@@ -17,6 +17,7 @@ const expectedDomains = [
   "verification-providers",
   "projects",
   "plans",
+  "templates",
   "workspace-trust",
   "runner-sandbox",
   "policy-packs",
@@ -138,6 +139,13 @@ describe("CLI/MCP parity manifest", () => {
     ]));
     expect(byDomain.get("handoffs")?.jsonContracts).toContain("handoff");
     expect(byDomain.get("search")?.mcpTools).toEqual(expect.arrayContaining(["search_tasks", "get_status"]));
+    expect(byDomain.get("templates")?.mcpTools).toEqual(expect.arrayContaining([
+      "list_template_library",
+      "init_templates",
+      "create_task_from_template",
+      "export_template",
+      "import_template",
+    ]));
     expect(byDomain.get("imports")?.jsonContracts).toContain("local_bridge_import_result");
     expect(byDomain.get("exports")?.jsonContracts).toContain("local_bridge_bundle");
   });
@@ -159,6 +167,7 @@ describe("CLI/MCP parity manifest", () => {
     expect(docs).toContain("todos fields set 1234abcd --labels bug,cli --severity s1 --field component=parser --json");
     expect(docs).toContain("todos dedupe scan --threshold 0.8 --json");
     expect(docs).toContain("todos verify-providers run local --task 1234abcd --json");
+    expect(docs).toContain("todos template-library --json");
     expect(docs).toContain("todos handoff --create --agent codex");
     expect(docs).toContain("acknowledge_handoff");
     expect(docs).toContain("create_task");

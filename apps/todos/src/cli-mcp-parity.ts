@@ -8,6 +8,7 @@ export type TodosCliMcpParityDomain =
   | "verification-providers"
   | "projects"
   | "plans"
+  | "templates"
   | "workspace-trust"
   | "runner-sandbox"
   | "policy-packs"
@@ -250,6 +251,39 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos plans --add \"Release 1.0\" --json",
       mcpTool: "create_plan",
+    },
+  },
+  {
+    domain: "templates",
+    cliCommands: [
+      "todos template-library",
+      "todos template-init",
+      "todos template-preview",
+      "todos templates --use",
+      "todos template-export",
+      "todos template-import",
+      "todos template-history",
+    ],
+    mcpTools: [
+      "list_template_library",
+      "write_template_library",
+      "init_templates",
+      "preview_template",
+      "create_task_from_template",
+      "create_template",
+      "list_templates",
+      "update_template",
+      "delete_template",
+      "export_template",
+      "import_template",
+      "template_history",
+    ],
+    jsonContracts: ["template", "task", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    example: {
+      cli: "todos template-library --json",
+      mcpTool: "list_template_library",
     },
   },
   {

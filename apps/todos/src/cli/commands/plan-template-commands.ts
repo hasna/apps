@@ -275,7 +275,7 @@ export function registerPlanTemplateCommands(program: Command) {
   program
     .command("template-init")
     .alias("templates-init")
-    .description("Initialize built-in starter templates (open-source-project, bug-fix, feature, security-audit)")
+    .description("Initialize the bundled local template library")
     .action(async () => {
       const globalOpts = program.opts();
       const { initBuiltinTemplates } = await import("../../db/builtin-templates.js");
@@ -286,6 +286,50 @@ export function registerPlanTemplateCommands(program: Command) {
       } else {
         console.log(chalk.green(`Created ${result.created} template(s): ${result.names.join(", ")}. Skipped ${result.skipped} existing.`));
       }
+    });
+
+  // template-library
+  program
+    .command("template-library")
+    .alias("templates-library")
+    .description("List, show, or write the bundled local template library as editable JSON files")
+    .option("--show <name>", "Show one bundled template as JSON")
+    .option("--write <dir>", "Write all bundled templates to editable JSON files")
+    .action(async (opts: { show?: string; write?: string }) => {
+      const globalOpts = program.opts();
+      const {
+        exportBuiltinTemplate,
+        listBuiltinTemplates,
+        writeBuiltinTemplateFiles,
+      } = await import("../../db/builtin-templates.js");
+      try {
+        if (opts.show) {
+          const template = exportBuiltinTemplate(opts.show);
+          output(template, true);
+          return;
+        }
+        if (opts.write) {
+          const result = writeBuiltinTemplateFiles(opts.write);
+          if (globalOpts.json) { output(result, true); return; }
+          console.log(chalk.green(`Wrote ${result.written} editable template file(s) to ${result.directory}`));
+          for (const file of result.files) console.log(chalk.dim(`  ${file}`));
+          return;
+        }
+        const templates = listBuiltinTemplates().map((template) => ({
+          name: template.name,
+          description: template.description,
+          category: template.category,
+          version: template.version,
+          variables: template.variables,
+          task_count: template.tasks.length,
+        }));
+        if (globalOpts.json) { output(templates, true); return; }
+        console.log(chalk.bold(`${templates.length} bundled local template(s):\n`));
+        for (const template of templates) {
+          console.log(`  ${chalk.bold(template.name)} ${chalk.dim(`[${template.category}]`)} ${chalk.yellow(`${template.task_count} tasks`)}`);
+          console.log(chalk.dim(`    ${template.description}`));
+        }
+      } catch (e) { handleError(e); }
     });
 
   // template-preview

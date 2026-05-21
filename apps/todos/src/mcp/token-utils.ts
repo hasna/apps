@@ -252,10 +252,12 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "export_template",
     "import_template",
     "init_templates",
+    "list_template_library",
     "list_templates",
     "preview_template",
     "template_history",
     "update_template",
+    "write_template_library",
   ],
   webhooks: ["create_webhook", "delete_webhook", "list_webhooks"],
   machines: [

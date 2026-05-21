@@ -16,6 +16,7 @@ import { registerTaskAdvTools } from "./tools/task-adv-tools.js";
 import { registerTaskAutoTools } from "./tools/task-auto-tools.js";
 import { registerAgentTools } from "./tools/agents.js";
 import { registerTaskResources } from "./tools/task-resources.js";
+import { registerTemplateTools } from "./tools/templates.js";
 
 // These tests verify the core operations that the MCP server wraps.
 // The MCP server itself uses stdio transport which is harder to test in unit tests.
@@ -1150,6 +1151,30 @@ describe("MCP tool wrappers", () => {
     }) as { isError?: boolean; content: { text: string }[] };
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toContain("Invalid agent name");
+  });
+
+  it("template tools expose the bundled local library and database templates", async () => {
+    const tools = captureTools(registerTemplateTools);
+
+    const library = await callCapturedTool(tools, "list_template_library", {});
+    const templates = JSON.parse(library.content[0]!.text) as Array<{ name: string; task_count: number }>;
+    expect(templates.map((template) => template.name)).toEqual(expect.arrayContaining([
+      "bug-fix",
+      "feature-implementation",
+      "security-review",
+      "release",
+      "migration",
+      "incident",
+      "docs-refresh",
+      "qa",
+    ]));
+    expect(templates.find((template) => template.name === "qa")!.task_count).toBeGreaterThan(0);
+
+    const initialized = await callCapturedTool(tools, "init_templates", {});
+    expect(initialized.content[0]!.text).toContain("Created");
+
+    const listed = await callCapturedTool(tools, "list_templates", {});
+    expect(listed.content[0]!.text).toContain("feature-implementation");
   });
 });
 

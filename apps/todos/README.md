@@ -246,11 +246,15 @@ MCP clients get the same local coordination through `claim_next_task`,
 
 ## Local Plan Templates
 
-Reusable plan templates also live in the local SQLite database. They can create
-one task or a full ordered plan with dependencies, variables, priorities, tags,
-and descriptions:
+Reusable plan templates live in the local SQLite database. The package also
+ships a marketplace-free local library for bug fixes, feature implementation,
+security review, releases, migrations, incidents, docs refreshes, QA, and open
+source package bootstraps. Templates can create one task or a full ordered plan
+with dependencies, variables, priorities, tags, and descriptions:
 
 ```bash
+todos template-library --json
+todos template-library --write .todos/templates
 todos template-init
 todos template-preview <template-id> --var name=api
 todos templates --use <template-id> --var name=api
@@ -258,12 +262,16 @@ todos template-export <template-id> > plan-template.json
 todos template-import plan-template.json
 ```
 
-`todos templates --use` creates every task in a multi-task template and wires
-its local dependency graph, so agents can immediately run `todos ready`,
-`todos blocked`, or `todos deps <task-id> --graph` against the generated plan.
-The same local-only workflow is available to MCP clients through
-`create_template`, `list_templates`, `create_task_from_template`,
-`preview_template`, `export_template`, and `import_template`.
+`todos template-library --write` writes editable JSON files that use the same
+shape as `todos template-import`, so teams can fork a built-in workflow without
+contacting any hosted marketplace. `todos templates --use` creates every task in
+a multi-task template and wires its local dependency graph, so agents can
+immediately run `todos ready`, `todos blocked`, or
+`todos deps <task-id> --graph` against the generated plan. The same local-only
+workflow is available to MCP clients through `list_template_library`,
+`write_template_library`, `init_templates`, `create_template`, `list_templates`,
+`create_task_from_template`, `preview_template`, `export_template`, and
+`import_template`.
 
 ## Local Git Traceability
 

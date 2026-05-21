@@ -24,7 +24,7 @@ const ALL_TOOLS = [
   "get_context","bootstrap","get_health","get_tasks_changed_since","heartbeat","release_agent",
   "get_task_history","get_recent_activity",
   "create_webhook","list_webhooks","delete_webhook",
-  "create_template","list_templates","create_task_from_template","delete_template",
+  "create_template","list_templates","create_task_from_template","delete_template","list_template_library","write_template_library",
   "bulk_update_tasks","bulk_create_tasks","get_task_stats","get_task_graph",
   "get_active_work","get_stale_tasks","get_status",
   "search_tools","describe_tools",
@@ -44,7 +44,7 @@ const DESCRIBE_TOOLS_KEYS = [
   "get_context","bootstrap","get_health","get_tasks_changed_since","heartbeat","release_agent",
   "get_task_history","get_recent_activity",
   "create_webhook","list_webhooks","delete_webhook",
-  "create_template","list_templates","create_task_from_template","delete_template",
+  "create_template","list_templates","create_task_from_template","delete_template","list_template_library","write_template_library",
   "bulk_update_tasks","bulk_create_tasks","get_task_stats","get_task_graph",
   "get_active_work","get_stale_tasks","get_status",
   "search_tools","describe_tools",
@@ -111,7 +111,7 @@ describe("TODOS_PROFILE filtering", () => {
   it("standard profile excludes webhook/template-only tools", () => {
     for (const excluded of [
       "create_webhook", "list_webhooks", "delete_webhook",
-      "create_template", "list_templates", "create_task_from_template", "delete_template",
+      "create_template", "list_templates", "create_task_from_template", "delete_template", "list_template_library", "write_template_library",
     ]) {
       expect(shouldRegisterToolForProfile(excluded, "standard")).toBe(false);
     }

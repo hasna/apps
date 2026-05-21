@@ -875,6 +875,45 @@ describe("CLI integration", () => {
     try { unlinkSync(importPath); } catch {}
   });
 
+  it("should expose and write the bundled local template library from the CLI", async () => {
+    const dbPath = "/tmp/test-cli-template-library.db";
+    const { mkdtempSync, rmSync, unlinkSync, existsSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    try { unlinkSync(dbPath); } catch {}
+    const dir = mkdtempSync(join(tmpdir(), "todos-cli-template-library-"));
+
+    try {
+      const listed = await runCli(["template-library", "--json"], dbPath);
+      expect(listed.exitCode).toBe(0);
+      const library = JSON.parse(listed.stdout);
+      expect(library.map((template: { name: string }) => template.name)).toEqual(expect.arrayContaining([
+        "bug-fix",
+        "feature-implementation",
+        "security-review",
+        "release",
+        "migration",
+        "incident",
+        "docs-refresh",
+        "qa",
+      ]));
+
+      const written = await runCli(["template-library", "--write", dir, "--json"], dbPath);
+      expect(written.exitCode).toBe(0);
+      expect(JSON.parse(written.stdout).written).toBeGreaterThanOrEqual(8);
+      expect(existsSync(join(dir, "qa.json"))).toBe(true);
+
+      const initialized = await runCli(["template-init", "--json"], dbPath);
+      expect(initialized.exitCode).toBe(0);
+      expect(JSON.parse(initialized.stdout).names).toContain("feature-implementation");
+    } finally {
+      try { unlinkSync(dbPath); } catch {}
+      try { unlinkSync(`${dbPath}-shm`); } catch {}
+      try { unlinkSync(`${dbPath}-wal`); } catch {}
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("should run sprint command", async () => {
     const proc = Bun.spawn(
       ["bun", "run", "src/cli/index.tsx", "sprint", "--json"],

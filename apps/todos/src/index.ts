@@ -282,7 +282,17 @@ export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTempl
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";
 
 // Built-in Templates
-export { initBuiltinTemplates, BUILTIN_TEMPLATES } from "./db/builtin-templates.js";
+export {
+  BUILTIN_TEMPLATE_LIBRARY_SOURCE,
+  BUILTIN_TEMPLATE_LIBRARY_VERSION,
+  BUILTIN_TEMPLATES,
+  exportBuiltinTemplate,
+  exportBuiltinTemplateFiles,
+  getBuiltinTemplate,
+  initBuiltinTemplates,
+  listBuiltinTemplates,
+  writeBuiltinTemplateFiles,
+} from "./db/builtin-templates.js";
 export type { BuiltinTemplate } from "./db/builtin-templates.js";
 
 // Checklists

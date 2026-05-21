@@ -25,6 +25,9 @@ structured error contracts.
 - `projects`: project bootstrap, project registration, project updates, task
   lists, path resolution, and focus.
 - `plans`: plan create, list, read, update, complete, and delete workflows.
+- `templates`: bundled marketplace-free local template library, editable JSON
+  template files, template import/export, preview, version history, and task
+  creation from templates.
 - `workspace-trust`: local trusted roots, permission presets, command checks,
   write scopes, env redaction declarations, and prompt-required decisions.
 - `runner-sandbox`: local runner command allowlists, cwd boundaries, write
@@ -114,6 +117,24 @@ Matching MCP tool:
 
 ```json
 { "tool": "run_verification_provider", "arguments": { "name": "local", "task_id": "1234abcd" } }
+```
+
+CLI template library:
+
+```bash
+todos template-library --json
+todos template-library --write .todos/templates --json
+todos template-init --json
+```
+
+Matching MCP tools:
+
+```json
+{ "tool": "list_template_library", "arguments": {} }
+```
+
+```json
+{ "tool": "write_template_library", "arguments": { "directory": ".todos/templates" } }
 ```
 
 CLI saved search view:

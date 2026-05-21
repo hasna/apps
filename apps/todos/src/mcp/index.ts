@@ -29,6 +29,7 @@ import { registerTaskRelTools } from "./tools/task-rel-tools.js";
 import { registerCodeTools } from "./tools/code-tools.js";
 import { registerMachineTools } from "./tools/machines.js";
 import { registerAgentTools } from "./tools/agents.js";
+import { registerTemplateTools } from "./tools/templates.js";
 import { getPackageVersion } from "../lib/package-version.js";
 import { installMcpTokenDiagnostics, shouldRegisterToolForProfile } from "./token-utils.js";
 
@@ -217,6 +218,7 @@ registerTaskResources(server, toolContext);
 registerTaskRelTools(server, toolContext);
 registerCodeTools(server, toolContext);
 registerAgentTools(server, { ...toolContext, agentFocusMap });
+registerTemplateTools(server, toolContext);
 
 // === MACHINES ===
 
