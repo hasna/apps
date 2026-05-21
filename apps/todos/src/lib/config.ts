@@ -67,6 +67,26 @@ export interface AgentRunAdapterConfig {
   updated_at?: string;
 }
 
+export type VerificationProviderKind = "command" | "testbox" | "ci_log" | "browser" | "script";
+
+export interface VerificationProviderRetryConfig {
+  attempts?: number;
+  backoff_ms?: number;
+}
+
+export interface VerificationProviderConfig {
+  name: string;
+  kind: VerificationProviderKind;
+  command?: string;
+  cwd?: string;
+  env?: Record<string, string>;
+  capabilities?: string[];
+  retry?: VerificationProviderRetryConfig;
+  timeout_ms?: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface PolicyPackConfig {
   name: string;
   version: number;
@@ -146,6 +166,8 @@ export interface TodosConfig {
   runner_sandboxes?: Record<string, RunnerSandboxProfile>;
   /** Local agent run adapters, keyed by adapter name. */
   agent_run_adapters?: Record<string, AgentRunAdapterConfig>;
+  /** Optional local verification provider adapters, keyed by provider name. */
+  verification_providers?: Record<string, VerificationProviderConfig>;
   /** Local policy packs for task done gates, keyed by pack name. */
   policy_packs?: Record<string, PolicyPackConfig>;
   /** Local event hooks and automation triggers, keyed by hook name. */

@@ -14,6 +14,7 @@ const expectedDomains = [
   "tasks",
   "local-fields",
   "dedupe",
+  "verification-providers",
   "projects",
   "plans",
   "workspace-trust",
@@ -122,6 +123,11 @@ describe("CLI/MCP parity manifest", () => {
       "merge_duplicate_task",
     ]));
     expect(byDomain.get("dedupe")?.jsonContracts).toEqual(expect.arrayContaining(["duplicate_task_candidate", "task_merge_result"]));
+    expect(byDomain.get("verification-providers")?.mcpTools).toEqual(expect.arrayContaining([
+      "set_verification_provider",
+      "run_verification_provider",
+    ]));
+    expect(byDomain.get("verification-providers")?.jsonContracts).toEqual(expect.arrayContaining(["verification_provider", "verification_provider_result"]));
     expect(byDomain.get("search")?.mcpTools).toEqual(expect.arrayContaining(["search_tasks", "get_status"]));
     expect(byDomain.get("imports")?.jsonContracts).toContain("local_bridge_import_result");
     expect(byDomain.get("exports")?.jsonContracts).toContain("local_bridge_bundle");
@@ -143,6 +149,7 @@ describe("CLI/MCP parity manifest", () => {
     expect(docs).toContain("todos add \"Fix flaky parser\" --priority high --json");
     expect(docs).toContain("todos fields set 1234abcd --labels bug,cli --severity s1 --field component=parser --json");
     expect(docs).toContain("todos dedupe scan --threshold 0.8 --json");
+    expect(docs).toContain("todos verify-providers run local --task 1234abcd --json");
     expect(docs).toContain("create_task");
     expect(docs).toContain("todos export --format bridge --output todos-bridge.json --json");
     expect(docs).toContain("todos bridge-import todos-bridge.json --apply --json");

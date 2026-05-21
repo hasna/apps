@@ -508,6 +508,110 @@ exit 0
       }
     });
 
+  const verificationProviders = program
+    .command("verify-providers")
+    .description("Manage optional local verification provider adapters");
+
+  verificationProviders
+    .command("set <name>")
+    .description("Create or update a local verification provider")
+    .requiredOption("--kind <kind>", "command, testbox, ci_log, browser, or script")
+    .option("--command <command>", "Local command template. Supports {task_id}, {agent_id}, {artifact_path}, and {url}")
+    .option("--cwd <path>", "Command working directory")
+    .option("--capabilities <items>", "Comma-separated capability labels")
+    .option("--attempts <n>", "Retry attempts", "1")
+    .option("--backoff-ms <n>", "Retry backoff in milliseconds", "0")
+    .option("--timeout-ms <n>", "Command timeout in milliseconds")
+    .option("--env <json>", "Static provider environment as a JSON object")
+    .action(async (name: string, opts: { kind: string; command?: string; cwd?: string; capabilities?: string; attempts?: string; backoffMs?: string; timeoutMs?: string; env?: string }) => {
+      const globalOpts = program.opts();
+      if (!["command", "testbox", "ci_log", "browser", "script"].includes(opts.kind)) {
+        console.error(chalk.red("--kind must be command, testbox, ci_log, browser, or script"));
+        process.exit(1);
+      }
+      const { upsertVerificationProvider } = await import("../../lib/verification-providers.js");
+      const provider = upsertVerificationProvider({
+        name,
+        kind: opts.kind as Parameters<typeof upsertVerificationProvider>[0]["kind"],
+        command: opts.command,
+        cwd: opts.cwd,
+        capabilities: listOption(opts.capabilities),
+        retry: { attempts: Number(opts.attempts), backoff_ms: Number(opts.backoffMs) },
+        timeout_ms: opts.timeoutMs ? Number(opts.timeoutMs) : undefined,
+        env: parseJsonOption(opts.env, "--env") as Record<string, string> | undefined,
+      });
+      if (globalOpts.json) { output(provider, true); return; }
+      console.log(chalk.green(`Saved verification provider ${provider.name}`));
+    });
+
+  verificationProviders
+    .command("list")
+    .description("List local verification providers")
+    .action(async () => {
+      const globalOpts = program.opts();
+      const { listVerificationProviders } = await import("../../lib/verification-providers.js");
+      const providers = listVerificationProviders();
+      if (globalOpts.json) { output(providers, true); return; }
+      if (providers.length === 0) {
+        console.log(chalk.dim("No verification providers configured."));
+        return;
+      }
+      for (const provider of providers) console.log(`${provider.name.padEnd(12)} ${provider.kind}`);
+    });
+
+  verificationProviders
+    .command("capabilities <name>")
+    .description("Show local verification provider capabilities")
+    .action(async (name: string) => {
+      const globalOpts = program.opts();
+      const { discoverVerificationProviderCapabilities } = await import("../../lib/verification-providers.js");
+      const capabilities = discoverVerificationProviderCapabilities(name);
+      if (globalOpts.json) { output(capabilities, true); return; }
+      console.log(`${capabilities.name} ${capabilities.kind}: ${capabilities.capabilities.join(", ")}`);
+    });
+
+  verificationProviders
+    .command("remove <name>")
+    .description("Remove a local verification provider")
+    .action(async (name: string) => {
+      const globalOpts = program.opts();
+      const { removeVerificationProvider } = await import("../../lib/verification-providers.js");
+      const removed = removeVerificationProvider(name);
+      if (globalOpts.json) { output({ removed }, true); return; }
+      console.log(removed ? chalk.green("Provider removed.") : chalk.dim("No provider matched."));
+    });
+
+  verificationProviders
+    .command("run <name>")
+    .description("Run a local verification provider and optionally record task evidence")
+    .option("--task <id>", "Task ID to record verification evidence against")
+    .option("--agent <name>", "Agent running the provider")
+    .option("--command <command>", "Override provider command for this run")
+    .option("--cwd <path>", "Command working directory")
+    .option("--log <text>", "CI log text to classify")
+    .option("--log-file <path>", "CI log file to classify")
+    .option("--artifact <path>", "Local artifact or screenshot path")
+    .option("--url <url>", "Browser URL label")
+    .option("--metadata <json>", "Additional run metadata")
+    .action(async (name: string, opts: { task?: string; agent?: string; command?: string; cwd?: string; log?: string; logFile?: string; artifact?: string; url?: string; metadata?: string }) => {
+      const globalOpts = program.opts();
+      const { runVerificationProvider } = await import("../../lib/verification-providers.js");
+      const result = await runVerificationProvider({
+        name,
+        task_id: opts.task ? resolveTaskId(opts.task) : undefined,
+        agent_id: opts.agent || globalOpts.agent,
+        command: opts.command,
+        cwd: opts.cwd,
+        log_text: opts.log,
+        log_path: opts.logFile,
+        artifact_path: opts.artifact,
+        url: opts.url,
+        metadata: parseJsonOption(opts.metadata, "--metadata"),
+      });
+      if (globalOpts.json) { output(result, true); return; }
+      console.log(`${result.status} ${result.provider}: ${result.output_summary || ""}`);
+    });
+
   const runs = program
     .command("runs")
     .description("Manage the local run ledger and evidence capture");
