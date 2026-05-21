@@ -12,6 +12,7 @@ import { getStatus } from "./db/tasks.js";
 import { createTaskList } from "./db/task-lists.js";
 import { createTask } from "./db/task-crud.js";
 import { createTemplate } from "./db/templates.js";
+import { getLocalActivityTimeline } from "./lib/activity-timeline.js";
 import { createAgentContextPack } from "./lib/context-packs.js";
 import {
   TODOS_JSON_CONTRACTS,
@@ -67,6 +68,7 @@ describe("stable JSON contracts", () => {
       "checkpoint",
       "dispatch",
       "audit_history",
+      "local_activity_timeline_entry",
       "status_summary",
       "context_pack",
       "local_event_hook",
@@ -143,6 +145,7 @@ describe("stable JSON contracts", () => {
       delay_ms: 40,
     }, db);
     const history = logTaskChange(task.id, "update", "status", "pending", "in_progress", "agent-1", db);
+    const timeline = getLocalActivityTimeline({ entity_type: "task", entity_id: task.id }, db);
     const status = getStatus({ project_id: project.id }, undefined, { explain_blocked: true }, db);
     const contextPack = createAgentContextPack({ task_id: task.id, profile: "codex" }, db);
 
@@ -155,6 +158,7 @@ describe("stable JSON contracts", () => {
     expectValid("checkpoint", checkpoint);
     expectValid("dispatch", dispatch);
     expectValid("audit_history", history);
+    expectValid("local_activity_timeline_entry", timeline.entries[0]);
     expectValid("status_summary", status);
     expectValid("context_pack", contextPack);
     expectValid("local_event_hook", {

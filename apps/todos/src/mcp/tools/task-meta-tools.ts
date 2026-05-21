@@ -109,6 +109,7 @@ export function registerTaskMetaTools(server: McpServer, ctx: TaskMetaContext) {
             create_comment: "create_comment — Add comment. Params: task_id, body, author",
             list_comments: "list_comments — List comments. Params: task_id",
             get_comments: "get_comments — List recent comments by default. Params: task_id, detail=compact|full, limit",
+            get_activity_timeline: "get_activity_timeline — Unified local timeline across comments, task history, and run evidence. Params: entity_type, entity_id, limit, offset, order, since, until",
             update_comment: "update_comment — Edit comment. Params: comment_id, body",
             delete_comment: "delete_comment — Delete comment. Params: comment_id",
             lock_task: "lock_task — Acquire exclusive lock. Params: task_id, agent_id, ttl_seconds",

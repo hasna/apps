@@ -395,9 +395,9 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
   },
   {
     domain: "comments",
-    cliCommands: ["todos comment", "todos log"],
-    mcpTools: ["add_comment", "create_comment", "list_comments", "get_comments", "update_comment", "delete_comment"],
-    jsonContracts: ["comment", "audit_history", "structured_error", "api_error"],
+    cliCommands: ["todos comment", "todos log", "todos timeline"],
+    mcpTools: ["add_comment", "create_comment", "list_comments", "get_comments", "get_activity_timeline", "update_comment", "delete_comment"],
+    jsonContracts: ["comment", "audit_history", "local_activity_timeline_entry", "structured_error", "api_error"],
     errorContracts: ["structured_error", "api_error"],
     status: "matched",
     example: {

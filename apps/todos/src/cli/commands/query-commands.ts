@@ -1024,6 +1024,69 @@ export function registerQueryCommands(program: Command) {
       }
     });
 
+  // timeline
+  program
+    .command("timeline")
+    .description("Show a unified local activity timeline for tasks, projects, plans, or runs")
+    .option("--task <id>", "Filter to a task")
+    .option("--project <id>", "Filter to a project")
+    .option("--plan <id>", "Filter to a plan")
+    .option("--run <id>", "Filter to a run ledger")
+    .option("--since <iso>", "Only include entries at or after this ISO timestamp")
+    .option("--until <iso>", "Only include entries at or before this ISO timestamp")
+    .option("--limit <n>", "Number of entries", "50")
+    .option("--offset <n>", "Entries to skip", "0")
+    .option("--order <order>", "Sort order: asc or desc", "desc")
+    .option("-j, --json", "Output as JSON")
+    .action(async (opts) => {
+      const globalOpts = program.opts();
+      const db = getDatabase();
+      const { getLocalActivityTimeline } = await import("../../lib/activity-timeline.js");
+      const { resolveTaskRunId } = await import("../../db/task-runs.js");
+      const options: Parameters<typeof getLocalActivityTimeline>[0] = {
+        since: opts.since,
+        until: opts.until,
+        limit: parseInt(opts.limit, 10),
+        offset: parseInt(opts.offset, 10),
+        order: opts.order === "asc" ? "asc" : "desc",
+      };
+      if (opts.task) {
+        options.entity_type = "task";
+        options.entity_id = resolveTaskId(opts.task);
+      } else if (opts.project) {
+        const projectId = resolvePartialId(db, "projects", opts.project);
+        if (!projectId) throw new Error(`Could not resolve project ID: ${opts.project}`);
+        options.entity_type = "project";
+        options.entity_id = projectId;
+      } else if (opts.plan) {
+        const planId = resolvePartialId(db, "plans", opts.plan);
+        if (!planId) throw new Error(`Could not resolve plan ID: ${opts.plan}`);
+        options.entity_type = "plan";
+        options.entity_id = planId;
+      } else if (opts.run) {
+        options.entity_type = "run";
+        options.entity_id = resolveTaskRunId(opts.run, db);
+      }
+
+      const timeline = getLocalActivityTimeline(options, db);
+      if (opts.json || globalOpts.json) {
+        console.log(JSON.stringify(timeline, null, 2));
+        return;
+      }
+      if (timeline.entries.length === 0) {
+        console.log(chalk.dim("  No activity yet."));
+        return;
+      }
+      console.log(chalk.bold(`Activity timeline (${timeline.total}${timeline.total > timeline.entries.length ? `, showing ${timeline.entries.length}` : ""}):\n`));
+      for (const entry of timeline.entries) {
+        const time = entry.created_at.replace("T", " ").slice(0, 16);
+        const ref = entry.run_id ? `run ${entry.run_id.slice(0, 8)}` : `task ${entry.task_id.slice(0, 8)}`;
+        const agent = entry.agent_id ? chalk.dim(` (${entry.agent_id})`) : "";
+        const message = entry.message ? ` ${entry.message}` : "";
+        console.log(`  ${chalk.dim(time)} ${chalk.cyan(entry.source)} ${chalk.dim(ref)} ${entry.event_type}${message}${agent}`);
+      }
+    });
+
   // ready
   program
     .command("ready")

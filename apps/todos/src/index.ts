@@ -694,6 +694,15 @@ export type {
   TodosLocalBridgePackageSource,
   TodosLocalBridgeSource,
 } from "./lib/local-bridge.js";
+export { getLocalActivityTimeline } from "./lib/activity-timeline.js";
+export type {
+  LocalActivityTimelineEntityType,
+  LocalActivityTimelineEntry,
+  LocalActivityTimelineOptions,
+  LocalActivityTimelineOrder,
+  LocalActivityTimelinePage,
+  LocalActivityTimelineSource,
+} from "./lib/activity-timeline.js";
 
 // Dispatch formatter
 export { formatDispatchMessage, formatSingleTask } from "./lib/dispatch-formatter.js";

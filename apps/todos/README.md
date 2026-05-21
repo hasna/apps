@@ -284,6 +284,23 @@ metadata, redaction status, retention metadata, and metadata-only fallback when
 the original path is unavailable. Use `--no-store` to record only artifact
 metadata.
 
+## Local Activity Timeline
+
+The timeline command gives agents one ordered, redacted view of local comments,
+task history, run events, command evidence, and artifacts:
+
+```bash
+todos timeline --task <task-id> --json
+todos timeline --project <project-id> --limit 50
+todos timeline --run <run-id> --order asc
+```
+
+MCP clients can call `get_activity_timeline` with `entity_type`, `entity_id`,
+`limit`, `offset`, `since`, and `until`. Timeline entries are derived from the
+local SQLite store and local bridge exports already include the underlying
+comments, runs, run evidence, files, commits, and verification records needed to
+rebuild the same timeline after import.
+
 ## Local Agent Context Packs
 
 Context packs create deterministic run-start bundles for Codex, Claude Code,

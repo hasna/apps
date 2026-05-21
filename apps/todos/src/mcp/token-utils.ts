@@ -200,6 +200,7 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "delete_label",
     "delete_tag",
     "get_label",
+    "get_activity_timeline",
     "get_recent_activity",
     "get_tag",
     "get_task_graph",
