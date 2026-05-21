@@ -96,6 +96,22 @@ events are linked to task file tracking, and comments can be recorded into the
 task timeline. Sensitive-looking tokens, keys, passwords, and bearer values are
 redacted before evidence is stored.
 
+## Local Inbox Intake
+
+Paste failures, CI logs, GitHub issue URLs, files, or local git context into a
+deduped inbox and create a linked task:
+
+```bash
+todos inbox add "bun test failed: parser regression" --source-type ci_log
+todos inbox add --file /tmp/ci.log --source-name "local CI"
+todos inbox add https://github.com/hasna/todos/issues/42 --source-url https://github.com/hasna/todos/issues/42
+todos inbox git --diff
+todos inbox list
+```
+
+Inbox bodies and metadata are redacted before storage. Repeated input resolves
+to the existing inbox item instead of creating duplicate tasks.
+
 ## MCP Server
 
 ```bash

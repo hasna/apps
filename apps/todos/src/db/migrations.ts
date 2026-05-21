@@ -958,4 +958,25 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_task_run_artifacts_path ON task_run_artifacts(path);
   INSERT OR IGNORE INTO _migrations (id) VALUES (52);
   `,
+  // Migration 53: Local inbox intake for failures, CI logs, and pasted context
+  `
+  CREATE TABLE IF NOT EXISTS inbox_items (
+    id TEXT PRIMARY KEY,
+    task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    source_type TEXT NOT NULL CHECK(source_type IN ('pasted_error', 'ci_log', 'git_context', 'github_issue', 'file', 'other')),
+    source_name TEXT,
+    source_url TEXT,
+    title TEXT NOT NULL,
+    body TEXT,
+    fingerprint TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'triaged' CHECK(status IN ('new', 'triaged', 'ignored')),
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_inbox_items_task ON inbox_items(task_id);
+  CREATE INDEX IF NOT EXISTS idx_inbox_items_source ON inbox_items(source_type, source_name);
+  CREATE INDEX IF NOT EXISTS idx_inbox_items_status ON inbox_items(status);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (53);
+  `,
 ];
