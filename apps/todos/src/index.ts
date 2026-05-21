@@ -105,6 +105,7 @@ export {
   completeTask,
   lockTask,
   unlockTask,
+  getTaskLockStatus,
   addDependency,
   removeDependency,
   getTaskDependencies,
@@ -134,7 +135,7 @@ export {
   archiveTasks,
   unarchiveTask,
 } from "./db/tasks.js";
-export type { TaskGraphNode, TaskGraph, BulkCreateTaskInput, ActiveWorkItem, StatusSummary, DecomposeSubtaskInput } from "./db/tasks.js";
+export type { TaskGraphNode, TaskGraph, BulkCreateTaskInput, ActiveWorkItem, StatusSummary, DecomposeSubtaskInput, StaleTaskQuery, TaskLockStatus } from "./db/tasks.js";
 
 // Cycles
 export {

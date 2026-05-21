@@ -11,6 +11,7 @@ import {
   getTask, updateTask, createTask, listTasks,
   startTask, completeTask, setTaskStatus, setTaskPriority,
   addDependency, removeDependency, getTaskGraph,
+  lockTask, unlockTask, getTaskLockStatus,
 } from "../../db/tasks.js";
 import type { TaskGraph } from "../../db/tasks.js";
 import {
@@ -85,6 +86,65 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
           if (!current) throw new TaskNotFoundError(resolvedId);
           const task = startTask(resolvedId, current.assigned_to || current.agent_id || "mcp");
           return { content: [{ type: "text" as const, text: formatTask(task) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("lock_task")) {
+    server.tool(
+      "lock_task",
+      "Acquire or renew a local task lock lease for an agent.",
+      {
+        task_id: z.string().describe("Task ID"),
+        agent_id: z.string().describe("Agent ID or name acquiring the lock"),
+      },
+      async ({ task_id, agent_id }) => {
+        try {
+          const resolvedId = resolveId(task_id);
+          const result = lockTask(resolvedId, agent_id);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }], isError: !result.success };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("unlock_task")) {
+    server.tool(
+      "unlock_task",
+      "Release a local task lock. The agent must own the active lock unless omitted for force release.",
+      {
+        task_id: z.string().describe("Task ID"),
+        agent_id: z.string().optional().describe("Agent ID or name releasing the lock"),
+      },
+      async ({ task_id, agent_id }) => {
+        try {
+          const resolvedId = resolveId(task_id);
+          const success = unlockTask(resolvedId, agent_id);
+          return { content: [{ type: "text" as const, text: JSON.stringify({ success }, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("check_task_lock")) {
+    server.tool(
+      "check_task_lock",
+      "Check local task lock lease status.",
+      {
+        task_id: z.string().describe("Task ID"),
+      },
+      async ({ task_id }) => {
+        try {
+          const resolvedId = resolveId(task_id);
+          const status = getTaskLockStatus(resolvedId);
+          return { content: [{ type: "text" as const, text: JSON.stringify(status, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }

@@ -51,6 +51,25 @@ The same workflow is available to MCP clients through
 blocked pending tasks, and startup schema repair recreates the local dependency
 table for older databases.
 
+## Local Agent Locking
+
+Task claims and locks are local SQLite leases. Agents can claim the next ready
+task, renew their lock by re-locking it during long work, inspect stale work,
+and safely steal or redistribute stale tasks without hosted coordination:
+
+```bash
+todos claim codex
+todos --agent codex lock <task-id>
+todos stale --minutes 30
+todos claim codex --steal-stale --stale-minutes 30
+todos redistribute codex --max-age 60
+```
+
+MCP clients get the same local coordination through `claim_next_task`,
+`lock_task`, `unlock_task`, `check_task_lock`, and `get_stale_tasks`.
+`claim_next_task` can opt into stale recovery with `steal_stale` and
+`stale_minutes`.
+
 ## Local Plan Templates
 
 Reusable plan templates also live in the local SQLite database. They can create

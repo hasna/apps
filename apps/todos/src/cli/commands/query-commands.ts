@@ -65,12 +65,16 @@ export function registerQueryCommands(program: Command) {
     .command("claim <agent>")
     .description("Atomically claim the best pending task for an agent")
     .option("--project <id>", "Filter to project")
+    .option("--steal-stale", "Steal the highest-priority stale task when no pending task is available")
+    .option("--stale-minutes <n>", "How long a task must be stale before stealing (default: 30)", "30")
     .option("-j, --json", "Output as JSON")
     .action(async (agent, opts) => {
       const db = getDatabase();
       const filters: Record<string, string> = {};
       if (opts.project) filters.project_id = opts.project;
-      const task = claimNextTask(agent, Object.keys(filters).length ? filters : undefined, db);
+      const task = opts.stealStale
+        ? (await import("../../db/tasks.js")).claimOrSteal(agent, { ...filters, stale_minutes: parseInt(opts.staleMinutes, 10) }, db)?.task ?? null
+        : claimNextTask(agent, Object.keys(filters).length ? filters : undefined, db);
       if (!task) {
         console.log(chalk.dim("No tasks available to claim."));
         return;
@@ -320,7 +324,7 @@ export function registerQueryCommands(program: Command) {
     .action(async (agent: string, opts) => {
       const globalOpts = program.opts();
       const db = getDatabase();
-      const projectId = opts.project ? resolvePartialId(db, "tasks", opts.project) ?? autoProject(globalOpts) : autoProject(globalOpts) ?? undefined;
+      const projectId = opts.project ? resolvePartialId(db, "projects", opts.project) ?? opts.project : autoProject(globalOpts) ?? undefined;
       const result = redistributeStaleTasks(agent, {
         max_age_minutes: parseInt(opts.maxAge, 10),
         project_id: projectId,

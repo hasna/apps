@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { getDatabase, closeDatabase, resetDatabase, resolvePartialId } from "../db/database.js";
-import { addDependency, createTask, getTask, listTasks, completeTask } from "../db/tasks.js";
+import { addDependency, createTask, getTask, listTasks, completeTask, startTask } from "../db/tasks.js";
 import { createProject } from "../db/projects.js";
 import { addComment, listComments } from "../db/comments.js";
 import { searchTasks } from "../lib/search.js";
@@ -205,6 +205,23 @@ describe("MCP tool wrappers", () => {
     const updated = getTask(task.id, db)!;
     expect(updated.status).toBe("in_progress");
     expect(updated.locked_by).toBe("mcp");
+  });
+
+  it("task lock tools acquire renew check and release local leases", async () => {
+    const tools = captureTools(registerTaskProjectTools);
+    const task = createTask({ title: "Lock via MCP" }, db);
+
+    const locked = await callCapturedTool(tools, "lock_task", { task_id: task.id, agent_id: "mcp-agent" });
+    const lockJson = JSON.parse(locked.content[0]!.text);
+    expect(lockJson.success).toBe(true);
+    expect(lockJson.expires_at).toBeTruthy();
+
+    const checked = await callCapturedTool(tools, "check_task_lock", { task_id: task.id });
+    expect(JSON.parse(checked.content[0]!.text).locked_by).toBe("mcp-agent");
+
+    const released = await callCapturedTool(tools, "unlock_task", { task_id: task.id, agent_id: "mcp-agent" });
+    expect(JSON.parse(released.content[0]!.text).success).toBe(true);
+    expect(getTask(task.id, db)!.locked_by).toBeNull();
   });
 
   it("get_task_dependencies returns the transitive dependency tree for agent planning", async () => {
@@ -460,6 +477,16 @@ describe("MCP tool wrappers", () => {
     expect(health.content[0]!.text).toContain("Tasks:");
   });
 
+  it("auto get_stale_tasks accepts MCP hour and minute parameters", async () => {
+    const tools = captureTools(registerTaskAutoTools);
+    const task = createTask({ title: "Stale wrapper task", status: "in_progress" }, db);
+    const staleTime = new Date(Date.now() - 90 * 60 * 1000).toISOString();
+    db.run("UPDATE tasks SET updated_at = ?, locked_at = ? WHERE id = ?", [staleTime, staleTime, task.id]);
+
+    const result = await callCapturedTool(tools, "get_stale_tasks", { minutes: 30 });
+    expect(result.content[0]!.text).toContain("Stale wrapper task");
+  });
+
   it("workflow queue tools expose next, claim, changed, status, and context", async () => {
     const workflowTools = captureTools(registerTaskWorkflowTools);
     const advTools = captureTools(registerTaskAdvTools);
@@ -481,6 +508,23 @@ describe("MCP tool wrappers", () => {
 
     await callCapturedTool(workflowTools, "claim_next_task", { agent_id: "mcp" });
     expect(getTask(task.id, db)!.status).toBe("in_progress");
+  });
+
+  it("workflow claim_next_task can steal stale local work when requested", async () => {
+    const workflowTools = captureTools(registerTaskWorkflowTools);
+    const task = createTask({ title: "Steal via MCP" }, db);
+    startTask(task.id, "old-agent", db);
+    const staleTime = new Date(Date.now() - 90 * 60 * 1000).toISOString();
+    db.run("UPDATE tasks SET updated_at = ?, locked_at = ? WHERE id = ?", [staleTime, staleTime, task.id]);
+
+    const result = await callCapturedTool(workflowTools, "claim_next_task", {
+      agent_id: "new-agent",
+      steal_stale: true,
+      stale_minutes: 30,
+    });
+
+    expect(result.content[0]!.text).toContain("Stolen");
+    expect(getTask(task.id, db)!.locked_by).toBe("new-agent");
   });
 
   it("task detail tools are compact by default and expand on request", async () => {

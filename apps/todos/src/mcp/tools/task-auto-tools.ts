@@ -223,13 +223,14 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
       "Get tasks that haven't been updated in a given time window (excluding completed/cancelled).",
       {
         hours: z.number().optional().describe("Hours since last update (default: 48)"),
+        minutes: z.number().optional().describe("Minutes since last update; overrides hours when provided"),
         project_id: z.string().optional().describe("Filter by project"),
       },
-      async ({ hours = 48, project_id }) => {
+      async ({ hours = 48, minutes, project_id }) => {
         try {
           const { getStaleTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolvedProjectId = project_id ? resolveId(project_id, "projects") : undefined;
-          const tasks = getStaleTasks({ hours, project_id: resolvedProjectId });
+          const tasks = getStaleTasks({ hours, minutes, project_id: resolvedProjectId });
           if (tasks.length === 0) return { content: [{ type: "text" as const, text: "No stale tasks." }] };
           const lines = tasks.map((t: any) => `${(t.short_id || t.id.slice(0,8))} [${t.status}] ${t.title} — last updated ${t.updated_at}`);
           return { content: [{ type: "text" as const, text: `${tasks.length} stale task(s):\n${lines.join("\n")}` }] };
