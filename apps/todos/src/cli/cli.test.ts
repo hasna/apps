@@ -408,6 +408,47 @@ describe("CLI integration", () => {
     try { unlinkSync(`${dbPath}-wal`); } catch {}
   });
 
+  it("should capture local inbox intake and dedupe repeated failures", async () => {
+    const dbPath = "/tmp/test-cli-inbox-intake.db";
+    const { unlinkSync, writeFileSync } = await import("node:fs");
+    const filePath = "/tmp/test-cli-inbox-intake.log";
+    try { unlinkSync(dbPath); } catch {}
+    try { unlinkSync(`${dbPath}-shm`); } catch {}
+    try { unlinkSync(`${dbPath}-wal`); } catch {}
+    try { unlinkSync(filePath); } catch {}
+
+    writeFileSync(filePath, "bun test failed\nTypeError: broken\nTOKEN=secret-token-value");
+    const created = await runCli(["inbox", "add", "--file", filePath, "--source-type", "ci_log", "--json"], dbPath);
+    expect(created.exitCode).toBe(0);
+    const first = JSON.parse(created.stdout);
+    expect(first.item.source_type).toBe("ci_log");
+    expect(first.item.body).not.toContain("secret-token-value");
+    expect(first.task.tags).toContain("ci_log");
+
+    const duplicate = JSON.parse((await runCli(["inbox", "add", "--file", filePath, "--source-type", "ci_log", "--json"], dbPath)).stdout);
+    expect(duplicate.duplicate).toBe(true);
+    expect(duplicate.item.id).toBe(first.item.id);
+
+    const github = JSON.parse((await runCli([
+      "inbox",
+      "add",
+      "https://github.com/hasna/todos/issues/42",
+      "--source-url",
+      "https://github.com/hasna/todos/issues/42",
+      "--json",
+    ], dbPath)).stdout);
+    expect(github.item.source_type).toBe("github_issue");
+    expect(github.item.title).toBe("GitHub issue hasna/todos#42");
+
+    const items = JSON.parse((await runCli(["inbox", "list", "--json"], dbPath)).stdout);
+    expect(items).toHaveLength(2);
+
+    try { unlinkSync(dbPath); } catch {}
+    try { unlinkSync(`${dbPath}-shm`); } catch {}
+    try { unlinkSync(`${dbPath}-wal`); } catch {}
+    try { unlinkSync(filePath); } catch {}
+  });
+
   it("should create all tasks and dependencies from a reusable plan template", async () => {
     const dbPath = "/tmp/test-cli-plan-template-use.db";
     const importPath = "/tmp/test-cli-plan-template-use.json";

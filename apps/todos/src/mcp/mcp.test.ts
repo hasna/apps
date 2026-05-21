@@ -359,6 +359,37 @@ describe("MCP tool wrappers", () => {
     expect(runs[0].id).toBe(run.id);
   });
 
+  it("inbox tools capture and dedupe local failure intake", async () => {
+    const tools = captureTools(registerTaskResources);
+
+    const createdResult = await callCapturedTool(tools, "create_inbox_item", {
+      body: "GitHub Actions failed\nTOKEN=secret-token-value",
+      source_type: "ci_log",
+      metadata: { secret: "hidden" },
+    });
+    const created = JSON.parse(createdResult.content[0]!.text);
+    expect(created.item.source_type).toBe("ci_log");
+    expect(created.item.body).not.toContain("secret-token-value");
+    expect(created.item.metadata.secret).toBe("[REDACTED]");
+    expect(created.task.tags).toContain("ci_log");
+
+    const duplicateResult = await callCapturedTool(tools, "create_inbox_item", {
+      body: "GitHub Actions failed\nTOKEN=secret-token-value",
+      source_type: "ci_log",
+    });
+    const duplicate = JSON.parse(duplicateResult.content[0]!.text);
+    expect(duplicate.duplicate).toBe(true);
+    expect(duplicate.item.id).toBe(created.item.id);
+
+    const listResult = await callCapturedTool(tools, "list_inbox_items", { source_type: "ci_log" });
+    const items = JSON.parse(listResult.content[0]!.text);
+    expect(items).toHaveLength(1);
+
+    const itemResult = await callCapturedTool(tools, "get_inbox_item", { id: created.item.id.slice(0, 8) });
+    const item = JSON.parse(itemResult.content[0]!.text);
+    expect(item.id).toBe(created.item.id);
+  });
+
   it("comment wrappers persist and read the real comment fields", async () => {
     const projectTools = captureTools(registerTaskProjectTools);
     const advTools = captureTools(registerTaskAdvTools);

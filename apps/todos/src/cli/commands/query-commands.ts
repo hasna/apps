@@ -18,6 +18,18 @@ import { createHandoff, listHandoffs, getLatestHandoff } from "../../db/handoffs
 import { isValidRecurrenceRule } from "../../lib/recurrence.js";
 import { autoProject, handleError, output, formatTaskLine, resolveTaskId } from "../helpers.js";
 
+function parseJsonObjectOption(value: string | undefined, label: string): Record<string, unknown> | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not object");
+    return parsed as Record<string, unknown>;
+  } catch {
+    console.error(chalk.red(`${label} must be a valid JSON object`));
+    process.exit(1);
+  }
+}
+
 export function registerQueryCommands(program: Command) {
   // next
   program
@@ -1264,6 +1276,122 @@ export function registerQueryCommands(program: Command) {
       }
 
       console.log(chalk.dim(`\n  as_of: ${new Date().toISOString()}`));
+    });
+
+  const inbox = program
+    .command("inbox")
+    .description("Capture local inbox items from pasted errors, CI logs, git context, files, or GitHub issue URLs");
+
+  inbox
+    .command("add [text]")
+    .description("Create a local inbox item and linked task from text, stdin, or a file")
+    .option("--file <path>", "Read captured context from a file")
+    .option("--source-type <type>", "pasted_error, ci_log, git_context, github_issue, file, or other")
+    .option("--source-name <name>", "Human-readable source name")
+    .option("--source-url <url>", "Source URL, including GitHub issue URLs")
+    .option("--title <title>", "Task/inbox title")
+    .option("--priority <priority>", "Task priority")
+    .option("--tags <tags>", "Comma-separated extra tags")
+    .option("--metadata <json>", "Additional JSON metadata")
+    .option("--no-task", "Only store inbox item; do not create a linked task")
+    .option("-j, --json", "Output as JSON")
+    .action(async (text: string | undefined, opts) => {
+      const globalOpts = program.opts();
+      const { readFileSync } = await import("node:fs");
+      const { createInboxItem } = await import("../../db/inbox.js");
+      let body = text || "";
+      if (opts.file) body = readFileSync(opts.file, "utf-8");
+      if (!body && !process.stdin.isTTY) body = await Bun.stdin.text();
+      if (!body.trim()) {
+        console.error(chalk.red("Provide text, --file, or stdin input."));
+        process.exit(1);
+      }
+      const result = createInboxItem({
+        title: opts.title,
+        body,
+        source_type: opts.sourceType,
+        source_name: opts.sourceName || opts.file,
+        source_url: opts.sourceUrl,
+        metadata: parseJsonObjectOption(opts.metadata, "--metadata"),
+        project_id: autoProject(globalOpts) || undefined,
+        priority: opts.priority,
+        tags: opts.tags ? String(opts.tags).split(",").map((tag: string) => tag.trim()).filter(Boolean) : undefined,
+        create_task: opts.task,
+      });
+      if (opts.json || globalOpts.json) { output(result, true); return; }
+      const id = result.item.id.slice(0, 8);
+      const duplicate = result.duplicate ? chalk.yellow("duplicate ") : "";
+      console.log(chalk.green(`${duplicate}Inbox item ${id}: ${result.item.title}`));
+      if (result.task) console.log(chalk.cyan(`  Task: ${result.task.short_id || result.task.id.slice(0, 8)}`));
+    });
+
+  inbox
+    .command("git")
+    .description("Capture local git status and optional diff/stat context into the inbox")
+    .option("--diff", "Include git diff --stat and short diff context")
+    .option("--title <title>", "Task/inbox title")
+    .option("-j, --json", "Output as JSON")
+    .action(async (opts) => {
+      const globalOpts = program.opts();
+      const { execSync } = await import("node:child_process");
+      const { createInboxItem } = await import("../../db/inbox.js");
+      const status = execSync("git status --short", { encoding: "utf-8" });
+      const branch = execSync("git rev-parse --abbrev-ref HEAD", { encoding: "utf-8" }).trim();
+      const diffStat = opts.diff ? execSync("git diff --stat", { encoding: "utf-8" }) : "";
+      const diff = opts.diff ? execSync("git diff -- src README.md docs package.json | sed -n '1,220p'", { encoding: "utf-8", shell: "/bin/bash" }) : "";
+      const body = [`branch: ${branch}`, "status:", status || "(clean)", diffStat ? `diff stat:\n${diffStat}` : null, diff ? `diff:\n${diff}` : null].filter(Boolean).join("\n\n");
+      const result = createInboxItem({
+        title: opts.title || `Git context: ${branch}`,
+        body,
+        source_type: "git_context",
+        source_name: branch,
+        project_id: autoProject(globalOpts) || undefined,
+        priority: "medium",
+        tags: ["git"],
+      });
+      if (opts.json || globalOpts.json) { output(result, true); return; }
+      console.log(chalk.green(`Inbox item ${result.item.id.slice(0, 8)}: ${result.item.title}`));
+      if (result.task) console.log(chalk.cyan(`  Task: ${result.task.short_id || result.task.id.slice(0, 8)}`));
+    });
+
+  inbox
+    .command("list")
+    .description("List local inbox items")
+    .option("--status <status>", "new, triaged, or ignored")
+    .option("--source-type <type>", "Filter by source type")
+    .option("--limit <n>", "Max rows", "50")
+    .option("-j, --json", "Output as JSON")
+    .action(async (opts) => {
+      const globalOpts = program.opts();
+      const { listInboxItems } = await import("../../db/inbox.js");
+      const items = listInboxItems({ status: opts.status, source_type: opts.sourceType, limit: Number.parseInt(opts.limit, 10) });
+      if (opts.json || globalOpts.json) { output(items, true); return; }
+      if (items.length === 0) {
+        console.log(chalk.dim("No inbox items."));
+        return;
+      }
+      for (const item of items) {
+        console.log(`${chalk.cyan(item.id.slice(0, 8))} ${item.source_type.padEnd(12)} ${item.title}`);
+      }
+    });
+
+  inbox
+    .command("show <id>")
+    .description("Show one inbox item")
+    .option("-j, --json", "Output as JSON")
+    .action(async (id: string, opts) => {
+      const globalOpts = program.opts();
+      const { getInboxItem } = await import("../../db/inbox.js");
+      const item = getInboxItem(id);
+      if (!item) {
+        console.error(chalk.red(`Inbox item not found: ${id}`));
+        process.exit(1);
+      }
+      if (opts.json || globalOpts.json) { output(item, true); return; }
+      console.log(chalk.bold(`${item.id.slice(0, 8)} ${item.title}`));
+      console.log(chalk.dim(`${item.source_type} ${item.source_name || ""}`.trim()));
+      if (item.task_id) console.log(`Task: ${item.task_id}`);
+      if (item.body) console.log(`\n${item.body}`);
     });
 
   // report-failure

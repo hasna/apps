@@ -288,6 +288,25 @@ export function ensureSchema(db: Database): void {
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_run_artifacts_task ON task_run_artifacts(task_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_run_artifacts_path ON task_run_artifacts(path)");
 
+  ensureTable("inbox_items", `
+    CREATE TABLE inbox_items (
+      id TEXT PRIMARY KEY,
+      task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+      source_type TEXT NOT NULL CHECK(source_type IN ('pasted_error', 'ci_log', 'git_context', 'github_issue', 'file', 'other')),
+      source_name TEXT,
+      source_url TEXT,
+      title TEXT NOT NULL,
+      body TEXT,
+      fingerprint TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL DEFAULT 'triaged' CHECK(status IN ('new', 'triaged', 'ignored')),
+      metadata TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_inbox_items_task ON inbox_items(task_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_inbox_items_source ON inbox_items(source_type, source_name)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_inbox_items_status ON inbox_items(status)");
+
   ensureTable("kg_edges", `
     CREATE TABLE kg_edges (
       id TEXT PRIMARY KEY,

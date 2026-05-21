@@ -29,6 +29,7 @@ import {
   listTaskRuns,
   startTaskRun,
 } from "../../db/task-runs.js";
+import { createInboxItem, getInboxItem, listInboxItems } from "../../db/inbox.js";
 
 interface TaskResourcesContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -554,6 +555,74 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
         try {
           const ledger = getTaskRunLedger(run_id);
           return { content: [{ type: "text" as const, text: JSON.stringify(ledger, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("create_inbox_item")) {
+    server.tool(
+      "create_inbox_item",
+      "Capture a local inbox item from pasted errors, CI logs, git context, files, or GitHub issue URLs. Creates a linked task by default.",
+      {
+        body: z.string().describe("Captured text, log, pasted failure, git context, or URL"),
+        title: z.string().optional().describe("Optional title"),
+        source_type: z.enum(["pasted_error", "ci_log", "git_context", "github_issue", "file", "other"]).optional().describe("Source type"),
+        source_name: z.string().optional().describe("Human-readable source name"),
+        source_url: z.string().optional().describe("Source URL"),
+        metadata: z.record(z.unknown()).optional().describe("Additional local metadata"),
+        project_id: z.string().optional().describe("Optional project ID"),
+        priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("Linked task priority"),
+        tags: z.array(z.string()).optional().describe("Extra linked task tags"),
+        create_task: z.boolean().optional().describe("Whether to create a linked task (default true)"),
+      },
+      async ({ body, title, source_type, source_name, source_url, metadata, project_id, priority, tags, create_task }) => {
+        try {
+          const result = createInboxItem({
+            body,
+            title,
+            source_type,
+            source_name,
+            source_url,
+            metadata,
+            project_id,
+            priority,
+            tags,
+            create_task,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_inbox_items")) {
+    server.tool(
+      "list_inbox_items",
+      "List local inbox intake items.",
+      {
+        status: z.enum(["new", "triaged", "ignored"]).optional().describe("Optional status filter"),
+        source_type: z.enum(["pasted_error", "ci_log", "git_context", "github_issue", "file", "other"]).optional().describe("Optional source type filter"),
+        limit: z.number().optional().describe("Max rows"),
+      },
+      async ({ status, source_type, limit }) => {
+        try {
+          const items = listInboxItems({ status, source_type, limit });
+          return { content: [{ type: "text" as const, text: JSON.stringify(items, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("get_inbox_item")) {
+    server.tool(
+      "get_inbox_item",
+      "Get one local inbox intake item by ID or prefix.",
+      { id: z.string().describe("Inbox item ID or prefix") },
+      async ({ id }) => {
+        try {
+          const item = getInboxItem(id);
+          return { content: [{ type: "text" as const, text: JSON.stringify(item, null, 2) }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
       },
     );

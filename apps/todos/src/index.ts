@@ -474,6 +474,15 @@ export type {
   TaskRunLedger,
   TaskRunStatus,
 } from "./db/task-runs.js";
+export {
+  createInboxItem,
+  deriveInboxTitle,
+  detectInboxSourceType,
+  fingerprintInboxInput,
+  getInboxItem,
+  listInboxItems,
+} from "./db/inbox.js";
+export type { CreateInboxItemInput, InboxItem, InboxSourceType, InboxStatus } from "./db/inbox.js";
 
 // Dispatch formatter
 export { formatDispatchMessage, formatSingleTask } from "./lib/dispatch-formatter.js";
