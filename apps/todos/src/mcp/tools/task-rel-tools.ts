@@ -639,6 +639,119 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
     );
   }
 
+  // === KANBAN BOARDS ===
+
+  if (shouldRegisterTool("create_board")) {
+    server.tool(
+      "create_board",
+      "Create a local task or plan kanban board with configurable workflow lanes and WIP limits.",
+      {
+        name: z.string().describe("Board name"),
+        scope: z.enum(["tasks", "plans"]).optional().describe("Board scope"),
+        project_id: z.string().optional().describe("Optional project filter"),
+        task_list_id: z.string().optional().describe("Optional task list filter"),
+        plan_id: z.string().optional().describe("Optional plan filter for task boards"),
+        agent_id: z.string().optional().describe("Optional agent filter"),
+        lanes: z.array(z.object({
+          id: z.string(),
+          name: z.string(),
+          statuses: z.array(z.string()),
+          wip_limit: z.number().nullable().optional(),
+          position: z.number().optional(),
+        })).optional().describe("Configurable board lanes"),
+        filters: z.record(z.unknown()).optional().describe("Saved local board filters"),
+      },
+      async ({ name, scope, project_id, task_list_id, plan_id, agent_id, lanes, filters }) => {
+        try {
+          const { createTaskBoard } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const board = createTaskBoard({
+            name,
+            scope,
+            project_id: project_id ? resolveId(project_id, "projects") : undefined,
+            task_list_id,
+            plan_id: plan_id ? resolveId(plan_id, "plans") : undefined,
+            agent_id,
+            lanes,
+            filters,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(board, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_boards")) {
+    server.tool(
+      "list_boards",
+      "List local task and plan kanban boards.",
+      {
+        scope: z.enum(["tasks", "plans"]).optional(),
+        project_id: z.string().optional(),
+        agent_id: z.string().optional(),
+        limit: z.number().optional(),
+      },
+      async ({ scope, project_id, agent_id, limit }) => {
+        try {
+          const { listTaskBoards } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const boards = listTaskBoards({
+            scope,
+            project_id: project_id ? resolveId(project_id, "projects") : undefined,
+            agent_id,
+            limit,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(boards, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("get_board_snapshot")) {
+    server.tool(
+      "get_board_snapshot",
+      "Return a JSON snapshot of a local kanban board, including WIP limit state and blocked/ready badges.",
+      {
+        board_id: z.string().describe("Board ID or name"),
+        format: z.enum(["json", "text"]).optional(),
+      },
+      async ({ board_id, format }) => {
+        try {
+          const { buildTaskBoardSnapshot, renderTaskBoard } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const snapshot = buildTaskBoardSnapshot(board_id);
+          const text = format === "text" ? renderTaskBoard(snapshot) : JSON.stringify(snapshot, null, 2);
+          return { content: [{ type: "text" as const, text }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("move_board_card")) {
+    server.tool(
+      "move_board_card",
+      "Move a task or plan card to a target lane or explicit workflow status.",
+      {
+        board_id: z.string().describe("Board ID or name"),
+        card_id: z.string().describe("Task or plan ID"),
+        lane_id: z.string().optional().describe("Target lane ID or name"),
+        status: z.string().optional().describe("Explicit target status"),
+      },
+      async ({ board_id, card_id, lane_id, status }) => {
+        try {
+          const { moveBoardCard } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const card = moveBoardCard({ board_id, card_id, lane_id, status });
+          return { content: [{ type: "text" as const, text: JSON.stringify(card, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
   // === TIME TRACKING ===
 
   if (shouldRegisterTool("log_time")) {

@@ -558,6 +558,88 @@ export interface FocusSessionRow {
   updated_at: string;
 }
 
+export type BoardScope = "tasks" | "plans";
+
+export interface BoardLane {
+  id: string;
+  name: string;
+  statuses: string[];
+  wip_limit: number | null;
+  position: number;
+}
+
+export interface TaskBoard {
+  id: string;
+  name: string;
+  scope: BoardScope;
+  project_id: string | null;
+  task_list_id: string | null;
+  plan_id: string | null;
+  agent_id: string | null;
+  lanes: BoardLane[];
+  filters: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskBoardRow {
+  id: string;
+  name: string;
+  scope: BoardScope;
+  project_id: string | null;
+  task_list_id: string | null;
+  plan_id: string | null;
+  agent_id: string | null;
+  lanes: string | null;
+  filters: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BoardCard {
+  id: string;
+  short_id: string | null;
+  title: string;
+  status: string;
+  priority: TaskPriority | null;
+  project_id: string | null;
+  plan_id: string | null;
+  task_list_id: string | null;
+  assigned_to: string | null;
+  blocked: boolean;
+  ready: boolean;
+  badges: string[];
+  updated_at: string;
+}
+
+export interface BoardLaneSnapshot {
+  lane: BoardLane;
+  count: number;
+  wip_limit: number | null;
+  wip_exceeded: boolean;
+  cards: BoardCard[];
+}
+
+export interface BoardSnapshot {
+  board: TaskBoard;
+  generated_at: string;
+  lanes: BoardLaneSnapshot[];
+  totals: {
+    cards: number;
+    blocked: number;
+    ready: number;
+    wip_exceeded_lanes: number;
+  };
+  keyboard: {
+    move_left: string;
+    move_right: string;
+    move_up: string;
+    move_down: string;
+    open: string;
+    quit: string;
+  };
+}
+
 // Task watcher — agent subscription to task events
 export interface TaskWatcher {
   id: string;

@@ -8,7 +8,7 @@ import { createPlan } from "../db/plans.js";
 import { createProject } from "../db/projects.js";
 import { createTaskList } from "../db/task-lists.js";
 import { linkTaskGitRef, linkTaskToCommit } from "../db/task-commits.js";
-import { addDependency, createTask, getTask, listTasks } from "../db/tasks.js";
+import { addDependency, createTask, createTaskBoard, getTask, listTaskBoards, listTasks } from "../db/tasks.js";
 import { addTaskRunArtifact, addTaskRunCommand, addTaskRunFile, finishTaskRun, startTaskRun, verifyTaskRunArtifacts } from "../db/task-runs.js";
 import { resetConfig, saveConfig } from "./config.js";
 import {
@@ -72,6 +72,14 @@ describe("local bridge import/export", () => {
       scope: "tasks",
       filters: { project_id: project.id, tags: ["bridge"] },
     }, db);
+    createTaskBoard({
+      name: "bridge-board",
+      project_id: project.id,
+      lanes: [
+        { id: "ready", name: "Ready", statuses: ["pending"], wip_limit: null, position: 0 },
+        { id: "doing", name: "Doing", statuses: ["in_progress"], wip_limit: 2, position: 1 },
+      ],
+    }, db);
 
     const bundle = createLocalBridgeBundle({
       project_id: project.id,
@@ -100,6 +108,7 @@ describe("local bridge import/export", () => {
       task_git_refs: 1,
       task_verifications: 1,
       saved_views: 1,
+      task_boards: 1,
     });
     expect(bundle.artifact_contents).toHaveLength(1);
     expect(validateLocalBridgeBundle(bundle).ok).toBe(true);
@@ -146,6 +155,7 @@ describe("local bridge import/export", () => {
       tags: ["portable"],
       metadata: { source: "test" },
     }, sourceDb);
+    createTaskBoard({ name: "portable-board", project_id: project.id }, sourceDb);
     const bundle = createLocalBridgeBundle({ project_id: project.id }, sourceDb);
 
     closeDatabase();
@@ -163,7 +173,9 @@ describe("local bridge import/export", () => {
     expect(applied.dry_run).toBe(false);
     expect(applied.inserted.projects).toBe(1);
     expect(applied.inserted.tasks).toBe(1);
+    expect(applied.inserted.task_boards).toBe(1);
     expect(applied.inserted.saved_views).toBe(0);
+    expect(listTaskBoards({}, targetDb).map((board) => board.name)).toContain("portable-board");
     expect(getTask(task.id, targetDb)).toMatchObject({
       id: task.id,
       title: "Portable task",

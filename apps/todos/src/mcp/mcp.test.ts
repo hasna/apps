@@ -795,6 +795,36 @@ describe("MCP tool wrappers", () => {
     expect(JSON.parse(listResult.content[0].text).map((item: { id: string }) => item.id)).toContain(session.id);
   });
 
+  it("kanban board tools create render and move local task boards", async () => {
+    const tools = captureTools(registerTaskRelTools);
+    const task = createTask({ title: "MCP board task", status: "pending" }, db);
+
+    const createdResult = await callCapturedTool(tools, "create_board", {
+      name: "mcp-board",
+      lanes: [
+        { id: "ready", name: "Ready", statuses: ["pending"], wip_limit: null, position: 0 },
+        { id: "doing", name: "Doing", statuses: ["in_progress"], wip_limit: 1, position: 1 },
+      ],
+    });
+    const board = JSON.parse(createdResult.content[0].text);
+    expect(board.name).toBe("mcp-board");
+
+    const snapshotResult = await callCapturedTool(tools, "get_board_snapshot", { board_id: "mcp-board" });
+    const snapshot = JSON.parse(snapshotResult.content[0].text);
+    expect(snapshot.totals.ready).toBe(1);
+    expect(snapshot.keyboard.quit).toBe("q");
+
+    const movedResult = await callCapturedTool(tools, "move_board_card", {
+      board_id: board.id,
+      card_id: task.id,
+      lane_id: "doing",
+    });
+    expect(JSON.parse(movedResult.content[0].text).status).toBe("in_progress");
+
+    const listResult = await callCapturedTool(tools, "list_boards", { scope: "tasks" });
+    expect(JSON.parse(listResult.content[0].text).map((item: { name: string }) => item.name)).toContain("mcp-board");
+  });
+
   it("git traceability tools link refs, commits, and verification evidence", async () => {
     const tools = captureTools(registerTaskResources);
     const task = createTask({ title: "Traceable via MCP" }, db);

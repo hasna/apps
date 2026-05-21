@@ -98,5 +98,26 @@ export type {
   TimeReportEntry,
 } from "./task-relations.ts";
 
+export {
+  buildTaskBoardSnapshot,
+  createTaskBoard,
+  deleteTaskBoard,
+  exportTaskBoardBundle,
+  getTaskBoard,
+  importTaskBoardBundle,
+  listTaskBoards,
+  moveBoardCard,
+  renderTaskBoard,
+  updateTaskBoard,
+} from "./boards.js";
+
+export type {
+  CreateTaskBoardInput,
+  MoveBoardCardInput,
+  TaskBoardBundle,
+  TaskBoardQuery,
+  UpdateTaskBoardInput,
+} from "./boards.ts";
+
 // Re-export types that were previously exported from this file
 export type { TaskFilter } from "../types/index.js";

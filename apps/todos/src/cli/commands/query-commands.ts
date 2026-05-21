@@ -22,6 +22,14 @@ import {
   stopFocusSession,
   getIdleFocusSessionPrompts,
   getTimeReport,
+  buildTaskBoardSnapshot,
+  createTaskBoard,
+  deleteTaskBoard,
+  exportTaskBoardBundle,
+  importTaskBoardBundle,
+  listTaskBoards,
+  moveBoardCard,
+  renderTaskBoard,
 } from "../../db/tasks.js";
 import { getRecap } from "../../db/audit.js";
 import {
@@ -37,7 +45,7 @@ import {
 import { findDuplicateTasks, mergeDuplicateTask } from "../../lib/task-dedupe.js";
 import { getTaskLocalFields, queryTasksByLocalFields, setTaskLocalFields } from "../../lib/local-fields.js";
 import type { LocalTaskFieldQuery, SetTaskLocalFieldsInput } from "../../lib/local-fields.js";
-import type { TaskPriority } from "../../types/index.js";
+import type { BoardLane, BoardScope, TaskPriority } from "../../types/index.js";
 import { autoProject, handleError, output, formatTaskLine, resolveTaskId } from "../helpers.js";
 
 function parseJsonObjectOption(value: string | undefined, label: string): Record<string, unknown> | undefined {
@@ -123,6 +131,47 @@ function parsePriority(value: string | undefined): TaskPriority | undefined {
     process.exit(1);
   }
   return value as TaskPriority;
+}
+
+function parseBoardScope(value: string | undefined): BoardScope {
+  if (!value) return "tasks";
+  if (value !== "tasks" && value !== "plans") {
+    console.error(chalk.red("--scope must be tasks or plans"));
+    process.exit(1);
+  }
+  return value;
+}
+
+function parseBoardLane(value: string, position: number): BoardLane {
+  const [labelPart, statusPart] = value.split("=");
+  if (!labelPart || !statusPart) {
+    console.error(chalk.red("--lane must use Name=status,status[:wip_limit] format"));
+    process.exit(1);
+  }
+  const [statusesRaw, limitRaw] = statusPart.split(":");
+  const statuses = statusesRaw!.split(",").map((status) => status.trim()).filter(Boolean);
+  if (statuses.length === 0) {
+    console.error(chalk.red("--lane must include at least one status"));
+    process.exit(1);
+  }
+  const name = labelPart.trim();
+  const wipLimit = limitRaw === undefined || limitRaw === "" ? null : parseInt(limitRaw, 10);
+  if (wipLimit !== null && (!Number.isFinite(wipLimit) || wipLimit < 1)) {
+    console.error(chalk.red("lane WIP limit must be a positive integer"));
+    process.exit(1);
+  }
+  return {
+    id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `lane-${position + 1}`,
+    name,
+    statuses,
+    wip_limit: wipLimit,
+    position,
+  };
+}
+
+function parseBoardLanes(values: string[] | undefined): BoardLane[] | undefined {
+  if (!values || values.length === 0) return undefined;
+  return values.map((value, index) => parseBoardLane(value, index));
 }
 
 export function registerQueryCommands(program: Command) {
@@ -1602,6 +1651,164 @@ export function registerQueryCommands(program: Command) {
         stale_after_hours: Number(opts.staleAfterHours),
       });
       console.log(renderAgentContextPack(pack, format, Boolean(opts.compact)));
+    });
+
+  const board = program
+    .command("board")
+    .description("Render local task and plan kanban boards");
+
+  board
+    .command("create <name>")
+    .description("Create a local kanban board")
+    .option("--scope <scope>", "Board scope: tasks or plans", "tasks")
+    .option("--project <id>", "Project filter")
+    .option("--task-list <id>", "Task list filter")
+    .option("--plan <id>", "Plan filter for task boards")
+    .option("--agent <id>", "Agent filter")
+    .option("--lane <spec...>", "Lane spec: Name=status,status[:wip_limit]")
+    .option("--filter <json>", "Saved board filters as JSON")
+    .option("-j, --json", "Output JSON")
+    .action((name: string, opts) => {
+      try {
+        const globalOpts = program.opts();
+        const scope = parseBoardScope(opts.scope);
+        const created = createTaskBoard({
+          name,
+          scope,
+          project_id: resolveProjectOption(opts.project || globalOpts.project),
+          task_list_id: opts.taskList,
+          plan_id: resolveOptionalId("plans", opts.plan),
+          agent_id: opts.agent || globalOpts.agent,
+          lanes: parseBoardLanes(opts.lane),
+          filters: parseJsonObjectOption(opts.filter, "--filter"),
+        });
+        if (opts.json || globalOpts.json) { output(created, true); return; }
+        console.log(chalk.green(`Created ${created.scope} board ${created.name} (${created.id.slice(0, 8)})`));
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  board
+    .command("list")
+    .description("List local kanban boards")
+    .option("--scope <scope>", "Filter by tasks or plans")
+    .option("--project <id>", "Filter by project")
+    .option("--agent <id>", "Filter by agent")
+    .option("-j, --json", "Output JSON")
+    .action((opts) => {
+      try {
+        const globalOpts = program.opts();
+        const boards = listTaskBoards({
+          scope: opts.scope ? parseBoardScope(opts.scope) : undefined,
+          project_id: resolveProjectOption(opts.project || globalOpts.project),
+          agent_id: opts.agent || globalOpts.agent,
+        });
+        if (opts.json || globalOpts.json) { output(boards, true); return; }
+        if (boards.length === 0) { console.log(chalk.dim("No boards.")); return; }
+        for (const item of boards) {
+          console.log(`${item.id.slice(0, 8)} ${item.scope.padEnd(5)} ${item.name} (${item.lanes.length} lanes)`);
+        }
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  board
+    .command("show <board>")
+    .description("Render a local kanban board")
+    .option("-j, --json", "Output JSON snapshot")
+    .action((boardId: string, opts) => {
+      try {
+        const snapshot = buildTaskBoardSnapshot(boardId);
+        if (opts.json || program.opts().json) { output(snapshot, true); return; }
+        console.log(renderTaskBoard(snapshot));
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  board
+    .command("tui <board>")
+    .description("Render a keyboard-oriented terminal board snapshot")
+    .option("-j, --json", "Output JSON snapshot with key bindings")
+    .action((boardId: string, opts) => {
+      try {
+        const snapshot = buildTaskBoardSnapshot(boardId);
+        if (opts.json || program.opts().json) { output(snapshot, true); return; }
+        console.log(renderTaskBoard(snapshot));
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  board
+    .command("move <board> <card-id>")
+    .description("Move a task or plan card to a lane or explicit status")
+    .option("--lane <id>", "Target lane id or name")
+    .option("--status <status>", "Explicit target workflow status")
+    .option("-j, --json", "Output JSON")
+    .action((boardId: string, cardId: string, opts) => {
+      try {
+        const moved = moveBoardCard({
+          board_id: boardId,
+          card_id: cardId,
+          lane_id: opts.lane,
+          status: opts.status,
+        });
+        if (opts.json || program.opts().json) { output(moved, true); return; }
+        console.log(chalk.green(`Moved ${moved.id.slice(0, 8)} to ${moved.status}`));
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  board
+    .command("export [board]")
+    .description("Export local board definitions as a portable JSON bundle")
+    .option("--out <path>", "Write bundle to file")
+    .option("-j, --json", "Output JSON")
+    .action((boardId: string | undefined, opts) => {
+      try {
+        const bundle = exportTaskBoardBundle(boardId);
+        const json = JSON.stringify(bundle, null, 2);
+        if (opts.out) {
+          writeFileSync(opts.out, json);
+          if (!(opts.json || program.opts().json)) console.log(chalk.green(`Wrote ${bundle.boards.length} board(s) to ${opts.out}`));
+        }
+        if (opts.json || program.opts().json || !opts.out) console.log(json);
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  board
+    .command("import <path>")
+    .description("Import local board definitions from a JSON bundle")
+    .option("-j, --json", "Output JSON")
+    .action((path: string, opts) => {
+      try {
+        const bundle = JSON.parse(readFileSync(path, "utf-8"));
+        const result = importTaskBoardBundle(bundle);
+        if (opts.json || program.opts().json) { output(result, true); return; }
+        console.log(chalk.green(`Imported boards: ${result.inserted} inserted, ${result.updated} updated, ${result.skipped} skipped`));
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  board
+    .command("delete <board>")
+    .description("Delete a local board definition")
+    .option("-j, --json", "Output JSON")
+    .action((boardId: string, opts) => {
+      try {
+        const deleted = deleteTaskBoard(boardId);
+        if (opts.json || program.opts().json) { output({ deleted }, true); return; }
+        console.log(deleted ? chalk.green("Board deleted") : chalk.dim("Board not found"));
+      } catch (e) {
+        handleError(e);
+      }
     });
 
   const time = program

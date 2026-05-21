@@ -145,8 +145,18 @@ export {
   resumeFocusSession,
   stopFocusSession,
   getIdleFocusSessionPrompts,
+  buildTaskBoardSnapshot,
+  createTaskBoard,
+  deleteTaskBoard,
+  exportTaskBoardBundle,
+  getTaskBoard,
+  importTaskBoardBundle,
+  listTaskBoards,
+  moveBoardCard,
+  renderTaskBoard,
+  updateTaskBoard,
 } from "./db/tasks.js";
-export type { TaskGraphNode, TaskGraph, BulkCreateTaskInput, EscalatedTask, ActiveWorkItem, StatusSummary, DecomposeSubtaskInput, StaleTaskQuery, TaskLockStatus, FocusSessionQuery, IdleFocusSessionPrompt, LogTimeInput, StartFocusSessionInput, StopFocusSessionInput, TimeReportEntry } from "./db/tasks.js";
+export type { TaskGraphNode, TaskGraph, BulkCreateTaskInput, EscalatedTask, ActiveWorkItem, StatusSummary, DecomposeSubtaskInput, StaleTaskQuery, TaskLockStatus, FocusSessionQuery, IdleFocusSessionPrompt, LogTimeInput, StartFocusSessionInput, StopFocusSessionInput, TimeReportEntry, CreateTaskBoardInput, MoveBoardCardInput, TaskBoardBundle, TaskBoardQuery, UpdateTaskBoardInput } from "./db/tasks.js";
 
 // Cycles
 export {

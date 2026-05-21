@@ -638,6 +638,24 @@ export function ensureSchema(db: Database): void {
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_focus_sessions_agent ON focus_sessions(agent_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_focus_sessions_status ON focus_sessions(status)");
 
+  ensureTable("task_boards", `
+    CREATE TABLE task_boards (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      scope TEXT NOT NULL DEFAULT 'tasks' CHECK(scope IN ('tasks', 'plans')),
+      project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+      task_list_id TEXT REFERENCES task_lists(id) ON DELETE SET NULL,
+      plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+      agent_id TEXT,
+      lanes TEXT NOT NULL DEFAULT '[]',
+      filters TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_boards_scope ON task_boards(scope)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_boards_project ON task_boards(project_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_boards_plan ON task_boards(plan_id)");
+
   // Task watchers
   ensureTable("task_watchers", `
     CREATE TABLE task_watchers (

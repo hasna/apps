@@ -19,6 +19,7 @@ export type TodosCliMcpParityDomain =
   | "local-event-hooks"
   | "encryption"
   | "agent-runs"
+  | "kanban-boards"
   | "time-tracking"
   | "handoffs"
   | "runs"
@@ -515,6 +516,32 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos agent-runs queue 1234abcd --adapter codex --json",
       mcpTool: "queue_agent_run",
+    },
+  },
+  {
+    domain: "kanban-boards",
+    cliCommands: [
+      "todos board create",
+      "todos board list",
+      "todos board show",
+      "todos board tui",
+      "todos board move",
+      "todos board export",
+      "todos board import",
+      "todos board delete",
+    ],
+    mcpTools: [
+      "create_board",
+      "list_boards",
+      "get_board_snapshot",
+      "move_board_card",
+    ],
+    jsonContracts: ["task_board", "board_snapshot", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    example: {
+      cli: "todos board show local-flow --json",
+      mcpTool: "get_board_snapshot",
     },
   },
   {

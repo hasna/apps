@@ -546,6 +546,26 @@ preserve the filters without any hosted service. MCP clients use
 `save_search_view`, `list_search_views`, `run_search_view`, and
 `delete_search_view`.
 
+## Local Kanban Boards
+
+Boards are local SQLite records for task and plan workflow views. Lanes map to
+workflow statuses, can carry WIP limits, and render blocked/ready badges for
+agent planning:
+
+```bash
+todos board create local-flow --lane "Ready=pending" "Doing=in_progress:3" --json
+todos board show local-flow
+todos board tui local-flow --json
+todos board move local-flow <task-id> --lane Doing --json
+todos board export local-flow --json
+```
+
+Task boards render tasks; plan boards use `--scope plans` and render plans by
+plan status. Board snapshots include terminal key bindings for keyboard/TUI
+clients, but the state is still just local data and can be exported or imported
+without a hosted web UI. MCP clients use `create_board`, `list_boards`,
+`get_board_snapshot`, and `move_board_card`.
+
 ## Local Duplicate Detection
 
 Agents can scan local tasks for likely duplicates from imported issue URLs,
@@ -621,10 +641,10 @@ todos bridge-import todos-bridge.json --apply --resolve-conflicts
 
 Bridge bundles include local projects, task lists, plans, tasks, dependencies,
 comments, run ledgers, command evidence, file evidence, artifacts, stored
-artifact contents, commits, refs, and verification records. Imports default to
-dry-run mode and report conflicts before writing. The package does not upload
-bundles or call hosted services; any hosted sync must consume the exported JSON
-explicitly.
+artifact contents, commits, refs, verification records, saved views, and local
+board definitions. Imports default to dry-run mode and report conflicts before
+writing. The package does not upload bundles or call hosted services; any hosted
+sync must consume the exported JSON explicitly.
 
 For multi-machine local work, `--resolve-conflicts` performs a safe task merge
 instead of overwriting local edits. It fills blank local fields from the

@@ -32,6 +32,8 @@ The stable contracts cover these object IDs:
 - `local_activity_timeline_entry`
 - `status_summary`
 - `context_pack`
+- `task_board`
+- `board_snapshot`
 - `focus_session`
 - `time_report_entry`
 - `local_event_hook`
@@ -140,6 +142,20 @@ JSON or Markdown without hosted summarization.
 
 ## Time Tracking And Focus Sessions
 
+## Kanban Boards
+
+`task_board` is the stable local board definition returned by
+`todos board create --json`, `todos board list --json`, and `create_board`.
+It stores the board scope, local filters, workflow lanes, and WIP limits in
+SQLite, with no hosted web dependency.
+
+`board_snapshot` is returned by `todos board show --json`, `todos board tui
+--json`, and `get_board_snapshot`. It includes rendered lane cards,
+blocked/ready badges, WIP limit state, totals, and terminal key bindings for
+agent-native board navigation.
+
+## Time Tracking And Focus Sessions
+
 `focus_session` is the stable local timer object returned by `todos time start`,
 `todos time pause`, `todos time resume`, `todos time stop`,
 `list_focus_sessions`, and related MCP focus tools. A completed task-linked
@@ -186,7 +202,7 @@ stored as plaintext JSON.
 `@hasna/todos` data between stores. It contains versioned package metadata,
 source scope, grouped records for projects, task lists, plans, tasks,
 dependencies, comments, runs, run evidence, file evidence, git refs, commits,
-verification records, and saved search views.
+verification records, saved search views, and local board definitions.
 
 `local_bridge_import_result` is returned by dry-run and applied imports. It
 reports inserted counts, skipped counts, conflicts, and validation issues so a

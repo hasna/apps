@@ -65,6 +65,7 @@ function emptyCounts(): Record<keyof TodosLocalBridgeData, number> {
     task_git_refs: 0,
     task_verifications: 0,
     saved_views: 0,
+    task_boards: 0,
   };
 }
 

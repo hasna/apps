@@ -1615,6 +1615,45 @@ describe("CLI integration", () => {
     try { unlinkSync(dbPath); } catch {}
   });
 
+  it("should manage local kanban boards from the CLI", async () => {
+    const dbPath = "/tmp/test-cli-boards.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    try {
+      const first = JSON.parse((await runCli(["add", "board task one", "--status", "in_progress", "--json"], dbPath)).stdout);
+      await runCli(["add", "board task two", "--status", "in_progress", "--json"], dbPath);
+      const created = await runCli([
+        "board",
+        "create",
+        "cli-board",
+        "--lane",
+        "Ready=pending",
+        "Doing=in_progress:1",
+        "--json",
+      ], dbPath);
+      expect(created.exitCode).toBe(0);
+      expect(JSON.parse(created.stdout).name).toBe("cli-board");
+
+      const shown = await runCli(["board", "show", "cli-board", "--json"], dbPath);
+      expect(shown.exitCode).toBe(0);
+      const snapshot = JSON.parse(shown.stdout);
+      expect(snapshot.totals.cards).toBe(2);
+      expect(snapshot.totals.wip_exceeded_lanes).toBe(1);
+      expect(snapshot.keyboard.quit).toBe("q");
+
+      const moved = await runCli(["board", "move", "cli-board", first.id.slice(0, 8), "--lane", "Ready", "--json"], dbPath);
+      expect(moved.exitCode).toBe(0);
+      expect(JSON.parse(moved.stdout).status).toBe("pending");
+
+      const exported = JSON.parse((await runCli(["board", "export", "cli-board", "--json"], dbPath)).stdout);
+      expect(exported.kind).toBe("hasna.todos.task-board");
+      expect(exported.boards).toHaveLength(1);
+    } finally {
+      try { unlinkSync(dbPath); } catch {}
+    }
+  });
+
   it("should queue and run local agent dispatches", async () => {
     const dbPath = "/tmp/test-cli-agent-runs.db";
     const { unlinkSync } = await import("node:fs");

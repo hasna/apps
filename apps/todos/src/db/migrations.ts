@@ -1040,4 +1040,24 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_focus_sessions_status ON focus_sessions(status);
   INSERT OR IGNORE INTO _migrations (id) VALUES (56);
   `,
+  // Migration 57: Local task and plan kanban boards
+  `
+  CREATE TABLE IF NOT EXISTS task_boards (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    scope TEXT NOT NULL DEFAULT 'tasks' CHECK(scope IN ('tasks', 'plans')),
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    task_list_id TEXT REFERENCES task_lists(id) ON DELETE SET NULL,
+    plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+    agent_id TEXT,
+    lanes TEXT NOT NULL DEFAULT '[]',
+    filters TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_boards_scope ON task_boards(scope);
+  CREATE INDEX IF NOT EXISTS idx_task_boards_project ON task_boards(project_id);
+  CREATE INDEX IF NOT EXISTS idx_task_boards_plan ON task_boards(plan_id);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (57);
+  `,
 ];

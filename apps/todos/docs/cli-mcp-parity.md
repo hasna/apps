@@ -48,6 +48,9 @@ structured error contracts.
   bridge export/import workflows.
 - `agent-runs`: local adapter definitions, queued agent runs, dry-run launch
   previews, cancellation, retries, and run-ledger evidence.
+- `kanban-boards`: local task and plan board definitions, workflow lanes, WIP
+  limits, blocked/ready badges, board snapshots, terminal/TUI rendering, and
+  card moves.
 - `time-tracking`: local manual time logs, focus sessions, idle prompts,
   actual-minute rollups, and estimate reports.
 - `handoffs`: local session continuation records with referenced tasks, files,
@@ -89,6 +92,18 @@ Matching MCP tool:
 
 ```json
 { "tool": "set_task_fields", "arguments": { "task_id": "1234abcd", "labels": ["bug", "cli"], "severity": "s1", "custom": { "component": "parser" } } }
+```
+
+CLI board snapshot:
+
+```bash
+todos board show local-flow --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "get_board_snapshot", "arguments": { "board_id": "local-flow" } }
 ```
 
 CLI focus session:
