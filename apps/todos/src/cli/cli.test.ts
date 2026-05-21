@@ -664,6 +664,24 @@ describe("CLI integration", () => {
     expect(tasks[0].id).toBe(task.id);
     expect(tasks[0].title).toBe("Bridge portable task");
 
+    expect((await runCli(["update", task.id, "--title", "Local title", "--tags", "local"], targetDb)).exitCode).toBe(0);
+    expect((await runCli(["update", task.id, "--description", "incoming description", "--tags", "bridge,incoming"], sourceDb)).exitCode).toBe(0);
+    expect((await runCli(["export", "--format", "bridge", "--output", bundlePath], sourceDb)).exitCode).toBe(0);
+    const merged = await runCli(["bridge-import", bundlePath, "--apply", "--resolve-conflicts", "--json"], targetDb);
+    expect(merged.exitCode).toBe(0);
+    const mergedResult = JSON.parse(merged.stdout);
+    expect(mergedResult.merged.tasks).toBe(1);
+    expect(mergedResult.conflicts).toContainEqual(expect.objectContaining({
+      table: "tasks",
+      id: task.id,
+      reason: "diverged",
+      fields: expect.arrayContaining(["title"]),
+    }));
+    const mergedTasks = JSON.parse((await runCli(["list", "--json"], targetDb)).stdout);
+    expect(mergedTasks[0].title).toBe("Local title");
+    expect(mergedTasks[0].description).toBe("incoming description");
+    expect(mergedTasks[0].tags).toEqual(["local", "bridge", "incoming"]);
+
     for (const path of [sourceDb, targetDb, bundlePath, `${sourceDb}-shm`, `${sourceDb}-wal`, `${targetDb}-shm`, `${targetDb}-wal`]) {
       try { unlinkSync(path); } catch {}
     }

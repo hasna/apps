@@ -10,6 +10,7 @@ import {
   createLocalBridgeBundle,
   importLocalBridgeBundle,
   type ExportLocalBridgeOptions,
+  type ImportLocalBridgeOptions,
   type LocalBridgeImportResult,
   type TodosLocalBridgeBundle,
   type TodosLocalBridgeData,
@@ -20,6 +21,7 @@ export const TODOS_MARKDOWN_BRIDGE_MARKER = "hasna.todos.bridge";
 
 export interface ImportTodosMarkdownOptions {
   dryRun?: boolean;
+  conflictStrategy?: ImportLocalBridgeOptions["conflictStrategy"];
 }
 
 export interface TodosMarkdownImportResult {
@@ -27,6 +29,7 @@ export interface TodosMarkdownImportResult {
   dry_run: boolean;
   mode: "embedded_bridge" | "plain_markdown";
   inserted: Record<keyof TodosLocalBridgeData, number>;
+  merged: Record<keyof TodosLocalBridgeData, number>;
   skipped: Record<keyof TodosLocalBridgeData, number>;
   conflicts: LocalBridgeImportResult["conflicts"];
   issues: string[];
@@ -230,7 +233,7 @@ export function importTodosMarkdown(
   const dryRun = options.dryRun !== false;
   const embedded = extractEmbeddedBridge(markdown);
   if (embedded) {
-    const result = importLocalBridgeBundle(embedded, { dryRun }, d);
+    const result = importLocalBridgeBundle(embedded, { dryRun, conflictStrategy: options.conflictStrategy }, d);
     return { ...result, mode: "embedded_bridge" };
   }
 
@@ -246,7 +249,7 @@ export function importTodosMarkdown(
     inserted.comments = parsed.tasks.reduce((count, task) => count + task.comments.length, 0);
     inserted.runs = parsed.tasks.reduce((count, task) => count + task.run_summaries.length, 0);
     inserted.task_dependencies = parsed.tasks.reduce((count, task) => count + task.depends_on_titles.length, 0);
-    return { ok: issues.length === 0, dry_run: true, mode: "plain_markdown", inserted, skipped, conflicts: [], issues };
+    return { ok: issues.length === 0, dry_run: true, mode: "plain_markdown", inserted, merged: emptyCounts(), skipped, conflicts: [], issues };
   }
 
   const project = parsed.projectName
@@ -300,5 +303,5 @@ export function importTodosMarkdown(
     }
   }
 
-  return { ok: issues.length === 0, dry_run: false, mode: "plain_markdown", inserted, skipped, conflicts: [], issues };
+  return { ok: issues.length === 0, dry_run: false, mode: "plain_markdown", inserted, merged: emptyCounts(), skipped, conflicts: [], issues };
 }

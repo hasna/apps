@@ -477,6 +477,7 @@ export function registerProjectCommands(program: Command) {
     .description("Dry-run or apply a local hasna/todos bridge export bundle")
     .option("--apply", "Apply the import. Defaults to dry-run.")
     .option("--decrypt", "Decrypt an encrypted bridge export before importing")
+    .option("--resolve-conflicts", "Safely merge existing local tasks by filling blank fields, unioning tags, and recording unresolved divergences")
     .action(async (file: string, opts) => {
       const globalOpts = program.opts();
       try {
@@ -487,7 +488,7 @@ export function registerProjectCommands(program: Command) {
         const bundle = isEncryptedBridgeBundle(parsed)
           ? (opts.decrypt ? decryptBridgeBundle(parsed) : (() => { throw new Error("Bridge bundle is encrypted. Re-run with --decrypt and the configured key environment variable set."); })())
           : parsed;
-        const result = importLocalBridgeBundle(bundle, { dryRun: !opts.apply });
+        const result = importLocalBridgeBundle(bundle, { dryRun: !opts.apply, conflictStrategy: opts.resolveConflicts ? "safe_merge" : "skip" });
         const { emitLocalEventHooksQuiet } = await import("../../lib/event-hooks.js");
         emitLocalEventHooksQuiet({ type: "import.finished", payload: { file: resolve(file), dry_run: result.dry_run, ok: result.ok, inserted: result.inserted, skipped: result.skipped, conflicts: result.conflicts.length, issues: result.issues.length } });
         if (globalOpts.json) {
@@ -498,6 +499,9 @@ export function registerProjectCommands(program: Command) {
         console.log(chalk.bold(`${mode} ${result.ok ? "ready" : "has issues"}`));
         for (const [key, count] of Object.entries(result.inserted)) {
           if (count > 0) console.log(`  ${key}: ${count}`);
+        }
+        for (const [key, count] of Object.entries(result.merged)) {
+          if (count > 0) console.log(`  ${key} merged: ${count}`);
         }
         if (result.conflicts.length > 0) {
           console.log(chalk.yellow(`  conflicts: ${result.conflicts.length}`));
@@ -516,12 +520,13 @@ export function registerProjectCommands(program: Command) {
     .alias("import-md")
     .description("Dry-run or apply a local todos.md Markdown import")
     .option("--apply", "Apply the import. Defaults to dry-run.")
+    .option("--resolve-conflicts", "Safely merge embedded bridge task conflicts while preserving local divergent fields")
     .action(async (file: string, opts) => {
       const globalOpts = program.opts();
       try {
         const { readFileSync } = await import("node:fs");
         const { importTodosMarkdown } = await import("../../lib/todos-md.js");
-        const result = importTodosMarkdown(readFileSync(resolve(file), "utf-8"), { dryRun: !opts.apply });
+        const result = importTodosMarkdown(readFileSync(resolve(file), "utf-8"), { dryRun: !opts.apply, conflictStrategy: opts.resolveConflicts ? "safe_merge" : "skip" });
         const { emitLocalEventHooksQuiet } = await import("../../lib/event-hooks.js");
         emitLocalEventHooksQuiet({ type: "import.finished", payload: { file: resolve(file), format: "todos.md", dry_run: result.dry_run, ok: result.ok, inserted: result.inserted, skipped: result.skipped, issues: result.issues.length } });
         if (globalOpts.json) {
@@ -533,6 +538,9 @@ export function registerProjectCommands(program: Command) {
         console.log(`  mode: ${result.mode}`);
         for (const [key, count] of Object.entries(result.inserted)) {
           if (count > 0) console.log(`  ${key}: ${count}`);
+        }
+        for (const [key, count] of Object.entries(result.merged)) {
+          if (count > 0) console.log(`  ${key} merged: ${count}`);
         }
         for (const issue of result.issues) {
           console.error(chalk.red(`  ${issue}`));

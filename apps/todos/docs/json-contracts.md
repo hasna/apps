@@ -145,6 +145,12 @@ and verification records.
 reports inserted counts, skipped counts, conflicts, and validation issues so a
 caller can inspect what would change before writing to local SQLite.
 
+When bridge or embedded `todos.md` imports run with safe conflict resolution,
+the result also reports `merged` counts. Divergent task conflicts include the
+affected `fields` and a `resolution` of `manual_required`; the importer fills
+blank local fields, unions tags, merges non-conflicting metadata, and records a
+`metadata.sync_conflicts` note without overwriting local edits.
+
 ## CLI/MCP Parity Manifest
 
 `cli_mcp_parity_manifest` is the stable machine-readable shape for the

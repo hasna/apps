@@ -445,6 +445,7 @@ todos export --format bridge --output todos-bridge.json
 todos export --format bridge --encrypt --output todos-bridge.enc.json
 todos bridge-import todos-bridge.json --json
 todos bridge-import todos-bridge.json --apply
+todos bridge-import todos-bridge.json --apply --resolve-conflicts
 ```
 
 Bridge bundles include local projects, task lists, plans, tasks, dependencies,
@@ -453,6 +454,13 @@ artifact contents, commits, refs, and verification records. Imports default to
 dry-run mode and report conflicts before writing. The package does not upload
 bundles or call hosted services; any hosted sync must consume the exported JSON
 explicitly.
+
+For multi-machine local work, `--resolve-conflicts` performs a safe task merge
+instead of overwriting local edits. It fills blank local fields from the
+incoming bundle, unions tags, merges non-conflicting metadata keys, and records
+unresolved divergent fields in `metadata.sync_conflicts` for manual review.
+Local non-empty title, status, priority, and metadata values win when both sides
+changed.
 
 ## todos.md Markdown Import/Export
 
@@ -466,6 +474,7 @@ block:
 todos export --format todos.md --output todos.md
 todos todos-md-import todos.md --json
 todos todos-md-import todos.md --apply
+todos todos-md-import todos.md --apply --resolve-conflicts
 ```
 
 Existing plain checklists also import locally. Use `# Project: Name`, `## Plan:

@@ -235,6 +235,7 @@ CLI bridge export:
 ```bash
 todos export --format bridge --output todos-bridge.json --json
 todos export --format bridge --encrypt --output todos-bridge.enc.json
+todos bridge-import todos-bridge.json --apply --resolve-conflicts --json
 ```
 
 The full local bridge export is intentionally CLI-only because it writes a local
@@ -246,11 +247,15 @@ CLI bridge import:
 
 ```bash
 todos bridge-import todos-bridge.json --apply --json
+todos todos-md-import todos.md --apply --resolve-conflicts --json
 ```
 
 The full local bridge import is intentionally CLI-only and dry-run first because
-it can write many local records. MCP callers can use scoped intake tools such as
-`create_inbox_item` and `import_template`.
+it can write many local records. `--resolve-conflicts` safely merges
+multi-machine task edits by filling blank local fields, unioning tags, merging
+non-conflicting metadata, and recording unresolved divergent fields in
+`metadata.sync_conflicts` for manual review. MCP callers can use scoped intake
+tools such as `create_inbox_item` and `import_template`.
 
 ## Contract Rules
 

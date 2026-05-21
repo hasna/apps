@@ -1,11 +1,13 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { getPackageVersion } from "./package-version.js";
 import { getDatabase, now } from "../db/database.js";
+import { getTask, updateTask } from "../db/tasks.js";
 import { exportStoredArtifactContent, importStoredArtifactContent, type ExportedArtifactContent } from "./artifact-store.js";
 import type { Project, Plan, Task, TaskComment, TaskDependency, TaskList } from "../types/index.js";
 import type { TaskCommit, TaskGitRef, TaskVerification } from "../db/task-commits.js";
 import type { TaskFile } from "../db/task-files.js";
 import type { TaskRun, TaskRunArtifact, TaskRunCommand, TaskRunEvent } from "../db/task-runs.js";
+import { appendSyncConflict } from "./sync-utils.js";
 
 export const TODOS_LOCAL_BRIDGE_KIND = "hasna.todos.local-bridge";
 export const TODOS_LOCAL_BRIDGE_SCHEMA_VERSION = 1;
@@ -63,16 +65,26 @@ export interface LocalBridgeValidationResult {
 export interface LocalBridgeImportConflict {
   table: string;
   id: string;
-  reason: "already_exists" | "missing_dependency";
+  reason: "already_exists" | "missing_dependency" | "diverged";
+  fields?: string[];
+  resolution?: "skipped" | "safe_merged" | "manual_required";
 }
 
 export interface LocalBridgeImportResult {
   ok: boolean;
   dry_run: boolean;
   inserted: Record<keyof TodosLocalBridgeData, number>;
+  merged: Record<keyof TodosLocalBridgeData, number>;
   skipped: Record<keyof TodosLocalBridgeData, number>;
   conflicts: LocalBridgeImportConflict[];
   issues: string[];
+}
+
+export type LocalBridgeConflictStrategy = "skip" | "safe_merge";
+
+export interface ImportLocalBridgeOptions {
+  dryRun?: boolean;
+  conflictStrategy?: LocalBridgeConflictStrategy;
 }
 
 const dataKeys = [
@@ -416,22 +428,126 @@ function sortedTasks(tasks: Task[]): Task[] {
   return result;
 }
 
+function normalizeComparable(value: unknown): unknown {
+  if (value === undefined || value === "") return null;
+  return value;
+}
+
+function valuesEqual(left: unknown, right: unknown): boolean {
+  return JSON.stringify(normalizeComparable(left)) === JSON.stringify(normalizeComparable(right));
+}
+
+function isMissingValue(value: unknown): boolean {
+  return value === undefined || value === null || value === "";
+}
+
+function mergeStringArray(left: string[], right: string[]): string[] {
+  return Array.from(new Set([...left, ...right])).filter(Boolean);
+}
+
+function safeMergeMetadata(
+  localMetadata: Record<string, unknown>,
+  incomingMetadata: Record<string, unknown>,
+): { metadata: Record<string, unknown>; unresolvedFields: string[] } {
+  const metadata = { ...localMetadata };
+  const unresolvedFields: string[] = [];
+  for (const [key, incomingValue] of Object.entries(incomingMetadata)) {
+    if (key === "sync_conflicts") {
+      if (!Array.isArray(metadata[key]) && Array.isArray(incomingValue)) metadata[key] = incomingValue;
+      continue;
+    }
+    if (!(key in metadata) || isMissingValue(metadata[key])) {
+      metadata[key] = incomingValue;
+      continue;
+    }
+    if (!valuesEqual(metadata[key], incomingValue)) {
+      unresolvedFields.push(`metadata.${key}`);
+    }
+  }
+  return { metadata, unresolvedFields };
+}
+
+function buildDivergenceNotes(fields: string[]): string {
+  return `Local bridge import kept local values for divergent fields: ${fields.join(", ")}`;
+}
+
+function safeMergeTask(
+  db: Database,
+  incoming: Task,
+  options: { dryRun: boolean },
+): { merged: boolean; unresolvedFields: string[] } {
+  const current = getTask(incoming.id, db);
+  if (!current) return { merged: false, unresolvedFields: [] };
+  const updates: Partial<Parameters<typeof updateTask>[1]> = {};
+  const unresolvedFields: string[] = [];
+
+  const fillFields = [
+    "description",
+    "assigned_to",
+    "due_at",
+    "estimated_minutes",
+    "actual_minutes",
+    "confidence",
+    "task_type",
+  ] as const;
+  for (const field of fillFields) {
+    const localValue = current[field];
+    const incomingValue = incoming[field];
+    if (isMissingValue(localValue) && !isMissingValue(incomingValue)) {
+      (updates as Record<string, unknown>)[field] = incomingValue;
+    } else if (!valuesEqual(localValue, incomingValue) && !isMissingValue(incomingValue)) {
+      unresolvedFields.push(field);
+    }
+  }
+
+  for (const field of ["title", "status", "priority"] as const) {
+    if (!valuesEqual(current[field], incoming[field])) unresolvedFields.push(field);
+  }
+
+  const mergedTags = mergeStringArray(current.tags, incoming.tags);
+  if (!valuesEqual(current.tags, mergedTags)) updates.tags = mergedTags;
+
+  const metadataMerge = safeMergeMetadata(current.metadata, incoming.metadata);
+  let mergedMetadata = metadataMerge.metadata;
+  unresolvedFields.push(...metadataMerge.unresolvedFields);
+  if (unresolvedFields.length > 0) {
+    mergedMetadata = appendSyncConflict(mergedMetadata, {
+      agent: "local-bridge",
+      direction: "pull",
+      prefer: "local",
+      local_updated_at: current.updated_at,
+      remote_updated_at: incoming.updated_at,
+      detected_at: now(),
+      notes: buildDivergenceNotes(unresolvedFields),
+    }, 10);
+  }
+  if (!valuesEqual(current.metadata, mergedMetadata)) updates.metadata = mergedMetadata;
+
+  const merged = Object.keys(updates).length > 0;
+  if (merged && !options.dryRun) {
+    updateTask(incoming.id, { ...updates, version: current.version }, db);
+  }
+  return { merged, unresolvedFields };
+}
+
 export function importLocalBridgeBundle(
   bundle: TodosLocalBridgeBundle,
-  options: { dryRun?: boolean } = {},
+  options: ImportLocalBridgeOptions = {},
   db?: Database,
 ): LocalBridgeImportResult {
   const d = db || getDatabase();
   const validation = validateLocalBridgeBundle(bundle);
   const inserted = emptyCounts();
+  const merged = emptyCounts();
   const skipped = emptyCounts();
   const conflicts: LocalBridgeImportConflict[] = [];
   const issues: string[] = [];
   if (!validation.ok) {
-    return { ok: false, dry_run: options.dryRun !== false, inserted, skipped, conflicts, issues: validation.issues };
+    return { ok: false, dry_run: options.dryRun !== false, inserted, merged, skipped, conflicts, issues: validation.issues };
   }
 
   const dryRun = options.dryRun !== false;
+  const conflictStrategy = options.conflictStrategy ?? "skip";
   const data: TodosLocalBridgeData = {
     ...bundle.data,
     tasks: sortedTasks(bundle.data.tasks),
@@ -447,6 +563,22 @@ export function importLocalBridgeBundle(
         ? dependencyExists(d, row as unknown as TaskDependency)
         : existsById(d, table, id);
       if (exists) {
+        if (key === "tasks" && conflictStrategy === "safe_merge") {
+          const merge = safeMergeTask(d, row as unknown as Task, { dryRun });
+          if (merge.merged || merge.unresolvedFields.length > 0) {
+            if (merge.merged) merged[key]++;
+            if (merge.unresolvedFields.length > 0) {
+              conflicts.push({
+                table,
+                id,
+                reason: "diverged",
+                fields: merge.unresolvedFields,
+                resolution: merge.merged ? "manual_required" : "skipped",
+              });
+            }
+            continue;
+          }
+        }
         skipped[key]++;
         conflicts.push({ table, id, reason: "already_exists" });
         continue;
@@ -462,13 +594,11 @@ export function importLocalBridgeBundle(
     }
   }
 
-  if (dryRun) {
-    for (const key of dataKeys) inserted[key] = data[key].length - skipped[key];
-  } else if (Array.isArray(bundle.artifact_contents)) {
+  if (!dryRun && Array.isArray(bundle.artifact_contents)) {
     for (const content of bundle.artifact_contents) {
       const report = importStoredArtifactContent(content);
       if (report.status !== "ok") issues.push(`artifact ${content.artifact_id}: ${report.message}`);
     }
   }
-  return { ok: conflicts.every((conflict) => conflict.reason !== "missing_dependency") && issues.length === 0, dry_run: dryRun, inserted, skipped, conflicts, issues };
+  return { ok: conflicts.every((conflict) => conflict.reason !== "missing_dependency") && issues.length === 0, dry_run: dryRun, inserted, merged, skipped, conflicts, issues };
 }

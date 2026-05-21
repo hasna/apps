@@ -638,7 +638,9 @@ export const TODOS_JSON_CONTRACTS: TodosJsonObjectContract[] = [
       conflicts: field("array", "Conflict records with table, id, and reason."),
       issues: field("array", "Validation issue strings."),
     },
-    optional: {},
+    optional: {
+      merged: field("object", "Existing task records safely merged during multi-machine conflict resolution, grouped by object type."),
+    },
   }),
   contract({
     id: "cli_mcp_parity_manifest",

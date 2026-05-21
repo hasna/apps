@@ -138,6 +138,74 @@ describe("local bridge import/export", () => {
     });
   });
 
+  test("safely merges divergent task imports without overwriting local edits", () => {
+    const sourceDb = getDatabase();
+    const project = createProject({ name: "Bridge conflict", path: "/tmp/bridge-conflict" }, sourceDb);
+    const task = createTask({
+      title: "Shared task",
+      description: "incoming description",
+      project_id: project.id,
+      tags: ["incoming"],
+      metadata: { incoming_only: true, shared: "incoming" },
+      due_at: "2026-02-03T04:05:06.000Z",
+    }, sourceDb);
+    const bundle = createLocalBridgeBundle({ project_id: project.id }, sourceDb);
+
+    closeDatabase();
+    process.env["TODOS_DB_PATH"] = ":memory:";
+    resetDatabase();
+    const targetDb = getDatabase();
+    const targetProject = createProject({ name: "Bridge conflict", path: "/tmp/bridge-conflict" }, targetDb);
+    targetDb.run("UPDATE projects SET id = ? WHERE id = ?", [project.id, targetProject.id]);
+    targetDb.run(
+      `INSERT INTO tasks (id, project_id, title, description, status, priority, tags, metadata, version, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'pending', 'medium', ?, ?, 1, '2026-01-01T00:00:00.000Z', '2026-01-05T00:00:00.000Z')`,
+      [
+        task.id,
+        project.id,
+        "Local title",
+        null,
+        JSON.stringify(["local"]),
+        JSON.stringify({ local_only: true, shared: "local" }),
+      ],
+    );
+
+    const preview = importLocalBridgeBundle(bundle, { dryRun: true, conflictStrategy: "safe_merge" }, targetDb);
+    expect(preview.dry_run).toBe(true);
+    expect(preview.merged.tasks).toBe(1);
+    expect(getTask(task.id, targetDb)).toMatchObject({
+      title: "Local title",
+      description: null,
+      tags: ["local"],
+      metadata: { local_only: true, shared: "local" },
+    });
+
+    const applied = importLocalBridgeBundle(bundle, { dryRun: false, conflictStrategy: "safe_merge" }, targetDb);
+    expect(applied.ok).toBe(true);
+    expect(applied.merged.tasks).toBe(1);
+    expect(applied.conflicts).toContainEqual({
+      table: "tasks",
+      id: task.id,
+      reason: "diverged",
+      fields: ["title", "metadata.shared"],
+      resolution: "manual_required",
+    });
+    expect(getTask(task.id, targetDb)).toMatchObject({
+      title: "Local title",
+      description: "incoming description",
+      tags: ["local", "incoming"],
+      due_at: "2026-02-03T04:05:06.000Z",
+      metadata: {
+        local_only: true,
+        incoming_only: true,
+        shared: "local",
+      },
+    });
+    const merged = getTask(task.id, targetDb)!;
+    expect(Array.isArray(merged.metadata.sync_conflicts)).toBe(true);
+    expect(merged.metadata.sync_conflicts).toHaveLength(1);
+  });
+
   test("imports exported local artifact store content", () => {
     const sourceDb = getDatabase();
     const project = createProject({ name: "Bridge artifacts", path: "/tmp/bridge-artifacts" }, sourceDb);
