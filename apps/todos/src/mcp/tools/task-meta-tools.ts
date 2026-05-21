@@ -74,6 +74,7 @@ export function registerTaskMetaTools(server: McpServer, ctx: TaskMetaContext) {
             standup: "standup — Get standup report. Params: agent_id, project_id",
             patrol_tasks: "patrol_tasks — Scan for task issues. Params: stuck_minutes, confidence_threshold, project_id",
             get_review_queue: "get_review_queue — Get tasks needing review. Params: project_id, limit",
+            bootstrap_project: "bootstrap_project — Discover a local workspace and initialize project identity, default task list, and source metadata. Params: path, name, task_list_slug, dry_run",
             create_project: "create_project — Create a project. Params: name, description, status, short_id, metadata",
             list_projects: "list_projects — List projects. Params: status, limit",
             get_project: "get_project — Get project details. Params: project_id",

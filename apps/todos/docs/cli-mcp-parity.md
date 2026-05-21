@@ -16,8 +16,8 @@ structured error contracts.
 
 - `tasks`: create, list, read, update, lifecycle, assignment, queue, and bulk
   workflows.
-- `projects`: project registration, project updates, task lists, path
-  resolution, and focus.
+- `projects`: project bootstrap, project registration, project updates, task
+  lists, path resolution, and focus.
 - `plans`: plan create, list, read, update, complete, and delete workflows.
 - `runs`: local task-run ledgers, events, commands, files, artifacts, and
   finish records.

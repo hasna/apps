@@ -17,6 +17,22 @@ bun install -g @hasna/todos
 todos --help
 ```
 
+## Local Project Bootstrap
+
+Bootstrap discovers the current local workspace, registers a project identity,
+creates the default task list, records local source metadata, and works for
+monorepo package roots without contacting hosted services:
+
+```bash
+todos project-bootstrap .
+todos project-bootstrap packages/cli --name todos-cli --task-list todos-cli
+todos project-bootstrap . --dry-run --json
+```
+
+MCP clients can use `bootstrap_project` for the same local-only workflow. The
+command is idempotent, so running it again refreshes machine-local paths without
+duplicating projects, task lists, or source records.
+
 ## Local Dependency Workflows
 
 Dependencies are stored in the local SQLite database and never require hosted

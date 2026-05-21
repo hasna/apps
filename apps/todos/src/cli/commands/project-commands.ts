@@ -15,6 +15,47 @@ import { getAgentTaskListId } from "../../lib/config.js";
 import { autoProject, autoDetectProject, handleError, output, formatTaskLine, normalizeStatus, resolveTaskId } from "../helpers.js";
 
 export function registerProjectCommands(program: Command) {
+  program
+    .command("project-bootstrap [path]")
+    .description("Discover a local workspace and initialize project task state")
+    .option("--name <name>", "Project display name")
+    .option("--task-list <slug>", "Default task list slug")
+    .option("--dry-run", "Show discovery without writing local state")
+    .action(async (inputPath: string | undefined, opts) => {
+      const globalOpts = program.opts();
+      try {
+        const { bootstrapProject } = await import("../../lib/project-bootstrap.js");
+        const result = bootstrapProject({
+          path: inputPath || globalOpts.project || process.cwd(),
+          name: opts.name,
+          taskListSlug: opts.taskList,
+          dryRun: opts.dryRun,
+        });
+
+        if (globalOpts.json) {
+          output(result, true);
+          return;
+        }
+
+        console.log(chalk.bold("Project bootstrap"));
+        console.log(`  ${chalk.dim("Path:")}       ${result.discovery.projectPath}`);
+        console.log(`  ${chalk.dim("Name:")}       ${result.discovery.projectName}`);
+        if (result.discovery.gitRoot) console.log(`  ${chalk.dim("Git root:")}   ${result.discovery.gitRoot}`);
+        if (result.discovery.workspaceRoot) console.log(`  ${chalk.dim("Workspace:")}  ${result.discovery.workspaceRoot}`);
+        if (result.dryRun) {
+          console.log(chalk.dim("  Dry-run: no local state was changed."));
+          return;
+        }
+        if (result.project) console.log(`  ${chalk.dim("Project:")}    ${result.project.id.slice(0, 8)} ${result.created.project ? "(created)" : "(existing)"}`);
+        if (result.taskList) console.log(`  ${chalk.dim("Task list:")}  ${result.taskList.slug} ${result.created.taskList ? "(created)" : "(existing)"}`);
+        if (result.created.sources.length > 0) {
+          console.log(`  ${chalk.dim("Sources:")}    ${result.created.sources.join(", ")}`);
+        }
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
   // comment
   program
     .command("comment <id> <text>")

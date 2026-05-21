@@ -29,6 +29,7 @@ The stable contracts cover these object IDs:
 - `local_bridge_bundle`
 - `local_bridge_import_result`
 - `cli_mcp_parity_manifest`
+- `project_bootstrap_result`
 
 ## Evolution Rules
 
@@ -75,3 +76,10 @@ caller can inspect what would change before writing to local SQLite.
 side-effect-free CLI/MCP parity registry. It records local-only package metadata,
 the covered task/project/plan/run/comment/search/import/export domains, matching
 MCP tools, JSON contracts, error contracts, and intentional gaps.
+
+## Project Bootstrap Result
+
+`project_bootstrap_result` is returned by local workspace bootstrap commands.
+It includes dry-run status, workspace discovery, the registered project, the
+default task list, source records, and created flags. Dry-runs return null for
+the project and task list because no local SQLite rows are written.

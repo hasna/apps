@@ -128,6 +128,30 @@ describe("CLI integration", () => {
     try { unlinkSync("/tmp/test-cli-search.db"); } catch {}
   });
 
+  it("should bootstrap a local project from CLI JSON output", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, unlinkSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const root = mkdtempSync(join(tmpdir(), "todos-cli-bootstrap-"));
+    const dbPath = join(root, "todos.db");
+    mkdirSync(join(root, ".git"));
+    writeFileSync(join(root, "package.json"), `${JSON.stringify({ name: "@hasna/cli-bootstrap" }, null, 2)}\n`);
+
+    try {
+      const { stdout, stderr, exitCode } = await runCli(["project-bootstrap", root, "--json"], dbPath);
+      expect(exitCode).toBe(0);
+      expect(stderr).toBe("");
+      const result = JSON.parse(stdout);
+      expect(result.discovery.projectName).toBe("cli-bootstrap");
+      expect(result.project.name).toBe("cli-bootstrap");
+      expect(result.taskList.slug).toBe("todos-cli-bootstrap");
+      expect(result.created.project).toBe(true);
+    } finally {
+      try { unlinkSync(dbPath); } catch {}
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("should run week command", async () => {
     // Add a task so there's activity
     const addProc = Bun.spawn(

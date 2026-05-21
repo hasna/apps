@@ -25,6 +25,7 @@ import {
 import {
   addComment, listComments, updateComment, deleteComment,
 } from "../../db/comments.js";
+import { bootstrapProject } from "../../lib/project-bootstrap.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 
 interface TaskProjectContext {
@@ -362,6 +363,27 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
   }
 
   // === PROJECT LIFECYCLE ===
+
+  if (shouldRegisterTool("bootstrap_project")) {
+    server.tool(
+      "bootstrap_project",
+      "Discover a local workspace and initialize project identity, default task list, and local source metadata.",
+      {
+        path: z.string().optional().describe("Workspace path. Defaults to current working directory."),
+        name: z.string().optional().describe("Project display name override."),
+        task_list_slug: z.string().optional().describe("Default task list slug override."),
+        dry_run: z.boolean().optional().describe("Only report discovery; do not write local state."),
+      },
+      async ({ path, name, task_list_slug, dry_run }) => {
+        try {
+          const result = bootstrapProject({ path, name, taskListSlug: task_list_slug, dryRun: dry_run });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
 
   if (shouldRegisterTool("create_project")) {
     server.tool(

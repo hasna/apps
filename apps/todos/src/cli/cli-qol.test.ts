@@ -294,6 +294,7 @@ describe("CLI QoL commands", () => {
     expect(help).toContain("assign");
     expect(help).toContain("pin");
     expect(help).toContain("tag");
+    expect(help).toContain("project-bootstrap");
     // Server
     expect(help).toContain("serve");
     expect(help).toContain("stream");
