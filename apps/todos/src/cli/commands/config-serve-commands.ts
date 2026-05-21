@@ -72,6 +72,117 @@ export function registerConfigServeCommands(program: Command) {
       }
     });
 
+  const trust = program
+    .command("trust")
+    .description("Manage local workspace trust and permission profiles");
+
+  function listOption(value: string | undefined): string[] | undefined {
+    return value?.split(",").map((item) => item.trim()).filter(Boolean);
+  }
+
+  trust
+    .command("list")
+    .description("List local workspace trust profiles")
+    .action(async () => {
+      const globalOpts = program.opts();
+      const { listWorkspaceTrustProfiles } = await import("../../lib/workspace-trust.js");
+      const profiles = listWorkspaceTrustProfiles();
+      if (globalOpts.json) { output(profiles, true); return; }
+      if (profiles.length === 0) {
+        console.log(chalk.dim("No trusted workspaces configured."));
+        return;
+      }
+      for (const profile of profiles) {
+        console.log(`${profile.trusted ? chalk.green("trusted") : chalk.yellow("prompt")} ${profile.preset.padEnd(10)} ${profile.root}`);
+      }
+    });
+
+  trust
+    .command("status [path]")
+    .description("Show local trust status for a workspace path")
+    .action(async (path: string | undefined) => {
+      const globalOpts = program.opts();
+      const { getWorkspaceTrustStatus } = await import("../../lib/workspace-trust.js");
+      const status = getWorkspaceTrustStatus(path || process.cwd());
+      if (globalOpts.json) { output(status, true); return; }
+      console.log(chalk.bold(status.trusted ? "Workspace trusted" : "Workspace requires prompts"));
+      console.log(`  ${chalk.dim("Path:")}    ${status.root}`);
+      console.log(`  ${chalk.dim("Match:")}   ${status.matched_root || "(none)"}`);
+      console.log(`  ${chalk.dim("Preset:")}  ${status.profile.preset}`);
+    });
+
+  trust
+    .command("add <path>")
+    .description("Add or update a local workspace trust profile")
+    .option("--preset <preset>", "restricted, readonly, standard, or trusted", "standard")
+    .option("--trusted <value>", "Override trusted boolean")
+    .option("--allow-command <list>", "Comma-separated command prefixes or patterns")
+    .option("--deny-command <list>", "Comma-separated denied command substrings or patterns")
+    .option("--tool <list>", "Comma-separated tool permission names")
+    .option("--write-scope <list>", "Comma-separated allowed write scopes relative to the root")
+    .option("--redact-env <list>", "Comma-separated environment key patterns to redact")
+    .option("--no-prompt", "Do not require prompts for unsafe checks")
+    .action(async (path: string, opts: { preset?: string; trusted?: string; allowCommand?: string; denyCommand?: string; tool?: string; writeScope?: string; redactEnv?: string; prompt?: boolean }) => {
+      const globalOpts = program.opts();
+      const { upsertWorkspaceTrustProfile } = await import("../../lib/workspace-trust.js");
+      const preset = ["restricted", "readonly", "standard", "trusted"].includes(opts.preset || "")
+        ? opts.preset as "restricted" | "readonly" | "standard" | "trusted"
+        : "standard";
+      const profile = upsertWorkspaceTrustProfile({
+        root: path,
+        preset,
+        trusted: opts.trusted === undefined ? undefined : /^(1|true|yes|on)$/i.test(opts.trusted),
+        command_allowlist: listOption(opts.allowCommand),
+        command_denylist: listOption(opts.denyCommand),
+        tool_permissions: listOption(opts.tool),
+        write_scopes: listOption(opts.writeScope),
+        env_redactions: listOption(opts.redactEnv),
+        require_prompt_for_unsafe: opts.prompt === false ? false : undefined,
+      });
+      if (globalOpts.json) { output(profile, true); return; }
+      console.log(chalk.green(`Trusted workspace profile saved for ${profile.root}`));
+    });
+
+  trust
+    .command("remove <path>")
+    .description("Remove a local workspace trust profile")
+    .action(async (path: string) => {
+      const globalOpts = program.opts();
+      const { removeWorkspaceTrustProfile } = await import("../../lib/workspace-trust.js");
+      const removed = removeWorkspaceTrustProfile(path);
+      if (globalOpts.json) { output({ removed }, true); return; }
+      console.log(removed ? chalk.green("Trust profile removed.") : chalk.dim("No trust profile matched."));
+    });
+
+  trust
+    .command("check [path]")
+    .description("Check whether a local command, tool, or write path is allowed")
+    .option("--command <command>", "Command line to check")
+    .option("--tool <tool>", "Tool permission to check")
+    .option("--write <path>", "Write path to check")
+    .option("--env <list>", "Comma-separated environment keys to test for redaction")
+    .action(async (path: string | undefined, opts: { command?: string; tool?: string; write?: string; env?: string }) => {
+      const globalOpts = program.opts();
+      const { checkWorkspacePermission } = await import("../../lib/workspace-trust.js");
+      const env = Object.fromEntries((listOption(opts.env) || []).map((key) => [key, "set"]));
+      const result = checkWorkspacePermission({
+        path: path || process.cwd(),
+        command: opts.command,
+        tool: opts.tool,
+        write_path: opts.write,
+        env,
+      });
+      if (globalOpts.json) { output(result, true); return; }
+      console.log(result.allowed ? chalk.green("Allowed") : chalk.yellow("Requires review"));
+      if (result.reasons.length > 0) {
+        for (const reason of result.reasons) console.log(`  - ${reason}`);
+      }
+      if (result.redacted_env_keys.length > 0) {
+        console.log(`  ${chalk.dim("Redacted env:")} ${result.redacted_env_keys.join(", ")}`);
+      }
+      if (!result.allowed) process.exitCode = 1;
+    });
+
   // serve (web dashboard)
   program
     .command("serve")

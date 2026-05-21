@@ -5,6 +5,7 @@ export type TodosCliMcpParityDomain =
   | "tasks"
   | "projects"
   | "plans"
+  | "workspace-trust"
   | "runs"
   | "comments"
   | "search"
@@ -173,6 +174,30 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos plans --add \"Release 1.0\" --json",
       mcpTool: "create_plan",
+    },
+  },
+  {
+    domain: "workspace-trust",
+    cliCommands: [
+      "todos trust list",
+      "todos trust status",
+      "todos trust add",
+      "todos trust remove",
+      "todos trust check",
+    ],
+    mcpTools: [
+      "list_workspace_trust_profiles",
+      "get_workspace_trust",
+      "set_workspace_trust",
+      "remove_workspace_trust",
+      "check_workspace_permission",
+    ],
+    jsonContracts: ["structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    example: {
+      cli: "todos trust check . --command \"bun test\" --write src/index.ts --json",
+      mcpTool: "check_workspace_permission",
     },
   },
   {

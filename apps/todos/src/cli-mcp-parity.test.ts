@@ -14,6 +14,7 @@ const expectedDomains = [
   "tasks",
   "projects",
   "plans",
+  "workspace-trust",
   "runs",
   "comments",
   "search",

@@ -678,4 +678,54 @@ describe("CLI integration", () => {
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync("/tmp/test-cli-overdue.db"); } catch {}
   });
+
+  it("should manage local workspace trust profiles", async () => {
+    const dbPath = "/tmp/test-cli-trust.db";
+    const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const home = mkdtempSync(join(tmpdir(), "todos-cli-trust-home-"));
+    const project = join(home, "project");
+    const previousHome = process.env["HOME"];
+    process.env["HOME"] = home;
+    try { unlinkSync(dbPath); } catch {}
+
+    const added = await runCli([
+      "trust",
+      "add",
+      project,
+      "--preset",
+      "standard",
+      "--allow-command",
+      "bun,git",
+      "--write-scope",
+      "src",
+      "--redact-env",
+      "CUSTOM_SECRET",
+      "--json",
+    ], dbPath);
+    expect(added.exitCode).toBe(0);
+    expect(JSON.parse(added.stdout).write_scopes).toEqual(["src"]);
+
+    const allowed = await runCli(["trust", "check", project, "--command", "bun test", "--write", join(project, "src/index.ts"), "--env", "CUSTOM_SECRET,PATH", "--json"], dbPath);
+    expect(allowed.exitCode).toBe(0);
+    const allowedPayload = JSON.parse(allowed.stdout);
+    expect(allowedPayload.allowed).toBe(true);
+    expect(allowedPayload.redacted_env_keys).toEqual(["CUSTOM_SECRET"]);
+
+    const denied = await runCli(["trust", "check", project, "--command", "rm -rf .", "--write", join(project, "README.md"), "--json"], dbPath);
+    expect(denied.exitCode).toBe(0);
+    const deniedPayload = JSON.parse(denied.stdout);
+    expect(deniedPayload.allowed).toBe(false);
+    expect(deniedPayload.requires_prompt).toBe(true);
+
+    const removed = await runCli(["trust", "remove", project, "--json"], dbPath);
+    expect(removed.exitCode).toBe(0);
+    expect(JSON.parse(removed.stdout).removed).toBe(true);
+
+    if (previousHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = previousHome;
+    rmSync(home, { recursive: true, force: true });
+    try { unlinkSync(dbPath); } catch {}
+  });
 });

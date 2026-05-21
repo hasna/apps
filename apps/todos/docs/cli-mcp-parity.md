@@ -19,6 +19,8 @@ structured error contracts.
 - `projects`: project bootstrap, project registration, project updates, task
   lists, path resolution, and focus.
 - `plans`: plan create, list, read, update, complete, and delete workflows.
+- `workspace-trust`: local trusted roots, permission presets, command checks,
+  write scopes, env redaction declarations, and prompt-required decisions.
 - `runs`: local task-run ledgers, events, commands, files, artifacts, and
   finish records.
 - `comments`: task comments, progress notes, and activity entries.
@@ -40,6 +42,18 @@ Matching MCP tool:
 
 ```json
 { "tool": "create_task", "arguments": { "title": "Fix flaky parser", "priority": "high" } }
+```
+
+CLI workspace permission check:
+
+```bash
+todos trust check . --command "bun test" --write src/index.ts --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "check_workspace_permission", "arguments": { "path": ".", "command": "bun test", "write_path": "src/index.ts" } }
 ```
 
 CLI bridge export:

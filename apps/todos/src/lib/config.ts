@@ -24,6 +24,22 @@ export interface ProjectOverrideConfig {
   completion_guard?: CompletionGuardConfig;
 }
 
+export type WorkspacePermissionPreset = "restricted" | "readonly" | "standard" | "trusted";
+
+export interface WorkspaceTrustProfile {
+  root: string;
+  trusted: boolean;
+  preset: WorkspacePermissionPreset;
+  command_allowlist: string[];
+  command_denylist: string[];
+  tool_permissions: string[];
+  write_scopes: string[];
+  env_redactions: string[];
+  require_prompt_for_unsafe: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface TodosConfig {
   /** Local HTTP server URL used by SDK clients. Defaults to http://localhost:19427. */
   apiUrl?: string;
@@ -40,6 +56,8 @@ export interface TodosConfig {
   agent_pool?: string[];
   /** Per-project agent name pools, keyed by working directory path prefix. */
   project_pools?: Record<string, string[]>;
+  /** Local workspace trust profiles, keyed by absolute project root. */
+  workspace_trust?: Record<string, WorkspaceTrustProfile>;
 }
 
 function getTodosGlobalDir(): string {

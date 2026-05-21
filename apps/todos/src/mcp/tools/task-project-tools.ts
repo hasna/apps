@@ -27,6 +27,13 @@ import {
   addComment, listComments, updateComment, deleteComment,
 } from "../../db/comments.js";
 import { bootstrapProject } from "../../lib/project-bootstrap.js";
+import {
+  checkWorkspacePermission,
+  getWorkspaceTrustStatus,
+  listWorkspaceTrustProfiles,
+  removeWorkspaceTrustProfile,
+  upsertWorkspaceTrustProfile,
+} from "../../lib/workspace-trust.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 
 interface TaskProjectContext {
@@ -66,6 +73,96 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
     };
     visit(graph, 0, "root");
     return lines.join("\n");
+  }
+
+  // === WORKSPACE TRUST ===
+
+  if (shouldRegisterTool("list_workspace_trust_profiles")) {
+    server.tool("list_workspace_trust_profiles", "List local workspace trust and permission profiles.", {}, async () => {
+      try {
+        return { content: [{ type: "text" as const, text: JSON.stringify(listWorkspaceTrustProfiles(), null, 2) }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+      }
+    });
+  }
+
+  if (shouldRegisterTool("get_workspace_trust")) {
+    server.tool(
+      "get_workspace_trust",
+      "Show local trust status for a workspace path.",
+      { path: z.string().optional().describe("Workspace path. Defaults to current working directory.") },
+      async ({ path }) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify(getWorkspaceTrustStatus(path), null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("set_workspace_trust")) {
+    server.tool(
+      "set_workspace_trust",
+      "Create or update a local workspace trust and permission profile.",
+      {
+        root: z.string().describe("Workspace root path"),
+        preset: z.enum(["restricted", "readonly", "standard", "trusted"]).optional(),
+        trusted: z.boolean().optional(),
+        command_allowlist: z.array(z.string()).optional(),
+        command_denylist: z.array(z.string()).optional(),
+        tool_permissions: z.array(z.string()).optional(),
+        write_scopes: z.array(z.string()).optional(),
+        env_redactions: z.array(z.string()).optional(),
+        require_prompt_for_unsafe: z.boolean().optional(),
+      },
+      async (input) => {
+        try {
+          const profile = upsertWorkspaceTrustProfile(input);
+          return { content: [{ type: "text" as const, text: JSON.stringify(profile, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("remove_workspace_trust")) {
+    server.tool(
+      "remove_workspace_trust",
+      "Remove a local workspace trust profile.",
+      { root: z.string().describe("Workspace root path") },
+      async ({ root }) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ removed: removeWorkspaceTrustProfile(root) }, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("check_workspace_permission")) {
+    server.tool(
+      "check_workspace_permission",
+      "Check whether a local command, MCP tool, write path, or env exposure is allowed by the workspace trust profile.",
+      {
+        path: z.string().optional(),
+        command: z.string().optional(),
+        tool: z.string().optional(),
+        write_path: z.string().optional(),
+        env: z.record(z.string()).optional(),
+      },
+      async (input) => {
+        try {
+          const result = checkWorkspacePermission(input);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }], isError: !result.allowed };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
   }
 
   // === TASK STATE ===

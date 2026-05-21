@@ -379,7 +379,20 @@ export {
   getLocalApiConfig,
   normalizeApiUrl,
 } from "./lib/config.js";
-export type { TodosConfig, AgentConfig, CompletionGuardConfig, LocalApiConfig } from "./lib/config.js";
+export type { TodosConfig, AgentConfig, CompletionGuardConfig, LocalApiConfig, WorkspacePermissionPreset, WorkspaceTrustProfile } from "./lib/config.js";
+export {
+  checkWorkspacePermission,
+  getWorkspaceTrustStatus,
+  listWorkspaceTrustProfiles,
+  removeWorkspaceTrustProfile,
+  upsertWorkspaceTrustProfile,
+} from "./lib/workspace-trust.js";
+export type {
+  UpsertWorkspaceTrustInput,
+  WorkspacePermissionCheck,
+  WorkspacePermissionCheckInput,
+  WorkspaceTrustStatus,
+} from "./lib/workspace-trust.js";
 
 // Completion Guard
 export { checkCompletionGuard } from "./lib/completion-guard.js";

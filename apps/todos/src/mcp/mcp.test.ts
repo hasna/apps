@@ -3,6 +3,7 @@ import { getDatabase, closeDatabase, resetDatabase, resolvePartialId } from "../
 import { addDependency, createTask, getTask, listTasks, completeTask, startTask } from "../db/tasks.js";
 import { createProject } from "../db/projects.js";
 import { addComment, listComments } from "../db/comments.js";
+import { resetConfig } from "../lib/config.js";
 import { searchTasks } from "../lib/search.js";
 import type { Task } from "../types/index.js";
 import { registerTaskCrudTools } from "./tools/task-crud.js";
@@ -149,6 +150,47 @@ describe("MCP tool operations", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("workspace trust tools manage local permission profiles", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-trust-home-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    const tools = captureTools(registerTaskProjectTools);
+    const root = join(home, "project");
+
+    const savedResult = await callCapturedTool(tools, "set_workspace_trust", {
+      root,
+      preset: "standard",
+      command_allowlist: ["bun", "git"],
+      write_scopes: ["src"],
+      env_redactions: ["CUSTOM_SECRET"],
+    });
+    const saved = JSON.parse(savedResult.content[0]!.text);
+    expect(saved.write_scopes).toEqual(["src"]);
+
+    const checkResult = await callCapturedTool(tools, "check_workspace_permission", {
+      path: root,
+      command: "bun test",
+      write_path: join(root, "src/index.ts"),
+      env: { CUSTOM_SECRET: "set", PATH: "/bin" },
+    });
+    const check = JSON.parse(checkResult.content[0]!.text);
+    expect(check.allowed).toBe(true);
+    expect(check.redacted_env_keys).toEqual(["CUSTOM_SECRET"]);
+
+    const statusResult = await callCapturedTool(tools, "get_workspace_trust", { path: join(root, "src/index.ts") });
+    expect(JSON.parse(statusResult.content[0]!.text).matched_root).toBe(root);
+
+    await callCapturedTool(tools, "remove_workspace_trust", { root });
+    if (previousHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = previousHome;
+    resetConfig();
+    rmSync(home, { recursive: true, force: true });
   });
 
   it("version-based optimistic locking via update_task", () => {

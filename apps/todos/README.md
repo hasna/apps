@@ -33,6 +33,26 @@ MCP clients can use `bootstrap_project` for the same local-only workflow. The
 command is idempotent, so running it again refreshes machine-local paths without
 duplicating projects, task lists, or source records.
 
+## Local Workspace Trust
+
+Workspace trust profiles live in `~/.hasna/todos/config.json` and keep agent
+permissions local. Profiles declare trusted roots, command allowlists and
+denylists, tool permissions, write scopes, environment-key redaction patterns,
+and whether unsafe checks should require an explicit prompt:
+
+```bash
+todos trust add . --preset standard --allow-command bun,git,todos --write-scope src,tests --redact-env API_KEY,TOKEN
+todos trust status .
+todos trust check . --command "bun test" --write src/index.ts --env OPENAI_API_KEY,PATH
+todos trust remove .
+```
+
+MCP clients can use `set_workspace_trust`, `get_workspace_trust`,
+`list_workspace_trust_profiles`, `check_workspace_permission`, and
+`remove_workspace_trust`. The checks do not call a hosted policy service; they
+return deterministic JSON showing whether an action is allowed, why it needs a
+prompt, and which environment keys should be redacted.
+
 ## Local Dependency Workflows
 
 Dependencies are stored in the local SQLite database and never require hosted
