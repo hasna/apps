@@ -19,6 +19,16 @@ import {
   linkTaskGitRef,
   linkTaskToCommit,
 } from "../../db/task-commits.js";
+import {
+  addTaskRunArtifact,
+  addTaskRunCommand,
+  addTaskRunEvent,
+  addTaskRunFile,
+  finishTaskRun,
+  getTaskRunLedger,
+  listTaskRuns,
+  startTaskRun,
+} from "../../db/task-runs.js";
 
 interface TaskResourcesContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -391,6 +401,159 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
         try {
           const trace = getTaskTraceability(resolveId(task_id));
           return { content: [{ type: "text" as const, text: JSON.stringify(trace, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("start_task_run")) {
+    server.tool(
+      "start_task_run",
+      "Start a local run ledger entry for a task. Optionally claims the task for the agent. Never uploads artifacts or calls hosted APIs.",
+      {
+        task_id: z.string().describe("Task ID"),
+        agent_id: z.string().optional().describe("Agent starting the run"),
+        title: z.string().optional().describe("Run title"),
+        summary: z.string().optional().describe("Run summary"),
+        metadata: z.record(z.unknown()).optional().describe("Additional local metadata"),
+        claim: z.boolean().optional().describe("Claim/start the task before recording the run"),
+      },
+      async ({ task_id, agent_id, title, summary, metadata, claim }) => {
+        try {
+          const run = startTaskRun({ task_id: resolveId(task_id), agent_id, title, summary, metadata, claim });
+          return { content: [{ type: "text" as const, text: JSON.stringify(run, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_task_runs")) {
+    server.tool(
+      "list_task_runs",
+      "List local run ledger entries, optionally scoped to a task.",
+      { task_id: z.string().optional().describe("Optional task ID") },
+      async ({ task_id }) => {
+        try {
+          const runs = listTaskRuns(task_id ? resolveId(task_id) : undefined);
+          return { content: [{ type: "text" as const, text: JSON.stringify(runs, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("add_task_run_event")) {
+    server.tool(
+      "add_task_run_event",
+      "Record a local run event such as progress, comment, claim, command, file, artifact, completed, failed, or cancelled.",
+      {
+        run_id: z.string().describe("Run ID or prefix"),
+        event_type: z.enum(["started", "progress", "claim", "comment", "command", "file", "artifact", "completed", "failed", "cancelled"]),
+        message: z.string().optional().describe("Event message"),
+        data: z.record(z.unknown()).optional().describe("Additional local event data"),
+        agent_id: z.string().optional().describe("Agent recording the event"),
+      },
+      async ({ run_id, event_type, message, data, agent_id }) => {
+        try {
+          const event = addTaskRunEvent({ run_id, event_type, message, data, agent_id });
+          return { content: [{ type: "text" as const, text: JSON.stringify(event, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("add_task_run_command")) {
+    server.tool(
+      "add_task_run_command",
+      "Record local command/test evidence for a run and mirror it into task verification evidence.",
+      {
+        run_id: z.string().describe("Run ID or prefix"),
+        command: z.string().describe("Command that was run"),
+        status: z.enum(["passed", "failed", "unknown"]).optional().describe("Command result"),
+        exit_code: z.number().optional().describe("Process exit code"),
+        output_summary: z.string().optional().describe("Short output summary"),
+        artifact_path: z.string().optional().describe("Optional local artifact or log path"),
+        agent_id: z.string().optional().describe("Agent that ran the command"),
+      },
+      async ({ run_id, command, status, exit_code, output_summary, artifact_path, agent_id }) => {
+        try {
+          const evidence = addTaskRunCommand({ run_id, command, status, exit_code, output_summary, artifact_path, agent_id });
+          return { content: [{ type: "text" as const, text: JSON.stringify(evidence, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("add_task_run_file")) {
+    server.tool(
+      "add_task_run_file",
+      "Record a file touched by a local run and link it to the task.",
+      {
+        run_id: z.string().describe("Run ID or prefix"),
+        path: z.string().describe("File path"),
+        status: z.enum(["planned", "active", "modified", "reviewed", "removed"]).optional().describe("File status"),
+        note: z.string().optional().describe("Why the file was touched"),
+        agent_id: z.string().optional().describe("Agent touching the file"),
+      },
+      async ({ run_id, path, status, note, agent_id }) => {
+        try {
+          const file = addTaskRunFile({ run_id, path, status, note, agent_id });
+          return { content: [{ type: "text" as const, text: JSON.stringify(file, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("add_task_run_artifact")) {
+    server.tool(
+      "add_task_run_artifact",
+      "Record local artifact metadata for a run without uploading artifact content.",
+      {
+        run_id: z.string().describe("Run ID or prefix"),
+        path: z.string().describe("Local artifact path"),
+        artifact_type: z.string().optional().describe("Artifact type, e.g. log, screenshot, report"),
+        description: z.string().optional().describe("Artifact description"),
+        size_bytes: z.number().optional().describe("Artifact size in bytes"),
+        sha256: z.string().optional().describe("SHA-256 checksum"),
+        metadata: z.record(z.unknown()).optional().describe("Additional local metadata"),
+        agent_id: z.string().optional().describe("Agent adding the artifact"),
+      },
+      async ({ run_id, path, artifact_type, description, size_bytes, sha256, metadata, agent_id }) => {
+        try {
+          const artifact = addTaskRunArtifact({ run_id, path, artifact_type, description, size_bytes, sha256, metadata, agent_id });
+          return { content: [{ type: "text" as const, text: JSON.stringify(artifact, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("finish_task_run")) {
+    server.tool(
+      "finish_task_run",
+      "Finish a local run ledger entry as completed, failed, or cancelled.",
+      {
+        run_id: z.string().describe("Run ID or prefix"),
+        status: z.enum(["completed", "failed", "cancelled"]).describe("Final run status"),
+        summary: z.string().optional().describe("Final summary"),
+        agent_id: z.string().optional().describe("Agent finishing the run"),
+      },
+      async ({ run_id, status, summary, agent_id }) => {
+        try {
+          const run = finishTaskRun({ run_id, status, summary, agent_id });
+          return { content: [{ type: "text" as const, text: JSON.stringify(run, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("get_task_run_ledger")) {
+    server.tool(
+      "get_task_run_ledger",
+      "Get a local run ledger with events, commands, files, and artifact metadata.",
+      { run_id: z.string().describe("Run ID or prefix") },
+      async ({ run_id }) => {
+        try {
+          const ledger = getTaskRunLedger(run_id);
+          return { content: [{ type: "text" as const, text: JSON.stringify(ledger, null, 2) }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
       },
     );

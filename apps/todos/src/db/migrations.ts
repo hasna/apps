@@ -888,4 +888,74 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_task_verifications_status ON task_verifications(status);
   INSERT OR IGNORE INTO _migrations (id) VALUES (51);
   `,
+  // Migration 52: Local run ledger and evidence capture
+  `
+  CREATE TABLE IF NOT EXISTS task_runs (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    agent_id TEXT,
+    title TEXT,
+    status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running', 'completed', 'failed', 'cancelled')),
+    summary TEXT,
+    metadata TEXT DEFAULT '{}',
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_runs_task ON task_runs(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_runs_agent ON task_runs(agent_id);
+  CREATE INDEX IF NOT EXISTS idx_task_runs_status ON task_runs(status);
+  CREATE INDEX IF NOT EXISTS idx_task_runs_started ON task_runs(started_at);
+
+  CREATE TABLE IF NOT EXISTS task_run_events (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES task_runs(id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL CHECK(event_type IN ('started', 'progress', 'claim', 'comment', 'command', 'file', 'artifact', 'completed', 'failed', 'cancelled')),
+    message TEXT,
+    data TEXT DEFAULT '{}',
+    agent_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_run_events_run ON task_run_events(run_id);
+  CREATE INDEX IF NOT EXISTS idx_task_run_events_task ON task_run_events(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_run_events_type ON task_run_events(event_type);
+
+  CREATE TABLE IF NOT EXISTS task_run_commands (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES task_runs(id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    command TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'unknown' CHECK(status IN ('passed', 'failed', 'unknown')),
+    exit_code INTEGER,
+    output_summary TEXT,
+    artifact_path TEXT,
+    agent_id TEXT,
+    started_at TEXT,
+    completed_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_run_commands_run ON task_run_commands(run_id);
+  CREATE INDEX IF NOT EXISTS idx_task_run_commands_task ON task_run_commands(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_run_commands_status ON task_run_commands(status);
+
+  CREATE TABLE IF NOT EXISTS task_run_artifacts (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES task_runs(id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    artifact_type TEXT,
+    description TEXT,
+    size_bytes INTEGER,
+    sha256 TEXT,
+    metadata TEXT DEFAULT '{}',
+    agent_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_run_artifacts_run ON task_run_artifacts(run_id);
+  CREATE INDEX IF NOT EXISTS idx_task_run_artifacts_task ON task_run_artifacts(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_run_artifacts_path ON task_run_artifacts(path);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (52);
+  `,
 ];

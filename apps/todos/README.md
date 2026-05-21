@@ -76,6 +76,26 @@ MCP clients get the same local data through `link_task_to_commit`,
 `add_task_verification`, and `get_task_traceability`, so agents can explain
 which task changed a commit, branch, PR, file, or verification command.
 
+## Local Run Ledger
+
+Agent runs can record local evidence without uploading artifacts or calling a
+hosted API:
+
+```bash
+RUN_ID=$(todos runs start <task-id> --agent codex --title "Parser fix" --claim --json | jq -r .id)
+todos runs event "$RUN_ID" progress "writing regression tests"
+todos runs command "$RUN_ID" "bun test src/parser.test.ts" --status passed --summary "14 pass"
+todos runs file "$RUN_ID" src/parser.ts --status modified
+todos runs artifact "$RUN_ID" logs/parser-test.txt --type log --description "focused test output"
+todos runs finish "$RUN_ID" --status completed --summary "parser fixed and verified"
+todos runs show "$RUN_ID"
+```
+
+Run command evidence is also mirrored into task verification evidence, file
+events are linked to task file tracking, and comments can be recorded into the
+task timeline. Sensitive-looking tokens, keys, passwords, and bearer values are
+redacted before evidence is stored.
+
 ## MCP Server
 
 ```bash

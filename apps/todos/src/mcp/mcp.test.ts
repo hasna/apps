@@ -301,6 +301,64 @@ describe("MCP tool wrappers", () => {
     expect(refs[0].task_id).toBe(task.id);
   });
 
+  it("run ledger tools capture local run evidence without hosted calls", async () => {
+    const tools = captureTools(registerTaskResources);
+    const task = createTask({ title: "Run via MCP" }, db);
+
+    const startResult = await callCapturedTool(tools, "start_task_run", {
+      task_id: task.id,
+      agent_id: "mcp",
+      title: "MCP local run",
+      claim: true,
+      metadata: { source: "local" },
+    });
+    const run = JSON.parse(startResult.content[0]!.text);
+    expect(run.status).toBe("running");
+
+    await callCapturedTool(tools, "add_task_run_event", {
+      run_id: run.id,
+      event_type: "comment",
+      message: "progress update",
+      agent_id: "mcp",
+    });
+    await callCapturedTool(tools, "add_task_run_command", {
+      run_id: run.id,
+      command: "bun test src/db/task-runs.test.ts",
+      status: "passed",
+      exit_code: 0,
+      output_summary: "passed",
+      artifact_path: "logs/mcp-run.txt",
+    });
+    await callCapturedTool(tools, "add_task_run_file", {
+      run_id: run.id,
+      path: "src/db/task-runs.ts",
+      status: "modified",
+    });
+    await callCapturedTool(tools, "add_task_run_artifact", {
+      run_id: run.id,
+      path: "logs/mcp-run.txt",
+      artifact_type: "log",
+      description: "local log",
+    });
+    await callCapturedTool(tools, "finish_task_run", {
+      run_id: run.id,
+      status: "completed",
+      summary: "done",
+    });
+
+    const ledgerResult = await callCapturedTool(tools, "get_task_run_ledger", { run_id: run.id });
+    const ledger = JSON.parse(ledgerResult.content[0]!.text);
+    expect(ledger.run.status).toBe("completed");
+    expect(ledger.events.map((event: { event_type: string }) => event.event_type)).toContain("comment");
+    expect(ledger.commands[0].status).toBe("passed");
+    expect(ledger.files[0].path).toBe("src/db/task-runs.ts");
+    expect(ledger.artifacts[0].path).toBe("logs/mcp-run.txt");
+
+    const listResult = await callCapturedTool(tools, "list_task_runs", { task_id: task.id });
+    const runs = JSON.parse(listResult.content[0]!.text);
+    expect(runs[0].id).toBe(run.id);
+  });
+
   it("comment wrappers persist and read the real comment fields", async () => {
     const projectTools = captureTools(registerTaskProjectTools);
     const advTools = captureTools(registerTaskAdvTools);

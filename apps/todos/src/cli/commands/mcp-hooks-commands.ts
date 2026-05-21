@@ -72,6 +72,18 @@ function removeTomlBlock(content: string, blockName: string): string {
   return result.join("\n");
 }
 
+function parseJsonOption(value: string | undefined, label: string): Record<string, unknown> | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
+    return parsed as Record<string, unknown>;
+  } catch {
+    console.error(chalk.red(`${label} must be valid JSON object`));
+    process.exit(1);
+  }
+}
+
 // --- Claude Code: use `claude mcp add` ---
 
 function registerClaude(binPath: string, global?: boolean): void {
@@ -485,6 +497,200 @@ exit 0
       if (trace.git_refs.length === 0 && trace.commits.length === 0 && trace.files.length === 0 && trace.verifications.length === 0) {
         console.log(chalk.dim("No local traceability links recorded."));
       }
+    });
+
+  const runs = program
+    .command("runs")
+    .description("Manage the local run ledger and evidence capture");
+
+  runs
+    .command("start <task-id>")
+    .description("Start a local run ledger entry for a task")
+    .option("--agent <name>", "Agent starting the run")
+    .option("--title <text>", "Run title")
+    .option("--summary <text>", "Run summary")
+    .option("--metadata <json>", "Additional JSON metadata")
+    .option("--claim", "Claim/start the task for the agent before recording the run")
+    .action(async (taskId: string, opts: { agent?: string; title?: string; summary?: string; metadata?: string; claim?: boolean }) => {
+      const globalOpts = program.opts();
+      const { startTaskRun } = await import("../../db/task-runs.js");
+      const run = startTaskRun({
+        task_id: resolveTaskId(taskId),
+        agent_id: opts.agent || globalOpts.agent,
+        title: opts.title,
+        summary: opts.summary,
+        metadata: parseJsonOption(opts.metadata, "--metadata"),
+        claim: opts.claim,
+      });
+      if (globalOpts.json) { output(run, true); return; }
+      console.log(chalk.green(`Started run ${run.id.slice(0, 8)} for task ${taskId}`));
+    });
+
+  runs
+    .command("list [task-id]")
+    .description("List local run ledger entries")
+    .action(async (taskId?: string) => {
+      const globalOpts = program.opts();
+      const { listTaskRuns } = await import("../../db/task-runs.js");
+      const taskRuns = listTaskRuns(taskId ? resolveTaskId(taskId) : undefined);
+      if (globalOpts.json) { output(taskRuns, true); return; }
+      if (taskRuns.length === 0) {
+        console.log(chalk.dim("No runs recorded."));
+        return;
+      }
+      for (const run of taskRuns) {
+        console.log(`${chalk.yellow(run.id.slice(0, 8))} ${run.status.padEnd(9)} ${run.title || run.summary || run.task_id}`);
+      }
+    });
+
+  runs
+    .command("show <run-id>")
+    .description("Show a run ledger with events, commands, files, and artifacts")
+    .action(async (runId: string) => {
+      const globalOpts = program.opts();
+      const { getTaskRunLedger } = await import("../../db/task-runs.js");
+      const ledger = getTaskRunLedger(runId);
+      if (globalOpts.json) { output(ledger, true); return; }
+      console.log(chalk.bold(`Run ${ledger.run.id.slice(0, 8)} ${ledger.run.status}`));
+      console.log(chalk.dim(`Task: ${ledger.run.task_id}`));
+      if (ledger.run.summary) console.log(ledger.run.summary);
+      if (ledger.events.length > 0) {
+        console.log(chalk.bold("\nEvents:"));
+        for (const event of ledger.events) console.log(`  ${event.event_type.padEnd(9)} ${event.message || ""}`);
+      }
+      if (ledger.commands.length > 0) {
+        console.log(chalk.bold("\nCommands:"));
+        for (const command of ledger.commands) console.log(`  ${command.status.padEnd(7)} ${command.command}${command.output_summary ? chalk.dim(` — ${command.output_summary}`) : ""}`);
+      }
+      if (ledger.files.length > 0) {
+        console.log(chalk.bold("\nFiles:"));
+        for (const file of ledger.files) console.log(`  [${file.status}] ${file.path}`);
+      }
+      if (ledger.artifacts.length > 0) {
+        console.log(chalk.bold("\nArtifacts:"));
+        for (const artifact of ledger.artifacts) console.log(`  ${artifact.artifact_type || "artifact"} ${artifact.path}${artifact.description ? chalk.dim(` — ${artifact.description}`) : ""}`);
+      }
+    });
+
+  runs
+    .command("event <run-id> <type> [message]")
+    .description("Record a progress, comment, claim, or generic run event")
+    .option("--agent <name>", "Agent recording the event")
+    .option("--data <json>", "Additional JSON event data")
+    .action(async (runId: string, type: string, message: string | undefined, opts: { agent?: string; data?: string }) => {
+      const globalOpts = program.opts();
+      const allowed = ["started", "progress", "claim", "comment", "command", "file", "artifact", "completed", "failed", "cancelled"];
+      if (!allowed.includes(type)) {
+        console.error(chalk.red(`type must be one of: ${allowed.join(", ")}`));
+        process.exit(1);
+      }
+      const { addTaskRunEvent } = await import("../../db/task-runs.js");
+      const event = addTaskRunEvent({
+        run_id: runId,
+        event_type: type as any,
+        message,
+        data: parseJsonOption(opts.data, "--data"),
+        agent_id: opts.agent || globalOpts.agent,
+      });
+      if (globalOpts.json) { output(event, true); return; }
+      console.log(chalk.green(`Recorded ${event.event_type} event for run ${event.run_id.slice(0, 8)}`));
+    });
+
+  runs
+    .command("command <run-id> <command>")
+    .description("Record command/test evidence for a run")
+    .option("--status <status>", "Command status: passed, failed, or unknown", "unknown")
+    .option("--exit-code <code>", "Process exit code")
+    .option("--summary <text>", "Short output summary")
+    .option("--artifact <path>", "Optional local artifact/log path")
+    .option("--agent <name>", "Agent that ran the command")
+    .action(async (runId: string, command: string, opts: { status?: string; exitCode?: string; summary?: string; artifact?: string; agent?: string }) => {
+      const globalOpts = program.opts();
+      if (opts.status !== "passed" && opts.status !== "failed" && opts.status !== "unknown") {
+        console.error(chalk.red("--status must be passed, failed, or unknown"));
+        process.exit(1);
+      }
+      const { addTaskRunCommand } = await import("../../db/task-runs.js");
+      const evidence = addTaskRunCommand({
+        run_id: runId,
+        command,
+        status: opts.status,
+        exit_code: opts.exitCode !== undefined ? Number.parseInt(opts.exitCode, 10) : undefined,
+        output_summary: opts.summary,
+        artifact_path: opts.artifact,
+        agent_id: opts.agent || globalOpts.agent,
+      });
+      if (globalOpts.json) { output(evidence, true); return; }
+      console.log(chalk.green(`Recorded ${evidence.status} command for run ${runId.slice(0, 8)}`));
+    });
+
+  runs
+    .command("file <run-id> <path>")
+    .description("Record a file touched by a run")
+    .option("--status <status>", "File status: planned, active, modified, reviewed, or removed", "modified")
+    .option("--note <text>", "Why the file was touched")
+    .option("--agent <name>", "Agent touching the file")
+    .action(async (runId: string, path: string, opts: { status?: string; note?: string; agent?: string }) => {
+      const globalOpts = program.opts();
+      const allowed = ["planned", "active", "modified", "reviewed", "removed"];
+      if (!allowed.includes(opts.status || "modified")) {
+        console.error(chalk.red(`--status must be one of: ${allowed.join(", ")}`));
+        process.exit(1);
+      }
+      const { addTaskRunFile } = await import("../../db/task-runs.js");
+      const file = addTaskRunFile({
+        run_id: runId,
+        path,
+        status: opts.status as any,
+        note: opts.note,
+        agent_id: opts.agent || globalOpts.agent,
+      });
+      if (globalOpts.json) { output(file, true); return; }
+      console.log(chalk.green(`Recorded file ${file.path} for run ${runId.slice(0, 8)}`));
+    });
+
+  runs
+    .command("artifact <run-id> <path>")
+    .description("Record local artifact metadata for a run without uploading it")
+    .option("--type <type>", "Artifact type, e.g. log, screenshot, report")
+    .option("--description <text>", "Artifact description")
+    .option("--size <bytes>", "Size in bytes")
+    .option("--sha256 <hash>", "SHA-256 checksum")
+    .option("--metadata <json>", "Additional JSON metadata")
+    .option("--agent <name>", "Agent adding the artifact")
+    .action(async (runId: string, path: string, opts: { type?: string; description?: string; size?: string; sha256?: string; metadata?: string; agent?: string }) => {
+      const globalOpts = program.opts();
+      const { addTaskRunArtifact } = await import("../../db/task-runs.js");
+      const artifact = addTaskRunArtifact({
+        run_id: runId,
+        path,
+        artifact_type: opts.type,
+        description: opts.description,
+        size_bytes: opts.size !== undefined ? Number.parseInt(opts.size, 10) : undefined,
+        sha256: opts.sha256,
+        metadata: parseJsonOption(opts.metadata, "--metadata"),
+        agent_id: opts.agent || globalOpts.agent,
+      });
+      if (globalOpts.json) { output(artifact, true); return; }
+      console.log(chalk.green(`Recorded artifact ${artifact.path} for run ${runId.slice(0, 8)}`));
+    });
+
+  runs
+    .command("finish <run-id>")
+    .description("Finish a run ledger entry")
+    .option("--status <status>", "completed, failed, or cancelled", "completed")
+    .option("--summary <text>", "Final summary")
+    .option("--agent <name>", "Agent finishing the run")
+    .action(async (runId: string, opts: { status?: string; summary?: string; agent?: string }) => {
+      const globalOpts = program.opts();
+      if (opts.status !== "completed" && opts.status !== "failed" && opts.status !== "cancelled") {
+        console.error(chalk.red("--status must be completed, failed, or cancelled"));
+        process.exit(1);
+      }
+      const { finishTaskRun } = await import("../../db/task-runs.js");
+      const run = finishTaskRun({ run_id: runId, status: opts.status, summary: opts.summary, agent_id: opts.agent || globalOpts.agent });
+      if (globalOpts.json) { output(run, true); return; }
+      console.log(chalk.green(`Finished run ${run.id.slice(0, 8)} as ${run.status}`));
     });
 
   // hook install/uninstall
