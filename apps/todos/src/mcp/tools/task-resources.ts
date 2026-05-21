@@ -40,6 +40,13 @@ import {
   runNextAgentDispatch,
   upsertAgentRunAdapter,
 } from "../../lib/agent-run-dispatcher.js";
+import {
+  discoverVerificationProviderCapabilities,
+  listVerificationProviders,
+  removeVerificationProvider,
+  runVerificationProvider,
+  upsertVerificationProvider,
+} from "../../lib/verification-providers.js";
 import { createInboxItem, getInboxItem, listInboxItems } from "../../db/inbox.js";
 
 interface TaskResourcesContext {
@@ -399,6 +406,92 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
             run_at,
           });
           return { content: [{ type: "text" as const, text: JSON.stringify(verification, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("set_verification_provider")) {
+    server.tool(
+      "set_verification_provider",
+      "Create or update an optional local verification provider adapter. Providers are local-only and do not call cloud services unless the configured command does so.",
+      {
+        name: z.string(),
+        kind: z.enum(["command", "testbox", "ci_log", "browser", "script"]),
+        command: z.string().optional(),
+        cwd: z.string().optional(),
+        env: z.record(z.string()).optional(),
+        capabilities: z.array(z.string()).optional(),
+        retry: z.object({ attempts: z.number().optional(), backoff_ms: z.number().optional() }).optional(),
+        timeout_ms: z.number().optional(),
+      },
+      async (input) => {
+        try {
+          const provider = upsertVerificationProvider(input);
+          return { content: [{ type: "text" as const, text: JSON.stringify(provider, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_verification_providers")) {
+    server.tool("list_verification_providers", "List configured local verification provider adapters.", {}, async () => {
+      try {
+        return { content: [{ type: "text" as const, text: JSON.stringify(listVerificationProviders(), null, 2) }] };
+      } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+    });
+  }
+
+  if (shouldRegisterTool("get_verification_provider_capabilities")) {
+    server.tool(
+      "get_verification_provider_capabilities",
+      "Describe a local verification provider's deterministic capabilities.",
+      { name: z.string() },
+      async ({ name }) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify(discoverVerificationProviderCapabilities(name), null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("remove_verification_provider")) {
+    server.tool(
+      "remove_verification_provider",
+      "Remove a configured local verification provider.",
+      { name: z.string() },
+      async ({ name }) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ removed: removeVerificationProvider(name) }, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("run_verification_provider")) {
+    server.tool(
+      "run_verification_provider",
+      "Run a local verification provider and optionally record task verification evidence.",
+      {
+        name: z.string(),
+        task_id: z.string().optional(),
+        agent_id: z.string().optional(),
+        command: z.string().optional(),
+        cwd: z.string().optional(),
+        env: z.record(z.string()).optional(),
+        log_text: z.string().optional(),
+        log_path: z.string().optional(),
+        url: z.string().optional(),
+        artifact_path: z.string().optional(),
+        metadata: z.record(z.unknown()).optional(),
+      },
+      async (input) => {
+        try {
+          const result = await runVerificationProvider({
+            ...input,
+            task_id: input.task_id ? resolveId(input.task_id) : undefined,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
       },
     );

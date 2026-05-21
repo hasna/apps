@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { logTaskChange } from "./db/audit.js";
 import { addComment } from "./db/comments.js";
@@ -14,8 +15,10 @@ import { createTask } from "./db/task-crud.js";
 import { createTemplate } from "./db/templates.js";
 import { getLocalActivityTimeline } from "./lib/activity-timeline.js";
 import { createAgentContextPack } from "./lib/context-packs.js";
+import { resetConfig } from "./lib/config.js";
 import { getTaskLocalFields, setTaskLocalFields } from "./lib/local-fields.js";
 import { findDuplicateTasks, mergeDuplicateTask } from "./lib/task-dedupe.js";
+import { runVerificationProvider, upsertVerificationProvider } from "./lib/verification-providers.js";
 import {
   TODOS_JSON_CONTRACTS,
   TODOS_JSON_CONTRACTS_MANIFEST,
@@ -25,6 +28,10 @@ import {
 
 beforeEach(() => {
   process.env["TODOS_DB_PATH"] = ":memory:";
+  previousHome = process.env["HOME"];
+  home = mkdtempSync(join(tmpdir(), "todos-json-contracts-"));
+  process.env["HOME"] = home;
+  resetConfig();
   resetDatabase();
   getDatabase();
 });
@@ -32,7 +39,14 @@ beforeEach(() => {
 afterEach(() => {
   closeDatabase();
   delete process.env["TODOS_DB_PATH"];
+  if (previousHome === undefined) delete process.env["HOME"];
+  else process.env["HOME"] = previousHome;
+  resetConfig();
+  rmSync(home, { recursive: true, force: true });
 });
+
+let home: string;
+let previousHome: string | undefined;
 
 function expectValid(contractId: string, value: unknown): void {
   const result = validateJsonContract(contractId, value);
@@ -66,6 +80,8 @@ describe("stable JSON contracts", () => {
       "local_task_fields",
       "duplicate_task_candidate",
       "task_merge_result",
+      "verification_provider",
+      "verification_provider_result",
       "agent",
       "template",
       "task_list",
@@ -91,7 +107,7 @@ describe("stable JSON contracts", () => {
     expect(TODOS_JSON_CONTRACTS_MANIFEST.generatedAt).toBe("1970-01-01T00:00:00.000Z");
   });
 
-  test("validates real database objects against their stable output contracts", () => {
+  test("validates real database objects against their stable output contracts", async () => {
     const db = getDatabase();
     const project = createProject({
       name: "JSON Contracts",
@@ -131,12 +147,25 @@ describe("stable JSON contracts", () => {
       metadata: { source_url: "https://github.com/hasna/todos/issues/991" },
     }, db);
     const duplicateCandidate = findDuplicateTasks({ threshold: 0.8 }, db)
-      .find((candidate) => candidate.primary_task.id === duplicate.id && candidate.duplicate_task.id === sourcePeer.id)!;
+      .find((candidate) => {
+        const ids = new Set([candidate.primary_task.id, candidate.duplicate_task.id]);
+        return ids.has(duplicate.id) && ids.has(sourcePeer.id);
+      })!;
     const mergeResult = mergeDuplicateTask({
       primary_task_id: duplicate.id,
       duplicate_task_id: sourcePeer.id,
       agent_id: "jsoncontractagent",
       reason: "contract fixture",
+    }, db);
+    const verificationProvider = upsertVerificationProvider({
+      name: "contracts",
+      kind: "command",
+      command: "printf contracts-ok",
+    });
+    const verificationProviderResult = await runVerificationProvider({
+      name: "contracts",
+      task_id: task.id,
+      agent_id: "jsoncontractagent",
     }, db);
     const agent = registerAgent({
       name: "jsoncontractagent",
@@ -185,6 +214,8 @@ describe("stable JSON contracts", () => {
     expectValid("local_task_fields", localFields);
     expectValid("duplicate_task_candidate", duplicateCandidate);
     expectValid("task_merge_result", mergeResult);
+    expectValid("verification_provider", verificationProvider);
+    expectValid("verification_provider_result", verificationProviderResult);
     expectValid("agent", agent);
     expectValid("template", template);
     expectValid("comment", comment);

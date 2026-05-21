@@ -20,6 +20,8 @@ structured error contracts.
   fields with query support for agent-native task selection.
 - `dedupe`: local duplicate scans and merge workflows that preserve comments,
   dependencies, run ledgers, files, inbox links, and verification evidence.
+- `verification-providers`: optional local command, testbox-style, CI log,
+  browser artifact, and script adapters for recording verification evidence.
 - `projects`: project bootstrap, project registration, project updates, task
   lists, path resolution, and focus.
 - `plans`: plan create, list, read, update, complete, and delete workflows.
@@ -97,6 +99,18 @@ Matching MCP tool:
 
 ```json
 { "tool": "merge_duplicate_task", "arguments": { "primary_task_id": "primary123", "duplicate_task_id": "duplicate456", "reason": "same imported issue" } }
+```
+
+CLI verification provider run:
+
+```bash
+todos verify-providers run local --task 1234abcd --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "run_verification_provider", "arguments": { "name": "local", "task_id": "1234abcd" } }
 ```
 
 CLI workspace permission check:

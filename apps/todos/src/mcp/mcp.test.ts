@@ -657,6 +657,50 @@ describe("MCP tool wrappers", () => {
     expect(refs[0].task_id).toBe(task.id);
   });
 
+  it("verification provider tools manage local adapters and record evidence", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-verification-providers-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    try {
+      const tools = captureTools(registerTaskResources);
+      const task = createTask({ title: "MCP provider task" }, db);
+
+      const setResult = await callCapturedTool(tools, "set_verification_provider", {
+        name: "local",
+        kind: "command",
+        command: "printf mcp-provider-ok",
+        capabilities: ["command", "evidence"],
+      });
+      expect(JSON.parse(setResult.content[0]!.text).name).toBe("local");
+
+      const capsResult = await callCapturedTool(tools, "get_verification_provider_capabilities", { name: "local" });
+      expect(JSON.parse(capsResult.content[0]!.text).capabilities).toEqual(expect.arrayContaining(["command", "evidence"]));
+
+      const runResult = await callCapturedTool(tools, "run_verification_provider", {
+        name: "local",
+        task_id: task.id,
+        agent_id: "codex",
+      });
+      const result = JSON.parse(runResult.content[0]!.text);
+      expect(result.status).toBe("passed");
+      expect(result.output_summary).toContain("mcp-provider-ok");
+
+      const listResult = await callCapturedTool(tools, "list_verification_providers", {});
+      expect(JSON.parse(listResult.content[0]!.text)).toHaveLength(1);
+      const removeResult = await callCapturedTool(tools, "remove_verification_provider", { name: "local" });
+      expect(JSON.parse(removeResult.content[0]!.text).removed).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      resetConfig();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("run ledger tools capture local run evidence without hosted calls", async () => {
     const tools = captureTools(registerTaskResources);
     const task = createTask({ title: "Run via MCP" }, db);

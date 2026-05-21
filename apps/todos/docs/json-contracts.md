@@ -19,6 +19,8 @@ The stable contracts cover these object IDs:
 - `local_task_fields`
 - `duplicate_task_candidate`
 - `task_merge_result`
+- `verification_provider`
+- `verification_provider_result`
 - `agent`
 - `template`
 - `task_list`
@@ -84,6 +86,17 @@ task, duplicate task, score, and human-readable reasons for the match.
 `task_merge_result` is returned by `todos dedupe merge --json` and
 `merge_duplicate_task`. It includes the updated primary task, archived duplicate
 task, duplicate relationship id, and moved evidence counts.
+
+## Verification Providers
+
+`verification_provider` is the stable local adapter config returned by
+`todos verify-providers set --json`, `todos verify-providers list --json`,
+`set_verification_provider`, and `list_verification_providers`.
+
+`verification_provider_result` is returned by `todos verify-providers run --json`
+and `run_verification_provider`. It includes provider name, kind, status,
+attempt count, redacted output summary, optional artifact path, and task id when
+evidence was recorded.
 
 ## Agent Context Packs
 

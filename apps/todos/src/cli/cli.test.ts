@@ -472,6 +472,55 @@ describe("CLI integration", () => {
     try { unlinkSync(`${dbPath}-wal`); } catch {}
   });
 
+  it("should manage and run local verification providers from the CLI", async () => {
+    const dbPath = "/tmp/test-cli-verification-providers.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+    try { unlinkSync(`${dbPath}-shm`); } catch {}
+    try { unlinkSync(`${dbPath}-wal`); } catch {}
+
+    try {
+      const createdResult = await runCli(["add", "provider task", "--json"], dbPath);
+      expect(createdResult.exitCode).toBe(0);
+      const task = JSON.parse(createdResult.stdout);
+
+      const setResult = await runCli([
+        "verify-providers",
+        "set",
+        "local",
+        "--kind",
+        "command",
+        "--command",
+        "printf provider-ok-{task_id}",
+        "--capabilities",
+        "command,evidence",
+        "--json",
+      ], dbPath);
+      expect(setResult.stderr).toBe("");
+      expect(setResult.exitCode).toBe(0);
+      expect(JSON.parse(setResult.stdout).name).toBe("local");
+
+      const capsResult = await runCli(["verify-providers", "capabilities", "local", "--json"], dbPath);
+      expect(capsResult.exitCode).toBe(0);
+      expect(JSON.parse(capsResult.stdout).capabilities).toEqual(expect.arrayContaining(["command", "evidence"]));
+
+      const runResult = await runCli(["verify-providers", "run", "local", "--task", task.id, "--agent", "codex", "--json"], dbPath);
+      expect(runResult.stderr).toBe("");
+      expect(runResult.exitCode).toBe(0);
+      const result = JSON.parse(runResult.stdout);
+      expect(result.status).toBe("passed");
+      expect(result.output_summary).toContain("provider-ok");
+
+      const trace = JSON.parse((await runCli(["trace", task.id, "--json"], dbPath)).stdout);
+      expect(trace.verifications[0].command).toBe("provider:local");
+      expect(trace.verifications[0].status).toBe("passed");
+    } finally {
+      try { unlinkSync(dbPath); } catch {}
+      try { unlinkSync(`${dbPath}-shm`); } catch {}
+      try { unlinkSync(`${dbPath}-wal`); } catch {}
+    }
+  });
+
   it("should record a local run ledger with command, file, artifact, and finish evidence", async () => {
     const dbPath = "/tmp/test-cli-run-ledger.db";
     const { mkdtempSync, rmSync, unlinkSync, writeFileSync } = await import("node:fs");

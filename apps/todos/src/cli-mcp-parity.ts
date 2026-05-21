@@ -5,6 +5,7 @@ export type TodosCliMcpParityDomain =
   | "tasks"
   | "local-fields"
   | "dedupe"
+  | "verification-providers"
   | "projects"
   | "plans"
   | "workspace-trust"
@@ -165,6 +166,31 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos dedupe scan --threshold 0.8 --json",
       mcpTool: "find_duplicate_tasks",
+    },
+  },
+  {
+    domain: "verification-providers",
+    cliCommands: [
+      "todos verify-providers set",
+      "todos verify-providers list",
+      "todos verify-providers capabilities",
+      "todos verify-providers run",
+      "todos verify-providers remove",
+    ],
+    mcpTools: [
+      "set_verification_provider",
+      "list_verification_providers",
+      "get_verification_provider_capabilities",
+      "run_verification_provider",
+      "remove_verification_provider",
+    ],
+    jsonContracts: ["verification_provider", "verification_provider_result", "task", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    intentionalGaps: [],
+    example: {
+      cli: "todos verify-providers run local --task 1234abcd --json",
+      mcpTool: "run_verification_provider",
     },
   },
   {

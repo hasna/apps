@@ -540,6 +540,20 @@ export type {
   TaskMergeResult,
 } from "./lib/task-dedupe.js";
 export {
+  discoverVerificationProviderCapabilities,
+  listVerificationProviders,
+  removeVerificationProvider,
+  runVerificationProvider,
+  upsertVerificationProvider,
+} from "./lib/verification-providers.js";
+export type {
+  RunVerificationProviderInput,
+  UpsertVerificationProviderInput,
+  VerificationProviderCapabilities,
+  VerificationProviderResult,
+  VerificationProviderStatus,
+} from "./lib/verification-providers.js";
+export {
   createAgentContextPack,
   renderAgentContextPack,
   renderAgentContextPackMarkdown,

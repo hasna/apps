@@ -259,6 +259,27 @@ MCP clients get the same local data through `link_task_to_commit`,
 `add_task_verification`, and `get_task_traceability`, so agents can explain
 which task changed a commit, branch, PR, file, or verification command.
 
+## Local Verification Providers
+
+Optional provider adapters let agents standardize local verification without a
+hosted dependency. Providers can classify CI logs, verify browser/screenshot
+artifacts, or run explicitly configured command, script, and testbox-style
+commands with retry and redacted evidence capture:
+
+```bash
+todos verify-providers set local --kind command --command "bun test" --attempts 2 --json
+todos verify-providers set ci --kind ci_log --json
+todos verify-providers capabilities local --json
+todos verify-providers run local --task <task-id> --agent codex --json
+todos verify-providers run ci --task <task-id> --log-file /tmp/ci.log --json
+```
+
+Blacksmith/testbox-style providers are inert until a local command is explicitly
+configured, so the package never calls a cloud runner by default. MCP clients
+use `set_verification_provider`, `list_verification_providers`,
+`get_verification_provider_capabilities`, `run_verification_provider`, and
+`remove_verification_provider` for the same local-only workflow.
+
 ## Local Run Ledger
 
 Agent runs can record local evidence without uploading artifacts or calling a
