@@ -447,6 +447,30 @@ Name`, checkbox items, optional `priority: high`, `comment: ...`, `depends_on:
 Other task title`, `run: completed smoke`, `#tags`, and `@agent` markers to
 migrate older files without a hosted service.
 
+## Local Doctor and Repair
+
+`todos doctor` audits the local SQLite database without calling hosted services.
+By default it is a dry-run and reports schema/migration drift, orphaned rows,
+duplicate indexes, invalid JSON metadata, missing project roots, and unsafe
+database file permissions:
+
+```bash
+todos doctor
+todos doctor --json
+```
+
+Safe repairs require explicit apply mode. Before any mutation, the command
+creates a local backup next to the database when the database is file-backed:
+
+```bash
+todos doctor --apply
+```
+
+Repairs are limited to local integrity fixes such as running the migration
+safety net, clearing missing parent references, pruning orphaned dependency/run
+rows, resetting invalid metadata JSON to `{}`, dropping duplicate non-primary
+indexes, and tightening database file permissions.
+
 ## MCP Server
 
 ```bash

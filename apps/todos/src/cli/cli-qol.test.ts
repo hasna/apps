@@ -307,6 +307,14 @@ describe("CLI QoL commands", () => {
     expect(help).toContain("yesterday");
   });
 
+  it("doctor --json should report local dry-run diagnostics", () => {
+    const out = run("--json doctor");
+    const result = JSON.parse(out);
+    expect(result.dry_run).toBe(true);
+    expect(result.checks.some((check: { type: string }) => check.type === "migration_level")).toBe(true);
+    expect(result.checks.some((check: { type: string }) => check.type === "database_permissions")).toBe(true);
+  });
+
   it("list --sort priority should sort tasks by priority", () => {
     run("add 'Low prio task' --priority low --json");
     run("add 'High prio task' --priority high --json");

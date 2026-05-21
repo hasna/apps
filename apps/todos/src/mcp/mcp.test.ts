@@ -982,6 +982,10 @@ describe("MCP tool wrappers", () => {
 
     const health = await callCapturedTool(tools, "get_health", {});
     expect(health.content[0]!.text).toContain("Tasks:");
+
+    const doctor = await callCapturedTool(tools, "run_doctor", { apply: false });
+    expect(doctor.content[0]!.text).toContain("\"dry_run\": true");
+    expect(doctor.content[0]!.text).toContain("migration_level");
   });
 
   it("auto get_stale_tasks accepts MCP hour and minute parameters", async () => {

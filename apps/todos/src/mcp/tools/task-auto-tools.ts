@@ -320,4 +320,23 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
       },
     );
   }
+
+  if (shouldRegisterTool("run_doctor")) {
+    server.tool(
+      "run_doctor",
+      "Run local doctor diagnostics and optionally apply safe repairs after dry-run review.",
+      {
+        apply: z.boolean().optional().describe("Apply safe repairs. Defaults to false/dry-run."),
+      },
+      async ({ apply }) => {
+        try {
+          const { runTodosDoctor } = require("../../lib/doctor.js") as typeof import("../../lib/doctor.js");
+          const result = runTodosDoctor({ apply: Boolean(apply) });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
 }

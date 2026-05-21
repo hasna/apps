@@ -257,7 +257,7 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "machines_set_primary",
     "machines_unarchive",
   ],
-  maintenance: ["extract_todos", "notify_upcoming_deadlines", "score_task"],
+  maintenance: ["extract_todos", "notify_upcoming_deadlines", "run_doctor", "score_task"],
 };
 
 export const MCP_PROFILE_GROUPS: Record<string, readonly string[]> = {

@@ -144,6 +144,7 @@ export function registerTaskMetaTools(server: McpServer, ctx: TaskMetaContext) {
             get_blocked_tasks: "get_blocked_tasks — Get blocked tasks. Params: project_id",
             get_blocking_tasks: "get_blocking_tasks — Get tasks blocking others. Params: project_id",
             get_health: "get_health — Get system health stats",
+            run_doctor: "run_doctor — Diagnose local schema, migration, integrity, metadata, permission, and project-root issues. Params: apply",
             approve_task: "approve_task — Approve a task. Params: task_id, approved_by, notes, version",
             fail_task: "fail_task — Mark task failed. Params: task_id, reason, agent_id, version",
             register_agent: "register_agent — Register an agent. Params: name, description, role, title, capabilities, session_id, working_dir, force",

@@ -753,6 +753,16 @@ export type {
   LocalActivityTimelinePage,
   LocalActivityTimelineSource,
 } from "./lib/activity-timeline.js";
+export { runTodosDoctor } from "./lib/doctor.js";
+export type {
+  DoctorBackup,
+  DoctorCheck,
+  DoctorRepair,
+  DoctorResult,
+  DoctorSeverity,
+  DoctorSummary,
+  RunTodosDoctorOptions,
+} from "./lib/doctor.js";
 
 // Dispatch formatter
 export { formatDispatchMessage, formatSingleTask } from "./lib/dispatch-formatter.js";

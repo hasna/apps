@@ -15,7 +15,6 @@ import {
 } from "../../db/tasks.js";
 import { getRecap } from "../../db/audit.js";
 import { acknowledgeHandoff, createHandoff, createSessionRecoveryHandoff, getHandoff, listHandoffs, getLatestHandoff } from "../../db/handoffs.js";
-import { isValidRecurrenceRule } from "../../lib/recurrence.js";
 import { findDuplicateTasks, mergeDuplicateTask } from "../../lib/task-dedupe.js";
 import { getTaskLocalFields, queryTasksByLocalFields, setTaskLocalFields } from "../../lib/local-fields.js";
 import type { LocalTaskFieldQuery, SetTaskLocalFieldsInput } from "../../lib/local-fields.js";
@@ -548,53 +547,42 @@ export function registerQueryCommands(program: Command) {
   // doctor
   program
     .command("doctor")
-    .description("Diagnose common task data issues")
-    .option("--fix", "Auto-fix recoverable issues where possible")
+    .description("Diagnose and optionally repair local task data issues")
+    .option("--apply", "Apply safe repairs. Defaults to dry-run.")
+    .option("--fix", "Alias for --apply")
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const globalOpts = program.opts();
-      const db = getDatabase();
-      const issues: { severity: "error" | "warn" | "info"; type: string; message: string; count?: number }[] = [];
-
-      // 1. Stale in-progress tasks
-      const stale = listTasks({ status: "in_progress" as any }).filter(
-        t => new Date(t.updated_at).getTime() < Date.now() - 30 * 60 * 1000
-      );
-      if (stale.length > 0) issues.push({ severity: "warn", type: "stale_tasks", message: `${stale.length} tasks stuck in_progress >30min`, count: stale.length });
-
-      // 2. Tasks with invalid recurrence rules
-      const recurring = listTasks({ status: ["pending", "in_progress"] as any }).filter(t => (t as any).recurrence_rule);
-      const invalidRecurrence = recurring.filter(t => !isValidRecurrenceRule((t as any).recurrence_rule));
-      if (invalidRecurrence.length > 0) issues.push({ severity: "error", type: "invalid_recurrence", message: `${invalidRecurrence.length} tasks with invalid recurrence_rule`, count: invalidRecurrence.length });
-
-      // 3. Overdue recurring tasks
-      const nowStr = new Date().toISOString();
-      const overdueRecurring = recurring.filter(t => (t as any).due_at && (t as any).due_at < nowStr);
-      if (overdueRecurring.length > 0) issues.push({ severity: "warn", type: "overdue_recurring", message: `${overdueRecurring.length} recurring tasks past due date`, count: overdueRecurring.length });
-
-      // 4. Tasks with orphaned parent IDs
-      const allIds = new Set(listTasks({}).map(t => t.id));
-      const withParent = db.query("SELECT id, parent_id FROM tasks WHERE parent_id IS NOT NULL").all() as { id: string; parent_id: string }[];
-      const orphaned = withParent.filter(t => !allIds.has(t.parent_id));
-      if (orphaned.length > 0) issues.push({ severity: "error", type: "orphaned_parents", message: `${orphaned.length} tasks reference non-existent parent IDs`, count: orphaned.length });
-
-      // 5. Healthy
-      if (issues.length === 0) issues.push({ severity: "info", type: "healthy", message: "No issues found" });
+      const { runTodosDoctor } = await import("../../lib/doctor.js");
+      const result = runTodosDoctor({ apply: Boolean(opts.apply || opts.fix) });
 
       if (opts.json || globalOpts.json) {
-        console.log(JSON.stringify({ issues, ok: !issues.some(i => i.severity === "error") }));
+        console.log(JSON.stringify(result));
         return;
       }
 
       console.log(chalk.bold("todos doctor\n"));
-      for (const issue of issues) {
-        const icon = issue.severity === "error" ? chalk.red("x") : issue.severity === "warn" ? chalk.yellow("!") : chalk.green("✓");
-        console.log(`  ${icon} ${issue.message}`);
+      console.log(`  ${chalk.dim("Mode:")} ${result.dry_run ? "dry-run" : "apply"}`);
+      console.log(`  ${chalk.dim("Database:")} ${result.database_path}`);
+      if (result.backup) console.log(`  ${chalk.dim("Backup:")} ${result.backup.path}`);
+      console.log("");
+      for (const check of result.checks) {
+        const icon = check.severity === "error" ? chalk.red("x") : check.severity === "warn" ? chalk.yellow("!") : chalk.green("✓");
+        const count = check.count === undefined ? "" : ` (${check.count})`;
+        console.log(`  ${icon} ${check.message}${count}`);
       }
-      const errors = issues.filter(i => i.severity === "error").length;
-      const warns = issues.filter(i => i.severity === "warn").length;
-      if (errors === 0 && warns === 0) console.log(chalk.green("\n  All clear."));
-      else console.log(chalk[errors > 0 ? "red" : "yellow"](`\n  ${errors} error(s), ${warns} warning(s). Run with --fix to auto-resolve where possible.`));
+      if (result.repairs.length > 0) {
+        console.log(chalk.bold("\nRepairs"));
+        for (const repair of result.repairs) {
+          const icon = repair.applied ? chalk.green("✓") : chalk.yellow("!");
+          const count = repair.count === undefined ? "" : ` (${repair.count})`;
+          console.log(`  ${icon} ${repair.message}${count}`);
+        }
+      }
+      const { errors, warnings } = result.summary;
+      if (errors === 0 && warnings === 0) console.log(chalk.green("\n  All clear."));
+      else if (result.dry_run) console.log(chalk[errors > 0 ? "red" : "yellow"](`\n  ${errors} error(s), ${warnings} warning(s). Run with --apply to apply safe repairs after reviewing the dry-run.`));
+      else console.log(chalk[errors > 0 ? "red" : "yellow"](`\n  ${errors} error(s), ${warnings} warning(s) remain after repair.`));
     });
 
   // health
