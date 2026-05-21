@@ -385,6 +385,9 @@ export type {
   AgentRunAdapterConfig,
   CompletionGuardConfig,
   LocalApiConfig,
+  LocalEncryptionAlgorithm,
+  LocalEncryptionKdf,
+  LocalEncryptionProfileConfig,
   LocalEventHookConfig,
   LocalEventHookRetryConfig,
   LocalEventHookTarget,
@@ -489,6 +492,31 @@ export type {
   LocalEventHookInput,
   LocalEventType,
 } from "./lib/event-hooks.js";
+export {
+  DEFAULT_ENCRYPTION_KEY_ENV,
+  DEFAULT_ENCRYPTION_PROFILE,
+  TODOS_ENCRYPTED_BRIDGE_KIND,
+  TODOS_ENCRYPTED_VALUE_KIND,
+  TODOS_ENCRYPTION_SCHEMA_VERSION,
+  createEncryptedBridgeBundle,
+  decryptBridgeBundle,
+  decryptString,
+  decryptValue,
+  encryptSensitiveFields,
+  encryptString,
+  encryptValue,
+  encryptionProfileStatus,
+  isEncryptedBridgeBundle,
+  isEncryptedValue,
+  listEncryptionProfiles,
+  removeEncryptionProfile,
+  upsertEncryptionProfile,
+} from "./lib/local-encryption.js";
+export type {
+  EncryptedLocalBridgeBundle,
+  LocalEncryptionEnvelope,
+  UpsertEncryptionProfileInput,
+} from "./lib/local-encryption.js";
 export {
   createAgentContextPack,
   renderAgentContextPack,

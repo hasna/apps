@@ -110,6 +110,20 @@ export interface LocalEventHookConfig {
   updated_at?: string;
 }
 
+export type LocalEncryptionAlgorithm = "aes-256-gcm";
+export type LocalEncryptionKdf = "scrypt";
+
+export interface LocalEncryptionProfileConfig {
+  name: string;
+  algorithm: LocalEncryptionAlgorithm;
+  kdf: LocalEncryptionKdf;
+  key_env: string;
+  salt: string;
+  description?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface TodosConfig {
   /** Local HTTP server URL used by SDK clients. Defaults to http://localhost:19427. */
   apiUrl?: string;
@@ -136,6 +150,8 @@ export interface TodosConfig {
   policy_packs?: Record<string, PolicyPackConfig>;
   /** Local event hooks and automation triggers, keyed by hook name. */
   local_event_hooks?: Record<string, LocalEventHookConfig>;
+  /** Local encryption profiles. Profiles store key references and nonsecret KDF salt only. */
+  encryption_profiles?: Record<string, LocalEncryptionProfileConfig>;
 }
 
 function getTodosGlobalDir(): string {

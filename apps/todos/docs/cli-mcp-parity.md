@@ -29,6 +29,8 @@ structured error contracts.
   with approve, reject, expire, check, and list flows.
 - `local-event-hooks`: local-only event hooks for task, plan, run, approval,
   import, and export events with stdout, file, socket, and script targets.
+- `encryption`: local encryption profiles, encrypted JSON values, and secure
+  bridge export/import workflows.
 - `agent-runs`: local adapter definitions, queued agent runs, dry-run launch
   previews, cancellation, retries, and run-ledger evidence.
 - `runs`: local task-run ledgers, events, commands, files, artifacts, and
@@ -116,6 +118,18 @@ Matching MCP tool:
 { "tool": "set_local_event_hook", "arguments": { "name": "audit", "events": ["task.completed"], "target": "file", "file_path": ".todos/events.jsonl" } }
 ```
 
+CLI encryption profile:
+
+```bash
+todos encryption set default --key-env TODOS_ENCRYPTION_KEY --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "set_encryption_profile", "arguments": { "name": "default", "key_env": "TODOS_ENCRYPTION_KEY" } }
+```
+
 CLI agent run queue:
 
 ```bash
@@ -144,6 +158,7 @@ CLI bridge export:
 
 ```bash
 todos export --format bridge --output todos-bridge.json --json
+todos export --format bridge --encrypt --output todos-bridge.enc.json
 ```
 
 The full local bridge export is intentionally CLI-only because it writes a local

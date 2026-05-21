@@ -72,6 +72,86 @@ export function registerConfigServeCommands(program: Command) {
       }
     });
 
+  const encryption = program
+    .command("encryption")
+    .description("Manage local encryption profiles for fields and secure exports");
+
+  encryption
+    .command("list")
+    .description("List local encryption profiles")
+    .action(async () => {
+      const globalOpts = program.opts();
+      const { listEncryptionProfiles } = await import("../../lib/local-encryption.js");
+      const profiles = listEncryptionProfiles();
+      if (globalOpts.json) { output(profiles, true); return; }
+      if (profiles.length === 0) {
+        console.log(chalk.dim("No encryption profiles configured."));
+        return;
+      }
+      for (const profile of profiles) {
+        console.log(`${profile.name.padEnd(12)} ${profile.algorithm} ${chalk.dim(`key: ${profile.key_env}`)}`);
+      }
+    });
+
+  encryption
+    .command("set <name>")
+    .description("Create or update a local encryption profile")
+    .option("--key-env <name>", "Environment variable that supplies the encryption key", "TODOS_ENCRYPTION_KEY")
+    .option("--description <text>", "Profile description")
+    .action(async (name: string, opts: { keyEnv?: string; description?: string }) => {
+      const globalOpts = program.opts();
+      const { upsertEncryptionProfile } = await import("../../lib/local-encryption.js");
+      const profile = upsertEncryptionProfile({ name, key_env: opts.keyEnv, description: opts.description });
+      if (globalOpts.json) { output(profile, true); return; }
+      console.log(chalk.green(`Encryption profile saved: ${profile.name}`));
+      console.log(chalk.dim(`  Key env: ${profile.key_env}`));
+      console.log(chalk.dim("  Key material is not stored by todos."));
+    });
+
+  encryption
+    .command("status [name]")
+    .description("Show whether a local encryption profile is locked or unlocked")
+    .action(async (name: string | undefined) => {
+      const globalOpts = program.opts();
+      const { encryptionProfileStatus } = await import("../../lib/local-encryption.js");
+      const status = encryptionProfileStatus(name);
+      if (globalOpts.json) { output(status, true); return; }
+      console.log(status.locked ? chalk.yellow("Locked") : chalk.green("Unlocked"));
+      console.log(chalk.dim(`  Profile: ${status.profile.name}`));
+      console.log(chalk.dim(`  Key env: ${status.key_env}`));
+    });
+
+  encryption
+    .command("remove <name>")
+    .description("Remove a local encryption profile")
+    .action(async (name: string) => {
+      const globalOpts = program.opts();
+      const { removeEncryptionProfile } = await import("../../lib/local-encryption.js");
+      const removed = removeEncryptionProfile(name);
+      if (globalOpts.json) { output({ removed }, true); return; }
+      console.log(removed ? chalk.green("Encryption profile removed.") : chalk.dim("No encryption profile matched."));
+    });
+
+  encryption
+    .command("test [name]")
+    .description("Encrypt and decrypt a local test payload without storing key material")
+    .option("--text <text>", "Payload text", "hasna/todos encryption test")
+    .action(async (name: string | undefined, opts: { text?: string }) => {
+      const globalOpts = program.opts();
+      const { decryptString, encryptString } = await import("../../lib/local-encryption.js");
+      const text = opts.text || "hasna/todos encryption test";
+      const encrypted = encryptString(text, { profile: name });
+      const plaintext = decryptString(encrypted);
+      const result = {
+        ok: plaintext === text,
+        profile: encrypted.profile,
+        key_env: encrypted.key_env,
+        ciphertext_bytes: Buffer.from(encrypted.ciphertext, "base64").length,
+      };
+      if (globalOpts.json) { output(result, true); return; }
+      console.log(result.ok ? chalk.green("Encryption profile works.") : chalk.red("Encryption profile failed."));
+    });
+
   const trust = program
     .command("trust")
     .description("Manage local workspace trust and permission profiles");

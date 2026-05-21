@@ -10,6 +10,7 @@ export type TodosCliMcpParityDomain =
   | "policy-packs"
   | "approval-gates"
   | "local-event-hooks"
+  | "encryption"
   | "agent-runs"
   | "runs"
   | "comments"
@@ -363,6 +364,33 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos event-hooks set audit --event task.completed --target file --file .todos/events.jsonl --json",
       mcpTool: "set_local_event_hook",
+    },
+  },
+  {
+    domain: "encryption",
+    cliCommands: [
+      "todos encryption list",
+      "todos encryption set",
+      "todos encryption status",
+      "todos encryption remove",
+      "todos encryption test",
+      "todos export --format bridge --encrypt",
+      "todos bridge-import --decrypt",
+    ],
+    mcpTools: [
+      "list_encryption_profiles",
+      "set_encryption_profile",
+      "remove_encryption_profile",
+      "get_encryption_status",
+      "encrypt_local_value",
+      "decrypt_local_value",
+    ],
+    jsonContracts: ["local_encryption_profile", "local_encryption_envelope", "encrypted_local_bridge_bundle"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    example: {
+      cli: "todos export --format bridge --encrypt --output todos-bridge.enc.json",
+      mcpTool: "set_encryption_profile",
     },
   },
   {

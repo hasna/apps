@@ -62,6 +62,14 @@ import {
   testLocalEventHook,
   upsertLocalEventHook,
 } from "../../lib/event-hooks.js";
+import {
+  decryptValue,
+  encryptValue,
+  encryptionProfileStatus,
+  listEncryptionProfiles,
+  removeEncryptionProfile,
+  upsertEncryptionProfile,
+} from "../../lib/local-encryption.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 
 interface TaskProjectContext {
@@ -568,6 +576,100 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
           if (task_id) resolvedPayload.id = resolveId(task_id);
           const results = await testLocalEventHook(name, { type: event || "task.completed", payload: resolvedPayload });
           return { content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  // === LOCAL ENCRYPTION ===
+
+  if (shouldRegisterTool("list_encryption_profiles")) {
+    server.tool("list_encryption_profiles", "List local encryption profiles for secure fields and exports.", {}, async () => {
+      try {
+        return { content: [{ type: "text" as const, text: JSON.stringify(listEncryptionProfiles(), null, 2) }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+      }
+    });
+  }
+
+  if (shouldRegisterTool("set_encryption_profile")) {
+    server.tool(
+      "set_encryption_profile",
+      "Create or update a local encryption profile. Key material is referenced by environment variable and is never stored.",
+      {
+        name: z.string(),
+        key_env: z.string().optional(),
+        description: z.string().optional(),
+      },
+      async (input) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify(upsertEncryptionProfile(input), null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("remove_encryption_profile")) {
+    server.tool(
+      "remove_encryption_profile",
+      "Remove a local encryption profile.",
+      { name: z.string() },
+      async ({ name }) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ removed: removeEncryptionProfile(name) }, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("get_encryption_status")) {
+    server.tool(
+      "get_encryption_status",
+      "Show whether a local encryption profile is locked or unlocked.",
+      { name: z.string().optional() },
+      async ({ name }) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify(encryptionProfileStatus(name), null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("encrypt_local_value")) {
+    server.tool(
+      "encrypt_local_value",
+      "Encrypt a local JSON value with a configured profile.",
+      {
+        value: z.unknown(),
+        profile: z.string().optional(),
+      },
+      async ({ value, profile }) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify(encryptValue(value, { profile }), null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("decrypt_local_value")) {
+    server.tool(
+      "decrypt_local_value",
+      "Decrypt a local encrypted JSON value with the configured profile key.",
+      { envelope: z.unknown() },
+      async ({ envelope }) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify(decryptValue(envelope), null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }

@@ -71,6 +71,9 @@ describe("stable JSON contracts", () => {
       "context_pack",
       "local_event_hook",
       "local_event_hook_delivery",
+      "local_encryption_profile",
+      "local_encryption_envelope",
+      "encrypted_local_bridge_bundle",
       "structured_error",
       "api_error",
       "local_bridge_bundle",
@@ -169,6 +172,36 @@ describe("stable JSON contracts", () => {
       status: "delivered",
       attempts: 1,
       integrity: { algorithm: "sha256", digest: "abc" },
+    });
+    expectValid("local_encryption_profile", {
+      name: "default",
+      algorithm: "aes-256-gcm",
+      kdf: "scrypt",
+      key_env: "TODOS_ENCRYPTION_KEY",
+      salt: "c2FsdA==",
+    });
+    expectValid("local_encryption_envelope", {
+      schemaVersion: 1,
+      kind: "hasna.todos.encrypted-value",
+      encryptedAt: "2026-01-02T03:04:05.000Z",
+      profile: "default",
+      key_env: "TODOS_ENCRYPTION_KEY",
+      algorithm: "aes-256-gcm",
+      kdf: "scrypt",
+      salt: "c2FsdA==",
+      iv: "aXY=",
+      auth_tag: "dGFn",
+      ciphertext: "Y2lwaGVydGV4dA==",
+      plaintext_sha256: "abc",
+    });
+    expectValid("encrypted_local_bridge_bundle", {
+      schemaVersion: 1,
+      kind: "hasna.todos.encrypted-bridge",
+      encryptedAt: "2026-01-02T03:04:05.000Z",
+      package: { packageName: "@hasna/todos", repository: "hasna/todos", version: "1.2.3" },
+      plaintext: { kind: "hasna.todos.local-bridge", schemaVersion: 1, sha256: "abc" },
+      encryption: { profile: "default", key_env: "TODOS_ENCRYPTION_KEY", algorithm: "aes-256-gcm", kdf: "scrypt", salt: "c2FsdA==", iv: "aXY=", auth_tag: "dGFn", ciphertext: "Y2lwaGVydGV4dA==" },
+      warnings: ["key material is not stored"],
     });
     expectValid("structured_error", {
       code: "TASK_NOT_FOUND",
