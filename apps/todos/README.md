@@ -452,6 +452,27 @@ metadata, redaction status, retention metadata, and metadata-only fallback when
 the original path is unavailable. Use `--no-store` to record only artifact
 metadata.
 
+## Local Time Tracking
+
+Manual time logs and focus sessions stay in the local SQLite database and roll
+up into `task.actual_minutes` for planning and retrospectives:
+
+```bash
+todos time log <task-id> 25 --agent codex --notes "reviewed parser"
+SESSION=$(todos time start <task-id> --agent codex --idle-after 30 --json | jq -r .id)
+todos time pause "$SESSION"
+todos time resume "$SESSION"
+todos time stop "$SESSION" --notes "implemented and tested"
+todos time report --include-open --json
+```
+
+Focus sessions can be linked to tasks, plans, or run ledgers. Stopping a
+completed task-linked session writes a time log with the session id and run id,
+then recalculates actual minutes from all local logs. `todos time idle` and the
+`get_idle_focus_prompts` MCP tool report active sessions that exceeded their
+local idle threshold; no desktop notification service or hosted telemetry is
+required.
+
 ## Local Activity Timeline
 
 The timeline command gives agents one ordered, redacted view of local comments,

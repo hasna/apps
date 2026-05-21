@@ -648,16 +648,155 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       {
         task_id: z.string().describe("Task ID to log time against"),
         minutes: z.number().min(1).describe("Minutes spent"),
+        run_id: z.string().optional().describe("Optional run ID to link"),
+        focus_session_id: z.string().optional().describe("Optional focus session ID to link"),
         agent_id: z.string().optional().describe("Agent logging the time"),
         started_at: z.string().optional().describe("ISO timestamp when work started"),
         ended_at: z.string().optional().describe("ISO timestamp when work ended"),
         notes: z.string().optional().describe("Notes about what was done"),
       },
-      async ({ task_id, minutes, agent_id, started_at, ended_at, notes }) => {
+      async ({ task_id, minutes, run_id, focus_session_id, agent_id, started_at, ended_at, notes }) => {
         try {
           const { logTime } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
-          logTime({ task_id: resolveId(task_id), minutes, agent_id, started_at, ended_at, notes });
-          return { content: [{ type: "text" as const, text: `Logged ${minutes} min on task ${task_id.slice(0,8)}` }] };
+          const log = logTime({ task_id: resolveId(task_id), run_id, focus_session_id, minutes, agent_id, started_at, ended_at, notes });
+          return { content: [{ type: "text" as const, text: JSON.stringify(log, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("start_focus_session")) {
+    server.tool(
+      "start_focus_session",
+      "Start a local focus session for a task, plan, run, or general agent work.",
+      {
+        task_id: z.string().optional().describe("Optional task ID"),
+        plan_id: z.string().optional().describe("Optional plan ID"),
+        run_id: z.string().optional().describe("Optional run ID"),
+        agent_id: z.string().optional().describe("Agent starting focus"),
+        title: z.string().optional().describe("Focus session title"),
+        started_at: z.string().optional().describe("ISO timestamp when focus started"),
+        idle_after_minutes: z.number().optional().describe("Prompt after this many active minutes"),
+        notes: z.string().optional(),
+      },
+      async ({ task_id, plan_id, run_id, agent_id, title, started_at, idle_after_minutes, notes }) => {
+        try {
+          const { startFocusSession } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const session = startFocusSession({
+            task_id: task_id ? resolveId(task_id) : undefined,
+            plan_id: plan_id ? resolveId(plan_id, "plans") : undefined,
+            run_id,
+            agent_id,
+            title,
+            started_at,
+            idle_after_minutes,
+            notes,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(session, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("pause_focus_session")) {
+    server.tool(
+      "pause_focus_session",
+      "Pause an active local focus session.",
+      { session_id: z.string(), paused_at: z.string().optional() },
+      async ({ session_id, paused_at }) => {
+        try {
+          const { pauseFocusSession } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          return { content: [{ type: "text" as const, text: JSON.stringify(pauseFocusSession(session_id, paused_at), null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("resume_focus_session")) {
+    server.tool(
+      "resume_focus_session",
+      "Resume a paused local focus session.",
+      { session_id: z.string(), resumed_at: z.string().optional() },
+      async ({ session_id, resumed_at }) => {
+        try {
+          const { resumeFocusSession } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          return { content: [{ type: "text" as const, text: JSON.stringify(resumeFocusSession(session_id, resumed_at), null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("stop_focus_session")) {
+    server.tool(
+      "stop_focus_session",
+      "Stop a focus session and log task time when linked to a task.",
+      {
+        session_id: z.string(),
+        ended_at: z.string().optional(),
+        notes: z.string().optional(),
+        status: z.enum(["completed", "cancelled"]).optional(),
+      },
+      async ({ session_id, ended_at, notes, status }) => {
+        try {
+          const { stopFocusSession } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          return { content: [{ type: "text" as const, text: JSON.stringify(stopFocusSession({ id: session_id, ended_at, notes, status }), null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_focus_sessions")) {
+    server.tool(
+      "list_focus_sessions",
+      "List local focus sessions with optional task, plan, run, agent, and status filters.",
+      {
+        task_id: z.string().optional(),
+        plan_id: z.string().optional(),
+        run_id: z.string().optional(),
+        agent_id: z.string().optional(),
+        status: z.enum(["active", "paused", "completed", "cancelled"]).optional(),
+        include_completed: z.boolean().optional(),
+        limit: z.number().optional(),
+      },
+      async ({ task_id, plan_id, run_id, agent_id, status, include_completed, limit }) => {
+        try {
+          const { listFocusSessions } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const sessions = listFocusSessions({
+            task_id: task_id ? resolveId(task_id) : undefined,
+            plan_id: plan_id ? resolveId(plan_id, "plans") : undefined,
+            run_id,
+            agent_id,
+            status,
+            include_completed,
+            limit,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(sessions, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("get_idle_focus_prompts")) {
+    server.tool(
+      "get_idle_focus_prompts",
+      "Return local idle prompts for active focus sessions.",
+      { agent_id: z.string().optional(), now: z.string().optional() },
+      async ({ agent_id, now }) => {
+        try {
+          const { getIdleFocusSessionPrompts } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          return { content: [{ type: "text" as const, text: JSON.stringify(getIdleFocusSessionPrompts({ agent_id, now }), null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }
@@ -671,13 +810,17 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       "Get time tracking report: actual vs estimated minutes for completed tasks.",
       {
         project_id: z.string().optional().describe("Filter by project"),
+        plan_id: z.string().optional().describe("Filter by plan"),
         agent_id: z.string().optional().describe("Filter by assignee"),
         since: z.string().optional().describe("ISO date — only tasks completed after this date"),
+        include_open: z.boolean().optional().describe("Include open tasks with time logs"),
+        format: z.enum(["text", "json"]).optional(),
       },
-      async ({ project_id, agent_id, since }) => {
+      async ({ project_id, plan_id, agent_id, since, include_open, format }) => {
         try {
           const { getTimeReport } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
-          const report = getTimeReport({ project_id: project_id ? resolveId(project_id, "projects") : undefined, agent_id, since });
+          const report = getTimeReport({ project_id: project_id ? resolveId(project_id, "projects") : undefined, plan_id: plan_id ? resolveId(plan_id, "plans") : undefined, agent_id, since, include_open });
+          if (format === "json") return { content: [{ type: "text" as const, text: JSON.stringify(report, null, 2) }] };
           if (report.length === 0) return { content: [{ type: "text" as const, text: "No completed tasks found." }] };
           const lines = report.map(r => {
             const est = r.estimated_minutes ?? "?";

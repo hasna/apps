@@ -1575,6 +1575,46 @@ describe("CLI integration", () => {
     try { unlinkSync(dbPath); } catch {}
   });
 
+  it("should track local time and focus sessions from the CLI", async () => {
+    const dbPath = "/tmp/test-cli-time-tracking.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    const task = JSON.parse((await runCli(["add", "Time tracking task", "--estimated", "90", "--json"], dbPath)).stdout);
+    const manual = await runCli(["time", "log", task.id, "15", "--agent", "codex", "--json"], dbPath);
+    expect(manual.exitCode).toBe(0);
+    expect(JSON.parse(manual.stdout).minutes).toBe(15);
+
+    const started = await runCli([
+      "time", "start", task.id,
+      "--agent", "codex",
+      "--title", "focus block",
+      "--started-at", "2026-01-01T10:00:00.000Z",
+      "--idle-after", "20",
+      "--json",
+    ], dbPath);
+    expect(started.exitCode).toBe(0);
+    const session = JSON.parse(started.stdout);
+    expect(session.status).toBe("active");
+
+    const idle = await runCli(["time", "idle", "--agent", "codex", "--now", "2026-01-01T10:30:00.000Z", "--json"], dbPath);
+    expect(JSON.parse(idle.stdout)[0].idle_minutes).toBe(30);
+
+    const stopped = await runCli(["time", "stop", session.id, "--at", "2026-01-01T10:45:00.000Z", "--notes", "done", "--json"], dbPath);
+    expect(stopped.exitCode).toBe(0);
+    expect(JSON.parse(stopped.stdout).actual_minutes).toBe(45);
+
+    const report = await runCli(["time", "report", "--include-open", "--json"], dbPath);
+    const entry = JSON.parse(report.stdout).find((item: { task_id: string }) => item.task_id === task.id);
+    expect(entry.actual_minutes).toBe(60);
+    expect(entry.logged_minutes).toBe(60);
+    expect(entry.focus_minutes).toBe(45);
+
+    const sessions = await runCli(["time", "list", "--all", "--json"], dbPath);
+    expect(JSON.parse(sessions.stdout)).toHaveLength(1);
+    try { unlinkSync(dbPath); } catch {}
+  });
+
   it("should queue and run local agent dispatches", async () => {
     const dbPath = "/tmp/test-cli-agent-runs.db";
     const { unlinkSync } = await import("node:fs");

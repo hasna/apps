@@ -135,8 +135,18 @@ export {
   getEscalatedTasks,
   archiveTasks,
   unarchiveTask,
+  logTime,
+  getTimeLogs,
+  getTimeReport,
+  startFocusSession,
+  getFocusSession,
+  listFocusSessions,
+  pauseFocusSession,
+  resumeFocusSession,
+  stopFocusSession,
+  getIdleFocusSessionPrompts,
 } from "./db/tasks.js";
-export type { TaskGraphNode, TaskGraph, BulkCreateTaskInput, EscalatedTask, ActiveWorkItem, StatusSummary, DecomposeSubtaskInput, StaleTaskQuery, TaskLockStatus } from "./db/tasks.js";
+export type { TaskGraphNode, TaskGraph, BulkCreateTaskInput, EscalatedTask, ActiveWorkItem, StatusSummary, DecomposeSubtaskInput, StaleTaskQuery, TaskLockStatus, FocusSessionQuery, IdleFocusSessionPrompt, LogTimeInput, StartFocusSessionInput, StopFocusSessionInput, TimeReportEntry } from "./db/tasks.js";
 
 // Cycles
 export {

@@ -595,6 +595,8 @@ export function ensureSchema(db: Database): void {
     CREATE TABLE task_time_logs (
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      run_id TEXT,
+      focus_session_id TEXT,
       agent_id TEXT,
       started_at TEXT,
       ended_at TEXT,
@@ -602,9 +604,39 @@ export function ensureSchema(db: Database): void {
       notes TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`);
+  ensureColumn("task_time_logs", "run_id", "TEXT");
+  ensureColumn("task_time_logs", "focus_session_id", "TEXT");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_time_logs_task ON task_time_logs(task_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_time_logs_agent ON task_time_logs(agent_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_time_logs_run ON task_time_logs(run_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_time_logs_focus_session ON task_time_logs(focus_session_id)");
   ensureColumn("tasks", "actual_minutes", "INTEGER");
+
+  ensureTable("focus_sessions", `
+    CREATE TABLE focus_sessions (
+      id TEXT PRIMARY KEY,
+      task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+      plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+      run_id TEXT,
+      agent_id TEXT,
+      title TEXT,
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'paused', 'completed', 'cancelled')),
+      started_at TEXT NOT NULL,
+      last_resumed_at TEXT,
+      paused_at TEXT,
+      ended_at TEXT,
+      actual_minutes INTEGER NOT NULL DEFAULT 0,
+      idle_after_minutes INTEGER,
+      notes TEXT,
+      metadata TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_focus_sessions_task ON focus_sessions(task_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_focus_sessions_plan ON focus_sessions(plan_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_focus_sessions_run ON focus_sessions(run_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_focus_sessions_agent ON focus_sessions(agent_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_focus_sessions_status ON focus_sessions(status)");
 
   // Task watchers
   ensureTable("task_watchers", `

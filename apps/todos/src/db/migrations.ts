@@ -1008,4 +1008,36 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_saved_search_views_scope ON saved_search_views(scope);
   INSERT OR IGNORE INTO _migrations (id) VALUES (55);
   `,
+  // Migration 56: Local focus sessions and linked task time logs
+  `
+  ALTER TABLE task_time_logs ADD COLUMN run_id TEXT;
+  ALTER TABLE task_time_logs ADD COLUMN focus_session_id TEXT;
+  CREATE INDEX IF NOT EXISTS idx_task_time_logs_run ON task_time_logs(run_id);
+  CREATE INDEX IF NOT EXISTS idx_task_time_logs_focus_session ON task_time_logs(focus_session_id);
+  CREATE TABLE IF NOT EXISTS focus_sessions (
+    id TEXT PRIMARY KEY,
+    task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+    run_id TEXT,
+    agent_id TEXT,
+    title TEXT,
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'paused', 'completed', 'cancelled')),
+    started_at TEXT NOT NULL,
+    last_resumed_at TEXT,
+    paused_at TEXT,
+    ended_at TEXT,
+    actual_minutes INTEGER NOT NULL DEFAULT 0,
+    idle_after_minutes INTEGER,
+    notes TEXT,
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_focus_sessions_task ON focus_sessions(task_id);
+  CREATE INDEX IF NOT EXISTS idx_focus_sessions_plan ON focus_sessions(plan_id);
+  CREATE INDEX IF NOT EXISTS idx_focus_sessions_run ON focus_sessions(run_id);
+  CREATE INDEX IF NOT EXISTS idx_focus_sessions_agent ON focus_sessions(agent_id);
+  CREATE INDEX IF NOT EXISTS idx_focus_sessions_status ON focus_sessions(status);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (56);
+  `,
 ];

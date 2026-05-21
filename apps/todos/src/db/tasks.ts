@@ -73,6 +73,13 @@ export {
   logTime,
   getTimeLogs,
   getTimeReport,
+  startFocusSession,
+  getFocusSession,
+  listFocusSessions,
+  pauseFocusSession,
+  resumeFocusSession,
+  stopFocusSession,
+  getIdleFocusSessionPrompts,
   watchTask,
   unwatchTask,
   getTaskWatchers,
@@ -80,7 +87,16 @@ export {
   logCost,
 } from "./task-relations.js";
 
-export type { BulkCreateTaskInput, EscalatedTask, LogTimeInput } from "./task-relations.ts";
+export type {
+  BulkCreateTaskInput,
+  EscalatedTask,
+  FocusSessionQuery,
+  IdleFocusSessionPrompt,
+  LogTimeInput,
+  StartFocusSessionInput,
+  StopFocusSessionInput,
+  TimeReportEntry,
+} from "./task-relations.ts";
 
 // Re-export types that were previously exported from this file
 export type { TaskFilter } from "../types/index.js";

@@ -19,6 +19,7 @@ export type TodosCliMcpParityDomain =
   | "local-event-hooks"
   | "encryption"
   | "agent-runs"
+  | "time-tracking"
   | "handoffs"
   | "runs"
   | "comments"
@@ -514,6 +515,36 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos agent-runs queue 1234abcd --adapter codex --json",
       mcpTool: "queue_agent_run",
+    },
+  },
+  {
+    domain: "time-tracking",
+    cliCommands: [
+      "todos time log",
+      "todos time start",
+      "todos time pause",
+      "todos time resume",
+      "todos time stop",
+      "todos time list",
+      "todos time idle",
+      "todos time report",
+    ],
+    mcpTools: [
+      "log_time",
+      "start_focus_session",
+      "pause_focus_session",
+      "resume_focus_session",
+      "stop_focus_session",
+      "list_focus_sessions",
+      "get_idle_focus_prompts",
+      "get_time_report",
+    ],
+    jsonContracts: ["focus_session", "time_report_entry", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    example: {
+      cli: "todos time start 1234abcd --agent codex --idle-after 30 --json",
+      mcpTool: "start_focus_session",
     },
   },
   {

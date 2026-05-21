@@ -48,6 +48,8 @@ structured error contracts.
   bridge export/import workflows.
 - `agent-runs`: local adapter definitions, queued agent runs, dry-run launch
   previews, cancellation, retries, and run-ledger evidence.
+- `time-tracking`: local manual time logs, focus sessions, idle prompts,
+  actual-minute rollups, and estimate reports.
 - `handoffs`: local session continuation records with referenced tasks, files,
   runs, next steps, blockers, stale-session recovery, and per-agent
   acknowledgement state.
@@ -87,6 +89,18 @@ Matching MCP tool:
 
 ```json
 { "tool": "set_task_fields", "arguments": { "task_id": "1234abcd", "labels": ["bug", "cli"], "severity": "s1", "custom": { "component": "parser" } } }
+```
+
+CLI focus session:
+
+```bash
+todos time start 1234abcd --agent codex --idle-after 30 --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "start_focus_session", "arguments": { "task_id": "1234abcd", "agent_id": "codex", "idle_after_minutes": 30 } }
 ```
 
 CLI duplicate scan:

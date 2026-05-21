@@ -32,6 +32,8 @@ The stable contracts cover these object IDs:
 - `local_activity_timeline_entry`
 - `status_summary`
 - `context_pack`
+- `focus_session`
+- `time_report_entry`
 - `local_event_hook`
 - `local_event_hook_delivery`
 - `local_encryption_profile`
@@ -135,6 +137,18 @@ omitted sections, and deterministic redacted summaries for any evidence removed
 by `--include`, `--exclude`, or budget pruning. The estimate is intentionally
 simple and offline (`chars_div_4`) so CLI and MCP callers get repeatable compact
 JSON or Markdown without hosted summarization.
+
+## Time Tracking And Focus Sessions
+
+`focus_session` is the stable local timer object returned by `todos time start`,
+`todos time pause`, `todos time resume`, `todos time stop`,
+`list_focus_sessions`, and related MCP focus tools. A completed task-linked
+focus session writes a task time log and rolls up `task.actual_minutes`.
+
+`time_report_entry` is returned by `todos time report --json` and
+`get_time_report` with `format=json`. It combines task estimates, rolled-up
+actual minutes, manual time logs, and linked focus sessions for local planning
+and retrospective reports.
 
 ## Environment Snapshots
 

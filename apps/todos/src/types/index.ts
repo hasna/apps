@@ -506,12 +506,56 @@ export interface TaskDependency {
 export interface TaskTimeLog {
   id: string;
   task_id: string;
+  run_id: string | null;
+  focus_session_id: string | null;
   agent_id: string | null;
   started_at: string | null;
   ended_at: string | null;
   minutes: number;
   notes: string | null;
   created_at: string;
+}
+
+export type FocusSessionStatus = "active" | "paused" | "completed" | "cancelled";
+
+export interface FocusSession {
+  id: string;
+  task_id: string | null;
+  plan_id: string | null;
+  run_id: string | null;
+  agent_id: string | null;
+  title: string | null;
+  status: FocusSessionStatus;
+  started_at: string;
+  last_resumed_at: string | null;
+  paused_at: string | null;
+  ended_at: string | null;
+  actual_minutes: number;
+  idle_after_minutes: number | null;
+  notes: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FocusSessionRow {
+  id: string;
+  task_id: string | null;
+  plan_id: string | null;
+  run_id: string | null;
+  agent_id: string | null;
+  title: string | null;
+  status: FocusSessionStatus;
+  started_at: string;
+  last_resumed_at: string | null;
+  paused_at: string | null;
+  ended_at: string | null;
+  actual_minutes: number;
+  idle_after_minutes: number | null;
+  notes: string | null;
+  metadata: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 // Task watcher — agent subscription to task events

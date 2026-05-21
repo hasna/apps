@@ -1,5 +1,8 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import type {
+  FocusSession,
+  FocusSessionRow,
+  FocusSessionStatus,
   Task,
   TaskRow,
   TaskStatus,
@@ -363,6 +366,8 @@ export function getBlockingTasks(projectId?: string, db?: Database): Array<Task 
 
 export interface LogTimeInput {
   task_id: string;
+  run_id?: string;
+  focus_session_id?: string;
   agent_id?: string;
   minutes: number;
   started_at?: string;
@@ -370,16 +375,107 @@ export interface LogTimeInput {
   notes?: string;
 }
 
+export interface StartFocusSessionInput {
+  task_id?: string;
+  plan_id?: string;
+  run_id?: string;
+  agent_id?: string;
+  title?: string;
+  started_at?: string;
+  idle_after_minutes?: number;
+  notes?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface StopFocusSessionInput {
+  id: string;
+  ended_at?: string;
+  notes?: string;
+  status?: "completed" | "cancelled";
+}
+
+export interface FocusSessionQuery {
+  task_id?: string;
+  plan_id?: string;
+  run_id?: string;
+  agent_id?: string;
+  status?: FocusSessionStatus;
+  include_completed?: boolean;
+  limit?: number;
+}
+
+export interface IdleFocusSessionPrompt {
+  session: FocusSession;
+  idle_minutes: number;
+  message: string;
+}
+
+export interface TimeReportEntry {
+  task_id: string;
+  title: string;
+  project_id: string | null;
+  plan_id: string | null;
+  estimated_minutes: number | null;
+  actual_minutes: number | null;
+  logged_minutes: number;
+  focus_minutes: number;
+  time_logs: TaskTimeLog[];
+  focus_sessions: FocusSession[];
+}
+
+function rowToFocusSession(row: FocusSessionRow): FocusSession {
+  return {
+    ...row,
+    metadata: JSON.parse(row.metadata || "{}") as Record<string, unknown>,
+  };
+}
+
+function minutesBetween(start: string | null | undefined, end: string | null | undefined): number {
+  if (!start || !end) return 0;
+  const startMs = Date.parse(start);
+  const endMs = Date.parse(end);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return 0;
+  return Math.max(1, Math.ceil((endMs - startMs) / 60000));
+}
+
+function assertPositiveMinutes(minutes: number): number {
+  if (!Number.isFinite(minutes) || minutes < 1) throw new Error("minutes must be a positive integer");
+  return Math.floor(minutes);
+}
+
+function recalculateTaskActualMinutes(taskId: string, db: Database): number {
+  const row = db
+    .query("SELECT COALESCE(SUM(minutes), 0) as total FROM task_time_logs WHERE task_id = ?")
+    .get(taskId) as { total: number };
+  const total = Number(row.total || 0);
+  db.run("UPDATE tasks SET actual_minutes = ?, updated_at = ? WHERE id = ?", [total, now(), taskId]);
+  return total;
+}
+
 export function logTime(input: LogTimeInput, db?: Database): TaskTimeLog {
   const d = db || getDatabase();
+  if (!getTask(input.task_id, d)) throw new Error(`Task not found: ${input.task_id}`);
   const id = uuid();
   const ts = now();
+  const minutes = assertPositiveMinutes(input.minutes);
   d.run(
-    `INSERT INTO task_time_logs (id, task_id, agent_id, minutes, started_at, ended_at, notes, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, input.task_id, input.agent_id || null, input.minutes, input.started_at || null, input.ended_at || null, input.notes || null, ts],
+    `INSERT INTO task_time_logs (id, task_id, run_id, focus_session_id, agent_id, minutes, started_at, ended_at, notes, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, input.task_id, input.run_id || null, input.focus_session_id || null, input.agent_id || null, minutes, input.started_at || null, input.ended_at || null, input.notes || null, ts],
   );
-  return { id, task_id: input.task_id, agent_id: input.agent_id || null, minutes: input.minutes, started_at: input.started_at || null, ended_at: input.ended_at || null, notes: input.notes || null, created_at: ts };
+  recalculateTaskActualMinutes(input.task_id, d);
+  return {
+    id,
+    task_id: input.task_id,
+    run_id: input.run_id || null,
+    focus_session_id: input.focus_session_id || null,
+    agent_id: input.agent_id || null,
+    minutes,
+    started_at: input.started_at || null,
+    ended_at: input.ended_at || null,
+    notes: input.notes || null,
+    created_at: ts,
+  };
 }
 
 export function getTimeLogs(taskId: string, db?: Database): TaskTimeLog[] {
@@ -387,15 +483,168 @@ export function getTimeLogs(taskId: string, db?: Database): TaskTimeLog[] {
   return d.query(`SELECT * FROM task_time_logs WHERE task_id = ? ORDER BY created_at DESC`).all(taskId) as TaskTimeLog[];
 }
 
-export function getTimeReport(opts?: { project_id?: string; agent_id?: string; since?: string }, db?: Database): { task_id: string; title: string; estimated_minutes: number | null; actual_minutes: number | null; time_logs: TaskTimeLog[] }[] {
+export function startFocusSession(input: StartFocusSessionInput, db?: Database): FocusSession {
   const d = db || getDatabase();
-  let query = `SELECT t.id as task_id, t.title, t.estimated_minutes, t.actual_minutes FROM tasks t WHERE t.status = 'completed'`;
-  const params: any[] = [];
-  if (opts?.project_id) { query += ` AND t.project_id = ?`; params.push(opts.project_id); }
-  if (opts?.agent_id) { query += ` AND t.assigned_to = ?`; params.push(opts.agent_id); }
-  if (opts?.since) { query += ` AND t.completed_at >= ?`; params.push(opts.since); }
-  const rows = d.query(query).all(...params) as { task_id: string; title: string; estimated_minutes: number | null; actual_minutes: number | null }[];
-  return rows.map(row => ({ ...row, time_logs: getTimeLogs(row.task_id, d) }));
+  if (input.task_id && !getTask(input.task_id, d)) throw new Error(`Task not found: ${input.task_id}`);
+  const id = uuid();
+  const ts = now();
+  const startedAt = input.started_at || ts;
+  d.run(
+    `INSERT INTO focus_sessions (
+      id, task_id, plan_id, run_id, agent_id, title, status, started_at, last_resumed_at,
+      actual_minutes, idle_after_minutes, notes, metadata, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, 0, ?, ?, ?, ?, ?)`,
+    [
+      id,
+      input.task_id || null,
+      input.plan_id || null,
+      input.run_id || null,
+      input.agent_id || null,
+      input.title || null,
+      startedAt,
+      startedAt,
+      input.idle_after_minutes ?? null,
+      input.notes || null,
+      JSON.stringify(input.metadata || {}),
+      ts,
+      ts,
+    ],
+  );
+  return getFocusSession(id, d)!;
+}
+
+export function getFocusSession(id: string, db?: Database): FocusSession | null {
+  const d = db || getDatabase();
+  const row = d.query("SELECT * FROM focus_sessions WHERE id = ?").get(id) as FocusSessionRow | null;
+  return row ? rowToFocusSession(row) : null;
+}
+
+export function listFocusSessions(query: FocusSessionQuery = {}, db?: Database): FocusSession[] {
+  const d = db || getDatabase();
+  const conditions: string[] = [];
+  const params: SQLQueryBindings[] = [];
+  if (query.task_id) { conditions.push("task_id = ?"); params.push(query.task_id); }
+  if (query.plan_id) { conditions.push("plan_id = ?"); params.push(query.plan_id); }
+  if (query.run_id) { conditions.push("run_id = ?"); params.push(query.run_id); }
+  if (query.agent_id) { conditions.push("agent_id = ?"); params.push(query.agent_id); }
+  if (query.status) {
+    conditions.push("status = ?");
+    params.push(query.status);
+  } else if (!query.include_completed) {
+    conditions.push("status IN ('active', 'paused')");
+  }
+  let sql = "SELECT * FROM focus_sessions";
+  if (conditions.length > 0) sql += ` WHERE ${conditions.join(" AND ")}`;
+  sql += " ORDER BY updated_at DESC";
+  if (query.limit) { sql += " LIMIT ?"; params.push(query.limit); }
+  return (d.query(sql).all(...params) as FocusSessionRow[]).map(rowToFocusSession);
+}
+
+export function pauseFocusSession(id: string, pausedAt?: string, db?: Database): FocusSession {
+  const d = db || getDatabase();
+  const session = getFocusSession(id, d);
+  if (!session) throw new Error(`Focus session not found: ${id}`);
+  if (session.status !== "active") throw new Error(`Focus session is ${session.status}, not active`);
+  const ts = now();
+  const pauseAt = pausedAt || ts;
+  const minutes = session.actual_minutes + minutesBetween(session.last_resumed_at, pauseAt);
+  d.run(
+    "UPDATE focus_sessions SET status = 'paused', actual_minutes = ?, paused_at = ?, last_resumed_at = NULL, updated_at = ? WHERE id = ?",
+    [minutes, pauseAt, ts, id],
+  );
+  return getFocusSession(id, d)!;
+}
+
+export function resumeFocusSession(id: string, resumedAt?: string, db?: Database): FocusSession {
+  const d = db || getDatabase();
+  const session = getFocusSession(id, d);
+  if (!session) throw new Error(`Focus session not found: ${id}`);
+  if (session.status !== "paused") throw new Error(`Focus session is ${session.status}, not paused`);
+  const ts = now();
+  const resumed = resumedAt || ts;
+  d.run(
+    "UPDATE focus_sessions SET status = 'active', paused_at = NULL, last_resumed_at = ?, updated_at = ? WHERE id = ?",
+    [resumed, ts, id],
+  );
+  return getFocusSession(id, d)!;
+}
+
+export function stopFocusSession(input: StopFocusSessionInput, db?: Database): FocusSession {
+  const d = db || getDatabase();
+  const session = getFocusSession(input.id, d);
+  if (!session) throw new Error(`Focus session not found: ${input.id}`);
+  if (session.status === "completed" || session.status === "cancelled") return session;
+  const ts = now();
+  const endedAt = input.ended_at || ts;
+  const finalMinutes = session.status === "active"
+    ? session.actual_minutes + minutesBetween(session.last_resumed_at, endedAt)
+    : session.actual_minutes;
+  const finalStatus = input.status || "completed";
+  d.run(
+    "UPDATE focus_sessions SET status = ?, actual_minutes = ?, ended_at = ?, last_resumed_at = NULL, paused_at = NULL, notes = COALESCE(?, notes), updated_at = ? WHERE id = ?",
+    [finalStatus, finalMinutes, endedAt, input.notes || null, ts, input.id],
+  );
+  const stopped = getFocusSession(input.id, d)!;
+  if (stopped.task_id && finalStatus === "completed" && finalMinutes > 0) {
+    logTime({
+      task_id: stopped.task_id,
+      run_id: stopped.run_id || undefined,
+      focus_session_id: stopped.id,
+      agent_id: stopped.agent_id || undefined,
+      minutes: finalMinutes,
+      started_at: stopped.started_at,
+      ended_at: stopped.ended_at || endedAt,
+      notes: input.notes || stopped.notes || undefined,
+    }, d);
+  }
+  return stopped;
+}
+
+export function getIdleFocusSessionPrompts(opts: { agent_id?: string; now?: string | Date } = {}, db?: Database): IdleFocusSessionPrompt[] {
+  const d = db || getDatabase();
+  const nowDate = opts.now ? new Date(opts.now) : new Date();
+  const sessions = listFocusSessions({ agent_id: opts.agent_id, status: "active", include_completed: false }, d);
+  return sessions.flatMap((session) => {
+    if (!session.idle_after_minutes || !session.last_resumed_at) return [];
+    const idleMinutes = Math.floor((nowDate.getTime() - Date.parse(session.last_resumed_at)) / 60000);
+    if (!Number.isFinite(idleMinutes) || idleMinutes < session.idle_after_minutes) return [];
+    return [{
+      session,
+      idle_minutes: idleMinutes,
+      message: `Focus session ${session.id.slice(0, 8)} has been active for ${idleMinutes} minutes. Pause, stop, or continue it.`,
+    }];
+  });
+}
+
+export function getTimeReport(opts?: { project_id?: string; plan_id?: string; agent_id?: string; since?: string; include_open?: boolean }, db?: Database): TimeReportEntry[] {
+  const d = db || getDatabase();
+  const conditions = opts?.include_open ? ["1 = 1"] : ["t.status = 'completed'"];
+  const params: SQLQueryBindings[] = [];
+  if (opts?.project_id) { conditions.push("t.project_id = ?"); params.push(opts.project_id); }
+  if (opts?.plan_id) { conditions.push("t.plan_id = ?"); params.push(opts.plan_id); }
+  if (opts?.agent_id) {
+    conditions.push(`(
+      t.assigned_to = ?
+      OR t.agent_id = ?
+      OR EXISTS (SELECT 1 FROM task_time_logs ttl WHERE ttl.task_id = t.id AND ttl.agent_id = ?)
+      OR EXISTS (SELECT 1 FROM focus_sessions fs WHERE fs.task_id = t.id AND fs.agent_id = ?)
+    )`);
+    params.push(opts.agent_id, opts.agent_id, opts.agent_id, opts.agent_id);
+  }
+  if (opts?.since) { conditions.push("(t.completed_at >= ? OR t.updated_at >= ?)"); params.push(opts.since, opts.since); }
+  const rows = d.query(`
+    SELECT t.id as task_id, t.title, t.project_id, t.plan_id, t.estimated_minutes, t.actual_minutes
+    FROM tasks t
+    WHERE ${conditions.join(" AND ")}
+    ORDER BY t.completed_at DESC, t.updated_at DESC
+  `).all(...params) as Array<{ task_id: string; title: string; project_id: string | null; plan_id: string | null; estimated_minutes: number | null; actual_minutes: number | null }>;
+  return rows.map((row) => {
+    const timeLogs = getTimeLogs(row.task_id, d);
+    const focusSessions = listFocusSessions({ task_id: row.task_id, include_completed: true }, d);
+    const loggedMinutes = timeLogs.reduce((acc, log) => acc + log.minutes, 0);
+    const focusMinutes = focusSessions.reduce((acc, session) => acc + session.actual_minutes, 0);
+    return { ...row, logged_minutes: loggedMinutes, focus_minutes: focusMinutes, time_logs: timeLogs, focus_sessions: focusSessions };
+  });
 }
 
 // ── Task Watchers ──────────────────────────────────────────────────────────────

@@ -14,6 +14,14 @@ import {
   redistributeStaleTasks,
   getTask,
   getEscalatedTasks,
+  logTime,
+  startFocusSession,
+  listFocusSessions,
+  pauseFocusSession,
+  resumeFocusSession,
+  stopFocusSession,
+  getIdleFocusSessionPrompts,
+  getTimeReport,
 } from "../../db/tasks.js";
 import { getRecap } from "../../db/audit.js";
 import {
@@ -48,6 +56,42 @@ function parseCsvOption(value: string | undefined): string[] | undefined {
   if (!value) return undefined;
   const values = value.split(",").map((item) => item.trim()).filter(Boolean);
   return values.length > 0 ? values : undefined;
+}
+
+function resolveOptionalId(table: "plans" | "task_runs", value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  if (table === "task_runs") {
+    const db = getDatabase();
+    if (value.length >= 36) return value;
+    const rows = db.query("SELECT id FROM task_runs WHERE id LIKE ?").all(`${value}%`) as { id: string }[];
+    if (rows.length === 1) return rows[0]!.id;
+    console.error(chalk.red(`Could not resolve run ID: ${value}`));
+    process.exit(1);
+  }
+  const resolved = resolvePartialId(getDatabase(), table, value);
+  if (!resolved) {
+    console.error(chalk.red(`Could not resolve ${table.slice(0, -1)} ID: ${value}`));
+    process.exit(1);
+  }
+  return resolved;
+}
+
+function resolveProjectOption(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const resolved = resolvePartialId(getDatabase(), "projects", value);
+  if (!resolved) {
+    console.error(chalk.red(`Could not resolve project ID: ${value}`));
+    process.exit(1);
+  }
+  return resolved;
+}
+
+function resolveFocusSessionId(value: string): string {
+  if (value.length >= 36) return value;
+  const rows = getDatabase().query("SELECT id FROM focus_sessions WHERE id LIKE ?").all(`${value}%`) as { id: string }[];
+  if (rows.length === 1) return rows[0]!.id;
+  console.error(chalk.red(`Could not resolve focus session ID: ${value}`));
+  process.exit(1);
 }
 
 function parseFieldPairs(values: string[] | undefined): Record<string, unknown> | undefined {
@@ -1558,6 +1602,200 @@ export function registerQueryCommands(program: Command) {
         stale_after_hours: Number(opts.staleAfterHours),
       });
       console.log(renderAgentContextPack(pack, format, Boolean(opts.compact)));
+    });
+
+  const time = program
+    .command("time")
+    .description("Track local task time and focus sessions");
+
+  time
+    .command("log <task-id> <minutes>")
+    .description("Log completed local time against a task")
+    .option("--agent <id>", "Agent logging the time")
+    .option("--run <id>", "Run ID to link")
+    .option("--started-at <iso>", "ISO timestamp when work started")
+    .option("--ended-at <iso>", "ISO timestamp when work ended")
+    .option("--notes <text>", "Notes about the work")
+    .option("-j, --json", "Output JSON")
+    .action((taskId: string, minutes: string, opts) => {
+      try {
+        const globalOpts = program.opts();
+        const log = logTime({
+          task_id: resolveTaskId(taskId),
+          run_id: resolveOptionalId("task_runs", opts.run),
+          agent_id: opts.agent || globalOpts.agent,
+          minutes: Number(minutes),
+          started_at: opts.startedAt,
+          ended_at: opts.endedAt,
+          notes: opts.notes,
+        });
+        if (opts.json || globalOpts.json) { output(log, true); return; }
+        console.log(chalk.green(`Logged ${log.minutes} min on ${log.task_id.slice(0, 8)}`));
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  time
+    .command("start [task-id]")
+    .description("Start a local focus session")
+    .option("--plan <id>", "Plan ID to link")
+    .option("--run <id>", "Run ID to link")
+    .option("--agent <id>", "Agent starting the session")
+    .option("--title <text>", "Focus session title")
+    .option("--started-at <iso>", "ISO timestamp when focus started")
+    .option("--idle-after <minutes>", "Prompt when the session has been active this many minutes")
+    .option("--notes <text>", "Session notes")
+    .option("-j, --json", "Output JSON")
+    .action((taskId: string | undefined, opts) => {
+      try {
+        const globalOpts = program.opts();
+        const session = startFocusSession({
+          task_id: taskId ? resolveTaskId(taskId) : undefined,
+          plan_id: resolveOptionalId("plans", opts.plan),
+          run_id: resolveOptionalId("task_runs", opts.run),
+          agent_id: opts.agent || globalOpts.agent,
+          title: opts.title,
+          started_at: opts.startedAt,
+          idle_after_minutes: opts.idleAfter ? Number(opts.idleAfter) : undefined,
+          notes: opts.notes,
+        });
+        if (opts.json || globalOpts.json) { output(session, true); return; }
+        console.log(chalk.green(`Started focus session ${session.id.slice(0, 8)}`));
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  time
+    .command("pause <session-id>")
+    .description("Pause an active focus session")
+    .option("--at <iso>", "ISO pause timestamp")
+    .option("-j, --json", "Output JSON")
+    .action((sessionId: string, opts) => {
+      try {
+        const session = pauseFocusSession(resolveFocusSessionId(sessionId), opts.at);
+        if (opts.json || program.opts().json) { output(session, true); return; }
+        console.log(chalk.yellow(`Paused focus session ${session.id.slice(0, 8)} at ${session.actual_minutes} min`));
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  time
+    .command("resume <session-id>")
+    .description("Resume a paused focus session")
+    .option("--at <iso>", "ISO resume timestamp")
+    .option("-j, --json", "Output JSON")
+    .action((sessionId: string, opts) => {
+      try {
+        const session = resumeFocusSession(resolveFocusSessionId(sessionId), opts.at);
+        if (opts.json || program.opts().json) { output(session, true); return; }
+        console.log(chalk.green(`Resumed focus session ${session.id.slice(0, 8)}`));
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  time
+    .command("stop <session-id>")
+    .description("Stop a focus session and log task time when linked to a task")
+    .option("--at <iso>", "ISO stop timestamp")
+    .option("--cancel", "Cancel instead of completing; does not create a time log")
+    .option("--notes <text>", "Completion notes")
+    .option("-j, --json", "Output JSON")
+    .action((sessionId: string, opts) => {
+      try {
+        const session = stopFocusSession({
+          id: resolveFocusSessionId(sessionId),
+          ended_at: opts.at,
+          status: opts.cancel ? "cancelled" : "completed",
+          notes: opts.notes,
+        });
+        if (opts.json || program.opts().json) { output(session, true); return; }
+        console.log(chalk.green(`${session.status === "cancelled" ? "Cancelled" : "Stopped"} focus session ${session.id.slice(0, 8)} at ${session.actual_minutes} min`));
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  time
+    .command("list")
+    .description("List local focus sessions")
+    .option("--task <id>", "Filter by task")
+    .option("--plan <id>", "Filter by plan")
+    .option("--run <id>", "Filter by run")
+    .option("--agent <id>", "Filter by agent")
+    .option("--status <status>", "Filter by status")
+    .option("--all", "Include completed and cancelled sessions")
+    .option("--limit <n>", "Max sessions", "20")
+    .option("-j, --json", "Output JSON")
+    .action((opts) => {
+      try {
+        const sessions = listFocusSessions({
+          task_id: opts.task ? resolveTaskId(opts.task) : undefined,
+          plan_id: resolveOptionalId("plans", opts.plan),
+          run_id: resolveOptionalId("task_runs", opts.run),
+          agent_id: opts.agent,
+          status: opts.status,
+          include_completed: Boolean(opts.all),
+          limit: Number(opts.limit),
+        });
+        if (opts.json || program.opts().json) { output(sessions, true); return; }
+        if (sessions.length === 0) { console.log(chalk.dim("No focus sessions.")); return; }
+        for (const session of sessions) {
+          console.log(`${session.id.slice(0, 8)} ${session.status.padEnd(9)} ${String(session.actual_minutes).padStart(3)}m ${session.title || session.task_id?.slice(0, 8) || "(unlinked)"}`);
+        }
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  time
+    .command("idle")
+    .description("Show active focus sessions that need an idle prompt")
+    .option("--agent <id>", "Filter by agent")
+    .option("--now <iso>", "Reference time")
+    .option("-j, --json", "Output JSON")
+    .action((opts) => {
+      try {
+        const prompts = getIdleFocusSessionPrompts({ agent_id: opts.agent, now: opts.now });
+        if (opts.json || program.opts().json) { output(prompts, true); return; }
+        if (prompts.length === 0) { console.log(chalk.dim("No idle focus sessions.")); return; }
+        for (const prompt of prompts) console.log(chalk.yellow(prompt.message));
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  time
+    .command("report")
+    .description("Report local actual time against estimates")
+    .option("--project <id>", "Filter by project")
+    .option("--plan <id>", "Filter by plan")
+    .option("--agent <id>", "Filter by agent")
+    .option("--since <iso>", "Only tasks updated or completed since this date")
+    .option("--include-open", "Include open tasks")
+    .option("-j, --json", "Output JSON")
+    .action((opts) => {
+      try {
+        const report = getTimeReport({
+          project_id: resolveProjectOption(opts.project),
+          plan_id: resolveOptionalId("plans", opts.plan),
+          agent_id: opts.agent,
+          since: opts.since,
+          include_open: Boolean(opts.includeOpen),
+        });
+        if (opts.json || program.opts().json) { output(report, true); return; }
+        if (report.length === 0) { console.log(chalk.dim("No time report entries.")); return; }
+        for (const row of report) {
+          const diff = row.estimated_minutes != null && row.actual_minutes != null ? row.actual_minutes - row.estimated_minutes : null;
+          const suffix = diff == null ? "" : ` (${diff >= 0 ? "+" : ""}${diff}m)`;
+          console.log(`${row.task_id.slice(0, 8)} ${row.title}: estimated ${row.estimated_minutes ?? "?"}m, actual ${row.actual_minutes ?? 0}m${suffix}`);
+        }
+      } catch (e) {
+        handleError(e);
+      }
     });
 
   const fields = program

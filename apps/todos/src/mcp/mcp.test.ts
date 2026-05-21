@@ -753,6 +753,48 @@ describe("MCP tool wrappers", () => {
     expect(JSON.parse(importPreview.content[0]!.text).applied).toBe(false);
   });
 
+  it("time tracking tools manage local focus sessions and reports", async () => {
+    const tools = captureTools(registerTaskRelTools);
+    const task = createTask({ title: "MCP time task", estimated_minutes: 75 }, db);
+
+    const logResult = await callCapturedTool(tools, "log_time", {
+      task_id: task.id,
+      minutes: 10,
+      agent_id: "mcp",
+    });
+    expect(JSON.parse(logResult.content[0].text).minutes).toBe(10);
+
+    const startResult = await callCapturedTool(tools, "start_focus_session", {
+      task_id: task.id,
+      agent_id: "mcp",
+      title: "focus",
+      started_at: "2026-01-01T10:00:00.000Z",
+      idle_after_minutes: 20,
+    });
+    const session = JSON.parse(startResult.content[0].text);
+    expect(session.status).toBe("active");
+
+    const idleResult = await callCapturedTool(tools, "get_idle_focus_prompts", {
+      agent_id: "mcp",
+      now: "2026-01-01T10:25:00.000Z",
+    });
+    expect(JSON.parse(idleResult.content[0].text)[0].idle_minutes).toBe(25);
+
+    const stopResult = await callCapturedTool(tools, "stop_focus_session", {
+      session_id: session.id,
+      ended_at: "2026-01-01T10:30:00.000Z",
+    });
+    expect(JSON.parse(stopResult.content[0].text).actual_minutes).toBe(30);
+
+    const reportResult = await callCapturedTool(tools, "get_time_report", { include_open: true, format: "json" });
+    const report = JSON.parse(reportResult.content[0].text).find((entry: { task_id: string }) => entry.task_id === task.id);
+    expect(report.actual_minutes).toBe(40);
+    expect(getTask(task.id, db)!.actual_minutes).toBe(40);
+
+    const listResult = await callCapturedTool(tools, "list_focus_sessions", { include_completed: true });
+    expect(JSON.parse(listResult.content[0].text).map((item: { id: string }) => item.id)).toContain(session.id);
+  });
+
   it("git traceability tools link refs, commits, and verification evidence", async () => {
     const tools = captureTools(registerTaskResources);
     const task = createTask({ title: "Traceable via MCP" }, db);

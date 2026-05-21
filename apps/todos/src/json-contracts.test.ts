@@ -9,7 +9,7 @@ import { closeDatabase, getDatabase, resetDatabase } from "./db/database.js";
 import { createDispatch } from "./db/dispatches.js";
 import { registerAgent } from "./db/agents.js";
 import { createProject } from "./db/projects.js";
-import { getStatus } from "./db/tasks.js";
+import { getStatus, getTimeReport, startFocusSession, stopFocusSession } from "./db/tasks.js";
 import { createTaskList } from "./db/task-lists.js";
 import { createTask } from "./db/task-crud.js";
 import { createTemplate } from "./db/templates.js";
@@ -95,6 +95,8 @@ describe("stable JSON contracts", () => {
       "local_activity_timeline_entry",
       "status_summary",
       "context_pack",
+      "focus_session",
+      "time_report_entry",
       "environment_snapshot",
       "environment_snapshot_comparison",
       "local_event_hook",
@@ -223,6 +225,9 @@ describe("stable JSON contracts", () => {
     const timeline = getLocalActivityTimeline({ entity_type: "task", entity_id: task.id }, db);
     const status = getStatus({ project_id: project.id }, undefined, { explain_blocked: true }, db);
     const contextPack = createAgentContextPack({ task_id: task.id, profile: "codex" }, db);
+    const focusSession = startFocusSession({ task_id: task.id, agent_id: "jsoncontractagent", started_at: "2026-01-02T03:00:00.000Z" }, db);
+    const stoppedFocusSession = stopFocusSession({ id: focusSession.id, ended_at: "2026-01-02T03:20:00.000Z" }, db);
+    const timeReportEntry = getTimeReport({ include_open: true }, db).find((entry) => entry.task_id === task.id)!;
     const environmentSnapshot = captureEnvironmentSnapshot({ root: import.meta.dir, task_id: task.id, now: "2026-01-02T03:04:05.000Z" });
     const environmentComparison = compareEnvironmentSnapshots(environmentSnapshot, environmentSnapshot);
 
@@ -244,6 +249,8 @@ describe("stable JSON contracts", () => {
     expectValid("local_activity_timeline_entry", timeline.entries[0]);
     expectValid("status_summary", status);
     expectValid("context_pack", contextPack);
+    expectValid("focus_session", stoppedFocusSession);
+    expectValid("time_report_entry", timeReportEntry);
     expectValid("environment_snapshot", environmentSnapshot);
     expectValid("environment_snapshot_comparison", environmentComparison);
     expectValid("local_event_hook", {
