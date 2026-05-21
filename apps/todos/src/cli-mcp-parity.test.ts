@@ -22,6 +22,7 @@ const expectedDomains = [
   "secret-safety",
   "runner-sandbox",
   "extensions",
+  "workflow-prompts",
   "policy-packs",
   "approval-gates",
   "runs",

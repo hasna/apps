@@ -122,6 +122,25 @@ approved. MCP clients can use `inspect_local_extension`,
 `install_local_extension`, `list_local_extensions`, and
 `remove_local_extension` for the same offline workflow.
 
+## Local Workflow Prompts
+
+The package includes bundled MCP prompts for common agent workflows:
+`goal_planning`, `task_claiming`, `review`, `verification`, `handoff`,
+`release_prep`, `import_triage`, and `incident_response`. They are static,
+local-only prompt resources that can be listed or rendered without a model call:
+
+```bash
+todos workflows list
+todos workflows show goal_planning --objective "Ship release" --task 1234abcd --json
+todos workflows export --format markdown
+```
+
+MCP clients can discover the same catalog at `todos://workflow-prompts` and call
+the matching prompt by ID. Prompt output is deterministic and is intended for
+Codex, Claude Code, Takumi, and other agent-native clients that need reusable
+local guidance for planning, claiming, review, verification, handoff, release,
+triage, and incident workflows.
+
 ## Local Policy Packs
 
 Policy packs are project-local done gates for agents. They validate task status,

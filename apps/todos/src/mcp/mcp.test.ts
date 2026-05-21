@@ -19,6 +19,7 @@ import { registerTaskResources } from "./tools/task-resources.js";
 import { registerTemplateTools } from "./tools/templates.js";
 import { registerEnvironmentSnapshotTools } from "./tools/environment-snapshots.js";
 import { registerMachineTools } from "./tools/machines.js";
+import { registerWorkflowPrompts } from "./tools/workflow-prompts.js";
 
 // These tests verify the core operations that the MCP server wraps.
 // The MCP server itself uses stdio transport which is harder to test in unit tests.
@@ -951,6 +952,32 @@ describe("MCP tool wrappers", () => {
       rmSync(home, { recursive: true, force: true });
       rmSync(source, { recursive: true, force: true });
     }
+  });
+
+  it("registers guided local workflow prompts and catalog resource", async () => {
+    const resources = new Map<string, () => unknown>();
+    const prompts = new Map<string, { description: string; handler: (args: Record<string, string>) => unknown }>();
+    const server = {
+      resource(_name: string, uri: string, _metadata: unknown, handler: () => unknown) {
+        resources.set(uri, handler);
+      },
+      prompt(name: string, description: string, _schema: unknown, handler: (args: Record<string, string>) => unknown) {
+        prompts.set(name, { description, handler });
+      },
+    };
+
+    registerWorkflowPrompts(server as any);
+    expect(prompts.has("goal_planning")).toBe(true);
+    expect(prompts.has("incident_response")).toBe(true);
+    expect(resources.has("todos://workflow-prompts")).toBe(true);
+
+    const rendered = prompts.get("goal_planning")!.handler({ objective: "Ship release", task_id: "abcd1234" }) as any;
+    expect(rendered.description).toContain("goal");
+    expect(rendered.messages[0].content.text).toContain("Ship release");
+
+    const catalog = await resources.get("todos://workflow-prompts")!() as any;
+    const promptsJson = JSON.parse(catalog.contents[0].text);
+    expect(promptsJson.map((prompt: { id: string }) => prompt.id)).toContain("verification");
   });
 
   it("agent run dispatcher tools queue and dry-run local adapters", async () => {

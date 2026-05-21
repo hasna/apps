@@ -536,6 +536,54 @@ export function registerConfigServeCommands(program: Command) {
       console.log(removed ? chalk.green("Extension removed.") : chalk.dim("No extension matched."));
     });
 
+  const workflows = program
+    .command("workflows")
+    .description("List and render local guided workflow prompts");
+
+  workflows
+    .command("list")
+    .description("List bundled local workflow prompts")
+    .action(async () => {
+      const globalOpts = program.opts();
+      const { listWorkflowPrompts } = await import("../../lib/workflow-prompts.js");
+      const prompts = listWorkflowPrompts();
+      if (globalOpts.json) { output(prompts, true); return; }
+      for (const prompt of prompts) console.log(`${prompt.id.padEnd(18)} ${prompt.description}`);
+    });
+
+  workflows
+    .command("show <id>")
+    .description("Render a guided workflow prompt as Markdown or JSON")
+    .option("--objective <text>", "Objective or goal text")
+    .option("--task <id>", "Task ID to ground the workflow")
+    .option("--agent <name>", "Agent identity")
+    .option("--context <text>", "Additional local context")
+    .option("--format <format>", "Output format: markdown or json", "markdown")
+    .action(async (id: string, opts: { objective?: string; task?: string; agent?: string; context?: string; format?: string }) => {
+      const globalOpts = program.opts();
+      const { renderWorkflowPrompt, renderWorkflowPromptMarkdown } = await import("../../lib/workflow-prompts.js");
+      const input = { objective: opts.objective, task_id: opts.task, agent_id: opts.agent || globalOpts.agent, context: opts.context };
+      if (globalOpts.json || opts.format === "json") { output(renderWorkflowPrompt(id, input), true); return; }
+      console.log(renderWorkflowPromptMarkdown(id, input));
+    });
+
+  workflows
+    .command("export")
+    .description("Export bundled local workflow prompt metadata")
+    .option("--format <format>", "Output format: json or markdown", "json")
+    .action(async (opts: { format?: string }) => {
+      const globalOpts = program.opts();
+      const { listWorkflowPrompts } = await import("../../lib/workflow-prompts.js");
+      const prompts = listWorkflowPrompts();
+      if (globalOpts.json || opts.format === "json") { output(prompts, true); return; }
+      for (const prompt of prompts) {
+        console.log(`## ${prompt.title}`);
+        console.log("");
+        console.log(prompt.description);
+        console.log("");
+      }
+    });
+
   const policies = program
     .command("policies")
     .description("Manage local policy packs for task done gates");

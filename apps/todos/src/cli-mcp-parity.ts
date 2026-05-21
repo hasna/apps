@@ -13,6 +13,7 @@ export type TodosCliMcpParityDomain =
   | "secret-safety"
   | "runner-sandbox"
   | "extensions"
+  | "workflow-prompts"
   | "policy-packs"
   | "approval-gates"
   | "local-event-hooks"
@@ -379,6 +380,26 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos extensions install ./todos.extension.json --trust --json",
       mcpTool: "install_local_extension",
+    },
+  },
+  {
+    domain: "workflow-prompts",
+    cliCommands: [
+      "todos workflows list",
+      "todos workflows show",
+      "todos workflows export",
+    ],
+    mcpTools: [],
+    jsonContracts: ["structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "intentional-gap",
+    intentionalGaps: [{
+      cliCommand: "todos workflows list",
+      reason: "Workflow prompts are exposed through native MCP prompt/resource registrations, not MCP tools, so CLI parity is documented as prompt/resource parity instead of a tool mapping.",
+    }],
+    gapReason: "Workflow prompts are first-class MCP prompts and resources rather than callable tools, so the parity manifest records the CLI surface and documents the intentional tool gap.",
+    example: {
+      cli: "todos workflows show goal_planning --objective \"Ship release\" --json",
     },
   },
   {

@@ -35,6 +35,9 @@ structured error contracts.
 - `extensions`: local extension manifests, compatibility checks, checksum or
   signature verification, trust review state, offline bundles, and registry
   install/list/remove workflows.
+- `workflow-prompts`: bundled local prompt resources for goal planning, task
+  claiming, review, verification, handoff, release prep, import triage, and
+  incident response.
 - `policy-packs`: local done-gate policies for required commands, forbidden
   evidence, commits, pull requests, approvals, runs, and artifacts.
 - `approval-gates`: local manual checkpoints for risky task, plan, and run work
@@ -188,6 +191,19 @@ Matching MCP tool:
 
 ```json
 { "tool": "install_local_extension", "arguments": { "source": "./todos.extension.json", "trust": true } }
+```
+
+CLI workflow prompt render:
+
+```bash
+todos workflows show goal_planning --objective "Ship release" --json
+```
+
+Matching MCP surface:
+
+```text
+MCP prompt: goal_planning
+MCP resource: todos://workflow-prompts
 ```
 
 CLI policy validation:

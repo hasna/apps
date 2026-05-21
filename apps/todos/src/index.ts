@@ -656,6 +656,19 @@ export type {
   InstallLocalExtensionInput,
   VerifyExtensionSignatureInput,
 } from "./lib/local-extensions.js";
+export {
+  getWorkflowPrompt,
+  listWorkflowPrompts,
+  renderWorkflowPrompt,
+  renderWorkflowPromptMarkdown,
+  WORKFLOW_PROMPTS,
+} from "./lib/workflow-prompts.js";
+export type {
+  WorkflowPromptArgument,
+  WorkflowPromptDefinition,
+  WorkflowPromptRender,
+  WorkflowPromptRenderInput,
+} from "./lib/workflow-prompts.js";
 
 // Completion Guard
 export { checkCompletionGuard } from "./lib/completion-guard.js";

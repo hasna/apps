@@ -1308,6 +1308,40 @@ describe("CLI integration", () => {
     try { unlinkSync(`${dbPath}-wal`); } catch {}
   });
 
+  it("should list and render local workflow prompts", async () => {
+    const dbPath = "/tmp/test-cli-workflows.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    const listed = await runCli(["workflows", "list", "--json"], dbPath);
+    expect(listed.exitCode).toBe(0);
+    const prompts = JSON.parse(listed.stdout);
+    expect(prompts.map((prompt: { id: string }) => prompt.id)).toContain("goal_planning");
+
+    const rendered = await runCli([
+      "workflows",
+      "show",
+      "goal_planning",
+      "--objective",
+      "Ship release",
+      "--task",
+      "abcd1234",
+      "--json",
+    ], dbPath);
+    expect(rendered.exitCode).toBe(0);
+    const prompt = JSON.parse(rendered.stdout);
+    expect(prompt.local_only).toBe(true);
+    expect(prompt.messages[0].content.text).toContain("Ship release");
+
+    const exported = await runCli(["workflows", "export", "--format", "markdown"], dbPath);
+    expect(exported.exitCode).toBe(0);
+    expect(exported.stdout).toContain("## /goal planning");
+
+    try { unlinkSync(dbPath); } catch {}
+    try { unlinkSync(`${dbPath}-shm`); } catch {}
+    try { unlinkSync(`${dbPath}-wal`); } catch {}
+  });
+
   it("should manage local policy packs and validate task evidence", async () => {
     const dbPath = "/tmp/test-cli-policies.db";
     const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");

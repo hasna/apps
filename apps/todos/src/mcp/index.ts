@@ -31,6 +31,7 @@ import { registerMachineTools } from "./tools/machines.js";
 import { registerAgentTools } from "./tools/agents.js";
 import { registerTemplateTools } from "./tools/templates.js";
 import { registerEnvironmentSnapshotTools } from "./tools/environment-snapshots.js";
+import { registerWorkflowPrompts } from "./tools/workflow-prompts.js";
 import { getPackageVersion } from "../lib/package-version.js";
 import { installMcpTokenDiagnostics, shouldRegisterToolForProfile } from "./token-utils.js";
 
@@ -221,6 +222,7 @@ registerCodeTools(server, toolContext);
 registerAgentTools(server, { ...toolContext, agentFocusMap });
 registerTemplateTools(server, toolContext);
 registerEnvironmentSnapshotTools(server, toolContext);
+registerWorkflowPrompts(server);
 
 // === MACHINES ===
 
