@@ -428,6 +428,25 @@ dry-run mode and report conflicts before writing. The package does not upload
 bundles or call hosted services; any hosted sync must consume the exported JSON
 explicitly.
 
+## todos.md Markdown Import/Export
+
+`todos.md` files are readable Markdown checklists with an embedded local bridge
+bundle for lossless round trips. Export keeps the visible tasks, projects, and
+plans easy to inspect while preserving local ids, comments, run ledgers,
+dependencies, files, commits, and verification evidence in a hidden metadata
+block:
+
+```bash
+todos export --format todos.md --output todos.md
+todos todos-md-import todos.md --json
+todos todos-md-import todos.md --apply
+```
+
+Existing plain checklists also import locally. Use `# Project: Name`, `## Plan:
+Name`, checkbox items, optional `priority: high`, `comment: ...`, `depends_on:
+Other task title`, `run: completed smoke`, `#tags`, and `@agent` markers to
+migrate older files without a hosted service.
+
 ## MCP Server
 
 ```bash

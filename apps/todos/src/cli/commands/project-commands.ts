@@ -422,7 +422,7 @@ export function registerProjectCommands(program: Command) {
   program
     .command("export")
     .description("Export tasks")
-    .option("-f, --format <format>", "Format: json, md, or bridge", "json")
+    .option("-f, --format <format>", "Format: json, md, todos.md, or bridge", "json")
     .option("-o, --output <path>", "Write export output to a file")
     .option("--encrypt", "Encrypt bridge exports with a local encryption profile")
     .option("--encryption-profile <name>", "Encryption profile name", "default")
@@ -461,20 +461,15 @@ export function registerProjectCommands(program: Command) {
       }
 
       const tasks = listTasks(projectId ? { project_id: projectId } : {});
-
-      if (opts.format === "md") {
-        const lines = ["# Tasks", ""];
-        for (const t of tasks) {
-          const check = t.status === "completed" ? "x" : " ";
-          lines.push(`- [${check}] **${t.title}** (${t.priority}) ${t.status}`);
-          if (t.description) lines.push(`  ${t.description}`);
-        }
-        await writeOutput(lines.join("\n"));
+      const exportedCount = tasks.length;
+      if (["md", "markdown", "todos.md", "todos-md"].includes(opts.format)) {
+        const { exportTodosMarkdown } = await import("../../lib/todos-md.js");
+        await writeOutput(exportTodosMarkdown({ project_id: projectId ?? undefined }));
       } else {
         await writeOutput(JSON.stringify(tasks, null, 2));
       }
       const { emitLocalEventHooksQuiet } = await import("../../lib/event-hooks.js");
-      emitLocalEventHooksQuiet({ type: "export.finished", payload: { format: opts.format, project_id: projectId, output: opts.output ? resolve(opts.output) : null, count: tasks.length } });
+      emitLocalEventHooksQuiet({ type: "export.finished", payload: { format: opts.format, project_id: projectId, output: opts.output ? resolve(opts.output) : null, count: exportedCount } });
     });
 
   program
@@ -506,6 +501,38 @@ export function registerProjectCommands(program: Command) {
         }
         if (result.conflicts.length > 0) {
           console.log(chalk.yellow(`  conflicts: ${result.conflicts.length}`));
+        }
+        for (const issue of result.issues) {
+          console.error(chalk.red(`  ${issue}`));
+        }
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  program
+    .command("todos-md-import <file>")
+    .alias("markdown-import")
+    .alias("import-md")
+    .description("Dry-run or apply a local todos.md Markdown import")
+    .option("--apply", "Apply the import. Defaults to dry-run.")
+    .action(async (file: string, opts) => {
+      const globalOpts = program.opts();
+      try {
+        const { readFileSync } = await import("node:fs");
+        const { importTodosMarkdown } = await import("../../lib/todos-md.js");
+        const result = importTodosMarkdown(readFileSync(resolve(file), "utf-8"), { dryRun: !opts.apply });
+        const { emitLocalEventHooksQuiet } = await import("../../lib/event-hooks.js");
+        emitLocalEventHooksQuiet({ type: "import.finished", payload: { file: resolve(file), format: "todos.md", dry_run: result.dry_run, ok: result.ok, inserted: result.inserted, skipped: result.skipped, issues: result.issues.length } });
+        if (globalOpts.json) {
+          output(result, true);
+          return;
+        }
+        const mode = result.dry_run ? "Dry-run" : "Import";
+        console.log(chalk.bold(`${mode} ${result.ok ? "ready" : "has issues"}`));
+        console.log(`  mode: ${result.mode}`);
+        for (const [key, count] of Object.entries(result.inserted)) {
+          if (count > 0) console.log(`  ${key}: ${count}`);
         }
         for (const issue of result.issues) {
           console.error(chalk.red(`  ${issue}`));
