@@ -71,6 +71,7 @@ describe("stable JSON contracts", () => {
       "api_error",
       "local_bridge_bundle",
       "local_bridge_import_result",
+      "cli_mcp_parity_manifest",
     ]);
     expect(TODOS_JSON_CONTRACTS_MANIFEST.generatedAt).toBe("1970-01-01T00:00:00.000Z");
   });
@@ -152,6 +153,14 @@ describe("stable JSON contracts", () => {
       suggestion: "Use list_tasks.",
     });
     expectValid("api_error", { error: "Task not found" });
+    expectValid("cli_mcp_parity_manifest", {
+      schemaVersion: 1,
+      generatedAt: "2026-01-02T03:04:05.000Z",
+      package: { packageName: "@hasna/todos", repository: "hasna/todos", version: "1.2.3" },
+      localOnly: true,
+      noNetworkRequired: true,
+      parity: [],
+    });
   });
 
   test("reports missing required fields and incompatible required field types", () => {
