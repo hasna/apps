@@ -1132,6 +1132,13 @@ describe("CLI integration", () => {
     expect(passed.exitCode).toBe(0);
     expect(JSON.parse(passed.stdout).ok).toBe(true);
 
+    const reopened = await runCli(["contracts", "review", task.id, "--state", "reopened", "--reviewer", "reviewer", "--json"], dbPath);
+    expect(reopened.exitCode).toBe(0);
+    expect(JSON.parse(reopened.stdout).state).toBe("reopened");
+    const reopenedCheck = await runCli(["contracts", "check", task.id, "--json"], dbPath);
+    expect(reopenedCheck.exitCode).toBe(0);
+    expect(JSON.parse(reopenedCheck.stdout).missing).toContain("review_approved");
+
     try { unlinkSync(dbPath); } catch {}
   });
 

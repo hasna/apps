@@ -998,6 +998,14 @@ describe("MCP tool wrappers", () => {
 
     const showResult = await callCapturedTool(tools, "get_task_contract", { task_id: task.id });
     expect(showResult.content[0]!.text).toContain("\"reviewer\": \"reviewer\"");
+
+    const reopenedResult = await callCapturedTool(tools, "record_task_review", {
+      task_id: task.id,
+      state: "reopened",
+      reviewer: "reviewer",
+      notes: "Needs another pass",
+    });
+    expect(reopenedResult.content[0]!.text).toContain("\"state\": \"reopened\"");
   });
 
   it("auto tools report deadlines and health without dead imports", async () => {

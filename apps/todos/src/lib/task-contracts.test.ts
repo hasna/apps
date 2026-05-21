@@ -97,6 +97,17 @@ describe("local task contracts and reviews", () => {
     expect(review.state).toBe("changes_requested");
     expect(review.changes_requested).toEqual(["Add failing fixture", "Record verification evidence"]);
     expect(getTaskReview(task.id, db)?.history.at(-1)?.state).toBe("changes_requested");
+
+    const reopened = recordTaskReview({
+      task_id: task.id,
+      state: "reopened",
+      reviewer: "reviewer",
+      notes: "Reopen after requested changes",
+    }, db);
+
+    expect(reopened.state).toBe("reopened");
+    expect(reopened.changes_requested).toEqual([]);
+    expect(getTaskReview(task.id, db)?.history.at(-1)?.state).toBe("reopened");
   });
 
   test("does not allow stale approval metadata to bypass requested changes", () => {
