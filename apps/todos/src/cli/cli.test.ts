@@ -1772,6 +1772,37 @@ END:VCALENDAR`);
     }
   });
 
+  it("should extract source TODOs with index metadata and watcher output", async () => {
+    const { mkdtempSync, rmSync, writeFileSync, unlinkSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const root = mkdtempSync(join(tmpdir(), "todos-cli-extract-"));
+    const dbPath = join(root, "todos.db");
+
+    try {
+      writeFileSync(join(root, ".gitignore"), "ignored.ts\n");
+      writeFileSync(join(root, "ignored.ts"), "// TODO: Do not include\n");
+      writeFileSync(join(root, "app.ts"), "export function runAgent() {\n  // TODO: Create project plan\n}\n");
+
+      const dryRun = await runCli(["--json", "extract", root, "--dry-run", "--index"], dbPath);
+      expect(dryRun.exitCode).toBe(0);
+      const dryPayload = JSON.parse(dryRun.stdout);
+      expect(dryPayload.comments).toHaveLength(1);
+      expect(dryPayload.comments[0].symbol).toBe("runAgent");
+      expect(dryPayload.index.total_symbols).toBe(1);
+
+      const watch = await runCli(["--json", "extract-watch", root, "--dry-run", "--max-runs", "1"], dbPath);
+      expect(watch.exitCode).toBe(0);
+      const watchPayload = JSON.parse(watch.stdout);
+      expect(watchPayload.runs).toHaveLength(1);
+      expect(watchPayload.runs[0].changed_files).toEqual(["app.ts"]);
+
+      try { unlinkSync(dbPath); } catch {}
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("should register machines with topology metadata and report diagnostics", async () => {
     const dbPath = "/tmp/test-cli-machines-topology.db";
     const { unlinkSync } = await import("node:fs");

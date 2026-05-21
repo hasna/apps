@@ -27,6 +27,7 @@ const expectedDomains = [
   "approval-gates",
   "runs",
   "agent-runs",
+  "source-index",
   "calendar",
   "kanban-boards",
   "time-tracking",

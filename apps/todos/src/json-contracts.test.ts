@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { logTaskChange } from "./db/audit.js";
@@ -16,6 +16,7 @@ import { createTemplate } from "./db/templates.js";
 import { getLocalActivityTimeline } from "./lib/activity-timeline.js";
 import { createAgentContextPack } from "./lib/context-packs.js";
 import { captureEnvironmentSnapshot, compareEnvironmentSnapshots } from "./lib/environment-snapshots.js";
+import { buildCodebaseIndex, extractTodos } from "./lib/extract.js";
 import { resetConfig } from "./lib/config.js";
 import { getTaskLocalFields, setTaskLocalFields } from "./lib/local-fields.js";
 import { findDuplicateTasks, mergeDuplicateTask } from "./lib/task-dedupe.js";
@@ -95,6 +96,8 @@ describe("stable JSON contracts", () => {
       "local_activity_timeline_entry",
       "status_summary",
       "context_pack",
+      "source_todo_comment",
+      "source_code_index",
       "calendar_event",
       "ics_export_result",
       "task_board",
@@ -229,6 +232,10 @@ describe("stable JSON contracts", () => {
     const timeline = getLocalActivityTimeline({ entity_type: "task", entity_id: task.id }, db);
     const status = getStatus({ project_id: project.id }, undefined, { explain_blocked: true }, db);
     const contextPack = createAgentContextPack({ task_id: task.id, profile: "codex" }, db);
+    const sourceRoot = mkdtempSync(join(tmpdir(), "todos-contract-source-"));
+    writeFileSync(join(sourceRoot, "app.ts"), "function runPlan() {\n  // TODO: Verify source contracts\n}\n");
+    const sourceComment = extractTodos({ path: sourceRoot, dry_run: true }).comments[0]!;
+    const sourceIndex = buildCodebaseIndex({ path: sourceRoot });
     createCalendarItem({
       title: "Contract calendar milestone",
       kind: "milestone",
@@ -264,6 +271,8 @@ describe("stable JSON contracts", () => {
     expectValid("local_activity_timeline_entry", timeline.entries[0]);
     expectValid("status_summary", status);
     expectValid("context_pack", contextPack);
+    expectValid("source_todo_comment", sourceComment);
+    expectValid("source_code_index", sourceIndex);
     expectValid("calendar_event", calendarEvent);
     expectValid("ics_export_result", icsExport);
     expectValid("task_board", taskBoard);

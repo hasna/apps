@@ -32,6 +32,8 @@ The stable contracts cover these object IDs:
 - `local_activity_timeline_entry`
 - `status_summary`
 - `context_pack`
+- `source_todo_comment`
+- `source_code_index`
 - `calendar_event`
 - `ics_export_result`
 - `task_board`
@@ -98,6 +100,14 @@ plan, run, comment, or cross-entity searches.
 applied scope, filters, result count, and an array of `{ entity_type, entity }`
 records. Saved views are included in local bridge bundles and require no hosted
 service.
+
+## Source Index
+
+`source_todo_comment` and `source_code_index` are emitted by
+`todos extract --dry-run --index --json`, `todos extract-watch --json`,
+`extract_todos`, and `watch_source_todos`. They describe local code comments,
+dedupe fingerprints, nearest symbol context, checksums, and gitignore/exclude
+behavior without calling hosted code search or telemetry.
 
 ## Duplicate Tasks
 

@@ -48,6 +48,9 @@ structured error contracts.
   bridge export/import workflows.
 - `agent-runs`: local adapter definitions, queued agent runs, dry-run launch
   previews, cancellation, retries, and run-ledger evidence.
+- `source-index`: local TODO/FIXME/HACK/BUG/XXX/NOTE source extraction,
+  gitignore-aware codebase indexing, symbol context, dedupe fingerprints, and
+  finite watcher scans.
 - `calendar`: local task due dates, SLA threshold events, run-ledger events,
   reminders, milestones, work blocks, deterministic ICS export, and ICS import.
 - `kanban-boards`: local task and plan board definitions, workflow lanes, WIP
@@ -234,6 +237,20 @@ Matching MCP tool:
 
 ```json
 { "tool": "install_local_extension", "arguments": { "source": "./todos.extension.json", "trust": true } }
+```
+
+CLI source TODO index:
+
+```bash
+todos extract . --dry-run --index --exclude fixtures/** --json
+todos extract-watch . --dry-run --max-runs 1 --json
+```
+
+Matching MCP tools:
+
+```json
+{ "tool": "extract_todos", "arguments": { "path": ".", "dry_run": true, "include_index": true, "exclude": ["fixtures/**"] } }
+{ "tool": "watch_source_todos", "arguments": { "path": ".", "dry_run": true, "max_runs": 1 } }
 ```
 
 CLI workflow prompt render:

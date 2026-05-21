@@ -186,7 +186,8 @@ export function registerTaskMetaTools(server: McpServer, ctx: TaskMetaContext) {
             suggest_agent_name: "suggest_agent_name — Suggest available agent names. Params: working_dir",
             get_org_chart: "get_org_chart — Get global org chart. Params: format",
             set_reports_to: "set_reports_to — Set org hierarchy. Params: agent_id, reports_to",
-            extract_todos: "extract_todos — Scan code for TODO comments. Params: path, project_id, task_list_id, patterns, tags, assigned_to, agent_id, dry_run, extensions",
+            extract_todos: "extract_todos — Scan code for TODO comments. Params: path, project_id, task_list_id, patterns, tags, assigned_to, agent_id, dry_run, extensions, exclude, respect_gitignore, include_index",
+            watch_source_todos: "watch_source_todos — Run finite local source TODO watcher scans. Params: path, project_id, task_list_id, patterns, tags, assigned_to, agent_id, dry_run, extensions, exclude, respect_gitignore, interval_ms, max_runs",
           };
 
           if (toolDocs[tool_name]) {

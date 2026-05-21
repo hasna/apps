@@ -597,6 +597,9 @@ export function registerProjectCommands(program: Command) {
     .option("--assign <agent>", "Assign extracted tasks to an agent")
     .option("--list <id>", "Task list ID")
     .option("--ext <extensions>", "Comma-separated file extensions to scan (e.g. ts,py,go)")
+    .option("--exclude <patterns>", "Comma-separated gitignore-style path patterns to skip")
+    .option("--no-gitignore", "Do not read .gitignore from the scanned root")
+    .option("--index", "Include a local source index in JSON output")
     .action(async (scanPath: string, opts) => {
       try {
         const globalOpts = program.opts();
@@ -616,15 +619,30 @@ export function registerProjectCommands(program: Command) {
           agent_id: globalOpts.agent,
           dry_run: opts.dryRun,
           extensions: opts.ext ? opts.ext.split(",").map((e: string) => e.trim()) : undefined,
+          exclude: splitList(opts.exclude),
+          respect_gitignore: opts.gitignore !== false,
+          include_index: Boolean(opts.index),
         });
 
         if (globalOpts.json) {
-          console.log(JSON.stringify(opts.dryRun ? { comments: result.comments } : { tasks_created: result.tasks.length, skipped: result.skipped, comments: result.comments.length }, null, 2));
+          console.log(JSON.stringify(opts.dryRun ? {
+            comments: result.comments,
+            index: result.index,
+          } : {
+            tasks_created: result.tasks.length,
+            skipped: result.skipped,
+            comments: result.comments.length,
+            index: result.index,
+          }, null, 2));
         } else if (opts.dryRun) {
           console.log(chalk.cyan(`Found ${result.comments.length} comment(s):\n`));
           for (const c of result.comments) {
-            console.log(`  ${chalk.yellow(`[${c.tag}]`)} ${c.message}`);
+            const symbol = c.symbol ? chalk.gray(` in ${c.symbol_kind || "symbol"} ${c.symbol}`) : "";
+            console.log(`  ${chalk.yellow(`[${c.tag}]`)} ${c.message}${symbol}`);
             console.log(`    ${chalk.gray(`${c.file}:${c.line}`)}`);
+          }
+          if (result.index) {
+            console.log(chalk.gray(`\nIndexed ${result.index.files.length} file(s), ${result.index.total_symbols} symbol(s).`));
           }
         } else {
           console.log(chalk.green(`Created ${result.tasks.length} task(s)`));
@@ -632,8 +650,68 @@ export function registerProjectCommands(program: Command) {
             console.log(chalk.gray(`Skipped ${result.skipped} duplicate(s)`));
           }
           console.log(chalk.gray(`Total comments found: ${result.comments.length}`));
+          if (result.index) {
+            console.log(chalk.gray(`Indexed ${result.index.files.length} file(s), ${result.index.total_symbols} symbol(s).`));
+          }
           for (const t of result.tasks) {
             console.log(formatTaskLine(t));
+          }
+        }
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  program
+    .command("extract-watch <path>")
+    .description("Poll a local source tree for TODO/FIXME/HACK/BUG/XXX/NOTE comments and create tasks")
+    .option("--dry-run", "Show extracted comments without creating tasks")
+    .option("--once", "Run a single watcher scan and exit", true)
+    .option("--max-runs <n>", "Maximum watcher scans before exiting")
+    .option("--interval <ms>", "Polling interval in milliseconds", "2000")
+    .option("--pattern <tags>", "Comma-separated tags to look for")
+    .option("-t, --tags <tags>", "Extra comma-separated tags to add to created tasks")
+    .option("--assign <agent>", "Assign extracted tasks to an agent")
+    .option("--list <id>", "Task list ID")
+    .option("--ext <extensions>", "Comma-separated file extensions to scan")
+    .option("--exclude <patterns>", "Comma-separated gitignore-style path patterns to skip")
+    .option("--no-gitignore", "Do not read .gitignore from the watched root")
+    .action(async (scanPath: string, opts) => {
+      try {
+        const globalOpts = program.opts();
+        const projectId = autoProject(globalOpts);
+        const { watchSourceTodos, EXTRACT_TAGS } = await import("../../lib/extract.js");
+        const patterns = opts.pattern
+          ? opts.pattern.split(",").map((t: string) => t.trim().toUpperCase()) as typeof EXTRACT_TAGS[number][]
+          : undefined;
+        const taskListId = opts.list ? resolveTaskListId(opts.list) : undefined;
+        const maxRuns = opts.maxRuns ? parseInt(opts.maxRuns, 10) : 1;
+        const result = await watchSourceTodos({
+          path: resolve(scanPath),
+          patterns,
+          project_id: projectId,
+          task_list_id: taskListId,
+          tags: splitList(opts.tags),
+          assigned_to: opts.assign,
+          agent_id: globalOpts.agent,
+          dry_run: opts.dryRun,
+          extensions: splitList(opts.ext),
+          exclude: splitList(opts.exclude),
+          respect_gitignore: opts.gitignore !== false,
+          include_index: true,
+          once: opts.once !== false,
+          max_runs: maxRuns,
+          interval_ms: parseInt(opts.interval, 10),
+        });
+
+        if (globalOpts.json) {
+          console.log(JSON.stringify(result, null, 2));
+          return;
+        }
+        for (const run of result.runs) {
+          console.log(chalk.cyan(`Watcher run ${run.run}: ${run.result.comments.length} comment(s), ${run.changed_files.length} changed file(s)`));
+          if (!opts.dryRun) {
+            console.log(chalk.green(`Created ${run.result.tasks.length} task(s), skipped ${run.result.skipped} duplicate(s)`));
           }
         }
       } catch (e) {

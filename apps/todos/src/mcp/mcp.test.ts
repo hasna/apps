@@ -20,6 +20,7 @@ import { registerTemplateTools } from "./tools/templates.js";
 import { registerEnvironmentSnapshotTools } from "./tools/environment-snapshots.js";
 import { registerMachineTools } from "./tools/machines.js";
 import { registerWorkflowPrompts } from "./tools/workflow-prompts.js";
+import { registerCodeTools } from "./tools/code-tools.js";
 
 // These tests verify the core operations that the MCP server wraps.
 // The MCP server itself uses stdio transport which is harder to test in unit tests.
@@ -153,6 +154,40 @@ describe("MCP tool operations", () => {
       expect(payload.project.name).toBe("mcp-bootstrap");
       expect(payload.taskList.slug).toBe("todos-mcp-bootstrap");
       expect(payload.created.project).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("code tools expose source TODO index and finite watcher scans", async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const root = mkdtempSync(join(tmpdir(), "todos-mcp-source-"));
+    writeFileSync(join(root, ".gitignore"), "ignored.ts\n");
+    writeFileSync(join(root, "ignored.ts"), "// TODO: Ignored\n");
+    writeFileSync(join(root, "app.ts"), "function createProject() {\n  // TODO: Add tasks\n}\n");
+
+    try {
+      const tools = captureTools(registerCodeTools);
+      const extractResult = await callCapturedTool(tools, "extract_todos", {
+        path: root,
+        dry_run: true,
+        include_index: true,
+      });
+      const extractPayload = JSON.parse(extractResult.content[0]!.text);
+      expect(extractPayload.comments).toHaveLength(1);
+      expect(extractPayload.comments[0].symbol).toBe("createProject");
+      expect(extractPayload.index.total_comments).toBe(1);
+
+      const watchResult = await callCapturedTool(tools, "watch_source_todos", {
+        path: root,
+        dry_run: true,
+        max_runs: 1,
+      });
+      const watchPayload = JSON.parse(watchResult.content[0]!.text);
+      expect(watchPayload.runs).toHaveLength(1);
+      expect(watchPayload.runs[0].changed_files).toEqual(["app.ts"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

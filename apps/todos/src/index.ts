@@ -438,7 +438,7 @@ export { defaultSyncAgents, syncWithAgent, syncWithAgents } from "./lib/sync.js"
 export type { SyncResult } from "./lib/sync-types.js";
 
 // Extract
-export { extractTodos, extractFromSource, tagToPriority, EXTRACT_TAGS } from "./lib/extract.js";
+export { buildCodebaseIndex, extractTodos, extractFromSource, tagToPriority, watchSourceTodos, EXTRACT_TAGS } from "./lib/extract.js";
 
 // Burndown
 export { getBurndown } from "./lib/burndown.js";
@@ -459,7 +459,19 @@ export type { ContextSnapshot, SaveSnapshotInput, SnapshotType } from "./db/snap
 // Agent Budgets
 export { setBudget, getBudget, checkBudget } from "./db/budgets.js";
 export type { AgentBudget, BudgetCheck } from "./db/budgets.js";
-export type { ExtractedComment, ExtractOptions, ExtractResult, ExtractTag } from "./lib/extract.js";
+export type {
+  CodebaseIndex,
+  ExtractedComment,
+  ExtractOptions,
+  ExtractResult,
+  ExtractTag,
+  SourceIndexFile,
+  SourceSymbol,
+  SourceSymbolKind,
+  SourceTodoWatchResult,
+  SourceTodoWatchRun,
+  WatchSourceTodosOptions,
+} from "./lib/extract.js";
 
 // Config
 export {

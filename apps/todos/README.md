@@ -167,6 +167,23 @@ MCP clients can use `set_policy_pack`, `list_policy_packs`,
 Validation is a dry local read of recorded task evidence; it never calls a
 hosted enforcement service.
 
+## Local Source TODO Index
+
+Source extraction scans local code for `TODO`, `FIXME`, `HACK`, `BUG`, `XXX`,
+and `NOTE` comments, respects `.gitignore` plus explicit excludes, records
+source files, line anchors, nearby symbols, and stable dedupe fingerprints, and
+can run as a finite local watcher:
+
+```bash
+todos extract . --dry-run --index --json
+todos extract . --exclude fixtures/** --tags tech-debt
+todos extract-watch . --dry-run --max-runs 1 --json
+```
+
+Created tasks are tagged with `extracted` and linked back to the source file.
+MCP clients can call `extract_todos` and `watch_source_todos` for the same
+offline workflow; no hosted code search, cloud sync, or telemetry is used.
+
 ## Task Contracts and Reviews
 
 Task contracts make acceptance criteria, required verification, expected

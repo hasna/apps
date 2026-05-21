@@ -19,6 +19,7 @@ export type TodosCliMcpParityDomain =
   | "local-event-hooks"
   | "encryption"
   | "agent-runs"
+  | "source-index"
   | "calendar"
   | "kanban-boards"
   | "time-tracking"
@@ -517,6 +518,25 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos agent-runs queue 1234abcd --adapter codex --json",
       mcpTool: "queue_agent_run",
+    },
+  },
+  {
+    domain: "source-index",
+    cliCommands: [
+      "todos extract",
+      "todos extract-watch",
+    ],
+    mcpTools: [
+      "extract_todos",
+      "watch_source_todos",
+    ],
+    jsonContracts: ["source_code_index", "source_todo_comment", "task", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    intentionalGaps: [],
+    example: {
+      cli: "todos extract . --dry-run --index --json",
+      mcpTool: "extract_todos",
     },
   },
   {

@@ -33,6 +33,9 @@ export function registerCodeTools(server: McpServer, ctx: CodeToolsContext) {
         agent_id: z.string().optional().describe("Agent performing the extraction"),
         dry_run: z.boolean().optional().describe("If true, return found comments without creating tasks"),
         extensions: z.array(z.string()).optional().describe("File extensions to scan (e.g. ['ts', 'py'])"),
+        exclude: z.array(z.string()).optional().describe("Gitignore-style path patterns to skip"),
+        respect_gitignore: z.boolean().optional().describe("Respect .gitignore from the scanned root (default true)"),
+        include_index: z.boolean().optional().describe("Include local codebase index metadata in the response"),
       },
       async (params) => {
         try {
@@ -44,7 +47,10 @@ export function registerCodeTools(server: McpServer, ctx: CodeToolsContext) {
           const result = extractTodos(resolved as unknown as Parameters<typeof extractTodos>[0]);
 
           if (params.dry_run) {
-            const lines = result.comments.map((c: any) => `[${c.tag}] ${c.message} — ${c.file}:${c.line}`);
+            if (params.include_index) {
+              return { content: [{ type: "text" as const, text: JSON.stringify({ comments: result.comments, index: result.index }, null, 2) }] };
+            }
+            const lines = result.comments.map((c: any) => `[${c.tag}] ${c.message} — ${c.file}:${c.line}${c.symbol ? ` (${c.symbol})` : ""}`);
             return { content: [{ type: "text" as const, text: `Found ${result.comments.length} comment(s):\n${lines.join("\n")}` }] };
           }
 
@@ -56,6 +62,40 @@ export function registerCodeTools(server: McpServer, ctx: CodeToolsContext) {
 
           const taskLines = result.tasks.map(formatTask);
           return { content: [{ type: "text" as const, text: `${summary}\n\n${taskLines.join("\n")}` }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("watch_source_todos")) {
+    server.tool(
+      "watch_source_todos",
+      "Run finite local source TODO watcher scans. Uses polling, respects .gitignore/excludes, and can dry-run or apply extracted tasks.",
+      {
+        path: z.string().describe("Directory or file path to watch"),
+        project_id: z.string().optional().describe("Project to assign tasks to"),
+        task_list_id: z.string().optional().describe("Task list to add tasks to"),
+        patterns: z.array(z.enum(["TODO", "FIXME", "HACK", "XXX", "BUG", "NOTE"])).optional().describe("Tags to search for (default: all)"),
+        tags: z.array(z.string()).optional().describe("Extra tags to add to created tasks"),
+        assigned_to: z.string().optional().describe("Agent to assign tasks to"),
+        agent_id: z.string().optional().describe("Agent performing the watcher scan"),
+        dry_run: z.boolean().optional().describe("If true, return found comments without creating tasks"),
+        extensions: z.array(z.string()).optional().describe("File extensions to scan"),
+        exclude: z.array(z.string()).optional().describe("Gitignore-style path patterns to skip"),
+        respect_gitignore: z.boolean().optional().describe("Respect .gitignore from the watched root"),
+        interval_ms: z.number().optional().describe("Polling interval for repeated scans"),
+        max_runs: z.number().optional().describe("Maximum scans before returning; default 1"),
+      },
+      async (params) => {
+        try {
+          const { watchSourceTodos } = require("../../lib/extract.js") as typeof import("../../lib/extract.js");
+          const resolved: Record<string, unknown> = { ...params, include_index: true, once: (params.max_runs || 1) <= 1 };
+          if (resolved["project_id"]) resolved["project_id"] = resolveId(resolved["project_id"] as string, "projects");
+          if (resolved["task_list_id"]) resolved["task_list_id"] = resolveId(resolved["task_list_id"] as string, "task_lists");
+          const result = await watchSourceTodos(resolved as unknown as Parameters<typeof watchSourceTodos>[0]);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }
