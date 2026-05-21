@@ -518,6 +518,17 @@ export type {
   UpsertEncryptionProfileInput,
 } from "./lib/local-encryption.js";
 export {
+  getTaskLocalFields,
+  queryTasksByLocalFields,
+  setTaskLocalFields,
+} from "./lib/local-fields.js";
+export type {
+  LocalTaskFieldQuery,
+  LocalTaskFields,
+  LocalTaskSeverity,
+  SetTaskLocalFieldsInput,
+} from "./lib/local-fields.js";
+export {
   createAgentContextPack,
   renderAgentContextPack,
   renderAgentContextPackMarkdown,

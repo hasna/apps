@@ -72,6 +72,7 @@ import {
   upsertEncryptionProfile,
 } from "../../lib/local-encryption.js";
 import { getLocalActivityTimeline } from "../../lib/activity-timeline.js";
+import { getTaskLocalFields, queryTasksByLocalFields, setTaskLocalFields } from "../../lib/local-fields.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 
 interface TaskProjectContext {
@@ -1714,6 +1715,82 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
             until: input.until,
           });
           return { content: [{ type: "text" as const, text: JSON.stringify(timeline, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("get_task_fields")) {
+    server.tool(
+      "get_task_fields",
+      "Get local labels, priority, severity, owner, area, and custom fields for a task.",
+      {
+        task_id: z.string().describe("Task ID"),
+      },
+      async ({ task_id }) => {
+        try {
+          const fields = getTaskLocalFields(resolveId(task_id));
+          return { content: [{ type: "text" as const, text: JSON.stringify(fields, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("set_task_fields")) {
+    server.tool(
+      "set_task_fields",
+      "Set local labels, priority, severity, owner, area, and custom fields for a task.",
+      {
+        task_id: z.string().describe("Task ID"),
+        labels: z.array(z.string()).optional().describe("Local labels to set."),
+        priority: z.enum(["low", "medium", "high", "critical"]).optional(),
+        severity: z.string().nullable().optional(),
+        owner: z.string().nullable().optional(),
+        area: z.string().nullable().optional(),
+        custom: z.record(z.unknown()).optional(),
+        merge_custom: z.boolean().optional().describe("Merge custom fields by default; set false to replace."),
+      },
+      async (input) => {
+        try {
+          const task = setTaskLocalFields(resolveId(input.task_id), {
+            labels: input.labels,
+            priority: input.priority,
+            severity: input.severity,
+            owner: input.owner,
+            area: input.area,
+            custom: input.custom,
+            merge_custom: input.merge_custom,
+          });
+          const payload = { task, fields: getTaskLocalFields(task.id) };
+          return { content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("query_tasks_by_fields")) {
+    server.tool(
+      "query_tasks_by_fields",
+      "Query tasks by local labels, priority, severity, owner, area, and custom fields.",
+      {
+        labels: z.array(z.string()).optional(),
+        priority: z.union([z.enum(["low", "medium", "high", "critical"]), z.array(z.enum(["low", "medium", "high", "critical"]))]).optional(),
+        severity: z.string().optional(),
+        owner: z.string().optional(),
+        area: z.string().optional(),
+        custom: z.record(z.unknown()).optional(),
+        limit: z.number().optional(),
+      },
+      async (input) => {
+        try {
+          const tasks = queryTasksByLocalFields(input);
+          return { content: [{ type: "text" as const, text: JSON.stringify({ tasks, count: tasks.length }, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }

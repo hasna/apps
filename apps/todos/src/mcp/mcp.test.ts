@@ -826,6 +826,38 @@ describe("MCP tool wrappers", () => {
     expect(JSON.stringify(timeline.entries)).not.toContain("abcdefghijklmnop");
   });
 
+  it("local field wrappers set, get, and query task metadata", async () => {
+    const tools = captureTools(registerTaskProjectTools);
+    const task = createTask({ title: "MCP fielded" }, db);
+
+    const setResult = await callCapturedTool(tools, "set_task_fields", {
+      task_id: task.id,
+      labels: ["mcp", "bug"],
+      priority: "critical",
+      severity: "s0",
+      owner: "codex",
+      area: "metadata",
+      custom: { component: "fields" },
+    });
+    const setPayload = JSON.parse(setResult.content[0]!.text);
+    expect(setPayload.task.priority).toBe("critical");
+    expect(setPayload.fields.labels).toEqual(["bug", "mcp"]);
+
+    const getResult = await callCapturedTool(tools, "get_task_fields", { task_id: task.id });
+    const fields = JSON.parse(getResult.content[0]!.text);
+    expect(fields.owner).toBe("codex");
+    expect(fields.custom.component).toBe("fields");
+
+    const queryResult = await callCapturedTool(tools, "query_tasks_by_fields", {
+      labels: ["mcp"],
+      severity: "s0",
+      custom: { component: "fields" },
+    });
+    const query = JSON.parse(queryResult.content[0]!.text);
+    expect(query.count).toBe(1);
+    expect(query.tasks[0].id).toBe(task.id);
+  });
+
   it("search_tasks wrapper calls the search library", async () => {
     const tools = captureTools(registerTaskProjectTools);
     createTask({ title: "Needle wrapper task" }, db);

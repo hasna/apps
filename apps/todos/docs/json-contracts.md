@@ -16,6 +16,7 @@ The stable contracts cover these object IDs:
 
 - `task`
 - `project`
+- `local_task_fields`
 - `agent`
 - `template`
 - `task_list`
@@ -64,6 +65,13 @@ Two error shapes are stable:
 New machine-readable fields may be added to either error object. Existing
 clients should keep displaying the string message and use stable `code` values
 when present.
+
+## Local Task Fields
+
+`local_task_fields` is the stable object returned by `todos fields show`,
+`todos fields set --json`, `get_task_fields`, and `set_task_fields`. It keeps
+labels, priority, severity, owner, area, and custom local metadata in task
+metadata so bridge exports and imports carry it without any hosted dependency.
 
 ## Agent Context Packs
 

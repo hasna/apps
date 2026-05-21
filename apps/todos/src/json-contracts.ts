@@ -149,6 +149,22 @@ export const TODOS_JSON_CONTRACTS: TodosJsonObjectContract[] = [
     },
   }),
   contract({
+    id: "local_task_fields",
+    name: "Local Task Fields",
+    description: "Local task metadata for labels, priority, severity, owner, area, and extension-defined custom fields.",
+    surfaces: ["cli", "mcp", "sdk"],
+    stability: "stable",
+    required: {
+      labels: field("array", "Sorted local labels attached to the task."),
+      priority: field("string", "Canonical task priority mirrored from the task row."),
+      severity: field(["string", "null"], "Local severity label, or null when unset.", true),
+      owner: field(["string", "null"], "Local owner or responsible agent, or null when unset.", true),
+      area: field(["string", "null"], "Local area or component, or null when unset.", true),
+      custom: metadataField,
+    },
+    optional: {},
+  }),
+  contract({
     id: "agent",
     name: "Agent",
     description: "Registered agent identity and coordination metadata.",

@@ -301,6 +301,22 @@ local SQLite store and local bridge exports already include the underlying
 comments, runs, run evidence, files, commits, and verification records needed to
 rebuild the same timeline after import.
 
+## Local Task Fields
+
+Tasks can carry local labels, severity, owner, area, and custom metadata while
+keeping canonical priority on the task itself:
+
+```bash
+todos fields set <task-id> --labels bug,cli --priority high --severity s1 --owner codex --area parser --field component=parser --json
+todos fields show <task-id> --json
+todos fields query --labels bug,cli --severity s1 --field component=parser --json
+```
+
+Custom values are redacted before storage, labels are mirrored into task tags
+for existing filters, and the metadata is included in local bridge exports.
+MCP clients use `get_task_fields`, `set_task_fields`, and
+`query_tasks_by_fields` for the same local-only workflow.
+
 ## Local Agent Context Packs
 
 Context packs create deterministic run-start bundles for Codex, Claude Code,

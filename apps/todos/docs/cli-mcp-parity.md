@@ -16,6 +16,8 @@ structured error contracts.
 
 - `tasks`: create, list, read, update, lifecycle, assignment, queue, lock
   leases, stale recovery, and bulk workflows.
+- `local-fields`: local labels, priority, severity, owner, area, and custom
+  fields with query support for agent-native task selection.
 - `projects`: project bootstrap, project registration, project updates, task
   lists, path resolution, and focus.
 - `plans`: plan create, list, read, update, complete, and delete workflows.
@@ -57,6 +59,18 @@ Matching MCP tool:
 
 ```json
 { "tool": "create_task", "arguments": { "title": "Fix flaky parser", "priority": "high" } }
+```
+
+CLI local fields update:
+
+```bash
+todos fields set 1234abcd --labels bug,cli --severity s1 --field component=parser --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "set_task_fields", "arguments": { "task_id": "1234abcd", "labels": ["bug", "cli"], "severity": "s1", "custom": { "component": "parser" } } }
 ```
 
 CLI workspace permission check:

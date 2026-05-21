@@ -16,6 +16,9 @@ import {
 import { getRecap } from "../../db/audit.js";
 import { createHandoff, listHandoffs, getLatestHandoff } from "../../db/handoffs.js";
 import { isValidRecurrenceRule } from "../../lib/recurrence.js";
+import { getTaskLocalFields, queryTasksByLocalFields, setTaskLocalFields } from "../../lib/local-fields.js";
+import type { LocalTaskFieldQuery, SetTaskLocalFieldsInput } from "../../lib/local-fields.js";
+import type { TaskPriority } from "../../types/index.js";
 import { autoProject, handleError, output, formatTaskLine, resolveTaskId } from "../helpers.js";
 
 function parseJsonObjectOption(value: string | undefined, label: string): Record<string, unknown> | undefined {
@@ -28,6 +31,43 @@ function parseJsonObjectOption(value: string | undefined, label: string): Record
     console.error(chalk.red(`${label} must be a valid JSON object`));
     process.exit(1);
   }
+}
+
+function parseCsvOption(value: string | undefined): string[] | undefined {
+  if (!value) return undefined;
+  const values = value.split(",").map((item) => item.trim()).filter(Boolean);
+  return values.length > 0 ? values : undefined;
+}
+
+function parseFieldPairs(values: string[] | undefined): Record<string, unknown> | undefined {
+  if (!values || values.length === 0) return undefined;
+  const result: Record<string, unknown> = {};
+  for (const raw of values) {
+    const index = raw.indexOf("=");
+    if (index <= 0) {
+      console.error(chalk.red("--field entries must use key=value format"));
+      process.exit(1);
+    }
+    result[raw.slice(0, index).trim()] = raw.slice(index + 1);
+  }
+  return result;
+}
+
+function mergeCustomFields(
+  jsonFields: Record<string, unknown> | undefined,
+  pairFields: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!jsonFields && !pairFields) return undefined;
+  return { ...(jsonFields || {}), ...(pairFields || {}) };
+}
+
+function parsePriority(value: string | undefined): TaskPriority | undefined {
+  if (!value) return undefined;
+  if (!["low", "medium", "high", "critical"].includes(value)) {
+    console.error(chalk.red("--priority must be one of: low, medium, high, critical"));
+    process.exit(1);
+  }
+  return value as TaskPriority;
 }
 
 export function registerQueryCommands(program: Command) {
@@ -1386,6 +1426,107 @@ export function registerQueryCommands(program: Command) {
         stale_after_hours: Number(opts.staleAfterHours),
       });
       console.log(renderAgentContextPack(pack, format));
+    });
+
+  const fields = program
+    .command("fields")
+    .description("Manage local labels, priority, severity, owner, area, and custom fields");
+
+  fields
+    .command("show <task-id>")
+    .description("Show local fields for a task")
+    .option("-j, --json", "Output as JSON")
+    .action((taskId: string, opts) => {
+      const globalOpts = program.opts();
+      try {
+        const payload = getTaskLocalFields(resolveTaskId(taskId));
+        if (opts.json || globalOpts.json) { output(payload, true); return; }
+        console.log(chalk.bold(`Fields for ${taskId}`));
+        console.log(`  labels: ${payload.labels.join(", ") || "-"}`);
+        console.log(`  priority: ${payload.priority}`);
+        console.log(`  severity: ${payload.severity || "-"}`);
+        console.log(`  owner: ${payload.owner || "-"}`);
+        console.log(`  area: ${payload.area || "-"}`);
+        if (Object.keys(payload.custom).length) console.log(`  custom: ${JSON.stringify(payload.custom)}`);
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  fields
+    .command("set <task-id>")
+    .description("Set local fields for a task")
+    .option("--labels <labels>", "Comma-separated labels")
+    .option("--priority <priority>", "Priority: low, medium, high, critical")
+    .option("--severity <severity>", "Local severity, for example s0, s1, s2")
+    .option("--owner <owner>", "Local owner or responsible agent")
+    .option("--area <area>", "Local area or component")
+    .option("--custom <json>", "Custom fields as a JSON object")
+    .option("--field <pairs...>", "Custom key=value pairs")
+    .option("--replace-custom", "Replace custom fields instead of merging")
+    .option("-j, --json", "Output as JSON")
+    .action((taskId: string, opts) => {
+      const globalOpts = program.opts();
+      try {
+        const custom = mergeCustomFields(
+          parseJsonObjectOption(opts.custom, "--custom"),
+          parseFieldPairs(opts.field),
+        );
+        const input: SetTaskLocalFieldsInput = {
+          labels: parseCsvOption(opts.labels),
+          priority: parsePriority(opts.priority),
+          severity: opts.severity,
+          owner: opts.owner,
+          area: opts.area,
+          custom,
+          merge_custom: opts.replaceCustom ? false : undefined,
+        };
+        const task = setTaskLocalFields(resolveTaskId(taskId), input);
+        const payload = { task, fields: getTaskLocalFields(task.id) };
+        if (opts.json || globalOpts.json) { output(payload, true); return; }
+        console.log(chalk.green(`Updated fields for ${task.short_id || task.id.slice(0, 8)}.`));
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  fields
+    .command("query")
+    .description("Query tasks by local fields")
+    .option("--labels <labels>", "Comma-separated labels all matching tasks must have")
+    .option("--priority <priority>", "Priority: low, medium, high, critical")
+    .option("--severity <severity>", "Local severity")
+    .option("--owner <owner>", "Local owner or responsible agent")
+    .option("--area <area>", "Local area or component")
+    .option("--custom <json>", "Custom field query as a JSON object")
+    .option("--field <pairs...>", "Custom key=value pairs")
+    .option("--limit <n>", "Maximum tasks to return", "100")
+    .option("-j, --json", "Output as JSON")
+    .action((opts) => {
+      const globalOpts = program.opts();
+      try {
+        const query: LocalTaskFieldQuery = {
+          labels: parseCsvOption(opts.labels),
+          priority: parsePriority(opts.priority),
+          severity: opts.severity,
+          owner: opts.owner,
+          area: opts.area,
+          custom: mergeCustomFields(
+            parseJsonObjectOption(opts.custom, "--custom"),
+            parseFieldPairs(opts.field),
+          ),
+          limit: Number(opts.limit),
+        };
+        const tasks = queryTasksByLocalFields(query);
+        if (opts.json || globalOpts.json) { output({ tasks, count: tasks.length }, true); return; }
+        if (tasks.length === 0) {
+          console.log(chalk.dim("No matching tasks."));
+          return;
+        }
+        for (const task of tasks) console.log(formatTaskLine(task));
+      } catch (e) {
+        handleError(e);
+      }
     });
 
   const inbox = program
