@@ -28,6 +28,7 @@ The stable contracts cover these object IDs:
 - `local_audit_ledger_checkpoint`
 - `release_compatibility_report`
 - `local_usage_ledger`
+- `terminal_dashboard_snapshot`
 - `mention_resolution_report`
 - `project_knowledge_record`
 - `project_knowledge_export`
@@ -196,6 +197,13 @@ changelog surfaces, rollback steps, warnings, and blocking issues.
 `get_usage_ledger`. It summarizes aggregate local task, project, run, command,
 duration, token, cost, and evidence-storage usage with optional quota
 simulation. Raw commands and artifact paths are omitted from this report.
+
+## Terminal Dashboard Snapshot
+
+`terminal_dashboard_snapshot` is returned by
+`todos dashboard --snapshot --json`. It captures the local terminal dashboard
+tabs for projects, tasks, plans, runs, dependencies, inbox, and search with
+keyboard hints and no hosted service calls.
 
 ## Project Knowledge
 

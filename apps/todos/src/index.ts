@@ -1300,6 +1300,19 @@ export type {
   CliOptionEntry,
   CompletionShell,
 } from "./lib/cli-help.js";
+export {
+  TUI_DASHBOARD_VIEWS,
+  createTuiDashboardSnapshot,
+  renderTuiDashboardSnapshot,
+} from "./lib/tui-dashboard.js";
+export type {
+  CreateTuiDashboardSnapshotOptions,
+  TuiDashboardDependency,
+  TuiDashboardPlan,
+  TuiDashboardProject,
+  TuiDashboardSnapshot,
+  TuiDashboardView,
+} from "./lib/tui-dashboard.js";
 
 // Dispatch formatter
 export { formatDispatchMessage, formatSingleTask } from "./lib/dispatch-formatter.js";

@@ -1303,12 +1303,34 @@ export function registerConfigServeCommands(program: Command) {
     .description("Live-updating dashboard showing project health, agents, task flow")
     .option("--project <id>", "Filter to project")
     .option("--refresh <ms>", "Refresh interval in ms (default: 2000)", "2000")
+    .option("--snapshot", "Print a deterministic local dashboard snapshot instead of launching the TUI")
+    .option("--view <view>", "Snapshot/TUI view: overview, projects, tasks, plans, runs, dependencies, inbox, search", "overview")
+    .option("--search <query>", "Populate the search view with a local task search")
+    .option("--limit <n>", "Rows per dashboard section in snapshot mode", "8")
+    .option("--format <format>", "Snapshot format: markdown or json", "markdown")
+    .option("-j, --json", "Output snapshot as JSON")
     .action(async (opts) => {
+      const globalOpts = program.opts();
+      const projectId = opts.project || autoProject(globalOpts) || undefined;
+      if (opts.snapshot) {
+        const { createTuiDashboardSnapshot, renderTuiDashboardSnapshot, TUI_DASHBOARD_VIEWS } = await import("../../lib/tui-dashboard.js");
+        const view = TUI_DASHBOARD_VIEWS.includes(opts.view) ? opts.view : "overview";
+        const snapshot = createTuiDashboardSnapshot({
+          project_id: projectId,
+          active_view: view,
+          search: opts.search,
+          limit: parseInt(opts.limit, 10),
+        });
+        if (opts.json || globalOpts.json || opts.format === "json") {
+          output(snapshot, true);
+          return;
+        }
+        console.log(renderTuiDashboardSnapshot(snapshot));
+        return;
+      }
       const { render } = await import("ink");
       const React = await import("react");
       const { Dashboard } = await import("../components/Dashboard.js");
-      const globalOpts = program.opts();
-      const projectId = opts.project || autoProject(globalOpts) || undefined;
       render(React.createElement(Dashboard, { projectId, refreshMs: parseInt(opts.refresh, 10) }));
     });
 }

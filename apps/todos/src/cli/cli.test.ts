@@ -114,6 +114,32 @@ describe("CLI integration", () => {
     }
   });
 
+  it("should print a deterministic terminal dashboard snapshot", async () => {
+    const dbPath = "/tmp/test-cli-dashboard-snapshot.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    try {
+      await runCli(["add", "dashboard snapshot task", "--json"], dbPath);
+      const markdown = await runCli(["dashboard", "--snapshot", "--view", "tasks", "--search", "dashboard"], dbPath);
+      expect(markdown.exitCode).toBe(0);
+      expect(markdown.stdout).toContain("# todos terminal dashboard");
+      expect(markdown.stdout).toContain("View: tasks");
+      expect(markdown.stdout).toContain("## Tasks");
+      expect(markdown.stdout).toContain("dashboard snapshot task");
+      expect(markdown.stdout).toContain("## Search");
+
+      const json = await runCli(["dashboard", "--snapshot", "--json", "--search", "dashboard"], dbPath);
+      expect(json.exitCode).toBe(0);
+      const snapshot = JSON.parse(json.stdout);
+      expect(snapshot.local_only).toBe(true);
+      expect(snapshot.keymap).toContain("/ search");
+      expect(snapshot.search.results.some((task: { title: string }) => task.title === "dashboard snapshot task")).toBe(true);
+    } finally {
+      try { unlinkSync(dbPath); } catch {}
+    }
+  });
+
   it("should generate shell completions for bash zsh and fish", async () => {
     const dbPath = "/tmp/test-cli-completions.db";
     const { unlinkSync } = await import("node:fs");

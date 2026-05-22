@@ -27,6 +27,7 @@ const expectedDomains = [
   "audit-ledger",
   "release-compatibility",
   "usage-ledger",
+  "terminal-dashboard",
   "templates",
   "workspace-trust",
   "secret-safety",
@@ -218,6 +219,8 @@ describe("CLI/MCP parity manifest", () => {
     expect(byDomain.get("terminal-notifications")?.jsonContracts).toContain("local_notification_check");
     expect(byDomain.get("usage-ledger")?.mcpTools).toContain("get_usage_ledger");
     expect(byDomain.get("usage-ledger")?.jsonContracts).toContain("local_usage_ledger");
+    expect(byDomain.get("terminal-dashboard")?.status).toBe("intentional-gap");
+    expect(byDomain.get("terminal-dashboard")?.jsonContracts).toContain("terminal_dashboard_snapshot");
     expect(byDomain.get("search")?.mcpTools).toEqual(expect.arrayContaining(["search_tasks", "get_status"]));
     expect(byDomain.get("templates")?.mcpTools).toEqual(expect.arrayContaining([
       "list_template_library",

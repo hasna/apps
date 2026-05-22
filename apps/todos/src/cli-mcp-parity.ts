@@ -18,6 +18,7 @@ export type TodosCliMcpParityDomain =
   | "audit-ledger"
   | "release-compatibility"
   | "usage-ledger"
+  | "terminal-dashboard"
   | "templates"
   | "workspace-trust"
   | "secret-safety"
@@ -496,6 +497,22 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos usage report --agent codex --max-tasks 1000 --json",
       mcpTool: "get_usage_ledger",
+    },
+  },
+  {
+    domain: "terminal-dashboard",
+    cliCommands: ["todos dashboard", "todos dashboard --snapshot"],
+    mcpTools: [],
+    jsonContracts: ["terminal_dashboard_snapshot", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "intentional-gap",
+    intentionalGaps: [{
+      cliCommand: "todos dashboard",
+      reason: "The interactive terminal dashboard is a human TUI surface; agents should use the underlying task, project, plan, run, dependency, inbox, and search MCP tools directly.",
+    }],
+    gapReason: "Terminal UI keyboard navigation is not an MCP interaction model.",
+    example: {
+      cli: "todos dashboard --snapshot --view tasks --search release --json",
     },
   },
   {

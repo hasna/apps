@@ -46,6 +46,9 @@ structured error contracts.
   changelog, and rollback checks before publishing or updating.
 - `usage-ledger`: aggregate local task, project, run, command, token, cost,
   duration, storage, and quota reports without raw command or artifact paths.
+- `terminal-dashboard`: keyboard-first local TUI available through
+  `todos dashboard`; deterministic snapshots use
+  `todos dashboard --snapshot --json`.
 - `templates`: bundled marketplace-free local template library, editable JSON
   template files, template import/export, preview, version history, and task
   creation from templates.

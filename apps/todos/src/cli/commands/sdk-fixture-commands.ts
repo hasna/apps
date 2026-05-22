@@ -21,7 +21,7 @@ export function registerSdkFixtureCommands(program: Command) {
         if (opts.write) {
           const result = writeSdkIntegrationFixtures(resolve(opts.write));
           if (globalOpts.json) {
-            output(result, true);
+            console.log(JSON.stringify(result));
             return;
           }
           console.log(chalk.green(`Wrote ${result.files.length} SDK integration fixture file(s) to ${result.directory}`));
@@ -30,7 +30,7 @@ export function registerSdkFixtureCommands(program: Command) {
         }
 
         if (opts.show) {
-          output(createSdkIntegrationFixturePack(), true);
+          console.log(JSON.stringify(createSdkIntegrationFixturePack()));
           return;
         }
 

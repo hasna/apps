@@ -33,6 +33,22 @@ todos manual
 todos manual --json
 ```
 
+## Terminal Dashboard
+
+`todos dashboard` launches a local Ink TUI with keyboard tabs for overview,
+projects, tasks, plans, runs, dependencies, inbox, and search. It reads only the
+local SQLite database and can also print deterministic snapshots for scripts or
+tests:
+
+```bash
+todos dashboard
+todos dashboard --snapshot --view tasks --search "release" --json
+```
+
+Keyboard hints are shown in the interface: `h`/left and `l`/right move between
+tabs, `1`-`8` jumps to a tab, `/` opens local search, `r` refreshes, and `q`
+quits.
+
 ## Local Project Bootstrap
 
 Bootstrap discovers the current local workspace, registers a project identity,
