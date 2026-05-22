@@ -90,6 +90,11 @@ export {
   checkLocalNotifications,
 } from "./lib/local-notifications.js";
 export {
+  LOCAL_USAGE_LEDGER_SCHEMA_VERSION,
+  createLocalUsageLedger,
+  renderLocalUsageLedgerMarkdown,
+} from "./lib/usage-ledger.js";
+export {
   DEFAULT_ENCRYPTION_KEY_ENV,
   DEFAULT_ENCRYPTION_PROFILE,
   TODOS_ENCRYPTED_BRIDGE_KIND,
@@ -151,6 +156,12 @@ export type {
   LocalNotificationQuietHours,
   LocalNotificationSeverity,
 } from "./lib/local-notifications.js";
+export type {
+  UsageLedgerOptions,
+  UsageLedgerQuotaInput,
+  UsageLedgerQuotaResult,
+  UsageLedgerReport,
+} from "./lib/usage-ledger.js";
 export type {
   ImportOnboardingFixtureOptions,
   OnboardingFixture,

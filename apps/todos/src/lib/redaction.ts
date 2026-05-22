@@ -20,6 +20,15 @@ const DEFAULT_SECRET_PATTERNS: SecretPattern[] = [
 ];
 
 const DEFAULT_SECRET_KEY_PATTERN = /api[_-]?key|token|secret|password/i;
+const NON_SECRET_USAGE_KEYS = new Set([
+  "tokens",
+  "total_tokens",
+  "token_count",
+  "input_tokens",
+  "output_tokens",
+  "prompt_tokens",
+  "completion_tokens",
+]);
 
 function unique(values: string[] | undefined): string[] {
   return Array.from(new Set((values || []).map((value) => value.trim()).filter(Boolean)));
@@ -44,6 +53,7 @@ function secretPatterns(): SecretPattern[] {
 }
 
 function isSecretKey(key: string): boolean {
+  if (NON_SECRET_USAGE_KEYS.has(key.toLowerCase())) return false;
   if (DEFAULT_SECRET_KEY_PATTERN.test(key)) return true;
   return unique(loadConfig().secret_safety?.redaction_keys).some((pattern) => key.toLowerCase().includes(pattern.toLowerCase()));
 }

@@ -38,6 +38,7 @@ const [
   { registerCapacityCommands },
   { registerAuditLedgerCommands },
   { registerReleaseCompatibilityCommands },
+  { registerUsageLedgerCommands },
 ] = await Promise.all([
   import("./commands/task-commands.js"),
   import("./commands/plan-template-commands.js"),
@@ -62,6 +63,7 @@ const [
   import("./commands/capacity-commands.js"),
   import("./commands/audit-ledger-commands.js"),
   import("./commands/release-compatibility-commands.js"),
+  import("./commands/usage-ledger-commands.js"),
 ]);
 
 registerTaskCommands(program);
@@ -87,5 +89,6 @@ registerRoadmapCommands(program);
 registerCapacityCommands(program);
 registerAuditLedgerCommands(program);
 registerReleaseCompatibilityCommands(program);
+registerUsageLedgerCommands(program);
 
 program.parse();

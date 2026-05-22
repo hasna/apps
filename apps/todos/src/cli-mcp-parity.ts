@@ -17,6 +17,7 @@ export type TodosCliMcpParityDomain =
   | "capacity"
   | "audit-ledger"
   | "release-compatibility"
+  | "usage-ledger"
   | "templates"
   | "workspace-trust"
   | "secret-safety"
@@ -482,6 +483,19 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos release-compat check --json",
       mcpTool: "check_release_compatibility",
+    },
+  },
+  {
+    domain: "usage-ledger",
+    cliCommands: ["todos usage report"],
+    mcpTools: ["get_usage_ledger"],
+    jsonContracts: ["local_usage_ledger", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    intentionalGaps: [],
+    example: {
+      cli: "todos usage report --agent codex --max-tasks 1000 --json",
+      mcpTool: "get_usage_ledger",
     },
   },
   {

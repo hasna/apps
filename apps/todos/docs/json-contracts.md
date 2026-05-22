@@ -27,6 +27,7 @@ The stable contracts cover these object IDs:
 - `local_audit_ledger`
 - `local_audit_ledger_checkpoint`
 - `release_compatibility_report`
+- `local_usage_ledger`
 - `mention_resolution_report`
 - `project_knowledge_record`
 - `project_knowledge_export`
@@ -188,6 +189,13 @@ root hash and source counts used by `verify_audit_ledger`.
 summarizes local package identity, public access metadata, export keys, CLI
 binaries, in-memory migration simulations, Bun install smoke commands,
 changelog surfaces, rollback steps, warnings, and blocking issues.
+
+## Local Usage Ledger
+
+`local_usage_ledger` is returned by `todos usage report --json` and
+`get_usage_ledger`. It summarizes aggregate local task, project, run, command,
+duration, token, cost, and evidence-storage usage with optional quota
+simulation. Raw commands and artifact paths are omitted from this report.
 
 ## Project Knowledge
 

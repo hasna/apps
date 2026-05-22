@@ -4,7 +4,7 @@ import { addDependency, createTask, getTask, listTasks, completeTask, startTask 
 import { createProject } from "../db/projects.js";
 import { createPlan } from "../db/plans.js";
 import { addComment, listComments } from "../db/comments.js";
-import { addTaskRunCommand, addTaskRunEvent, startTaskRun } from "../db/task-runs.js";
+import { addTaskRunArtifact, addTaskRunCommand, addTaskRunEvent, finishTaskRun, startTaskRun } from "../db/task-runs.js";
 import { addTaskFile } from "../db/task-files.js";
 import { resetConfig } from "../lib/config.js";
 import { searchTasks } from "../lib/search.js";
@@ -1317,6 +1317,38 @@ describe("MCP tool wrappers", () => {
       format: "markdown",
     });
     expect(markdown.content[0]!.text).toContain("# Release Compatibility");
+  });
+
+  it("usage ledger tool reports aggregate local usage and quotas", async () => {
+    const tools = captureTools(registerTaskResources);
+    const project = createProject({ name: "MCP Usage", path: "/tmp/mcp-usage" }, db);
+    const task = createTask({ title: "MCP usage task", project_id: project.id, assigned_to: "codex" }, db);
+    const run = startTaskRun({
+      task_id: task.id,
+      agent_id: "codex",
+      metadata: { usage: { total_tokens: 25, cost_usd: 0.003 } },
+      started_at: "2026-01-02T03:00:00.000Z",
+    }, db);
+    addTaskRunCommand({ run_id: run.id, command: "bun test", status: "passed", tokens: 50, cost_usd: 0.005 }, db);
+    addTaskRunArtifact({ run_id: run.id, path: "logs/mcp-usage.txt", size_bytes: 2048, store_content: false }, db);
+    finishTaskRun({ run_id: run.id, status: "completed", completed_at: "2026-01-02T03:02:00.000Z" }, db);
+
+    const result = await callCapturedTool(tools, "get_usage_ledger", {
+      project_id: project.id,
+      agent_id: "codex",
+      max_storage_bytes: 1000,
+    });
+    const report = JSON.parse(result.content[0]!.text);
+    expect(report.local_only).toBe(true);
+    expect(report.counts.commands).toBe(1);
+    expect(report.usage.metadata_tokens).toBe(75);
+    expect(report.storage.evidence_bytes).toBe(2048);
+    expect(report.quota.exceeded).toContain("max_storage_bytes");
+    expect(JSON.stringify(report)).not.toContain("bun test");
+    expect(JSON.stringify(report)).not.toContain("logs/mcp-usage.txt");
+
+    const markdown = await callCapturedTool(tools, "get_usage_ledger", { project_id: project.id, format: "markdown" });
+    expect(markdown.content[0]!.text).toContain("Local Usage Ledger");
   });
 
   it("time tracking tools manage local focus sessions and reports", async () => {

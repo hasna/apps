@@ -95,6 +95,25 @@ describe("CLI integration", () => {
     try { unlinkSync("/tmp/test-cli-list.db"); } catch {}
   });
 
+  it("should run usage report command", async () => {
+    const dbPath = "/tmp/test-cli-usage.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    try {
+      await runCli(["add", "usage report cli task", "--json"], dbPath);
+      const result = await runCli(["usage", "report", "--max-tasks", "1", "--json"], dbPath);
+      expect(result.exitCode).toBe(0);
+      const report = JSON.parse(result.stdout);
+      expect(report.local_only).toBe(true);
+      expect(report.counts.tasks).toBe(1);
+      expect(report.quota.allowed).toBe(true);
+      expect(report.redaction.raw_commands_included).toBe(false);
+    } finally {
+      try { unlinkSync(dbPath); } catch {}
+    }
+  });
+
   it("should run search command", async () => {
     // First add a task, then search for it
     const addProc = Bun.spawn(

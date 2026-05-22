@@ -27,6 +27,7 @@ import { createMilestone, createRoadmap, exportRoadmapBundle, summarizeRoadmap }
 import { getPlanningForecast, upsertCapacityProfile } from "./lib/capacity-forecasts.js";
 import { getLocalAuditLedger, sealLocalAuditLedger } from "./lib/audit-ledger.js";
 import { createReleaseCompatibilityReport } from "./lib/release-compatibility.js";
+import { createLocalUsageLedger } from "./lib/usage-ledger.js";
 import { createSdkIntegrationFixturePack } from "./lib/sdk-integration-fixtures.js";
 import { generateReleaseNotes } from "./lib/release-notes.js";
 import { previewRetentionCleanup } from "./lib/retention-cleanup.js";
@@ -109,6 +110,7 @@ describe("stable JSON contracts", () => {
       "local_audit_ledger",
       "local_audit_ledger_checkpoint",
       "release_compatibility_report",
+      "local_usage_ledger",
       "mention_resolution_report",
       "project_knowledge_record",
       "project_knowledge_export",
@@ -425,9 +427,15 @@ describe("stable JSON contracts", () => {
       generated_at: "2026-01-02T03:04:05.000Z",
       simulated_levels: [0],
     });
+    const usageLedger = createLocalUsageLedger({
+      project_id: project.id,
+      generated_at: "2026-01-02T03:04:05.000Z",
+      quotas: { max_tasks: 1000, max_projects: 10 },
+    }, db);
     expectValid("local_audit_ledger", auditLedger);
     expectValid("local_audit_ledger_checkpoint", auditCheckpoint);
     expectValid("release_compatibility_report", releaseCompatibility);
+    expectValid("local_usage_ledger", usageLedger);
     expectValid("task_list", taskList);
     expectValid("task", task);
     expectValid("mention_resolution_report", mentionReport);

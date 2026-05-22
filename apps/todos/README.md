@@ -760,6 +760,22 @@ The report also includes changelog surfaces and rollback commands. MCP clients
 use `check_release_compatibility` for the same `release_compatibility_report`
 JSON contract.
 
+## Local Usage Ledger
+
+Usage reports summarize local tasks, projects, runs, commands, durations,
+agent-provided token and cost metadata, and run artifact storage. Quota flags
+are simulated locally so agents can check free/pro limits or project budgets
+without sending data anywhere:
+
+```bash
+todos usage report --agent codex --max-tasks 1000 --max-projects 10 --json
+todos usage report --project <project-id> --format markdown
+```
+
+The report is aggregate-only: raw command strings and artifact paths are not
+included. MCP clients use `get_usage_ledger` for the same
+`local_usage_ledger` JSON contract.
+
 ## Local Activity Timeline
 
 The timeline command gives agents one ordered, redacted view of local comments,

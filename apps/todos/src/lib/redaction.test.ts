@@ -51,4 +51,22 @@ describe("local secret redaction", () => {
     expect(JSON.stringify(findings)).not.toContain("TEAM-ABC-123");
     expect(JSON.stringify(findings)).not.toContain("sk-testsecret");
   });
+
+  test("keeps numeric usage token counters while redacting credential keys", () => {
+    expect(redactValue({
+      usage: {
+        total_tokens: 123,
+        input_tokens: 100,
+        output_tokens: 23,
+      },
+      access_token: "should-not-export",
+    })).toEqual({
+      usage: {
+        total_tokens: 123,
+        input_tokens: 100,
+        output_tokens: 23,
+      },
+      access_token: "[REDACTED]",
+    });
+  });
 });

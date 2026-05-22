@@ -75,6 +75,10 @@ import {
   renderAgentReliabilityMarkdown,
 } from "../../db/agent-metrics.js";
 import {
+  createLocalUsageLedger,
+  renderLocalUsageLedgerMarkdown,
+} from "../../lib/usage-ledger.js";
+import {
   getOnboardingFixtureBundle,
   importOnboardingFixture,
   listOnboardingFixtures,
@@ -719,6 +723,48 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
     );
   }
 
+  if (shouldRegisterTool("get_usage_ledger")) {
+    server.tool(
+      "get_usage_ledger",
+      "Get an aggregate local usage ledger for tasks, projects, runs, commands, costs, durations, storage, and simulated quotas.",
+      {
+        project_id: z.string().optional().describe("Optional project ID or name"),
+        agent_id: z.string().optional().describe("Optional agent ID or name"),
+        since: z.string().optional().describe("Only include records created or started at or after this timestamp"),
+        until: z.string().optional().describe("Only include records created or started at or before this timestamp"),
+        max_tasks: z.number().optional(),
+        max_projects: z.number().optional(),
+        max_runs: z.number().optional(),
+        max_commands: z.number().optional(),
+        max_tokens: z.number().optional(),
+        max_cost_usd: z.number().optional(),
+        max_storage_bytes: z.number().optional(),
+        format: z.enum(["json", "markdown"]).optional(),
+      },
+      async (input) => {
+        try {
+          const report = createLocalUsageLedger({
+            project_id: input.project_id ? resolveId(input.project_id, "projects") : undefined,
+            agent_id: input.agent_id,
+            since: input.since,
+            until: input.until,
+            quotas: {
+              max_tasks: input.max_tasks,
+              max_projects: input.max_projects,
+              max_runs: input.max_runs,
+              max_commands: input.max_commands,
+              max_tokens: input.max_tokens,
+              max_cost_usd: input.max_cost_usd,
+              max_storage_bytes: input.max_storage_bytes,
+            },
+          });
+          const text = input.format === "markdown" ? renderLocalUsageLedgerMarkdown(report) : JSON.stringify(report, null, 2);
+          return { content: [{ type: "text" as const, text }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
   if (shouldRegisterTool("add_task_file")) {
     server.tool(
       "add_task_file",
@@ -1236,11 +1282,14 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
         exit_code: z.number().optional().describe("Process exit code"),
         output_summary: z.string().optional().describe("Short output summary"),
         artifact_path: z.string().optional().describe("Optional local artifact or log path"),
+        tokens: z.number().optional().describe("Token count reported by the agent or model"),
+        cost_usd: z.number().optional().describe("USD cost reported by the agent or model"),
+        duration_ms: z.number().optional().describe("Duration reported by the agent or model"),
         agent_id: z.string().optional().describe("Agent that ran the command"),
       },
-      async ({ run_id, command, status, exit_code, output_summary, artifact_path, agent_id }) => {
+      async ({ run_id, command, status, exit_code, output_summary, artifact_path, tokens, cost_usd, duration_ms, agent_id }) => {
         try {
-          const evidence = addTaskRunCommand({ run_id, command, status, exit_code, output_summary, artifact_path, agent_id });
+          const evidence = addTaskRunCommand({ run_id, command, status, exit_code, output_summary, artifact_path, tokens, cost_usd, duration_ms, agent_id });
           return { content: [{ type: "text" as const, text: JSON.stringify(evidence, null, 2) }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
       },

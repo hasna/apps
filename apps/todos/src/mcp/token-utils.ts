@@ -214,6 +214,7 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "close_risk",
     "get_task_git_refs",
     "get_task_run_ledger",
+    "get_usage_ledger",
     "list_agent_run_adapters",
     "list_agent_run_queue",
     "verify_task_run_artifacts",

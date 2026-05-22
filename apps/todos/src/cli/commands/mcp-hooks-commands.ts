@@ -897,13 +897,16 @@ exit 0
     .option("--exit-code <code>", "Process exit code")
     .option("--summary <text>", "Short output summary")
     .option("--artifact <path>", "Optional local artifact/log path")
+    .option("--tokens <n>", "Token count reported by the agent or model")
+    .option("--cost-usd <n>", "USD cost reported by the agent or model")
+    .option("--duration-ms <n>", "Duration in milliseconds reported by the agent or model")
     .option("--sandbox <name>", "Runner sandbox profile to check before recording")
     .option("--cwd <path>", "Command working directory for sandbox checks")
     .option("--write <list>", "Comma-separated write paths for sandbox checks")
     .option("--env <list>", "Comma-separated environment keys for sandbox checks")
     .option("--network", "Request network access for sandbox checks")
     .option("--agent <name>", "Agent that ran the command")
-    .action(async (runId: string, command: string, opts: { status?: string; exitCode?: string; summary?: string; artifact?: string; sandbox?: string; cwd?: string; write?: string; env?: string; network?: boolean; agent?: string }) => {
+    .action(async (runId: string, command: string, opts: { status?: string; exitCode?: string; summary?: string; artifact?: string; tokens?: string; costUsd?: string; durationMs?: string; sandbox?: string; cwd?: string; write?: string; env?: string; network?: boolean; agent?: string }) => {
       const globalOpts = program.opts();
       if (opts.status !== "passed" && opts.status !== "failed" && opts.status !== "unknown") {
         console.error(chalk.red("--status must be passed, failed, or unknown"));
@@ -934,6 +937,9 @@ exit 0
         exit_code: opts.exitCode !== undefined ? Number.parseInt(opts.exitCode, 10) : undefined,
         output_summary: opts.summary,
         artifact_path: opts.artifact,
+        tokens: opts.tokens !== undefined ? Number.parseInt(opts.tokens, 10) : undefined,
+        cost_usd: opts.costUsd !== undefined ? Number.parseFloat(opts.costUsd) : undefined,
+        duration_ms: opts.durationMs !== undefined ? Number.parseInt(opts.durationMs, 10) : undefined,
         agent_id: opts.agent || globalOpts.agent,
       });
       if (globalOpts.json) { output(evidence, true); return; }

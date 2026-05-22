@@ -246,6 +246,9 @@ export interface AddTaskRunCommandInput {
   exit_code?: number;
   output_summary?: string;
   artifact_path?: string;
+  tokens?: number;
+  cost_usd?: number;
+  duration_ms?: number;
   agent_id?: string;
   started_at?: string;
   completed_at?: string;
@@ -295,7 +298,18 @@ export function addTaskRunCommand(input: AddTaskRunCommandInput, db?: Database):
     run_id: run.id,
     event_type: "command",
     message: `${status}: ${command}`,
-    data: { command, status, exit_code: input.exit_code ?? null, output_summary: outputSummary, artifact_path: artifactPath },
+    data: {
+      command,
+      status,
+      exit_code: input.exit_code ?? null,
+      output_summary: outputSummary,
+      artifact_path: artifactPath,
+      usage: {
+        tokens: input.tokens ?? null,
+        cost_usd: input.cost_usd ?? null,
+        duration_ms: input.duration_ms ?? null,
+      },
+    },
     agent_id: input.agent_id ?? run.agent_id ?? undefined,
     created_at: timestamp,
   }, d);

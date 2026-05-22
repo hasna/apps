@@ -1261,6 +1261,11 @@ export {
   LOCAL_NOTIFICATION_SCHEMA_VERSION,
   checkLocalNotifications,
 } from "./lib/local-notifications.js";
+export {
+  LOCAL_USAGE_LEDGER_SCHEMA_VERSION,
+  createLocalUsageLedger,
+  renderLocalUsageLedgerMarkdown,
+} from "./lib/usage-ledger.js";
 export type {
   ExternalIssueExistingMatch,
   ExternalIssueImportInput,
@@ -1276,6 +1281,12 @@ export type {
   LocalNotificationQuietHours,
   LocalNotificationSeverity,
 } from "./lib/local-notifications.js";
+export type {
+  UsageLedgerOptions,
+  UsageLedgerQuotaInput,
+  UsageLedgerQuotaResult,
+  UsageLedgerReport,
+} from "./lib/usage-ledger.js";
 
 // Dispatch formatter
 export { formatDispatchMessage, formatSingleTask } from "./lib/dispatch-formatter.js";
