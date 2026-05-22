@@ -22,6 +22,7 @@ import { getTaskLocalFields, setTaskLocalFields } from "./lib/local-fields.js";
 import { testExtensionCompatibility } from "./lib/local-extensions.js";
 import { getLocalSnapshot, pollLocalSnapshots } from "./lib/local-snapshots.js";
 import { listOnboardingFixtures } from "./lib/onboarding-fixtures.js";
+import { createSdkIntegrationFixturePack } from "./lib/sdk-integration-fixtures.js";
 import { generateReleaseNotes } from "./lib/release-notes.js";
 import { previewRetentionCleanup } from "./lib/retention-cleanup.js";
 import { resolveMentions } from "./lib/mention-resolver.js";
@@ -144,6 +145,7 @@ describe("stable JSON contracts", () => {
       "onboarding_fixture",
       "local_snapshot",
       "local_snapshot_poll_result",
+      "sdk_integration_fixture_pack",
       "local_bridge_bundle",
       "local_bridge_import_result",
       "cli_mcp_parity_manifest",
@@ -500,6 +502,10 @@ describe("stable JSON contracts", () => {
       types: ["tasks"],
       generatedAt: "2026-01-02T03:04:05.000Z",
     }, db));
+    expectValid("sdk_integration_fixture_pack", createSdkIntegrationFixturePack({
+      version: "1.2.3",
+      generatedAt: "2026-01-02T03:04:05.000Z",
+    }));
     expectValid("cli_mcp_parity_manifest", {
       schemaVersion: 1,
       generatedAt: "2026-01-02T03:04:05.000Z",

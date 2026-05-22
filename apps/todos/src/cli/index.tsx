@@ -32,6 +32,7 @@ const [
   { registerAgentReliabilityCommands },
   { registerOnboardingCommands },
   { registerLocalSnapshotCommands },
+  { registerSdkFixtureCommands },
 ] = await Promise.all([
   import("./commands/task-commands.js"),
   import("./commands/plan-template-commands.js"),
@@ -50,6 +51,7 @@ const [
   import("./commands/agent-reliability-commands.js"),
   import("./commands/onboarding-commands.js"),
   import("./commands/local-snapshot-commands.js"),
+  import("./commands/sdk-fixture-commands.js"),
 ]);
 
 registerTaskCommands(program);
@@ -69,5 +71,6 @@ registerRetrospectiveCommands(program);
 registerAgentReliabilityCommands(program);
 registerOnboardingCommands(program);
 registerLocalSnapshotCommands(program);
+registerSdkFixtureCommands(program);
 
 program.parse();

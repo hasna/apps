@@ -78,6 +78,22 @@ export type {
   LocalSnapshotType,
 } from "./lib/local-snapshots.js";
 
+// SDK integration fixtures
+export {
+  TODOS_SDK_INTEGRATION_FIXTURE_GENERATED_AT,
+  TODOS_SDK_INTEGRATION_FIXTURE_SCHEMA_VERSION,
+  createSdkIntegrationFixturePack,
+  listSdkIntegrationExamples,
+  writeSdkIntegrationFixtures,
+} from "./lib/sdk-integration-fixtures.js";
+export type {
+  SdkIntegrationExample,
+  SdkIntegrationExampleSurface,
+  SdkIntegrationFixtureDatabase,
+  SdkIntegrationFixturePack,
+  WriteSdkIntegrationFixturesResult,
+} from "./lib/sdk-integration-fixtures.js";
+
 // Side-effect-free MCP metadata
 export {
   CORE_MCP_TOOLS,

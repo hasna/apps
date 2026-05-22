@@ -62,6 +62,7 @@ The stable contracts cover these object IDs:
 - `onboarding_fixture`
 - `local_snapshot`
 - `local_snapshot_poll_result`
+- `sdk_integration_fixture_pack`
 - `local_bridge_bundle`
 - `local_bridge_import_result`
 - `cli_mcp_parity_manifest`
@@ -364,6 +365,12 @@ a cursor, a stable fingerprint, and resource hints.
 `local_snapshot_poll_result` is returned by `todos snapshots --poll` and
 `poll_local_snapshots`. It lets agent clients pass the last cursor and receive
 only snapshots whose local cursor advanced, without a hosted event stream.
+
+`sdk_integration_fixture_pack` is returned by `todos sdk-fixtures --show` and
+`createSdkIntegrationFixturePack`. It includes local package metadata,
+seeded fixture database identifiers, copy-pasteable example inventory, stable
+JSON contract snapshots, CLI/MCP parity metadata, local snapshot resources,
+project/task/plan/run/evidence snapshots, and one agent context pack.
 
 `local_bridge_bundle` is the stable offline import/export shape for moving local
 `@hasna/todos` data between stores. It contains versioned package metadata,

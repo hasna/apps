@@ -878,6 +878,22 @@ MCP clients can read `todos://snapshots/catalog` and
 `list_local_snapshots`, `get_local_snapshot`, and `poll_local_snapshots` for
 JSON or Markdown payloads.
 
+## SDK Integration Fixtures
+
+Downstream SDK, CLI JSON, MCP, and agent-adapter tests can generate a complete
+local fixture pack from the bundled demo project:
+
+```bash
+todos sdk-fixtures --json
+todos sdk-fixtures --show > sdk-fixture-pack.json
+todos sdk-fixtures --write .todos/sdk-integrations --json
+```
+
+The pack includes a local bridge fixture, stable JSON contract snapshots,
+project/task/plan/run/evidence snapshots, and a context pack. Copy-pasteable
+examples live in `examples/sdk-integrations/`, and the full guide is in
+`docs/sdk-integrations.md`.
+
 ## Local Bridge Import/Export
 
 Export a versioned local bridge bundle for migration, backup, or explicit

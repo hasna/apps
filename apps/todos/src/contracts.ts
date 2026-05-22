@@ -31,6 +31,13 @@ export {
   renderLocalSnapshotMarkdown,
 } from "./lib/local-snapshots.js";
 export {
+  TODOS_SDK_INTEGRATION_FIXTURE_GENERATED_AT,
+  TODOS_SDK_INTEGRATION_FIXTURE_SCHEMA_VERSION,
+  createSdkIntegrationFixturePack,
+  listSdkIntegrationExamples,
+  writeSdkIntegrationFixtures,
+} from "./lib/sdk-integration-fixtures.js";
+export {
   DEFAULT_ENCRYPTION_KEY_ENV,
   DEFAULT_ENCRYPTION_PROFILE,
   TODOS_ENCRYPTED_BRIDGE_KIND,
@@ -85,6 +92,13 @@ export type {
   LocalSnapshotPollResult,
   LocalSnapshotType,
 } from "./lib/local-snapshots.js";
+export type {
+  SdkIntegrationExample,
+  SdkIntegrationExampleSurface,
+  SdkIntegrationFixtureDatabase,
+  SdkIntegrationFixturePack,
+  WriteSdkIntegrationFixturesResult,
+} from "./lib/sdk-integration-fixtures.js";
 export type {
   EncryptedLocalBridgeBundle,
   LocalEncryptionEnvelope,

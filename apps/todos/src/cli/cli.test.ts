@@ -1174,6 +1174,43 @@ describe("CLI integration", () => {
     }
   });
 
+  it("should list show and write SDK integration fixtures through the CLI", async () => {
+    const dbPath = "/tmp/test-cli-sdk-fixtures.db";
+    const outputDir = "/tmp/test-cli-sdk-fixtures";
+    const { rmSync, unlinkSync } = await import("node:fs");
+    rmSync(outputDir, { recursive: true, force: true });
+    for (const path of [dbPath, `${dbPath}-shm`, `${dbPath}-wal`]) {
+      try { unlinkSync(path); } catch {}
+    }
+
+    const listed = await runCli(["sdk-fixtures", "--json"], dbPath);
+    expect(listed.exitCode).toBe(0);
+    const examples = JSON.parse(listed.stdout);
+    expect(examples.map((example: { surface: string }) => example.surface)).toEqual(["sdk", "cli-json", "mcp", "agent-adapter"]);
+
+    const shown = await runCli(["sdk-fixtures", "--show"], dbPath);
+    expect(shown.exitCode).toBe(0);
+    const pack = JSON.parse(shown.stdout);
+    expect(pack.local_only).toBe(true);
+    expect(pack.fixture_database.task_ids).toHaveLength(4);
+    expect(pack.contract_snapshots.snapshots.tasks.count).toBe(4);
+
+    const written = await runCli(["sdk-fixtures", "--write", outputDir, "--json"], dbPath);
+    expect(written.exitCode).toBe(0);
+    const result = JSON.parse(written.stdout);
+    expect(result.files.map((file: string) => file.replace(`${outputDir}/`, ""))).toEqual([
+      "fixture-pack.json",
+      "agent-project-demo.bridge.json",
+      "contract-snapshots.json",
+      "examples.json",
+    ]);
+
+    rmSync(outputDir, { recursive: true, force: true });
+    for (const path of [dbPath, `${dbPath}-shm`, `${dbPath}-wal`]) {
+      try { unlinkSync(path); } catch {}
+    }
+  });
+
   it("should encrypt and decrypt local bridge bundles through the CLI", async () => {
     const sourceDb = "/tmp/test-cli-bridge-encrypted-source.db";
     const targetDb = "/tmp/test-cli-bridge-encrypted-target.db";
