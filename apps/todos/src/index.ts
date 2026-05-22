@@ -882,6 +882,7 @@ export type {
   AgentReplayStep,
 } from "./lib/agent-replay-simulator.js";
 export {
+  discoverLocalExtensions,
   getLocalExtension,
   inspectExtensionSource,
   installLocalExtension,
@@ -892,9 +893,13 @@ export {
   verifyExtensionSignature,
 } from "./lib/local-extensions.js";
 export type {
+  DiscoverLocalExtensionsOptions,
+  ExtensionCompatibilityReport,
+  ExtensionSandboxCheck,
   ExtensionSourceInspection,
   ExtensionValidationResult,
   InstallLocalExtensionInput,
+  LocalExtensionDiscoveryReport,
   VerifyExtensionSignatureInput,
 } from "./lib/local-extensions.js";
 export {

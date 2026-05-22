@@ -655,6 +655,7 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     domain: "extensions",
     cliCommands: [
       "todos extensions list",
+      "todos extensions discover",
       "todos extensions inspect",
       "todos extensions compat",
       "todos extensions install",
@@ -663,12 +664,13 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     ],
     mcpTools: [
       "list_local_extensions",
+      "discover_local_extensions",
       "inspect_local_extension",
       "test_local_extension_compatibility",
       "install_local_extension",
       "remove_local_extension",
     ],
-    jsonContracts: ["local_extension_compatibility", "structured_error", "api_error"],
+    jsonContracts: ["local_extension_compatibility", "local_extension_discovery", "structured_error", "api_error"],
     errorContracts: ["structured_error", "api_error"],
     status: "matched",
     example: {

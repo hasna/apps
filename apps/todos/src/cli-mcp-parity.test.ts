@@ -153,6 +153,11 @@ describe("CLI/MCP parity manifest", () => {
       "apply_retention_cleanup",
     ]));
     expect(byDomain.get("retention-cleanup")?.jsonContracts).toContain("retention_cleanup_report");
+    expect(byDomain.get("extensions")?.mcpTools).toContain("discover_local_extensions");
+    expect(byDomain.get("extensions")?.jsonContracts).toEqual(expect.arrayContaining([
+      "local_extension_compatibility",
+      "local_extension_discovery",
+    ]));
     expect(byDomain.get("scale-hardening")?.status).toBe("intentional-gap");
     expect(byDomain.get("scale-hardening")?.jsonContracts).toEqual(expect.arrayContaining([
       "scale_performance_report",
@@ -275,6 +280,7 @@ describe("CLI/MCP parity manifest", () => {
     expect(docs).toContain("todos scale report --older-than-days 30 --json");
     expect(docs).toContain("todos template-library --json");
     expect(docs).toContain("todos extensions compat ./todos.extension.json --json");
+    expect(docs).toContain("todos extensions discover . --json");
     expect(docs).toContain("todos handoff --create --agent codex");
     expect(docs).toContain("acknowledge_handoff");
     expect(docs).toContain("create_task");

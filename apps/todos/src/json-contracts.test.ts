@@ -19,7 +19,7 @@ import { captureEnvironmentSnapshot, compareEnvironmentSnapshots } from "./lib/e
 import { buildCodebaseIndex, extractTodos } from "./lib/extract.js";
 import { resetConfig } from "./lib/config.js";
 import { getTaskLocalFields, setTaskLocalFields } from "./lib/local-fields.js";
-import { testExtensionCompatibility } from "./lib/local-extensions.js";
+import { discoverLocalExtensions, testExtensionCompatibility } from "./lib/local-extensions.js";
 import { getLocalSnapshot, pollLocalSnapshots } from "./lib/local-snapshots.js";
 import { listOnboardingFixtures } from "./lib/onboarding-fixtures.js";
 import { listReviewQueue, upsertReviewRoutingRule, requestReviewQueue } from "./lib/review-queues.js";
@@ -135,6 +135,7 @@ describe("stable JSON contracts", () => {
       "verification_provider",
       "verification_provider_result",
       "local_extension_compatibility",
+      "local_extension_discovery",
       "agent",
       "handoff",
       "template",
@@ -303,7 +304,10 @@ describe("stable JSON contracts", () => {
       compatibility: { todos: "*" },
       permissions: ["tasks:read"],
       mcp_tools: [{ name: "contract_extension_tool", permissions: ["tasks:read"] }],
+      templates: [{ name: "contract_template", kind: "task", content: "Contract {{task}}", variables: ["task"] }],
+      renderers: [{ name: "contract_renderer", target: "task", template: "contract_template" }],
     });
+    const extensionDiscovery = discoverLocalExtensions({ include_installed: false });
     const agent = registerAgent({
       name: "jsoncontractagent",
       description: "Contract fixture agent",
@@ -474,6 +478,7 @@ describe("stable JSON contracts", () => {
     expectValid("verification_provider", verificationProvider);
     expectValid("verification_provider_result", verificationProviderResult);
     expectValid("local_extension_compatibility", extensionCompatibility);
+    expectValid("local_extension_discovery", extensionDiscovery);
     expectValid("agent", agent);
     expectValid("handoff", handoff);
     expectValid("template", template);

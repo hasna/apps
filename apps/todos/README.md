@@ -170,11 +170,13 @@ and `todos://knowledge/decisions` resources for agent context refreshes.
 Extensions are installed from local manifests, directories with
 `todos.extension.json`, or offline JSON bundles. The registry validates the
 manifest shape, checks `@hasna/todos` compatibility ranges, records requested
-permissions, runs CLI/MCP compatibility checks, dry-runs declared commands
-through the local runner sandbox, verifies optional source checksums or detached
-signatures, and stores trust state in local config only:
+permissions, supports custom commands, MCP tool declarations, templates, hooks,
+and renderers, runs CLI/MCP compatibility checks, dry-runs declared commands and
+renderer commands through the local runner sandbox, verifies optional source
+checksums or detached signatures, and stores trust state in local config only:
 
 ```bash
+todos extensions discover . --json
 todos extensions inspect ./todos.extension.json --json
 todos extensions compat ./todos.extension.json --json
 todos extensions install ./todos.extension.json --checksum sha256:... --trust --json

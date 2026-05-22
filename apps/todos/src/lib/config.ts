@@ -22,6 +22,7 @@ export interface CompletionGuardConfig {
 
 export interface ProjectOverrideConfig {
   completion_guard?: CompletionGuardConfig;
+  extension_sources?: string[];
 }
 
 export type WorkspacePermissionPreset = "restricted" | "readonly" | "standard" | "trusted";
@@ -202,6 +203,8 @@ export interface LocalExtensionManifest {
   permissions?: string[];
   commands?: Array<{ name: string; command?: string; description?: string; permissions?: string[]; write_paths?: string[]; env?: string[]; network?: boolean }>;
   mcp_tools?: Array<{ name: string; description?: string; permissions?: string[] }>;
+  templates?: Array<{ name: string; kind?: string; description?: string; path?: string; content?: string; variables?: string[]; permissions?: string[] }>;
+  renderers?: Array<{ name: string; target: string; description?: string; command?: string; template?: string; permissions?: string[]; write_paths?: string[]; env?: string[]; network?: boolean }>;
   hooks?: string[];
   checksum?: string;
   signature?: string;
@@ -348,6 +351,8 @@ export interface TodosConfig {
   verification_providers?: Record<string, VerificationProviderConfig>;
   /** Local extension registry entries, keyed by extension name. */
   extension_registry?: Record<string, LocalExtensionRecord>;
+  /** Local extension manifest, directory, or bundle sources to discover. */
+  extension_sources?: string[];
   /** Local policy packs for task done gates, keyed by pack name. */
   policy_packs?: Record<string, PolicyPackConfig>;
   /** Local event hooks and automation triggers, keyed by hook name. */

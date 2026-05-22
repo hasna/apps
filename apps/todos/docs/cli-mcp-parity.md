@@ -64,9 +64,9 @@ structured error contracts.
   confirmation.
 - `runner-sandbox`: local runner command allowlists, cwd boundaries, write
   scopes, env allowlists, network policy, audit evidence, and dry-run explains.
-- `extensions`: local extension manifests, compatibility checks, checksum or
-  signature verification, trust review state, offline bundles, and registry
-  install/list/remove workflows.
+- `extensions`: local extension discovery, manifests, compatibility checks,
+  checksum or signature verification, trust review state, offline bundles, and
+  registry install/list/remove workflows.
 - `workflow-prompts`: bundled local prompt resources for goal planning, task
   claiming, review, verification, handoff, release prep, import triage, and
   incident response.
@@ -364,6 +364,7 @@ CLI extension install:
 
 ```bash
 todos extensions compat ./todos.extension.json --json
+todos extensions discover . --json
 todos extensions install ./todos.extension.json --trust --json
 ```
 
@@ -371,6 +372,10 @@ Matching MCP tool:
 
 ```json
 { "tool": "test_local_extension_compatibility", "arguments": { "source": "./todos.extension.json" } }
+```
+
+```json
+{ "tool": "discover_local_extensions", "arguments": { "project_path": "." } }
 ```
 
 ```json

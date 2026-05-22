@@ -1676,6 +1676,8 @@ describe("MCP tool wrappers", () => {
         compatibility: { todos: "*" },
         permissions: ["tasks:read"],
         mcp_tools: [{ name: "mcp_extension_tool" }],
+        templates: [{ name: "mcp_template", kind: "task", content: "Summarize {{task}}", variables: ["task"] }],
+        renderers: [{ name: "mcp_renderer", target: "task", template: "mcp_template" }],
       }, null, 2));
       const tools = captureTools(registerTaskResources);
 
@@ -1686,6 +1688,13 @@ describe("MCP tool wrappers", () => {
       const compatibility = JSON.parse((await callCapturedTool(tools, "test_local_extension_compatibility", { source })).content[0]!.text);
       expect(compatibility.ok).toBe(true);
       expect(compatibility.summary.mcp_tools).toBe(1);
+      expect(compatibility.summary.templates).toBe(1);
+      expect(compatibility.summary.renderers).toBe(1);
+
+      const discovered = JSON.parse((await callCapturedTool(tools, "discover_local_extensions", { project_path: source })).content[0]!.text);
+      expect(discovered.local_only).toBe(true);
+      expect(discovered.no_network).toBe(true);
+      expect(discovered.discovered.map((extension: { manifest: { name: string } }) => extension.manifest.name)).toEqual(["mcp-extension"]);
 
       const installed = JSON.parse((await callCapturedTool(tools, "install_local_extension", {
         source,

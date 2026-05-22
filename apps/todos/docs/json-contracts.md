@@ -49,6 +49,8 @@ The stable contracts cover these object IDs:
 - `external_issue_import_report`
 - `verification_provider`
 - `verification_provider_result`
+- `local_extension_compatibility`
+- `local_extension_discovery`
 - `agent`
 - `handoff`
 - `template`
@@ -331,7 +333,13 @@ evidence was recorded.
 `local_extension_compatibility` is returned by `todos extensions compat --json`
 and `test_local_extension_compatibility`. It includes normalized manifest
 metadata, permission declaration checks, CLI/MCP naming checks, runner sandbox
-dry-run diagnostics for declared commands, and install-time warnings/errors.
+dry-run diagnostics for declared commands and renderers, and install-time
+warnings/errors.
+
+`local_extension_discovery` is returned by
+`todos extensions discover --json` and `discover_local_extensions`. It reports
+local config sources, project `.todos` extension manifests, installed registry
+records, and source-level warnings without installing or fetching anything.
 
 ## Agent Handoffs
 

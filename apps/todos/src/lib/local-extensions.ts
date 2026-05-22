@@ -1,5 +1,5 @@
 import { createHash, createVerify } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import {
   loadConfig,
@@ -35,7 +35,7 @@ export interface ExtensionValidationResult {
 }
 
 export interface ExtensionCompatibilityCheck {
-  surface: "cli" | "mcp" | "hook" | "permissions";
+  surface: "cli" | "mcp" | "hook" | "template" | "renderer" | "permissions";
   name: string;
   ok: boolean;
   errors: string[];
@@ -59,6 +59,8 @@ export interface ExtensionCompatibilityReport {
   summary: {
     commands: number;
     mcp_tools: number;
+    templates: number;
+    renderers: number;
     hooks: number;
     permissions: number;
     sandbox_checks: number;
@@ -66,6 +68,22 @@ export interface ExtensionCompatibilityReport {
   };
   errors: string[];
   warnings: string[];
+}
+
+export interface LocalExtensionDiscoveryReport {
+  schema_version: 1;
+  local_only: true;
+  no_network: true;
+  project_path: string | null;
+  config_sources: string[];
+  discovered: ExtensionSourceInspection[];
+  installed: LocalExtensionRecord[];
+  warnings: string[];
+}
+
+export interface DiscoverLocalExtensionsOptions {
+  project_path?: string;
+  include_installed?: boolean;
 }
 
 export interface InstallLocalExtensionInput {
@@ -127,6 +145,26 @@ function normalizeManifest(input: unknown): LocalExtensionManifest {
     description: typeof tool["description"] === "string" ? tool["description"] : undefined,
     permissions: permissionList(tool["permissions"]),
   })) : [];
+  const templates = Array.isArray(input["templates"]) ? input["templates"].filter(isObject).map((template) => ({
+    name: normalizeName(String(template["name"] || "")),
+    kind: typeof template["kind"] === "string" ? template["kind"] : undefined,
+    description: typeof template["description"] === "string" ? template["description"] : undefined,
+    path: typeof template["path"] === "string" ? template["path"] : undefined,
+    content: typeof template["content"] === "string" ? template["content"] : undefined,
+    variables: unique(template["variables"]),
+    permissions: permissionList(template["permissions"]),
+  })) : [];
+  const renderers = Array.isArray(input["renderers"]) ? input["renderers"].filter(isObject).map((renderer) => ({
+    name: normalizeName(String(renderer["name"] || "")),
+    target: typeof renderer["target"] === "string" ? renderer["target"] : "",
+    description: typeof renderer["description"] === "string" ? renderer["description"] : undefined,
+    command: typeof renderer["command"] === "string" ? renderer["command"] : undefined,
+    template: typeof renderer["template"] === "string" ? renderer["template"] : undefined,
+    permissions: permissionList(renderer["permissions"]),
+    write_paths: unique(renderer["write_paths"]),
+    env: unique(renderer["env"]),
+    network: typeof renderer["network"] === "boolean" ? renderer["network"] : undefined,
+  })) : [];
   return {
     schema_version: typeof input["schema_version"] === "number" ? input["schema_version"] : 1,
     name,
@@ -136,6 +174,8 @@ function normalizeManifest(input: unknown): LocalExtensionManifest {
     permissions: unique(input["permissions"]),
     commands,
     mcp_tools: mcpTools,
+    templates,
+    renderers,
     hooks: unique(input["hooks"]),
     checksum: typeof input["checksum"] === "string" ? input["checksum"] : undefined,
     signature: typeof input["signature"] === "string" ? input["signature"] : undefined,
@@ -216,7 +256,7 @@ function validatePermission(permission: string): ExtensionCompatibilityCheck {
   };
 }
 
-function duplicateChecks(surface: "cli" | "mcp" | "hook", names: string[]): ExtensionCompatibilityCheck[] {
+function duplicateChecks(surface: "cli" | "mcp" | "hook" | "template" | "renderer", names: string[]): ExtensionCompatibilityCheck[] {
   const counts = new Map<string, number>();
   for (const name of names) counts.set(name, (counts.get(name) || 0) + 1);
   return [...counts.entries()].filter(([, count]) => count > 1).map(([name]) => ({
@@ -232,9 +272,13 @@ function compatibilityChecks(manifest: LocalExtensionManifest): ExtensionCompati
   const checks: ExtensionCompatibilityCheck[] = [];
   const commands = manifest.commands || [];
   const tools = manifest.mcp_tools || [];
+  const templates = manifest.templates || [];
+  const renderers = manifest.renderers || [];
   const hooks = manifest.hooks || [];
   checks.push(...duplicateChecks("cli", commands.map((command) => command.name)));
   checks.push(...duplicateChecks("mcp", tools.map((tool) => tool.name)));
+  checks.push(...duplicateChecks("template", templates.map((template) => template.name)));
+  checks.push(...duplicateChecks("renderer", renderers.map((renderer) => renderer.name)));
   checks.push(...duplicateChecks("hook", hooks));
 
   for (const command of commands) {
@@ -258,17 +302,46 @@ function compatibilityChecks(manifest: LocalExtensionManifest): ExtensionCompati
     });
   }
 
+  for (const template of templates) {
+    checks.push({
+      surface: "template",
+      name: template.name,
+      ok: Boolean(template.path || template.content),
+      errors: template.path || template.content ? [] : [`template ${template.name} needs path or inline content`],
+      warnings: [],
+    });
+  }
+
+  const templateNames = new Set(templates.map((template) => template.name));
+  for (const renderer of renderers) {
+    const missingTarget = !renderer.target;
+    const missingImplementation = !renderer.command && !renderer.template;
+    checks.push({
+      surface: "renderer",
+      name: renderer.name,
+      ok: !missingTarget && !missingImplementation && (!renderer.template || templateNames.has(renderer.template)),
+      errors: [
+        ...(missingTarget ? [`renderer ${renderer.name} needs a target`] : []),
+        ...(missingImplementation ? [`renderer ${renderer.name} needs command or template`] : []),
+        ...(renderer.template && !templateNames.has(renderer.template) ? [`renderer ${renderer.name} references unknown template ${renderer.template}`] : []),
+      ],
+      warnings: renderer.command ? ["renderer command will be checked by the local runner sandbox"] : [],
+    });
+  }
+
   const permissions = [
     ...(manifest.permissions || []),
     ...commands.flatMap((command) => command.permissions || []),
     ...tools.flatMap((tool) => tool.permissions || []),
+    ...templates.flatMap((template) => template.permissions || []),
+    ...renderers.flatMap((renderer) => renderer.permissions || []),
   ];
   checks.push(...permissions.map(validatePermission));
   return checks;
 }
 
 function sandboxChecks(manifest: LocalExtensionManifest, source?: string): ExtensionSandboxCheck[] {
-  return (manifest.commands || [])
+  const commandChecks = (manifest.commands || [])
     .filter((command): command is NonNullable<LocalExtensionManifest["commands"]>[number] & { command: string } => Boolean(command.command))
     .map((command) => {
       const check = checkRunnerSandbox({
@@ -288,6 +361,27 @@ function sandboxChecks(manifest: LocalExtensionManifest, source?: string): Exten
         audit_evidence: check.audit_evidence,
       };
     });
+  const rendererChecks = (manifest.renderers || [])
+    .filter((renderer): renderer is NonNullable<LocalExtensionManifest["renderers"]>[number] & { command: string } => Boolean(renderer.command))
+    .map((renderer) => {
+      const check = checkRunnerSandbox({
+        path: source,
+        cwd: source,
+        command: renderer.command,
+        write_paths: renderer.write_paths,
+        env: Object.fromEntries((renderer.env || []).map((key) => [key, "declared"])),
+        network: renderer.network,
+      });
+      return {
+        command_name: `renderer:${renderer.name}`,
+        command: renderer.command,
+        allowed: check.allowed,
+        requires_approval: check.requires_approval,
+        reasons: check.reasons,
+        audit_evidence: check.audit_evidence,
+      };
+    });
+  return [...commandChecks, ...rendererChecks];
 }
 
 export function verifyExtensionSignature(input: VerifyExtensionSignatureInput): boolean {
@@ -338,8 +432,8 @@ export function validateExtensionManifest(manifest: LocalExtensionManifest): Ext
   const compatible = versionSatisfies(todosVersion, compatibilityRange || "*");
   if (!compatible) errors.push(`extension requires @hasna/todos ${compatibilityRange}, current version is ${todosVersion}`);
   if ((candidate.permissions || []).length === 0) warnings.push("extension declares no permissions");
-  if ((candidate.commands || []).length === 0 && (candidate.mcp_tools || []).length === 0 && (candidate.hooks || []).length === 0) {
-    warnings.push("extension declares no commands, MCP tools, or hooks");
+  if ((candidate.commands || []).length === 0 && (candidate.mcp_tools || []).length === 0 && (candidate.templates || []).length === 0 && (candidate.renderers || []).length === 0 && (candidate.hooks || []).length === 0) {
+    warnings.push("extension declares no commands, MCP tools, templates, renderers, or hooks");
   }
   const cliMcpChecks = compatibilityChecks(candidate);
   for (const check of cliMcpChecks) {
@@ -382,12 +476,64 @@ export function testExtensionCompatibility(sourceOrManifest: string | LocalExten
     summary: {
       commands: manifest.commands?.length || 0,
       mcp_tools: manifest.mcp_tools?.length || 0,
+      templates: manifest.templates?.length || 0,
+      renderers: manifest.renderers?.length || 0,
       hooks: manifest.hooks?.length || 0,
       permissions: validation.permission_declarations.length,
       sandbox_checks: validation.sandbox_checks.length,
       failed_sandbox_checks: validation.sandbox_checks.filter((check) => !check.allowed).length,
     },
     errors,
+    warnings,
+  };
+}
+
+function projectExtensionSources(projectPath: string | undefined): string[] {
+  if (!projectPath) return [];
+  const root = resolve(projectPath);
+  const candidates = [
+    join(root, "todos.extension.json"),
+    join(root, ".todos", "todos.extension.json"),
+  ];
+  const extensionDir = join(root, ".todos", "extensions");
+  if (existsSync(extensionDir)) {
+    for (const entry of readdirSync(extensionDir)) {
+      if (entry.startsWith(".")) continue;
+      const full = join(extensionDir, entry);
+      if (statSync(full).isDirectory() || entry.endsWith(".json")) candidates.push(full);
+    }
+  }
+  return candidates.filter(existsSync);
+}
+
+export function discoverLocalExtensions(options: DiscoverLocalExtensionsOptions = {}): LocalExtensionDiscoveryReport {
+  const config = loadConfig();
+  const projectPath = options.project_path ? resolve(options.project_path) : null;
+  const configuredSources = [
+    ...(config.extension_sources || []),
+    ...(projectPath ? (config.project_overrides?.[projectPath]?.extension_sources || []) : []),
+  ];
+  const sources = Array.from(new Set([
+    ...configuredSources,
+    ...projectExtensionSources(projectPath || undefined),
+  ])).map((source) => projectPath && !source.startsWith("/") ? resolve(projectPath, source) : resolve(source));
+  const warnings: string[] = [];
+  const discovered: ExtensionSourceInspection[] = [];
+  for (const source of sources) {
+    try {
+      discovered.push(inspectExtensionSource(source));
+    } catch (error) {
+      warnings.push(`${source}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return {
+    schema_version: 1,
+    local_only: true,
+    no_network: true,
+    project_path: projectPath,
+    config_sources: sources,
+    discovered,
+    installed: options.include_installed === false ? [] : listLocalExtensions(),
     warnings,
   };
 }

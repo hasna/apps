@@ -1871,6 +1871,8 @@ describe("CLI integration", () => {
       compatibility: { todos: "*" },
       permissions: ["tasks:read"],
       commands: [{ name: "cli-demo", command: "echo demo" }],
+      templates: [{ name: "cli-template", kind: "task", content: "Review {{file}}", variables: ["file"] }],
+      renderers: [{ name: "cli-renderer", target: "task", template: "cli-template" }],
     }, null, 2));
     const env = { HOME: home };
     try { unlinkSync(dbPath); } catch {}
@@ -1885,7 +1887,16 @@ describe("CLI integration", () => {
     expect(compatibility.exitCode).toBe(0);
     const compatibilityPayload = JSON.parse(compatibility.stdout);
     expect(compatibilityPayload.summary.commands).toBe(1);
+    expect(compatibilityPayload.summary.templates).toBe(1);
+    expect(compatibilityPayload.summary.renderers).toBe(1);
     expect(compatibilityPayload.validation.sandbox_checks[0].command_name).toBe("cli-demo");
+
+    const discovered = await runCli(["extensions", "discover", source, "--json"], dbPath, env);
+    expect(discovered.exitCode).toBe(0);
+    const discoveredPayload = JSON.parse(discovered.stdout);
+    expect(discoveredPayload.local_only).toBe(true);
+    expect(discoveredPayload.no_network).toBe(true);
+    expect(discoveredPayload.discovered.map((item: { manifest: { name: string } }) => item.manifest.name)).toEqual(["cli-extension"]);
 
     const installed = await runCli(["extensions", "install", source, "--checksum", inspectedPayload.checksum, "--json"], dbPath, env);
     expect(installed.exitCode).toBe(0);

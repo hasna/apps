@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createSign, generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { resetConfig } from "./config.js";
 import {
   getLocalExtension,
+  discoverLocalExtensions,
   inspectExtensionSource,
   installLocalExtension,
   listLocalExtensions,
@@ -27,6 +28,8 @@ function writeManifest(dir: string, overrides: Record<string, unknown> = {}) {
     permissions: ["tasks:read", "runs:write"],
     commands: [{ name: "demo", command: "echo demo" }],
     mcp_tools: [{ name: "demo_tool", description: "local demo" }],
+    templates: [{ name: "demo-template", kind: "task", content: "Do {{thing}}", variables: ["thing"] }],
+    renderers: [{ name: "demo-renderer", target: "task", template: "demo-template" }],
     ...overrides,
   }, null, 2));
   return path;
@@ -74,7 +77,7 @@ describe("local extension registry", () => {
       expect(listLocalExtensions()).toHaveLength(1);
       const stored = getLocalExtension("demo-extension");
       expect(stored?.manifest.permissions).toEqual(["runs:write", "tasks:read"]);
-      expect(stored?.diagnostics?.summary).toMatchObject({ commands: 1, mcp_tools: 1 });
+      expect(stored?.diagnostics?.summary).toMatchObject({ commands: 1, mcp_tools: 1, templates: 1, renderers: 1 });
       expect(removeLocalExtension("demo-extension")).toBe(true);
       expect(listLocalExtensions()).toHaveLength(0);
     } finally {
@@ -149,6 +152,13 @@ describe("local extension registry", () => {
     try {
       writeManifest(sourceDir, {
         permissions: ["tasks:read", "badpermission"],
+        templates: [
+          { name: "missing-template-body" },
+        ],
+        renderers: [
+          { name: "bad-renderer", target: "task", template: "missing" },
+          { name: "command-renderer", target: "task", command: "rm -rf /tmp/nope", permissions: ["commands:run"], write_paths: ["../outside"] },
+        ],
         commands: [
           { name: "list", command: "rm -rf /tmp/nope", permissions: ["commands:run"], write_paths: ["../outside"] },
           { name: "agent-safe", command: "todos status --json", permissions: ["tasks:read"] },
@@ -164,17 +174,42 @@ describe("local extension registry", () => {
       expect(report.summary).toMatchObject({
         commands: 2,
         mcp_tools: 2,
+        templates: 1,
+        renderers: 2,
         permissions: 6,
-        sandbox_checks: 2,
+        sandbox_checks: 3,
       });
       expect(report.errors).toContain("MCP tool list_tasks conflicts with a built-in todos tool");
+      expect(report.errors).toContain("template missing-template-body needs path or inline content");
+      expect(report.errors).toContain("renderer bad-renderer references unknown template missing");
       expect(report.warnings).toEqual(expect.arrayContaining([
         "command list shadows a built-in todos command name",
+        "renderer command will be checked by the local runner sandbox",
         "permission should use resource:action format such as tasks:read, runs:write, commands:run, or *",
       ]));
       expect(report.validation.sandbox_checks.some((check) => check.command_name === "list" && !check.allowed)).toBe(true);
+      expect(report.validation.sandbox_checks.some((check) => check.command_name === "renderer:command-renderer" && !check.allowed)).toBe(true);
     } finally {
       rmSync(sourceDir, { recursive: true, force: true });
+    }
+  });
+
+  test("discovers project extension sources without installing them", () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "todos-extension-project-"));
+    const extensionDir = join(projectDir, ".todos", "extensions");
+    mkdirSync(extensionDir, { recursive: true });
+    try {
+      writeManifest(extensionDir, { name: "project-extension", commands: [], mcp_tools: [], hooks: ["task.completed"] });
+
+      const report = discoverLocalExtensions({ project_path: projectDir });
+      expect(report.local_only).toBe(true);
+      expect(report.no_network).toBe(true);
+      expect(report.project_path).toBe(projectDir);
+      expect(report.discovered.map((item) => item.manifest.name)).toEqual(["project-extension"]);
+      expect(report.installed).toEqual([]);
+      expect(report.warnings).toEqual([]);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
     }
   });
 });

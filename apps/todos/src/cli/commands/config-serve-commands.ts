@@ -512,6 +512,29 @@ export function registerConfigServeCommands(program: Command) {
     });
 
   extensions
+    .command("discover [project]")
+    .description("Discover local extension manifests from config and project .todos folders")
+    .option("--no-installed", "Do not include installed extension registry records")
+    .action(async (project: string | undefined, opts: { installed?: boolean }) => {
+      const globalOpts = program.opts();
+      const { discoverLocalExtensions } = await import("../../lib/local-extensions.js");
+      const report = discoverLocalExtensions({
+        project_path: project || globalOpts.project,
+        include_installed: opts.installed !== false,
+      });
+      if (globalOpts.json) { output(report, true); return; }
+      console.log(chalk.bold("Local extension discovery"));
+      console.log(`  ${chalk.dim("Project:")} ${report.project_path || "(none)"}`);
+      console.log(`  ${chalk.dim("Sources:")} ${report.config_sources.length}`);
+      console.log(`  ${chalk.dim("Discovered:")} ${report.discovered.length}`);
+      console.log(`  ${chalk.dim("Installed:")} ${report.installed.length}`);
+      for (const item of report.discovered) {
+        console.log(`  ${item.manifest.name}@${item.manifest.version} ${item.validation.ok ? chalk.green("valid") : chalk.red("invalid")} ${chalk.dim(item.source)}`);
+      }
+      for (const warning of report.warnings) console.log(`  ${chalk.yellow("warning:")} ${warning}`);
+    });
+
+  extensions
     .command("inspect <source>")
     .description("Validate a local extension manifest, directory, or offline bundle without installing it")
     .action(async (source: string) => {

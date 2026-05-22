@@ -255,6 +255,7 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "set_review_routing_rule",
     "set_verification_provider",
     "simulate_agent_replay",
+    "discover_local_extensions",
     "inspect_local_extension",
     "install_local_extension",
     "list_local_extensions",

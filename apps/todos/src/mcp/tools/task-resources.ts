@@ -1421,6 +1421,23 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
     );
   }
 
+  if (shouldRegisterTool("discover_local_extensions")) {
+    server.tool(
+      "discover_local_extensions",
+      "Discover local extension manifests from config and project .todos folders without installing them.",
+      {
+        project_path: z.string().optional().describe("Project root to inspect for todos.extension.json and .todos/extensions entries"),
+        include_installed: z.boolean().optional().describe("Include installed extension registry records"),
+      },
+      async (input) => {
+        try {
+          const { discoverLocalExtensions } = require("../../lib/local-extensions.js") as typeof import("../../lib/local-extensions.js");
+          return { content: [{ type: "text" as const, text: JSON.stringify(discoverLocalExtensions(input), null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
   if (shouldRegisterTool("test_local_extension_compatibility")) {
     server.tool(
       "test_local_extension_compatibility",
