@@ -309,6 +309,46 @@ describe("CLI integration", () => {
     }
   });
 
+  it("should generate local agent reliability scorecards from the CLI", async () => {
+    const dbPath = "/tmp/test-cli-agent-reliability.db";
+    const { unlinkSync } = await import("node:fs");
+    try {
+      unlinkSync(dbPath);
+    } catch {}
+
+    try {
+      const agent = JSON.parse((await runCli(["--json", "init", "scorebot"], dbPath)).stdout);
+      const completed = JSON.parse((await runCli(["--agent", agent.id, "add", "completed scorecard task", "--json"], dbPath)).stdout);
+      await runCli(["--agent", agent.id, "start", completed.id], dbPath);
+      await runCli(["--agent", agent.id, "done", completed.id], dbPath);
+      await runCli(["record-verification", completed.id, "bun test", "--status", "passed", "--agent", agent.id], dbPath);
+
+      const failed = JSON.parse((await runCli(["--agent", agent.id, "add", "failed scorecard task", "--json"], dbPath)).stdout);
+      await runCli(["--agent", agent.id, "start", failed.id], dbPath);
+      await runCli(["--agent", agent.id, "fail", failed.id, "--reason", "fixture failure"], dbPath);
+      await runCli(["record-verification", failed.id, "bun test", "--status", "failed", "--agent", agent.id], dbPath);
+
+      const scorecardResult = await runCli(["reliability", "show", "scorebot", "--json"], dbPath);
+      expect(scorecardResult.exitCode).toBe(0);
+      const scorecard = JSON.parse(scorecardResult.stdout);
+      expect(scorecard.local_only).toBe(true);
+      expect(scorecard.no_network).toBe(true);
+      expect(scorecard.agent_name).toBe("scorebot");
+      expect(scorecard.signals.tasks_completed).toBe(1);
+      expect(scorecard.signals.tasks_failed).toBe(1);
+      expect(scorecard.signals.passed_verifications).toBe(1);
+      expect(scorecard.signals.failed_verifications).toBe(1);
+
+      const exportResult = await runCli(["reliability", "export", "--agent", "scorebot", "--json"], dbPath);
+      expect(exportResult.exitCode).toBe(0);
+      const exported = JSON.parse(exportResult.stdout);
+      expect(exported.count).toBe(1);
+      expect(exported.scorecards[0].agent_name).toBe("scorebot");
+    } finally {
+      try { unlinkSync(dbPath); } catch {}
+    }
+  });
+
   it("should manage local task fields from the CLI", async () => {
     const dbPath = "/tmp/test-cli-fields.db";
     const { unlinkSync } = await import("node:fs");

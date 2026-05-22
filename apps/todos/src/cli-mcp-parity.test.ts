@@ -16,6 +16,7 @@ const expectedDomains = [
   "knowledge",
   "risks",
   "retrospectives",
+  "agent-reliability",
   "local-fields",
   "dedupe",
   "verification-providers",
@@ -181,6 +182,14 @@ describe("CLI/MCP parity manifest", () => {
       "retrospective_record",
       "retrospective_report",
       "retrospective_export",
+    ]));
+    expect(byDomain.get("agent-reliability")?.mcpTools).toEqual(expect.arrayContaining([
+      "get_agent_reliability_scorecard",
+      "export_agent_reliability_scorecards",
+    ]));
+    expect(byDomain.get("agent-reliability")?.jsonContracts).toEqual(expect.arrayContaining([
+      "agent_reliability_scorecard",
+      "agent_reliability_export",
     ]));
     expect(byDomain.get("verification-providers")?.mcpTools).toEqual(expect.arrayContaining([
       "set_verification_provider",

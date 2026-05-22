@@ -25,6 +25,8 @@ The stable contracts cover these object IDs:
 - `retrospective_record`
 - `retrospective_report`
 - `retrospective_export`
+- `agent_reliability_scorecard`
+- `agent_reliability_export`
 - `local_task_fields`
 - `retention_cleanup_report`
 - `duplicate_task_candidate`
@@ -143,6 +145,18 @@ suggested or created follow-up tasks.
 `retrospective_export` is returned by `todos retrospectives export --json` and
 `export_retrospectives`. It exports stored retrospectives with local-only
 metadata and never calls hosted services or network APIs.
+
+## Agent Reliability
+
+`agent_reliability_scorecard` is returned by `todos reliability show --json`
+and `get_agent_reliability_scorecard`. It scores one local agent from completed
+and failed tasks, verification records, run ledgers, stale locks, retry counts,
+and handoffs.
+
+`agent_reliability_export` is returned by `todos reliability export --json` and
+`export_agent_reliability_scorecards`. It contains local-only export metadata,
+normalized filters, count, and scorecards. The export never calls hosted
+services or network APIs.
 
 ## Local Task Fields
 

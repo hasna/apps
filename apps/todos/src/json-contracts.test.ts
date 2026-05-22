@@ -26,6 +26,7 @@ import { resolveMentions } from "./lib/mention-resolver.js";
 import { findDuplicateTasks, mergeDuplicateTask } from "./lib/task-dedupe.js";
 import { runVerificationProvider, upsertVerificationProvider } from "./lib/verification-providers.js";
 import { createHandoff } from "./db/handoffs.js";
+import { createAgentReliabilityExport, getAgentReliabilityScorecard } from "./db/agent-metrics.js";
 import { createKnowledgeExportReport, createKnowledgeRecord } from "./db/project-knowledge.js";
 import { createRisk, createRiskRegisterExport, scoreProjectHealth } from "./db/project-risks.js";
 import { createRetrospective, createRetrospectiveExport } from "./db/retrospectives.js";
@@ -96,6 +97,8 @@ describe("stable JSON contracts", () => {
       "retrospective_record",
       "retrospective_report",
       "retrospective_export",
+      "agent_reliability_scorecard",
+      "agent_reliability_export",
       "local_task_fields",
       "retention_cleanup_report",
       "duplicate_task_candidate",
@@ -308,6 +311,8 @@ describe("stable JSON contracts", () => {
     const healthReport = scoreProjectHealth(project.id, db);
     const retrospective = createRetrospective({ project_id: project.id, title: "Contract retrospective" }, db);
     const retrospectiveExport = createRetrospectiveExport({ project_id: project.id }, db);
+    const reliabilityScorecard = getAgentReliabilityScorecard("jsoncontractagent", { project_id: project.id }, db)!;
+    const reliabilityExport = createAgentReliabilityExport({ agent_id: "jsoncontractagent", project_id: project.id }, db);
     const sourceComment = extractTodos({ path: sourceRoot, dry_run: true }).comments[0]!;
     const sourceIndex = buildCodebaseIndex({ path: sourceRoot });
     createCalendarItem({
@@ -339,6 +344,8 @@ describe("stable JSON contracts", () => {
     expectValid("retrospective_record", retrospective);
     expectValid("retrospective_report", retrospective.report);
     expectValid("retrospective_export", retrospectiveExport);
+    expectValid("agent_reliability_scorecard", reliabilityScorecard);
+    expectValid("agent_reliability_export", reliabilityExport);
     expectValid("local_task_fields", localFields);
     expectValid("retention_cleanup_report", retentionCleanupReport);
     expectValid("duplicate_task_candidate", duplicateCandidate);

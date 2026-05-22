@@ -70,6 +70,11 @@ import {
   updateRisk,
 } from "../../db/project-risks.js";
 import {
+  createAgentReliabilityExport,
+  getAgentReliabilityScorecard,
+  renderAgentReliabilityMarkdown,
+} from "../../db/agent-metrics.js";
+import {
   createRetrospective,
   createRetrospectiveExport,
   listRetrospectives,
@@ -163,6 +168,16 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
     async () => {
       const retrospectives = listRetrospectives({ limit: 100 });
       return { contents: [{ uri: "todos://retrospectives", text: JSON.stringify(retrospectives, null, 2), mimeType: "application/json" }] };
+    },
+  );
+
+  server.resource(
+    "agent-reliability-scorecards",
+    "todos://agents/reliability",
+    { description: "Local agent reliability scorecards from task, run, verification, lock, retry, and handoff evidence", mimeType: "application/json" },
+    async () => {
+      const report = createAgentReliabilityExport({ limit: 100 });
+      return { contents: [{ uri: "todos://agents/reliability", text: JSON.stringify(report, null, 2), mimeType: "application/json" }] };
     },
   );
 
@@ -502,6 +517,48 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
         try {
           const report = createRetrospectiveExport(input as any);
           const text = input.format === "markdown" ? renderRetrospectiveMarkdown(report) : JSON.stringify(report, null, 2);
+          return { content: [{ type: "text" as const, text }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("get_agent_reliability_scorecard")) {
+    server.tool(
+      "get_agent_reliability_scorecard",
+      "Get one local-only agent reliability scorecard from completed tasks, failed runs, verification evidence, stale locks, handoffs, and retry history.",
+      {
+        agent_id: z.string().describe("Agent ID or name"),
+        project_id: z.string().optional().describe("Optional project ID or name"),
+        since: z.string().optional().describe("Only include task and evidence created at or after this timestamp"),
+        stale_after_hours: z.number().optional().describe("Task locks older than this are considered stale"),
+      },
+      async (input) => {
+        try {
+          const scorecard = getAgentReliabilityScorecard(input.agent_id, input as any);
+          if (!scorecard) throw new Error(`Agent not found: ${input.agent_id}`);
+          return { content: [{ type: "text" as const, text: JSON.stringify(scorecard, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("export_agent_reliability_scorecards")) {
+    server.tool(
+      "export_agent_reliability_scorecards",
+      "Export local agent reliability scorecards as deterministic JSON or Markdown without remote reporting.",
+      {
+        agent_id: z.string().optional().describe("Optional agent ID or name"),
+        project_id: z.string().optional().describe("Optional project ID or name"),
+        since: z.string().optional().describe("Only include task and evidence created at or after this timestamp"),
+        stale_after_hours: z.number().optional().describe("Task locks older than this are considered stale"),
+        limit: z.number().optional().describe("Maximum scorecards"),
+        format: z.enum(["json", "markdown"]).optional(),
+      },
+      async (input) => {
+        try {
+          const report = createAgentReliabilityExport(input as any);
+          const text = input.format === "markdown" ? renderAgentReliabilityMarkdown(report) : JSON.stringify(report, null, 2);
           return { content: [{ type: "text" as const, text }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
       },

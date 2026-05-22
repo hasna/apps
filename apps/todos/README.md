@@ -431,6 +431,22 @@ Use `--create-followups` to create the suggested follow-up tasks locally. MCP
 clients get the same reports through `create_retrospective`,
 `list_retrospectives`, and `export_retrospectives`.
 
+## Local Agent Reliability Scorecards
+
+Reliability scorecards summarize each agent from local evidence only: completed
+and failed tasks, passed and failed verification records, failed run ledgers,
+stale task/resource locks, retry history, and handoff quality.
+
+```bash
+todos reliability show codex --json
+todos reliability list --project my-project --json
+todos reliability export --format markdown
+```
+
+MCP clients get the same summaries through `get_agent_reliability_scorecard`,
+`export_agent_reliability_scorecards`, and the `todos://agents/reliability`
+resource.
+
 ## Local Agent Locking
 
 Task claims and locks are local SQLite leases. Agents can claim the next ready

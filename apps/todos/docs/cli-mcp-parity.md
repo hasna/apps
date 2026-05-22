@@ -25,6 +25,8 @@ structured error contracts.
   dates, deterministic exports, and local health scoring from task evidence.
 - `retrospectives`: local lessons-learned reports from completed plans, missed
   estimates, recurring blockers, failed verifications, and follow-up tasks.
+- `agent-reliability`: local agent scorecards from task completion, failed run
+  ledgers, verification evidence, stale locks, retry history, and handoffs.
 - `local-fields`: local labels, priority, severity, owner, area, and custom
   fields with query support for agent-native task selection.
 - `dedupe`: local duplicate scans and merge workflows that preserve comments,
@@ -160,6 +162,18 @@ Matching MCP tool:
 
 ```json
 { "tool": "create_retrospective", "arguments": { "plan_id": "1234abcd" } }
+```
+
+CLI agent reliability:
+
+```bash
+todos reliability show codex --project 1234abcd --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "get_agent_reliability_scorecard", "arguments": { "agent_id": "codex", "project_id": "1234abcd" } }
 ```
 
 CLI local fields update:

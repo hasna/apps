@@ -474,8 +474,23 @@ export { patrolTasks, getReviewQueue } from "./db/patrol.js";
 export type { PatrolIssue, PatrolResult } from "./db/patrol.js";
 
 // Agent Metrics
-export { getAgentMetrics, getLeaderboard, scoreTask } from "./db/agent-metrics.js";
-export type { AgentMetrics, LeaderboardEntry } from "./db/agent-metrics.js";
+export {
+  createAgentReliabilityExport,
+  getAgentMetrics,
+  getAgentReliabilityScorecard,
+  getLeaderboard,
+  listAgentReliabilityScorecards,
+  renderAgentReliabilityMarkdown,
+  scoreTask,
+} from "./db/agent-metrics.js";
+export type {
+  AgentMetrics,
+  AgentReliabilityExport,
+  AgentReliabilityGrade,
+  AgentReliabilityScorecard,
+  AgentReliabilityScorecardOptions,
+  LeaderboardEntry,
+} from "./db/agent-metrics.js";
 
 // Search
 export { searchTasks } from "./lib/search.js";
