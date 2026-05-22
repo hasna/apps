@@ -1043,6 +1043,82 @@ describe("MCP tool wrappers", () => {
     expect(JSON.parse(importPreview.content[0]!.text).applied).toBe(false);
   });
 
+  it("review queue tools route claim return approve and manage local rules", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-review-queues-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    try {
+      const tools = captureTools(registerTaskRelTools);
+      const task = createTask({ title: "MCP review queue task", priority: "high", tags: ["security"] }, db);
+
+      const ruleResult = await callCapturedTool(tools, "set_review_routing_rule", {
+        name: "security",
+        queue: "security-review",
+        reviewers: ["reviewer"],
+        tags: ["security"],
+        priorities: ["high"],
+      });
+      expect(JSON.parse(ruleResult.content[0]!.text).queue).toBe("security-review");
+
+      const requestResult = await callCapturedTool(tools, "request_review_queue", {
+        task_id: task.id,
+        requester: "codex",
+        reason: "security review",
+      });
+      const requested = JSON.parse(requestResult.content[0]!.text);
+      expect(requested.queue).toBe("security-review");
+      expect(requested.reviewer).toBe("reviewer");
+
+      const claimResult = await callCapturedTool(tools, "claim_review_item", {
+        task_id: task.id.slice(0, 8),
+        reviewer: "reviewer",
+      });
+      expect(JSON.parse(claimResult.content[0]!.text).state).toBe("claimed");
+
+      const returnResult = await callCapturedTool(tools, "return_review_item", {
+        task_id: task.id,
+        reviewer: "reviewer",
+        changes_requested: ["add regression", "record verification"],
+      });
+      const returned = JSON.parse(returnResult.content[0]!.text);
+      expect(returned.state).toBe("returned");
+      expect(returned.changes_requested).toEqual(["add regression", "record verification"]);
+
+      const listResult = await callCapturedTool(tools, "list_review_queue", {
+        queue: "security-review",
+        reviewer: "reviewer",
+      });
+      expect(JSON.parse(listResult.content[0]!.text)).toHaveLength(1);
+
+      const approveResult = await callCapturedTool(tools, "approve_review_item", {
+        task_id: task.id,
+        reviewer: "reviewer",
+      });
+      expect(JSON.parse(approveResult.content[0]!.text).state).toBe("approved");
+
+      const reopenResult = await callCapturedTool(tools, "reopen_review_item", {
+        task_id: task.id,
+        reviewer: "reviewer",
+      });
+      expect(JSON.parse(reopenResult.content[0]!.text).state).toBe("reopened");
+
+      const rulesResult = await callCapturedTool(tools, "list_review_routing_rules", {});
+      expect(JSON.parse(rulesResult.content[0]!.text).map((item: { name: string }) => item.name)).toEqual(["security"]);
+
+      const removeResult = await callCapturedTool(tools, "remove_review_routing_rule", { name: "security" });
+      expect(JSON.parse(removeResult.content[0]!.text).removed).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      resetConfig();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("time tracking tools manage local focus sessions and reports", async () => {
     const tools = captureTools(registerTaskRelTools);
     const task = createTask({ title: "MCP time task", estimated_minutes: 75 }, db);

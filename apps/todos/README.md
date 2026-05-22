@@ -279,6 +279,29 @@ MCP clients can use `require_approval_gate`, `approve_approval_gate`,
 `list_approval_gates`. Gate events are written to task audit history and, when
 a run is linked, to the local run ledger.
 
+## Local Review Queues
+
+Review queues turn local task review into an explicit agent workflow: request a
+review, route it to a queue, claim it, return it with changes, reopen it, or
+approve it. Routing rules live in local config and can match tags, priorities,
+and projects without hosted users, orgs, or cloud services:
+
+```bash
+todos reviews rules set security --queue security-review --reviewers reviewer --tags security --priorities high
+todos reviews request <task-id> --requester codex --reason "security-sensitive change"
+todos reviews claim <task-id> --reviewer reviewer
+todos reviews return <task-id> --reviewer reviewer --changes "Add tests;Record verification"
+todos reviews approve <task-id> --reviewer reviewer
+todos reviews list --queue security-review --json
+```
+
+MCP clients can use `list_review_queue`, `request_review_queue`,
+`claim_review_item`, `return_review_item`, `approve_review_item`,
+`reopen_review_item`, `set_review_routing_rule`, `list_review_routing_rules`,
+and `remove_review_routing_rule`. Queue transitions are written to audit
+history and emitted to local event hooks as `review.requested`,
+`review.claimed`, `review.returned`, `review.approved`, and `review.reopened`.
+
 ## Local Event Hooks
 
 Event hooks are local subscriptions for task, plan, run, approval, import, and

@@ -618,6 +618,188 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
     );
   }
 
+  if (shouldRegisterTool("list_review_queue")) {
+    server.tool(
+      "list_review_queue",
+      "List local review queue items with explicit queue, reviewer, claim, return, and approval state.",
+      {
+        queue: z.string().optional(),
+        state: z.enum(["requested", "claimed", "approved", "changes_requested", "returned", "reopened"]).optional(),
+        reviewer: z.string().optional(),
+        requester: z.string().optional(),
+        project_id: z.string().optional(),
+        limit: z.number().optional(),
+      },
+      async ({ queue, state, reviewer, requester, project_id, limit }) => {
+        try {
+          const { listReviewQueue } = require("../../lib/review-queues.js") as any;
+          const items = listReviewQueue({
+            queue,
+            state,
+            reviewer,
+            requester,
+            project_id: project_id ? resolveId(project_id, "projects") : undefined,
+            limit,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(items, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("request_review_queue")) {
+    server.tool(
+      "request_review_queue",
+      "Request local review for a task and place it in a review queue.",
+      {
+        task_id: z.string(),
+        requester: z.string(),
+        reviewer: z.string().optional(),
+        queue: z.string().optional(),
+        reason: z.string().optional(),
+        notes: z.string().optional(),
+      },
+      async ({ task_id, requester, reviewer, queue, reason, notes }) => {
+        try {
+          const { requestReviewQueue } = require("../../lib/review-queues.js") as any;
+          const item = requestReviewQueue({ task_id: resolveId(task_id), requester, reviewer, queue, reason, notes });
+          return { content: [{ type: "text" as const, text: JSON.stringify(item, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("claim_review_item")) {
+    server.tool(
+      "claim_review_item",
+      "Claim a task from the local review queue.",
+      { task_id: z.string(), reviewer: z.string(), note: z.string().optional() },
+      async ({ task_id, reviewer, note }) => {
+        try {
+          const { claimReviewItem } = require("../../lib/review-queues.js") as any;
+          const item = claimReviewItem({ task_id: resolveId(task_id), reviewer, note });
+          return { content: [{ type: "text" as const, text: JSON.stringify(item, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("approve_review_item")) {
+    server.tool(
+      "approve_review_item",
+      "Approve a local review queue item.",
+      { task_id: z.string(), reviewer: z.string(), note: z.string().optional() },
+      async ({ task_id, reviewer, note }) => {
+        try {
+          const { approveReviewItem } = require("../../lib/review-queues.js") as any;
+          const item = approveReviewItem({ task_id: resolveId(task_id), reviewer, note });
+          return { content: [{ type: "text" as const, text: JSON.stringify(item, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("return_review_item")) {
+    server.tool(
+      "return_review_item",
+      "Return a local review queue item with requested changes.",
+      { task_id: z.string(), reviewer: z.string(), note: z.string().optional(), changes_requested: z.array(z.string()).optional() },
+      async ({ task_id, reviewer, note, changes_requested }) => {
+        try {
+          const { returnReviewItem } = require("../../lib/review-queues.js") as any;
+          const item = returnReviewItem({ task_id: resolveId(task_id), reviewer, note, changes_requested });
+          return { content: [{ type: "text" as const, text: JSON.stringify(item, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("reopen_review_item")) {
+    server.tool(
+      "reopen_review_item",
+      "Reopen a local review queue item for another review pass.",
+      { task_id: z.string(), reviewer: z.string(), note: z.string().optional() },
+      async ({ task_id, reviewer, note }) => {
+        try {
+          const { reopenReviewItem } = require("../../lib/review-queues.js") as any;
+          const item = reopenReviewItem({ task_id: resolveId(task_id), reviewer, note });
+          return { content: [{ type: "text" as const, text: JSON.stringify(item, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("set_review_routing_rule")) {
+    server.tool(
+      "set_review_routing_rule",
+      "Create or update a local review routing rule for queue and reviewer defaults.",
+      {
+        name: z.string(),
+        queue: z.string().optional(),
+        reviewers: z.array(z.string()).optional(),
+        tags: z.array(z.string()).optional(),
+        priorities: z.array(z.enum(["low", "medium", "high", "critical"])).optional(),
+        project_id: z.string().optional(),
+        enabled: z.boolean().optional(),
+      },
+      async ({ name, queue, reviewers, tags, priorities, project_id, enabled }) => {
+        try {
+          const { upsertReviewRoutingRule } = require("../../lib/review-queues.js") as any;
+          const rule = upsertReviewRoutingRule({ name, queue, reviewers, tags, priorities, project_id: project_id ? resolveId(project_id, "projects") : undefined, enabled });
+          return { content: [{ type: "text" as const, text: JSON.stringify(rule, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_review_routing_rules")) {
+    server.tool(
+      "list_review_routing_rules",
+      "List local review routing rules.",
+      {},
+      async () => {
+        try {
+          const { listReviewRoutingRules } = require("../../lib/review-queues.js") as any;
+          const rules = listReviewRoutingRules();
+          return { content: [{ type: "text" as const, text: JSON.stringify(rules, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("remove_review_routing_rule")) {
+    server.tool(
+      "remove_review_routing_rule",
+      "Remove a local review routing rule.",
+      { name: z.string() },
+      async ({ name }) => {
+        try {
+          const { removeReviewRoutingRule } = require("../../lib/review-queues.js") as any;
+          const removed = removeReviewRoutingRule(name);
+          return { content: [{ type: "text" as const, text: JSON.stringify({ removed }, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
   if (shouldRegisterTool("score_task")) {
     server.tool(
       "score_task",

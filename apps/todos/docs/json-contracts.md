@@ -16,6 +16,8 @@ The stable contracts cover these object IDs:
 
 - `task`
 - `project`
+- `local_review_queue_item`
+- `review_routing_rule`
 - `mention_resolution_report`
 - `project_knowledge_record`
 - `project_knowledge_export`
@@ -105,6 +107,21 @@ locally, the canonical reference key, and validated backlinks for files, line
 anchors, symbols, commits, branches, pull request refs present in local git
 refs, plans, runs, tasks, and agents. It uses only the local workspace, local
 git refs, and local todos state.
+
+## Local Review Queues
+
+`local_review_queue_item` is returned by `todos reviews list`,
+`todos reviews request`, `todos reviews claim`, `todos reviews return`,
+`todos reviews approve`, `todos reviews reopen`, and matching MCP review queue
+tools. It captures the task identity, queue, review state, requester, reviewer,
+claim holder, requested changes, route provenance, timestamps, and linked local
+task review contract.
+
+`review_routing_rule` is returned by `todos reviews rules set`,
+`todos reviews rules list`, `set_review_routing_rule`, and
+`list_review_routing_rules`. It stores local queue routing by name with enabled
+state, queue, reviewers, tags, priorities, and optional project scope. Rules
+are local config only and never imply hosted users, orgs, or cloud routing.
 
 ## Project Knowledge
 

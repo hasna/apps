@@ -31,6 +31,7 @@ const expectedDomains = [
   "workflow-prompts",
   "policy-packs",
   "approval-gates",
+  "review-queues",
   "runs",
   "agent-runs",
   "source-index",

@@ -67,6 +67,18 @@ export interface AgentRunAdapterConfig {
   updated_at?: string;
 }
 
+export interface ReviewRoutingRuleConfig {
+  name: string;
+  enabled: boolean;
+  queue: string;
+  reviewers: string[];
+  tags: string[];
+  priorities: Array<"low" | "medium" | "high" | "critical">;
+  project_id: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export type VerificationProviderKind = "command" | "testbox" | "ci_log" | "browser" | "script";
 
 export interface VerificationProviderRetryConfig {
@@ -227,6 +239,8 @@ export interface TodosConfig {
   runner_sandboxes?: Record<string, RunnerSandboxProfile>;
   /** Local agent run adapters, keyed by adapter name. */
   agent_run_adapters?: Record<string, AgentRunAdapterConfig>;
+  /** Local review routing rules for queue and reviewer defaults. */
+  review_routing_rules?: Record<string, ReviewRoutingRuleConfig>;
   /** Optional local verification provider adapters, keyed by provider name. */
   verification_providers?: Record<string, VerificationProviderConfig>;
   /** Local extension registry entries, keyed by extension name. */

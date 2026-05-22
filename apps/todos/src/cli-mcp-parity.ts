@@ -22,6 +22,7 @@ export type TodosCliMcpParityDomain =
   | "workflow-prompts"
   | "policy-packs"
   | "approval-gates"
+  | "review-queues"
   | "local-event-hooks"
   | "terminal-notifications"
   | "branch-work-plans"
@@ -599,6 +600,38 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos approvals check 1234abcd deploy --json",
       mcpTool: "check_approval_gate",
+    },
+  },
+  {
+    domain: "review-queues",
+    cliCommands: [
+      "todos reviews list",
+      "todos reviews request",
+      "todos reviews claim",
+      "todos reviews approve",
+      "todos reviews return",
+      "todos reviews reopen",
+      "todos reviews rules list",
+      "todos reviews rules set",
+      "todos reviews rules remove",
+    ],
+    mcpTools: [
+      "list_review_queue",
+      "request_review_queue",
+      "claim_review_item",
+      "approve_review_item",
+      "return_review_item",
+      "reopen_review_item",
+      "list_review_routing_rules",
+      "set_review_routing_rule",
+      "remove_review_routing_rule",
+    ],
+    jsonContracts: ["local_review_queue_item", "review_routing_rule", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    example: {
+      cli: "todos reviews list --queue qa --json",
+      mcpTool: "list_review_queue",
     },
   },
   {

@@ -1925,6 +1925,78 @@ describe("CLI integration", () => {
     try { unlinkSync(dbPath); } catch {}
   });
 
+  it("should manage local review queues and routing rules from the CLI", async () => {
+    const dbPath = "/tmp/test-cli-review-queues.db";
+    const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const home = mkdtempSync(join(tmpdir(), "todos-cli-review-home-"));
+    const env = { HOME: home };
+    try {
+      for (const suffix of ["", "-wal", "-shm"]) {
+        try { unlinkSync(`${dbPath}${suffix}`); } catch {}
+      }
+
+      const task = JSON.parse((await runCli(["add", "Review queue task", "--priority", "high", "--tag", "security", "--json"], dbPath, env)).stdout);
+      const rule = await runCli([
+        "reviews",
+        "rules",
+        "set",
+        "security",
+        "--queue",
+        "security-review",
+        "--reviewers",
+        "reviewer",
+        "--tags",
+        "security",
+        "--priorities",
+        "high",
+        "--json",
+      ], dbPath, env);
+      expect(rule.exitCode).toBe(0);
+      expect(JSON.parse(rule.stdout).queue).toBe("security-review");
+
+      const requested = await runCli(["reviews", "request", task.id, "--requester", "codex", "--reason", "needs review", "--json"], dbPath, env);
+      expect(requested.exitCode).toBe(0);
+      const requestedItem = JSON.parse(requested.stdout);
+      expect(requestedItem.queue).toBe("security-review");
+      expect(requestedItem.reviewer).toBe("reviewer");
+      expect(requestedItem.routing_rule).toBe("security");
+
+      const claimed = await runCli(["reviews", "claim", task.id, "--reviewer", "reviewer", "--json"], dbPath, env);
+      expect(claimed.exitCode).toBe(0);
+      expect(JSON.parse(claimed.stdout).state).toBe("claimed");
+
+      const returned = await runCli(["reviews", "return", task.id, "--reviewer", "reviewer", "--changes", "Add tests;Record verification", "--json"], dbPath, env);
+      expect(returned.exitCode).toBe(0);
+      expect(JSON.parse(returned.stdout).changes_requested).toEqual(["Add tests", "Record verification"]);
+
+      const listed = await runCli(["reviews", "list", "--queue", "security-review", "--json"], dbPath, env);
+      expect(listed.exitCode).toBe(0);
+      expect(JSON.parse(listed.stdout)).toHaveLength(1);
+
+      const approved = await runCli(["reviews", "approve", task.id, "--reviewer", "reviewer", "--json"], dbPath, env);
+      expect(approved.exitCode).toBe(0);
+      expect(JSON.parse(approved.stdout).state).toBe("approved");
+
+      const reopened = await runCli(["reviews", "reopen", task.id, "--reviewer", "reviewer", "--json"], dbPath, env);
+      expect(reopened.exitCode).toBe(0);
+      expect(JSON.parse(reopened.stdout).state).toBe("reopened");
+
+      const rules = await runCli(["reviews", "rules", "list", "--json"], dbPath, env);
+      expect(JSON.parse(rules.stdout).map((item: { name: string }) => item.name)).toEqual(["security"]);
+
+      const removed = await runCli(["reviews", "rules", "remove", "security", "--json"], dbPath, env);
+      expect(removed.exitCode).toBe(0);
+      expect(JSON.parse(removed.stdout).removed).toBe(true);
+    } finally {
+      for (const suffix of ["", "-wal", "-shm"]) {
+        try { unlinkSync(`${dbPath}${suffix}`); } catch {}
+      }
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("should manage local approval gates and block failed checks in json mode", async () => {
     const dbPath = "/tmp/test-cli-approval-gates.db";
     const { unlinkSync } = await import("node:fs");

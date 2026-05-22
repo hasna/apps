@@ -22,6 +22,7 @@ import { getTaskLocalFields, setTaskLocalFields } from "./lib/local-fields.js";
 import { testExtensionCompatibility } from "./lib/local-extensions.js";
 import { getLocalSnapshot, pollLocalSnapshots } from "./lib/local-snapshots.js";
 import { listOnboardingFixtures } from "./lib/onboarding-fixtures.js";
+import { listReviewQueue, upsertReviewRoutingRule, requestReviewQueue } from "./lib/review-queues.js";
 import { createSdkIntegrationFixturePack } from "./lib/sdk-integration-fixtures.js";
 import { generateReleaseNotes } from "./lib/release-notes.js";
 import { previewRetentionCleanup } from "./lib/retention-cleanup.js";
@@ -91,6 +92,8 @@ describe("stable JSON contracts", () => {
     expect(manifest.contracts.map((contract) => contract.id)).toEqual([
       "task",
       "project",
+      "local_review_queue_item",
+      "review_routing_rule",
       "mention_resolution_report",
       "project_knowledge_record",
       "project_knowledge_export",
@@ -178,6 +181,20 @@ describe("stable JSON contracts", () => {
       tags: ["contracts"],
       metadata: { fixture: true },
     }, db);
+    const reviewRoutingRule = upsertReviewRoutingRule({
+      name: "contracts-review",
+      queue: "qa",
+      reviewers: ["reviewer"],
+      tags: ["contracts"],
+      priorities: ["high"],
+      project_id: project.id,
+    });
+    requestReviewQueue({
+      task_id: task.id,
+      requester: "jsoncontractagent",
+      reason: "contract fixture review",
+    }, db);
+    const reviewQueueItem = listReviewQueue({ queue: "qa" }, db)[0]!;
     setTaskLocalFields(task.id, {
       labels: ["contracts"],
       severity: "s2",
@@ -340,6 +357,8 @@ describe("stable JSON contracts", () => {
     const environmentComparison = compareEnvironmentSnapshots(environmentSnapshot, environmentSnapshot);
 
     expectValid("project", project);
+    expectValid("local_review_queue_item", reviewQueueItem);
+    expectValid("review_routing_rule", reviewRoutingRule);
     expectValid("task_list", taskList);
     expectValid("task", task);
     expectValid("mention_resolution_report", mentionReport);

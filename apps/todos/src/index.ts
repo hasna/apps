@@ -94,6 +94,30 @@ export type {
   WriteSdkIntegrationFixturesResult,
 } from "./lib/sdk-integration-fixtures.js";
 
+// Local review queues
+export {
+  approveReviewItem,
+  claimReviewItem,
+  listReviewQueue,
+  listReviewRoutingRules,
+  removeReviewRoutingRule,
+  reopenReviewItem,
+  requestReviewQueue,
+  returnReviewItem,
+  upsertReviewRoutingRule,
+} from "./lib/review-queues.js";
+export type {
+  ClaimReviewInput,
+  DecideReviewInput,
+  RequestReviewQueueInput,
+  ReviewQueueHistoryEntry,
+  ReviewQueueItem,
+  ReviewQueueListOptions,
+  ReviewQueueMetadata,
+  ReviewQueueState,
+  UpsertReviewRoutingRuleInput,
+} from "./lib/review-queues.js";
+
 // Side-effect-free MCP metadata
 export {
   CORE_MCP_TOOLS,

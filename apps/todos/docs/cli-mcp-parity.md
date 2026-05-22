@@ -58,6 +58,8 @@ structured error contracts.
   evidence, commits, pull requests, approvals, runs, and artifacts.
 - `approval-gates`: local manual checkpoints for risky task, plan, and run work
   with approve, reject, expire, check, and list flows.
+- `review-queues`: local review queues, reviewer claims, requested changes,
+  approvals, and routing rules for human or agent review without hosted users.
 - `local-event-hooks`: local-only event hooks for task, plan, run, approval,
   import, and export events with stdout, file, socket, and script targets.
 - `terminal-notifications`: local terminal watch rules for task, run, plan,
@@ -399,6 +401,18 @@ Matching MCP tool:
 
 ```json
 { "tool": "check_approval_gate", "arguments": { "task_id": "1234abcd", "gate": "deploy" } }
+```
+
+CLI local review queue:
+
+```bash
+todos reviews list --queue security-review --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "list_review_queue", "arguments": { "queue": "security-review" } }
 ```
 
 CLI local event hook:

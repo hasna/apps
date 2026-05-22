@@ -38,6 +38,17 @@ export {
   writeSdkIntegrationFixtures,
 } from "./lib/sdk-integration-fixtures.js";
 export {
+  approveReviewItem,
+  claimReviewItem,
+  listReviewQueue,
+  listReviewRoutingRules,
+  removeReviewRoutingRule,
+  reopenReviewItem,
+  requestReviewQueue,
+  returnReviewItem,
+  upsertReviewRoutingRule,
+} from "./lib/review-queues.js";
+export {
   DEFAULT_ENCRYPTION_KEY_ENV,
   DEFAULT_ENCRYPTION_PROFILE,
   TODOS_ENCRYPTED_BRIDGE_KIND,
@@ -99,6 +110,17 @@ export type {
   SdkIntegrationFixturePack,
   WriteSdkIntegrationFixturesResult,
 } from "./lib/sdk-integration-fixtures.js";
+export type {
+  ClaimReviewInput,
+  DecideReviewInput,
+  RequestReviewQueueInput,
+  ReviewQueueHistoryEntry,
+  ReviewQueueItem,
+  ReviewQueueListOptions,
+  ReviewQueueMetadata,
+  ReviewQueueState,
+  UpsertReviewRoutingRuleInput,
+} from "./lib/review-queues.js";
 export type {
   EncryptedLocalBridgeBundle,
   LocalEncryptionEnvelope,
