@@ -99,6 +99,7 @@ import {
   removeLocalExtension,
   testExtensionCompatibility,
 } from "../../lib/local-extensions.js";
+import { importExternalIssues } from "../../lib/external-issue-importers.js";
 import { createInboxItem, getInboxItem, listInboxItems } from "../../db/inbox.js";
 
 interface TaskResourcesContext {
@@ -1568,6 +1569,37 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
             priority,
             tags,
             create_task,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("import_external_issues")) {
+    server.tool(
+      "import_external_issues",
+      "Dry-run or apply local imports from GitHub, Linear, Jira, or plain URL issue data with source-metadata dedupe.",
+      {
+        provider: z.enum(["github", "linear", "jira", "url"]).optional(),
+        text: z.string().optional(),
+        json: z.unknown().optional(),
+        source_url: z.string().optional(),
+        source_name: z.string().optional(),
+        project_id: z.string().optional(),
+        task_list_id: z.string().optional(),
+        agent_id: z.string().optional(),
+        default_priority: z.enum(["low", "medium", "high", "critical"]).optional(),
+        apply: z.boolean().optional(),
+        allow_network: z.boolean().optional(),
+        create_inbox: z.boolean().optional(),
+        dedupe: z.boolean().optional(),
+      },
+      async (input) => {
+        try {
+          const result = importExternalIssues({
+            ...input,
+            project_id: input.project_id ? resolveId(input.project_id, "projects") : undefined,
           });
           return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }

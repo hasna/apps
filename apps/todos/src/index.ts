@@ -1253,6 +1253,18 @@ export type {
   ReleaseCompatibilityStatus,
 } from "./lib/release-compatibility.js";
 
+export {
+  EXTERNAL_ISSUE_IMPORT_SCHEMA_VERSION,
+  importExternalIssues,
+} from "./lib/external-issue-importers.js";
+export type {
+  ExternalIssueExistingMatch,
+  ExternalIssueImportInput,
+  ExternalIssueImportResult,
+  ExternalIssueProvider,
+  ExternalIssueRecord,
+} from "./lib/external-issue-importers.js";
+
 // Dispatch formatter
 export { formatDispatchMessage, formatSingleTask } from "./lib/dispatch-formatter.js";
 export type { FormatOpts } from "./lib/dispatch-formatter.js";

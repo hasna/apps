@@ -1136,6 +1136,7 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
       "todos template-import",
       "todos inbox add",
       "todos inbox git",
+      "todos issues import",
       "todos bridge-import",
     ],
     mcpTools: [
@@ -1143,10 +1144,12 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
       "create_inbox_item",
       "list_inbox_items",
       "get_inbox_item",
+      "import_external_issues",
     ],
     jsonContracts: [
       "template",
       "task",
+      "external_issue_import_report",
       "local_bridge_bundle",
       "local_bridge_import_result",
       "structured_error",
@@ -1154,9 +1157,10 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     ],
     errorContracts: ["structured_error", "api_error"],
     status: "intentional-gap",
-    gapReason: "Local bridge import can mutate many local records, so the CLI keeps it explicit with dry-run by default. MCP callers can still create inbox items and templates through smaller scoped tools.",
+    gapReason: "External issue imports, templates, and inbox intake have CLI/MCP parity. Local bridge import can mutate many local records, so the CLI keeps that path explicit and dry-run by default.",
     example: {
-      cli: "todos bridge-import todos-bridge.json --apply --json",
+      cli: "todos issues import --file issues.json --provider github --apply --json",
+      mcpTool: "import_external_issues",
     },
   },
   {

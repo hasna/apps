@@ -2396,6 +2396,62 @@ export function registerQueryCommands(program: Command) {
       }
     });
 
+  const issues = program
+    .command("issues")
+    .description("Import external issue data into local tasks");
+
+  issues
+    .command("import [text]")
+    .description("Dry-run or apply local imports from GitHub, Linear, Jira, or plain URL issue data")
+    .option("--file <path>", "Read issue data from a JSON, Markdown, or text file")
+    .option("--url <url>", "Source issue URL")
+    .option("--provider <provider>", "github, linear, jira, or url")
+    .option("--project <id>", "Project ID for created tasks")
+    .option("--list <id>", "Task list ID for created tasks")
+    .option("--priority <priority>", "Default priority for records without explicit priority", "medium")
+    .option("--apply", "Create local tasks; default is dry-run preview")
+    .option("--allow-network", "Allow explicit provider CLI/API fetches when supported")
+    .option("--no-inbox", "Do not create linked inbox evidence for applied imports")
+    .option("--no-dedupe", "Do not skip records that match existing source metadata")
+    .option("-j, --json", "Output as JSON")
+    .action(async (text: string | undefined, opts) => {
+      const globalOpts = program.opts();
+      try {
+        const { importExternalIssues } = await import("../../lib/external-issue-importers.js");
+        let body = text || "";
+        if (opts.file) body = readFileSync(opts.file, "utf-8");
+        if (!body && !opts.url && !process.stdin.isTTY) body = await Bun.stdin.text();
+        if (!body.trim() && !opts.url) {
+          console.error(chalk.red("Provide text, --file, --url, or stdin input."));
+          process.exit(1);
+        }
+        const report = importExternalIssues({
+          provider: opts.provider,
+          text: body || undefined,
+          source_url: opts.url,
+          source_name: opts.file || opts.url,
+          project_id: resolveProjectOption(opts.project) || autoProject(globalOpts) || undefined,
+          task_list_id: opts.list,
+          agent_id: globalOpts.agent,
+          default_priority: parsePriority(opts.priority) || "medium",
+          apply: Boolean(opts.apply),
+          allow_network: Boolean(opts.allowNetwork),
+          create_inbox: opts.inbox,
+          dedupe: opts.dedupe,
+        });
+        if (opts.json || globalOpts.json) { output(report, true); return; }
+        const mode = report.dry_run ? "Previewed" : "Imported";
+        console.log(chalk.green(`${mode} ${report.issues.length} external issue${report.issues.length === 1 ? "" : "s"}.`));
+        if (report.created_tasks.length > 0) {
+          for (const task of report.created_tasks) console.log(`  ${chalk.cyan(task.short_id || task.id.slice(0, 8))} ${task.title}`);
+        }
+        if (report.existing_matches.length > 0) console.log(chalk.yellow(`  skipped existing: ${report.existing_matches.length}`));
+        if (report.warnings.length > 0) for (const warning of report.warnings) console.log(chalk.yellow(`  ${warning}`));
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
   const inbox = program
     .command("inbox")
     .description("Capture local inbox items from pasted errors, CI logs, git context, files, or GitHub issue URLs");

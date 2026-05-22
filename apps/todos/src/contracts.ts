@@ -82,6 +82,10 @@ export {
   renderReleaseCompatibilityMarkdown,
 } from "./lib/release-compatibility.js";
 export {
+  EXTERNAL_ISSUE_IMPORT_SCHEMA_VERSION,
+  importExternalIssues,
+} from "./lib/external-issue-importers.js";
+export {
   DEFAULT_ENCRYPTION_KEY_ENV,
   DEFAULT_ENCRYPTION_PROFILE,
   TODOS_ENCRYPTED_BRIDGE_KIND,
@@ -128,6 +132,13 @@ export type {
   ReleaseCompatibilityReport,
   ReleaseCompatibilityStatus,
 } from "./lib/release-compatibility.js";
+export type {
+  ExternalIssueExistingMatch,
+  ExternalIssueImportInput,
+  ExternalIssueImportResult,
+  ExternalIssueProvider,
+  ExternalIssueRecord,
+} from "./lib/external-issue-importers.js";
 export type {
   ImportOnboardingFixtureOptions,
   OnboardingFixture,

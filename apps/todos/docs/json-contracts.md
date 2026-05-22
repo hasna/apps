@@ -42,6 +42,7 @@ The stable contracts cover these object IDs:
 - `retention_cleanup_report`
 - `duplicate_task_candidate`
 - `task_merge_result`
+- `external_issue_import_report`
 - `verification_provider`
 - `verification_provider_result`
 - `agent`
@@ -288,6 +289,12 @@ task, duplicate task, score, and human-readable reasons for the match.
 `task_merge_result` is returned by `todos dedupe merge --json` and
 `merge_duplicate_task`. It includes the updated primary task, archived duplicate
 task, duplicate relationship id, and moved evidence counts.
+
+`external_issue_import_report` is returned by `todos issues import --json` and
+`import_external_issues`. It records dry-run/apply mode, whether explicit
+network access was used, normalized GitHub/Linear/Jira/URL records, created
+tasks, linked inbox evidence, source-metadata matches that were skipped,
+duplicate candidates, warnings, and follow-up local commands.
 
 ## Verification Providers
 

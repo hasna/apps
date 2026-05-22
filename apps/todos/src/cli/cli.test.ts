@@ -2585,6 +2585,52 @@ END:VCALENDAR`);
     }
   });
 
+  it("should import external issue data from the CLI with dry-run and dedupe", async () => {
+    const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const home = mkdtempSync(join(tmpdir(), "todos-cli-issues-import-"));
+    const dbPath = join(home, "todos.db");
+    const fixture = join(home, "issues.json");
+
+    writeFileSync(fixture, JSON.stringify({
+      issues: [{
+        number: 42,
+        title: "CLI imported issue",
+        body: `Failure includes bearer ${"abcdefghijklmnopqrstuvwxyz"}`,
+        html_url: "https://github.com/hasna/todos/issues/42",
+        state: "open",
+        labels: [{ name: "bug" }, { name: "p1" }],
+      }],
+    }));
+
+    try {
+      const preview = await runCli(["--json", "issues", "import", "--file", fixture, "--provider", "github"], dbPath, { HOME: home });
+      expect(preview.exitCode).toBe(0);
+      const previewReport = JSON.parse(preview.stdout);
+      expect(previewReport.dry_run).toBe(true);
+      expect(previewReport.issues[0].key).toBe("hasna/todos#42");
+      expect(previewReport.created_tasks).toHaveLength(0);
+
+      const applied = await runCli(["--json", "issues", "import", "--file", fixture, "--provider", "github", "--apply"], dbPath, { HOME: home });
+      expect(applied.exitCode).toBe(0);
+      const appliedReport = JSON.parse(applied.stdout);
+      expect(appliedReport.dry_run).toBe(false);
+      expect(appliedReport.created_tasks).toHaveLength(1);
+      expect(appliedReport.created_tasks[0].title).toContain("[GH hasna/todos#42]");
+      expect(appliedReport.created_tasks[0].description).not.toContain("abcdefghijklmnopqrstuvwxyz");
+      expect(appliedReport.inbox_items).toHaveLength(1);
+
+      const duplicate = await runCli(["--json", "issues", "import", "--file", fixture, "--provider", "github", "--apply"], dbPath, { HOME: home });
+      expect(duplicate.exitCode).toBe(0);
+      const duplicateReport = JSON.parse(duplicate.stdout);
+      expect(duplicateReport.created_tasks).toHaveLength(0);
+      expect(duplicateReport.existing_matches).toHaveLength(1);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("should extract source TODOs with index metadata and watcher output", async () => {
     const { mkdtempSync, rmSync, writeFileSync, unlinkSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");

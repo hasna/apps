@@ -912,6 +912,28 @@ as runs, traceability, comments, files, dependencies, and plan context is
 summarized in a stable `context_budget` block so agents still know what was left
 out.
 
+## Local External Issue Imports
+
+Import issue records from pasted JSON, files, stdin, or explicit URLs without
+depending on any hosted Hasna service. Imports default to a dry-run preview;
+`--apply` creates local tasks, stores redacted source metadata, creates linked
+inbox evidence, and skips existing tasks that already have the same source URL,
+GitHub owner/repo/number, or external issue key:
+
+```bash
+todos issues import --file issues.json --provider github --json
+todos issues import --file issues.json --provider github --apply --json
+todos issues import --provider linear --apply < linear-export.json
+todos issues import "Title: Fix parser\nURL: https://tracker.example/BUG-42" --apply --json
+```
+
+GitHub, Linear, Jira, and plain URL records are normalized into local task
+metadata and tags. Network access is off unless `--allow-network` is passed; for
+GitHub that explicitly shells out through the authenticated `gh` CLI, while
+offline files and pasted exports work without tokens. MCP clients use
+`import_external_issues` with the same dry-run, apply, inbox, and dedupe
+controls.
+
 ## Local Inbox Intake
 
 Paste failures, CI logs, GitHub issue URLs, files, or local git context into a

@@ -234,6 +234,8 @@ describe("CLI/MCP parity manifest", () => {
     expect(byDomain.get("release-compatibility")?.mcpTools).toContain("check_release_compatibility");
     expect(byDomain.get("release-compatibility")?.jsonContracts).toContain("release_compatibility_report");
     expect(byDomain.get("imports")?.jsonContracts).toContain("local_bridge_import_result");
+    expect(byDomain.get("imports")?.mcpTools).toContain("import_external_issues");
+    expect(byDomain.get("imports")?.jsonContracts).toContain("external_issue_import_report");
     expect(byDomain.get("exports")?.jsonContracts).toContain("local_bridge_bundle");
   });
 
@@ -263,6 +265,8 @@ describe("CLI/MCP parity manifest", () => {
     expect(docs).toContain("create_task");
     expect(docs).toContain("todos export --format bridge --output todos-bridge.json --json");
     expect(docs).toContain("todos bridge-import todos-bridge.json --apply --json");
+    expect(docs).toContain("todos issues import --file issues.json --provider github --apply --json");
+    expect(docs).toContain("import_external_issues");
     expect(docs).toContain("todos event-hooks set audit --event task.completed");
     expect(docs).toContain("todos env-snapshot capture --task 1234abcd --json");
     expect(docs).toContain("todos release-notes --project . --format markdown");

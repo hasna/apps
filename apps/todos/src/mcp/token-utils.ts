@@ -222,6 +222,7 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "get_task_relationships",
     "get_task_watchers",
     "import_handoff",
+    "import_external_issues",
     "import_onboarding_fixture",
     "link_task_git_ref",
     "link_task_to_commit",

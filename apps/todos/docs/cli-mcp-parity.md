@@ -111,7 +111,8 @@ structured error contracts.
 - `local-snapshots`: local project, task, plan, run, dependency, event, and
   evidence snapshots with cursors, fingerprints, JSON, Markdown, MCP resources,
   and polling.
-- `imports`: template imports, inbox intake, and local bridge imports.
+- `imports`: template imports, external issue imports, inbox intake, and local
+  bridge imports.
 - `exports`: template exports, traceability exports, verification records, and
   local bridge exports.
 
@@ -632,16 +633,30 @@ do not need a whole-store bundle.
 CLI bridge import:
 
 ```bash
+todos issues import --file issues.json --provider github --apply --json
 todos bridge-import todos-bridge.json --apply --json
 todos todos-md-import todos.md --apply --resolve-conflicts --json
 ```
+
+Matching MCP tool for external issue intake:
+
+```json
+{ "tool": "import_external_issues", "arguments": { "provider": "github", "json": { "number": 42, "title": "Parser regression", "html_url": "https://github.com/hasna/todos/issues/42" }, "apply": true } }
+```
+
+External issue imports support GitHub, Linear, Jira, and plain URL records from
+offline files, pasted JSON, stdin, or explicit source URLs. They default to
+dry-run previews, redact bodies and metadata before storage, and dedupe against
+existing source metadata. Explicit network fetches are disabled unless the
+caller opts in.
 
 The full local bridge import is intentionally CLI-only and dry-run first because
 it can write many local records. `--resolve-conflicts` safely merges
 multi-machine task edits by filling blank local fields, unioning tags, merging
 non-conflicting metadata, and recording unresolved divergent fields in
 `metadata.sync_conflicts` for manual review. MCP callers can use scoped intake
-tools such as `create_inbox_item` and `import_template`.
+tools such as `create_inbox_item`, `import_external_issues`, and
+`import_template`.
 
 ## Contract Rules
 

@@ -1824,6 +1824,67 @@ describe("MCP tool wrappers", () => {
     expect(item.id).toBe(created.item.id);
   });
 
+  it("imports external issue data through the MCP resource tool", async () => {
+    const tools = captureTools(registerTaskResources);
+    const project = createProject({ name: "Issue Imports", path: "/tmp/issue-imports" }, db);
+
+    const previewResult = await callCapturedTool(tools, "import_external_issues", {
+      provider: "linear",
+      project_id: project.id.slice(0, 8),
+      json: {
+        issues: [{
+          id: "lin-1",
+          identifier: "ENG-123",
+          title: "MCP imported issue",
+          description: `Failure includes bearer ${"abcdefghijklmnopqrstuvwxyz"}`,
+          url: "https://linear.app/hasna/issue/ENG-123/mcp-imported-issue",
+          state: { name: "Todo" },
+          labels: { nodes: [{ name: "backend" }] },
+          priorityLabel: "High",
+        }],
+      },
+    });
+    const preview = JSON.parse(previewResult.content[0]!.text);
+    expect(preview.dry_run).toBe(true);
+    expect(preview.issues[0].key).toBe("ENG-123");
+    expect(preview.issues[0].body).not.toContain("abcdefghijklmnopqrstuvwxyz");
+
+    const appliedResult = await callCapturedTool(tools, "import_external_issues", {
+      provider: "linear",
+      project_id: project.id.slice(0, 8),
+      apply: true,
+      json: {
+        issues: [{
+          id: "lin-1",
+          identifier: "ENG-123",
+          title: "MCP imported issue",
+          description: "Same imported issue",
+          url: "https://linear.app/hasna/issue/ENG-123/mcp-imported-issue",
+          priorityLabel: "High",
+        }],
+      },
+    });
+    const applied = JSON.parse(appliedResult.content[0]!.text);
+    expect(applied.created_tasks).toHaveLength(1);
+    expect(applied.created_tasks[0].project_id).toBe(project.id);
+    expect(applied.created_tasks[0].tags).toEqual(expect.arrayContaining(["external-issue", "linear"]));
+    expect(applied.inbox_items).toHaveLength(1);
+
+    const duplicateResult = await callCapturedTool(tools, "import_external_issues", {
+      provider: "linear",
+      apply: true,
+      json: {
+        id: "lin-1",
+        identifier: "ENG-123",
+        title: "MCP imported issue",
+        url: "https://linear.app/hasna/issue/ENG-123/mcp-imported-issue",
+      },
+    });
+    const duplicate = JSON.parse(duplicateResult.content[0]!.text);
+    expect(duplicate.created_tasks).toHaveLength(0);
+    expect(duplicate.existing_matches).toHaveLength(1);
+  });
+
   it("comment wrappers persist and read the real comment fields", async () => {
     const projectTools = captureTools(registerTaskProjectTools);
     const advTools = captureTools(registerTaskAdvTools);

@@ -32,6 +32,7 @@ import { generateReleaseNotes } from "./lib/release-notes.js";
 import { previewRetentionCleanup } from "./lib/retention-cleanup.js";
 import { resolveMentions } from "./lib/mention-resolver.js";
 import { findDuplicateTasks, mergeDuplicateTask } from "./lib/task-dedupe.js";
+import { importExternalIssues } from "./lib/external-issue-importers.js";
 import { runVerificationProvider, upsertVerificationProvider } from "./lib/verification-providers.js";
 import { createHandoff } from "./db/handoffs.js";
 import { createAgentReliabilityExport, getAgentReliabilityScorecard } from "./db/agent-metrics.js";
@@ -122,6 +123,7 @@ describe("stable JSON contracts", () => {
       "retention_cleanup_report",
       "duplicate_task_candidate",
       "task_merge_result",
+      "external_issue_import_report",
       "verification_provider",
       "verification_provider_result",
       "local_extension_compatibility",
@@ -262,6 +264,19 @@ describe("stable JSON contracts", () => {
       duplicate_task_id: sourcePeer.id,
       agent_id: "jsoncontractagent",
       reason: "contract fixture",
+    }, db);
+    const externalIssueImport = importExternalIssues({
+      json: {
+        number: 992,
+        title: "External contract issue",
+        body: "Contract fixture",
+        labels: ["contracts"],
+        state: "open",
+        html_url: "https://github.com/hasna/todos/issues/992",
+      },
+      provider: "github",
+      project_id: project.id,
+      apply: true,
     }, db);
     const verificationProvider = upsertVerificationProvider({
       name: "contracts",
@@ -428,6 +443,7 @@ describe("stable JSON contracts", () => {
     expectValid("retention_cleanup_report", retentionCleanupReport);
     expectValid("duplicate_task_candidate", duplicateCandidate);
     expectValid("task_merge_result", mergeResult);
+    expectValid("external_issue_import_report", externalIssueImport);
     expectValid("verification_provider", verificationProvider);
     expectValid("verification_provider_result", verificationProviderResult);
     expectValid("local_extension_compatibility", extensionCompatibility);
