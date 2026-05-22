@@ -23,6 +23,14 @@ interface TaskCrudContext {
 export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
   const { shouldRegisterTool, resolveId, formatError, formatTask } = ctx;
 
+  function mutationTaskResponse(task: Task): string {
+    const compact = compactTask(task, 240);
+    compact["version"] = task.version;
+    compact["created_at"] = task.created_at;
+    compact["task_list_id"] = task.task_list_id;
+    return compactJson(compact);
+  }
+
   function versionFor(taskId: string, version?: number): number {
     const current = getTask(taskId);
     if (!current) throw new TaskNotFoundError(taskId);
@@ -69,7 +77,7 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
           if (deadline) resolved.due_at = deadline;
 
           const task = createTask(resolved as Parameters<typeof createTask>[0]);
-          return { content: [{ type: "text" as const, text: formatTask(task) }] };
+          return { content: [{ type: "text" as const, text: mutationTaskResponse(task) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }
@@ -217,7 +225,7 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
           }
 
           const task = updateTask(resolvedId, { ...resolved, version: versionFor(resolvedId, version) } as Parameters<typeof updateTask>[1]);
-          return { content: [{ type: "text" as const, text: formatTask(task) }] };
+          return { content: [{ type: "text" as const, text: mutationTaskResponse(task) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }

@@ -171,6 +171,49 @@ describe("MCP tool wrappers", () => {
     expect(task.max_retries).toBe(5);
   });
 
+  it("create_task returns an id accepted by get_task and update_task in one MCP session", async () => {
+    const tools = captureTools(registerTaskCrudTools);
+
+    const createdResult = await callCapturedTool(tools, "create_task", {
+      title: "Created then read via MCP",
+      priority: "high",
+    });
+    const created = JSON.parse(createdResult.content[0]!.text);
+
+    expect(created.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(created.short_id).toBe(created.id.slice(0, 8));
+    expect(created.version).toBe(1);
+
+    const fetchedResult = await callCapturedTool(tools, "get_task", {
+      task_id: created.id,
+    });
+    const fetched = JSON.parse(fetchedResult.content[0]!.text);
+
+    expect(fetched.id).toBe(created.id);
+    expect(fetched.title).toBe("Created then read via MCP");
+
+    const updatedResult = await callCapturedTool(tools, "update_task", {
+      task_id: created.id,
+      title: "Updated after create via MCP",
+      status: "in_progress",
+      version: created.version,
+    });
+    const updated = JSON.parse(updatedResult.content[0]!.text);
+
+    expect(updated.id).toBe(created.id);
+    expect(updated.title).toBe("Updated after create via MCP");
+    expect(updated.status).toBe("in_progress");
+    expect(updated.version).toBe(2);
+
+    const refetchedResult = await callCapturedTool(tools, "get_task", {
+      task_id: updated.id,
+    });
+    const refetched = JSON.parse(refetchedResult.content[0]!.text);
+
+    expect(refetched.title).toBe("Updated after create via MCP");
+    expect(refetched.version).toBe(2);
+  });
+
   it("start_task works without forcing callers to pass the current version", async () => {
     const tools = captureTools(registerTaskProjectTools);
     const task = createTask({ title: "Start via MCP" }, db);
