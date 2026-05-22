@@ -415,6 +415,22 @@ depth, and open risks. MCP clients get the same surface through `create_risk`,
 `list_risks`, `update_risk`, `close_risk`, `score_plan_health`,
 `score_project_health`, and `export_risk_register`.
 
+## Local Retrospectives
+
+Retrospectives summarize a project or plan using local evidence: completed
+plans, missed estimates, repeated blockers, failed verification records,
+lessons learned, and suggested follow-up tasks.
+
+```bash
+todos retrospectives create --plan 1234abcd --json
+todos retrospectives list --project my-project --json
+todos retrospectives export --plan 1234abcd --format markdown
+```
+
+Use `--create-followups` to create the suggested follow-up tasks locally. MCP
+clients get the same reports through `create_retrospective`,
+`list_retrospectives`, and `export_retrospectives`.
+
 ## Local Agent Locking
 
 Task claims and locks are local SQLite leases. Agents can claim the next ready

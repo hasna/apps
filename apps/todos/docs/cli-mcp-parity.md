@@ -23,6 +23,8 @@ structured error contracts.
   snapshots, search, export, and MCP resources for agent project memory.
 - `risks`: local project and plan risk register entries, owner/mitigation due
   dates, deterministic exports, and local health scoring from task evidence.
+- `retrospectives`: local lessons-learned reports from completed plans, missed
+  estimates, recurring blockers, failed verifications, and follow-up tasks.
 - `local-fields`: local labels, priority, severity, owner, area, and custom
   fields with query support for agent-native task selection.
 - `dedupe`: local duplicate scans and merge workflows that preserve comments,
@@ -146,6 +148,18 @@ Matching MCP tools:
 ```json
 { "tool": "create_risk", "arguments": { "title": "Release blocker", "plan_id": "1234abcd", "severity": "high", "owner": "codex" } }
 { "tool": "score_plan_health", "arguments": { "plan_id": "1234abcd" } }
+```
+
+CLI retrospective:
+
+```bash
+todos retrospectives create --plan 1234abcd --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "create_retrospective", "arguments": { "plan_id": "1234abcd" } }
 ```
 
 CLI local fields update:

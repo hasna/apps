@@ -259,6 +259,24 @@ export type {
   UpdateRiskInput,
 } from "./db/project-risks.js";
 
+// Local retrospectives and lessons learned
+export {
+  createRetrospective,
+  createRetrospectiveExport,
+  getRetrospective,
+  listRetrospectives,
+  renderRetrospectiveMarkdown,
+} from "./db/retrospectives.js";
+export type {
+  CreateRetrospectiveInput,
+  ListRetrospectivesOptions,
+  RetrospectiveExport,
+  RetrospectiveExportFormat,
+  RetrospectiveRecord,
+  RetrospectiveReport,
+  RetrospectiveScope,
+} from "./db/retrospectives.js";
+
 // Project bootstrap and workspace discovery
 export {
   bootstrapProject,

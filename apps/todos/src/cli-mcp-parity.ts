@@ -6,6 +6,7 @@ export type TodosCliMcpParityDomain =
   | "references"
   | "knowledge"
   | "risks"
+  | "retrospectives"
   | "local-fields"
   | "dedupe"
   | "verification-providers"
@@ -216,6 +217,28 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos risks add \"Release blocker\" --plan 1234abcd --severity high --owner codex --json",
       mcpTool: "create_risk",
+    },
+  },
+  {
+    domain: "retrospectives",
+    cliCommands: [
+      "todos retrospectives create",
+      "todos retrospectives list",
+      "todos retrospectives show",
+      "todos retrospectives export",
+    ],
+    mcpTools: [
+      "create_retrospective",
+      "list_retrospectives",
+      "export_retrospectives",
+    ],
+    jsonContracts: ["retrospective_record", "retrospective_report", "retrospective_export", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    intentionalGaps: [],
+    example: {
+      cli: "todos retrospectives create --plan 1234abcd --json",
+      mcpTool: "create_retrospective",
     },
   },
   {

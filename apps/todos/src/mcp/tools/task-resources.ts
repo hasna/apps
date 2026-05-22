@@ -69,6 +69,12 @@ import {
   scoreProjectHealth,
   updateRisk,
 } from "../../db/project-risks.js";
+import {
+  createRetrospective,
+  createRetrospectiveExport,
+  listRetrospectives,
+  renderRetrospectiveMarkdown,
+} from "../../db/retrospectives.js";
 import { simulateAgentReplay } from "../../lib/agent-replay-simulator.js";
 import {
   inspectExtensionSource,
@@ -147,6 +153,16 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
     async () => {
       const risks = listRisks({ limit: 100 });
       return { contents: [{ uri: "todos://risks", text: JSON.stringify(risks, null, 2), mimeType: "application/json" }] };
+    },
+  );
+
+  server.resource(
+    "retrospectives",
+    "todos://retrospectives",
+    { description: "Local retrospectives and lessons learned reports", mimeType: "application/json" },
+    async () => {
+      const retrospectives = listRetrospectives({ limit: 100 });
+      return { contents: [{ uri: "todos://retrospectives", text: JSON.stringify(retrospectives, null, 2), mimeType: "application/json" }] };
     },
   );
 
@@ -426,6 +442,66 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
         try {
           const report = createRiskRegisterExport(input as any);
           const text = input.format === "markdown" ? renderRiskRegisterMarkdown(report) : JSON.stringify(report, null, 2);
+          return { content: [{ type: "text" as const, text }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("create_retrospective")) {
+    server.tool(
+      "create_retrospective",
+      "Create a local retrospective report for a project or plan from completed plans, missed estimates, recurring blockers, failed verifications, and suggested follow-up tasks.",
+      {
+        title: z.string().optional(),
+        project_id: z.string().optional(),
+        plan_id: z.string().optional(),
+        agent_id: z.string().optional(),
+        create_followups: z.boolean().optional(),
+      },
+      async (input) => {
+        try {
+          const record = createRetrospective(input as any);
+          return { content: [{ type: "text" as const, text: JSON.stringify(record, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_retrospectives")) {
+    server.tool(
+      "list_retrospectives",
+      "List stored local retrospectives with optional project, plan, and agent filters.",
+      {
+        project_id: z.string().optional(),
+        plan_id: z.string().optional(),
+        agent_id: z.string().optional(),
+        limit: z.number().optional(),
+      },
+      async (input) => {
+        try {
+          const records = listRetrospectives(input as any);
+          return { content: [{ type: "text" as const, text: JSON.stringify(records, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("export_retrospectives")) {
+    server.tool(
+      "export_retrospectives",
+      "Export stored local retrospectives as deterministic JSON or Markdown.",
+      {
+        project_id: z.string().optional(),
+        plan_id: z.string().optional(),
+        agent_id: z.string().optional(),
+        limit: z.number().optional(),
+        format: z.enum(["json", "markdown"]).optional(),
+      },
+      async (input) => {
+        try {
+          const report = createRetrospectiveExport(input as any);
+          const text = input.format === "markdown" ? renderRetrospectiveMarkdown(report) : JSON.stringify(report, null, 2);
           return { content: [{ type: "text" as const, text }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
       },

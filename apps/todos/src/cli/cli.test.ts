@@ -270,6 +270,45 @@ describe("CLI integration", () => {
     }
   });
 
+  it("should create and export local retrospectives from the CLI", async () => {
+    const dbPath = "/tmp/test-cli-retrospectives.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    try {
+      const plan = JSON.parse((await runCli(["plans", "--add", "CLI retro plan", "--json"], dbPath)).stdout);
+      const task = JSON.parse((await runCli(["add", "retro task", "--plan", plan.id, "--estimated", "10", "--json"], dbPath)).stdout);
+      const { Database } = await import("bun:sqlite");
+      const db = new Database(dbPath);
+      db.run("UPDATE tasks SET status = 'completed', actual_minutes = 25 WHERE id = ?", [task.id]);
+      db.close();
+
+      const createdResult = await runCli([
+        "retrospectives",
+        "create",
+        "--plan",
+        plan.id,
+        "--title",
+        "CLI retrospective",
+        "--json",
+      ], dbPath);
+      expect(createdResult.exitCode).toBe(0);
+      const created = JSON.parse(createdResult.stdout);
+      expect(created.report.local_only).toBe(true);
+      expect(created.report.summary.missed_estimates).toBe(1);
+      expect(created.report.lessons.join(" ")).toContain("exceeded their estimate");
+
+      const listed = JSON.parse((await runCli(["retrospectives", "list", "--plan", plan.id, "--json"], dbPath)).stdout);
+      expect(listed.map((record: { id: string }) => record.id)).toContain(created.id);
+
+      const exported = JSON.parse((await runCli(["retrospectives", "export", "--plan", plan.id, "--json"], dbPath)).stdout);
+      expect(exported.local_only).toBe(true);
+      expect(exported.retrospectives.length).toBe(1);
+    } finally {
+      try { unlinkSync(dbPath); } catch {}
+    }
+  });
+
   it("should manage local task fields from the CLI", async () => {
     const dbPath = "/tmp/test-cli-fields.db";
     const { unlinkSync } = await import("node:fs");

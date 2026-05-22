@@ -15,6 +15,7 @@ const expectedDomains = [
   "references",
   "knowledge",
   "risks",
+  "retrospectives",
   "local-fields",
   "dedupe",
   "verification-providers",
@@ -170,6 +171,16 @@ describe("CLI/MCP parity manifest", () => {
       "project_risk_record",
       "risk_register_export",
       "project_health_report",
+    ]));
+    expect(byDomain.get("retrospectives")?.mcpTools).toEqual(expect.arrayContaining([
+      "create_retrospective",
+      "list_retrospectives",
+      "export_retrospectives",
+    ]));
+    expect(byDomain.get("retrospectives")?.jsonContracts).toEqual(expect.arrayContaining([
+      "retrospective_record",
+      "retrospective_report",
+      "retrospective_export",
     ]));
     expect(byDomain.get("verification-providers")?.mcpTools).toEqual(expect.arrayContaining([
       "set_verification_provider",

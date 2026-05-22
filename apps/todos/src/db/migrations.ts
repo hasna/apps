@@ -1142,4 +1142,22 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_project_risks_due ON project_risks(due_at);
   INSERT OR IGNORE INTO _migrations (id) VALUES (60);
   `,
+  // Migration 61: Local retrospective records and lessons learned reports
+  `
+  CREATE TABLE IF NOT EXISTS local_retrospectives (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    scope TEXT NOT NULL CHECK(scope IN ('project','plan')),
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+    agent_id TEXT,
+    report_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_local_retrospectives_project ON local_retrospectives(project_id);
+  CREATE INDEX IF NOT EXISTS idx_local_retrospectives_plan ON local_retrospectives(plan_id);
+  CREATE INDEX IF NOT EXISTS idx_local_retrospectives_agent ON local_retrospectives(agent_id);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (61);
+  `,
 ];

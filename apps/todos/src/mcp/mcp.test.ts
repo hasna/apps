@@ -378,6 +378,32 @@ describe("MCP tool operations", () => {
     expect(JSON.parse(closedResult.content[0]!.text).status).toBe("accepted");
   });
 
+  it("retrospective tools expose local lessons learned through MCP", async () => {
+    const tools = captureTools(registerTaskResources);
+    const project = createProject({ name: "MCP Retro", path: "/tmp/mcp-retro" }, db);
+    const plan = createPlan({ name: "MCP retro plan", project_id: project.id }, db);
+    const task = createTask({ title: "MCP retro task", project_id: project.id, plan_id: plan.id, estimated_minutes: 10 }, db);
+    db.run("UPDATE tasks SET status = 'completed', actual_minutes = 30 WHERE id = ?", [task.id]);
+
+    const createdResult = await callCapturedTool(tools, "create_retrospective", {
+      title: "MCP retrospective",
+      plan_id: plan.id,
+      agent_id: "codex",
+    });
+    const created = JSON.parse(createdResult.content[0]!.text);
+    expect(created.report.local_only).toBe(true);
+    expect(created.report.no_network).toBe(true);
+    expect(created.report.summary.missed_estimates).toBe(1);
+
+    const listResult = await callCapturedTool(tools, "list_retrospectives", { plan_id: plan.id });
+    const listed = JSON.parse(listResult.content[0]!.text);
+    expect(listed.map((record: { id: string }) => record.id)).toContain(created.id);
+
+    const exportResult = await callCapturedTool(tools, "export_retrospectives", { plan_id: plan.id });
+    const exported = JSON.parse(exportResult.content[0]!.text);
+    expect(exported.retrospectives).toHaveLength(1);
+  });
+
   it("retention cleanup tools preview and apply local evidence cleanup without leaking content", async () => {
     const tools = captureTools(registerTaskProjectTools);
     const project = createProject({ name: "MCP retention", path: "/tmp/mcp-retention" }, db);

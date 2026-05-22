@@ -22,6 +22,9 @@ The stable contracts cover these object IDs:
 - `project_risk_record`
 - `risk_register_export`
 - `project_health_report`
+- `retrospective_record`
+- `retrospective_report`
+- `retrospective_export`
 - `local_task_fields`
 - `retention_cleanup_report`
 - `duplicate_task_candidate`
@@ -126,6 +129,20 @@ filters, count, and redacted risk records.
 local blockers, overdue work, failed verification records, failed run ledgers,
 dependency depth, and open risks. It never calls hosted services or network
 APIs.
+
+## Retrospectives
+
+`retrospective_record` is returned by `todos retrospectives create`,
+`todos retrospectives list`, and matching MCP tools. It stores a local
+lessons-learned report for a project or plan.
+
+`retrospective_report` contains the deterministic local summary: completed
+plans, missed estimates, recurring blockers, failed verifications, lessons, and
+suggested or created follow-up tasks.
+
+`retrospective_export` is returned by `todos retrospectives export --json` and
+`export_retrospectives`. It exports stored retrospectives with local-only
+metadata and never calls hosted services or network APIs.
 
 ## Local Task Fields
 
