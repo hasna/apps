@@ -1287,6 +1287,28 @@ describe("MCP tool wrappers", () => {
     }
   });
 
+  it("release compatibility tool checks local release readiness", async () => {
+    const tools = captureTools(registerTaskProjectTools);
+
+    const result = await callCapturedTool(tools, "check_release_compatibility", {
+      root: `${import.meta.dir}/../..`,
+      simulated_levels: [0, 1],
+    });
+    const report = JSON.parse(result.content[0]!.text);
+
+    expect(report.ok).toBe(true);
+    expect(report.package.name).toBe("@hasna/todos");
+    expect(report.install_plan.manager).toBe("bun");
+    expect(report.checks.map((check: { id: string }) => check.id)).toContain("migration-level-0");
+
+    const markdown = await callCapturedTool(tools, "check_release_compatibility", {
+      root: `${import.meta.dir}/../..`,
+      simulated_levels: [0],
+      format: "markdown",
+    });
+    expect(markdown.content[0]!.text).toContain("# Release Compatibility");
+  });
+
   it("time tracking tools manage local focus sessions and reports", async () => {
     const tools = captureTools(registerTaskRelTools);
     const task = createTask({ title: "MCP time task", estimated_minutes: 75 }, db);

@@ -102,6 +102,7 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "get_plan",
     "get_planning_forecast",
     "get_audit_ledger",
+    "check_release_compatibility",
     "get_roadmap_summary",
     "validate_policy_pack",
     "get_project",

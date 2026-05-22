@@ -42,6 +42,8 @@ structured error contracts.
   estimates, actual minutes, due dates, and risk flags.
 - `audit-ledger`: tamper-evident local hash-chain checkpoints for task, run,
   verification, approval, and handoff evidence.
+- `release-compatibility`: local package, migration, export, Bun install,
+  changelog, and rollback checks before publishing or updating.
 - `templates`: bundled marketplace-free local template library, editable JSON
   template files, template import/export, preview, version history, and task
   creation from templates.
@@ -456,6 +458,18 @@ Matching MCP tool:
 
 ```json
 { "tool": "seal_audit_ledger", "arguments": { "name": "release-checkpoint", "task_id": "task-id" } }
+```
+
+CLI release compatibility:
+
+```bash
+todos release-compat check --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "check_release_compatibility", "arguments": { "simulated_levels": [0, 1] } }
 ```
 
 CLI local event hook:

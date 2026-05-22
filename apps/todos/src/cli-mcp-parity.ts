@@ -16,6 +16,7 @@ export type TodosCliMcpParityDomain =
   | "roadmaps"
   | "capacity"
   | "audit-ledger"
+  | "release-compatibility"
   | "templates"
   | "workspace-trust"
   | "secret-safety"
@@ -468,6 +469,19 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos audit-ledger seal release-checkpoint --task task-id --json",
       mcpTool: "seal_audit_ledger",
+    },
+  },
+  {
+    domain: "release-compatibility",
+    cliCommands: ["todos release-compat check"],
+    mcpTools: ["check_release_compatibility"],
+    jsonContracts: ["release_compatibility_report", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    intentionalGaps: [],
+    example: {
+      cli: "todos release-compat check --json",
+      mcpTool: "check_release_compatibility",
     },
   },
   {

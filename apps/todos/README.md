@@ -741,6 +741,22 @@ changes against a previously sealed root hash. MCP clients use
 `get_audit_ledger`, `seal_audit_ledger`, `list_audit_ledger_checkpoints`, and
 `verify_audit_ledger`.
 
+## Release Compatibility
+
+Release compatibility checks give agents a local dry-run report before publish
+or update work. They verify the package stays `@hasna/todos`, public, pointed at
+`hasna/todos`, export-stable, migration-compatible from recent local schema
+levels, and ready for Bun global install smoke tests:
+
+```bash
+todos release-compat check --json
+todos release-compat check --format markdown
+```
+
+The report also includes changelog surfaces and rollback commands. MCP clients
+use `check_release_compatibility` for the same `release_compatibility_report`
+JSON contract.
+
 ## Local Activity Timeline
 
 The timeline command gives agents one ordered, redacted view of local comments,

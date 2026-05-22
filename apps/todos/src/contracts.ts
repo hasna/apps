@@ -77,6 +77,11 @@ export {
   verifyLocalAuditLedger,
 } from "./lib/audit-ledger.js";
 export {
+  LOCAL_RELEASE_COMPATIBILITY_SCHEMA_VERSION,
+  createReleaseCompatibilityReport,
+  renderReleaseCompatibilityMarkdown,
+} from "./lib/release-compatibility.js";
+export {
   DEFAULT_ENCRYPTION_KEY_ENV,
   DEFAULT_ENCRYPTION_PROFILE,
   TODOS_ENCRYPTED_BRIDGE_KIND,
@@ -117,6 +122,12 @@ export type {
   LocalAuditLedgerVerifyResult,
   SealLocalAuditLedgerInput,
 } from "./lib/audit-ledger.js";
+export type {
+  CreateReleaseCompatibilityReportOptions,
+  ReleaseCompatibilityCheck,
+  ReleaseCompatibilityReport,
+  ReleaseCompatibilityStatus,
+} from "./lib/release-compatibility.js";
 export type {
   ImportOnboardingFixtureOptions,
   OnboardingFixture,

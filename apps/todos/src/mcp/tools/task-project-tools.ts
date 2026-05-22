@@ -123,6 +123,10 @@ import {
   sealLocalAuditLedger,
   verifyLocalAuditLedger,
 } from "../../lib/audit-ledger.js";
+import {
+  createReleaseCompatibilityReport,
+  renderReleaseCompatibilityMarkdown,
+} from "../../lib/release-compatibility.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 
 interface TaskProjectContext {
@@ -2203,6 +2207,29 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
           const result = verifyLocalAuditLedger(checkpoint);
           const text = format === "markdown" ? renderLocalAuditLedgerMarkdown(result) : JSON.stringify(result, null, 2);
           return { content: [{ type: "text" as const, text }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  // === RELEASE COMPATIBILITY ===
+
+  if (shouldRegisterTool("check_release_compatibility")) {
+    server.tool(
+      "check_release_compatibility",
+      "Check local release compatibility for package metadata, migrations, exports, Bun global install guidance, changelog readiness, and rollback steps.",
+      {
+        root: z.string().optional(),
+        simulated_levels: z.array(z.number().int().min(0)).optional(),
+        format: z.enum(["json", "markdown"]).optional(),
+      },
+      async ({ root, simulated_levels, format }) => {
+        try {
+          const report = createReleaseCompatibilityReport({ root, simulated_levels });
+          const text = format === "markdown" ? renderReleaseCompatibilityMarkdown(report) : JSON.stringify(report, null, 2);
+          return { content: [{ type: "text" as const, text }], isError: !report.ok };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }

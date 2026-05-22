@@ -1241,6 +1241,18 @@ export type {
   SealLocalAuditLedgerInput,
 } from "./lib/audit-ledger.js";
 
+export {
+  LOCAL_RELEASE_COMPATIBILITY_SCHEMA_VERSION,
+  createReleaseCompatibilityReport,
+  renderReleaseCompatibilityMarkdown,
+} from "./lib/release-compatibility.js";
+export type {
+  CreateReleaseCompatibilityReportOptions,
+  ReleaseCompatibilityCheck,
+  ReleaseCompatibilityReport,
+  ReleaseCompatibilityStatus,
+} from "./lib/release-compatibility.js";
+
 // Dispatch formatter
 export { formatDispatchMessage, formatSingleTask } from "./lib/dispatch-formatter.js";
 export type { FormatOpts } from "./lib/dispatch-formatter.js";

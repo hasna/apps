@@ -25,6 +25,7 @@ const expectedDomains = [
   "roadmaps",
   "capacity",
   "audit-ledger",
+  "release-compatibility",
   "templates",
   "workspace-trust",
   "secret-safety",
@@ -230,6 +231,8 @@ describe("CLI/MCP parity manifest", () => {
     ]));
     expect(byDomain.get("release-notes")?.mcpTools).toContain("generate_release_notes");
     expect(byDomain.get("release-notes")?.jsonContracts).toContain("release_notes");
+    expect(byDomain.get("release-compatibility")?.mcpTools).toContain("check_release_compatibility");
+    expect(byDomain.get("release-compatibility")?.jsonContracts).toContain("release_compatibility_report");
     expect(byDomain.get("imports")?.jsonContracts).toContain("local_bridge_import_result");
     expect(byDomain.get("exports")?.jsonContracts).toContain("local_bridge_bundle");
   });
@@ -263,6 +266,7 @@ describe("CLI/MCP parity manifest", () => {
     expect(docs).toContain("todos event-hooks set audit --event task.completed");
     expect(docs).toContain("todos env-snapshot capture --task 1234abcd --json");
     expect(docs).toContain("todos release-notes --project . --format markdown");
+    expect(docs).toContain("todos release-compat check --json");
     expect(docs).toContain("intentionally CLI-only");
   });
 

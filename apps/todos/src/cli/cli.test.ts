@@ -2553,6 +2553,38 @@ END:VCALENDAR`);
     }
   });
 
+  it("should check release compatibility from the CLI", async () => {
+    const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const home = mkdtempSync(join(tmpdir(), "todos-cli-release-compat-"));
+    const dbPath = join(home, "todos.db");
+
+    try {
+      const checked = await runCli([
+        "--json",
+        "release-compat",
+        "check",
+        "--levels",
+        "0,1",
+      ], dbPath, { HOME: home });
+      expect(checked.exitCode).toBe(0);
+      const report = JSON.parse(checked.stdout);
+      expect(report.ok).toBe(true);
+      expect(report.package.name).toBe("@hasna/todos");
+      expect(report.install_plan.manager).toBe("bun");
+      expect(report.checks.map((check: { id: string }) => check.id)).toContain("migration-level-0");
+
+      const markdown = await runCli(["release-compat", "check", "--levels", "0", "--format", "markdown"], dbPath, { HOME: home });
+      expect(markdown.exitCode).toBe(0);
+      expect(markdown.stdout).toContain("# Release Compatibility");
+      expect(markdown.stdout).toContain("bun install -g @hasna/todos@latest");
+      try { unlinkSync(dbPath); } catch {}
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("should extract source TODOs with index metadata and watcher output", async () => {
     const { mkdtempSync, rmSync, writeFileSync, unlinkSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");

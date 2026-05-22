@@ -26,6 +26,7 @@ The stable contracts cover these object IDs:
 - `planning_forecast`
 - `local_audit_ledger`
 - `local_audit_ledger_checkpoint`
+- `release_compatibility_report`
 - `mention_resolution_report`
 - `project_knowledge_record`
 - `project_knowledge_export`
@@ -175,6 +176,14 @@ hashes.
 `todos audit-ledger seal --json`, `todos audit-ledger list --json`,
 `seal_audit_ledger`, and `list_audit_ledger_checkpoints`. It stores the sealed
 root hash and source counts used by `verify_audit_ledger`.
+
+## Release Compatibility
+
+`release_compatibility_report` is returned by
+`todos release-compat check --json` and `check_release_compatibility`. It
+summarizes local package identity, public access metadata, export keys, CLI
+binaries, in-memory migration simulations, Bun install smoke commands,
+changelog surfaces, rollback steps, warnings, and blocking issues.
 
 ## Project Knowledge
 
