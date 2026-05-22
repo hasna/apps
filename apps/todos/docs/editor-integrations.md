@@ -2,7 +2,7 @@
 
 `@hasna/todos` integrates with editors through the public local CLI and MCP
 contracts. These recipes do not import private modules, call hosted services, or
-depend on `platform-todos`.
+depend on any private platform package.
 
 ## VS Code
 

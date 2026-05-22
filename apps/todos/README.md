@@ -1154,6 +1154,9 @@ Release checks enforce that boundary before publishing:
 - local runtime tests use a no-network fixture for local-only workflows
 - `bun run verify:release` builds, packs, validates provenance, and runs a clean
   Bun global install smoke test from the candidate tarball
+- the install smoke plan itself is covered by tests: it installs only with Bun,
+  verifies `todos`, `todos-mcp`, and `todos-serve`, and rejects private or
+  hosted endpoint references
 
 ## License
 

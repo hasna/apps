@@ -5,8 +5,10 @@ import { join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
   validateNpmView,
+  getInstallSmokeCommands,
   validatePackedPackageFiles,
   validatePackedProvenanceMetadata,
+  validateInstallSmokeCommands,
   validatePublicTextSurfaces,
   validateReleaseProvenanceMetadata,
   validateRootPackageMetadata,
@@ -111,13 +113,21 @@ function npmPack(destination: string): PackResult {
 }
 
 function installSmoke(tarball: string): void {
-  run("bun", ["remove", "-g", "@hasna/todos"]);
-  runOrExit("bun", ["install", "-g", tarball]);
-  runOrExit("bash", ["-lc", "command -v todos && command -v todos-mcp && command -v todos-serve"]);
-  runOrExit("todos", ["--version"]);
-  runOrExit("todos", ["--help"]);
-  runOrExit("todos-mcp", ["--help"]);
-  expectServeStartup();
+  const failures = validateInstallSmokeCommands(getInstallSmokeCommands(tarball, "19600"));
+  if (failures.length > 0) {
+    console.error("Install smoke plan is invalid:");
+    for (const failure of failures) console.error(`- ${failure.check}: ${failure.message}`);
+    process.exit(1);
+  }
+
+  for (const step of getInstallSmokeCommands(tarball, "19600")) {
+    if (step.command === "todos-serve") {
+      expectServeStartup();
+      continue;
+    }
+    if (step.required === false) run(step.command, step.args);
+    else runOrExit(step.command, step.args);
+  }
 }
 
 function expectServeStartup(): void {

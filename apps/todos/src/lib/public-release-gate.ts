@@ -44,6 +44,12 @@ export type ReleaseProvenance = {
   generatedAt?: string;
 };
 
+export type InstallSmokeCommand = {
+  command: string;
+  args: string[];
+  required?: boolean;
+};
+
 const PACKAGE_NAME = "@hasna/todos";
 const REPOSITORY_URL = "https://github.com/hasna/todos.git";
 const HOMEPAGE_URL = "https://github.com/hasna/todos";
@@ -80,6 +86,16 @@ const SECRET_PATTERNS: RegExp[] = [
   /ASIA[0-9A-Z]{16}/,
   /-----BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY-----/,
   /[A-Za-z0-9_]*(API_KEY|SECRET|TOKEN|PASSWORD)[A-Za-z0-9_]*\s*=\s*['"][^'"]{12,}/,
+];
+
+const INSTALL_SMOKE_COMMANDS: InstallSmokeCommand[] = [
+  { command: "bun", args: ["remove", "-g", PACKAGE_NAME], required: false },
+  { command: "bun", args: ["install", "-g", "<tarball>"] },
+  { command: "bash", args: ["-lc", "command -v todos && command -v todos-mcp && command -v todos-serve"] },
+  { command: "todos", args: ["--version"] },
+  { command: "todos", args: ["--help"] },
+  { command: "todos-mcp", args: ["--help"] },
+  { command: "todos-serve", args: ["--port=<port>", "--host", "127.0.0.1", "--no-open"] },
 ];
 
 export function validateRootPackageMetadata(packageJson: PackageJson): ReleaseGateFailure[] {
@@ -249,6 +265,42 @@ export function validateNpmView(packageName: string, rawJson: string): ReleaseGa
   const record = parsed as Record<string, unknown>;
   addIf(failures, record.name !== packageName, "npm-view-name", `npm registry did not return ${packageName}`);
   addIf(failures, typeof record.version !== "string", "npm-view-version", "npm registry did not return a public version");
+  return failures;
+}
+
+export function getInstallSmokeCommands(tarball = "<tarball>", port = "<port>"): InstallSmokeCommand[] {
+  return INSTALL_SMOKE_COMMANDS.map((step) => ({
+    ...step,
+    args: step.args.map((arg) => arg.replace("<tarball>", tarball).replace("<port>", port)),
+  }));
+}
+
+export function validateInstallSmokeCommands(commands: InstallSmokeCommand[]): ReleaseGateFailure[] {
+  const failures: ReleaseGateFailure[] = [];
+  const rendered = commands.map((step) => [step.command, ...step.args].join(" "));
+
+  addIf(
+    failures,
+    !rendered.some((line) => line.startsWith(`bun install -g ${PACKAGE_NAME}`) || line.startsWith("bun install -g /")),
+    "install-smoke-bun-install",
+    `install smoke must install ${PACKAGE_NAME} with bun install -g`,
+  );
+  addIf(
+    failures,
+    rendered.some((line) => /^npm\s+(install|i|exec|x)\b/.test(line) || /^npx\b/.test(line)),
+    "install-smoke-npm",
+    "install smoke must not use npm or npx for installation/execution",
+  );
+
+  for (const expected of ["command -v todos", "command -v todos-mcp", "command -v todos-serve", "todos --version", "todos --help", "todos-mcp --help"]) {
+    addIf(failures, !rendered.some((line) => line.includes(expected)), "install-smoke-command", `install smoke must run ${expected}`);
+  }
+
+  const joined = rendered.join("\n");
+  for (const pattern of FORBIDDEN_TEXT_PATTERNS) {
+    addIf(failures, pattern.test(joined), "install-smoke-boundary", `install smoke matches forbidden pattern ${pattern}`);
+  }
+
   return failures;
 }
 

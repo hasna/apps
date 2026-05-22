@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
+  getInstallSmokeCommands,
   validateNpmView,
+  validateInstallSmokeCommands,
   validatePackedPackageFiles,
   validatePackedProvenanceMetadata,
   validatePublicTextSurfaces,
@@ -108,5 +110,33 @@ describe("public release gate", () => {
     expect(validateReleaseProvenanceMetadata({}, rootPackage).map((failure) => failure.check)).toContain("provenance-git-commit");
     expect(validateNpmView("@hasna/todos", JSON.stringify({ name: "@hasna/todos", version: "0.11.40" }))).toEqual([]);
     expect(validateNpmView("@hasna/todos", JSON.stringify({ name: "@scope/other" }))).not.toEqual([]);
+  });
+
+  test("keeps the Bun install smoke plan public, local, and stable", () => {
+    const plan = getInstallSmokeCommands("/tmp/hasna-todos.tgz", "19717");
+    const rendered = plan.map((step) => [step.command, ...step.args].join(" "));
+
+    expect(validateInstallSmokeCommands(plan)).toEqual([]);
+    expect(rendered).toContain("bun install -g /tmp/hasna-todos.tgz");
+    expect(rendered).toContain("bash -lc command -v todos && command -v todos-mcp && command -v todos-serve");
+    expect(rendered).toContain("todos --version");
+    expect(rendered).toContain("todos --help");
+    expect(rendered).toContain("todos-mcp --help");
+    expect(rendered).toContain("todos-serve --port=19717 --host 127.0.0.1 --no-open");
+    expect(rendered.some((line) => line.startsWith("npm "))).toBe(false);
+    expect(rendered.some((line) => line.includes("platform-todos"))).toBe(false);
+  });
+
+  test("rejects install smoke plans that use non-Bun installers or private endpoints", () => {
+    const failures = validateInstallSmokeCommands([
+      { command: "npm", args: ["install", "-g", "@hasna/todos"] },
+      { command: "todos", args: ["--help"] },
+      { command: "todos", args: ["--version"] },
+      { command: "todos-mcp", args: ["--help"] },
+      { command: "bash", args: ["-lc", "command -v todos && command -v todos-mcp && command -v todos-serve"] },
+    ]);
+
+    expect(failures.map((failure) => failure.check)).toContain("install-smoke-bun-install");
+    expect(failures.map((failure) => failure.check)).toContain("install-smoke-npm");
   });
 });
