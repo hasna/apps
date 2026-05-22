@@ -1129,6 +1129,19 @@ export {
   importLocalBridgeBundle,
   validateLocalBridgeBundle,
 } from "./lib/local-bridge.js";
+export {
+  LOCAL_BACKUP_CHECKSUM_ALGORITHM,
+  TODOS_LOCAL_BACKUP_KIND,
+  TODOS_LOCAL_BACKUP_SCHEMA_VERSION,
+  TODOS_LOCAL_INTEGRITY_KIND,
+  TODOS_LOCAL_INTEGRITY_SCHEMA_VERSION,
+  checkLocalIntegrity,
+  createLocalBackup,
+  readLocalBackupFile,
+  restoreLocalBackup,
+  verifyLocalBackup,
+  writeLocalBackupFile,
+} from "./lib/local-backups.js";
 export type {
   ExportLocalBridgeOptions,
   LocalBridgeImportConflict,
@@ -1139,6 +1152,16 @@ export type {
   TodosLocalBridgePackageSource,
   TodosLocalBridgeSource,
 } from "./lib/local-bridge.js";
+export type {
+  CreateLocalBackupOptions,
+  LocalBackupBundle,
+  LocalBackupManifest,
+  LocalBackupRestoreResult,
+  LocalBackupSqliteIntegrity,
+  LocalBackupVerification,
+  LocalIntegrityReport,
+  RestoreLocalBackupOptions,
+} from "./lib/local-backups.js";
 export {
   TODOS_MARKDOWN_BRIDGE_MARKER,
   TODOS_MARKDOWN_SCHEMA,

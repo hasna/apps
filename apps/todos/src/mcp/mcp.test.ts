@@ -430,6 +430,41 @@ describe("MCP tool operations", () => {
     expect(report.verification.outcomes.passed).toBe(1);
   });
 
+  it("local backup tools create verify restore-preview and integrity-check through MCP", async () => {
+    const tools = captureTools(registerTaskResources);
+    const project = createProject({ name: "MCP Backups", path: "/tmp/mcp-backups" }, db);
+    const task = createTask({ title: "MCP backup task", project_id: project.id }, db);
+    const run = startTaskRun({ task_id: task.id, agent_id: "codex", title: "MCP backup run" }, db);
+    addTaskRunCommand({ run_id: run.id, command: "bun test", status: "passed", output_summary: "ok" }, db);
+
+    const createdResult = await callCapturedTool(tools, "create_local_backup", {
+      project_id: project.id,
+    });
+    const backup = JSON.parse(createdResult.content[0]!.text);
+    expect(backup.local_only).toBe(true);
+    expect(backup.no_network).toBe(true);
+    expect(backup.manifest.bridge.stats.tasks).toBe(1);
+
+    const verifiedResult = await callCapturedTool(tools, "verify_local_backup", { backup });
+    const verified = JSON.parse(verifiedResult.content[0]!.text);
+    expect(verified.ok).toBe(true);
+    expect(verified.checksum.ok).toBe(true);
+
+    const restoreResult = await callCapturedTool(tools, "restore_local_backup", { backup });
+    const restored = JSON.parse(restoreResult.content[0]!.text);
+    expect(restored.dry_run).toBe(true);
+    expect(restored.ok).toBe(true);
+    expect(restored.import_result.skipped.tasks).toBe(1);
+
+    const integrityResult = await callCapturedTool(tools, "check_local_integrity", {
+      project_id: project.id,
+    });
+    const integrity = JSON.parse(integrityResult.content[0]!.text);
+    expect(integrity.local_only).toBe(true);
+    expect(integrity.sqlite.quick_check).toBe("ok");
+    expect(integrity.counts.tasks).toBe(1);
+  });
+
   it("retention cleanup tools preview and apply local evidence cleanup without leaking content", async () => {
     const tools = captureTools(registerTaskProjectTools);
     const project = createProject({ name: "MCP retention", path: "/tmp/mcp-retention" }, db);

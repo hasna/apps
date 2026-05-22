@@ -215,6 +215,25 @@ Matching MCP tool:
 { "tool": "build_local_report", "arguments": { "agent_id": "codex", "format": "markdown" } }
 ```
 
+CLI local backups:
+
+```bash
+todos backup create --output todos-backup.json --json
+todos backup verify todos-backup.json --json
+todos backup restore todos-backup.json --json
+todos backup integrity --json
+```
+
+Matching MCP tools:
+
+```json
+{ "tool": "create_local_backup", "arguments": { "output_path": "todos-backup.json" } }
+```
+
+```json
+{ "tool": "check_local_integrity", "arguments": {} }
+```
+
 CLI local fields update:
 
 ```bash

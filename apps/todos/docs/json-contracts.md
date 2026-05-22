@@ -29,6 +29,10 @@ The stable contracts cover these object IDs:
 - `release_compatibility_report`
 - `local_usage_ledger`
 - `local_report`
+- `local_backup_bundle`
+- `local_backup_verification`
+- `local_backup_restore_result`
+- `local_integrity_report`
 - `terminal_dashboard_snapshot`
 - `scale_performance_report`
 - `scale_compaction_result`
@@ -213,6 +217,26 @@ simulation. Raw commands and artifact paths are omitted from this report.
 plan progress, run outcomes, verification evidence, and per-agent summaries
 from the local SQLite store only. Markdown export is available through
 `todos reports local --format markdown` and the same MCP tool.
+
+## Local Backups
+
+`local_backup_bundle` is returned by `todos backup create --json` and
+`create_local_backup`. It wraps a local bridge bundle with manifest counts,
+SHA-256 checksums, SQLite integrity metadata, section checksums, and stored
+artifact-content coverage.
+
+`local_backup_verification` is returned by `todos backup verify --json` and
+`verify_local_backup`. It checks the backup checksum, embedded bridge checksum,
+manifest counts, bridge schema compatibility, and current SQLite integrity
+before restore.
+
+`local_backup_restore_result` is returned by `todos backup restore --json` and
+`restore_local_backup`. Restore defaults to dry-run mode and includes both the
+verification result and bridge import result.
+
+`local_integrity_report` is returned by `todos backup integrity --json` and
+`check_local_integrity`. It summarizes SQLite quick_check, foreign key checks,
+bridge validation, backup-relevant counts, and orphan-row detection.
 
 ## Terminal Dashboard Snapshot
 

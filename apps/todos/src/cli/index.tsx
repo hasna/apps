@@ -39,6 +39,7 @@ const [
   { registerAuditLedgerCommands },
   { registerReleaseCompatibilityCommands },
   { registerUsageLedgerCommands },
+  { registerLocalBackupCommands },
   { registerScaleHardeningCommands },
   { registerHelpCommands },
 ] = await Promise.all([
@@ -66,6 +67,7 @@ const [
   import("./commands/audit-ledger-commands.js"),
   import("./commands/release-compatibility-commands.js"),
   import("./commands/usage-ledger-commands.js"),
+  import("./commands/local-backup-commands.js"),
   import("./commands/scale-hardening-commands.js"),
   import("./commands/help-commands.js"),
 ]);
@@ -94,6 +96,7 @@ registerCapacityCommands(program);
 registerAuditLedgerCommands(program);
 registerReleaseCompatibilityCommands(program);
 registerUsageLedgerCommands(program);
+registerLocalBackupCommands(program);
 registerScaleHardeningCommands(program);
 registerHelpCommands(program);
 

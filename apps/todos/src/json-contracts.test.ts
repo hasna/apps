@@ -21,6 +21,7 @@ import { resetConfig } from "./lib/config.js";
 import { getTaskLocalFields, setTaskLocalFields } from "./lib/local-fields.js";
 import { discoverLocalExtensions, testExtensionCompatibility } from "./lib/local-extensions.js";
 import { getLocalSnapshot, pollLocalSnapshots } from "./lib/local-snapshots.js";
+import { checkLocalIntegrity, createLocalBackup, restoreLocalBackup, verifyLocalBackup } from "./lib/local-backups.js";
 import { listOnboardingFixtures } from "./lib/onboarding-fixtures.js";
 import { listReviewQueue, upsertReviewRoutingRule, requestReviewQueue } from "./lib/review-queues.js";
 import { createMilestone, createRoadmap, exportRoadmapBundle, summarizeRoadmap } from "./lib/roadmaps.js";
@@ -116,6 +117,10 @@ describe("stable JSON contracts", () => {
       "release_compatibility_report",
       "local_usage_ledger",
       "local_report",
+      "local_backup_bundle",
+      "local_backup_verification",
+      "local_backup_restore_result",
+      "local_integrity_report",
       "terminal_dashboard_snapshot",
       "mention_resolution_report",
       "project_knowledge_record",
@@ -452,6 +457,22 @@ describe("stable JSON contracts", () => {
       generated_at: "2026-01-02T03:04:05.000Z",
       now: "2026-01-02T03:04:05.000Z",
     }, db);
+    const localBackup = createLocalBackup({
+      project_id: project.id,
+      generated_at: "2026-01-02T03:04:05.000Z",
+      version: "1.2.3",
+    }, db);
+    const localBackupVerification = verifyLocalBackup(localBackup, {
+      verified_at: "2026-01-02T03:04:05.000Z",
+    }, db);
+    const localBackupRestore = restoreLocalBackup(localBackup, {
+      verified_at: "2026-01-02T03:04:05.000Z",
+    }, db);
+    const localIntegrity = checkLocalIntegrity({
+      generated_at: "2026-01-02T03:04:05.000Z",
+      project_id: project.id,
+      version: "1.2.3",
+    }, db);
     const terminalDashboard = createTuiDashboardSnapshot({
       project_id: project.id,
       active_view: "tasks",
@@ -469,6 +490,10 @@ describe("stable JSON contracts", () => {
     expectValid("release_compatibility_report", releaseCompatibility);
     expectValid("local_usage_ledger", usageLedger);
     expectValid("local_report", localReport);
+    expectValid("local_backup_bundle", localBackup);
+    expectValid("local_backup_verification", localBackupVerification);
+    expectValid("local_backup_restore_result", localBackupRestore);
+    expectValid("local_integrity_report", localIntegrity);
     expectValid("terminal_dashboard_snapshot", terminalDashboard);
     expectValid("scale_performance_report", scalePerformanceReport);
     expectValid("scale_compaction_result", scaleCompactionResult);

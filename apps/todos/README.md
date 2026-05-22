@@ -1150,6 +1150,27 @@ unresolved divergent fields in `metadata.sync_conflicts` for manual review.
 Local non-empty title, status, priority, and metadata values win when both sides
 changed.
 
+## Local Backups and Integrity
+
+Create a checksum-protected local backup wrapper around the bridge bundle when
+you need a restorable snapshot with manifest counts and SQLite integrity
+metadata:
+
+```bash
+todos backup create --output todos-backup.json
+todos backup verify todos-backup.json --json
+todos backup restore todos-backup.json --json
+todos backup restore todos-backup.json --apply --resolve-conflicts
+todos backup integrity --json
+```
+
+Backups include the same local projects, task lists, plans, tasks, comments,
+runs, commands, files, commits, refs, verification records, saved views, boards,
+calendar items, and stored artifact contents as bridge exports. The backup
+manifest adds SHA-256 checksums for the full payload, embedded bridge bundle,
+and each bridge section. Restore defaults to dry-run mode and refuses corrupted
+or schema-incompatible bundles before importing.
+
 ## todos.md Markdown Import/Export
 
 `todos.md` files are readable Markdown checklists with an embedded local bridge

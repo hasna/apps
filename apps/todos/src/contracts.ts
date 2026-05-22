@@ -17,6 +17,19 @@ export {
   writeOnboardingFixtureFiles,
 } from "./lib/onboarding-fixtures.js";
 export {
+  LOCAL_BACKUP_CHECKSUM_ALGORITHM,
+  TODOS_LOCAL_BACKUP_KIND,
+  TODOS_LOCAL_BACKUP_SCHEMA_VERSION,
+  TODOS_LOCAL_INTEGRITY_KIND,
+  TODOS_LOCAL_INTEGRITY_SCHEMA_VERSION,
+  checkLocalIntegrity,
+  createLocalBackup,
+  readLocalBackupFile,
+  restoreLocalBackup,
+  verifyLocalBackup,
+  writeLocalBackupFile,
+} from "./lib/local-backups.js";
+export {
   TODOS_LOCAL_BRIDGE_KIND,
   TODOS_LOCAL_BRIDGE_SCHEMA_VERSION,
   createLocalBridgeBundle,
@@ -187,6 +200,16 @@ export type {
   OnboardingFixtureSummary,
   WriteOnboardingFixtureResult,
 } from "./lib/onboarding-fixtures.js";
+export type {
+  CreateLocalBackupOptions,
+  LocalBackupBundle,
+  LocalBackupManifest,
+  LocalBackupRestoreResult,
+  LocalBackupSqliteIntegrity,
+  LocalBackupVerification,
+  LocalIntegrityReport,
+  RestoreLocalBackupOptions,
+} from "./lib/local-backups.js";
 export type {
   ExportLocalBridgeOptions,
   LocalBridgeImportConflict,

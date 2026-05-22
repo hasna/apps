@@ -84,6 +84,13 @@ import {
   renderLocalReportMarkdown,
 } from "../../lib/local-reports.js";
 import {
+  checkLocalIntegrity,
+  createLocalBackup,
+  readLocalBackupFile,
+  restoreLocalBackup,
+  verifyLocalBackup,
+} from "../../lib/local-backups.js";
+import {
   getOnboardingFixtureBundle,
   importOnboardingFixture,
   listOnboardingFixtures,
@@ -810,6 +817,95 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
           });
           const text = input.format === "markdown" ? renderLocalReportMarkdown(report) : JSON.stringify(report, null, 2);
           return { content: [{ type: "text" as const, text }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("create_local_backup")) {
+    server.tool(
+      "create_local_backup",
+      "Create a local backup bundle with manifest checksums for tasks, projects, plans, runs, comments, evidence, and stored artifacts.",
+      {
+        project_id: z.string().optional().describe("Optional local project ID or name"),
+        output_path: z.string().optional().describe("Optional local file path to write the backup JSON"),
+      },
+      async (input) => {
+        try {
+          const backup = createLocalBackup({
+            project_id: input.project_id ? resolveId(input.project_id, "projects") : undefined,
+            output_path: input.output_path,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(backup, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("verify_local_backup")) {
+    server.tool(
+      "verify_local_backup",
+      "Verify a local backup bundle checksum, manifest counts, bridge schema compatibility, and current SQLite integrity.",
+      {
+        path: z.string().optional().describe("Local backup JSON path"),
+        backup: z.record(z.unknown()).optional().describe("Backup JSON object when not reading from a path"),
+      },
+      async (input) => {
+        try {
+          const backup = input.path ? readLocalBackupFile(input.path) : input.backup;
+          if (!backup) throw new Error("path or backup is required");
+          const verification = verifyLocalBackup(backup);
+          return { content: [{ type: "text" as const, text: JSON.stringify(verification, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("restore_local_backup")) {
+    server.tool(
+      "restore_local_backup",
+      "Dry-run or apply a local backup restore. Dry-run is the default and reports conflicts before writing.",
+      {
+        path: z.string().optional().describe("Local backup JSON path"),
+        backup: z.record(z.unknown()).optional().describe("Backup JSON object when not reading from a path"),
+        apply: z.boolean().optional().describe("Set true to apply the restore. Defaults to false."),
+        resolve_conflicts: z.boolean().optional().describe("Safely merge existing local tasks while preserving divergent fields."),
+      },
+      async (input) => {
+        try {
+          const backup = input.path ? readLocalBackupFile(input.path) : input.backup;
+          if (!backup) throw new Error("path or backup is required");
+          const result = restoreLocalBackup(backup as any, {
+            apply: Boolean(input.apply),
+            conflict_strategy: input.resolve_conflicts ? "safe_merge" : "skip",
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("check_local_integrity")) {
+    server.tool(
+      "check_local_integrity",
+      "Check local SQLite quick_check, foreign keys, bridge validation, backup-relevant counts, and orphan rows.",
+      {
+        project_id: z.string().optional().describe("Optional local project ID or name"),
+      },
+      async (input) => {
+        try {
+          const report = checkLocalIntegrity({
+            project_id: input.project_id ? resolveId(input.project_id, "projects") : undefined,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(report, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }

@@ -1216,6 +1216,54 @@ describe("CLI integration", () => {
     }
   });
 
+  it("should create verify integrity-check and restore a local backup through the CLI", async () => {
+    const sourceDb = "/tmp/test-cli-backup-source.db";
+    const targetDb = "/tmp/test-cli-backup-target.db";
+    const backupPath = "/tmp/test-cli-backup-bundle.json";
+    const { unlinkSync } = await import("node:fs");
+    for (const path of [sourceDb, targetDb, backupPath, `${sourceDb}-shm`, `${sourceDb}-wal`, `${targetDb}-shm`, `${targetDb}-wal`]) {
+      try { unlinkSync(path); } catch {}
+    }
+
+    const task = JSON.parse((await runCli(["add", "Backup portable task", "--tag", "backup", "--json"], sourceDb)).stdout);
+    const created = await runCli(["backup", "create", "--output", backupPath, "--json"], sourceDb);
+    expect(created.exitCode).toBe(0);
+    const createPayload = JSON.parse(created.stdout);
+    expect(createPayload.output_path).toBe(backupPath);
+    expect(createPayload.backup.manifest.bridge.stats.tasks).toBe(1);
+    expect(createPayload.backup.local_only).toBe(true);
+
+    const verified = await runCli(["backup", "verify", backupPath, "--json"], sourceDb);
+    expect(verified.exitCode).toBe(0);
+    expect(JSON.parse(verified.stdout).ok).toBe(true);
+
+    const integrity = await runCli(["backup", "integrity", "--json"], sourceDb);
+    expect(integrity.exitCode).toBe(0);
+    const integrityPayload = JSON.parse(integrity.stdout);
+    expect(integrityPayload.local_only).toBe(true);
+    expect(integrityPayload.sqlite.quick_check).toBe("ok");
+
+    const preview = await runCli(["backup", "restore", backupPath, "--json"], targetDb);
+    expect(preview.exitCode).toBe(0);
+    const previewPayload = JSON.parse(preview.stdout);
+    expect(previewPayload.dry_run).toBe(true);
+    expect(previewPayload.import_result.inserted.tasks).toBe(1);
+    expect(JSON.parse((await runCli(["list", "--json"], targetDb)).stdout)).toHaveLength(0);
+
+    const applied = await runCli(["backup", "restore", backupPath, "--apply", "--json"], targetDb);
+    expect(applied.exitCode).toBe(0);
+    const appliedPayload = JSON.parse(applied.stdout);
+    expect(appliedPayload.dry_run).toBe(false);
+    expect(appliedPayload.ok).toBe(true);
+    const tasks = JSON.parse((await runCli(["list", "--json"], targetDb)).stdout);
+    expect(tasks[0].id).toBe(task.id);
+    expect(tasks[0].title).toBe("Backup portable task");
+
+    for (const path of [sourceDb, targetDb, backupPath, `${sourceDb}-shm`, `${sourceDb}-wal`, `${targetDb}-shm`, `${targetDb}-wal`]) {
+      try { unlinkSync(path); } catch {}
+    }
+  });
+
   it("should export and import todos.md markdown through the CLI", async () => {
     const sourceDb = "/tmp/test-cli-todos-md-source.db";
     const targetDb = "/tmp/test-cli-todos-md-target.db";

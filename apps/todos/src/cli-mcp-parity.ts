@@ -9,6 +9,7 @@ export type TodosCliMcpParityDomain =
   | "retrospectives"
   | "agent-reliability"
   | "local-reports"
+  | "local-backups"
   | "local-fields"
   | "workflow-states"
   | "dedupe"
@@ -290,6 +291,38 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos reports local --agent codex --format markdown",
       mcpTool: "build_local_report",
+    },
+  },
+  {
+    domain: "local-backups",
+    cliCommands: [
+      "todos backup create",
+      "todos backup verify",
+      "todos backup restore",
+      "todos backup integrity",
+    ],
+    mcpTools: [
+      "create_local_backup",
+      "verify_local_backup",
+      "restore_local_backup",
+      "check_local_integrity",
+    ],
+    jsonContracts: [
+      "local_backup_bundle",
+      "local_backup_verification",
+      "local_backup_restore_result",
+      "local_integrity_report",
+      "local_bridge_bundle",
+      "local_bridge_import_result",
+      "structured_error",
+      "api_error",
+    ],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    intentionalGaps: [],
+    example: {
+      cli: "todos backup create --output todos-backup.json --json",
+      mcpTool: "create_local_backup",
     },
   },
   {
