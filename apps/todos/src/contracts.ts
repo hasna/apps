@@ -95,6 +95,13 @@ export {
   renderLocalUsageLedgerMarkdown,
 } from "./lib/usage-ledger.js";
 export {
+  LOCAL_REPORT_SCHEMA_VERSION,
+  LOCAL_REPORT_TYPES,
+  createLocalReport,
+  listLocalReportTypes,
+  renderLocalReportMarkdown,
+} from "./lib/local-reports.js";
+export {
   DEFAULT_ENCRYPTION_KEY_ENV,
   DEFAULT_ENCRYPTION_PROFILE,
   TODOS_ENCRYPTED_BRIDGE_KIND,
@@ -162,6 +169,18 @@ export type {
   UsageLedgerQuotaResult,
   UsageLedgerReport,
 } from "./lib/usage-ledger.js";
+export type {
+  LocalReport,
+  LocalReportAgentSummary,
+  LocalReportBlockedTask,
+  LocalReportOptions,
+  LocalReportPlanSummary,
+  LocalReportRunSummary,
+  LocalReportTaskSummary,
+  LocalReportTaskView,
+  LocalReportType,
+  LocalReportVerificationSummary,
+} from "./lib/local-reports.js";
 export type {
   ImportOnboardingFixtureOptions,
   OnboardingFixture,

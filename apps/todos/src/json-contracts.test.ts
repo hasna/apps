@@ -28,6 +28,7 @@ import { getPlanningForecast, upsertCapacityProfile } from "./lib/capacity-forec
 import { getLocalAuditLedger, sealLocalAuditLedger } from "./lib/audit-ledger.js";
 import { createReleaseCompatibilityReport } from "./lib/release-compatibility.js";
 import { createLocalUsageLedger } from "./lib/usage-ledger.js";
+import { createLocalReport } from "./lib/local-reports.js";
 import { createTuiDashboardSnapshot } from "./lib/tui-dashboard.js";
 import { compactScaleStorage, createScalePerformanceReport } from "./lib/scale-hardening.js";
 import { listWorkflowStates, migrateWorkflowStates, setTaskWorkflowState } from "./lib/workflow-states.js";
@@ -114,6 +115,7 @@ describe("stable JSON contracts", () => {
       "local_audit_ledger_checkpoint",
       "release_compatibility_report",
       "local_usage_ledger",
+      "local_report",
       "terminal_dashboard_snapshot",
       "mention_resolution_report",
       "project_knowledge_record",
@@ -445,6 +447,11 @@ describe("stable JSON contracts", () => {
       generated_at: "2026-01-02T03:04:05.000Z",
       quotas: { max_tasks: 1000, max_projects: 10 },
     }, db);
+    const localReport = createLocalReport({
+      project_id: project.id,
+      generated_at: "2026-01-02T03:04:05.000Z",
+      now: "2026-01-02T03:04:05.000Z",
+    }, db);
     const terminalDashboard = createTuiDashboardSnapshot({
       project_id: project.id,
       active_view: "tasks",
@@ -461,6 +468,7 @@ describe("stable JSON contracts", () => {
     expectValid("local_audit_ledger_checkpoint", auditCheckpoint);
     expectValid("release_compatibility_report", releaseCompatibility);
     expectValid("local_usage_ledger", usageLedger);
+    expectValid("local_report", localReport);
     expectValid("terminal_dashboard_snapshot", terminalDashboard);
     expectValid("scale_performance_report", scalePerformanceReport);
     expectValid("scale_compaction_result", scaleCompactionResult);

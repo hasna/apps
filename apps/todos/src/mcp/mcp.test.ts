@@ -404,6 +404,32 @@ describe("MCP tool operations", () => {
     expect(exported.retrospectives).toHaveLength(1);
   });
 
+  it("local report tools expose agent-ready summaries through MCP", async () => {
+    const tools = captureTools(registerTaskResources);
+    const project = createProject({ name: "MCP Reports", path: "/tmp/mcp-reports" }, db);
+    const task = createTask({ title: "MCP ready report task", project_id: project.id, assigned_to: "codex" }, db);
+    const run = startTaskRun({ task_id: task.id, agent_id: "codex", title: "MCP report run" }, db);
+    addTaskRunCommand({ run_id: run.id, command: "bun test", status: "passed", output_summary: "ok", agent_id: "codex" }, db);
+    finishTaskRun({ run_id: run.id, status: "completed", agent_id: "codex" }, db);
+
+    const typesResult = await callCapturedTool(tools, "list_local_report_types", {});
+    const types = JSON.parse(typesResult.content[0]!.text);
+    expect(types.report_types).toContain("agent_summary");
+    expect(types.local_only).toBe(true);
+
+    const reportResult = await callCapturedTool(tools, "build_local_report", {
+      project_id: project.id,
+      agent_id: "codex",
+      format: "json",
+    });
+    const report = JSON.parse(reportResult.content[0]!.text);
+    expect(report.local_only).toBe(true);
+    expect(report.no_network).toBe(true);
+    expect(report.views.ready.items.map((item: { id: string }) => item.id)).toContain(task.id);
+    expect(report.runs.outcomes.completed).toBe(1);
+    expect(report.verification.outcomes.passed).toBe(1);
+  });
+
   it("retention cleanup tools preview and apply local evidence cleanup without leaking content", async () => {
     const tools = captureTools(registerTaskProjectTools);
     const project = createProject({ name: "MCP retention", path: "/tmp/mcp-retention" }, db);

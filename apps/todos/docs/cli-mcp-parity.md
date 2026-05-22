@@ -27,6 +27,8 @@ structured error contracts.
   estimates, recurring blockers, failed verifications, and follow-up tasks.
 - `agent-reliability`: local agent scorecards from task completion, failed run
   ledgers, verification evidence, stale locks, retry history, and handoffs.
+- `local-reports`: local ready, blocked, overdue, plan, run, verification,
+  and per-agent summaries for standups and agent planning.
 - `local-fields`: local labels, priority, severity, owner, area, and custom
   fields with query support for agent-native task selection.
 - `dedupe`: local duplicate scans and merge workflows that preserve comments,
@@ -199,6 +201,18 @@ Matching MCP tool:
 
 ```json
 { "tool": "get_agent_reliability_scorecard", "arguments": { "agent_id": "codex", "project_id": "1234abcd" } }
+```
+
+CLI local report:
+
+```bash
+todos reports local --agent codex --format markdown
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "build_local_report", "arguments": { "agent_id": "codex", "format": "markdown" } }
 ```
 
 CLI local fields update:

@@ -528,6 +528,22 @@ MCP clients get the same summaries through `get_agent_reliability_scorecard`,
 `export_agent_reliability_scorecards`, and the `todos://agents/reliability`
 resource.
 
+## Local Agent Reports
+
+Agent reports compose the local planning surfaces into one report for standups,
+handoffs, and agent run planning: ready tasks, blocked tasks, overdue work,
+plan progress, run outcomes, verification evidence, and per-agent summaries.
+
+```bash
+todos reports local --agent codex --format markdown
+todos reports local --project <project-id> --json
+```
+
+MCP clients can list sections with `list_local_report_types` and build the
+same local-only `local_report` contract with `build_local_report`. The report
+uses the local SQLite store only and does not call hosted analytics or external
+services.
+
 ## Local Agent Locking
 
 Task claims and locks are local SQLite leases. Agents can claim the next ready

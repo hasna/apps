@@ -8,6 +8,7 @@ export type TodosCliMcpParityDomain =
   | "risks"
   | "retrospectives"
   | "agent-reliability"
+  | "local-reports"
   | "local-fields"
   | "workflow-states"
   | "dedupe"
@@ -271,6 +272,24 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos reliability show codex --project 1234abcd --json",
       mcpTool: "get_agent_reliability_scorecard",
+    },
+  },
+  {
+    domain: "local-reports",
+    cliCommands: [
+      "todos reports local",
+    ],
+    mcpTools: [
+      "list_local_report_types",
+      "build_local_report",
+    ],
+    jsonContracts: ["local_report", "task", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    intentionalGaps: [],
+    example: {
+      cli: "todos reports local --agent codex --format markdown",
+      mcpTool: "build_local_report",
     },
   },
   {

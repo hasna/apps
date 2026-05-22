@@ -17,6 +17,7 @@ const expectedDomains = [
   "risks",
   "retrospectives",
   "agent-reliability",
+  "local-reports",
   "local-fields",
   "workflow-states",
   "dedupe",
@@ -223,6 +224,11 @@ describe("CLI/MCP parity manifest", () => {
       "agent_reliability_scorecard",
       "agent_reliability_export",
     ]));
+    expect(byDomain.get("local-reports")?.mcpTools).toEqual(expect.arrayContaining([
+      "list_local_report_types",
+      "build_local_report",
+    ]));
+    expect(byDomain.get("local-reports")?.jsonContracts).toContain("local_report");
     expect(byDomain.get("verification-providers")?.mcpTools).toEqual(expect.arrayContaining([
       "set_verification_provider",
       "run_verification_provider",
@@ -286,6 +292,7 @@ describe("CLI/MCP parity manifest", () => {
     expect(docs).toContain("todos add \"Fix flaky parser\" --priority high --json");
     expect(docs).toContain("todos references resolve file:src/index.ts:12 symbol:createTask branch:main --json");
     expect(docs).toContain("todos fields set 1234abcd --labels bug,cli --severity s1 --field component=parser --json");
+    expect(docs).toContain("todos reports local --agent codex --format markdown");
     expect(docs).toContain("todos dedupe scan --threshold 0.8 --json");
     expect(docs).toContain("todos verify-providers run local --task 1234abcd --json");
     expect(docs).toContain("todos retention cleanup --older-than-days 30 --json");

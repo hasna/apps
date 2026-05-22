@@ -79,6 +79,11 @@ import {
   renderLocalUsageLedgerMarkdown,
 } from "../../lib/usage-ledger.js";
 import {
+  createLocalReport,
+  listLocalReportTypes,
+  renderLocalReportMarkdown,
+} from "../../lib/local-reports.js";
+import {
   getOnboardingFixtureBundle,
   importOnboardingFixture,
   listOnboardingFixtures,
@@ -761,6 +766,53 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
           const text = input.format === "markdown" ? renderLocalUsageLedgerMarkdown(report) : JSON.stringify(report, null, 2);
           return { content: [{ type: "text" as const, text }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_local_report_types")) {
+    server.tool(
+      "list_local_report_types",
+      "List stable local report sections available for agent-native planning, runs, and verification summaries.",
+      {},
+      async () => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ report_types: listLocalReportTypes(), local_only: true, no_network: true }, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("build_local_report")) {
+    server.tool(
+      "build_local_report",
+      "Build a local JSON or Markdown report from tasks, plans, runs, and verification evidence without hosted analytics.",
+      {
+        project_id: z.string().optional().describe("Optional project ID or name"),
+        plan_id: z.string().optional().describe("Optional plan ID or name"),
+        agent_id: z.string().optional().describe("Optional agent ID or assignee"),
+        since: z.string().optional().describe("Only include task, run, and verification activity since this timestamp"),
+        until: z.string().optional().describe("Only include task, run, and verification activity until this timestamp"),
+        limit: z.number().optional().describe("Maximum rows per report section"),
+        format: z.enum(["json", "markdown"]).optional(),
+      },
+      async (input) => {
+        try {
+          const report = createLocalReport({
+            project_id: input.project_id ? resolveId(input.project_id, "projects") : undefined,
+            plan_id: input.plan_id ? resolveId(input.plan_id, "plans") : undefined,
+            agent_id: input.agent_id,
+            since: input.since,
+            until: input.until,
+            limit: input.limit,
+          });
+          const text = input.format === "markdown" ? renderLocalReportMarkdown(report) : JSON.stringify(report, null, 2);
+          return { content: [{ type: "text" as const, text }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
       },
     );
   }

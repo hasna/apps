@@ -56,6 +56,7 @@ import {
   renderWorkflowStatesMarkdown,
   setTaskWorkflowState,
 } from "../../lib/workflow-states.js";
+import { createLocalReport, renderLocalReportMarkdown } from "../../lib/local-reports.js";
 import type { BoardLane, BoardScope, CalendarEventKind, TaskPriority } from "../../types/index.js";
 import { autoProject, handleError, output, formatTaskLine, resolveTaskId } from "../helpers.js";
 
@@ -1435,6 +1436,42 @@ export function registerQueryCommands(program: Command) {
 
       // Summary line
       console.log(chalk.dim(`\n  ${inProgress.length} active · ${pending.length} pending · ${blocked.length} blocked · ${overdue.length} overdue`));
+    });
+
+  const reports = program
+    .command("reports")
+    .description("Build local agent-native reports from tasks, plans, runs, and verification evidence");
+
+  reports
+    .command("local")
+    .description("Build a local JSON or Markdown report for agent planning and standups")
+    .option("--project <id>", "Filter to project")
+    .option("--plan <id>", "Filter to plan")
+    .option("--agent <id>", "Filter to agent or assignee")
+    .option("--since <iso>", "Only include task, run, and verification activity since this timestamp")
+    .option("--until <iso>", "Only include task, run, and verification activity until this timestamp")
+    .option("--limit <n>", "Maximum rows per report section", "20")
+    .option("--format <format>", "Output format: json or markdown", "markdown")
+    .option("-j, --json", "Output JSON")
+    .action((opts) => {
+      const globalOpts = program.opts();
+      try {
+        const report = createLocalReport({
+          project_id: resolveProjectOption(opts.project) || autoProject(globalOpts) || undefined,
+          plan_id: resolveOptionalId("plans", opts.plan),
+          agent_id: opts.agent || globalOpts.agent || undefined,
+          since: opts.since,
+          until: opts.until,
+          limit: Number(opts.limit),
+        });
+        if (opts.json || globalOpts.json || opts.format === "json") {
+          output(report, true);
+          return;
+        }
+        console.log(renderLocalReportMarkdown(report));
+      } catch (e) {
+        handleError(e);
+      }
     });
 
   // handoff

@@ -28,6 +28,7 @@ The stable contracts cover these object IDs:
 - `local_audit_ledger_checkpoint`
 - `release_compatibility_report`
 - `local_usage_ledger`
+- `local_report`
 - `terminal_dashboard_snapshot`
 - `scale_performance_report`
 - `scale_compaction_result`
@@ -204,6 +205,14 @@ changelog surfaces, rollback steps, warnings, and blocking issues.
 `get_usage_ledger`. It summarizes aggregate local task, project, run, command,
 duration, token, cost, and evidence-storage usage with optional quota
 simulation. Raw commands and artifact paths are omitted from this report.
+
+## Local Agent Reports
+
+`local_report` is returned by `todos reports local --json` and
+`build_local_report`. It summarizes ready, blocked, and overdue task views,
+plan progress, run outcomes, verification evidence, and per-agent summaries
+from the local SQLite store only. Markdown export is available through
+`todos reports local --format markdown` and the same MCP tool.
 
 ## Terminal Dashboard Snapshot
 

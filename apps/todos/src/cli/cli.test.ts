@@ -114,6 +114,25 @@ describe("CLI integration", () => {
     }
   });
 
+  it("should run local reports command", async () => {
+    const dbPath = "/tmp/test-cli-local-reports.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    try {
+      await runCli(["add", "local reports cli task", "--json"], dbPath);
+      const result = await runCli(["reports", "local", "--json"], dbPath);
+      expect(result.exitCode).toBe(0);
+      const report = JSON.parse(result.stdout);
+      expect(report.local_only).toBe(true);
+      expect(report.no_network).toBe(true);
+      expect(report.views.ready.items.some((task: { title: string }) => task.title === "local reports cli task")).toBe(true);
+      expect(report.exports.json_contract).toBe("local_report");
+    } finally {
+      try { unlinkSync(dbPath); } catch {}
+    }
+  });
+
   it("manages local workflow states through the CLI", async () => {
     const dbPath = "/tmp/test-cli-workflow-states.db";
     const home = `/tmp/test-cli-workflow-states-home-${Date.now()}`;
