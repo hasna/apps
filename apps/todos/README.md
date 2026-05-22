@@ -835,6 +835,30 @@ intake parsing is deterministic and local-only; it defaults to a dry-run preview
 and creates projects, plans, tasks, dependencies, and acceptance criteria only
 with `--apply`.
 
+## Bundled Onboarding Fixtures
+
+The package ships deterministic local demo fixtures for first-run onboarding and
+agent integration tests. The default `agent-project-demo` fixture shows the
+simple flow used by the public demo: create a project, add todos, generate a
+plan, run an agent, record command/artifact/verification evidence, review the
+remaining task, and prove export/import with the local bridge bundle.
+
+```bash
+todos onboarding --json
+todos onboarding --show agent-project-demo > agent-project-demo.bridge.json
+todos onboarding --import agent-project-demo --json
+todos onboarding --import agent-project-demo --apply
+```
+
+Fixtures are bundled with `@hasna/todos`, redacted, offline, and local-only.
+Imports default to dry-run mode and use the same bridge importer as normal
+exports, so CLI, MCP, and SDK consumers can test against the exact project,
+tasks, plan, run ledger, evidence, saved view, and board records.
+
+MCP clients can read `todos://onboarding/fixtures` or
+`todos://onboarding/demo`, then use `list_onboarding_fixtures`,
+`get_onboarding_fixture`, and `import_onboarding_fixture`.
+
 ## Local Bridge Import/Export
 
 Export a versioned local bridge bundle for migration, backup, or explicit

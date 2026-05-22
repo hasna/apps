@@ -47,6 +47,7 @@ const expectedDomains = [
   "search",
   "context-packs",
   "environment-snapshots",
+  "onboarding",
   "imports",
   "release-notes",
   "exports",

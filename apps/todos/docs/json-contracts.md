@@ -59,6 +59,7 @@ The stable contracts cover these object IDs:
 - `encrypted_local_bridge_bundle`
 - `structured_error`
 - `api_error`
+- `onboarding_fixture`
 - `local_bridge_bundle`
 - `local_bridge_import_result`
 - `cli_mcp_parity_manifest`
@@ -344,6 +345,12 @@ wraps a bridge export so tasks, evidence, artifact content, and metadata are not
 stored as plaintext JSON.
 
 ## Local Bridge Bundles
+
+`onboarding_fixture` describes bundled local demo fixtures that are safe for
+CLI, MCP, and SDK smoke tests. Each fixture summary declares that it is
+local-only, no-network, and redacted, lists the workflow steps it demonstrates,
+and exposes bridge-bundle stats so consumers can assert project, task, plan,
+run, evidence, saved-view, and board coverage before importing.
 
 `local_bridge_bundle` is the stable offline import/export shape for moving local
 `@hasna/todos` data between stores. It contains versioned package metadata,

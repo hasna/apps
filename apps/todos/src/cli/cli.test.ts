@@ -1094,6 +1094,50 @@ describe("CLI integration", () => {
     }
   });
 
+  it("should list and import bundled onboarding fixtures through the CLI", async () => {
+    const dbPath = "/tmp/test-cli-onboarding-fixtures.db";
+    const { unlinkSync } = await import("node:fs");
+    for (const path of [dbPath, `${dbPath}-shm`, `${dbPath}-wal`]) {
+      try { unlinkSync(path); } catch {}
+    }
+
+    const listed = await runCli(["onboarding", "--json"], dbPath);
+    expect(listed.exitCode).toBe(0);
+    const fixtures = JSON.parse(listed.stdout);
+    expect(fixtures[0]).toMatchObject({
+      name: "agent-project-demo",
+      local_only: true,
+      no_network: true,
+      redacted: true,
+    });
+    expect(fixtures[0].stats.tasks).toBe(4);
+
+    const shown = await runCli(["onboarding", "--show", "agent-project-demo"], dbPath);
+    expect(shown.exitCode).toBe(0);
+    const bundle = JSON.parse(shown.stdout);
+    expect(bundle.kind).toBe("hasna.todos.local-bridge");
+    expect(bundle.data.tasks).toHaveLength(4);
+
+    const preview = await runCli(["onboarding", "--import", "agent-project-demo", "--json"], dbPath);
+    expect(preview.exitCode).toBe(0);
+    const previewResult = JSON.parse(preview.stdout);
+    expect(previewResult.dry_run).toBe(true);
+    expect(previewResult.inserted.tasks).toBe(4);
+    expect(JSON.parse((await runCli(["list", "--json"], dbPath)).stdout)).toHaveLength(0);
+
+    const applied = await runCli(["onboarding", "--import", "agent-project-demo", "--apply", "--json"], dbPath);
+    expect(applied.exitCode).toBe(0);
+    const appliedResult = JSON.parse(applied.stdout);
+    expect(appliedResult.dry_run).toBe(false);
+    expect(appliedResult.inserted.runs).toBe(1);
+    const tasks = JSON.parse((await runCli(["list", "--all", "--json"], dbPath)).stdout);
+    expect(tasks.map((task: any) => task.title)).toContain("Run the agent on the plan");
+
+    for (const path of [dbPath, `${dbPath}-shm`, `${dbPath}-wal`]) {
+      try { unlinkSync(path); } catch {}
+    }
+  });
+
   it("should encrypt and decrypt local bridge bundles through the CLI", async () => {
     const sourceDb = "/tmp/test-cli-bridge-encrypted-source.db";
     const targetDb = "/tmp/test-cli-bridge-encrypted-target.db";

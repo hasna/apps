@@ -20,6 +20,7 @@ import { buildCodebaseIndex, extractTodos } from "./lib/extract.js";
 import { resetConfig } from "./lib/config.js";
 import { getTaskLocalFields, setTaskLocalFields } from "./lib/local-fields.js";
 import { testExtensionCompatibility } from "./lib/local-extensions.js";
+import { listOnboardingFixtures } from "./lib/onboarding-fixtures.js";
 import { generateReleaseNotes } from "./lib/release-notes.js";
 import { previewRetentionCleanup } from "./lib/retention-cleanup.js";
 import { resolveMentions } from "./lib/mention-resolver.js";
@@ -139,6 +140,7 @@ describe("stable JSON contracts", () => {
       "encrypted_local_bridge_bundle",
       "structured_error",
       "api_error",
+      "onboarding_fixture",
       "local_bridge_bundle",
       "local_bridge_import_result",
       "cli_mcp_parity_manifest",
@@ -486,6 +488,7 @@ describe("stable JSON contracts", () => {
       suggestion: "Use list_tasks.",
     });
     expectValid("api_error", { error: "Task not found" });
+    expectValid("onboarding_fixture", listOnboardingFixtures()[0]);
     expectValid("cli_mcp_parity_manifest", {
       schemaVersion: 1,
       generatedAt: "2026-01-02T03:04:05.000Z",

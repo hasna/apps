@@ -96,6 +96,8 @@ structured error contracts.
   run starts.
 - `release-notes`: local changelog generation from completed tasks, plans,
   linked commits, verification records, breaking changes, and migration notes.
+- `onboarding`: bundled deterministic local demo fixtures for project, task,
+  plan, run, evidence, review, and bridge import/export smoke tests.
 - `imports`: template imports, inbox intake, and local bridge imports.
 - `exports`: template exports, traceability exports, verification records, and
   local bridge exports.

@@ -8,6 +8,15 @@ export {
   validateJsonContract,
 } from "./json-contracts.js";
 export {
+  TODOS_ONBOARDING_FIXTURE_LIBRARY_VERSION,
+  TODOS_ONBOARDING_FIXTURE_SOURCE,
+  getOnboardingFixture,
+  getOnboardingFixtureBundle,
+  importOnboardingFixture,
+  listOnboardingFixtures,
+  writeOnboardingFixtureFiles,
+} from "./lib/onboarding-fixtures.js";
+export {
   TODOS_LOCAL_BRIDGE_KIND,
   TODOS_LOCAL_BRIDGE_SCHEMA_VERSION,
   createLocalBridgeBundle,
@@ -46,6 +55,12 @@ export type {
   TodosJsonStability,
   TodosJsonSurface,
 } from "./json-contracts.js";
+export type {
+  ImportOnboardingFixtureOptions,
+  OnboardingFixture,
+  OnboardingFixtureSummary,
+  WriteOnboardingFixtureResult,
+} from "./lib/onboarding-fixtures.js";
 export type {
   ExportLocalBridgeOptions,
   LocalBridgeImportConflict,

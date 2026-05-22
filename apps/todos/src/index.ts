@@ -45,6 +45,23 @@ export type {
   TodosJsonSurface,
 } from "./contracts.js";
 
+// Bundled local onboarding fixtures
+export {
+  TODOS_ONBOARDING_FIXTURE_LIBRARY_VERSION,
+  TODOS_ONBOARDING_FIXTURE_SOURCE,
+  getOnboardingFixture,
+  getOnboardingFixtureBundle,
+  importOnboardingFixture,
+  listOnboardingFixtures,
+  writeOnboardingFixtureFiles,
+} from "./lib/onboarding-fixtures.js";
+export type {
+  ImportOnboardingFixtureOptions,
+  OnboardingFixture,
+  OnboardingFixtureSummary,
+  WriteOnboardingFixtureResult,
+} from "./lib/onboarding-fixtures.js";
+
 // Side-effect-free MCP metadata
 export {
   CORE_MCP_TOOLS,

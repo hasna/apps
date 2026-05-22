@@ -75,6 +75,11 @@ import {
   renderAgentReliabilityMarkdown,
 } from "../../db/agent-metrics.js";
 import {
+  getOnboardingFixtureBundle,
+  importOnboardingFixture,
+  listOnboardingFixtures,
+} from "../../lib/onboarding-fixtures.js";
+import {
   createRetrospective,
   createRetrospectiveExport,
   listRetrospectives,
@@ -181,7 +186,73 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
     },
   );
 
+  server.resource(
+    "onboarding-fixtures",
+    "todos://onboarding/fixtures",
+    { description: "Bundled deterministic local onboarding fixtures and demo bridge bundles", mimeType: "application/json" },
+    async () => {
+      return { contents: [{ uri: "todos://onboarding/fixtures", text: JSON.stringify(listOnboardingFixtures(), null, 2), mimeType: "application/json" }] };
+    },
+  );
+
+  server.resource(
+    "onboarding-demo-fixture",
+    "todos://onboarding/demo",
+    { description: "Default local onboarding demo as a redacted bridge bundle", mimeType: "application/json" },
+    async () => {
+      return { contents: [{ uri: "todos://onboarding/demo", text: JSON.stringify(getOnboardingFixtureBundle(), null, 2), mimeType: "application/json" }] };
+    },
+  );
+
   // === TASK FILES ===
+
+  if (shouldRegisterTool("list_onboarding_fixtures")) {
+    server.tool(
+      "list_onboarding_fixtures",
+      "List bundled local onboarding fixtures. The fixtures are deterministic, redacted, local-only, and require no network access.",
+      {},
+      async () => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify(listOnboardingFixtures(), null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("get_onboarding_fixture")) {
+    server.tool(
+      "get_onboarding_fixture",
+      "Return one bundled onboarding fixture as a local bridge bundle.",
+      { name: z.string().optional().describe("Fixture name. Defaults to agent-project-demo.") },
+      async ({ name }) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify(getOnboardingFixtureBundle(name), null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("import_onboarding_fixture")) {
+    server.tool(
+      "import_onboarding_fixture",
+      "Dry-run or apply a bundled local onboarding fixture import. Dry-run is the default.",
+      {
+        name: z.string().optional().describe("Fixture name. Defaults to agent-project-demo."),
+        apply: z.boolean().optional().describe("Set true to write local records. Defaults to false."),
+        resolve_conflicts: z.boolean().optional().describe("Safely merge existing local tasks while preserving divergent fields."),
+      },
+      async ({ name, apply, resolve_conflicts }) => {
+        try {
+          const result = importOnboardingFixture({
+            name,
+            dryRun: !apply,
+            conflictStrategy: resolve_conflicts ? "safe_merge" : "skip",
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
 
   if (shouldRegisterTool("create_knowledge_record")) {
     server.tool(

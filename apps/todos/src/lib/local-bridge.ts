@@ -413,14 +413,39 @@ function dependencyExists(db: Database, row: TaskDependency): boolean {
     .get(row.task_id, row.depends_on));
 }
 
-function missingDependency(db: Database, tableKey: keyof TodosLocalBridgeData, row: Record<string, unknown>): string | null {
+function plannedIdSets(data: TodosLocalBridgeData): Map<keyof TodosLocalBridgeData, Set<string>> {
+  const result = new Map<keyof TodosLocalBridgeData, Set<string>>();
+  for (const key of dataKeys) {
+    if (key === "task_dependencies") continue;
+    result.set(key, new Set((data[key] as unknown as Array<Record<string, unknown>>)
+      .map((row) => typeof row.id === "string" ? row.id : null)
+      .filter((id): id is string => Boolean(id))));
+  }
+  return result;
+}
+
+function hasExistingOrPlannedId(
+  db: Database,
+  tableKey: keyof TodosLocalBridgeData,
+  id: string,
+  plannedIds: Map<keyof TodosLocalBridgeData, Set<string>>,
+): boolean {
+  return existsById(db, tableByKey[tableKey], id) || Boolean(plannedIds.get(tableKey)?.has(id));
+}
+
+function missingDependency(
+  db: Database,
+  tableKey: keyof TodosLocalBridgeData,
+  row: Record<string, unknown>,
+  plannedIds: Map<keyof TodosLocalBridgeData, Set<string>>,
+): string | null {
   const taskId = typeof row.task_id === "string" ? row.task_id : null;
   const runId = typeof row.run_id === "string" ? row.run_id : null;
-  if (taskId && !existsById(db, "tasks", taskId)) return taskId;
-  if (runId && !existsById(db, "task_runs", runId)) return runId;
+  if (taskId && !hasExistingOrPlannedId(db, "tasks", taskId, plannedIds)) return taskId;
+  if (runId && !hasExistingOrPlannedId(db, "runs", runId, plannedIds)) return runId;
   if (tableKey === "task_dependencies") {
     const dependsOn = typeof row.depends_on === "string" ? row.depends_on : null;
-    if (dependsOn && !existsById(db, "tasks", dependsOn)) return dependsOn;
+    if (dependsOn && !hasExistingOrPlannedId(db, "tasks", dependsOn, plannedIds)) return dependsOn;
   }
   return null;
 }
@@ -595,6 +620,7 @@ export function importLocalBridgeBundle(
     task_boards: bundle.data.task_boards ?? [],
     local_calendar_items: bundle.data.local_calendar_items ?? [],
   };
+  const plannedIds = plannedIdSets(data);
 
   for (const key of dataKeys) {
     for (const row of data[key] as unknown as Array<Record<string, unknown>>) {
@@ -626,7 +652,7 @@ export function importLocalBridgeBundle(
         conflicts.push({ table, id, reason: "already_exists" });
         continue;
       }
-      const missing = missingDependency(d, key, row);
+      const missing = missingDependency(d, key, row, plannedIds);
       if (missing) {
         skipped[key]++;
         conflicts.push({ table, id, reason: "missing_dependency" });

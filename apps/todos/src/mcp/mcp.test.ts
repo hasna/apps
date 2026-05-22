@@ -1427,6 +1427,38 @@ describe("MCP tool wrappers", () => {
     expect(promptsJson.map((prompt: { id: string }) => prompt.id)).toContain("verification");
   });
 
+  it("exposes onboarding fixtures through MCP resources and tools", async () => {
+    const resources = new Map<string, () => unknown>();
+    const server = {
+      resource(_name: string, uri: string, _metadata: unknown, handler: () => unknown) {
+        resources.set(uri, handler);
+      },
+      tool() {},
+    };
+    const ctx = {
+      shouldRegisterTool: () => false,
+      resolveId: () => "",
+      formatError: (error: unknown) => String(error),
+    };
+
+    registerTaskResources(server as any, ctx as any);
+    expect(resources.has("todos://onboarding/fixtures")).toBe(true);
+    expect(resources.has("todos://onboarding/demo")).toBe(true);
+    const catalog = await resources.get("todos://onboarding/fixtures")!() as any;
+    const fixtures = JSON.parse(catalog.contents[0].text);
+    expect(fixtures[0].name).toBe("agent-project-demo");
+
+    const tools = captureTools(registerTaskResources);
+    const listed = JSON.parse((await callCapturedTool(tools, "list_onboarding_fixtures", {})).content[0]!.text);
+    expect(listed[0].stats.tasks).toBe(4);
+    const preview = JSON.parse((await callCapturedTool(tools, "import_onboarding_fixture", {})).content[0]!.text);
+    expect(preview.dry_run).toBe(true);
+    expect(preview.inserted.tasks).toBe(4);
+    const applied = JSON.parse((await callCapturedTool(tools, "import_onboarding_fixture", { apply: true })).content[0]!.text);
+    expect(applied.dry_run).toBe(false);
+    expect(listTasks()).toHaveLength(4);
+  });
+
   it("agent run dispatcher tools queue and dry-run local adapters", async () => {
     const { mkdtempSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
