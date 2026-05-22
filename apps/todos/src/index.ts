@@ -233,6 +233,32 @@ export type {
   SearchKnowledgeRecordsOptions,
 } from "./db/project-knowledge.js";
 
+// Local risk register and health scoring
+export {
+  closeRisk,
+  createRisk,
+  createRiskRegisterExport,
+  getRisk,
+  listRisks,
+  renderRiskRegisterMarkdown,
+  scorePlanHealth,
+  scoreProjectHealth,
+  updateRisk,
+} from "./db/project-risks.js";
+export type {
+  CreateRiskInput,
+  ListRisksOptions,
+  ProjectHealthReport,
+  ProjectHealthStatus,
+  ProjectRiskProbability,
+  ProjectRiskRecord,
+  ProjectRiskSeverity,
+  ProjectRiskStatus,
+  RiskExportFormat,
+  RiskRegisterExport,
+  UpdateRiskInput,
+} from "./db/project-risks.js";
+
 // Project bootstrap and workspace discovery
 export {
   bootstrapProject,

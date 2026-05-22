@@ -14,6 +14,7 @@ const expectedDomains = [
   "tasks",
   "references",
   "knowledge",
+  "risks",
   "local-fields",
   "dedupe",
   "verification-providers",
@@ -157,6 +158,18 @@ describe("CLI/MCP parity manifest", () => {
     expect(byDomain.get("knowledge")?.jsonContracts).toEqual(expect.arrayContaining([
       "project_knowledge_record",
       "project_knowledge_export",
+    ]));
+    expect(byDomain.get("risks")?.mcpTools).toEqual(expect.arrayContaining([
+      "create_risk",
+      "list_risks",
+      "score_plan_health",
+      "score_project_health",
+      "export_risk_register",
+    ]));
+    expect(byDomain.get("risks")?.jsonContracts).toEqual(expect.arrayContaining([
+      "project_risk_record",
+      "risk_register_export",
+      "project_health_report",
     ]));
     expect(byDomain.get("verification-providers")?.mcpTools).toEqual(expect.arrayContaining([
       "set_verification_provider",

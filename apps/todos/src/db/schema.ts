@@ -254,6 +254,33 @@ export function ensureSchema(db: Database): void {
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_knowledge_agent ON project_knowledge_records(agent_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_knowledge_snapshot ON project_knowledge_records(snapshot_id)");
 
+  ensureTable("project_risks", `
+    CREATE TABLE project_risks (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      description TEXT,
+      status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','mitigating','resolved','accepted')),
+      severity TEXT NOT NULL DEFAULT 'medium' CHECK(severity IN ('low','medium','high','critical')),
+      probability TEXT NOT NULL DEFAULT 'medium' CHECK(probability IN ('low','medium','high')),
+      owner TEXT,
+      mitigation TEXT,
+      due_at TEXT,
+      project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+      plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+      task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+      tags TEXT DEFAULT '[]',
+      metadata TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      closed_at TEXT
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_risks_status ON project_risks(status)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_risks_severity ON project_risks(severity)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_risks_project ON project_risks(project_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_risks_plan ON project_risks(plan_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_risks_task ON project_risks(task_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_risks_due ON project_risks(due_at)");
+
   ensureTable("task_relationships", `
     CREATE TABLE task_relationships (
       id TEXT PRIMARY KEY,

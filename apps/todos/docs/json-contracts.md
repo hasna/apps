@@ -19,6 +19,9 @@ The stable contracts cover these object IDs:
 - `mention_resolution_report`
 - `project_knowledge_record`
 - `project_knowledge_export`
+- `project_risk_record`
+- `risk_register_export`
+- `project_health_report`
 - `local_task_fields`
 - `retention_cleanup_report`
 - `duplicate_task_candidate`
@@ -106,6 +109,23 @@ snapshot links.
 `export_knowledge_records`. It contains local-only export metadata, normalized
 filters, count, and redacted knowledge records. The export never calls hosted
 services or network APIs.
+
+## Risk Register And Health
+
+`project_risk_record` is returned by `todos risks add`, `todos risks list`,
+`todos risks show`, and matching MCP risk tools. It captures local risk status,
+severity, probability, owner, mitigation, due date, and optional project, plan,
+task, tag, and metadata links.
+
+`risk_register_export` is returned by `todos risks export --json` and
+`export_risk_register`. It contains local-only export metadata, normalized
+filters, count, and redacted risk records.
+
+`project_health_report` is returned by `todos risks score --json`,
+`score_plan_health`, and `score_project_health`. The score is derived only from
+local blockers, overdue work, failed verification records, failed run ledgers,
+dependency depth, and open risks. It never calls hosted services or network
+APIs.
 
 ## Local Task Fields
 

@@ -1113,4 +1113,33 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_project_knowledge_snapshot ON project_knowledge_records(snapshot_id);
   INSERT OR IGNORE INTO _migrations (id) VALUES (59);
   `,
+  // Migration 60: Local risk register and plan/project health scoring inputs
+  `
+  CREATE TABLE IF NOT EXISTS project_risks (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','mitigating','resolved','accepted')),
+    severity TEXT NOT NULL DEFAULT 'medium' CHECK(severity IN ('low','medium','high','critical')),
+    probability TEXT NOT NULL DEFAULT 'medium' CHECK(probability IN ('low','medium','high')),
+    owner TEXT,
+    mitigation TEXT,
+    due_at TEXT,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+    task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    tags TEXT DEFAULT '[]',
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    closed_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_project_risks_status ON project_risks(status);
+  CREATE INDEX IF NOT EXISTS idx_project_risks_severity ON project_risks(severity);
+  CREATE INDEX IF NOT EXISTS idx_project_risks_project ON project_risks(project_id);
+  CREATE INDEX IF NOT EXISTS idx_project_risks_plan ON project_risks(plan_id);
+  CREATE INDEX IF NOT EXISTS idx_project_risks_task ON project_risks(task_id);
+  CREATE INDEX IF NOT EXISTS idx_project_risks_due ON project_risks(due_at);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (60);
+  `,
 ];

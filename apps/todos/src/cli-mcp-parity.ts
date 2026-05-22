@@ -5,6 +5,7 @@ export type TodosCliMcpParityDomain =
   | "tasks"
   | "references"
   | "knowledge"
+  | "risks"
   | "local-fields"
   | "dedupe"
   | "verification-providers"
@@ -186,6 +187,35 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos knowledge add decision \"Use local SQLite\" --decision \"Keep OSS knowledge local\" --json",
       mcpTool: "create_knowledge_record",
+    },
+  },
+  {
+    domain: "risks",
+    cliCommands: [
+      "todos risks add",
+      "todos risks list",
+      "todos risks show",
+      "todos risks update",
+      "todos risks close",
+      "todos risks score",
+      "todos risks export",
+    ],
+    mcpTools: [
+      "create_risk",
+      "list_risks",
+      "update_risk",
+      "close_risk",
+      "score_plan_health",
+      "score_project_health",
+      "export_risk_register",
+    ],
+    jsonContracts: ["project_risk_record", "risk_register_export", "project_health_report", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    intentionalGaps: [],
+    example: {
+      cli: "todos risks add \"Release blocker\" --plan 1234abcd --severity high --owner codex --json",
+      mcpTool: "create_risk",
     },
   },
   {

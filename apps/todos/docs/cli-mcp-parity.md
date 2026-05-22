@@ -21,6 +21,8 @@ structured error contracts.
   hosted code search.
 - `knowledge`: local decision records, architecture notes, tradeoffs, context
   snapshots, search, export, and MCP resources for agent project memory.
+- `risks`: local project and plan risk register entries, owner/mitigation due
+  dates, deterministic exports, and local health scoring from task evidence.
 - `local-fields`: local labels, priority, severity, owner, area, and custom
   fields with query support for agent-native task selection.
 - `dedupe`: local duplicate scans and merge workflows that preserve comments,
@@ -130,6 +132,20 @@ Matching MCP tool:
 
 ```json
 { "tool": "create_knowledge_record", "arguments": { "record_type": "decision", "title": "Use local SQLite", "decision": "Keep OSS knowledge local" } }
+```
+
+CLI risk scoring:
+
+```bash
+todos risks add "Release blocker" --plan 1234abcd --severity high --owner codex --json
+todos risks score --plan 1234abcd --json
+```
+
+Matching MCP tools:
+
+```json
+{ "tool": "create_risk", "arguments": { "title": "Release blocker", "plan_id": "1234abcd", "severity": "high", "owner": "codex" } }
+{ "tool": "score_plan_health", "arguments": { "plan_id": "1234abcd" } }
 ```
 
 CLI local fields update:

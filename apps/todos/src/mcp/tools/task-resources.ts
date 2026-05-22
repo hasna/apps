@@ -59,6 +59,16 @@ import {
   renderKnowledgeExportMarkdown,
   searchKnowledgeRecords,
 } from "../../db/project-knowledge.js";
+import {
+  closeRisk,
+  createRisk,
+  createRiskRegisterExport,
+  listRisks,
+  renderRiskRegisterMarkdown,
+  scorePlanHealth,
+  scoreProjectHealth,
+  updateRisk,
+} from "../../db/project-risks.js";
 import { simulateAgentReplay } from "../../lib/agent-replay-simulator.js";
 import {
   inspectExtensionSource,
@@ -127,6 +137,16 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
     async () => {
       const records = listKnowledgeRecords({ record_type: "decision", limit: 100 });
       return { contents: [{ uri: "todos://knowledge/decisions", text: JSON.stringify(records, null, 2), mimeType: "application/json" }] };
+    },
+  );
+
+  server.resource(
+    "risks",
+    "todos://risks",
+    { description: "Local project and plan risk register entries", mimeType: "application/json" },
+    async () => {
+      const risks = listRisks({ limit: 100 });
+      return { contents: [{ uri: "todos://risks", text: JSON.stringify(risks, null, 2), mimeType: "application/json" }] };
     },
   );
 
@@ -251,6 +271,161 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
         try {
           const report = createKnowledgeExportReport(input as any);
           const text = input.format === "markdown" ? renderKnowledgeExportMarkdown(report) : JSON.stringify(report, null, 2);
+          return { content: [{ type: "text" as const, text }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("create_risk")) {
+    server.tool(
+      "create_risk",
+      "Create a local project or plan risk register entry. Uses only local SQLite state.",
+      {
+        title: z.string().describe("Risk title"),
+        description: z.string().optional().describe("Risk description"),
+        status: z.enum(["open", "mitigating", "resolved", "accepted"]).optional().describe("Risk status"),
+        severity: z.enum(["low", "medium", "high", "critical"]).optional().describe("Risk severity"),
+        probability: z.enum(["low", "medium", "high"]).optional().describe("Risk probability"),
+        owner: z.string().optional().describe("Risk owner"),
+        mitigation: z.string().optional().describe("Mitigation plan"),
+        due_at: z.string().optional().describe("Mitigation due date"),
+        project_id: z.string().optional().describe("Project ID or name"),
+        plan_id: z.string().optional().describe("Plan ID or prefix"),
+        task_id: z.string().optional().describe("Task ID or prefix"),
+        tags: z.array(z.string()).optional().describe("Local tags"),
+        metadata: z.record(z.unknown()).optional().describe("JSON metadata"),
+      },
+      async (input) => {
+        try {
+          const risk = createRisk(input as any);
+          return { content: [{ type: "text" as const, text: JSON.stringify(risk, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_risks")) {
+    server.tool(
+      "list_risks",
+      "List local risk register entries with optional project, plan, task, owner, status, and severity filters.",
+      {
+        status: z.enum(["open", "mitigating", "resolved", "accepted"]).optional(),
+        severity: z.enum(["low", "medium", "high", "critical"]).optional(),
+        probability: z.enum(["low", "medium", "high"]).optional(),
+        owner: z.string().optional(),
+        project_id: z.string().optional(),
+        plan_id: z.string().optional(),
+        task_id: z.string().optional(),
+        tag: z.string().optional(),
+        include_closed: z.boolean().optional(),
+        limit: z.number().optional(),
+      },
+      async (input) => {
+        try {
+          const risks = listRisks(input as any);
+          return { content: [{ type: "text" as const, text: JSON.stringify(risks, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("update_risk")) {
+    server.tool(
+      "update_risk",
+      "Update a local risk register entry.",
+      {
+        id: z.string().describe("Risk ID or prefix"),
+        title: z.string().optional(),
+        description: z.string().nullable().optional(),
+        status: z.enum(["open", "mitigating", "resolved", "accepted"]).optional(),
+        severity: z.enum(["low", "medium", "high", "critical"]).optional(),
+        probability: z.enum(["low", "medium", "high"]).optional(),
+        owner: z.string().nullable().optional(),
+        mitigation: z.string().nullable().optional(),
+        due_at: z.string().nullable().optional(),
+        project_id: z.string().nullable().optional(),
+        plan_id: z.string().nullable().optional(),
+        task_id: z.string().nullable().optional(),
+        tags: z.array(z.string()).optional(),
+        metadata: z.record(z.unknown()).optional(),
+      },
+      async (input) => {
+        try {
+          const { id, ...patch } = input as any;
+          const risk = updateRisk(id, patch);
+          return { content: [{ type: "text" as const, text: JSON.stringify(risk, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("close_risk")) {
+    server.tool(
+      "close_risk",
+      "Close a local risk as resolved or accepted.",
+      {
+        id: z.string().describe("Risk ID or prefix"),
+        status: z.enum(["resolved", "accepted"]).optional(),
+      },
+      async (input) => {
+        try {
+          const risk = closeRisk(input.id, input.status || "resolved");
+          return { content: [{ type: "text" as const, text: JSON.stringify(risk, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("score_plan_health")) {
+    server.tool(
+      "score_plan_health",
+      "Score a plan's local health from blockers, overdue tasks, failed checks, failed runs, dependency depth, and open risks.",
+      { plan_id: z.string().describe("Plan ID or prefix") },
+      async (input) => {
+        try {
+          const report = scorePlanHealth(input.plan_id);
+          return { content: [{ type: "text" as const, text: JSON.stringify(report, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("score_project_health")) {
+    server.tool(
+      "score_project_health",
+      "Score a project's local health from blockers, overdue tasks, failed checks, failed runs, dependency depth, and open risks.",
+      { project_id: z.string().describe("Project ID or name") },
+      async (input) => {
+        try {
+          const report = scoreProjectHealth(input.project_id);
+          return { content: [{ type: "text" as const, text: JSON.stringify(report, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("export_risk_register")) {
+    server.tool(
+      "export_risk_register",
+      "Export local risk register entries as deterministic JSON or Markdown.",
+      {
+        status: z.enum(["open", "mitigating", "resolved", "accepted"]).optional(),
+        severity: z.enum(["low", "medium", "high", "critical"]).optional(),
+        probability: z.enum(["low", "medium", "high"]).optional(),
+        owner: z.string().optional(),
+        project_id: z.string().optional(),
+        plan_id: z.string().optional(),
+        task_id: z.string().optional(),
+        tag: z.string().optional(),
+        include_closed: z.boolean().optional(),
+        limit: z.number().optional(),
+        format: z.enum(["json", "markdown"]).optional(),
+      },
+      async (input) => {
+        try {
+          const report = createRiskRegisterExport(input as any);
+          const text = input.format === "markdown" ? renderRiskRegisterMarkdown(report) : JSON.stringify(report, null, 2);
           return { content: [{ type: "text" as const, text }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
       },

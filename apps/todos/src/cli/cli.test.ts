@@ -218,6 +218,58 @@ describe("CLI integration", () => {
     }
   });
 
+  it("should manage local risk register entries and health reports from the CLI", async () => {
+    const dbPath = "/tmp/test-cli-risks.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    try {
+      const plan = JSON.parse((await runCli(["plans", "--add", "CLI risk plan", "--json"], dbPath)).stdout);
+      const task = JSON.parse((await runCli(["add", "risk linked task", "--plan", plan.id, "--json"], dbPath)).stdout);
+      const createdResult = await runCli([
+        "risks",
+        "add",
+        "Dependency could miss release",
+        "--severity",
+        "high",
+        "--probability",
+        "medium",
+        "--owner",
+        "codex",
+        "--mitigation",
+        "Prepare fallback",
+        "--plan",
+        plan.id,
+        "--task",
+        task.id,
+        "--tag",
+        "release",
+        "--json",
+      ], dbPath);
+      expect(createdResult.exitCode).toBe(0);
+      const created = JSON.parse(createdResult.stdout);
+      expect(created.plan_id).toBe(plan.id);
+      expect(created.task_id).toBe(task.id);
+
+      const listed = JSON.parse((await runCli(["risks", "list", "--plan", plan.id, "--json"], dbPath)).stdout);
+      expect(listed.map((risk: { id: string }) => risk.id)).toContain(created.id);
+
+      const health = JSON.parse((await runCli(["risks", "score", "--plan", plan.id, "--json"], dbPath)).stdout);
+      expect(health.local_only).toBe(true);
+      expect(health.no_network).toBe(true);
+      expect(health.components.open_risks).toBe(1);
+
+      const exported = JSON.parse((await runCli(["risks", "export", "--plan", plan.id, "--json"], dbPath)).stdout);
+      expect(exported.local_only).toBe(true);
+      expect(exported.risks.length).toBe(1);
+
+      const closed = JSON.parse((await runCli(["risks", "close", created.id, "--status", "accepted", "--json"], dbPath)).stdout);
+      expect(closed.status).toBe("accepted");
+    } finally {
+      try { unlinkSync(dbPath); } catch {}
+    }
+  });
+
   it("should manage local task fields from the CLI", async () => {
     const dbPath = "/tmp/test-cli-fields.db";
     const { unlinkSync } = await import("node:fs");

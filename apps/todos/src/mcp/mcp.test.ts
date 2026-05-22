@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { getDatabase, closeDatabase, resetDatabase, resolvePartialId } from "../db/database.js";
 import { addDependency, createTask, getTask, listTasks, completeTask, startTask } from "../db/tasks.js";
 import { createProject } from "../db/projects.js";
+import { createPlan } from "../db/plans.js";
 import { addComment, listComments } from "../db/comments.js";
 import { addTaskRunEvent, startTaskRun } from "../db/task-runs.js";
 import { addTaskFile } from "../db/task-files.js";
@@ -333,6 +334,48 @@ describe("MCP tool operations", () => {
     expect(exported.local_only).toBe(true);
     expect(exported.no_network).toBe(true);
     expect(exported.records).toHaveLength(2);
+  });
+
+  it("risk tools expose local risk registers and health scoring through MCP", async () => {
+    const tools = captureTools(registerTaskResources);
+    const project = createProject({ name: "MCP Risks", path: "/tmp/mcp-risks" }, db);
+    const plan = createPlan({ name: "MCP risk plan", project_id: project.id }, db);
+    const task = createTask({ title: "MCP risk task", project_id: project.id, plan_id: plan.id }, db);
+
+    const createdResult = await callCapturedTool(tools, "create_risk", {
+      title: "Keep risk scoring local",
+      severity: "high",
+      probability: "medium",
+      owner: "codex",
+      mitigation: "Use SQLite evidence only.",
+      project_id: project.id,
+      plan_id: plan.id,
+      task_id: task.id,
+      tags: ["mcp", "risk"],
+    });
+    const created = JSON.parse(createdResult.content[0]!.text);
+    expect(created.plan_id).toBe(plan.id);
+    expect(created.task_id).toBe(task.id);
+
+    const listResult = await callCapturedTool(tools, "list_risks", { plan_id: plan.id });
+    const listed = JSON.parse(listResult.content[0]!.text);
+    expect(listed.map((risk: { id: string }) => risk.id)).toContain(created.id);
+
+    const healthResult = await callCapturedTool(tools, "score_plan_health", { plan_id: plan.id });
+    const health = JSON.parse(healthResult.content[0]!.text);
+    expect(health.local_only).toBe(true);
+    expect(health.no_network).toBe(true);
+    expect(health.components.open_risks).toBe(1);
+
+    const projectHealthResult = await callCapturedTool(tools, "score_project_health", { project_id: project.id });
+    expect(JSON.parse(projectHealthResult.content[0]!.text).scope).toBe("project");
+
+    const exportResult = await callCapturedTool(tools, "export_risk_register", { project_id: project.id });
+    const exported = JSON.parse(exportResult.content[0]!.text);
+    expect(exported.risks).toHaveLength(1);
+
+    const closedResult = await callCapturedTool(tools, "close_risk", { id: created.id, status: "accepted" });
+    expect(JSON.parse(closedResult.content[0]!.text).status).toBe("accepted");
   });
 
   it("retention cleanup tools preview and apply local evidence cleanup without leaking content", async () => {

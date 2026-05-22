@@ -27,6 +27,7 @@ import { findDuplicateTasks, mergeDuplicateTask } from "./lib/task-dedupe.js";
 import { runVerificationProvider, upsertVerificationProvider } from "./lib/verification-providers.js";
 import { createHandoff } from "./db/handoffs.js";
 import { createKnowledgeExportReport, createKnowledgeRecord } from "./db/project-knowledge.js";
+import { createRisk, createRiskRegisterExport, scoreProjectHealth } from "./db/project-risks.js";
 import {
   TODOS_JSON_CONTRACTS,
   TODOS_JSON_CONTRACTS_MANIFEST,
@@ -88,6 +89,9 @@ describe("stable JSON contracts", () => {
       "mention_resolution_report",
       "project_knowledge_record",
       "project_knowledge_export",
+      "project_risk_record",
+      "risk_register_export",
+      "project_health_report",
       "local_task_fields",
       "retention_cleanup_report",
       "duplicate_task_candidate",
@@ -286,6 +290,18 @@ describe("stable JSON contracts", () => {
       tags: ["contracts", "knowledge"],
     }, db);
     const knowledgeExport = createKnowledgeExportReport({ project_id: project.id }, db);
+    const riskRecord = createRisk({
+      title: "Contract release risk",
+      severity: "high",
+      probability: "medium",
+      owner: "jsoncontractagent",
+      mitigation: "Keep local evidence green.",
+      project_id: project.id,
+      task_id: task.id,
+      tags: ["contracts", "risk"],
+    }, db);
+    const riskExport = createRiskRegisterExport({ project_id: project.id }, db);
+    const healthReport = scoreProjectHealth(project.id, db);
     const sourceComment = extractTodos({ path: sourceRoot, dry_run: true }).comments[0]!;
     const sourceIndex = buildCodebaseIndex({ path: sourceRoot });
     createCalendarItem({
@@ -311,6 +327,9 @@ describe("stable JSON contracts", () => {
     expectValid("mention_resolution_report", mentionReport);
     expectValid("project_knowledge_record", knowledgeRecord);
     expectValid("project_knowledge_export", knowledgeExport);
+    expectValid("project_risk_record", riskRecord);
+    expectValid("risk_register_export", riskExport);
+    expectValid("project_health_report", healthReport);
     expectValid("local_task_fields", localFields);
     expectValid("retention_cleanup_report", retentionCleanupReport);
     expectValid("duplicate_task_candidate", duplicateCandidate);

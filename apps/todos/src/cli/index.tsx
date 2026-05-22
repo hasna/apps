@@ -27,6 +27,7 @@ const [
   { registerApiKeyCommands },
   { registerEnvironmentSnapshotCommands },
   { registerKnowledgeCommands },
+  { registerRiskCommands },
 ] = await Promise.all([
   import("./commands/task-commands.js"),
   import("./commands/plan-template-commands.js"),
@@ -40,6 +41,7 @@ const [
   import("./commands/api-key-commands.js"),
   import("./commands/environment-snapshots.js"),
   import("./commands/knowledge-commands.js"),
+  import("./commands/risk-commands.js"),
 ]);
 
 registerTaskCommands(program);
@@ -54,5 +56,6 @@ registerMachineCommands(program);
 registerApiKeyCommands(program);
 registerEnvironmentSnapshotCommands(program);
 registerKnowledgeCommands(program);
+registerRiskCommands(program);
 
 program.parse();

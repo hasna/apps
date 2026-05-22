@@ -397,6 +397,24 @@ The same workflow is available to MCP clients through
 blocked pending tasks, and startup schema repair recreates the local dependency
 table for older databases.
 
+## Local Risk Register And Health
+
+Risks are stored in local SQLite and can be linked to projects, plans, or tasks
+with an owner, mitigation, due date, severity, probability, tags, and metadata:
+
+```bash
+todos risks add "Release blocker" --plan 1234abcd --severity high --owner codex --mitigation "Ship fallback" --json
+todos risks list --plan 1234abcd --json
+todos risks score --plan 1234abcd --json
+todos risks export --project my-project --json
+```
+
+Health reports score a plan or project from local evidence only: blocked tasks,
+overdue open work, failed verification records, failed run ledgers, dependency
+depth, and open risks. MCP clients get the same surface through `create_risk`,
+`list_risks`, `update_risk`, `close_risk`, `score_plan_health`,
+`score_project_health`, and `export_risk_register`.
+
 ## Local Agent Locking
 
 Task claims and locks are local SQLite leases. Agents can claim the next ready
