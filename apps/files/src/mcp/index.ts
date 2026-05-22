@@ -1213,15 +1213,6 @@ registerTool("get_session_activity", "Get all activity within a session", {
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
-// Auto-index all local sources on startup (non-blocking)
-const machine = getCurrentMachine();
-const allSources = listSources(machine.id).filter((s) => s.enabled);
-for (const source of allSources) {
-  if (source.type === "local") {
-    indexLocalSource(source, machine.id).catch(() => {});
-  }
-}
-
 function printHelp(): void {
   console.log("Usage: files-mcp [options]\n\nRuns the open-files MCP stdio server.\n\nOptions:\n  -h, --help        Show this help text");
 }
