@@ -164,6 +164,60 @@ describe("CLI integration", () => {
     }
   });
 
+  it("should manage local project knowledge records from the CLI", async () => {
+    const dbPath = "/tmp/test-cli-knowledge.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    try {
+      const task = JSON.parse((await runCli(["add", "knowledge linked task", "--json"], dbPath)).stdout);
+      const createdResult = await runCli([
+        "knowledge",
+        "add",
+        "decision",
+        "Use local records",
+        "--decision",
+        "Store project knowledge in SQLite",
+        "--rationale",
+        "Agents need offline context",
+        "--task",
+        task.id,
+        "--tag",
+        "architecture",
+        "--json",
+      ], dbPath);
+      expect(createdResult.exitCode).toBe(0);
+      const created = JSON.parse(createdResult.stdout);
+      expect(created.record_type).toBe("decision");
+      expect(created.task_id).toBe(task.id);
+
+      const search = JSON.parse((await runCli(["knowledge", "search", "offline", "--json"], dbPath)).stdout);
+      expect(search.map((record: { id: string }) => record.id)).toContain(created.id);
+
+      const snapshot = JSON.parse((await runCli([
+        "knowledge",
+        "snapshot",
+        "--summary",
+        "Implementation is ready for verification",
+        "--task",
+        task.id,
+        "--agent",
+        "codex",
+        "--file",
+        "src/db/project-knowledge.ts",
+        "--json",
+      ], dbPath)).stdout);
+      expect(snapshot.snapshot_id).toBeTruthy();
+      expect(snapshot.record.record_type).toBe("context_snapshot");
+
+      const exported = JSON.parse((await runCli(["knowledge", "export", "--json"], dbPath)).stdout);
+      expect(exported.local_only).toBe(true);
+      expect(exported.records.length).toBe(2);
+    } finally {
+      try { unlinkSync(dbPath); } catch {}
+    }
+  });
+
   it("should manage local task fields from the CLI", async () => {
     const dbPath = "/tmp/test-cli-fields.db";
     const { unlinkSync } = await import("node:fs");

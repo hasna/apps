@@ -17,6 +17,8 @@ The stable contracts cover these object IDs:
 - `task`
 - `project`
 - `mention_resolution_report`
+- `project_knowledge_record`
+- `project_knowledge_export`
 - `local_task_fields`
 - `retention_cleanup_report`
 - `duplicate_task_candidate`
@@ -91,6 +93,19 @@ locally, the canonical reference key, and validated backlinks for files, line
 anchors, symbols, commits, branches, pull request refs present in local git
 refs, plans, runs, tasks, and agents. It uses only the local workspace, local
 git refs, and local todos state.
+
+## Project Knowledge
+
+`project_knowledge_record` is returned by `todos knowledge add`,
+`todos knowledge snapshot`, `todos knowledge list`, `todos knowledge search`,
+and matching MCP knowledge tools. It stores local decisions, architecture notes,
+tradeoffs, and context snapshots with task, project, plan, agent, tag, and
+snapshot links.
+
+`project_knowledge_export` is returned by `todos knowledge export --json` and
+`export_knowledge_records`. It contains local-only export metadata, normalized
+filters, count, and redacted knowledge records. The export never calls hosted
+services or network APIs.
 
 ## Local Task Fields
 

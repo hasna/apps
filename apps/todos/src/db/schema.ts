@@ -210,6 +210,50 @@ export function ensureSchema(db: Database): void {
     )`);
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_saved_search_views_scope ON saved_search_views(scope)");
 
+  ensureTable("context_snapshots", `
+    CREATE TABLE context_snapshots (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT,
+      task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+      project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+      snapshot_type TEXT NOT NULL CHECK(snapshot_type IN ('interrupt','complete','handoff','checkpoint')),
+      plan_summary TEXT,
+      files_open TEXT DEFAULT '[]',
+      attempts TEXT DEFAULT '[]',
+      blockers TEXT DEFAULT '[]',
+      next_steps TEXT,
+      metadata TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_snapshots_agent ON context_snapshots(agent_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_snapshots_task ON context_snapshots(task_id)");
+
+  ensureTable("project_knowledge_records", `
+    CREATE TABLE project_knowledge_records (
+      id TEXT PRIMARY KEY,
+      record_type TEXT NOT NULL CHECK(record_type IN ('decision','architecture_note','tradeoff','context_snapshot')),
+      title TEXT NOT NULL,
+      content TEXT,
+      decision TEXT,
+      rationale TEXT,
+      alternatives TEXT DEFAULT '[]',
+      task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+      project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+      plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+      agent_id TEXT,
+      snapshot_id TEXT REFERENCES context_snapshots(id) ON DELETE SET NULL,
+      tags TEXT DEFAULT '[]',
+      metadata TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_knowledge_type ON project_knowledge_records(record_type)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_knowledge_project ON project_knowledge_records(project_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_knowledge_task ON project_knowledge_records(task_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_knowledge_plan ON project_knowledge_records(plan_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_knowledge_agent ON project_knowledge_records(agent_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_knowledge_snapshot ON project_knowledge_records(snapshot_id)");
+
   ensureTable("task_relationships", `
     CREATE TABLE task_relationships (
       id TEXT PRIMARY KEY,

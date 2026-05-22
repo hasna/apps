@@ -51,6 +51,14 @@ import {
   generateReleaseNotes,
   renderReleaseNotesMarkdown,
 } from "../../lib/release-notes.js";
+import {
+  createKnowledgeExportReport,
+  createKnowledgeRecord,
+  createKnowledgeSnapshot,
+  listKnowledgeRecords,
+  renderKnowledgeExportMarkdown,
+  searchKnowledgeRecords,
+} from "../../db/project-knowledge.js";
 import { simulateAgentReplay } from "../../lib/agent-replay-simulator.js";
 import {
   inspectExtensionSource,
@@ -102,7 +110,152 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
     },
   );
 
+  server.resource(
+    "knowledge",
+    "todos://knowledge",
+    { description: "Local project knowledge records, decisions, tradeoffs, and context snapshots", mimeType: "application/json" },
+    async () => {
+      const records = listKnowledgeRecords({ limit: 100 });
+      return { contents: [{ uri: "todos://knowledge", text: JSON.stringify(records, null, 2), mimeType: "application/json" }] };
+    },
+  );
+
+  server.resource(
+    "knowledge-decisions",
+    "todos://knowledge/decisions",
+    { description: "Local decision records", mimeType: "application/json" },
+    async () => {
+      const records = listKnowledgeRecords({ record_type: "decision", limit: 100 });
+      return { contents: [{ uri: "todos://knowledge/decisions", text: JSON.stringify(records, null, 2), mimeType: "application/json" }] };
+    },
+  );
+
   // === TASK FILES ===
+
+  if (shouldRegisterTool("create_knowledge_record")) {
+    server.tool(
+      "create_knowledge_record",
+      "Create a local project knowledge record for decisions, architecture notes, tradeoffs, or task-linked context. Uses only local SQLite state.",
+      {
+        record_type: z.enum(["decision", "architecture_note", "tradeoff", "context_snapshot"]).describe("Knowledge record type"),
+        title: z.string().describe("Record title"),
+        content: z.string().optional().describe("Record body"),
+        decision: z.string().optional().describe("Decision outcome"),
+        rationale: z.string().optional().describe("Decision rationale"),
+        alternatives: z.array(z.string()).optional().describe("Alternatives considered"),
+        task_id: z.string().optional().describe("Task ID or prefix"),
+        project_id: z.string().optional().describe("Project ID or name"),
+        plan_id: z.string().optional().describe("Plan ID or prefix"),
+        agent_id: z.string().optional().describe("Authoring agent"),
+        snapshot_id: z.string().optional().describe("Linked context snapshot"),
+        tags: z.array(z.string()).optional().describe("Local tags"),
+        metadata: z.record(z.unknown()).optional().describe("JSON metadata"),
+      },
+      async (input) => {
+        try {
+          const record = createKnowledgeRecord(input as any);
+          return { content: [{ type: "text" as const, text: JSON.stringify(record, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("create_knowledge_snapshot")) {
+    server.tool(
+      "create_knowledge_snapshot",
+      "Save a local context snapshot and attach it as a project knowledge record.",
+      {
+        summary: z.string().describe("Snapshot summary"),
+        title: z.string().optional().describe("Knowledge record title"),
+        snapshot_type: z.enum(["interrupt", "complete", "handoff", "checkpoint"]).optional().describe("Snapshot type"),
+        task_id: z.string().optional().describe("Task ID or prefix"),
+        project_id: z.string().optional().describe("Project ID or name"),
+        agent_id: z.string().optional().describe("Agent that produced the snapshot"),
+        files_open: z.array(z.string()).optional().describe("Open or relevant files"),
+        attempts: z.array(z.string()).optional().describe("Attempt summaries"),
+        blockers: z.array(z.string()).optional().describe("Blocker summaries"),
+        next_steps: z.string().optional().describe("Next steps"),
+        tags: z.array(z.string()).optional().describe("Local tags"),
+        metadata: z.record(z.unknown()).optional().describe("JSON metadata"),
+      },
+      async (input) => {
+        try {
+          const result = createKnowledgeSnapshot(input as any);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_knowledge_records")) {
+    server.tool(
+      "list_knowledge_records",
+      "List local project knowledge records with optional filters.",
+      {
+        record_type: z.enum(["decision", "architecture_note", "tradeoff", "context_snapshot"]).optional(),
+        task_id: z.string().optional(),
+        project_id: z.string().optional(),
+        plan_id: z.string().optional(),
+        agent_id: z.string().optional(),
+        tag: z.string().optional(),
+        limit: z.number().optional(),
+      },
+      async (input) => {
+        try {
+          const records = listKnowledgeRecords(input as any);
+          return { content: [{ type: "text" as const, text: JSON.stringify(records, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("search_knowledge_records")) {
+    server.tool(
+      "search_knowledge_records",
+      "Search local project knowledge records by title, body, decisions, rationale, and tags.",
+      {
+        query: z.string().describe("Search query"),
+        record_type: z.enum(["decision", "architecture_note", "tradeoff", "context_snapshot"]).optional(),
+        task_id: z.string().optional(),
+        project_id: z.string().optional(),
+        plan_id: z.string().optional(),
+        agent_id: z.string().optional(),
+        tag: z.string().optional(),
+        limit: z.number().optional(),
+      },
+      async (input) => {
+        try {
+          const records = searchKnowledgeRecords(input as any);
+          return { content: [{ type: "text" as const, text: JSON.stringify(records, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("export_knowledge_records")) {
+    server.tool(
+      "export_knowledge_records",
+      "Export local project knowledge records as deterministic JSON or Markdown.",
+      {
+        query: z.string().optional(),
+        record_type: z.enum(["decision", "architecture_note", "tradeoff", "context_snapshot"]).optional(),
+        task_id: z.string().optional(),
+        project_id: z.string().optional(),
+        plan_id: z.string().optional(),
+        agent_id: z.string().optional(),
+        tag: z.string().optional(),
+        limit: z.number().optional(),
+        format: z.enum(["json", "markdown"]).optional(),
+      },
+      async (input) => {
+        try {
+          const report = createKnowledgeExportReport(input as any);
+          const text = input.format === "markdown" ? renderKnowledgeExportMarkdown(report) : JSON.stringify(report, null, 2);
+          return { content: [{ type: "text" as const, text }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
 
   if (shouldRegisterTool("add_task_file")) {
     server.tool(

@@ -19,6 +19,8 @@ structured error contracts.
 - `references`: local file, line, symbol, commit, branch, pull request ref,
   plan, run, task, and agent mention resolution with validated backlinks and no
   hosted code search.
+- `knowledge`: local decision records, architecture notes, tradeoffs, context
+  snapshots, search, export, and MCP resources for agent project memory.
 - `local-fields`: local labels, priority, severity, owner, area, and custom
   fields with query support for agent-native task selection.
 - `dedupe`: local duplicate scans and merge workflows that preserve comments,
@@ -116,6 +118,18 @@ Matching MCP tool:
 
 ```json
 { "tool": "resolve_mentions", "arguments": { "mentions": ["file:src/index.ts:12", "symbol:createTask", "branch:main"] } }
+```
+
+CLI knowledge decision:
+
+```bash
+todos knowledge add decision "Use local SQLite" --decision "Keep OSS knowledge local" --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "create_knowledge_record", "arguments": { "record_type": "decision", "title": "Use local SQLite", "decision": "Keep OSS knowledge local" } }
 ```
 
 CLI local fields update:

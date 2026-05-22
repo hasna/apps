@@ -139,7 +139,7 @@ export function clearExpiredLocks(db: Database): void {
   db.run("UPDATE tasks SET locked_by = NULL, locked_at = NULL WHERE locked_at IS NOT NULL AND locked_at < ?", [cutoff]);
 }
 
-const ALLOWED_TABLES = new Set(["tasks", "projects", "agents", "plans", "task_lists", "task_templates"]);
+const ALLOWED_TABLES = new Set(["tasks", "projects", "agents", "plans", "task_lists", "task_templates", "project_knowledge_records"]);
 
 export function resolvePartialId(db: Database, table: string, partialId: string): string | null {
   if (!ALLOWED_TABLES.has(table)) {

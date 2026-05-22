@@ -13,6 +13,7 @@ import { withNoNetwork } from "./test/no-network.js";
 const expectedDomains = [
   "tasks",
   "references",
+  "knowledge",
   "local-fields",
   "dedupe",
   "verification-providers",
@@ -146,6 +147,17 @@ describe("CLI/MCP parity manifest", () => {
     expect(byDomain.get("dedupe")?.jsonContracts).toEqual(expect.arrayContaining(["duplicate_task_candidate", "task_merge_result"]));
     expect(byDomain.get("references")?.mcpTools).toContain("resolve_mentions");
     expect(byDomain.get("references")?.jsonContracts).toContain("mention_resolution_report");
+    expect(byDomain.get("knowledge")?.mcpTools).toEqual(expect.arrayContaining([
+      "create_knowledge_record",
+      "create_knowledge_snapshot",
+      "list_knowledge_records",
+      "search_knowledge_records",
+      "export_knowledge_records",
+    ]));
+    expect(byDomain.get("knowledge")?.jsonContracts).toEqual(expect.arrayContaining([
+      "project_knowledge_record",
+      "project_knowledge_export",
+    ]));
     expect(byDomain.get("verification-providers")?.mcpTools).toEqual(expect.arrayContaining([
       "set_verification_provider",
       "run_verification_provider",

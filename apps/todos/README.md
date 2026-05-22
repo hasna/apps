@@ -114,6 +114,25 @@ MCP clients can use `set_runner_sandbox_profile`,
 are local-only and compose with workspace trust checks, so command and write
 decisions stay auditable before an agent records run evidence.
 
+## Local Project Knowledge
+
+Project knowledge records keep agent decisions, architecture notes, tradeoffs,
+and task-linked context snapshots in local SQLite. They are searchable,
+exportable, redacted on output, and available to MCP clients without hosted
+services:
+
+```bash
+todos knowledge add decision "Use local SQLite" --decision "Keep OSS knowledge local" --rationale "Agents need offline project memory" --task <task-id> --tag architecture --json
+todos knowledge snapshot --summary "Parser fix is ready for verification" --task <task-id> --agent codex --file src/parser.ts --json
+todos knowledge search "offline project memory" --json
+todos knowledge export --format markdown
+```
+
+MCP clients can use `create_knowledge_record`, `create_knowledge_snapshot`,
+`list_knowledge_records`, `search_knowledge_records`, and
+`export_knowledge_records`. The MCP server also publishes `todos://knowledge`
+and `todos://knowledge/decisions` resources for agent context refreshes.
+
 ## Local Extension Registry
 
 Extensions are installed from local manifests, directories with

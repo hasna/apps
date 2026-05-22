@@ -212,6 +212,27 @@ export {
   deletePlan,
 } from "./db/plans.js";
 
+// Local project knowledge records
+export {
+  createKnowledgeExportReport,
+  createKnowledgeRecord,
+  createKnowledgeSnapshot,
+  getKnowledgeRecord,
+  listKnowledgeRecords,
+  renderKnowledgeExportMarkdown,
+  searchKnowledgeRecords,
+} from "./db/project-knowledge.js";
+export type {
+  CreateKnowledgeRecordInput,
+  CreateKnowledgeSnapshotInput,
+  KnowledgeExportFormat,
+  KnowledgeExportReport,
+  KnowledgeRecordType,
+  ListKnowledgeRecordsOptions,
+  ProjectKnowledgeRecord,
+  SearchKnowledgeRecordsOptions,
+} from "./db/project-knowledge.js";
+
 // Project bootstrap and workspace discovery
 export {
   bootstrapProject,

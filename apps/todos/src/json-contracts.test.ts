@@ -26,6 +26,7 @@ import { resolveMentions } from "./lib/mention-resolver.js";
 import { findDuplicateTasks, mergeDuplicateTask } from "./lib/task-dedupe.js";
 import { runVerificationProvider, upsertVerificationProvider } from "./lib/verification-providers.js";
 import { createHandoff } from "./db/handoffs.js";
+import { createKnowledgeExportReport, createKnowledgeRecord } from "./db/project-knowledge.js";
 import {
   TODOS_JSON_CONTRACTS,
   TODOS_JSON_CONTRACTS_MANIFEST,
@@ -85,6 +86,8 @@ describe("stable JSON contracts", () => {
       "task",
       "project",
       "mention_resolution_report",
+      "project_knowledge_record",
+      "project_knowledge_export",
       "local_task_fields",
       "retention_cleanup_report",
       "duplicate_task_candidate",
@@ -272,6 +275,17 @@ describe("stable JSON contracts", () => {
       mentions: ["file:app.ts:1", "symbol:runPlan"],
       now: "2026-01-02T03:04:05.000Z",
     }, db);
+    const knowledgeRecord = createKnowledgeRecord({
+      record_type: "decision",
+      title: "Use local knowledge records",
+      decision: "Store decisions in local SQLite.",
+      rationale: "Agents need offline context without hosted services.",
+      task_id: task.id,
+      project_id: project.id,
+      agent_id: "jsoncontractagent",
+      tags: ["contracts", "knowledge"],
+    }, db);
+    const knowledgeExport = createKnowledgeExportReport({ project_id: project.id }, db);
     const sourceComment = extractTodos({ path: sourceRoot, dry_run: true }).comments[0]!;
     const sourceIndex = buildCodebaseIndex({ path: sourceRoot });
     createCalendarItem({
@@ -295,6 +309,8 @@ describe("stable JSON contracts", () => {
     expectValid("task_list", taskList);
     expectValid("task", task);
     expectValid("mention_resolution_report", mentionReport);
+    expectValid("project_knowledge_record", knowledgeRecord);
+    expectValid("project_knowledge_export", knowledgeExport);
     expectValid("local_task_fields", localFields);
     expectValid("retention_cleanup_report", retentionCleanupReport);
     expectValid("duplicate_task_candidate", duplicateCandidate);

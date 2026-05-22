@@ -4,6 +4,7 @@ import { getMcpToolNames } from "./mcp.js";
 export type TodosCliMcpParityDomain =
   | "tasks"
   | "references"
+  | "knowledge"
   | "local-fields"
   | "dedupe"
   | "verification-providers"
@@ -159,6 +160,32 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos references resolve file:src/index.ts:12 symbol:createTask branch:main --json",
       mcpTool: "resolve_mentions",
+    },
+  },
+  {
+    domain: "knowledge",
+    cliCommands: [
+      "todos knowledge add",
+      "todos knowledge snapshot",
+      "todos knowledge list",
+      "todos knowledge search",
+      "todos knowledge show",
+      "todos knowledge export",
+    ],
+    mcpTools: [
+      "create_knowledge_record",
+      "create_knowledge_snapshot",
+      "list_knowledge_records",
+      "search_knowledge_records",
+      "export_knowledge_records",
+    ],
+    jsonContracts: ["project_knowledge_record", "project_knowledge_export", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    intentionalGaps: [],
+    example: {
+      cli: "todos knowledge add decision \"Use local SQLite\" --decision \"Keep OSS knowledge local\" --json",
+      mcpTool: "create_knowledge_record",
     },
   },
   {

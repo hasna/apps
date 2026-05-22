@@ -1085,4 +1085,32 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_local_calendar_items_kind ON local_calendar_items(kind);
   INSERT OR IGNORE INTO _migrations (id) VALUES (58);
   `,
+  // Migration 59: Local project knowledge records and decision snapshots
+  `
+  CREATE TABLE IF NOT EXISTS project_knowledge_records (
+    id TEXT PRIMARY KEY,
+    record_type TEXT NOT NULL CHECK(record_type IN ('decision','architecture_note','tradeoff','context_snapshot')),
+    title TEXT NOT NULL,
+    content TEXT,
+    decision TEXT,
+    rationale TEXT,
+    alternatives TEXT DEFAULT '[]',
+    task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+    agent_id TEXT,
+    snapshot_id TEXT REFERENCES context_snapshots(id) ON DELETE SET NULL,
+    tags TEXT DEFAULT '[]',
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_project_knowledge_type ON project_knowledge_records(record_type);
+  CREATE INDEX IF NOT EXISTS idx_project_knowledge_project ON project_knowledge_records(project_id);
+  CREATE INDEX IF NOT EXISTS idx_project_knowledge_task ON project_knowledge_records(task_id);
+  CREATE INDEX IF NOT EXISTS idx_project_knowledge_plan ON project_knowledge_records(plan_id);
+  CREATE INDEX IF NOT EXISTS idx_project_knowledge_agent ON project_knowledge_records(agent_id);
+  CREATE INDEX IF NOT EXISTS idx_project_knowledge_snapshot ON project_knowledge_records(snapshot_id);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (59);
+  `,
 ];

@@ -295,6 +295,46 @@ describe("MCP tool operations", () => {
     }
   });
 
+  it("knowledge tools expose local decision records and context snapshots through MCP", async () => {
+    const tools = captureTools(registerTaskResources);
+    const project = createProject({ name: "MCP Knowledge", path: "/tmp/mcp-knowledge" }, db);
+    const task = createTask({ title: "Capture MCP decision", project_id: project.id }, db);
+
+    const createdResult = await callCapturedTool(tools, "create_knowledge_record", {
+      record_type: "decision",
+      title: "Keep MCP knowledge local",
+      decision: "Store records in SQLite.",
+      rationale: "Agent clients need offline context.",
+      task_id: task.id,
+      project_id: project.id,
+      tags: ["mcp", "knowledge"],
+    });
+    const created = JSON.parse(createdResult.content[0]!.text);
+    expect(created.record_type).toBe("decision");
+    expect(created.task_id).toBe(task.id);
+
+    const snapshotResult = await callCapturedTool(tools, "create_knowledge_snapshot", {
+      summary: "MCP implementation is ready for verification.",
+      task_id: task.id,
+      project_id: project.id,
+      agent_id: "codex",
+      files_open: ["src/mcp/tools/task-resources.ts"],
+    });
+    const snapshot = JSON.parse(snapshotResult.content[0]!.text);
+    expect(snapshot.snapshot_id).toBeTruthy();
+    expect(snapshot.record.record_type).toBe("context_snapshot");
+
+    const searchResult = await callCapturedTool(tools, "search_knowledge_records", { query: "offline" });
+    const search = JSON.parse(searchResult.content[0]!.text);
+    expect(search.map((record: { id: string }) => record.id)).toContain(created.id);
+
+    const exportResult = await callCapturedTool(tools, "export_knowledge_records", { project_id: project.id });
+    const exported = JSON.parse(exportResult.content[0]!.text);
+    expect(exported.local_only).toBe(true);
+    expect(exported.no_network).toBe(true);
+    expect(exported.records).toHaveLength(2);
+  });
+
   it("retention cleanup tools preview and apply local evidence cleanup without leaking content", async () => {
     const tools = captureTools(registerTaskProjectTools);
     const project = createProject({ name: "MCP retention", path: "/tmp/mcp-retention" }, db);
