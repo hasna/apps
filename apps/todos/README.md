@@ -302,6 +302,27 @@ and `remove_review_routing_rule`. Queue transitions are written to audit
 history and emitted to local event hooks as `review.requested`,
 `review.claimed`, `review.returned`, `review.approved`, and `review.reopened`.
 
+## Local Roadmaps
+
+Roadmaps group local tasks, plans, runs, milestones, and release labels into a
+portable planning view. They live in local config, summarize dependency
+readiness from the task graph, and export deterministic JSON or Markdown
+bundles:
+
+```bash
+todos roadmaps create "Public package launch" --release v1 --json
+todos roadmaps milestones add <roadmap-id> "Docs and examples" --tasks <task-id> --due 2026-06-01 --release v1 --json
+todos roadmaps releases set <roadmap-id> v1 --milestones <milestone-id> --release-version 1.0.0 --json
+todos roadmaps show <roadmap-id> --format markdown
+todos roadmaps export <roadmap-id> --out roadmap.json
+todos roadmaps import roadmap.json --apply --json
+```
+
+MCP clients can use `create_roadmap`, `list_roadmaps`,
+`get_roadmap_summary`, `update_roadmap`, `delete_roadmap`,
+`create_milestone`, `update_milestone`, `delete_milestone`,
+`set_release_group`, `export_roadmap`, and `import_roadmap`.
+
 ## Local Event Hooks
 
 Event hooks are local subscriptions for task, plan, run, approval, import, and

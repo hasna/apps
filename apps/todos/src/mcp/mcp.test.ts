@@ -1119,6 +1119,80 @@ describe("MCP tool wrappers", () => {
     }
   });
 
+  it("roadmap tools manage milestones release groups summaries and bundles", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-roadmaps-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    try {
+      const tools = captureTools(registerTaskProjectTools);
+      const task = createTask({ title: "MCP roadmap task" }, db);
+
+      const createResult = await callCapturedTool(tools, "create_roadmap", {
+        name: "MCP Roadmap",
+        release: "v1",
+        owner: "codex",
+      });
+      const roadmap = JSON.parse(createResult.content[0]!.text);
+      expect(roadmap.name).toBe("MCP Roadmap");
+
+      const milestoneResult = await callCapturedTool(tools, "create_milestone", {
+        roadmap_id: roadmap.id,
+        title: "MCP Milestone",
+        task_ids: [task.id.slice(0, 8)],
+        due_at: "2026-06-01",
+        release: "v1",
+      });
+      const milestone = JSON.parse(milestoneResult.content[0]!.text);
+      expect(milestone.task_ids).toEqual([task.id]);
+
+      const releaseResult = await callCapturedTool(tools, "set_release_group", {
+        roadmap_id: roadmap.id,
+        name: "v1",
+        version: "1.0.0",
+        milestone_ids: [milestone.id],
+        task_ids: [task.id],
+      });
+      expect(JSON.parse(releaseResult.content[0]!.text).version).toBe("1.0.0");
+
+      const summaryResult = await callCapturedTool(tools, "get_roadmap_summary", { roadmap_id: roadmap.id });
+      expect(JSON.parse(summaryResult.content[0]!.text).progress.task_count).toBe(1);
+
+      const markdownResult = await callCapturedTool(tools, "export_roadmap", { roadmap_id: roadmap.id, format: "markdown" });
+      expect(markdownResult.content[0]!.text).toContain("MCP Milestone");
+
+      const bundleResult = await callCapturedTool(tools, "export_roadmap", { roadmap_id: roadmap.id });
+      const bundle = JSON.parse(bundleResult.content[0]!.text);
+      expect(bundle.kind).toBe("hasna.todos.roadmap-bundle");
+
+      const previewResult = await callCapturedTool(tools, "import_roadmap", { bundle, apply: false });
+      expect(JSON.parse(previewResult.content[0]!.text).applied).toBe(false);
+
+      const updatedMilestone = await callCapturedTool(tools, "update_milestone", {
+        milestone_id: milestone.id,
+        status: "active",
+      });
+      expect(JSON.parse(updatedMilestone.content[0]!.text).status).toBe("active");
+
+      const updatedRoadmap = await callCapturedTool(tools, "update_roadmap", {
+        roadmap_id: roadmap.id,
+        status: "active",
+      });
+      expect(JSON.parse(updatedRoadmap.content[0]!.text).status).toBe("active");
+
+      const listResult = await callCapturedTool(tools, "list_roadmaps", {});
+      expect(JSON.parse(listResult.content[0]!.text).map((item: { name: string }) => item.name)).toContain("MCP Roadmap");
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      resetConfig();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("time tracking tools manage local focus sessions and reports", async () => {
     const tools = captureTools(registerTaskRelTools);
     const task = createTask({ title: "MCP time task", estimated_minutes: 75 }, db);

@@ -79,6 +79,61 @@ export interface ReviewRoutingRuleConfig {
   updated_at?: string;
 }
 
+export type LocalRoadmapStatus = "planned" | "active" | "completed" | "archived";
+export type LocalMilestoneStatus = "planned" | "active" | "completed" | "blocked" | "archived";
+
+export interface LocalMilestoneConfig {
+  id: string;
+  roadmap_id: string;
+  title: string;
+  description: string | null;
+  due_at: string | null;
+  status: LocalMilestoneStatus;
+  owner: string | null;
+  agent_id: string | null;
+  task_ids: string[];
+  plan_ids: string[];
+  run_ids: string[];
+  release: string | null;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LocalReleaseGroupConfig {
+  name: string;
+  version: string | null;
+  roadmap_id: string;
+  status: LocalMilestoneStatus;
+  milestone_ids: string[];
+  task_ids: string[];
+  plan_ids: string[];
+  run_ids: string[];
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LocalRoadmapConfig {
+  id: string;
+  name: string;
+  description: string | null;
+  project_id: string | null;
+  status: LocalRoadmapStatus;
+  owner: string | null;
+  agent_id: string | null;
+  release: string | null;
+  milestone_ids: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LocalRoadmapStoreConfig {
+  roadmaps: Record<string, LocalRoadmapConfig>;
+  milestones: Record<string, LocalMilestoneConfig>;
+  releases: Record<string, LocalReleaseGroupConfig>;
+}
+
 export type VerificationProviderKind = "command" | "testbox" | "ci_log" | "browser" | "script";
 
 export interface VerificationProviderRetryConfig {
@@ -241,6 +296,8 @@ export interface TodosConfig {
   agent_run_adapters?: Record<string, AgentRunAdapterConfig>;
   /** Local review routing rules for queue and reviewer defaults. */
   review_routing_rules?: Record<string, ReviewRoutingRuleConfig>;
+  /** Local roadmap, milestone, and release grouping state. */
+  local_roadmaps?: LocalRoadmapStoreConfig;
   /** Optional local verification provider adapters, keyed by provider name. */
   verification_providers?: Record<string, VerificationProviderConfig>;
   /** Local extension registry entries, keyed by extension name. */

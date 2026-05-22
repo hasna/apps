@@ -34,6 +34,7 @@ const [
   { registerLocalSnapshotCommands },
   { registerSdkFixtureCommands },
   { registerReviewQueueCommands },
+  { registerRoadmapCommands },
 ] = await Promise.all([
   import("./commands/task-commands.js"),
   import("./commands/plan-template-commands.js"),
@@ -54,6 +55,7 @@ const [
   import("./commands/local-snapshot-commands.js"),
   import("./commands/sdk-fixture-commands.js"),
   import("./commands/review-queue-commands.js"),
+  import("./commands/roadmap-commands.js"),
 ]);
 
 registerTaskCommands(program);
@@ -75,5 +77,6 @@ registerOnboardingCommands(program);
 registerLocalSnapshotCommands(program);
 registerSdkFixtureCommands(program);
 registerReviewQueueCommands(program);
+registerRoadmapCommands(program);
 
 program.parse();

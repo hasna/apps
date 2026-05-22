@@ -36,6 +36,8 @@ structured error contracts.
 - `projects`: project bootstrap, project registration, project updates, task
   lists, path resolution, and focus.
 - `plans`: plan create, list, read, update, complete, and delete workflows.
+- `roadmaps`: local roadmap, milestone, release grouping, progress summary,
+  dependency readiness, Markdown/JSON export, and import workflows.
 - `templates`: bundled marketplace-free local template library, editable JSON
   template files, template import/export, preview, version history, and task
   creation from templates.
@@ -413,6 +415,18 @@ Matching MCP tool:
 
 ```json
 { "tool": "list_review_queue", "arguments": { "queue": "security-review" } }
+```
+
+CLI local roadmap summary:
+
+```bash
+todos roadmaps show release-plan --format markdown
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "get_roadmap_summary", "arguments": { "roadmap_id": "release-plan", "format": "markdown" } }
 ```
 
 CLI local event hook:

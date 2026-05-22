@@ -18,6 +18,10 @@ The stable contracts cover these object IDs:
 - `project`
 - `local_review_queue_item`
 - `review_routing_rule`
+- `local_roadmap`
+- `local_milestone`
+- `roadmap_summary`
+- `roadmap_bundle`
 - `mention_resolution_report`
 - `project_knowledge_record`
 - `project_knowledge_export`
@@ -122,6 +126,27 @@ task review contract.
 `list_review_routing_rules`. It stores local queue routing by name with enabled
 state, queue, reviewers, tags, priorities, and optional project scope. Rules
 are local config only and never imply hosted users, orgs, or cloud routing.
+
+## Local Roadmaps
+
+`local_roadmap` is returned by `todos roadmaps create`,
+`todos roadmaps list`, `todos roadmaps update`, `create_roadmap`,
+`list_roadmaps`, and `update_roadmap`. It captures local roadmap identity,
+status, project scope, owner, agent owner, default release label, milestone
+links, and timestamps.
+
+`local_milestone` is returned by `todos roadmaps milestones add`,
+`todos roadmaps milestones update`, `create_milestone`, and
+`update_milestone`. It captures local due dates, owner assignment, linked task,
+plan, run, release, and tag metadata.
+
+`roadmap_summary` is returned by `todos roadmaps show --json` and
+`get_roadmap_summary`. It includes milestone summaries, release groups, task
+progress, blocker counts, and readiness derived from local dependencies.
+
+`roadmap_bundle` is returned by `todos roadmaps export --json` and
+`export_roadmap`. It is the import/export envelope consumed by
+`todos roadmaps import` and `import_roadmap`.
 
 ## Project Knowledge
 

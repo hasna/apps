@@ -1165,6 +1165,43 @@ export type {
   TaskReviewState,
   TaskRiskLevel,
 } from "./lib/task-contracts.js";
+export {
+  LOCAL_ROADMAP_SCHEMA_VERSION,
+  createMilestone,
+  createRoadmap,
+  deleteMilestone,
+  deleteRoadmap,
+  exportRoadmapBundle,
+  getRoadmap,
+  importRoadmapBundle,
+  listMilestones,
+  listReleaseGroups,
+  listRoadmaps,
+  renderRoadmapMarkdown,
+  summarizeMilestone,
+  summarizeRoadmap,
+  updateMilestone,
+  updateRoadmap,
+  upsertReleaseGroup,
+} from "./lib/roadmaps.js";
+export type {
+  CreateMilestoneInput,
+  CreateRoadmapInput,
+  ImportRoadmapBundleResult,
+  LocalMilestoneConfig,
+  LocalMilestoneStatus,
+  LocalReleaseGroupConfig,
+  LocalRoadmapConfig,
+  LocalRoadmapStatus,
+  LocalRoadmapStoreConfig,
+  MilestoneSummary,
+  RoadmapBundle,
+  RoadmapProgressSummary,
+  RoadmapSummary,
+  UpdateMilestoneInput,
+  UpdateRoadmapInput,
+  UpsertReleaseGroupInput,
+} from "./lib/roadmaps.js";
 
 // Dispatch formatter
 export { formatDispatchMessage, formatSingleTask } from "./lib/dispatch-formatter.js";

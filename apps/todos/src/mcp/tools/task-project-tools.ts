@@ -95,6 +95,20 @@ import { createBranchWorkPlan } from "../../lib/branch-work-plans.js";
 import { getTaskLocalFields, queryTasksByLocalFields, setTaskLocalFields } from "../../lib/local-fields.js";
 import { previewNaturalLanguageIntake } from "../../lib/natural-language-intake.js";
 import { findDuplicateTasks, mergeDuplicateTask } from "../../lib/task-dedupe.js";
+import {
+  createMilestone,
+  createRoadmap,
+  deleteMilestone,
+  deleteRoadmap,
+  exportRoadmapBundle,
+  importRoadmapBundle,
+  listRoadmaps,
+  renderRoadmapMarkdown,
+  summarizeRoadmap,
+  updateMilestone,
+  updateRoadmap,
+  upsertReleaseGroup,
+} from "../../lib/roadmaps.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 
 interface TaskProjectContext {
@@ -249,6 +263,25 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
     };
     visit(graph, 0, "root");
     return lines.join("\n");
+  }
+
+  const roadmapStatusSchema = z.enum(["planned", "active", "completed", "archived"]);
+  const milestoneStatusSchema = z.enum(["planned", "active", "completed", "blocked", "archived"]);
+
+  function resolveProjectIdInput(projectId?: string): string | undefined {
+    return projectId ? resolveId(projectId, "projects") : undefined;
+  }
+
+  function resolveTaskIdsInput(taskIds?: string[]): string[] | undefined {
+    return taskIds?.map((taskId) => resolveId(taskId, "tasks"));
+  }
+
+  function resolvePlanIdsInput(planIds?: string[]): string[] | undefined {
+    return planIds?.map((planId) => resolveId(planId, "plans"));
+  }
+
+  function resolveRunIdsInput(runIds?: string[]): string[] | undefined {
+    return runIds?.map((runId) => resolveTaskRunId(runId));
   }
 
   // === WORKSPACE TRUST ===
@@ -1711,6 +1744,271 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
         try {
           deletePlan(resolveId(plan_id, "plans"), force);
           return { content: [{ type: "text" as const, text: `Plan ${plan_id.slice(0, 8)} deleted.` }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  // === ROADMAPS ===
+
+  if (shouldRegisterTool("create_roadmap")) {
+    server.tool(
+      "create_roadmap",
+      "Create a local roadmap for grouping milestones, plans, tasks, runs, and release labels.",
+      {
+        name: z.string(),
+        description: z.string().optional(),
+        project_id: z.string().optional(),
+        status: roadmapStatusSchema.optional(),
+        owner: z.string().optional(),
+        agent_id: z.string().optional(),
+        release: z.string().optional(),
+      },
+      async (input) => {
+        try {
+          const roadmap = createRoadmap({ ...input, project_id: resolveProjectIdInput(input.project_id) });
+          return { content: [{ type: "text" as const, text: JSON.stringify(roadmap, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_roadmaps")) {
+    server.tool(
+      "list_roadmaps",
+      "List local roadmaps.",
+      {
+        project_id: z.string().optional(),
+        status: roadmapStatusSchema.optional(),
+      },
+      async ({ project_id, status }) => {
+        try {
+          const roadmaps = listRoadmaps({ project_id: resolveProjectIdInput(project_id), status });
+          return { content: [{ type: "text" as const, text: JSON.stringify(roadmaps, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("get_roadmap_summary")) {
+    server.tool(
+      "get_roadmap_summary",
+      "Get computed local roadmap progress, milestone, release, and blocker summary.",
+      {
+        roadmap_id: z.string(),
+        format: z.enum(["json", "markdown"]).optional(),
+      },
+      async ({ roadmap_id, format }) => {
+        try {
+          const text = format === "markdown"
+            ? renderRoadmapMarkdown(roadmap_id)
+            : JSON.stringify(summarizeRoadmap(roadmap_id), null, 2);
+          return { content: [{ type: "text" as const, text }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("update_roadmap")) {
+    server.tool(
+      "update_roadmap",
+      "Update a local roadmap.",
+      {
+        roadmap_id: z.string(),
+        name: z.string().optional(),
+        description: z.string().nullable().optional(),
+        project_id: z.string().nullable().optional(),
+        status: roadmapStatusSchema.optional(),
+        owner: z.string().nullable().optional(),
+        agent_id: z.string().nullable().optional(),
+        release: z.string().nullable().optional(),
+      },
+      async ({ roadmap_id, project_id, ...updates }) => {
+        try {
+          const resolvedProject = project_id === undefined || project_id === null ? project_id : resolveId(project_id, "projects");
+          const roadmap = updateRoadmap(roadmap_id, { ...updates, project_id: resolvedProject });
+          return { content: [{ type: "text" as const, text: JSON.stringify(roadmap, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("delete_roadmap")) {
+    server.tool(
+      "delete_roadmap",
+      "Delete a local roadmap and its milestone/release config.",
+      {
+        roadmap_id: z.string(),
+      },
+      async ({ roadmap_id }) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ deleted: deleteRoadmap(roadmap_id) }, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("create_milestone")) {
+    server.tool(
+      "create_milestone",
+      "Add a local milestone to a roadmap.",
+      {
+        roadmap_id: z.string(),
+        title: z.string(),
+        description: z.string().optional(),
+        due_at: z.string().optional(),
+        status: milestoneStatusSchema.optional(),
+        owner: z.string().optional(),
+        agent_id: z.string().optional(),
+        task_ids: z.array(z.string()).optional(),
+        plan_ids: z.array(z.string()).optional(),
+        run_ids: z.array(z.string()).optional(),
+        release: z.string().optional(),
+        tags: z.array(z.string()).optional(),
+      },
+      async ({ task_ids, plan_ids, run_ids, ...input }) => {
+        try {
+          const milestone = createMilestone({
+            ...input,
+            task_ids: resolveTaskIdsInput(task_ids),
+            plan_ids: resolvePlanIdsInput(plan_ids),
+            run_ids: resolveRunIdsInput(run_ids),
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(milestone, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("update_milestone")) {
+    server.tool(
+      "update_milestone",
+      "Update a local roadmap milestone.",
+      {
+        milestone_id: z.string(),
+        title: z.string().optional(),
+        description: z.string().nullable().optional(),
+        due_at: z.string().nullable().optional(),
+        status: milestoneStatusSchema.optional(),
+        owner: z.string().nullable().optional(),
+        agent_id: z.string().nullable().optional(),
+        task_ids: z.array(z.string()).optional(),
+        plan_ids: z.array(z.string()).optional(),
+        run_ids: z.array(z.string()).optional(),
+        release: z.string().nullable().optional(),
+        tags: z.array(z.string()).optional(),
+      },
+      async ({ milestone_id, task_ids, plan_ids, run_ids, ...updates }) => {
+        try {
+          const milestone = updateMilestone(milestone_id, {
+            ...updates,
+            task_ids: resolveTaskIdsInput(task_ids),
+            plan_ids: resolvePlanIdsInput(plan_ids),
+            run_ids: resolveRunIdsInput(run_ids),
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(milestone, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("delete_milestone")) {
+    server.tool(
+      "delete_milestone",
+      "Delete a local roadmap milestone.",
+      {
+        milestone_id: z.string(),
+      },
+      async ({ milestone_id }) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ deleted: deleteMilestone(milestone_id) }, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("set_release_group")) {
+    server.tool(
+      "set_release_group",
+      "Create or update a local roadmap release grouping.",
+      {
+        roadmap_id: z.string(),
+        name: z.string(),
+        version: z.string().optional(),
+        status: milestoneStatusSchema.optional(),
+        milestone_ids: z.array(z.string()).optional(),
+        task_ids: z.array(z.string()).optional(),
+        plan_ids: z.array(z.string()).optional(),
+        run_ids: z.array(z.string()).optional(),
+        notes: z.string().optional(),
+      },
+      async ({ task_ids, plan_ids, run_ids, ...input }) => {
+        try {
+          const release = upsertReleaseGroup({
+            ...input,
+            task_ids: resolveTaskIdsInput(task_ids),
+            plan_ids: resolvePlanIdsInput(plan_ids),
+            run_ids: resolveRunIdsInput(run_ids),
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(release, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("export_roadmap")) {
+    server.tool(
+      "export_roadmap",
+      "Export a local roadmap as JSON bundle or Markdown.",
+      {
+        roadmap_id: z.string(),
+        format: z.enum(["json", "markdown"]).optional(),
+      },
+      async ({ roadmap_id, format }) => {
+        try {
+          const text = format === "markdown"
+            ? renderRoadmapMarkdown(roadmap_id)
+            : JSON.stringify(exportRoadmapBundle(roadmap_id), null, 2);
+          return { content: [{ type: "text" as const, text }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("import_roadmap")) {
+    server.tool(
+      "import_roadmap",
+      "Preview or apply a local roadmap JSON bundle.",
+      {
+        bundle: z.record(z.unknown()),
+        apply: z.boolean().optional(),
+      },
+      async ({ bundle, apply }) => {
+        try {
+          const result = importRoadmapBundle(bundle as Parameters<typeof importRoadmapBundle>[0], { apply });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }

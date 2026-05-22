@@ -22,6 +22,7 @@ const expectedDomains = [
   "verification-providers",
   "projects",
   "plans",
+  "roadmaps",
   "templates",
   "workspace-trust",
   "secret-safety",

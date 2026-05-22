@@ -2368,6 +2368,85 @@ END:VCALENDAR`);
     }
   });
 
+  it("should manage local roadmaps, milestones, release groups, and imports from the CLI", async () => {
+    const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-cli-roadmaps-"));
+    process.env["HOME"] = home;
+    const dbPath = join(home, "todos.db");
+    const bundlePath = join(home, "roadmap.json");
+
+    try {
+      const taskResult = await runCli(["--json", "add", "CLI roadmap task"], dbPath, { HOME: home });
+      expect(taskResult.exitCode).toBe(0);
+      const task = JSON.parse(taskResult.stdout);
+
+      const roadmapResult = await runCli(["--json", "roadmaps", "create", "CLI Roadmap", "--release", "v1"], dbPath, { HOME: home });
+      expect(roadmapResult.exitCode).toBe(0);
+      const roadmap = JSON.parse(roadmapResult.stdout);
+      expect(roadmap.name).toBe("CLI Roadmap");
+
+      const milestoneResult = await runCli([
+        "--json",
+        "roadmaps",
+        "milestones",
+        "add",
+        roadmap.id,
+        "CLI Milestone",
+        "--tasks",
+        task.id,
+        "--due",
+        "2026-06-01",
+        "--release",
+        "v1",
+      ], dbPath, { HOME: home });
+      expect(milestoneResult.exitCode).toBe(0);
+      const milestone = JSON.parse(milestoneResult.stdout);
+      expect(milestone.task_ids).toEqual([task.id]);
+
+      const releaseResult = await runCli([
+        "--json",
+        "roadmaps",
+        "releases",
+        "set",
+        roadmap.id,
+        "v1",
+        "--milestones",
+        milestone.id,
+        "--tasks",
+        task.id,
+        "--release-version",
+        "1.0.0",
+      ], dbPath, { HOME: home });
+      expect(releaseResult.exitCode).toBe(0);
+      expect(JSON.parse(releaseResult.stdout).version).toBe("1.0.0");
+
+      const summaryResult = await runCli(["--json", "roadmaps", "show", roadmap.id], dbPath, { HOME: home });
+      expect(summaryResult.exitCode).toBe(0);
+      expect(JSON.parse(summaryResult.stdout).progress.task_count).toBe(1);
+
+      const markdownResult = await runCli(["roadmaps", "show", roadmap.id, "--format", "markdown"], dbPath, { HOME: home });
+      expect(markdownResult.exitCode).toBe(0);
+      expect(markdownResult.stdout).toContain("CLI Milestone");
+
+      const exportResult = await runCli(["roadmaps", "export", roadmap.id, "--out", bundlePath], dbPath, { HOME: home });
+      expect(exportResult.exitCode).toBe(0);
+
+      const importPreview = await runCli(["--json", "roadmaps", "import", bundlePath], dbPath, { HOME: home });
+      expect(JSON.parse(importPreview.stdout).applied).toBe(false);
+
+      const importApply = await runCli(["--json", "roadmaps", "import", bundlePath, "--apply"], dbPath, { HOME: home });
+      expect(JSON.parse(importApply.stdout).applied).toBe(true);
+      try { unlinkSync(dbPath); } catch {}
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("should extract source TODOs with index metadata and watcher output", async () => {
     const { mkdtempSync, rmSync, writeFileSync, unlinkSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");

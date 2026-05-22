@@ -13,6 +13,7 @@ export type TodosCliMcpParityDomain =
   | "verification-providers"
   | "projects"
   | "plans"
+  | "roadmaps"
   | "templates"
   | "workspace-trust"
   | "secret-safety"
@@ -386,6 +387,41 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos plans --add \"Release 1.0\" --json",
       mcpTool: "create_plan",
+    },
+  },
+  {
+    domain: "roadmaps",
+    cliCommands: [
+      "todos roadmaps create",
+      "todos roadmaps list",
+      "todos roadmaps show",
+      "todos roadmaps update",
+      "todos roadmaps delete",
+      "todos roadmaps milestones add",
+      "todos roadmaps milestones update",
+      "todos roadmaps releases set",
+      "todos roadmaps export",
+      "todos roadmaps import",
+    ],
+    mcpTools: [
+      "create_roadmap",
+      "list_roadmaps",
+      "get_roadmap_summary",
+      "update_roadmap",
+      "delete_roadmap",
+      "create_milestone",
+      "update_milestone",
+      "delete_milestone",
+      "set_release_group",
+      "export_roadmap",
+      "import_roadmap",
+    ],
+    jsonContracts: ["local_roadmap", "local_milestone", "roadmap_summary", "roadmap_bundle", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    example: {
+      cli: "todos roadmaps show release-plan --format markdown",
+      mcpTool: "get_roadmap_summary",
     },
   },
   {

@@ -49,6 +49,25 @@ export {
   upsertReviewRoutingRule,
 } from "./lib/review-queues.js";
 export {
+  LOCAL_ROADMAP_SCHEMA_VERSION,
+  createMilestone,
+  createRoadmap,
+  deleteMilestone,
+  deleteRoadmap,
+  exportRoadmapBundle,
+  getRoadmap,
+  importRoadmapBundle,
+  listMilestones,
+  listReleaseGroups,
+  listRoadmaps,
+  renderRoadmapMarkdown,
+  summarizeMilestone,
+  summarizeRoadmap,
+  updateMilestone,
+  updateRoadmap,
+  upsertReleaseGroup,
+} from "./lib/roadmaps.js";
+export {
   DEFAULT_ENCRYPTION_KEY_ENV,
   DEFAULT_ENCRYPTION_PROFILE,
   TODOS_ENCRYPTED_BRIDGE_KIND,
@@ -121,6 +140,24 @@ export type {
   ReviewQueueState,
   UpsertReviewRoutingRuleInput,
 } from "./lib/review-queues.js";
+export type {
+  CreateMilestoneInput,
+  CreateRoadmapInput,
+  ImportRoadmapBundleResult,
+  LocalMilestoneConfig,
+  LocalMilestoneStatus,
+  LocalReleaseGroupConfig,
+  LocalRoadmapConfig,
+  LocalRoadmapStatus,
+  LocalRoadmapStoreConfig,
+  MilestoneSummary,
+  RoadmapBundle,
+  RoadmapProgressSummary,
+  RoadmapSummary,
+  UpdateMilestoneInput,
+  UpdateRoadmapInput,
+  UpsertReleaseGroupInput,
+} from "./lib/roadmaps.js";
 export type {
   EncryptedLocalBridgeBundle,
   LocalEncryptionEnvelope,

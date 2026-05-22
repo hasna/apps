@@ -23,6 +23,7 @@ import { testExtensionCompatibility } from "./lib/local-extensions.js";
 import { getLocalSnapshot, pollLocalSnapshots } from "./lib/local-snapshots.js";
 import { listOnboardingFixtures } from "./lib/onboarding-fixtures.js";
 import { listReviewQueue, upsertReviewRoutingRule, requestReviewQueue } from "./lib/review-queues.js";
+import { createMilestone, createRoadmap, exportRoadmapBundle, summarizeRoadmap } from "./lib/roadmaps.js";
 import { createSdkIntegrationFixturePack } from "./lib/sdk-integration-fixtures.js";
 import { generateReleaseNotes } from "./lib/release-notes.js";
 import { previewRetentionCleanup } from "./lib/retention-cleanup.js";
@@ -94,6 +95,10 @@ describe("stable JSON contracts", () => {
       "project",
       "local_review_queue_item",
       "review_routing_rule",
+      "local_roadmap",
+      "local_milestone",
+      "roadmap_summary",
+      "roadmap_bundle",
       "mention_resolution_report",
       "project_knowledge_record",
       "project_knowledge_export",
@@ -195,6 +200,23 @@ describe("stable JSON contracts", () => {
       reason: "contract fixture review",
     }, db);
     const reviewQueueItem = listReviewQueue({ queue: "qa" }, db)[0]!;
+    const roadmap = createRoadmap({
+      name: "Contract Roadmap",
+      description: "Contract roadmap fixture",
+      project_id: project.id,
+      owner: "jsoncontractagent",
+      release: "v1.0",
+    });
+    const milestone = createMilestone({
+      roadmap_id: roadmap.id,
+      title: "Contract milestone",
+      due_at: "2026-01-10",
+      task_ids: [task.id],
+      release: "v1.0",
+      tags: ["contracts"],
+    });
+    const roadmapSummary = summarizeRoadmap(roadmap.id, db);
+    const roadmapBundle = exportRoadmapBundle(roadmap.id);
     setTaskLocalFields(task.id, {
       labels: ["contracts"],
       severity: "s2",
@@ -359,6 +381,10 @@ describe("stable JSON contracts", () => {
     expectValid("project", project);
     expectValid("local_review_queue_item", reviewQueueItem);
     expectValid("review_routing_rule", reviewRoutingRule);
+    expectValid("local_roadmap", roadmap);
+    expectValid("local_milestone", milestone);
+    expectValid("roadmap_summary", roadmapSummary);
+    expectValid("roadmap_bundle", roadmapBundle);
     expectValid("task_list", taskList);
     expectValid("task", task);
     expectValid("mention_resolution_report", mentionReport);
