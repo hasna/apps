@@ -2447,6 +2447,72 @@ END:VCALENDAR`);
     }
   });
 
+  it("should manage local capacity profiles and planning forecasts from the CLI", async () => {
+    const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-cli-capacity-"));
+    process.env["HOME"] = home;
+    const dbPath = join(home, "todos.db");
+
+    try {
+      const plan = JSON.parse((await runCli(["--json", "plans", "--add", "Capacity Plan"], dbPath, { HOME: home })).stdout);
+      const task = await runCli([
+        "--json",
+        "add",
+        "Forecast task",
+        "--plan",
+        plan.id,
+        "--assign",
+        "codex",
+        "--estimated",
+        "120",
+      ], dbPath, { HOME: home });
+      expect(task.exitCode).toBe(0);
+
+      const profile = await runCli([
+        "--json",
+        "capacity",
+        "set",
+        "codex",
+        "--minutes-per-day",
+        "60",
+        "--days",
+        "1,2,3,4,5",
+      ], dbPath, { HOME: home });
+      expect(profile.exitCode).toBe(0);
+      expect(JSON.parse(profile.stdout).minutes_per_day).toBe(60);
+
+      const forecast = await runCli([
+        "--json",
+        "capacity",
+        "forecast",
+        "--plan",
+        plan.id,
+        "--agent",
+        "codex",
+        "--start-date",
+        "2026-01-01",
+      ], dbPath, { HOME: home });
+      expect(forecast.exitCode).toBe(0);
+      const payload = JSON.parse(forecast.stdout);
+      expect(payload.remaining_estimated_minutes).toBe(120);
+      expect(payload.forecast_work_days).toBe(2);
+
+      const markdown = await runCli(["capacity", "forecast", "--plan", plan.id, "--agent", "codex", "--format", "markdown"], dbPath, { HOME: home });
+      expect(markdown.stdout).toContain("Forecast task");
+
+      const removed = await runCli(["--json", "capacity", "remove", "codex"], dbPath, { HOME: home });
+      expect(JSON.parse(removed.stdout).removed).toBe(true);
+      try { unlinkSync(dbPath); } catch {}
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("should extract source TODOs with index metadata and watcher output", async () => {
     const { mkdtempSync, rmSync, writeFileSync, unlinkSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");

@@ -134,6 +134,21 @@ export interface LocalRoadmapStoreConfig {
   releases: Record<string, LocalReleaseGroupConfig>;
 }
 
+export interface LocalCapacityProfileConfig {
+  id: string;
+  agent_id: string;
+  project_id: string | null;
+  minutes_per_day: number;
+  working_days: number[];
+  effective_from: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LocalCapacityStoreConfig {
+  profiles: Record<string, LocalCapacityProfileConfig>;
+}
+
 export type VerificationProviderKind = "command" | "testbox" | "ci_log" | "browser" | "script";
 
 export interface VerificationProviderRetryConfig {
@@ -298,6 +313,8 @@ export interface TodosConfig {
   review_routing_rules?: Record<string, ReviewRoutingRuleConfig>;
   /** Local roadmap, milestone, and release grouping state. */
   local_roadmaps?: LocalRoadmapStoreConfig;
+  /** Local planning capacity profiles, keyed by stable profile id. */
+  local_capacity?: LocalCapacityStoreConfig;
   /** Optional local verification provider adapters, keyed by provider name. */
   verification_providers?: Record<string, VerificationProviderConfig>;
   /** Local extension registry entries, keyed by extension name. */

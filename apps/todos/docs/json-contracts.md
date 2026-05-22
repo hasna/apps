@@ -22,6 +22,8 @@ The stable contracts cover these object IDs:
 - `local_milestone`
 - `roadmap_summary`
 - `roadmap_bundle`
+- `capacity_profile`
+- `planning_forecast`
 - `mention_resolution_report`
 - `project_knowledge_record`
 - `project_knowledge_export`
@@ -147,6 +149,18 @@ progress, blocker counts, and readiness derived from local dependencies.
 `roadmap_bundle` is returned by `todos roadmaps export --json` and
 `export_roadmap`. It is the import/export envelope consumed by
 `todos roadmaps import` and `import_roadmap`.
+
+## Local Capacity Forecasts
+
+`capacity_profile` is returned by `todos capacity set`,
+`todos capacity list`, `set_capacity_profile`, and
+`list_capacity_profiles`. It stores local agent capacity in minutes per day,
+working days, optional project scope, and effective date metadata.
+
+`planning_forecast` is returned by `todos capacity forecast --json` and
+`get_planning_forecast`. It combines task estimates, actual minutes, capacity
+profiles, due dates, projected completion date, and risk flags for local
+planning.
 
 ## Project Knowledge
 

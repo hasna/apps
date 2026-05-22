@@ -1203,6 +1203,25 @@ export type {
   UpsertReleaseGroupInput,
 } from "./lib/roadmaps.js";
 
+export {
+  LOCAL_CAPACITY_SCHEMA_VERSION,
+  getPlanningForecast,
+  listCapacityProfiles,
+  removeCapacityProfile,
+  renderPlanningForecastMarkdown,
+  upsertCapacityProfile,
+} from "./lib/capacity-forecasts.js";
+export type {
+  CapacityProfileQuery,
+  ForecastRiskFlag,
+  LocalCapacityProfileConfig,
+  LocalCapacityStoreConfig,
+  PlanningForecast,
+  PlanningForecastInput,
+  PlanningForecastTask,
+  UpsertCapacityProfileInput,
+} from "./lib/capacity-forecasts.js";
+
 // Dispatch formatter
 export { formatDispatchMessage, formatSingleTask } from "./lib/dispatch-formatter.js";
 export type { FormatOpts } from "./lib/dispatch-formatter.js";

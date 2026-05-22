@@ -24,6 +24,7 @@ import { getLocalSnapshot, pollLocalSnapshots } from "./lib/local-snapshots.js";
 import { listOnboardingFixtures } from "./lib/onboarding-fixtures.js";
 import { listReviewQueue, upsertReviewRoutingRule, requestReviewQueue } from "./lib/review-queues.js";
 import { createMilestone, createRoadmap, exportRoadmapBundle, summarizeRoadmap } from "./lib/roadmaps.js";
+import { getPlanningForecast, upsertCapacityProfile } from "./lib/capacity-forecasts.js";
 import { createSdkIntegrationFixturePack } from "./lib/sdk-integration-fixtures.js";
 import { generateReleaseNotes } from "./lib/release-notes.js";
 import { previewRetentionCleanup } from "./lib/retention-cleanup.js";
@@ -99,6 +100,8 @@ describe("stable JSON contracts", () => {
       "local_milestone",
       "roadmap_summary",
       "roadmap_bundle",
+      "capacity_profile",
+      "planning_forecast",
       "mention_resolution_report",
       "project_knowledge_record",
       "project_knowledge_export",
@@ -217,6 +220,12 @@ describe("stable JSON contracts", () => {
     });
     const roadmapSummary = summarizeRoadmap(roadmap.id, db);
     const roadmapBundle = exportRoadmapBundle(roadmap.id);
+    const capacityProfile = upsertCapacityProfile({
+      agent_id: "jsoncontractagent",
+      project_id: project.id,
+      minutes_per_day: 180,
+    });
+    const planningForecast = getPlanningForecast({ project_id: project.id, agent_id: "jsoncontractagent", start_date: "2026-01-02" }, db);
     setTaskLocalFields(task.id, {
       labels: ["contracts"],
       severity: "s2",
@@ -385,6 +394,8 @@ describe("stable JSON contracts", () => {
     expectValid("local_milestone", milestone);
     expectValid("roadmap_summary", roadmapSummary);
     expectValid("roadmap_bundle", roadmapBundle);
+    expectValid("capacity_profile", capacityProfile);
+    expectValid("planning_forecast", planningForecast);
     expectValid("task_list", taskList);
     expectValid("task", task);
     expectValid("mention_resolution_report", mentionReport);

@@ -14,6 +14,7 @@ export type TodosCliMcpParityDomain =
   | "projects"
   | "plans"
   | "roadmaps"
+  | "capacity"
   | "templates"
   | "workspace-trust"
   | "secret-safety"
@@ -422,6 +423,28 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos roadmaps show release-plan --format markdown",
       mcpTool: "get_roadmap_summary",
+    },
+  },
+  {
+    domain: "capacity",
+    cliCommands: [
+      "todos capacity set",
+      "todos capacity list",
+      "todos capacity remove",
+      "todos capacity forecast",
+    ],
+    mcpTools: [
+      "set_capacity_profile",
+      "list_capacity_profiles",
+      "remove_capacity_profile",
+      "get_planning_forecast",
+    ],
+    jsonContracts: ["capacity_profile", "planning_forecast", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    example: {
+      cli: "todos capacity forecast --plan release-plan --agent codex --json",
+      mcpTool: "get_planning_forecast",
     },
   },
   {

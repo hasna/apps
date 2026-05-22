@@ -159,6 +159,16 @@ export type {
   UpsertReleaseGroupInput,
 } from "./lib/roadmaps.js";
 export type {
+  CapacityProfileQuery,
+  ForecastRiskFlag,
+  LocalCapacityProfileConfig,
+  LocalCapacityStoreConfig,
+  PlanningForecast,
+  PlanningForecastInput,
+  PlanningForecastTask,
+  UpsertCapacityProfileInput,
+} from "./lib/capacity-forecasts.js";
+export type {
   EncryptedLocalBridgeBundle,
   LocalEncryptionEnvelope,
   UpsertEncryptionProfileInput,

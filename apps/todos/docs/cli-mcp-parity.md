@@ -38,6 +38,8 @@ structured error contracts.
 - `plans`: plan create, list, read, update, complete, and delete workflows.
 - `roadmaps`: local roadmap, milestone, release grouping, progress summary,
   dependency readiness, Markdown/JSON export, and import workflows.
+- `capacity`: local agent capacity profiles and planning forecasts from task
+  estimates, actual minutes, due dates, and risk flags.
 - `templates`: bundled marketplace-free local template library, editable JSON
   template files, template import/export, preview, version history, and task
   creation from templates.
@@ -427,6 +429,18 @@ Matching MCP tool:
 
 ```json
 { "tool": "get_roadmap_summary", "arguments": { "roadmap_id": "release-plan", "format": "markdown" } }
+```
+
+CLI local capacity forecast:
+
+```bash
+todos capacity forecast --plan release-plan --agent codex --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "get_planning_forecast", "arguments": { "plan_id": "release-plan", "agent_id": "codex" } }
 ```
 
 CLI local event hook:

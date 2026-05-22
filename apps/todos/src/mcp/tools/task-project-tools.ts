@@ -109,6 +109,13 @@ import {
   updateRoadmap,
   upsertReleaseGroup,
 } from "../../lib/roadmaps.js";
+import {
+  getPlanningForecast,
+  listCapacityProfiles,
+  removeCapacityProfile,
+  renderPlanningForecastMarkdown,
+  upsertCapacityProfile,
+} from "../../lib/capacity-forecasts.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 
 interface TaskProjectContext {
@@ -2009,6 +2016,96 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
         try {
           const result = importRoadmapBundle(bundle as Parameters<typeof importRoadmapBundle>[0], { apply });
           return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  // === CAPACITY AND FORECASTS ===
+
+  if (shouldRegisterTool("set_capacity_profile")) {
+    server.tool(
+      "set_capacity_profile",
+      "Create or update a local agent capacity profile.",
+      {
+        agent_id: z.string(),
+        project_id: z.string().optional(),
+        minutes_per_day: z.number().int().positive(),
+        working_days: z.array(z.number().int().min(0).max(6)).optional(),
+        effective_from: z.string().nullable().optional(),
+      },
+      async (input) => {
+        try {
+          const profile = upsertCapacityProfile({ ...input, project_id: resolveProjectIdInput(input.project_id) });
+          return { content: [{ type: "text" as const, text: JSON.stringify(profile, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_capacity_profiles")) {
+    server.tool(
+      "list_capacity_profiles",
+      "List local planning capacity profiles.",
+      {
+        agent_id: z.string().optional(),
+        project_id: z.string().optional(),
+      },
+      async ({ agent_id, project_id }) => {
+        try {
+          const profiles = listCapacityProfiles({ agent_id, project_id: resolveProjectIdInput(project_id) });
+          return { content: [{ type: "text" as const, text: JSON.stringify(profiles, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("remove_capacity_profile")) {
+    server.tool(
+      "remove_capacity_profile",
+      "Remove a local planning capacity profile.",
+      {
+        agent_id_or_id: z.string(),
+        project_id: z.string().nullable().optional(),
+      },
+      async ({ agent_id_or_id, project_id }) => {
+        try {
+          const resolvedProject = project_id === undefined || project_id === null ? project_id : resolveId(project_id, "projects");
+          return { content: [{ type: "text" as const, text: JSON.stringify({ removed: removeCapacityProfile(agent_id_or_id, resolvedProject) }, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("get_planning_forecast")) {
+    server.tool(
+      "get_planning_forecast",
+      "Forecast local plan or project completion from estimates, actuals, capacity, and due dates.",
+      {
+        project_id: z.string().optional(),
+        plan_id: z.string().optional(),
+        agent_id: z.string().optional(),
+        start_date: z.string().optional(),
+        format: z.enum(["json", "markdown"]).optional(),
+      },
+      async ({ project_id, plan_id, agent_id, start_date, format }) => {
+        try {
+          const forecast = getPlanningForecast({
+            project_id: resolveProjectIdInput(project_id),
+            plan_id: plan_id ? resolveId(plan_id, "plans") : undefined,
+            agent_id,
+            start_date,
+          });
+          const text = format === "markdown" ? renderPlanningForecastMarkdown(forecast) : JSON.stringify(forecast, null, 2);
+          return { content: [{ type: "text" as const, text }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }

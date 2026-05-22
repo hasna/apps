@@ -1193,6 +1193,64 @@ describe("MCP tool wrappers", () => {
     }
   });
 
+  it("capacity tools manage local profiles and planning forecasts", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-capacity-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    try {
+      const tools = captureTools(registerTaskProjectTools);
+      const project = createProject({ name: "MCP Capacity", path: "/tmp/mcp-capacity" }, db);
+      const plan = createPlan({ name: "MCP Capacity Plan", project_id: project.id }, db);
+      createTask({
+        title: "MCP forecast task",
+        project_id: project.id,
+        plan_id: plan.id,
+        assigned_to: "codex",
+        estimated_minutes: 90,
+      }, db);
+
+      const profileResult = await callCapturedTool(tools, "set_capacity_profile", {
+        agent_id: "codex",
+        project_id: project.id,
+        minutes_per_day: 45,
+      });
+      expect(JSON.parse(profileResult.content[0]!.text).minutes_per_day).toBe(45);
+
+      const forecastResult = await callCapturedTool(tools, "get_planning_forecast", {
+        project_id: project.id,
+        plan_id: plan.id,
+        agent_id: "codex",
+        start_date: "2026-01-01",
+      });
+      const forecast = JSON.parse(forecastResult.content[0]!.text);
+      expect(forecast.remaining_estimated_minutes).toBe(90);
+      expect(forecast.forecast_work_days).toBe(2);
+
+      const markdown = await callCapturedTool(tools, "get_planning_forecast", {
+        project_id: project.id,
+        plan_id: plan.id,
+        agent_id: "codex",
+        format: "markdown",
+      });
+      expect(markdown.content[0]!.text).toContain("MCP forecast task");
+
+      const listResult = await callCapturedTool(tools, "list_capacity_profiles", { agent_id: "codex" });
+      expect(JSON.parse(listResult.content[0]!.text)).toHaveLength(1);
+
+      const removeResult = await callCapturedTool(tools, "remove_capacity_profile", { agent_id_or_id: "codex", project_id: project.id });
+      expect(JSON.parse(removeResult.content[0]!.text).removed).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      resetConfig();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("time tracking tools manage local focus sessions and reports", async () => {
     const tools = captureTools(registerTaskRelTools);
     const task = createTask({ title: "MCP time task", estimated_minutes: 75 }, db);
