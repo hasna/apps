@@ -350,15 +350,18 @@ status, and payload text, then render deterministic line or JSON notifications:
 
 ```bash
 todos terminal-notifications set blocked --event task.blocked,task.failed --min-severity warning --agent codex --priority high --contains deploy --bell
+todos terminal-notifications set due --event task.due,task.sla_breached --min-severity warning --quiet-hours 22:00-07:00
+todos notifications check --emit-hooks --terminal --quiet-hours 22:00-07:00 --json
 todos terminal-notifications test blocked --event task.failed --payload '{"id":"demo","title":"Deploy failed","agent_id":"codex","priority":"high"}' --json
 todos terminal-notifications list --json
 ```
 
 MCP clients can use `set_terminal_notification_rule`,
 `list_terminal_notification_rules`, `test_terminal_notification_rule`,
-`evaluate_terminal_watch_rules`, and `remove_terminal_notification_rule`.
-Notifications are evaluated from local event payloads and do not require a
-desktop notification daemon, hosted queue, or cloud webhook service.
+`evaluate_terminal_watch_rules`, `check_local_notifications`, and
+`remove_terminal_notification_rule`. Notifications are evaluated from local
+event payloads, can respect quiet hours, and do not require a desktop
+notification daemon, hosted queue, or cloud webhook service.
 
 ## Local Encryption Profiles
 
@@ -785,6 +788,7 @@ todos add "Weekly review" --due 2026-06-01 --recurrence "every week" --sla-minut
 todos update <task-id> --due 2026-06-08 --recurrence "every monday" --sla 90 --json
 todos overdue --json
 todos sla --json
+todos notifications check --due-within-minutes 60 --stale-minutes 30 --terminal --json
 ```
 
 `todos overdue` returns unfinished tasks past `due_at`. `todos sla` returns
@@ -792,7 +796,11 @@ unfinished tasks that are past `due_at` or whose `sla_minutes` threshold has
 elapsed from `started_at` when present, otherwise `created_at`. MCP clients use
 `create_task` and `update_task` with `deadline`, `recurrence_rule`, and
 `sla_minutes`, and can call `get_sla_breaches` for the same local escalation
-view.
+view. `todos notifications check` turns due, due-soon, SLA, stale task,
+completed run, and local reminder records into redacted local alerts; it can
+emit configured file/socket/script/stdout event hooks, evaluate terminal watch
+rules, and suppress delivery during quiet hours without contacting an external
+notification service.
 
 ## Local Task Fields
 

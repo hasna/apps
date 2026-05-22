@@ -2334,11 +2334,14 @@ END:VCALENDAR`);
         "high",
         "--contains",
         "deploy",
+        "--quiet-hours",
+        "22:00-07:00",
         "--bell",
         "--json",
       ], dbPath);
       expect(saved.exitCode).toBe(0);
       expect(JSON.parse(saved.stdout).rule.name).toBe("blocked");
+      expect(JSON.parse(saved.stdout).rule.quiet_hours.start).toBe("22:00");
 
       const test = await runCli([
         "terminal-notifications",
@@ -2357,6 +2360,21 @@ END:VCALENDAR`);
 
       const list = await runCli(["terminal-notifications", "list", "--json"], dbPath);
       expect(JSON.parse(list.stdout)).toHaveLength(1);
+
+      const task = JSON.parse((await runCli(["add", "CLI notification due", "--due", "2026-01-02T03:00:00.000Z", "--json"], dbPath)).stdout);
+      const checked = await runCli([
+        "notifications",
+        "check",
+        "--now",
+        "2026-01-02T04:00:00.000Z",
+        "--no-runs",
+        "--no-calendar",
+        "--json",
+      ], dbPath);
+      expect(checked.exitCode).toBe(0);
+      const notificationCheck = JSON.parse(checked.stdout);
+      expect(notificationCheck.counts.task_due).toBe(1);
+      expect(notificationCheck.alerts[0].task_id).toBe(task.id);
 
       const removed = await runCli(["terminal-notifications", "remove", "blocked", "--json"], dbPath);
       expect(JSON.parse(removed.stdout).removed).toBe(true);

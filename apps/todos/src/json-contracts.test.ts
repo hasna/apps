@@ -33,6 +33,7 @@ import { previewRetentionCleanup } from "./lib/retention-cleanup.js";
 import { resolveMentions } from "./lib/mention-resolver.js";
 import { findDuplicateTasks, mergeDuplicateTask } from "./lib/task-dedupe.js";
 import { importExternalIssues } from "./lib/external-issue-importers.js";
+import { checkLocalNotifications } from "./lib/local-notifications.js";
 import { runVerificationProvider, upsertVerificationProvider } from "./lib/verification-providers.js";
 import { createHandoff } from "./db/handoffs.js";
 import { createAgentReliabilityExport, getAgentReliabilityScorecard } from "./db/agent-metrics.js";
@@ -153,6 +154,7 @@ describe("stable JSON contracts", () => {
       "local_event_hook_delivery",
       "terminal_notification_rule",
       "terminal_notification_evaluation",
+      "local_notification_check",
       "branch_work_plan",
       "natural_language_intake_preview",
       "local_encryption_profile",
@@ -507,6 +509,12 @@ describe("stable JSON contracts", () => {
         payload: {},
       }],
     });
+    const localNotificationCheck = await checkLocalNotifications({
+      now: "2026-01-02T03:04:05.000Z",
+      include_runs: false,
+      include_calendar: false,
+    }, db);
+    expectValid("local_notification_check", localNotificationCheck);
     expectValid("branch_work_plan", {
       schema_version: 1,
       local_only: true,

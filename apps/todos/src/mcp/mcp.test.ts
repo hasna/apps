@@ -675,6 +675,16 @@ describe("MCP tool operations", () => {
       });
       expect(JSON.parse(evaluated.content[0]!.text)[0].matched).toBe(false);
 
+      createTask({ title: "MCP overdue notification", due_at: "2026-01-02T03:00:00.000Z" }, db);
+      const checked = await callCapturedTool(tools, "check_local_notifications", {
+        now: "2026-01-02T04:00:00.000Z",
+        include_runs: false,
+        include_calendar: false,
+      });
+      const notificationCheck = JSON.parse(checked.content[0]!.text);
+      expect(notificationCheck.counts.task_due).toBe(1);
+      expect(notificationCheck.alerts[0].event_type).toBe("task.due");
+
       const listResult = await callCapturedTool(tools, "list_terminal_notification_rules", {});
       expect(JSON.parse(listResult.content[0]!.text)).toHaveLength(1);
 

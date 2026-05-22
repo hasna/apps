@@ -1257,6 +1257,10 @@ export {
   EXTERNAL_ISSUE_IMPORT_SCHEMA_VERSION,
   importExternalIssues,
 } from "./lib/external-issue-importers.js";
+export {
+  LOCAL_NOTIFICATION_SCHEMA_VERSION,
+  checkLocalNotifications,
+} from "./lib/local-notifications.js";
 export type {
   ExternalIssueExistingMatch,
   ExternalIssueImportInput,
@@ -1264,6 +1268,14 @@ export type {
   ExternalIssueProvider,
   ExternalIssueRecord,
 } from "./lib/external-issue-importers.js";
+export type {
+  CheckLocalNotificationsInput,
+  CheckLocalNotificationsResult,
+  LocalNotificationAlert,
+  LocalNotificationKind,
+  LocalNotificationQuietHours,
+  LocalNotificationSeverity,
+} from "./lib/local-notifications.js";
 
 // Dispatch formatter
 export { formatDispatchMessage, formatSingleTask } from "./lib/dispatch-formatter.js";

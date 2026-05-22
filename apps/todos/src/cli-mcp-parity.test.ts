@@ -213,6 +213,8 @@ describe("CLI/MCP parity manifest", () => {
       "recover_stale_session_handoff",
     ]));
     expect(byDomain.get("handoffs")?.jsonContracts).toContain("handoff");
+    expect(byDomain.get("terminal-notifications")?.mcpTools).toContain("check_local_notifications");
+    expect(byDomain.get("terminal-notifications")?.jsonContracts).toContain("local_notification_check");
     expect(byDomain.get("search")?.mcpTools).toEqual(expect.arrayContaining(["search_tasks", "get_status"]));
     expect(byDomain.get("templates")?.mcpTools).toEqual(expect.arrayContaining([
       "list_template_library",
@@ -268,6 +270,8 @@ describe("CLI/MCP parity manifest", () => {
     expect(docs).toContain("todos issues import --file issues.json --provider github --apply --json");
     expect(docs).toContain("import_external_issues");
     expect(docs).toContain("todos event-hooks set audit --event task.completed");
+    expect(docs).toContain("todos notifications check --terminal --json");
+    expect(docs).toContain("check_local_notifications");
     expect(docs).toContain("todos env-snapshot capture --task 1234abcd --json");
     expect(docs).toContain("todos release-notes --project . --format markdown");
     expect(docs).toContain("todos release-compat check --json");

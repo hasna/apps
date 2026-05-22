@@ -86,6 +86,10 @@ export {
   importExternalIssues,
 } from "./lib/external-issue-importers.js";
 export {
+  LOCAL_NOTIFICATION_SCHEMA_VERSION,
+  checkLocalNotifications,
+} from "./lib/local-notifications.js";
+export {
   DEFAULT_ENCRYPTION_KEY_ENV,
   DEFAULT_ENCRYPTION_PROFILE,
   TODOS_ENCRYPTED_BRIDGE_KIND,
@@ -139,6 +143,14 @@ export type {
   ExternalIssueProvider,
   ExternalIssueRecord,
 } from "./lib/external-issue-importers.js";
+export type {
+  CheckLocalNotificationsInput,
+  CheckLocalNotificationsResult,
+  LocalNotificationAlert,
+  LocalNotificationKind,
+  LocalNotificationQuietHours,
+  LocalNotificationSeverity,
+} from "./lib/local-notifications.js";
 export type {
   ImportOnboardingFixtureOptions,
   OnboardingFixture,

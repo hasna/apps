@@ -946,6 +946,7 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
       "todos terminal-notifications set",
       "todos terminal-notifications remove",
       "todos terminal-notifications test",
+      "todos notifications check",
     ],
     mcpTools: [
       "list_terminal_notification_rules",
@@ -953,13 +954,14 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
       "remove_terminal_notification_rule",
       "test_terminal_notification_rule",
       "evaluate_terminal_watch_rules",
+      "check_local_notifications",
     ],
-    jsonContracts: ["terminal_notification_rule", "terminal_notification_evaluation", "structured_error", "api_error"],
+    jsonContracts: ["terminal_notification_rule", "terminal_notification_evaluation", "local_notification_check", "structured_error", "api_error"],
     errorContracts: ["structured_error", "api_error"],
     status: "matched",
     example: {
-      cli: "todos terminal-notifications set blocked --event task.blocked,task.failed --min-severity warning --agent codex --json",
-      mcpTool: "set_terminal_notification_rule",
+      cli: "todos notifications check --terminal --json",
+      mcpTool: "check_local_notifications",
     },
   },
   {

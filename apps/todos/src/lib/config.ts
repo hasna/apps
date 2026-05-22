@@ -270,6 +270,12 @@ export interface LocalEventHookConfig {
 export type TerminalNotificationSeverity = "info" | "warning" | "critical";
 export type TerminalNotificationFormat = "line" | "json";
 
+export interface TerminalNotificationQuietHoursConfig {
+  start: string;
+  end: string;
+  timezone?: "utc" | "local";
+}
+
 export interface TerminalNotificationRuleConfig {
   name: string;
   enabled: boolean;
@@ -282,6 +288,7 @@ export interface TerminalNotificationRuleConfig {
   agent_ids?: string[];
   project_ids?: string[];
   contains?: string[];
+  quiet_hours?: TerminalNotificationQuietHoursConfig;
   created_at?: string;
   updated_at?: string;
 }

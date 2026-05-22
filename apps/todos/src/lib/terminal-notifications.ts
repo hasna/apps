@@ -2,6 +2,7 @@ import {
   loadConfig,
   saveConfig,
   type TerminalNotificationFormat,
+  type TerminalNotificationQuietHoursConfig,
   type TerminalNotificationRuleConfig,
   type TerminalNotificationSeverity,
 } from "./config.js";
@@ -20,6 +21,7 @@ export interface TerminalNotificationRuleInput {
   agent_ids?: string[];
   project_ids?: string[];
   contains?: string[];
+  quiet_hours?: TerminalNotificationQuietHoursConfig;
 }
 
 export interface TerminalWatchEventInput {
@@ -57,7 +59,7 @@ const SEVERITY_ORDER: Record<TerminalNotificationSeverity, number> = {
 
 const EVENT_SEVERITY: Array<[RegExp, TerminalNotificationSeverity]> = [
   [/(failed|blocked|breach|expired|rejected|cancelled)/, "critical"],
-  [/(assigned|status_changed|unblocked|approval|due|deadline|updated)/, "warning"],
+  [/(assigned|status_changed|unblocked|approval|due|deadline|updated|stale|sla|reminder)/, "warning"],
 ];
 
 const VALID_SEVERITIES = new Set<TerminalNotificationSeverity>(["info", "warning", "critical"]);
@@ -81,6 +83,35 @@ function normalizeEvents(events: string[]): string[] {
   return normalized;
 }
 
+function parseClock(value: string): number {
+  const match = value.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  if (!match) throw new Error("quiet hours must use HH:MM-HH:MM");
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+export function parseQuietHours(value: string | undefined, timezone: "utc" | "local" = "local"): TerminalNotificationQuietHoursConfig | undefined {
+  if (!value) return undefined;
+  const [start, end] = value.split("-", 2).map((part) => part.trim());
+  if (!start || !end) throw new Error("quiet hours must use HH:MM-HH:MM");
+  parseClock(start);
+  parseClock(end);
+  return { start, end, timezone };
+}
+
+function isQuietTime(quiet: TerminalNotificationQuietHoursConfig | undefined, timestamp: string): boolean {
+  if (!quiet) return false;
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return false;
+  const minutes = quiet.timezone === "utc"
+    ? date.getUTCHours() * 60 + date.getUTCMinutes()
+    : date.getHours() * 60 + date.getMinutes();
+  const start = parseClock(quiet.start);
+  const end = parseClock(quiet.end);
+  if (start === end) return true;
+  if (start < end) return minutes >= start && minutes < end;
+  return minutes >= start || minutes < end;
+}
+
 function normalizeRule(input: TerminalNotificationRuleInput, existing?: TerminalNotificationRuleConfig): TerminalNotificationRuleConfig {
   const severity = input.min_severity || existing?.min_severity || "info";
   const format = input.format || existing?.format || "line";
@@ -100,6 +131,7 @@ function normalizeRule(input: TerminalNotificationRuleInput, existing?: Terminal
     agent_ids: normalizeList(input.agent_ids) ?? existing?.agent_ids,
     project_ids: normalizeList(input.project_ids) ?? existing?.project_ids,
     contains: normalizeList(input.contains) ?? existing?.contains,
+    quiet_hours: input.quiet_hours ?? existing?.quiet_hours,
     created_at: existing?.created_at || timestamp,
     updated_at: timestamp,
   };
@@ -182,6 +214,7 @@ export function evaluateTerminalWatchRules(input: TerminalWatchEventInput, rules
     if (!fieldMatches(rule.agent_ids, payload["agent_id"] ?? payload["assigned_to"])) skipped.push("agent does not match rule");
     if (!fieldMatches(rule.project_ids, payload["project_id"])) skipped.push("project does not match rule");
     if (!containsMatches(rule.contains, payload)) skipped.push("payload text does not match rule");
+    if (isQuietTime(rule.quiet_hours, timestamp)) skipped.push("quiet hours active");
 
     const matched = skipped.length === 0;
     const title = asString(payload["title"]) || asString(payload["name"]) || input.type;

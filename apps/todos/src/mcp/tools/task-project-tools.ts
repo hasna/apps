@@ -82,6 +82,7 @@ import {
   testTerminalNotificationRule,
   upsertTerminalNotificationRule,
 } from "../../lib/terminal-notifications.js";
+import { checkLocalNotifications } from "../../lib/local-notifications.js";
 import {
   decryptValue,
   encryptValue,
@@ -802,6 +803,11 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
         agent_ids: z.array(z.string()).optional(),
         project_ids: z.array(z.string()).optional(),
         contains: z.array(z.string()).optional(),
+        quiet_hours: z.object({
+          start: z.string(),
+          end: z.string(),
+          timezone: z.enum(["utc", "local"]).optional(),
+        }).optional(),
       },
       async (input) => {
         try {
@@ -863,6 +869,42 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       async ({ event, payload }) => {
         try {
           const result = evaluateTerminalWatchRules({ type: event, payload: payload || {} });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("check_local_notifications")) {
+    server.tool(
+      "check_local_notifications",
+      "Check local due-date, SLA, stale-task, completed-run, and calendar reminder alerts; optionally emit local hooks and terminal watch evaluations.",
+      {
+        project_id: z.string().optional(),
+        agent_id: z.string().optional(),
+        now: z.string().optional(),
+        due_within_minutes: z.number().optional(),
+        stale_minutes: z.number().optional(),
+        run_since: z.string().optional(),
+        include_runs: z.boolean().optional(),
+        include_calendar: z.boolean().optional(),
+        emit_hooks: z.boolean().optional(),
+        evaluate_terminal: z.boolean().optional(),
+        quiet_hours: z.object({
+          start: z.string(),
+          end: z.string(),
+          timezone: z.enum(["utc", "local"]).optional(),
+        }).optional(),
+        limit: z.number().optional(),
+      },
+      async (input) => {
+        try {
+          const result = await checkLocalNotifications({
+            ...input,
+            project_id: input.project_id ? resolveId(input.project_id, "projects") : undefined,
+          });
           return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };

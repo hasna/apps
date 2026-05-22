@@ -71,8 +71,9 @@ structured error contracts.
 - `local-event-hooks`: local-only event hooks for task, plan, run, approval,
   import, and export events with stdout, file, socket, and script targets.
 - `terminal-notifications`: local terminal watch rules for task, run, plan,
-  approval, import, and export events with severity, agent, project, priority,
-  status, payload text, and bell filters.
+  approval, import, export, due-date, SLA, stale-task, run, and reminder events
+  with severity, agent, project, priority, status, payload text, quiet-hours,
+  and bell filters.
 - `branch-work-plans`: local branch-safe work plans with task/plan scope,
   planned files, active file conflicts, git status, and suggested traceability
   commands.
@@ -489,12 +490,14 @@ CLI terminal notification rule:
 
 ```bash
 todos terminal-notifications set blocked --event task.blocked,task.failed --min-severity warning --agent codex --json
+todos notifications check --terminal --json
 ```
 
 Matching MCP tool:
 
 ```json
 { "tool": "set_terminal_notification_rule", "arguments": { "name": "blocked", "events": ["task.blocked", "task.failed"], "min_severity": "warning", "agent_ids": ["codex"] } }
+{ "tool": "check_local_notifications", "arguments": { "due_within_minutes": 60, "evaluate_terminal": true } }
 ```
 
 CLI branch-safe work plan:

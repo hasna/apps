@@ -188,6 +188,18 @@ function parseCalendarKind(value: string | undefined): CalendarEventKind | undef
   return value as CalendarEventKind;
 }
 
+function parseQuietHoursOption(value: string | undefined, timezone: string | undefined): { start: string; end: string; timezone: "utc" | "local" } | undefined {
+  if (!value) return undefined;
+  const [start, end] = value.split("-", 2).map((part) => part.trim());
+  const clock = /^([01]?\d|2[0-3]):([0-5]\d)$/;
+  if (!start || !end || !clock.test(start) || !clock.test(end)) {
+    console.error(chalk.red("--quiet-hours must use HH:MM-HH:MM"));
+    process.exit(1);
+  }
+  const tz = timezone === "utc" ? "utc" : "local";
+  return { start, end, timezone: tz };
+}
+
 export function registerQueryCommands(program: Command) {
   const references = program
     .command("references")
@@ -1880,6 +1892,60 @@ export function registerQueryCommands(program: Command) {
         const result = importCalendarIcs(readFileSync(path, "utf-8"));
         if (opts.json || program.opts().json) { output(result, true); return; }
         console.log(chalk.green(`Imported ${result.imported} events, skipped ${result.skipped}`));
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  const notifications = program
+    .command("notifications")
+    .description("Check local due-date, SLA, stale-task, run, and reminder alerts");
+
+  notifications
+    .command("check")
+    .description("Evaluate local notification alerts and optionally emit local hooks or terminal watch rules")
+    .option("--project <id>", "Project filter")
+    .option("--agent <id>", "Agent filter")
+    .option("--now <iso>", "Evaluation timestamp")
+    .option("--due-within-minutes <n>", "Warn for tasks and reminders due within this many minutes", "60")
+    .option("--stale-minutes <n>", "Minutes before an in-progress task is stale", "30")
+    .option("--run-since <iso>", "Only include completed run alerts at or after this timestamp")
+    .option("--no-runs", "Exclude completed run alerts")
+    .option("--no-calendar", "Exclude local calendar reminder alerts")
+    .option("--emit-hooks", "Emit matching local event hooks for generated alerts")
+    .option("--terminal", "Evaluate terminal notification rules for generated alerts")
+    .option("--quiet-hours <range>", "Suppress hook and terminal delivery during HH:MM-HH:MM")
+    .option("--quiet-timezone <tz>", "Quiet hours timezone: local or utc", "local")
+    .option("--limit <n>", "Max alerts", "100")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const globalOpts = program.opts();
+        const { checkLocalNotifications } = await import("../../lib/local-notifications.js");
+        const result = await checkLocalNotifications({
+          project_id: resolveProjectOption(opts.project || globalOpts.project),
+          agent_id: opts.agent || globalOpts.agent,
+          now: opts.now,
+          due_within_minutes: Number(opts.dueWithinMinutes),
+          stale_minutes: Number(opts.staleMinutes),
+          run_since: opts.runSince,
+          include_runs: opts.runs,
+          include_calendar: opts.calendar,
+          emit_hooks: Boolean(opts.emitHooks),
+          evaluate_terminal: Boolean(opts.terminal),
+          quiet_hours: parseQuietHoursOption(opts.quietHours, opts.quietTimezone),
+          limit: Number(opts.limit),
+        });
+        if (opts.json || globalOpts.json) { output(result, true); return; }
+        if (result.alerts.length === 0) {
+          console.log(chalk.dim("No local notification alerts."));
+          return;
+        }
+        for (const alert of result.alerts) {
+          const color = alert.severity === "critical" ? chalk.red : alert.severity === "warning" ? chalk.yellow : chalk.cyan;
+          const quiet = alert.quieted ? chalk.dim(" quiet") : "";
+          console.log(`${color(alert.severity.toUpperCase())} ${alert.event_type} ${alert.title}${quiet}`);
+        }
       } catch (e) {
         handleError(e);
       }

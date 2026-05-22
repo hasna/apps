@@ -66,6 +66,9 @@ The stable contracts cover these object IDs:
 - `time_report_entry`
 - `local_event_hook`
 - `local_event_hook_delivery`
+- `terminal_notification_rule`
+- `terminal_notification_evaluation`
+- `local_notification_check`
 - `local_encryption_profile`
 - `local_encryption_envelope`
 - `encrypted_local_bridge_bundle`
@@ -405,6 +408,12 @@ result returned by `todos event-hooks test` and `test_local_event_hook`.
 `terminal_notification_evaluation` is returned by terminal notification tests
 and watch-rule evaluation tools, including skipped reasons and generated local
 terminal notification payloads.
+
+`local_notification_check` is returned by `todos notifications check --json` and
+`check_local_notifications`. It includes due, due-soon, SLA, stale task,
+completed run, and local calendar reminder alerts plus optional local event hook
+delivery results, terminal rule evaluations, quiet-hours state, counts, and
+warnings.
 
 ## Branch Work Plans
 

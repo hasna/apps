@@ -1019,11 +1019,13 @@ export function registerConfigServeCommands(program: Command) {
     .option("--agent <list>", "Comma-separated agent IDs to match")
     .option("--project <list>", "Comma-separated project IDs to match")
     .option("--contains <list>", "Comma-separated payload text fragments to match")
+    .option("--quiet-hours <range>", "Suppress notifications during HH:MM-HH:MM")
+    .option("--quiet-timezone <tz>", "Quiet hours timezone: local or utc", "local")
     .option("--bell", "Ring the terminal bell for critical matches")
     .option("--disabled", "Store rule disabled")
-    .action(async (name: string, opts: { event: string; minSeverity?: string; format?: string; status?: string; priority?: string; agent?: string; project?: string; contains?: string; bell?: boolean; disabled?: boolean }) => {
+    .action(async (name: string, opts: { event: string; minSeverity?: string; format?: string; status?: string; priority?: string; agent?: string; project?: string; contains?: string; quietHours?: string; quietTimezone?: string; bell?: boolean; disabled?: boolean }) => {
       const globalOpts = program.opts();
-      const { describeTerminalNotificationRule, upsertTerminalNotificationRule } = await import("../../lib/terminal-notifications.js");
+      const { describeTerminalNotificationRule, parseQuietHours, upsertTerminalNotificationRule } = await import("../../lib/terminal-notifications.js");
       const rule = upsertTerminalNotificationRule({
         name,
         events: listOption(opts.event) || [],
@@ -1036,6 +1038,7 @@ export function registerConfigServeCommands(program: Command) {
         agent_ids: listOption(opts.agent),
         project_ids: listOption(opts.project),
         contains: listOption(opts.contains),
+        quiet_hours: parseQuietHours(opts.quietHours, opts.quietTimezone === "utc" ? "utc" : "local"),
       });
       const described = describeTerminalNotificationRule(rule);
       if (globalOpts.json) { output(described, true); return; }

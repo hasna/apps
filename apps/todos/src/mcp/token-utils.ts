@@ -92,6 +92,7 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "delete_roadmap",
     "delete_task_list",
     "check_approval_gate",
+    "check_local_notifications",
     "check_runner_sandbox",
     "check_workspace_permission",
     "explain_policy_pack",
