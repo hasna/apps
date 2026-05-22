@@ -12,6 +12,7 @@ import { withNoNetwork } from "./test/no-network.js";
 
 const expectedDomains = [
   "tasks",
+  "references",
   "local-fields",
   "dedupe",
   "verification-providers",
@@ -143,6 +144,8 @@ describe("CLI/MCP parity manifest", () => {
       "merge_duplicate_task",
     ]));
     expect(byDomain.get("dedupe")?.jsonContracts).toEqual(expect.arrayContaining(["duplicate_task_candidate", "task_merge_result"]));
+    expect(byDomain.get("references")?.mcpTools).toContain("resolve_mentions");
+    expect(byDomain.get("references")?.jsonContracts).toContain("mention_resolution_report");
     expect(byDomain.get("verification-providers")?.mcpTools).toEqual(expect.arrayContaining([
       "set_verification_provider",
       "run_verification_provider",
@@ -194,6 +197,7 @@ describe("CLI/MCP parity manifest", () => {
     const docs = readFileSync(join(import.meta.dir, "..", "docs", "cli-mcp-parity.md"), "utf-8");
 
     expect(docs).toContain("todos add \"Fix flaky parser\" --priority high --json");
+    expect(docs).toContain("todos references resolve file:src/index.ts:12 symbol:createTask branch:main --json");
     expect(docs).toContain("todos fields set 1234abcd --labels bug,cli --severity s1 --field component=parser --json");
     expect(docs).toContain("todos dedupe scan --threshold 0.8 --json");
     expect(docs).toContain("todos verify-providers run local --task 1234abcd --json");

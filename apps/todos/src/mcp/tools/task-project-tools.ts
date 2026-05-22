@@ -38,6 +38,7 @@ import {
   applyRetentionCleanup,
   previewRetentionCleanup,
 } from "../../lib/retention-cleanup.js";
+import { resolveMentions } from "../../lib/mention-resolver.js";
 import {
   checkWorkspacePermission,
   getWorkspaceTrustStatus,
@@ -146,6 +147,26 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
         try {
           const findings = listSecretFindings(text);
           return { content: [{ type: "text" as const, text: JSON.stringify({ ok: findings.length === 0, findings }, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("resolve_mentions")) {
+    server.tool(
+      "resolve_mentions",
+      "Resolve local file, line, symbol, git ref, plan, run, task, and agent mentions without hosted lookups.",
+      {
+        mentions: z.array(z.string()).min(1),
+        workspace: z.string().optional().describe("Workspace root for local file, symbol, and git resolution."),
+        max_symbol_matches: z.number().int().positive().max(100).optional(),
+      },
+      async ({ mentions, workspace, max_symbol_matches }) => {
+        try {
+          const report = resolveMentions({ mentions, workspace, max_symbol_matches });
+          return { content: [{ type: "text" as const, text: JSON.stringify(report, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }

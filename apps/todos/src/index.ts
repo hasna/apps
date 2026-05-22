@@ -623,6 +623,14 @@ export type {
   NaturalLanguageIntakePreview,
   NaturalLanguageTaskPreview,
 } from "./lib/natural-language-intake.js";
+export { resolveMentions } from "./lib/mention-resolver.js";
+export type {
+  MentionBacklink,
+  MentionReferenceKind,
+  MentionResolution,
+  MentionResolutionReport,
+  MentionResolverInput,
+} from "./lib/mention-resolver.js";
 export {
   DEFAULT_ENCRYPTION_KEY_ENV,
   DEFAULT_ENCRYPTION_PROFILE,

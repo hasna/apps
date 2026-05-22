@@ -16,6 +16,9 @@ structured error contracts.
 
 - `tasks`: create, list, read, update, lifecycle, assignment, queue, lock
   leases, stale recovery, and bulk workflows.
+- `references`: local file, line, symbol, commit, branch, pull request ref,
+  plan, run, task, and agent mention resolution with validated backlinks and no
+  hosted code search.
 - `local-fields`: local labels, priority, severity, owner, area, and custom
   fields with query support for agent-native task selection.
 - `dedupe`: local duplicate scans and merge workflows that preserve comments,
@@ -101,6 +104,18 @@ Matching MCP tool:
 
 ```json
 { "tool": "create_task", "arguments": { "title": "Fix flaky parser", "priority": "high" } }
+```
+
+CLI reference resolution:
+
+```bash
+todos references resolve file:src/index.ts:12 symbol:createTask branch:main --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "resolve_mentions", "arguments": { "mentions": ["file:src/index.ts:12", "symbol:createTask", "branch:main"] } }
 ```
 
 CLI local fields update:

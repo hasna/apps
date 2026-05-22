@@ -219,6 +219,43 @@ describe("CLI integration", () => {
     }
   });
 
+  it("should resolve local mentions from the CLI without network lookups", async () => {
+    const dbPath = "/tmp/test-cli-mentions.db";
+    const { mkdtempSync, rmSync, writeFileSync, unlinkSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const root = mkdtempSync(join(tmpdir(), "todos-cli-mentions-"));
+    try { unlinkSync(dbPath); } catch {}
+
+    try {
+      writeFileSync(join(root, "app.ts"), "export function createProject() { return true; }\n");
+      const result = await runCli([
+        "references",
+        "resolve",
+        "file:app.ts:1",
+        "symbol:createProject",
+        "pr:123",
+        "--workspace",
+        root,
+        "--json",
+      ], dbPath);
+      expect(result.stderr).toBe("");
+      expect(result.exitCode).toBe(0);
+      const report = JSON.parse(result.stdout);
+      expect(report.local_only).toBe(true);
+      expect(report.no_network).toBe(true);
+      expect(report.references.map((reference: { resolved: boolean }) => reference.resolved)).toEqual([true, true, false]);
+      expect(report.backlinks.map((item: { key: string }) => item.key)).toEqual(expect.arrayContaining([
+        "file:app.ts:1",
+        "symbol:createProject@app.ts:1",
+      ]));
+      expect(report.warnings.join(" ")).toContain("hosted lookups are not used");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      try { unlinkSync(dbPath); } catch {}
+    }
+  });
+
   it("should scan and merge duplicate tasks from the CLI", async () => {
     const dbPath = "/tmp/test-cli-dedupe.db";
     const { unlinkSync } = await import("node:fs");

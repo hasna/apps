@@ -22,6 +22,7 @@ import { getTaskLocalFields, setTaskLocalFields } from "./lib/local-fields.js";
 import { testExtensionCompatibility } from "./lib/local-extensions.js";
 import { generateReleaseNotes } from "./lib/release-notes.js";
 import { previewRetentionCleanup } from "./lib/retention-cleanup.js";
+import { resolveMentions } from "./lib/mention-resolver.js";
 import { findDuplicateTasks, mergeDuplicateTask } from "./lib/task-dedupe.js";
 import { runVerificationProvider, upsertVerificationProvider } from "./lib/verification-providers.js";
 import { createHandoff } from "./db/handoffs.js";
@@ -83,6 +84,7 @@ describe("stable JSON contracts", () => {
     expect(manifest.contracts.map((contract) => contract.id)).toEqual([
       "task",
       "project",
+      "mention_resolution_report",
       "local_task_fields",
       "retention_cleanup_report",
       "duplicate_task_candidate",
@@ -265,6 +267,11 @@ describe("stable JSON contracts", () => {
     }, db);
     const sourceRoot = mkdtempSync(join(tmpdir(), "todos-contract-source-"));
     writeFileSync(join(sourceRoot, "app.ts"), "function runPlan() {\n  // TODO: Verify source contracts\n}\n");
+    const mentionReport = resolveMentions({
+      workspace: sourceRoot,
+      mentions: ["file:app.ts:1", "symbol:runPlan"],
+      now: "2026-01-02T03:04:05.000Z",
+    }, db);
     const sourceComment = extractTodos({ path: sourceRoot, dry_run: true }).comments[0]!;
     const sourceIndex = buildCodebaseIndex({ path: sourceRoot });
     createCalendarItem({
@@ -287,6 +294,7 @@ describe("stable JSON contracts", () => {
     expectValid("project", project);
     expectValid("task_list", taskList);
     expectValid("task", task);
+    expectValid("mention_resolution_report", mentionReport);
     expectValid("local_task_fields", localFields);
     expectValid("retention_cleanup_report", retentionCleanupReport);
     expectValid("duplicate_task_candidate", duplicateCandidate);

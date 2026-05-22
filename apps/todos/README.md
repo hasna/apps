@@ -446,6 +446,25 @@ MCP clients get the same local data through `link_task_to_commit`,
 `add_task_verification`, and `get_task_traceability`, so agents can explain
 which task changed a commit, branch, PR, file, or verification command.
 
+## Local Mention Resolution
+
+Agents can resolve task references before adding them to descriptions, plans, or
+handoffs. The resolver validates local files and line anchors, scans local source
+declarations for symbols, checks local git commits, branches, and fetched pull
+request refs, and resolves plans, runs, tasks, and agents from the local SQLite
+state:
+
+```bash
+todos references resolve file:src/index.ts:12 symbol:createTask branch:main --json
+todos refs resolve plan:release run:abc123 agent:marcus --workspace .
+```
+
+The JSON output includes canonical reference keys and validated backlinks such
+as `file:src/index.ts:12`, `symbol:createTask@src/index.ts:40`, `commit:<sha>`,
+`plan:<id>`, and `run:<id>`. MCP clients can call `resolve_mentions` for the
+same local-only report; pull request refs are validated only when present in
+local git refs, and the resolver never calls hosted code search.
+
 ## Local Branch-Safe Work Plans
 
 Before an agent starts a branch, it can ask for a local branch work plan that

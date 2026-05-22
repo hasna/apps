@@ -129,7 +129,7 @@ describe("local retention cleanup", () => {
     const report = applyRetentionCleanup({
       older_than_days: 30,
       include: ["expired_artifacts"],
-      now: NOW,
+      now: "2999-01-01T00:00:00.000Z",
       confirm: RETENTION_CLEANUP_CONFIRMATION,
     }, db);
 

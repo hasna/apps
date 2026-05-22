@@ -189,6 +189,43 @@ function parseCalendarKind(value: string | undefined): CalendarEventKind | undef
 }
 
 export function registerQueryCommands(program: Command) {
+  const references = program
+    .command("references")
+    .alias("refs")
+    .description("Resolve local file, symbol, git, plan, run, task, and agent references");
+
+  references
+    .command("resolve <mentions...>")
+    .description("Resolve mentions using only local workspace, git, and todos state")
+    .option("--workspace <path>", "Workspace root for file, symbol, and git references")
+    .option("--max-symbol-matches <n>", "Maximum symbol matches per symbol mention", "20")
+    .option("-j, --json", "Output as JSON")
+    .action(async (mentions: string[], opts: { workspace?: string; maxSymbolMatches?: string; json?: boolean }) => {
+      const globalOpts = program.opts();
+      const { resolveMentions } = await import("../../lib/mention-resolver.js");
+      const report = resolveMentions({
+        mentions,
+        workspace: opts.workspace || globalOpts.project || process.cwd(),
+        max_symbol_matches: Number.parseInt(opts.maxSymbolMatches || "20", 10),
+      });
+      if (opts.json || globalOpts.json) {
+        output(report, true);
+        return;
+      }
+      console.log(chalk.bold("Resolved references"));
+      for (const reference of report.references) {
+        const status = reference.resolved ? chalk.green("ok") : chalk.yellow("missing");
+        const label = reference.title || reference.canonical || reference.target;
+        console.log(`  ${status} ${reference.kind.padEnd(12)} ${reference.input} -> ${label}`);
+        for (const warning of reference.warnings) {
+          console.log(chalk.dim(`    ${warning}`));
+        }
+      }
+      if (report.backlinks.length > 0) {
+        console.log(chalk.dim(`  backlinks: ${report.backlinks.map((item) => item.key).join(", ")}`));
+      }
+    });
+
   // next
   program
     .command("next")

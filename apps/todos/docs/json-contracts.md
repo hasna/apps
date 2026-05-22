@@ -16,6 +16,7 @@ The stable contracts cover these object IDs:
 
 - `task`
 - `project`
+- `mention_resolution_report`
 - `local_task_fields`
 - `retention_cleanup_report`
 - `duplicate_task_candidate`
@@ -81,6 +82,15 @@ Two error shapes are stable:
 New machine-readable fields may be added to either error object. Existing
 clients should keep displaying the string message and use stable `code` values
 when present.
+
+## Mention Resolution
+
+`mention_resolution_report` is returned by `todos references resolve --json`
+and `resolve_mentions`. It reports each input mention, whether it resolved
+locally, the canonical reference key, and validated backlinks for files, line
+anchors, symbols, commits, branches, pull request refs present in local git
+refs, plans, runs, tasks, and agents. It uses only the local workspace, local
+git refs, and local todos state.
 
 ## Local Task Fields
 

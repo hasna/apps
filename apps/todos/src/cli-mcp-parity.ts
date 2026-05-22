@@ -3,6 +3,7 @@ import { getMcpToolNames } from "./mcp.js";
 
 export type TodosCliMcpParityDomain =
   | "tasks"
+  | "references"
   | "local-fields"
   | "dedupe"
   | "verification-providers"
@@ -141,6 +142,23 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos add \"Fix flaky parser\" --priority high --json",
       mcpTool: "create_task",
+    },
+  },
+  {
+    domain: "references",
+    cliCommands: [
+      "todos references resolve",
+    ],
+    mcpTools: [
+      "resolve_mentions",
+    ],
+    jsonContracts: ["mention_resolution_report", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    intentionalGaps: [],
+    example: {
+      cli: "todos references resolve file:src/index.ts:12 symbol:createTask branch:main --json",
+      mcpTool: "resolve_mentions",
     },
   },
   {

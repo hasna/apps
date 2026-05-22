@@ -197,6 +197,7 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "queue_agent_run",
     "remove_agent_run_adapter",
     "retry_agent_run_dispatch",
+    "resolve_mentions",
     "run_next_agent_dispatch",
     "set_agent_run_adapter",
     "set_verification_provider",

@@ -269,6 +269,32 @@ describe("MCP tool operations", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
+  it("resolve_mentions exposes local reference backlinks through MCP", async () => {
+    const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const root = mkdtempSync(join(tmpdir(), "todos-mcp-mentions-"));
+    writeFileSync(join(root, "app.ts"), "export function createProject() { return true; }\n");
+
+    try {
+      const tools = captureTools(registerTaskProjectTools);
+      const result = await callCapturedTool(tools, "resolve_mentions", {
+        workspace: root,
+        mentions: ["file:app.ts:1", "symbol:createProject", "pr:123"],
+      });
+      const payload = JSON.parse(result.content[0]!.text);
+      expect(payload.local_only).toBe(true);
+      expect(payload.no_network).toBe(true);
+      expect(payload.references.map((reference: { resolved: boolean }) => reference.resolved)).toEqual([true, true, false]);
+      expect(payload.backlinks.map((item: { key: string }) => item.key)).toEqual(expect.arrayContaining([
+        "file:app.ts:1",
+        "symbol:createProject@app.ts:1",
+      ]));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("retention cleanup tools preview and apply local evidence cleanup without leaking content", async () => {
     const tools = captureTools(registerTaskProjectTools);
     const project = createProject({ name: "MCP retention", path: "/tmp/mcp-retention" }, db);
