@@ -1052,6 +1052,18 @@ export type {
   RetentionCleanupScope,
 } from "./lib/retention-cleanup.js";
 export {
+  compactScaleStorage,
+  createScalePerformanceReport,
+  renderScalePerformanceReportMarkdown,
+} from "./lib/scale-hardening.js";
+export type {
+  CompactScaleStorageOptions,
+  CreateScalePerformanceReportOptions,
+  ScaleBenchmark,
+  ScaleCompactionResult,
+  ScalePerformanceReport,
+} from "./lib/scale-hardening.js";
+export {
   artifactStorePath,
   artifactStoreRoot,
   exportStoredArtifactContent,

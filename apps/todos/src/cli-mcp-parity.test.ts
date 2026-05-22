@@ -28,6 +28,7 @@ const expectedDomains = [
   "release-compatibility",
   "usage-ledger",
   "terminal-dashboard",
+  "scale-hardening",
   "templates",
   "workspace-trust",
   "secret-safety",
@@ -152,6 +153,11 @@ describe("CLI/MCP parity manifest", () => {
       "apply_retention_cleanup",
     ]));
     expect(byDomain.get("retention-cleanup")?.jsonContracts).toContain("retention_cleanup_report");
+    expect(byDomain.get("scale-hardening")?.status).toBe("intentional-gap");
+    expect(byDomain.get("scale-hardening")?.jsonContracts).toEqual(expect.arrayContaining([
+      "scale_performance_report",
+      "scale_compaction_result",
+    ]));
     expect(byDomain.get("dedupe")?.mcpTools).toEqual(expect.arrayContaining([
       "find_duplicate_tasks",
       "merge_duplicate_task",
@@ -266,6 +272,7 @@ describe("CLI/MCP parity manifest", () => {
     expect(docs).toContain("todos dedupe scan --threshold 0.8 --json");
     expect(docs).toContain("todos verify-providers run local --task 1234abcd --json");
     expect(docs).toContain("todos retention cleanup --older-than-days 30 --json");
+    expect(docs).toContain("todos scale report --older-than-days 30 --json");
     expect(docs).toContain("todos template-library --json");
     expect(docs).toContain("todos extensions compat ./todos.extension.json --json");
     expect(docs).toContain("todos handoff --create --agent codex");

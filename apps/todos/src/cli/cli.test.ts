@@ -1764,6 +1764,40 @@ describe("CLI integration", () => {
     }
   });
 
+  it("should report local scale hardening and preview compaction from the CLI", async () => {
+    const dbPath = `/tmp/test-cli-scale-hardening-${crypto.randomUUID()}.db`;
+    process.env["TODOS_DB_PATH"] = dbPath;
+    resetDatabase();
+    const db = getDatabase();
+    const task = createTask({ title: "CLI scale task", status: "completed" }, db);
+    db.run("UPDATE tasks SET updated_at = ? WHERE id = ?", ["2026-01-01T00:00:00.000Z", task.id]);
+    closeDatabase();
+
+    try {
+      const json = await runCli(["scale", "report", "--older-than-days", "30", "--json"], dbPath);
+      expect(json.exitCode).toBe(0);
+      const report = JSON.parse(json.stdout);
+      expect(report.schema_version).toBe(1);
+      expect(report.local_only).toBe(true);
+      expect(report.no_network).toBe(true);
+      expect(report.archive.older_terminal_unarchived_tasks).toBe(1);
+      expect(report.integrity.ok).toBe(true);
+
+      const markdown = await runCli(["scale", "report", "--format", "markdown"], dbPath);
+      expect(markdown.exitCode).toBe(0);
+      expect(markdown.stdout).toContain("# todos scale hardening report");
+      expect(markdown.stdout).toContain("## Compaction");
+
+      const compact = await runCli(["scale", "compact", "--json"], dbPath);
+      expect(compact.exitCode).toBe(0);
+      const result = JSON.parse(compact.stdout);
+      expect(result.dry_run).toBe(true);
+      expect(result.actions).toEqual(["PRAGMA optimize", "VACUUM"]);
+    } finally {
+      resetDatabase();
+    }
+  });
+
   it("should manage local runner sandbox profiles and guard run commands", async () => {
     const dbPath = "/tmp/test-cli-sandbox.db";
     const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");

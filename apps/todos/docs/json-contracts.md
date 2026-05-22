@@ -29,6 +29,8 @@ The stable contracts cover these object IDs:
 - `release_compatibility_report`
 - `local_usage_ledger`
 - `terminal_dashboard_snapshot`
+- `scale_performance_report`
+- `scale_compaction_result`
 - `mention_resolution_report`
 - `project_knowledge_record`
 - `project_knowledge_export`

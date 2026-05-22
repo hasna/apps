@@ -637,6 +637,10 @@ export function ensureSchema(db: Database): void {
 
   // ── Indexes ──
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_plan ON tasks(plan_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_archived_at ON tasks(archived_at)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_updated_at ON tasks(updated_at)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_task_list ON tasks(task_list_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_due_at ON tasks(due_at)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_short_id ON tasks(short_id) WHERE short_id IS NOT NULL");

@@ -808,6 +808,21 @@ The report is aggregate-only: raw command strings and artifact paths are not
 included. MCP clients use `get_usage_ledger` for the same
 `local_usage_ledger` JSON contract.
 
+## Local Scale Hardening
+
+Scale reports benchmark common local queries, count archive-ready terminal
+tasks, check expected SQLite indexes, run integrity diagnostics, and preview
+database compaction without network access:
+
+```bash
+todos scale report --older-than-days 30 --json
+todos scale report --format markdown
+todos scale compact --json
+```
+
+`todos scale compact --apply` runs `PRAGMA optimize` and `VACUUM` against the
+local SQLite database. The default is a dry run.
+
 ## Local Activity Timeline
 
 The timeline command gives agents one ordered, redacted view of local comments,

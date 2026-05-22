@@ -29,6 +29,7 @@ import { getLocalAuditLedger, sealLocalAuditLedger } from "./lib/audit-ledger.js
 import { createReleaseCompatibilityReport } from "./lib/release-compatibility.js";
 import { createLocalUsageLedger } from "./lib/usage-ledger.js";
 import { createTuiDashboardSnapshot } from "./lib/tui-dashboard.js";
+import { compactScaleStorage, createScalePerformanceReport } from "./lib/scale-hardening.js";
 import { createSdkIntegrationFixturePack } from "./lib/sdk-integration-fixtures.js";
 import { generateReleaseNotes } from "./lib/release-notes.js";
 import { previewRetentionCleanup } from "./lib/retention-cleanup.js";
@@ -126,6 +127,8 @@ describe("stable JSON contracts", () => {
       "agent_reliability_export",
       "local_task_fields",
       "retention_cleanup_report",
+      "scale_performance_report",
+      "scale_compaction_result",
       "duplicate_task_candidate",
       "task_merge_result",
       "external_issue_import_report",
@@ -439,11 +442,17 @@ describe("stable JSON contracts", () => {
       active_view: "tasks",
       search: "Contract",
     }, db);
+    const scalePerformanceReport = createScalePerformanceReport({
+      generated_at: "2026-01-02T03:04:05.000Z",
+    }, db);
+    const scaleCompactionResult = compactScaleStorage({}, db);
     expectValid("local_audit_ledger", auditLedger);
     expectValid("local_audit_ledger_checkpoint", auditCheckpoint);
     expectValid("release_compatibility_report", releaseCompatibility);
     expectValid("local_usage_ledger", usageLedger);
     expectValid("terminal_dashboard_snapshot", terminalDashboard);
+    expectValid("scale_performance_report", scalePerformanceReport);
+    expectValid("scale_compaction_result", scaleCompactionResult);
     expectValid("task_list", taskList);
     expectValid("task", task);
     expectValid("mention_resolution_report", mentionReport);

@@ -19,6 +19,7 @@ export type TodosCliMcpParityDomain =
   | "release-compatibility"
   | "usage-ledger"
   | "terminal-dashboard"
+  | "scale-hardening"
   | "templates"
   | "workspace-trust"
   | "secret-safety"
@@ -513,6 +514,22 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     gapReason: "Terminal UI keyboard navigation is not an MCP interaction model.",
     example: {
       cli: "todos dashboard --snapshot --view tasks --search release --json",
+    },
+  },
+  {
+    domain: "scale-hardening",
+    cliCommands: ["todos scale report", "todos scale compact"],
+    mcpTools: [],
+    jsonContracts: ["scale_performance_report", "scale_compaction_result", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "intentional-gap",
+    intentionalGaps: [{
+      cliCommand: "todos scale compact",
+      reason: "SQLite VACUUM is a local maintenance operation that can briefly lock the database; MCP agents should request explicit local CLI maintenance instead of invoking compaction through a remote-facing tool surface.",
+    }],
+    gapReason: "Scale diagnostics and compaction are local operator maintenance commands, while MCP tools should use domain-specific task, run, and doctor APIs.",
+    example: {
+      cli: "todos scale report --older-than-days 30 --json",
     },
   },
   {

@@ -49,6 +49,9 @@ structured error contracts.
 - `terminal-dashboard`: keyboard-first local TUI available through
   `todos dashboard`; deterministic snapshots use
   `todos dashboard --snapshot --json`.
+- `scale-hardening`: local performance benchmarks, archive-readiness counts,
+  SQLite compaction previews, and integrity/index checks through
+  `todos scale report` and `todos scale compact`.
 - `templates`: bundled marketplace-free local template library, editable JSON
   template files, template import/export, preview, version history, and task
   creation from templates.
@@ -286,6 +289,13 @@ CLI retention cleanup preview:
 
 ```bash
 todos retention cleanup --older-than-days 30 --json
+```
+
+Local scale hardening:
+
+```bash
+todos scale report --older-than-days 30 --json
+todos scale compact --json
 ```
 
 Matching MCP tool:
