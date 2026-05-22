@@ -213,6 +213,18 @@ Matching MCP tool:
 { "tool": "set_task_fields", "arguments": { "task_id": "1234abcd", "labels": ["bug", "cli"], "severity": "s1", "custom": { "component": "parser" } } }
 ```
 
+CLI workflow state update:
+
+```bash
+todos workflow set 1234abcd review --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "set_task_workflow_state", "arguments": { "task_id": "1234abcd", "state": "review" } }
+```
+
 CLI board snapshot:
 
 ```bash

@@ -114,6 +114,42 @@ describe("CLI integration", () => {
     }
   });
 
+  it("manages local workflow states through the CLI", async () => {
+    const dbPath = "/tmp/test-cli-workflow-states.db";
+    const home = `/tmp/test-cli-workflow-states-home-${Date.now()}`;
+    const { mkdirSync, rmSync, unlinkSync, writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    try { unlinkSync(dbPath); } catch {}
+    mkdirSync(join(home, ".hasna", "todos"), { recursive: true });
+    writeFileSync(join(home, ".hasna", "todos", "config.json"), JSON.stringify({
+      workflow_states: {
+        states: [
+          { name: "review", canonical_status: "in_progress", aliases: ["pr"], transitions: ["released"] },
+          { name: "released", canonical_status: "completed", terminal: true },
+        ],
+      },
+    }));
+
+    try {
+      const added = JSON.parse((await runCli(["add", "workflow cli task", "--json"], dbPath, { HOME: home })).stdout);
+      const states = JSON.parse((await runCli(["workflow", "states", "--json"], dbPath, { HOME: home })).stdout);
+      expect(states.states.map((state: { name: string }) => state.name)).toContain("review");
+
+      const set = await runCli(["workflow", "set", added.id, "pr", "--json"], dbPath, { HOME: home });
+      expect(set.exitCode).toBe(0);
+      const payload = JSON.parse(set.stdout);
+      expect(payload.workflow_state.name).toBe("review");
+      expect(payload.task.status).toBe("in_progress");
+
+      const query = JSON.parse((await runCli(["workflow", "tasks", "review", "--json"], dbPath, { HOME: home })).stdout);
+      expect(query.count).toBe(1);
+      expect(query.tasks[0].id).toBe(added.id);
+    } finally {
+      try { unlinkSync(dbPath); } catch {}
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("should print a deterministic terminal dashboard snapshot", async () => {
     const dbPath = "/tmp/test-cli-dashboard-snapshot.db";
     const { unlinkSync } = await import("node:fs");

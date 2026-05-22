@@ -18,6 +18,7 @@ const expectedDomains = [
   "retrospectives",
   "agent-reliability",
   "local-fields",
+  "workflow-states",
   "dedupe",
   "verification-providers",
   "projects",
@@ -148,6 +149,17 @@ describe("CLI/MCP parity manifest", () => {
       "query_tasks_by_fields",
     ]));
     expect(byDomain.get("local-fields")?.jsonContracts).toContain("local_task_fields");
+    expect(byDomain.get("workflow-states")?.mcpTools).toEqual(expect.arrayContaining([
+      "list_workflow_states",
+      "set_task_workflow_state",
+      "query_tasks_by_workflow_state",
+      "migrate_workflow_states",
+    ]));
+    expect(byDomain.get("workflow-states")?.jsonContracts).toEqual(expect.arrayContaining([
+      "workflow_state_config",
+      "workflow_state_result",
+      "workflow_state_migration",
+    ]));
     expect(byDomain.get("retention-cleanup")?.mcpTools).toEqual(expect.arrayContaining([
       "preview_retention_cleanup",
       "apply_retention_cleanup",

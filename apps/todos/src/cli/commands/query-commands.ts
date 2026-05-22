@@ -49,6 +49,13 @@ import {
 import { findDuplicateTasks, mergeDuplicateTask } from "../../lib/task-dedupe.js";
 import { getTaskLocalFields, queryTasksByLocalFields, setTaskLocalFields } from "../../lib/local-fields.js";
 import type { LocalTaskFieldQuery, SetTaskLocalFieldsInput } from "../../lib/local-fields.js";
+import {
+  listWorkflowStates,
+  migrateWorkflowStates,
+  queryTasksByWorkflowState,
+  renderWorkflowStatesMarkdown,
+  setTaskWorkflowState,
+} from "../../lib/workflow-states.js";
 import type { BoardLane, BoardScope, CalendarEventKind, TaskPriority } from "../../types/index.js";
 import { autoProject, handleError, output, formatTaskLine, resolveTaskId } from "../helpers.js";
 
@@ -2399,6 +2406,103 @@ export function registerQueryCommands(program: Command) {
           return;
         }
         for (const task of tasks) console.log(formatTaskLine(task));
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  const workflow = program
+    .command("workflow")
+    .description("Manage local project workflow states");
+
+  workflow
+    .command("states")
+    .description("List local workflow states")
+    .option("--project-path <path>", "Project path override for workflow configuration")
+    .option("-j, --json", "Output as JSON")
+    .action((opts) => {
+      const globalOpts = program.opts();
+      try {
+        const states = listWorkflowStates(opts.projectPath || globalOpts.project || process.cwd());
+        if (opts.json || globalOpts.json) { output({ states, local_only: true }, true); return; }
+        console.log(renderWorkflowStatesMarkdown(states));
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  workflow
+    .command("set <task-id> <state>")
+    .description("Set a task's local workflow state")
+    .option("--actor <agent>", "Agent or user changing the state")
+    .option("--project-path <path>", "Project path override for workflow configuration")
+    .option("--force", "Bypass configured transition guards")
+    .option("-j, --json", "Output as JSON")
+    .action((taskId: string, state: string, opts) => {
+      const globalOpts = program.opts();
+      try {
+        const result = setTaskWorkflowState(resolveTaskId(taskId), state, {
+          actor: opts.actor || globalOpts.agent,
+          project_path: opts.projectPath || globalOpts.project || process.cwd(),
+          force: Boolean(opts.force),
+        });
+        if (opts.json || globalOpts.json) { output(result, true); return; }
+        console.log(chalk.green(`Moved ${result.task.short_id || result.task.id.slice(0, 8)} to ${result.workflow_state.name}.`));
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  workflow
+    .command("tasks <state>")
+    .description("List tasks by local workflow state")
+    .option("--project <id>", "Project filter")
+    .option("--task-list <id>", "Task list filter")
+    .option("--project-path <path>", "Project path override for workflow configuration")
+    .option("--limit <n>", "Maximum tasks to return", "100")
+    .option("-j, --json", "Output as JSON")
+    .action((state: string, opts) => {
+      const globalOpts = program.opts();
+      try {
+        const result = queryTasksByWorkflowState({
+          state,
+          project_id: resolveProjectOption(opts.project),
+          task_list_id: opts.taskList,
+          project_path: opts.projectPath || globalOpts.project || process.cwd(),
+          limit: Number(opts.limit),
+        });
+        if (opts.json || globalOpts.json) { output(result, true); return; }
+        if (result.tasks.length === 0) {
+          console.log(chalk.dim("No matching tasks."));
+          return;
+        }
+        for (const task of result.tasks) console.log(formatTaskLine(task));
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  workflow
+    .command("migrate")
+    .description("Backfill local workflow state metadata from canonical task statuses")
+    .option("--apply", "Write migration metadata")
+    .option("--project <id>", "Project filter")
+    .option("--task-list <id>", "Task list filter")
+    .option("--project-path <path>", "Project path override for workflow configuration")
+    .option("--limit <n>", "Maximum tasks to inspect", "10000")
+    .option("-j, --json", "Output as JSON")
+    .action((opts) => {
+      const globalOpts = program.opts();
+      try {
+        const report = migrateWorkflowStates({
+          apply: Boolean(opts.apply),
+          project_id: resolveProjectOption(opts.project),
+          task_list_id: opts.taskList,
+          project_path: opts.projectPath || globalOpts.project || process.cwd(),
+          limit: Number(opts.limit),
+        });
+        if (opts.json || globalOpts.json) { output(report, true); return; }
+        console.log(`${report.applied ? "Migrated" : "Would migrate"} ${report.applied ? report.migrated_count : report.pending_count} tasks.`);
       } catch (e) {
         handleError(e);
       }

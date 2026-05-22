@@ -20,9 +20,24 @@ export interface CompletionGuardConfig {
   cooldown_seconds?: number;
 }
 
+export interface WorkflowStateConfig {
+  name: string;
+  canonical_status: "pending" | "in_progress" | "completed" | "failed" | "cancelled";
+  aliases?: string[];
+  description?: string;
+  transitions?: string[];
+  terminal?: boolean;
+  color?: string;
+}
+
+export interface LocalWorkflowStatesConfig {
+  states: WorkflowStateConfig[];
+}
+
 export interface ProjectOverrideConfig {
   completion_guard?: CompletionGuardConfig;
   extension_sources?: string[];
+  workflow_states?: LocalWorkflowStatesConfig;
 }
 
 export type WorkspacePermissionPreset = "restricted" | "readonly" | "standard" | "trusted";
@@ -353,6 +368,8 @@ export interface TodosConfig {
   extension_registry?: Record<string, LocalExtensionRecord>;
   /** Local extension manifest, directory, or bundle sources to discover. */
   extension_sources?: string[];
+  /** Local custom workflow states mapped onto canonical task statuses. */
+  workflow_states?: LocalWorkflowStatesConfig;
   /** Local policy packs for task done gates, keyed by pack name. */
   policy_packs?: Record<string, PolicyPackConfig>;
   /** Local event hooks and automation triggers, keyed by hook name. */

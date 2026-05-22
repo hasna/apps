@@ -883,6 +883,26 @@ for existing filters, and the metadata is included in local bridge exports.
 MCP clients use `get_task_fields`, `set_task_fields`, and
 `query_tasks_by_fields` for the same local-only workflow.
 
+## Local Workflow States
+
+Projects can define local workflow states such as review, blocked, verifying,
+failed, or released while keeping storage compatible with the canonical task
+statuses:
+
+```bash
+todos workflow states --json
+todos workflow set <task-id> review --json
+todos workflow tasks review --json
+todos workflow migrate --apply --json
+```
+
+Workflow states live in local config under `workflow_states.states`. Each state
+maps to a canonical `canonical_status`, can declare aliases, and can restrict
+allowed transitions. The selected local state is stored in task metadata and is
+included in local bridge exports. MCP clients use `list_workflow_states`,
+`set_task_workflow_state`, `query_tasks_by_workflow_state`, and
+`migrate_workflow_states`.
+
 ## Local Calendar And ICS
 
 Calendar events are derived from local tasks, SLA thresholds, run ledgers, and

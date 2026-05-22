@@ -43,6 +43,9 @@ The stable contracts cover these object IDs:
 - `agent_reliability_scorecard`
 - `agent_reliability_export`
 - `local_task_fields`
+- `workflow_state_config`
+- `workflow_state_result`
+- `workflow_state_migration`
 - `retention_cleanup_report`
 - `duplicate_task_candidate`
 - `task_merge_result`
@@ -271,6 +274,22 @@ services or network APIs.
 `todos fields set --json`, `get_task_fields`, and `set_task_fields`. It keeps
 labels, priority, severity, owner, area, and custom local metadata in task
 metadata so bridge exports and imports carry it without any hosted dependency.
+
+## Local Workflow States
+
+`workflow_state_config` is returned by `todos workflow states --json` and
+`list_workflow_states`. It defines project-local workflow states such as
+review, blocked, verifying, failed, or released while mapping each state onto a
+canonical task status for storage compatibility.
+
+`workflow_state_result` is returned by `todos workflow set --json` and
+`set_task_workflow_state`. It includes the updated task, previous and target
+workflow states, whether the local state changed, and whether the canonical
+task status changed.
+
+`workflow_state_migration` is returned by `todos workflow migrate --json` and
+`migrate_workflow_states`. It previews or backfills local workflow-state
+metadata from existing canonical task statuses without requiring hosted state.
 
 ## Retention Cleanup
 

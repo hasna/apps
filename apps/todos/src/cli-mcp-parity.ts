@@ -9,6 +9,7 @@ export type TodosCliMcpParityDomain =
   | "retrospectives"
   | "agent-reliability"
   | "local-fields"
+  | "workflow-states"
   | "dedupe"
   | "verification-providers"
   | "projects"
@@ -291,6 +292,29 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos fields set 1234abcd --labels bug,cli --severity s1 --field component=parser --json",
       mcpTool: "set_task_fields",
+    },
+  },
+  {
+    domain: "workflow-states",
+    cliCommands: [
+      "todos workflow states",
+      "todos workflow set",
+      "todos workflow tasks",
+      "todos workflow migrate",
+    ],
+    mcpTools: [
+      "list_workflow_states",
+      "set_task_workflow_state",
+      "query_tasks_by_workflow_state",
+      "migrate_workflow_states",
+    ],
+    jsonContracts: ["workflow_state_config", "workflow_state_result", "workflow_state_migration", "task", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    intentionalGaps: [],
+    example: {
+      cli: "todos workflow set 1234abcd review --json",
+      mcpTool: "set_task_workflow_state",
     },
   },
   {

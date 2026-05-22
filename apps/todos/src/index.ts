@@ -821,6 +821,26 @@ export type {
   SetTaskLocalFieldsInput,
 } from "./lib/local-fields.js";
 export {
+  getTaskWorkflowState,
+  listWorkflowStates,
+  migrateWorkflowStates,
+  queryTasksByWorkflowState,
+  renderWorkflowStatesMarkdown,
+  resolveWorkflowState,
+  setTaskWorkflowState,
+} from "./lib/workflow-states.js";
+export type {
+  SetTaskWorkflowStateOptions,
+  TaskWorkflowStateResult,
+  WorkflowState,
+  WorkflowStateMigrationItem,
+  WorkflowStateMigrationOptions,
+  WorkflowStateMigrationReport,
+  WorkflowStateQuery,
+  WorkflowStateQueryResult,
+  WorkflowStateResolution,
+} from "./lib/workflow-states.js";
+export {
   findDuplicateTasks,
   mergeDuplicateTask,
 } from "./lib/task-dedupe.js";

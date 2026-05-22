@@ -30,6 +30,7 @@ import { createReleaseCompatibilityReport } from "./lib/release-compatibility.js
 import { createLocalUsageLedger } from "./lib/usage-ledger.js";
 import { createTuiDashboardSnapshot } from "./lib/tui-dashboard.js";
 import { compactScaleStorage, createScalePerformanceReport } from "./lib/scale-hardening.js";
+import { listWorkflowStates, migrateWorkflowStates, setTaskWorkflowState } from "./lib/workflow-states.js";
 import { createSdkIntegrationFixturePack } from "./lib/sdk-integration-fixtures.js";
 import { generateReleaseNotes } from "./lib/release-notes.js";
 import { previewRetentionCleanup } from "./lib/retention-cleanup.js";
@@ -126,6 +127,9 @@ describe("stable JSON contracts", () => {
       "agent_reliability_scorecard",
       "agent_reliability_export",
       "local_task_fields",
+      "workflow_state_config",
+      "workflow_state_result",
+      "workflow_state_migration",
       "retention_cleanup_report",
       "scale_performance_report",
       "scale_compaction_result",
@@ -450,6 +454,9 @@ describe("stable JSON contracts", () => {
       generated_at: "2026-01-02T03:04:05.000Z",
     }, db);
     const scaleCompactionResult = compactScaleStorage({}, db);
+    const workflowStateConfig = listWorkflowStates()[0]!;
+    const workflowStateResult = setTaskWorkflowState(task.id, "pending", { actor: "jsoncontractagent" }, db);
+    const workflowStateMigration = migrateWorkflowStates({ apply: false }, db);
     expectValid("local_audit_ledger", auditLedger);
     expectValid("local_audit_ledger_checkpoint", auditCheckpoint);
     expectValid("release_compatibility_report", releaseCompatibility);
@@ -471,6 +478,9 @@ describe("stable JSON contracts", () => {
     expectValid("agent_reliability_scorecard", reliabilityScorecard);
     expectValid("agent_reliability_export", reliabilityExport);
     expectValid("local_task_fields", localFields);
+    expectValid("workflow_state_config", workflowStateConfig);
+    expectValid("workflow_state_result", workflowStateResult);
+    expectValid("workflow_state_migration", workflowStateMigration);
     expectValid("retention_cleanup_report", retentionCleanupReport);
     expectValid("duplicate_task_candidate", duplicateCandidate);
     expectValid("task_merge_result", mergeResult);

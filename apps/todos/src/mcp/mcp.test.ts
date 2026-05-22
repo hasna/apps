@@ -2010,6 +2010,57 @@ describe("MCP tool wrappers", () => {
     expect(query.tasks[0].id).toBe(task.id);
   });
 
+  it("local workflow state wrappers list, set, migrate, and query states", async () => {
+    const previousHome = process.env["HOME"];
+    const { mkdtempSync, rmSync, writeFileSync, mkdirSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-workflow-home-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    mkdirSync(join(home, ".hasna", "todos"), { recursive: true });
+    writeFileSync(join(home, ".hasna", "todos", "config.json"), JSON.stringify({
+      workflow_states: {
+        states: [
+          { name: "verifying", canonical_status: "in_progress", aliases: ["verify"], transitions: ["released"] },
+          { name: "released", canonical_status: "completed", terminal: true },
+        ],
+      },
+    }));
+    try {
+      const tools = captureTools(registerTaskProjectTools);
+      const task = createTask({ title: "MCP workflowed" }, db);
+
+      const states = JSON.parse((await callCapturedTool(tools, "list_workflow_states", {})).content[0]!.text);
+      expect(states.states.map((state: { name: string }) => state.name)).toContain("verifying");
+
+      const set = JSON.parse((await callCapturedTool(tools, "set_task_workflow_state", {
+        task_id: task.id,
+        state: "verify",
+        actor: "mcp",
+      })).content[0]!.text);
+      expect(set.workflow_state.name).toBe("verifying");
+      expect(set.task.status).toBe("in_progress");
+
+      const queried = JSON.parse((await callCapturedTool(tools, "query_tasks_by_workflow_state", {
+        state: "verifying",
+      })).content[0]!.text);
+      expect(queried.count).toBe(1);
+      expect(queried.tasks[0].id).toBe(task.id);
+
+      const migrated = JSON.parse((await callCapturedTool(tools, "migrate_workflow_states", {
+        apply: false,
+      })).content[0]!.text);
+      expect(migrated.applied).toBe(false);
+      expect(migrated.local_only).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      resetConfig();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("duplicate wrappers scan and merge without dropping task records", async () => {
     const tools = captureTools(registerTaskProjectTools);
     const primary = createTask({ title: "MCP duplicate parser crash" }, db);

@@ -94,6 +94,12 @@ import {
 import { getLocalActivityTimeline } from "../../lib/activity-timeline.js";
 import { createBranchWorkPlan } from "../../lib/branch-work-plans.js";
 import { getTaskLocalFields, queryTasksByLocalFields, setTaskLocalFields } from "../../lib/local-fields.js";
+import {
+  listWorkflowStates,
+  migrateWorkflowStates,
+  queryTasksByWorkflowState,
+  setTaskWorkflowState,
+} from "../../lib/workflow-states.js";
 import { previewNaturalLanguageIntake } from "../../lib/natural-language-intake.js";
 import { findDuplicateTasks, mergeDuplicateTask } from "../../lib/task-dedupe.js";
 import {
@@ -2641,6 +2647,101 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
         try {
           const tasks = queryTasksByLocalFields(input);
           return { content: [{ type: "text" as const, text: JSON.stringify({ tasks, count: tasks.length }, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_workflow_states")) {
+    server.tool(
+      "list_workflow_states",
+      "List local project workflow states mapped onto canonical task statuses.",
+      {
+        project_path: z.string().optional(),
+      },
+      async ({ project_path }) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ states: listWorkflowStates(project_path), local_only: true }, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("set_task_workflow_state")) {
+    server.tool(
+      "set_task_workflow_state",
+      "Set a task's local workflow state with configured transition guards.",
+      {
+        task_id: z.string().describe("Task ID"),
+        state: z.string().describe("Workflow state name or alias"),
+        actor: z.string().optional().describe("Agent or user changing the state"),
+        project_path: z.string().optional(),
+        force: z.boolean().optional().describe("Bypass configured transition guards"),
+      },
+      async ({ task_id, state, actor, project_path, force }) => {
+        try {
+          const result = setTaskWorkflowState(resolveId(task_id), state, { actor, project_path, force });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("query_tasks_by_workflow_state")) {
+    server.tool(
+      "query_tasks_by_workflow_state",
+      "Query tasks by local workflow state while preserving canonical task statuses.",
+      {
+        state: z.string().describe("Workflow state name or alias"),
+        project_id: z.string().optional(),
+        task_list_id: z.string().optional(),
+        project_path: z.string().optional(),
+        limit: z.number().optional(),
+      },
+      async ({ state, project_id, task_list_id, project_path, limit }) => {
+        try {
+          const result = queryTasksByWorkflowState({
+            state,
+            project_id: project_id ? resolveId(project_id, "projects") : undefined,
+            task_list_id: task_list_id ? resolveId(task_list_id, "task_lists") : undefined,
+            project_path,
+            limit,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("migrate_workflow_states")) {
+    server.tool(
+      "migrate_workflow_states",
+      "Backfill local workflow state metadata from canonical task statuses.",
+      {
+        apply: z.boolean().optional(),
+        project_id: z.string().optional(),
+        task_list_id: z.string().optional(),
+        project_path: z.string().optional(),
+        limit: z.number().optional(),
+      },
+      async ({ apply, project_id, task_list_id, project_path, limit }) => {
+        try {
+          const report = migrateWorkflowStates({
+            apply,
+            project_id: project_id ? resolveId(project_id, "projects") : undefined,
+            task_list_id: task_list_id ? resolveId(task_list_id, "task_lists") : undefined,
+            project_path,
+            limit,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(report, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }
