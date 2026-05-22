@@ -4,7 +4,7 @@ import { addDependency, createTask, getTask, listTasks, completeTask, startTask 
 import { createProject } from "../db/projects.js";
 import { createPlan } from "../db/plans.js";
 import { addComment, listComments } from "../db/comments.js";
-import { addTaskRunEvent, startTaskRun } from "../db/task-runs.js";
+import { addTaskRunCommand, addTaskRunEvent, startTaskRun } from "../db/task-runs.js";
 import { addTaskFile } from "../db/task-files.js";
 import { resetConfig } from "../lib/config.js";
 import { searchTasks } from "../lib/search.js";
@@ -1243,6 +1243,42 @@ describe("MCP tool wrappers", () => {
 
       const removeResult = await callCapturedTool(tools, "remove_capacity_profile", { agent_id_or_id: "codex", project_id: project.id });
       expect(JSON.parse(removeResult.content[0]!.text).removed).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      resetConfig();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("audit ledger tools seal and verify local evidence", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-audit-ledger-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    try {
+      const tools = captureTools(registerTaskProjectTools);
+      const task = createTask({ title: "MCP ledger task" }, db);
+      const run = startTaskRun({ task_id: task.id, agent_id: "codex" }, db);
+      addTaskRunCommand({ run_id: run.id, command: "bun test", status: "passed" }, db);
+
+      const ledgerResult = await callCapturedTool(tools, "get_audit_ledger", { task_id: task.id, include_entries: true });
+      const ledger = JSON.parse(ledgerResult.content[0]!.text);
+      expect(ledger.entry_count).toBeGreaterThan(0);
+      expect(ledger.entries.length).toBe(ledger.entry_count);
+
+      const sealResult = await callCapturedTool(tools, "seal_audit_ledger", { name: "mcp-checkpoint", task_id: task.id, agent_id: "codex" });
+      const checkpoint = JSON.parse(sealResult.content[0]!.text);
+      expect(checkpoint.name).toBe("mcp-checkpoint");
+
+      const listResult = await callCapturedTool(tools, "list_audit_ledger_checkpoints", {});
+      expect(JSON.parse(listResult.content[0]!.text)).toHaveLength(1);
+
+      const verifyResult = await callCapturedTool(tools, "verify_audit_ledger", { checkpoint: checkpoint.id });
+      expect(JSON.parse(verifyResult.content[0]!.text).ok).toBe(true);
     } finally {
       if (previousHome === undefined) delete process.env["HOME"];
       else process.env["HOME"] = previousHome;

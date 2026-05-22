@@ -36,6 +36,7 @@ const [
   { registerReviewQueueCommands },
   { registerRoadmapCommands },
   { registerCapacityCommands },
+  { registerAuditLedgerCommands },
 ] = await Promise.all([
   import("./commands/task-commands.js"),
   import("./commands/plan-template-commands.js"),
@@ -58,6 +59,7 @@ const [
   import("./commands/review-queue-commands.js"),
   import("./commands/roadmap-commands.js"),
   import("./commands/capacity-commands.js"),
+  import("./commands/audit-ledger-commands.js"),
 ]);
 
 registerTaskCommands(program);
@@ -81,5 +83,6 @@ registerSdkFixtureCommands(program);
 registerReviewQueueCommands(program);
 registerRoadmapCommands(program);
 registerCapacityCommands(program);
+registerAuditLedgerCommands(program);
 
 program.parse();

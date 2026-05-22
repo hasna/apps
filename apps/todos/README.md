@@ -722,6 +722,25 @@ and risk flags. MCP clients use `set_capacity_profile`,
 `list_capacity_profiles`, `remove_capacity_profile`, and
 `get_planning_forecast`.
 
+## Local Audit Ledger
+
+Audit ledger checkpoints hash local evidence into a deterministic chain so an
+agent can seal task, run, verification, approval, and handoff records and verify
+later that the local evidence still matches:
+
+```bash
+todos audit-ledger show --task <task-id> --entries --json
+todos audit-ledger seal release-checkpoint --task <task-id> --json
+todos audit-ledger verify release-checkpoint --json
+todos audit-ledger list --json
+```
+
+The ledger stores only local checkpoint metadata in config. It does not call a
+hosted service and it does not claim to prevent local deletion; it detects
+changes against a previously sealed root hash. MCP clients use
+`get_audit_ledger`, `seal_audit_ledger`, `list_audit_ledger_checkpoints`, and
+`verify_audit_ledger`.
+
 ## Local Activity Timeline
 
 The timeline command gives agents one ordered, redacted view of local comments,

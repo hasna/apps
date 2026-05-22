@@ -2513,6 +2513,46 @@ END:VCALENDAR`);
     }
   });
 
+  it("should seal and verify local audit ledger checkpoints from the CLI", async () => {
+    const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-cli-audit-ledger-"));
+    process.env["HOME"] = home;
+    const dbPath = join(home, "todos.db");
+
+    try {
+      const task = JSON.parse((await runCli(["--json", "add", "Ledger CLI task"], dbPath, { HOME: home })).stdout);
+      const run = JSON.parse((await runCli(["--json", "runs", "start", task.id, "--agent", "codex", "--title", "CLI run"], dbPath, { HOME: home })).stdout);
+      const command = await runCli(["--json", "runs", "command", run.id, "bun test", "--status", "passed", "--summary", "1 pass"], dbPath, { HOME: home });
+      expect(command.exitCode).toBe(0);
+
+      const shown = await runCli(["--json", "audit-ledger", "show", "--task", task.id, "--entries"], dbPath, { HOME: home });
+      expect(shown.exitCode).toBe(0);
+      const ledger = JSON.parse(shown.stdout);
+      expect(ledger.entry_count).toBeGreaterThan(0);
+      expect(ledger.entries.length).toBe(ledger.entry_count);
+
+      const sealed = await runCli(["--json", "--agent", "codex", "audit-ledger", "seal", "cli-checkpoint", "--task", task.id], dbPath, { HOME: home });
+      expect(sealed.exitCode).toBe(0);
+      const checkpoint = JSON.parse(sealed.stdout);
+      expect(checkpoint.name).toBe("cli-checkpoint");
+
+      const verified = await runCli(["--json", "audit-ledger", "verify", checkpoint.id], dbPath, { HOME: home });
+      expect(verified.exitCode).toBe(0);
+      expect(JSON.parse(verified.stdout).ok).toBe(true);
+
+      const markdown = await runCli(["audit-ledger", "verify", checkpoint.id, "--format", "markdown"], dbPath, { HOME: home });
+      expect(markdown.stdout).toContain("Local Audit Ledger Verification");
+      try { unlinkSync(dbPath); } catch {}
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("should extract source TODOs with index metadata and watcher output", async () => {
     const { mkdtempSync, rmSync, writeFileSync, unlinkSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");

@@ -24,6 +24,8 @@ The stable contracts cover these object IDs:
 - `roadmap_bundle`
 - `capacity_profile`
 - `planning_forecast`
+- `local_audit_ledger`
+- `local_audit_ledger_checkpoint`
 - `mention_resolution_report`
 - `project_knowledge_record`
 - `project_knowledge_export`
@@ -161,6 +163,18 @@ working days, optional project scope, and effective date metadata.
 `get_planning_forecast`. It combines task estimates, actual minutes, capacity
 profiles, due dates, projected completion date, and risk flags for local
 planning.
+
+## Local Audit Ledgers
+
+`local_audit_ledger` is returned by `todos audit-ledger show --json` and
+`get_audit_ledger`. It contains the local-only hash algorithm, scoped evidence
+filters, source counts, entry count, root hash, and optional per-entry chain
+hashes.
+
+`local_audit_ledger_checkpoint` is returned by
+`todos audit-ledger seal --json`, `todos audit-ledger list --json`,
+`seal_audit_ledger`, and `list_audit_ledger_checkpoints`. It stores the sealed
+root hash and source counts used by `verify_audit_ledger`.
 
 ## Project Knowledge
 

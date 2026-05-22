@@ -1222,6 +1222,25 @@ export type {
   UpsertCapacityProfileInput,
 } from "./lib/capacity-forecasts.js";
 
+export {
+  LOCAL_AUDIT_LEDGER_HASH_ALGORITHM,
+  LOCAL_AUDIT_LEDGER_SCHEMA_VERSION,
+  getLocalAuditLedger,
+  listLocalAuditLedgerCheckpoints,
+  renderLocalAuditLedgerMarkdown,
+  sealLocalAuditLedger,
+  verifyLocalAuditLedger,
+} from "./lib/audit-ledger.js";
+export type {
+  LocalAuditLedger,
+  LocalAuditLedgerEntry,
+  LocalAuditLedgerInput,
+  LocalAuditLedgerScope,
+  LocalAuditLedgerSource,
+  LocalAuditLedgerVerifyResult,
+  SealLocalAuditLedgerInput,
+} from "./lib/audit-ledger.js";
+
 // Dispatch formatter
 export { formatDispatchMessage, formatSingleTask } from "./lib/dispatch-formatter.js";
 export type { FormatOpts } from "./lib/dispatch-formatter.js";

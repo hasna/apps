@@ -116,6 +116,13 @@ import {
   renderPlanningForecastMarkdown,
   upsertCapacityProfile,
 } from "../../lib/capacity-forecasts.js";
+import {
+  getLocalAuditLedger,
+  listLocalAuditLedgerCheckpoints,
+  renderLocalAuditLedgerMarkdown,
+  sealLocalAuditLedger,
+  verifyLocalAuditLedger,
+} from "../../lib/audit-ledger.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 
 interface TaskProjectContext {
@@ -2105,6 +2112,96 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
             start_date,
           });
           const text = format === "markdown" ? renderPlanningForecastMarkdown(forecast) : JSON.stringify(forecast, null, 2);
+          return { content: [{ type: "text" as const, text }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  // === LOCAL AUDIT LEDGER ===
+
+  if (shouldRegisterTool("get_audit_ledger")) {
+    server.tool(
+      "get_audit_ledger",
+      "Build a tamper-evident local audit hash chain from task, run, verification, approval, and handoff evidence.",
+      {
+        project_id: z.string().optional(),
+        task_id: z.string().optional(),
+        run_id: z.string().optional(),
+        include_entries: z.boolean().optional(),
+        format: z.enum(["json", "markdown"]).optional(),
+      },
+      async ({ project_id, task_id, run_id, include_entries, format }) => {
+        try {
+          const ledger = getLocalAuditLedger({
+            project_id: resolveProjectIdInput(project_id),
+            task_id: task_id ? resolveId(task_id, "tasks") : undefined,
+            run_id: run_id ? resolveTaskRunId(run_id) : undefined,
+            include_entries,
+          });
+          const text = format === "markdown" ? renderLocalAuditLedgerMarkdown(ledger) : JSON.stringify(ledger, null, 2);
+          return { content: [{ type: "text" as const, text }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("seal_audit_ledger")) {
+    server.tool(
+      "seal_audit_ledger",
+      "Store a local audit ledger checkpoint for later integrity verification.",
+      {
+        name: z.string(),
+        project_id: z.string().optional(),
+        task_id: z.string().optional(),
+        run_id: z.string().optional(),
+        agent_id: z.string().optional(),
+        note: z.string().optional(),
+      },
+      async ({ name, project_id, task_id, run_id, agent_id, note }) => {
+        try {
+          const checkpoint = sealLocalAuditLedger({
+            name,
+            project_id: resolveProjectIdInput(project_id),
+            task_id: task_id ? resolveId(task_id, "tasks") : undefined,
+            run_id: run_id ? resolveTaskRunId(run_id) : undefined,
+            agent_id,
+            note,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(checkpoint, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_audit_ledger_checkpoints")) {
+    server.tool("list_audit_ledger_checkpoints", "List sealed local audit ledger checkpoints.", {}, async () => {
+      try {
+        return { content: [{ type: "text" as const, text: JSON.stringify(listLocalAuditLedgerCheckpoints(), null, 2) }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+      }
+    });
+  }
+
+  if (shouldRegisterTool("verify_audit_ledger")) {
+    server.tool(
+      "verify_audit_ledger",
+      "Verify current local evidence against a sealed audit ledger checkpoint.",
+      {
+        checkpoint: z.string(),
+        format: z.enum(["json", "markdown"]).optional(),
+      },
+      async ({ checkpoint, format }) => {
+        try {
+          const result = verifyLocalAuditLedger(checkpoint);
+          const text = format === "markdown" ? renderLocalAuditLedgerMarkdown(result) : JSON.stringify(result, null, 2);
           return { content: [{ type: "text" as const, text }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };

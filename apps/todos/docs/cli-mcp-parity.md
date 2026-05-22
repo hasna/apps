@@ -40,6 +40,8 @@ structured error contracts.
   dependency readiness, Markdown/JSON export, and import workflows.
 - `capacity`: local agent capacity profiles and planning forecasts from task
   estimates, actual minutes, due dates, and risk flags.
+- `audit-ledger`: tamper-evident local hash-chain checkpoints for task, run,
+  verification, approval, and handoff evidence.
 - `templates`: bundled marketplace-free local template library, editable JSON
   template files, template import/export, preview, version history, and task
   creation from templates.
@@ -441,6 +443,19 @@ Matching MCP tool:
 
 ```json
 { "tool": "get_planning_forecast", "arguments": { "plan_id": "release-plan", "agent_id": "codex" } }
+```
+
+CLI audit ledger checkpoint:
+
+```bash
+todos audit-ledger seal release-checkpoint --task task-id --json
+todos audit-ledger verify release-checkpoint --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "seal_audit_ledger", "arguments": { "name": "release-checkpoint", "task_id": "task-id" } }
 ```
 
 CLI local event hook:

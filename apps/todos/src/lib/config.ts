@@ -149,6 +149,26 @@ export interface LocalCapacityStoreConfig {
   profiles: Record<string, LocalCapacityProfileConfig>;
 }
 
+export interface LocalAuditLedgerCheckpointConfig {
+  id: string;
+  name: string;
+  project_id: string | null;
+  task_id: string | null;
+  run_id: string | null;
+  agent_id: string | null;
+  note: string | null;
+  entry_count: number;
+  root_hash: string;
+  first_entry_hash: string | null;
+  last_entry_hash: string | null;
+  source_counts: Record<string, number>;
+  created_at: string;
+}
+
+export interface LocalAuditLedgerStoreConfig {
+  checkpoints: Record<string, LocalAuditLedgerCheckpointConfig>;
+}
+
 export type VerificationProviderKind = "command" | "testbox" | "ci_log" | "browser" | "script";
 
 export interface VerificationProviderRetryConfig {
@@ -315,6 +335,8 @@ export interface TodosConfig {
   local_roadmaps?: LocalRoadmapStoreConfig;
   /** Local planning capacity profiles, keyed by stable profile id. */
   local_capacity?: LocalCapacityStoreConfig;
+  /** Optional tamper-evident local audit ledger checkpoints. */
+  local_audit_ledgers?: LocalAuditLedgerStoreConfig;
   /** Optional local verification provider adapters, keyed by provider name. */
   verification_providers?: Record<string, VerificationProviderConfig>;
   /** Local extension registry entries, keyed by extension name. */

@@ -68,6 +68,15 @@ export {
   upsertReleaseGroup,
 } from "./lib/roadmaps.js";
 export {
+  LOCAL_AUDIT_LEDGER_HASH_ALGORITHM,
+  LOCAL_AUDIT_LEDGER_SCHEMA_VERSION,
+  getLocalAuditLedger,
+  listLocalAuditLedgerCheckpoints,
+  renderLocalAuditLedgerMarkdown,
+  sealLocalAuditLedger,
+  verifyLocalAuditLedger,
+} from "./lib/audit-ledger.js";
+export {
   DEFAULT_ENCRYPTION_KEY_ENV,
   DEFAULT_ENCRYPTION_PROFILE,
   TODOS_ENCRYPTED_BRIDGE_KIND,
@@ -99,6 +108,15 @@ export type {
   TodosJsonStability,
   TodosJsonSurface,
 } from "./json-contracts.js";
+export type {
+  LocalAuditLedger,
+  LocalAuditLedgerEntry,
+  LocalAuditLedgerInput,
+  LocalAuditLedgerScope,
+  LocalAuditLedgerSource,
+  LocalAuditLedgerVerifyResult,
+  SealLocalAuditLedgerInput,
+} from "./lib/audit-ledger.js";
 export type {
   ImportOnboardingFixtureOptions,
   OnboardingFixture,

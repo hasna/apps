@@ -15,6 +15,7 @@ export type TodosCliMcpParityDomain =
   | "plans"
   | "roadmaps"
   | "capacity"
+  | "audit-ledger"
   | "templates"
   | "workspace-trust"
   | "secret-safety"
@@ -445,6 +446,28 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos capacity forecast --plan release-plan --agent codex --json",
       mcpTool: "get_planning_forecast",
+    },
+  },
+  {
+    domain: "audit-ledger",
+    cliCommands: [
+      "todos audit-ledger show",
+      "todos audit-ledger seal",
+      "todos audit-ledger list",
+      "todos audit-ledger verify",
+    ],
+    mcpTools: [
+      "get_audit_ledger",
+      "seal_audit_ledger",
+      "list_audit_ledger_checkpoints",
+      "verify_audit_ledger",
+    ],
+    jsonContracts: ["local_audit_ledger", "local_audit_ledger_checkpoint", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    example: {
+      cli: "todos audit-ledger seal release-checkpoint --task task-id --json",
+      mcpTool: "seal_audit_ledger",
     },
   },
   {
