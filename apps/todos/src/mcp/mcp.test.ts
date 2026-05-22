@@ -1459,6 +1459,40 @@ describe("MCP tool wrappers", () => {
     expect(listTasks()).toHaveLength(4);
   });
 
+  it("exposes local snapshots through MCP resources and tools", async () => {
+    const resources = new Map<string, () => unknown>();
+    const server = {
+      resource(_name: string, uri: string, _metadata: unknown, handler: () => unknown) {
+        resources.set(uri, handler);
+      },
+      tool() {},
+    };
+    const ctx = {
+      shouldRegisterTool: () => false,
+      resolveId: () => "",
+      formatError: (error: unknown) => String(error),
+    };
+
+    registerTaskResources(server as any, ctx as any);
+    expect(resources.has("todos://snapshots/catalog")).toBe(true);
+    expect(resources.has("todos://snapshots/tasks")).toBe(true);
+    const catalog = await resources.get("todos://snapshots/catalog")!() as any;
+    const snapshotResources = JSON.parse(catalog.contents[0].text);
+    expect(snapshotResources.map((resource: { type: string }) => resource.type)).toContain("evidence");
+
+    const tools = captureTools(registerTaskResources);
+    await callCapturedTool(tools, "import_onboarding_fixture", { apply: true });
+    const listed = JSON.parse((await callCapturedTool(tools, "list_local_snapshots", {})).content[0]!.text);
+    expect(listed.map((resource: { uri: string }) => resource.uri)).toContain("todos://snapshots/tasks");
+    const snapshot = JSON.parse((await callCapturedTool(tools, "get_local_snapshot", { type: "tasks" })).content[0]!.text);
+    expect(snapshot.local_only).toBe(true);
+    expect(snapshot.items.length).toBeGreaterThan(0);
+    const markdown = (await callCapturedTool(tools, "get_local_snapshot", { type: "tasks", format: "markdown" })).content[0]!.text;
+    expect(markdown).toContain("# tasks snapshot");
+    const polled = JSON.parse((await callCapturedTool(tools, "poll_local_snapshots", { types: ["tasks", "evidence"] })).content[0]!.text);
+    expect(polled.snapshots.map((item: { type: string }) => item.type)).toEqual(["tasks", "evidence"]);
+  });
+
   it("agent run dispatcher tools queue and dry-run local adapters", async () => {
     const { mkdtempSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");

@@ -80,6 +80,12 @@ import {
   listOnboardingFixtures,
 } from "../../lib/onboarding-fixtures.js";
 import {
+  getLocalSnapshot,
+  listLocalSnapshotResources,
+  pollLocalSnapshots,
+  renderLocalSnapshotMarkdown,
+} from "../../lib/local-snapshots.js";
+import {
   createRetrospective,
   createRetrospectiveExport,
   listRetrospectives,
@@ -204,7 +210,83 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
     },
   );
 
+  server.resource(
+    "local-snapshot-catalog",
+    "todos://snapshots/catalog",
+    { description: "Stable local snapshot resource catalog for agent context refreshes", mimeType: "application/json" },
+    async () => {
+      return { contents: [{ uri: "todos://snapshots/catalog", text: JSON.stringify(listLocalSnapshotResources(), null, 2), mimeType: "application/json" }] };
+    },
+  );
+
+  for (const resource of listLocalSnapshotResources()) {
+    server.resource(
+      `local-snapshot-${resource.type}`,
+      resource.uri,
+      { description: resource.description, mimeType: "application/json" },
+      async () => {
+        const snapshot = getLocalSnapshot({ type: resource.type });
+        return { contents: [{ uri: resource.uri, text: JSON.stringify(snapshot, null, 2), mimeType: "application/json" }] };
+      },
+    );
+  }
+
   // === TASK FILES ===
+
+  if (shouldRegisterTool("list_local_snapshots")) {
+    server.tool(
+      "list_local_snapshots",
+      "List stable local snapshot resources for projects, tasks, plans, runs, dependencies, events, and evidence.",
+      {},
+      async () => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify(listLocalSnapshotResources(), null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("get_local_snapshot")) {
+    server.tool(
+      "get_local_snapshot",
+      "Read one redacted deterministic local snapshot as JSON or Markdown. Uses only local SQLite state.",
+      {
+        type: z.enum(["projects", "tasks", "plans", "runs", "dependencies", "events", "evidence"]).describe("Snapshot type"),
+        project_id: z.string().optional().describe("Optional local project id filter"),
+        since: z.string().optional().describe("Optional ISO cursor for event snapshots"),
+        limit: z.number().optional().describe("Maximum items to include"),
+        format: z.enum(["json", "markdown"]).optional().describe("Output format. Defaults to json."),
+      },
+      async ({ type, project_id, since, limit, format }) => {
+        try {
+          const snapshot = getLocalSnapshot({ type, project_id, since, limit });
+          const text = format === "markdown"
+            ? renderLocalSnapshotMarkdown(snapshot)
+            : JSON.stringify(snapshot, null, 2);
+          return { content: [{ type: "text" as const, text }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("poll_local_snapshots")) {
+    server.tool(
+      "poll_local_snapshots",
+      "Poll local snapshots and return only resources with cursors newer than the supplied ISO cursor.",
+      {
+        types: z.array(z.enum(["projects", "tasks", "plans", "runs", "dependencies", "events", "evidence"])).optional().describe("Snapshot types to poll"),
+        project_id: z.string().optional().describe("Optional local project id filter"),
+        since: z.string().optional().describe("Optional ISO cursor"),
+        limit: z.number().optional().describe("Maximum items per snapshot"),
+      },
+      async ({ types, project_id, since, limit }) => {
+        try {
+          const result = pollLocalSnapshots({ types, project_id, since, limit });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
 
   if (shouldRegisterTool("list_onboarding_fixtures")) {
     server.tool(

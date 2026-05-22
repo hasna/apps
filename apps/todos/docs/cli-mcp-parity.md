@@ -98,6 +98,9 @@ structured error contracts.
   linked commits, verification records, breaking changes, and migration notes.
 - `onboarding`: bundled deterministic local demo fixtures for project, task,
   plan, run, evidence, review, and bridge import/export smoke tests.
+- `local-snapshots`: local project, task, plan, run, dependency, event, and
+  evidence snapshots with cursors, fingerprints, JSON, Markdown, MCP resources,
+  and polling.
 - `imports`: template imports, inbox intake, and local bridge imports.
 - `exports`: template exports, traceability exports, verification records, and
   local bridge exports.

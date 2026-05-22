@@ -20,6 +20,7 @@ import { buildCodebaseIndex, extractTodos } from "./lib/extract.js";
 import { resetConfig } from "./lib/config.js";
 import { getTaskLocalFields, setTaskLocalFields } from "./lib/local-fields.js";
 import { testExtensionCompatibility } from "./lib/local-extensions.js";
+import { getLocalSnapshot, pollLocalSnapshots } from "./lib/local-snapshots.js";
 import { listOnboardingFixtures } from "./lib/onboarding-fixtures.js";
 import { generateReleaseNotes } from "./lib/release-notes.js";
 import { previewRetentionCleanup } from "./lib/retention-cleanup.js";
@@ -141,6 +142,8 @@ describe("stable JSON contracts", () => {
       "structured_error",
       "api_error",
       "onboarding_fixture",
+      "local_snapshot",
+      "local_snapshot_poll_result",
       "local_bridge_bundle",
       "local_bridge_import_result",
       "cli_mcp_parity_manifest",
@@ -489,6 +492,14 @@ describe("stable JSON contracts", () => {
     });
     expectValid("api_error", { error: "Task not found" });
     expectValid("onboarding_fixture", listOnboardingFixtures()[0]);
+    expectValid("local_snapshot", getLocalSnapshot({
+      type: "tasks",
+      generatedAt: "2026-01-02T03:04:05.000Z",
+    }, db));
+    expectValid("local_snapshot_poll_result", pollLocalSnapshots({
+      types: ["tasks"],
+      generatedAt: "2026-01-02T03:04:05.000Z",
+    }, db));
     expectValid("cli_mcp_parity_manifest", {
       schemaVersion: 1,
       generatedAt: "2026-01-02T03:04:05.000Z",

@@ -48,6 +48,7 @@ const expectedDomains = [
   "context-packs",
   "environment-snapshots",
   "onboarding",
+  "local-snapshots",
   "imports",
   "release-notes",
   "exports",

@@ -31,6 +31,7 @@ const [
   { registerRetrospectiveCommands },
   { registerAgentReliabilityCommands },
   { registerOnboardingCommands },
+  { registerLocalSnapshotCommands },
 ] = await Promise.all([
   import("./commands/task-commands.js"),
   import("./commands/plan-template-commands.js"),
@@ -48,6 +49,7 @@ const [
   import("./commands/retrospective-commands.js"),
   import("./commands/agent-reliability-commands.js"),
   import("./commands/onboarding-commands.js"),
+  import("./commands/local-snapshot-commands.js"),
 ]);
 
 registerTaskCommands(program);
@@ -66,5 +68,6 @@ registerRiskCommands(program);
 registerRetrospectiveCommands(program);
 registerAgentReliabilityCommands(program);
 registerOnboardingCommands(program);
+registerLocalSnapshotCommands(program);
 
 program.parse();

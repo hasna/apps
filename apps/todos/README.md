@@ -859,6 +859,25 @@ MCP clients can read `todos://onboarding/fixtures` or
 `todos://onboarding/demo`, then use `list_onboarding_fixtures`,
 `get_onboarding_fixture`, and `import_onboarding_fixture`.
 
+## Local Agent Snapshots
+
+Agents can refresh context through stable local snapshots for projects, tasks,
+plans, runs, dependencies, activity events, and evidence. Snapshots are
+redacted, deterministic, and include cursors plus fingerprints so MCP clients
+can poll for changes without a hosted event stream.
+
+```bash
+todos snapshots --json
+todos snapshots --show tasks --json
+todos snapshots --show evidence --markdown
+todos snapshots --poll --types tasks,evidence --since 2026-05-22T00:00:00.000Z --json
+```
+
+MCP clients can read `todos://snapshots/catalog` and
+`todos://snapshots/tasks` through `todos://snapshots/evidence`, or use
+`list_local_snapshots`, `get_local_snapshot`, and `poll_local_snapshots` for
+JSON or Markdown payloads.
+
 ## Local Bridge Import/Export
 
 Export a versioned local bridge bundle for migration, backup, or explicit

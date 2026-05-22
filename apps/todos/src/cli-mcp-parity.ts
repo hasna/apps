@@ -40,6 +40,7 @@ export type TodosCliMcpParityDomain =
   | "release-notes"
   | "environment-snapshots"
   | "onboarding"
+  | "local-snapshots"
   | "imports"
   | "exports";
 
@@ -977,6 +978,26 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos onboarding --import agent-project-demo --apply --json",
       mcpTool: "import_onboarding_fixture",
+    },
+  },
+  {
+    domain: "local-snapshots",
+    cliCommands: [
+      "todos snapshots",
+      "todos snapshots --show",
+      "todos snapshots --poll",
+    ],
+    mcpTools: [
+      "list_local_snapshots",
+      "get_local_snapshot",
+      "poll_local_snapshots",
+    ],
+    jsonContracts: ["local_snapshot", "local_snapshot_poll_result", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    example: {
+      cli: "todos snapshots --show tasks --json",
+      mcpTool: "get_local_snapshot",
     },
   },
   {

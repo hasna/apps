@@ -60,6 +60,8 @@ The stable contracts cover these object IDs:
 - `structured_error`
 - `api_error`
 - `onboarding_fixture`
+- `local_snapshot`
+- `local_snapshot_poll_result`
 - `local_bridge_bundle`
 - `local_bridge_import_result`
 - `cli_mcp_parity_manifest`
@@ -351,6 +353,17 @@ CLI, MCP, and SDK smoke tests. Each fixture summary declares that it is
 local-only, no-network, and redacted, lists the workflow steps it demonstrates,
 and exposes bridge-bundle stats so consumers can assert project, task, plan,
 run, evidence, saved-view, and board coverage before importing.
+
+`local_snapshot` is the stable context refresh shape returned by
+`todos snapshots --show`, `get_local_snapshot`, and
+`todos://snapshots/<type>` resources. Snapshot types cover projects, tasks,
+plans, runs, dependencies, local activity events, and evidence summaries.
+Every snapshot includes local-only/no-network flags, redaction status, filters,
+a cursor, a stable fingerprint, and resource hints.
+
+`local_snapshot_poll_result` is returned by `todos snapshots --poll` and
+`poll_local_snapshots`. It lets agent clients pass the last cursor and receive
+only snapshots whose local cursor advanced, without a hosted event stream.
 
 `local_bridge_bundle` is the stable offline import/export shape for moving local
 `@hasna/todos` data between stores. It contains versioned package metadata,

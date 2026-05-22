@@ -62,6 +62,22 @@ export type {
   WriteOnboardingFixtureResult,
 } from "./lib/onboarding-fixtures.js";
 
+// Local snapshot resources
+export {
+  TODOS_LOCAL_SNAPSHOT_SCHEMA_VERSION,
+  getLocalSnapshot,
+  listLocalSnapshotResources,
+  pollLocalSnapshots,
+  renderLocalSnapshotMarkdown,
+} from "./lib/local-snapshots.js";
+export type {
+  LocalSnapshot,
+  LocalSnapshotCatalogEntry,
+  LocalSnapshotOptions,
+  LocalSnapshotPollResult,
+  LocalSnapshotType,
+} from "./lib/local-snapshots.js";
+
 // Side-effect-free MCP metadata
 export {
   CORE_MCP_TOOLS,

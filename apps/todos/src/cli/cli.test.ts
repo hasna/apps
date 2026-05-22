@@ -1138,6 +1138,42 @@ describe("CLI integration", () => {
     }
   });
 
+  it("should list read and poll local snapshots through the CLI", async () => {
+    const dbPath = "/tmp/test-cli-local-snapshots.db";
+    const { unlinkSync } = await import("node:fs");
+    for (const path of [dbPath, `${dbPath}-shm`, `${dbPath}-wal`]) {
+      try { unlinkSync(path); } catch {}
+    }
+
+    expect((await runCli(["onboarding", "--import", "agent-project-demo", "--apply", "--json"], dbPath)).exitCode).toBe(0);
+
+    const listed = await runCli(["snapshots", "--json"], dbPath);
+    expect(listed.exitCode).toBe(0);
+    const resources = JSON.parse(listed.stdout);
+    expect(resources.map((resource: { uri: string }) => resource.uri)).toContain("todos://snapshots/tasks");
+
+    const shown = await runCli(["snapshots", "--show", "tasks", "--json"], dbPath);
+    expect(shown.exitCode).toBe(0);
+    const snapshot = JSON.parse(shown.stdout);
+    expect(snapshot.type).toBe("tasks");
+    expect(snapshot.local_only).toBe(true);
+    expect(snapshot.items.length).toBeGreaterThan(0);
+
+    const markdown = await runCli(["snapshots", "--show", "tasks", "--markdown"], dbPath);
+    expect(markdown.exitCode).toBe(0);
+    expect(markdown.stdout).toContain("# tasks snapshot");
+
+    const polled = await runCli(["snapshots", "--poll", "--types", "tasks,evidence", "--json"], dbPath);
+    expect(polled.exitCode).toBe(0);
+    const pollResult = JSON.parse(polled.stdout);
+    expect(pollResult.changed).toBe(true);
+    expect(pollResult.snapshots.map((item: { type: string }) => item.type)).toEqual(["tasks", "evidence"]);
+
+    for (const path of [dbPath, `${dbPath}-shm`, `${dbPath}-wal`]) {
+      try { unlinkSync(path); } catch {}
+    }
+  });
+
   it("should encrypt and decrypt local bridge bundles through the CLI", async () => {
     const sourceDb = "/tmp/test-cli-bridge-encrypted-source.db";
     const targetDb = "/tmp/test-cli-bridge-encrypted-target.db";

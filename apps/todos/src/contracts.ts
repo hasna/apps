@@ -24,6 +24,13 @@ export {
   validateLocalBridgeBundle,
 } from "./lib/local-bridge.js";
 export {
+  TODOS_LOCAL_SNAPSHOT_SCHEMA_VERSION,
+  getLocalSnapshot,
+  listLocalSnapshotResources,
+  pollLocalSnapshots,
+  renderLocalSnapshotMarkdown,
+} from "./lib/local-snapshots.js";
+export {
   DEFAULT_ENCRYPTION_KEY_ENV,
   DEFAULT_ENCRYPTION_PROFILE,
   TODOS_ENCRYPTED_BRIDGE_KIND,
@@ -71,6 +78,13 @@ export type {
   TodosLocalBridgePackageSource,
   TodosLocalBridgeSource,
 } from "./lib/local-bridge.js";
+export type {
+  LocalSnapshot,
+  LocalSnapshotCatalogEntry,
+  LocalSnapshotOptions,
+  LocalSnapshotPollResult,
+  LocalSnapshotType,
+} from "./lib/local-snapshots.js";
 export type {
   EncryptedLocalBridgeBundle,
   LocalEncryptionEnvelope,
