@@ -299,6 +299,9 @@ describe("CLI QoL commands", () => {
     expect(help).toContain("serve");
     expect(help).toContain("stream");
     expect(help).toContain("mcp");
+    // Discoverability
+    expect(help).toContain("completions");
+    expect(help).toContain("manual");
     // Diagnostics
     expect(help).toContain("doctor");
     expect(help).toContain("health");

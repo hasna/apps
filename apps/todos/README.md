@@ -17,6 +17,22 @@ bun install -g @hasna/todos
 todos --help
 ```
 
+Generate shell completions directly from the registered CLI command tree:
+
+```bash
+todos completions bash > ~/.local/share/bash-completion/completions/todos
+todos completions zsh > ~/.zsh/completions/_todos
+todos completions fish > ~/.config/fish/completions/todos.fish
+```
+
+Print the local CLI manual when you need install/update commands, examples,
+JSON output contracts, error behavior, and the command catalog:
+
+```bash
+todos manual
+todos manual --json
+```
+
 ## Local Project Bootstrap
 
 Bootstrap discovers the current local workspace, registers a project identity,

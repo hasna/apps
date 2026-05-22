@@ -114,6 +114,64 @@ describe("CLI integration", () => {
     }
   });
 
+  it("should generate shell completions for bash zsh and fish", async () => {
+    const dbPath = "/tmp/test-cli-completions.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    try {
+      const bash = await runCli(["completions", "bash"], dbPath);
+      expect(bash.exitCode).toBe(0);
+      expect(bash.stdout).toContain("complete -F _todos_completion todos");
+      expect(bash.stdout).toContain("project-bootstrap");
+      expect(bash.stdout).toContain("--json");
+      expect(bash.stdout).toContain("usage");
+
+      const zsh = await runCli(["completions", "zsh"], dbPath);
+      expect(zsh.exitCode).toBe(0);
+      expect(zsh.stdout).toContain("#compdef todos");
+      expect(zsh.stdout).toContain("project-bootstrap");
+      expect(zsh.stdout).toContain("usage");
+
+      const fish = await runCli(["completions", "fish"], dbPath);
+      expect(fish.exitCode).toBe(0);
+      expect(fish.stdout).toContain("complete -c todos -f");
+      expect(fish.stdout).toContain("__fish_use_subcommand");
+      expect(fish.stdout).toContain("project-bootstrap");
+      expect(fish.stdout).toContain("usage");
+    } finally {
+      try { unlinkSync(dbPath); } catch {}
+    }
+  });
+
+  it("should print a manpage-grade local CLI manual", async () => {
+    const dbPath = "/tmp/test-cli-manual.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    try {
+      const markdown = await runCli(["manual"], dbPath);
+      expect(markdown.exitCode).toBe(0);
+      expect(markdown.stdout).toContain("# todos(1)");
+      expect(markdown.stdout).toContain("bun install -g @hasna/todos");
+      expect(markdown.stdout).toContain("## Shell Completions");
+      expect(markdown.stdout).toContain("## JSON Output Contracts");
+      expect(markdown.stdout).toContain("## Error Codes");
+      expect(markdown.stdout).toContain("todos project-bootstrap");
+      expect(markdown.stdout).toContain("todos usage report");
+
+      const json = await runCli(["manual", "--json"], dbPath);
+      expect(json.exitCode).toBe(0);
+      const parsed = JSON.parse(json.stdout);
+      expect(parsed.local_only).toBe(true);
+      expect(parsed.completion_shells).toEqual(["bash", "zsh", "fish"]);
+      expect(parsed.commands.some((command: { command: string }) => command.command === "usage report")).toBe(true);
+      expect(parsed.json_contracts).toContain("local_usage_ledger");
+    } finally {
+      try { unlinkSync(dbPath); } catch {}
+    }
+  });
+
   it("should run search command", async () => {
     // First add a task, then search for it
     const addProc = Bun.spawn(

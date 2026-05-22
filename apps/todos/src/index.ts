@@ -1287,6 +1287,19 @@ export type {
   UsageLedgerQuotaResult,
   UsageLedgerReport,
 } from "./lib/usage-ledger.js";
+export {
+  COMPLETION_SHELLS,
+  collectCliCommandEntries,
+  createCliManual,
+  generateCompletionScript,
+  renderCliManualMarkdown,
+} from "./lib/cli-help.js";
+export type {
+  CliCommandEntry,
+  CliManual,
+  CliOptionEntry,
+  CompletionShell,
+} from "./lib/cli-help.js";
 
 // Dispatch formatter
 export { formatDispatchMessage, formatSingleTask } from "./lib/dispatch-formatter.js";
