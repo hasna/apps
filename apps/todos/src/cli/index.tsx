@@ -4163,6 +4163,87 @@ goalCmd
     console.log(getGoalCommandRecipesMarkdown());
   });
 
+// verify — local verification providers
+const verifyCmd = program
+  .command("verify")
+  .description("Run local verification providers and store evidence records");
+
+verifyCmd
+  .command("providers")
+  .description("List configured verification providers")
+  .action(() => {
+    const globalOpts = program.opts();
+    const { loadVerificationProviders } = require("../lib/verification-providers.js") as typeof import("../lib/verification-providers.js");
+    const providers = loadVerificationProviders();
+    if (globalOpts.json) {
+      console.log(JSON.stringify(providers, null, 2));
+      return;
+    }
+    for (const p of providers) {
+      console.log(`  ${chalk.cyan(p.name)} ${chalk.dim(`(${p.type})`)}${p.command ? ` — ${p.command}` : ""}`);
+    }
+  });
+
+verifyCmd
+  .command("run <provider>")
+  .description("Run a verification provider")
+  .option("--task <id>", "Associate with task ID")
+  .option("--note <text>", "Manual verification note")
+  .option("--evidence <path>", "Manual evidence file path")
+  .option("--snapshot <path>", "CI snapshot JSON path")
+  .option("--cwd <dir>", "Working directory for shell/testbox")
+  .action((provider, opts) => {
+    const globalOpts = program.opts();
+    try {
+      const { runVerification } = require("../lib/verification-providers.js") as typeof import("../lib/verification-providers.js");
+      const record = runVerification({
+        provider,
+        task_id: opts.task,
+        note: opts.note,
+        evidence_path: opts.evidence,
+        snapshot_path: opts.snapshot,
+        cwd: opts.cwd,
+      });
+      if (globalOpts.json) {
+        console.log(JSON.stringify(record, null, 2));
+        return;
+      }
+      const color = record.status === "passed" ? chalk.green : record.status === "failed" ? chalk.red : chalk.yellow;
+      console.log(color(`  ${record.status.toUpperCase()}: ${record.summary}`));
+      console.log(chalk.dim(`  Record: ${record.id.slice(0, 8)}`));
+      if (record.status === "failed") process.exitCode = 1;
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
+verifyCmd
+  .command("records")
+  .description("List verification evidence records")
+  .option("--task <id>", "Filter by task")
+  .option("--provider <name>", "Filter by provider")
+  .option("--limit <n>", "Max records", "20")
+  .action((opts) => {
+    const globalOpts = program.opts();
+    const { listVerificationRecords } = require("../lib/verification-providers.js") as typeof import("../lib/verification-providers.js");
+    const records = listVerificationRecords({
+      task_id: opts.task,
+      provider: opts.provider,
+      limit: parseInt(opts.limit, 10),
+    });
+    if (globalOpts.json) {
+      console.log(JSON.stringify(records, null, 2));
+      return;
+    }
+    if (records.length === 0) {
+      console.log(chalk.dim("  No verification records."));
+      return;
+    }
+    for (const r of records) {
+      console.log(`  ${r.id.slice(0, 8)} ${r.provider_name} ${r.status} — ${r.summary}`);
+    }
+  });
+
 // handoff
 program
   .command("handoff")

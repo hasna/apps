@@ -841,4 +841,23 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_artifacts_deleted ON artifacts(deleted_at);
   INSERT OR IGNORE INTO _migrations (id) VALUES (49);
   `,
+  // Migration 50: Local verification evidence records
+  `
+  CREATE TABLE IF NOT EXISTS verification_records (
+    id TEXT PRIMARY KEY,
+    task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    provider_name TEXT NOT NULL,
+    provider_type TEXT NOT NULL CHECK(provider_type IN ('shell', 'testbox', 'ci_snapshot', 'manual')),
+    status TEXT NOT NULL CHECK(status IN ('passed', 'failed', 'skipped', 'pending')),
+    summary TEXT NOT NULL,
+    evidence TEXT DEFAULT '{}',
+    artifact_id TEXT,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_verification_records_task ON verification_records(task_id);
+  CREATE INDEX IF NOT EXISTS idx_verification_records_provider ON verification_records(provider_name);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (50);
+  `,
 ];

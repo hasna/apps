@@ -216,6 +216,29 @@ export type {
   ParsedGoalCommand,
 } from "./lib/goal-workflow.js";
 
+// Verification providers
+export {
+  loadVerificationProviders,
+  saveVerificationProviders,
+  getVerificationProvider,
+  runVerification,
+  listVerificationRecords,
+  getVerificationRecord,
+  getDefaultProviders,
+  resetVerificationProviderCache,
+  VERIFICATION_SCHEMA_VERSION,
+  VERIFICATION_PROVIDER_TYPES,
+  VERIFICATION_STATUSES,
+} from "./lib/verification-providers.js";
+export type {
+  VerificationProviderConfig,
+  VerificationEvidenceRecord,
+  VerificationProviderType,
+  VerificationStatus,
+  RunVerificationInput,
+  VerificationProvidersFile,
+} from "./lib/verification-providers.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";
