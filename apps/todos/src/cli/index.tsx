@@ -4910,6 +4910,27 @@ program
     console.log(JSON.stringify(discoverWorkspace(opts.cwd), null, 2));
   });
 
+program
+  .command("parity")
+  .description("Show CLI ↔ MCP parity manifest and documented gaps")
+  .option("--domain <name>", "Filter by domain")
+  .option("-j, --json", "JSON output")
+  .action((opts) => {
+    const { getParityReport, CLI_MCP_PARITY_MANIFEST } = require("../lib/cli-mcp-parity.js") as typeof import("../lib/cli-mcp-parity.js");
+    const report = getParityReport();
+    const entries = opts.domain
+      ? CLI_MCP_PARITY_MANIFEST.filter((e) => e.domain === opts.domain)
+      : report.entries;
+    if (opts.json) {
+      console.log(JSON.stringify({ ...report, entries }, null, 2));
+    } else {
+      for (const e of entries) {
+        console.log(`${e.domain}/${e.operation}: cli=${e.cli ?? "-"} mcp=${e.mcp ?? "-"}${e.gap ? ` [gap: ${e.gap}]` : ""}`);
+      }
+      console.log(`\nMatched: ${report.matched} | CLI-only gaps: ${report.cli_only} | Total: ${report.total}`);
+    }
+  });
+
 // handoff
 program
   .command("handoff")

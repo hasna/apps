@@ -453,6 +453,18 @@ export {
 } from "./lib/project-bootstrap.js";
 export type { WorkspaceDiscovery, BootstrapResult } from "./lib/project-bootstrap.js";
 
+// CLI MCP parity
+export {
+  CLI_MCP_PARITY_MANIFEST,
+  getParityReport,
+  validateParityManifest,
+  findParityForMcpTool,
+  findParityForCliCommand,
+  normalizeErrorContract,
+  PARITY_SCHEMA_VERSION,
+} from "./lib/cli-mcp-parity.js";
+export type { ParityEntry, ParityReport, ParityDomain, ErrorContract } from "./lib/cli-mcp-parity.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";
