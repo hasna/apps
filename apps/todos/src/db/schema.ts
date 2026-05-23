@@ -610,6 +610,18 @@ export function ensureSchema(db: Database): void {
 
   ensureColumn("tasks", "scheduled_start_at", "TEXT");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_scheduled_start ON tasks(scheduled_start_at)");
+
+  ensureTable("saved_views", `
+    CREATE TABLE saved_views (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      slug TEXT NOT NULL UNIQUE,
+      entity_type TEXT NOT NULL DEFAULT 'task' CHECK(entity_type IN ('task', 'project', 'plan', 'comment', 'run', 'all')),
+      filters TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_saved_views_slug ON saved_views(slug)");
 }
 
 export function backfillTaskTags(db: Database): void {

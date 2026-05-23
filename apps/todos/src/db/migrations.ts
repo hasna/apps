@@ -1042,4 +1042,18 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_tasks_scheduled_start ON tasks(scheduled_start_at);
   INSERT OR IGNORE INTO _migrations (id) VALUES (58);
   `,
+  // Migration 59: Saved search filters and views
+  `
+  CREATE TABLE IF NOT EXISTS saved_views (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    slug TEXT NOT NULL UNIQUE,
+    entity_type TEXT NOT NULL DEFAULT 'task' CHECK(entity_type IN ('task', 'project', 'plan', 'comment', 'run', 'all')),
+    filters TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_saved_views_slug ON saved_views(slug);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (59);
+  `,
 ];

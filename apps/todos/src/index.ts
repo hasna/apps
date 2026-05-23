@@ -643,6 +643,19 @@ export {
 } from "./lib/task-scheduling.js";
 export type { ScheduleTaskInput, StaleTaskReport, SchedulingQueueItem, SchedulingSummary } from "./lib/task-scheduling.js";
 
+// Saved views / unified search
+export {
+  SAVED_VIEWS_SCHEMA,
+  createSavedView,
+  getSavedView,
+  listSavedViews,
+  deleteSavedView,
+  unifiedSearch,
+  runSavedView,
+  getBuiltinSavedViews,
+} from "./lib/saved-views.js";
+export type { SearchEntityType, SavedView, UnifiedSearchInput, SearchHit, UnifiedSearchResult } from "./lib/saved-views.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";

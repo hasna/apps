@@ -5439,6 +5439,64 @@ scheduleCmd
     console.log(getAgentLoopDocs());
   });
 
+// views — saved search filters and unified search
+const viewsCmd = program
+  .command("views")
+  .description("Saved search filters and unified local search");
+
+viewsCmd
+  .command("search [query]")
+  .description("Unified search across tasks, projects, plans, comments, runs")
+  .option("--type <types...>", "Entity types (task, project, plan, comment, run, all)")
+  .option("--status <status>", "Task status filter")
+  .option("--project <id>", "Project filter")
+  .option("--limit <n>", "Limit", "50")
+  .option("--offset <n>", "Offset", "0")
+  .option("-j, --json", "JSON output")
+  .action((query, opts) => {
+    const { unifiedSearch } = require("../lib/saved-views.js") as typeof import("../lib/saved-views.js");
+    const result = unifiedSearch({
+      query,
+      entity_types: opts.type,
+      limit: parseInt(opts.limit, 10),
+      offset: parseInt(opts.offset, 10),
+      task_filters: { status: opts.status, project_id: opts.project },
+    });
+    if (opts.json) console.log(JSON.stringify(result, null, 2));
+    else for (const h of result.hits) console.log(`[${h.entity_type}] ${h.title} (${h.score})`);
+  });
+
+viewsCmd
+  .command("save <name>")
+  .description("Save current filters as a view")
+  .option("--filters <json>", "Filters JSON")
+  .option("--type <entity>", "Entity type", "task")
+  .action((name, opts) => {
+    const { createSavedView } = require("../lib/saved-views.js") as typeof import("../lib/saved-views.js");
+    const filters = opts.filters ? JSON.parse(opts.filters) : {};
+    console.log(JSON.stringify(createSavedView({ name, entity_type: opts.type, filters }), null, 2));
+  });
+
+viewsCmd
+  .command("list")
+  .description("List saved views")
+  .action(() => {
+    const { listSavedViews } = require("../lib/saved-views.js") as typeof import("../lib/saved-views.js");
+    console.log(JSON.stringify(listSavedViews(), null, 2));
+  });
+
+viewsCmd
+  .command("run <slug>")
+  .description("Run a saved view")
+  .option("--query <text>", "Additional query")
+  .option("-j, --json", "JSON output")
+  .action((slug, opts) => {
+    const { runSavedView } = require("../lib/saved-views.js") as typeof import("../lib/saved-views.js");
+    const result = runSavedView(slug, { query: opts.query });
+    if (opts.json) console.log(JSON.stringify(result, null, 2));
+    else for (const h of result.hits) console.log(`[${h.entity_type}] ${h.title}`);
+  });
+
 // handoff
 program
   .command("handoff")

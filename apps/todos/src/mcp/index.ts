@@ -58,6 +58,7 @@ import { registerDbBackupTools } from "./tools/db-backup.js";
 import { registerJsonSchemaTools } from "./tools/json-schemas.js";
 import { registerActivityAuditTools } from "./tools/activity-audit.js";
 import { registerTaskSchedulingTools } from "./tools/task-scheduling.js";
+import { registerSavedViewTools } from "./tools/saved-views.js";
 import { resolveAccessProfile, shouldRegisterToolForProfile } from "../lib/access-profiles.js";
 
 function getMcpVersion(): string {
@@ -267,6 +268,7 @@ registerDbBackupTools(server, { shouldRegisterTool, formatError });
 registerJsonSchemaTools(server, { shouldRegisterTool, formatError });
 registerActivityAuditTools(server, { shouldRegisterTool, resolveId, formatError });
 registerTaskSchedulingTools(server, { shouldRegisterTool, resolveId, formatError });
+registerSavedViewTools(server, { shouldRegisterTool, resolveId, formatError });
 
 // === DISPATCH ===
 
