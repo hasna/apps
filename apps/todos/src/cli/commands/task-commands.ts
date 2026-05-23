@@ -39,6 +39,16 @@ function resolveProjectIdOrSlug(input: string): string {
   process.exit(1);
 }
 
+function resolvePlanId(input: string): string {
+  const db = getDatabase();
+  const id = resolvePartialId(db, "plans", input);
+  if (!id) {
+    console.error(chalk.red(`Could not resolve plan ID: ${input}`));
+    process.exit(1);
+  }
+  return id;
+}
+
 export function registerTaskCommands(program: Command) {
   // add
   program
@@ -82,15 +92,7 @@ export function registerTaskCommands(program: Command) {
         priority: opts.priority as TaskPriority | undefined,
         parent_id: opts.parent ? resolveTaskId(opts.parent) : undefined,
         tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
-        plan_id: opts.plan ? (() => {
-          const db = getDatabase();
-          const id = resolvePartialId(db, "plans", opts.plan);
-          if (!id) {
-            console.error(chalk.red(`Could not resolve plan ID: ${opts.plan}`));
-            process.exit(1);
-          }
-          return id;
-        })() : undefined,
+        plan_id: opts.plan ? resolvePlanId(opts.plan) : undefined,
         assigned_to: opts.assign,
         status: opts.status ? normalizeStatus(opts.status) as TaskStatus : undefined,
         task_list_id: taskListId,
@@ -522,6 +524,8 @@ export function registerTaskCommands(program: Command) {
     .option("--tag <tags>", "New tags (alias for --tags)")
     .option("--list <id>", "Move to a task list")
     .option("--task-list <id>", "Move to a task list (alias for --list)")
+    .option("--plan <id>", "Move to a plan")
+    .option("--clear-plan", "Remove from its current plan")
     .option("--estimated <minutes>", "Estimated time in minutes")
     .option("--approval", "Require approval before completion")
     .action((id: string, opts) => {
@@ -534,6 +538,10 @@ export function registerTaskCommands(program: Command) {
         console.error(chalk.red(`Task not found: ${id}`));
         process.exit(1);
       }
+      if (opts.plan && opts.clearPlan) {
+        console.error(chalk.red("Use either --plan or --clear-plan, not both."));
+        process.exit(1);
+      }
 
       const taskListId = opts.list ? (() => {
         const db = getDatabase();
@@ -544,6 +552,7 @@ export function registerTaskCommands(program: Command) {
         }
         return resolved;
       })() : undefined;
+      const planId = opts.plan ? resolvePlanId(opts.plan) : opts.clearPlan ? null : undefined;
 
       let task;
       try {
@@ -555,6 +564,7 @@ export function registerTaskCommands(program: Command) {
           priority: opts.priority as TaskPriority | undefined,
           assigned_to: opts.assign,
           tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
+          plan_id: planId,
           task_list_id: taskListId,
           estimated_minutes: opts.estimated !== undefined ? parseInt(opts.estimated, 10) : undefined,
           requires_approval: opts.approval !== undefined ? true : undefined,
@@ -745,10 +755,21 @@ export function registerTaskCommands(program: Command) {
   // bulk
   program
     .command("bulk <action> <ids...>")
-    .description("Bulk operation on multiple tasks (done, start, delete)")
-    .action((action: string, ids: string[]) => {
+    .description("Bulk operation on multiple tasks (done, start, delete, plan)")
+    .option("--plan <id>", "Plan ID for the plan/move-plan action")
+    .option("--clear-plan", "Remove plan assignment for the plan/move-plan action")
+    .action((action: string, ids: string[], opts: { plan?: string; clearPlan?: boolean }) => {
       const globalOpts = program.opts();
       const results: { id: string; success: boolean; error?: string }[] = [];
+      const isPlanAction = action === "plan" || action === "move-plan";
+      if (isPlanAction && Boolean(opts.plan) === Boolean(opts.clearPlan)) {
+        console.error(chalk.red("Use exactly one of --plan or --clear-plan with bulk plan."));
+        process.exit(1);
+      }
+      const planId = isPlanAction
+        ? opts.plan ? resolvePlanId(opts.plan) : null
+        : undefined;
+
       for (const rawId of ids) {
         try {
           const resolvedId = resolveTaskId(rawId);
@@ -761,8 +782,15 @@ export function registerTaskCommands(program: Command) {
           } else if (action === "delete") {
             deleteTask(resolvedId);
             results.push({ id: resolvedId, success: true });
+          } else if (isPlanAction) {
+            const current = getTask(resolvedId);
+            if (!current) {
+              throw new Error(`Task not found: ${rawId}`);
+            }
+            updateTask(resolvedId, { version: current.version, plan_id: planId });
+            results.push({ id: resolvedId, success: true });
           } else {
-            console.error(chalk.red(`Unknown action: ${action}. Use: done, start, delete`));
+            console.error(chalk.red(`Unknown action: ${action}. Use: done, start, delete, plan`));
             process.exit(1);
           }
         } catch (e) {

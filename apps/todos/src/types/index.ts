@@ -403,7 +403,7 @@ export interface UpdateTaskInput {
   priority?: TaskPriority;
   project_id?: string | null;
   assigned_to?: string;
-  plan_id?: string;
+  plan_id?: string | null;
   task_list_id?: string;
   cycle_id?: string | null;
   tags?: string[];

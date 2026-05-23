@@ -121,6 +121,66 @@ describe("CLI QoL commands", () => {
     expect(errorOutput).toContain("Could not resolve task ID");
   });
 
+  // ── plan moves ─────────────────────────────────────────────────
+
+  it("update --plan should move a task between plans", () => {
+    const planA = JSON.parse(run("--json plans --add 'CLI QoL Plan A'"));
+    const planB = JSON.parse(run("--json plans --add 'CLI QoL Plan B'"));
+    const task = JSON.parse(run(`add 'Move between plans' --plan ${planA.id} --json`));
+    expect(task.plan_id).toBe(planA.id);
+
+    const updated = JSON.parse(run(`--json update ${task.id} --plan ${planB.id}`));
+    expect(updated.plan_id).toBe(planB.id);
+
+    const shown = JSON.parse(run(`--json show ${task.id}`));
+    expect(shown.plan_id).toBe(planB.id);
+  });
+
+  it("update --clear-plan should remove a task from its plan", () => {
+    const plan = JSON.parse(run("--json plans --add 'CLI QoL Clear Plan'"));
+    const task = JSON.parse(run(`add 'Clear plan assignment' --plan ${plan.id} --json`));
+
+    const updated = JSON.parse(run(`--json update ${task.id} --clear-plan`));
+    expect(updated.plan_id).toBeNull();
+
+    const shown = JSON.parse(run(`--json show ${task.id}`));
+    expect(shown.plan_id).toBeNull();
+  });
+
+  it("bulk plan should move multiple tasks into a plan", () => {
+    const plan = JSON.parse(run("--json plans --add 'CLI QoL Bulk Plan'"));
+    const t1 = JSON.parse(run("add 'Bulk plan task 1' --json"));
+    const t2 = JSON.parse(run("add 'Bulk plan task 2' --json"));
+
+    const out = run(`--json bulk plan --plan ${plan.id} ${t1.id} ${t2.id}`);
+    const result = JSON.parse(out);
+
+    expect(result.succeeded).toBe(2);
+    expect(result.failed).toBe(0);
+
+    const task1 = JSON.parse(run(`--json show ${t1.id}`));
+    const task2 = JSON.parse(run(`--json show ${t2.id}`));
+    expect(task1.plan_id).toBe(plan.id);
+    expect(task2.plan_id).toBe(plan.id);
+  });
+
+  it("bulk plan --clear-plan should clear multiple task plan assignments", () => {
+    const plan = JSON.parse(run("--json plans --add 'CLI QoL Bulk Clear Plan'"));
+    const t1 = JSON.parse(run(`add 'Bulk clear plan task 1' --plan ${plan.id} --json`));
+    const t2 = JSON.parse(run(`add 'Bulk clear plan task 2' --plan ${plan.id} --json`));
+
+    const out = run(`--json bulk plan --clear-plan ${t1.id} ${t2.id}`);
+    const result = JSON.parse(out);
+
+    expect(result.succeeded).toBe(2);
+    expect(result.failed).toBe(0);
+
+    const task1 = JSON.parse(run(`--json show ${t1.id}`));
+    const task2 = JSON.parse(run(`--json show ${t2.id}`));
+    expect(task1.plan_id).toBeNull();
+    expect(task2.plan_id).toBeNull();
+  });
+
   // ── list --sort updated ────────────────────────────────────────
 
   it("list --sort updated should return tasks sorted by update time", () => {
