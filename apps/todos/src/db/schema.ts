@@ -477,6 +477,53 @@ export function ensureSchema(db: Database): void {
   ensureColumn("task_commits", "traceability", "TEXT DEFAULT '{}'");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_commits_branch ON task_commits(branch)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_commits_pr ON task_commits(pr_number)");
+
+  // Labels and custom fields
+  ensureTable("labels", `
+    CREATE TABLE labels (
+      id TEXT PRIMARY KEY,
+      project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      color TEXT,
+      description TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(project_id, name)
+    )`);
+  ensureTable("task_labels", `
+    CREATE TABLE task_labels (
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      label_id TEXT NOT NULL REFERENCES labels(id) ON DELETE CASCADE,
+      PRIMARY KEY (task_id, label_id)
+    )`);
+  ensureTable("custom_field_definitions", `
+    CREATE TABLE custom_field_definitions (
+      id TEXT PRIMARY KEY,
+      project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      slug TEXT NOT NULL,
+      field_type TEXT NOT NULL CHECK(field_type IN ('text', 'number', 'boolean', 'date', 'enum')),
+      options TEXT DEFAULT '[]',
+      required INTEGER NOT NULL DEFAULT 0,
+      default_value TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(project_id, slug)
+    )`);
+  ensureTable("task_custom_field_values", `
+    CREATE TABLE task_custom_field_values (
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      field_id TEXT NOT NULL REFERENCES custom_field_definitions(id) ON DELETE CASCADE,
+      value TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (task_id, field_id)
+    )`);
+  ensureColumn("tasks", "priority_score", "INTEGER");
+  ensureColumn("tasks", "priority_reason", "TEXT");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_labels_project ON labels(project_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_labels_label ON task_labels(label_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_custom_fields_project ON custom_field_definitions(project_id)");
 }
 
 export function backfillTaskTags(db: Database): void {

@@ -4579,6 +4579,83 @@ traceCmd
     console.log(JSON.stringify(info, null, 2));
   });
 
+// labels — first-class task labels
+const labelsCmd = program
+  .command("labels")
+  .description("Manage task labels");
+
+labelsCmd
+  .command("create <name>")
+  .option("--color <hex>", "Label color")
+  .option("--project <id>", "Project ID scope")
+  .action((name, opts) => {
+    const { createLabel } = require("../db/labels.js") as typeof import("../db/labels.js");
+    console.log(JSON.stringify(createLabel({ name, color: opts.color, project_id: opts.project }), null, 2));
+  });
+
+labelsCmd
+  .command("list")
+  .option("--project <id>", "Project ID")
+  .action((opts) => {
+    const { listLabels } = require("../db/labels.js") as typeof import("../db/labels.js");
+    console.log(JSON.stringify(listLabels(opts.project), null, 2));
+  });
+
+labelsCmd
+  .command("assign <taskId> <label>")
+  .action((taskId, label) => {
+    const { assignLabelToTask } = require("../db/labels.js") as typeof import("../db/labels.js");
+    const resolvedId = resolveTaskId(taskId);
+    console.log(JSON.stringify(assignLabelToTask(resolvedId, label), null, 2));
+  });
+
+// fields — custom fields and priority metadata
+const fieldsCmd = program
+  .command("fields")
+  .description("Custom fields and priority metadata");
+
+fieldsCmd
+  .command("define <name>")
+  .requiredOption("--type <type>", "text|number|boolean|date|enum")
+  .option("--options <list>", "Comma-separated enum options")
+  .option("--project <id>", "Project scope")
+  .action((name, opts) => {
+    const { createCustomFieldDefinition } = require("../db/custom-fields.js") as typeof import("../db/custom-fields.js");
+    console.log(JSON.stringify(createCustomFieldDefinition({
+      name,
+      field_type: opts.type,
+      project_id: opts.project,
+      options: opts.options ? opts.options.split(",").map((s: string) => s.trim()) : undefined,
+    }), null, 2));
+  });
+
+fieldsCmd
+  .command("set <taskId> <field> <value>")
+  .action((taskId, field, value) => {
+    const { setTaskCustomField } = require("../db/custom-fields.js") as typeof import("../db/custom-fields.js");
+    console.log(JSON.stringify(setTaskCustomField(resolveTaskId(taskId), field, value), null, 2));
+  });
+
+fieldsCmd
+  .command("show <taskId>")
+  .action((taskId) => {
+    const { exportTaskFields } = require("../db/custom-fields.js") as typeof import("../db/custom-fields.js");
+    console.log(JSON.stringify(exportTaskFields(resolveTaskId(taskId)), null, 2));
+  });
+
+fieldsCmd
+  .command("priority <taskId>")
+  .option("--score <n>", "Priority score 0-100")
+  .option("--reason <text>", "Priority reason")
+  .action((taskId, opts) => {
+    const { setTaskPriorityMeta } = require("../db/custom-fields.js") as typeof import("../db/custom-fields.js");
+    setTaskPriorityMeta(resolveTaskId(taskId), {
+      priority_score: opts.score !== undefined ? parseInt(opts.score, 10) : undefined,
+      priority_reason: opts.reason,
+    });
+    console.log(chalk.green("Priority metadata updated."));
+  });
+
 // handoff
 program
   .command("handoff")

@@ -24,6 +24,14 @@ import {
   addComment, listComments, deleteComment,
 } from "../../db/comments.js";
 import { TaskNotFoundError } from "../../types/index.js";
+import {
+  createLabel, listLabels, getLabel, updateLabel, deleteLabel,
+  assignLabelToTask, removeLabelFromTask, getTaskLabels,
+} from "../../db/labels.js";
+import {
+  createCustomFieldDefinition, listCustomFieldDefinitions,
+  setTaskCustomField, getTaskCustomFields, setTaskPriorityMeta, exportTaskFields,
+} from "../../db/custom-fields.js";
 
 interface TaskProjectContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -894,6 +902,104 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
         try {
           deleteLabel(label_id);
           return { content: [{ type: "text" as const, text: `Label deleted: ${label_id}` }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("assign_label_to_task")) {
+    server.tool(
+      "assign_label_to_task",
+      "Assign a label to a task (syncs to tags for search compatibility).",
+      {
+        task_id: z.string(),
+        label_id: z.string().describe("Label ID or name"),
+      },
+      async ({ task_id, label_id }) => {
+        try {
+          const label = assignLabelToTask(resolveId(task_id), label_id);
+          return { content: [{ type: "text" as const, text: `Assigned label '${label.name}' to task.` }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("create_custom_field")) {
+    server.tool(
+      "create_custom_field",
+      "Define a user custom field for tasks.",
+      {
+        name: z.string(),
+        field_type: z.enum(["text", "number", "boolean", "date", "enum"]),
+        project_id: z.string().optional(),
+        options: z.array(z.string()).optional(),
+        required: z.boolean().optional(),
+        default_value: z.string().optional(),
+      },
+      async (params) => {
+        try {
+          const field = createCustomFieldDefinition(params as Parameters<typeof createCustomFieldDefinition>[0]);
+          return { content: [{ type: "text" as const, text: JSON.stringify(field, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("set_task_custom_field")) {
+    server.tool(
+      "set_task_custom_field",
+      "Set a custom field value on a task.",
+      {
+        task_id: z.string(),
+        field_id: z.string().describe("Field ID or slug"),
+        value: z.union([z.string(), z.number(), z.boolean(), z.null()]),
+      },
+      async ({ task_id, field_id, value }) => {
+        try {
+          const result = setTaskCustomField(resolveId(task_id), field_id, value);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("get_task_fields")) {
+    server.tool(
+      "get_task_fields",
+      "Export labels, custom fields, and priority metadata for a task.",
+      { task_id: z.string() },
+      async ({ task_id }) => {
+        try {
+          const data = exportTaskFields(resolveId(task_id));
+          return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("set_task_priority_meta")) {
+    server.tool(
+      "set_task_priority_meta",
+      "Set numeric priority score (0-100) and/or priority reason on a task.",
+      {
+        task_id: z.string(),
+        priority_score: z.number().optional(),
+        priority_reason: z.string().optional(),
+      },
+      async ({ task_id, priority_score, priority_reason }) => {
+        try {
+          setTaskPriorityMeta(resolveId(task_id), { priority_score, priority_reason });
+          return { content: [{ type: "text" as const, text: "Priority metadata updated." }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }

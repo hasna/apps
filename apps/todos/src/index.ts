@@ -354,6 +354,19 @@ export {
 } from "./lib/git-traceability.js";
 export type { GitCommitInfo, LinkGitTraceInput } from "./lib/git-traceability.js";
 
+// Labels and custom fields
+export {
+  createLabel, getLabel, listLabels, updateLabel, deleteLabel,
+  assignLabelToTask, removeLabelFromTask, getTaskLabels,
+} from "./db/labels.js";
+export type { Label, CreateLabelInput, UpdateLabelInput } from "./db/labels.js";
+export {
+  createCustomFieldDefinition, getCustomFieldDefinition, listCustomFieldDefinitions,
+  deleteCustomFieldDefinition, setTaskCustomField, getTaskCustomFields,
+  setTaskPriorityMeta, exportTaskFields, CUSTOM_FIELD_TYPES,
+} from "./db/custom-fields.js";
+export type { CustomFieldDefinition, CustomFieldType, TaskCustomFieldValue } from "./db/custom-fields.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";
