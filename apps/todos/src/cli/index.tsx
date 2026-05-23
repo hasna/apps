@@ -4693,6 +4693,38 @@ dedupeCmd
     console.log(JSON.stringify(result, null, 2));
   });
 
+// md — local todos.md import/export/sync
+const mdCmd = program
+  .command("md")
+  .description("Local todos.md markdown import, export, and sync");
+
+mdCmd
+  .command("export")
+  .option("--path <file>", "Output path", "todos.md")
+  .option("--project <id>", "Project filter")
+  .option("--include-completed", "Include completed tasks")
+  .action((opts) => {
+    const { exportTodosMd } = require("../lib/todos-md.js") as typeof import("../lib/todos-md.js");
+    exportTodosMd({ path: opts.path, project_id: opts.project, include_completed: opts.includeCompleted });
+    console.log(chalk.green(`Exported to ${opts.path}`));
+  });
+
+mdCmd
+  .command("import")
+  .option("--path <file>", "Input path", "todos.md")
+  .action((opts) => {
+    const { importTodosMd } = require("../lib/todos-md.js") as typeof import("../lib/todos-md.js");
+    console.log(JSON.stringify(importTodosMd(opts.path), null, 2));
+  });
+
+mdCmd
+  .command("sync")
+  .option("--path <file>", "File path", "todos.md")
+  .action((opts) => {
+    const { syncTodosMd } = require("../lib/todos-md.js") as typeof import("../lib/todos-md.js");
+    console.log(JSON.stringify(syncTodosMd(opts.path), null, 2));
+  });
+
 // handoff
 program
   .command("handoff")

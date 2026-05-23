@@ -377,6 +377,20 @@ export {
 } from "./lib/task-dedupe.js";
 export type { DuplicateCandidate, DuplicateSignal, FindDuplicatesFilter, MergeTasksInput, MergeTasksResult } from "./lib/task-dedupe.js";
 
+// todos.md markdown
+export {
+  parseTodosMd,
+  serializeTodosMd,
+  exportTodosMd,
+  importTodosMd,
+  syncTodosMd,
+  startTodosMdWatch,
+  stopTodosMdWatch,
+  TODOS_MD_VERSION,
+  TODOS_MD_SCHEMA,
+} from "./lib/todos-md.js";
+export type { TodosMdDocument, TodosMdTaskLine, ImportTodosMdResult, ExportTodosMdOptions, SyncTodosMdResult } from "./lib/todos-md.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";
