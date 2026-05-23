@@ -4656,6 +4656,43 @@ fieldsCmd
     console.log(chalk.green("Priority metadata updated."));
   });
 
+// dedupe — duplicate detection and merge
+const dedupeCmd = program
+  .command("dedupe")
+  .description("Duplicate task detection and merge workflows");
+
+dedupeCmd
+  .command("find")
+  .description("Find likely duplicate tasks")
+  .option("--project <id>", "Project filter")
+  .option("--task <id>", "Compare against one task")
+  .option("--min-score <n>", "Minimum score 0-1", "0.65")
+  .action((opts) => {
+    const { findDuplicateCandidates, formatDuplicatePreview } = require("../lib/task-dedupe.js") as typeof import("../lib/task-dedupe.js");
+    const candidates = findDuplicateCandidates({
+      project_id: opts.project,
+      task_id: opts.task ? resolveTaskId(opts.task) : undefined,
+      min_score: parseFloat(opts.minScore),
+    });
+    console.log(formatDuplicatePreview(candidates) || "No duplicates found.");
+  });
+
+dedupeCmd
+  .command("merge <primary> <secondary>")
+  .description("Merge secondary task into primary")
+  .option("--delete", "Delete secondary instead of cancelling")
+  .option("--dry-run", "Preview merge only")
+  .action((primary, secondary, opts) => {
+    const { mergeTasks } = require("../lib/task-dedupe.js") as typeof import("../lib/task-dedupe.js");
+    const result = mergeTasks({
+      primary_id: resolveTaskId(primary),
+      secondary_id: resolveTaskId(secondary),
+      delete_secondary: opts.delete,
+      dry_run: opts.dryRun,
+    });
+    console.log(JSON.stringify(result, null, 2));
+  });
+
 // handoff
 program
   .command("handoff")

@@ -41,6 +41,7 @@ import { registerResourceSubscriptionTools } from "./tools/resource-subscription
 import { registerSandboxTools } from "./tools/sandbox.js";
 import { registerAgentRunTools } from "./tools/agent-runs.js";
 import { registerGitTraceabilityTools } from "./tools/git-traceability.js";
+import { registerTaskDedupeTools } from "./tools/task-dedupe.js";
 
 function getMcpVersion(): string {
   try {
@@ -248,6 +249,7 @@ registerResourceSubscriptionTools(server, { shouldRegisterTool, formatError });
 registerSandboxTools(server, { shouldRegisterTool, formatError });
 registerAgentRunTools(server, { shouldRegisterTool, resolveId, formatError });
 registerGitTraceabilityTools(server, { shouldRegisterTool, resolveId, formatError });
+registerTaskDedupeTools(server, { shouldRegisterTool, resolveId, formatError });
 
 // === DISPATCH ===
 
