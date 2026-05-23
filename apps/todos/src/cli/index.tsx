@@ -5217,12 +5217,12 @@ intakeCmd
     }
   });
 
-// release — package supply-chain checks
-const releaseCmd = program
-  .command("release")
+// package — public package release and supply-chain checks
+const packageCmd = program
+  .command("package")
   .description("Public package release and supply-chain checks");
 
-releaseCmd
+packageCmd
   .command("check")
   .description("Run release hardening checks (contents, secrets, bins)")
   .option("--skip-dist", "Skip dist artifact scan")
@@ -5243,7 +5243,7 @@ releaseCmd
     }
   });
 
-releaseCmd
+packageCmd
   .command("docs")
   .description("Show publish workflow documentation")
   .action(() => {

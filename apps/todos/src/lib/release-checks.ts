@@ -182,7 +182,7 @@ export function getReleaseWorkflowDocs(): string {
 bun install
 bun run build
 bun test
-bun run src/cli/index.tsx release check
+bun run src/cli/index.tsx package check
 \`\`\`
 
 ## Publish (bun only)
