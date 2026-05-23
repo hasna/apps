@@ -45,6 +45,7 @@ import { registerTaskDedupeTools } from "./tools/task-dedupe.js";
 import { registerTodosMdTools } from "./tools/todos-md.js";
 import { registerWorkspaceTrustTools } from "./tools/workspace-trust.js";
 import { registerApprovalGateTools } from "./tools/approval-gates.js";
+import { registerAgentCoordinationTools } from "./tools/agent-coordination.js";
 
 function getMcpVersion(): string {
   try {
@@ -256,6 +257,7 @@ registerTaskDedupeTools(server, { shouldRegisterTool, resolveId, formatError });
 registerTodosMdTools(server, { shouldRegisterTool, formatError });
 registerWorkspaceTrustTools(server, { shouldRegisterTool, formatError });
 registerApprovalGateTools(server, { shouldRegisterTool, resolveId, formatError });
+registerAgentCoordinationTools(server, { shouldRegisterTool, resolveId, formatError });
 
 // === DISPATCH ===
 

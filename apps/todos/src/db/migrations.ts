@@ -969,4 +969,20 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_approval_requests_gate ON task_approval_requests(gate_type);
   INSERT OR IGNORE INTO _migrations (id) VALUES (54);
   `,
+  // Migration 55: Task leases for multi-agent coordination
+  `
+  CREATE TABLE IF NOT EXISTS task_leases (
+    task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL,
+    acquired_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    heartbeat_at TEXT,
+    steal_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_leases_agent ON task_leases(agent_id);
+  CREATE INDEX IF NOT EXISTS idx_task_leases_expires ON task_leases(expires_at);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (55);
+  `,
 ];

@@ -427,6 +427,22 @@ export {
 } from "./lib/approval-gates.js";
 export type { ApprovalRequest, GateType, TaskGateStatus, RequestApprovalInput } from "./lib/approval-gates.js";
 
+// Agent coordination leases
+export {
+  acquireTaskLease,
+  renewTaskLease,
+  releaseTaskLease,
+  stealTaskLease,
+  recoverStaleLeases,
+  listActiveLeases,
+  listExpiredLeases,
+  getTaskLease,
+  formatLockConflict,
+  AGENT_COORDINATION_SCHEMA,
+  DEFAULT_LEASE_MINUTES,
+} from "./lib/agent-coordination.js";
+export type { TaskLease, LeaseAcquireResult, LockConflict, StaleRecoveryResult } from "./lib/agent-coordination.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";

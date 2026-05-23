@@ -543,6 +543,21 @@ export function ensureSchema(db: Database): void {
     )`);
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_approval_requests_task ON task_approval_requests(task_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_approval_requests_status ON task_approval_requests(status)");
+
+  // Task leases
+  ensureTable("task_leases", `
+    CREATE TABLE task_leases (
+      task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL,
+      acquired_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      heartbeat_at TEXT,
+      steal_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_leases_agent ON task_leases(agent_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_leases_expires ON task_leases(expires_at)");
 }
 
 export function backfillTaskTags(db: Database): void {

@@ -4830,6 +4830,64 @@ approvalsCmd
     console.log(JSON.stringify({ tasks_gated: enablePlanApprovalGates(planId) }, null, 2));
   });
 
+// lease — multi-agent task leases
+const leaseCmd = program
+  .command("lease")
+  .description("Task leases for multi-agent coordination");
+
+leaseCmd
+  .command("acquire <taskId> <agent>")
+  .option("--ttl <minutes>", "Lease TTL minutes", "30")
+  .action((taskId, agent, opts) => {
+    const { acquireTaskLease } = require("../lib/agent-coordination.js") as typeof import("../lib/agent-coordination.js");
+    console.log(JSON.stringify(acquireTaskLease(resolveTaskId(taskId), agent, parseInt(opts.ttl, 10)), null, 2));
+  });
+
+leaseCmd
+  .command("renew <taskId> <agent>")
+  .option("--ttl <minutes>", "Lease TTL minutes", "30")
+  .action((taskId, agent, opts) => {
+    const { renewTaskLease } = require("../lib/agent-coordination.js") as typeof import("../lib/agent-coordination.js");
+    console.log(JSON.stringify(renewTaskLease(resolveTaskId(taskId), agent, parseInt(opts.ttl, 10)), null, 2));
+  });
+
+leaseCmd
+  .command("release <taskId> <agent>")
+  .action((taskId, agent) => {
+    const { releaseTaskLease } = require("../lib/agent-coordination.js") as typeof import("../lib/agent-coordination.js");
+    releaseTaskLease(resolveTaskId(taskId), agent);
+    console.log(chalk.green("Lease released."));
+  });
+
+leaseCmd
+  .command("steal <taskId> <agent>")
+  .option("--force", "Force steal")
+  .option("--reason <text>", "Steal reason")
+  .action((taskId, agent, opts) => {
+    const { stealTaskLease } = require("../lib/agent-coordination.js") as typeof import("../lib/agent-coordination.js");
+    console.log(JSON.stringify(stealTaskLease(resolveTaskId(taskId), agent, { force: opts.force, reason: opts.reason }), null, 2));
+  });
+
+leaseCmd
+  .command("recover")
+  .option("--agent <id>", "Reclaim stolen work for agent")
+  .option("--stale-minutes <n>", "Stale threshold", "30")
+  .action((opts) => {
+    const { recoverStaleLeases } = require("../lib/agent-coordination.js") as typeof import("../lib/agent-coordination.js");
+    console.log(JSON.stringify(recoverStaleLeases({
+      reclaim_agent: opts.agent,
+      stale_minutes: parseInt(opts.staleMinutes, 10),
+    }), null, 2));
+  });
+
+leaseCmd
+  .command("list")
+  .option("--agent <id>", "Filter by agent")
+  .action((opts) => {
+    const { listActiveLeases } = require("../lib/agent-coordination.js") as typeof import("../lib/agent-coordination.js");
+    console.log(JSON.stringify(listActiveLeases(opts.agent), null, 2));
+  });
+
 // handoff
 program
   .command("handoff")
