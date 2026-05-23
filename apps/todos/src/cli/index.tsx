@@ -5217,6 +5217,40 @@ intakeCmd
     }
   });
 
+// release — package supply-chain checks
+const releaseCmd = program
+  .command("release")
+  .description("Public package release and supply-chain checks");
+
+releaseCmd
+  .command("check")
+  .description("Run release hardening checks (contents, secrets, bins)")
+  .option("--skip-dist", "Skip dist artifact scan")
+  .option("-j, --json", "JSON output")
+  .action((opts) => {
+    const globalOpts = program.opts();
+    try {
+      const { runReleaseChecks, formatReleaseCheckReport } = require("../lib/release-checks.js") as typeof import("../lib/release-checks.js");
+      const report = runReleaseChecks({ skip_dist_scan: opts.skipDist });
+      if (opts.json || globalOpts.json) {
+        console.log(JSON.stringify(report, null, 2));
+      } else {
+        console.log(formatReleaseCheckReport(report));
+      }
+      if (!report.passed) process.exitCode = 1;
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
+releaseCmd
+  .command("docs")
+  .description("Show publish workflow documentation")
+  .action(() => {
+    const { getReleaseWorkflowDocs } = require("../lib/release-checks.js") as typeof import("../lib/release-checks.js");
+    console.log(getReleaseWorkflowDocs());
+  });
+
 // handoff
 program
   .command("handoff")

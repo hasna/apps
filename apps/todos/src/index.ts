@@ -557,6 +557,18 @@ export type {
   RunReplayBundle,
 } from "./lib/run-records.js";
 
+// Release checks
+export {
+  RELEASE_CHECK_SCHEMA,
+  auditPackageContents,
+  scanDistArtifacts,
+  validateReleaseScripts,
+  runReleaseChecks,
+  formatReleaseCheckReport,
+  getReleaseWorkflowDocs,
+} from "./lib/release-checks.js";
+export type { ReleaseCheckSeverity, ReleaseCheckItem, ReleaseCheckReport, ReleaseCheckOptions } from "./lib/release-checks.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";

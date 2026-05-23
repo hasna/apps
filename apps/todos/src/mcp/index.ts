@@ -53,6 +53,7 @@ import { registerAccessProfileTools } from "./tools/access-profiles.js";
 import { registerAgentAdapterDocTools } from "./tools/agent-adapter-docs.js";
 import { registerInboxIntakeTools } from "./tools/inbox-intake.js";
 import { registerRunRecordTools } from "./tools/run-records.js";
+import { registerReleaseCheckTools } from "./tools/release-checks.js";
 import { resolveAccessProfile, shouldRegisterToolForProfile } from "../lib/access-profiles.js";
 
 function getMcpVersion(): string {
@@ -257,6 +258,7 @@ registerAccessProfileTools(server, { shouldRegisterTool, formatError });
 registerAgentAdapterDocTools(server, { shouldRegisterTool, formatError });
 registerInboxIntakeTools(server, { shouldRegisterTool, resolveId, formatError });
 registerRunRecordTools(server, { shouldRegisterTool, resolveId, formatError });
+registerReleaseCheckTools(server, { shouldRegisterTool, formatError });
 
 // === DISPATCH ===
 
