@@ -498,6 +498,21 @@ export {
 } from "./lib/access-profiles.js";
 export type { AccessProfile, AccessProfileMeta } from "./lib/access-profiles.js";
 
+// Agent adapter docs
+export {
+  ADAPTER_DOCS_SCHEMA_VERSION,
+  AGENT_ADAPTER_HOSTS,
+  AGENT_ADAPTER_DOCS,
+  normalizeAdapterHost,
+  getAgentAdapterDoc,
+  listAgentAdapterDocs,
+  validateAdapterDocs,
+  renderAdapterDocMarkdown,
+  renderAllAdapterDocsMarkdown,
+  getAdapterDocsFingerprint,
+} from "./lib/agent-adapter-docs.js";
+export type { AgentAdapterHost, AgentAdapterDoc, AdapterWorkflowStep, AdapterFailureMode } from "./lib/agent-adapter-docs.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";

@@ -1793,8 +1793,8 @@ exit 0
 program
   .command("mcp")
   .description("Start MCP server (stdio)")
-  .option("--register <agent>", "Register MCP server with an agent (claude, codex, gemini, all)")
-  .option("--unregister <agent>", "Unregister MCP server from an agent (claude, codex, gemini, all)")
+  .option("--register <agent>", "Register MCP server with an agent (claude, codex, gemini, takumi, all)")
+  .option("--unregister <agent>", "Unregister MCP server from an agent (claude, codex, gemini, takumi, all)")
   .option("-g, --global", "Register/unregister globally (user-level) instead of project-level")
   .action(async (opts) => {
     if (opts.register) {
@@ -1970,10 +1970,37 @@ function unregisterGemini(): void {
   console.log(chalk.green(`Gemini CLI: unregistered from ${configPath}`));
 }
 
+// --- Takumi CLI: `takumi mcp add` (stdio, project scope) ---
+
+function registerTakumi(binPath: string, global?: boolean): void {
+  const scope = global ? "user" : "project";
+  const cmd = `takumi mcp add --scope ${scope} todos -- ${binPath}`;
+  try {
+    const { execSync } = require("node:child_process") as typeof import("node:child_process");
+    execSync(cmd, { stdio: "pipe" });
+    console.log(chalk.green(`Takumi (${scope}): registered via 'takumi mcp add'`));
+  } catch {
+    console.log(chalk.yellow(`Takumi: could not auto-register. Run this command manually:`));
+    console.log(chalk.cyan(`  ${cmd}`));
+  }
+}
+
+function unregisterTakumi(global?: boolean): void {
+  const scope = global ? "user" : "project";
+  try {
+    const { execSync } = require("node:child_process") as typeof import("node:child_process");
+    execSync(`takumi mcp remove --scope ${scope} todos`, { stdio: "pipe" });
+    console.log(chalk.green(`Takumi (${scope}): removed todos MCP server`));
+  } catch {
+    console.log(chalk.yellow(`Takumi: could not auto-remove. Run manually:`));
+    console.log(chalk.cyan(`  takumi mcp remove --scope ${scope} todos`));
+  }
+}
+
 // --- Main register/unregister ---
 
 function registerMcp(agent: string, global?: boolean): void {
-  const agents = agent === "all" ? ["claude", "codex", "gemini"] : [agent];
+  const agents = agent === "all" ? ["claude", "codex", "gemini", "takumi"] : [agent];
   const binPath = getMcpBinaryPath();
 
   for (const a of agents) {
@@ -1987,14 +2014,17 @@ function registerMcp(agent: string, global?: boolean): void {
       case "gemini":
         registerGemini(binPath);
         break;
+      case "takumi":
+        registerTakumi(binPath, global);
+        break;
       default:
-        console.error(chalk.red(`Unknown agent: ${a}. Use: claude, codex, gemini, all`));
+        console.error(chalk.red(`Unknown agent: ${a}. Use: claude, codex, gemini, takumi, all`));
     }
   }
 }
 
 function unregisterMcp(agent: string, global?: boolean): void {
-  const agents = agent === "all" ? ["claude", "codex", "gemini"] : [agent];
+  const agents = agent === "all" ? ["claude", "codex", "gemini", "takumi"] : [agent];
 
   for (const a of agents) {
     switch (a) {
@@ -2007,8 +2037,11 @@ function unregisterMcp(agent: string, global?: boolean): void {
       case "gemini":
         unregisterGemini();
         break;
+      case "takumi":
+        unregisterTakumi(global);
+        break;
       default:
-        console.error(chalk.red(`Unknown agent: ${a}. Use: claude, codex, gemini, all`));
+        console.error(chalk.red(`Unknown agent: ${a}. Use: claude, codex, gemini, takumi, all`));
     }
   }
 }
@@ -4971,6 +5004,42 @@ program
     } else {
       console.log(`Active: ${resolveAccessProfile()}`);
       for (const n of getHeadlessUsageNotes()) console.log(`  ${n}`);
+    }
+  });
+
+// docs — local adapter documentation
+const docsCmd = program
+  .command("docs")
+  .description("Local adapter and integration documentation");
+
+docsCmd
+  .command("adapters [host]")
+  .description("Show Codex, Claude Code, or Takumi adapter docs (all if host omitted)")
+  .option("-j, --json", "JSON output (single host only)")
+  .action((host, opts) => {
+    const {
+      getAgentAdapterDoc,
+      renderAdapterDocMarkdown,
+      renderAllAdapterDocsMarkdown,
+      listAgentAdapterDocs,
+    } = require("../lib/agent-adapter-docs.js") as typeof import("../lib/agent-adapter-docs.js");
+
+    if (!host) {
+      console.log(renderAllAdapterDocsMarkdown());
+      return;
+    }
+
+    const doc = getAgentAdapterDoc(host);
+    if (!doc) {
+      console.error(chalk.red(`Unknown host: ${host}. Use: codex, claude-code, takumi`));
+      console.error(chalk.dim(`Available: ${listAgentAdapterDocs().map((d) => d.host).join(", ")}`));
+      process.exit(1);
+    }
+
+    if (opts.json) {
+      console.log(JSON.stringify(doc, null, 2));
+    } else {
+      console.log(renderAdapterDocMarkdown(host));
     }
   });
 

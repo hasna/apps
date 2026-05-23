@@ -109,6 +109,13 @@ export function getDefaultAgentAdapters(): AgentAdapterConfig[] {
       description: "Cursor agent CLI (local)",
     },
     {
+      name: "takumi",
+      type: "script",
+      command: "takumi --dangerously-skip-permissions",
+      sandbox_profile: "default",
+      description: "Takumi CLI (local)",
+    },
+    {
       name: "tmux",
       type: "tmux",
       target: "agents:0",
