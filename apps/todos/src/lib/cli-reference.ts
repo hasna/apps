@@ -109,7 +109,9 @@ export const CLI_COMMAND_GROUPS: CliCommandGroup[] = [
       { name: "plan-exec", summary: "Plan execution mode", example: "todos plan-exec status <planId>" },
       { name: "schedule", summary: "Due dates and stale reports", example: "todos schedule summary" },
       { name: "reminders", summary: "Local due-date and SLA alerts", example: "todos reminders scan" },
+      { name: "watch", summary: "Terminal notifications and watch rules", example: "todos watch once" },
       { name: "handoff-packet", summary: "Rich offline handoff", example: "todos handoff-packet build --agent me" },
+      { name: "decisions", summary: "ADR decision records and knowledge snapshots", example: "todos decisions create -t \"Use SQLite\" -d \"Local WAL DB\"" },
       { name: "deps", summary: "Dependency graph", example: "todos deps ready --json" },
     ],
   },
@@ -151,8 +153,8 @@ export function listTopLevelCommands(): string[] {
   for (const extra of [
     "count", "inspect", "update", "lock", "unlock", "delete", "bulk", "templates",
     "comment", "sync", "config", "stream", "recap", "standup", "analytics",
-    "views", "reminders", "bridge", "activity", "crypto", "policy", "runs", "trace", "labels",
-    "intake", "package", "schema", "bootstrap", "context", "release", "hook", "hooks",
+    "views", "reminders", "bridge", "activity", "crypto", "policy", "runs", "trace", "refs", "labels",
+    "intake", "package", "schema", "bootstrap", "context", "release", "hook", "hooks", "decisions",
   ]) {
     names.add(extra);
   }
@@ -173,14 +175,17 @@ export const NESTED_SUBCOMMANDS: Record<string, string[]> = {
   scaffolds: ["list", "create", "preview", "apply", "export", "docs"],
   report: ["export", "docs"],
   env: ["capture", "list", "get", "check"],
+  decisions: ["create", "list", "show", "update", "status", "supersede", "export", "snapshot"],
   views: ["search", "save", "list", "run"],
   reminders: ["list", "scan", "check", "create", "dismiss", "snooze", "summary", "prefs", "docs"],
+  watch: ["once", "status", "rules", "prefs", "docs", "list"],
   schedule: ["set", "summary", "queue", "stale-report", "docs"],
   docs: ["cli", "adapters", "env"],
   features: ["list", "manifest", "docs"],
   completion: ["bash", "zsh", "fish", "install"],
   md: ["import", "export", "sync"],
   runs: ["record", "list", "show"],
+  refs: ["parse", "resolve", "scan", "inspect", "docs"],
   activity: ["list", "export"],
   schema: ["list", "validate", "compat"],
 };

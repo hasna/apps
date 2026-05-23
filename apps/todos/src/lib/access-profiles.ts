@@ -73,6 +73,7 @@ export const READ_ONLY_TOOLS = new Set([
   "get_tasks_changed_since", "get_stale_tasks", "get_active_work", "get_next_task",
   "find_duplicate_tasks", "describe_tools", "search_tools", "inspect_git_commit",
   "scan_text_for_secrets", "check_workspace_permission", "check_sandbox_command",
+  "parse_mentions", "resolve_mention", "resolve_mentions_in_text",
 ]);
 
 export const MINIMAL_TOOLS = new Set([

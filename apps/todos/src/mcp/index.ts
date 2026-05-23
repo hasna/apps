@@ -74,6 +74,9 @@ import { registerUserScaffoldTools } from "./tools/user-scaffolds.js";
 import { registerAgentWorkflowDemoTools } from "./tools/agent-workflow-demo.js";
 import { registerFeatureManifestTools } from "./tools/feature-manifest.js";
 import { registerNotificationReminderTools } from "./tools/notification-reminders.js";
+import { registerTerminalNotificationTools } from "./tools/terminal-notifications.js";
+import { registerDecisionRecordTools } from "./tools/decision-records.js";
+import { registerMentionResolverTools } from "./tools/mention-resolver.js";
 import { resolveAccessProfile, shouldRegisterToolForProfile } from "../lib/access-profiles.js";
 
 function getMcpVersion(): string {
@@ -299,6 +302,9 @@ registerUserScaffoldTools(server, { shouldRegisterTool, formatError });
 registerAgentWorkflowDemoTools(server, { shouldRegisterTool, formatError });
 registerFeatureManifestTools(server, { shouldRegisterTool, formatError });
 registerNotificationReminderTools(server, { shouldRegisterTool, resolveId, formatError });
+registerTerminalNotificationTools(server, { shouldRegisterTool, resolveId, formatError });
+registerDecisionRecordTools(server, { shouldRegisterTool, resolveId, formatError });
+registerMentionResolverTools(server, { shouldRegisterTool, resolveId, formatError });
 
 // === DISPATCH ===
 

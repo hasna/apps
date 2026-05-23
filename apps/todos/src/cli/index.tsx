@@ -1189,6 +1189,196 @@ envCmd
     console.log(JSON.stringify(checkEnvSnapshot(id, opts.cwd), null, 2));
   });
 
+// decisions — ADR-style decision records and project knowledge snapshots
+const decisionsCmd = program
+  .command("decisions")
+  .description("ADR-style decision records and project knowledge snapshots");
+
+decisionsCmd
+  .command("create")
+  .description("Create a decision record")
+  .requiredOption("-t, --title <title>", "Decision title")
+  .requiredOption("-d, --decision <text>", "Decision statement")
+  .option("--project-id <id>", "Project id")
+  .option("--task-id <id>", "Related task id")
+  .option("--plan-id <id>", "Related plan id")
+  .option("--agent-id <id>", "Author agent id")
+  .option("--status <status>", "proposed|accepted|deprecated|superseded|rejected", "proposed")
+  .option("--context <text>", "Context")
+  .option("--consequences <text>", "Consequences")
+  .option("--tags <tags>", "Comma-separated tags")
+  .option("--supersedes-id <id>", "Prior decision id")
+  .action((opts) => {
+    const { createDecisionRecord } = require("../lib/decision-records.js") as typeof import("../lib/decision-records.js");
+    console.log(JSON.stringify(createDecisionRecord({
+      project_id: opts.projectId,
+      task_id: opts.taskId,
+      plan_id: opts.planId,
+      agent_id: opts.agentId,
+      title: opts.title,
+      decision: opts.decision,
+      status: opts.status,
+      context: opts.context,
+      consequences: opts.consequences,
+      tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()).filter(Boolean) : undefined,
+      supersedes_id: opts.supersedesId,
+    }), null, 2));
+  });
+
+decisionsCmd
+  .command("list")
+  .description("List decision records")
+  .option("--project-id <id>", "Filter by project")
+  .option("--task-id <id>", "Filter by task")
+  .option("--status <status>", "Filter by status")
+  .option("--tag <tag>", "Filter by tag")
+  .option("--limit <n>", "Max results", "50")
+  .action((opts) => {
+    const { listDecisionRecords } = require("../lib/decision-records.js") as typeof import("../lib/decision-records.js");
+    console.log(JSON.stringify(listDecisionRecords({
+      project_id: opts.projectId,
+      task_id: opts.taskId,
+      status: opts.status,
+      tag: opts.tag,
+      limit: parseInt(opts.limit, 10),
+    }), null, 2));
+  });
+
+decisionsCmd
+  .command("show <id>")
+  .description("Show decision record by id or short ref")
+  .option("--md", "Markdown output")
+  .action((id, opts) => {
+    const { getDecisionRecord, getDecisionRecordByRef, formatDecisionRecordMarkdown } = require("../lib/decision-records.js") as typeof import("../lib/decision-records.js");
+    const record = getDecisionRecord(id) ?? getDecisionRecordByRef(id);
+    if (!record) {
+      console.error(`Decision record not found: ${id}`);
+      process.exit(1);
+    }
+    if (opts.md) console.log(formatDecisionRecordMarkdown(record));
+    else console.log(JSON.stringify(record, null, 2));
+  });
+
+decisionsCmd
+  .command("update <id>")
+  .description("Update decision record fields")
+  .option("-t, --title <title>", "Title")
+  .option("--context <text>", "Context")
+  .option("-d, --decision <text>", "Decision statement")
+  .option("--consequences <text>", "Consequences")
+  .option("--tags <tags>", "Comma-separated tags")
+  .action((id, opts) => {
+    const { updateDecisionRecord } = require("../lib/decision-records.js") as typeof import("../lib/decision-records.js");
+    console.log(JSON.stringify(updateDecisionRecord(id, {
+      title: opts.title,
+      context: opts.context,
+      decision: opts.decision,
+      consequences: opts.consequences,
+      tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()).filter(Boolean) : undefined,
+    }), null, 2));
+  });
+
+decisionsCmd
+  .command("status <id> <status>")
+  .description("Set decision record status")
+  .action((id, status) => {
+    const { setDecisionStatus } = require("../lib/decision-records.js") as typeof import("../lib/decision-records.js");
+    console.log(JSON.stringify(setDecisionStatus(id, status), null, 2));
+  });
+
+decisionsCmd
+  .command("supersede <id>")
+  .description("Create replacement decision and mark prior superseded")
+  .requiredOption("-t, --title <title>", "Replacement title")
+  .requiredOption("-d, --decision <text>", "Replacement decision")
+  .option("--context <text>", "Context")
+  .option("--consequences <text>", "Consequences")
+  .option("--agent-id <id>", "Author agent id")
+  .action((id, opts) => {
+    const { supersedeDecisionRecord } = require("../lib/decision-records.js") as typeof import("../lib/decision-records.js");
+    console.log(JSON.stringify(supersedeDecisionRecord(id, {
+      title: opts.title,
+      decision: opts.decision,
+      context: opts.context,
+      consequences: opts.consequences,
+      agent_id: opts.agentId,
+    }), null, 2));
+  });
+
+decisionsCmd
+  .command("export <id>")
+  .description("Export decision record to local Markdown or JSON")
+  .option("-o, --out <path>", "Output path")
+  .option("-f, --format <format>", "markdown or json", "markdown")
+  .action((id, opts) => {
+    const { exportDecisionRecord, getDecisionRecord, getDecisionRecordByRef } = require("../lib/decision-records.js") as typeof import("../lib/decision-records.js");
+    const record = getDecisionRecord(id) ?? getDecisionRecordByRef(id);
+    if (!record) {
+      console.error(`Decision record not found: ${id}`);
+      process.exit(1);
+    }
+    console.log(JSON.stringify(exportDecisionRecord(record.id, opts.out, opts.format), null, 2));
+  });
+
+const decisionsSnapshotCmd = decisionsCmd
+  .command("snapshot")
+  .description("Project knowledge snapshots");
+
+decisionsSnapshotCmd
+  .command("capture")
+  .description("Capture project knowledge snapshot")
+  .requiredOption("--project-id <id>", "Project id")
+  .option("-t, --title <title>", "Snapshot title")
+  .option("--summary <text>", "Summary")
+  .option("--notes <text>", "Notes")
+  .action((opts) => {
+    const { captureKnowledgeSnapshot } = require("../lib/decision-records.js") as typeof import("../lib/decision-records.js");
+    console.log(JSON.stringify(captureKnowledgeSnapshot({
+      project_id: opts.projectId,
+      title: opts.title,
+      summary: opts.summary,
+      notes: opts.notes,
+    }), null, 2));
+  });
+
+decisionsSnapshotCmd
+  .command("list")
+  .description("List knowledge snapshots")
+  .option("--project-id <id>", "Filter by project")
+  .option("--limit <n>", "Max results", "20")
+  .action((opts) => {
+    const { listKnowledgeSnapshots } = require("../lib/decision-records.js") as typeof import("../lib/decision-records.js");
+    console.log(JSON.stringify(listKnowledgeSnapshots({
+      project_id: opts.projectId,
+      limit: parseInt(opts.limit, 10),
+    }), null, 2));
+  });
+
+decisionsSnapshotCmd
+  .command("show <id>")
+  .description("Show knowledge snapshot")
+  .option("--md", "Markdown output")
+  .action((id, opts) => {
+    const { getKnowledgeSnapshot, formatKnowledgeSnapshotMarkdown } = require("../lib/decision-records.js") as typeof import("../lib/decision-records.js");
+    const record = getKnowledgeSnapshot(id);
+    if (!record) {
+      console.error(`Knowledge snapshot not found: ${id}`);
+      process.exit(1);
+    }
+    if (opts.md) console.log(formatKnowledgeSnapshotMarkdown(record));
+    else console.log(JSON.stringify(record, null, 2));
+  });
+
+decisionsSnapshotCmd
+  .command("export <id>")
+  .description("Export knowledge snapshot")
+  .option("-o, --out <path>", "Output path")
+  .option("-f, --format <format>", "markdown or json", "markdown")
+  .action((id, opts) => {
+    const { exportKnowledgeSnapshot } = require("../lib/decision-records.js") as typeof import("../lib/decision-records.js");
+    console.log(JSON.stringify(exportKnowledgeSnapshot(id, opts.out, opts.format), null, 2));
+  });
+
 // report — read-only HTML and Markdown exports
 const reportCmd = program
   .command("report")
@@ -3042,9 +3232,215 @@ program
     await startServer(port, { open: opts.open !== false, host: opts.host });
   });
 
-// watch
-program
+// watch — terminal notifications + live task list
+const watchCmd = program
   .command("watch")
+  .description("Local terminal notifications and live task views")
+  .option("--agent <id>", "Filter watch events to agent")
+  .option("--quiet", "Suppress terminal output (bell/hook only)")
+  .option("--no-bell", "Disable terminal bell")
+  .option("--desktop", "Use notify-send when a rule/preference enables it")
+  .option("-i, --interval <seconds>", "Poll interval for listen mode", "5")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const projectId = autoProject(globalOpts);
+    const {
+      pollWatchNotifications,
+      getWatchPreferences,
+      ensureDefaultWatchRules,
+    } = require("../lib/terminal-notifications.js") as typeof import("../lib/terminal-notifications.js");
+
+    ensureDefaultWatchRules();
+    const prefs = getWatchPreferences();
+    if (!prefs.enabled) {
+      console.log(chalk.yellow("Watch notifications are disabled. Run: todos watch prefs --enabled"));
+      process.exit(1);
+    }
+
+    const interval = parseInt(opts.interval, 10) * 1000;
+    const pollOpts = {
+      project_id: projectId,
+      agent_id: opts.agent,
+      project_path: process.cwd(),
+      quiet: opts.quiet,
+      bell: opts.bell !== false,
+      desktop: opts.desktop,
+    };
+
+    console.log(chalk.bold("todos watch") + chalk.dim(` — listening every ${opts.interval}s — Ctrl+C to stop\n`));
+
+    const tick = () => pollWatchNotifications(pollOpts);
+    tick();
+    const timer = setInterval(tick, interval);
+    process.on("SIGINT", () => {
+      clearInterval(timer);
+      process.exit(0);
+    });
+    await new Promise(() => {});
+  });
+
+watchCmd
+  .command("once")
+  .description("Poll once for matching watch events")
+  .option("--since <iso>", "Only events after this timestamp")
+  .option("--dry-run", "Find events without emitting or updating cursor")
+  .option("--json", "Output poll result as JSON")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const projectId = autoProject(globalOpts);
+    const parentOpts = watchCmd.opts();
+    const { pollWatchNotifications } = require("../lib/terminal-notifications.js") as typeof import("../lib/terminal-notifications.js");
+    const result = pollWatchNotifications({
+      project_id: projectId,
+      agent_id: parentOpts.agent,
+      project_path: process.cwd(),
+      since: opts.since,
+      dry_run: opts.dryRun,
+      quiet: parentOpts.quiet,
+      bell: parentOpts.bell !== false,
+      desktop: parentOpts.desktop,
+    });
+
+    if (opts.json || globalOpts.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    console.log(chalk.dim(`Since ${result.since} — ${result.notifications_sent} notification(s), ${result.events_found} event(s) found`));
+  });
+
+watchCmd
+  .command("status")
+  .description("Show watch cursor, rules, and preferences summary")
+  .option("-j, --json", "Output as JSON")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const { getWatchStatus } = require("../lib/terminal-notifications.js") as typeof import("../lib/terminal-notifications.js");
+    const status = getWatchStatus();
+    if (opts.json || globalOpts.json) {
+      console.log(JSON.stringify(status, null, 2));
+      return;
+    }
+    console.log(chalk.bold("Watch status\n"));
+    console.log(`  enabled: ${status.enabled ? chalk.green("yes") : chalk.red("no")}`);
+    console.log(`  last poll: ${status.last_poll_at ?? chalk.dim("never")}`);
+    console.log(`  rules: ${status.rules_enabled}/${status.rules_total} enabled`);
+    console.log(`  dedup entries: ${status.dedup_entries}`);
+    console.log(`  interval: ${status.preferences.poll_interval_seconds}s`);
+  });
+
+const watchRulesCmd = watchCmd.command("rules").description("Manage watch rules");
+
+watchRulesCmd
+  .command("list")
+  .description("List watch rules")
+  .option("-j, --json", "Output as JSON")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const projectId = autoProject(globalOpts);
+    const { listWatchRules } = require("../lib/terminal-notifications.js") as typeof import("../lib/terminal-notifications.js");
+    const rules = listWatchRules({ project_id: projectId });
+    if (opts.json || globalOpts.json) {
+      console.log(JSON.stringify(rules, null, 2));
+      return;
+    }
+    if (rules.length === 0) {
+      console.log(chalk.dim("No watch rules."));
+      return;
+    }
+    for (const rule of rules) {
+      const state = rule.enabled ? chalk.green("on") : chalk.dim("off");
+      const events = rule.events.length ? rule.events.join(", ") : "all";
+      console.log(`${state} ${chalk.bold(rule.name)} ${chalk.dim(`(${events})`)}`);
+    }
+  });
+
+watchRulesCmd
+  .command("add")
+  .description("Add a watch rule")
+  .requiredOption("-n, --name <name>", "Rule name")
+  .option("-e, --events <list>", "Comma-separated event types")
+  .option("--project-path <path>", "Project path prefix pattern")
+  .option("--quiet", "Quiet mode (no terminal output)")
+  .option("--no-bell", "Disable bell")
+  .option("--desktop", "Enable desktop notify-send")
+  .option("--hook <command>", "Shell hook command")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const projectId = autoProject(globalOpts);
+    const { createWatchRule } = require("../lib/terminal-notifications.js") as typeof import("../lib/terminal-notifications.js");
+    const events = opts.events ? opts.events.split(",").map((s: string) => s.trim()).filter(Boolean) : [];
+    const rule = createWatchRule({
+      name: opts.name,
+      events,
+      project_id: projectId,
+      project_path_pattern: opts.projectPath,
+      quiet: opts.quiet,
+      bell: opts.bell !== false,
+      desktop_notify: opts.desktop,
+      hook_command: opts.hook,
+    });
+    if (globalOpts.json) console.log(JSON.stringify(rule, null, 2));
+    else console.log(chalk.green(`Created watch rule: ${rule.name}`));
+  });
+
+watchRulesCmd
+  .command("remove")
+  .description("Remove a watch rule by ID")
+  .argument("<id>", "Rule ID")
+  .action(async (id) => {
+    const { deleteWatchRule } = require("../lib/terminal-notifications.js") as typeof import("../lib/terminal-notifications.js");
+    const ok = deleteWatchRule(id);
+    console.log(ok ? chalk.green("Rule removed.") : chalk.red("Rule not found."));
+  });
+
+watchCmd
+  .command("prefs")
+  .description("Show or update watch preferences")
+  .option("--enabled", "Enable watch notifications")
+  .option("--disabled", "Disable watch notifications")
+  .option("--interval <seconds>", "Poll interval")
+  .option("--quiet", "Default quiet mode")
+  .option("--no-bell", "Disable bell by default")
+  .option("--desktop", "Enable desktop notify by default")
+  .option("--due-soon-hours <n>", "Due-soon window")
+  .option("--stale-minutes <n>", "Stale task threshold")
+  .option("-j, --json", "Output as JSON")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const { getWatchPreferences, setWatchPreferences } = require("../lib/terminal-notifications.js") as typeof import("../lib/terminal-notifications.js");
+    const hasUpdate = opts.enabled || opts.disabled || opts.interval || opts.quiet || opts.bell === false || opts.desktop || opts.dueSoonHours || opts.staleMinutes;
+    const prefs = hasUpdate
+      ? setWatchPreferences({
+          enabled: opts.disabled ? false : opts.enabled ? true : undefined,
+          poll_interval_seconds: opts.interval ? parseInt(opts.interval, 10) : undefined,
+          quiet: opts.quiet,
+          bell: opts.bell === false ? false : undefined,
+          desktop_notify: opts.desktop,
+          due_soon_hours: opts.dueSoonHours ? parseInt(opts.dueSoonHours, 10) : undefined,
+          stale_minutes: opts.staleMinutes ? parseInt(opts.staleMinutes, 10) : undefined,
+        })
+      : getWatchPreferences();
+    if (opts.json || globalOpts.json) console.log(JSON.stringify(prefs, null, 2));
+    else {
+      console.log(chalk.bold("Watch preferences\n"));
+      console.log(`  enabled: ${prefs.enabled}`);
+      console.log(`  interval: ${prefs.poll_interval_seconds}s`);
+      console.log(`  bell: ${prefs.bell}`);
+      console.log(`  quiet: ${prefs.quiet}`);
+      console.log(`  desktop: ${prefs.desktop_notify}`);
+    }
+  });
+
+watchCmd
+  .command("docs")
+  .description("Watch rules and terminal notification docs")
+  .action(async () => {
+    const { getWatchDocs } = require("../lib/terminal-notifications.js") as typeof import("../lib/terminal-notifications.js");
+    console.log(getWatchDocs());
+  });
+
+watchCmd
+  .command("list")
   .description("Live-updating task list (refreshes every few seconds)")
   .option("-s, --status <status>", "Filter by status (default: pending,in_progress)")
   .option("-i, --interval <seconds>", "Refresh interval in seconds", "5")
@@ -3060,14 +3456,11 @@ program
       const counts: Record<string, number> = {};
       for (const t of all) counts[t.status] = (counts[t.status] || 0) + 1;
 
-      // Clear screen
       process.stdout.write("\x1B[2J\x1B[0f");
 
-      // Header
-      const now = new Date().toLocaleTimeString();
-      console.log(chalk.bold(`todos watch`) + chalk.dim(` — ${now} — refreshing every ${opts.interval}s — Ctrl+C to stop\n`));
+      const nowTime = new Date().toLocaleTimeString();
+      console.log(chalk.bold(`todos watch list`) + chalk.dim(` — ${nowTime} — refreshing every ${opts.interval}s — Ctrl+C to stop\n`));
 
-      // Stats line
       const parts = [
         `total: ${chalk.bold(String(all.length))}`,
         `pending: ${chalk.yellow(String(counts["pending"] || 0))}`,
@@ -3090,13 +3483,10 @@ program
 
     render();
     const timer = setInterval(render, interval);
-
     process.on("SIGINT", () => {
       clearInterval(timer);
       process.exit(0);
     });
-
-    // Keep alive
     await new Promise(() => {});
   });
 
@@ -5144,6 +5534,99 @@ traceCmd
       process.exit(1);
     }
     console.log(JSON.stringify(info, null, 2));
+  });
+
+// refs — local mention resolver for files, symbols, and refs
+const refsCmd = program
+  .command("refs")
+  .description("Resolve @file, @symbol, task/plan/run refs, git refs, and URLs locally");
+
+refsCmd
+  .command("parse")
+  .description("Parse mentions from text without resolving")
+  .option("--text <text>", "Inline text")
+  .option("--file <path>", "Read text from file")
+  .option("-j, --json", "JSON output")
+  .action((opts) => {
+    const { parseMentions } = require("../lib/mention-resolver.js") as typeof import("../lib/mention-resolver.js");
+    const { readFileSync } = require("node:fs") as typeof import("node:fs");
+    const text = opts.text ?? (opts.file ? readFileSync(opts.file, "utf8") : "");
+    if (!text) {
+      console.error(chalk.red("Provide --text or --file"));
+      process.exit(1);
+    }
+    const mentions = parseMentions(text);
+    if (opts.json) console.log(JSON.stringify(mentions, null, 2));
+    else if (mentions.length === 0) console.log(chalk.dim("No mentions found."));
+    else for (const m of mentions) console.log(`${m.kind}\t${m.target}\t(${m.raw})`);
+  });
+
+refsCmd
+  .command("resolve")
+  .description("Resolve a single mention")
+  .requiredOption("--kind <kind>", "file|symbol|task|plan|run|branch|commit|pr|url")
+  .requiredOption("--target <target>", "Mention target")
+  .option("--cwd <path>", "Working directory for file/git resolution")
+  .option("--no-redact", "Skip secret redaction on snippets")
+  .option("-j, --json", "JSON output")
+  .action((opts) => {
+    const { resolveMention, formatResolvedMention, MENTION_KINDS } = require("../lib/mention-resolver.js") as typeof import("../lib/mention-resolver.js");
+    if (!MENTION_KINDS.includes(opts.kind)) {
+      console.error(chalk.red(`Invalid kind: ${opts.kind}`));
+      process.exit(1);
+    }
+    const resolved = resolveMention(opts.kind, opts.target, {
+      cwd: opts.cwd,
+      redact: opts.redact !== false,
+    });
+    if (opts.json) console.log(JSON.stringify(resolved, null, 2));
+    else console.log(formatResolvedMention(resolved));
+  });
+
+refsCmd
+  .command("scan")
+  .description("Parse and resolve all mentions in text")
+  .option("--text <text>", "Inline text")
+  .option("--file <path>", "Read text from file")
+  .option("--cwd <path>", "Working directory for file/git resolution")
+  .option("--no-redact", "Skip secret redaction")
+  .option("-j, --json", "JSON output")
+  .action((opts) => {
+    const { resolveMentionsInText, formatMentionResolutionResult } = require("../lib/mention-resolver.js") as typeof import("../lib/mention-resolver.js");
+    const { readFileSync } = require("node:fs") as typeof import("node:fs");
+    const text = opts.text ?? (opts.file ? readFileSync(opts.file, "utf8") : "");
+    if (!text) {
+      console.error(chalk.red("Provide --text or --file"));
+      process.exit(1);
+    }
+    const result = resolveMentionsInText(text, { cwd: opts.cwd, redact: opts.redact !== false });
+    if (opts.json) console.log(JSON.stringify(result, null, 2));
+    else console.log(formatMentionResolutionResult(result));
+  });
+
+refsCmd
+  .command("inspect <ref>")
+  .description("Inspect a mention ref like @file:src/foo.ts or @task:abc12345")
+  .option("--cwd <path>", "Working directory")
+  .option("-j, --json", "JSON output")
+  .action((ref, opts) => {
+    const { resolveMention, formatResolvedMention } = require("../lib/mention-resolver.js") as typeof import("../lib/mention-resolver.js");
+    const match = ref.match(/^@?(file|symbol|task|plan|run|branch|commit|pr):(.+)$/i);
+    if (!match) {
+      console.error(chalk.red("Ref must look like @file:path, @task:id, @commit:sha, etc."));
+      process.exit(1);
+    }
+    const resolved = resolveMention(match[1]!.toLowerCase(), match[2]!, { cwd: opts.cwd });
+    if (opts.json) console.log(JSON.stringify(resolved, null, 2));
+    else console.log(formatResolvedMention(resolved));
+  });
+
+refsCmd
+  .command("docs")
+  .description("Mention resolver syntax and boundaries")
+  .action(() => {
+    const { getMentionResolverDocs } = require("../lib/mention-resolver.js") as typeof import("../lib/mention-resolver.js");
+    for (const line of getMentionResolverDocs()) console.log(line);
   });
 
 // labels — first-class task labels

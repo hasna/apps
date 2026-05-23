@@ -669,6 +669,54 @@ export function ensureSchema(db: Database): void {
       desktop_notify INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`);
+
+  ensureTable("watch_rules", `
+    CREATE TABLE watch_rules (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      events TEXT NOT NULL DEFAULT '[]',
+      project_id TEXT,
+      project_path_pattern TEXT,
+      agent_id TEXT,
+      priority_min TEXT CHECK(priority_min IN ('low', 'medium', 'high', 'critical')),
+      quiet INTEGER NOT NULL DEFAULT 0,
+      bell INTEGER NOT NULL DEFAULT 1,
+      desktop_notify INTEGER NOT NULL DEFAULT 0,
+      hook_command TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_watch_rules_project ON watch_rules(project_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_watch_rules_enabled ON watch_rules(enabled)");
+
+  ensureTable("watch_preferences", `
+    CREATE TABLE watch_preferences (
+      id TEXT PRIMARY KEY,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      poll_interval_seconds INTEGER NOT NULL DEFAULT 5,
+      bell INTEGER NOT NULL DEFAULT 1,
+      desktop_notify INTEGER NOT NULL DEFAULT 0,
+      quiet INTEGER NOT NULL DEFAULT 0,
+      due_soon_hours INTEGER NOT NULL DEFAULT 24,
+      stale_minutes INTEGER NOT NULL DEFAULT 30,
+      stale_lock_minutes INTEGER NOT NULL DEFAULT 30,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+
+  ensureTable("watch_state", `
+    CREATE TABLE watch_state (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+
+  ensureTable("watch_dedup", `
+    CREATE TABLE watch_dedup (
+      event_key TEXT PRIMARY KEY,
+      fired_at TEXT NOT NULL
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_watch_dedup_fired ON watch_dedup(fired_at)");
 }
 
 export function backfillTaskTags(db: Database): void {

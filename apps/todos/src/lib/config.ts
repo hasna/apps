@@ -24,6 +24,17 @@ export interface ProjectOverrideConfig {
   completion_guard?: CompletionGuardConfig;
 }
 
+export interface WatchRulePattern {
+  name?: string;
+  project_path?: string;
+  events?: string[];
+  enabled?: boolean;
+  quiet?: boolean;
+  bell?: boolean;
+  desktop_notify?: boolean;
+  hook_command?: string;
+}
+
 export interface TodosConfig {
   sync_agents?: string[] | string;
   task_list_id?: string;
@@ -36,6 +47,10 @@ export interface TodosConfig {
   agent_pool?: string[];
   /** Per-project agent name pools, keyed by working directory path prefix. */
   project_pools?: Record<string, string[]>;
+  /** Global watch rule patterns synced into SQLite watch_rules. */
+  watch_rules?: WatchRulePattern[];
+  /** Per-project watch rule patterns, keyed by working directory path prefix. */
+  project_watch_rules?: Record<string, WatchRulePattern[]>;
 }
 
 function getTodosGlobalDir(): string {

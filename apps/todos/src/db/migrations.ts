@@ -1106,4 +1106,96 @@ export const MIGRATIONS = [
   );
   INSERT OR IGNORE INTO _migrations (id) VALUES (61);
   `,
+  // Migration 62: Local terminal watch rules and notification state
+  `
+  CREATE TABLE IF NOT EXISTS watch_rules (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    events TEXT NOT NULL DEFAULT '[]',
+    project_id TEXT,
+    project_path_pattern TEXT,
+    agent_id TEXT,
+    priority_min TEXT CHECK(priority_min IN ('low', 'medium', 'high', 'critical')),
+    quiet INTEGER NOT NULL DEFAULT 0,
+    bell INTEGER NOT NULL DEFAULT 1,
+    desktop_notify INTEGER NOT NULL DEFAULT 0,
+    hook_command TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_watch_rules_project ON watch_rules(project_id);
+  CREATE INDEX IF NOT EXISTS idx_watch_rules_enabled ON watch_rules(enabled);
+
+  CREATE TABLE IF NOT EXISTS watch_preferences (
+    id TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    poll_interval_seconds INTEGER NOT NULL DEFAULT 5,
+    bell INTEGER NOT NULL DEFAULT 1,
+    desktop_notify INTEGER NOT NULL DEFAULT 0,
+    quiet INTEGER NOT NULL DEFAULT 0,
+    due_soon_hours INTEGER NOT NULL DEFAULT 24,
+    stale_minutes INTEGER NOT NULL DEFAULT 30,
+    stale_lock_minutes INTEGER NOT NULL DEFAULT 30,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS watch_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS watch_dedup (
+    event_key TEXT PRIMARY KEY,
+    fired_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_watch_dedup_fired ON watch_dedup(fired_at);
+
+  INSERT OR IGNORE INTO _migrations (id) VALUES (62);
+  `,
+  // Migration 63: ADR-style decision records and project knowledge snapshots
+  `
+  CREATE TABLE IF NOT EXISTS decision_records (
+    id TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+    agent_id TEXT,
+    sequence_num INTEGER NOT NULL DEFAULT 1,
+    short_ref TEXT NOT NULL,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed', 'accepted', 'deprecated', 'superseded', 'rejected')),
+    context TEXT,
+    decision TEXT NOT NULL,
+    consequences TEXT,
+    alternatives TEXT NOT NULL DEFAULT '[]',
+    tags TEXT NOT NULL DEFAULT '[]',
+    supersedes_id TEXT REFERENCES decision_records(id) ON DELETE SET NULL,
+    superseded_by_id TEXT,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_decision_records_project ON decision_records(project_id);
+  CREATE INDEX IF NOT EXISTS idx_decision_records_status ON decision_records(status);
+  CREATE INDEX IF NOT EXISTS idx_decision_records_short_ref ON decision_records(short_ref);
+  CREATE INDEX IF NOT EXISTS idx_decision_records_task ON decision_records(task_id);
+
+  CREATE TABLE IF NOT EXISTS knowledge_snapshots (
+    id TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    summary TEXT,
+    content_hash TEXT NOT NULL,
+    snapshot TEXT NOT NULL,
+    decision_ids TEXT NOT NULL DEFAULT '[]',
+    topics TEXT NOT NULL DEFAULT '[]',
+    source TEXT NOT NULL DEFAULT 'manual' CHECK(source IN ('manual', 'auto', 'import')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_knowledge_snapshots_project ON knowledge_snapshots(project_id);
+  CREATE INDEX IF NOT EXISTS idx_knowledge_snapshots_hash ON knowledge_snapshots(content_hash);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (63);
+  `,
 ];

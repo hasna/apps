@@ -373,6 +373,26 @@ export {
 } from "./lib/git-traceability.js";
 export type { GitCommitInfo, LinkGitTraceInput } from "./lib/git-traceability.js";
 
+// Mention resolver
+export {
+  MENTION_RESOLVER_SCHEMA,
+  MENTION_KINDS,
+  parseMentions,
+  resolveMention,
+  resolveMentionsInText,
+  formatResolvedMention,
+  formatMentionResolutionResult,
+  getMentionResolverDocs,
+} from "./lib/mention-resolver.js";
+export type {
+  MentionKind,
+  MentionStatus,
+  ParsedMention,
+  ResolvedMention,
+  MentionResolutionResult,
+  ResolveMentionOptions,
+} from "./lib/mention-resolver.js";
+
 // Labels and custom fields
 export {
   createLabel, getLabel, listLabels, updateLabel, deleteLabel,
@@ -705,6 +725,39 @@ export type {
   CreateReminderInput,
 } from "./lib/notification-reminders.js";
 
+// Terminal notifications / watch rules
+export {
+  TERMINAL_NOTIFICATIONS_SCHEMA,
+  WATCH_EVENT_TYPES,
+  ensureDefaultWatchRules,
+  createWatchRule,
+  updateWatchRule,
+  deleteWatchRule,
+  getWatchRule,
+  listWatchRules,
+  ruleMatchesEvent,
+  collectWatchEvents,
+  formatTerminalNotification,
+  pollWatchNotifications,
+  getWatchStatus,
+  getWatchPreferences,
+  setWatchPreferences,
+  syncConfigWatchRules,
+  getWatchDocs,
+} from "./lib/terminal-notifications.js";
+export type {
+  WatchEventType,
+  WatchSeverity,
+  WatchEvent,
+  WatchRule,
+  WatchPreferences,
+  CreateWatchRuleInput,
+  UpdateWatchRuleInput,
+  PollWatchOptions,
+  PollWatchResult,
+  WatchStatus,
+} from "./lib/terminal-notifications.js";
+
 // Import/export bridge
 export {
   BUNDLE_SCHEMA,
@@ -892,6 +945,44 @@ export type {
   CaptureEnvSnapshotInput,
   EnvSnapshotCheckResult,
 } from "./lib/environment-snapshots.js";
+
+// Decision records and knowledge snapshots
+export {
+  DECISION_RECORD_SCHEMA,
+  KNOWLEDGE_SNAPSHOT_SCHEMA,
+  DECISION_STATUSES,
+  KNOWLEDGE_SNAPSHOT_SOURCES,
+  createDecisionRecord,
+  getDecisionRecord,
+  getDecisionRecordByRef,
+  listDecisionRecords,
+  updateDecisionRecord,
+  setDecisionStatus,
+  supersedeDecisionRecord,
+  formatDecisionRecordMarkdown,
+  exportDecisionRecord,
+  buildKnowledgeSnapshotPayload,
+  captureKnowledgeSnapshot,
+  getKnowledgeSnapshot,
+  listKnowledgeSnapshots,
+  formatKnowledgeSnapshotMarkdown,
+  exportKnowledgeSnapshot,
+  getDecisionRecordsDocs,
+} from "./lib/decision-records.js";
+export type {
+  DecisionStatus,
+  KnowledgeSnapshotSource,
+  DecisionAlternative,
+  DecisionRecord,
+  CreateDecisionRecordInput,
+  UpdateDecisionRecordInput,
+  ListDecisionRecordsFilter,
+  KnowledgeSnapshotDecisionSummary,
+  KnowledgeSnapshotPayload,
+  KnowledgeSnapshotRecord,
+  CaptureKnowledgeSnapshotInput,
+  ListKnowledgeSnapshotsFilter,
+} from "./lib/decision-records.js";
 
 // Report exports
 export {
