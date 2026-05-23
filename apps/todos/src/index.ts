@@ -239,6 +239,24 @@ export type {
   VerificationProvidersFile,
 } from "./lib/verification-providers.js";
 
+// Local encryption
+export {
+  encryptValue,
+  decryptValue,
+  encryptSensitiveFields,
+  decryptSensitiveFields,
+  redactObject,
+  applyExportProfile,
+  assertExportProfileAllowed,
+  initEncryptionKeyFile,
+  loadEncryptionKey,
+  getEncryptionKeySource,
+  isEncryptedPayload,
+  ENCRYPTION_SCHEMA_VERSION,
+  EXPORT_PROFILES,
+} from "./lib/local-encryption.js";
+export type { EncryptedPayload, ExportProfile, ExportBundleOptions } from "./lib/local-encryption.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";

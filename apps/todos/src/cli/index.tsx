@@ -4244,6 +4244,58 @@ verifyCmd
     }
   });
 
+// crypto — local encryption and secure exports
+const cryptoCmd = program
+  .command("crypto")
+  .description("Local encryption key management and secure export profiles");
+
+cryptoCmd
+  .command("init-key")
+  .description("Generate local encryption key file (~/.hasna/todos/encryption.key)")
+  .action(() => {
+    const { initEncryptionKeyFile } = require("../lib/local-encryption.js") as typeof import("../lib/local-encryption.js");
+    const path = initEncryptionKeyFile();
+    console.log(chalk.green(`  ✓ Encryption key initialized at ${path}`));
+    console.log(chalk.dim("  Or set TODOS_ENCRYPTION_KEY env var instead."));
+  });
+
+cryptoCmd
+  .command("status")
+  .description("Show encryption key source (never prints key material)")
+  .action(() => {
+    const { getEncryptionKeySource } = require("../lib/local-encryption.js") as typeof import("../lib/local-encryption.js");
+    console.log(`  Key source: ${getEncryptionKeySource()}`);
+  });
+
+cryptoCmd
+  .command("export-profile")
+  .description("Apply secure export profile to JSON data from stdin or file")
+  .requiredOption("--profile <profile>", "redacted, encrypted, or plaintext")
+  .option("--acknowledge-plaintext", "Required for plaintext profile")
+  .option("--file <path>", "JSON file (default stdin)")
+  .action(async (opts) => {
+    const { applyExportProfile, assertExportProfileAllowed } = require("../lib/local-encryption.js") as typeof import("../lib/local-encryption.js");
+    const profile = assertExportProfileAllowed(opts.profile);
+    let raw = "";
+    if (opts.file) {
+      raw = require("node:fs").readFileSync(opts.file, "utf8");
+    } else {
+      raw = await new Promise<string>((resolve, reject) => {
+        let buf = "";
+        process.stdin.setEncoding("utf8");
+        process.stdin.on("data", (c) => { buf += c; });
+        process.stdin.on("end", () => resolve(buf));
+        process.stdin.on("error", reject);
+      });
+    }
+    const data = JSON.parse(raw || "{}") as Record<string, unknown>;
+    const result = applyExportProfile(data, { profile, acknowledge_plaintext: opts.acknowledgePlaintext });
+    if (result.warnings.length) {
+      for (const w of result.warnings) console.error(chalk.yellow(`  ⚠ ${w}`));
+    }
+    console.log(JSON.stringify(result.data, null, 2));
+  });
+
 // handoff
 program
   .command("handoff")
