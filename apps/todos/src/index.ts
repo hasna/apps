@@ -759,6 +759,27 @@ export type {
   BuildHandoffPacketInput,
 } from "./lib/handoff-packets.js";
 
+// TUI dashboard
+export {
+  TUI_DASHBOARD_SCHEMA,
+  initialDashboardState,
+  reduceDashboardState,
+  loadDashboardData,
+  clampSelectedIndex,
+  executeDashboardTaskAction,
+  listDashboardProjects,
+  KEYBOARD_HELP,
+  DASHBOARD_PANELS,
+} from "./lib/tui-dashboard.js";
+export type {
+  DashboardState,
+  DashboardData,
+  DashboardPanel,
+  DashboardFilter,
+  DashboardAction,
+  DashboardTaskRow,
+} from "./lib/tui-dashboard.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";

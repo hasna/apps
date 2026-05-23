@@ -2847,13 +2847,20 @@ program
   .description("Live-updating dashboard showing project health, agents, task flow")
   .option("--project <id>", "Filter to project")
   .option("--refresh <ms>", "Refresh interval in ms (default: 2000)", "2000")
+  .option("--readonly", "Read-only safe mode (no claim/start/done)")
+  .option("--agent <name>", "Agent name for claim/start actions", "tui")
   .action(async (opts) => {
     const { render } = await import("ink");
     const React = await import("react");
     const { Dashboard } = await import("./components/Dashboard.js");
     const globalOpts = program.opts();
     const projectId = opts.project || autoProject(globalOpts) || undefined;
-    render(React.createElement(Dashboard, { projectId, refreshMs: parseInt(opts.refresh, 10) }));
+    render(React.createElement(Dashboard, {
+      projectId,
+      refreshMs: parseInt(opts.refresh, 10),
+      readOnly: !!opts.readonly,
+      agentId: opts.agent,
+    }));
   });
 
 // next
