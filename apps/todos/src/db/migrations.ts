@@ -1015,4 +1015,25 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_run_records_status ON run_records(status);
   INSERT OR IGNORE INTO _migrations (id) VALUES (56);
   `,
+  // Migration 57: Unified append-only activity log for tasks, projects, plans, runs
+  `
+  CREATE TABLE IF NOT EXISTS activity_log (
+    id TEXT PRIMARY KEY,
+    entity_type TEXT NOT NULL CHECK(entity_type IN ('task', 'project', 'plan', 'agent_run', 'run_record', 'comment', 'session')),
+    entity_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    field TEXT,
+    old_value TEXT,
+    new_value TEXT,
+    actor_id TEXT,
+    session_id TEXT,
+    machine_id TEXT,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_activity_log_entity ON activity_log(entity_type, entity_id);
+  CREATE INDEX IF NOT EXISTS idx_activity_log_actor ON activity_log(actor_id);
+  CREATE INDEX IF NOT EXISTS idx_activity_log_created ON activity_log(created_at);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (57);
+  `,
 ];

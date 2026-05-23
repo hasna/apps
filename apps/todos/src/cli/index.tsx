@@ -5326,6 +5326,55 @@ schemaCmd
     console.log(getSchemaSemverGuidance());
   });
 
+// activity — append-only audit trail
+const activityCmd = program
+  .command("activity")
+  .description("Activity log and audit trail");
+
+activityCmd
+  .command("list")
+  .description("List activity records")
+  .option("--entity-type <type>", "Entity type filter")
+  .option("--entity <id>", "Entity ID filter")
+  .option("--actor <id>", "Actor filter")
+  .option("--limit <n>", "Limit", "50")
+  .option("-j, --json", "JSON output")
+  .action((opts) => {
+    const { listActivity, formatActivityRecordText } = require("../lib/activity-audit.js") as typeof import("../lib/activity-audit.js");
+    const records = listActivity({
+      entity_type: opts.entityType,
+      entity_id: opts.entity,
+      actor_id: opts.actor,
+      limit: parseInt(opts.limit, 10),
+    });
+    if (opts.json) console.log(JSON.stringify(records, null, 2));
+    else for (const r of records) console.log(formatActivityRecordText(r));
+  });
+
+activityCmd
+  .command("timeline <entityType> <entityId>")
+  .description("Chronological activity for an entity")
+  .option("-j, --json", "JSON output")
+  .action((entityType, entityId, opts) => {
+    const { getActivityTimeline } = require("../lib/activity-audit.js") as typeof import("../lib/activity-audit.js");
+    const timeline = getActivityTimeline(entityType, entityId);
+    if (opts.json) console.log(JSON.stringify(timeline, null, 2));
+    else for (const r of timeline) console.log(`${r.created_at} ${r.action}`);
+  });
+
+activityCmd
+  .command("export")
+  .description("Export redacted activity log bundle")
+  .option("--entity-type <type>", "Entity type")
+  .option("--entity <id>", "Entity ID")
+  .action((opts) => {
+    const { exportActivityLog } = require("../lib/activity-audit.js") as typeof import("../lib/activity-audit.js");
+    console.log(JSON.stringify(exportActivityLog({
+      entity_type: opts.entityType,
+      entity_id: opts.entity,
+    }), null, 2));
+  });
+
 // handoff
 program
   .command("handoff")

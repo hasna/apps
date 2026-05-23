@@ -608,6 +608,26 @@ export type {
   SchemaCompatibilityResult,
 } from "./lib/json-schemas.js";
 
+// Activity audit
+export {
+  ACTIVITY_LOG_SCHEMA,
+  ACTIVITY_ENTITY_TYPES,
+  logActivity,
+  listActivity,
+  getActivityTimeline,
+  exportActivityLog,
+  importActivityLog,
+  redactActivityRecord,
+  formatActivityRecordText,
+} from "./lib/activity-audit.js";
+export type {
+  ActivityEntityType,
+  ActivityRecord,
+  LogActivityInput,
+  ListActivityFilter,
+  ActivityExportBundle,
+} from "./lib/activity-audit.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";

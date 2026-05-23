@@ -587,6 +587,26 @@ export function ensureSchema(db: Database): void {
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_run_records_agent ON run_records(agent_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_run_records_plan ON run_records(plan_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_run_records_status ON run_records(status)");
+
+  // Unified activity log
+  ensureTable("activity_log", `
+    CREATE TABLE activity_log (
+      id TEXT PRIMARY KEY,
+      entity_type TEXT NOT NULL CHECK(entity_type IN ('task', 'project', 'plan', 'agent_run', 'run_record', 'comment', 'session')),
+      entity_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      field TEXT,
+      old_value TEXT,
+      new_value TEXT,
+      actor_id TEXT,
+      session_id TEXT,
+      machine_id TEXT,
+      metadata TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_activity_log_entity ON activity_log(entity_type, entity_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_activity_log_actor ON activity_log(actor_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_activity_log_created ON activity_log(created_at)");
 }
 
 export function backfillTaskTags(db: Database): void {
