@@ -4888,6 +4888,28 @@ leaseCmd
     console.log(JSON.stringify(listActiveLeases(opts.agent), null, 2));
   });
 
+// bootstrap — workspace discovery and first-run setup
+program
+  .command("bootstrap")
+  .description("Discover workspace and bootstrap local todos project")
+  .option("--cwd <path>", "Working directory")
+  .option("--name <name>", "Project name override")
+  .option("--no-todos-md", "Skip todos.md creation")
+  .action((opts) => {
+    const { bootstrapWorkspace, discoverWorkspace, formatBootstrapReport } = require("../lib/project-bootstrap.js") as typeof import("../lib/project-bootstrap.js");
+    const result = bootstrapWorkspace({ cwd: opts.cwd, project_name: opts.name, init_todos_md: opts.todosMd !== false });
+    console.log(formatBootstrapReport(result, discoverWorkspace(opts.cwd)));
+  });
+
+program
+  .command("discover")
+  .description("Discover workspace metadata (git root, todos paths)")
+  .option("--cwd <path>", "Working directory")
+  .action((opts) => {
+    const { discoverWorkspace } = require("../lib/project-bootstrap.js") as typeof import("../lib/project-bootstrap.js");
+    console.log(JSON.stringify(discoverWorkspace(opts.cwd), null, 2));
+  });
+
 // handoff
 program
   .command("handoff")

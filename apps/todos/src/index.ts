@@ -443,6 +443,16 @@ export {
 } from "./lib/agent-coordination.js";
 export type { TaskLease, LeaseAcquireResult, LockConflict, StaleRecoveryResult } from "./lib/agent-coordination.js";
 
+// Project bootstrap
+export {
+  discoverWorkspace,
+  bootstrapWorkspace,
+  getBootstrapStatus,
+  formatBootstrapReport,
+  BOOTSTRAP_SCHEMA,
+} from "./lib/project-bootstrap.js";
+export type { WorkspaceDiscovery, BootstrapResult } from "./lib/project-bootstrap.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";

@@ -46,6 +46,7 @@ import { registerTodosMdTools } from "./tools/todos-md.js";
 import { registerWorkspaceTrustTools } from "./tools/workspace-trust.js";
 import { registerApprovalGateTools } from "./tools/approval-gates.js";
 import { registerAgentCoordinationTools } from "./tools/agent-coordination.js";
+import { registerProjectBootstrapTools } from "./tools/project-bootstrap.js";
 
 function getMcpVersion(): string {
   try {
@@ -258,6 +259,7 @@ registerTodosMdTools(server, { shouldRegisterTool, formatError });
 registerWorkspaceTrustTools(server, { shouldRegisterTool, formatError });
 registerApprovalGateTools(server, { shouldRegisterTool, resolveId, formatError });
 registerAgentCoordinationTools(server, { shouldRegisterTool, resolveId, formatError });
+registerProjectBootstrapTools(server, { shouldRegisterTool, formatError });
 
 // === DISPATCH ===
 
