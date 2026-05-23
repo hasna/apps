@@ -114,6 +114,10 @@ function autoProject(opts: { project?: string }): string | undefined {
   return autoDetectProject(opts)?.id;
 }
 
+function collect(value: string, previous: string[]): string[] {
+  return previous.concat([value]);
+}
+
 /** Normalize user-friendly status aliases to canonical TaskStatus values */
 function normalizeStatus(s: string): string {
   switch (s.toLowerCase().trim()) {
@@ -1904,10 +1908,10 @@ program
     }
   });
 
-// deps
+// depends — per-task dependency add/remove
 program
-  .command("deps <id>")
-  .description("Manage task dependencies")
+  .command("depends <id>")
+  .description("Manage task dependencies (add/remove)")
   .option("--needs <dep-id>", "Add dependency (this task needs dep-id)")
   .option("--remove <dep-id>", "Remove dependency")
   .action((id: string, opts) => {
@@ -2627,10 +2631,91 @@ function unregisterMcp(agent: string, global?: boolean): void {
   }
 }
 
-// import — GitHub issue import
-program
-  .command("import <url>")
-  .description("Import a GitHub issue as a task")
+// import — external issue and GitHub imports
+const importCmd = program
+  .command("import")
+  .description("Import external issues into tasks");
+
+importCmd
+  .command("issues <path>")
+  .description("Import GitHub, Linear, or Jira issues from a local JSON export")
+  .option("--source <source>", "Export source: github, linear, jira, or auto (default)")
+  .option("--project <id>", "Project ID")
+  .option("--list <id>", "Task list ID")
+  .option("--tag <tags...>", "Extra tags")
+  .option("--dry-run", "Preview import without creating tasks")
+  .option("--force", "Create tasks even when duplicates are detected")
+  .option("--skip-dedupe", "Skip duplicate detection")
+  .option("-j, --json", "JSON output")
+  .action((path: string, opts: {
+    source?: string;
+    project?: string;
+    list?: string;
+    tag?: string[];
+    dryRun?: boolean;
+    force?: boolean;
+    skipDedupe?: boolean;
+    json?: boolean;
+  }) => {
+    const globalOpts = program.opts();
+    try {
+      const {
+        previewIssueImport,
+        importIssues,
+        formatIssueImportPreviewText,
+        ISSUE_SOURCES,
+      } = require("../lib/issue-importers.js") as typeof import("../lib/issue-importers.js");
+      const source = opts.source && ISSUE_SOURCES.includes(opts.source as typeof ISSUE_SOURCES[number])
+        ? (opts.source as typeof ISSUE_SOURCES[number])
+        : "auto";
+      const input = {
+        file_path: path,
+        source,
+        project_id: opts.project || autoProject(globalOpts) || undefined,
+        task_list_id: opts.list,
+        tags: opts.tag,
+      };
+
+      if (opts.dryRun) {
+        const preview = previewIssueImport(input);
+        if (opts.json || globalOpts.json) {
+          console.log(JSON.stringify(preview, null, 2));
+        } else {
+          console.log(formatIssueImportPreviewText(preview));
+        }
+        return;
+      }
+
+      const result = importIssues(input, {
+        dry_run: false,
+        force: opts.force,
+        skip_dedupe: opts.skipDedupe,
+      });
+
+      if (opts.json || globalOpts.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      console.log(chalk.green(`Imported ${result.created.length} issue(s) from ${result.source} export`));
+      if (result.skipped_duplicates.length > 0) {
+        console.log(chalk.yellow(`Skipped ${result.skipped_duplicates.length} duplicate(s)`));
+      }
+      for (const task of result.created) {
+        console.log(`  ${chalk.dim(task.short_id || task.id.slice(0, 8))} ${task.title}`);
+      }
+      if (result.errors.length > 0) {
+        for (const err of result.errors) console.error(chalk.red(err));
+        process.exitCode = 1;
+      }
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
+importCmd
+  .command("github <url>")
+  .description("Import a GitHub issue as a task via gh CLI")
   .option("--project <id>", "Project ID")
   .option("--list <id>", "Task list ID")
   .action((url: string, opts: { project?: string; list?: string }) => {
@@ -4237,9 +4322,9 @@ program
     console.log(`\n  ${allOk ? chalk.green("All checks passed.") : chalk.yellow("Some checks need attention.")}`);
   });
 
-// report
+// analytics — task activity and completion rates (formerly top-level `report`)
 program
-  .command("report")
+  .command("analytics")
   .description("Analytics report: task activity, completion rates, agent breakdown")
   .option("--days <n>", "Days to include in report", "7")
   .option("--project <id>", "Filter to project")
@@ -4298,7 +4383,7 @@ program
       lines.push(`| Failed (${days}d) | ${failed.length} |`);
       if (sparkline) lines.push(`| Activity | \`${sparkline}\` |`);
     } else {
-      lines.push(chalk.bold(`todos report — last ${days} day${days !== 1 ? "s" : ""}`));
+      lines.push(chalk.bold(`todos analytics — last ${days} day${days !== 1 ? "s" : ""}`));
       lines.push("");
       lines.push(`  Total:      ${chalk.bold(String(all.length))} tasks (${chalk.yellow(String(stats.by_status?.pending ?? 0))} pending, ${chalk.blue(String(stats.by_status?.in_progress ?? 0))} active)`);
       lines.push(`  Changed:    ${chalk.bold(String(changed.length))} in period`);
@@ -5536,6 +5621,104 @@ traceCmd
     console.log(JSON.stringify(info, null, 2));
   });
 
+function runBranchPlanAction(opts: {
+  branch?: string;
+  base?: string;
+  strategy?: string;
+  format?: string;
+  analyze?: boolean;
+}): void {
+  const mod = require("../lib/branch-work-plans.js") as typeof import("../lib/branch-work-plans.js");
+  const input = {
+    branch: opts.branch,
+    base_branch: opts.base,
+    prefer_strategy: opts.strategy === "merge" || opts.strategy === "rebase" ? opts.strategy : undefined,
+  };
+
+  if (opts.analyze) {
+    const analysis = mod.analyzeBranchWork(input);
+    if (opts.format === "text") {
+      console.log([
+        `Branch: ${analysis.branch.name} (${analysis.branch.sha.slice(0, 7)})`,
+        `Base: ${analysis.base_branch} (${analysis.base.sha.slice(0, 7)})`,
+        `Ahead: ${analysis.commits_ahead} | Behind: ${analysis.commits_behind} | Dirty: ${analysis.is_dirty}`,
+        `Overlapping files: ${analysis.overlapping_files.length}`,
+        `Predicted conflicts: ${analysis.has_predicted_conflicts ? "yes" : "no"}`,
+      ].join("\n"));
+    } else {
+      console.log(JSON.stringify(analysis, null, 2));
+    }
+    return;
+  }
+
+  const plan = mod.generateSafeWorkPlan(input);
+  if (opts.format === "markdown") console.log(mod.formatSafeWorkPlanMarkdown(plan));
+  else if (opts.format === "text") console.log(mod.formatSafeWorkPlanText(plan));
+  else console.log(JSON.stringify(plan, null, 2));
+}
+
+// branch-plan — safe local branch integration plans
+const branchPlanCmd = program
+  .command("branch-plan")
+  .description("Local git branch analysis and safe integration work plans for agents");
+
+branchPlanCmd
+  .command("analyze")
+  .description("Analyze branch vs base (ahead/behind, overlaps, predicted conflicts)")
+  .option("--branch <name>", "Branch to analyze (default: current)")
+  .option("--base <name>", "Base branch (default: main/master)")
+  .option("--format <format>", "json or text", "json")
+  .action((opts) => {
+    try {
+      runBranchPlanAction({ ...opts, analyze: true });
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
+branchPlanCmd
+  .command("plan")
+  .description("Generate safe step-by-step branch integration plan")
+  .option("--branch <name>", "Branch to plan for (default: current)")
+  .option("--base <name>", "Base branch (default: main/master)")
+  .option("--strategy <strategy>", "merge or rebase")
+  .option("--format <format>", "json, markdown, or text", "json")
+  .action((opts) => {
+    try {
+      runBranchPlanAction(opts);
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
+branchPlanCmd
+  .command("docs")
+  .description("Branch work plan documentation")
+  .action(() => {
+    const { getBranchWorkPlanDocs } = require("../lib/branch-work-plans.js") as typeof import("../lib/branch-work-plans.js");
+    console.log(getBranchWorkPlanDocs());
+  });
+
+// git — git utilities (alias surface)
+const gitCmd = program
+  .command("git")
+  .description("Local git utilities for agents");
+
+gitCmd
+  .command("plan")
+  .description("Alias for branch-plan plan")
+  .option("--branch <name>", "Branch to plan for (default: current)")
+  .option("--base <name>", "Base branch (default: main/master)")
+  .option("--strategy <strategy>", "merge or rebase")
+  .option("--format <format>", "json, markdown, or text", "json")
+  .action((opts) => {
+    try {
+      runBranchPlanAction(opts);
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
 // refs — local mention resolver for files, symbols, and refs
 const refsCmd = program
   .command("refs")
@@ -6321,6 +6504,59 @@ intakeCmd
     }
   });
 
+intakeCmd
+  .command("nl")
+  .description("Natural-language task intake with local parsing (preview by default)")
+  .argument("[text]", "Natural language task description")
+  .option("--text <text>", "Inline text (alternative to argument)")
+  .option("--project <id>", "Project ID")
+  .option("--tag <tags...>", "Extra tags")
+  .option("--create", "Create task instead of dry-run preview")
+  .option("--force", "Create even if duplicate detected")
+  .option("--skip-dedupe", "Skip duplicate detection")
+  .option("-j, --json", "JSON output")
+  .action((textArg, opts) => {
+    const globalOpts = program.opts();
+    const text = opts.text ?? textArg;
+    if (!text) {
+      console.error(chalk.red("Provide natural language text as an argument or --text"));
+      process.exit(2);
+    }
+    try {
+      const { previewNlIntake, createNlIntake, formatNlIntakePreviewText } = require("../lib/nl-intake.js") as typeof import("../lib/nl-intake.js");
+      const input = {
+        text,
+        project_id: opts.project || autoProject(globalOpts) || undefined,
+        tags: opts.tag,
+      };
+      if (opts.create) {
+        const result = createNlIntake(input, {
+          force: opts.force,
+          skip_dedupe: opts.skipDedupe,
+        });
+        if (opts.json || globalOpts.json) {
+          console.log(JSON.stringify(result, null, 2));
+        } else if (result.skipped_duplicate && result.task) {
+          console.log(chalk.yellow(`  Duplicate skipped → ${result.task.short_id || result.task.id.slice(0, 8)} ${result.task.title}`));
+        } else if (result.task) {
+          console.log(chalk.green(`  ✓ Created: ${result.task.short_id || result.task.id.slice(0, 8)} ${result.task.title}`));
+        } else {
+          console.log(chalk.dim("  Dry-run preview (no task created)"));
+          console.log(formatNlIntakePreviewText({ ...result, dry_run: true, intake: result.intake }));
+        }
+      } else {
+        const preview = previewNlIntake(input);
+        if (opts.json || globalOpts.json) {
+          console.log(JSON.stringify(preview, null, 2));
+        } else {
+          console.log(formatNlIntakePreviewText(preview));
+        }
+      }
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
 // package — public package release and supply-chain checks
 const packageCmd = program
   .command("package")
@@ -6353,6 +6589,95 @@ packageCmd
   .action(() => {
     const { getReleaseWorkflowDocs } = require("../lib/release-checks.js") as typeof import("../lib/release-checks.js");
     console.log(getReleaseWorkflowDocs());
+  });
+
+// release-notes — changelog generation from git commits and completed tasks
+const releaseNotesCmd = program
+  .command("release-notes")
+  .description("Generate release notes and changelog from git commits and completed tasks");
+
+releaseNotesCmd
+  .command("generate")
+  .description("Build release notes for a version")
+  .option("--version <v>", "Release version (default: package.json)")
+  .option("--since <ref>", "Since tag, SHA, or ISO date (default: latest tag)")
+  .option("--until <ref>", "Until git ref")
+  .option("--project <id>", "Filter tasks by project")
+  .option("--format <format>", "markdown or json", "markdown")
+  .option("--write-changelog", "Prepend section to CHANGELOG.md")
+  .option("--changelog <path>", "Changelog file path", "CHANGELOG.md")
+  .option("--no-commits", "Skip git commits")
+  .option("--no-tasks", "Skip completed tasks")
+  .option("--cwd <path>", "Git working directory")
+  .option("-j, --json", "JSON output")
+  .action((opts) => {
+    const globalOpts = program.opts();
+    try {
+      const mod = require("../lib/release-notes.js") as typeof import("../lib/release-notes.js");
+      const report = mod.buildReleaseNotes({
+        version: opts.version,
+        since: opts.since,
+        until: opts.until,
+        project_id: opts.project ? resolvePartialId(getDatabase(), "projects", opts.project) ?? undefined : undefined,
+        cwd: opts.cwd,
+        include_commits: !opts.noCommits,
+        include_tasks: !opts.noTasks,
+      });
+
+      if (opts.writeChangelog) {
+        mod.updateChangelog({ path: opts.changelog, report });
+      }
+
+      if (opts.format === "json" || opts.json || globalOpts.json) {
+        console.log(JSON.stringify(report, null, 2));
+      } else {
+        console.log(mod.formatReleaseNotesMarkdown(report));
+        if (opts.writeChangelog) {
+          console.log(chalk.green(`\nUpdated ${opts.changelog}`));
+        }
+      }
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
+releaseNotesCmd
+  .command("preview")
+  .description("Preview release notes without writing CHANGELOG.md")
+  .option("--version <v>", "Release version")
+  .option("--since <ref>", "Since tag, SHA, or ISO date")
+  .option("--until <ref>", "Until git ref")
+  .option("--project <id>", "Filter tasks by project")
+  .option("--no-commits", "Skip git commits")
+  .option("--no-tasks", "Skip completed tasks")
+  .option("--cwd <path>", "Git working directory")
+  .option("-j, --json", "JSON output")
+  .action((opts) => {
+    const globalOpts = program.opts();
+    try {
+      const mod = require("../lib/release-notes.js") as typeof import("../lib/release-notes.js");
+      const report = mod.buildReleaseNotes({
+        version: opts.version,
+        since: opts.since,
+        until: opts.until,
+        project_id: opts.project ? resolvePartialId(getDatabase(), "projects", opts.project) ?? undefined : undefined,
+        cwd: opts.cwd,
+        include_commits: !opts.noCommits,
+        include_tasks: !opts.noTasks,
+      });
+      if (opts.json || globalOpts.json) console.log(JSON.stringify(report, null, 2));
+      else console.log(mod.formatReleaseNotesMarkdown(report));
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
+releaseNotesCmd
+  .command("docs")
+  .description("Release notes generation documentation")
+  .action(() => {
+    const { getReleaseNotesDocs } = require("../lib/release-notes.js") as typeof import("../lib/release-notes.js");
+    console.log(getReleaseNotesDocs());
   });
 
 // schema — versioned JSON schemas and contract validation

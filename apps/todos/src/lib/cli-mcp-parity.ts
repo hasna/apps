@@ -58,6 +58,8 @@ export const CLI_MCP_PARITY_MANIFEST: ParityEntry[] = [
   { domain: "task", operation: "link_commit", cli: "link-commit", mcp: "link_task_to_commit" },
   { domain: "task", operation: "git_trace", cli: "trace link", mcp: "link_task_git_trace" },
   { domain: "task", operation: "traceability", cli: "trace show", mcp: "get_task_traceability" },
+  { domain: "workflow", operation: "branch_plan", cli: "branch-plan plan", mcp: "generate_branch_work_plan" },
+  { domain: "workflow", operation: "branch_analyze", cli: "branch-plan analyze", mcp: "analyze_branch_work" },
   { domain: "task", operation: "dedupe_find", cli: "dedupe find", mcp: "find_duplicate_tasks" },
   { domain: "task", operation: "dedupe_merge", cli: "dedupe merge", mcp: "merge_tasks" },
   { domain: "task", operation: "labels", cli: "labels assign", mcp: "assign_label_to_task" },
@@ -100,6 +102,8 @@ export const CLI_MCP_PARITY_MANIFEST: ParityEntry[] = [
   { domain: "import_export", operation: "import_md", cli: "md import", mcp: "import_todos_md" },
   { domain: "import_export", operation: "sync_md", cli: "md sync", mcp: "sync_todos_md" },
   { domain: "import_export", operation: "artifacts", cli: "artifact add", mcp: "add_artifact" },
+  { domain: "import_export", operation: "import_issues", cli: "import issues", mcp: "import_issues" },
+  { domain: "import_export", operation: "preview_issue_import", cli: "import issues --dry-run", mcp: "preview_issue_import" },
 
   // Security & coordination
   { domain: "security", operation: "sandbox", cli: "sandbox check", mcp: "check_sandbox_command" },

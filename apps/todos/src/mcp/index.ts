@@ -52,14 +52,17 @@ import { registerSecretRedactionTools } from "./tools/secret-redaction.js";
 import { registerAccessProfileTools } from "./tools/access-profiles.js";
 import { registerAgentAdapterDocTools } from "./tools/agent-adapter-docs.js";
 import { registerInboxIntakeTools } from "./tools/inbox-intake.js";
+import { registerNlIntakeTools } from "./tools/nl-intake.js";
 import { registerRunRecordTools } from "./tools/run-records.js";
 import { registerReleaseCheckTools } from "./tools/release-checks.js";
+import { registerReleaseNotesTools } from "./tools/release-notes.js";
 import { registerDbBackupTools } from "./tools/db-backup.js";
 import { registerJsonSchemaTools } from "./tools/json-schemas.js";
 import { registerActivityAuditTools } from "./tools/activity-audit.js";
 import { registerTaskSchedulingTools } from "./tools/task-scheduling.js";
 import { registerSavedViewTools } from "./tools/saved-views.js";
 import { registerImportExportBridgeTools } from "./tools/import-export-bridge.js";
+import { registerIssueImporterTools } from "./tools/issue-importers.js";
 import { registerDependencyGraphTools } from "./tools/dependency-graph.js";
 import { registerPlanExecutionTools } from "./tools/plan-execution.js";
 import { registerHandoffPacketTools } from "./tools/handoff-packets.js";
@@ -77,6 +80,7 @@ import { registerNotificationReminderTools } from "./tools/notification-reminder
 import { registerTerminalNotificationTools } from "./tools/terminal-notifications.js";
 import { registerDecisionRecordTools } from "./tools/decision-records.js";
 import { registerMentionResolverTools } from "./tools/mention-resolver.js";
+import { registerBranchWorkPlanTools } from "./tools/branch-work-plans.js";
 import { resolveAccessProfile, shouldRegisterToolForProfile } from "../lib/access-profiles.js";
 
 function getMcpVersion(): string {
@@ -280,14 +284,17 @@ registerSecretRedactionTools(server, { shouldRegisterTool, formatError });
 registerAccessProfileTools(server, { shouldRegisterTool, formatError });
 registerAgentAdapterDocTools(server, { shouldRegisterTool, formatError });
 registerInboxIntakeTools(server, { shouldRegisterTool, resolveId, formatError });
+registerNlIntakeTools(server, { shouldRegisterTool, resolveId, formatError });
 registerRunRecordTools(server, { shouldRegisterTool, resolveId, formatError });
 registerReleaseCheckTools(server, { shouldRegisterTool, formatError });
+registerReleaseNotesTools(server, { shouldRegisterTool, resolveId, formatError });
 registerDbBackupTools(server, { shouldRegisterTool, formatError });
 registerJsonSchemaTools(server, { shouldRegisterTool, formatError });
 registerActivityAuditTools(server, { shouldRegisterTool, resolveId, formatError });
 registerTaskSchedulingTools(server, { shouldRegisterTool, resolveId, formatError });
 registerSavedViewTools(server, { shouldRegisterTool, resolveId, formatError });
 registerImportExportBridgeTools(server, { shouldRegisterTool, resolveId, formatError });
+registerIssueImporterTools(server, { shouldRegisterTool, resolveId, formatError });
 registerDependencyGraphTools(server, { shouldRegisterTool, resolveId, formatError });
 registerPlanExecutionTools(server, { shouldRegisterTool, resolveId, formatError });
 registerHandoffPacketTools(server, { shouldRegisterTool, resolveId, formatError });
@@ -305,6 +312,7 @@ registerNotificationReminderTools(server, { shouldRegisterTool, resolveId, forma
 registerTerminalNotificationTools(server, { shouldRegisterTool, resolveId, formatError });
 registerDecisionRecordTools(server, { shouldRegisterTool, resolveId, formatError });
 registerMentionResolverTools(server, { shouldRegisterTool, resolveId, formatError });
+registerBranchWorkPlanTools(server, { shouldRegisterTool, formatError });
 
 // === DISPATCH ===
 

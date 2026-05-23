@@ -154,7 +154,7 @@ export function listTopLevelCommands(): string[] {
     "count", "inspect", "update", "lock", "unlock", "delete", "bulk", "templates",
     "comment", "sync", "config", "stream", "recap", "standup", "analytics",
     "views", "reminders", "bridge", "activity", "crypto", "policy", "runs", "trace", "refs", "labels",
-    "intake", "package", "schema", "bootstrap", "context", "release", "hook", "hooks", "decisions",
+    "intake", "package", "schema", "bootstrap", "context", "release", "release-notes", "hook", "hooks", "decisions", "branch-plan", "git",
   ]) {
     names.add(extra);
   }
@@ -175,6 +175,7 @@ export const NESTED_SUBCOMMANDS: Record<string, string[]> = {
   scaffolds: ["list", "create", "preview", "apply", "export", "docs"],
   report: ["export", "docs"],
   env: ["capture", "list", "get", "check"],
+  intake: ["preview", "create", "nl"],
   decisions: ["create", "list", "show", "update", "status", "supersede", "export", "snapshot"],
   views: ["search", "save", "list", "run"],
   reminders: ["list", "scan", "check", "create", "dismiss", "snooze", "summary", "prefs", "docs"],
@@ -186,6 +187,10 @@ export const NESTED_SUBCOMMANDS: Record<string, string[]> = {
   md: ["import", "export", "sync"],
   runs: ["record", "list", "show"],
   refs: ["parse", "resolve", "scan", "inspect", "docs"],
+  "release-notes": ["generate", "preview", "docs"],
+  "branch-plan": ["analyze", "plan", "docs"],
+  git: ["plan"],
+  trace: ["link", "show", "inspect"],
   activity: ["list", "export"],
   schema: ["list", "validate", "compat"],
 };

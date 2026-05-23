@@ -567,6 +567,46 @@ export {
 } from "./lib/inbox-intake.js";
 export type { IntakeSourceType, IntakeTriageStatus, IntakeInput, IntakePreview, IntakeResult, IntakeOptions } from "./lib/inbox-intake.js";
 
+// Natural-language intake
+export {
+  NL_INTAKE_SCHEMA,
+  parseNaturalLanguageTask,
+  previewNlIntake,
+  createNlIntake,
+  formatNlIntakePreviewText,
+} from "./lib/nl-intake.js";
+export type {
+  ParsedNlFields,
+  NlIntakeExplain,
+  NlIntakeInput,
+  NlIntakePreview,
+  NlIntakeResult,
+  ParseNaturalLanguageOptions,
+} from "./lib/nl-intake.js";
+
+// External issue importers
+export {
+  ISSUE_IMPORT_SCHEMA,
+  ISSUE_SOURCES,
+  detectIssueExportSource,
+  parseIssueExport,
+  loadIssueExportFromFile,
+  previewIssueImport,
+  importIssues,
+  formatIssueImportPreviewText,
+  getIssueImportDocs,
+} from "./lib/issue-importers.js";
+export type {
+  IssueSource,
+  ResolvedIssueSource,
+  NormalizedExternalIssue,
+  IssueImportInput,
+  IssueImportPreviewItem,
+  IssueImportPreview,
+  IssueImportOptions,
+  IssueImportResult,
+} from "./lib/issue-importers.js";
+
 // Run records
 export {
   RUN_RECORD_SCHEMA,
@@ -607,6 +647,31 @@ export {
   getReleaseWorkflowDocs,
 } from "./lib/release-checks.js";
 export type { ReleaseCheckSeverity, ReleaseCheckItem, ReleaseCheckReport, ReleaseCheckOptions } from "./lib/release-checks.js";
+
+// Release notes
+export {
+  RELEASE_NOTES_SCHEMA,
+  CHANGELOG_CATEGORIES,
+  parseConventionalCommit,
+  mapCommitTypeToCategory,
+  getLatestGitTag,
+  resolveSinceRef,
+  getGitLogSince,
+  getCompletedTasksForRelease,
+  buildReleaseNotes,
+  formatReleaseNotesMarkdown,
+  formatChangelogSection,
+  updateChangelog,
+  getReleaseNotesDocs,
+} from "./lib/release-notes.js";
+export type {
+  ChangelogCategory,
+  GitCommitEntry,
+  TaskReleaseEntry,
+  ReleaseNotesReport,
+  BuildReleaseNotesInput,
+  UpdateChangelogInput,
+} from "./lib/release-notes.js";
 
 // Database backup
 export {
@@ -1045,6 +1110,27 @@ export type {
   ApplyFailureTriageInput,
   ApplyFailureTriageResult,
 } from "./lib/failure-triage.js";
+
+// Branch work plans
+export {
+  BRANCH_WORK_PLAN_SCHEMA,
+  analyzeBranchWork,
+  generateSafeWorkPlan,
+  resolveDefaultBaseBranch,
+  formatSafeWorkPlanMarkdown,
+  formatSafeWorkPlanText,
+  getBranchWorkPlanDocs,
+} from "./lib/branch-work-plans.js";
+export type {
+  WorkPlanRisk,
+  WorkPlanStrategy,
+  BranchWorkPlanInput,
+  BranchRefInfo,
+  BranchConflictFile,
+  BranchWorkAnalysis,
+  WorkPlanStep,
+  SafeWorkPlan,
+} from "./lib/branch-work-plans.js";
 
 // User scaffolds
 export {

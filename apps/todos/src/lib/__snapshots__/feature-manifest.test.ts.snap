@@ -4,7 +4,7 @@ exports[`feature manifest normalizes manifest for deterministic snapshots 1`] = 
 {
   "active_profile": "standard",
   "cli": {
-    "command_count": 128,
+    "command_count": 162,
     "group_names": [
       "tasks",
       "agents",
@@ -17,17 +17,23 @@ exports[`feature manifest normalizes manifest for deterministic snapshots 1`] = 
     ],
     "nested_subcommand_keys": [
       "activity",
+      "branch-plan",
       "bridge",
       "completion",
       "db",
+      "decisions",
       "deps",
       "docs",
       "env",
       "features",
+      "git",
       "goal",
       "handoff-packet",
+      "intake",
       "md",
       "plan-exec",
+      "refs",
+      "release-notes",
       "reminders",
       "report",
       "runs",
@@ -35,9 +41,11 @@ exports[`feature manifest normalizes manifest for deterministic snapshots 1`] = 
       "schedule",
       "schema",
       "shortcuts",
+      "trace",
       "triage",
       "verify",
       "views",
+      "watch",
     ],
     "top_level_commands": [
       "active",
@@ -47,6 +55,7 @@ exports[`feature manifest normalizes manifest for deterministic snapshots 1`] = 
       "artifact",
       "blocked",
       "bootstrap",
+      "branch-plan",
       "bridge",
       "bulk",
       "claim",
@@ -58,11 +67,13 @@ exports[`feature manifest normalizes manifest for deterministic snapshots 1`] = 
       "crypto",
       "dashboard",
       "db",
+      "decisions",
       "delete",
       "deps",
       "docs",
       "done",
       "fail",
+      "git",
       "goal",
       "handoff-packet",
       "hook",
@@ -83,7 +94,9 @@ exports[`feature manifest normalizes manifest for deterministic snapshots 1`] = 
       "projects",
       "ready",
       "recap",
+      "refs",
       "release",
+      "release-notes",
       "reminders",
       "runs",
       "schedule",
@@ -103,6 +116,7 @@ exports[`feature manifest normalizes manifest for deterministic snapshots 1`] = 
       "update",
       "verify",
       "views",
+      "watch",
     ],
   },
   "env_vars": [
@@ -129,18 +143,18 @@ exports[`feature manifest normalizes manifest for deterministic snapshots 1`] = 
       "agent_runs": 2,
       "agents": 5,
       "cloud": 7,
-      "coordination": 15,
-      "graph": 8,
-      "import_export": 26,
+      "coordination": 17,
+      "graph": 10,
+      "import_export": 29,
       "meta": 20,
-      "ops": 6,
+      "ops": 8,
       "projects": 1,
       "security": 7,
-      "tasks": 151,
-      "workflow": 52,
+      "tasks": 162,
+      "workflow": 57,
     },
-    "tools_for_profile_count": 276,
-    "total_tools": 300,
+    "tools_for_profile_count": 301,
+    "total_tools": 325,
   },
   "profiles": [
     "read_only",
@@ -152,10 +166,10 @@ exports[`feature manifest normalizes manifest for deterministic snapshots 1`] = 
   ],
   "schema_version": "todos.feature_manifest.v1",
   "summary": {
-    "cli_command_count": 128,
+    "cli_command_count": 162,
     "env_var_count": 7,
     "feature_area_count": 6,
-    "mcp_tool_count": 300,
+    "mcp_tool_count": 325,
     "profile_count": 6,
   },
 }
@@ -169,8 +183,8 @@ Active profile: minimal — Low-token MCP session bootstrap and task workflow
 
 Summary:
   Feature areas: 6
-  CLI commands:  128
-  MCP tools:     300 (8 in active profile)
+  CLI commands:  162
+  MCP tools:     325 (8 in active profile)
   Profiles:      6
   Env vars:      7
 
@@ -184,17 +198,17 @@ Feature areas:
 
 MCP tool groups:
   - Meta: 20 tools
-  - Tasks: 151 tools
+  - Tasks: 162 tools
   - Projects and plans: 1 tools
   - Agents: 5 tools
   - Agent runs: 2 tools
-  - Coordination: 15 tools
-  - Graph and dependencies: 8 tools
-  - Import and export: 26 tools
-  - Operations: 6 tools
+  - Coordination: 17 tools
+  - Graph and dependencies: 10 tools
+  - Import and export: 29 tools
+  - Operations: 8 tools
   - Security: 7 tools
   - Cloud bridge: 7 tools
-  - Workflow utilities: 52 tools
+  - Workflow utilities: 57 tools
 
 Profiles:
   - read_only: Read tasks, projects, search — no mutations

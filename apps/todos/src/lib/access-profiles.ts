@@ -74,6 +74,8 @@ export const READ_ONLY_TOOLS = new Set([
   "find_duplicate_tasks", "describe_tools", "search_tools", "inspect_git_commit",
   "scan_text_for_secrets", "check_workspace_permission", "check_sandbox_command",
   "parse_mentions", "resolve_mention", "resolve_mentions_in_text",
+  "generate_release_notes", "format_release_notes_markdown",
+  "analyze_branch_work", "generate_branch_work_plan", "get_branch_work_plan_docs",
 ]);
 
 export const MINIMAL_TOOLS = new Set([
