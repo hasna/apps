@@ -3932,6 +3932,123 @@ program
     console.log(chalk.dim(`\n  ${inProgress.length} active · ${pending.length} pending · ${blocked.length} blocked · ${overdue.length} overdue`));
   });
 
+// artifacts — local attachment and evidence store
+const artifactsCmd = program
+  .command("artifacts")
+  .description("Manage local attachments and evidence artifacts (local-only, never auto-uploads)");
+
+artifactsCmd
+  .command("add")
+  .description("Attach a local file as an artifact")
+  .requiredOption("--entity-type <type>", "Entity type: task, project, plan, run, verification, handoff")
+  .requiredOption("--entity-id <id>", "Entity ID")
+  .requiredOption("--file <path>", "Local file path")
+  .option("--name <name>", "Artifact display name")
+  .option("--mode <mode>", "Storage mode: copy (default) or reference")
+  .option("--redaction <status>", "Redaction status: none, partial, full", "none")
+  .action((opts) => {
+    const globalOpts = program.opts();
+    try {
+      const { addArtifact } = require("../db/artifacts.js") as typeof import("../db/artifacts.js");
+      const artifact = addArtifact({
+        entity_type: opts.entityType,
+        entity_id: opts.entityId,
+        source_path: opts.file,
+        name: opts.name,
+        storage_mode: opts.mode || "copy",
+        redaction_status: opts.redaction,
+      });
+      if (globalOpts.json) {
+        console.log(JSON.stringify(artifact, null, 2));
+        return;
+      }
+      console.log(chalk.green(`  ✓ Artifact ${artifact.id.slice(0, 8)} — ${artifact.name} (${artifact.storage_mode}, ${artifact.size_bytes} bytes)`));
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
+artifactsCmd
+  .command("list")
+  .description("List artifacts")
+  .option("--entity-type <type>", "Filter by entity type")
+  .option("--entity-id <id>", "Filter by entity ID")
+  .option("--limit <n>", "Max results", "50")
+  .action((opts) => {
+    const globalOpts = program.opts();
+    try {
+      const { listArtifacts } = require("../db/artifacts.js") as typeof import("../db/artifacts.js");
+      const artifacts = listArtifacts({
+        entity_type: opts.entityType,
+        entity_id: opts.entityId,
+        limit: parseInt(opts.limit, 10),
+      });
+      if (globalOpts.json) {
+        console.log(JSON.stringify(artifacts, null, 2));
+        return;
+      }
+      if (artifacts.length === 0) {
+        console.log(chalk.dim("  No artifacts found."));
+        return;
+      }
+      for (const a of artifacts) {
+        console.log(`  ${chalk.cyan(a.id.slice(0, 8))} ${a.entity_type}:${a.entity_id.slice(0, 8)} ${a.name} ${chalk.dim(`(${a.storage_mode}, ${a.size_bytes}b, ${a.redaction_status})`)}`);
+      }
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
+artifactsCmd
+  .command("export")
+  .description("Export artifacts manifest JSON (local bridge format, does not upload)")
+  .option("--entity-type <type>", "Filter by entity type")
+  .option("--entity-id <id>", "Filter by entity ID")
+  .option("-o, --output <file>", "Write manifest to file instead of stdout")
+  .action((opts) => {
+    const globalOpts = program.opts();
+    try {
+      const { exportArtifacts } = require("../db/artifacts.js") as typeof import("../db/artifacts.js");
+      const { writeArtifactExportManifest } = require("../lib/artifact-store.js") as typeof import("../lib/artifact-store.js");
+      const manifest = exportArtifacts({ entity_type: opts.entityType, entity_id: opts.entityId });
+      if (opts.output) {
+        writeArtifactExportManifest(manifest, opts.output);
+        console.log(chalk.green(`  ✓ Exported ${manifest.artifacts.length} artifact(s) to ${opts.output}`));
+        return;
+      }
+      console.log(JSON.stringify(manifest, null, 2));
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
+artifactsCmd
+  .command("delete <id>")
+  .description("Soft-delete an artifact")
+  .action((id) => {
+    try {
+      const { softDeleteArtifact } = require("../db/artifacts.js") as typeof import("../db/artifacts.js");
+      const deleted = softDeleteArtifact(id);
+      console.log(deleted ? chalk.green("  ✓ Artifact soft-deleted") : chalk.red("  Artifact not found"));
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
+artifactsCmd
+  .command("cleanup")
+  .description("Purge expired soft-deleted artifacts from local store")
+  .option("--days <n>", "Retention days for soft-deleted artifacts", "30")
+  .action((opts) => {
+    try {
+      const { cleanupArtifacts } = require("../db/artifacts.js") as typeof import("../db/artifacts.js");
+      const purged = cleanupArtifacts({ deleted_retention_days: parseInt(opts.days, 10) });
+      console.log(chalk.green(`  ✓ Purged ${purged} expired artifact(s)`));
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
 // handoff
 program
   .command("handoff")

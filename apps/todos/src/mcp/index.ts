@@ -4,6 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { registerCloudSyncTools } from "./tools/cloud.js";
 import { getAgent, getAgentByName } from "../db/agents.js";
 import { getDatabase, resolvePartialId } from "../db/database.js";
+import { logError, logWarn } from "../lib/logger.js";
 import {
   VersionConflictError,
   TaskNotFoundError,
@@ -30,6 +31,7 @@ import { registerTaskMetaTools } from "./tools/task-meta-tools.js";
 import { registerTaskResources } from "./tools/task-resources.js";
 import { registerTaskRelTools } from "./tools/task-rel-tools.js";
 import { registerCodeTools } from "./tools/code-tools.js";
+import { registerArtifactTools } from "./tools/artifacts.js";
 
 function getMcpVersion(): string {
   try {
@@ -155,6 +157,7 @@ function formatError(error: unknown): string {
     }
     // Sanitize: never expose raw database error messages (may contain schema info)
     console.error("[mcp] Unhandled error:", msg);
+    logError(`[mcp] Unhandled error: ${msg}`, { service: "mcp" }).catch(() => {});
     return JSON.stringify({ code: "UNKNOWN_ERROR", message: "An unexpected error occurred. Check server logs for details." });
   }
   return JSON.stringify({ code: "UNKNOWN_ERROR", message: "An unexpected error occurred." });
@@ -226,6 +229,7 @@ registerTaskMetaTools(server, toolContext);
 registerTaskResources(server, toolContext);
 registerTaskRelTools(server, toolContext);
 registerCodeTools(server, toolContext);
+registerArtifactTools(server, { shouldRegisterTool, resolveId, formatError });
 
 // === DISPATCH ===
 
@@ -242,7 +246,11 @@ async function main() {
   await server.connect(transport);
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error("MCP server error:", err);
+  await logError(`MCP server startup failed: ${err instanceof Error ? err.message : String(err)}`, {
+    service: "mcp",
+    stack: err instanceof Error ? err.stack : undefined,
+  }).catch(() => {});
   process.exit(1);
 });

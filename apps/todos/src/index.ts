@@ -150,6 +150,39 @@ export {
 export { createWebhook, getWebhook, listWebhooks, deleteWebhook, dispatchWebhook, listDeliveries } from "./db/webhooks.js";
 export type { WebhookDelivery } from "./db/webhooks.js";
 
+// Artifacts (local-only attachment store)
+export {
+  addArtifact,
+  getArtifact,
+  listArtifacts,
+  softDeleteArtifact,
+  purgeArtifact,
+  cleanupArtifacts,
+  exportArtifacts,
+  importArtifactFromManifestEntry,
+  updateArtifactRedaction,
+  ARTIFACT_ENTITY_TYPES,
+  ARTIFACT_STORAGE_MODES,
+  ARTIFACT_REDACTION_STATUSES,
+} from "./db/artifacts.js";
+export type {
+  Artifact,
+  ArtifactEntityType,
+  ArtifactStorageMode,
+  ArtifactRedactionStatus,
+  AddArtifactInput,
+  ListArtifactsFilter,
+  ImportArtifactInput,
+} from "./db/artifacts.js";
+export {
+  getArtifactStoreRoot,
+  computeContentHash,
+  buildArtifactExportManifest,
+  writeArtifactExportManifest,
+  isArtifactExpired,
+} from "./lib/artifact-store.js";
+export type { ArtifactExportEntry, ArtifactExportManifest, CleanupPolicy, StoredArtifactFile } from "./lib/artifact-store.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";

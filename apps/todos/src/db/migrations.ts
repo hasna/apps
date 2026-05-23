@@ -817,4 +817,28 @@ export const MIGRATIONS = [
   ALTER TABLE tasks ADD COLUMN total_steps INTEGER;
   INSERT OR IGNORE INTO _migrations (id) VALUES (48);
   `,
+  // Migration 49: Local artifact store — attachments and evidence for tasks, projects, plans, runs, handoffs
+  `
+  CREATE TABLE IF NOT EXISTS artifacts (
+    id TEXT PRIMARY KEY,
+    entity_type TEXT NOT NULL CHECK(entity_type IN ('task', 'project', 'plan', 'run', 'verification', 'handoff')),
+    entity_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    storage_mode TEXT NOT NULL CHECK(storage_mode IN ('reference', 'copy')),
+    source_path TEXT,
+    local_path TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    mime_type TEXT,
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    redaction_status TEXT NOT NULL DEFAULT 'none' CHECK(redaction_status IN ('none', 'partial', 'full')),
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    deleted_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_artifacts_entity ON artifacts(entity_type, entity_id);
+  CREATE INDEX IF NOT EXISTS idx_artifacts_hash ON artifacts(content_hash);
+  CREATE INDEX IF NOT EXISTS idx_artifacts_deleted ON artifacts(deleted_at);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (49);
+  `,
 ];
