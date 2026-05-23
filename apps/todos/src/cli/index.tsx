@@ -4296,6 +4296,41 @@ cryptoCmd
     console.log(JSON.stringify(result.data, null, 2));
   });
 
+// context — agent context packs
+program
+  .command("context-pack")
+  .description("Generate local agent context pack (Markdown/JSON)")
+  .option("--task <id>", "Task ID")
+  .option("--project <id>", "Project ID")
+  .option("--plan <id>", "Plan ID")
+  .option("--format <fmt>", "json, markdown, or both", "both")
+  .option("--no-redact", "Disable sensitive field redaction")
+  .action((opts) => {
+    const globalOpts = program.opts();
+    try {
+      const { buildContextPack, formatContextPackJson, formatContextPackMarkdown } = require("../lib/context-packs.js") as typeof import("../lib/context-packs.js");
+      const pack = buildContextPack({
+        task_id: opts.task,
+        project_id: opts.project || autoProject(globalOpts) || undefined,
+        plan_id: opts.plan,
+        redact: opts.redact !== false,
+      });
+      if (opts.format === "json" || globalOpts.json) {
+        console.log(formatContextPackJson(pack));
+        return;
+      }
+      if (opts.format === "markdown") {
+        console.log(formatContextPackMarkdown(pack));
+        return;
+      }
+      console.log(formatContextPackMarkdown(pack));
+      console.log("\n---\n");
+      console.log(formatContextPackJson(pack));
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
 // handoff
 program
   .command("handoff")

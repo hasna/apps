@@ -35,6 +35,7 @@ import { registerArtifactTools } from "./tools/artifacts.js";
 import { registerGoalTools } from "./tools/goal.js";
 import { registerVerificationTools } from "./tools/verification.js";
 import { registerCryptoTools } from "./tools/crypto.js";
+import { registerContextPackTools } from "./tools/context-packs.js";
 
 function getMcpVersion(): string {
   try {
@@ -236,6 +237,7 @@ registerArtifactTools(server, { shouldRegisterTool, resolveId, formatError });
 registerGoalTools(server, { shouldRegisterTool, resolveId, formatError });
 registerVerificationTools(server, { shouldRegisterTool, resolveId, formatError });
 registerCryptoTools(server, { shouldRegisterTool, formatError });
+registerContextPackTools(server, { shouldRegisterTool, resolveId, formatError });
 
 // === DISPATCH ===
 

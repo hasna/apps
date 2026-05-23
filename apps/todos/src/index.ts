@@ -257,6 +257,15 @@ export {
 } from "./lib/local-encryption.js";
 export type { EncryptedPayload, ExportProfile, ExportBundleOptions } from "./lib/local-encryption.js";
 
+// Context packs
+export {
+  buildContextPack,
+  formatContextPackMarkdown,
+  formatContextPackJson,
+  CONTEXT_PACK_VERSION,
+} from "./lib/context-packs.js";
+export type { ContextPack, ContextPackInput } from "./lib/context-packs.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";
