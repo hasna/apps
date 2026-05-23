@@ -72,6 +72,8 @@ export {
   logCost,
 } from "./task-relations.js";
 
+export { notifyUpcomingDeadlines } from "../lib/notification-reminders.js";
+
 export type { BulkCreateTaskInput, LogTimeInput } from "./task-relations.ts";
 
 // Re-export types that were previously exported from this file

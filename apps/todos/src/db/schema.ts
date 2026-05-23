@@ -636,6 +636,39 @@ export function ensureSchema(db: Database): void {
     )`);
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_env_snapshots_run ON env_snapshots(run_record_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_env_snapshots_hash ON env_snapshots(content_hash)");
+
+  ensureTable("notification_reminders", `
+    CREATE TABLE notification_reminders (
+      id TEXT PRIMARY KEY,
+      task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+      reminder_type TEXT NOT NULL CHECK(reminder_type IN ('due_soon', 'due_overdue', 'sla_warning', 'sla_breach', 'custom')),
+      title TEXT NOT NULL,
+      message TEXT,
+      trigger_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'fired', 'dismissed', 'snoozed')),
+      snoozed_until TEXT,
+      project_id TEXT,
+      agent_id TEXT,
+      priority TEXT NOT NULL DEFAULT 'medium' CHECK(priority IN ('low', 'medium', 'high', 'critical')),
+      metadata TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      fired_at TEXT,
+      dismissed_at TEXT
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_notification_reminders_status ON notification_reminders(status)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_notification_reminders_trigger ON notification_reminders(trigger_at)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_notification_reminders_task ON notification_reminders(task_id)");
+
+  ensureTable("reminder_preferences", `
+    CREATE TABLE reminder_preferences (
+      id TEXT PRIMARY KEY,
+      due_soon_hours INTEGER NOT NULL DEFAULT 24,
+      sla_warning_minutes INTEGER NOT NULL DEFAULT 30,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      desktop_notify INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
 }
 
 export function backfillTaskTags(db: Database): void {
