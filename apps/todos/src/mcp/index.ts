@@ -32,6 +32,7 @@ import { registerTaskResources } from "./tools/task-resources.js";
 import { registerTaskRelTools } from "./tools/task-rel-tools.js";
 import { registerCodeTools } from "./tools/code-tools.js";
 import { registerArtifactTools } from "./tools/artifacts.js";
+import { registerGoalTools } from "./tools/goal.js";
 
 function getMcpVersion(): string {
   try {
@@ -230,6 +231,7 @@ registerTaskResources(server, toolContext);
 registerTaskRelTools(server, toolContext);
 registerCodeTools(server, toolContext);
 registerArtifactTools(server, { shouldRegisterTool, resolveId, formatError });
+registerGoalTools(server, { shouldRegisterTool, resolveId, formatError });
 
 // === DISPATCH ===
 

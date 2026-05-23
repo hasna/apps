@@ -4049,6 +4049,120 @@ artifactsCmd
     }
   });
 
+// goal — /goal-style workflow for agents
+const goalCmd = program
+  .command("goal")
+  .description("/goal-style workflow: plan creation, step claiming, progress, handoffs");
+
+goalCmd
+  .command("create <goal>")
+  .description("Create a goal plan and decompose into step tasks")
+  .option("--project <id>", "Project ID")
+  .option("--agent <name>", "Agent ID")
+  .option("--step <titles...>", "Step titles (repeatable)")
+  .option("--no-sequential", "Do not chain step dependencies")
+  .action((goal, opts) => {
+    const globalOpts = program.opts();
+    try {
+      const { createGoalWorkflow } = require("../lib/goal-workflow.js") as typeof import("../lib/goal-workflow.js");
+      const steps = (opts.step as string[] | undefined)?.map((title: string) => ({ title }));
+      const manifest = createGoalWorkflow({
+        goal,
+        project_id: opts.project || autoProject(globalOpts) || undefined,
+        agent_id: opts.agent || globalOpts.agent,
+        steps,
+        sequential: opts.sequential !== false,
+      });
+      if (globalOpts.json) {
+        console.log(JSON.stringify(manifest, null, 2));
+        return;
+      }
+      console.log(chalk.green(`  ✓ Goal plan created: ${manifest.plan_name} (${manifest.step_task_ids.length} steps)`));
+      console.log(chalk.dim(`    Plan: ${manifest.plan_id.slice(0, 8)}  Root: ${manifest.root_task_id.slice(0, 8)}`));
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
+goalCmd
+  .command("execute <plan>")
+  .description("Claim next ready goal step (/goal execute)")
+  .requiredOption("--agent <name>", "Agent claiming the step")
+  .action((plan, opts) => {
+    const globalOpts = program.opts();
+    try {
+      const { claimGoalStep } = require("../lib/goal-workflow.js") as typeof import("../lib/goal-workflow.js");
+      const task = claimGoalStep(plan, opts.agent);
+      if (!task) {
+        console.log(chalk.yellow("  No claimable goal step found."));
+        process.exitCode = 1;
+        return;
+      }
+      if (globalOpts.json) {
+        console.log(JSON.stringify(task, null, 2));
+        return;
+      }
+      console.log(chalk.green(`  ✓ Claimed: ${task.short_id || task.id.slice(0, 8)} ${task.title}`));
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
+goalCmd
+  .command("status <plan>")
+  .description("Show goal plan progress")
+  .action((plan) => {
+    const globalOpts = program.opts();
+    try {
+      const { getGoalProgress } = require("../lib/goal-workflow.js") as typeof import("../lib/goal-workflow.js");
+      const progress = getGoalProgress(plan);
+      if (!progress) {
+        console.error(chalk.red("  Plan not found"));
+        process.exit(1);
+        return;
+      }
+      if (globalOpts.json) {
+        console.log(JSON.stringify(progress, null, 2));
+        return;
+      }
+      console.log(chalk.bold(`  Goal: ${progress.goal}`));
+      console.log(`  ${progress.completed}/${progress.total_steps} done · ${progress.in_progress} active · ${progress.pending} pending`);
+      if (progress.current_step) {
+        console.log(chalk.cyan(`  Current: ${progress.current_step.short_id || progress.current_step.id.slice(0, 8)} ${progress.current_step.title}`));
+      }
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
+goalCmd
+  .command("handoff <plan>")
+  .description("Produce goal handoff packet")
+  .option("--format <fmt>", "json or markdown", "json")
+  .option("--agent <name>", "Agent producing handoff")
+  .action((plan, opts) => {
+    try {
+      const { formatGoalHandoff } = require("../lib/goal-workflow.js") as typeof import("../lib/goal-workflow.js");
+      const output = formatGoalHandoff(plan, opts.format === "markdown" ? "markdown" : "json", opts.agent);
+      if (!output) {
+        console.error(chalk.red("  Plan not found"));
+        process.exit(1);
+        return;
+      }
+      console.log(output);
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
+goalCmd
+  .command("recipes")
+  .description("Show /goal command recipes for agents")
+  .action(() => {
+    const { getGoalCommandRecipesMarkdown } = require("../lib/goal-workflow.js") as typeof import("../lib/goal-workflow.js");
+    console.log(getGoalCommandRecipesMarkdown());
+  });
+
 // handoff
 program
   .command("handoff")

@@ -195,6 +195,27 @@ export {
 } from "./lib/headless-boundaries.js";
 export type { HeadlessBoundaryManifest } from "./lib/headless-boundaries.js";
 
+// Goal workflow (/goal compatibility)
+export {
+  parseGoalCommand,
+  createGoalWorkflow,
+  getGoalProgress,
+  claimGoalStep,
+  logGoalProgress,
+  formatGoalHandoff,
+  resolvePlanId,
+  getGoalCommandRecipesMarkdown,
+  GOAL_COMMAND_RECIPES,
+  GOAL_WORKFLOW_VERSION,
+} from "./lib/goal-workflow.js";
+export type {
+  GoalStep,
+  GoalInput,
+  GoalManifest,
+  GoalProgress,
+  ParsedGoalCommand,
+} from "./lib/goal-workflow.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";
