@@ -266,6 +266,20 @@ export {
 } from "./lib/context-packs.js";
 export type { ContextPack, ContextPackInput } from "./lib/context-packs.js";
 
+// Policy packs
+export {
+  loadPolicyPacks,
+  savePolicyPacks,
+  getPolicyPack,
+  validateTaskAgainstPolicyPack,
+  assertPolicyPackPassed,
+  resolveProjectPolicyPack,
+  getDefaultPolicyPacks,
+  resetPolicyPackCache,
+  POLICY_PACK_VERSION,
+} from "./lib/policy-packs.js";
+export type { PolicyPack, PolicyRule, PolicyRuleType, PolicyValidationResult } from "./lib/policy-packs.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";

@@ -4331,6 +4331,50 @@ program
     }
   });
 
+// policy — local done-gate policy packs
+const policyCmd = program
+  .command("policy")
+  .description("Local policy packs for task done gates");
+
+policyCmd
+  .command("list")
+  .description("List policy packs")
+  .action(() => {
+    const globalOpts = program.opts();
+    const { loadPolicyPacks } = require("../lib/policy-packs.js") as typeof import("../lib/policy-packs.js");
+    const packs = loadPolicyPacks();
+    if (globalOpts.json) {
+      console.log(JSON.stringify(packs, null, 2));
+      return;
+    }
+    for (const p of packs) {
+      console.log(`  ${chalk.cyan(p.name)} v${p.version} — ${p.description || ""} (${p.rules.length} rules)`);
+    }
+  });
+
+policyCmd
+  .command("validate <task-id>")
+  .description("Validate task against policy pack")
+  .option("--pack <name>", "Policy pack name", "default")
+  .option("--dry-run", "Explain only, do not block")
+  .action((taskId, opts) => {
+    const globalOpts = program.opts();
+    try {
+      const { validateTaskAgainstPolicyPack } = require("../lib/policy-packs.js") as typeof import("../lib/policy-packs.js");
+      const result = validateTaskAgainstPolicyPack(taskId, opts.pack, { dry_run: opts.dryRun });
+      if (globalOpts.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      for (const line of result.explanations) {
+        console.log(`  ${line.includes("OK") ? chalk.green(line) : chalk.yellow(line)}`);
+      }
+      if (!result.passed) process.exitCode = 1;
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
 // handoff
 program
   .command("handoff")

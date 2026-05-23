@@ -36,6 +36,7 @@ import { registerGoalTools } from "./tools/goal.js";
 import { registerVerificationTools } from "./tools/verification.js";
 import { registerCryptoTools } from "./tools/crypto.js";
 import { registerContextPackTools } from "./tools/context-packs.js";
+import { registerPolicyTools } from "./tools/policy-packs.js";
 
 function getMcpVersion(): string {
   try {
@@ -238,6 +239,7 @@ registerGoalTools(server, { shouldRegisterTool, resolveId, formatError });
 registerVerificationTools(server, { shouldRegisterTool, resolveId, formatError });
 registerCryptoTools(server, { shouldRegisterTool, formatError });
 registerContextPackTools(server, { shouldRegisterTool, resolveId, formatError });
+registerPolicyTools(server, { shouldRegisterTool, resolveId, formatError });
 
 // === DISPATCH ===
 
