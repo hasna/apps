@@ -5734,6 +5734,45 @@ planExecCmd
     console.log(JSON.stringify(exportPlanExecutionContract(planId), null, 2));
   });
 
+// handoff-packet — rich offline handoff summaries
+const handoffPacketCmd = program
+  .command("handoff-packet")
+  .description("Build/export rich agent handoff packets (offline, portable)");
+
+handoffPacketCmd
+  .command("build")
+  .description("Build handoff packet without persisting")
+  .option("--agent <name>", "Agent ID")
+  .option("--project <id>", "Project ID")
+  .option("--plan <id>", "Plan ID")
+  .option("--format <fmt>", "json|markdown", "json")
+  .action((opts) => {
+    const { buildHandoffPacket, formatHandoffPacket } = require("../lib/handoff-packets.js") as typeof import("../lib/handoff-packets.js");
+    const packet = buildHandoffPacket({ agent_id: opts.agent, project_id: opts.project, plan_id: opts.plan });
+    console.log(formatHandoffPacket(packet, opts.format));
+  });
+
+handoffPacketCmd
+  .command("create")
+  .description("Build and store handoff packet")
+  .option("--agent <name>", "Agent ID")
+  .option("--project <id>", "Project ID")
+  .option("--plan <id>", "Plan ID")
+  .action((opts) => {
+    const { createHandoffPacket } = require("../lib/handoff-packets.js") as typeof import("../lib/handoff-packets.js");
+    console.log(JSON.stringify(createHandoffPacket({ agent_id: opts.agent, project_id: opts.project, plan_id: opts.plan }), null, 2));
+  });
+
+handoffPacketCmd
+  .command("export [path]")
+  .description("Export handoff packet JSON to file or stdout")
+  .option("--agent <name>", "Agent ID")
+  .option("--project <id>", "Project ID")
+  .action((path, opts) => {
+    const { exportHandoffPacket } = require("../lib/handoff-packets.js") as typeof import("../lib/handoff-packets.js");
+    console.log(JSON.stringify(exportHandoffPacket({ agent_id: opts.agent, project_id: opts.project }, path), null, 2));
+  });
+
 // handoff
 program
   .command("handoff")
