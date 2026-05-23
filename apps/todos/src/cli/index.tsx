@@ -5375,6 +5375,70 @@ activityCmd
     }), null, 2));
   });
 
+// schedule — due dates, delayed starts, recurrence, stale detection
+const scheduleCmd = program
+  .command("schedule")
+  .description("Local task scheduling: due dates, delayed starts, stale detection");
+
+scheduleCmd
+  .command("set <taskId>")
+  .description("Set schedule on a task")
+  .option("--due <iso>", "Due date")
+  .option("--start-at <iso>", "Delayed start (scheduled_start_at)")
+  .option("--recurrence <rule>", "Recurrence rule")
+  .action((taskId, opts) => {
+    const { scheduleTask } = require("../lib/task-scheduling.js") as typeof import("../lib/task-scheduling.js");
+    const id = resolveTaskId(taskId);
+    console.log(JSON.stringify(scheduleTask(id, {
+      due_at: opts.due,
+      scheduled_start_at: opts.startAt,
+      recurrence_rule: opts.recurrence,
+    }), null, 2));
+  });
+
+scheduleCmd
+  .command("summary")
+  .description("Scheduling summary for agent loops")
+  .option("--agent <id>", "Agent ID for next-task hint")
+  .option("--project <id>", "Project filter")
+  .option("-j, --json", "JSON output")
+  .action((opts) => {
+    const { getSchedulingSummary } = require("../lib/task-scheduling.js") as typeof import("../lib/task-scheduling.js");
+    console.log(JSON.stringify(getSchedulingSummary(opts.agent, { project_id: opts.project }), null, 2));
+  });
+
+scheduleCmd
+  .command("queue")
+  .description("Agent-safe ordered pending queue")
+  .option("--agent <id>", "Agent ID")
+  .option("--project <id>", "Project filter")
+  .option("--limit <n>", "Limit", "20")
+  .action((opts) => {
+    const { getAgentSafeQueue } = require("../lib/task-scheduling.js") as typeof import("../lib/task-scheduling.js");
+    console.log(JSON.stringify(getAgentSafeQueue(opts.agent, {
+      project_id: opts.project,
+      limit: parseInt(opts.limit, 10),
+    }), null, 2));
+  });
+
+scheduleCmd
+  .command("stale-report")
+  .description("Stale in_progress task report")
+  .option("--minutes <n>", "Stale threshold", "30")
+  .option("--project <id>", "Project filter")
+  .action((opts) => {
+    const { getStaleTaskReport } = require("../lib/task-scheduling.js") as typeof import("../lib/task-scheduling.js");
+    console.log(JSON.stringify(getStaleTaskReport(parseInt(opts.minutes, 10), { project_id: opts.project }), null, 2));
+  });
+
+scheduleCmd
+  .command("docs")
+  .description("Agent scheduling loop documentation")
+  .action(() => {
+    const { getAgentLoopDocs } = require("../lib/task-scheduling.js") as typeof import("../lib/task-scheduling.js");
+    console.log(getAgentLoopDocs());
+  });
+
 // handoff
 program
   .command("handoff")

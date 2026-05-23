@@ -1036,4 +1036,10 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_activity_log_created ON activity_log(created_at);
   INSERT OR IGNORE INTO _migrations (id) VALUES (57);
   `,
+  // Migration 58: Delayed task starts for local scheduling
+  `
+  ALTER TABLE tasks ADD COLUMN scheduled_start_at TEXT;
+  CREATE INDEX IF NOT EXISTS idx_tasks_scheduled_start ON tasks(scheduled_start_at);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (58);
+  `,
 ];

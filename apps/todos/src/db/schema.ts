@@ -607,6 +607,9 @@ export function ensureSchema(db: Database): void {
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_activity_log_entity ON activity_log(entity_type, entity_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_activity_log_actor ON activity_log(actor_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_activity_log_created ON activity_log(created_at)");
+
+  ensureColumn("tasks", "scheduled_start_at", "TEXT");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_scheduled_start ON tasks(scheduled_start_at)");
 }
 
 export function backfillTaskTags(db: Database): void {
