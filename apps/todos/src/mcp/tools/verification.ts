@@ -72,4 +72,60 @@ export function registerVerificationTools(server: McpServer, { shouldRegisterToo
       },
     );
   }
+
+  if (shouldRegisterTool("create_verification_evidence")) {
+    server.tool(
+      "create_verification_evidence",
+      "Create a portable verification evidence record with commands, test results, CI links, and artifact refs.",
+      {
+        task_id: z.string().optional(),
+        run_record_id: z.string().optional(),
+        agent_id: z.string().optional(),
+        status: z.enum(["passed", "failed", "skipped", "pending"]),
+        summary: z.string(),
+        confidence: z.number().optional(),
+        commands: z.array(z.object({
+          command: z.string(),
+          exit_code: z.number().optional(),
+          duration_ms: z.number().optional(),
+        })).optional(),
+        links: z.array(z.object({
+          label: z.string(),
+          url: z.string(),
+          kind: z.enum(["ci", "deploy", "pr", "log", "other"]).optional(),
+        })).optional(),
+      },
+      async (params) => {
+        try {
+          const { createVerificationEvidence } = await import("../../lib/verification-evidence.js");
+          const taskId = params.task_id ? resolveId(params.task_id, "tasks") ?? params.task_id : undefined;
+          const record = createVerificationEvidence({ ...params, task_id: taskId });
+          return { content: [{ type: "text" as const, text: JSON.stringify(record, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("export_verification_evidence")) {
+    server.tool(
+      "export_verification_evidence",
+      "Export portable verification evidence bundle for a task or run record.",
+      {
+        task_id: z.string().optional(),
+        run_record_id: z.string().optional(),
+      },
+      async (params) => {
+        try {
+          const { exportVerificationEvidence } = await import("../../lib/verification-evidence.js");
+          const taskId = params.task_id ? resolveId(params.task_id, "tasks") ?? params.task_id : undefined;
+          const bundle = exportVerificationEvidence({ task_id: taskId, run_record_id: params.run_record_id });
+          return { content: [{ type: "text" as const, text: JSON.stringify(bundle, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
 }

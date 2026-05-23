@@ -4277,6 +4277,53 @@ verifyCmd
     }
   });
 
+verifyCmd
+  .command("create")
+  .description("Create portable verification evidence record")
+  .requiredOption("--status <status>", "passed|failed|skipped|pending")
+  .requiredOption("--summary <text>", "Evidence summary")
+  .option("--task <id>", "Task ID")
+  .option("--run <id>", "Run record ID")
+  .option("--agent <id>", "Verifier agent ID")
+  .option("--confidence <n>", "Confidence 0-1")
+  .option("--command <cmd>", "Command executed (repeatable)", collect, [])
+  .option("--link <url>", "CI/deploy link (repeatable)", collect, [])
+  .action((opts) => {
+    const globalOpts = program.opts();
+    const { createVerificationEvidence } = require("../lib/verification-evidence.js") as typeof import("../lib/verification-evidence.js");
+    const record = createVerificationEvidence({
+      task_id: opts.task,
+      run_record_id: opts.run,
+      agent_id: opts.agent,
+      status: opts.status,
+      summary: opts.summary,
+      confidence: opts.confidence ? parseFloat(opts.confidence) : undefined,
+      commands: (opts.command as string[]).map((c) => ({ command: c })),
+      links: (opts.link as string[]).map((url, i) => ({ label: `link-${i + 1}`, url, kind: "ci" as const })),
+    });
+    if (globalOpts.json) console.log(JSON.stringify(record, null, 2));
+    else console.log(`${record.id.slice(0, 8)} ${record.status} — ${record.summary}`);
+  });
+
+verifyCmd
+  .command("export [path]")
+  .description("Export verification evidence bundle JSON")
+  .option("--task <id>", "Task ID filter")
+  .option("--run <id>", "Run record ID filter")
+  .action((path, opts) => {
+    const globalOpts = program.opts();
+    const { exportVerificationEvidence, writeVerificationExport } = require("../lib/verification-evidence.js") as typeof import("../lib/verification-evidence.js");
+    const bundle = exportVerificationEvidence({ task_id: opts.task, run_record_id: opts.run });
+    if (path) {
+      writeVerificationExport(bundle, path);
+      console.log(JSON.stringify({ path, records: bundle.records.length }, null, 2));
+    } else if (globalOpts.json) {
+      console.log(JSON.stringify(bundle, null, 2));
+    } else {
+      console.log(JSON.stringify(bundle, null, 2));
+    }
+  });
+
 // crypto — local encryption and secure exports
 const cryptoCmd = program
   .command("crypto")

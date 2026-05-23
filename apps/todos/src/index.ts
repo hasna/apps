@@ -239,6 +239,25 @@ export type {
   VerificationProvidersFile,
 } from "./lib/verification-providers.js";
 
+// Portable verification evidence
+export {
+  VERIFICATION_EVIDENCE_SCHEMA,
+  createVerificationEvidence,
+  listVerificationEvidence,
+  getVerificationEvidence,
+  exportVerificationEvidence,
+  writeVerificationExport,
+  toPortableEvidence,
+} from "./lib/verification-evidence.js";
+export type {
+  PortableVerificationEvidence,
+  CreateVerificationEvidenceInput,
+  VerificationExportBundle,
+  VerificationCommandEntry,
+  VerificationTestResult,
+  VerificationLinkRef,
+} from "./lib/verification-evidence.js";
+
 // Local encryption
 export {
   encryptValue,
