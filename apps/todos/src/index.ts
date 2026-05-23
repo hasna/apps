@@ -908,6 +908,23 @@ export type {
   ImportAliasesResult,
 } from "./lib/command-aliases.js";
 
+// Failure triage
+export {
+  FAILURE_TRIAGE_SCHEMA,
+  FAILURE_CLASSES,
+  buildFailureTriageReport,
+  applyFailureTriage,
+  formatFailureTriageMarkdown,
+  getFailureTriageDocs,
+} from "./lib/failure-triage.js";
+export type {
+  FailureClass,
+  FailureTriageItem,
+  FailureTriageReport,
+  ApplyFailureTriageInput,
+  ApplyFailureTriageResult,
+} from "./lib/failure-triage.js";
+
 // Checklists
 export {
   getChecklist,

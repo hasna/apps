@@ -1316,6 +1316,57 @@ shortcutsCmd
     console.log(getCommandAliasDocs());
   });
 
+// triage — failure triage and retry playbooks
+const triageCmd = program
+  .command("triage")
+  .description("Local failure triage and retry playbooks");
+
+triageCmd
+  .command("report")
+  .description("Build failure triage report")
+  .option("--project-id <id>", "Filter by project")
+  .option("--plan-id <id>", "Filter by plan")
+  .option("--format <format>", "json or markdown", "json")
+  .action((opts) => {
+    const mod = require("../lib/failure-triage.js") as typeof import("../lib/failure-triage.js");
+    const report = mod.buildFailureTriageReport({ project_id: opts.projectId, plan_id: opts.planId });
+    if (opts.format === "markdown") console.log(mod.formatFailureTriageMarkdown(report));
+    else console.log(JSON.stringify(report, null, 2));
+  });
+
+triageCmd
+  .command("apply")
+  .description("Apply triage action to failed entity")
+  .option("--task-id <id>", "Task id")
+  .option("--run-record-id <id>", "Run record id")
+  .option("--agent-run-id <id>", "Agent run id")
+  .option("--root-cause <text>", "Root cause note")
+  .option("--action <action>", "annotate|retry|reopen|split|escalate", "annotate")
+  .option("--agent <id>", "Agent id for comments")
+  .option("--split-title <text>", "Title for split follow-up task")
+  .option("--max-retries <n>", "Max retries override")
+  .action((opts) => {
+    const { applyFailureTriage } = require("../lib/failure-triage.js") as typeof import("../lib/failure-triage.js");
+    console.log(JSON.stringify(applyFailureTriage({
+      task_id: opts.taskId,
+      run_record_id: opts.runRecordId,
+      agent_run_id: opts.agentRunId,
+      root_cause: opts.rootCause,
+      action: opts.action,
+      agent_id: opts.agent,
+      split_title: opts.splitTitle,
+      max_retries: opts.maxRetries ? parseInt(opts.maxRetries, 10) : undefined,
+    }), null, 2));
+  });
+
+triageCmd
+  .command("docs")
+  .description("Failure triage documentation")
+  .action(() => {
+    const { getFailureTriageDocs } = require("../lib/failure-triage.js") as typeof import("../lib/failure-triage.js");
+    console.log(getFailureTriageDocs());
+  });
+
 // templates
 program
   .command("templates")

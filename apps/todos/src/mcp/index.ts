@@ -69,6 +69,7 @@ import { registerMachineTopologyTools } from "./tools/machine-topology.js";
 import { registerEnvironmentSnapshotTools } from "./tools/environment-snapshots.js";
 import { registerReportExportTools } from "./tools/report-exports.js";
 import { registerCommandAliasTools } from "./tools/command-aliases.js";
+import { registerFailureTriageTools } from "./tools/failure-triage.js";
 import { resolveAccessProfile, shouldRegisterToolForProfile } from "../lib/access-profiles.js";
 
 function getMcpVersion(): string {
@@ -289,6 +290,7 @@ registerMachineTopologyTools(server, { shouldRegisterTool, formatError });
 registerEnvironmentSnapshotTools(server, { shouldRegisterTool, resolveId, formatError });
 registerReportExportTools(server, { shouldRegisterTool, resolveId, formatError });
 registerCommandAliasTools(server, { shouldRegisterTool, formatError });
+registerFailureTriageTools(server, { shouldRegisterTool, resolveId, formatError });
 
 // === DISPATCH ===
 
