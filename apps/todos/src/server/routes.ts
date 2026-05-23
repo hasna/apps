@@ -137,6 +137,11 @@ export function handleHealth(_ctx: RouteContext, json: (data: unknown, status?: 
   return json({ status: stale.length === 0 && overdue.length === 0 ? "ok" : "warn", tasks: all.length, stale: stale.length, overdue_recurring: overdue.length, timestamp: new Date().toISOString() });
 }
 
+export function handleHeadlessBoundary(_ctx: RouteContext, json: (data: unknown, status?: number) => Response): Response {
+  const { getHeadlessBoundaryManifest } = require("../lib/headless-boundaries.js") as typeof import("../lib/headless-boundaries.js");
+  return json(getHeadlessBoundaryManifest());
+}
+
 export function handleStats(_ctx: RouteContext, json: (data: unknown, status?: number) => Response): Response {
   const all = listTasks({ limit: 10000 });
   const projects = listProjects();

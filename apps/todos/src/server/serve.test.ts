@@ -735,6 +735,19 @@ describe("GET /api/tasks/:id/progress", () => {
   });
 });
 
+describe("GET /api/headless", () => {
+  it("should return headless boundary manifest", async () => {
+    const res = await api("GET", "/api/headless");
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as Record<string, unknown>;
+    expect(data.schema_version).toBe("todos.headless-boundary.v1");
+    expect(data.hosted_auth).toBe(false);
+    expect(data.hosted_mutation).toBe(false);
+    expect(data.local_api_only).toBe(true);
+    expect(data.primary_surfaces).toEqual(["cli", "mcp", "sdk"]);
+  });
+});
+
 describe("Security: path traversal prevention", () => {
   it("should not serve /etc/passwd contents via path traversal", async () => {
     // In test env, dashboard/dist doesn't exist so request falls through to API 404 ({"error":"Not found"})

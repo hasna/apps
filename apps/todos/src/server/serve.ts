@@ -262,6 +262,11 @@ export async function startServer(port: number, options?: { open?: boolean; host
         return handlers.handleHealth(ctx, json);
       }
 
+      // ── API: Headless boundary manifest (agent-native, local-only) ──
+      if (path === "/api/headless" && method === "GET") {
+        return handlers.handleHeadlessBoundary(ctx, json);
+      }
+
       // ── API: Stats ──
       if (path === "/api/stats" && method === "GET") {
         return handlers.handleStats(ctx, json);

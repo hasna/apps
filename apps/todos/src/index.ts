@@ -183,6 +183,18 @@ export {
 } from "./lib/artifact-store.js";
 export type { ArtifactExportEntry, ArtifactExportManifest, CleanupPolicy, StoredArtifactFile } from "./lib/artifact-store.js";
 
+// Headless boundaries
+export {
+  getHeadlessBoundaryManifest,
+  isAllowedLocalApiUrl,
+  assertHeadlessOutboundUrl,
+  scanSourceForForbiddenWebPatterns,
+  HEADLESS_BOUNDARY_VERSION,
+  FORBIDDEN_HOSTED_HOSTS,
+  FORBIDDEN_WEB_PATTERNS,
+} from "./lib/headless-boundaries.js";
+export type { HeadlessBoundaryManifest } from "./lib/headless-boundaries.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";
