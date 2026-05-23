@@ -66,6 +66,7 @@ export const READ_ONLY_TOOLS = new Set([
   "list_task_lists", "get_task_list", "get_task_commits", "get_task_traceability",
   "list_pending_approvals", "get_task_gate_status", "list_active_leases",
   "list_agent_runs", "list_agent_adapters", "discover_workspace", "get_bootstrap_status",
+  "get_agent_workflow_demo_docs",
   "get_cli_mcp_parity", "list_secret_patterns", "list_sandbox_profiles",
   "list_workspace_trust_profiles", "list_verification_providers", "list_verification_records",
   "get_tasks_changed_since", "get_stale_tasks", "get_active_work", "get_next_task",

@@ -945,6 +945,25 @@ export {
 } from "./lib/user-scaffolds.js";
 export type { ScaffoldKind, UserScaffold, UserScaffoldStore, ScaffoldPreview } from "./lib/user-scaffolds.js";
 
+// Agent workflow demo
+export {
+  AGENT_WORKFLOW_DEMO_SCHEMA,
+  DEMO_DEFAULT_AGENT,
+  DEMO_DEFAULT_PROJECT,
+  DEMO_PROJECT_PATH,
+  runAgentWorkflowDemo,
+  setupEphemeralDemoDb,
+  normalizeAgentWorkflowDemoResult,
+  formatAgentWorkflowDemoReport,
+  getAgentWorkflowDemoDocs,
+} from "./lib/agent-workflow-demo.js";
+export type {
+  DemoStep,
+  AgentWorkflowDemoResult,
+  RunAgentWorkflowDemoOptions,
+  EphemeralDbHandle,
+} from "./lib/agent-workflow-demo.js";
+
 // Checklists
 export {
   getChecklist,

@@ -5477,6 +5477,47 @@ program
     console.log(JSON.stringify(discoverWorkspace(opts.cwd), null, 2));
   });
 
+// demo — one-command local agent workflow quickstart
+const demoCmd = program
+  .command("demo")
+  .description("Local agent workflow quickstart demo (agents, projects, tasks, runs)");
+
+demoCmd
+  .command("run")
+  .description("Run scripted demo using ephemeral in-memory or temp database")
+  .option("--json", "JSON output")
+  .option("--persist", "Use temp file database instead of in-memory")
+  .option("--agent <name>", "Demo agent name")
+  .option("--project <name>", "Demo project name")
+  .action((opts) => {
+    const {
+      runAgentWorkflowDemo,
+      formatAgentWorkflowDemoReport,
+    } = require("../lib/agent-workflow-demo.js") as typeof import("../lib/agent-workflow-demo.js");
+    const result = runAgentWorkflowDemo({
+      persist: opts.persist,
+      agent_name: opts.agent,
+      project_name: opts.project,
+    });
+    if (opts.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(formatAgentWorkflowDemoReport(result));
+    }
+  });
+
+demoCmd
+  .command("docs")
+  .description("Show agent workflow demo quickstart documentation")
+  .action(() => {
+    const { getAgentWorkflowDemoDocs } = require("../lib/agent-workflow-demo.js") as typeof import("../lib/agent-workflow-demo.js");
+    console.log(getAgentWorkflowDemoDocs());
+  });
+
+demoCmd.action(() => {
+  demoCmd.commands.find((c) => c.name() === "run")?.help();
+});
+
 program
   .command("parity")
   .description("Show CLI ↔ MCP parity manifest and documented gaps")

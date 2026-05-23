@@ -78,6 +78,8 @@ export const CLI_MCP_PARITY_MANIFEST: ParityEntry[] = [
   // Agent runs
   { domain: "run", operation: "queue", cli: "runs queue", mcp: "enqueue_agent_run" },
   { domain: "run", operation: "claim", cli: "runs claim", mcp: "claim_next_agent_run" },
+  { domain: "workflow", operation: "agent_demo", cli: "demo run", mcp: "run_agent_workflow_demo" },
+  { domain: "workflow", operation: "agent_demo_docs", cli: "demo docs", mcp: "get_agent_workflow_demo_docs" },
   { domain: "run", operation: "list", cli: "runs list", mcp: "list_agent_runs" },
   { domain: "run", operation: "complete", cli: "runs complete", mcp: "complete_agent_run" },
   { domain: "run", operation: "fail", cli: "runs fail", mcp: "fail_agent_run" },
