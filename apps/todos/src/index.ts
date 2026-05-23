@@ -721,6 +721,27 @@ export type {
   GraphFilter,
 } from "./lib/dependency-graph.js";
 
+// Plan execution
+export {
+  PLAN_EXECUTION_SCHEMA,
+  PLAN_EXECUTION_MODES,
+  attachPlanToProject,
+  materializePlanSteps,
+  getPlanExecutionState,
+  claimPlanStep,
+  exportPlanExecutionContract,
+  createPlanWithSteps,
+  resolvePlanRef,
+} from "./lib/plan-execution.js";
+export type {
+  PlanExecutionMode,
+  PlanStepInput,
+  PlanExecutionManifest,
+  PlanExecutionState,
+  AttachPlanInput,
+  MaterializePlanInput,
+} from "./lib/plan-execution.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";

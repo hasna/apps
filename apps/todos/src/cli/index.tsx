@@ -5685,6 +5685,55 @@ depsCmd
     console.log(JSON.stringify(analyzeDependencyGraph({ project_id: opts.project, plan_id: opts.plan }), null, 2));
   });
 
+// plan exec — first-class plan execution mode
+const planExecCmd = program
+  .command("plan-exec")
+  .description("Plan execution: attach, materialize steps, claim, track progress");
+
+planExecCmd
+  .command("attach <planId> <projectId>")
+  .description("Attach plan to project")
+  .option("--mode <mode>", "sequential|parallel", "sequential")
+  .action((planId, projectId, opts) => {
+    const { attachPlanToProject } = require("../lib/plan-execution.js") as typeof import("../lib/plan-execution.js");
+    console.log(JSON.stringify(attachPlanToProject({ plan_id: planId, project_id: projectId, execution_mode: opts.mode }), null, 2));
+  });
+
+planExecCmd
+  .command("materialize <planId>")
+  .description("Create plan step tasks from titles")
+  .option("--step <title>", "Step title (repeatable)", collect, [])
+  .option("--mode <mode>", "sequential|parallel", "sequential")
+  .action((planId, opts) => {
+    const { materializePlanSteps } = require("../lib/plan-execution.js") as typeof import("../lib/plan-execution.js");
+    const steps = (opts.step as string[]).map((title) => ({ title }));
+    console.log(JSON.stringify(materializePlanSteps({ plan_id: planId, steps, execution_mode: opts.mode }), null, 2));
+  });
+
+planExecCmd
+  .command("status <planId>")
+  .description("Plan execution progress")
+  .action((planId) => {
+    const { getPlanExecutionState } = require("../lib/plan-execution.js") as typeof import("../lib/plan-execution.js");
+    console.log(JSON.stringify(getPlanExecutionState(planId), null, 2));
+  });
+
+planExecCmd
+  .command("claim <planId> <agent>")
+  .description("Claim next ready plan step")
+  .action((planId, agent) => {
+    const { claimPlanStep } = require("../lib/plan-execution.js") as typeof import("../lib/plan-execution.js");
+    console.log(JSON.stringify(claimPlanStep(planId, agent), null, 2));
+  });
+
+planExecCmd
+  .command("export <planId>")
+  .description("Export portable plan execution contract")
+  .action((planId) => {
+    const { exportPlanExecutionContract } = require("../lib/plan-execution.js") as typeof import("../lib/plan-execution.js");
+    console.log(JSON.stringify(exportPlanExecutionContract(planId), null, 2));
+  });
+
 // handoff
 program
   .command("handoff")
