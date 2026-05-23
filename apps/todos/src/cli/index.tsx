@@ -1189,6 +1189,47 @@ envCmd
     console.log(JSON.stringify(checkEnvSnapshot(id, opts.cwd), null, 2));
   });
 
+// report — read-only HTML and Markdown exports
+const reportCmd = program
+  .command("report")
+  .description("Read-only HTML and Markdown report exports");
+
+reportCmd
+  .command("export")
+  .description("Export a local read-only report")
+  .requiredOption("-k, --kind <kind>", "Report kind: project|plan|run|evidence|roadmap|retrospective")
+  .requiredOption("-o, --out <path>", "Output file path")
+  .option("-f, --format <format>", "markdown or html", "markdown")
+  .option("--project-id <id>", "Project id")
+  .option("--plan-id <id>", "Plan id")
+  .option("--run-record-id <id>", "Run record id")
+  .option("--task-id <id>", "Task id")
+  .option("--days <n>", "Days for retrospective", "7")
+  .option("--no-redact", "Skip secret redaction")
+  .action((opts) => {
+    const { exportReport } = require("../lib/report-exports.js") as typeof import("../lib/report-exports.js");
+    const data = exportReport({
+      kind: opts.kind,
+      format: opts.format,
+      path: opts.out,
+      project_id: opts.projectId,
+      plan_id: opts.planId,
+      run_record_id: opts.runRecordId,
+      task_id: opts.taskId,
+      days: parseInt(opts.days, 10),
+      redact: opts.redact !== false,
+    });
+    console.log(JSON.stringify({ ok: true, path: opts.out, title: data.title }, null, 2));
+  });
+
+reportCmd
+  .command("docs")
+  .description("Report export documentation")
+  .action(() => {
+    const { getReportExportDocs } = require("../lib/report-exports.js") as typeof import("../lib/report-exports.js");
+    console.log(getReportExportDocs());
+  });
+
 // templates
 program
   .command("templates")

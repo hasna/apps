@@ -863,6 +863,27 @@ export type {
   EnvSnapshotCheckResult,
 } from "./lib/environment-snapshots.js";
 
+// Report exports
+export {
+  REPORT_EXPORT_SCHEMA,
+  REPORT_KINDS,
+  REPORT_FORMATS,
+  buildReportExportData,
+  formatReportMarkdown,
+  formatReportHtml,
+  formatReportExport,
+  writeReportExport,
+  exportReport,
+  getReportExportDocs,
+} from "./lib/report-exports.js";
+export type {
+  ReportKind,
+  ReportFormat,
+  ReportSection,
+  ReportExportData,
+  BuildReportExportInput,
+} from "./lib/report-exports.js";
+
 // Checklists
 export {
   getChecklist,
