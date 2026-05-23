@@ -280,6 +280,21 @@ export {
 } from "./lib/policy-packs.js";
 export type { PolicyPack, PolicyRule, PolicyRuleType, PolicyValidationResult } from "./lib/policy-packs.js";
 
+// Resource snapshots
+export {
+  buildResourceSnapshot,
+  subscribeResource,
+  unsubscribeResource,
+  listSubscriptions,
+  isSnapshotStale,
+  getChangedResourcesSince,
+  resourceDiagnostics,
+  resetSubscriptions,
+  RESOURCE_URIS,
+  RESOURCE_SNAPSHOT_VERSION,
+} from "./lib/resource-snapshots.js";
+export type { ResourceSnapshot, ResourceSubscription, ResourceUri } from "./lib/resource-snapshots.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";

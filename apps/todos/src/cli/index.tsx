@@ -4375,6 +4375,27 @@ policyCmd
     }
   });
 
+// resources — MCP resource snapshot diagnostics
+program
+  .command("resources")
+  .description("MCP resource snapshot and subscription diagnostics")
+  .option("--uri <uri>", "Build snapshot for URI (e.g. todos://tasks)")
+  .option("--since <iso>", "Show changed resources since timestamp")
+  .action((opts) => {
+    const globalOpts = program.opts();
+    const mod = require("../lib/resource-snapshots.js") as typeof import("../lib/resource-snapshots.js");
+    if (opts.uri) {
+      const snap = mod.buildResourceSnapshot(opts.uri);
+      console.log(globalOpts.json ? JSON.stringify(snap, null, 2) : JSON.stringify(snap, null, 2));
+      return;
+    }
+    if (opts.since) {
+      console.log(JSON.stringify(mod.getChangedResourcesSince(opts.since), null, 2));
+      return;
+    }
+    console.log(JSON.stringify(mod.resourceDiagnostics(), null, 2));
+  });
+
 // handoff
 program
   .command("handoff")
