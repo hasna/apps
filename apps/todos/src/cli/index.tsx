@@ -5474,6 +5474,56 @@ const dbCmd = program
   .description("Database management commands");
 
 dbCmd
+  .command("backup [path]")
+  .description("Create atomic local SQLite backup")
+  .option("--db <path>", "Source database path")
+  .action((path, opts) => {
+    const { backupDatabase, defaultBackupPath, writeBackupManifest } = require("../lib/db-backup.js") as typeof import("../lib/db-backup.js");
+    const out = path || defaultBackupPath(opts.db);
+    const result = backupDatabase(out, opts.db);
+    writeBackupManifest(out, result);
+    console.log(JSON.stringify(result, null, 2));
+  });
+
+dbCmd
+  .command("restore <backup>")
+  .description("Restore database from backup")
+  .option("--db <path>", "Target database path")
+  .action((backup, opts) => {
+    const { restoreDatabase } = require("../lib/db-backup.js") as typeof import("../lib/db-backup.js");
+    console.log(JSON.stringify(restoreDatabase(backup, opts.db), null, 2));
+  });
+
+dbCmd
+  .command("check")
+  .description("Integrity check (quick_check + foreign keys)")
+  .option("--db <path>", "Database path")
+  .action((opts) => {
+    const { checkDatabaseIntegrity } = require("../lib/db-backup.js") as typeof import("../lib/db-backup.js");
+    const result = checkDatabaseIntegrity(opts.db);
+    console.log(JSON.stringify(result, null, 2));
+    if (!result.ok) process.exitCode = 1;
+  });
+
+dbCmd
+  .command("compact")
+  .description("VACUUM compact local database")
+  .option("--db <path>", "Database path")
+  .action((opts) => {
+    const { compactDatabase } = require("../lib/db-backup.js") as typeof import("../lib/db-backup.js");
+    console.log(JSON.stringify(compactDatabase(opts.db), null, 2));
+  });
+
+dbCmd
+  .command("migrate-dry-run")
+  .description("List pending migrations without applying")
+  .option("--db <path>", "Database path")
+  .action((opts) => {
+    const { migrationDryRun } = require("../lib/db-backup.js") as typeof import("../lib/db-backup.js");
+    console.log(JSON.stringify(migrationDryRun(opts.db), null, 2));
+  });
+
+dbCmd
   .command("migrate-pg")
   .description("Apply PostgreSQL migrations to the configured RDS instance")
   .option("--connection-string <url>", "PostgreSQL connection string (overrides cloud config)")

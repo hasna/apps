@@ -54,6 +54,7 @@ import { registerAgentAdapterDocTools } from "./tools/agent-adapter-docs.js";
 import { registerInboxIntakeTools } from "./tools/inbox-intake.js";
 import { registerRunRecordTools } from "./tools/run-records.js";
 import { registerReleaseCheckTools } from "./tools/release-checks.js";
+import { registerDbBackupTools } from "./tools/db-backup.js";
 import { resolveAccessProfile, shouldRegisterToolForProfile } from "../lib/access-profiles.js";
 
 function getMcpVersion(): string {
@@ -259,6 +260,7 @@ registerAgentAdapterDocTools(server, { shouldRegisterTool, formatError });
 registerInboxIntakeTools(server, { shouldRegisterTool, resolveId, formatError });
 registerRunRecordTools(server, { shouldRegisterTool, resolveId, formatError });
 registerReleaseCheckTools(server, { shouldRegisterTool, formatError });
+registerDbBackupTools(server, { shouldRegisterTool, formatError });
 
 // === DISPATCH ===
 
