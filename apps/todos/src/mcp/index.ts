@@ -72,6 +72,8 @@ import { registerCommandAliasTools } from "./tools/command-aliases.js";
 import { registerFailureTriageTools } from "./tools/failure-triage.js";
 import { registerUserScaffoldTools } from "./tools/user-scaffolds.js";
 import { registerAgentWorkflowDemoTools } from "./tools/agent-workflow-demo.js";
+import { registerFeatureManifestTools } from "./tools/feature-manifest.js";
+import { registerNotificationReminderTools } from "./tools/notification-reminders.js";
 import { resolveAccessProfile, shouldRegisterToolForProfile } from "../lib/access-profiles.js";
 
 function getMcpVersion(): string {
@@ -295,6 +297,8 @@ registerCommandAliasTools(server, { shouldRegisterTool, formatError });
 registerFailureTriageTools(server, { shouldRegisterTool, resolveId, formatError });
 registerUserScaffoldTools(server, { shouldRegisterTool, formatError });
 registerAgentWorkflowDemoTools(server, { shouldRegisterTool, formatError });
+registerFeatureManifestTools(server, { shouldRegisterTool, formatError });
+registerNotificationReminderTools(server, { shouldRegisterTool, resolveId, formatError });
 
 // === DISPATCH ===
 

@@ -675,6 +675,36 @@ export {
 } from "./lib/saved-views.js";
 export type { SearchEntityType, SavedView, UnifiedSearchInput, SearchHit, UnifiedSearchResult } from "./lib/saved-views.js";
 
+// Notification reminders
+export {
+  NOTIFICATION_REMINDERS_SCHEMA,
+  REMINDER_TYPES,
+  REMINDER_STATUSES,
+  createReminder,
+  getReminder,
+  listReminders,
+  dismissReminder,
+  snoozeReminder,
+  scanReminders,
+  processDueReminders,
+  getReminderSummary,
+  getReminderPreferences,
+  setReminderPreferences,
+  getUpcomingDueTasks,
+  notifyUpcomingDeadlines,
+  getReminderDocs,
+} from "./lib/notification-reminders.js";
+export type {
+  ReminderType,
+  ReminderStatus,
+  ReminderPreferences,
+  NotificationReminder,
+  ScanRemindersResult,
+  ProcessRemindersResult,
+  ReminderSummary,
+  CreateReminderInput,
+} from "./lib/notification-reminders.js";
+
 // Import/export bridge
 export {
   BUNDLE_SCHEMA,
@@ -963,6 +993,32 @@ export type {
   RunAgentWorkflowDemoOptions,
   EphemeralDbHandle,
 } from "./lib/agent-workflow-demo.js";
+
+// Feature manifest
+export {
+  FEATURE_MANIFEST_SCHEMA,
+  FEATURE_AREAS,
+  ALL_MCP_TOOLS,
+  buildFeatureManifest,
+  buildMcpToolGroups,
+  getCapabilityDiscovery,
+  normalizeFeatureManifest,
+  formatFeatureManifestReport,
+  getFeatureManifestDocs,
+  validateFeatureManifest,
+  listMcpToolNames,
+  categorizeMcpTool,
+} from "./lib/feature-manifest.js";
+export type {
+  FeatureArea,
+  McpToolGroup,
+  FeatureManifest,
+  CapabilityKind,
+  CapabilityMatch,
+  CapabilityDiscovery,
+  BuildFeatureManifestOptions,
+  GetCapabilityDiscoveryOptions,
+} from "./lib/feature-manifest.js";
 
 // Checklists
 export {

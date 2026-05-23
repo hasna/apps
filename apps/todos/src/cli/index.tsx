@@ -5539,6 +5539,73 @@ program
     }
   });
 
+// features — local capability manifest and discovery
+const featuresCmd = program
+  .command("features")
+  .description("Local feature manifest and capability discovery");
+
+featuresCmd
+  .command("list")
+  .description("Search and list capabilities (CLI, MCP, profiles, env vars)")
+  .option("--query <text>", "Filter by keyword")
+  .option("--surface <name>", "Filter surface: all|cli|mcp", "all")
+  .option("--profile <name>", "MCP profile for tool filtering")
+  .option("--limit <n>", "Max matches", "50")
+  .option("--json", "JSON output")
+  .action((opts) => {
+    const { getCapabilityDiscovery } = require("../lib/feature-manifest.js") as typeof import("../lib/feature-manifest.js");
+    const { resolveAccessProfile } = require("../lib/access-profiles.js") as typeof import("../lib/access-profiles.js");
+    const discovery = getCapabilityDiscovery({
+      query: opts.query,
+      surface: opts.surface,
+      profile: opts.profile ? resolveAccessProfile(opts.profile) : undefined,
+      limit: Number(opts.limit),
+    });
+    if (opts.json) {
+      console.log(JSON.stringify(discovery, null, 2));
+    } else {
+      console.log(`Capabilities${discovery.query ? ` matching "${discovery.query}"` : ""} (${discovery.totals.matched} matches)`);
+      console.log(`CLI: ${discovery.totals.cli} | MCP: ${discovery.totals.mcp} | Areas: ${discovery.totals.areas}`);
+      console.log("");
+      for (const m of discovery.matches) {
+        console.log(`[${m.kind}] ${m.name} (${m.surface}) — ${m.description}`);
+      }
+    }
+  });
+
+featuresCmd
+  .command("manifest")
+  .description("Show full local feature manifest")
+  .option("--profile <name>", "Access profile override")
+  .option("--json", "JSON output")
+  .action((opts) => {
+    const {
+      buildFeatureManifest,
+      formatFeatureManifestReport,
+    } = require("../lib/feature-manifest.js") as typeof import("../lib/feature-manifest.js");
+    const { resolveAccessProfile } = require("../lib/access-profiles.js") as typeof import("../lib/access-profiles.js");
+    const manifest = buildFeatureManifest({
+      profile: opts.profile ? resolveAccessProfile(opts.profile) : undefined,
+    });
+    if (opts.json) {
+      console.log(JSON.stringify(manifest, null, 2));
+    } else {
+      console.log(formatFeatureManifestReport(manifest));
+    }
+  });
+
+featuresCmd
+  .command("docs")
+  .description("Show feature manifest quickstart documentation")
+  .action(() => {
+    const { getFeatureManifestDocs } = require("../lib/feature-manifest.js") as typeof import("../lib/feature-manifest.js");
+    console.log(getFeatureManifestDocs());
+  });
+
+featuresCmd.action(() => {
+  featuresCmd.commands.find((c) => c.name() === "list")?.help();
+});
+
 // redact — secret scanning and redaction
 const redactCmd = program
   .command("redact")
@@ -6049,6 +6116,161 @@ viewsCmd
     const result = runSavedView(slug, { query: opts.query });
     if (opts.json) console.log(JSON.stringify(result, null, 2));
     else for (const h of result.hits) console.log(`[${h.entity_type}] ${h.title}`);
+  });
+
+// reminders — local due-date and SLA notification reminders
+const remindersCmd = program
+  .command("reminders")
+  .description("Local due-date and SLA notification reminders");
+
+remindersCmd
+  .command("list")
+  .description("List notification reminders")
+  .option("--status <status>", "Filter by status")
+  .option("--type <type>", "Filter by reminder type")
+  .option("--project <id>", "Filter by project")
+  .option("--agent <id>", "Filter by agent")
+  .option("--limit <n>", "Max results", "50")
+  .option("-j, --json", "JSON output")
+  .action((opts) => {
+    const { listReminders } = require("../lib/notification-reminders.js") as typeof import("../lib/notification-reminders.js");
+    const reminders = listReminders({
+      status: opts.status,
+      reminder_type: opts.type,
+      project_id: opts.project,
+      agent_id: opts.agent,
+      limit: parseInt(opts.limit, 10),
+    });
+    if (opts.json) console.log(JSON.stringify(reminders, null, 2));
+    else {
+      if (reminders.length === 0) console.log(chalk.dim("No reminders found."));
+      for (const r of reminders) {
+        console.log(`${r.id.slice(0, 8)} [${r.status}] ${r.reminder_type} ${r.title} @ ${r.trigger_at}`);
+      }
+    }
+  });
+
+remindersCmd
+  .command("scan")
+  .description("Scan tasks for due-date and SLA reminders")
+  .option("--project <id>", "Scope to project")
+  .option("--agent <id>", "Scope to agent")
+  .option("-j, --json", "JSON output")
+  .action((opts) => {
+    const { scanReminders } = require("../lib/notification-reminders.js") as typeof import("../lib/notification-reminders.js");
+    const result = scanReminders({ project_id: opts.project, agent_id: opts.agent });
+    if (opts.json) console.log(JSON.stringify(result, null, 2));
+    else console.log(chalk.green(`Scanned: ${result.created} created, ${result.updated} updated, ${result.dismissed} dismissed`));
+  });
+
+remindersCmd
+  .command("check")
+  .description("Process due reminders (optional desktop notify-send)")
+  .option("--desktop", "Send desktop notifications via notify-send")
+  .option("--project <id>", "Scope to project")
+  .option("--agent <id>", "Scope to agent")
+  .option("-j, --json", "JSON output")
+  .action((opts) => {
+    const { processDueReminders } = require("../lib/notification-reminders.js") as typeof import("../lib/notification-reminders.js");
+    const result = processDueReminders({
+      desktop: opts.desktop,
+      project_id: opts.project,
+      agent_id: opts.agent,
+    });
+    if (opts.json) console.log(JSON.stringify(result, null, 2));
+    else {
+      console.log(chalk.green(`Fired ${result.fired} reminder(s).`));
+      for (const r of result.reminders) console.log(`  ${r.title}`);
+    }
+  });
+
+remindersCmd
+  .command("create")
+  .description("Create a custom reminder")
+  .requiredOption("--title <title>", "Reminder title")
+  .requiredOption("--at <datetime>", "ISO trigger datetime")
+  .option("--task <id>", "Related task ID")
+  .option("--message <text>", "Reminder message")
+  .option("-j, --json", "JSON output")
+  .action((opts) => {
+    const { createReminder } = require("../lib/notification-reminders.js") as typeof import("../lib/notification-reminders.js");
+    const reminder = createReminder({
+      title: opts.title,
+      trigger_at: opts.at,
+      task_id: opts.task,
+      message: opts.message,
+    });
+    if (opts.json) console.log(JSON.stringify(reminder, null, 2));
+    else console.log(chalk.green(`Reminder created: ${reminder.id.slice(0, 8)}`));
+  });
+
+remindersCmd
+  .command("dismiss <id>")
+  .description("Dismiss a reminder")
+  .option("-j, --json", "JSON output")
+  .action((id, opts) => {
+    const { dismissReminder } = require("../lib/notification-reminders.js") as typeof import("../lib/notification-reminders.js");
+    const reminder = dismissReminder(id);
+    if (opts.json) console.log(JSON.stringify(reminder, null, 2));
+    else console.log(reminder ? chalk.yellow("Dismissed.") : chalk.red("Reminder not found."));
+  });
+
+remindersCmd
+  .command("snooze <id>")
+  .description("Snooze a reminder until a later time")
+  .requiredOption("--until <datetime>", "ISO datetime to snooze until")
+  .option("-j, --json", "JSON output")
+  .action((id, opts) => {
+    const { snoozeReminder } = require("../lib/notification-reminders.js") as typeof import("../lib/notification-reminders.js");
+    const reminder = snoozeReminder(id, opts.until);
+    if (opts.json) console.log(JSON.stringify(reminder, null, 2));
+    else console.log(reminder ? chalk.yellow(`Snoozed until ${opts.until}`) : chalk.red("Reminder not found."));
+  });
+
+remindersCmd
+  .command("summary")
+  .description("Reminder counts summary")
+  .option("-j, --json", "JSON output")
+  .action((opts) => {
+    const { getReminderSummary } = require("../lib/notification-reminders.js") as typeof import("../lib/notification-reminders.js");
+    const summary = getReminderSummary();
+    if (opts.json) console.log(JSON.stringify(summary, null, 2));
+    else {
+      console.log(`Pending: ${summary.pending} | Due now: ${summary.due_now} | Snoozed: ${summary.snoozed} | Fired today: ${summary.fired_today}`);
+    }
+  });
+
+remindersCmd
+  .command("prefs")
+  .description("Get or set reminder preferences")
+  .option("--due-soon-hours <n>", "Hours before due date to alert")
+  .option("--sla-warning-minutes <n>", "Minutes before SLA breach to warn")
+  .option("--enabled [bool]", "Enable/disable scanning")
+  .option("--desktop-notify [bool]", "Enable desktop notify-send")
+  .option("-j, --json", "JSON output")
+  .action((opts) => {
+    const { getReminderPreferences, setReminderPreferences } = require("../lib/notification-reminders.js") as typeof import("../lib/notification-reminders.js");
+    const hasUpdates = opts.dueSoonHours || opts.slaWarningMinutes || opts.enabled !== undefined || opts.desktopNotify !== undefined;
+    const prefs = hasUpdates
+      ? setReminderPreferences({
+          due_soon_hours: opts.dueSoonHours ? parseInt(opts.dueSoonHours, 10) : undefined,
+          sla_warning_minutes: opts.slaWarningMinutes ? parseInt(opts.slaWarningMinutes, 10) : undefined,
+          enabled: opts.enabled === undefined ? undefined : opts.enabled !== "false",
+          desktop_notify: opts.desktopNotify === undefined ? undefined : opts.desktopNotify !== "false",
+        })
+      : getReminderPreferences();
+    if (opts.json) console.log(JSON.stringify(prefs, null, 2));
+    else {
+      console.log(`Due soon: ${prefs.due_soon_hours}h | SLA warning: ${prefs.sla_warning_minutes}m | Enabled: ${prefs.enabled} | Desktop: ${prefs.desktop_notify}`);
+    }
+  });
+
+remindersCmd
+  .command("docs")
+  .description("Reminder workflow documentation")
+  .action(() => {
+    const { getReminderDocs } = require("../lib/notification-reminders.js") as typeof import("../lib/notification-reminders.js");
+    console.log(getReminderDocs());
   });
 
 // bridge — local import/export/sync for hosted bridge

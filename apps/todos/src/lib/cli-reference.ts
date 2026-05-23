@@ -108,6 +108,7 @@ export const CLI_COMMAND_GROUPS: CliCommandGroup[] = [
       { name: "goal", summary: "/goal-style workflows", example: "todos goal create \"Ship v1\" --step \"Tests\"" },
       { name: "plan-exec", summary: "Plan execution mode", example: "todos plan-exec status <planId>" },
       { name: "schedule", summary: "Due dates and stale reports", example: "todos schedule summary" },
+      { name: "reminders", summary: "Local due-date and SLA alerts", example: "todos reminders scan" },
       { name: "handoff-packet", summary: "Rich offline handoff", example: "todos handoff-packet build --agent me" },
       { name: "deps", summary: "Dependency graph", example: "todos deps ready --json" },
     ],
@@ -150,7 +151,7 @@ export function listTopLevelCommands(): string[] {
   for (const extra of [
     "count", "inspect", "update", "lock", "unlock", "delete", "bulk", "templates",
     "comment", "sync", "config", "stream", "recap", "standup", "analytics",
-    "views", "bridge", "activity", "crypto", "policy", "runs", "trace", "labels",
+    "views", "reminders", "bridge", "activity", "crypto", "policy", "runs", "trace", "labels",
     "intake", "package", "schema", "bootstrap", "context", "release", "hook", "hooks",
   ]) {
     names.add(extra);
@@ -173,8 +174,10 @@ export const NESTED_SUBCOMMANDS: Record<string, string[]> = {
   report: ["export", "docs"],
   env: ["capture", "list", "get", "check"],
   views: ["search", "save", "list", "run"],
+  reminders: ["list", "scan", "check", "create", "dismiss", "snooze", "summary", "prefs", "docs"],
   schedule: ["set", "summary", "queue", "stale-report", "docs"],
   docs: ["cli", "adapters", "env"],
+  features: ["list", "manifest", "docs"],
   completion: ["bash", "zsh", "fish", "install"],
   md: ["import", "export", "sync"],
   runs: ["record", "list", "show"],
