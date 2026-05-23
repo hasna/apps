@@ -1367,6 +1367,80 @@ triageCmd
     console.log(getFailureTriageDocs());
   });
 
+// scaffolds — user-authored versioned templates
+const scaffoldsCmd = program
+  .command("scaffolds")
+  .description("User-authored local scaffolds (tasks, plans, checklists, contracts)");
+
+scaffoldsCmd
+  .command("list")
+  .option("--kind <kind>", "Filter by scaffold kind")
+  .action((opts) => {
+    const { listUserScaffolds } = require("../lib/user-scaffolds.js") as typeof import("../lib/user-scaffolds.js");
+    console.log(JSON.stringify(listUserScaffolds(opts.kind), null, 2));
+  });
+
+scaffoldsCmd
+  .command("create")
+  .requiredOption("--name <name>", "Scaffold name")
+  .requiredOption("--kind <kind>", "task|plan|project|checklist|contract|verification_policy")
+  .option("--description <text>", "Description")
+  .option("--file <path>", "JSON payload file")
+  .action((opts) => {
+    const fs = require("node:fs") as typeof import("node:fs");
+    const { createUserScaffold } = require("../lib/user-scaffolds.js") as typeof import("../lib/user-scaffolds.js");
+    const payload = opts.file ? JSON.parse(fs.readFileSync(opts.file, "utf8")) : {};
+    console.log(JSON.stringify(createUserScaffold({ name: opts.name, kind: opts.kind, description: opts.description, payload }), null, 2));
+  });
+
+scaffoldsCmd
+  .command("preview <slug>")
+  .option("--var <vars...>", "Variables key=value")
+  .action((slug, opts) => {
+    const { previewUserScaffold } = require("../lib/user-scaffolds.js") as typeof import("../lib/user-scaffolds.js");
+    const variables: Record<string, string> = {};
+    for (const v of opts.var ?? []) {
+      const [k, ...rest] = v.split("=");
+      variables[k!] = rest.join("=");
+    }
+    console.log(JSON.stringify(previewUserScaffold(slug, variables), null, 2));
+  });
+
+scaffoldsCmd
+  .command("apply <slug>")
+  .option("--var <vars...>", "Variables key=value")
+  .action((slug, opts) => {
+    const { applyUserScaffold } = require("../lib/user-scaffolds.js") as typeof import("../lib/user-scaffolds.js");
+    const variables: Record<string, string> = {};
+    for (const v of opts.var ?? []) {
+      const [k, ...rest] = v.split("=");
+      variables[k!] = rest.join("=");
+    }
+    console.log(JSON.stringify(applyUserScaffold(slug, variables), null, 2));
+  });
+
+scaffoldsCmd
+  .command("export <slug>")
+  .option("-o, --out <path>", "Output file")
+  .action((slug, opts) => {
+    const fs = require("node:fs") as typeof import("node:fs");
+    const { exportUserScaffold } = require("../lib/user-scaffolds.js") as typeof import("../lib/user-scaffolds.js");
+    const payload = JSON.stringify(exportUserScaffold(slug), null, 2);
+    if (opts.out) {
+      fs.writeFileSync(opts.out, payload, "utf8");
+      console.log(JSON.stringify({ ok: true, path: opts.out }, null, 2));
+    } else {
+      console.log(payload);
+    }
+  });
+
+scaffoldsCmd
+  .command("docs")
+  .action(() => {
+    const { getUserScaffoldDocs } = require("../lib/user-scaffolds.js") as typeof import("../lib/user-scaffolds.js");
+    console.log(getUserScaffoldDocs());
+  });
+
 // templates
 program
   .command("templates")

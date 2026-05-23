@@ -169,6 +169,7 @@ export const NESTED_SUBCOMMANDS: Record<string, string[]> = {
   "handoff-packet": ["build", "create", "export"],
   shortcuts: ["list", "add", "remove", "explain", "run", "export", "import", "docs"],
   triage: ["report", "apply", "docs"],
+  scaffolds: ["list", "create", "preview", "apply", "export", "docs"],
   report: ["export", "docs"],
   env: ["capture", "list", "get", "check"],
   views: ["search", "save", "list", "run"],

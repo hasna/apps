@@ -925,6 +925,26 @@ export type {
   ApplyFailureTriageResult,
 } from "./lib/failure-triage.js";
 
+// User scaffolds
+export {
+  USER_SCAFFOLD_SCHEMA,
+  SCAFFOLD_KINDS,
+  loadUserScaffoldStore,
+  saveUserScaffoldStore,
+  listUserScaffolds,
+  getUserScaffold,
+  createUserScaffold,
+  updateUserScaffold,
+  previewUserScaffold,
+  applyUserScaffold,
+  exportUserScaffold,
+  importUserScaffold,
+  linkTemplateAsScaffold,
+  getUserScaffoldDocs,
+  listLinkedTemplates,
+} from "./lib/user-scaffolds.js";
+export type { ScaffoldKind, UserScaffold, UserScaffoldStore, ScaffoldPreview } from "./lib/user-scaffolds.js";
+
 // Checklists
 export {
   getChecklist,
