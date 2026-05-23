@@ -4555,6 +4555,95 @@ runsCmd
     console.log(JSON.stringify(retryAgentRun(runId), null, 2));
   });
 
+// runs record — detailed run records, logs, replay
+const runsRecordCmd = runsCmd
+  .command("record")
+  .description("First-class run records with commands, logs, and replay export");
+
+runsRecordCmd
+  .command("start")
+  .description("Start a new run record")
+  .option("--agent-run <id>", "Linked agent run ID")
+  .option("--agent <id>", "Agent ID")
+  .option("--objective <text>", "Run objective")
+  .option("--plan <id>", "Plan ID")
+  .option("--task <ids...>", "Claimed task IDs")
+  .action((opts) => {
+    const { createRunRecord } = require("../lib/run-records.js") as typeof import("../lib/run-records.js");
+    const record = createRunRecord({
+      agent_run_id: opts.agentRun,
+      agent_id: opts.agent,
+      objective: opts.objective,
+      plan_id: opts.plan,
+      claimed_task_ids: opts.task,
+    });
+    console.log(JSON.stringify(record, null, 2));
+  });
+
+runsRecordCmd
+  .command("log <recordId>")
+  .description("Append a command and optional output to a run record")
+  .requiredOption("--command <cmd>", "Command executed")
+  .option("--exit-code <n>", "Exit code")
+  .option("--stdout <text>", "Stdout snippet")
+  .option("--stderr <text>", "Stderr snippet")
+  .action((recordId, opts) => {
+    const { appendRunCommand } = require("../lib/run-records.js") as typeof import("../lib/run-records.js");
+    console.log(JSON.stringify(appendRunCommand(recordId, opts.command, {
+      exit_code: opts.exitCode != null ? parseInt(opts.exitCode, 10) : undefined,
+      stdout: opts.stdout,
+      stderr: opts.stderr,
+    }), null, 2));
+  });
+
+runsRecordCmd
+  .command("show <recordId>")
+  .description("Show run record (JSON or markdown)")
+  .option("--md", "Markdown output")
+  .action((recordId, opts) => {
+    const { getRunRecord, formatRunRecordMarkdown } = require("../lib/run-records.js") as typeof import("../lib/run-records.js");
+    const record = getRunRecord(recordId);
+    if (!record) {
+      console.error(chalk.red("  Run record not found"));
+      process.exit(1);
+    }
+    if (opts.md) console.log(formatRunRecordMarkdown(record));
+    else console.log(JSON.stringify(record, null, 2));
+  });
+
+runsRecordCmd
+  .command("list")
+  .description("List run records")
+  .option("--agent <id>", "Filter by agent")
+  .option("--status <status>", "Filter by status")
+  .option("--limit <n>", "Limit", "20")
+  .action((opts) => {
+    const { listRunRecords } = require("../lib/run-records.js") as typeof import("../lib/run-records.js");
+    console.log(JSON.stringify(listRunRecords({
+      agent_id: opts.agent,
+      status: opts.status,
+      limit: parseInt(opts.limit, 10),
+    }), null, 2));
+  });
+
+runsRecordCmd
+  .command("complete <recordId>")
+  .description("Complete a run record")
+  .option("--note <text>", "Completion note")
+  .action((recordId, opts) => {
+    const { completeRunRecord } = require("../lib/run-records.js") as typeof import("../lib/run-records.js");
+    console.log(JSON.stringify(completeRunRecord(recordId, opts.note), null, 2));
+  });
+
+runsRecordCmd
+  .command("replay <recordId>")
+  .description("Export run replay bundle to local JSON")
+  .option("--out <path>", "Output path")
+  .action((recordId, opts) => {
+    const { exportRunReplay } = require("../lib/run-records.js") as typeof import("../lib/run-records.js");
+    console.log(JSON.stringify(exportRunReplay(recordId, opts.out), null, 2));
+  });
+
 // trace — git branch/commit/PR traceability
 const traceCmd = program
   .command("trace")

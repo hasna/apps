@@ -558,6 +558,35 @@ export function ensureSchema(db: Database): void {
     )`);
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_leases_agent ON task_leases(agent_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_leases_expires ON task_leases(expires_at)");
+
+  // Run records — detailed agent execution logs and replay artifacts
+  ensureTable("run_records", `
+    CREATE TABLE run_records (
+      id TEXT PRIMARY KEY,
+      agent_run_id TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
+      agent_id TEXT,
+      objective TEXT,
+      plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+      claimed_task_ids TEXT NOT NULL DEFAULT '[]',
+      commands TEXT NOT NULL DEFAULT '[]',
+      stdout_summary TEXT,
+      stderr_summary TEXT,
+      files_touched TEXT NOT NULL DEFAULT '[]',
+      verification_results TEXT NOT NULL DEFAULT '[]',
+      artifact_ids TEXT NOT NULL DEFAULT '[]',
+      status_transitions TEXT NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'completed', 'failed', 'archived')),
+      replay_bundle TEXT,
+      metadata TEXT NOT NULL DEFAULT '{}',
+      started_at TEXT NOT NULL,
+      completed_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_run_records_agent_run ON run_records(agent_run_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_run_records_agent ON run_records(agent_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_run_records_plan ON run_records(plan_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_run_records_status ON run_records(status)");
 }
 
 export function backfillTaskTags(db: Database): void {

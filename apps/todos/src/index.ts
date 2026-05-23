@@ -528,6 +528,35 @@ export {
 } from "./lib/inbox-intake.js";
 export type { IntakeSourceType, IntakeTriageStatus, IntakeInput, IntakePreview, IntakeResult, IntakeOptions } from "./lib/inbox-intake.js";
 
+// Run records
+export {
+  RUN_RECORD_SCHEMA,
+  RUN_RECORD_STATUSES,
+  createRunRecord,
+  getRunRecord,
+  listRunRecords,
+  appendRunCommand,
+  recordFilesTouched,
+  linkRunVerification,
+  linkRunArtifact,
+  completeRunRecord,
+  failRunRecord,
+  buildRunReplayBundle,
+  exportRunReplay,
+  formatRunRecordMarkdown,
+  getDefaultReplayDir,
+} from "./lib/run-records.js";
+export type {
+  RunRecordStatus,
+  RunRecord,
+  RunCommandEntry,
+  RunStatusTransition,
+  RunVerificationRef,
+  CreateRunRecordInput,
+  ListRunRecordsFilter,
+  RunReplayBundle,
+} from "./lib/run-records.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";
