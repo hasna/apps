@@ -583,6 +583,31 @@ export {
 } from "./lib/db-backup.js";
 export type { BackupResult, IntegrityResult, MigrationDryRunResult } from "./lib/db-backup.js";
 
+// JSON schemas
+export {
+  JSON_SCHEMA_CATALOG_VERSION,
+  SCHEMA_SEMVER,
+  SCHEMA_ENTITIES,
+  JSON_SCHEMAS,
+  SCHEMA_CONTRACT_FIXTURES,
+  validateSchemaPayload,
+  validateAllContractFixtures,
+  checkSchemaCompatibility,
+  listJsonSchemas,
+  getJsonSchema,
+  getSchemaSemverGuidance,
+  exportSchemasToDirectory,
+  wrapWithSchemaVersion,
+} from "./lib/json-schemas.js";
+export type {
+  SchemaEntity,
+  JsonSchemaDefinition,
+  JsonSchemaProperty,
+  SchemaValidationIssue,
+  SchemaValidationResult,
+  SchemaCompatibilityResult,
+} from "./lib/json-schemas.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";

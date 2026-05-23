@@ -55,6 +55,7 @@ import { registerInboxIntakeTools } from "./tools/inbox-intake.js";
 import { registerRunRecordTools } from "./tools/run-records.js";
 import { registerReleaseCheckTools } from "./tools/release-checks.js";
 import { registerDbBackupTools } from "./tools/db-backup.js";
+import { registerJsonSchemaTools } from "./tools/json-schemas.js";
 import { resolveAccessProfile, shouldRegisterToolForProfile } from "../lib/access-profiles.js";
 
 function getMcpVersion(): string {
@@ -261,6 +262,7 @@ registerInboxIntakeTools(server, { shouldRegisterTool, resolveId, formatError })
 registerRunRecordTools(server, { shouldRegisterTool, resolveId, formatError });
 registerReleaseCheckTools(server, { shouldRegisterTool, formatError });
 registerDbBackupTools(server, { shouldRegisterTool, formatError });
+registerJsonSchemaTools(server, { shouldRegisterTool, formatError });
 
 // === DISPATCH ===
 

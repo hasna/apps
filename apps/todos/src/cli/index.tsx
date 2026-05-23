@@ -5251,6 +5251,81 @@ packageCmd
     console.log(getReleaseWorkflowDocs());
   });
 
+// schema — versioned JSON schemas and contract validation
+const schemaCmd = program
+  .command("schema")
+  .description("Versioned JSON schemas and contract validation");
+
+schemaCmd
+  .command("list")
+  .description("List published schema entities")
+  .option("-j, --json", "JSON output")
+  .action((opts) => {
+    const { listJsonSchemas } = require("../lib/json-schemas.js") as typeof import("../lib/json-schemas.js");
+    const list = listJsonSchemas();
+    if (opts.json) console.log(JSON.stringify(list, null, 2));
+    else for (const s of list) console.log(`${s.entity}\t${s.schema_version}\t${s.title}`);
+  });
+
+schemaCmd
+  .command("show <entity>")
+  .description("Show JSON Schema for an entity")
+  .action((entity) => {
+    const { getJsonSchema, SCHEMA_ENTITIES } = require("../lib/json-schemas.js") as typeof import("../lib/json-schemas.js");
+    if (!SCHEMA_ENTITIES.includes(entity)) {
+      console.error(chalk.red(`Unknown entity: ${entity}`));
+      process.exit(1);
+    }
+    console.log(JSON.stringify(getJsonSchema(entity), null, 2));
+  });
+
+schemaCmd
+  .command("validate <entity> <json>")
+  .description("Validate inline JSON against entity schema")
+  .action((entity, json) => {
+    const { validateSchemaPayload, SCHEMA_ENTITIES } = require("../lib/json-schemas.js") as typeof import("../lib/json-schemas.js");
+    if (!SCHEMA_ENTITIES.includes(entity)) {
+      console.error(chalk.red(`Unknown entity: ${entity}`));
+      process.exit(1);
+    }
+    const payload = JSON.parse(json);
+    const result = validateSchemaPayload(entity, payload);
+    console.log(JSON.stringify(result, null, 2));
+    if (!result.valid) process.exitCode = 1;
+  });
+
+schemaCmd
+  .command("test")
+  .description("Run contract fixture validation (all entities)")
+  .action(() => {
+    const { validateAllContractFixtures } = require("../lib/json-schemas.js") as typeof import("../lib/json-schemas.js");
+    const issues = validateAllContractFixtures();
+    if (issues.length === 0) {
+      console.log(chalk.green("  ✓ All contract fixtures valid"));
+    } else {
+      console.log(JSON.stringify(issues, null, 2));
+      process.exitCode = 1;
+    }
+  });
+
+schemaCmd
+  .command("export [dir]")
+  .description("Export schemas to directory (default: ./schemas)")
+  .action((dir) => {
+    const { exportSchemasToDirectory } = require("../lib/json-schemas.js") as typeof import("../lib/json-schemas.js");
+    const out = dir || join(process.cwd(), "schemas");
+    const files = exportSchemasToDirectory(out);
+    console.log(JSON.stringify({ directory: out, files }, null, 2));
+  });
+
+schemaCmd
+  .command("semver")
+  .description("Show semver and compatibility guidance")
+  .action(() => {
+    const { getSchemaSemverGuidance } = require("../lib/json-schemas.js") as typeof import("../lib/json-schemas.js");
+    console.log(getSchemaSemverGuidance());
+  });
+
 // handoff
 program
   .command("handoff")
