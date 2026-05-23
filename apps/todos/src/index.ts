@@ -884,6 +884,30 @@ export type {
   BuildReportExportInput,
 } from "./lib/report-exports.js";
 
+// Command aliases
+export {
+  COMMAND_ALIASES_SCHEMA,
+  validateAliasName,
+  loadAliasStore,
+  saveAliasStore,
+  listCommandAliases,
+  getCommandAlias,
+  saveCommandAlias,
+  deleteCommandAlias,
+  resolveCommandQuery,
+  explainCommandQuery,
+  exportCommandAliases,
+  importCommandAliases,
+  getCommandAliasDocs,
+  listBuiltinShortcuts,
+} from "./lib/command-aliases.js";
+export type {
+  CommandAlias,
+  AliasStore,
+  QueryResolution,
+  ImportAliasesResult,
+} from "./lib/command-aliases.js";
+
 // Checklists
 export {
   getChecklist,

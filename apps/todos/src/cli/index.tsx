@@ -1230,6 +1230,92 @@ reportCmd
     console.log(getReportExportDocs());
   });
 
+// shortcuts — saved aliases and natural query expansion
+const shortcutsCmd = program
+  .command("shortcuts")
+  .description("Saved command aliases and natural query shortcuts");
+
+shortcutsCmd
+  .command("list")
+  .description("List saved aliases and built-in shortcuts")
+  .action(() => {
+    const mod = require("../lib/command-aliases.js") as typeof import("../lib/command-aliases.js");
+    console.log(JSON.stringify({ saved: mod.listCommandAliases(), builtin: mod.listBuiltinShortcuts() }, null, 2));
+  });
+
+shortcutsCmd
+  .command("add <name> <command...>")
+  .description("Save a command alias")
+  .option("-d, --description <text>", "Alias description")
+  .action((name, commandParts, opts) => {
+    const { saveCommandAlias } = require("../lib/command-aliases.js") as typeof import("../lib/command-aliases.js");
+    console.log(JSON.stringify(saveCommandAlias({ name, command: commandParts.join(" "), description: opts.description }), null, 2));
+  });
+
+shortcutsCmd
+  .command("remove <name>")
+  .description("Delete a saved alias")
+  .action((name) => {
+    const { deleteCommandAlias } = require("../lib/command-aliases.js") as typeof import("../lib/command-aliases.js");
+    if (!deleteCommandAlias(name)) {
+      console.error(`Alias not found: ${name}`);
+      process.exit(1);
+    }
+    console.log(JSON.stringify({ ok: true, removed: name }, null, 2));
+  });
+
+shortcutsCmd
+  .command("explain <query...>")
+  .description("Explain how a query or @alias expands (dry-run)")
+  .action((queryParts) => {
+    const { explainCommandQuery } = require("../lib/command-aliases.js") as typeof import("../lib/command-aliases.js");
+    console.log(explainCommandQuery(queryParts.join(" ")));
+  });
+
+shortcutsCmd
+  .command("run <query...>")
+  .description("Resolve query to argv JSON (does not execute)")
+  .action((queryParts) => {
+    const { resolveCommandQuery } = require("../lib/command-aliases.js") as typeof import("../lib/command-aliases.js");
+    console.log(JSON.stringify(resolveCommandQuery(queryParts.join(" "), { dry_run: false }), null, 2));
+  });
+
+shortcutsCmd
+  .command("export")
+  .description("Export alias store JSON")
+  .option("-o, --out <path>", "Output path (default stdout)")
+  .action((opts) => {
+    const { exportCommandAliases } = require("../lib/command-aliases.js") as typeof import("../lib/command-aliases.js");
+    const payload = JSON.stringify(exportCommandAliases(), null, 2);
+    if (opts.out) {
+      require("node:fs").writeFileSync(opts.out, payload, "utf8");
+      console.log(JSON.stringify({ ok: true, path: opts.out }, null, 2));
+    } else {
+      console.log(payload);
+    }
+  });
+
+shortcutsCmd
+  .command("import")
+  .description("Import alias store JSON")
+  .requiredOption("-i, --in <path>", "Input path")
+  .option("--overwrite", "Overwrite conflicting aliases")
+  .action((opts) => {
+    const fs = require("node:fs") as typeof import("node:fs");
+    const { importCommandAliases, COMMAND_ALIASES_SCHEMA } = require("../lib/command-aliases.js") as typeof import("../lib/command-aliases.js");
+    const payload = JSON.parse(fs.readFileSync(opts.in, "utf8"));
+    if (payload.schema_version !== COMMAND_ALIASES_SCHEMA) throw new Error("Invalid alias store schema");
+    console.log(JSON.stringify(importCommandAliases(payload, opts.overwrite ? "overwrite" : "skip"), null, 2));
+  });
+
+shortcutsCmd
+  .command("docs")
+  .description("Alias and shortcut documentation")
+  .action(() => {
+    const { getCommandAliasDocs } = require("../lib/command-aliases.js") as typeof import("../lib/command-aliases.js");
+    console.log(getCommandAliasDocs());
+  });
+
 // templates
 program
   .command("templates")
