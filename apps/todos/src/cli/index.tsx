@@ -4420,6 +4420,108 @@ sandboxCmd
     if (!result.allowed) process.exitCode = 1;
   });
 
+// runs — local agent run dispatcher queue
+const runsCmd = program
+  .command("runs")
+  .description("Local agent run dispatcher queue");
+
+runsCmd
+  .command("adapters")
+  .description("List configured local agent adapters")
+  .action(() => {
+    const { loadAgentAdapters } = require("../lib/agent-run-dispatcher.js") as typeof import("../lib/agent-run-dispatcher.js");
+    console.log(JSON.stringify(loadAgentAdapters(), null, 2));
+  });
+
+runsCmd
+  .command("queue")
+  .description("Enqueue a task or plan run")
+  .requiredOption("--adapter <name>", "Agent adapter name")
+  .option("--task <id>", "Task ID")
+  .option("--plan <id>", "Plan ID")
+  .option("--agent <id>", "Preferred agent ID")
+  .option("--max-retries <n>", "Max auto-retries", "3")
+  .action((opts) => {
+    const { enqueueAgentRun } = require("../lib/agent-run-dispatcher.js") as typeof import("../lib/agent-run-dispatcher.js");
+    if (!opts.task && !opts.plan) {
+      console.error(chalk.red("  --task or --plan is required"));
+      process.exit(1);
+    }
+    const run = enqueueAgentRun({
+      task_id: opts.task,
+      plan_id: opts.plan,
+      adapter: opts.adapter,
+      agent_id: opts.agent,
+      max_retries: parseInt(opts.maxRetries, 10),
+    });
+    console.log(JSON.stringify(run, null, 2));
+  });
+
+runsCmd
+  .command("claim <agent>")
+  .description("Claim next queued run for an agent")
+  .option("--adapter <name>", "Filter by adapter")
+  .action((agent, opts) => {
+    const { claimNextAgentRun } = require("../lib/agent-run-dispatcher.js") as typeof import("../lib/agent-run-dispatcher.js");
+    const run = claimNextAgentRun(agent, { adapter: opts.adapter });
+    if (!run) {
+      console.log(chalk.yellow("  No queued runs available."));
+      return;
+    }
+    console.log(JSON.stringify(run, null, 2));
+  });
+
+runsCmd
+  .command("list")
+  .description("List agent runs")
+  .option("--status <status>", "Filter by status")
+  .option("--adapter <name>", "Filter by adapter")
+  .option("--limit <n>", "Limit", "20")
+  .action((opts) => {
+    const { listAgentRuns } = require("../lib/agent-run-dispatcher.js") as typeof import("../lib/agent-run-dispatcher.js");
+    const runs = listAgentRuns({
+      status: opts.status as any,
+      adapter: opts.adapter,
+      limit: parseInt(opts.limit, 10),
+    });
+    console.log(JSON.stringify(runs, null, 2));
+  });
+
+runsCmd
+  .command("complete <runId>")
+  .description("Complete a running agent run")
+  .option("--notes <text>", "Completion notes stored in evidence")
+  .action((runId, opts) => {
+    const { completeAgentRun } = require("../lib/agent-run-dispatcher.js") as typeof import("../lib/agent-run-dispatcher.js");
+    const evidence = opts.notes ? { notes: opts.notes } : {};
+    console.log(JSON.stringify(completeAgentRun(runId, evidence), null, 2));
+  });
+
+runsCmd
+  .command("fail <runId> <error>")
+  .description("Fail an agent run")
+  .option("--no-retry", "Skip auto-retry")
+  .action((runId, error, opts) => {
+    const { failAgentRun } = require("../lib/agent-run-dispatcher.js") as typeof import("../lib/agent-run-dispatcher.js");
+    console.log(JSON.stringify(failAgentRun(runId, error, { retry: !opts.noRetry }), null, 2));
+  });
+
+runsCmd
+  .command("cancel <runId>")
+  .description("Cancel a queued or running agent run")
+  .action((runId) => {
+    const { cancelAgentRun } = require("../lib/agent-run-dispatcher.js") as typeof import("../lib/agent-run-dispatcher.js");
+    console.log(JSON.stringify(cancelAgentRun(runId), null, 2));
+  });
+
+runsCmd
+  .command("retry <runId>")
+  .description("Manually retry a failed or cancelled run")
+  .action((runId) => {
+    const { retryAgentRun } = require("../lib/agent-run-dispatcher.js") as typeof import("../lib/agent-run-dispatcher.js");
+    console.log(JSON.stringify(retryAgentRun(runId), null, 2));
+  });
+
 // handoff
 program
   .command("handoff")

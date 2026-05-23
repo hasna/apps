@@ -860,4 +860,29 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_verification_records_provider ON verification_records(provider_name);
   INSERT OR IGNORE INTO _migrations (id) VALUES (50);
   `,
+  // Migration 51: Local agent run dispatcher queue
+  `
+  CREATE TABLE IF NOT EXISTS agent_runs (
+    id TEXT PRIMARY KEY,
+    task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+    agent_id TEXT,
+    adapter TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued', 'running', 'completed', 'failed', 'cancelled')),
+    evidence TEXT DEFAULT '{}',
+    error TEXT,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    max_retries INTEGER NOT NULL DEFAULT 3,
+    claimed_at TEXT,
+    started_at TEXT,
+    completed_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status);
+  CREATE INDEX IF NOT EXISTS idx_agent_runs_adapter ON agent_runs(adapter);
+  CREATE INDEX IF NOT EXISTS idx_agent_runs_task ON agent_runs(task_id);
+  CREATE INDEX IF NOT EXISTS idx_agent_runs_plan ON agent_runs(plan_id);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (51);
+  `,
 ];

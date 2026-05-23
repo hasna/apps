@@ -441,6 +441,30 @@ export function ensureSchema(db: Database): void {
   // Cross-project task dependencies
   ensureColumn("task_dependencies", "external_project_id", "TEXT");
   ensureColumn("task_dependencies", "external_task_id", "TEXT");
+
+  // Local agent run dispatcher queue
+  ensureTable("agent_runs", `
+    CREATE TABLE agent_runs (
+      id TEXT PRIMARY KEY,
+      task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+      plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+      agent_id TEXT,
+      adapter TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued', 'running', 'completed', 'failed', 'cancelled')),
+      evidence TEXT DEFAULT '{}',
+      error TEXT,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      max_retries INTEGER NOT NULL DEFAULT 3,
+      claimed_at TEXT,
+      started_at TEXT,
+      completed_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_agent_runs_adapter ON agent_runs(adapter)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_agent_runs_task ON agent_runs(task_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_agent_runs_plan ON agent_runs(plan_id)");
 }
 
 export function backfillTaskTags(db: Database): void {

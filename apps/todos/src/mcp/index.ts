@@ -39,6 +39,7 @@ import { registerContextPackTools } from "./tools/context-packs.js";
 import { registerPolicyTools } from "./tools/policy-packs.js";
 import { registerResourceSubscriptionTools } from "./tools/resource-subscriptions.js";
 import { registerSandboxTools } from "./tools/sandbox.js";
+import { registerAgentRunTools } from "./tools/agent-runs.js";
 
 function getMcpVersion(): string {
   try {
@@ -244,6 +245,7 @@ registerContextPackTools(server, { shouldRegisterTool, resolveId, formatError })
 registerPolicyTools(server, { shouldRegisterTool, resolveId, formatError });
 registerResourceSubscriptionTools(server, { shouldRegisterTool, formatError });
 registerSandboxTools(server, { shouldRegisterTool, formatError });
+registerAgentRunTools(server, { shouldRegisterTool, resolveId, formatError });
 
 // === DISPATCH ===
 

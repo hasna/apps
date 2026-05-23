@@ -307,6 +307,31 @@ export {
 } from "./lib/sandbox-profiles.js";
 export type { SandboxProfile, SandboxCheckInput, SandboxCheckResult } from "./lib/sandbox-profiles.js";
 
+// Agent run dispatcher
+export {
+  loadAgentAdapters,
+  saveAgentAdapters,
+  getAgentAdapter,
+  getDefaultAgentAdapters,
+  resetAgentAdapterCache,
+  enqueueAgentRun,
+  claimNextAgentRun,
+  completeAgentRun,
+  failAgentRun,
+  cancelAgentRun,
+  retryAgentRun,
+  listAgentRuns,
+  getAgentRun,
+  AGENT_RUN_SCHEMA_VERSION,
+} from "./lib/agent-run-dispatcher.js";
+export type {
+  AgentAdapterConfig,
+  AgentRun,
+  AgentRunStatus,
+  EnqueueAgentRunInput,
+  ListAgentRunsFilter,
+} from "./lib/agent-run-dispatcher.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";
