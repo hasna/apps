@@ -4960,6 +4960,20 @@ redactCmd
     console.log(JSON.stringify(getDefaultSecretPatterns(), null, 2));
   });
 
+program
+  .command("profile")
+  .description("Access profile metadata (TODOS_PROFILE)")
+  .option("--list", "List all profiles")
+  .action((opts) => {
+    const { listAccessProfiles, resolveAccessProfile, getHeadlessUsageNotes } = require("../lib/access-profiles.js") as typeof import("../lib/access-profiles.js");
+    if (opts.list) {
+      console.log(JSON.stringify(listAccessProfiles(), null, 2));
+    } else {
+      console.log(`Active: ${resolveAccessProfile()}`);
+      for (const n of getHeadlessUsageNotes()) console.log(`  ${n}`);
+    }
+  });
+
 // handoff
 program
   .command("handoff")

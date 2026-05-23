@@ -484,6 +484,20 @@ export {
 } from "./lib/secret-redaction.js";
 export type { SecretMatch, SecretScanResult, RedactionOptions, SecretPattern } from "./lib/secret-redaction.js";
 
+// Access profiles
+export {
+  ACCESS_PROFILES,
+  resolveAccessProfile,
+  getAccessProfileMeta,
+  listAccessProfiles,
+  shouldRegisterToolForProfile,
+  assertToolAllowed,
+  getHeadlessUsageNotes,
+  getProfileToolCount,
+  ACCESS_PROFILE_SCHEMA,
+} from "./lib/access-profiles.js";
+export type { AccessProfile, AccessProfileMeta } from "./lib/access-profiles.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";

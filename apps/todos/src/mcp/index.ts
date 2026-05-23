@@ -48,7 +48,8 @@ import { registerApprovalGateTools } from "./tools/approval-gates.js";
 import { registerAgentCoordinationTools } from "./tools/agent-coordination.js";
 import { registerProjectBootstrapTools } from "./tools/project-bootstrap.js";
 import { registerParityTools } from "./tools/parity.js";
-import { registerSecretRedactionTools } from "./tools/secret-redaction.js";
+import { registerAccessProfileTools } from "./tools/access-profiles.js";
+import { resolveAccessProfile, shouldRegisterToolForProfile } from "../lib/access-profiles.js";
 
 function getMcpVersion(): string {
   try {
@@ -65,26 +66,10 @@ const server = new McpServer({
 
 // === PROFILE FILTERING ===
 
-const TODOS_PROFILE = (process.env["TODOS_PROFILE"] || "full").toLowerCase();
-
-const MINIMAL_TOOLS = new Set([
-  "claim_next_task", "complete_task", "fail_task", "get_status", "get_context",
-  "get_task", "start_task", "add_comment", "get_next_task", "bootstrap",
-  "get_tasks_changed_since", "heartbeat", "release_agent",
-]);
-
-const STANDARD_EXCLUDED = new Set([
-  "rename_agent", "delete_agent", "unarchive_agent",
-  "create_webhook", "list_webhooks", "delete_webhook",
-  "create_template", "list_templates", "create_task_from_template", "delete_template", "update_template",
-  "init_templates", "preview_template", "export_template", "import_template", "template_history",
-  "approve_task",
-]);
+const TODOS_PROFILE = resolveAccessProfile(process.env["TODOS_PROFILE"]);
 
 function shouldRegisterTool(name: string): boolean {
-  if (TODOS_PROFILE === "minimal") return MINIMAL_TOOLS.has(name);
-  if (TODOS_PROFILE === "standard") return !STANDARD_EXCLUDED.has(name);
-  return true; // "full" or any unknown value = all tools
+  return shouldRegisterToolForProfile(name, TODOS_PROFILE);
 }
 
 // === FOCUS MODE ===
@@ -264,6 +249,7 @@ registerAgentCoordinationTools(server, { shouldRegisterTool, resolveId, formatEr
 registerProjectBootstrapTools(server, { shouldRegisterTool, formatError });
 registerParityTools(server, { shouldRegisterTool, formatError });
 registerSecretRedactionTools(server, { shouldRegisterTool, formatError });
+registerAccessProfileTools(server, { shouldRegisterTool, formatError });
 
 // === DISPATCH ===
 
