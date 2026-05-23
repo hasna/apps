@@ -43,6 +43,7 @@ import { registerAgentRunTools } from "./tools/agent-runs.js";
 import { registerGitTraceabilityTools } from "./tools/git-traceability.js";
 import { registerTaskDedupeTools } from "./tools/task-dedupe.js";
 import { registerTodosMdTools } from "./tools/todos-md.js";
+import { registerWorkspaceTrustTools } from "./tools/workspace-trust.js";
 
 function getMcpVersion(): string {
   try {
@@ -252,6 +253,7 @@ registerAgentRunTools(server, { shouldRegisterTool, resolveId, formatError });
 registerGitTraceabilityTools(server, { shouldRegisterTool, resolveId, formatError });
 registerTaskDedupeTools(server, { shouldRegisterTool, resolveId, formatError });
 registerTodosMdTools(server, { shouldRegisterTool, formatError });
+registerWorkspaceTrustTools(server, { shouldRegisterTool, formatError });
 
 // === DISPATCH ===
 

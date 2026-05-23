@@ -391,6 +391,25 @@ export {
 } from "./lib/todos-md.js";
 export type { TodosMdDocument, TodosMdTaskLine, ImportTodosMdResult, ExportTodosMdOptions, SyncTodosMdResult } from "./lib/todos-md.js";
 
+// Workspace trust
+export {
+  loadWorkspaceTrustConfig,
+  saveWorkspaceTrustConfig,
+  getWorkspaceTrustProfile,
+  getAgentTrustProfile,
+  checkPermission,
+  assertPermission,
+  trustWorkspace,
+  untrustWorkspace,
+  isWorkspaceTrusted,
+  getDefaultWorkspaceTrustProfiles,
+  resetWorkspaceTrustCache,
+  WorkspacePermissionError,
+  WORKSPACE_TRUST_VERSION,
+  PERMISSION_OPERATIONS,
+} from "./lib/workspace-trust.js";
+export type { WorkspaceTrustProfile, WorkspaceTrustConfig, PermissionOperation } from "./lib/workspace-trust.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";

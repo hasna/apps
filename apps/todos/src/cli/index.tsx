@@ -4725,6 +4725,35 @@ mdCmd
     console.log(JSON.stringify(syncTodosMd(opts.path), null, 2));
   });
 
+// trust — workspace trust and permission profiles
+const trustCmd = program
+  .command("trust")
+  .description("Local workspace trust and permission profiles");
+
+trustCmd
+  .command("profiles")
+  .action(() => {
+    const { loadWorkspaceTrustConfig } = require("../lib/workspace-trust.js") as typeof import("../lib/workspace-trust.js");
+    console.log(JSON.stringify(loadWorkspaceTrustConfig(), null, 2));
+  });
+
+trustCmd
+  .command("check <operation>")
+  .option("--profile <name>", "Profile name")
+  .option("--agent <id>", "Agent ID")
+  .action((operation, opts) => {
+    const { checkPermission } = require("../lib/workspace-trust.js") as typeof import("../lib/workspace-trust.js");
+    console.log(JSON.stringify(checkPermission(operation as any, { profile: opts.profile, agent_id: opts.agent }), null, 2));
+  });
+
+trustCmd
+  .command("add <path>")
+  .description("Trust a workspace path")
+  .action((path) => {
+    const { trustWorkspace } = require("../lib/workspace-trust.js") as typeof import("../lib/workspace-trust.js");
+    console.log(JSON.stringify(trustWorkspace(path), null, 2));
+  });
+
 // handoff
 program
   .command("handoff")
