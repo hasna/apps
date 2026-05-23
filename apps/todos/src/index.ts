@@ -845,6 +845,24 @@ export type {
   MachineTopologyReport,
 } from "./lib/machine-topology.js";
 
+// Environment snapshots
+export {
+  ENV_SNAPSHOT_SCHEMA,
+  buildEnvSnapshotPayload,
+  captureEnvSnapshot,
+  getEnvSnapshot,
+  listEnvSnapshots,
+  checkEnvSnapshot,
+  computeSnapshotHash,
+} from "./lib/environment-snapshots.js";
+export type {
+  EnvCommandVersion,
+  EnvSnapshotPayload,
+  EnvSnapshotRecord,
+  CaptureEnvSnapshotInput,
+  EnvSnapshotCheckResult,
+} from "./lib/environment-snapshots.js";
+
 // Checklists
 export {
   getChecklist,

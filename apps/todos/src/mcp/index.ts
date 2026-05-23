@@ -66,6 +66,7 @@ import { registerHandoffPacketTools } from "./tools/handoff-packets.js";
 import { registerCliDocsTools } from "./tools/cli-docs.js";
 import { registerTemplateLibraryTools } from "./tools/template-library.js";
 import { registerMachineTopologyTools } from "./tools/machine-topology.js";
+import { registerEnvironmentSnapshotTools } from "./tools/environment-snapshots.js";
 import { resolveAccessProfile, shouldRegisterToolForProfile } from "../lib/access-profiles.js";
 
 function getMcpVersion(): string {
@@ -283,6 +284,7 @@ registerHandoffPacketTools(server, { shouldRegisterTool, resolveId, formatError 
 registerCliDocsTools(server, { shouldRegisterTool, formatError });
 registerTemplateLibraryTools(server, { shouldRegisterTool, formatError });
 registerMachineTopologyTools(server, { shouldRegisterTool, formatError });
+registerEnvironmentSnapshotTools(server, { shouldRegisterTool, resolveId, formatError });
 
 // === DISPATCH ===
 

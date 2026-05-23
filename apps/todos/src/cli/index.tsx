@@ -1134,6 +1134,61 @@ machinesCmd
     console.log(JSON.stringify(buildMachineTopologyReport(), null, 2));
   });
 
+// env — reproducible environment snapshots
+const envCmd = program
+  .command("env")
+  .description("Capture and compare reproducible environment snapshots");
+
+envCmd
+  .command("capture")
+  .description("Capture current environment snapshot")
+  .option("--cwd <path>", "Working directory")
+  .option("--run-record-id <id>", "Link to run record")
+  .option("--agent-run-id <id>", "Link to agent run")
+  .action((opts) => {
+    const { captureEnvSnapshot } = require("../lib/environment-snapshots.js") as typeof import("../lib/environment-snapshots.js");
+    console.log(JSON.stringify(captureEnvSnapshot({
+      cwd: opts.cwd,
+      run_record_id: opts.runRecordId,
+      agent_run_id: opts.agentRunId,
+    }), null, 2));
+  });
+
+envCmd
+  .command("list")
+  .description("List stored environment snapshots")
+  .option("--run-record-id <id>", "Filter by run record")
+  .option("--limit <n>", "Max results", "20")
+  .action((opts) => {
+    const { listEnvSnapshots } = require("../lib/environment-snapshots.js") as typeof import("../lib/environment-snapshots.js");
+    console.log(JSON.stringify(listEnvSnapshots({
+      run_record_id: opts.runRecordId,
+      limit: parseInt(opts.limit, 10),
+    }), null, 2));
+  });
+
+envCmd
+  .command("get <id>")
+  .description("Get environment snapshot by id")
+  .action((id) => {
+    const { getEnvSnapshot } = require("../lib/environment-snapshots.js") as typeof import("../lib/environment-snapshots.js");
+    const record = getEnvSnapshot(id);
+    if (!record) {
+      console.error(`Snapshot not found: ${id}`);
+      process.exit(1);
+    }
+    console.log(JSON.stringify(record, null, 2));
+  });
+
+envCmd
+  .command("check <id>")
+  .description("Compare current environment against stored snapshot")
+  .option("--cwd <path>", "Working directory for comparison")
+  .action((id, opts) => {
+    const { checkEnvSnapshot } = require("../lib/environment-snapshots.js") as typeof import("../lib/environment-snapshots.js");
+    console.log(JSON.stringify(checkEnvSnapshot(id, opts.cwd), null, 2));
+  });
+
 // templates
 program
   .command("templates")

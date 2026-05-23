@@ -622,6 +622,20 @@ export function ensureSchema(db: Database): void {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`);
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_saved_views_slug ON saved_views(slug)");
+
+  ensureTable("env_snapshots", `
+    CREATE TABLE env_snapshots (
+      id TEXT PRIMARY KEY,
+      run_record_id TEXT,
+      agent_run_id TEXT,
+      cwd TEXT,
+      git_ref TEXT,
+      content_hash TEXT NOT NULL,
+      snapshot TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_env_snapshots_run ON env_snapshots(run_record_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_env_snapshots_hash ON env_snapshots(content_hash)");
 }
 
 export function backfillTaskTags(db: Database): void {
