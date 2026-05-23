@@ -465,6 +465,18 @@ export function ensureSchema(db: Database): void {
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_agent_runs_adapter ON agent_runs(adapter)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_agent_runs_task ON agent_runs(task_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_agent_runs_plan ON agent_runs(plan_id)");
+
+  // Git traceability on task_commits
+  ensureColumn("task_commits", "branch", "TEXT");
+  ensureColumn("task_commits", "pr_url", "TEXT");
+  ensureColumn("task_commits", "pr_number", "INTEGER");
+  ensureColumn("task_commits", "pr_state", "TEXT");
+  ensureColumn("task_commits", "ci_snapshot", "TEXT");
+  ensureColumn("task_commits", "release_tag", "TEXT");
+  ensureColumn("task_commits", "repo_path", "TEXT");
+  ensureColumn("task_commits", "traceability", "TEXT DEFAULT '{}'");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_commits_branch ON task_commits(branch)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_commits_pr ON task_commits(pr_number)");
 }
 
 export function backfillTaskTags(db: Database): void {

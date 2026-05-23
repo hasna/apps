@@ -4522,6 +4522,63 @@ runsCmd
     console.log(JSON.stringify(retryAgentRun(runId), null, 2));
   });
 
+// trace — git branch/commit/PR traceability
+const traceCmd = program
+  .command("trace")
+  .description("Git branch, commit, and PR traceability for tasks");
+
+traceCmd
+  .command("link <taskId>")
+  .description("Capture and link local git context to a task")
+  .option("--sha <sha>", "Commit SHA (default: HEAD)")
+  .option("--branch <name>", "Branch name override")
+  .option("--pr-url <url>", "Pull request URL")
+  .option("--pr-number <n>", "Pull request number")
+  .option("--release-tag <tag>", "Release tag evidence")
+  .option("--ci-snapshot <path>", "Path to CI snapshot JSON")
+  .action((taskId, opts) => {
+    const { linkTaskGitTrace } = require("../lib/git-traceability.js") as typeof import("../lib/git-traceability.js");
+    const resolvedId = resolveTaskId(taskId);
+    const commit = linkTaskGitTrace({
+      task_id: resolvedId,
+      sha: opts.sha,
+      branch: opts.branch,
+      pr_url: opts.prUrl,
+      pr_number: opts.prNumber ? parseInt(opts.prNumber, 10) : undefined,
+      release_tag: opts.releaseTag,
+      ci_snapshot_path: opts.ciSnapshot,
+    });
+    console.log(JSON.stringify(commit, null, 2));
+  });
+
+traceCmd
+  .command("show <taskId>")
+  .description("Show traceability report for a task")
+  .option("-j, --json", "Output JSON instead of text")
+  .action((taskId, opts) => {
+    const { getTaskTraceability, formatTraceabilityReport } = require("../lib/git-traceability.js") as typeof import("../lib/git-traceability.js");
+    const resolvedId = resolveTaskId(taskId);
+    const report = getTaskTraceability(resolvedId);
+    if (opts.json) {
+      console.log(JSON.stringify(report, null, 2));
+    } else {
+      console.log(formatTraceabilityReport(report));
+    }
+  });
+
+traceCmd
+  .command("inspect <sha>")
+  .description("Inspect a local git commit")
+  .action((sha) => {
+    const { inspectGitCommit } = require("../lib/git-traceability.js") as typeof import("../lib/git-traceability.js");
+    const info = inspectGitCommit(sha);
+    if (!info) {
+      console.error(chalk.red(`Commit not found: ${sha}`));
+      process.exit(1);
+    }
+    console.log(JSON.stringify(info, null, 2));
+  });
+
 // handoff
 program
   .command("handoff")

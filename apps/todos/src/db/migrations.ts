@@ -885,4 +885,18 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_agent_runs_plan ON agent_runs(plan_id);
   INSERT OR IGNORE INTO _migrations (id) VALUES (51);
   `,
+  // Migration 52: Git traceability — branch, PR, CI snapshot, release evidence on task_commits
+  `
+  ALTER TABLE task_commits ADD COLUMN branch TEXT;
+  ALTER TABLE task_commits ADD COLUMN pr_url TEXT;
+  ALTER TABLE task_commits ADD COLUMN pr_number INTEGER;
+  ALTER TABLE task_commits ADD COLUMN pr_state TEXT;
+  ALTER TABLE task_commits ADD COLUMN ci_snapshot TEXT;
+  ALTER TABLE task_commits ADD COLUMN release_tag TEXT;
+  ALTER TABLE task_commits ADD COLUMN repo_path TEXT;
+  ALTER TABLE task_commits ADD COLUMN traceability TEXT DEFAULT '{}';
+  CREATE INDEX IF NOT EXISTS idx_task_commits_branch ON task_commits(branch);
+  CREATE INDEX IF NOT EXISTS idx_task_commits_pr ON task_commits(pr_number);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (52);
+  `,
 ];

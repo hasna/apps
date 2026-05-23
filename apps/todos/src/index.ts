@@ -332,6 +332,28 @@ export type {
   ListAgentRunsFilter,
 } from "./lib/agent-run-dispatcher.js";
 
+// Git traceability
+export {
+  linkTaskToCommit,
+  getTaskCommits,
+  findTaskByCommit,
+  unlinkTaskCommit,
+  getTaskTraceability,
+} from "./db/task-commits.js";
+export type { TaskCommit, CiSnapshot, TaskTraceabilityReport, LinkTaskToCommitInput } from "./db/task-commits.js";
+export {
+  linkTaskGitTrace,
+  inspectGitCommit,
+  getHeadSha,
+  getCurrentBranch,
+  resolveGitRoot,
+  loadCiSnapshot,
+  detectPrForBranch,
+  formatTraceabilityReport,
+  GIT_TRACEABILITY_SCHEMA_VERSION,
+} from "./lib/git-traceability.js";
+export type { GitCommitInfo, LinkGitTraceInput } from "./lib/git-traceability.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";
