@@ -1,4 +1,7 @@
 import { afterEach, describe, mock, test, expect } from "bun:test";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { join } from "path";
+import { homedir } from "os";
 import {
   getConnectorCliPath,
   getConnectorOperations,
@@ -410,6 +413,64 @@ describe("Runner", () => {
         OPEN_AI_KEY: "oai-key",
       });
       expect(env.OPEN_AI_API_KEY).toBe("oai-key");
+    });
+
+    test("injects stored Gmail OAuth credentials into subprocess env", () => {
+      const configDir = join(homedir(), ".hasna", "connectors", "connect-gmail");
+      const credsFile = join(configDir, "credentials.json");
+      const profileDir = join(configDir, "profiles", "default");
+      const tokensFile = join(profileDir, "tokens.json");
+      const currentProfileFile = join(configDir, "current_profile");
+      const hadCreds = existsSync(credsFile);
+      const previousCreds = hadCreds ? readFileSync(credsFile, "utf-8") : null;
+      const hadTokens = existsSync(tokensFile);
+      const previousTokens = hadTokens ? readFileSync(tokensFile, "utf-8") : null;
+      const hadCurrentProfile = existsSync(currentProfileFile);
+      const previousCurrentProfile = hadCurrentProfile
+        ? readFileSync(currentProfileFile, "utf-8")
+        : null;
+
+      mkdirSync(profileDir, { recursive: true });
+      writeFileSync(currentProfileFile, "default");
+      writeFileSync(
+        credsFile,
+        JSON.stringify({
+          clientId: "runner-client-id",
+          clientSecret: "runner-client-secret",
+        })
+      );
+      writeFileSync(
+        tokensFile,
+        JSON.stringify({
+          accessToken: "runner-access-token",
+          refreshToken: "runner-refresh-token",
+          expiresAt: Date.now() + 3600_000,
+        })
+      );
+
+      try {
+        const env = buildEnvWithCredentials("gmail", {});
+        expect(env.GMAIL_CLIENT_ID).toBe("runner-client-id");
+        expect(env.GMAIL_CLIENT_SECRET).toBe("runner-client-secret");
+        expect(env.GMAIL_ACCESS_TOKEN).toBe("runner-access-token");
+        expect(env.GMAIL_REFRESH_TOKEN).toBe("runner-refresh-token");
+      } finally {
+        if (previousCreds !== null) {
+          writeFileSync(credsFile, previousCreds);
+        } else if (existsSync(credsFile)) {
+          rmSync(credsFile);
+        }
+        if (previousTokens !== null) {
+          writeFileSync(tokensFile, previousTokens);
+        } else if (existsSync(tokensFile)) {
+          rmSync(tokensFile);
+        }
+        if (previousCurrentProfile !== null) {
+          writeFileSync(currentProfileFile, previousCurrentProfile);
+        } else if (existsSync(currentProfileFile)) {
+          rmSync(currentProfileFile);
+        }
+      }
     });
   });
 });

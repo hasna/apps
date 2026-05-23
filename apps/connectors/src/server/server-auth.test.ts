@@ -130,6 +130,69 @@ describe("auth", () => {
       expect(status.tokenExpiry).toBeUndefined();
     });
 
+    test("returns configured=true for oauth when credentials.json has client credentials", () => {
+      const configDir = testConfigDir("gmail");
+      const credsFile = join(configDir, "credentials.json");
+      const hadCreds = existsSync(credsFile);
+      const previous = hadCreds ? readFileSync(credsFile, "utf-8") : null;
+
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        credsFile,
+        JSON.stringify({
+          clientId: "stored-client-id",
+          clientSecret: "stored-client-secret",
+        })
+      );
+
+      try {
+        const status = getAuthStatus("gmail");
+        expect(status.type).toBe("oauth");
+        expect(status.configured).toBe(true);
+        expect(status.hasOAuthCredentials).toBe(true);
+        expect(status.envVars.find((v) => v.variable === "GMAIL_CLIENT_ID")?.set).toBe(true);
+        expect(status.envVars.find((v) => v.variable === "GMAIL_CLIENT_SECRET")?.set).toBe(true);
+      } finally {
+        if (previous !== null) {
+          writeFileSync(credsFile, previous);
+        } else if (existsSync(credsFile)) {
+          rmSync(credsFile);
+        }
+      }
+    });
+
+    test("returns configured=true for oauth when tokens exist in profile", () => {
+      const profileDir = join(testConfigDir("gmail"), "profiles", "default");
+      const tokensFile = join(profileDir, "tokens.json");
+      const hadTokens = existsSync(tokensFile);
+      const previous = hadTokens ? readFileSync(tokensFile, "utf-8") : null;
+
+      mkdirSync(profileDir, { recursive: true });
+      writeFileSync(
+        tokensFile,
+        JSON.stringify({
+          accessToken: "access-token",
+          refreshToken: "refresh-token",
+          expiresAt: Date.now() + 3600_000,
+        })
+      );
+
+      try {
+        const status = getAuthStatus("gmail");
+        expect(status.type).toBe("oauth");
+        expect(status.configured).toBe(true);
+        expect(status.hasRefreshToken).toBe(true);
+        expect(status.envVars.find((v) => v.variable === "GMAIL_ACCESS_TOKEN")?.set).toBe(true);
+        expect(status.envVars.find((v) => v.variable === "GMAIL_REFRESH_TOKEN")?.set).toBe(true);
+      } finally {
+        if (previous !== null) {
+          writeFileSync(tokensFile, previous);
+        } else if (existsSync(tokensFile)) {
+          rmSync(tokensFile);
+        }
+      }
+    });
+
     test("envVars array includes expected variables for stripe", () => {
       const status = getAuthStatus("stripe");
       expect(status.envVars.length).toBeGreaterThan(0);

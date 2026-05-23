@@ -439,6 +439,40 @@ describe("MCP Server", () => {
       expect(data.envVars[0]).toHaveProperty("variable");
       expect(data.envVars[0]).toHaveProperty("description");
     });
+
+    test("reports gmail configured when credentials.json is stored", async () => {
+      const { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } = await import("fs");
+      const { join } = await import("path");
+      const { homedir } = await import("os");
+
+      const configDir = join(homedir(), ".hasna", "connectors", "connect-gmail");
+      const credsFile = join(configDir, "credentials.json");
+      const hadCreds = existsSync(credsFile);
+      const previous = hadCreds ? readFileSync(credsFile, "utf-8") : null;
+
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        credsFile,
+        JSON.stringify({
+          clientId: "mcp-client-id",
+          clientSecret: "mcp-client-secret",
+        })
+      );
+
+      try {
+        const res = await callMcp("connector_auth_status", { name: "gmail" });
+        const data = parseContent(res);
+        expect(data.type).toBe("oauth");
+        expect(data.configured).toBe(true);
+        expect(data.hasOAuthCredentials).toBe(true);
+      } finally {
+        if (previous !== null) {
+          writeFileSync(credsFile, previous);
+        } else if (existsSync(credsFile)) {
+          rmSync(credsFile);
+        }
+      }
+    });
   });
 
   describe("configure_auth", () => {

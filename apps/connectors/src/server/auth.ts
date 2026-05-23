@@ -68,6 +68,7 @@ export interface AuthStatus {
   configured: boolean;
   tokenExpiry?: number;
   hasRefreshToken?: boolean;
+  hasOAuthCredentials?: boolean;
   envVars: { variable: string; description: string; set: boolean }[];
   envVarSetCount: number;
   envVarTotalCount: number;
@@ -192,39 +193,66 @@ export function loadTokens(name: string): OAuthTokens | null {
   return null;
 }
 
+function isStoredOAuthEnvVarSet(
+  variable: string,
+  oauthConfig: { clientId?: string; clientSecret?: string },
+  tokens: OAuthTokens | null,
+  profileConfig: Record<string, unknown>
+): boolean {
+  if (variable.endsWith("_CLIENT_ID")) {
+    return Boolean(oauthConfig.clientId || profileConfig.clientId);
+  }
+  if (variable.endsWith("_CLIENT_SECRET")) {
+    return Boolean(oauthConfig.clientSecret || profileConfig.clientSecret);
+  }
+  if (variable.endsWith("_ACCESS_TOKEN")) {
+    return Boolean(tokens?.accessToken || profileConfig.accessToken);
+  }
+  if (variable.endsWith("_REFRESH_TOKEN")) {
+    return Boolean(tokens?.refreshToken || profileConfig.refreshToken);
+  }
+  if (variable.endsWith("_TOKEN_EXPIRES_AT")) {
+    return Boolean(tokens?.expiresAt || profileConfig.expiresAt);
+  }
+  return false;
+}
+
 /**
  * Get the full auth status for a connector
  */
 export function getAuthStatus(name: string): AuthStatus {
   const authType = getAuthType(name);
   const docs = getConnectorDocs(name);
+  const oauthConfig = authType === "oauth" ? getOAuthConfig(name) : {};
+  const tokens = authType === "oauth" ? loadTokens(name) : null;
+  const profileConfig = authType === "oauth" ? loadProfileConfig(name) : {};
 
-  // Build env vars list with set/unset status
+  // Build env vars list with set/unset status (process env + stored credentials)
   const envVars = (docs?.envVars || []).map((v) => ({
     variable: v.variable,
     description: v.description,
-    set: !!process.env[v.variable],
+    set:
+      !!process.env[v.variable] ||
+      (authType === "oauth" &&
+        isStoredOAuthEnvVarSet(v.variable, oauthConfig, tokens, profileConfig)),
   }));
 
   const envVarTotalCount = envVars.length;
   const envVarSetCount = envVars.filter((v) => v.set).length;
 
   if (authType === "oauth") {
-    // Check directory pattern: profiles/<name>/tokens.json
-    const tokens = loadTokens(name);
-    // Check both flat and directory config patterns for accessToken/refreshToken
-    const config = loadProfileConfig(name);
-
-    const hasTokens = !!tokens?.accessToken || !!(config.accessToken);
-    const hasRefreshToken = !!tokens?.refreshToken || !!(config.refreshToken);
-    const tokenExpiry = tokens?.expiresAt || (config.expiresAt as number | undefined);
+    const hasTokens = !!tokens?.accessToken || !!(profileConfig.accessToken);
+    const hasRefreshToken = !!tokens?.refreshToken || !!(profileConfig.refreshToken);
+    const tokenExpiry = tokens?.expiresAt || (profileConfig.expiresAt as number | undefined);
+    const hasOAuthCredentials = Boolean(oauthConfig.clientId && oauthConfig.clientSecret);
     const hasEnvVar = envVars.some((v) => v.set);
 
     return {
       type: "oauth",
-      configured: hasTokens || hasRefreshToken || hasEnvVar,
+      configured: hasTokens || hasRefreshToken || hasOAuthCredentials || hasEnvVar,
       tokenExpiry,
       hasRefreshToken,
+      hasOAuthCredentials,
       envVars,
       envVarSetCount,
       envVarTotalCount,

@@ -12,6 +12,12 @@ import {
   listInternalConnectorDefinitions,
 } from "../core/builtins.js";
 import { getConnectorsHome } from "../db/database.js";
+import {
+  getAuthType,
+  getEnvVars,
+  getOAuthConfig,
+  loadTokens,
+} from "../server/auth.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -123,6 +129,27 @@ export function buildEnvWithCredentials(
       if (value) {
         env[canonicalKey] = value;
         break;
+      }
+    }
+  }
+
+  if (getAuthType(connectorName) === "oauth") {
+    const oauthConfig = getOAuthConfig(connectorName);
+    const tokens = loadTokens(connectorName);
+
+    for (const { variable } of getEnvVars(connectorName)) {
+      if (env[variable]) continue;
+
+      if (variable.endsWith("_CLIENT_ID") && oauthConfig.clientId) {
+        env[variable] = oauthConfig.clientId;
+      } else if (variable.endsWith("_CLIENT_SECRET") && oauthConfig.clientSecret) {
+        env[variable] = oauthConfig.clientSecret;
+      } else if (variable.endsWith("_ACCESS_TOKEN") && tokens?.accessToken) {
+        env[variable] = tokens.accessToken;
+      } else if (variable.endsWith("_REFRESH_TOKEN") && tokens?.refreshToken) {
+        env[variable] = tokens.refreshToken;
+      } else if (variable.endsWith("_TOKEN_EXPIRES_AT") && tokens?.expiresAt) {
+        env[variable] = String(tokens.expiresAt);
       }
     }
   }
