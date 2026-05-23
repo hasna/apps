@@ -768,9 +768,9 @@ describe("tasksFromTemplate with variables validation", () => {
 // === Feature 2: Built-in starter templates ===
 
 describe("initBuiltinTemplates", () => {
-  it("should create all 4 built-in templates", () => {
+  it("should create all built-in templates", () => {
     const result = initBuiltinTemplates(db);
-    expect(result.created).toBe(4);
+    expect(result.created).toBe(8);
     expect(result.skipped).toBe(0);
     expect(result.names).toContain("open-source-project");
     expect(result.names).toContain("bug-fix");
@@ -782,7 +782,7 @@ describe("initBuiltinTemplates", () => {
     initBuiltinTemplates(db);
     const result2 = initBuiltinTemplates(db);
     expect(result2.created).toBe(0);
-    expect(result2.skipped).toBe(4);
+    expect(result2.skipped).toBe(8);
   });
 
   it("should create templates with variables", () => {
@@ -818,15 +818,15 @@ describe("initBuiltinTemplates", () => {
     // Create one manually first
     createTemplate({ name: "bug-fix", title_pattern: "Custom bug fix" }, db);
     const result = initBuiltinTemplates(db);
-    expect(result.created).toBe(3);
+    expect(result.created).toBe(7);
     expect(result.skipped).toBe(1);
     expect(result.names).not.toContain("bug-fix");
   });
 });
 
 describe("BUILTIN_TEMPLATES constant", () => {
-  it("should have 4 templates", () => {
-    expect(BUILTIN_TEMPLATES).toHaveLength(4);
+  it("should have 8 templates", () => {
+    expect(BUILTIN_TEMPLATES).toHaveLength(8);
   });
 
   it("should have required variables in each template", () => {

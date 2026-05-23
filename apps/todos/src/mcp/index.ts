@@ -64,6 +64,7 @@ import { registerDependencyGraphTools } from "./tools/dependency-graph.js";
 import { registerPlanExecutionTools } from "./tools/plan-execution.js";
 import { registerHandoffPacketTools } from "./tools/handoff-packets.js";
 import { registerCliDocsTools } from "./tools/cli-docs.js";
+import { registerTemplateLibraryTools } from "./tools/template-library.js";
 import { resolveAccessProfile, shouldRegisterToolForProfile } from "../lib/access-profiles.js";
 
 function getMcpVersion(): string {
@@ -279,6 +280,7 @@ registerDependencyGraphTools(server, { shouldRegisterTool, resolveId, formatErro
 registerPlanExecutionTools(server, { shouldRegisterTool, resolveId, formatError });
 registerHandoffPacketTools(server, { shouldRegisterTool, resolveId, formatError });
 registerCliDocsTools(server, { shouldRegisterTool, formatError });
+registerTemplateLibraryTools(server, { shouldRegisterTool, formatError });
 
 // === DISPATCH ===
 

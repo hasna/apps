@@ -1050,6 +1050,60 @@ program
     }
   });
 
+// template-library — bundled marketplace-free workflows
+const templateLibraryCmd = program
+  .command("template-library")
+  .description("Bundled local template library (no marketplace/network)");
+
+templateLibraryCmd
+  .command("list")
+  .description("List bundled templates")
+  .option("-j, --json", "JSON output")
+  .action((opts) => {
+    const { listTemplateLibrary } = require("../lib/template-library.js") as typeof import("../lib/template-library.js");
+    const list = listTemplateLibrary();
+    if (opts.json) console.log(JSON.stringify(list, null, 2));
+    else for (const t of list) console.log(`${t.installed ? "✓" : "○"} ${t.name} v${t.version} [${t.category}] — ${t.description} (${t.task_count} tasks)`);
+  });
+
+templateLibraryCmd
+  .command("preview <name>")
+  .description("Preview template task list")
+  .option("--var <pairs...>", "Variables key=value")
+  .action((name, opts) => {
+    const { previewBuiltinTemplate } = require("../lib/template-library.js") as typeof import("../lib/template-library.js");
+    const vars: Record<string, string> = {};
+    for (const v of (opts.var as string[] | undefined) ?? []) {
+      const eq = v.indexOf("=");
+      if (eq > 0) vars[v.slice(0, eq)] = v.slice(eq + 1);
+    }
+    console.log(JSON.stringify(previewBuiltinTemplate(name, vars), null, 2));
+  });
+
+templateLibraryCmd
+  .command("install")
+  .description("Install all bundled templates (idempotent)")
+  .action(() => {
+    const { installTemplateLibrary } = require("../lib/template-library.js") as typeof import("../lib/template-library.js");
+    console.log(JSON.stringify(installTemplateLibrary(), null, 2));
+  });
+
+templateLibraryCmd
+  .command("export [path]")
+  .description("Export template catalog JSON")
+  .action((path) => {
+    const { exportTemplateLibraryCatalog } = require("../lib/template-library.js") as typeof import("../lib/template-library.js");
+    console.log(JSON.stringify(exportTemplateLibraryCatalog(path), null, 2));
+  });
+
+templateLibraryCmd
+  .command("docs")
+  .description("Template library documentation")
+  .action(() => {
+    const { getTemplateLibraryDocs } = require("../lib/template-library.js") as typeof import("../lib/template-library.js");
+    console.log(getTemplateLibraryDocs());
+  });
+
 // templates
 program
   .command("templates")
