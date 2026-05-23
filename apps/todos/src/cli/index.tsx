@@ -5497,6 +5497,77 @@ viewsCmd
     else for (const h of result.hits) console.log(`[${h.entity_type}] ${h.title}`);
   });
 
+// bridge — local import/export/sync for hosted bridge
+const bridgeCmd = program
+  .command("bridge")
+  .description("Local import/export/sync bundles for hosted-bridge (no cloud calls)");
+
+bridgeCmd
+  .command("export [path]")
+  .description("Export local bundle JSON")
+  .option("--project <id>", "Scope to project")
+  .option("--profile <profile>", "Export profile: redacted|encrypted|plaintext", "redacted")
+  .option("--acknowledge-plaintext", "Acknowledge plaintext export risk")
+  .action((path, opts) => {
+    const { exportLocalBundle, writeBundleFile } = require("../lib/import-export-bridge.js") as typeof import("../lib/import-export-bridge.js");
+    const bundle = exportLocalBundle({
+      project_id: opts.project,
+      profile: opts.profile,
+      acknowledge_plaintext: opts.acknowledgePlaintext,
+    });
+    if (path) {
+      writeBundleFile(bundle, path);
+      console.log(JSON.stringify({ path, exported_at: bundle.exported_at, tasks: bundle.tasks.length }, null, 2));
+    } else {
+      console.log(JSON.stringify(bundle, null, 2));
+    }
+  });
+
+bridgeCmd
+  .command("import <path>")
+  .description("Import bundle JSON into local database")
+  .option("--strategy <s>", "Merge strategy", "newest_wins")
+  .option("--dry-run", "Preview only")
+  .action((path, opts) => {
+    const { readBundleFile, importBundle } = require("../lib/import-export-bridge.js") as typeof import("../lib/import-export-bridge.js");
+    const bundle = readBundleFile(path);
+    console.log(JSON.stringify(importBundle(bundle, { strategy: opts.strategy, dry_run: !!opts.dryRun }), null, 2));
+  });
+
+bridgeCmd
+  .command("sync <path>")
+  .description("Preview sync conflicts for a bundle")
+  .option("--strategy <s>", "Merge strategy", "newest_wins")
+  .action((path, opts) => {
+    const { readBundleFile, previewSync } = require("../lib/import-export-bridge.js") as typeof import("../lib/import-export-bridge.js");
+    const bundle = readBundleFile(path);
+    console.log(JSON.stringify(previewSync(bundle, opts.strategy), null, 2));
+  });
+
+bridgeCmd
+  .command("validate <path>")
+  .description("Validate bundle JSON structure")
+  .action((path) => {
+    const { readBundleFile, validateBundle } = require("../lib/import-export-bridge.js") as typeof import("../lib/import-export-bridge.js");
+    const raw = JSON.parse(require("node:fs").readFileSync(path, "utf8"));
+    const result = validateBundle(raw);
+    if (!result.valid) {
+      console.log(JSON.stringify(result, null, 2));
+      process.exitCode = 1;
+      return;
+    }
+    readBundleFile(path);
+    console.log(JSON.stringify({ valid: true, path }, null, 2));
+  });
+
+bridgeCmd
+  .command("docs")
+  .description("Bridge workflow documentation")
+  .action(() => {
+    const { getBridgeDocs } = require("../lib/import-export-bridge.js") as typeof import("../lib/import-export-bridge.js");
+    console.log(getBridgeDocs());
+  });
+
 // handoff
 program
   .command("handoff")
