@@ -828,6 +828,23 @@ export {
 } from "./lib/template-library.js";
 export type { TemplateLibraryEntry, TemplateLibraryCatalog, TemplateLibraryExport } from "./lib/template-library.js";
 
+// Machine topology
+export {
+  MACHINE_TOPOLOGY_SCHEMA,
+  registerLocalMachine,
+  getPathOverrides,
+  getMachineAgentSummaries,
+  buildMachineTopologyReport,
+  getReachableHostnames,
+  getTopologyDocs,
+} from "./lib/machine-topology.js";
+export type {
+  MachinePathOverride,
+  MachineAgentSummary,
+  MachineTopologyNode,
+  MachineTopologyReport,
+} from "./lib/machine-topology.js";
+
 // Checklists
 export {
   getChecklist,

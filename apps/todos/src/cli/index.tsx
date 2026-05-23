@@ -1104,6 +1104,36 @@ templateLibraryCmd
     console.log(getTemplateLibraryDocs());
   });
 
+// machines — local registry and topology
+const machinesCmd = program
+  .command("machines")
+  .description("Local machine registry and topology diagnostics");
+
+machinesCmd
+  .command("register")
+  .description("Register or refresh local machine")
+  .action(() => {
+    const { registerLocalMachine } = require("../lib/machine-topology.js") as typeof import("../lib/machine-topology.js");
+    console.log(JSON.stringify(registerLocalMachine(), null, 2));
+  });
+
+machinesCmd
+  .command("list")
+  .description("List registered machines")
+  .action(() => {
+    const { listMachines } = require("../db/machines.js") as typeof import("../db/machines.js");
+    console.log(JSON.stringify(listMachines(), null, 2));
+  });
+
+machinesCmd
+  .command("topology")
+  .description("Full topology diagnostic report")
+  .option("-j, --json", "JSON output")
+  .action((opts) => {
+    const { buildMachineTopologyReport } = require("../lib/machine-topology.js") as typeof import("../lib/machine-topology.js");
+    console.log(JSON.stringify(buildMachineTopologyReport(), null, 2));
+  });
+
 // templates
 program
   .command("templates")
