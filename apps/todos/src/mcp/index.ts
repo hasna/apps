@@ -48,6 +48,7 @@ import { registerApprovalGateTools } from "./tools/approval-gates.js";
 import { registerAgentCoordinationTools } from "./tools/agent-coordination.js";
 import { registerProjectBootstrapTools } from "./tools/project-bootstrap.js";
 import { registerParityTools } from "./tools/parity.js";
+import { registerSecretRedactionTools } from "./tools/secret-redaction.js";
 
 function getMcpVersion(): string {
   try {
@@ -262,6 +263,7 @@ registerApprovalGateTools(server, { shouldRegisterTool, resolveId, formatError }
 registerAgentCoordinationTools(server, { shouldRegisterTool, resolveId, formatError });
 registerProjectBootstrapTools(server, { shouldRegisterTool, formatError });
 registerParityTools(server, { shouldRegisterTool, formatError });
+registerSecretRedactionTools(server, { shouldRegisterTool, formatError });
 
 // === DISPATCH ===
 

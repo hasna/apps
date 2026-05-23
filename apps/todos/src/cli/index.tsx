@@ -4931,6 +4931,35 @@ program
     }
   });
 
+// redact — secret scanning and redaction
+const redactCmd = program
+  .command("redact")
+  .description("Secret scanning and redaction for safe exports");
+
+redactCmd
+  .command("scan <path>")
+  .description("Scan a file for secret patterns")
+  .action((path) => {
+    const { scanFileForSecrets } = require("../lib/secret-redaction.js") as typeof import("../lib/secret-redaction.js");
+    console.log(JSON.stringify(scanFileForSecrets(path), null, 2));
+  });
+
+redactCmd
+  .command("text <text>")
+  .description("Scan/redact inline text")
+  .action((text) => {
+    const { scanAndRedactText } = require("../lib/secret-redaction.js") as typeof import("../lib/secret-redaction.js");
+    console.log(JSON.stringify(scanAndRedactText(text), null, 2));
+  });
+
+redactCmd
+  .command("patterns")
+  .description("List built-in secret patterns")
+  .action(() => {
+    const { getDefaultSecretPatterns } = require("../lib/secret-redaction.js") as typeof import("../lib/secret-redaction.js");
+    console.log(JSON.stringify(getDefaultSecretPatterns(), null, 2));
+  });
+
 // handoff
 program
   .command("handoff")
