@@ -780,6 +780,32 @@ export type {
   DashboardTaskRow,
 } from "./lib/tui-dashboard.js";
 
+// CLI reference, completions, manpage
+export {
+  CLI_REFERENCE_SCHEMA,
+  CLI_COMMAND_GROUPS,
+  ENV_VARS,
+  EXIT_CODES,
+  JSON_OUTPUT_CONTRACT,
+  listTopLevelCommands,
+  NESTED_SUBCOMMANDS,
+  getCommandHelp,
+  getInstallInstructions,
+} from "./lib/cli-reference.js";
+export type { CliCommandRef, CliCommandGroup, ExitCodeRef, EnvVarRef } from "./lib/cli-reference.js";
+export {
+  COMPLETIONS_SCHEMA,
+  generateBashCompletion,
+  generateZshCompletion,
+  generateFishCompletion,
+  generateCompletionInstallScript,
+} from "./lib/cli-completions.js";
+export {
+  MANPAGE_SCHEMA,
+  generateManpage,
+  generateCliReferenceMarkdown,
+} from "./lib/cli-manpage.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";

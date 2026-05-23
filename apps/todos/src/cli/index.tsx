@@ -5186,6 +5186,74 @@ docsCmd
     }
   });
 
+docsCmd
+  .command("cli")
+  .description("Manpage-grade CLI reference (markdown)")
+  .option("--man", "Emit troff-style manpage text")
+  .action((opts) => {
+    const { generateCliReferenceMarkdown, generateManpage } = require("../lib/cli-manpage.js") as typeof import("../lib/cli-manpage.js");
+    console.log(opts.man ? generateManpage() : generateCliReferenceMarkdown());
+  });
+
+docsCmd
+  .command("env")
+  .description("Environment variables and exit codes")
+  .option("-j, --json", "JSON output")
+  .action((opts) => {
+    const { ENV_VARS, EXIT_CODES, JSON_OUTPUT_CONTRACT } = require("../lib/cli-reference.js") as typeof import("../lib/cli-reference.js");
+    const payload = { env: ENV_VARS, exit_codes: EXIT_CODES, json_contract: JSON_OUTPUT_CONTRACT };
+    if (opts.json) console.log(JSON.stringify(payload, null, 2));
+    else {
+      console.log("Environment:\n");
+      for (const e of ENV_VARS) console.log(`  ${e.name} — ${e.description}${e.default ? ` (${e.default})` : ""}`);
+      console.log("\nExit codes:\n");
+      for (const c of EXIT_CODES) console.log(`  ${c.code} — ${c.meaning}`);
+    }
+  });
+
+// completion — shell completions
+const completionCmd = program
+  .command("completion")
+  .description("Generate shell completions (bash, zsh, fish)");
+
+completionCmd
+  .command("bash")
+  .description("Bash completion script")
+  .action(() => {
+    const { generateBashCompletion } = require("../lib/cli-completions.js") as typeof import("../lib/cli-completions.js");
+    console.log(generateBashCompletion());
+  });
+
+completionCmd
+  .command("zsh")
+  .description("Zsh completion script")
+  .action(() => {
+    const { generateZshCompletion } = require("../lib/cli-completions.js") as typeof import("../lib/cli-completions.js");
+    console.log(generateZshCompletion());
+  });
+
+completionCmd
+  .command("fish")
+  .description("Fish completion script")
+  .action(() => {
+    const { generateFishCompletion } = require("../lib/cli-completions.js") as typeof import("../lib/cli-completions.js");
+    console.log(generateFishCompletion());
+  });
+
+completionCmd
+  .command("install")
+  .description("Print install instructions for a shell")
+  .requiredOption("--shell <shell>", "bash, zsh, or fish")
+  .action((opts) => {
+    const { getInstallInstructions } = require("../lib/cli-reference.js") as typeof import("../lib/cli-reference.js");
+    const shell = opts.shell as "bash" | "zsh" | "fish";
+    if (!["bash", "zsh", "fish"].includes(shell)) {
+      console.error(chalk.red("Shell must be bash, zsh, or fish"));
+      process.exit(1);
+    }
+    for (const line of getInstallInstructions(shell)) console.log(line);
+  });
+
 // intake — local inbox intake for issues, CI logs, feedback
 const intakeCmd = program
   .command("intake")
