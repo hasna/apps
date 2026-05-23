@@ -524,6 +524,25 @@ export function ensureSchema(db: Database): void {
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_labels_project ON labels(project_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_labels_label ON task_labels(label_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_custom_fields_project ON custom_field_definitions(project_id)");
+
+  // Approval gate requests
+  ensureTable("task_approval_requests", `
+    CREATE TABLE task_approval_requests (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+      checkpoint_step TEXT,
+      gate_type TEXT NOT NULL CHECK(gate_type IN ('start', 'complete', 'checkpoint', 'plan_step')),
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected', 'cancelled')),
+      requested_by TEXT,
+      reviewed_by TEXT,
+      note TEXT,
+      review_note TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      reviewed_at TEXT
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_approval_requests_task ON task_approval_requests(task_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_approval_requests_status ON task_approval_requests(status)");
 }
 
 export function backfillTaskTags(db: Database): void {

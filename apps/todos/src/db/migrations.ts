@@ -948,4 +948,25 @@ export const MIGRATIONS = [
   ALTER TABLE tasks ADD COLUMN priority_reason TEXT;
   INSERT OR IGNORE INTO _migrations (id) VALUES (53);
   `,
+  // Migration 54: Approval gates and manual checkpoint requests
+  `
+  CREATE TABLE IF NOT EXISTS task_approval_requests (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+    checkpoint_step TEXT,
+    gate_type TEXT NOT NULL CHECK(gate_type IN ('start', 'complete', 'checkpoint', 'plan_step')),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected', 'cancelled')),
+    requested_by TEXT,
+    reviewed_by TEXT,
+    note TEXT,
+    review_note TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    reviewed_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_approval_requests_task ON task_approval_requests(task_id);
+  CREATE INDEX IF NOT EXISTS idx_approval_requests_status ON task_approval_requests(status);
+  CREATE INDEX IF NOT EXISTS idx_approval_requests_gate ON task_approval_requests(gate_type);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (54);
+  `,
 ];

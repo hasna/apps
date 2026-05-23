@@ -4754,6 +4754,82 @@ trustCmd
     console.log(JSON.stringify(trustWorkspace(path), null, 2));
   });
 
+// approvals — gates and manual checkpoints
+const approvalsCmd = program
+  .command("approvals")
+  .description("Approval gates and manual checkpoints");
+
+approvalsCmd
+  .command("request <taskId> <gateType>")
+  .description("Request approval (start|complete|checkpoint|plan_step)")
+  .option("--step <name>", "Checkpoint step name")
+  .option("--note <text>", "Request note")
+  .option("--agent <id>", "Requesting agent")
+  .action((taskId, gateType, opts) => {
+    const { requestApproval } = require("../lib/approval-gates.js") as typeof import("../lib/approval-gates.js");
+    console.log(JSON.stringify(requestApproval({
+      task_id: resolveTaskId(taskId),
+      gate_type: gateType as any,
+      checkpoint_step: opts.step,
+      note: opts.note,
+      requested_by: opts.agent,
+    }), null, 2));
+  });
+
+approvalsCmd
+  .command("pending")
+  .option("--task <id>", "Task filter")
+  .option("--plan <id>", "Plan filter")
+  .action((opts) => {
+    const { listPendingApprovals } = require("../lib/approval-gates.js") as typeof import("../lib/approval-gates.js");
+    console.log(JSON.stringify(listPendingApprovals({
+      task_id: opts.task ? resolveTaskId(opts.task) : undefined,
+      plan_id: opts.plan,
+    }), null, 2));
+  });
+
+approvalsCmd
+  .command("approve <requestId> <reviewer>")
+  .option("--note <text>", "Review note")
+  .action((requestId, reviewer, opts) => {
+    const { approveGate } = require("../lib/approval-gates.js") as typeof import("../lib/approval-gates.js");
+    console.log(JSON.stringify(approveGate(requestId, reviewer, opts.note), null, 2));
+  });
+
+approvalsCmd
+  .command("reject <requestId> <reviewer>")
+  .option("--note <text>", "Review note")
+  .action((requestId, reviewer, opts) => {
+    const { rejectGate } = require("../lib/approval-gates.js") as typeof import("../lib/approval-gates.js");
+    console.log(JSON.stringify(rejectGate(requestId, reviewer, opts.note), null, 2));
+  });
+
+approvalsCmd
+  .command("status <taskId>")
+  .description("Show blocked/ready gate status")
+  .action((taskId) => {
+    const { getTaskGateStatus } = require("../lib/approval-gates.js") as typeof import("../lib/approval-gates.js");
+    console.log(JSON.stringify(getTaskGateStatus(resolveTaskId(taskId)), null, 2));
+  });
+
+approvalsCmd
+  .command("checkpoint <taskId> <step>")
+  .option("--require-approval", "Require approval before proceeding")
+  .action((taskId, step, opts) => {
+    const { createManualCheckpoint } = require("../lib/approval-gates.js") as typeof import("../lib/approval-gates.js");
+    console.log(JSON.stringify(createManualCheckpoint(resolveTaskId(taskId), step, {
+      requires_approval: opts.requireApproval,
+    }), null, 2));
+  });
+
+approvalsCmd
+  .command("plan <planId>")
+  .description("Enable approval gates on all tasks in a plan")
+  .action((planId) => {
+    const { enablePlanApprovalGates } = require("../lib/approval-gates.js") as typeof import("../lib/approval-gates.js");
+    console.log(JSON.stringify({ tasks_gated: enablePlanApprovalGates(planId) }, null, 2));
+  });
+
 // handoff
 program
   .command("handoff")

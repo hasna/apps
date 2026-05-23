@@ -44,6 +44,7 @@ import { registerGitTraceabilityTools } from "./tools/git-traceability.js";
 import { registerTaskDedupeTools } from "./tools/task-dedupe.js";
 import { registerTodosMdTools } from "./tools/todos-md.js";
 import { registerWorkspaceTrustTools } from "./tools/workspace-trust.js";
+import { registerApprovalGateTools } from "./tools/approval-gates.js";
 
 function getMcpVersion(): string {
   try {
@@ -254,6 +255,7 @@ registerGitTraceabilityTools(server, { shouldRegisterTool, resolveId, formatErro
 registerTaskDedupeTools(server, { shouldRegisterTool, resolveId, formatError });
 registerTodosMdTools(server, { shouldRegisterTool, formatError });
 registerWorkspaceTrustTools(server, { shouldRegisterTool, formatError });
+registerApprovalGateTools(server, { shouldRegisterTool, resolveId, formatError });
 
 // === DISPATCH ===
 
