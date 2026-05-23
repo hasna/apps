@@ -5568,6 +5568,76 @@ bridgeCmd
     console.log(getBridgeDocs());
   });
 
+// deps — dependency graph analysis
+const depsCmd = program
+  .command("deps")
+  .description("Dependency graph: ready, blocked, critical path, unlock impact");
+
+depsCmd
+  .command("ready")
+  .description("List ready unblocked tasks")
+  .option("--project <id>", "Project filter")
+  .option("--plan <id>", "Plan filter")
+  .option("--limit <n>", "Limit", "20")
+  .option("-j, --json", "JSON output")
+  .action((opts) => {
+    const { getReadyTasks } = require("../lib/dependency-graph.js") as typeof import("../lib/dependency-graph.js");
+    const result = getReadyTasks({ project_id: opts.project, plan_id: opts.plan, limit: parseInt(opts.limit, 10) });
+    if (opts.json) console.log(JSON.stringify(result, null, 2));
+    else for (const r of result) console.log(`${r.task.short_id || r.task.id.slice(0, 8)} ${r.task.title}`);
+  });
+
+depsCmd
+  .command("blocked")
+  .description("List blocked tasks with blockers")
+  .option("--project <id>", "Project filter")
+  .option("--plan <id>", "Plan filter")
+  .option("-j, --json", "JSON output")
+  .action((opts) => {
+    const { getBlockedTaskReports } = require("../lib/dependency-graph.js") as typeof import("../lib/dependency-graph.js");
+    const result = getBlockedTaskReports({ project_id: opts.project, plan_id: opts.plan });
+    if (opts.json) console.log(JSON.stringify(result, null, 2));
+    else for (const b of result) console.log(`${b.task.title} blocked by ${b.blockers.map((x) => x.title).join(", ")}`);
+  });
+
+depsCmd
+  .command("critical-path")
+  .description("Tasks blocking the most downstream work")
+  .option("--project <id>", "Project filter")
+  .option("--limit <n>", "Limit", "10")
+  .option("-j, --json", "JSON output")
+  .action((opts) => {
+    const { getCriticalPath } = require("../lib/dependency-graph.js") as typeof import("../lib/dependency-graph.js");
+    const result = getCriticalPath({ project_id: opts.project, limit: parseInt(opts.limit, 10) });
+    if (opts.json) console.log(JSON.stringify(result, null, 2));
+    else for (const c of result) console.log(`${c.task.title} downstream=${c.downstream_count}`);
+  });
+
+depsCmd
+  .command("unlock <taskId>")
+  .description("Unlock impact if task completes")
+  .option("-j, --json", "JSON output")
+  .action((taskId, opts) => {
+    const { getUnlockImpact } = require("../lib/dependency-graph.js") as typeof import("../lib/dependency-graph.js");
+    const result = getUnlockImpact(taskId);
+    if (opts.json) console.log(JSON.stringify(result, null, 2));
+    else {
+      console.log(`Would unlock ${result.would_unlock.length} task(s)`);
+      for (const t of result.would_unlock) console.log(`  ${t.title}`);
+    }
+  });
+
+depsCmd
+  .command("analyze")
+  .description("Full dependency graph analysis")
+  .option("--project <id>", "Project filter")
+  .option("--plan <id>", "Plan filter")
+  .option("-j, --json", "JSON output")
+  .action((opts) => {
+    const { analyzeDependencyGraph } = require("../lib/dependency-graph.js") as typeof import("../lib/dependency-graph.js");
+    console.log(JSON.stringify(analyzeDependencyGraph({ project_id: opts.project, plan_id: opts.plan }), null, 2));
+  });
+
 // handoff
 program
   .command("handoff")

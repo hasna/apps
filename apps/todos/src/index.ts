@@ -681,6 +681,27 @@ export type {
   ConflictType,
 } from "./lib/import-export-bridge.js";
 
+// Dependency graph
+export {
+  DEPENDENCY_GRAPH_SCHEMA,
+  getReadyTasks,
+  getBlockedTaskReports,
+  getCriticalPath,
+  getUnlockImpact,
+  analyzeDependencyGraph,
+  getDependents,
+  getBlockers,
+} from "./lib/dependency-graph.js";
+export type {
+  DependencyNode,
+  BlockedTaskReport,
+  ReadyTaskReport,
+  CriticalPathEntry,
+  UnlockImpactReport,
+  DependencyGraphAnalysis,
+  GraphFilter,
+} from "./lib/dependency-graph.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";

@@ -60,6 +60,7 @@ import { registerActivityAuditTools } from "./tools/activity-audit.js";
 import { registerTaskSchedulingTools } from "./tools/task-scheduling.js";
 import { registerSavedViewTools } from "./tools/saved-views.js";
 import { registerImportExportBridgeTools } from "./tools/import-export-bridge.js";
+import { registerDependencyGraphTools } from "./tools/dependency-graph.js";
 import { resolveAccessProfile, shouldRegisterToolForProfile } from "../lib/access-profiles.js";
 
 function getMcpVersion(): string {
@@ -271,6 +272,7 @@ registerActivityAuditTools(server, { shouldRegisterTool, resolveId, formatError 
 registerTaskSchedulingTools(server, { shouldRegisterTool, resolveId, formatError });
 registerSavedViewTools(server, { shouldRegisterTool, resolveId, formatError });
 registerImportExportBridgeTools(server, { shouldRegisterTool, resolveId, formatError });
+registerDependencyGraphTools(server, { shouldRegisterTool, resolveId, formatError });
 
 // === DISPATCH ===
 
