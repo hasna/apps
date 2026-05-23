@@ -295,6 +295,18 @@ export {
 } from "./lib/resource-snapshots.js";
 export type { ResourceSnapshot, ResourceSubscription, ResourceUri } from "./lib/resource-snapshots.js";
 
+// Sandbox profiles
+export {
+  loadSandboxProfiles,
+  saveSandboxProfiles,
+  getSandboxProfile,
+  checkSandboxCommand,
+  getDefaultSandboxProfiles,
+  resetSandboxProfileCache,
+  SANDBOX_PROFILE_VERSION,
+} from "./lib/sandbox-profiles.js";
+export type { SandboxProfile, SandboxCheckInput, SandboxCheckResult } from "./lib/sandbox-profiles.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";

@@ -4396,6 +4396,30 @@ program
     console.log(JSON.stringify(mod.resourceDiagnostics(), null, 2));
   });
 
+// sandbox — runner sandbox profiles
+const sandboxCmd = program
+  .command("sandbox")
+  .description("Local runner sandbox profiles and command allowlists");
+
+sandboxCmd
+  .command("list")
+  .description("List sandbox profiles")
+  .action(() => {
+    const { loadSandboxProfiles } = require("../lib/sandbox-profiles.js") as typeof import("../lib/sandbox-profiles.js");
+    console.log(JSON.stringify(loadSandboxProfiles(), null, 2));
+  });
+
+sandboxCmd
+  .command("check <command>")
+  .description("Check if command is allowed (dry-run explain)")
+  .option("--profile <name>", "Profile name", "default")
+  .action((command, opts) => {
+    const { checkSandboxCommand } = require("../lib/sandbox-profiles.js") as typeof import("../lib/sandbox-profiles.js");
+    const result = checkSandboxCommand({ command }, opts.profile, true);
+    console.log(JSON.stringify(result, null, 2));
+    if (!result.allowed) process.exitCode = 1;
+  });
+
 // handoff
 program
   .command("handoff")

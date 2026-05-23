@@ -38,6 +38,7 @@ import { registerCryptoTools } from "./tools/crypto.js";
 import { registerContextPackTools } from "./tools/context-packs.js";
 import { registerPolicyTools } from "./tools/policy-packs.js";
 import { registerResourceSubscriptionTools } from "./tools/resource-subscriptions.js";
+import { registerSandboxTools } from "./tools/sandbox.js";
 
 function getMcpVersion(): string {
   try {
@@ -242,6 +243,7 @@ registerCryptoTools(server, { shouldRegisterTool, formatError });
 registerContextPackTools(server, { shouldRegisterTool, resolveId, formatError });
 registerPolicyTools(server, { shouldRegisterTool, resolveId, formatError });
 registerResourceSubscriptionTools(server, { shouldRegisterTool, formatError });
+registerSandboxTools(server, { shouldRegisterTool, formatError });
 
 // === DISPATCH ===
 
