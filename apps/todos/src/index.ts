@@ -513,6 +513,21 @@ export {
 } from "./lib/agent-adapter-docs.js";
 export type { AgentAdapterHost, AgentAdapterDoc, AdapterWorkflowStep, AdapterFailureMode } from "./lib/agent-adapter-docs.js";
 
+// Inbox intake
+export {
+  INBOX_INTAKE_SCHEMA,
+  INTAKE_SOURCE_TYPES,
+  INTAKE_TRIAGE_STATUSES,
+  detectSourceType,
+  parseCiLog,
+  parseErrorPaste,
+  parseFeedback,
+  previewInboxIntake,
+  createInboxIntake,
+  formatIntakePreviewText,
+} from "./lib/inbox-intake.js";
+export type { IntakeSourceType, IntakeTriageStatus, IntakeInput, IntakePreview, IntakeResult, IntakeOptions } from "./lib/inbox-intake.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";

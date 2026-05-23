@@ -51,6 +51,7 @@ import { registerParityTools } from "./tools/parity.js";
 import { registerSecretRedactionTools } from "./tools/secret-redaction.js";
 import { registerAccessProfileTools } from "./tools/access-profiles.js";
 import { registerAgentAdapterDocTools } from "./tools/agent-adapter-docs.js";
+import { registerInboxIntakeTools } from "./tools/inbox-intake.js";
 import { resolveAccessProfile, shouldRegisterToolForProfile } from "../lib/access-profiles.js";
 
 function getMcpVersion(): string {
@@ -253,6 +254,7 @@ registerParityTools(server, { shouldRegisterTool, formatError });
 registerSecretRedactionTools(server, { shouldRegisterTool, formatError });
 registerAccessProfileTools(server, { shouldRegisterTool, formatError });
 registerAgentAdapterDocTools(server, { shouldRegisterTool, formatError });
+registerInboxIntakeTools(server, { shouldRegisterTool, resolveId, formatError });
 
 // === DISPATCH ===
 

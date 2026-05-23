@@ -5043,6 +5043,91 @@ docsCmd
     }
   });
 
+// intake — local inbox intake for issues, CI logs, feedback
+const intakeCmd = program
+  .command("intake")
+  .description("Local inbox intake: turn issues, CI logs, feedback, and errors into tasks");
+
+intakeCmd
+  .command("preview")
+  .description("Preview intake with dedupe and redaction (dry-run)")
+  .option("--text <text>", "Inline text or pasted error")
+  .option("--file <path>", "Read from file (CI log, support note)")
+  .option("--github <url>", "GitHub issue URL (uses gh CLI if available)")
+  .option("--type <type>", "Source type: github_issue, ci_log, feedback, error_paste, file, text")
+  .option("--title <title>", "Override generated title")
+  .option("--project <id>", "Project ID")
+  .option("--tag <tags...>", "Extra tags")
+  .option("-j, --json", "JSON output")
+  .action((opts) => {
+    const globalOpts = program.opts();
+    try {
+      const { previewInboxIntake, formatIntakePreviewText } = require("../lib/inbox-intake.js") as typeof import("../lib/inbox-intake.js");
+      const preview = previewInboxIntake({
+        text: opts.text,
+        file_path: opts.file,
+        github_url: opts.github,
+        source_type: opts.type,
+        title: opts.title,
+        project_id: opts.project || autoProject(globalOpts) || undefined,
+        tags: opts.tag,
+      });
+      if (opts.json || globalOpts.json) {
+        console.log(JSON.stringify(preview, null, 2));
+      } else {
+        console.log(formatIntakePreviewText(preview));
+      }
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
+intakeCmd
+  .command("create")
+  .description("Create task from intake (skips duplicates unless --force)")
+  .option("--text <text>", "Inline text")
+  .option("--file <path>", "Read from file")
+  .option("--github <url>", "GitHub issue URL")
+  .option("--type <type>", "Source type")
+  .option("--title <title>", "Override title")
+  .option("--project <id>", "Project ID")
+  .option("--tag <tags...>", "Extra tags")
+  .option("--dry-run", "Preview only")
+  .option("--force", "Create even if duplicate detected")
+  .option("--skip-dedupe", "Skip duplicate detection")
+  .option("-j, --json", "JSON output")
+  .action((opts) => {
+    const globalOpts = program.opts();
+    try {
+      const { createInboxIntake } = require("../lib/inbox-intake.js") as typeof import("../lib/inbox-intake.js");
+      const result = createInboxIntake({
+        text: opts.text,
+        file_path: opts.file,
+        github_url: opts.github,
+        source_type: opts.type,
+        title: opts.title,
+        project_id: opts.project || autoProject(globalOpts) || undefined,
+        tags: opts.tag,
+      }, {
+        dry_run: opts.dryRun,
+        force: opts.force,
+        skip_dedupe: opts.skipDedupe,
+      });
+      if (opts.json || globalOpts.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else if (result.skipped_duplicate && result.task) {
+        console.log(chalk.yellow(`  Duplicate skipped → ${result.task.short_id || result.task.id.slice(0, 8)} ${result.task.title}`));
+      } else if (result.task) {
+        console.log(chalk.green(`  ✓ Created: ${result.task.short_id || result.task.id.slice(0, 8)} ${result.task.title}`));
+      } else {
+        console.log(chalk.dim("  Dry-run preview (no task created)"));
+        console.log(JSON.stringify(result.preview, null, 2));
+      }
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
 // handoff
 program
   .command("handoff")
