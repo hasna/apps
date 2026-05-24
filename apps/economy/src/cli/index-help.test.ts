@@ -32,6 +32,41 @@ afterEach(() => {
 })
 
 describe('economy CLI help', () => {
+  test('todos --help documents usage vs savings roadmap', async () => {
+    const { stdout, stderr, exitCode } = await runCli(['todos', '--help'])
+
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain('fleet sync, usage tracking, subscription savings')
+    expect(stdout).toContain('Multi-machine (current vs target)')
+    expect(stdout).toContain('included_consumed_usd')
+    expect(stdout).toContain('opencode')
+    expect(stdout).toContain('cursor')
+    expect(stdout).toContain('hermes')
+    expect(stdout).toContain('saved_usd')
+    expect(stderr).toBe('')
+  })
+
+  test('todos list includes OpenCode and Cursor ingest tasks', async () => {
+    const { stdout, stderr, exitCode } = await runCli(['todos', 'list', '--phase', 'phase-4'])
+
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain('phase-4')
+    expect(stdout).toContain('Cursor Agent')
+    expect(stdout).toContain('4.2')
+    expect(stderr).toBe('')
+  })
+
+  test('todos list includes multi-machine auto sync phase', async () => {
+    const { stdout, stderr, exitCode } = await runCli(['todos', 'list', '--phase', 'phase-9'])
+
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain('phase-9')
+    expect(stdout).toContain('Multi-machine auto sync')
+    expect(stdout).toContain('9.7')
+    expect(stdout).toContain('registerSyncSchedule')
+    expect(stderr).toBe('')
+  })
+
   test('documents Gemini as a billing sync provider', async () => {
     const { stdout, stderr, exitCode } = await runCli(['billing', 'sync', '--help'])
 
@@ -101,7 +136,7 @@ describe('economy CLI mutation validation', () => {
 
     result = await runCli(['budget', 'set', '--limit', '10', '--agent', 'unknown'])
     expect(result.exitCode).toBe(1)
-    expect(result.stderr).toContain('--agent must be one of: claude, takumi, codex, gemini')
+    expect(result.stderr).toContain('--agent must be one of: claude, takumi, codex, gemini, opencode, cursor, pi, hermes')
   })
 
   test('pricing set rejects invalid numeric values', async () => {
@@ -129,7 +164,7 @@ describe('economy CLI mutation validation', () => {
 
     result = await runCli(['goal', 'set', '--limit', '10', '--agent', 'unknown'])
     expect(result.exitCode).toBe(1)
-    expect(result.stderr).toContain('--agent must be one of: claude, takumi, codex, gemini')
+    expect(result.stderr).toContain('--agent must be one of: claude, takumi, codex, gemini, opencode, cursor, pi, hermes')
   })
 
   test('operational commands reject invalid numeric options before running', async () => {
@@ -155,6 +190,6 @@ describe('economy CLI mutation validation', () => {
 
     result = await runCli(['top', '--agent', 'unknown'])
     expect(result.exitCode).toBe(1)
-    expect(result.stderr).toContain('--agent must be one of: claude, takumi, codex, gemini')
+    expect(result.stderr).toContain('--agent must be one of: claude, takumi, codex, gemini, opencode, cursor, pi, hermes')
   })
 })

@@ -1,8 +1,8 @@
 import chalk from 'chalk'
+import { watch } from 'fs'
 import { openDatabase, querySummary, queryRequestsSince } from '../../db/database.js'
-import { ingestClaude, ingestTakumi } from '../../ingest/claude.js'
-import { ingestCodex } from '../../ingest/codex.js'
-import { ingestGemini } from '../../ingest/gemini.js'
+import { syncAll } from '../../lib/sync-all.js'
+import { getWatchPaths } from '../../lib/watch-paths.js'
 import type { Agent } from '../../types/index.js'
 import { sendNotification } from './notification.js'
 
@@ -10,15 +10,16 @@ interface WatchOptions {
   interval: number
   agent?: Agent
   notify?: number
+  daemon?: boolean
 }
 
 function fmt(usd: number): string {
   return chalk.green(`$${usd.toFixed(4)}`)
 }
 
-function renderHeader(todayUsd: number, weekUsd: number): void {
-  process.stdout.write('\x1b[H\x1b[2J') // clear screen
-  console.log(chalk.bold.cyan('  economy watch') + chalk.dim(' — live cost stream'))
+function renderHeader(todayUsd: number, weekUsd: number, mode: string): void {
+  process.stdout.write('\x1b[H\x1b[2J')
+  console.log(chalk.bold.cyan('  economy watch') + chalk.dim(` — live cost stream (${mode})`))
   console.log(chalk.dim('  ─────────────────────────────────────────'))
   console.log(`  Today:  ${fmt(todayUsd)}   Week: ${fmt(weekUsd)}`)
   console.log(chalk.dim('  ─────────────────────────────────────────'))
@@ -31,6 +32,10 @@ function agentLabel(agent: string): string {
   if (agent === 'codex') return chalk.yellow('[codex] ')
   if (agent === 'gemini') return chalk.green('[gemini]')
   if (agent === 'takumi') return chalk.magenta('[takumi]')
+  if (agent === 'opencode') return chalk.cyan('[opncde]')
+  if (agent === 'cursor') return chalk.white('[cursor]')
+  if (agent === 'pi') return chalk.white('[pi    ]')
+  if (agent === 'hermes') return chalk.white('[hermes]')
   return chalk.gray(`[${agent.slice(0, 6).padEnd(6)}]`)
 }
 
@@ -40,27 +45,46 @@ export async function watchCosts(opts: WatchOptions): Promise<void> {
   const lines: string[] = []
   const MAX_LINES = 20
 
-  // Notify threshold tracking
   let sessionCumulativeCost = 0
-  let notifyThresholdFired = 0  // tracks how many full thresholds have been crossed
+  let notifyThresholdFired = 0
+  let ingestPending = false
+  let ingestTimer: ReturnType<typeof setTimeout> | null = null
 
-  // Initial render
+  const mode = opts.daemon ? 'daemon' : 'poll'
   const initialSummaryToday = querySummary(db, 'today')
   const initialSummaryWeek = querySummary(db, 'week')
-  renderHeader(initialSummaryToday.total_usd, initialSummaryWeek.total_usd)
+  renderHeader(initialSummaryToday.total_usd, initialSummaryWeek.total_usd, mode)
 
-  console.log(chalk.dim(`\n  Polling every ${opts.interval}s — Ctrl+C to exit\n`))
+  if (opts.daemon) {
+    const paths = getWatchPaths()
+    console.log(chalk.dim(`\n  Watching ${paths.length} paths — sync on change, refresh every ${opts.interval}s\n`))
+    for (const p of paths) {
+      try {
+        watch(p, { recursive: true }, () => scheduleIngest())
+      } catch {
+        try { watch(p, () => scheduleIngest()) } catch { /* skip unreadable paths */ }
+      }
+    }
+  } else {
+    console.log(chalk.dim(`\n  Polling every ${opts.interval}s — Ctrl+C to exit\n`))
+  }
+
+  function scheduleIngest(): void {
+    ingestPending = true
+    if (ingestTimer) return
+    ingestTimer = setTimeout(() => {
+      ingestTimer = null
+      void poll()
+    }, 500)
+  }
 
   async function poll(): Promise<void> {
     const now = new Date().toISOString()
+    const shouldSync = !opts.daemon || ingestPending
+    ingestPending = false
 
-    // Incremental ingest
-    await ingestClaude(db)
-    await ingestTakumi(db)
-    await ingestCodex(db)
-    await ingestGemini(db)
+    if (shouldSync) await syncAll(db)
 
-    // Get new requests since last check
     const newRequests = queryRequestsSince(db, lastCheck)
     lastCheck = now
 
@@ -74,12 +98,10 @@ export async function watchCosts(opts: WatchOptions): Promise<void> {
       lines.push(line)
       if (lines.length > MAX_LINES) lines.shift()
 
-      // Notify on large cost
       if (req.cost_usd > 1.0) {
         sendNotification('economy: high cost', `$${req.cost_usd.toFixed(2)} on ${req.model}`)
       }
 
-      // --notify threshold tracking
       if (opts.notify && opts.notify > 0) {
         sessionCumulativeCost += req.cost_usd
         const crossedThresholds = Math.floor(sessionCumulativeCost / opts.notify)
@@ -90,28 +112,27 @@ export async function watchCosts(opts: WatchOptions): Promise<void> {
       }
     }
 
-    // Re-render
     const today = querySummary(db, 'today')
     const week = querySummary(db, 'week')
-    renderHeader(today.total_usd, week.total_usd)
+    renderHeader(today.total_usd, week.total_usd, mode)
     for (const line of lines) console.log(line)
     if (lines.length === 0) console.log(chalk.dim('  Waiting for new requests...'))
-    console.log(chalk.dim(`\n  Last updated: ${new Date().toLocaleTimeString()} — polling every ${opts.interval}s — Ctrl+C to exit`))
+    const suffix = opts.daemon
+      ? `file watch + ${opts.interval}s refresh`
+      : `polling every ${opts.interval}s`
+    console.log(chalk.dim(`\n  Last updated: ${new Date().toLocaleTimeString()} — ${suffix} — Ctrl+C to exit`))
   }
 
-  // Run immediately
+  if (opts.daemon) ingestPending = true
   await poll()
-
-  // Then poll on interval
   const timer = setInterval(poll, opts.interval * 1000)
 
-  // Clean exit
   process.on('SIGINT', () => {
     clearInterval(timer)
+    if (ingestTimer) clearTimeout(ingestTimer)
     console.log(chalk.dim('\n\n  Stopped watching.'))
     process.exit(0)
   })
 
-  // Keep process alive
   await new Promise<void>(() => {})
 }
