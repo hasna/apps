@@ -10,6 +10,9 @@ import { BudgetsTab } from "@/tabs/BudgetsTab";
 import { GoalsTab } from "@/tabs/GoalsTab";
 import { PricingTab } from "@/tabs/PricingTab";
 import { BillingTab } from "@/tabs/BillingTab";
+import { UsageTab } from "@/tabs/UsageTab";
+import { SavingsTab } from "@/tabs/SavingsTab";
+import { ReconciliationTab } from "@/tabs/ReconciliationTab";
 import { Button } from "@/components/ui/button";
 import {
   NavigationMenu,
@@ -19,7 +22,19 @@ import {
 } from "@/components/ui/navigation-menu";
 import { navigationMenuTriggerStyle } from "@/components/ui/navigation-menu-style";
 
-type Tab = "overview" | "sessions" | "models" | "projects" | "budgets" | "goals" | "pricing" | "billing";
+type Tab =
+  | "overview"
+  | "sessions"
+  | "models"
+  | "projects"
+  | "budgets"
+  | "goals"
+  | "usage"
+  | "savings"
+  | "fleet"
+  | "reconciliation"
+  | "pricing"
+  | "billing";
 
 const navItems: { key: Tab; label: string }[] = [
   { key: "overview", label: "Overview" },
@@ -28,6 +43,10 @@ const navItems: { key: Tab; label: string }[] = [
   { key: "projects", label: "Projects" },
   { key: "budgets", label: "Budgets" },
   { key: "goals", label: "Goals" },
+  { key: "usage", label: "Usage" },
+  { key: "savings", label: "Savings" },
+  { key: "fleet", label: "Fleet" },
+  { key: "reconciliation", label: "Reconcile" },
   { key: "pricing", label: "Pricing" },
   { key: "billing", label: "Billing" },
 ];
@@ -141,6 +160,10 @@ function AppInner() {
         {tab === "projects" && <ProjectsTab key={reloadKey} />}
         {tab === "budgets" && <BudgetsTab key={reloadKey} />}
         {tab === "goals" && <GoalsTab key={reloadKey} />}
+        {tab === "usage" && <UsageTab key={reloadKey} />}
+        {tab === "savings" && <SavingsTab key={reloadKey} />}
+        {tab === "fleet" && <FleetTab key={reloadKey} />}
+        {tab === "reconciliation" && <ReconciliationTab key={reloadKey} />}
         {tab === "pricing" && <PricingTab key={reloadKey} />}
         {tab === "billing" && <BillingTab key={reloadKey} />}
       </main>

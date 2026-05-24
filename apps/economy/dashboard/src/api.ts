@@ -1,6 +1,18 @@
 const API_BASE = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3456'
 
-export type Agent = 'claude' | 'takumi' | 'codex' | 'gemini'
+export type Agent =
+  | 'claude'
+  | 'takumi'
+  | 'codex'
+  | 'gemini'
+  | 'opencode'
+  | 'cursor'
+  | 'pi'
+  | 'hermes'
+
+export const ALL_AGENTS: Agent[] = [
+  'claude', 'takumi', 'codex', 'gemini', 'opencode', 'cursor', 'pi', 'hermes',
+]
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const url = `${API_BASE}${path}`
@@ -86,6 +98,77 @@ export interface BreakdownEntry {
 
 export interface BillingSummary {
   total_usd: number
+  by_provider: Record<string, number>
+}
+
+export interface UsageSnapshot {
+  id: string
+  agent: string
+  date: string
+  metric: string
+  value: number
+  unit: string
+  machine_id: string
+  updated_at: string
+}
+
+export interface UsageResponse {
+  snapshots: UsageSnapshot[]
+  summary: Summary
+}
+
+export interface SavingsSummary {
+  period: string
+  api_equivalent_usd: number
+  subscription_fee_usd: number
+  included_consumed_usd: number
+  on_demand_usd: number
+  saved_usd: number
+  by_agent: Record<string, Partial<SavingsSummary>>
+}
+
+export interface MachineInfo {
+  machine_id: string
+  sessions: number
+  requests: number
+  total_cost_usd: number
+  last_active: string
+}
+
+export interface MachineRegistry {
+  machine_id: string
+  hostname: string
+  last_seen_at: string | null
+  last_push_at: string | null
+  last_pull_at: string | null
+  economy_version: string | null
+  updated_at: string
+}
+
+export interface FleetResponse {
+  summary: Summary
+  machines: MachineInfo[]
+  registry: MachineRegistry[]
+  current_machine: string
+}
+
+export interface BillingDiffRow {
+  agent: string
+  estimated_usd: number
+  actual_usd: number
+  delta_usd: number
+  delta_pct: number
+}
+
+export interface BillingDiffSummary {
+  period: string
+  estimated_usd: number
+  actual_usd: number
+  delta_usd: number
+  delta_pct: number
+  threshold_pct: number
+  is_alert: boolean
+  by_agent: BillingDiffRow[]
   by_provider: Record<string, number>
 }
 
@@ -178,6 +261,9 @@ export const getPricing = () =>
 export const getBilling = (period: 'today' | 'yesterday' | 'week' | 'month' | 'year' | 'all' = 'month') =>
   request<{ data: BillingSummary }>(`/api/billing?period=${period}`)
 
+export const getBillingDiff = (period: 'today' | 'week' | 'month' | 'all' = 'month', threshold = 15) =>
+  request<{ data: BillingDiffSummary }>(`/api/billing/diff?period=${period}&threshold=${threshold}`)
+
 export const syncBilling = (body: { days?: number; providers?: Array<'anthropic' | 'openai' | 'gemini'> }) =>
   request<{ data: Record<string, unknown> }>('/api/billing/sync', {
     method: 'POST',
@@ -195,8 +281,26 @@ export const deletePricing = (model: string) =>
     method: 'DELETE',
   })
 
+export type SyncSource = 'all' | Agent
+
+// Usage & savings
+export const getUsage = (period: 'today' | 'week' | 'month' | 'all' = 'month', agent?: string) => {
+  const q = new URLSearchParams({ period })
+  if (agent) q.set('agent', agent)
+  return request<{ data: UsageResponse }>(`/api/usage?${q}`)
+}
+
+export const getSavings = (period: 'today' | 'week' | 'month' | 'all' = 'month', agent?: string) => {
+  const q = new URLSearchParams({ period })
+  if (agent) q.set('agent', agent)
+  return request<{ data: SavingsSummary }>(`/api/savings?${q}`)
+}
+
+export const getFleet = (period: 'today' | 'week' | 'month' | 'all' = 'month') =>
+  request<{ data: FleetResponse }>(`/api/fleet?period=${period}`)
+
 // Sync
-export const syncSources = (sources: 'all' | 'claude' | 'takumi' | 'codex' | 'gemini' = 'all') =>
+export const syncSources = (sources: SyncSource = 'all') =>
   request<{ data: Record<string, unknown> }>('/api/sync', {
     method: 'POST',
     body: JSON.stringify({ sources }),
