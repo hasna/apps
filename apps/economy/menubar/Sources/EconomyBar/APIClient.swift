@@ -68,6 +68,18 @@ actor APIClient {
     try await get("/api/projects")
   }
 
+  func fetchSavings() async throws -> SavingsSummary {
+    try await get("/api/savings?period=month")
+  }
+
+  func fetchUsage() async throws -> UsageResponse {
+    try await get("/api/usage?period=month")
+  }
+
+  func fetchFleet() async throws -> FleetResponse {
+    try await get("/api/fleet?period=month")
+  }
+
   func fetchSessions(search: String, limit: Int) async throws -> [SessionStat] {
     guard var components = URLComponents(string: "\(base)/api/sessions") else { throw APIError.offline }
     var queryItems = [URLQueryItem(name: "limit", value: String(limit))]

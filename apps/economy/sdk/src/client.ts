@@ -19,6 +19,10 @@ import type {
   CreateGoalInput,
   GoalStatus,
   MutationOk,
+  UsageResponse,
+  SavingsSummary,
+  FleetResponse,
+  BillingDiffSummary,
 } from './types.js'
 
 export interface EconomyClientOptions {
@@ -205,10 +209,41 @@ export class EconomyClient {
     })
   }
 
-  async sync(sources?: 'all' | 'claude' | 'takumi' | 'codex' | 'gemini'): Promise<SyncResult> {
+  async sync(sources?: 'all' | Agent): Promise<SyncResult> {
     return this.request<SyncResult>('/api/sync', {
       method: 'POST',
       body: JSON.stringify({ sources: sources ?? 'all' }),
     })
+  }
+
+  async getUsage(period?: Period, agent?: Agent | string): Promise<UsageResponse> {
+    const params = new URLSearchParams()
+    if (period) params.set('period', period)
+    if (agent) params.set('agent', agent)
+    const qs = params.toString() ? `?${params.toString()}` : ''
+    return this.request<UsageResponse>(`/api/usage${qs}`)
+  }
+
+  async getSavings(period?: Period, agent?: Agent | string): Promise<SavingsSummary> {
+    const params = new URLSearchParams()
+    if (period) params.set('period', period)
+    if (agent) params.set('agent', agent)
+    const qs = params.toString() ? `?${params.toString()}` : ''
+    return this.request<SavingsSummary>(`/api/savings${qs}`)
+  }
+
+  async getFleet(period?: Period): Promise<FleetResponse> {
+    const params = new URLSearchParams()
+    if (period) params.set('period', period)
+    const qs = params.toString() ? `?${params.toString()}` : ''
+    return this.request<FleetResponse>(`/api/fleet${qs}`)
+  }
+
+  async getBillingDiff(period?: Period, threshold?: number): Promise<BillingDiffSummary> {
+    const params = new URLSearchParams()
+    if (period) params.set('period', period)
+    if (threshold != null) params.set('threshold', String(threshold))
+    const qs = params.toString() ? `?${params.toString()}` : ''
+    return this.request<BillingDiffSummary>(`/api/billing/diff${qs}`)
   }
 }

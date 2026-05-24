@@ -77,6 +77,43 @@ struct ContentView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
 
+            if appState.savedUsd > 0 || appState.machineCount > 1 {
+              HStack(spacing: 12) {
+                if appState.savedUsd > 0 {
+                  VStack(alignment: .leading, spacing: 2) {
+                    Text("SAVED")
+                      .font(.caption2)
+                      .foregroundStyle(.secondary)
+                    Text(String(format: "$%.2f", appState.savedUsd))
+                      .font(.subheadline.monospacedDigit())
+                      .foregroundStyle(.green)
+                  }
+                }
+                if appState.machineCount > 1 {
+                  VStack(alignment: .leading, spacing: 2) {
+                    Text("FLEET")
+                      .font(.caption2)
+                      .foregroundStyle(.secondary)
+                    Text("\(appState.machineCount) machines")
+                      .font(.subheadline)
+                  }
+                }
+                if let quota = appState.claudeQuotaPct {
+                  VStack(alignment: .leading, spacing: 2) {
+                    Text("CLAUDE 5H")
+                      .font(.caption2)
+                      .foregroundStyle(.secondary)
+                    Text(String(format: "%.0f%% used", quota))
+                      .font(.subheadline.monospacedDigit())
+                      .foregroundStyle(quota >= 80 ? .orange : .primary)
+                  }
+                }
+                Spacer()
+              }
+              .padding(.horizontal, 16)
+              .padding(.bottom, 12)
+            }
+
             if !appState.dailyEntries.isEmpty {
               Divider()
               SparklineView(entries: appState.dailyEntries)

@@ -1,4 +1,12 @@
-export type Agent = 'claude' | 'codex' | 'gemini' | 'takumi'
+export type Agent =
+  | 'claude'
+  | 'takumi'
+  | 'codex'
+  | 'gemini'
+  | 'opencode'
+  | 'cursor'
+  | 'pi'
+  | 'hermes'
 
 export type Period = 'today' | 'yesterday' | 'week' | 'month' | 'year' | 'all'
 
@@ -185,7 +193,78 @@ export interface SyncResult {
   takumi?: unknown
   codex?: unknown
   gemini?: unknown
+  opencode?: unknown
+  cursor?: unknown
+  pi?: unknown
+  hermes?: unknown
+  claudeQuota?: unknown
+  deduped?: number
+  cloudPulled?: boolean
+  cloudPushed?: boolean
   [key: string]: unknown
+}
+
+export interface UsageSnapshot {
+  id: string
+  agent: Agent | string
+  date: string
+  metric: string
+  value: number
+  unit: string
+  machine_id: string
+  updated_at: string
+}
+
+export interface UsageResponse {
+  snapshots: UsageSnapshot[]
+  summary: CostSummary
+}
+
+export interface SavingsSummary {
+  period: Period
+  api_equivalent_usd: number
+  subscription_fee_usd: number
+  included_consumed_usd: number
+  on_demand_usd: number
+  saved_usd: number
+  by_agent: Record<string, Partial<SavingsSummary>>
+}
+
+export interface MachineRegistry {
+  machine_id: string
+  hostname: string
+  last_seen_at: string | null
+  last_push_at: string | null
+  last_pull_at: string | null
+  economy_version: string | null
+  updated_at: string
+}
+
+export interface FleetResponse {
+  summary: CostSummary
+  machines: MachineInfo[]
+  registry: MachineRegistry[]
+  current_machine: string
+}
+
+export interface BillingDiffRow {
+  agent: string
+  estimated_usd: number
+  actual_usd: number
+  delta_usd: number
+  delta_pct: number
+}
+
+export interface BillingDiffSummary {
+  period: Period
+  estimated_usd: number
+  actual_usd: number
+  delta_usd: number
+  delta_pct: number
+  threshold_pct: number
+  is_alert: boolean
+  by_agent: BillingDiffRow[]
+  by_provider: Record<string, number>
 }
 
 export interface SessionFilter {

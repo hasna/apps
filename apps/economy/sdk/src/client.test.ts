@@ -115,6 +115,26 @@ describe('EconomyClient', () => {
     expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({ sources: 'gemini' })
   })
 
+  it('exposes usage, savings, fleet, and billing diff endpoints', async () => {
+    globalThis.fetch = (async (url, init) => {
+      calls.push({ url: String(url), init })
+      return mockJson({ data: {}, meta: {} })
+    }) as typeof fetch
+
+    const client = new EconomyClient({ baseUrl: 'http://economy.test', retries: 0 })
+    await client.getUsage('month', 'claude')
+    await client.getSavings('month')
+    await client.getFleet('month')
+    await client.getBillingDiff('month', 10)
+
+    expect(calls.map((c) => c.url)).toEqual([
+      'http://economy.test/api/usage?period=month&agent=claude',
+      'http://economy.test/api/savings?period=month',
+      'http://economy.test/api/fleet?period=month',
+      'http://economy.test/api/billing/diff?period=month&threshold=10',
+    ])
+  })
+
   it('exposes billing summary and admin sync endpoints', async () => {
     globalThis.fetch = (async (url, init) => {
       calls.push({ url: String(url), init })

@@ -17,6 +17,9 @@ final class AppState: ObservableObject {
   @Published var apiBaseURL: String = APIClient.storedBaseURL()
   @Published var sessionQuery: String = ""
   @Published var isEditingServer: Bool = false
+  @Published var savedUsd: Double = 0
+  @Published var claudeQuotaPct: Double? = nil
+  @Published var machineCount: Int = 0
 
   private let client = APIClient()
   private var pollTask: Task<Void, Never>?
@@ -91,7 +94,13 @@ final class AppState: ObservableObject {
     async let dailyResult = try? await client.fetchDaily(days: 14)
     async let projectsResult = try? await client.fetchProjects()
     async let sessionsResult = try? await client.fetchSessions(search: sessionQuery, limit: sessionQuery.isEmpty ? 6 : 10)
-    let (todaySummary, weekSummary, monthSummary, daily, projects, sessions) = await (todayResult, weekResult, monthResult, dailyResult, projectsResult, sessionsResult)
+    async let savingsResult = try? await client.fetchSavings()
+    async let usageResult = try? await client.fetchUsage()
+    async let fleetResult = try? await client.fetchFleet()
+    let (todaySummary, weekSummary, monthSummary, daily, projects, sessions, savings, usage, fleet) = await (
+      todayResult, weekResult, monthResult, dailyResult, projectsResult, sessionsResult,
+      savingsResult, usageResult, fleetResult
+    )
     if let todaySummary { today = todaySummary }
     if let weekSummary { week = weekSummary }
     if let monthSummary { month = monthSummary }
@@ -101,6 +110,11 @@ final class AppState: ObservableObject {
       topProjects = sorted.prefix(3).map { $0 }
     }
     if let sessions { recentSessions = sessions }
+    if let savings { savedUsd = savings.saved_usd }
+    if let usage {
+      claudeQuotaPct = usage.snapshots.first(where: { $0.agent == "claude" && $0.metric == "five_hour_utilization" })?.value
+    }
+    if let fleet { machineCount = fleet.machines.count }
     lastUpdated = Date()
   }
 }

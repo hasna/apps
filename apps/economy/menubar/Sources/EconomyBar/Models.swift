@@ -74,3 +74,30 @@ struct GoalStatus: Decodable, Identifiable {
   let is_at_risk: Bool
   let is_over: Bool
 }
+
+struct SavingsSummary: Decodable {
+  let saved_usd: Double
+  let api_equivalent_usd: Double
+  let subscription_fee_usd: Double
+}
+
+struct UsageSnapshot: Decodable {
+  let agent: String
+  let metric: String
+  let value: Double
+  let unit: String
+}
+
+struct UsageResponse: Decodable {
+  let snapshots: [UsageSnapshot]
+}
+
+struct FleetMachine: Decodable {
+  let machine_id: String
+  let total_cost_usd: Double
+}
+
+struct FleetResponse: Decodable {
+  let machines: [FleetMachine]
+  let current_machine: String
+}
