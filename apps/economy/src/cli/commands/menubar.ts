@@ -1,11 +1,11 @@
 import chalk from 'chalk'
-import { execSync } from 'child_process'
-import { existsSync, writeFileSync } from 'fs'
+import { execFileSync } from 'child_process'
+import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir, arch } from 'os'
 import { join } from 'path'
 
 const APP_PATH = '/Applications/Economy Bar.app'
-const REPO = 'hasna/open-economy'
+const REPO = 'hasna/economy'
 
 function getArch(): 'arm64' | 'x86_64' {
   return arch() === 'arm64' ? 'arm64' : 'x86_64'
@@ -17,7 +17,7 @@ function isInstalled(): boolean {
 
 function isRunning(): boolean {
   try {
-    const result = execSync(`pgrep -x EconomyBar`, { stdio: 'pipe' }).toString().trim()
+    const result = execFileSync('pgrep', ['-x', 'EconomyBar'], { stdio: 'pipe' }).toString().trim()
     return result.length > 0
   } catch {
     return false
@@ -71,14 +71,18 @@ export async function menubarInstall(opts: { force?: boolean }): Promise<void> {
   // Unzip and install
   console.log(chalk.cyan('→ Installing to /Applications...'))
   try {
-    execSync(`rm -rf "${extractDir}" && mkdir -p "${extractDir}"`, { stdio: 'ignore' })
-    execSync(`unzip -q "${zipPath}" -d "${extractDir}"`, { stdio: 'ignore' })
-    if (isInstalled()) execSync(`rm -rf "${APP_PATH}"`, { stdio: 'ignore' })
-    execSync(`cp -R "${extractDir}/Economy Bar.app" /Applications/`, { stdio: 'ignore' })
+    rmSync(extractDir, { recursive: true, force: true })
+    mkdirSync(extractDir, { recursive: true })
+    execFileSync('unzip', ['-q', zipPath, '-d', extractDir], { stdio: 'ignore' })
+    if (isInstalled()) rmSync(APP_PATH, { recursive: true, force: true })
+    cpSync(join(extractDir, 'Economy Bar.app'), APP_PATH, { recursive: true })
     // Clear quarantine so macOS doesn't block unsigned app
-    execSync(`xattr -rd com.apple.quarantine "${APP_PATH}" 2>/dev/null || true`, { stdio: 'ignore' })
+    try {
+      execFileSync('xattr', ['-rd', 'com.apple.quarantine', APP_PATH], { stdio: 'ignore' })
+    } catch { /* xattr may be absent outside macOS */ }
     // Cleanup
-    execSync(`rm -rf "${zipPath}" "${extractDir}"`, { stdio: 'ignore' })
+    rmSync(zipPath, { force: true })
+    rmSync(extractDir, { recursive: true, force: true })
     console.log(chalk.green(`✓ Installed to ${APP_PATH}`))
   } catch (e) {
     console.error(chalk.red(`✗ Install failed: ${e instanceof Error ? e.message : String(e)}`))
@@ -88,7 +92,7 @@ export async function menubarInstall(opts: { force?: boolean }): Promise<void> {
   // Launch
   console.log(chalk.cyan('→ Launching Economy Bar...'))
   try {
-    execSync(`open "${APP_PATH}"`, { stdio: 'ignore' })
+    execFileSync('open', [APP_PATH], { stdio: 'ignore' })
     console.log(chalk.bold.green('\n✓ Economy Bar is running in your menu bar!'))
     console.log(chalk.dim('  Make sure economy serve is running: economy serve'))
   } catch (e) {
@@ -104,11 +108,11 @@ export function menubarUninstall(): void {
   // Quit if running
   if (isRunning()) {
     try {
-      execSync(`osascript -e 'quit app "Economy Bar"'`, { stdio: 'ignore' })
-      execSync(`sleep 1`, { stdio: 'ignore' })
+      execFileSync('osascript', ['-e', 'quit app "Economy Bar"'], { stdio: 'ignore' })
+      execFileSync('sleep', ['1'], { stdio: 'ignore' })
     } catch {}
   }
-  execSync(`rm -rf "${APP_PATH}"`, { stdio: 'ignore' })
+  rmSync(APP_PATH, { recursive: true, force: true })
   console.log(chalk.green('✓ Economy Bar uninstalled'))
 }
 
@@ -117,7 +121,7 @@ export function menubarStart(): void {
     console.error(chalk.red('Economy Bar is not installed. Run: economy menubar install'))
     process.exit(1)
   }
-  execSync(`open "${APP_PATH}"`, { stdio: 'ignore' })
+  execFileSync('open', [APP_PATH], { stdio: 'ignore' })
   console.log(chalk.green('✓ Economy Bar launched'))
 }
 
@@ -127,7 +131,7 @@ export function menubarStop(): void {
     return
   }
   try {
-    execSync(`osascript -e 'quit app "Economy Bar"'`, { stdio: 'ignore' })
+    execFileSync('osascript', ['-e', 'quit app "Economy Bar"'], { stdio: 'ignore' })
     console.log(chalk.green('✓ Economy Bar stopped'))
   } catch {
     console.log(chalk.yellow('Could not quit Economy Bar gracefully'))

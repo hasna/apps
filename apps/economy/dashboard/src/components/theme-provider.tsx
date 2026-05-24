@@ -1,22 +1,11 @@
 import * as React from "react";
-
-type Theme = "dark" | "light" | "system";
+import { ThemeProviderContext, type Theme } from "./theme-context";
 
 interface ThemeProviderProps {
   children: React.ReactNode;
   defaultTheme?: Theme;
   storageKey?: string;
 }
-
-interface ThemeProviderState {
-  theme: Theme;
-  setTheme: (theme: Theme) => void;
-}
-
-const ThemeProviderContext = React.createContext<ThemeProviderState>({
-  theme: "system",
-  setTheme: () => null,
-});
 
 export function ThemeProvider({
   children,
@@ -55,9 +44,3 @@ export function ThemeProvider({
     </ThemeProviderContext.Provider>
   );
 }
-
-export const useTheme = () => {
-  const context = React.useContext(ThemeProviderContext);
-  if (context === undefined) throw new Error("useTheme must be used within a ThemeProvider");
-  return context;
-};

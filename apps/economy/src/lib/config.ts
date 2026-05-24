@@ -1,8 +1,10 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import { getDataDir } from '../db/database.js'
 
-const CONFIG_PATH = join(getDataDir(), 'config.json')
+function getConfigPath(): string {
+  return process.env['HASNA_ECONOMY_CONFIG_PATH'] ?? join(getDataDir(), 'config.json')
+}
 
 export interface EconomyConfig {
   port: number
@@ -24,8 +26,9 @@ const DEFAULTS: EconomyConfig = {
 
 export function loadConfig(): EconomyConfig {
   try {
-    if (existsSync(CONFIG_PATH)) {
-      const raw = readFileSync(CONFIG_PATH, 'utf-8')
+    const configPath = getConfigPath()
+    if (existsSync(configPath)) {
+      const raw = readFileSync(configPath, 'utf-8')
       return { ...DEFAULTS, ...JSON.parse(raw) }
     }
   } catch { /* ignore */ }
@@ -33,9 +36,10 @@ export function loadConfig(): EconomyConfig {
 }
 
 export function saveConfig(config: EconomyConfig): void {
-  const dir = CONFIG_PATH.substring(0, CONFIG_PATH.lastIndexOf('/'))
+  const configPath = getConfigPath()
+  const dir = dirname(configPath)
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n')
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n')
 }
 
 export function getConfigValue(key: string): unknown {

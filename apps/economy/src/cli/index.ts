@@ -2,34 +2,35 @@
 import { Command } from 'commander'
 import chalk from 'chalk'
 import { registerBrainsCommand } from './brains.js'
-import { openDatabase, getDbPath, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertProject, deleteProject, getProject, listModelPricing, upsertModelPricing, deleteModelPricing, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId } from '../db/database.js'
-import { ingestClaude, ingestTakumi } from '../ingest/claude.js'
-import { ingestCodex } from '../ingest/codex.js'
-import { ingestGemini } from '../ingest/gemini.js'
-import { syncAnthropicBilling, syncOpenAIBilling } from '../ingest/billing.js'
+import { registerTodosCommand } from './commands/todos.js'
+import { registerExtendedCommands, registerFleetCommands } from './commands/extras.js'
+import { AGENTS, parseAgent } from '../lib/agents.js'
+import { syncAll } from '../lib/sync-all.js'
+import { maybePullFromCloud, cloudPush, cloudPull, cloudSyncFull, getCloudDatabaseUrl, getCloudPg } from '../lib/cloud-sync.js'
+import type { Agent } from '../lib/agents.js'
+import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertProject, deleteProject, getProject, listModelPricing, upsertModelPricing, deleteModelPricing, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId, listMachineRegistry } from '../db/database.js'
 import { queryBillingSummary } from '../db/database.js'
+import { syncAnthropicBilling, syncOpenAIBilling, syncGeminiBilling } from '../ingest/billing.js'
 import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
 import { randomUUID } from 'crypto'
 import { execSync } from 'child_process'
-import type { Period, Agent } from '../types/index.js'
+import type { Period } from '../types/index.js'
 
 const program = new Command()
 
 program
   .name('economy')
-  .description('AI coding cost tracker — Claude Code, Codex, and Gemini')
+  .description('AI coding cost tracker — Claude, Codex, Gemini, OpenCode, Cursor, Pi, Hermes')
   .version(packageMetadata.version)
 
 // ── Auto-sync helper ──────────────────────────────────────────────────────────
 
-async function autoSync(): Promise<void> {
+async function autoSync(opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; verbose?: boolean } = {}): Promise<void> {
   const db = openDatabase()
   ensurePricingSeeded(db)
-  await ingestClaude(db)
-  await ingestTakumi(db)
-  await ingestCodex(db)
-  await ingestGemini(db)
+  await maybePullFromCloud()
+  await syncAll(db, opts)
 }
 
 // ── Sparkline helper ──────────────────────────────────────────────────────────
@@ -69,6 +70,69 @@ function fmtTokens(n: number): string {
 
 function fmtCount(n: number): string {
   return n.toLocaleString('en-US')
+}
+
+function fmtAgent(agent: string): string {
+  if (agent === 'claude') return chalk.blue('claude')
+  if (agent === 'codex') return chalk.yellow('codex')
+  if (agent === 'gemini') return chalk.green('gemini')
+  if (agent === 'takumi') return chalk.magenta('takumi')
+  if (agent === 'opencode') return chalk.cyan('opencode')
+  if (agent === 'cursor') return chalk.white('cursor')
+  if (agent === 'pi') return chalk.hex('#FF6B6B')('pi')
+  if (agent === 'hermes') return chalk.hex('#9B59B6')('hermes')
+  return chalk.gray(agent)
+}
+
+function fail(message: string): never {
+  console.error(chalk.red(message))
+  process.exit(1)
+}
+
+function parseFiniteCliNumber(value: string | undefined, option: string): number {
+  if (value == null || value === '') fail(`${option} is required`)
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) fail(`${option} must be a number`)
+  return parsed
+}
+
+function parsePositiveCliNumber(value: string | undefined, option: string): number {
+  const parsed = parseFiniteCliNumber(value, option)
+  if (parsed <= 0) fail(`${option} must be greater than 0`)
+  return parsed
+}
+
+function parsePositiveCliInteger(value: string | undefined, option: string): number {
+  const parsed = parsePositiveCliNumber(value, option)
+  if (!Number.isInteger(parsed)) fail(`${option} must be an integer`)
+  return parsed
+}
+
+function parseNonNegativeCliNumber(value: string | undefined, option: string): number {
+  const parsed = parseFiniteCliNumber(value, option)
+  if (parsed < 0) fail(`${option} must be non-negative`)
+  return parsed
+}
+
+function parseCliPort(value: string | undefined, option: string): number {
+  const port = parsePositiveCliInteger(value, option)
+  if (port > 65535) fail(`${option} must be between 1 and 65535`)
+  return port
+}
+
+function parseOptionalCliAgent(value: string | undefined): Agent | undefined {
+  if (value == null) return undefined
+  try {
+    return parseAgent(value, '--agent')
+  } catch (e) {
+    fail(e instanceof Error ? e.message : String(e))
+  }
+}
+
+function requireCliChoice<T extends string>(value: string | undefined, option: string, allowed: readonly T[]): T {
+  const selected = value ?? allowed[0]!
+  if ((allowed as readonly string[]).includes(selected)) return selected as T
+  fail(`${option} must be one of: ${allowed.join(', ')}`)
 }
 
 function printTable(headers: string[], rows: string[][]): void {
@@ -164,47 +228,49 @@ program.action(async () => {
 
 program
   .command('sync')
-  .description('Ingest cost data from Claude Code, Codex, and Gemini')
+  .description('Ingest cost data from all coding agents')
   .option('--claude', 'Only ingest Claude Code telemetry')
   .option('--takumi', 'Only ingest Takumi sessions')
   .option('--codex', 'Only ingest Codex sessions')
   .option('--gemini', 'Only ingest Gemini CLI sessions')
+  .option('--opencode', 'Only ingest OpenCode sessions')
+  .option('--cursor', 'Only ingest Cursor usage')
+  .option('--pi', 'Only ingest Pi sessions')
+  .option('--hermes', 'Only ingest Hermes sessions')
   .option('-v, --verbose', 'Verbose output')
   .option('--force', 'Force re-process all files (ignore mtime cache)')
   .option('--backfill-machine', 'Tag existing records that have no machine_id with current hostname')
   .option('--recalculate', 'Recalculate costs for all requests with cost_usd = 0')
-  .action(async (opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; verbose?: boolean; force?: boolean; backfillMachine?: boolean; recalculate?: boolean }) => {
+  .action(async (opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; verbose?: boolean; force?: boolean; backfillMachine?: boolean; recalculate?: boolean }) => {
     const db = openDatabase()
     ensurePricingSeeded(db)
+    const anySpecific = opts.claude || opts.takumi || opts.codex || opts.gemini || opts.opencode || opts.cursor || opts.pi || opts.hermes
+    if (!anySpecific || opts.verbose) {
+      try {
+        const { syncOpenProjectsRegistry } = await import('../lib/open-projects.js')
+        const p = await syncOpenProjectsRegistry(db)
+        if (opts.verbose) console.log(chalk.dim(`Synced open-projects registry: ${p.imported} imported, ${p.skipped} skipped`))
+      } catch (e) {
+        if (opts.verbose) console.log(chalk.dim(`open-projects registry sync skipped: ${e instanceof Error ? e.message : String(e)}`))
+      }
+    }
     if (opts.force) {
-      db.exec(`DELETE FROM ingest_state WHERE source = 'claude'`)
+      db.exec(`DELETE FROM ingest_state WHERE source IN (${AGENTS.map(a => `'${a}'`).join(', ')})`)
       if (opts.verbose) console.log(chalk.dim('Cleared ingest cache'))
     }
-    const anySpecific = opts.claude || opts.takumi || opts.codex || opts.gemini
-    const doClaude = opts.claude || !anySpecific
-    const doTakumi = opts.takumi || !anySpecific
-    const doCodex = opts.codex || !anySpecific
-    const doGemini = opts.gemini || !anySpecific
-    if (doClaude) {
-      process.stdout.write(chalk.cyan('→ Ingesting Claude Code telemetry... '))
-      const r = await ingestClaude(db, opts.verbose)
-      console.log(chalk.green(`✓ ${r.files} files, ${r.requests} requests, ${r.sessions} sessions`))
-    }
-    if (doTakumi) {
-      process.stdout.write(chalk.cyan('→ Ingesting Takumi sessions... '))
-      const r = await ingestTakumi(db, opts.verbose)
-      console.log(chalk.green(`✓ ${r.files} files, ${r.requests} requests, ${r.sessions} sessions`))
-    }
-    if (doCodex) {
-      process.stdout.write(chalk.cyan('→ Ingesting Codex sessions... '))
-      const r = await ingestCodex(db, opts.verbose)
-      console.log(chalk.green(`✓ ${r.sessions} sessions`))
-    }
-    if (doGemini) {
-      process.stdout.write(chalk.cyan('→ Ingesting Gemini CLI sessions... '))
-      const r = await ingestGemini(db, opts.verbose)
-      console.log(chalk.green(`✓ ${r.sessions} sessions`))
-    }
+    process.stdout.write(chalk.cyan('→ Ingesting agent data... '))
+    const result = await syncAll(db, {
+      claude: opts.claude,
+      takumi: opts.takumi,
+      codex: opts.codex,
+      gemini: opts.gemini,
+      opencode: opts.opencode,
+      cursor: opts.cursor,
+      pi: opts.pi,
+      hermes: opts.hermes,
+      verbose: opts.verbose,
+    })
+    console.log(chalk.green(`✓ deduped ${result.deduped}${result.cloudPushed ? ', pushed to cloud' : ''}`))
     // Backfill empty machine_id records
     if (opts.backfillMachine) {
       const machine = getMachineId()
@@ -215,10 +281,11 @@ program
     // Recalculate zero-cost requests
     if (opts.recalculate) {
       const { computeCostFromDb } = await import('../lib/pricing.js')
-      const zeroRows = db.prepare(`SELECT id, model, input_tokens, output_tokens, cache_read_tokens, cache_create_tokens FROM requests WHERE cost_usd = 0 AND (input_tokens > 0 OR output_tokens > 0)`).all() as Array<{ id: string; model: string; input_tokens: number; output_tokens: number; cache_read_tokens: number; cache_create_tokens: number }>
+      const zeroRows = db.prepare(`SELECT id, model, input_tokens, output_tokens, cache_read_tokens, cache_create_tokens, cache_create_5m_tokens, cache_create_1h_tokens FROM requests WHERE cost_usd = 0 AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_create_tokens > 0)`).all() as Array<{ id: string; model: string; input_tokens: number; output_tokens: number; cache_read_tokens: number; cache_create_tokens: number; cache_create_5m_tokens?: number; cache_create_1h_tokens?: number }>
       let fixed = 0
       for (const r of zeroRows) {
-        const cost = computeCostFromDb(db, r.model, r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_create_tokens)
+        const cache5m = r.cache_create_5m_tokens ?? r.cache_create_tokens
+        const cost = computeCostFromDb(db, r.model, r.input_tokens, r.output_tokens, r.cache_read_tokens, cache5m, r.cache_create_1h_tokens ?? 0)
         if (cost > 0) {
           db.prepare(`UPDATE requests SET cost_usd = ? WHERE id = ?`).run(cost, r.id)
           fixed++
@@ -253,7 +320,7 @@ program.command('month').description('Cost summary for this month').action(async
 program
   .command('sessions')
   .description('List coding sessions with costs')
-  .option('--agent <agent>', 'Filter by agent (claude|codex)')
+  .option('--agent <agent>', 'Filter by agent (claude|takumi|codex|gemini)')
   .option('--project <path>', 'Filter by project path')
   .option('--machine <id>', 'Filter by machine hostname (e.g. spark01, apple01)')
   .option('--limit <n>', 'Number of sessions', '20')
@@ -261,14 +328,16 @@ program
   .option('--since <date>', 'Filter sessions since date or relative (e.g. 2026-03-01, 7d, 30d)')
   .option('--search <query>', 'Search by project name, session id prefix, or agent')
   .action(async (opts: { agent?: string; project?: string; machine?: string; limit?: string; format?: string; since?: string; search?: string }) => {
+    const limit = parsePositiveCliInteger(opts.limit ?? '20', '--limit')
+    const agent = parseOptionalCliAgent(opts.agent)
     await autoSync()
     const db = openDatabase()
     const sinceDate = opts.since ? parseSinceDate(opts.since) : undefined
     let sessions = querySessions(db, {
-      agent: opts.agent as Agent | undefined,
+      agent,
       project: opts.project,
       machine: opts.machine,
-      limit: Number(opts.limit ?? 20),
+      limit,
       since: sinceDate,
       search: opts.search,
     })
@@ -289,7 +358,7 @@ program
       ['Session ID', 'Agent', 'Project', 'Cost', 'Tokens', 'Requests', 'Started'],
       sessions.map(s => [
         chalk.dim(s.id.substring(0, 12)),
-        s.agent === 'claude' ? chalk.blue('claude') : chalk.yellow('codex'),
+        fmtAgent(s.agent),
         chalk.white(s.project_name || chalk.dim('unknown')),
         fmt(s.total_cost_usd),
         chalk.cyan(fmtTokens(s.total_tokens)),
@@ -309,9 +378,11 @@ program
   .option('--agent <agent>', 'Filter by agent')
   .option('--since <date>', 'Filter sessions since date or relative (e.g. 2026-03-01, 7d, 30d)')
   .action((opts: { n?: string; agent?: string; since?: string }) => {
+    const count = parsePositiveCliInteger(opts.n ?? '10', '-n')
+    const agent = parseOptionalCliAgent(opts.agent)
     const db = openDatabase()
     const sinceDate = opts.since ? parseSinceDate(opts.since) : undefined
-    let sessions = queryTopSessions(db, Number(opts.n ?? 10), opts.agent)
+    let sessions = queryTopSessions(db, count, agent)
     if (sinceDate) sessions = sessions.filter(s => s.started_at >= sinceDate)
     if (sessions.length === 0) {
       console.log(chalk.yellow('No sessions found. Run `economy sync` first.'))
@@ -323,7 +394,7 @@ program
       sessions.map((s, i) => [
         chalk.dim(String(i + 1)),
         chalk.white(s.project_name || chalk.dim('unknown')),
-        s.agent === 'claude' ? chalk.blue('claude') : chalk.yellow('codex'),
+        fmtAgent(s.agent),
         fmt(s.total_cost_usd),
         chalk.cyan(fmtTokens(s.total_tokens)),
         chalk.dim(s.started_at.substring(0, 16)),
@@ -383,7 +454,7 @@ program
         ['Model', 'Agent', 'Requests', 'Tokens', 'Cost'],
         rows.map(r => [
           chalk.white(r.model),
-          r.agent === 'claude' ? chalk.blue('claude') : chalk.yellow('codex'),
+          fmtAgent(r.agent),
           String(r.requests),
           chalk.cyan(fmtTokens(r.total_tokens)),
           fmt(r.cost_usd),
@@ -399,11 +470,17 @@ program
   .command('watch')
   .description('Live stream of incoming costs')
   .option('--interval <seconds>', 'Poll interval in seconds', '10')
+  .option('--daemon', 'Watch agent data directories and sync on change')
   .option('--agent <agent>', 'Filter by agent')
   .option('--notify <amount>', 'Fire macOS notification when cumulative cost crosses this USD threshold')
-  .action(async (opts: { interval?: string; agent?: string; notify?: string }) => {
+  .action(async (opts: { interval?: string; daemon?: boolean; agent?: string; notify?: string }) => {
     const { watchCosts } = await import('./commands/watch.js')
-    await watchCosts({ interval: Number(opts.interval ?? 10), agent: opts.agent as Agent | undefined, notify: opts.notify ? Number(opts.notify) : undefined })
+    await watchCosts({
+      interval: parsePositiveCliInteger(opts.interval ?? '10', '--interval'),
+      daemon: Boolean(opts.daemon),
+      agent: parseOptionalCliAgent(opts.agent),
+      notify: opts.notify ? parsePositiveCliNumber(opts.notify, '--notify') : undefined,
+    })
   })
 
 // ── budget ────────────────────────────────────────────────────────────────────
@@ -417,22 +494,26 @@ budgetCmd
   .option('--period <period>', 'Period: daily|weekly|monthly', 'monthly')
   .option('--limit <usd>', 'Budget limit in USD')
   .option('--alert <percent>', 'Alert threshold %', '80')
-  .option('--agent <agent>', 'Limit to agent (claude|codex)')
+  .option('--agent <agent>', 'Limit to agent (claude|takumi|codex|gemini)')
   .action((opts: { project?: string; period?: string; limit?: string; alert?: string; agent?: string }) => {
-    if (!opts.limit) { console.error(chalk.red('--limit is required')); process.exit(1) }
+    const limitUsd = parsePositiveCliNumber(opts.limit, '--limit')
+    const alertAtPercent = parsePositiveCliNumber(opts.alert ?? '80', '--alert')
+    if (alertAtPercent > 100) fail('--alert must be between 1 and 100')
+    const period = requireCliChoice(opts.period, '--period', ['daily', 'weekly', 'monthly'] as const)
+    const agent = parseOptionalCliAgent(opts.agent) ?? null
     const db = openDatabase()
     const now = new Date().toISOString()
     upsertBudget(db, {
       id: randomUUID(),
       project_path: opts.project ?? null,
-      agent: opts.agent as Agent ?? null,
-      period: (opts.period ?? 'monthly') as 'daily' | 'weekly' | 'monthly',
-      limit_usd: Number(opts.limit),
-      alert_at_percent: Number(opts.alert ?? 80),
+      agent,
+      period,
+      limit_usd: limitUsd,
+      alert_at_percent: alertAtPercent,
       created_at: now,
       updated_at: now,
     })
-    console.log(chalk.green(`✓ Budget set: ${opts.project ?? 'global'} — ${opts.period} $${opts.limit}`))
+    console.log(chalk.green(`✓ Budget set: ${opts.project ?? 'global'} — ${period} $${limitUsd}`))
   })
 
 budgetCmd
@@ -672,13 +753,14 @@ pricingCmd
     const rows = listModelPricing(db)
     console.log()
     printTable(
-      ['Model', 'Input/1M', 'Output/1M', 'CacheR/1M', 'CacheW/1M', 'Out/1k'],
+      ['Model', 'Input/1M', 'Output/1M', 'CacheR/1M', 'CacheW/1M', 'CacheStorage/1M-h', 'Out/1k'],
       rows.map(r => [
         chalk.white(r.model),
         fmt(r.input_per_1m),
         fmt(r.output_per_1m),
         fmt(r.cache_read_per_1m),
-        fmt(r.cache_write_per_1m),
+        r.cache_write_1h_per_1m ? `${fmt(r.cache_write_per_1m)} / ${fmt(r.cache_write_1h_per_1m)}` : fmt(r.cache_write_per_1m),
+        fmt(r.cache_storage_per_1m_hour ?? 0),
         chalk.dim(fmt(r.output_per_1m / 1000)),
       ]),
     )
@@ -691,17 +773,26 @@ pricingCmd
   .option('--input <usd>', 'Input price per 1M tokens')
   .option('--output <usd>', 'Output price per 1M tokens')
   .option('--cache-read <usd>', 'Cache read price per 1M tokens', '0')
-  .option('--cache-write <usd>', 'Cache write price per 1M tokens', '0')
-  .action((model: string, opts: { input?: string; output?: string; cacheRead?: string; cacheWrite?: string }) => {
-    if (!opts.input || !opts.output) { console.error(chalk.red('--input and --output are required')); process.exit(1) }
+  .option('--cache-write <usd>', '5-minute cache write price per 1M tokens', '0')
+  .option('--cache-write-1h <usd>', '1-hour cache write price per 1M tokens', '0')
+  .option('--cache-storage <usd>', 'Context cache storage price per 1M token-hours', '0')
+  .action((model: string, opts: { input?: string; output?: string; cacheRead?: string; cacheWrite?: string; cacheWrite1h?: string; cacheStorage?: string }) => {
+    const input = parseNonNegativeCliNumber(opts.input, '--input')
+    const output = parseNonNegativeCliNumber(opts.output, '--output')
+    const cacheRead = parseNonNegativeCliNumber(opts.cacheRead ?? '0', '--cache-read')
+    const cacheWrite = parseNonNegativeCliNumber(opts.cacheWrite ?? '0', '--cache-write')
+    const cacheWrite1h = parseNonNegativeCliNumber(opts.cacheWrite1h ?? '0', '--cache-write-1h')
+    const cacheStorage = parseNonNegativeCliNumber(opts.cacheStorage ?? '0', '--cache-storage')
     const db = openDatabase()
     ensurePricingSeeded(db)
     upsertModelPricing(db, {
       model,
-      input_per_1m: Number(opts.input),
-      output_per_1m: Number(opts.output),
-      cache_read_per_1m: Number(opts.cacheRead ?? 0),
-      cache_write_per_1m: Number(opts.cacheWrite ?? 0),
+      input_per_1m: input,
+      output_per_1m: output,
+      cache_read_per_1m: cacheRead,
+      cache_write_per_1m: cacheWrite,
+      cache_write_1h_per_1m: cacheWrite1h,
+      cache_storage_per_1m_hour: cacheStorage,
       updated_at: new Date().toISOString(),
     })
     console.log(chalk.green(`✓ Pricing updated for ${model}`))
@@ -723,7 +814,7 @@ program
   .description('Start the REST API server')
   .option('-p, --port <port>', 'Port', '3456')
   .action(async (opts: { port?: string }) => {
-    const port = Number(opts.port ?? 3456)
+    const port = parseCliPort(opts.port ?? '3456', '--port')
     const { startServer } = await import('../server/serve.js')
     startServer(port)
   })
@@ -735,7 +826,7 @@ program
   .description('Open the web dashboard (auto-starts server if not running)')
   .option('-p, --port <port>', 'Server port', '3456')
   .action(async (opts: { port?: string }) => {
-    const port = Number(opts.port ?? 3456)
+    const port = parseCliPort(opts.port ?? '3456', '--port')
     const url = `http://localhost:${port}`
 
     // Check if server is already running
@@ -790,9 +881,10 @@ program
   .description('Show MCP server install commands')
   .option('--claude', 'Install into Claude Code')
   .option('--codex', 'Install into Codex')
+  .option('--gemini', 'Install into Gemini CLI')
   .option('--all', 'Install into all agents')
-  .action(async (opts: { claude?: boolean; codex?: boolean; all?: boolean }) => {
-    const doAll = opts.all || (!opts.claude && !opts.codex)
+  .action(async (opts: { claude?: boolean; codex?: boolean; gemini?: boolean; all?: boolean }) => {
+    const doAll = opts.all || (!opts.claude && !opts.codex && !opts.gemini)
     if (opts.claude || doAll) {
       console.log(chalk.bold.cyan('\nClaude Code:'))
       console.log(chalk.white('  claude mcp add --transport stdio --scope user economy -- economy-mcp'))
@@ -800,6 +892,10 @@ program
     if (opts.codex || doAll) {
       console.log(chalk.bold.yellow('\nCodex (~/.codex/config.toml):'))
       console.log(chalk.white('  [mcp_servers.economy]\n  command = "economy-mcp"\n  args = []'))
+    }
+    if (opts.gemini || doAll) {
+      console.log(chalk.bold.green('\nGemini (~/.gemini/settings.json):'))
+      console.log(chalk.white('  "mcpServers": { "economy": { "command": "economy-mcp", "args": [] } }'))
     }
     console.log()
   })
@@ -1121,19 +1217,21 @@ goalCmd
   .option('--project <path>', 'Scope to project path')
   .option('--agent <agent>', 'Scope to agent')
   .action((opts: { period?: string; limit?: string; project?: string; agent?: string }) => {
-    if (!opts.limit) { console.error(chalk.red('--limit is required')); process.exit(1) }
+    const limitUsd = parsePositiveCliNumber(opts.limit, '--limit')
+    const period = requireCliChoice(opts.period, '--period', ['day', 'week', 'month', 'year'] as const)
+    const agent = parseOptionalCliAgent(opts.agent) ?? null
     const db = openDatabase()
     const now = new Date().toISOString()
     upsertGoal(db, {
       id: randomUUID(),
-      period: (opts.period ?? 'month') as 'day' | 'week' | 'month' | 'year',
+      period,
       project_path: opts.project ?? null,
-      agent: opts.agent as Agent ?? null,
-      limit_usd: Number(opts.limit),
+      agent,
+      limit_usd: limitUsd,
       created_at: now,
       updated_at: now,
     })
-    console.log(chalk.green(`✓ Goal set: ${opts.period ?? 'month'} $${opts.limit}${opts.project ? ` (${opts.project})` : ''}`))
+    console.log(chalk.green(`✓ Goal set: ${period} $${limitUsd}${opts.project ? ` (${opts.project})` : ''}`))
   })
 
 goalCmd
@@ -1235,27 +1333,6 @@ program
 
 // ── cloud ────────────────────────────────────────────────────────────────────
 
-const CLOUD_RDS_HOST = 'hasnaxyz-prod-opensource.c4limg0qgqvk.us-east-1.rds.amazonaws.com'
-const CLOUD_RDS_USER = 'hasna_admin'
-const CLOUD_RDS_DB = 'economy'
-const CLOUD_TABLES = ['requests', 'sessions', 'projects', 'budgets', 'goals', 'model_pricing']
-
-async function getCloudPassword(): Promise<string> {
-  if (process.env['ECONOMY_PG_PASSWORD']) return process.env['ECONOMY_PG_PASSWORD']
-  const { execSync: exec } = await import('child_process')
-  const secretJson = exec(
-    `aws --profile hasna-xyz-hq secretsmanager get-secret-value --secret-id 'rds!db-7a451ce6-83a9-40fa-b24a-81e5d5943511' --query SecretString --output text`,
-    { timeout: 10000, encoding: 'utf-8' },
-  )
-  return JSON.parse(secretJson).password
-}
-
-async function getCloudPg() {
-  const { PgAdapterAsync } = await import('@hasna/cloud')
-  const pw = encodeURIComponent(await getCloudPassword())
-  return new PgAdapterAsync(`postgresql://${CLOUD_RDS_USER}:${pw}@${CLOUD_RDS_HOST}:5432/${CLOUD_RDS_DB}?sslmode=require`)
-}
-
 const cloudCmd = program.command('cloud').description('Cross-machine sync via cloud PostgreSQL')
 
 cloudCmd
@@ -1263,24 +1340,10 @@ cloudCmd
   .description('Push local economy data to cloud PostgreSQL')
   .option('--tables <tables>', 'Comma-separated table names (default: all)')
   .action(async (opts: { tables?: string }) => {
-    const { syncPush, SqliteAdapter } = await import('@hasna/cloud')
-    const { PG_MIGRATIONS } = await import('../db/pg-migrations.js')
-    const cloud = await getCloudPg()
-    const local = new SqliteAdapter(getDbPath())
-
-    process.stdout.write(chalk.cyan('→ Running PG migrations... '))
-    for (const sql of PG_MIGRATIONS) { await cloud.run(sql) }
-    console.log(chalk.green('✓'))
-
-    const tableList = opts.tables ? opts.tables.split(',').map(t => t.trim()) : CLOUD_TABLES
-    process.stdout.write(chalk.cyan(`→ Pushing ${tableList.join(', ')}... `))
-    const results = await syncPush(local, cloud, { tables: tableList }) as Array<{ rowsWritten: number }>
-    const totalRows = results.reduce((s: number, r: { rowsWritten: number }) => s + r.rowsWritten, 0)
-    console.log(chalk.green(`✓ ${totalRows} rows across ${tableList.length} tables`))
-
-    local.close()
-    await cloud.close()
-    console.log(chalk.bold.green(`\n✓ Push complete from ${getMachineId()}`))
+    const tableList = opts.tables ? opts.tables.split(',').map(t => t.trim()) : undefined
+    process.stdout.write(chalk.cyan('→ Pushing to cloud... '))
+    const r = await cloudPush({ tables: tableList })
+    console.log(chalk.green(`✓ ${r.rows} rows from ${r.machine}`))
   })
 
 cloudCmd
@@ -1288,24 +1351,10 @@ cloudCmd
   .description('Pull cloud PostgreSQL data to local')
   .option('--tables <tables>', 'Comma-separated table names (default: all)')
   .action(async (opts: { tables?: string }) => {
-    const { syncPull, SqliteAdapter } = await import('@hasna/cloud')
-    const { PG_MIGRATIONS } = await import('../db/pg-migrations.js')
-    const cloud = await getCloudPg()
-    const local = new SqliteAdapter(getDbPath())
-
-    process.stdout.write(chalk.cyan('→ Running PG migrations... '))
-    for (const sql of PG_MIGRATIONS) { await cloud.run(sql) }
-    console.log(chalk.green('✓'))
-
-    const tableList = opts.tables ? opts.tables.split(',').map(t => t.trim()) : CLOUD_TABLES
-    process.stdout.write(chalk.cyan(`→ Pulling ${tableList.join(', ')}... `))
-    const results = await syncPull(cloud, local, { tables: tableList }) as Array<{ rowsWritten: number }>
-    const totalRows = results.reduce((s: number, r: { rowsWritten: number }) => s + r.rowsWritten, 0)
-    console.log(chalk.green(`✓ ${totalRows} rows across ${tableList.length} tables`))
-
-    local.close()
-    await cloud.close()
-    console.log(chalk.bold.green(`\n✓ Pull complete to ${getMachineId()}`))
+    const tableList = opts.tables ? opts.tables.split(',').map(t => t.trim()) : undefined
+    process.stdout.write(chalk.cyan('→ Pulling from cloud... '))
+    const r = await cloudPull({ tables: tableList })
+    console.log(chalk.green(`✓ ${r.rows} rows to ${r.machine}`))
   })
 
 cloudCmd
@@ -1313,68 +1362,60 @@ cloudCmd
   .description('Full sync: ingest local → push to cloud → pull from cloud')
   .action(async () => {
     console.log(chalk.bold.cyan(`  Cloud Sync — ${getMachineId()}\n`))
-
     process.stdout.write(chalk.cyan('→ Ingesting local data... '))
     await autoSync()
     console.log(chalk.green('✓'))
-
-    const { syncPush, syncPull, SqliteAdapter } = await import('@hasna/cloud')
-    const { PG_MIGRATIONS } = await import('../db/pg-migrations.js')
-    const cloud = await getCloudPg()
-    const local = new SqliteAdapter(getDbPath())
-
-    for (const sql of PG_MIGRATIONS) { await cloud.run(sql) }
-
-    process.stdout.write(chalk.cyan('→ Pushing local → cloud... '))
-    const pushResults = await syncPush(local, cloud, { tables: CLOUD_TABLES }) as Array<{ rowsWritten: number }>
-    console.log(chalk.green(`✓ ${pushResults.reduce((s: number, r: { rowsWritten: number }) => s + r.rowsWritten, 0)} rows`))
-
-    process.stdout.write(chalk.cyan('→ Pulling cloud → local... '))
-    const pullResults = await syncPull(cloud, local, { tables: CLOUD_TABLES }) as Array<{ rowsWritten: number }>
-    console.log(chalk.green(`✓ ${pullResults.reduce((s: number, r: { rowsWritten: number }) => s + r.rowsWritten, 0)} rows`))
-
-    local.close()
-    await cloud.close()
+    process.stdout.write(chalk.cyan('→ Cloud round-trip... '))
+    const r = await cloudSyncFull()
+    console.log(chalk.green(`✓ push ${r.push} / pull ${r.pull}`))
     console.log(chalk.bold.green('\n✓ Cloud sync complete'))
   })
 
 cloudCmd
   .command('status')
-  .description('Check cloud connection status')
+  .description('Check cloud connection and fleet machine registry')
   .action(async () => {
     console.log()
     console.log(`  Machine: ${chalk.white(getMachineId())}`)
-    console.log(`  RDS Host: ${chalk.white(CLOUD_RDS_HOST)}`)
-    console.log(`  Database: ${chalk.white(CLOUD_RDS_DB)}`)
+    console.log(`  Cloud URL: ${chalk.white(getCloudDatabaseUrl() ?? '(not set — export ECONOMY_CLOUD_DATABASE_URL)')}`)
+    const registry = listMachineRegistry(openDatabase())
+    if (registry.length > 0) {
+      console.log(chalk.dim('\n  Fleet registry:'))
+      for (const m of registry) {
+        console.log(`    ${m.machine_id.padEnd(12)} push ${m.last_push_at?.substring(0, 16) ?? '—'}  pull ${m.last_pull_at?.substring(0, 16) ?? '—'}`)
+      }
+    }
     try {
       const cloud = await getCloudPg()
       await cloud.get('SELECT 1 as ok')
       const tables = await cloud.all("SELECT tablename FROM pg_tables WHERE schemaname = 'public'") as Array<{ tablename: string }>
-      console.log(`  PostgreSQL: ${chalk.green('connected')}`)
+      console.log(`\n  PostgreSQL: ${chalk.green('connected')}`)
       console.log(`  Tables: ${chalk.white(tables.map(t => t.tablename).join(', ') || '(none)')}`)
       await cloud.close()
     } catch (err: unknown) {
-      console.log(`  PostgreSQL: ${chalk.red(`failed — ${err instanceof Error ? err.message : String(err)}`)}`)
+      console.log(`\n  PostgreSQL: ${chalk.red(`failed — ${err instanceof Error ? err.message : String(err)}`)}`)
     }
     console.log()
   })
 
 // ── billing ──────────────────────────────────────────────────────────────────
 
-const billingCmd = program.command('billing').description('Pull actual billing from provider admin APIs (ground truth)')
+const billingCmd = program.command('billing').description('Pull actual billing from provider billing sources (ground truth)')
 
 billingCmd
   .command('sync')
-  .description('Sync actual billing from Anthropic and OpenAI admin APIs')
+  .description('Sync actual billing from Anthropic, OpenAI, and Gemini billing sources')
   .option('--days <n>', 'Days of history to fetch', '31')
   .option('--anthropic', 'Only sync Anthropic')
   .option('--openai', 'Only sync OpenAI')
-  .action(async (opts: { days?: string; anthropic?: boolean; openai?: boolean }) => {
+  .option('--gemini', 'Only sync Gemini')
+  .action(async (opts: { days?: string; anthropic?: boolean; openai?: boolean; gemini?: boolean }) => {
+    const days = parsePositiveCliInteger(opts.days ?? '31', '--days')
+    if (days > 366) fail('--days must be between 1 and 366')
     const db = openDatabase()
-    const days = Number(opts.days ?? 31)
-    const doBoth = !opts.anthropic && !opts.openai
+    const doAll = !opts.anthropic && !opts.openai && !opts.gemini
 
-    if (opts.anthropic || doBoth) {
+    if (opts.anthropic || doAll) {
       process.stdout.write(chalk.cyan('→ Syncing Anthropic billing... '))
       try {
         const r = await syncAnthropicBilling(db, { days })
@@ -1383,11 +1424,24 @@ billingCmd
         console.log(chalk.red(`✗ ${e instanceof Error ? e.message : String(e)}`))
       }
     }
-    if (opts.openai || doBoth) {
+    if (opts.openai || doAll) {
       process.stdout.write(chalk.cyan('→ Syncing OpenAI billing... '))
       try {
         const r = await syncOpenAIBilling(db, { days })
         console.log(chalk.green(`✓ ${r.days} days, $${r.totalUsd.toFixed(2)}`))
+      } catch (e) {
+        console.log(chalk.red(`✗ ${e instanceof Error ? e.message : String(e)}`))
+      }
+    }
+    if (opts.gemini || doAll) {
+      process.stdout.write(chalk.cyan('→ Syncing Gemini billing... '))
+      try {
+        const r = await syncGeminiBilling(db, { days })
+        if (r.skipped) {
+          console.log(chalk.yellow(`skipped — ${r.skipped}`))
+        } else {
+          console.log(chalk.green(`✓ ${r.days} days, $${r.totalUsd.toFixed(2)}`))
+        }
       } catch (e) {
         console.log(chalk.red(`✗ ${e instanceof Error ? e.message : String(e)}`))
       }
@@ -1421,5 +1475,8 @@ billingCmd
 // ── brains ─────────────────────────────────────────────────────────────────────
 
 registerBrainsCommand(program)
+registerTodosCommand(program)
+registerExtendedCommands(program)
+registerFleetCommands(program)
 
 program.parse()

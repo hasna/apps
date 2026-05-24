@@ -9,16 +9,32 @@ import { ProjectsTab } from "@/tabs/ProjectsTab";
 import { BudgetsTab } from "@/tabs/BudgetsTab";
 import { GoalsTab } from "@/tabs/GoalsTab";
 import { PricingTab } from "@/tabs/PricingTab";
+import { BillingTab } from "@/tabs/BillingTab";
+import { UsageTab } from "@/tabs/UsageTab";
+import { SavingsTab } from "@/tabs/SavingsTab";
+import { ReconciliationTab } from "@/tabs/ReconciliationTab";
 import { Button } from "@/components/ui/button";
 import {
   NavigationMenu,
   NavigationMenuList,
   NavigationMenuItem,
   NavigationMenuLink,
-  navigationMenuTriggerStyle,
 } from "@/components/ui/navigation-menu";
+import { navigationMenuTriggerStyle } from "@/components/ui/navigation-menu-style";
 
-type Tab = "overview" | "sessions" | "models" | "projects" | "budgets" | "goals" | "pricing";
+type Tab =
+  | "overview"
+  | "sessions"
+  | "models"
+  | "projects"
+  | "budgets"
+  | "goals"
+  | "usage"
+  | "savings"
+  | "fleet"
+  | "reconciliation"
+  | "pricing"
+  | "billing";
 
 const navItems: { key: Tab; label: string }[] = [
   { key: "overview", label: "Overview" },
@@ -27,19 +43,35 @@ const navItems: { key: Tab; label: string }[] = [
   { key: "projects", label: "Projects" },
   { key: "budgets", label: "Budgets" },
   { key: "goals", label: "Goals" },
+  { key: "usage", label: "Usage" },
+  { key: "savings", label: "Savings" },
+  { key: "fleet", label: "Fleet" },
+  { key: "reconciliation", label: "Reconcile" },
   { key: "pricing", label: "Pricing" },
+  { key: "billing", label: "Billing" },
 ];
 
 function useElapsedTime() {
-  const [now, setNow] = React.useState(Date.now());
-  const [lastReload, setLastReload] = React.useState(Date.now());
+  const [now, setNow] = React.useState(0);
+  const [lastReload, setLastReload] = React.useState(0);
+
   React.useEffect(() => {
+    const initial = Date.now();
+    setNow(initial);
+    setLastReload(initial);
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
+
+  const markReloaded = React.useCallback(() => {
+    const current = Date.now();
+    setNow(current);
+    setLastReload(current);
+  }, []);
+
   const elapsed = Math.round((now - lastReload) / 1000);
   const text = elapsed < 5 ? "just now" : `${elapsed}s ago`;
-  return { text, markReloaded: () => setLastReload(Date.now()) };
+  return { text, markReloaded };
 }
 
 function AppInner() {
@@ -48,12 +80,12 @@ function AppInner() {
   const [reloadKey, setReloadKey] = React.useState(0);
   const { text: lastUpdatedText, markReloaded } = useElapsedTime();
 
-  function reload() {
+  const reload = React.useCallback(() => {
     setLoading(true);
     setReloadKey((k) => k + 1);
     markReloaded();
     setTimeout(() => setLoading(false), 500);
-  }
+  }, [markReloaded]);
 
   // Auto-mark as "reloaded" when tab data refreshes via its own 30s interval
   React.useEffect(() => {
@@ -69,7 +101,7 @@ function AppInner() {
     }
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  }, [reload]);
 
   return (
     <div className="min-h-screen">
@@ -128,7 +160,12 @@ function AppInner() {
         {tab === "projects" && <ProjectsTab key={reloadKey} />}
         {tab === "budgets" && <BudgetsTab key={reloadKey} />}
         {tab === "goals" && <GoalsTab key={reloadKey} />}
+        {tab === "usage" && <UsageTab key={reloadKey} />}
+        {tab === "savings" && <SavingsTab key={reloadKey} />}
+        {tab === "fleet" && <FleetTab key={reloadKey} />}
+        {tab === "reconciliation" && <ReconciliationTab key={reloadKey} />}
         {tab === "pricing" && <PricingTab key={reloadKey} />}
+        {tab === "billing" && <BillingTab key={reloadKey} />}
       </main>
     </div>
   );

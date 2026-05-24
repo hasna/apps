@@ -1,3 +1,4 @@
+import { readFileSync } from 'fs'
 import type { SqliteAdapter as Database } from '@hasna/cloud'
 import { upsertBillingDaily, clearBillingRange } from '../db/database.js'
 
@@ -13,8 +14,82 @@ function getOpenAIAdminKey(): string | null {
     ?? null
 }
 
+function getGeminiBillingExportPath(): string | null {
+  return process.env['HASNA_ECONOMY_GEMINI_BILLING_EXPORT_PATH']
+    ?? process.env['HASNAXYZ_ECONOMY_GEMINI_BILLING_EXPORT_PATH']
+    ?? process.env['GEMINI_BILLING_EXPORT_PATH']
+    ?? null
+}
+
 function toISODate(d: Date): string {
   return d.toISOString().substring(0, 10)
+}
+
+function parseDate(value: unknown): string | null {
+  if (typeof value !== 'string' || !value.trim()) return null
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return value.substring(0, 10)
+  return toISODate(d)
+}
+
+function parseCsv(content: string): Array<Record<string, unknown>> {
+  const lines = content.split(/\r?\n/).filter(line => line.trim())
+  if (lines.length < 2) return []
+  const headers = parseCsvLine(lines[0]!).map(h => h.trim())
+  return lines.slice(1).map(line => {
+    const values = parseCsvLine(line)
+    return Object.fromEntries(headers.map((header, i) => [header, values[i]?.trim() ?? '']))
+  })
+}
+
+function parseCsvLine(line: string): string[] {
+  const values: string[] = []
+  let value = ''
+  let quoted = false
+
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i]
+    if (char === '"') {
+      if (quoted && line[i + 1] === '"') {
+        value += '"'
+        i++
+      } else {
+        quoted = !quoted
+      }
+    } else if (char === ',' && !quoted) {
+      values.push(value)
+      value = ''
+    } else {
+      value += char
+    }
+  }
+  values.push(value)
+  return values
+}
+
+function parseBillingRows(content: string): Array<Record<string, unknown>> {
+  const trimmed = content.trim()
+  if (!trimmed) return []
+  try {
+    const parsed = JSON.parse(trimmed) as unknown
+    if (Array.isArray(parsed)) return parsed as Array<Record<string, unknown>>
+    if (parsed && typeof parsed === 'object' && Array.isArray((parsed as Record<string, unknown>)['rows'])) {
+      return (parsed as Record<string, unknown>)['rows'] as Array<Record<string, unknown>>
+    }
+  } catch { /* try JSONL/CSV below */ }
+
+  const jsonlRows: Array<Record<string, unknown>> = []
+  for (const line of trimmed.split(/\r?\n/)) {
+    try {
+      const parsed = JSON.parse(line) as unknown
+      if (parsed && typeof parsed === 'object') jsonlRows.push(parsed as Record<string, unknown>)
+    } catch {
+      jsonlRows.length = 0
+      break
+    }
+  }
+  if (jsonlRows.length > 0) return jsonlRows
+  return parseCsv(content)
 }
 
 interface AnthropicBucket {
@@ -159,4 +234,49 @@ export async function syncOpenAIBilling(
   }
 
   return { days: buckets.length, totalUsd }
+}
+
+export async function syncGeminiBilling(
+  db: Database,
+  opts: { days?: number; fromDate?: string; toDate?: string } = {},
+): Promise<{ days: number; totalUsd: number; skipped?: string }> {
+  const exportPath = getGeminiBillingExportPath()
+  if (!exportPath) {
+    return {
+      days: 0,
+      totalUsd: 0,
+      skipped: 'Missing Gemini billing export path (HASNA_ECONOMY_GEMINI_BILLING_EXPORT_PATH, HASNAXYZ_ECONOMY_GEMINI_BILLING_EXPORT_PATH, or GEMINI_BILLING_EXPORT_PATH)',
+    }
+  }
+
+  const now = new Date()
+  const end = opts.toDate ? new Date(opts.toDate) : now
+  const days = opts.days ?? 31
+  const start = opts.fromDate
+    ? new Date(opts.fromDate)
+    : new Date(end.getTime() - days * 24 * 3600_000)
+  const fromDateStr = toISODate(start)
+  const toDateStr = toISODate(end)
+
+  const rows = parseBillingRows(readFileSync(exportPath, 'utf-8'))
+  clearBillingRange(db, 'gemini', fromDateStr, toDateStr)
+
+  const updatedAt = new Date().toISOString()
+  let totalUsd = 0
+  const seenDays = new Set<string>()
+  for (const row of rows) {
+    const date = parseDate(row['date'] ?? row['usage_start_time'] ?? row['start_time'] ?? row['invoice.month'])
+    if (!date || date < fromDateStr || date > toDateStr) continue
+    const rawCost = row['cost_usd'] ?? row['costUsd'] ?? row['cost'] ?? row['amount']
+    const costUsd = Number(rawCost)
+    if (!Number.isFinite(costUsd) || costUsd === 0) continue
+    const service = row['service.description'] ?? row['service'] ?? row['provider'] ?? ''
+    const sku = row['sku.description'] ?? row['sku'] ?? row['description'] ?? 'Gemini API'
+    const description = `${String(service || 'Google AI')}: ${String(sku)}`.substring(0, 200)
+    upsertBillingDaily(db, { date, provider: 'gemini', description, cost_usd: costUsd, updated_at: updatedAt })
+    totalUsd += costUsd
+    seenDays.add(date)
+  }
+
+  return { days: seenDays.size, totalUsd }
 }

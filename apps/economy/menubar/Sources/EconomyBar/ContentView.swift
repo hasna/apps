@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
   @EnvironmentObject var appState: AppState
   @Environment(\.openURL) private var openURL
+  @State private var draftAPIBaseURL: String = ""
 
   private var lastUpdatedText: String {
     guard let date = appState.lastUpdated else { return "Never" }
@@ -22,10 +23,35 @@ struct ContentView: View {
         Text(lastUpdatedText)
           .font(.caption)
           .foregroundStyle(.secondary)
+
+        Button(action: toggleServerEditor) {
+          Image(systemName: "slider.horizontal.3")
+        }
+        .buttonStyle(.borderless)
+        .help("Server URL")
       }
       .padding(.horizontal, 16)
       .padding(.top, 14)
       .padding(.bottom, 12)
+
+      if appState.isEditingServer {
+        HStack(spacing: 8) {
+          TextField("Server URL", text: $draftAPIBaseURL)
+            .textFieldStyle(.roundedBorder)
+            .onSubmit(saveServerURL)
+
+          Button("Save", action: saveServerURL)
+            .buttonStyle(.borderedProminent)
+
+          Button("Cancel") {
+            draftAPIBaseURL = appState.apiBaseURL
+            appState.cancelServerEditing()
+          }
+          .buttonStyle(.bordered)
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 12)
+      }
 
       Divider()
 
@@ -50,6 +76,43 @@ struct ContentView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
+
+            if appState.savedUsd > 0 || appState.machineCount > 1 {
+              HStack(spacing: 12) {
+                if appState.savedUsd > 0 {
+                  VStack(alignment: .leading, spacing: 2) {
+                    Text("SAVED")
+                      .font(.caption2)
+                      .foregroundStyle(.secondary)
+                    Text(String(format: "$%.2f", appState.savedUsd))
+                      .font(.subheadline.monospacedDigit())
+                      .foregroundStyle(.green)
+                  }
+                }
+                if appState.machineCount > 1 {
+                  VStack(alignment: .leading, spacing: 2) {
+                    Text("FLEET")
+                      .font(.caption2)
+                      .foregroundStyle(.secondary)
+                    Text("\(appState.machineCount) machines")
+                      .font(.subheadline)
+                  }
+                }
+                if let quota = appState.claudeQuotaPct {
+                  VStack(alignment: .leading, spacing: 2) {
+                    Text("CLAUDE 5H")
+                      .font(.caption2)
+                      .foregroundStyle(.secondary)
+                    Text(String(format: "%.0f%% used", quota))
+                      .font(.subheadline.monospacedDigit())
+                      .foregroundStyle(quota >= 80 ? .orange : .primary)
+                  }
+                }
+                Spacer()
+              }
+              .padding(.horizontal, 16)
+              .padding(.bottom, 12)
+            }
 
             if !appState.dailyEntries.isEmpty {
               Divider()
@@ -123,7 +186,7 @@ struct ContentView: View {
             Text("Sync")
           }
         }
-        .buttonStyle(.glass)
+        .buttonStyle(.bordered)
 
         Button(action: {
           if let url = URL(string: appState.apiBaseURL) {
@@ -135,18 +198,33 @@ struct ContentView: View {
             Text("Dashboard")
           }
         }
-        .buttonStyle(.glass)
+        .buttonStyle(.bordered)
 
         Spacer()
 
         Button(action: { NSApp.terminate(nil) }) {
           Text("Quit")
         }
-        .buttonStyle(.glass)
+        .buttonStyle(.bordered)
       }
       .padding(.horizontal, 16)
       .padding(.vertical, 12)
     }
     .frame(width: 360)
+    .onAppear {
+      draftAPIBaseURL = appState.apiBaseURL
+    }
+    .onChange(of: appState.apiBaseURL) { _, newValue in
+      draftAPIBaseURL = newValue
+    }
+  }
+
+  private func toggleServerEditor() {
+    draftAPIBaseURL = appState.apiBaseURL
+    appState.toggleServerEditor()
+  }
+
+  private func saveServerURL() {
+    appState.saveAPIBaseURL(draftAPIBaseURL)
   }
 }

@@ -55,6 +55,8 @@ function AgentBadge({ agent }: { agent: string }) {
   const colors: Record<string, string> = {
     claude: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
     codex: "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
+    gemini: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
+    takumi: "bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200",
   };
   return (
     <span
@@ -391,7 +393,8 @@ export function SessionsTab() {
                     <TableHead className="text-xs text-right">Input</TableHead>
                     <TableHead className="text-xs text-right">Output</TableHead>
                     <TableHead className="text-xs text-right">Cache read</TableHead>
-                    <TableHead className="text-xs text-right">Cache write</TableHead>
+                    <TableHead className="text-xs text-right">5m write</TableHead>
+                    <TableHead className="text-xs text-right">1h write</TableHead>
                     <TableHead className="text-xs text-right">Cost</TableHead>
                     <TableHead className="text-xs text-right">Duration</TableHead>
                   </TableRow>
@@ -415,7 +418,10 @@ export function SessionsTab() {
                         {req.cache_read_tokens.toLocaleString()}
                       </TableCell>
                       <TableCell className="text-right text-xs text-muted-foreground">
-                        {req.cache_create_tokens.toLocaleString()}
+                        {(req.cache_create_5m_tokens ?? req.cache_create_tokens).toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right text-xs text-muted-foreground">
+                        {(req.cache_create_1h_tokens ?? 0).toLocaleString()}
                       </TableCell>
                       <TableCell className="text-right text-xs font-medium">
                         {formatUsd(req.cost_usd)}

@@ -20,6 +20,8 @@ function AgentBadge({ agent }: { agent: string }) {
   const colors: Record<string, string> = {
     claude: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
     codex: "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
+    gemini: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
+    takumi: "bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200",
   };
   return (
     <span
@@ -94,8 +96,9 @@ export function ModelsTab() {
   }, []);
 
   useEffect(() => {
-    load();
-    intervalRef.current = setInterval(() => load(), 30000);
+    const run = () => load();
+    queueMicrotask(run);
+    intervalRef.current = setInterval(run, 30000);
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };

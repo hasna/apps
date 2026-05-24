@@ -78,6 +78,8 @@ function initSchema(db: Database): void {
       output_tokens INTEGER DEFAULT 0,
       cache_read_tokens INTEGER DEFAULT 0,
       cache_create_tokens INTEGER DEFAULT 0,
+      cache_create_5m_tokens INTEGER DEFAULT 0,
+      cache_create_1h_tokens INTEGER DEFAULT 0,
       cost_usd REAL NOT NULL DEFAULT 0,
       duration_ms INTEGER DEFAULT 0,
       timestamp TEXT NOT NULL,
@@ -148,6 +150,8 @@ function initSchema(db: Database): void {
       output_per_1m REAL NOT NULL DEFAULT 0,
       cache_read_per_1m REAL NOT NULL DEFAULT 0,
       cache_write_per_1m REAL NOT NULL DEFAULT 0,
+      cache_write_1h_per_1m REAL NOT NULL DEFAULT 0,
+      cache_storage_per_1m_hour REAL NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL
     );
 
@@ -172,6 +176,56 @@ function initSchema(db: Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_billing_date ON billing_daily(date);
     CREATE INDEX IF NOT EXISTS idx_billing_provider ON billing_daily(provider);
+
+    CREATE TABLE IF NOT EXISTS subscriptions (
+      id TEXT PRIMARY KEY,
+      agent TEXT,
+      provider TEXT NOT NULL,
+      plan TEXT NOT NULL,
+      monthly_fee_usd REAL NOT NULL DEFAULT 0,
+      included_usage_usd REAL NOT NULL DEFAULT 0,
+      billing_cycle_start TEXT,
+      reset_policy TEXT DEFAULT 'monthly',
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS usage_snapshots (
+      id TEXT PRIMARY KEY,
+      agent TEXT NOT NULL,
+      date TEXT NOT NULL,
+      metric TEXT NOT NULL,
+      value REAL NOT NULL DEFAULT 0,
+      unit TEXT DEFAULT '',
+      machine_id TEXT DEFAULT '',
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS savings_daily (
+      date TEXT NOT NULL,
+      agent TEXT DEFAULT '',
+      api_equivalent_usd REAL NOT NULL DEFAULT 0,
+      subscription_fee_usd REAL NOT NULL DEFAULT 0,
+      included_consumed_usd REAL NOT NULL DEFAULT 0,
+      on_demand_usd REAL NOT NULL DEFAULT 0,
+      saved_usd REAL NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (date, agent)
+    );
+
+    CREATE TABLE IF NOT EXISTS machines (
+      machine_id TEXT PRIMARY KEY,
+      hostname TEXT NOT NULL,
+      last_seen_at TEXT,
+      last_push_at TEXT,
+      last_pull_at TEXT,
+      economy_version TEXT,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_usage_agent_date ON usage_snapshots(agent, date);
+    CREATE INDEX IF NOT EXISTS idx_savings_date ON savings_daily(date);
   `)
 
   // Migrate existing DBs: add machine_id if missing (must run before index creation)
@@ -179,6 +233,46 @@ function initSchema(db: Database): void {
   if (!cols.some(c => c.name === 'machine_id')) {
     db.exec(`ALTER TABLE requests ADD COLUMN machine_id TEXT DEFAULT ''`)
     db.exec(`ALTER TABLE sessions ADD COLUMN machine_id TEXT DEFAULT ''`)
+  }
+  if (!cols.some(c => c.name === 'cache_create_5m_tokens')) {
+    db.exec(`ALTER TABLE requests ADD COLUMN cache_create_5m_tokens INTEGER DEFAULT 0`)
+    db.exec(`UPDATE requests SET cache_create_5m_tokens = cache_create_tokens WHERE cache_create_5m_tokens = 0`)
+  }
+  if (!cols.some(c => c.name === 'cache_create_1h_tokens')) {
+    db.exec(`ALTER TABLE requests ADD COLUMN cache_create_1h_tokens INTEGER DEFAULT 0`)
+  }
+  if (!cols.some(c => c.name === 'cost_basis')) {
+    db.exec(`ALTER TABLE requests ADD COLUMN cost_basis TEXT DEFAULT 'estimated'`)
+  }
+  if (!cols.some(c => c.name === 'attribution_tag')) {
+    db.exec(`ALTER TABLE requests ADD COLUMN attribution_tag TEXT DEFAULT ''`)
+  }
+  if (!cols.some(c => c.name === 'updated_at')) {
+    db.exec(`ALTER TABLE requests ADD COLUMN updated_at TEXT DEFAULT ''`)
+    db.exec(`UPDATE requests SET updated_at = timestamp WHERE updated_at = '' OR updated_at IS NULL`)
+  }
+  if (!cols.some(c => c.name === 'synced_at')) {
+    db.exec(`ALTER TABLE requests ADD COLUMN synced_at TEXT DEFAULT ''`)
+  }
+
+  const sessionCols = db.prepare(`PRAGMA table_info(sessions)`).all() as Array<{ name: string }>
+  if (!sessionCols.some(c => c.name === 'attribution_tag')) {
+    db.exec(`ALTER TABLE sessions ADD COLUMN attribution_tag TEXT DEFAULT ''`)
+  }
+  if (!sessionCols.some(c => c.name === 'updated_at')) {
+    db.exec(`ALTER TABLE sessions ADD COLUMN updated_at TEXT DEFAULT ''`)
+    db.exec(`UPDATE sessions SET updated_at = started_at WHERE updated_at = '' OR updated_at IS NULL`)
+  }
+  if (!sessionCols.some(c => c.name === 'synced_at')) {
+    db.exec(`ALTER TABLE sessions ADD COLUMN synced_at TEXT DEFAULT ''`)
+  }
+
+  const pricingCols = db.prepare(`PRAGMA table_info(model_pricing)`).all() as Array<{ name: string }>
+  if (!pricingCols.some(c => c.name === 'cache_write_1h_per_1m')) {
+    db.exec(`ALTER TABLE model_pricing ADD COLUMN cache_write_1h_per_1m REAL NOT NULL DEFAULT 0`)
+  }
+  if (!pricingCols.some(c => c.name === 'cache_storage_per_1m_hour')) {
+    db.exec(`ALTER TABLE model_pricing ADD COLUMN cache_storage_per_1m_hour REAL NOT NULL DEFAULT 0`)
   }
 
   // Create indexes that depend on machine_id (after migration)
@@ -213,33 +307,43 @@ function sessionPeriodWhere(period: Period): string {
 // ── Requests ──────────────────────────────────────────────────────────────────
 
 export function upsertRequest(db: Database, req: EconomyRequest): void {
+  const now = req.updated_at ?? new Date().toISOString()
   db.prepare(`
     INSERT OR REPLACE INTO requests
       (id, agent, session_id, model, input_tokens, output_tokens,
-       cache_read_tokens, cache_create_tokens, cost_usd, duration_ms,
-       timestamp, source_request_id, machine_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       cache_read_tokens, cache_create_tokens, cache_create_5m_tokens,
+       cache_create_1h_tokens, cost_usd, cost_basis, duration_ms, timestamp,
+       source_request_id, machine_id, attribution_tag, updated_at, synced_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     req.id, req.agent, req.session_id, req.model,
     req.input_tokens, req.output_tokens, req.cache_read_tokens,
-    req.cache_create_tokens, req.cost_usd, req.duration_ms,
+    req.cache_create_tokens,
+    req.cache_create_5m_tokens ?? req.cache_create_tokens,
+    req.cache_create_1h_tokens ?? 0,
+    req.cost_usd, req.cost_basis ?? 'estimated', req.duration_ms,
     req.timestamp, req.source_request_id, req.machine_id ?? '',
+    req.attribution_tag ?? process.env['ECONOMY_TAG'] ?? '',
+    now, req.synced_at ?? '',
   )
 }
 
 // ── Sessions ──────────────────────────────────────────────────────────────────
 
 export function upsertSession(db: Database, session: EconomySession): void {
+  const now = session.updated_at ?? new Date().toISOString()
   db.prepare(`
     INSERT OR REPLACE INTO sessions
       (id, agent, project_path, project_name, started_at, ended_at,
-       total_cost_usd, total_tokens, request_count, machine_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       total_cost_usd, total_tokens, request_count, machine_id, attribution_tag, updated_at, synced_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     session.id, session.agent, session.project_path, session.project_name,
     session.started_at, session.ended_at ?? null,
     session.total_cost_usd, session.total_tokens, session.request_count,
     session.machine_id ?? '',
+    session.attribution_tag ?? process.env['ECONOMY_TAG'] ?? '',
+    now, session.synced_at ?? '',
   )
 }
 
@@ -286,10 +390,10 @@ export function queryTopSessions(db: Database, n = 10, agent?: string): EconomyS
 
 // ── Summary ───────────────────────────────────────────────────────────────────
 
-export function querySummary(db: Database, period: Period, machine?: string): CostSummary {
+export function querySummary(db: Database, period: Period, machine?: string, allMachines = false): CostSummary {
   const rWhere = periodWhere(period)
   const sWhere = sessionPeriodWhere(period)
-  const machineClause = machine ? ` AND machine_id = '${machine.replace(/'/g, "''")}'` : ''
+  const machineClause = !allMachines && machine ? ` AND machine_id = '${machine.replace(/'/g, "''")}'` : ''
 
   const r = db.prepare(`
     SELECT COALESCE(SUM(cost_usd), 0) as total_usd,
@@ -643,15 +747,26 @@ export interface DbModelPricing {
   output_per_1m: number
   cache_read_per_1m: number
   cache_write_per_1m: number
+  cache_write_1h_per_1m?: number
+  cache_storage_per_1m_hour?: number
   updated_at: string
 }
 
 export function upsertModelPricing(db: Database, p: DbModelPricing): void {
   db.prepare(`
     INSERT OR REPLACE INTO model_pricing
-      (model, input_per_1m, output_per_1m, cache_read_per_1m, cache_write_per_1m, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(p.model, p.input_per_1m, p.output_per_1m, p.cache_read_per_1m, p.cache_write_per_1m, p.updated_at)
+      (model, input_per_1m, output_per_1m, cache_read_per_1m, cache_write_per_1m, cache_write_1h_per_1m, cache_storage_per_1m_hour, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    p.model,
+    p.input_per_1m,
+    p.output_per_1m,
+    p.cache_read_per_1m,
+    p.cache_write_per_1m,
+    p.cache_write_1h_per_1m ?? 0,
+    p.cache_storage_per_1m_hour ?? 0,
+    p.updated_at,
+  )
 }
 
 export function getModelPricing(db: Database, model: string): DbModelPricing | null {
@@ -666,7 +781,7 @@ export function deleteModelPricing(db: Database, model: string): void {
   db.prepare(`DELETE FROM model_pricing WHERE model = ?`).run(model)
 }
 
-export function seedModelPricing(db: Database, defaults: Record<string, { inputPer1M: number; outputPer1M: number; cacheReadPer1M: number; cacheWritePer1M: number }>): void {
+export function seedModelPricing(db: Database, defaults: Record<string, { inputPer1M: number; outputPer1M: number; cacheReadPer1M: number; cacheWritePer1M: number; cacheWrite1hPer1M?: number; cacheStoragePer1MHour?: number }>): void {
   const existing = new Set(
     (db.prepare(`SELECT model FROM model_pricing`).all() as Array<{ model: string }>).map(r => r.model)
   )
@@ -679,7 +794,80 @@ export function seedModelPricing(db: Database, defaults: Record<string, { inputP
       output_per_1m: p.outputPer1M,
       cache_read_per_1m: p.cacheReadPer1M,
       cache_write_per_1m: p.cacheWritePer1M,
+      cache_write_1h_per_1m: p.cacheWrite1hPer1M ?? 0,
+      cache_storage_per_1m_hour: p.cacheStoragePer1MHour ?? 0,
       updated_at: now,
     })
   }
+}
+
+// ── Subscriptions ─────────────────────────────────────────────────────────────
+
+export function upsertSubscription(db: Database, sub: import('../types/index.js').Subscription): void {
+  db.prepare(`
+    INSERT OR REPLACE INTO subscriptions
+      (id, agent, provider, plan, monthly_fee_usd, included_usage_usd, billing_cycle_start, reset_policy, active, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    sub.id, sub.agent, sub.provider, sub.plan, sub.monthly_fee_usd, sub.included_usage_usd,
+    sub.billing_cycle_start, sub.reset_policy, sub.active, sub.created_at, sub.updated_at,
+  )
+}
+
+export function listSubscriptions(db: Database): import('../types/index.js').Subscription[] {
+  return db.prepare(`SELECT * FROM subscriptions ORDER BY provider, plan`).all() as import('../types/index.js').Subscription[]
+}
+
+export function deleteSubscription(db: Database, id: string): void {
+  db.prepare(`DELETE FROM subscriptions WHERE id = ?`).run(id)
+}
+
+// ── Usage snapshots ───────────────────────────────────────────────────────────
+
+export function upsertUsageSnapshot(
+  db: Database,
+  snap: Omit<import('../types/index.js').UsageSnapshot, 'id' | 'updated_at'> & { id?: string; updated_at?: string },
+): void {
+  const now = snap.updated_at ?? new Date().toISOString()
+  const id = snap.id ?? `${snap.agent}-${snap.date}-${snap.metric}-${snap.machine_id}`
+  db.prepare(`
+    INSERT OR REPLACE INTO usage_snapshots (id, agent, date, metric, value, unit, machine_id, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, snap.agent, snap.date, snap.metric, snap.value, snap.unit, snap.machine_id, now)
+}
+
+export function queryUsageSnapshots(
+  db: Database,
+  opts: { agent?: string; date?: string; since?: string } = {},
+): import('../types/index.js').UsageSnapshot[] {
+  const conditions: string[] = []
+  const params: string[] = []
+  if (opts.agent) { conditions.push('agent = ?'); params.push(opts.agent) }
+  if (opts.date) { conditions.push('date = ?'); params.push(opts.date) }
+  if (opts.since) { conditions.push('date >= ?'); params.push(opts.since) }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+  return db.prepare(`SELECT * FROM usage_snapshots ${where} ORDER BY date DESC, agent, metric`).all(...params) as import('../types/index.js').UsageSnapshot[]
+}
+
+export function listMachineRegistry(db: Database): import('../types/index.js').MachineRegistry[] {
+  return db.prepare(`SELECT * FROM machines ORDER BY last_seen_at DESC`).all() as import('../types/index.js').MachineRegistry[]
+}
+
+export function dedupeRequests(db: Database): number {
+  const dupes = db.prepare(`
+    SELECT source_request_id, agent, MIN(id) as keep_id, COUNT(*) as cnt
+    FROM requests
+    WHERE source_request_id != '' AND source_request_id IS NOT NULL
+    GROUP BY source_request_id, agent
+    HAVING cnt > 1
+  `).all() as Array<{ source_request_id: string; agent: string; keep_id: string; cnt: number }>
+
+  let removed = 0
+  for (const row of dupes) {
+    const result = db.prepare(`
+      DELETE FROM requests WHERE source_request_id = ? AND agent = ? AND id != ?
+    `).run(row.source_request_id, row.agent, row.keep_id)
+    removed += result.changes
+  }
+  return removed
 }

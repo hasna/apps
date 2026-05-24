@@ -32,6 +32,10 @@ type GatherTrainingDataFn = (options?: GathererOptions) => Promise<GatherResult>
 const SYSTEM_PROMPT =
   'You are a cost-aware AI assistant that tracks API usage, identifies expensive patterns, and helps optimize spending.'
 
+function hasCostData(summary: { total_usd: number; sessions: number; requests: number; tokens: number }): boolean {
+  return summary.total_usd > 0 || summary.sessions > 0 || summary.requests > 0 || summary.tokens > 0
+}
+
 export const gatherTrainingData: GatherTrainingDataFn = async (
   options: GathererOptions = {}
 ): Promise<GatherResult> => {
@@ -47,6 +51,7 @@ export const gatherTrainingData: GatherTrainingDataFn = async (
     for (const period of periods) {
       try {
         const s = querySummary(db, period)
+        if (!hasCostData(s)) continue
         examples.push({
           messages: [
             { role: 'system', content: SYSTEM_PROMPT },

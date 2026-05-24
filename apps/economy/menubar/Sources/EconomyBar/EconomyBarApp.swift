@@ -14,6 +14,7 @@ struct EconomyBarApp: App {
         todayCost: appState.today.total_usd,
         weekCost: appState.week.total_usd,
         monthCost: appState.month.total_usd,
+        claudeQuotaPct: appState.claudeQuotaPct,
         isOffline: appState.isOffline
       )
       .task {

@@ -6,6 +6,12 @@ import { join } from 'path'
 const repoRoot = new URL('../../', import.meta.url).pathname.replace(/\/$/, '')
 
 describe('economy-serve build artifact', () => {
+  test('publishes built dashboard assets used by the server', () => {
+    const manifest = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')) as { files?: string[] }
+
+    expect(manifest.files).toContain('dashboard/dist')
+  })
+
   test('preserves the bun shebang in the built entrypoint', async () => {
     const outdir = mkdtempSync(join(tmpdir(), 'economy-serve-build-'))
 

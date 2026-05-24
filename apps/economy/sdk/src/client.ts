@@ -3,14 +3,26 @@ import type {
   Agent,
   CostSummary,
   Session,
+  SessionRequest,
   ModelBreakdown,
   ProjectBreakdown,
   BudgetStatus,
+  CreateBudgetInput,
   DailyPoint,
+  CreatePricingInput,
   ModelPricing,
   MachineInfo,
+  BillingSummary,
+  BillingSyncResult,
   SyncResult,
   SessionFilter,
+  CreateGoalInput,
+  GoalStatus,
+  MutationOk,
+  UsageResponse,
+  SavingsSummary,
+  FleetResponse,
+  BillingDiffSummary,
 } from './types.js'
 
 export interface EconomyClientOptions {
@@ -93,11 +105,16 @@ export class EconomyClient {
     if (filter?.agent) params.set('agent', filter.agent)
     if (filter?.project) params.set('project', filter.project)
     if (filter?.machine) params.set('machine', filter.machine)
+    if (filter?.search) params.set('search', filter.search)
     if (filter?.limit != null) params.set('limit', String(filter.limit))
     if (filter?.offset != null) params.set('offset', String(filter.offset))
     if (filter?.since) params.set('since', filter.since)
     const qs = params.toString() ? `?${params.toString()}` : ''
     return this.request<Session[]>(`/api/sessions${qs}`)
+  }
+
+  async getSessionRequests(sessionId: string): Promise<SessionRequest[]> {
+    return this.request<SessionRequest[]>(`/api/sessions/${encodeURIComponent(sessionId)}/requests`)
   }
 
   async getMachines(): Promise<MachineInfo[]> {
@@ -124,6 +141,19 @@ export class EconomyClient {
     return this.request<BudgetStatus[]>('/api/budgets')
   }
 
+  async createBudget(input: CreateBudgetInput): Promise<BudgetStatus> {
+    return this.request<BudgetStatus>('/api/budgets', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  }
+
+  async deleteBudget(id: string): Promise<MutationOk> {
+    return this.request<MutationOk>(`/api/budgets/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    })
+  }
+
   async getDaily(days?: number): Promise<DailyPoint[]> {
     const params = new URLSearchParams()
     if (days != null) params.set('days', String(days))
@@ -135,10 +165,85 @@ export class EconomyClient {
     return this.request<ModelPricing[]>('/api/pricing')
   }
 
-  async sync(sources?: 'all' | 'claude' | 'codex'): Promise<SyncResult> {
+  async createPricing(input: CreatePricingInput): Promise<ModelPricing> {
+    return this.request<ModelPricing>('/api/pricing', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  }
+
+  async deletePricing(model: string): Promise<MutationOk> {
+    return this.request<MutationOk>(`/api/pricing/${encodeURIComponent(model)}`, {
+      method: 'DELETE',
+    })
+  }
+
+  async getGoals(): Promise<GoalStatus[]> {
+    return this.request<GoalStatus[]>('/api/goals')
+  }
+
+  async createGoal(input: CreateGoalInput): Promise<GoalStatus> {
+    return this.request<GoalStatus>('/api/goals', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  }
+
+  async deleteGoal(id: string): Promise<MutationOk> {
+    return this.request<MutationOk>(`/api/goals/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    })
+  }
+
+  async getBilling(period?: Period): Promise<BillingSummary> {
+    const params = new URLSearchParams()
+    if (period) params.set('period', period)
+    const qs = params.toString() ? `?${params.toString()}` : ''
+    return this.request<BillingSummary>(`/api/billing${qs}`)
+  }
+
+  async syncBilling(opts?: { days?: number; providers?: Array<'anthropic' | 'openai' | 'gemini'> }): Promise<BillingSyncResult> {
+    return this.request<BillingSyncResult>('/api/billing/sync', {
+      method: 'POST',
+      body: JSON.stringify(opts ?? {}),
+    })
+  }
+
+  async sync(sources?: 'all' | Agent): Promise<SyncResult> {
     return this.request<SyncResult>('/api/sync', {
       method: 'POST',
       body: JSON.stringify({ sources: sources ?? 'all' }),
     })
+  }
+
+  async getUsage(period?: Period, agent?: Agent | string): Promise<UsageResponse> {
+    const params = new URLSearchParams()
+    if (period) params.set('period', period)
+    if (agent) params.set('agent', agent)
+    const qs = params.toString() ? `?${params.toString()}` : ''
+    return this.request<UsageResponse>(`/api/usage${qs}`)
+  }
+
+  async getSavings(period?: Period, agent?: Agent | string): Promise<SavingsSummary> {
+    const params = new URLSearchParams()
+    if (period) params.set('period', period)
+    if (agent) params.set('agent', agent)
+    const qs = params.toString() ? `?${params.toString()}` : ''
+    return this.request<SavingsSummary>(`/api/savings${qs}`)
+  }
+
+  async getFleet(period?: Period): Promise<FleetResponse> {
+    const params = new URLSearchParams()
+    if (period) params.set('period', period)
+    const qs = params.toString() ? `?${params.toString()}` : ''
+    return this.request<FleetResponse>(`/api/fleet${qs}`)
+  }
+
+  async getBillingDiff(period?: Period, threshold?: number): Promise<BillingDiffSummary> {
+    const params = new URLSearchParams()
+    if (period) params.set('period', period)
+    if (threshold != null) params.set('threshold', String(threshold))
+    const qs = params.toString() ? `?${params.toString()}` : ''
+    return this.request<BillingDiffSummary>(`/api/billing/diff${qs}`)
   }
 }

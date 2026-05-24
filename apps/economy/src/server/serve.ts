@@ -7,19 +7,38 @@ import {
   listModelPricing, upsertModelPricing, deleteModelPricing,
   upsertGoal, deleteGoal, getGoalStatuses,
   listMachines, getMachineId,
+  listMachineRegistry,
+  queryBillingSummary,
   openDatabase,
 } from '../db/database.js'
-import { ingestClaude, ingestTakumi } from '../ingest/claude.js'
-import { ingestCodex } from '../ingest/codex.js'
-import { ingestGemini } from '../ingest/gemini.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
+import { AGENTS, isAgent } from '../lib/agents.js'
+import { syncAll } from '../lib/sync-all.js'
+import { querySavingsSummary } from '../lib/savings.js'
+import { queryBillingDiff } from '../lib/billing-diff.js'
+import { queryUsageSnapshots } from '../db/database.js'
+import { isAuthorizedRequest } from '../lib/serve-auth.js'
 import { randomUUID } from 'crypto'
-import type { Period, Agent } from '../types/index.js'
+import { existsSync } from 'fs'
+import { resolve, sep } from 'path'
+import { getServeBindHost } from '../lib/serve-auth.js'
+import type { Period } from '../types/index.js'
+import type { Agent } from '../lib/agents.js'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Economy-Token',
+}
+const AGENT_ERROR = `agent must be one of: ${AGENTS.join(', ')}`
+const SYNC_SOURCES = ['all', ...AGENTS] as const
+const DEFAULT_DASHBOARD_DIR = new URL('../../dashboard/dist', import.meta.url).pathname
+
+interface StartServerOptions {
+  db?: Database
+  dashboardDir?: string
+  hostname?: string
+  log?: (message: string) => void
 }
 
 function json(data: unknown, status = 200): Response {
@@ -52,6 +71,70 @@ function normalizeBudgetPeriod(value: unknown): 'daily' | 'weekly' | 'monthly' {
   }
 }
 
+function finiteNumber(value: unknown): number | null {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
+async function jsonBody(req: Request): Promise<Record<string, unknown> | null> {
+  const body = await req.json().catch(() => null) as unknown
+  return body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null
+}
+
+function optionalString(value: unknown): string | null {
+  return typeof value === 'string' ? value : null
+}
+
+function optionalAgent(value: unknown): Agent | null | undefined {
+  if (value == null || value === '') return null
+  return typeof value === 'string' && (AGENTS as readonly string[]).includes(value) ? value as Agent : undefined
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
+function dashboardPath(root: string, pathname: string): string | null {
+  let decoded: string
+  try {
+    decoded = decodeURIComponent(pathname)
+  } catch {
+    return null
+  }
+
+  const relativePath = decoded === '/' ? 'index.html' : decoded.replace(/^\/+/, '')
+  const rootPath = resolve(root)
+  const filePath = resolve(rootPath, relativePath)
+  return filePath === rootPath || filePath.startsWith(rootPath + sep) ? filePath : null
+}
+
+export function createServerFetch(apiHandler: (req: Request) => Promise<Response>, dashboardDir = DEFAULT_DASHBOARD_DIR) {
+  return async function fetch(req: Request): Promise<Response> {
+    const url = new URL(req.url)
+
+    // API routes
+    if (url.pathname.startsWith('/api') || url.pathname === '/health') {
+      return apiHandler(req)
+    }
+
+    // Serve dashboard static files
+    if (existsSync(dashboardDir)) {
+      const filePath = dashboardPath(dashboardDir, url.pathname)
+      if (filePath && existsSync(filePath)) {
+        return new Response(Bun.file(filePath))
+      }
+
+      // SPA fallback — return index.html for any unmatched path
+      const indexPath = dashboardPath(dashboardDir, '/')
+      if (indexPath && existsSync(indexPath)) {
+        return new Response(Bun.file(indexPath))
+      }
+    }
+
+    return apiHandler(req)
+  }
+}
+
 /** Apply ?fields=f1,f2 filtering — reduces response size by 50-89% */
 function applyFields<T extends Record<string, unknown>>(obj: T, fields?: string[]): Partial<T> {
   if (!fields || fields.length === 0) return obj
@@ -66,6 +149,8 @@ export function createHandler(db: Database) {
 
     if (method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS })
 
+    if (!isAuthorizedRequest(req, path)) return err('Unauthorized', 401)
+
     // Health
     if (path === '/health') return ok({ status: 'ok', ts: new Date().toISOString() })
 
@@ -79,6 +164,16 @@ export function createHandler(db: Database) {
     // Machines
     if (path === '/api/machines' && method === 'GET') {
       return ok(listMachines(db), { current_machine: getMachineId() })
+    }
+
+    if (path === '/api/fleet' && method === 'GET') {
+      const period = (url.searchParams.get('period') ?? 'month') as Period
+      return ok({
+        summary: querySummary(db, period, undefined, true),
+        machines: listMachines(db),
+        registry: listMachineRegistry(db),
+        current_machine: getMachineId(),
+      })
     }
 
     // Daily breakdown for charts
@@ -122,6 +217,39 @@ export function createHandler(db: Database) {
       return ok(queryModelBreakdown(db))
     }
 
+    // Ground-truth provider billing imported from admin APIs.
+    if (path === '/api/billing' && method === 'GET') {
+      const period = (url.searchParams.get('period') ?? 'month') as Period
+      return ok(queryBillingSummary(db, period))
+    }
+
+    if (path === '/api/billing/diff' && method === 'GET') {
+      const period = (url.searchParams.get('period') ?? 'month') as Period
+      const threshold = Number(url.searchParams.get('threshold') ?? 15)
+      return ok(queryBillingDiff(db, period, Number.isFinite(threshold) ? threshold : 15))
+    }
+    if (path === '/api/billing/sync' && method === 'POST') {
+      const body = await jsonBody(req) ?? {}
+      const days = Number(body['days'] ?? 31)
+      if (!Number.isFinite(days) || days <= 0 || days > 366) return err('days must be between 1 and 366')
+      const providers = Array.isArray(body['providers']) ? body['providers'] as string[] : ['anthropic', 'openai', 'gemini']
+      const allowedProviders = new Set(['anthropic', 'openai', 'gemini'])
+      if (providers.some(provider => !allowedProviders.has(provider))) return err('invalid billing provider')
+      const results: Record<string, unknown> = {}
+      const { syncAnthropicBilling, syncOpenAIBilling, syncGeminiBilling } = await import('../ingest/billing.js')
+      async function capture(provider: string, fn: () => Promise<unknown>): Promise<void> {
+        try {
+          results[provider] = await fn()
+        } catch (e) {
+          results[provider] = { error: e instanceof Error ? e.message : String(e) }
+        }
+      }
+      if (providers.includes('anthropic')) await capture('anthropic', () => syncAnthropicBilling(db, { days }))
+      if (providers.includes('openai')) await capture('openai', () => syncOpenAIBilling(db, { days }))
+      if (providers.includes('gemini')) await capture('gemini', () => syncGeminiBilling(db, { days }))
+      return ok(results)
+    }
+
     // Project breakdown
     if (path === '/api/projects' && method === 'GET') {
       return ok(queryProjectBreakdown(db))
@@ -138,23 +266,31 @@ export function createHandler(db: Database) {
       return ok(getBudgetStatuses(db))
     }
     if (path === '/api/budgets' && method === 'POST') {
-      const body = await req.json() as Record<string, unknown>
+      const body = await jsonBody(req)
+      if (!body) return err('invalid JSON body')
+      const limitUsd = finiteNumber(body['limit_usd'])
+      const alertAtPercent = finiteNumber(body['alert_at_percent'] ?? 80)
+      if (limitUsd == null || limitUsd <= 0) return err('limit_usd must be a positive number')
+      if (alertAtPercent == null || alertAtPercent <= 0 || alertAtPercent > 100) return err('alert_at_percent must be between 1 and 100')
+      const agent = optionalAgent(body['agent'])
+      if (agent === undefined) return err(AGENT_ERROR)
       const now = new Date().toISOString()
-      upsertBudget(db, {
+      const budget = {
         id: randomUUID(),
         project_path: (body['project_path'] as string | null) ?? null,
-        agent: (body['agent'] as Agent | null) ?? null,
+        agent,
         period: normalizeBudgetPeriod(body['period']),
-        limit_usd: Number(body['limit_usd']),
-        alert_at_percent: Number(body['alert_at_percent'] ?? 80),
+        limit_usd: limitUsd,
+        alert_at_percent: alertAtPercent,
         created_at: now,
         updated_at: now,
-      })
-      return ok({ ok: true })
+      }
+      upsertBudget(db, budget)
+      return ok(getBudgetStatuses(db).find(b => b.id === budget.id) ?? budget)
     }
     const budgetMatch = path.match(/^\/api\/budgets\/(.+)$/)
     if (budgetMatch && method === 'DELETE') {
-      deleteBudget(db, budgetMatch[1]!)
+      deleteBudget(db, decodeURIComponent(budgetMatch[1]!))
       return ok({ ok: true })
     }
 
@@ -163,15 +299,17 @@ export function createHandler(db: Database) {
       return ok(listProjects(db))
     }
     if (path === '/api/project-registry' && method === 'POST') {
-      const body = await req.json() as Record<string, unknown>
+      const body = await jsonBody(req)
+      if (!body) return err('invalid JSON body')
       const { basename } = await import('path')
-      const projPath = body['path'] as string
+      const projPath = optionalString(body['path'])?.trim()
+      if (!projPath) return err('path is required')
       upsertProject(db, {
         id: randomUUID(),
         path: projPath,
-        name: (body['name'] as string | null) ?? basename(projPath),
-        description: (body['description'] as string | null) ?? null,
-        tags: (body['tags'] as string[] | null) ?? [],
+        name: optionalString(body['name']) ?? basename(projPath),
+        description: optionalString(body['description']),
+        tags: stringArray(body['tags']),
         created_at: new Date().toISOString(),
       })
       return ok({ ok: true })
@@ -187,16 +325,31 @@ export function createHandler(db: Database) {
       return ok(listModelPricing(db))
     }
     if (path === '/api/pricing' && method === 'POST') {
-      const body = await req.json() as Record<string, unknown>
-      upsertModelPricing(db, {
-        model: body['model'] as string,
-        input_per_1m: Number(body['input_per_1m']),
-        output_per_1m: Number(body['output_per_1m']),
-        cache_read_per_1m: Number(body['cache_read_per_1m'] ?? 0),
-        cache_write_per_1m: Number(body['cache_write_per_1m'] ?? 0),
+      const body = await jsonBody(req)
+      if (!body) return err('invalid JSON body')
+      const model = String(body['model'] ?? '').trim()
+      if (!model) return err('model is required')
+      const input = finiteNumber(body['input_per_1m'])
+      const output = finiteNumber(body['output_per_1m'])
+      const cacheRead = finiteNumber(body['cache_read_per_1m'] ?? 0)
+      const cacheWrite = finiteNumber(body['cache_write_per_1m'] ?? 0)
+      const cacheWrite1h = finiteNumber(body['cache_write_1h_per_1m'] ?? 0)
+      const cacheStorage = finiteNumber(body['cache_storage_per_1m_hour'] ?? 0)
+      if ([input, output, cacheRead, cacheWrite, cacheWrite1h, cacheStorage].some(v => v == null || v < 0)) {
+        return err('pricing values must be non-negative numbers')
+      }
+      const pricing = {
+        model,
+        input_per_1m: input!,
+        output_per_1m: output!,
+        cache_read_per_1m: cacheRead!,
+        cache_write_per_1m: cacheWrite!,
+        cache_write_1h_per_1m: cacheWrite1h!,
+        cache_storage_per_1m_hour: cacheStorage!,
         updated_at: new Date().toISOString(),
-      })
-      return ok({ ok: true })
+      }
+      upsertModelPricing(db, pricing)
+      return ok(pricing)
     }
     const pricingMatch = path.match(/^\/api\/pricing\/(.+)$/)
     if (pricingMatch && method === 'DELETE') {
@@ -206,20 +359,48 @@ export function createHandler(db: Database) {
 
     // Sync trigger
     if (path === '/api/sync' && method === 'POST') {
-      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      const body = await jsonBody(req) ?? {}
       const sources = (body['sources'] as string | null) ?? 'all'
+      if (!(SYNC_SOURCES as readonly string[]).includes(sources)) return err('invalid sync source')
       const results: Record<string, unknown> = {}
-      if (sources === 'all' || sources === 'claude') results['claude'] = await ingestClaude(db)
-      if (sources === 'all' || sources === 'takumi') results['takumi'] = await ingestTakumi(db)
-      if (sources === 'all' || sources === 'codex') results['codex'] = await ingestCodex(db)
-      if (sources === 'all' || sources === 'gemini') results['gemini'] = await ingestGemini(db)
+      if (sources === 'all') {
+        try {
+          const { syncOpenProjectsRegistry } = await import('../lib/open-projects.js')
+          results['projects'] = await syncOpenProjectsRegistry(db)
+        } catch { /* open-projects registry sync is optional */ }
+      }
+      const selected = sources === 'all'
+        ? {}
+        : { [sources]: true } as Record<string, boolean>
+      const syncResult = await syncAll(db, selected)
+      Object.assign(results, syncResult)
+      try {
+        const { checkAndFireWebhooks } = await import('../lib/webhooks.js')
+        await checkAndFireWebhooks(db)
+      } catch { /* webhooks are optional */ }
       return ok(results)
+    }
+
+    if (path === '/api/usage' && method === 'GET') {
+      const period = (url.searchParams.get('period') ?? 'month') as Period
+      const agent = url.searchParams.get('agent') ?? undefined
+      const since = period === 'month' ? new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().substring(0, 10) : undefined
+      return ok({
+        snapshots: queryUsageSnapshots(db, { agent: agent && isAgent(agent) ? agent : undefined, since }),
+        summary: querySummary(db, period, undefined, true),
+      })
+    }
+
+    if (path === '/api/savings' && method === 'GET') {
+      const period = (url.searchParams.get('period') ?? 'month') as Period
+      const agent = url.searchParams.get('agent') ?? undefined
+      return ok(querySavingsSummary(db, period, agent && isAgent(agent) ? agent : undefined))
     }
 
     // Session requests detail
     const sessionRequestsMatch = path.match(/^\/api\/sessions\/([^/]+)\/requests$/)
     if (sessionRequestsMatch && method === 'GET') {
-      const sessionId = sessionRequestsMatch[1]!
+      const sessionId = decodeURIComponent(sessionRequestsMatch[1]!)
       const session = db.prepare(`SELECT * FROM sessions WHERE id = ? OR id LIKE ?`).get(sessionId, `${sessionId}%`) as Record<string, unknown> | null
       if (!session) return err('Session not found', 404)
       const requests = db.prepare(`SELECT * FROM requests WHERE session_id = ? ORDER BY timestamp ASC`).all(session['id'] as string) as Array<Record<string, unknown>>
@@ -231,22 +412,30 @@ export function createHandler(db: Database) {
       return ok(getGoalStatuses(db))
     }
     if (path === '/api/goals' && method === 'POST') {
-      const body = await req.json() as Record<string, unknown>
+      const body = await jsonBody(req)
+      if (!body) return err('invalid JSON body')
+      const period = body['period'] ?? 'month'
+      if (!['day', 'week', 'month', 'year'].includes(String(period))) return err('period must be day, week, month, or year')
+      const limitUsd = finiteNumber(body['limit_usd'])
+      if (limitUsd == null || limitUsd <= 0) return err('limit_usd must be a positive number')
+      const agent = optionalAgent(body['agent'])
+      if (agent === undefined) return err(AGENT_ERROR)
       const now = new Date().toISOString()
-      upsertGoal(db, {
+      const goal = {
         id: randomUUID(),
-        period: (body['period'] as 'day' | 'week' | 'month' | 'year') ?? 'month',
-        project_path: (body['project_path'] as string | null) ?? null,
-        agent: (body['agent'] as string | null) ?? null,
-        limit_usd: Number(body['limit_usd']),
+        period: period as 'day' | 'week' | 'month' | 'year',
+        project_path: optionalString(body['project_path']),
+        agent,
+        limit_usd: limitUsd,
         created_at: now,
         updated_at: now,
-      })
-      return ok({ ok: true })
+      }
+      upsertGoal(db, goal)
+      return ok(getGoalStatuses(db).find(g => g.id === goal.id) ?? goal)
     }
     const goalMatch = path.match(/^\/api\/goals\/(.+)$/)
     if (goalMatch && method === 'DELETE') {
-      deleteGoal(db, goalMatch[1]!)
+      deleteGoal(db, decodeURIComponent(goalMatch[1]!))
       return ok({ ok: true })
     }
 
@@ -254,43 +443,18 @@ export function createHandler(db: Database) {
   }
 }
 
-export function startServer(port = 3456): void {
-  const db = openDatabase()
+export function startServer(port = 3456, options: StartServerOptions = {}): ReturnType<typeof Bun.serve> {
+  const db = options.db ?? openDatabase()
   ensurePricingSeeded(db)
   const apiHandler = createHandler(db)
-
-  // Also serve the built dashboard from dist/dashboard/ if it exists
-  const dashboardDir = new URL('../../dashboard/dist', import.meta.url).pathname
-
-  Bun.serve({
+  const hostname = options.hostname ?? getServeBindHost()
+  const server = Bun.serve({
     port,
-    async fetch(req) {
-      const url = new URL(req.url)
-
-      // API routes
-      if (url.pathname.startsWith('/api') || url.pathname === '/health') {
-        return apiHandler(req)
-      }
-
-      // Serve dashboard static files
-      try {
-        const { existsSync } = await import('fs')
-        if (existsSync(dashboardDir)) {
-          let filePath = url.pathname === '/' ? '/index.html' : url.pathname
-          const fullPath = dashboardDir + filePath
-          if (existsSync(fullPath)) {
-            return new Response(Bun.file(fullPath))
-          }
-          // SPA fallback — return index.html for any unmatched path
-          const indexPath = dashboardDir + '/index.html'
-          if (existsSync(indexPath)) {
-            return new Response(Bun.file(indexPath))
-          }
-        }
-      } catch { /* ignore */ }
-
-      return apiHandler(req)
-    },
+    hostname,
+    fetch: createServerFetch(apiHandler, options.dashboardDir),
   })
-  console.log(`economy-serve listening on http://localhost:${port}`)
+  const address = `http://${hostname === '0.0.0.0' ? 'localhost' : hostname}:${server.port}`
+  const log = options.log ?? console.log
+  log(`economy-serve listening on ${address}`)
+  return server
 }

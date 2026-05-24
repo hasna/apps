@@ -4,12 +4,11 @@ import {
   Line,
   BarChart,
   Bar,
-  Cell,
   XAxis,
   YAxis,
   CartesianGrid,
 } from "recharts";
-import { getSummary, getDaily, syncSources } from "../api";
+import { getSummary, getDaily, syncSources, ALL_AGENTS } from "../api";
 import type { Summary, DailyEntry } from "../api";
 import {
   DollarSignIcon,
@@ -56,22 +55,65 @@ function formatDate(d: string) {
 
 interface ChartEntry {
   date: string;
-  rawDate: string; // YYYY-MM-DD for spike comparison
-  claude: number;
-  codex: number;
+  rawDate: string;
+  [agent: string]: string | number;
 }
 
-function buildChartData(entries: DailyEntry[]): ChartEntry[] {
+const AGENT_LABELS: Record<string, string> = {
+  claude: "Claude",
+  takumi: "Takumi",
+  codex: "Codex",
+  gemini: "Gemini",
+  opencode: "OpenCode",
+  cursor: "Cursor",
+  pi: "Pi",
+  hermes: "Hermes",
+};
+
+const AGENT_CHART_VARS = [
+  "hsl(var(--chart-1, 221 83% 53%))",
+  "hsl(var(--chart-2, 24 95% 53%))",
+  "hsl(var(--chart-3, 142 71% 45%))",
+  "hsl(var(--chart-4, 262 83% 58%))",
+  "hsl(var(--chart-5, 340 75% 55%))",
+  "hsl(var(--chart-1, 221 83% 53%))",
+  "hsl(var(--chart-2, 24 95% 53%))",
+  "hsl(var(--chart-3, 142 71% 45%))",
+];
+
+function buildChartData(entries: DailyEntry[]): { rows: ChartEntry[]; agents: string[] } {
+  const agentSet = new Set<string>();
   const map = new Map<string, ChartEntry>();
   for (const e of entries) {
+    agentSet.add(e.agent);
     const key = e.date;
-    if (!map.has(key)) map.set(key, { date: formatDate(key), rawDate: key, claude: 0, codex: 0 });
+    if (!map.has(key)) map.set(key, { date: formatDate(key), rawDate: key });
     const row = map.get(key)!;
-    if (e.agent === "claude") row.claude += e.cost_usd;
-    else if (e.agent === "codex") row.codex += e.cost_usd;
-    else row.claude += e.cost_usd;
+    row[e.agent] = (Number(row[e.agent] ?? 0)) + e.cost_usd;
   }
-  return Array.from(map.values()).sort((a, b) => a.rawDate.localeCompare(b.rawDate));
+  const agents = [...agentSet].sort((a, b) => {
+    const ai = ALL_AGENTS.indexOf(a as typeof ALL_AGENTS[number]);
+    const bi = ALL_AGENTS.indexOf(b as typeof ALL_AGENTS[number]);
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+  });
+  for (const row of map.values()) {
+    for (const agent of agents) {
+      if (row[agent] == null) row[agent] = 0;
+    }
+  }
+  const rows = Array.from(map.values()).sort((a, b) => a.rawDate.localeCompare(b.rawDate));
+  return { rows, agents };
+}
+
+function buildChartConfig(agents: string[]): ChartConfig {
+  const cfg: ChartConfig = {};
+  agents.forEach((agent, i) => {
+    cfg[agent] = {
+      label: AGENT_LABELS[agent] ?? agent,
+      color: AGENT_CHART_VARS[i % AGENT_CHART_VARS.length]!,
+    };
+  });
+  return cfg;
 }
 
 function computeSpikes(daily: DailyEntry[]): { spikeDates: Set<string>; spikeCount: number } {
@@ -89,16 +131,12 @@ function computeSpikes(daily: DailyEntry[]): { spikeDates: Set<string>; spikeCou
   return { spikeDates, spikeCount: spikeDates.size };
 }
 
-const chartConfig: ChartConfig = {
-  claude: { label: "Claude", color: "hsl(var(--chart-1, 221 83% 53%))" },
-  codex: { label: "Codex", color: "hsl(var(--chart-2, 24 95% 53%))" },
-};
-
 export function OverviewTab() {
   const [todaySummary, setTodaySummary] = useState<Summary | null>(null);
   const [weekSummary, setWeekSummary] = useState<Summary | null>(null);
   const [monthSummary, setMonthSummary] = useState<Summary | null>(null);
   const [allChartData, setAllChartData] = useState<ChartEntry[]>([]);
+  const [chartAgents, setChartAgents] = useState<string[]>([]);
   const [allDailyEntries, setAllDailyEntries] = useState<DailyEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -124,7 +162,9 @@ export function OverviewTab() {
       setWeekSummary(w.data);
       setMonthSummary(m.data);
       setAllDailyEntries(daily.data);
-      setAllChartData(buildChartData(daily.data));
+      const built = buildChartData(daily.data);
+      setAllChartData(built.rows);
+      setChartAgents(built.agents);
       setLastUpdated(new Date());
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load data");
@@ -143,6 +183,8 @@ export function OverviewTab() {
     });
   }, [allChartData, dateFrom, dateTo]);
 
+  const chartConfig = useMemo(() => buildChartConfig(chartAgents), [chartAgents]);
+
   // Spike computation over the full dataset (not filtered)
   const { spikeDates, spikeCount } = useMemo(
     () => computeSpikes(allDailyEntries),
@@ -150,8 +192,9 @@ export function OverviewTab() {
   );
 
   useEffect(() => {
-    load();
-    intervalRef.current = setInterval(() => load(), 30000);
+    const run = () => load();
+    queueMicrotask(run);
+    intervalRef.current = setInterval(run, 30000);
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
@@ -329,20 +372,16 @@ export function OverviewTab() {
                     content={<ChartTooltipContent formatter={(val: number) => formatUsd(val)} />}
                   />
                   <ChartLegend content={<ChartLegendContent />} />
-                  <Line
-                    type="monotone"
-                    dataKey="claude"
-                    stroke="var(--color-claude)"
-                    strokeWidth={2}
-                    dot={false}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="codex"
-                    stroke="var(--color-codex)"
-                    strokeWidth={2}
-                    dot={false}
-                  />
+                  {chartAgents.map((agent) => (
+                    <Line
+                      key={agent}
+                      type="monotone"
+                      dataKey={agent}
+                      stroke={`var(--color-${agent})`}
+                      strokeWidth={2}
+                      dot={false}
+                    />
+                  ))}
                 </LineChart>
               ) : (
                 <BarChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
@@ -358,15 +397,15 @@ export function OverviewTab() {
                     content={<ChartTooltipContent formatter={(val: number) => formatUsd(val)} />}
                   />
                   <ChartLegend content={<ChartLegendContent />} />
-                  <Bar dataKey="claude" radius={[4, 4, 0, 0]}>
-                    {chartData.map((entry, index) => (
-                      <Cell
-                        key={index}
-                        fill={spikeDates.has(entry.rawDate) ? "#f59e0b" : "var(--color-claude)"}
-                      />
-                    ))}
-                  </Bar>
-                  <Bar dataKey="codex" fill="var(--color-codex)" radius={[4, 4, 0, 0]} />
+                  {chartAgents.map((agent, i) => (
+                    <Bar
+                      key={agent}
+                      dataKey={agent}
+                      fill={`var(--color-${agent})`}
+                      radius={i === chartAgents.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]}
+                      stackId="cost"
+                    />
+                  ))}
                 </BarChart>
               )}
             </ChartContainer>

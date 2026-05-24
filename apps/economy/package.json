@@ -8,7 +8,8 @@
   "bin": {
     "economy": "dist/cli/index.js",
     "economy-mcp": "dist/mcp/index.js",
-    "economy-serve": "dist/server/index.js"
+    "economy-serve": "dist/server/index.js",
+    "economy-otel": "dist/otel/index.js"
   },
   "exports": {
     ".": {
@@ -18,10 +19,11 @@
   },
   "files": [
     "dist",
+    "dashboard/dist",
     "LICENSE"
   ],
   "scripts": {
-    "build": "cd dashboard && bun run build && cd .. && bun build src/cli/index.ts --outdir dist/cli --target bun --packages external && bun build src/mcp/index.ts --outdir dist/mcp --target bun --packages external && bun build src/server/index.ts --outdir dist/server --target bun --packages external && bun build src/index.ts --outdir dist --target bun --packages external && tsc --emitDeclarationOnly --outDir dist",
+    "build": "cd dashboard && bun run build && cd .. && bun build src/cli/index.ts --outdir dist/cli --target bun --packages external && bun build src/mcp/index.ts --outdir dist/mcp --target bun --packages external && bun build src/server/index.ts --outdir dist/server --target bun --packages external && bun build src/otel/index.ts --outdir dist/otel --target bun --packages external && bun build src/index.ts --outdir dist --target bun --packages external && tsc --emitDeclarationOnly --outDir dist",
     "build:cli": "bun build src/cli/index.ts --outdir dist/cli --target bun --packages external",
     "build:mcp": "bun build src/mcp/index.ts --outdir dist/mcp --target bun --packages external",
     "build:server": "bun build src/server/index.ts --outdir dist/server --target bun --packages external",
@@ -32,6 +34,7 @@
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
+    "dev:otel": "bun run src/otel/index.ts",
     "postinstall": "mkdir -p $HOME/.hasna/economy/training 2>/dev/null || true"
   },
   "keywords": [
@@ -54,6 +57,7 @@
   },
   "dependencies": {
     "@hasna/cloud": "^0.1.24",
+    "@hasna/projects": "0.1.43",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",

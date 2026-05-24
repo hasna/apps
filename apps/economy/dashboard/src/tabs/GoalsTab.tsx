@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { getGoals, createGoal, deleteGoalApi } from "../api";
-import type { GoalStatus } from "../api";
+import type { Agent, GoalStatus } from "../api";
 import { PlusIcon, Trash2Icon } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -119,7 +119,7 @@ function AddGoalDialog({ onCreated }: { onCreated: () => void }) {
   const [period, setPeriod] = useState("month");
   const [limitUsd, setLimitUsd] = useState("");
   const [projectPath, setProjectPath] = useState("");
-  const [agent, setAgent] = useState("");
+  const [agent, setAgent] = useState<Agent | "">("");
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -204,11 +204,12 @@ function AddGoalDialog({ onCreated }: { onCreated: () => void }) {
             </label>
             <select
               value={agent}
-              onChange={(e) => setAgent(e.target.value)}
+              onChange={(e) => setAgent(e.target.value as Agent | "")}
               className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
               <option value="">All agents</option>
               <option value="claude">Claude</option>
+              <option value="takumi">Takumi</option>
               <option value="codex">Codex</option>
               <option value="gemini">Gemini</option>
             </select>
@@ -247,8 +248,9 @@ export function GoalsTab() {
   }, []);
 
   useEffect(() => {
-    load();
-    intervalRef.current = setInterval(() => load(), 30000);
+    const run = () => load();
+    queueMicrotask(run);
+    intervalRef.current = setInterval(run, 30000);
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };

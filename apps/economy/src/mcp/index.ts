@@ -4,14 +4,17 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { registerCloudTools } from '@hasna/cloud'
 import { z } from 'zod'
-import { openDatabase, getDbPath, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId } from '../db/database.js'
+import { openDatabase, getDbPath, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId, queryBillingSummary, listModelPricing, upsertModelPricing, deleteModelPricing } from '../db/database.js'
 import { PG_MIGRATIONS } from '../db/pg-migrations.js'
-import { ingestClaude, ingestTakumi } from '../ingest/claude.js'
-import { ingestCodex } from '../ingest/codex.js'
-import { ingestGemini } from '../ingest/gemini.js'
+import { syncAll } from '../lib/sync-all.js'
+import { AGENTS } from '../lib/agents.js'
+import { querySavingsSummary } from '../lib/savings.js'
+import { queryUsageSnapshots } from '../db/database.js'
+import { computeCostFromDb } from '../lib/pricing.js'
 import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
-import type { Period, Agent } from '../types/index.js'
+import type { Period } from '../types/index.js'
+import type { Agent } from '../lib/agents.js'
 
 function printHelp(): void {
   console.log(`Usage: economy-mcp [options]
@@ -54,7 +57,13 @@ const TOOL_NAMES = [
   'get_model_breakdown',
   'get_project_breakdown',
   'get_budget_status',
+  'set_budget',
+  'remove_budget',
+  'get_pricing',
+  'set_pricing',
+  'remove_pricing',
   'get_daily',
+  'get_billing_summary',
   'get_session_detail',
   'sync',
   'search_tools',
@@ -72,15 +81,21 @@ const TOOL_NAMES = [
 
 const TOOL_DESCRIPTIONS: Record<string, string> = {
   get_cost_summary: 'period(today|week|month|year|all), machine?(hostname) -> {total_usd, sessions, requests, tokens, summary}',
-  get_sessions: 'agent(claude|codex|gemini), project(partial), machine?(hostname), limit(20) -> compact session table',
-  get_top_sessions: 'n(10), agent(claude|codex|gemini) -> top sessions by cost',
+  get_sessions: 'agent(claude|takumi|codex|gemini), project(partial), machine?(hostname), limit(20) -> compact session table',
+  get_top_sessions: 'n(10), agent(claude|takumi|codex|gemini) -> top sessions by cost',
   list_machines: 'no params -> machine_id, sessions, requests, cost, last_active',
   get_model_breakdown: 'no params -> model, requests, tokens, cost',
   get_project_breakdown: 'no params -> project_name, sessions, cost',
   get_budget_status: 'no params -> budget limits, current spend, percent_used, is_over_alert',
+  set_budget: 'period(daily|weekly|monthly), limit_usd, project_path?, agent?, alert_at_percent? -> create budget',
+  remove_budget: 'id -> delete budget',
+  get_pricing: 'no params -> model pricing rows with input, output, cache read/write, and cache storage rates',
+  set_pricing: 'model, input_per_1m, output_per_1m, cache_read_per_1m?, cache_write_per_1m?, cache_write_1h_per_1m?, cache_storage_per_1m_hour? -> create/update pricing',
+  remove_pricing: 'model -> delete pricing row',
   get_daily: 'days(30) -> daily cost table grouped by date and agent',
+  get_billing_summary: 'period(today|yesterday|week|month|year|all) -> actual provider billing totals',
   get_session_detail: 'session_id(prefix ok) -> per-request breakdown with model, tokens, cost',
-  sync: 'sources(all|claude|codex|gemini) -> ingest latest cost data',
+  sync: `sources(all|${AGENTS.join('|')}) -> ingest latest cost data`,
   search_tools: 'query substring -> tool name list',
   describe_tools: 'names[] -> one-line parameter hints',
   get_goals: 'no params -> goal progress summary',
@@ -239,27 +254,141 @@ server.tool(
 )
 
 server.tool(
+  'set_budget',
+  'Create a spending budget. period: daily|weekly|monthly. limit_usd must be positive. alert_at_percent defaults to 80.',
+  {
+    period: z.enum(['daily', 'weekly', 'monthly']),
+    limit_usd: z.number().positive(),
+    project_path: z.string().optional(),
+    agent: z.enum(['claude', 'takumi', 'codex', 'gemini']).optional(),
+    alert_at_percent: z.number().positive().max(100).optional(),
+  },
+  async ({ period, limit_usd, project_path, agent, alert_at_percent }: { period: 'daily' | 'weekly' | 'monthly'; limit_usd: number; project_path?: string; agent?: Agent; alert_at_percent?: number }) => {
+    const now = new Date().toISOString()
+    const id = randomUUID()
+    upsertBudget(db, {
+      id,
+      project_path: project_path ?? null,
+      agent: agent ?? null,
+      period,
+      limit_usd,
+      alert_at_percent: alert_at_percent ?? 80,
+      created_at: now,
+      updated_at: now,
+    })
+    return text(`Budget set: ${id}`)
+  },
+)
+
+server.tool(
+  'remove_budget',
+  'Delete a budget by id.',
+  { id: z.string() },
+  async ({ id }: { id: string }) => {
+    deleteBudget(db, id)
+    return text('Budget removed.')
+  },
+)
+
+server.tool(
+  'get_pricing',
+  'Editable model pricing rows. Includes input/output/cache rates and context-cache storage.',
+  {},
+  async () => {
+    const rows = listModelPricing(db)
+    const lines = ['model                          input    output   cache-r  cache-w  cache-1h storage-h']
+    for (const row of rows) {
+      lines.push(
+        `${row.model.slice(0, 30).padEnd(31)}` +
+        `${fmtUsd(row.input_per_1m).padEnd(9)}` +
+        `${fmtUsd(row.output_per_1m).padEnd(9)}` +
+        `${fmtUsd(row.cache_read_per_1m).padEnd(9)}` +
+        `${fmtUsd(row.cache_write_per_1m).padEnd(9)}` +
+        `${fmtUsd(row.cache_write_1h_per_1m ?? 0).padEnd(9)}` +
+        `${fmtUsd(row.cache_storage_per_1m_hour ?? 0)}`,
+      )
+    }
+    return text(lines.join('\n'))
+  },
+)
+
+server.tool(
+  'set_pricing',
+  'Create or update a model pricing row. Values are USD per 1M tokens except cache_storage_per_1m_hour.',
+  {
+    model: z.string().min(1),
+    input_per_1m: z.number().nonnegative(),
+    output_per_1m: z.number().nonnegative(),
+    cache_read_per_1m: z.number().nonnegative().optional(),
+    cache_write_per_1m: z.number().nonnegative().optional(),
+    cache_write_1h_per_1m: z.number().nonnegative().optional(),
+    cache_storage_per_1m_hour: z.number().nonnegative().optional(),
+  },
+  async (input: { model: string; input_per_1m: number; output_per_1m: number; cache_read_per_1m?: number; cache_write_per_1m?: number; cache_write_1h_per_1m?: number; cache_storage_per_1m_hour?: number }) => {
+    const model = input.model.trim()
+    if (!model) return textError('model is required')
+    upsertModelPricing(db, {
+      model,
+      input_per_1m: input.input_per_1m,
+      output_per_1m: input.output_per_1m,
+      cache_read_per_1m: input.cache_read_per_1m ?? 0,
+      cache_write_per_1m: input.cache_write_per_1m ?? 0,
+      cache_write_1h_per_1m: input.cache_write_1h_per_1m ?? 0,
+      cache_storage_per_1m_hour: input.cache_storage_per_1m_hour ?? 0,
+      updated_at: new Date().toISOString(),
+    })
+    return text(`Pricing set: ${model}`)
+  },
+)
+
+server.tool(
+  'remove_pricing',
+  'Delete a model pricing row by model id.',
+  { model: z.string() },
+  async ({ model }: { model: string }) => {
+    deleteModelPricing(db, model)
+    return text('Pricing removed.')
+  },
+)
+
+server.tool(
   'get_daily',
   'Daily cost table by agent. Params: days(30)',
   { days: z.number().int().positive().max(365).optional() },
   async ({ days }: { days?: number }) => {
     const rows = queryDailyBreakdown(db, days ?? 30) as Array<Record<string, unknown>>
-    const byDate = new Map<string, { claude: number; codex: number; gemini: number }>()
+    const byDate = new Map<string, { claude: number; takumi: number; codex: number; gemini: number }>()
 
     for (const row of rows) {
       const date = String(row['date'])
-      const entry = byDate.get(date) ?? { claude: 0, codex: 0, gemini: 0 }
+      const entry = byDate.get(date) ?? { claude: 0, takumi: 0, codex: 0, gemini: 0 }
       if (row['agent'] === 'claude') entry.claude += Number(row['cost_usd'])
+      else if (row['agent'] === 'takumi') entry.takumi += Number(row['cost_usd'])
       else if (row['agent'] === 'codex') entry.codex += Number(row['cost_usd'])
       else if (row['agent'] === 'gemini') entry.gemini += Number(row['cost_usd'])
       byDate.set(date, entry)
     }
 
-    const lines = ['date        claude     codex      gemini     total']
+    const lines = ['date        claude     takumi     codex      gemini     total']
     for (const [date, costs] of [...byDate.entries()].sort()) {
-      const total = costs.claude + costs.codex + costs.gemini
-      lines.push(`${date}  ${fmtUsd(costs.claude).padEnd(11)}${fmtUsd(costs.codex).padEnd(11)}${fmtUsd(costs.gemini).padEnd(11)}${fmtUsd(total)}`)
+      const total = costs.claude + costs.takumi + costs.codex + costs.gemini
+      lines.push(`${date}  ${fmtUsd(costs.claude).padEnd(11)}${fmtUsd(costs.takumi).padEnd(11)}${fmtUsd(costs.codex).padEnd(11)}${fmtUsd(costs.gemini).padEnd(11)}${fmtUsd(total)}`)
     }
+    return text(lines.join('\n'))
+  },
+)
+
+server.tool(
+  'get_billing_summary',
+  'Actual provider billing totals from admin API sync. Params: period(today|yesterday|week|month|year|all)',
+  { period: z.enum(['today', 'yesterday', 'week', 'month', 'year', 'all']).optional() },
+  async ({ period }: { period?: Period }) => {
+    const summary = queryBillingSummary(db, period ?? 'month')
+    const lines = ['provider    billed']
+    for (const [provider, cost] of Object.entries(summary.by_provider)) {
+      lines.push(`${provider.padEnd(11)}${fmtUsd(cost)}`)
+    }
+    lines.push(`total       ${fmtUsd(summary.total_usd)}`)
     return text(lines.join('\n'))
   },
 )
@@ -278,11 +407,20 @@ server.tool(
       `agent: ${session['agent']}  project: ${session['project_name'] || '—'}`,
       `cost: ${fmtUsd(Number(session['total_cost_usd']))}  tokens: ${fmtTok(Number(session['total_tokens']))}  requests: ${session['request_count']}`,
       '',
-      'time      model                  input    output   cost',
+      'time      model                  input    output   cache-r  cache-5m cache-1h cost',
     ]
 
     for (const request of requests) {
-      lines.push(`${String(request['timestamp']).slice(11, 19)}  ${String(request['model']).slice(0, 22).padEnd(23)}${fmtTok(Number(request['input_tokens'])).padEnd(9)}${fmtTok(Number(request['output_tokens'])).padEnd(9)}${fmtUsd(Number(request['cost_usd']))}`)
+      lines.push(
+        `${String(request['timestamp']).slice(11, 19)}  ` +
+        `${String(request['model']).slice(0, 22).padEnd(23)}` +
+        `${fmtTok(Number(request['input_tokens'])).padEnd(9)}` +
+        `${fmtTok(Number(request['output_tokens'])).padEnd(9)}` +
+        `${fmtTok(Number(request['cache_read_tokens'])).padEnd(9)}` +
+        `${fmtTok(Number(request['cache_create_5m_tokens'] ?? request['cache_create_tokens'] ?? 0)).padEnd(9)}` +
+        `${fmtTok(Number(request['cache_create_1h_tokens'] ?? 0)).padEnd(9)}` +
+        `${fmtUsd(Number(request['cost_usd']))}`,
+      )
     }
     return text(lines.join('\n'))
   },
@@ -290,30 +428,44 @@ server.tool(
 
 server.tool(
   'sync',
-  'Ingest new cost data. sources: all|claude|takumi|codex|gemini',
-  { sources: z.enum(['all', 'claude', 'takumi', 'codex', 'gemini']).optional() },
-  async ({ sources }: { sources?: 'all' | 'claude' | 'takumi' | 'codex' | 'gemini' }) => {
+  `Ingest new cost data. sources: all|${AGENTS.join('|')}`,
+  { sources: z.enum(['all', ...AGENTS] as [string, ...string[]]).optional() },
+  async ({ sources }: { sources?: typeof AGENTS[number] | 'all' }) => {
     const selected = sources ?? 'all'
-    const parts: string[] = []
+    const opts = selected === 'all' ? {} : { [selected]: true } as Record<string, boolean>
+    const result = await syncAll(db, opts)
+    return text(JSON.stringify(result, null, 2))
+  },
+)
 
-    if (selected === 'all' || selected === 'claude') {
-      const result = await ingestClaude(db) as Record<string, number>
-      parts.push(`claude: ${result['files']} files, ${result['requests']} requests, ${result['sessions']} sessions`)
-    }
-    if (selected === 'all' || selected === 'takumi') {
-      const result = await ingestTakumi(db) as Record<string, number>
-      parts.push(`takumi: ${result['files']} files, ${result['requests']} requests, ${result['sessions']} sessions`)
-    }
-    if (selected === 'all' || selected === 'codex') {
-      const result = await ingestCodex(db) as Record<string, number>
-      parts.push(`codex: ${result['sessions']} sessions`)
-    }
-    if (selected === 'all' || selected === 'gemini') {
-      const result = await ingestGemini(db) as Record<string, number>
-      parts.push(`gemini: ${result['sessions']} sessions`)
-    }
+server.tool(
+  'get_usage',
+  'Usage snapshots and fleet summary. period: today|week|month',
+  { period: z.enum(['today', 'week', 'month']).optional(), agent: z.enum(AGENTS).optional() },
+  async ({ period, agent }: { period?: 'today' | 'week' | 'month'; agent?: Agent }) => {
+    const p = (period ?? 'month') as Period
+    const snaps = queryUsageSnapshots(db, { agent })
+    const summary = querySummary(db, p, undefined, true)
+    return text(JSON.stringify({ snapshots: snaps, summary }, null, 2))
+  },
+)
 
-    return text(parts.join('\n') || 'done')
+server.tool(
+  'get_savings',
+  'Subscription vs API savings summary',
+  { period: z.enum(['today', 'week', 'month', 'year', 'all']).optional(), agent: z.enum(AGENTS).optional() },
+  async ({ period, agent }: { period?: Period; agent?: Agent }) => {
+    return text(JSON.stringify(querySavingsSummary(db, period ?? 'month', agent), null, 2))
+  },
+)
+
+server.tool(
+  'estimate_cost',
+  'Pre-flight cost estimate for token counts',
+  { model: z.string(), input_tokens: z.number().optional(), output_tokens: z.number().optional() },
+  async ({ model, input_tokens, output_tokens }: { model: string; input_tokens?: number; output_tokens?: number }) => {
+    const cost = computeCostFromDb(db, model, input_tokens ?? 0, output_tokens ?? 0, 0, 0, 0)
+    return text(`${model}: ${fmtUsd(cost)} (${input_tokens ?? 0} in / ${output_tokens ?? 0} out)`)
   },
 )
 
@@ -341,7 +493,7 @@ server.tool(
   'Create/update a spending goal. period(day|week|month|year), limit_usd, project_path?, agent?',
   {
     period: z.enum(['day', 'week', 'month', 'year']),
-    limit_usd: z.number().nonnegative(),
+    limit_usd: z.number().positive(),
     project_path: z.string().optional(),
     agent: z.string().optional(),
   },
