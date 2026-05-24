@@ -1,10 +1,11 @@
-export type Agent = 'claude' | 'codex' | 'gemini' | 'takumi'
+export type { Agent, CostBasis } from '../lib/agents.js'
+export { AGENTS, COST_BASIS, isAgent } from '../lib/agents.js'
 
 export type Period = 'today' | 'yesterday' | 'week' | 'month' | 'year' | 'all'
 
 export interface EconomyRequest {
   id: string
-  agent: Agent
+  agent: import('../lib/agents.js').Agent
   session_id: string
   model: string
   input_tokens: number
@@ -14,15 +15,19 @@ export interface EconomyRequest {
   cache_create_5m_tokens?: number
   cache_create_1h_tokens?: number
   cost_usd: number
+  cost_basis?: import('../lib/agents.js').CostBasis
   duration_ms: number
   timestamp: string
   source_request_id: string
   machine_id?: string
+  attribution_tag?: string
+  updated_at?: string
+  synced_at?: string
 }
 
 export interface EconomySession {
   id: string
-  agent: Agent
+  agent: import('../lib/agents.js').Agent
   project_path: string
   project_name: string
   started_at: string
@@ -31,6 +36,9 @@ export interface EconomySession {
   total_tokens: number
   request_count: number
   machine_id?: string
+  attribution_tag?: string
+  updated_at?: string
+  synced_at?: string
 }
 
 export interface EconomyProject {
@@ -45,7 +53,7 @@ export interface EconomyProject {
 export interface Budget {
   id: string
   project_path: string | null
-  agent: Agent | null
+  agent: import('../lib/agents.js').Agent | null
   period: 'daily' | 'weekly' | 'monthly'
   limit_usd: number
   alert_at_percent: number
@@ -76,7 +84,7 @@ export interface CostSummary {
 
 export interface ModelBreakdown {
   model: string
-  agent: Agent
+  agent: import('../lib/agents.js').Agent
   requests: number
   input_tokens: number
   output_tokens: number
@@ -105,18 +113,57 @@ export interface ModelPricing {
 
 export interface SyncOptions {
   claude?: boolean
+  takumi?: boolean
   codex?: boolean
   gemini?: boolean
-  takumi?: boolean
+  opencode?: boolean
+  cursor?: boolean
+  pi?: boolean
+  hermes?: boolean
   verbose?: boolean
 }
 
 export interface SessionFilter {
-  agent?: Agent
+  agent?: import('../lib/agents.js').Agent
   project?: string
   limit?: number
   offset?: number
   since?: string
   search?: string
   machine?: string
+}
+
+export interface Subscription {
+  id: string
+  agent: import('../lib/agents.js').Agent | null
+  provider: string
+  plan: string
+  monthly_fee_usd: number
+  included_usage_usd: number
+  billing_cycle_start: string | null
+  reset_policy: string
+  active: number
+  created_at: string
+  updated_at: string
+}
+
+export interface UsageSnapshot {
+  id: string
+  agent: import('../lib/agents.js').Agent
+  date: string
+  metric: string
+  value: number
+  unit: string
+  machine_id: string
+  updated_at: string
+}
+
+export interface MachineRegistry {
+  machine_id: string
+  hostname: string
+  last_seen_at: string | null
+  last_push_at: string | null
+  last_pull_at: string | null
+  economy_version: string | null
+  updated_at: string
 }

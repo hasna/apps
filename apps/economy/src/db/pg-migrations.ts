@@ -127,4 +127,62 @@ export const PG_MIGRATIONS: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_billing_date ON billing_daily(date)`,
   `CREATE INDEX IF NOT EXISTS idx_billing_provider ON billing_daily(provider)`,
+
+  `CREATE TABLE IF NOT EXISTS subscriptions (
+    id TEXT PRIMARY KEY,
+    agent TEXT,
+    provider TEXT NOT NULL,
+    plan TEXT NOT NULL,
+    monthly_fee_usd REAL NOT NULL DEFAULT 0,
+    included_usage_usd REAL NOT NULL DEFAULT 0,
+    billing_cycle_start TEXT,
+    reset_policy TEXT DEFAULT 'monthly',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS usage_snapshots (
+    id TEXT PRIMARY KEY,
+    agent TEXT NOT NULL,
+    date TEXT NOT NULL,
+    metric TEXT NOT NULL,
+    value REAL NOT NULL DEFAULT 0,
+    unit TEXT DEFAULT '',
+    machine_id TEXT DEFAULT '',
+    updated_at TEXT NOT NULL
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS savings_daily (
+    date TEXT NOT NULL,
+    agent TEXT DEFAULT '',
+    api_equivalent_usd REAL NOT NULL DEFAULT 0,
+    subscription_fee_usd REAL NOT NULL DEFAULT 0,
+    included_consumed_usd REAL NOT NULL DEFAULT 0,
+    on_demand_usd REAL NOT NULL DEFAULT 0,
+    saved_usd REAL NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (date, agent)
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS machines (
+    machine_id TEXT PRIMARY KEY,
+    hostname TEXT NOT NULL,
+    last_seen_at TEXT,
+    last_push_at TEXT,
+    last_pull_at TEXT,
+    economy_version TEXT,
+    updated_at TEXT NOT NULL
+  )`,
+
+  `ALTER TABLE requests ADD COLUMN IF NOT EXISTS cost_basis TEXT DEFAULT 'estimated'`,
+  `ALTER TABLE requests ADD COLUMN IF NOT EXISTS attribution_tag TEXT DEFAULT ''`,
+  `ALTER TABLE requests ADD COLUMN IF NOT EXISTS updated_at TEXT DEFAULT ''`,
+  `ALTER TABLE requests ADD COLUMN IF NOT EXISTS synced_at TEXT DEFAULT ''`,
+  `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS attribution_tag TEXT DEFAULT ''`,
+  `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS updated_at TEXT DEFAULT ''`,
+  `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS synced_at TEXT DEFAULT ''`,
+
+  `CREATE INDEX IF NOT EXISTS idx_usage_agent_date ON usage_snapshots(agent, date)`,
+  `CREATE INDEX IF NOT EXISTS idx_savings_date ON savings_daily(date)`,
 ];
