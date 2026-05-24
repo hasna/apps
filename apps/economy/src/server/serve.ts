@@ -7,24 +7,31 @@ import {
   listModelPricing, upsertModelPricing, deleteModelPricing,
   upsertGoal, deleteGoal, getGoalStatuses,
   listMachines, getMachineId,
+  listMachineRegistry,
   queryBillingSummary,
   openDatabase,
 } from '../db/database.js'
-import { ingestClaude, ingestTakumi } from '../ingest/claude.js'
-import { ingestCodex } from '../ingest/codex.js'
-import { ingestGemini } from '../ingest/gemini.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
+import { AGENTS, isAgent } from '../lib/agents.js'
+import { syncAll } from '../lib/sync-all.js'
+import { querySavingsSummary } from '../lib/savings.js'
+import { queryBillingDiff } from '../lib/billing-diff.js'
+import { queryUsageSnapshots } from '../db/database.js'
+import { isAuthorizedRequest } from '../lib/serve-auth.js'
 import { randomUUID } from 'crypto'
 import { existsSync } from 'fs'
 import { resolve, sep } from 'path'
-import type { Period, Agent } from '../types/index.js'
+import { getServeBindHost } from '../lib/serve-auth.js'
+import type { Period } from '../types/index.js'
+import type { Agent } from '../lib/agents.js'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Economy-Token',
 }
-const AGENTS = ['claude', 'takumi', 'codex', 'gemini'] as const
+const AGENT_ERROR = `agent must be one of: ${AGENTS.join(', ')}`
+const SYNC_SOURCES = ['all', ...AGENTS] as const
 const DEFAULT_DASHBOARD_DIR = new URL('../../dashboard/dist', import.meta.url).pathname
 
 interface StartServerOptions {
@@ -142,6 +149,8 @@ export function createHandler(db: Database) {
 
     if (method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS })
 
+    if (!isAuthorizedRequest(req, path)) return err('Unauthorized', 401)
+
     // Health
     if (path === '/health') return ok({ status: 'ok', ts: new Date().toISOString() })
 
@@ -155,6 +164,16 @@ export function createHandler(db: Database) {
     // Machines
     if (path === '/api/machines' && method === 'GET') {
       return ok(listMachines(db), { current_machine: getMachineId() })
+    }
+
+    if (path === '/api/fleet' && method === 'GET') {
+      const period = (url.searchParams.get('period') ?? 'month') as Period
+      return ok({
+        summary: querySummary(db, period, undefined, true),
+        machines: listMachines(db),
+        registry: listMachineRegistry(db),
+        current_machine: getMachineId(),
+      })
     }
 
     // Daily breakdown for charts
@@ -203,6 +222,12 @@ export function createHandler(db: Database) {
       const period = (url.searchParams.get('period') ?? 'month') as Period
       return ok(queryBillingSummary(db, period))
     }
+
+    if (path === '/api/billing/diff' && method === 'GET') {
+      const period = (url.searchParams.get('period') ?? 'month') as Period
+      const threshold = Number(url.searchParams.get('threshold') ?? 15)
+      return ok(queryBillingDiff(db, period, Number.isFinite(threshold) ? threshold : 15))
+    }
     if (path === '/api/billing/sync' && method === 'POST') {
       const body = await jsonBody(req) ?? {}
       const days = Number(body['days'] ?? 31)
@@ -248,7 +273,7 @@ export function createHandler(db: Database) {
       if (limitUsd == null || limitUsd <= 0) return err('limit_usd must be a positive number')
       if (alertAtPercent == null || alertAtPercent <= 0 || alertAtPercent > 100) return err('alert_at_percent must be between 1 and 100')
       const agent = optionalAgent(body['agent'])
-      if (agent === undefined) return err('agent must be one of: claude, takumi, codex, gemini')
+      if (agent === undefined) return err(AGENT_ERROR)
       const now = new Date().toISOString()
       const budget = {
         id: randomUUID(),
@@ -336,7 +361,7 @@ export function createHandler(db: Database) {
     if (path === '/api/sync' && method === 'POST') {
       const body = await jsonBody(req) ?? {}
       const sources = (body['sources'] as string | null) ?? 'all'
-      if (!['all', 'claude', 'takumi', 'codex', 'gemini'].includes(sources)) return err('invalid sync source')
+      if (!(SYNC_SOURCES as readonly string[]).includes(sources)) return err('invalid sync source')
       const results: Record<string, unknown> = {}
       if (sources === 'all') {
         try {
@@ -344,15 +369,32 @@ export function createHandler(db: Database) {
           results['projects'] = await syncOpenProjectsRegistry(db)
         } catch { /* open-projects registry sync is optional */ }
       }
-      if (sources === 'all' || sources === 'claude') results['claude'] = await ingestClaude(db)
-      if (sources === 'all' || sources === 'takumi') results['takumi'] = await ingestTakumi(db)
-      if (sources === 'all' || sources === 'codex') results['codex'] = await ingestCodex(db)
-      if (sources === 'all' || sources === 'gemini') results['gemini'] = await ingestGemini(db)
+      const selected = sources === 'all'
+        ? {}
+        : { [sources]: true } as Record<string, boolean>
+      const syncResult = await syncAll(db, selected)
+      Object.assign(results, syncResult)
       try {
         const { checkAndFireWebhooks } = await import('../lib/webhooks.js')
         await checkAndFireWebhooks(db)
       } catch { /* webhooks are optional */ }
       return ok(results)
+    }
+
+    if (path === '/api/usage' && method === 'GET') {
+      const period = (url.searchParams.get('period') ?? 'month') as Period
+      const agent = url.searchParams.get('agent') ?? undefined
+      const since = period === 'month' ? new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().substring(0, 10) : undefined
+      return ok({
+        snapshots: queryUsageSnapshots(db, { agent: agent && isAgent(agent) ? agent : undefined, since }),
+        summary: querySummary(db, period, undefined, true),
+      })
+    }
+
+    if (path === '/api/savings' && method === 'GET') {
+      const period = (url.searchParams.get('period') ?? 'month') as Period
+      const agent = url.searchParams.get('agent') ?? undefined
+      return ok(querySavingsSummary(db, period, agent && isAgent(agent) ? agent : undefined))
     }
 
     // Session requests detail
@@ -377,7 +419,7 @@ export function createHandler(db: Database) {
       const limitUsd = finiteNumber(body['limit_usd'])
       if (limitUsd == null || limitUsd <= 0) return err('limit_usd must be a positive number')
       const agent = optionalAgent(body['agent'])
-      if (agent === undefined) return err('agent must be one of: claude, takumi, codex, gemini')
+      if (agent === undefined) return err(AGENT_ERROR)
       const now = new Date().toISOString()
       const goal = {
         id: randomUUID(),
@@ -405,7 +447,7 @@ export function startServer(port = 3456, options: StartServerOptions = {}): Retu
   const db = options.db ?? openDatabase()
   ensurePricingSeeded(db)
   const apiHandler = createHandler(db)
-  const hostname = options.hostname ?? '0.0.0.0'
+  const hostname = options.hostname ?? getServeBindHost()
   const server = Bun.serve({
     port,
     hostname,

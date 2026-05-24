@@ -116,7 +116,7 @@ describe('economy-mcp stdio server', () => {
         { timeout: 5_000 },
       )
       const text = description.content[0]?.type === 'text' ? description.content[0].text : ''
-      expect(text).toContain('sync: sources(all|claude|takumi|codex|gemini)')
+      expect(text).toContain('sync: sources(all|claude|takumi|codex|gemini|opencode|cursor|pi|hermes)')
       expect(text).toContain('get_billing_summary: period(today|yesterday|week|month|year|all)')
       expect(text).toContain('get_pricing: no params -> model pricing rows')
       expect(text).toContain('set_budget: period(daily|weekly|monthly)')

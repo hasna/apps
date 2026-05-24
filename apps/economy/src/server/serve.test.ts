@@ -6,6 +6,7 @@ import { Database as BunDatabase } from 'bun:sqlite'
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { AGENTS } from '../lib/agents.js'
 
 const NOW = new Date().toISOString()
 const roots: string[] = []
@@ -40,10 +41,18 @@ function seedData(db: Database) {
   })
 }
 
-async function req(handler: (r: Request) => Promise<Response>, path: string, method = 'GET', body?: unknown): Promise<{ status: number; data: unknown }> {
+async function req(
+  handler: (r: Request) => Promise<Response>,
+  path: string,
+  method = 'GET',
+  body?: unknown,
+  headers: Record<string, string> = {},
+): Promise<{ status: number; data: unknown }> {
   const r = new Request(`http://localhost:3456${path}`, {
     method,
-    headers: body ? { 'Content-Type': 'application/json' } : {},
+    headers: body
+      ? { 'Content-Type': 'application/json', ...headers }
+      : headers,
     body: body ? JSON.stringify(body) : undefined,
   })
   const res = await handler(r)
@@ -145,6 +154,33 @@ describe('REST API server', () => {
     expect((d['by_provider'] as Record<string, number>)['openai']).toBeCloseTo(12.34)
   })
 
+  it('GET /api/billing/diff returns estimated vs actual delta', async () => {
+    const { status, data } = await req(handler, '/api/billing/diff?period=month')
+    expect(status).toBe(200)
+    const d = (data as Record<string, unknown>)['data'] as Record<string, unknown>
+    expect(typeof d['estimated_usd']).toBe('number')
+    expect(typeof d['actual_usd']).toBe('number')
+    expect(typeof d['is_alert']).toBe('boolean')
+  })
+
+  it('rejects API requests without token when ECONOMY_API_TOKEN is set', async () => {
+    process.env['ECONOMY_API_TOKEN'] = 'test-token'
+    try {
+      const authed = await req(handler, '/api/summary?period=today', 'GET', undefined, {
+        Authorization: 'Bearer test-token',
+      })
+      expect(authed.status).toBe(200)
+
+      const denied = await req(handler, '/api/summary?period=today')
+      expect(denied.status).toBe(401)
+
+      const health = await req(handler, '/health')
+      expect(health.status).toBe(200)
+    } finally {
+      delete process.env['ECONOMY_API_TOKEN']
+    }
+  })
+
   it('POST /api/billing/sync validates days', async () => {
     const { status, data } = await req(handler, '/api/billing/sync', 'POST', { days: 0 })
     expect(status).toBe(400)
@@ -242,7 +278,7 @@ describe('REST API server', () => {
       period: 'daily', limit_usd: 10, agent: 'unknown',
     })
     expect(response.status).toBe(400)
-    expect((response.data as Record<string, unknown>)['error']).toBe('agent must be one of: claude, takumi, codex, gemini')
+    expect((response.data as Record<string, unknown>)['error']).toBe(`agent must be one of: ${AGENTS.join(', ')}`)
   })
 
   it('POST /api/budgets normalizes day/week/month aliases', async () => {
@@ -512,7 +548,7 @@ describe('REST API server', () => {
       agent: 'unknown',
     })
     expect(response.status).toBe(400)
-    expect((response.data as Record<string, unknown>)['error']).toBe('agent must be one of: claude, takumi, codex, gemini')
+    expect((response.data as Record<string, unknown>)['error']).toBe(`agent must be one of: ${AGENTS.join(', ')}`)
   })
 
   it('GET /api/daily returns daily data', async () => {

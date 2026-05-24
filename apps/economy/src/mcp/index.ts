@@ -6,12 +6,15 @@ import { registerCloudTools } from '@hasna/cloud'
 import { z } from 'zod'
 import { openDatabase, getDbPath, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId, queryBillingSummary, listModelPricing, upsertModelPricing, deleteModelPricing } from '../db/database.js'
 import { PG_MIGRATIONS } from '../db/pg-migrations.js'
-import { ingestClaude, ingestTakumi } from '../ingest/claude.js'
-import { ingestCodex } from '../ingest/codex.js'
-import { ingestGemini } from '../ingest/gemini.js'
+import { syncAll } from '../lib/sync-all.js'
+import { AGENTS } from '../lib/agents.js'
+import { querySavingsSummary } from '../lib/savings.js'
+import { queryUsageSnapshots } from '../db/database.js'
+import { computeCostFromDb } from '../lib/pricing.js'
 import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
-import type { Period, Agent } from '../types/index.js'
+import type { Period } from '../types/index.js'
+import type { Agent } from '../lib/agents.js'
 
 function printHelp(): void {
   console.log(`Usage: economy-mcp [options]
@@ -92,7 +95,7 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   get_daily: 'days(30) -> daily cost table grouped by date and agent',
   get_billing_summary: 'period(today|yesterday|week|month|year|all) -> actual provider billing totals',
   get_session_detail: 'session_id(prefix ok) -> per-request breakdown with model, tokens, cost',
-  sync: 'sources(all|claude|takumi|codex|gemini) -> ingest latest cost data',
+  sync: `sources(all|${AGENTS.join('|')}) -> ingest latest cost data`,
   search_tools: 'query substring -> tool name list',
   describe_tools: 'names[] -> one-line parameter hints',
   get_goals: 'no params -> goal progress summary',
@@ -425,30 +428,44 @@ server.tool(
 
 server.tool(
   'sync',
-  'Ingest new cost data. sources: all|claude|takumi|codex|gemini',
-  { sources: z.enum(['all', 'claude', 'takumi', 'codex', 'gemini']).optional() },
-  async ({ sources }: { sources?: 'all' | 'claude' | 'takumi' | 'codex' | 'gemini' }) => {
+  `Ingest new cost data. sources: all|${AGENTS.join('|')}`,
+  { sources: z.enum(['all', ...AGENTS] as [string, ...string[]]).optional() },
+  async ({ sources }: { sources?: typeof AGENTS[number] | 'all' }) => {
     const selected = sources ?? 'all'
-    const parts: string[] = []
+    const opts = selected === 'all' ? {} : { [selected]: true } as Record<string, boolean>
+    const result = await syncAll(db, opts)
+    return text(JSON.stringify(result, null, 2))
+  },
+)
 
-    if (selected === 'all' || selected === 'claude') {
-      const result = await ingestClaude(db) as Record<string, number>
-      parts.push(`claude: ${result['files']} files, ${result['requests']} requests, ${result['sessions']} sessions`)
-    }
-    if (selected === 'all' || selected === 'takumi') {
-      const result = await ingestTakumi(db) as Record<string, number>
-      parts.push(`takumi: ${result['files']} files, ${result['requests']} requests, ${result['sessions']} sessions`)
-    }
-    if (selected === 'all' || selected === 'codex') {
-      const result = await ingestCodex(db) as Record<string, number>
-      parts.push(`codex: ${result['sessions']} sessions, ${result['requests']} requests`)
-    }
-    if (selected === 'all' || selected === 'gemini') {
-      const result = await ingestGemini(db) as Record<string, number>
-      parts.push(`gemini: ${result['sessions']} sessions, ${result['requests']} requests`)
-    }
+server.tool(
+  'get_usage',
+  'Usage snapshots and fleet summary. period: today|week|month',
+  { period: z.enum(['today', 'week', 'month']).optional(), agent: z.enum(AGENTS).optional() },
+  async ({ period, agent }: { period?: 'today' | 'week' | 'month'; agent?: Agent }) => {
+    const p = (period ?? 'month') as Period
+    const snaps = queryUsageSnapshots(db, { agent })
+    const summary = querySummary(db, p, undefined, true)
+    return text(JSON.stringify({ snapshots: snaps, summary }, null, 2))
+  },
+)
 
-    return text(parts.join('\n') || 'done')
+server.tool(
+  'get_savings',
+  'Subscription vs API savings summary',
+  { period: z.enum(['today', 'week', 'month', 'year', 'all']).optional(), agent: z.enum(AGENTS).optional() },
+  async ({ period, agent }: { period?: Period; agent?: Agent }) => {
+    return text(JSON.stringify(querySavingsSummary(db, period ?? 'month', agent), null, 2))
+  },
+)
+
+server.tool(
+  'estimate_cost',
+  'Pre-flight cost estimate for token counts',
+  { model: z.string(), input_tokens: z.number().optional(), output_tokens: z.number().optional() },
+  async ({ model, input_tokens, output_tokens }: { model: string; input_tokens?: number; output_tokens?: number }) => {
+    const cost = computeCostFromDb(db, model, input_tokens ?? 0, output_tokens ?? 0, 0, 0, 0)
+    return text(`${model}: ${fmtUsd(cost)} (${input_tokens ?? 0} in / ${output_tokens ?? 0} out)`)
   },
 )
 
