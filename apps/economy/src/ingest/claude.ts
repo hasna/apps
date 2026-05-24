@@ -11,6 +11,7 @@ function autoDetectProject(cwd: string, projects: Array<{path: string, name: str
   return projects.find(p => cwd === p.path || cwd.startsWith(p.path + '/'))
 }
 import { computeCostFromDb, normalizeModelName } from '../lib/pricing.js'
+import { defaultCostBasisForAgent } from '../lib/savings.js'
 import type { EconomySession, Agent } from '../types/index.js'
 
 const CLAUDE_PROJECTS_DIR = join(homedir(), '.claude', 'projects')
@@ -186,6 +187,7 @@ export async function ingestJsonlProjects(
           cache_create_5m_tokens: cacheWrite5mTokens,
           cache_create_1h_tokens: cacheWrite1hTokens,
           cost_usd: costUsd,
+          cost_basis: defaultCostBasisForAgent(agentName),
           duration_ms: 0,
           timestamp,
           source_request_id: sourceRequestId,

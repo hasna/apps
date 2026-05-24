@@ -4,6 +4,7 @@ import { join, basename } from 'path'
 import type { SqliteAdapter as Database } from '@hasna/cloud'
 import { upsertRequest, upsertSession, rollupSession, getIngestState, setIngestState, getMachineId } from '../db/database.js'
 import { computeCostFromDb } from '../lib/pricing.js'
+import { defaultCostBasisForAgent } from '../lib/savings.js'
 import type { EconomySession } from '../types/index.js'
 
 const DEFAULT_GEMINI_TMP_DIR = join(homedir(), '.gemini', 'tmp')
@@ -208,6 +209,7 @@ export async function ingestGemini(db: Database, verbose?: boolean): Promise<{ s
           cache_read_tokens: cacheReadTokens,
           cache_create_tokens: 0,
           cost_usd: costUsd,
+          cost_basis: defaultCostBasisForAgent('gemini'),
           duration_ms: 0,
           timestamp,
           source_request_id: message.id ?? requestId,

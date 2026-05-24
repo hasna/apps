@@ -7,6 +7,7 @@ import {
   upsertRequest, upsertSession, rollupSession, getIngestState, setIngestState, getMachineId,
 } from '../db/database.js'
 import { computeCostFromDb } from '../lib/pricing.js'
+import { defaultCostBasisForAgent } from '../lib/savings.js'
 
 const DEFAULT_CODEX_DB_PATH = join(homedir(), '.codex', 'state_5.sqlite')
 const DEFAULT_CODEX_CONFIG_PATH = join(homedir(), '.codex', 'config.toml')
@@ -180,6 +181,7 @@ export async function ingestCodex(db: Database, verbose = false): Promise<{ sess
           cache_read_tokens: cacheReadTokens,
           cache_create_tokens: 0,
           cost_usd: costUsd,
+          cost_basis: defaultCostBasisForAgent('codex'),
           duration_ms: 0,
           timestamp,
           source_request_id: requestId,
