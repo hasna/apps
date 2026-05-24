@@ -218,4 +218,31 @@ describe('checkAndFireWebhooks', () => {
     expect(attempts).toBe(0)
     expect(getIngestState(db, 'webhook', 'webhook-budget-budget-1-monthly')).toBeNull()
   })
+
+  it('fires a cost spike webhook once per day', async () => {
+    const calls: Array<Record<string, unknown>> = []
+    globalThis.fetch = (async (_url, init) => {
+      calls.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+      return new Response(null, { status: 204 })
+    }) as typeof fetch
+
+    const db = openDatabase(':memory:', true)
+    const baseDate = new Date()
+    for (let i = 8; i >= 1; i--) {
+      const d = new Date(baseDate)
+      d.setDate(d.getDate() - (i - 1))
+      const date = d.toISOString()
+      const cost = i === 1 ? 20 : 1
+      seedSpend(db, cost, `request-${i}`)
+      db.prepare(`UPDATE requests SET timestamp = ? WHERE id = ?`).run(date, `request-${i}`)
+    }
+
+    await checkAndFireWebhooks(db)
+    await checkAndFireWebhooks(db)
+
+    const spikeCalls = calls.filter((c) => c['event'] === 'cost_spike')
+    expect(spikeCalls).toHaveLength(1)
+    expect(spikeCalls[0]?.['cost_usd']).toBe(20)
+    expect(getIngestState(db, 'webhook', `webhook-spike-${baseDate.toISOString().substring(0, 10)}`)).toBe('1')
+  })
 })
