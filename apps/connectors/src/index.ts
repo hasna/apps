@@ -36,12 +36,16 @@ export {
 
 export {
   runConnectorCommand,
+  runConnectorOperation,
+  buildConnectorOperationArgs,
   getConnectorOperations,
   getConnectorCommandHelp,
   getConnectorCliPath,
   hasConnectorCommandSurface,
   getConnectorsWithCli,
   type RunResult,
+  type RunConnectorOperationArgs,
+  type ConnectorOperationResult,
 } from "./lib/runner.js";
 
 export {

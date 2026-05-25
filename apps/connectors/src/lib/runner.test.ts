@@ -10,6 +10,8 @@ import {
   getConnectorsWithCli,
   hasConnectorCommandSurface,
   buildEnvWithCredentials,
+  buildConnectorOperationArgs,
+  runConnectorOperation,
   parseCommanderHelpOperations,
 } from "./runner";
 
@@ -179,7 +181,7 @@ describe("Runner", () => {
     });
 
     test("runs github internal runtime for user info", async () => {
-      process.env.GITHUB_TOKEN = "ghp_test_token";
+      process.env.GITHUB_TOKEN = "github_test_token";
       const fetchMock = mock((input: RequestInfo | URL) =>
         Promise.resolve(
           new Response(JSON.stringify({ login: "octocat", id: 1 }), {
@@ -274,6 +276,71 @@ describe("Runner", () => {
       expect(request.method).toBe("POST");
       expect(request.headers).toBeInstanceOf(Headers);
       expect((request.headers as Headers).get("X-Device-Id")).toBe("device-main");
+    });
+  });
+
+  describe("runConnectorOperation", () => {
+    test("normalizes structured input into legacy connector CLI arguments", () => {
+      expect(buildConnectorOperationArgs({
+        connector: "googledrive",
+        profile: "andreihasnacom",
+        operation: "files.list",
+        input: {
+          pageSize: 100,
+          include_all_drives: true,
+          empty: false,
+          sharedDrive: ["drive-a", "drive-b"],
+        },
+      })).toEqual([
+        "--profile",
+        "andreihasnacom",
+        "files",
+        "list",
+        "--page-size",
+        "100",
+        "--include-all-drives",
+        "--shared-drive",
+        "drive-a",
+        "--shared-drive",
+        "drive-b",
+        "--format",
+        "json",
+      ]);
+    });
+
+    test("does not force json format when caller opts out", () => {
+      expect(buildConnectorOperationArgs({
+        connector: "googledrive",
+        operation: "files.list",
+        parseJson: false,
+      })).toEqual(["files", "list"]);
+    });
+
+    test("runs internal connector operations and returns parsed data", async () => {
+      process.env.GITHUB_TOKEN = "github_test_token";
+      const fetchMock = mock((input: RequestInfo | URL) =>
+        Promise.resolve(
+          new Response(JSON.stringify({ login: "octocat", id: 1 }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          })
+        )
+      );
+      global.fetch = fetchMock as unknown as typeof fetch;
+
+      const result = await runConnectorOperation<{ login: string }>({
+        connector: "github",
+        operation: "user",
+        profile: "work",
+        input: {
+          args: ["info", "octocat"],
+          format: "json",
+        },
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.profile).toBe("work");
+      expect(result.data).toMatchObject({ login: "octocat" });
     });
   });
 

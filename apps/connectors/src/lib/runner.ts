@@ -11,6 +11,7 @@ import {
   getInternalConnectorDefinition,
   listInternalConnectorDefinitions,
 } from "../core/builtins.js";
+import { executeConnectorOperation } from "../core/connector.js";
 import { getConnectorsHome } from "../db/database.js";
 import {
   getAuthType,
@@ -240,6 +241,22 @@ export interface RunResult {
   success: boolean;
 }
 
+export interface RunConnectorOperationArgs {
+  connector: string;
+  operation: string;
+  input?: Record<string, unknown>;
+  profile?: string;
+  timeoutMs?: number;
+  parseJson?: boolean;
+}
+
+export interface ConnectorOperationResult<T = unknown> extends RunResult {
+  connector: string;
+  operation: string;
+  profile?: string;
+  data?: T;
+}
+
 /**
  * Run a connector CLI command as a subprocess.
  *
@@ -278,6 +295,144 @@ export function runConnectorCommand(
   }
 
   return runLegacyConnectorCommand(name, args, timeoutMs);
+}
+
+/**
+ * Run a connector operation through the one-product runtime.
+ *
+ * This is the stable SDK surface for consumers such as @hasna/files. It avoids
+ * importing individual connect-* packages while still supporting legacy
+ * connector CLIs during the migration to internal connector definitions.
+ */
+export async function runConnectorOperation<T = unknown>(
+  args: RunConnectorOperationArgs
+): Promise<ConnectorOperationResult<T>> {
+  const internal = getInternalConnectorDefinition(args.connector);
+  if (internal?.operations[args.operation]) {
+    try {
+      const operationData = await executeConnectorOperation(internal, {
+        operation: args.operation,
+        input: args.input,
+        profile: args.profile,
+      });
+      const commandResult = normalizeOperationReturn<T>(operationData);
+
+      return {
+        connector: args.connector,
+        operation: args.operation,
+        profile: args.profile,
+        ...commandResult,
+      };
+    } catch (error) {
+      return {
+        connector: args.connector,
+        operation: args.operation,
+        profile: args.profile,
+        stdout: "",
+        stderr: (error as Error).message,
+        exitCode: 1,
+        success: false,
+      };
+    }
+  }
+
+  const commandArgs = buildConnectorOperationArgs(args);
+  const result = await runConnectorCommand(
+    args.connector,
+    commandArgs,
+    args.timeoutMs ?? 30000
+  );
+
+  const response: ConnectorOperationResult<T> = {
+    ...result,
+    connector: args.connector,
+    operation: args.operation,
+    profile: args.profile,
+  };
+
+  if (args.parseJson !== false && result.stdout) {
+    try {
+      response.data = JSON.parse(result.stdout) as T;
+    } catch {
+      // Some legacy connectors still print human-readable output. Preserve the
+      // raw stdout and let callers decide whether that is acceptable.
+    }
+  }
+
+  return response;
+}
+
+function normalizeOperationReturn<T>(value: unknown): Omit<ConnectorOperationResult<T>, "connector" | "operation" | "profile"> {
+  if (isRunResult(value)) {
+    const result = value as RunResult;
+    const response: Omit<ConnectorOperationResult<T>, "connector" | "operation" | "profile"> = {
+      ...result,
+    };
+    if (result.stdout) {
+      try {
+        response.data = JSON.parse(result.stdout) as T;
+      } catch {
+        // Keep raw stdout when command-style operations print non-JSON.
+      }
+    }
+    return response;
+  }
+
+  return {
+    data: value as T,
+    stdout: JSON.stringify(value),
+    stderr: "",
+    exitCode: 0,
+    success: true,
+  };
+}
+
+function isRunResult(value: unknown): value is RunResult {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<RunResult>;
+  return typeof candidate.stdout === "string"
+    && typeof candidate.stderr === "string"
+    && typeof candidate.exitCode === "number"
+    && typeof candidate.success === "boolean";
+}
+
+export function buildConnectorOperationArgs(
+  args: RunConnectorOperationArgs
+): string[] {
+  const commandArgs: string[] = [];
+
+  if (args.profile) {
+    commandArgs.push("--profile", args.profile);
+  }
+
+  commandArgs.push(...args.operation.split(".").filter(Boolean));
+
+  let hasFormat = false;
+  for (const [key, value] of Object.entries(args.input ?? {})) {
+    if (value === undefined || value === null) continue;
+    const flag = `--${key.replace(/_/g, "-").replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`)}`;
+    if (flag === "--format" || flag === "--json") hasFormat = true;
+
+    if (typeof value === "boolean") {
+      if (value) commandArgs.push(flag);
+      continue;
+    }
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        commandArgs.push(flag, String(item));
+      }
+      continue;
+    }
+
+    commandArgs.push(flag, String(value));
+  }
+
+  if (args.parseJson !== false && !hasFormat) {
+    commandArgs.push("--format", "json");
+  }
+
+  return commandArgs;
 }
 
 function runLegacyConnectorCommand(
