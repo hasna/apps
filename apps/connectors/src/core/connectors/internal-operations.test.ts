@@ -9,6 +9,7 @@ import {
 } from "../index.js";
 import { stripeConnector } from "./stripe.js";
 import { githubConnector } from "./github.js";
+import { gmailConnector } from "./gmail.js";
 import { googleDriveConnector } from "./googledrive.js";
 
 describe("internal connector operations", () => {
@@ -65,6 +66,38 @@ describe("internal connector operations", () => {
         delete process.env.HASNA_GOOGLE_DRIVE_CONNECTOR_DIR;
       } else {
         process.env.HASNA_GOOGLE_DRIVE_CONNECTOR_DIR = previousDir;
+      }
+    }
+  });
+
+  test("lists gmail profiles and normalized sync operations without network", async () => {
+    const previousDir = process.env.HASNA_GMAIL_CONNECTOR_DIR;
+    const configDir = join(tmpdir(), `connectors-gmail-${crypto.randomUUID()}`);
+    mkdirSync(join(configDir, "profiles", "andreihasnacom"), { recursive: true });
+    writeFileSync(join(configDir, "profiles", "maximstaris.json"), "{}");
+    process.env.HASNA_GMAIL_CONNECTOR_DIR = configDir;
+
+    try {
+      const operations = listConnectorOperations(gmailConnector).map((op) => op.name);
+      expect(operations).toContain("profiles.list");
+      expect(operations).toContain("messages.list");
+      expect(operations).toContain("messages.read");
+      expect(operations).toContain("messages.getRaw");
+      expect(operations).toContain("attachments.list");
+      expect(operations).toContain("attachments.download");
+      expect(operations).toContain("labels.list");
+      expect(operations).toContain("history.list");
+
+      const result = await executeConnectorOperation(gmailConnector, {
+        operation: "profiles.list",
+      });
+
+      expect(result).toEqual({ profiles: ["andreihasnacom", "maximstaris"] });
+    } finally {
+      if (previousDir === undefined) {
+        delete process.env.HASNA_GMAIL_CONNECTOR_DIR;
+      } else {
+        process.env.HASNA_GMAIL_CONNECTOR_DIR = previousDir;
       }
     }
   });

@@ -10,18 +10,18 @@ import {
 describe("builtins", () => {
   test("registers migrated internal connectors", () => {
     const names = INTERNAL_CONNECTOR_DEFINITIONS.map((definition) => definition.meta.name).sort();
-    expect(names).toEqual(["github", "googledrive", "imessage", "stripe"]);
+    expect(names).toEqual(["github", "gmail", "googledrive", "imessage", "stripe"]);
   });
 
   test("listInternalConnectorDefinitions returns all migrated connectors", () => {
     const definitions = listInternalConnectorDefinitions();
-    expect(definitions.length).toBe(4);
+    expect(definitions.length).toBe(5);
     expect(definitions.every((definition) => definition.meta.displayName.length > 0)).toBe(true);
   });
 
   test("listInternalConnectorCatalogEntries exposes catalog metadata", () => {
     const entries = listInternalConnectorCatalogEntries();
-    expect(entries.map((entry) => entry.name).sort()).toEqual(["github", "googledrive", "imessage", "stripe"]);
+    expect(entries.map((entry) => entry.name).sort()).toEqual(["github", "gmail", "googledrive", "imessage", "stripe"]);
     for (const entry of entries) {
       expect(entry.category).toBeTruthy();
       expect(Array.isArray(entry.tags)).toBe(true);
@@ -37,7 +37,7 @@ describe("builtins", () => {
 
   test("hasInternalConnectorDefinition distinguishes internal vs legacy-only connectors", () => {
     expect(hasInternalConnectorDefinition("github")).toBe(true);
-    expect(hasInternalConnectorDefinition("gmail")).toBe(false);
+    expect(hasInternalConnectorDefinition("gmail")).toBe(true);
     expect(hasInternalConnectorDefinition("nonexistent-xyz")).toBe(false);
   });
 

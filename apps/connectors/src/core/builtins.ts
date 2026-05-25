@@ -7,6 +7,7 @@ import {
   listConnectorDefinitions,
 } from "./registry.js";
 import { githubConnector } from "./connectors/github.js";
+import { gmailConnector } from "./connectors/gmail.js";
 import { googleDriveConnector } from "./connectors/googledrive.js";
 import { imessageConnector } from "./connectors/imessage.js";
 import { stripeConnector } from "./connectors/stripe.js";
@@ -18,6 +19,7 @@ import { stripeConnector } from "./connectors/stripe.js";
  * surface.
  */
 export const INTERNAL_CONNECTOR_DEFINITIONS: InternalConnectorDefinition<any>[] = [
+  gmailConnector,
   githubConnector,
   googleDriveConnector,
   imessageConnector,
