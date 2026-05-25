@@ -8,20 +8,20 @@ import {
 } from "./builtins.js";
 
 describe("builtins", () => {
-  test("registers github, stripe, and imessage internal connectors", () => {
+  test("registers migrated internal connectors", () => {
     const names = INTERNAL_CONNECTOR_DEFINITIONS.map((definition) => definition.meta.name).sort();
-    expect(names).toEqual(["github", "imessage", "stripe"]);
+    expect(names).toEqual(["github", "googledrive", "imessage", "stripe"]);
   });
 
   test("listInternalConnectorDefinitions returns all migrated connectors", () => {
     const definitions = listInternalConnectorDefinitions();
-    expect(definitions.length).toBe(3);
+    expect(definitions.length).toBe(4);
     expect(definitions.every((definition) => definition.meta.displayName.length > 0)).toBe(true);
   });
 
   test("listInternalConnectorCatalogEntries exposes catalog metadata", () => {
     const entries = listInternalConnectorCatalogEntries();
-    expect(entries.map((entry) => entry.name).sort()).toEqual(["github", "imessage", "stripe"]);
+    expect(entries.map((entry) => entry.name).sort()).toEqual(["github", "googledrive", "imessage", "stripe"]);
     for (const entry of entries) {
       expect(entry.category).toBeTruthy();
       expect(Array.isArray(entry.tags)).toBe(true);

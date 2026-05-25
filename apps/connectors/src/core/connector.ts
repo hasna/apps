@@ -118,7 +118,7 @@ export interface InternalConnectorDefinition<TContext = unknown>
 }
 
 const CONNECTOR_NAME_RE = /^[a-z0-9-]+$/;
-const OPERATION_NAME_RE = /^[a-z0-9:_-]+$/;
+const OPERATION_NAME_RE = /^[a-z0-9:._-]+$/;
 
 export function defineConnector<TContext = unknown>(
   definition: ConnectorDefinition<TContext>
