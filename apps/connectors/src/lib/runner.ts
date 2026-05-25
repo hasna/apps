@@ -244,7 +244,15 @@ export interface RunResult {
 export interface RunConnectorOperationArgs {
   connector: string;
   operation: string;
-  input?: Record<string, unknown>;
+  input?: Record<string, unknown> & {
+    /**
+     * Positional arguments for legacy connector command surfaces.
+     *
+     * Example: { args: ["MESSAGE_ID"], body: true } becomes
+     * `messages read MESSAGE_ID --body --format json`.
+     */
+    args?: Array<string | number | boolean>;
+  };
   profile?: string;
   timeoutMs?: number;
   parseJson?: boolean;
@@ -407,8 +415,13 @@ export function buildConnectorOperationArgs(
 
   commandArgs.push(...args.operation.split(".").filter(Boolean));
 
+  for (const positional of args.input?.args ?? []) {
+    commandArgs.push(String(positional));
+  }
+
   let hasFormat = false;
   for (const [key, value] of Object.entries(args.input ?? {})) {
+    if (key === "args") continue;
     if (value === undefined || value === null) continue;
     const flag = `--${key.replace(/_/g, "-").replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`)}`;
     if (flag === "--format" || flag === "--json") hasFormat = true;

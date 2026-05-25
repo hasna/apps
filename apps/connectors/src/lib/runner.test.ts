@@ -308,12 +308,53 @@ describe("Runner", () => {
       ]);
     });
 
+    test("places positional operation args before generated flags", () => {
+      expect(buildConnectorOperationArgs({
+        connector: "gmail",
+        profile: "andreihasnacom",
+        operation: "messages.read",
+        input: {
+          args: ["gmail-message-1"],
+          body: true,
+          html: true,
+        },
+      })).toEqual([
+        "--profile",
+        "andreihasnacom",
+        "messages",
+        "read",
+        "gmail-message-1",
+        "--body",
+        "--html",
+        "--format",
+        "json",
+      ]);
+    });
+
     test("does not force json format when caller opts out", () => {
       expect(buildConnectorOperationArgs({
         connector: "googledrive",
         operation: "files.list",
         parseJson: false,
       })).toEqual(["files", "list"]);
+    });
+
+    test("places explicit positional args before generated flags", () => {
+      expect(buildConnectorOperationArgs({
+        connector: "gmail",
+        operation: "messages.read",
+        input: {
+          args: ["msg-1"],
+          body: true,
+        },
+      })).toEqual([
+        "messages",
+        "read",
+        "msg-1",
+        "--body",
+        "--format",
+        "json",
+      ]);
     });
 
     test("runs internal connector operations and returns parsed data", async () => {
