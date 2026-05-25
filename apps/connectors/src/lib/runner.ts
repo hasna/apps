@@ -216,7 +216,7 @@ export function parseCommanderHelpOperations(
     // Commander prints real command rows with exactly two leading spaces.
     // Wrapped descriptions are indented much deeper and must not be parsed
     // as runnable commands (for example "queries)" on a continuation line).
-    const row = line.match(/^ {2}(\S.*?)(?: {2,}(.+))?$/);
+    const row = line.match(/^ {2}(?! )(\S.*?)(?: {2,}(.+))?$/);
     if (!row) continue;
 
     const usage = row[1].trim();
