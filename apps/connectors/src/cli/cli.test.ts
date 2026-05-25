@@ -946,4 +946,150 @@ describe("CLI", () => {
       expect(stdout).toContain("run");
     });
   });
+
+  describe("auth", () => {
+    const authKey = `sk-test-${process.pid}`;
+
+    afterEach(async () => {
+      const { rmSync, existsSync } = await import("fs");
+      const { join } = await import("path");
+      const { homedir } = await import("os");
+      const dir = join(homedir(), ".hasna", "connectors", "connect-anthropic");
+      if (existsSync(dir)) rmSync(dir, { recursive: true });
+    });
+
+    test("saves bearer token non-interactively with --key", async () => {
+      const { stdout, exitCode } = await run([
+        "auth",
+        "anthropic",
+        "--key",
+        authKey,
+        "--json",
+      ]);
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(data.connector).toBe("anthropic");
+      expect(data.authType).toBe("bearer");
+      expect(data.configured).toBe(true);
+    });
+
+    test("requires --key in non-interactive mode", async () => {
+      const { stdout, exitCode } = await run(["auth", "anthropic", "--json"]);
+      expect(exitCode).toBe(1);
+      const data = JSON.parse(stdout);
+      expect(data.error).toContain("TTY");
+    });
+
+    test("errors for unknown connector", async () => {
+      const { exitCode } = await run(["auth", "nonexistent-xyz-abc", "--json"]);
+      expect(exitCode).not.toBe(0);
+    });
+  });
+
+  describe("status", () => {
+    test("returns auth status summary as JSON", async () => {
+      const { stdout, exitCode } = await run("status --json");
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(data).toHaveProperty("configured");
+      expect(data).toHaveProperty("unconfigured");
+      expect(data).toHaveProperty("summary");
+      expect(Array.isArray(data.configured)).toBe(true);
+      expect(Array.isArray(data.unconfigured)).toBe(true);
+    });
+
+    test("includes globally configured connectors when present", async () => {
+      const { stdout, exitCode } = await run("status --json");
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      const all = [...data.configured, ...data.unconfigured];
+      for (const entry of all) {
+        expect(entry).toHaveProperty("name");
+        expect(entry).toHaveProperty("authType");
+        expect(entry).toHaveProperty("configured");
+        expect(["project", "global"]).toContain(entry.source);
+      }
+    });
+  });
+
+  describe("jobs", () => {
+    test("lists scheduled jobs as JSON", async () => {
+      const { stdout, exitCode } = await run("jobs list --json");
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(Array.isArray(data)).toBe(true);
+    });
+  });
+
+  describe("workflows", () => {
+    test("lists workflows as JSON", async () => {
+      const { stdout, exitCode } = await run("workflows list --json");
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(Array.isArray(data)).toBe(true);
+    });
+  });
+
+  describe("llm", () => {
+    test("reports LLM status as JSON", async () => {
+      const { stdout, exitCode } = await run("llm status --json");
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(typeof data.configured).toBe("boolean");
+    });
+
+    test("lists supported providers", async () => {
+      const { stdout, exitCode } = await run("llm providers --json");
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(Array.isArray(data)).toBe(true);
+      expect(data.length).toBeGreaterThan(0);
+      expect(data[0]).toHaveProperty("name");
+    });
+  });
+
+  describe("hot", () => {
+    test("returns hot connector rankings as JSON", async () => {
+      const { stdout, exitCode } = await run("hot --json");
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(Array.isArray(data)).toBe(true);
+    });
+  });
+
+  describe("list pagination", () => {
+    test("rejects invalid --limit values", async () => {
+      const { stdout, exitCode } = await run(["list", "--json", "--limit", "abc"]);
+      expect(exitCode).toBe(1);
+      const data = JSON.parse(stdout);
+      expect(data.error).toContain("--limit");
+    });
+  });
+
+  describe("promote and demote", () => {
+    test("promotes a known connector", async () => {
+      const { stdout, exitCode } = await run(["promote", "stripe"]);
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("promoted");
+    });
+
+    test("demotes a connector", async () => {
+      await run(["promote", "stripe"]);
+      const { stdout, exitCode } = await run(["demote", "stripe"]);
+      expect(exitCode).toBe(0);
+      expect(stdout.toLowerCase()).toMatch(/demoted|not promoted/);
+    });
+
+    test("errors when promoting unknown connector", async () => {
+      const { exitCode } = await run(["promote", "nonexistent-xyz-abc"]);
+      expect(exitCode).not.toBe(0);
+    });
+  });
+
+  describe("cloud", () => {
+    test("cloud command is registered in help", async () => {
+      const { stdout } = await run("--help");
+      expect(stdout).toContain("cloud");
+    });
+  });
 });

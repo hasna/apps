@@ -226,9 +226,10 @@ describe("auth", () => {
     const name2 = `${TEST_ID}save2`;
     const name3 = `${TEST_ID}save3`;
     const name4 = `${TEST_ID}save4`;
+    const name5 = `${TEST_ID}oauth-creds`;
 
     afterEach(() => {
-      cleanupTestConnectors(name1, name2, name3, name4);
+      cleanupTestConnectors(name1, name2, name3, name4, name5);
     });
 
     test("creates profile directory and saves key for new connector", async () => {
@@ -293,6 +294,22 @@ describe("auth", () => {
       );
       expect(content.apiKey).toBe("updated-key");
       expect(content.oldKey).toBe("old-value");
+    });
+
+    test("saves OAuth client credentials to credentials.json", async () => {
+      await saveApiKey(name5, "oauth-client-id", "clientId");
+      await saveApiKey(name5, "oauth-client-secret", "clientSecret");
+
+      const credentialsFile = join(testConfigDir(name5), "credentials.json");
+      expect(existsSync(credentialsFile)).toBe(true);
+
+      const creds = JSON.parse(readFileSync(credentialsFile, "utf-8"));
+      expect(creds.clientId).toBe("oauth-client-id");
+      expect(creds.clientSecret).toBe("oauth-client-secret");
+
+      const config = getOAuthConfig(name5);
+      expect(config.clientId).toBe("oauth-client-id");
+      expect(config.clientSecret).toBe("oauth-client-secret");
     });
   });
 

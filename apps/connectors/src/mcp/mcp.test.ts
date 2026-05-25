@@ -502,6 +502,97 @@ describe("MCP Server", () => {
       expect(data.success).toBe(true);
       expect(data.field).toBe("bearerToken");
     });
+
+    test("saves multiple OAuth fields at once", async () => {
+      const oauthName = `zzztest${process.pid}mcpoauth`;
+      const res = await callMcp("configure_auth", {
+        name: oauthName,
+        fields: {
+          clientId: "mcp-oauth-client-id",
+          clientSecret: "mcp-oauth-client-secret",
+        },
+      });
+      const data = parseContent(res);
+      expect(data.success).toBe(true);
+      expect(data.fields).toEqual(["clientId", "clientSecret"]);
+
+      const { readFileSync, existsSync, rmSync } = await import("fs");
+      const { join } = await import("path");
+      const { homedir } = await import("os");
+      const credsFile = join(homedir(), ".hasna", "connectors", `connect-${oauthName}`, "credentials.json");
+      expect(existsSync(credsFile)).toBe(true);
+      const creds = JSON.parse(readFileSync(credsFile, "utf-8"));
+      expect(creds.clientId).toBe("mcp-oauth-client-id");
+      expect(creds.clientSecret).toBe("mcp-oauth-client-secret");
+      rmSync(join(homedir(), ".hasna", "connectors", `connect-${oauthName}`), { recursive: true });
+    });
+
+    test("errors when neither key nor fields are provided", async () => {
+      const res = await callMcp("configure_auth", { name: authName1 });
+      expect(res.result?.isError).toBe(true);
+      const content = parseContent(res);
+      expect(String(content)).toContain("Provide either");
+    });
+  });
+
+  describe("connector_oauth", () => {
+    test("returns auth URL for oauth connector", async () => {
+      const res = await callMcp("connector_oauth", { name: "gmail" });
+      const data = parseContent(res);
+      expect(data.status).toBe("auth_required");
+      expect(data.authType).toBe("oauth");
+      expect(data.oauthUrl).toContain("/oauth/gmail/start");
+    });
+
+    test("errors for non-oauth connector", async () => {
+      const res = await callMcp("connector_oauth", { name: "stripe" });
+      expect(res.result?.isError).toBe(true);
+      expect(String(parseContent(res))).toContain("does not use OAuth");
+    });
+
+    test("errors for unknown connector", async () => {
+      const res = await callMcp("connector_oauth", { name: "nonexistent-xyz" });
+      expect(res.result?.isError).toBe(true);
+    });
+
+    test("reports already authenticated when valid tokens exist", async () => {
+      const { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } = await import("fs");
+      const { join } = await import("path");
+      const { homedir } = await import("os");
+
+      const profileDir = join(homedir(), ".hasna", "connectors", "connect-gmail", "profiles", "default");
+      const tokensFile = join(profileDir, "tokens.json");
+      const currentProfileFile = join(homedir(), ".hasna", "connectors", "connect-gmail", "current_profile");
+      const hadTokens = existsSync(tokensFile);
+      const previousTokens = hadTokens ? readFileSync(tokensFile, "utf-8") : null;
+      const hadCurrentProfile = existsSync(currentProfileFile);
+      const previousCurrentProfile = hadCurrentProfile
+        ? readFileSync(currentProfileFile, "utf-8")
+        : null;
+
+      mkdirSync(profileDir, { recursive: true });
+      writeFileSync(currentProfileFile, "default");
+      writeFileSync(
+        tokensFile,
+        JSON.stringify({
+          accessToken: "valid-access-token",
+          refreshToken: "valid-refresh-token",
+          expiresAt: Date.now() + 3600_000,
+        })
+      );
+
+      try {
+        const res = await callMcp("connector_oauth", { name: "gmail" });
+        const data = parseContent(res);
+        expect(data.status).toBe("already_authenticated");
+        expect(data.expiresIn).toBeTruthy();
+      } finally {
+        if (previousTokens !== null) writeFileSync(tokensFile, previousTokens);
+        else if (existsSync(tokensFile)) rmSync(tokensFile);
+        if (previousCurrentProfile !== null) writeFileSync(currentProfileFile, previousCurrentProfile);
+        else if (existsSync(currentProfileFile)) rmSync(currentProfileFile);
+      }
+    });
   });
 
   describe("list_categories", () => {
@@ -669,6 +760,120 @@ describe("MCP Server", () => {
       expect(data.connector).toBe("stripe");
       expect(data.success).toBe(true);
       expect(data.output).toContain("\"profile\"");
+    });
+  });
+
+  describe("get_llm_config", () => {
+    test("returns configured flag", async () => {
+      const res = await callMcp("get_llm_config", {});
+      const data = parseContent(res);
+      expect(typeof data.configured).toBe("boolean");
+    });
+  });
+
+  describe("list_agents", () => {
+    test("returns registered agents array", async () => {
+      const res = await callMcp("list_agents", {});
+      const data = parseContent(res);
+      expect(Array.isArray(data)).toBe(true);
+    });
+  });
+
+  describe("register_agent", () => {
+    test("registers a new agent", async () => {
+      const agentName = `zzztest${process.pid}mcpagent`;
+      const res = await callMcp("register_agent", { name: agentName });
+      const data = parseContent(res);
+      expect(data.name).toBe(agentName);
+      expect(data.id).toBeTruthy();
+    });
+  });
+
+  describe("list_jobs", () => {
+    test("returns scheduled jobs array", async () => {
+      const res = await callMcp("list_jobs", {});
+      const data = parseContent(res);
+      expect(Array.isArray(data)).toBe(true);
+    });
+  });
+
+  describe("list_workflows", () => {
+    test("returns workflows array", async () => {
+      const res = await callMcp("list_workflows", {});
+      const data = parseContent(res);
+      expect(Array.isArray(data)).toBe(true);
+    });
+  });
+
+  describe("rate budget tools", () => {
+    test("get_rate_budget returns budget status without consuming", async () => {
+      const res = await callMcp("get_rate_budget", {
+        agent_id: `zzztest${process.pid}rate`,
+        connector: "stripe",
+        limit: 100,
+      });
+      const data = parseContent(res);
+      expect(typeof data.budget).toBe("number");
+      expect(typeof data.remaining).toBe("number");
+    });
+
+    test("check_rate_budget consumes a budget unit", async () => {
+      const agentId = `zzztest${process.pid}rate2`;
+      const res = await callMcp("check_rate_budget", {
+        agent_id: agentId,
+        connector: "stripe",
+        limit: 100,
+      });
+      const data = parseContent(res);
+      expect(data.used).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  describe("ranking tools", () => {
+    test("get_hot_connectors returns usage array", async () => {
+      const res = await callMcp("get_hot_connectors", { limit: 5, days: 7 });
+      const data = parseContent(res);
+      expect(Array.isArray(data)).toBe(true);
+    });
+
+    test("promote_connector succeeds for known connector", async () => {
+      const res = await callMcp("promote_connector", { name: "stripe" });
+      const data = parseContent(res);
+      expect(data.success).toBe(true);
+      expect(data.connector).toBe("stripe");
+    });
+
+    test("demote_connector handles promoted connector", async () => {
+      await callMcp("promote_connector", { name: "figma" });
+      const res = await callMcp("demote_connector", { name: "figma" });
+      const data = parseContent(res);
+      expect(data.connector).toBe("figma");
+      expect(typeof data.success).toBe("boolean");
+    });
+
+    test("promote_connector errors for unknown connector", async () => {
+      const res = await callMcp("promote_connector", { name: "nonexistent-xyz" });
+      expect(res.result?.isError).toBe(true);
+    });
+  });
+
+  describe("feedback tools", () => {
+    test("send_feedback saves a message", async () => {
+      const res = await callMcp("send_feedback", {
+        message: "Test feedback from MCP",
+        category: "general",
+      });
+      const text = parseContent(res);
+      expect(String(text)).toContain("Feedback saved");
+    });
+  });
+
+  describe("job lookup tools", () => {
+    test("get_latest_job_run errors for unknown job", async () => {
+      const res = await callMcp("get_latest_job_run", { name: "nonexistent-job-xyz" });
+      expect(res.result?.isError).toBe(true);
+      const data = parseContent(res);
+      expect(data.error).toContain("not found");
     });
   });
 });
