@@ -144,6 +144,7 @@ sources
     deleteBehavior: string;
     json?: boolean;
   }) => {
+    return (async () => {
     const machine = getCurrentMachine();
     const destinationId = opts.destinationSource ? requireId(opts.destinationSource, "sources") : undefined;
     if (destinationId) {
@@ -162,7 +163,7 @@ sources
       process.exit(1);
     }
 
-    const profiles = opts.allProfiles ? listGoogleDriveProfiles() : opts.profile;
+    const profiles = opts.allProfiles ? await listGoogleDriveProfiles() : opts.profile;
     if (!profiles.length) {
       console.error(chalk.red(opts.allProfiles
         ? "No Google Drive profiles found. Run: connectors auth googledrive"
@@ -201,14 +202,18 @@ sources
     for (const source of created) {
       console.log(chalk.green(`✓ Google Drive source added: ${source.id}`));
     }
+    })().catch((error) => {
+      console.error(chalk.red((error as Error).message));
+      process.exit(1);
+    });
   });
 
 sources
   .command("google-drive-profiles")
   .description("List Google Drive profiles available through connectors auth")
   .option("--json", "Output as JSON")
-  .action((opts: { json?: boolean }) => {
-    const profiles = listGoogleDriveProfiles();
+  .action(async (opts: { json?: boolean }) => {
+    const profiles = await listGoogleDriveProfiles();
     if (opts.json) { console.log(JSON.stringify(profiles, null, 2)); return; }
     if (!profiles.length) {
       console.log(chalk.dim("No Google Drive profiles found. Run: connectors auth googledrive"));

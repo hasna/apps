@@ -78,7 +78,7 @@ registerTool("add_source", "Add a local folder or S3 bucket as an indexed source
 });
 
 registerTool("list_google_drive_profiles", "List Google Drive profiles available through connectors auth", {}, async () => {
-  return { content: [{ type: "text", text: JSON.stringify(listGoogleDriveProfiles(), null, 2) }] };
+  return { content: [{ type: "text", text: JSON.stringify(await listGoogleDriveProfiles(), null, 2) }] };
 });
 
 registerTool("add_google_drive_source", "Add a Google Drive source that syncs into the default S3 source or a configured local/S3 destination", {

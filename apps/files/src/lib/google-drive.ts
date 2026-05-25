@@ -71,7 +71,7 @@ export function setGoogleDriveStorageAdapterForTests(adapter?: Partial<GoogleDri
   };
 }
 
-export function listGoogleDriveProfiles(): string[] {
+export function listGoogleDriveProfiles(): Promise<string[]> {
   return listGoogleDriveProfilesFromConnectorConfig();
 }
 

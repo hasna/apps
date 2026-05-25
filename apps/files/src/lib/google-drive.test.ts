@@ -27,7 +27,10 @@ const {
 } = await import("./google-drive.js");
 const { listGoogleDriveImportedObjects } = await import("../db/google-drive.js");
 const { loadConfig, saveConfig } = await import("./config.js");
-const { GOOGLE_FOLDER_MIME } = await import("./google-drive-client.js");
+const {
+  GOOGLE_FOLDER_MIME,
+  createConnectorProfileGoogleDriveClient,
+} = await import("./google-drive-client.js");
 
 type FilePage = { files: GoogleDriveApiFile[]; nextPageToken?: string };
 type DrivePage = { drives: GoogleDriveApiSharedDrive[]; nextPageToken?: string };
@@ -76,6 +79,41 @@ afterAll(() => {
 });
 
 describe("Google Drive discovery", () => {
+  test("uses the connectors SDK for profile-scoped Drive listing", async () => {
+    const previousToken = process.env.GOOGLE_ACCESS_TOKEN;
+    const previousFetch = globalThis.fetch;
+    const requests: string[] = [];
+    process.env.GOOGLE_ACCESS_TOKEN = "test-access-token";
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(String(input));
+      expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer test-access-token");
+      return new Response(JSON.stringify({
+        files: [file("sdk-1", "sdk.txt", undefined, "text/plain")],
+        nextPageToken: "next",
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    try {
+      const client = createConnectorProfileGoogleDriveClient("work");
+      const page = await client.listFiles({ pageSize: 25, pageToken: "first" });
+
+      expect(page.files[0]?.id).toBe("sdk-1");
+      expect(page.nextPageToken).toBe("next");
+      expect(requests[0]).toContain("pageSize=25");
+      expect(requests[0]).toContain("pageToken=first");
+    } finally {
+      if (previousToken === undefined) {
+        delete process.env.GOOGLE_ACCESS_TOKEN;
+      } else {
+        process.env.GOOGLE_ACCESS_TOKEN = previousToken;
+      }
+      globalThis.fetch = previousFetch;
+    }
+  });
+
   test("paginates My Drive and shared drives while preserving folder paths", async () => {
     const machine = getCurrentMachine();
     const googleSource = createSource({
