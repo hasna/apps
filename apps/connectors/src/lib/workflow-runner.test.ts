@@ -1,7 +1,12 @@
-import { describe, test, expect, mock } from "bun:test";
+import { describe, test, expect, mock, afterEach } from "bun:test";
 import { EventEmitter } from "events";
+import { spawn as nodeSpawn } from "node:child_process";
+import {
+  runWorkflow,
+  __setSpawnForTests,
+  __resetSpawnForTests,
+} from "./workflow-runner.js";
 
-// Create a factory for fake child processes
 function makeFakeProc(stdout: string, stderr: string, exitCode: number, delay = 5) {
   const proc = new EventEmitter() as any;
   proc.stdout = new EventEmitter();
@@ -17,16 +22,13 @@ function makeFakeProc(stdout: string, stderr: string, exitCode: number, delay = 
   return proc;
 }
 
-// Mock child_process.spawn so workflow-runner uses our fake process
-const spawnMock = mock((_cmd: string, _args: string[], _opts: any) =>
-  makeFakeProc('{"result":"ok"}', "", 0)
-);
+function setSpawnMock(implementation: (...args: any[]) => any) {
+  __setSpawnForTests(implementation as typeof nodeSpawn);
+}
 
-mock.module("child_process", () => ({
-  spawn: spawnMock,
-}));
-
-const { runWorkflow } = await import("./workflow-runner.js");
+afterEach(() => {
+  __resetSpawnForTests();
+});
 
 describe("runWorkflow", () => {
   test("returns success with empty steps", async () => {
@@ -45,7 +47,7 @@ describe("runWorkflow", () => {
   });
 
   test("runs a single step and returns output", async () => {
-    spawnMock.mockImplementation(() => makeFakeProc('{"items":[1,2,3]}', "", 0));
+    setSpawnMock(() => makeFakeProc('{"items":[1,2,3]}', "", 0));
     const result = await runWorkflow({
       id: "wf-one",
       name: "one-step",
@@ -64,7 +66,7 @@ describe("runWorkflow", () => {
 
   test("stops on first failing step", async () => {
     let call = 0;
-    spawnMock.mockImplementation(() => {
+    setSpawnMock(() => {
       call++;
       if (call === 1) return makeFakeProc("error output", "", 1);
       return makeFakeProc("should not reach", "", 0);
@@ -80,12 +82,12 @@ describe("runWorkflow", () => {
       created_at: new Date().toISOString(),
     });
     expect(result.success).toBe(false);
-    expect(result.steps).toHaveLength(1); // stopped after first failure
+    expect(result.steps).toHaveLength(1);
   });
 
   test("passes previous step output as --input to next step", async () => {
     const calls: string[][] = [];
-    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+    setSpawnMock((_cmd: string, args: string[]) => {
       calls.push(args);
       return makeFakeProc('{"data":"step-output"}', "", 0);
     });
@@ -99,17 +101,15 @@ describe("runWorkflow", () => {
       enabled: true,
       created_at: new Date().toISOString(),
     });
-    // Second step should include --input flag with first step's output
     expect(calls.length).toBe(2);
-    const secondArgs = calls[1];
-    expect(secondArgs).toContain("--input");
+    expect(calls[1]).toContain("--input");
   });
 
   test("handles step with no previous output (no --input added)", async () => {
     const calls: string[][] = [];
-    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+    setSpawnMock((_cmd: string, args: string[]) => {
       calls.push(args);
-      return makeFakeProc("", "", 0); // empty output
+      return makeFakeProc("", "", 0);
     });
     await runWorkflow({
       id: "wf-empty-out",
@@ -121,13 +121,11 @@ describe("runWorkflow", () => {
       enabled: true,
       created_at: new Date().toISOString(),
     });
-    // Second step should NOT include --input since first output is empty
-    const secondArgs = calls[1];
-    expect(secondArgs).not.toContain("--input");
+    expect(calls[1]).not.toContain("--input");
   });
 
   test("proc error event resolves with exit code 1", async () => {
-    spawnMock.mockImplementation(() => {
+    setSpawnMock(() => {
       const proc = new EventEmitter() as any;
       proc.stdout = new EventEmitter();
       proc.stderr = new EventEmitter();

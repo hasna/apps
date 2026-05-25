@@ -5,9 +5,23 @@
  * injected into its args as --input <previous_output>.
  */
 
-import { spawn } from "child_process";
+import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from "child_process";
 import { maybeStrip } from "./strip.js";
 import type { ConnectorWorkflow, WorkflowStep } from "../db/workflows.js";
+
+type SpawnFn = typeof nodeSpawn;
+
+let spawnImpl: SpawnFn = nodeSpawn;
+
+/** @internal Test hook for substituting process spawning. */
+export function __setSpawnForTests(fn: SpawnFn): void {
+  spawnImpl = fn;
+}
+
+/** @internal Restore default process spawning after tests. */
+export function __resetSpawnForTests(): void {
+  spawnImpl = nodeSpawn;
+}
 
 export interface WorkflowStepResult {
   step: number;
@@ -36,7 +50,7 @@ async function runStep(
       args.push("--input", previousOutput.trim().slice(0, 4096)); // cap at 4KB
     }
     const cmdArgs = ["run", step.connector, step.command, ...args, "--format", "json"];
-    const proc = spawn("connectors", cmdArgs, { shell: false });
+    const proc = spawnImpl("connectors", cmdArgs, { shell: false }) as ChildProcessWithoutNullStreams;
     let output = "";
     proc.stdout.on("data", (d: Buffer) => { output += d.toString(); });
     proc.stderr.on("data", (d: Buffer) => { output += d.toString(); });
