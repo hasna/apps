@@ -2,11 +2,13 @@ import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { Readable } from "stream";
 import type {
   GoogleDriveApiFile,
   GoogleDriveApiSharedDrive,
   GoogleDriveClient,
   GoogleDriveDownloadedFile,
+  GoogleDriveDownloadedStream,
   GoogleDriveListFilesOptions,
   GoogleDriveListSharedDrivesOptions,
 } from "./google-drive-client.js";
@@ -61,6 +63,16 @@ class MockDriveClient implements GoogleDriveClient {
       data: new TextEncoder().encode(`data:${file.id}`).buffer,
       filename: file.name,
       mimeType: file.mimeType,
+    };
+  }
+
+  async downloadFileStream(file: GoogleDriveApiFile): Promise<GoogleDriveDownloadedStream> {
+    this.downloaded.push(`stream:${file.id}`);
+    return {
+      body: Readable.from([Buffer.from(`stream:${file.id}`)]),
+      filename: file.name,
+      mimeType: file.mimeType,
+      size: Number(file.size ?? 0),
     };
   }
 }
@@ -135,6 +147,40 @@ describe("Google Drive discovery", () => {
       expect(downloaded.filename).toBe("MOIC4842.MP4");
       expect(downloaded.mimeType).toBe("video/mp4");
       expect(downloaded.data.byteLength).toBe(0);
+    } finally {
+      if (previousToken === undefined) {
+        delete process.env.GOOGLE_ACCESS_TOKEN;
+      } else {
+        process.env.GOOGLE_ACCESS_TOKEN = previousToken;
+      }
+      globalThis.fetch = previousFetch;
+    }
+  });
+
+  test("streams Drive media responses without base64 buffering", async () => {
+    const previousToken = process.env.GOOGLE_ACCESS_TOKEN;
+    const previousFetch = globalThis.fetch;
+    process.env.GOOGLE_ACCESS_TOKEN = "test-access-token";
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toContain("/files/large-video");
+      expect(String(input)).toContain("alt=media");
+      expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer test-access-token");
+      return new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { "content-type": "video/mp4", "content-length": "3" },
+      });
+    }) as typeof fetch;
+
+    try {
+      const client = createConnectorProfileGoogleDriveClient("work");
+      const downloaded = await client.downloadFileStream!(file("large-video", "EUROFABEIQUE_FINAL.mp4", undefined, "video/mp4"));
+      const chunks: Buffer[] = [];
+      for await (const chunk of downloaded.body) chunks.push(Buffer.from(chunk as Uint8Array));
+
+      expect(downloaded.filename).toBe("EUROFABEIQUE_FINAL.mp4");
+      expect(downloaded.mimeType).toBe("video/mp4");
+      expect(downloaded.size).toBe(10);
+      expect(Buffer.concat(chunks)).toEqual(Buffer.from([1, 2, 3]));
     } finally {
       if (previousToken === undefined) {
         delete process.env.GOOGLE_ACCESS_TOKEN;
@@ -361,6 +407,77 @@ describe("Google Drive sync", () => {
       storage_key: "imports/google-drive/work/my-drive/report (doc-1).txt",
       s3_key: "imports/google-drive/work/my-drive/report (doc-1).txt",
       file_record_id: indexed[0]?.id,
+    });
+  });
+
+  test("streams large Drive binaries to S3 without calling buffered download", async () => {
+    const machine = getCurrentMachine();
+    const s3Source = createSource({
+      name: "Files bucket",
+      type: "s3",
+      bucket: "files-bucket",
+      prefix: "imports",
+      region: "us-east-1",
+      config: {},
+      machine_id: machine.id,
+    });
+    const googleSource = createSource({
+      name: "Drive",
+      type: "google_drive",
+      machine_id: machine.id,
+      config: {
+        profile: "work",
+        include_my_drive: true,
+        include_all_shared_drives: false,
+        destination_source_id: s3Source.id,
+        delete_behavior: "ignore",
+      },
+    });
+    const uploads: Array<{ key: string; contentLength?: number; bodyWasBuffer: boolean; data: string }> = [];
+    setGoogleDriveStorageAdapterForTests({
+      uploadS3: async (_source, body, key, _contentType, contentLength) => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of body as NodeJS.ReadableStream) chunks.push(Buffer.from(chunk as Uint8Array));
+        uploads.push({
+          key,
+          contentLength,
+          bodyWasBuffer: Buffer.isBuffer(body),
+          data: Buffer.concat(chunks).toString("utf8"),
+        });
+        return key;
+      },
+    });
+    const largeFile = file("large-video", "EUROFABEIQUE_FINAL.mp4", undefined, "video/mp4", {
+      size: "19344300537",
+      md5Checksum: "drive-md5",
+      version: "9",
+    });
+    const client = new MockDriveClient(() => ({ files: [largeFile] }));
+    client.downloadFile = async () => {
+      throw new Error("buffered download must not be used for large S3 imports");
+    };
+    setGoogleDriveClientFactoryForTests(() => client);
+
+    const stats = await syncGoogleDriveSource(googleSource);
+
+    expect(stats).toMatchObject({ added: 1, updated: 0, deleted: 0, errors: 0 });
+    expect(client.downloaded).toEqual(["stream:large-video"]);
+    expect(uploads).toEqual([{
+      key: "imports/google-drive/work/my-drive/EUROFABEIQUE_FINAL (large-video).mp4",
+      contentLength: 19344300537,
+      bodyWasBuffer: false,
+      data: "stream:large-video",
+    }]);
+    const indexed = listFiles({ source_id: s3Source.id });
+    expect(indexed[0]).toMatchObject({
+      path: "imports/google-drive/work/my-drive/EUROFABEIQUE_FINAL (large-video).mp4",
+      size: 19344300537,
+      hash: "drive-md5",
+    });
+    expect(listGoogleDriveImportedObjects(googleSource.id)[0]).toMatchObject({
+      file_id: "large-video",
+      size: 19344300537,
+      hash: "drive-md5",
     });
   });
 

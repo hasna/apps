@@ -1,5 +1,6 @@
-import { mkdirSync, writeFileSync } from "fs";
+import { createWriteStream, mkdirSync, writeFileSync } from "fs";
 import { basename, dirname, extname, join, posix } from "path";
+import { pipeline } from "stream/promises";
 import { lookup as mimeLookup } from "mime-types";
 import { getCurrentMachine } from "../db/machines.js";
 import { markFileDeletedById, upsertFile } from "../db/files.js";
@@ -25,6 +26,7 @@ import {
   type GoogleDriveApiFile,
   type GoogleDriveClient,
   type GoogleDriveDownloadedFile,
+  type GoogleDriveDownloadedStream,
 } from "./google-drive-client.js";
 import type {
   GoogleDriveConfig,
@@ -38,12 +40,14 @@ import type {
 } from "../types/index.js";
 
 const DRIVE_FIELDS = "nextPageToken,files(id,name,mimeType,size,modifiedTime,parents,version,md5Checksum)";
+const STREAM_TO_S3_THRESHOLD_BYTES = 64 * 1024 * 1024;
 
 type GoogleDriveStorageType = "s3" | "local";
 
 type GoogleDriveStorageAdapter = {
   uploadS3: typeof uploadBufferToS3;
   writeLocal: (source: Source, relativePath: string, data: Buffer) => Promise<string>;
+  writeLocalStream: (source: Source, relativePath: string, body: NodeJS.ReadableStream) => Promise<string>;
 };
 
 let clientFactory: (profile: string) => GoogleDriveClient = createConnectorProfileGoogleDriveClient;
@@ -55,6 +59,13 @@ let storageAdapter: GoogleDriveStorageAdapter = {
     const localPath = join(source.path, relativePath);
     mkdirSync(dirname(localPath), { recursive: true });
     writeFileSync(localPath, data);
+    return relativePath;
+  },
+  writeLocalStream: async (source, relativePath, body) => {
+    if (!source.path) throw new Error("Local destination source missing path");
+    const localPath = join(source.path, relativePath);
+    mkdirSync(dirname(localPath), { recursive: true });
+    await pipeline(body, createWriteStream(localPath));
     return relativePath;
   },
 };
@@ -77,6 +88,13 @@ export function setGoogleDriveStorageAdapterForTests(adapter?: Partial<GoogleDri
       const localPath = join(source.path, relativePath);
       mkdirSync(dirname(localPath), { recursive: true });
       writeFileSync(localPath, data);
+      return relativePath;
+    }),
+    writeLocalStream: adapter?.writeLocalStream ?? (async (source, relativePath, body) => {
+      if (!source.path) throw new Error("Local destination source missing path");
+      const localPath = join(source.path, relativePath);
+      mkdirSync(dirname(localPath), { recursive: true });
+      await pipeline(body, createWriteStream(localPath));
       return relativePath;
     }),
   };
@@ -219,22 +237,17 @@ export async function syncGoogleDriveSource(source: Source): Promise<IndexStats>
         const existing = getGoogleDriveImportedObject(source.id, item.drive_id, item.id);
         if (existing && !shouldImport(config, item, existing, destination.source.id, destination.storage_type)) continue;
 
-        const downloaded = await downloadOrArchiveGoogleDriveItem(client, item, config);
-        const importedName = basename(downloaded.filename);
-        const importedPath = buildImportedPath(config, item, importedName);
-        const contentType = downloaded.mimeType || ((mimeLookup(downloaded.filename) || item.mime || "application/octet-stream") as string);
-        const data = Buffer.from(downloaded.data);
-        const storageKey = await writeToDestination(destination.source, destination.storage_type, importedPath, data, contentType);
+        const importResult = await importGoogleDriveItem(client, item, config, destination.source, destination.storage_type);
         const fileRecord = upsertFile({
           id: existing?.file_record_id,
           source_id: destination.source.id,
           machine_id: machine.id,
-          path: storageKey,
-          name: importedName,
-          ext: extname(importedName).toLowerCase(),
-          size: data.byteLength,
-          mime: contentType,
-          hash: item.hash ?? hashBuffer(data),
+          path: importResult.storageKey,
+          name: importResult.importedName,
+          ext: extname(importResult.importedName).toLowerCase(),
+          size: importResult.size,
+          mime: importResult.contentType,
+          hash: importResult.hash,
           status: "active",
           modified_at: item.modified_at,
         });
@@ -245,17 +258,17 @@ export async function syncGoogleDriveSource(source: Source): Promise<IndexStats>
           file_id: item.id,
           profile: config.profile,
           parent_id: item.parent_id,
-          path: importedPath,
-          name: importedName,
-          mime: contentType,
-          size: data.byteLength,
+          path: importResult.importedPath,
+          name: importResult.importedName,
+          mime: importResult.contentType,
+          size: importResult.size,
           modified_at: item.modified_at,
           version: item.version,
-          hash: item.hash,
+          hash: importResult.hash,
           storage_type: destination.storage_type,
-          storage_key: storageKey,
+          storage_key: importResult.storageKey,
           destination_source_id: destination.source.id,
-          s3_key: destination.storage_type === "s3" ? storageKey : "",
+          s3_key: destination.storage_type === "s3" ? importResult.storageKey : "",
           file_record_id: fileRecord.id,
           deleted: false,
           last_imported_at: new Date().toISOString(),
@@ -331,6 +344,96 @@ async function writeToDestination(
     return storageAdapter.uploadS3(source, data, key, contentType, data.byteLength);
   }
   return storageAdapter.writeLocal(source, importedPath, data);
+}
+
+async function importGoogleDriveItem(
+  client: GoogleDriveClient,
+  item: GoogleDriveItem,
+  config: GoogleDriveConfig,
+  destinationSource: Source,
+  storageType: GoogleDriveStorageType,
+): Promise<{
+  importedName: string;
+  importedPath: string;
+  contentType: string;
+  size: number;
+  hash?: string;
+  storageKey: string;
+}> {
+  if (shouldStreamGoogleDriveItem(client, item, storageType)) {
+    const downloaded = await client.downloadFileStream!(toApiFile(item), config.export_formats);
+    return importGoogleDriveStream(destinationSource, storageType, item, config, downloaded);
+  }
+
+  const downloaded = await downloadOrArchiveGoogleDriveItem(client, item, config);
+  const importedName = basename(downloaded.filename);
+  const importedPath = buildImportedPath(config, item, importedName);
+  const contentType = downloaded.mimeType || ((mimeLookup(downloaded.filename) || item.mime || "application/octet-stream") as string);
+  const data = Buffer.from(downloaded.data);
+  const storageKey = await writeToDestination(destinationSource, storageType, importedPath, data, contentType);
+  return {
+    importedName,
+    importedPath,
+    contentType,
+    size: data.byteLength,
+    hash: item.hash ?? hashBuffer(data),
+    storageKey,
+  };
+}
+
+function shouldStreamGoogleDriveItem(
+  client: GoogleDriveClient,
+  item: GoogleDriveItem,
+  storageType: GoogleDriveStorageType,
+): boolean {
+  return storageType === "s3"
+    && typeof client.downloadFileStream === "function"
+    && !item.mime.startsWith("application/vnd.google-apps.")
+    && item.size >= STREAM_TO_S3_THRESHOLD_BYTES;
+}
+
+async function importGoogleDriveStream(
+  source: Source,
+  storageType: GoogleDriveStorageType,
+  item: GoogleDriveItem,
+  config: GoogleDriveConfig,
+  downloaded: GoogleDriveDownloadedStream,
+): Promise<{
+  importedName: string;
+  importedPath: string;
+  contentType: string;
+  size: number;
+  hash?: string;
+  storageKey: string;
+}> {
+  const importedName = basename(downloaded.filename);
+  const importedPath = buildImportedPath(config, item, importedName);
+  const contentType = downloaded.mimeType || ((mimeLookup(downloaded.filename) || item.mime || "application/octet-stream") as string);
+  const size = downloaded.size ?? item.size;
+  const storageKey = await writeStreamToDestination(source, storageType, importedPath, downloaded.body, contentType, size);
+  return {
+    importedName,
+    importedPath,
+    contentType,
+    size,
+    hash: item.hash,
+    storageKey,
+  };
+}
+
+async function writeStreamToDestination(
+  source: Source,
+  storageType: GoogleDriveStorageType,
+  importedPath: string,
+  body: NodeJS.ReadableStream,
+  contentType: string,
+  contentLength?: number,
+): Promise<string> {
+  if (storageType === "s3") {
+    const key = buildStorageKey(source, importedPath);
+    return storageAdapter.uploadS3(source, body as Parameters<typeof uploadBufferToS3>[1], key, contentType, contentLength);
+  }
+  return storageAdapter.writeLocalStream(source, importedPath, body);
 }
 
 async function getIncludedSharedDrives(source: Source, client: GoogleDriveClient): Promise<GoogleDriveSharedDrive[]> {
