@@ -318,22 +318,76 @@ describe("Google Drive sync", () => {
     expect(stats).toMatchObject({ added: 1, updated: 0, deleted: 0, errors: 0 });
     expect(uploads).toEqual([{
       source: s3Source.id,
-      key: "imports/google-drive/work/my-drive/report.txt",
+      key: "imports/google-drive/work/my-drive/report (doc-1).txt",
       data: "data:doc-1",
     }]);
     const indexed = listFiles({ source_id: s3Source.id });
     expect(indexed).toHaveLength(1);
-    expect(indexed[0]?.path).toBe("imports/google-drive/work/my-drive/report.txt");
+    expect(indexed[0]?.path).toBe("imports/google-drive/work/my-drive/report (doc-1).txt");
     expect(indexed[0]?.source_id).toBe(s3Source.id);
 
     const imports = listGoogleDriveImportedObjects(googleSource.id);
     expect(imports[0]).toMatchObject({
       destination_source_id: s3Source.id,
       storage_type: "s3",
-      storage_key: "imports/google-drive/work/my-drive/report.txt",
-      s3_key: "imports/google-drive/work/my-drive/report.txt",
+      storage_key: "imports/google-drive/work/my-drive/report (doc-1).txt",
+      s3_key: "imports/google-drive/work/my-drive/report (doc-1).txt",
       file_record_id: indexed[0]?.id,
     });
+  });
+
+  test("uses Drive file IDs in path-based storage keys so duplicate filenames do not collide", async () => {
+    const machine = getCurrentMachine();
+    const s3Source = createSource({
+      name: "Files bucket",
+      type: "s3",
+      bucket: "files-bucket",
+      region: "us-east-1",
+      config: {},
+      machine_id: machine.id,
+    });
+    const googleSource = createSource({
+      name: "Drive",
+      type: "google_drive",
+      machine_id: machine.id,
+      config: {
+        profile: "work",
+        include_my_drive: true,
+        include_all_shared_drives: false,
+        destination_source_id: s3Source.id,
+        delete_behavior: "ignore",
+      },
+    });
+    const uploads: string[] = [];
+    setGoogleDriveStorageAdapterForTests({
+      uploadS3: async (_source, _body, key) => {
+        uploads.push(key);
+        return key;
+      },
+    });
+    setGoogleDriveClientFactoryForTests(() => new MockDriveClient(() => ({
+      files: [
+        file("invoice-a", "Invoice.pdf", undefined, "application/pdf"),
+        file("invoice-b", "Invoice.pdf", undefined, "application/pdf"),
+      ],
+    })));
+
+    const stats = await syncGoogleDriveSource(googleSource);
+
+    expect(stats).toMatchObject({ added: 2, updated: 0, deleted: 0, errors: 0 });
+    expect(uploads).toEqual([
+      "google-drive/work/my-drive/Invoice (invoice-a).pdf",
+      "google-drive/work/my-drive/Invoice (invoice-b).pdf",
+    ]);
+    expect(new Set(uploads).size).toBe(2);
+    expect(listFiles({ source_id: s3Source.id }).map((item) => item.path).sort()).toEqual([
+      "google-drive/work/my-drive/Invoice (invoice-a).pdf",
+      "google-drive/work/my-drive/Invoice (invoice-b).pdf",
+    ]);
+    expect(listGoogleDriveImportedObjects(googleSource.id).map((item) => item.s3_key).sort()).toEqual([
+      "google-drive/work/my-drive/Invoice (invoice-a).pdf",
+      "google-drive/work/my-drive/Invoice (invoice-b).pdf",
+    ]);
   });
 
   test("skips unchanged Drive files and updates changed revisions on repeated S3 syncs", async () => {
@@ -384,8 +438,8 @@ describe("Google Drive sync", () => {
     expect(await syncGoogleDriveSource(googleSource)).toMatchObject({ added: 0, updated: 1, errors: 0 });
 
     expect(uploads).toEqual([
-      "google-drive/work/my-drive/report.txt",
-      "google-drive/work/my-drive/report.txt",
+      "google-drive/work/my-drive/report (doc-1).txt",
+      "google-drive/work/my-drive/report (doc-1).txt",
     ]);
     expect(listGoogleDriveImportedObjects(googleSource.id)[0]).toMatchObject({
       hash: "hash-2",
@@ -438,12 +492,12 @@ describe("Google Drive sync", () => {
     shouldFail = false;
     expect(await syncGoogleDriveSource(googleSource)).toMatchObject({ added: 1, updated: 0, errors: 0 });
     expect(uploads).toEqual([
-      "google-drive/work/my-drive/resume.txt",
-      "google-drive/work/my-drive/resume.txt",
+      "google-drive/work/my-drive/resume (doc-1).txt",
+      "google-drive/work/my-drive/resume (doc-1).txt",
     ]);
     expect(listGoogleDriveImportedObjects(googleSource.id)[0]).toMatchObject({
       file_id: "doc-1",
-      storage_key: "google-drive/work/my-drive/resume.txt",
+      storage_key: "google-drive/work/my-drive/resume (doc-1).txt",
     });
   });
 
@@ -473,11 +527,11 @@ describe("Google Drive sync", () => {
     setGoogleDriveClientFactoryForTests(() => new MockDriveClient(() => ({ files })));
 
     await syncGoogleDriveSource(googleSource);
-    const storedPath = join(localRoot, "google-drive/personal/my-drive/todo.txt");
+    const storedPath = join(localRoot, "google-drive/personal/my-drive/todo (doc-1).txt");
     expect(existsSync(storedPath)).toBe(true);
     expect(readFileSync(storedPath, "utf8")).toBe("data:doc-1");
     const indexed = listFiles({ source_id: localSource.id });
-    expect(indexed[0]?.path).toBe("google-drive/personal/my-drive/todo.txt");
+    expect(indexed[0]?.path).toBe("google-drive/personal/my-drive/todo (doc-1).txt");
 
     files = [];
     const deleteStats = await syncGoogleDriveSource(googleSource);
@@ -487,7 +541,7 @@ describe("Google Drive sync", () => {
     const imports = listGoogleDriveImportedObjects(googleSource.id);
     expect(imports[0]).toMatchObject({
       storage_type: "local",
-      storage_key: "google-drive/personal/my-drive/todo.txt",
+      storage_key: "google-drive/personal/my-drive/todo (doc-1).txt",
       destination_source_id: localSource.id,
       deleted: true,
     });
@@ -521,7 +575,7 @@ describe("Google Drive sync", () => {
 
     await syncGoogleDriveSource(googleSource);
 
-    expect(listFiles({ source_id: localSource.id })[0]?.path).toBe("google-drive/personal/my-drive/configured.txt");
+    expect(listFiles({ source_id: localSource.id })[0]?.path).toBe("google-drive/personal/my-drive/configured (doc-1).txt");
   });
 });
 

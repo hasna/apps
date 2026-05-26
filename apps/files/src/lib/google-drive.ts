@@ -526,13 +526,20 @@ function buildImportedPath(config: GoogleDriveConfig, item: GoogleDriveItem, imp
     return posix.join("google-drive", safePathSegment(config.profile), safePathSegment(item.drive_id), item.id, importedName);
   }
 
-  const itemPath = item.path === item.name ? importedName : posix.join(dirname(item.path), importedName);
+  const storageName = appendDriveFileId(importedName, item.id);
+  const itemPath = item.path === item.name ? storageName : posix.join(dirname(item.path), storageName);
   const driveSegment = item.drive_id === "my-drive" ? "my-drive" : safePathSegment(item.drive_name || item.drive_id);
   return posix.join("google-drive", safePathSegment(config.profile), driveSegment, itemPath);
 }
 
 function safePathSegment(value: string): string {
   return value.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").replace(/\s+/g, " ").trim() || "unnamed";
+}
+
+function appendDriveFileId(filename: string, fileId: string): string {
+  const ext = extname(filename);
+  const base = ext ? filename.slice(0, -ext.length) : filename;
+  return `${base} (${safePathSegment(fileId)})${ext}`;
 }
 
 function toApiFile(item: GoogleDriveItem): GoogleDriveApiFile {
