@@ -390,6 +390,72 @@ describe("Google Drive sync", () => {
     ]);
   });
 
+  test("archives non-exportable Google Workspace items as metadata JSON", async () => {
+    const machine = getCurrentMachine();
+    const s3Source = createSource({
+      name: "Files bucket",
+      type: "s3",
+      bucket: "files-bucket",
+      region: "us-east-1",
+      config: {},
+      machine_id: machine.id,
+    });
+    const googleSource = createSource({
+      name: "Drive",
+      type: "google_drive",
+      machine_id: machine.id,
+      config: {
+        profile: "work",
+        include_my_drive: true,
+        include_all_shared_drives: false,
+        destination_source_id: s3Source.id,
+        delete_behavior: "ignore",
+      },
+    });
+    const uploads: Array<{ key: string; data: Record<string, unknown>; mime: string }> = [];
+    setGoogleDriveStorageAdapterForTests({
+      uploadS3: async (_source, body, key, contentType) => {
+        uploads.push({
+          key,
+          data: JSON.parse(Buffer.from(body as Uint8Array).toString("utf8")),
+          mime: contentType,
+        });
+        return key;
+      },
+    });
+    const client = new MockDriveClient(() => ({
+      files: [
+        file("form-1", "Hiring Form", undefined, "application/vnd.google-apps.form", { version: "17" }),
+        file("shortcut-1", "Shared Folder", undefined, "application/vnd.google-apps.shortcut"),
+      ],
+    }));
+    setGoogleDriveClientFactoryForTests(() => client);
+
+    const stats = await syncGoogleDriveSource(googleSource);
+
+    expect(stats).toMatchObject({ added: 2, updated: 0, deleted: 0, errors: 0 });
+    expect(client.downloaded).toEqual([]);
+    expect(uploads.map((item) => item.key)).toEqual([
+      "google-drive/work/my-drive/Hiring Form.gdrive-metadata (form-1).json",
+      "google-drive/work/my-drive/Shared Folder.gdrive-metadata (shortcut-1).json",
+    ]);
+    expect(uploads.every((item) => item.mime === "application/json")).toBe(true);
+    expect(uploads[0]?.data).toMatchObject({
+      id: "form-1",
+      name: "Hiring Form",
+      mime: "application/vnd.google-apps.form",
+      drive_id: "my-drive",
+      drive_name: "My Drive",
+      path: "Hiring Form",
+      version: "17",
+      archived_as: "google-drive-metadata",
+    });
+    expect(listGoogleDriveImportedObjects(googleSource.id).map((item) => item.s3_key).sort()).toEqual([
+      "google-drive/work/my-drive/Hiring Form.gdrive-metadata (form-1).json",
+      "google-drive/work/my-drive/Shared Folder.gdrive-metadata (shortcut-1).json",
+    ]);
+  });
+
   test("skips unchanged Drive files and updates changed revisions on repeated S3 syncs", async () => {
     const machine = getCurrentMachine();
     const s3Source = createSource({

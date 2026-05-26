@@ -24,6 +24,7 @@ import {
   listGoogleDriveProfilesFromConnectorConfig,
   type GoogleDriveApiFile,
   type GoogleDriveClient,
+  type GoogleDriveDownloadedFile,
 } from "./google-drive-client.js";
 import type {
   GoogleDriveConfig,
@@ -218,7 +219,9 @@ export async function syncGoogleDriveSource(source: Source): Promise<IndexStats>
         const existing = getGoogleDriveImportedObject(source.id, item.drive_id, item.id);
         if (existing && !shouldImport(config, item, existing, destination.source.id, destination.storage_type)) continue;
 
-        const downloaded = await client.downloadFile(toApiFile(item), config.export_formats);
+        const downloaded = canDownloadDriveItem(item)
+          ? await client.downloadFile(toApiFile(item), config.export_formats)
+          : createGoogleDriveMetadataArchive(item);
         const importedName = basename(downloaded.filename);
         const importedPath = buildImportedPath(config, item, importedName);
         const contentType = downloaded.mimeType || ((mimeLookup(downloaded.filename) || item.mime || "application/octet-stream") as string);
@@ -540,6 +543,41 @@ function appendDriveFileId(filename: string, fileId: string): string {
   const ext = extname(filename);
   const base = ext ? filename.slice(0, -ext.length) : filename;
   return `${base} (${safePathSegment(fileId)})${ext}`;
+}
+
+function canDownloadDriveItem(item: GoogleDriveItem): boolean {
+  if (!item.mime.startsWith("application/vnd.google-apps.")) return true;
+  return [
+    "application/vnd.google-apps.document",
+    "application/vnd.google-apps.spreadsheet",
+    "application/vnd.google-apps.presentation",
+    "application/vnd.google-apps.drawing",
+  ].includes(item.mime);
+}
+
+function createGoogleDriveMetadataArchive(item: GoogleDriveItem): GoogleDriveDownloadedFile {
+  const metadata = {
+    archived_as: "google-drive-metadata",
+    reason: "Google Drive item is not exportable as file content through Drive export.",
+    id: item.id,
+    name: item.name,
+    mime: item.mime,
+    drive_id: item.drive_id,
+    drive_name: item.drive_name,
+    is_shared_drive: item.is_shared_drive,
+    parent_id: item.parent_id,
+    path: item.path,
+    size: item.size,
+    modified_at: item.modified_at,
+    version: item.version,
+    hash: item.hash,
+  };
+  const data = Buffer.from(JSON.stringify(metadata, null, 2) + "\n");
+  return {
+    data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+    filename: `${item.name}.gdrive-metadata.json`,
+    mimeType: "application/json",
+  };
 }
 
 function toApiFile(item: GoogleDriveItem): GoogleDriveApiFile {
