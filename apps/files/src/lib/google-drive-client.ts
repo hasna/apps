@@ -9,6 +9,7 @@ export const GOOGLE_FOLDER_MIME = "application/vnd.google-apps.folder";
 const DRIVE_API_BASE = "https://www.googleapis.com/drive/v3";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
+const RANGE_DOWNLOAD_CHUNK_BYTES = 64 * 1024 * 1024;
 
 const DEFAULT_EXPORT_FORMATS: Required<GoogleDriveExportFormats> = {
   document: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -194,6 +195,16 @@ class ConnectorSdkGoogleDriveClient implements GoogleDriveClient {
       };
     }
 
+    const size = file.size ? Number(file.size) : undefined;
+    if (size && size > RANGE_DOWNLOAD_CHUNK_BYTES) {
+      return {
+        body: Readable.from(downloadGoogleDriveRangeChunks(this.profile, file.id, size)),
+        filename: file.name,
+        mimeType: file.mimeType || "application/octet-stream",
+        size,
+      };
+    }
+
     const response = await requestGoogleDrive(this.profile, `/files/${encodeURIComponent(file.id)}`, {
       alt: "media",
       supportsAllDrives: true,
@@ -203,7 +214,7 @@ class ConnectorSdkGoogleDriveClient implements GoogleDriveClient {
       body: Readable.fromWeb(response.body as any),
       filename: file.name,
       mimeType: response.headers.get("content-type")?.split(";")[0] || file.mimeType || "application/octet-stream",
-      size: file.size ? Number(file.size) : Number(response.headers.get("content-length") ?? 0) || undefined,
+      size: size ?? (Number(response.headers.get("content-length") ?? 0) || undefined),
     };
   }
 }
@@ -240,6 +251,7 @@ async function requestGoogleDrive(
   profile: string,
   path: string,
   params: Record<string, string | number | boolean | undefined>,
+  headers: Record<string, string> = {},
 ): Promise<Response> {
   const token = await getValidAccessToken(profile);
   const url = new URL(`${DRIVE_API_BASE}${path}`);
@@ -250,6 +262,7 @@ async function requestGoogleDrive(
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: "application/octet-stream",
+      ...headers,
     },
   });
   if (!response.ok) {
@@ -257,6 +270,20 @@ async function requestGoogleDrive(
     throw new Error(`Google Drive request failed (${response.status}): ${extractGoogleError(body) || response.statusText}`);
   }
   return response;
+}
+
+async function* downloadGoogleDriveRangeChunks(profile: string, fileId: string, size: number): AsyncGenerator<Buffer> {
+  for (let start = 0; start < size; start += RANGE_DOWNLOAD_CHUNK_BYTES) {
+    const end = Math.min(start + RANGE_DOWNLOAD_CHUNK_BYTES - 1, size - 1);
+    const response = await requestGoogleDrive(
+      profile,
+      `/files/${encodeURIComponent(fileId)}`,
+      { alt: "media", supportsAllDrives: true },
+      { Range: `bytes=${start}-${end}` },
+    );
+    const data = Buffer.from(await response.arrayBuffer());
+    yield data;
+  }
 }
 
 async function getValidAccessToken(profile: string): Promise<string> {
