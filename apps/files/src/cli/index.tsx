@@ -11,7 +11,7 @@ import { createProject, listProjects, addToProject, deleteProject } from "../db/
 import { listPeers, addPeer, removePeer } from "../db/peers.js";
 import { loadConfig, setConfigValue, CONFIG_PATH_EXPORT } from "../lib/config.js";
 import { indexLocalSource } from "../lib/indexer.js";
-import { listGoogleDriveItems, listGoogleDriveProfiles, listGoogleDriveSharedDrives, syncGoogleDriveSource } from "../lib/google-drive.js";
+import { listGoogleDriveItems, listGoogleDriveProfiles, listGoogleDriveSharedDrives, preflightGoogleDriveSource, syncGoogleDriveSource } from "../lib/google-drive.js";
 import { indexS3Source, downloadFromS3, uploadToS3 } from "../lib/s3.js";
 import { DB_PATH, getDb } from "../db/database.js";
 import { requireId } from "../db/resolve.js";
@@ -50,7 +50,7 @@ sources
     for (const s of all) {
       const isMine = s.machine_id === machine.id;
       const typeLabel = s.type === "s3"
-        ? chalk.blue(`s3://${s.bucket}${s.prefix ? `/${s.prefix}` : ""}`)
+        ? chalk.blue(`s3://${s.bucket}${s.prefix ? `/${s.prefix}` : ""}${(s.config as S3Config).profile ? ` profile:${(s.config as S3Config).profile}` : ""}`)
         : s.type === "google_drive"
           ? chalk.magenta(`google-drive:${(s.config as GoogleDriveConfig).profile}`)
           : chalk.green(s.path ?? "");
@@ -68,6 +68,7 @@ sources
   .option("--prefix <prefix>", "S3 key prefix (for S3)")
   .option("--access-key <key>", "AWS access key ID (for S3)")
   .option("--secret-key <secret>", "AWS secret access key (for S3)")
+  .option("--aws-profile <profile>", "AWS shared config profile name (for S3)")
   .option("--endpoint <url>", "Custom S3 endpoint (for S3-compatible storage)")
   .action((pathOrS3: string, opts: {
     name?: string;
@@ -75,6 +76,7 @@ sources
     prefix?: string;
     accessKey?: string;
     secretKey?: string;
+    awsProfile?: string;
     endpoint?: string;
   }) => {
     const machine = getCurrentMachine();
@@ -86,7 +88,12 @@ sources
       const config: S3Config = {};
       if (opts.accessKey) config.accessKeyId = opts.accessKey;
       if (opts.secretKey) config.secretAccessKey = opts.secretKey;
+      if (opts.awsProfile) config.profile = opts.awsProfile;
       if (opts.endpoint) config.endpoint = opts.endpoint;
+      if (config.profile && config.accessKeyId) {
+        console.error(chalk.red("Use either --aws-profile or static --access-key/--secret-key credentials, not both."));
+        process.exit(1);
+      }
 
       const source = createSource({
         name: opts.name ?? bucket,
@@ -206,6 +213,70 @@ sources
       console.error(chalk.red((error as Error).message));
       process.exit(1);
     });
+  });
+
+sources
+  .command("bootstrap-prod-files")
+  .description("Create or update the production S3 source for Google Drive/Gmail sync")
+  .option("--bucket <bucket>", "Production files bucket", "hasna-xyz-prod-files")
+  .option("--region <region>", "AWS region", "us-east-1")
+  .option("--aws-profile <profile>", "AWS shared config profile", "hasna-xyz-infra")
+  .option("--prefix <prefix>", "Optional S3 key prefix")
+  .option("-n, --name <name>", "Source name", "prod-files")
+  .option("--no-google-drive-default", "Do not set this source as the default Google Drive destination")
+  .option("--json", "Output as JSON")
+  .action((opts: {
+    bucket: string;
+    region: string;
+    awsProfile: string;
+    prefix?: string;
+    name: string;
+    googleDriveDefault?: boolean;
+    json?: boolean;
+  }) => {
+    const machine = getCurrentMachine();
+    const config: S3Config = { profile: opts.awsProfile };
+    const existing = listSources().find((source) =>
+      source.type === "s3" && (source.name === opts.name || source.bucket === opts.bucket)
+    );
+
+    const source = existing
+      ? updateSource(existing.id, {
+          name: opts.name,
+          bucket: opts.bucket,
+          prefix: opts.prefix,
+          region: opts.region,
+          config,
+          enabled: true,
+        })!
+      : createSource({
+          name: opts.name,
+          type: "s3",
+          bucket: opts.bucket,
+          prefix: opts.prefix,
+          region: opts.region,
+          config,
+          machine_id: machine.id,
+        });
+
+    if (opts.googleDriveDefault !== false) {
+      setConfigValue("google_drive_default_destination_source_id", source.id);
+    }
+
+    if (opts.json) {
+      console.log(JSON.stringify({
+        source,
+        google_drive_default_destination_source_id: opts.googleDriveDefault === false ? undefined : source.id,
+      }, null, 2));
+      return;
+    }
+
+    const action = existing ? "updated" : "created";
+    console.log(chalk.green(`✓ ${opts.name} ${action}: ${source.id} → s3://${opts.bucket}${opts.prefix ? `/${opts.prefix}` : ""}`));
+    console.log(chalk.dim(`  AWS profile: ${opts.awsProfile}`));
+    if (opts.googleDriveDefault !== false) {
+      console.log(chalk.dim("  Google Drive default destination: set"));
+    }
   });
 
 sources
@@ -341,10 +412,40 @@ sources
   });
 
 sources
-  .command("sync-google-drive [id]")
-  .description("Import one Google Drive source, or all enabled Google Drive sources when omitted")
+  .command("google-drive-status [id]")
+  .description("Preflight Google Drive auth, destination, and item scope without uploading")
   .option("--json", "Output as JSON")
   .action(async (id: string | undefined, opts: { json?: boolean }) => {
+    const sources = id
+      ? [getSource(requireId(id, "sources"))].filter(Boolean)
+      : listSources().filter((source) => source.enabled && source.type === "google_drive");
+    const results = [];
+
+    if (!sources.length) {
+      if (opts.json) { console.log("[]"); return; }
+      console.log(chalk.dim("No Google Drive sources found."));
+      return;
+    }
+
+    for (const source of sources) {
+      if (!source || source.type !== "google_drive") {
+        console.error(chalk.red("Source must be a Google Drive source"));
+        process.exit(1);
+      }
+      const result = await preflightGoogleDriveSource(source);
+      results.push(result);
+      if (!opts.json) printGoogleDrivePreflight(result);
+    }
+
+    if (opts.json) console.log(JSON.stringify(results, null, 2));
+  });
+
+sources
+  .command("sync-google-drive [id]")
+  .description("Import one Google Drive source, or all enabled Google Drive sources when omitted")
+  .option("--dry-run", "Preflight auth, destination, and item scope without uploading")
+  .option("--json", "Output as JSON")
+  .action(async (id: string | undefined, opts: { dryRun?: boolean; json?: boolean }) => {
     const toSync = id
       ? [getSource(requireId(id, "sources"))].filter(Boolean)
       : listSources().filter((source) => source.enabled && source.type === "google_drive");
@@ -361,6 +462,12 @@ sources
         console.error(chalk.red("Source must be a Google Drive source"));
         process.exit(1);
       }
+      if (opts.dryRun) {
+        const result = await preflightGoogleDriveSource(source);
+        results.push(result);
+        if (!opts.json) printGoogleDrivePreflight(result);
+        continue;
+      }
       const stats = await syncGoogleDriveSource(source);
       results.push({ source: source.id, name: source.name, ...stats });
       if (!opts.json) {
@@ -373,6 +480,33 @@ sources
 
     if (opts.json) console.log(JSON.stringify(results, null, 2));
   });
+
+function printGoogleDrivePreflight(result: Awaited<ReturnType<typeof preflightGoogleDriveSource>>): void {
+  const destination = result.destination.type === "s3"
+    ? `s3://${result.destination.bucket}${result.destination.prefix ? `/${result.destination.prefix}` : ""}`
+    : result.destination.path;
+  const authLabel = result.auth?.authRequired
+    ? chalk.red("auth required")
+    : result.auth?.expired
+      ? chalk.yellow("refreshable")
+      : chalk.green("ok");
+  console.log(chalk.bold(result.source_name));
+  console.log(`  profile: ${chalk.cyan(result.profile)} (${authLabel})`);
+  console.log(`  destination: ${chalk.cyan(destination ?? result.destination.name)}${result.destination.aws_profile ? chalk.dim(` profile:${result.destination.aws_profile}`) : ""}`);
+  console.log(`  includes: ${[
+    result.includes.my_drive ? "My Drive" : "",
+    result.includes.all_shared_drives ? "all shared drives" : "",
+    result.includes.shared_drive_ids.length ? `${result.includes.shared_drive_ids.length} selected shared drives` : "",
+    result.includes.root_folder_ids.length ? `${result.includes.root_folder_ids.length} root folders` : "",
+  ].filter(Boolean).join(", ") || "none"}`);
+  console.log(`  visible items: ${result.item_count}`);
+  for (const drive of result.drive_counts) {
+    console.log(chalk.dim(`    ${drive.drive_name}: ${drive.count}`));
+  }
+  for (const error of result.errors) {
+    console.log(chalk.red(`  error: ${error}`));
+  }
+}
 
 // ─── machines ───────────────────────────────────────────────────────────────
 

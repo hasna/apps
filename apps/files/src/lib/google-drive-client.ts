@@ -1,5 +1,5 @@
 import { runConnectorOperation } from "@hasna/connectors";
-import type { GoogleDriveExportFormats } from "../types/index.js";
+import type { GoogleDriveExportFormats, GoogleDriveProfileStatus } from "../types/index.js";
 
 export const GOOGLE_FOLDER_MIME = "application/vnd.google-apps.folder";
 
@@ -60,6 +60,10 @@ interface ConnectorProfilesResponse {
   profiles?: string[];
 }
 
+interface ConnectorProfileStatusesResponse {
+  profiles?: GoogleDriveProfileStatus[];
+}
+
 interface ConnectorListFilesResponse {
   files?: GoogleDriveApiFile[];
   nextPageToken?: string;
@@ -79,6 +83,11 @@ interface ConnectorDownloadResponse {
 export async function listGoogleDriveProfilesFromConnectorConfig(): Promise<string[]> {
   const response = await runGoogleDriveOperation<ConnectorProfilesResponse>("profiles.list");
   return [...(response.profiles ?? [])].sort((a, b) => a.localeCompare(b));
+}
+
+export async function listGoogleDriveProfileStatusesFromConnectorConfig(profile?: string): Promise<GoogleDriveProfileStatus[]> {
+  const response = await runGoogleDriveOperation<ConnectorProfileStatusesResponse>("profiles.status", undefined, { profile });
+  return [...(response.profiles ?? [])].sort((a, b) => a.profile.localeCompare(b.profile));
 }
 
 export function createConnectorProfileGoogleDriveClient(profile: string): GoogleDriveClient {

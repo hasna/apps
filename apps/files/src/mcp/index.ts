@@ -11,8 +11,8 @@ import { tagFile, untagFile, listTags, deleteTag } from "../db/tags.js";
 import { createCollection, updateCollection, listCollections, getCollection, deleteCollection, addToCollection, removeFromCollection, autoPopulateCollection } from "../db/collections.js";
 import { createProject, updateProject, listProjects, getProject, deleteProject, addToProject, removeFromProject } from "../db/projects.js";
 import { indexLocalSource } from "../lib/indexer.js";
-import { listGoogleDriveItems, listGoogleDriveProfiles, syncGoogleDriveSource } from "../lib/google-drive.js";
-import { indexS3Source, downloadFromS3, uploadToS3, getPresignedUrl } from "../lib/s3.js";
+import { listGoogleDriveItems, listGoogleDriveProfiles, preflightGoogleDriveSource, syncGoogleDriveSource } from "../lib/google-drive.js";
+import { createS3ClientConfig, indexS3Source, downloadFromS3, uploadToS3, getPresignedUrl } from "../lib/s3.js";
 import { registerAgent, getAgent, listAgents as listDbAgents, updateAgentHeartbeat, setAgentFocus } from "../db/agents.js";
 import { logActivity, getFileHistory, getAgentActivity, getSessionActivity } from "../db/activity.js";
 import { join } from "path";
@@ -60,8 +60,9 @@ registerTool("add_source", "Add a local folder or S3 bucket as an indexed source
     accessKeyId: z.string().optional(),
     secretAccessKey: z.string().optional(),
     sessionToken: z.string().optional(),
+    profile: z.string().optional(),
     endpoint: z.string().optional(),
-  }).optional().describe("S3 credentials (optional — uses env/profile if omitted)"),
+  }).optional().describe("S3 credentials or AWS named profile (optional — uses env/default chain if omitted)"),
 }, async ({ type, path, bucket, prefix, region, name, config }) => {
   const machine = getCurrentMachine();
   const source = createSource({
@@ -128,6 +129,17 @@ registerTool("list_google_drive_items", "List Google Drive items visible to a Go
   }
   const items = await listGoogleDriveItems(source);
   return { content: [{ type: "text", text: JSON.stringify(items, null, 2) }] };
+});
+
+registerTool("preflight_google_drive_sync", "Check Google Drive auth, destination, and visible item scope without uploading", {
+  source_id: z.string().describe("Google Drive source ID"),
+}, async ({ source_id }) => {
+  const source = getSource(source_id);
+  if (!source || source.type !== "google_drive") {
+    return { content: [{ type: "text" as const, text: "Source must be a Google Drive source" }], isError: true };
+  }
+  const result = await preflightGoogleDriveSource(source);
+  return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
 });
 
 registerTool("sync_google_drive", "Sync one Google Drive source, or all enabled Google Drive sources when source_id is omitted", {
@@ -494,12 +506,7 @@ registerTool("get_file_content", "Read the content of a text file (local or S3 s
   } else if (source.type === "s3") {
     try {
       const { GetObjectCommand, S3Client } = await import("@aws-sdk/client-s3");
-      const cfg = source.config as S3Config;
-      const client = new S3Client({
-        region: source.region ?? "us-east-1",
-        ...(cfg.endpoint ? { endpoint: cfg.endpoint } : {}),
-        ...(cfg.accessKeyId ? { credentials: { accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey!, sessionToken: cfg.sessionToken } } : {}),
-      });
+      const client = new S3Client(createS3ClientConfig(source));
       const resp = await client.send(new GetObjectCommand({
         Bucket: source.bucket!,
         Key: file.path,

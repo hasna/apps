@@ -25,13 +25,20 @@ Google Drive sync uses profiles configured through the connectors CLI:
 connectors auth googledrive
 ```
 
-Add an S3 destination once. Google Drive sources auto-use the first enabled S3
-source by default:
+Add or repair the production S3 destination once. This stores the AWS named
+profile on the source and sets it as the default Google Drive destination:
 
 ```bash
-files sources add s3://my-files-bucket/google-drive --region us-east-1
+files sources bootstrap-prod-files
 files sources add-google-drive --all-profiles --all
+files sources sync-google-drive --dry-run
 files sources sync-google-drive
+```
+
+For a custom S3 destination, pass the shared AWS profile explicitly:
+
+```bash
+files sources add s3://my-files-bucket/google-drive --region us-east-1 --aws-profile hasna-xyz-infra
 ```
 
 To sync into local storage instead, add a local source and pass it as the

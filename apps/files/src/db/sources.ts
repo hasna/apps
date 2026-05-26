@@ -76,13 +76,18 @@ export function listSources(machine_id?: string): Source[] {
   return db.query<SourceRow, []>("SELECT * FROM sources ORDER BY created_at DESC").all().map(toSource);
 }
 
-export function updateSource(id: string, updates: Partial<Pick<Source, "name" | "enabled" | "config" | "prefix" | "region">>): Source | null {
+export function updateSource(
+  id: string,
+  updates: Partial<Pick<Source, "name" | "enabled" | "config" | "path" | "bucket" | "prefix" | "region">>,
+): Source | null {
   const db = getDb();
   const fields: string[] = ["updated_at = datetime('now')"];
   const values: unknown[] = [];
   if (updates.name !== undefined) { fields.push("name = ?"); values.push(updates.name); }
   if (updates.enabled !== undefined) { fields.push("enabled = ?"); values.push(updates.enabled ? 1 : 0); }
   if (updates.config !== undefined) { fields.push("config = ?"); values.push(JSON.stringify(updates.config)); }
+  if (updates.path !== undefined) { fields.push("path = ?"); values.push(updates.path); }
+  if (updates.bucket !== undefined) { fields.push("bucket = ?"); values.push(updates.bucket); }
   if (updates.prefix !== undefined) { fields.push("prefix = ?"); values.push(updates.prefix); }
   if (updates.region !== undefined) { fields.push("region = ?"); values.push(updates.region); }
   if (fields.length === 1) return getSource(id);

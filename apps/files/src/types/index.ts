@@ -6,6 +6,7 @@ export interface S3Config {
   secretAccessKey?: string;
   sessionToken?: string;
   endpoint?: string;
+  profile?: string;
 }
 
 export interface GoogleDriveExportFormats {
@@ -184,6 +185,19 @@ export interface GoogleDriveSharedDrive {
   name: string;
 }
 
+export interface GoogleDriveProfileStatus {
+  profile: string;
+  configured: boolean;
+  authenticated: boolean;
+  expired: boolean;
+  expiresAt: number | null;
+  hasAccessToken: boolean;
+  hasRefreshToken: boolean;
+  hasOAuthCredentials: boolean;
+  authRequired: boolean;
+  message: string;
+}
+
 export interface GoogleDriveItem {
   id: string;
   drive_id: string;
@@ -227,4 +241,35 @@ export interface GoogleDriveImportedObject {
   file_record_id: string;
   deleted: boolean;
   last_imported_at: string;
+}
+
+export interface GoogleDrivePreflightResult {
+  source_id: string;
+  source_name: string;
+  profile: string;
+  auth: GoogleDriveProfileStatus | null;
+  destination: {
+    source_id: string;
+    name: string;
+    type: "s3" | "local";
+    bucket?: string;
+    prefix?: string;
+    region?: string;
+    aws_profile?: string;
+    path?: string;
+  };
+  includes: {
+    my_drive: boolean;
+    all_shared_drives: boolean;
+    shared_drive_ids: string[];
+    root_folder_ids: string[];
+  };
+  item_count: number;
+  drive_counts: Array<{
+    drive_id: string;
+    drive_name: string;
+    is_shared_drive: boolean;
+    count: number;
+  }>;
+  errors: string[];
 }

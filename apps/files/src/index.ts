@@ -16,7 +16,7 @@ export { logActivity, getFileHistory, getAgentActivity, getSessionActivity } fro
 
 // Lib
 export { indexLocalSource } from "./lib/indexer.js";
-export { listGoogleDriveProfiles, listGoogleDriveSharedDrives, listGoogleDriveItems, syncGoogleDriveSource } from "./lib/google-drive.js";
+export { listGoogleDriveProfiles, listGoogleDriveProfileStatuses, listGoogleDriveSharedDrives, listGoogleDriveItems, preflightGoogleDriveSource, syncGoogleDriveSource } from "./lib/google-drive.js";
 export { createConnectorProfileGoogleDriveClient } from "./lib/google-drive-client.js";
 export { indexS3Source, downloadFromS3, uploadToS3, uploadBufferToS3, deleteFromS3, headS3Object } from "./lib/s3.js";
 export { watchSource, unwatchSource, stopAllWatchers } from "./lib/watcher.js";

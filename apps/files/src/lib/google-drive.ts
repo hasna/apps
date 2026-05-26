@@ -20,6 +20,7 @@ import { uploadBufferToS3 } from "./s3.js";
 import {
   GOOGLE_FOLDER_MIME,
   createConnectorProfileGoogleDriveClient,
+  listGoogleDriveProfileStatusesFromConnectorConfig,
   listGoogleDriveProfilesFromConnectorConfig,
   type GoogleDriveApiFile,
   type GoogleDriveClient,
@@ -27,6 +28,8 @@ import {
 import type {
   GoogleDriveConfig,
   GoogleDriveItem,
+  GoogleDrivePreflightResult,
+  GoogleDriveProfileStatus,
   GoogleDriveSharedDrive,
   GoogleDriveImportedObject,
   IndexStats,
@@ -43,6 +46,7 @@ type GoogleDriveStorageAdapter = {
 };
 
 let clientFactory: (profile: string) => GoogleDriveClient = createConnectorProfileGoogleDriveClient;
+let profileStatusProvider: (profile?: string) => Promise<GoogleDriveProfileStatus[]> = listGoogleDriveProfileStatusesFromConnectorConfig;
 let storageAdapter: GoogleDriveStorageAdapter = {
   uploadS3: uploadBufferToS3,
   writeLocal: async (source, relativePath, data) => {
@@ -56,6 +60,12 @@ let storageAdapter: GoogleDriveStorageAdapter = {
 
 export function setGoogleDriveClientFactoryForTests(factory?: (profile: string) => GoogleDriveClient): void {
   clientFactory = factory ?? createConnectorProfileGoogleDriveClient;
+}
+
+export function setGoogleDriveProfileStatusProviderForTests(
+  provider?: (profile?: string) => Promise<GoogleDriveProfileStatus[]>,
+): void {
+  profileStatusProvider = provider ?? listGoogleDriveProfileStatusesFromConnectorConfig;
 }
 
 export function setGoogleDriveStorageAdapterForTests(adapter?: Partial<GoogleDriveStorageAdapter>): void {
@@ -73,6 +83,10 @@ export function setGoogleDriveStorageAdapterForTests(adapter?: Partial<GoogleDri
 
 export function listGoogleDriveProfiles(): Promise<string[]> {
   return listGoogleDriveProfilesFromConnectorConfig();
+}
+
+export function listGoogleDriveProfileStatuses(profile?: string): Promise<GoogleDriveProfileStatus[]> {
+  return profileStatusProvider(profile);
 }
 
 function getGoogleDriveConfig(source: Source): GoogleDriveConfig {
@@ -121,6 +135,56 @@ export async function listGoogleDriveItems(source: Source): Promise<GoogleDriveI
   const config = getGoogleDriveConfig(source);
   const client = clientFactory(config.profile);
   return listGoogleDriveItemsWithClient(source, client);
+}
+
+export async function preflightGoogleDriveSource(source: Source): Promise<GoogleDrivePreflightResult> {
+  const config = getGoogleDriveConfig(source);
+  const destination = getDestinationSource(source);
+  const errors: string[] = [];
+  let auth: GoogleDriveProfileStatus | null = null;
+  let items: GoogleDriveItem[] = [];
+
+  try {
+    auth = (await profileStatusProvider(config.profile)).find((item) => item.profile === config.profile) ?? null;
+    if (auth?.authRequired) errors.push(auth.message);
+  } catch (error) {
+    errors.push(`Unable to read Google Drive auth status: ${(error as Error).message}`);
+  }
+
+  if (!auth?.authRequired) {
+    try {
+      const client = clientFactory(config.profile);
+      items = await listGoogleDriveItemsWithClient(source, client);
+    } catch (error) {
+      errors.push(`Unable to list Google Drive items: ${(error as Error).message}`);
+    }
+  }
+
+  return {
+    source_id: source.id,
+    source_name: source.name,
+    profile: config.profile,
+    auth,
+    destination: {
+      source_id: destination.source.id,
+      name: destination.source.name,
+      type: destination.storage_type,
+      bucket: destination.source.bucket,
+      prefix: destination.source.prefix,
+      region: destination.source.region,
+      aws_profile: (destination.source.config as { profile?: string }).profile,
+      path: destination.source.path,
+    },
+    includes: {
+      my_drive: config.include_my_drive,
+      all_shared_drives: config.include_all_shared_drives,
+      shared_drive_ids: config.shared_drive_ids ?? [],
+      root_folder_ids: config.root_folder_ids ?? [],
+    },
+    item_count: items.length,
+    drive_counts: countItemsByDrive(items),
+    errors,
+  };
 }
 
 async function listGoogleDriveItemsWithClient(source: Source, client: GoogleDriveClient): Promise<GoogleDriveItem[]> {
@@ -234,6 +298,24 @@ function countActiveFiles(source_id: string): number {
     "SELECT COUNT(*) AS n FROM files WHERE source_id = ? AND status = 'active'",
   ).get(source_id);
   return row?.n ?? 0;
+}
+
+function countItemsByDrive(items: GoogleDriveItem[]): GoogleDrivePreflightResult["drive_counts"] {
+  const counts = new Map<string, GoogleDrivePreflightResult["drive_counts"][number]>();
+  for (const item of items) {
+    const existing = counts.get(item.drive_id);
+    if (existing) {
+      existing.count++;
+      continue;
+    }
+    counts.set(item.drive_id, {
+      drive_id: item.drive_id,
+      drive_name: item.drive_name,
+      is_shared_drive: item.is_shared_drive,
+      count: 1,
+    });
+  }
+  return [...counts.values()].sort((a, b) => a.drive_name.localeCompare(b.drive_name));
 }
 
 async function writeToDestination(

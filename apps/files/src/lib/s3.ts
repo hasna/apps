@@ -5,7 +5,9 @@ import {
   DeleteObjectCommand,
   HeadObjectCommand,
   type _Object,
+  type S3ClientConfig,
 } from "@aws-sdk/client-s3";
+import { fromIni } from "@aws-sdk/credential-providers";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Upload } from "@aws-sdk/lib-storage";
 import { createWriteStream, createReadStream, statSync } from "fs";
@@ -18,9 +20,15 @@ import { markSourceIndexed } from "../db/sources.js";
 import type { Source, IndexStats, S3Config } from "../types/index.js";
 import type { StreamingBlobPayloadInputTypes } from "@smithy/types";
 
-function makeClient(source: Source): S3Client {
+let credentialProviderFactory: typeof fromIni = fromIni;
+
+export function setS3CredentialProviderFactoryForTests(factory?: typeof fromIni): void {
+  credentialProviderFactory = factory ?? fromIni;
+}
+
+export function createS3ClientConfig(source: Source): S3ClientConfig {
   const cfg = source.config as S3Config;
-  return new S3Client({
+  return {
     region: source.region ?? "us-east-1",
     ...(cfg.endpoint ? { endpoint: cfg.endpoint } : {}),
     ...(cfg.accessKeyId
@@ -31,8 +39,14 @@ function makeClient(source: Source): S3Client {
             sessionToken: cfg.sessionToken,
           },
         }
-      : {}),
-  });
+      : cfg.profile
+        ? { credentials: credentialProviderFactory({ profile: cfg.profile }) }
+        : {}),
+  };
+}
+
+function makeClient(source: Source): S3Client {
+  return new S3Client(createS3ClientConfig(source));
 }
 
 export async function indexS3Source(source: Source, machine_id: string): Promise<IndexStats> {
