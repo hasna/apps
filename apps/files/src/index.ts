@@ -1,5 +1,5 @@
 // DB layer
-export { getDb, DB_PATH } from "./db/database.js";
+export { getDb, getDbPath, DB_PATH } from "./db/database.js";
 
 // DB — PostgreSQL migrations
 export { PG_MIGRATIONS } from "./db/pg-migrations.js";

@@ -18,8 +18,9 @@ function resolveDataDir(): string {
   return newDir;
 }
 
-const DATA_DIR = resolveDataDir();
-const CONFIG_PATH = join(DATA_DIR, "config.json");
+export function getConfigPath(): string {
+  return join(resolveDataDir(), "config.json");
+}
 
 export interface FilesConfig {
   auto_watch: boolean;
@@ -39,17 +40,19 @@ const DEFAULTS: FilesConfig = {
 };
 
 export function loadConfig(): FilesConfig {
-  if (!existsSync(CONFIG_PATH)) return { ...DEFAULTS };
+  const configPath = getConfigPath();
+  if (!existsSync(configPath)) return { ...DEFAULTS };
   try {
-    return { ...DEFAULTS, ...(JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as Partial<FilesConfig>) };
+    return { ...DEFAULTS, ...(JSON.parse(readFileSync(configPath, "utf8")) as Partial<FilesConfig>) };
   } catch {
     return { ...DEFAULTS };
   }
 }
 
 export function saveConfig(cfg: FilesConfig): void {
-  mkdirSync(DATA_DIR, { recursive: true });
-  writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2) + "\n");
+  const dataDir = resolveDataDir();
+  mkdirSync(dataDir, { recursive: true });
+  writeFileSync(getConfigPath(), JSON.stringify(cfg, null, 2) + "\n");
 }
 
 export function getConfigValue(key: keyof FilesConfig): unknown {
@@ -73,4 +76,4 @@ export function setConfigValue(key: string, value: string): void {
   saveConfig(cfg);
 }
 
-export const CONFIG_PATH_EXPORT = CONFIG_PATH;
+export const CONFIG_PATH_EXPORT = getConfigPath();

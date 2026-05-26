@@ -9,11 +9,11 @@ import { listTags, tagFile, untagFile } from "../db/tags.js";
 import { createCollection, listCollections, addToCollection, deleteCollection } from "../db/collections.js";
 import { createProject, listProjects, addToProject, deleteProject } from "../db/projects.js";
 import { listPeers, addPeer, removePeer } from "../db/peers.js";
-import { loadConfig, setConfigValue, CONFIG_PATH_EXPORT } from "../lib/config.js";
+import { getConfigPath, loadConfig, setConfigValue } from "../lib/config.js";
 import { indexLocalSource } from "../lib/indexer.js";
 import { listGoogleDriveItems, listGoogleDriveProfiles, listGoogleDriveSharedDrives, preflightGoogleDriveSource, syncGoogleDriveSource } from "../lib/google-drive.js";
 import { indexS3Source, downloadFromS3, uploadToS3 } from "../lib/s3.js";
-import { DB_PATH, getDb } from "../db/database.js";
+import { getDb, getDbPath } from "../db/database.js";
 import { requireId } from "../db/resolve.js";
 import { resolve, join } from "path";
 import { existsSync, readFileSync } from "fs";
@@ -1071,7 +1071,7 @@ config
   .description("Show all config values")
   .action(() => {
     const cfg = loadConfig();
-    console.log(chalk.bold(`\n  Config: ${CONFIG_PATH_EXPORT}\n`));
+    console.log(chalk.bold(`\n  Config: ${getConfigPath()}\n`));
     for (const [k, v] of Object.entries(cfg)) {
       console.log(`  ${chalk.cyan(k.padEnd(24))} ${JSON.stringify(v)}`);
     }
@@ -1101,7 +1101,7 @@ config
 program
   .command("db")
   .description("Show database path")
-  .action(() => console.log(DB_PATH));
+  .action(() => console.log(getDbPath()));
 
 // ─── utils ───────────────────────────────────────────────────────────────────
 

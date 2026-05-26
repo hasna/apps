@@ -19,16 +19,27 @@ function resolveDataDir(): string {
   return newDir;
 }
 
-const DATA_DIR = resolveDataDir();
-mkdirSync(DATA_DIR, { recursive: true });
+export function getDataDir(): string {
+  const dir = resolveDataDir();
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
 
-export const DB_PATH = process.env.HASNA_FILES_DB_PATH ?? process.env.FILES_DB_PATH ?? join(DATA_DIR, "files.db");
+export function getDbPath(): string {
+  return process.env.HASNA_FILES_DB_PATH ?? process.env.FILES_DB_PATH ?? join(getDataDir(), "files.db");
+}
 
 let _db: Database | null = null;
+let _dbPath: string | null = null;
+
+export const DB_PATH = getDbPath();
 
 export function getDb(): Database {
-  if (_db) return _db;
-  _db = new Database(DB_PATH, { create: true });
+  const dbPath = getDbPath();
+  if (_db && _dbPath === dbPath) return _db;
+  _db?.close();
+  _db = new Database(dbPath, { create: true });
+  _dbPath = dbPath;
   _db.exec("PRAGMA busy_timeout=5000");
   _db.exec("PRAGMA journal_mode=WAL");
   _db.exec("PRAGMA foreign_keys=ON");
@@ -436,4 +447,5 @@ const migration_v10 = `
 export function closeDb(): void {
   _db?.close();
   _db = null;
+  _dbPath = null;
 }
