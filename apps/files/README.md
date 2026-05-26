@@ -35,10 +35,13 @@ files sources sync-google-drive --dry-run
 files sources sync-google-drive
 ```
 
+The production default is `s3://hasna-xyz-prod-emails/drive/<profile>/...`
+using the `hasna-xyz-infra` AWS profile.
+
 For a custom S3 destination, pass the shared AWS profile explicitly:
 
 ```bash
-files sources add s3://my-files-bucket/google-drive --region us-east-1 --aws-profile hasna-xyz-infra
+files sources add s3://my-files-bucket/drive --region us-west-2 --aws-profile hasna-xyz-infra
 ```
 
 To sync into local storage instead, add a local source and pass it as the

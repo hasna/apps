@@ -287,11 +287,11 @@ describe("Google Drive sync", () => {
   test("preflights destination, auth status, and Drive item counts without uploading", async () => {
     const machine = getCurrentMachine();
     const s3Source = createSource({
-      name: "prod-files",
+      name: "prod-emails-drive",
       type: "s3",
-      bucket: "hasna-xyz-prod-files",
+      bucket: "hasna-xyz-prod-emails",
       prefix: "imports",
-      region: "us-east-1",
+      region: "us-west-2",
       config: { profile: "hasna-xyz-infra" },
       machine_id: machine.id,
     });
@@ -337,9 +337,9 @@ describe("Google Drive sync", () => {
     expect(result.destination).toMatchObject({
       source_id: s3Source.id,
       type: "s3",
-      bucket: "hasna-xyz-prod-files",
+      bucket: "hasna-xyz-prod-emails",
       prefix: "imports",
-      region: "us-east-1",
+      region: "us-west-2",
       aws_profile: "hasna-xyz-infra",
     });
     expect(result.auth).toMatchObject({ profile: "work", authRequired: false });
@@ -353,10 +353,10 @@ describe("Google Drive sync", () => {
   test("preflight reports auth errors without listing or uploading", async () => {
     const machine = getCurrentMachine();
     const s3Source = createSource({
-      name: "prod-files",
+      name: "prod-emails-drive",
       type: "s3",
-      bucket: "hasna-xyz-prod-files",
-      region: "us-east-1",
+      bucket: "hasna-xyz-prod-emails",
+      region: "us-west-2",
       config: { profile: "hasna-xyz-infra" },
       machine_id: machine.id,
     });
@@ -401,7 +401,7 @@ describe("Google Drive sync", () => {
       type: "s3",
       bucket: "files-bucket",
       prefix: "imports",
-      region: "us-east-1",
+      region: "us-west-2",
       config: {},
       machine_id: machine.id,
     });
@@ -433,20 +433,20 @@ describe("Google Drive sync", () => {
     expect(stats).toMatchObject({ added: 1, updated: 0, deleted: 0, errors: 0 });
     expect(uploads).toEqual([{
       source: s3Source.id,
-      key: "imports/google-drive/work/my-drive/report (doc-1).txt",
+      key: "imports/work/my-drive/report (doc-1).txt",
       data: "data:doc-1",
     }]);
     const indexed = listFiles({ source_id: s3Source.id });
     expect(indexed).toHaveLength(1);
-    expect(indexed[0]?.path).toBe("imports/google-drive/work/my-drive/report (doc-1).txt");
+    expect(indexed[0]?.path).toBe("imports/work/my-drive/report (doc-1).txt");
     expect(indexed[0]?.source_id).toBe(s3Source.id);
 
     const imports = listGoogleDriveImportedObjects(googleSource.id);
     expect(imports[0]).toMatchObject({
       destination_source_id: s3Source.id,
       storage_type: "s3",
-      storage_key: "imports/google-drive/work/my-drive/report (doc-1).txt",
-      s3_key: "imports/google-drive/work/my-drive/report (doc-1).txt",
+      storage_key: "imports/work/my-drive/report (doc-1).txt",
+      s3_key: "imports/work/my-drive/report (doc-1).txt",
       file_record_id: indexed[0]?.id,
     });
   });
@@ -458,7 +458,7 @@ describe("Google Drive sync", () => {
       type: "s3",
       bucket: "files-bucket",
       prefix: "imports",
-      region: "us-east-1",
+      region: "us-west-2",
       config: {},
       machine_id: machine.id,
     });
@@ -504,14 +504,14 @@ describe("Google Drive sync", () => {
     expect(stats).toMatchObject({ added: 1, updated: 0, deleted: 0, errors: 0 });
     expect(client.downloaded).toEqual(["stream:large-video"]);
     expect(uploads).toEqual([{
-      key: "imports/google-drive/work/my-drive/EUROFABEIQUE_FINAL (large-video).mp4",
+      key: "imports/work/my-drive/EUROFABEIQUE_FINAL (large-video).mp4",
       contentLength: 19344300537,
       bodyWasBuffer: false,
       data: "stream:large-video",
     }]);
     const indexed = listFiles({ source_id: s3Source.id });
     expect(indexed[0]).toMatchObject({
-      path: "imports/google-drive/work/my-drive/EUROFABEIQUE_FINAL (large-video).mp4",
+      path: "imports/work/my-drive/EUROFABEIQUE_FINAL (large-video).mp4",
       size: 19344300537,
       hash: "drive-md5",
     });
@@ -528,7 +528,7 @@ describe("Google Drive sync", () => {
       name: "Files bucket",
       type: "s3",
       bucket: "files-bucket",
-      region: "us-east-1",
+      region: "us-west-2",
       config: {},
       machine_id: machine.id,
     });
@@ -562,17 +562,17 @@ describe("Google Drive sync", () => {
 
     expect(stats).toMatchObject({ added: 2, updated: 0, deleted: 0, errors: 0 });
     expect(uploads).toEqual([
-      "google-drive/work/my-drive/Invoice (invoice-a).pdf",
-      "google-drive/work/my-drive/Invoice (invoice-b).pdf",
+      "work/my-drive/Invoice (invoice-a).pdf",
+      "work/my-drive/Invoice (invoice-b).pdf",
     ]);
     expect(new Set(uploads).size).toBe(2);
     expect(listFiles({ source_id: s3Source.id }).map((item) => item.path).sort()).toEqual([
-      "google-drive/work/my-drive/Invoice (invoice-a).pdf",
-      "google-drive/work/my-drive/Invoice (invoice-b).pdf",
+      "work/my-drive/Invoice (invoice-a).pdf",
+      "work/my-drive/Invoice (invoice-b).pdf",
     ]);
     expect(listGoogleDriveImportedObjects(googleSource.id).map((item) => item.s3_key).sort()).toEqual([
-      "google-drive/work/my-drive/Invoice (invoice-a).pdf",
-      "google-drive/work/my-drive/Invoice (invoice-b).pdf",
+      "work/my-drive/Invoice (invoice-a).pdf",
+      "work/my-drive/Invoice (invoice-b).pdf",
     ]);
   });
 
@@ -582,7 +582,7 @@ describe("Google Drive sync", () => {
       name: "Files bucket",
       type: "s3",
       bucket: "files-bucket",
-      region: "us-east-1",
+      region: "us-west-2",
       config: {},
       machine_id: machine.id,
     });
@@ -622,8 +622,8 @@ describe("Google Drive sync", () => {
     expect(stats).toMatchObject({ added: 2, updated: 0, deleted: 0, errors: 0 });
     expect(client.downloaded).toEqual([]);
     expect(uploads.map((item) => item.key)).toEqual([
-      "google-drive/work/my-drive/Hiring Form.gdrive-metadata (form-1).json",
-      "google-drive/work/my-drive/Shared Folder.gdrive-metadata (shortcut-1).json",
+      "work/my-drive/Hiring Form.gdrive-metadata (form-1).json",
+      "work/my-drive/Shared Folder.gdrive-metadata (shortcut-1).json",
     ]);
     expect(uploads.every((item) => item.mime === "application/json")).toBe(true);
     expect(uploads[0]?.data).toMatchObject({
@@ -637,8 +637,8 @@ describe("Google Drive sync", () => {
       archived_as: "google-drive-metadata",
     });
     expect(listGoogleDriveImportedObjects(googleSource.id).map((item) => item.s3_key).sort()).toEqual([
-      "google-drive/work/my-drive/Hiring Form.gdrive-metadata (form-1).json",
-      "google-drive/work/my-drive/Shared Folder.gdrive-metadata (shortcut-1).json",
+      "work/my-drive/Hiring Form.gdrive-metadata (form-1).json",
+      "work/my-drive/Shared Folder.gdrive-metadata (shortcut-1).json",
     ]);
   });
 
@@ -648,7 +648,7 @@ describe("Google Drive sync", () => {
       name: "Files bucket",
       type: "s3",
       bucket: "files-bucket",
-      region: "us-east-1",
+      region: "us-west-2",
       config: {},
       machine_id: machine.id,
     });
@@ -694,7 +694,7 @@ describe("Google Drive sync", () => {
     expect(client.downloaded).toEqual(["presentation-1"]);
     expect(uploads).toHaveLength(1);
     expect(uploads[0]).toMatchObject({
-      key: "google-drive/work/my-drive/Lane Health Visual Concepts.gdrive-metadata (presentation-1).json",
+      key: "work/my-drive/Lane Health Visual Concepts.gdrive-metadata (presentation-1).json",
       mime: "application/json",
     });
     expect(uploads[0]?.data).toMatchObject({
@@ -709,10 +709,10 @@ describe("Google Drive sync", () => {
   test("skips unchanged Drive files and updates changed revisions on repeated S3 syncs", async () => {
     const machine = getCurrentMachine();
     const s3Source = createSource({
-      name: "prod-files",
+      name: "prod-emails-drive",
       type: "s3",
-      bucket: "hasna-xyz-prod-files",
-      region: "us-east-1",
+      bucket: "hasna-xyz-prod-emails",
+      region: "us-west-2",
       config: { profile: "hasna-xyz-infra" },
       machine_id: machine.id,
     });
@@ -754,8 +754,8 @@ describe("Google Drive sync", () => {
     expect(await syncGoogleDriveSource(googleSource)).toMatchObject({ added: 0, updated: 1, errors: 0 });
 
     expect(uploads).toEqual([
-      "google-drive/work/my-drive/report (doc-1).txt",
-      "google-drive/work/my-drive/report (doc-1).txt",
+      "work/my-drive/report (doc-1).txt",
+      "work/my-drive/report (doc-1).txt",
     ]);
     expect(listGoogleDriveImportedObjects(googleSource.id)[0]).toMatchObject({
       hash: "hash-2",
@@ -767,10 +767,10 @@ describe("Google Drive sync", () => {
   test("retries Drive files that failed during a previous S3 sync", async () => {
     const machine = getCurrentMachine();
     const s3Source = createSource({
-      name: "prod-files",
+      name: "prod-emails-drive",
       type: "s3",
-      bucket: "hasna-xyz-prod-files",
-      region: "us-east-1",
+      bucket: "hasna-xyz-prod-emails",
+      region: "us-west-2",
       config: { profile: "hasna-xyz-infra" },
       machine_id: machine.id,
     });
@@ -808,12 +808,12 @@ describe("Google Drive sync", () => {
     shouldFail = false;
     expect(await syncGoogleDriveSource(googleSource)).toMatchObject({ added: 1, updated: 0, errors: 0 });
     expect(uploads).toEqual([
-      "google-drive/work/my-drive/resume (doc-1).txt",
-      "google-drive/work/my-drive/resume (doc-1).txt",
+      "work/my-drive/resume (doc-1).txt",
+      "work/my-drive/resume (doc-1).txt",
     ]);
     expect(listGoogleDriveImportedObjects(googleSource.id)[0]).toMatchObject({
       file_id: "doc-1",
-      storage_key: "google-drive/work/my-drive/resume (doc-1).txt",
+      storage_key: "work/my-drive/resume (doc-1).txt",
     });
   });
 
@@ -843,11 +843,11 @@ describe("Google Drive sync", () => {
     setGoogleDriveClientFactoryForTests(() => new MockDriveClient(() => ({ files })));
 
     await syncGoogleDriveSource(googleSource);
-    const storedPath = join(localRoot, "google-drive/personal/my-drive/todo (doc-1).txt");
+    const storedPath = join(localRoot, "personal/my-drive/todo (doc-1).txt");
     expect(existsSync(storedPath)).toBe(true);
     expect(readFileSync(storedPath, "utf8")).toBe("data:doc-1");
     const indexed = listFiles({ source_id: localSource.id });
-    expect(indexed[0]?.path).toBe("google-drive/personal/my-drive/todo (doc-1).txt");
+    expect(indexed[0]?.path).toBe("personal/my-drive/todo (doc-1).txt");
 
     files = [];
     const deleteStats = await syncGoogleDriveSource(googleSource);
@@ -857,7 +857,7 @@ describe("Google Drive sync", () => {
     const imports = listGoogleDriveImportedObjects(googleSource.id);
     expect(imports[0]).toMatchObject({
       storage_type: "local",
-      storage_key: "google-drive/personal/my-drive/todo (doc-1).txt",
+      storage_key: "personal/my-drive/todo (doc-1).txt",
       destination_source_id: localSource.id,
       deleted: true,
     });
@@ -891,7 +891,7 @@ describe("Google Drive sync", () => {
 
     await syncGoogleDriveSource(googleSource);
 
-    expect(listFiles({ source_id: localSource.id })[0]?.path).toBe("google-drive/personal/my-drive/configured (doc-1).txt");
+    expect(listFiles({ source_id: localSource.id })[0]?.path).toBe("personal/my-drive/configured (doc-1).txt");
   });
 });
 
