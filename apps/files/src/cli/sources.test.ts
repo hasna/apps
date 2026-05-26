@@ -205,6 +205,8 @@ describe("sources CLI", () => {
     const bootstrapped = JSON.parse(new TextDecoder().decode(bootstrap.stdout)) as {
       source: { id: string; bucket?: string; prefix?: string };
       google_drive_default_destination_source_id?: string;
+      updated_google_drive_source_ids: string[];
+      disabled_legacy_source_ids: string[];
     };
 
     expect(bootstrapped.source.id).toBe(activeId);
@@ -213,6 +215,8 @@ describe("sources CLI", () => {
       prefix: "drive",
     });
     expect(bootstrapped.google_drive_default_destination_source_id).toBe(activeId);
+    expect(bootstrapped.updated_google_drive_source_ids).toEqual([]);
+    expect(bootstrapped.disabled_legacy_source_ids).toEqual([]);
 
     list = Bun.spawnSync({
       cmd: ["bun", "run", cliPath, "sources", "list", "--json"],
@@ -234,6 +238,99 @@ describe("sources CLI", () => {
       bucket: "hasna-prod-files",
       enabled: false,
     });
+  });
+
+  test("repairs Drive source destinations that point at disabled legacy S3 sources", () => {
+    const env = cliEnv();
+    const legacy = Bun.spawnSync({
+      cmd: ["bun", "run", cliPath, "sources", "add", "s3://hasna-xyz-prod-files/google-drive", "--name", "prod-files"],
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(legacy.exitCode).toBe(0);
+
+    let list = Bun.spawnSync({
+      cmd: ["bun", "run", cliPath, "sources", "list", "--json"],
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const legacyId = (JSON.parse(new TextDecoder().decode(list.stdout)) as Array<{ id: string }>)[0]!.id;
+
+    const drive = Bun.spawnSync({
+      cmd: [
+        "bun",
+        "run",
+        cliPath,
+        "sources",
+        "add-google-drive",
+        "--profile",
+        "andreihasnacom",
+        "--include-my-drive",
+        "--destination-source",
+        legacyId,
+      ],
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(drive.exitCode).toBe(0);
+
+    expect(Bun.spawnSync({
+      cmd: ["bun", "run", cliPath, "sources", "disable", legacyId],
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    }).exitCode).toBe(0);
+
+    const current = Bun.spawnSync({
+      cmd: ["bun", "run", cliPath, "sources", "add", "s3://hasna-xyz-prod-emails/drive", "--name", "prod-emails-drive"],
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(current.exitCode).toBe(0);
+
+    list = Bun.spawnSync({
+      cmd: ["bun", "run", cliPath, "sources", "list", "--json"],
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const currentId = (JSON.parse(new TextDecoder().decode(list.stdout)) as Array<{
+      id: string;
+      type: string;
+      bucket?: string;
+    }>).find((source) => source.type === "s3" && source.bucket === "hasna-xyz-prod-emails")!.id;
+
+    const bootstrap = Bun.spawnSync({
+      cmd: ["bun", "run", cliPath, "sources", "bootstrap-prod-files", "--json"],
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(bootstrap.exitCode).toBe(0);
+    const bootstrapped = JSON.parse(new TextDecoder().decode(bootstrap.stdout)) as {
+      source: { id: string; bucket?: string; prefix?: string };
+      updated_google_drive_source_ids: string[];
+    };
+    expect(bootstrapped.source.id).toBe(currentId);
+    expect(bootstrapped.updated_google_drive_source_ids).toHaveLength(1);
+
+    list = Bun.spawnSync({
+      cmd: ["bun", "run", cliPath, "sources", "list", "--json"],
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const sources = JSON.parse(new TextDecoder().decode(list.stdout)) as Array<{
+      id: string;
+      type: string;
+      config: { destination_source_id?: string };
+    }>;
+    const driveSource = sources.find((source) => source.type === "google_drive")!;
+    expect(driveSource.config.destination_source_id).toBe(currentId);
   });
 });
 

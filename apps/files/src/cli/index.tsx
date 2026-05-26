@@ -250,10 +250,14 @@ sources
       source.type === "s3"
         && (legacyProductionNames.has(source.name) || legacyProductionBuckets.has(source.bucket ?? ""))
     );
-    const existing = candidates.find((source) => activeDriveDestinationIds.has(source.id))
-      ?? candidates.find((source) => configuredDefaultId === source.id)
+    const existing = candidates.find((source) => activeDriveDestinationIds.has(source.id) && source.enabled)
+      ?? candidates.find((source) => configuredDefaultId === source.id && source.enabled)
+      ?? candidates.find((source) => source.enabled && source.bucket === opts.bucket)
       ?? candidates.find((source) => source.enabled)
+      ?? candidates.find((source) => configuredDefaultId === source.id)
+      ?? candidates.find((source) => activeDriveDestinationIds.has(source.id))
       ?? candidates[0];
+    const candidateIds = new Set(candidates.map((source) => source.id));
 
     const source = existing
       ? updateSource(existing.id, {
@@ -274,6 +278,29 @@ sources
           machine_id: machine.id,
         });
 
+    const updatedGoogleDriveSourceIds: string[] = [];
+    for (const driveSource of allSources.filter((source) => source.type === "google_drive")) {
+      const driveConfig = driveSource.config as GoogleDriveConfig;
+      const shouldRepairDestination = !driveConfig.destination_source_id
+        || candidateIds.has(driveConfig.destination_source_id);
+      if (!shouldRepairDestination || driveConfig.destination_source_id === source.id) continue;
+
+      updateSource(driveSource.id, {
+        config: {
+          ...driveConfig,
+          destination_source_id: source.id,
+        },
+      });
+      updatedGoogleDriveSourceIds.push(driveSource.id);
+    }
+
+    const disabledLegacySourceIds: string[] = [];
+    for (const candidate of candidates) {
+      if (candidate.id === source.id || !candidate.enabled) continue;
+      updateSource(candidate.id, { enabled: false });
+      disabledLegacySourceIds.push(candidate.id);
+    }
+
     if (opts.googleDriveDefault !== false) {
       setConfigValue("google_drive_default_destination_source_id", source.id);
     }
@@ -282,6 +309,8 @@ sources
       console.log(JSON.stringify({
         source,
         google_drive_default_destination_source_id: opts.googleDriveDefault === false ? undefined : source.id,
+        updated_google_drive_source_ids: updatedGoogleDriveSourceIds,
+        disabled_legacy_source_ids: disabledLegacySourceIds,
       }, null, 2));
       return;
     }
@@ -291,6 +320,12 @@ sources
     console.log(chalk.dim(`  AWS profile: ${opts.awsProfile}`));
     if (opts.googleDriveDefault !== false) {
       console.log(chalk.dim("  Google Drive default destination: set"));
+    }
+    if (updatedGoogleDriveSourceIds.length) {
+      console.log(chalk.dim(`  Google Drive sources repaired: ${updatedGoogleDriveSourceIds.join(", ")}`));
+    }
+    if (disabledLegacySourceIds.length) {
+      console.log(chalk.dim(`  Legacy S3 sources disabled: ${disabledLegacySourceIds.join(", ")}`));
     }
   });
 
