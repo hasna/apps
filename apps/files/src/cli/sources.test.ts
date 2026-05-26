@@ -131,6 +131,110 @@ describe("sources CLI", () => {
     });
     expect(JSON.parse(new TextDecoder().decode(config.stdout))).toBe(bootstrapped.source.id);
   });
+
+  test("bootstraps the S3 source used by enabled Drive sources before disabled legacy duplicates", () => {
+    const env = cliEnv();
+    const disabledLegacy = Bun.spawnSync({
+      cmd: ["bun", "run", cliPath, "sources", "add", "s3://hasna-prod-files", "--name", "prod-files"],
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(disabledLegacy.exitCode).toBe(0);
+
+    let list = Bun.spawnSync({
+      cmd: ["bun", "run", cliPath, "sources", "list", "--json"],
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const disabledId = (JSON.parse(new TextDecoder().decode(list.stdout)) as Array<{ id: string }>)[0]!.id;
+    expect(Bun.spawnSync({
+      cmd: ["bun", "run", cliPath, "sources", "disable", disabledId],
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    }).exitCode).toBe(0);
+
+    const activeLegacy = Bun.spawnSync({
+      cmd: ["bun", "run", cliPath, "sources", "add", "s3://hasna-xyz-prod-files", "--name", "prod-files"],
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(activeLegacy.exitCode).toBe(0);
+
+    list = Bun.spawnSync({
+      cmd: ["bun", "run", cliPath, "sources", "list", "--json"],
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const activeId = (JSON.parse(new TextDecoder().decode(list.stdout)) as Array<{
+      id: string;
+      type: string;
+      enabled: boolean;
+    }>).find((source) => source.type === "s3" && source.enabled)!.id;
+
+    const drive = Bun.spawnSync({
+      cmd: [
+        "bun",
+        "run",
+        cliPath,
+        "sources",
+        "add-google-drive",
+        "--profile",
+        "andreihasnacom",
+        "--include-my-drive",
+        "--destination-source",
+        activeId,
+      ],
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(drive.exitCode).toBe(0);
+
+    const bootstrap = Bun.spawnSync({
+      cmd: ["bun", "run", cliPath, "sources", "bootstrap-prod-files", "--json"],
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(bootstrap.exitCode).toBe(0);
+    const bootstrapped = JSON.parse(new TextDecoder().decode(bootstrap.stdout)) as {
+      source: { id: string; bucket?: string; prefix?: string };
+      google_drive_default_destination_source_id?: string;
+    };
+
+    expect(bootstrapped.source.id).toBe(activeId);
+    expect(bootstrapped.source).toMatchObject({
+      bucket: "hasna-xyz-prod-emails",
+      prefix: "drive",
+    });
+    expect(bootstrapped.google_drive_default_destination_source_id).toBe(activeId);
+
+    list = Bun.spawnSync({
+      cmd: ["bun", "run", cliPath, "sources", "list", "--json"],
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const sources = JSON.parse(new TextDecoder().decode(list.stdout)) as Array<{
+      id: string;
+      type: string;
+      bucket?: string;
+      enabled: boolean;
+    }>;
+    expect(sources.find((source) => source.id === activeId)).toMatchObject({
+      bucket: "hasna-xyz-prod-emails",
+      enabled: true,
+    });
+    expect(sources.find((source) => source.id === disabledId)).toMatchObject({
+      bucket: "hasna-prod-files",
+      enabled: false,
+    });
+  });
 });
 
 function cliEnv(): NodeJS.ProcessEnv {

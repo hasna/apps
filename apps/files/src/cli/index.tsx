@@ -238,10 +238,22 @@ sources
     const config: S3Config = { profile: opts.awsProfile };
     const legacyProductionNames = new Set([opts.name, "prod-files"]);
     const legacyProductionBuckets = new Set([opts.bucket, "hasna-xyz-prod-files", "hasna-prod-files"]);
-    const existing = listSources().find((source) =>
+    const allSources = listSources();
+    const activeDriveDestinationIds = new Set(
+      allSources
+        .filter((source) => source.enabled && source.type === "google_drive")
+        .map((source) => (source.config as GoogleDriveConfig).destination_source_id)
+        .filter((id): id is string => Boolean(id)),
+    );
+    const configuredDefaultId = loadConfig().google_drive_default_destination_source_id;
+    const candidates = allSources.filter((source) =>
       source.type === "s3"
         && (legacyProductionNames.has(source.name) || legacyProductionBuckets.has(source.bucket ?? ""))
     );
+    const existing = candidates.find((source) => activeDriveDestinationIds.has(source.id))
+      ?? candidates.find((source) => configuredDefaultId === source.id)
+      ?? candidates.find((source) => source.enabled)
+      ?? candidates[0];
 
     const source = existing
       ? updateSource(existing.id, {
