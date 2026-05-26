@@ -9,7 +9,11 @@ import {
   getConnectorCommandHelp,
   hasConnectorCommandSurface,
 } from "../../lib/runner.js";
-import { getConnectorConfigReadDirs } from "../../lib/connector-resolver.js";
+import {
+  getCurrentOAuthProfile,
+  getOAuthTokenPathsForProfile,
+  hasOAuthTokenFileUpdatedSince,
+} from "./auth.js";
 
 export function registerCommands(program: Command): void {
   // ============================================
@@ -225,14 +229,13 @@ export function registerCommands(program: Command): void {
 
               const { spawn } = await import("child_process");
               const { getConnectorsHome } = await import("../../db/database.js");
-              const { existsSync } = await import("fs");
-              const { join } = await import("path");
 
               const scriptPath = process.argv[1];
-              const serverProc = spawn("node", [scriptPath, "serve", "--port", String(port)], {
+              const serverProc = spawn(process.execPath, [scriptPath, "serve", "--port", String(port)], {
                 detached: true,
                 stdio: "ignore",
               });
+              const startedAt = Date.now();
               serverProc.unref();
               await new Promise<void>((resolve) => setTimeout(resolve, 2000));
 
@@ -246,14 +249,14 @@ export function registerCommands(program: Command): void {
 
               console.log(chalk.dim("  Waiting for authentication to complete..."));
               const connectorsHome = getConnectorsHome();
-              const tokenPaths = getConnectorConfigReadDirs(name, connectorsHome)
-                .map((dir) => join(dir, "profiles", "default", "tokens.json"));
+              const activeProfile = getCurrentOAuthProfile(name, connectorsHome);
+              const tokenPaths = getOAuthTokenPathsForProfile(name, connectorsHome, activeProfile);
 
               let attempts = 0;
               const maxAttempts = 360;
               while (attempts < maxAttempts) {
                 await new Promise<void>((resolve) => setTimeout(resolve, 500));
-                if (tokenPaths.some((tokensPath) => existsSync(tokensPath))) break;
+                if (hasOAuthTokenFileUpdatedSince(tokenPaths, startedAt)) break;
                 attempts++;
                 if (attempts % 6 === 0) process.stdout.write(".");
               }

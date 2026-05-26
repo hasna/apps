@@ -75,6 +75,34 @@ function getOAuthTokenState(name: string): { hasTokens: boolean; expired: boolea
   return { hasTokens: true, expired: isExpired, expiresIn };
 }
 
+export function getCurrentOAuthProfile(name: string, connectorsHome = getConnectorsHome()): string {
+  for (const dir of getConnectorConfigReadDirs(name, connectorsHome)) {
+    const currentProfilePath = join(dir, "current_profile");
+    if (!existsSync(currentProfilePath)) continue;
+
+    const profile = readFileSync(currentProfilePath, "utf8").trim();
+    if (profile) return profile;
+  }
+
+  return "default";
+}
+
+export function getOAuthTokenPathsForProfile(
+  name: string,
+  connectorsHome = getConnectorsHome(),
+  profile = getCurrentOAuthProfile(name, connectorsHome)
+): string[] {
+  return getConnectorConfigReadDirs(name, connectorsHome)
+    .map((dir) => join(dir, "profiles", profile, "tokens.json"));
+}
+
+export function hasOAuthTokenFileUpdatedSince(tokenPaths: string[], sinceMs: number): boolean {
+  return tokenPaths.some((tokensPath) => {
+    if (!existsSync(tokensPath)) return false;
+    return statSync(tokensPath).mtimeMs >= sinceMs;
+  });
+}
+
 export function registerCommands(program: Command): void {
   // Auth command — configure connector authentication from CLI
   program
@@ -228,10 +256,11 @@ export function registerCommands(program: Command): void {
 
             // Resolve the path to the connectors CLI
             const scriptPath = process.argv[1];
-            const serverProc = spawn("node", [scriptPath, "serve", "--port", String(port)], {
+            const serverProc = spawn(process.execPath, [scriptPath, "serve", "--port", String(port)], {
               detached: true,
               stdio: "ignore",
             });
+            const startedAt = Date.now();
 
             // Unref so we don't wait on the child if the parent exits
             serverProc.unref();
@@ -255,14 +284,14 @@ export function registerCommands(program: Command): void {
 
             // Poll for the tokens file with progress dots
             const connectorsHome = getConnectorsHome();
-            const tokenPaths = getConnectorConfigReadDirs(connector, connectorsHome)
-              .map((dir) => join(dir, "profiles", "default", "tokens.json"));
+            const activeProfile = getCurrentOAuthProfile(connector, connectorsHome);
+            const tokenPaths = getOAuthTokenPathsForProfile(connector, connectorsHome, activeProfile);
 
             let attempts = 0;
             const maxAttempts = 360; // 3 minutes at 500ms intervals
             while (attempts < maxAttempts) {
               await new Promise<void>((resolve) => setTimeout(resolve, 500));
-              if (tokenPaths.some((tokensPath) => existsSync(tokensPath))) {
+              if (hasOAuthTokenFileUpdatedSince(tokenPaths, startedAt)) {
                 break;
               }
               attempts++;
