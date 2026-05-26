@@ -55,6 +55,7 @@ describe("internal connector operations", () => {
       expect(operations).toContain("files.list");
       expect(operations).toContain("files.download");
       expect(operations).toContain("drives.list");
+      expect(operations).toContain("profiles.status");
 
       const result = await executeConnectorOperation(googleDriveConnector, {
         operation: "profiles.list",
@@ -66,6 +67,70 @@ describe("internal connector operations", () => {
         delete process.env.HASNA_GOOGLE_DRIVE_CONNECTOR_DIR;
       } else {
         process.env.HASNA_GOOGLE_DRIVE_CONNECTOR_DIR = previousDir;
+      }
+    }
+  });
+
+  test("reports google drive profile auth status without network", async () => {
+    const previousDir = process.env.HASNA_GOOGLE_DRIVE_CONNECTOR_DIR;
+    const previousToken = process.env.GOOGLE_ACCESS_TOKEN;
+    const configDir = join(tmpdir(), `connectors-googledrive-status-${crypto.randomUUID()}`);
+    const validProfileDir = join(configDir, "profiles", "valid");
+    const expiredProfileDir = join(configDir, "profiles", "expired");
+    mkdirSync(validProfileDir, { recursive: true });
+    mkdirSync(expiredProfileDir, { recursive: true });
+    writeFileSync(join(configDir, "credentials.json"), JSON.stringify({ clientId: "client", clientSecret: "secret" }));
+    writeFileSync(join(validProfileDir, "tokens.json"), JSON.stringify({
+      accessToken: "access",
+      refreshToken: "refresh",
+      expiresAt: Date.now() + 3_600_000,
+    }));
+    writeFileSync(join(expiredProfileDir, "tokens.json"), JSON.stringify({
+      accessToken: "access",
+      expiresAt: Date.now() - 60_000,
+    }));
+    process.env.HASNA_GOOGLE_DRIVE_CONNECTOR_DIR = configDir;
+    delete process.env.GOOGLE_ACCESS_TOKEN;
+
+    try {
+      const result = await executeConnectorOperation(googleDriveConnector, {
+        operation: "profiles.status",
+      }) as {
+        profiles: Array<{
+          profile: string;
+          authenticated: boolean;
+          expired: boolean;
+          authRequired: boolean;
+          hasRefreshToken: boolean;
+          hasOAuthCredentials: boolean;
+        }>;
+      };
+
+      expect(result.profiles.map((item) => item.profile)).toEqual(["expired", "valid"]);
+      expect(result.profiles.find((item) => item.profile === "valid")).toMatchObject({
+        authenticated: true,
+        expired: false,
+        authRequired: false,
+        hasRefreshToken: true,
+        hasOAuthCredentials: true,
+      });
+      expect(result.profiles.find((item) => item.profile === "expired")).toMatchObject({
+        authenticated: false,
+        expired: true,
+        authRequired: true,
+        hasRefreshToken: false,
+        hasOAuthCredentials: true,
+      });
+    } finally {
+      if (previousDir === undefined) {
+        delete process.env.HASNA_GOOGLE_DRIVE_CONNECTOR_DIR;
+      } else {
+        process.env.HASNA_GOOGLE_DRIVE_CONNECTOR_DIR = previousDir;
+      }
+      if (previousToken === undefined) {
+        delete process.env.GOOGLE_ACCESS_TOKEN;
+      } else {
+        process.env.GOOGLE_ACCESS_TOKEN = previousToken;
       }
     }
   });

@@ -100,6 +100,10 @@ const downloadSchema = z.object({
   exportMimeType: z.string().optional(),
 });
 
+const profilesStatusSchema = z.object({
+  profile: z.string().optional(),
+});
+
 export const googleDriveConnector = defineConnector<GoogleDriveContext>({
   meta: {
     name: "googledrive",
@@ -121,6 +125,11 @@ export const googleDriveConnector = defineConnector<GoogleDriveContext>({
     "profiles.list": {
       summary: "List configured Google Drive profiles.",
       execute: () => ({ profiles: listProfiles() }),
+    },
+    "profiles.status": {
+      summary: "List Google Drive profile authentication status.",
+      inputSchema: profilesStatusSchema,
+      execute: (_ctx, input) => ({ profiles: listProfileStatuses(input.profile) }),
     },
     "files.list": {
       summary: "List Google Drive files.",
@@ -258,6 +267,53 @@ function listProfiles(): string[] {
     }
   }
   return Array.from(profiles).sort((a, b) => a.localeCompare(b));
+}
+
+function listProfileStatuses(profile?: string): Array<{
+  profile: string;
+  configured: boolean;
+  authenticated: boolean;
+  expired: boolean;
+  expiresAt: number | null;
+  hasAccessToken: boolean;
+  hasRefreshToken: boolean;
+  hasOAuthCredentials: boolean;
+  authRequired: boolean;
+  message: string;
+}> {
+  const profiles = profile ? [profile] : listProfiles();
+  const uniqueProfiles = profiles.length ? profiles : ["default"];
+  const now = Date.now();
+
+  return uniqueProfiles.map((name) => {
+    const tokens = loadTokens(name);
+    const credentials = loadCredentials(name);
+    const hasAccessToken = Boolean(tokens?.accessToken || process.env.GOOGLE_ACCESS_TOKEN);
+    const hasRefreshToken = Boolean(tokens?.refreshToken);
+    const hasOAuthCredentials = Boolean(credentials.clientId && credentials.clientSecret);
+    const expiresAt = tokens?.expiresAt ?? null;
+    const expired = Boolean(expiresAt && now >= expiresAt - REFRESH_BUFFER_MS);
+    const authenticated = Boolean(process.env.GOOGLE_ACCESS_TOKEN || hasRefreshToken || (hasAccessToken && !expired));
+    const configured = authenticated || hasOAuthCredentials;
+    const authRequired = !authenticated || (expired && !hasRefreshToken);
+
+    return {
+      profile: name,
+      configured,
+      authenticated,
+      expired,
+      expiresAt,
+      hasAccessToken,
+      hasRefreshToken,
+      hasOAuthCredentials,
+      authRequired,
+      message: authRequired
+        ? `Google Drive profile "${name}" needs authentication. Run: connectors auth googledrive`
+        : expired
+          ? `Google Drive profile "${name}" access token is expired but can refresh.`
+          : `Google Drive profile "${name}" is authenticated.`,
+    };
+  });
 }
 
 function loadCredentials(profile: string): OAuthCredentials {
