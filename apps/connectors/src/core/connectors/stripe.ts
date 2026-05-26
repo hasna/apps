@@ -100,10 +100,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 function resolveStripeConnectorDir(): string {
   const candidates = [
-    join(__dirname, "..", "..", "..", "connectors", "connect-stripe"),
-    join(__dirname, "..", "..", "connectors", "connect-stripe"),
-    join(__dirname, "..", "connectors", "connect-stripe"),
-    join(process.cwd(), "connectors", "connect-stripe"),
+    join(__dirname, "..", "..", "..", "connectors", "stripe"),
+    join(__dirname, "..", "..", "connectors", "stripe"),
+    join(__dirname, "..", "connectors", "stripe"),
+    join(process.cwd(), "connectors", "stripe"),
   ];
 
   for (const candidate of candidates) {

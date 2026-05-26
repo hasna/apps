@@ -345,7 +345,7 @@ export function getDashboardHtml(port: number): string {
         envHtml +
         '<label>API Key / Token</label>' +
         '<input type="password" id="key-input" placeholder="Enter key or token..." />' +
-        '<div class="hint">Stored locally at ~/.hasna/connectors/connect-' + name + '/</div>' +
+        '<div class="hint">Stored locally at ~/.hasna/connectors/' + name + '/</div>' +
         '<div class="actions">' +
         '<button class="btn" onclick="closeModal()">Cancel</button>' +
         '<button class="btn btn-primary" onclick="saveKey(\\''+name+'\\')">Save</button>' +

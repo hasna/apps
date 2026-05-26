@@ -8,13 +8,18 @@ const TEST_ID = `zzztest${process.pid}`;
 const originalFetch = global.fetch;
 
 function testConfigDir(name: string): string {
+  return join(homedir(), ".hasna", "connectors", name);
+}
+
+function legacyTestConfigDir(name: string): string {
   return join(homedir(), ".hasna", "connectors", `connect-${name}`);
 }
 
 function cleanupTestConnectors(...names: string[]) {
   for (const name of names) {
-    const dir = testConfigDir(name);
-    if (existsSync(dir)) rmSync(dir, { recursive: true });
+    for (const dir of [testConfigDir(name), legacyTestConfigDir(name)]) {
+      if (existsSync(dir)) rmSync(dir, { recursive: true });
+    }
   }
 }
 

@@ -23,11 +23,19 @@ import {
 } from "../lib/registry.js";
 import { getInstalledConnectors, getConnectorDocs, installConnector, removeConnector } from "../lib/installer.js";
 import {
+  getConnectorConfigDir,
+  getConnectorConfigReadDirs,
+  isValidConnectorName,
+  listConfiguredConnectorNames,
+} from "../lib/connector-resolver.js";
+import {
   getConnectorCommandHelp,
   getConnectorOperations,
   hasConnectorCommandSurface,
   runConnectorCommand,
+  runConnectorOperation,
 } from "../lib/runner.js";
+import { getConnectorCapabilityManifest } from "../lib/manifest.js";
 import {
   getAuthStatus,
   saveApiKey,
@@ -147,11 +155,6 @@ function htmlResponse(content: string, status = 200): Response {
     status,
     headers: { "Content-Type": "text/html; charset=utf-8", ...SECURITY_HEADERS },
   });
-}
-
-/** Validate connector name to prevent path traversal */
-function isValidConnectorName(name: string): boolean {
-  return /^[a-z0-9-]+$/.test(name);
 }
 
 /** Max request body size (1MB) */
@@ -308,6 +311,21 @@ export async function startServer(requestedPort: number, options?: { open?: bool
         return jsonStripped(data, 200, port);
       }
 
+      // GET /api/connectors/manifest
+      if (path === "/api/connectors/manifest" && method === "GET") {
+        const connectorNames = url.searchParams.get("connectors")
+          ?.split(",")
+          .map((name) => name.trim())
+          .filter(Boolean);
+        const includeOperations = url.searchParams.get("includeOperations") === "true";
+
+        const manifest = await getConnectorCapabilityManifest({
+          includeOperations,
+          ...(connectorNames ? { connectorNames } : {}),
+        });
+        return json(manifest, 200, port);
+      }
+
       // GET /api/connectors/:name
       const singleMatch = path.match(/^\/api\/connectors\/([^/]+)$/);
       if (singleMatch && method === "GET") {
@@ -404,9 +422,31 @@ export async function startServer(requestedPort: number, options?: { open?: bool
 
           const body = (await req.json()) as {
             args?: unknown;
+            operation?: unknown;
+            input?: Record<string, unknown>;
+            profile?: string;
             format?: "json" | "pretty";
             timeout?: number;
+            parseJson?: boolean;
           };
+
+          if (typeof body.operation === "string" && body.operation.trim()) {
+            const result = await runConnectorOperation({
+              connector: name,
+              operation: body.operation,
+              input: body.input,
+              profile: body.profile,
+              timeoutMs: body.timeout ?? 30000,
+              parseJson: body.parseJson,
+            });
+
+            if (!result.success) {
+              return json({ displayName: meta.displayName, ...result }, 400, port);
+            }
+
+            return json({ displayName: meta.displayName, ...result }, 200, port);
+          }
+
           const args = Array.isArray(body.args)
             ? body.args.filter((value): value is string => typeof value === "string")
             : [];
@@ -748,11 +788,13 @@ export async function startServer(requestedPort: number, options?: { open?: bool
         if (!isValidConnectorName(name)) return json({ error: "Invalid connector name" }, 400, port);
         try {
           const profiles = listProfiles(name);
-          const configDir = join(getConnectorsHome(), name.startsWith("connect-") ? name : `connect-${name}`);
-          const currentProfileFile = join(configDir, "current_profile");
           let current = "default";
-          if (existsSync(currentProfileFile)) {
-            try { current = readFileSync(currentProfileFile, "utf-8").trim() || "default"; } catch { /* default */ }
+          for (const configDir of getConnectorConfigReadDirs(name)) {
+            const currentProfileFile = join(configDir, "current_profile");
+            if (existsSync(currentProfileFile)) {
+              try { current = readFileSync(currentProfileFile, "utf-8").trim() || "default"; } catch { /* default */ }
+              break;
+            }
           }
           return json({ current, profiles }, 200, port);
         } catch (e) {
@@ -804,33 +846,31 @@ export async function startServer(requestedPort: number, options?: { open?: bool
           const result: Record<string, { profiles: Record<string, unknown> }> = {};
 
           if (existsSync(connectDir)) {
-            const entries = readdirSync(connectDir, { withFileTypes: true });
-            for (const entry of entries) {
-              if (!entry.isDirectory() || !entry.name.startsWith("connect-")) continue;
-              const connectorName = entry.name.replace(/^connect-/, "");
-              const profilesDir = join(connectDir, entry.name, "profiles");
-              if (!existsSync(profilesDir)) continue;
-
+            for (const connectorName of listConfiguredConnectorNames(connectDir)) {
               const profiles: Record<string, unknown> = {};
-              const profileEntries = readdirSync(profilesDir, { withFileTypes: true });
+              for (const configDir of [...getConnectorConfigReadDirs(connectorName, connectDir)].reverse()) {
+                const profilesDir = join(configDir, "profiles");
+                if (!existsSync(profilesDir)) continue;
 
-              for (const pEntry of profileEntries) {
-                // Pattern 1: profiles/<name>.json (flat file)
-                if (pEntry.isFile() && pEntry.name.endsWith(".json")) {
-                  const profileName = basename(pEntry.name, ".json");
-                  try {
-                    const config = JSON.parse(readFileSync(join(profilesDir, pEntry.name), "utf-8"));
-                    profiles[profileName] = config;
-                  } catch { /* skip unreadable */ }
-                }
-                // Pattern 2: profiles/<name>/config.json (directory)
-                if (pEntry.isDirectory()) {
-                  const configPath = join(profilesDir, pEntry.name, "config.json");
-                  if (existsSync(configPath)) {
+                const profileEntries = readdirSync(profilesDir, { withFileTypes: true });
+                for (const pEntry of profileEntries) {
+                  // Pattern 1: profiles/<name>.json (flat file)
+                  if (pEntry.isFile() && pEntry.name.endsWith(".json")) {
+                    const profileName = basename(pEntry.name, ".json");
                     try {
-                      const config = JSON.parse(readFileSync(configPath, "utf-8"));
-                      profiles[pEntry.name] = config;
+                      const config = JSON.parse(readFileSync(join(profilesDir, pEntry.name), "utf-8"));
+                      profiles[profileName] = config;
                     } catch { /* skip unreadable */ }
+                  }
+                  // Pattern 2: profiles/<name>/config.json (directory)
+                  if (pEntry.isDirectory()) {
+                    const configPath = join(profilesDir, pEntry.name, "config.json");
+                    if (existsSync(configPath)) {
+                      try {
+                        const config = JSON.parse(readFileSync(configPath, "utf-8"));
+                        profiles[pEntry.name] = config;
+                      } catch { /* skip unreadable */ }
+                    }
                   }
                 }
               }
@@ -874,7 +914,7 @@ export async function startServer(requestedPort: number, options?: { open?: bool
             if (!isValidConnectorName(connectorName)) continue;
             if (!data.profiles || typeof data.profiles !== "object") continue;
 
-            const connectorDir = join(connectDir, `connect-${connectorName}`);
+            const connectorDir = getConnectorConfigDir(connectorName, connectDir);
             const profilesDir = join(connectorDir, "profiles");
 
             for (const [profileName, config] of Object.entries(data.profiles)) {
@@ -908,7 +948,7 @@ export async function startServer(requestedPort: number, options?: { open?: bool
             "warning",
             "OAuth Not Available",
             `No OAuth client credentials found for <span class="connector">${name}</span>.`,
-            `Run <code>connectors auth ${name}</code> or add credentials at <code>~/.hasna/connectors/connect-${name}/credentials.json</code>`
+            `Run <code>connectors auth ${name}</code> or add credentials at <code>~/.hasna/connectors/${name}/credentials.json</code>`
           ));
         }
 

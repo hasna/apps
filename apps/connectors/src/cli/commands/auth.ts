@@ -10,6 +10,11 @@ import { join } from "path";
 import { homedir } from "os";
 import { createInterface } from "readline";
 import { isTTY, listFilesRecursive } from "./install.js";
+import {
+  getConnectorConfigDir,
+  getConnectorConfigReadDirs,
+  listConfiguredConnectorNames,
+} from "../../lib/connector-resolver.js";
 
 const SENSITIVE_FIELDS = new Set([
   "clientsecret", "client_secret",
@@ -250,14 +255,14 @@ export function registerCommands(program: Command): void {
 
             // Poll for the tokens file with progress dots
             const connectorsHome = getConnectorsHome();
-            const connectorDirName = connector.startsWith("connect-") ? connector : `connect-${connector}`;
-            const tokensPath = join(connectorsHome, connectorDirName, "profiles", "default", "tokens.json");
+            const tokenPaths = getConnectorConfigReadDirs(connector, connectorsHome)
+              .map((dir) => join(dir, "profiles", "default", "tokens.json"));
 
             let attempts = 0;
             const maxAttempts = 360; // 3 minutes at 500ms intervals
             while (attempts < maxAttempts) {
               await new Promise<void>((resolve) => setTimeout(resolve, 500));
-              if (existsSync(tokensPath)) {
+              if (tokenPaths.some((tokensPath) => existsSync(tokensPath))) {
                 break;
               }
               attempts++;
@@ -275,7 +280,7 @@ export function registerCommands(program: Command): void {
             if (attempts >= maxAttempts) {
               console.log();
               console.log(chalk.yellow("Timed out waiting for OAuth callback. The auth may still be in progress."));
-              console.log(chalk.dim(`Check ${tokensPath} for tokens.`));
+              console.log(chalk.dim(`Check ${tokenPaths[0]} for tokens.`));
               console.log(chalk.dim("You can stop the server manually: lsof -ti :${port} | xargs kill"));
               process.exit(1);
               return;
@@ -444,14 +449,12 @@ export function registerCommands(program: Command): void {
       const configuredNames: string[] = [];
       try {
         if (existsSync(connectorsHome)) {
-          const entries = readdirSync(connectorsHome).filter(
-            (e) => e.startsWith("connect-") && statSync(join(connectorsHome, e)).isDirectory()
-          );
-          for (const entry of entries) {
-            const profilesDir = join(connectorsHome, entry, "profiles");
-            if (existsSync(profilesDir)) {
+          for (const name of listConfiguredConnectorNames(connectorsHome)) {
+            const hasProfiles = getConnectorConfigReadDirs(name, connectorsHome)
+              .some((dir) => existsSync(join(dir, "profiles")));
+            if (hasProfiles) {
               configuredCount++;
-              configuredNames.push(entry.replace(/^connect-/, ""));
+              configuredNames.push(name);
             }
           }
         }
@@ -528,38 +531,38 @@ export function registerCommands(program: Command): void {
       const result: Record<string, { credentials?: unknown; profiles: Record<string, unknown> }> = {};
 
       if (existsSync(connectDir)) {
-        for (const entry of readdirSync(connectDir)) {
-          const entryPath = join(connectDir, entry);
-          if (!statSync(entryPath).isDirectory() || !entry.startsWith("connect-")) continue;
-          const connectorName = entry.replace(/^connect-/, "");
+        for (const connectorName of listConfiguredConnectorNames(connectDir)) {
+          const connectorDirs = [...getConnectorConfigReadDirs(connectorName, connectDir)].reverse();
 
           // Read root-level credentials.json (OAuth client credentials shared across profiles)
           let credentials: unknown = undefined;
-          const credentialsPath = join(entryPath, "credentials.json");
-          if (existsSync(credentialsPath)) {
-            try { credentials = JSON.parse(readFileSync(credentialsPath, "utf-8")); } catch {}
+          for (const connectorDir of connectorDirs) {
+            const credentialsPath = join(connectorDir, "credentials.json");
+            if (existsSync(credentialsPath)) {
+              try { credentials = JSON.parse(readFileSync(credentialsPath, "utf-8")); } catch {}
+            }
           }
 
-          const profilesDir = join(entryPath, "profiles");
-          if (!existsSync(profilesDir) && !credentials) continue;
-
           const profiles: Record<string, unknown> = {};
-          if (existsSync(profilesDir)) {
-            for (const pEntry of readdirSync(profilesDir)) {
-              const pPath = join(profilesDir, pEntry);
-              if (statSync(pPath).isFile() && pEntry.endsWith(".json")) {
-                try { profiles[pEntry.replace(/\.json$/, "")] = JSON.parse(readFileSync(pPath, "utf-8")); } catch {}
-              } else if (statSync(pPath).isDirectory()) {
-                const configPath = join(pPath, "config.json");
-                const tokensPath = join(pPath, "tokens.json");
-                let merged: Record<string, unknown> = {};
-                if (existsSync(configPath)) {
-                  try { merged = { ...merged, ...JSON.parse(readFileSync(configPath, "utf-8")) }; } catch {}
+          for (const connectorDir of connectorDirs) {
+            const profilesDir = join(connectorDir, "profiles");
+            if (existsSync(profilesDir)) {
+              for (const pEntry of readdirSync(profilesDir)) {
+                const pPath = join(profilesDir, pEntry);
+                if (statSync(pPath).isFile() && pEntry.endsWith(".json")) {
+                  try { profiles[pEntry.replace(/\.json$/, "")] = JSON.parse(readFileSync(pPath, "utf-8")); } catch {}
+                } else if (statSync(pPath).isDirectory()) {
+                  const configPath = join(pPath, "config.json");
+                  const tokensPath = join(pPath, "tokens.json");
+                  let merged: Record<string, unknown> = {};
+                  if (existsSync(configPath)) {
+                    try { merged = { ...merged, ...JSON.parse(readFileSync(configPath, "utf-8")) }; } catch {}
+                  }
+                  if (existsSync(tokensPath)) {
+                    try { merged = { ...merged, ...JSON.parse(readFileSync(tokensPath, "utf-8")) }; } catch {}
+                  }
+                  if (Object.keys(merged).length > 0) profiles[pEntry] = merged;
                 }
-                if (existsSync(tokensPath)) {
-                  try { merged = { ...merged, ...JSON.parse(readFileSync(tokensPath, "utf-8")) }; } catch {}
-                }
-                if (Object.keys(merged).length > 0) profiles[pEntry] = merged;
               }
             }
           }
@@ -632,7 +635,7 @@ export function registerCommands(program: Command): void {
       for (const [connectorName, connData] of Object.entries(data.connectors)) {
         if (!/^[a-z0-9-]+$/.test(connectorName)) continue;
 
-        const connectorDir = join(connectDir, `connect-${connectorName}`);
+        const connectorDir = getConnectorConfigDir(connectorName, connectDir);
 
         // Restore credentials.json at connector root
         if (connData.credentials && typeof connData.credentials === "object") {
@@ -699,8 +702,8 @@ export function registerCommands(program: Command): void {
 
       for (const dirName of entries) {
         const oldDir = join(oldBase, dirName);
-        const newDir = join(newBase, dirName);
         const connectorName = dirName.replace(/^connect-/, "");
+        const newDir = getConnectorConfigDir(connectorName, newBase);
 
         // Collect all files recursively from the old directory
         const allFiles = listFilesRecursive(oldDir);

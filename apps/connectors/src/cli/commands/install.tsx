@@ -132,7 +132,6 @@ export function registerCommands(program: Command): void {
             continue;
           }
 
-          const connectorDirName = name.startsWith("connect-") ? name : `connect-${name}`;
           const sourcePath = getConnectorPath(name);
           const alreadyInstalled = installed.includes(name);
           const files = listFilesRecursive(sourcePath);

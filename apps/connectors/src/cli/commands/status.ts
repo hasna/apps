@@ -4,8 +4,9 @@ import { getConnector } from "../../lib/registry.js";
 import { getInstalledConnectors } from "../../lib/installer.js";
 import { getAuthStatus } from "../../server/auth.js";
 import { getConnectorsHome } from "../../db/database.js";
-import { existsSync, readdirSync, statSync, readFileSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { join } from "path";
+import { getConnectorConfigReadDirs, listConfiguredConnectorNames } from "../../lib/connector-resolver.js";
 
 export function registerCommands(program: Command): void {
   // Status command — show auth status of installed connectors
@@ -37,11 +38,13 @@ export function registerCommands(program: Command): void {
         const auth = getAuthStatus(name);
 
         // Read current profile
-        const connectorName = name.startsWith("connect-") ? name : `connect-${name}`;
-        const currentProfileFile = join(configDir, connectorName, "current_profile");
         let profile = "default";
-        if (existsSync(currentProfileFile)) {
-          try { profile = readFileSync(currentProfileFile, "utf-8").trim() || "default"; } catch {}
+        for (const connectorConfigDir of getConnectorConfigReadDirs(name, configDir)) {
+          const currentProfileFile = join(connectorConfigDir, "current_profile");
+          if (existsSync(currentProfileFile)) {
+            try { profile = readFileSync(currentProfileFile, "utf-8").trim() || "default"; } catch {}
+            break;
+          }
         }
 
         // Compute expiry label for OAuth connectors
@@ -85,14 +88,8 @@ export function registerCommands(program: Command): void {
       // 2. Globally configured connectors from the shared connector home
       if (existsSync(configDir)) {
         try {
-          const globalDirs = readdirSync(configDir).filter((f: string) => {
-            if (!f.startsWith("connect-")) return false;
-            if (f.startsWith("connect-zzztest")) return false;
-            try { return statSync(join(configDir, f)).isDirectory(); } catch { return false; }
-          });
-
-          for (const dir of globalDirs) {
-            const name = dir.replace("connect-", "");
+          for (const name of listConfiguredConnectorNames(configDir)) {
+            if (name.startsWith("zzztest")) continue;
             if (seen.has(name)) continue;
             seen.add(name);
             allStatuses.push(buildStatusEntry(name, "global"));

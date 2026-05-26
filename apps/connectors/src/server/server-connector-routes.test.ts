@@ -23,13 +23,18 @@ const ORIGINAL_HOME = process.env.HOME;
 const TEST_HOME = mkdtempSync(join(tmpdir(), "open-connectors-server-"));
 
 function testConfigDir(name: string): string {
+  return join(TEST_HOME, ".hasna", "connectors", name);
+}
+
+function legacyTestConfigDir(name: string): string {
   return join(TEST_HOME, ".hasna", "connectors", `connect-${name}`);
 }
 
 function cleanupTestConnectors(...names: string[]) {
   for (const name of names) {
-    const dir = testConfigDir(name);
-    if (existsSync(dir)) rmSync(dir, { recursive: true });
+    for (const dir of [testConfigDir(name), legacyTestConfigDir(name)]) {
+      if (existsSync(dir)) rmSync(dir, { recursive: true });
+    }
   }
 }
 

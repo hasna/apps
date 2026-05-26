@@ -425,7 +425,7 @@ function configDirs(): string[] {
   const explicit = process.env.HASNA_GMAIL_CONNECTOR_DIR ?? process.env.GMAIL_CONNECTOR_DIR;
   if (explicit) return [explicit];
   const baseDir = process.env.HASNA_CONNECTORS_DIR ?? join(homedir(), ".hasna", "connectors");
-  return [join(baseDir, "connect-gmail"), join(baseDir, "gmail")];
+  return [join(baseDir, "gmail"), join(baseDir, "connect-gmail")];
 }
 
 function readJson<T>(path: string): T | null {

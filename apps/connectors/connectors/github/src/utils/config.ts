@@ -2,14 +2,12 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync
 import { homedir } from 'os';
 import { join } from 'path';
 
-// Stripe connector name
-const CONNECTOR_NAME = 'connect-stripe';
+const CONNECTOR_NAME = 'github';
 const DEFAULT_PROFILE = 'default';
 
 export interface ProfileConfig {
-  apiKey?: string;
-  apiSecret?: string;
-  accountId?: string;  // Required for org API keys (Stripe-Context header)
+  token?: string;
+  baseUrl?: string; // For GitHub Enterprise
 }
 
 // Store for --profile flag override (set by CLI before commands run)
@@ -170,36 +168,26 @@ export function saveProfile(config: ProfileConfig, profile?: string): void {
 }
 
 // ============================================
-// API Key Management
+// Token Management
 // ============================================
 
-export function getApiKey(): string | undefined {
-  return process.env.STRIPE_API_KEY || loadProfile().apiKey;
+export function getToken(): string | undefined {
+  return process.env.GITHUB_TOKEN || loadProfile().token;
 }
 
-export function setApiKey(apiKey: string): void {
+export function setToken(token: string): void {
   const config = loadProfile();
-  config.apiKey = apiKey;
+  config.token = token;
   saveProfile(config);
 }
 
-export function getApiSecret(): string | undefined {
-  return process.env.STRIPE_API_SECRET || loadProfile().apiSecret;
+export function getBaseUrl(): string | undefined {
+  return process.env.GITHUB_BASE_URL || loadProfile().baseUrl;
 }
 
-export function setApiSecret(apiSecret: string): void {
+export function setBaseUrl(baseUrl: string): void {
   const config = loadProfile();
-  config.apiSecret = apiSecret;
-  saveProfile(config);
-}
-
-export function getAccountId(): string | undefined {
-  return process.env.STRIPE_ACCOUNT_ID || loadProfile().accountId;
-}
-
-export function setAccountId(accountId: string): void {
-  const config = loadProfile();
-  config.accountId = accountId;
+  config.baseUrl = baseUrl;
   saveProfile(config);
 }
 

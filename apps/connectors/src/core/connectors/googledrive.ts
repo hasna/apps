@@ -295,7 +295,7 @@ function configDirs(): string[] {
   const explicit = process.env.HASNA_GOOGLE_DRIVE_CONNECTOR_DIR ?? process.env.GOOGLE_DRIVE_CONNECTOR_DIR;
   if (explicit) return [explicit];
   const baseDir = process.env.HASNA_CONNECTORS_DIR ?? join(homedir(), ".hasna", "connectors");
-  return [join(baseDir, "connect-googledrive"), join(baseDir, "googledrive")];
+  return [join(baseDir, "googledrive"), join(baseDir, "connect-googledrive")];
 }
 
 function readJson<T>(path: string): T | null {

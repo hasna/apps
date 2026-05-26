@@ -154,10 +154,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 function resolveGithubConnectorDir(): string {
   const candidates = [
-    join(__dirname, "..", "..", "..", "connectors", "connect-github"),
-    join(__dirname, "..", "..", "connectors", "connect-github"),
-    join(__dirname, "..", "connectors", "connect-github"),
-    join(process.cwd(), "connectors", "connect-github"),
+    join(__dirname, "..", "..", "..", "connectors", "github"),
+    join(__dirname, "..", "..", "connectors", "github"),
+    join(__dirname, "..", "connectors", "github"),
+    join(process.cwd(), "connectors", "github"),
   ];
 
   for (const candidate of candidates) {

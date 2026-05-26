@@ -21,13 +21,18 @@ const HOME = homedir();
 const TEST_ID = `zzztest${process.pid}m`;
 
 function testConfigDir(name: string): string {
+  return join(HOME, ".hasna", "connectors", name);
+}
+
+function legacyTestConfigDir(name: string): string {
   return join(HOME, ".hasna", "connectors", `connect-${name}`);
 }
 
 function cleanupTestConnectors(...names: string[]) {
   for (const name of names) {
-    const dir = testConfigDir(name);
-    if (existsSync(dir)) rmSync(dir, { recursive: true });
+    for (const dir of [testConfigDir(name), legacyTestConfigDir(name)]) {
+      if (existsSync(dir)) rmSync(dir, { recursive: true });
+    }
   }
 }
 
@@ -290,6 +295,23 @@ describe("server management routes", () => {
     });
   });
 
+  describe("GET /api/connectors/manifest", () => {
+    test("returns scoped capability manifest", async () => {
+      const res = await fetch(`${baseUrl}/api/connectors/manifest?connectors=github&includeOperations=true`);
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        packageName: string;
+        connectorCount: number;
+        connectors: Array<{ id: string; aliases: string[]; operations?: Array<{ name: string }> }>;
+      };
+      expect(data.packageName).toBe("@hasna/connectors");
+      expect(data.connectorCount).toBe(1);
+      expect(data.connectors[0]?.id).toBe("github");
+      expect(data.connectors[0]?.aliases).toContain("connect-github");
+      expect(data.connectors[0]?.operations?.some((operation) => operation.name === "config")).toBe(true);
+    });
+  });
+
   describe("POST /api/connectors/:name/operations/run", () => {
     test("runs an internal github command", async () => {
       const res = await fetch(`${baseUrl}/api/connectors/github/operations/run`, {
@@ -340,6 +362,28 @@ describe("server management routes", () => {
       expect(data.connector).toBe("anthropic");
       expect(data.success).toBe(true);
       expect(data.output).toContain("claude");
+    });
+
+    test("runs a structured connector operation", async () => {
+      const res = await fetch(`${baseUrl}/api/connectors/github/operations/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          operation: "config",
+          input: { args: ["show"], format: "json" },
+        }),
+      });
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        connector: string;
+        operation: string;
+        success: boolean;
+        data?: { profile: string };
+      };
+      expect(data.connector).toBe("github");
+      expect(data.operation).toBe("config");
+      expect(data.success).toBe(true);
+      expect(data.data?.profile).toBe("default");
     });
   });
 

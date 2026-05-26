@@ -39,6 +39,7 @@ describe("library exports", () => {
     expect(stripe).toBeDefined();
     expect(stripe!.name).toBe("stripe");
     expect(stripe!.displayName).toBe("Stripe");
+    expect(lib.getConnector("connect-stripe")?.name).toBe("stripe");
 
     // getConnectorsByCategory
     const aiConnectors = lib.getConnectorsByCategory("AI & ML");
@@ -61,7 +62,7 @@ describe("library exports", () => {
 
     // getConnectorPath
     const path = lib.getConnectorPath("figma");
-    expect(path).toContain("connect-figma");
+    expect(path).toContain("figma");
 
     // getConnectorDocs
     const docs = lib.getConnectorDocs("stripe");

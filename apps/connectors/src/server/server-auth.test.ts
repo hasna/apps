@@ -38,17 +38,22 @@ import { startServer } from "./serve.js";
 const HOME = homedir();
 const TEST_ID = `zzztest${process.pid}`;
 
-/** Get the real ~/.hasna/connectors/connect-<name> path */
+/** Get the real ~/.hasna/connectors/<name> path */
 function testConfigDir(name: string): string {
+  return join(HOME, ".hasna", "connectors", name);
+}
+
+function legacyTestConfigDir(name: string): string {
   return join(HOME, ".hasna", "connectors", `connect-${name}`);
 }
 
 /** Clean up test connector directories from ~/.hasna/connectors/ */
 function cleanupTestConnectors(...names: string[]) {
   for (const name of names) {
-    const dir = testConfigDir(name);
-    if (existsSync(dir)) {
-      rmSync(dir, { recursive: true });
+    for (const dir of [testConfigDir(name), legacyTestConfigDir(name)]) {
+      if (existsSync(dir)) {
+        rmSync(dir, { recursive: true });
+      }
     }
   }
 }
@@ -654,6 +659,44 @@ describe("auth", () => {
       // Falls through to profile config, which also doesn't exist
       expect(config.clientId).toBeUndefined();
       expect(config.clientSecret).toBeUndefined();
+    });
+  });
+
+  describe("legacy config compatibility", () => {
+    const name1 = `${TEST_ID}legacy1`;
+    const name2 = `${TEST_ID}legacy2`;
+
+    afterEach(() => {
+      cleanupTestConnectors(name1, name2);
+    });
+
+    test("reads OAuth tokens from legacy connect-prefixed config dirs", () => {
+      const expiresAt = Date.now() + 60_000;
+      const legacyProfileDir = join(legacyTestConfigDir(name1), "profiles", "default");
+      mkdirSync(legacyProfileDir, { recursive: true });
+      writeFileSync(
+        join(legacyProfileDir, "tokens.json"),
+        JSON.stringify({ accessToken: "legacy-token", expiresAt })
+      );
+
+      expect(getTokenExpiry(name1)).toBe(expiresAt);
+    });
+
+    test("writes new API keys to prefixless dirs without mutating legacy config", async () => {
+      const legacyProfileDir = join(legacyTestConfigDir(name2), "profiles", "default");
+      mkdirSync(legacyProfileDir, { recursive: true });
+      writeFileSync(
+        join(legacyProfileDir, "config.json"),
+        JSON.stringify({ apiKey: "legacy-key" }, null, 2)
+      );
+
+      expect(getAuthStatus(name2).configured).toBe(true);
+      await saveApiKey(name2, "prefixless-key", "apiKey");
+
+      const prefixlessConfigFile = join(testConfigDir(name2), "profiles", "default", "config.json");
+      const legacyConfigFile = join(legacyProfileDir, "config.json");
+      expect(JSON.parse(readFileSync(prefixlessConfigFile, "utf-8")).apiKey).toBe("prefixless-key");
+      expect(JSON.parse(readFileSync(legacyConfigFile, "utf-8")).apiKey).toBe("legacy-key");
     });
   });
 

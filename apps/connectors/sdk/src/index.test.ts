@@ -148,6 +148,42 @@ describe("ConnectorsClient", () => {
     });
   });
 
+  describe("getManifest()", () => {
+    it("calls GET /api/connectors/manifest", async () => {
+      const fetchMock = mockFetch(200, {
+        version: 1,
+        packageName: "@hasna/connectors",
+        packageVersion: "1.3.26",
+        generatedAt: "2026-05-26T00:00:00.000Z",
+        categories: [],
+        connectorCount: 1,
+        connectors: [{ id: "github", name: "github", aliases: ["github", "connect-github"] }],
+      });
+      global.fetch = fetchMock;
+      const result = await client.getManifest();
+      const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe("http://localhost:9876/api/connectors/manifest");
+      expect(result.connectors[0].id).toBe("github");
+    });
+
+    it("adds manifest query params when provided", async () => {
+      const fetchMock = mockFetch(200, {
+        version: 1,
+        packageName: "@hasna/connectors",
+        packageVersion: "1.3.26",
+        generatedAt: "2026-05-26T00:00:00.000Z",
+        categories: [],
+        connectorCount: 1,
+        connectors: [],
+      });
+      global.fetch = fetchMock;
+      await client.getManifest({ includeOperations: true, connectorNames: ["github", "stripe"] });
+      const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toContain("includeOperations=true");
+      expect(url).toContain("connectors=github%2Cstripe");
+    });
+  });
+
   describe("runOperation()", () => {
     it("calls POST /api/connectors/:name/operations/run", async () => {
       const fetchMock = mockFetch(200, {
@@ -172,6 +208,40 @@ describe("ConnectorsClient", () => {
         timeout: 5000,
       });
       expect(result.success).toBe(true);
+    });
+  });
+
+  describe("runStructuredOperation()", () => {
+    it("calls POST /api/connectors/:name/operations/run with structured body", async () => {
+      const fetchMock = mockFetch(200, {
+        connector: "github",
+        displayName: "GitHub",
+        operation: "user.info",
+        stdout: "{\"login\":\"octocat\"}",
+        stderr: "",
+        exitCode: 0,
+        success: true,
+        data: { login: "octocat" },
+      });
+      global.fetch = fetchMock;
+      const result = await client.runStructuredOperation<{ login: string }>("github", {
+        operation: "user.info",
+        input: { username: "octocat" },
+        profile: "work",
+        timeout: 5000,
+      });
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe(
+        "http://localhost:9876/api/connectors/github/operations/run"
+      );
+      expect(init.method).toBe("POST");
+      expect(JSON.parse(init.body as string)).toEqual({
+        operation: "user.info",
+        input: { username: "octocat" },
+        profile: "work",
+        timeout: 5000,
+      });
+      expect(result.data?.login).toBe("octocat");
     });
   });
 

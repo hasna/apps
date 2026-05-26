@@ -519,12 +519,12 @@ describe("MCP Server", () => {
       const { readFileSync, existsSync, rmSync } = await import("fs");
       const { join } = await import("path");
       const { homedir } = await import("os");
-      const credsFile = join(homedir(), ".hasna", "connectors", `connect-${oauthName}`, "credentials.json");
+      const credsFile = join(homedir(), ".hasna", "connectors", oauthName, "credentials.json");
       expect(existsSync(credsFile)).toBe(true);
       const creds = JSON.parse(readFileSync(credsFile, "utf-8"));
       expect(creds.clientId).toBe("mcp-oauth-client-id");
       expect(creds.clientSecret).toBe("mcp-oauth-client-secret");
-      rmSync(join(homedir(), ".hasna", "connectors", `connect-${oauthName}`), { recursive: true });
+      rmSync(join(homedir(), ".hasna", "connectors", oauthName), { recursive: true });
     });
 
     test("errors when neither key nor fields are provided", async () => {

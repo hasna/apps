@@ -13,7 +13,11 @@ import {
   getInternalConnectorDefinition,
   hasInternalConnectorDefinition,
 } from "../core/builtins.js";
-import { getConnectorsHome } from "../db/database.js";
+import {
+  getConnectorPackagePath,
+  legacyConnectorName,
+  normalizeConnectorName,
+} from "./connector-resolver.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -53,10 +57,6 @@ const PROJECT_CONNECTORS_DIRNAME = ".connectors";
 const ENABLEMENT_MANIFEST_FILENAME = "manifest.json";
 const ENABLEMENT_INDEX_FILENAME = "index.ts";
 
-function normalizeConnectorName(name: string): string {
-  return name.startsWith("connect-") ? name.slice("connect-".length) : name;
-}
-
 function getProjectConnectorsDir(targetDir: string): string {
   return join(targetDir, PROJECT_CONNECTORS_DIRNAME);
 }
@@ -70,7 +70,7 @@ function getEnablementIndexPath(targetDir: string): string {
 }
 
 function getLegacyInstallPath(targetDir: string, name: string): string {
-  return join(getProjectConnectorsDir(targetDir), `connect-${normalizeConnectorName(name)}`);
+  return join(getProjectConnectorsDir(targetDir), legacyConnectorName(name));
 }
 
 function loadEnablementManifest(targetDir: string): InstalledConnectorsManifest | null {
@@ -164,8 +164,7 @@ function writeEnablementManifest(targetDir: string, connectors: string[]): void 
  * Get the path to a connector in the package
  */
 export function getConnectorPath(name: string): string {
-  const connectorName = name.startsWith("connect-") ? name : `connect-${name}`;
-  return join(CONNECTORS_DIR, connectorName);
+  return getConnectorPackagePath(CONNECTORS_DIR, name);
 }
 
 /**

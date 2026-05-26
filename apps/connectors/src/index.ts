@@ -71,3 +71,15 @@ export {
   type InternalConnectorDefinition,
   type InternalConnectorOperationDefinition,
 } from "./core/index.js";
+
+export {
+  getConnectorCapability,
+  getConnectorCapabilityManifest,
+  type ConnectorCapability,
+  type ConnectorCapabilityAuth,
+  type ConnectorCapabilityDocs,
+  type ConnectorCapabilityManifest,
+  type ConnectorCapabilityManifestOptions,
+  type ConnectorCapabilityOptions,
+  type ConnectorCapabilityRuntime,
+} from "./lib/manifest.js";

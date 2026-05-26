@@ -9,7 +9,11 @@ import { randomBytes } from "crypto";
 import { join } from "path";
 import { getConnectorDocs } from "../lib/installer.js";
 import { withWriteLock } from "../lib/lock.js";
-import { getConnectorsHome } from "../db/database.js";
+import {
+  getConnectorConfigDir as getPreferredConnectorConfigDir,
+  getConnectorConfigReadDirs as getResolvedConnectorConfigReadDirs,
+  normalizeConnectorName,
+} from "../lib/connector-resolver.js";
 
 /** Timeout for external HTTP requests (10 seconds) */
 const FETCH_TIMEOUT = 10_000;
@@ -86,6 +90,7 @@ export interface OAuthTokens {
  * Get the auth type for a connector by parsing its CLAUDE.md
  */
 export function getAuthType(name: string): AuthType {
+  name = normalizeConnectorName(name);
   const docs = getConnectorDocs(name);
   if (!docs?.auth) return "apikey";
 
@@ -99,40 +104,38 @@ export function getAuthType(name: string): AuthType {
  * Get the base config directory for a connector
  */
 function getConnectorConfigDir(name: string): string {
-  const connectorName = name.startsWith("connect-") ? name : `connect-${name}`;
-  return join(getConnectorsHome(), connectorName);
+  name = normalizeConnectorName(name);
+  return getPreferredConnectorConfigDir(name);
+}
+
+function getConnectorConfigReadDirs(name: string): string[] {
+  name = normalizeConnectorName(name);
+  return getResolvedConnectorConfigReadDirs(name);
 }
 
 /**
  * Get the current profile name for a connector
  */
 function getCurrentProfile(name: string): string {
-  const configDir = getConnectorConfigDir(name);
-  const currentProfileFile = join(configDir, "current_profile");
+  name = normalizeConnectorName(name);
+  for (const configDir of getConnectorConfigReadDirs(name)) {
+    const currentProfileFile = join(configDir, "current_profile");
 
-  if (existsSync(currentProfileFile)) {
-    try {
-      return readFileSync(currentProfileFile, "utf-8").trim() || "default";
-    } catch {
-      return "default";
+    if (existsSync(currentProfileFile)) {
+      try {
+        return readFileSync(currentProfileFile, "utf-8").trim() || "default";
+      } catch {
+        return "default";
+      }
     }
   }
   return "default";
 }
 
-/**
- * Load the profile config for a connector (handles both file patterns).
- * Checks both flat (profiles/<name>.json) and directory (profiles/<name>/config.json)
- * patterns and merges results. Directory pattern takes precedence when both exist.
- */
-function loadProfileConfig(name: string): Record<string, unknown> {
-  const configDir = getConnectorConfigDir(name);
-  const profile = getCurrentProfile(name);
-
+function loadProfileConfigFromDir(configDir: string, profile: string): Record<string, unknown> {
   let flatConfig: Record<string, unknown> = {};
   let dirConfig: Record<string, unknown> = {};
 
-  // Pattern 1: profiles/<name>.json (e.g., Stripe, GitHub, Exa)
   const profileFile = join(configDir, "profiles", `${profile}.json`);
   if (existsSync(profileFile)) {
     try {
@@ -142,7 +145,6 @@ function loadProfileConfig(name: string): Record<string, unknown> {
     }
   }
 
-  // Pattern 2: profiles/<name>/config.json (e.g., Gmail)
   const profileDirConfig = join(configDir, "profiles", profile, "config.json");
   if (existsSync(profileDirConfig)) {
     try {
@@ -152,27 +154,43 @@ function loadProfileConfig(name: string): Record<string, unknown> {
     }
   }
 
-  // Merge both, directory pattern takes precedence
-  if (Object.keys(flatConfig).length === 0 && Object.keys(dirConfig).length === 0) {
-    return {};
-  }
   return { ...flatConfig, ...dirConfig };
+}
+
+/**
+ * Load the profile config for a connector (handles both file patterns).
+ * Checks both flat (profiles/<name>.json) and directory (profiles/<name>/config.json)
+ * patterns and merges results. Directory pattern takes precedence when both exist.
+ */
+function loadProfileConfig(name: string): Record<string, unknown> {
+  name = normalizeConnectorName(name);
+  const profile = getCurrentProfile(name);
+  const merged: Record<string, unknown> = {};
+
+  // Read legacy first, then preferred, so prefixless config wins when both exist.
+  for (const configDir of [...getConnectorConfigReadDirs(name)].reverse()) {
+    Object.assign(merged, loadProfileConfigFromDir(configDir, profile));
+  }
+
+  return merged;
 }
 
 /**
  * Load OAuth tokens for a connector
  */
 export function loadTokens(name: string): OAuthTokens | null {
-  const configDir = getConnectorConfigDir(name);
+  name = normalizeConnectorName(name);
   const profile = getCurrentProfile(name);
 
-  // Pattern 1: profiles/<name>/tokens.json (e.g., Gmail directory pattern)
-  const tokensFile = join(configDir, "profiles", profile, "tokens.json");
-  if (existsSync(tokensFile)) {
-    try {
-      return JSON.parse(readFileSync(tokensFile, "utf-8"));
-    } catch {
-      return null;
+  for (const configDir of getConnectorConfigReadDirs(name)) {
+    // Pattern 1: profiles/<name>/tokens.json (e.g., Gmail directory pattern)
+    const tokensFile = join(configDir, "profiles", profile, "tokens.json");
+    if (existsSync(tokensFile)) {
+      try {
+        return JSON.parse(readFileSync(tokensFile, "utf-8"));
+      } catch {
+        return null;
+      }
     }
   }
 
@@ -221,6 +239,7 @@ function isStoredOAuthEnvVarSet(
  * Get the full auth status for a connector
  */
 export function getAuthStatus(name: string): AuthStatus {
+  name = normalizeConnectorName(name);
   const authType = getAuthType(name);
   const docs = getConnectorDocs(name);
   const oauthConfig = authType === "oauth" ? getOAuthConfig(name) : {};
@@ -279,6 +298,7 @@ export function getAuthStatus(name: string): AuthStatus {
  * Get required env var names from a connector's CLAUDE.md
  */
 export function getEnvVars(name: string): { variable: string; description: string }[] {
+  name = normalizeConnectorName(name);
   const docs = getConnectorDocs(name);
   return docs?.envVars || [];
 }
@@ -287,10 +307,12 @@ export function getEnvVars(name: string): { variable: string; description: strin
  * Save an API key to a connector's profile
  */
 export async function saveApiKey(name: string, key: string, field?: string): Promise<void> {
+  name = normalizeConnectorName(name);
   return withWriteLock(name, () => _saveApiKey(name, key, field));
 }
 
 function _saveApiKey(name: string, key: string, field?: string): void {
+  name = normalizeConnectorName(name);
   const configDir = getConnectorConfigDir(name);
   const profile = getCurrentProfile(name);
 
@@ -346,6 +368,7 @@ function _saveApiKey(name: string, key: string, field?: string): void {
  * Guess the key field name based on connector name
  */
 function guessKeyField(name: string): string {
+  name = normalizeConnectorName(name);
   const docs = getConnectorDocs(name);
   if (!docs?.envVars.length) return "apiKey";
 
@@ -377,16 +400,17 @@ function guessKeyField(name: string): string {
  * Get OAuth client credentials for a connector
  */
 export function getOAuthConfig(name: string): { clientId?: string; clientSecret?: string } {
-  const configDir = getConnectorConfigDir(name);
-
-  // Check credentials.json at base level (shared across profiles)
-  const credentialsFile = join(configDir, "credentials.json");
-  if (existsSync(credentialsFile)) {
-    try {
-      const creds = JSON.parse(readFileSync(credentialsFile, "utf-8"));
-      return { clientId: creds.clientId, clientSecret: creds.clientSecret };
-    } catch {
-      // fall through
+  name = normalizeConnectorName(name);
+  for (const configDir of getConnectorConfigReadDirs(name)) {
+    // Check credentials.json at base level (shared across profiles)
+    const credentialsFile = join(configDir, "credentials.json");
+    if (existsSync(credentialsFile)) {
+      try {
+        const creds = JSON.parse(readFileSync(credentialsFile, "utf-8"));
+        return { clientId: creds.clientId, clientSecret: creds.clientSecret };
+      } catch {
+        // fall through
+      }
     }
   }
 
@@ -402,6 +426,7 @@ export function getOAuthConfig(name: string): { clientId?: string; clientSecret?
  * Build OAuth authorization URL for a connector
  */
 export function getOAuthStartUrl(name: string, redirectUri: string): string | null {
+  name = normalizeConnectorName(name);
   const oauthConfig = getOAuthConfig(name);
   if (!oauthConfig.clientId) return null;
 
@@ -435,6 +460,7 @@ export function getOAuthStartUrl(name: string, redirectUri: string): string | nu
  * Validate and consume an OAuth state token (CSRF protection)
  */
 export function validateOAuthState(state: string | null, expectedConnector: string): boolean {
+  expectedConnector = normalizeConnectorName(expectedConnector);
   if (!state) return false;
   const entry = oauthStateStore.get(state);
   if (!entry || entry.connector !== expectedConnector) return false;
@@ -451,6 +477,7 @@ export async function exchangeOAuthCode(
   code: string,
   redirectUri: string
 ): Promise<OAuthTokens> {
+  name = normalizeConnectorName(name);
   const oauthConfig = getOAuthConfig(name);
   if (!oauthConfig.clientId || !oauthConfig.clientSecret) {
     throw new Error("OAuth credentials not configured for " + name);
@@ -495,6 +522,7 @@ export async function exchangeOAuthCode(
  * Save OAuth tokens to the connector's profile directory
  */
 function saveOAuthTokens(name: string, tokens: OAuthTokens): void {
+  name = normalizeConnectorName(name);
   const configDir = getConnectorConfigDir(name);
   const profile = getCurrentProfile(name);
   const profileDir = join(configDir, "profiles", profile);
@@ -510,10 +538,12 @@ function saveOAuthTokens(name: string, tokens: OAuthTokens): void {
  * from racing on token refresh (double-refresh race condition).
  */
 export async function refreshOAuthToken(name: string): Promise<OAuthTokens> {
+  name = normalizeConnectorName(name);
   return withWriteLock(name, () => _refreshOAuthToken(name));
 }
 
 async function _refreshOAuthToken(name: string): Promise<OAuthTokens> {
+  name = normalizeConnectorName(name);
   const oauthConfig = getOAuthConfig(name);
   const currentTokens = loadTokens(name);
 
@@ -562,37 +592,39 @@ async function _refreshOAuthToken(name: string): Promise<OAuthTokens> {
  * Get token expiry time for an OAuth connector
  */
 export function getTokenExpiry(name: string): number | null {
+  name = normalizeConnectorName(name);
   const tokens = loadTokens(name);
   return tokens?.expiresAt || null;
 }
 
 /**
  * List all profile names for a connector.
- * Reads ~/.hasna/connectors/connect-{name}/profiles/ directory entries —
+ * Reads ~/.hasna/connectors/{name}/profiles/ and legacy connect-{name} entries —
  * both .json files (pattern 1) and subdirectories (pattern 2).
  */
 export function listProfiles(name: string): string[] {
-  const configDir = getConnectorConfigDir(name);
-  const profilesDir = join(configDir, "profiles");
-
-  if (!existsSync(profilesDir)) return ["default"];
-
+  name = normalizeConnectorName(name);
   const seen = new Set<string>();
-  try {
-    const entries = readdirSync(profilesDir);
-    for (const entry of entries) {
-      const fullPath = join(profilesDir, entry);
-      const stat = statSync(fullPath);
-      if (stat.isDirectory()) {
-        // Pattern 2: profiles/<name>/ directory
-        seen.add(entry);
-      } else if (entry.endsWith(".json")) {
-        // Pattern 1: profiles/<name>.json file
-        seen.add(entry.replace(/\.json$/, ""));
+  for (const configDir of getConnectorConfigReadDirs(name)) {
+    const profilesDir = join(configDir, "profiles");
+    if (!existsSync(profilesDir)) continue;
+
+    try {
+      const entries = readdirSync(profilesDir);
+      for (const entry of entries) {
+        const fullPath = join(profilesDir, entry);
+        const stat = statSync(fullPath);
+        if (stat.isDirectory()) {
+          // Pattern 2: profiles/<name>/ directory
+          seen.add(entry);
+        } else if (entry.endsWith(".json")) {
+          // Pattern 1: profiles/<name>.json file
+          seen.add(entry.replace(/\.json$/, ""));
+        }
       }
+    } catch {
+      // If we can't read the directory, keep checking other dirs.
     }
-  } catch {
-    // If we can't read the directory, return default
   }
 
   // Ensure "default" is always present
@@ -603,9 +635,10 @@ export function listProfiles(name: string): string[] {
 
 /**
  * Switch the active profile for a connector.
- * Writes the profile name to ~/.hasna/connectors/connect-{name}/current_profile
+ * Writes the profile name to ~/.hasna/connectors/{name}/current_profile
  */
 export function switchProfile(name: string, profile: string): void {
+  name = normalizeConnectorName(name);
   const configDir = getConnectorConfigDir(name);
   mkdirSync(configDir, { recursive: true });
   writeFileSync(join(configDir, "current_profile"), profile);
@@ -613,11 +646,12 @@ export function switchProfile(name: string, profile: string): void {
 
 /**
  * Delete a profile for a connector.
- * Removes the profile file or directory from ~/.hasna/connectors/connect-{name}/profiles/.
+ * Removes the profile file or directory from ~/.hasna/connectors/{name}/profiles/.
  * Refuses to delete the "default" profile.
  * Returns true if deletion succeeded, false if profile not found or is "default".
  */
 export function deleteProfile(name: string, profile: string): boolean {
+  name = normalizeConnectorName(name);
   if (profile === "default") return false;
 
   const configDir = getConnectorConfigDir(name);

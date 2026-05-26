@@ -4,11 +4,15 @@ import { CONNECTORS, CATEGORIES } from "../../lib/registry.js";
 import { getInstalledConnectors, getConnectorDocs } from "../../lib/installer.js";
 import { getAuthStatus } from "../../server/auth.js";
 import { getConnectorsHome } from "../../db/database.js";
-import { existsSync, readdirSync, statSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { TEST_ENDPOINTS } from "../../lib/test-endpoints.js";
 import { refreshOAuthToken } from "../../server/auth.js";
 import { PRESETS, isTTY } from "./install.js";
+import {
+  getConnectorConfigReadDirs,
+  listConfiguredConnectorNames,
+} from "../../lib/connector-resolver.js";
 
 export function registerCommands(program: Command): void {
   // Upgrade command — check for and install latest version
@@ -257,11 +261,13 @@ complete -F _connectors connectors`);
         else unconfigured++;
 
         // Read current profile
-        const connectorConfigDir = join(configDir, name.startsWith("connect-") ? name : `connect-${name}`);
-        const currentProfileFile = join(connectorConfigDir, "current_profile");
         let profile = "default";
-        if (existsSync(currentProfileFile)) {
-          try { profile = readFileSync(currentProfileFile, "utf-8").trim() || "default"; } catch {}
+        for (const connectorConfigDir of getConnectorConfigReadDirs(name, configDir)) {
+          const currentProfileFile = join(connectorConfigDir, "current_profile");
+          if (existsSync(currentProfileFile)) {
+            try { profile = readFileSync(currentProfileFile, "utf-8").trim() || "default"; } catch {}
+            break;
+          }
         }
 
         connectorDetails.push({ name, configured: auth.configured, authType: auth.type, profile, source: "project" });
@@ -270,13 +276,7 @@ complete -F _connectors connectors`);
       // Globally configured connectors from the shared connector home
       if (existsSync(configDir)) {
         try {
-          const globalDirs = readdirSync(configDir).filter((f: string) => {
-            if (!f.startsWith("connect-")) return false;
-            try { return statSync(join(configDir, f)).isDirectory(); } catch { return false; }
-          });
-
-          for (const dir of globalDirs) {
-            const name = dir.replace("connect-", "");
+          for (const name of listConfiguredConnectorNames(configDir)) {
             if (seen.has(name)) continue;
 
             const auth = getAuthStatus(name);
@@ -285,10 +285,13 @@ complete -F _connectors connectors`);
             seen.add(name);
             configured++;
 
-            const currentProfileFile = join(configDir, dir, "current_profile");
             let profile = "default";
-            if (existsSync(currentProfileFile)) {
-              try { profile = readFileSync(currentProfileFile, "utf-8").trim() || "default"; } catch {}
+            for (const connectorConfigDir of getConnectorConfigReadDirs(name, configDir)) {
+              const currentProfileFile = join(connectorConfigDir, "current_profile");
+              if (existsSync(currentProfileFile)) {
+                try { profile = readFileSync(currentProfileFile, "utf-8").trim() || "default"; } catch {}
+                break;
+              }
             }
 
             connectorDetails.push({ name, configured: true, authType: auth.type, profile, source: "global" });
@@ -415,18 +418,23 @@ complete -F _connectors connectors`);
 
         // Try profile config if no env var
         if (!apiKey) {
-          const connectorConfigDir = join(getConnectorsHome(), name.startsWith("connect-") ? name : `connect-${name}`);
+          const connectorConfigDirs = getConnectorConfigReadDirs(name);
 
           // Determine current profile
           let currentProfile = "default";
-          const currentProfileFile = join(connectorConfigDir, "current_profile");
-          if (existsSync(currentProfileFile)) {
-            try { currentProfile = readFileSync(currentProfileFile, "utf-8").trim() || "default"; } catch {}
+          for (const connectorConfigDir of connectorConfigDirs) {
+            const currentProfileFile = join(connectorConfigDir, "current_profile");
+            if (existsSync(currentProfileFile)) {
+              try { currentProfile = readFileSync(currentProfileFile, "utf-8").trim() || "default"; } catch {}
+              break;
+            }
           }
 
           // Try OAuth tokens first (profiles/<name>/tokens.json) — refresh if expired
-          const tokensFile = join(connectorConfigDir, "profiles", currentProfile, "tokens.json");
-          if (existsSync(tokensFile)) {
+          const tokensFile = connectorConfigDirs
+            .map((dir) => join(dir, "profiles", currentProfile, "tokens.json"))
+            .find((path) => existsSync(path));
+          if (tokensFile) {
             try {
               const tokens = JSON.parse(readFileSync(tokensFile, "utf-8"));
               const isExpired = tokens.expiresAt && Date.now() >= tokens.expiresAt - 60000;
@@ -448,23 +456,29 @@ complete -F _connectors connectors`);
 
           // Try flat profile config (profiles/<name>.json)
           if (!apiKey) {
-            const profileFile = join(connectorConfigDir, "profiles", `${currentProfile}.json`);
-            if (existsSync(profileFile)) {
-              try {
-                const config = JSON.parse(readFileSync(profileFile, "utf-8"));
-                apiKey = Object.values(config).find((v): v is string => typeof v === "string" && v.length > 0) as string | undefined;
-              } catch {}
+            for (const connectorConfigDir of connectorConfigDirs) {
+              const profileFile = join(connectorConfigDir, "profiles", `${currentProfile}.json`);
+              if (existsSync(profileFile)) {
+                try {
+                  const config = JSON.parse(readFileSync(profileFile, "utf-8"));
+                  apiKey = Object.values(config).find((v): v is string => typeof v === "string" && v.length > 0) as string | undefined;
+                } catch {}
+                if (apiKey) break;
+              }
             }
           }
 
           // Try directory profile config (profiles/<name>/config.json)
           if (!apiKey) {
-            const profileDirConfig = join(connectorConfigDir, "profiles", currentProfile, "config.json");
-            if (existsSync(profileDirConfig)) {
-              try {
-                const config = JSON.parse(readFileSync(profileDirConfig, "utf-8"));
-                apiKey = Object.values(config).find((v): v is string => typeof v === "string" && v.length > 0) as string | undefined;
-              } catch {}
+            for (const connectorConfigDir of connectorConfigDirs) {
+              const profileDirConfig = join(connectorConfigDir, "profiles", currentProfile, "config.json");
+              if (existsSync(profileDirConfig)) {
+                try {
+                  const config = JSON.parse(readFileSync(profileDirConfig, "utf-8"));
+                  apiKey = Object.values(config).find((v): v is string => typeof v === "string" && v.length > 0) as string | undefined;
+                } catch {}
+                if (apiKey) break;
+              }
             }
           }
         }

@@ -10,7 +10,10 @@ import {
 } from "fs";
 import { join } from "path";
 import { z } from "zod";
-import { getConnectorsHome } from "../../db/database.js";
+import {
+  getConnectorConfigDir,
+  getConnectorConfigReadDirs,
+} from "../../lib/connector-resolver.js";
 import {
   defineConnector,
   type ConnectorCommandDescriptor,
@@ -96,7 +99,7 @@ interface NormalizedListResult<T> {
   nextCursor?: string;
 }
 
-const CONNECTOR_DIRNAME = "connect-imessage";
+const CONNECTOR_NAME = "imessage";
 
 const COMMAND_SPECS: CommandSpec[] = [
   {
@@ -231,7 +234,7 @@ API Key authentication is optional and depends on the bridge deployment. A bridg
 
 ## Data Storage
 
-Connector state is stored under \`~/.hasna/connectors/connect-imessage/\`. Profiles are read from both \`profiles/<name>.json\` and \`profiles/<name>/config.json\` so the connector stays compatible with the shared dashboard auth helpers while remaining fully internal to the one-product repo.
+Connector state is stored under \`~/.hasna/connectors/imessage/\`. Profiles are read from both \`profiles/<name>.json\` and \`profiles/<name>/config.json\` so the connector stays compatible with the shared dashboard auth helpers while remaining fully internal to the one-product repo.
 `;
 
 const commandInputSchema = z.object({
@@ -274,7 +277,11 @@ const messageReplyInputSchema = z.object({
 });
 
 function getConfigDir(): string {
-  return join(getConnectorsHome(), CONNECTOR_DIRNAME);
+  return getConnectorConfigDir(CONNECTOR_NAME);
+}
+
+function getConfigReadDirs(): string[] {
+  return getConnectorConfigReadDirs(CONNECTOR_NAME);
 }
 
 function getProfilesDir(): string {
@@ -282,16 +289,18 @@ function getProfilesDir(): string {
 }
 
 function getCurrentProfile(): string {
-  const currentProfileFile = join(getConfigDir(), "current_profile");
-  if (!existsSync(currentProfileFile)) {
-    return "default";
+  for (const configDir of getConfigReadDirs()) {
+    const currentProfileFile = join(configDir, "current_profile");
+    if (!existsSync(currentProfileFile)) continue;
+
+    try {
+      return readFileSync(currentProfileFile, "utf-8").trim() || "default";
+    } catch {
+      return "default";
+    }
   }
 
-  try {
-    return readFileSync(currentProfileFile, "utf-8").trim() || "default";
-  } catch {
-    return "default";
-  }
+  return "default";
 }
 
 function setCurrentProfile(profile: string): void {
@@ -306,6 +315,14 @@ function getFlatProfilePath(profile: string): string {
 
 function getDirectoryProfilePath(profile: string): string {
   return join(getProfilesDir(), profile, "config.json");
+}
+
+function getFlatProfileReadPaths(profile: string): string[] {
+  return getConfigReadDirs().map((dir) => join(dir, "profiles", `${profile}.json`));
+}
+
+function getDirectoryProfileReadPaths(profile: string): string[] {
+  return getConfigReadDirs().map((dir) => join(dir, "profiles", profile, "config.json"));
 }
 
 function loadJsonFile(path: string): Record<string, unknown> {
@@ -331,12 +348,14 @@ function sanitizeProfileConfig(
 }
 
 function loadProfile(profile = getCurrentProfile()): IMessageProfileConfig {
-  const flatConfig = existsSync(getFlatProfilePath(profile))
-    ? loadJsonFile(getFlatProfilePath(profile))
-    : {};
-  const directoryConfig = existsSync(getDirectoryProfilePath(profile))
-    ? loadJsonFile(getDirectoryProfilePath(profile))
-    : {};
+  const flatConfig = getFlatProfileReadPaths(profile).reverse().reduce(
+    (config, path) => ({ ...config, ...(existsSync(path) ? loadJsonFile(path) : {}) }),
+    {} as Record<string, unknown>,
+  );
+  const directoryConfig = getDirectoryProfileReadPaths(profile).reverse().reduce(
+    (config, path) => ({ ...config, ...(existsSync(path) ? loadJsonFile(path) : {}) }),
+    {} as Record<string, unknown>,
+  );
 
   return sanitizeProfileConfig({
     ...flatConfig,
@@ -359,31 +378,31 @@ function profileExists(profile: string): boolean {
   }
 
   return (
-    existsSync(getFlatProfilePath(profile)) ||
-    existsSync(join(getProfilesDir(), profile))
+    getFlatProfileReadPaths(profile).some((path) => existsSync(path)) ||
+    getConfigReadDirs().some((dir) => existsSync(join(dir, "profiles", profile)))
   );
 }
 
 function listProfiles(): string[] {
-  const profilesDir = getProfilesDir();
   const seen = new Set<string>(["default"]);
 
-  if (!existsSync(profilesDir)) {
-    return [...seen];
-  }
+  for (const configDir of getConfigReadDirs()) {
+    const profilesDir = join(configDir, "profiles");
+    if (!existsSync(profilesDir)) continue;
 
-  try {
-    for (const entry of readdirSync(profilesDir)) {
-      const fullPath = join(profilesDir, entry);
-      const stat = statSync(fullPath);
-      if (stat.isDirectory()) {
-        seen.add(entry);
-      } else if (entry.endsWith(".json")) {
-        seen.add(entry.replace(/\.json$/, ""));
+    try {
+      for (const entry of readdirSync(profilesDir)) {
+        const fullPath = join(profilesDir, entry);
+        const stat = statSync(fullPath);
+        if (stat.isDirectory()) {
+          seen.add(entry);
+        } else if (entry.endsWith(".json")) {
+          seen.add(entry.replace(/\.json$/, ""));
+        }
       }
+    } catch {
+      // Ignore profile listing failures and return whatever we have.
     }
-  } catch {
-    // Ignore profile listing failures and return whatever we have.
   }
 
   return [...seen].sort();

@@ -60,11 +60,80 @@ export interface ConnectorOperationHelpResponse {
   help: string;
 }
 
+export interface ConnectorCapabilityRuntime {
+  packageName: "@hasna/connectors";
+  connectorId: string;
+  legacyConnectorId: string;
+  packagePath: string;
+  configDirName: string;
+  legacyConfigDirName: string;
+  internal: boolean;
+  packageDirectory: boolean;
+  commandSurface: boolean;
+}
+
+export interface ConnectorCapabilityAuth {
+  type: AuthStatus["type"];
+  summary: string | null;
+  envVars: Array<{ variable: string; description: string }>;
+}
+
+export interface ConnectorCapabilityDocs {
+  overview: string;
+  cliCommands: string;
+  dataStorage: string | null;
+}
+
+export interface ConnectorCapability {
+  id: string;
+  name: string;
+  displayName: string;
+  description: string;
+  category: string;
+  tags: string[];
+  version?: string;
+  aliases: string[];
+  runtime: ConnectorCapabilityRuntime;
+  auth: ConnectorCapabilityAuth;
+  docs: ConnectorCapabilityDocs;
+  operations?: ConnectorOperationDescriptor[];
+}
+
+export interface ConnectorCapabilityManifest {
+  version: 1;
+  packageName: "@hasna/connectors";
+  packageVersion: string;
+  generatedAt: string;
+  categories: readonly string[];
+  connectorCount: number;
+  connectors: ConnectorCapability[];
+}
+
 export interface RunOperationResponse {
   connector: string;
   displayName: string;
   success: boolean;
   output: string;
+}
+
+export interface StructuredRunOperationOptions<TInput extends Record<string, unknown> = Record<string, unknown>> {
+  operation: string;
+  input?: TInput;
+  profile?: string;
+  timeout?: number;
+  parseJson?: boolean;
+}
+
+export interface StructuredRunOperationResponse<TData = unknown> {
+  connector: string;
+  displayName: string;
+  operation: string;
+  profile?: string;
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  success: boolean;
+  data?: TData;
 }
 
 export interface Profile {
@@ -142,6 +211,11 @@ export interface RunOperationOptions {
   timeout?: number;
 }
 
+export interface ManifestOptions {
+  includeOperations?: boolean;
+  connectorNames?: string[];
+}
+
 // ── Client ─────────────────────────────────────────────────────────────────
 
 export class ConnectorsClient {
@@ -215,6 +289,17 @@ export class ConnectorsClient {
   }
 
   /**
+   * Get the platform-consumable connector capability manifest.
+   */
+  async getManifest(options: ManifestOptions = {}): Promise<ConnectorCapabilityManifest> {
+    const params = new URLSearchParams();
+    if (options.includeOperations) params.set("includeOperations", "true");
+    if (options.connectorNames?.length) params.set("connectors", options.connectorNames.join(","));
+    const qs = params.toString() ? `?${params.toString()}` : "";
+    return this.request<ConnectorCapabilityManifest>(`/api/connectors/manifest${qs}`);
+  }
+
+  /**
    * Execute a connector command.
    */
   async runOperation(
@@ -230,6 +315,31 @@ export class ConnectorsClient {
           args,
           ...(options.format ? { format: options.format } : {}),
           ...(options.timeout !== undefined ? { timeout: options.timeout } : {}),
+        }),
+      }
+    );
+  }
+
+  /**
+   * Execute a structured connector operation.
+   */
+  async runStructuredOperation<
+    TData = unknown,
+    TInput extends Record<string, unknown> = Record<string, unknown>,
+  >(
+    name: string,
+    options: StructuredRunOperationOptions<TInput>
+  ): Promise<StructuredRunOperationResponse<TData>> {
+    return this.request<StructuredRunOperationResponse<TData>>(
+      `/api/connectors/${encodeURIComponent(name)}/operations/run`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          operation: options.operation,
+          ...(options.input ? { input: options.input } : {}),
+          ...(options.profile ? { profile: options.profile } : {}),
+          ...(options.timeout !== undefined ? { timeout: options.timeout } : {}),
+          ...(options.parseJson !== undefined ? { parseJson: options.parseJson } : {}),
         }),
       }
     );

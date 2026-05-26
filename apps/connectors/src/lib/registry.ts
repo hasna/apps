@@ -8,6 +8,7 @@ import { fileURLToPath } from "url";
 import { getInternalConnectorDefinition } from "../core/builtins.js";
 import { bestFuzzyScore } from "./fuzzy.js";
 import { expandQuery } from "./synonyms.js";
+import { getConnectorPackagePath, isValidConnectorName, normalizeConnectorName } from "./connector-resolver.js";
 
 export interface ConnectorMeta {
   name: string;
@@ -257,7 +258,9 @@ export function searchConnectors(
 }
 
 export function getConnector(name: string): ConnectorMeta | undefined {
-  return CONNECTORS.find((c) => c.name === name);
+  if (!isValidConnectorName(name)) return undefined;
+  const normalizedName = normalizeConnectorName(name);
+  return CONNECTORS.find((c) => c.name === normalizedName);
 }
 
 /**
@@ -281,7 +284,7 @@ export function loadConnectorVersions(): void {
 
   for (const connector of CONNECTORS) {
     try {
-      const pkgPath = join(connectorsDir, `connect-${connector.name}`, "package.json");
+      const pkgPath = join(getConnectorPackagePath(connectorsDir, connector.name), "package.json");
       if (existsSync(pkgPath)) {
         const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
         connector.version = pkg.version || "0.0.0";

@@ -40,13 +40,13 @@ describe("installer", () => {
   describe("getConnectorPath", () => {
     test("returns path for name without prefix", () => {
       const path = getConnectorPath("figma");
-      expect(path).toContain("connect-figma");
+      expect(path).toContain("figma");
       expect(path).toContain("connectors");
     });
 
     test("returns path for name with prefix", () => {
       const path = getConnectorPath("connect-figma");
-      expect(path).toContain("connect-figma");
+      expect(path).toContain("figma");
       // Should NOT have double "connect-connect-"
       expect(path).not.toContain("connect-connect-");
     });
@@ -521,12 +521,13 @@ describe("installer", () => {
   describe("getConnectorPath edge cases", () => {
     test("handles hyphenated names", () => {
       const path = getConnectorPath("google-calendar");
-      expect(path).toContain("connect-google-calendar");
+      expect(path).toContain("google-calendar");
+      expect(path).not.toContain("connect-connect-");
     });
 
     test("handles numeric names", () => {
       const path = getConnectorPath("e2b");
-      expect(path).toContain("connect-e2b");
+      expect(path).toContain("e2b");
     });
   });
 

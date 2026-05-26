@@ -33,7 +33,7 @@ describe("Runner", () => {
     test("returns path for connector with CLI", () => {
       const path = getConnectorCliPath("stripe");
       expect(path).not.toBeNull();
-      expect(path).toContain("connect-stripe/src/cli/index.ts");
+      expect(path).toContain("stripe/src/cli/index.ts");
     });
 
     test("returns null for non-existent connector", () => {
@@ -218,7 +218,7 @@ describe("Runner", () => {
       expect(result.success).toBe(true);
       const data = JSON.parse(result.stdout);
       expect(data.profile).toBeDefined();
-      expect(data.configDir).toContain(".hasna/connectors/connect-stripe");
+      expect(data.configDir).toContain(".hasna/connectors/stripe");
     });
 
     test("runs imessage internal runtime for message send", async () => {

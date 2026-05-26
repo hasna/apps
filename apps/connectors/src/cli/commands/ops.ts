@@ -9,6 +9,7 @@ import {
   getConnectorCommandHelp,
   hasConnectorCommandSurface,
 } from "../../lib/runner.js";
+import { getConnectorConfigReadDirs } from "../../lib/connector-resolver.js";
 
 export function registerCommands(program: Command): void {
   // ============================================
@@ -245,14 +246,14 @@ export function registerCommands(program: Command): void {
 
               console.log(chalk.dim("  Waiting for authentication to complete..."));
               const connectorsHome = getConnectorsHome();
-              const connectorDirName = name.startsWith("connect-") ? name : `connect-${name}`;
-              const tokensPath = join(connectorsHome, connectorDirName, "profiles", "default", "tokens.json");
+              const tokenPaths = getConnectorConfigReadDirs(name, connectorsHome)
+                .map((dir) => join(dir, "profiles", "default", "tokens.json"));
 
               let attempts = 0;
               const maxAttempts = 360;
               while (attempts < maxAttempts) {
                 await new Promise<void>((resolve) => setTimeout(resolve, 500));
-                if (existsSync(tokensPath)) break;
+                if (tokenPaths.some((tokensPath) => existsSync(tokensPath))) break;
                 attempts++;
                 if (attempts % 6 === 0) process.stdout.write(".");
               }

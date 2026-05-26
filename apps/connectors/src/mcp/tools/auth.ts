@@ -6,6 +6,7 @@ import { getConnectorsHome } from "../../db/database.js";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { spawn } from "child_process";
+import { getConnectorConfigReadDirs } from "../../lib/connector-resolver.js";
 
 export function registerAuthTools(server: McpServer, stripped: (text: string) => Promise<{ content: { type: "text"; text: string }[] }>) {
   // --- Tool: connector_auth_status ---
@@ -173,8 +174,8 @@ export function registerAuthTools(server: McpServer, stripped: (text: string) =>
       if (noBrowser) {
         // Spawn a detached server process and poll for tokens
         const connectorsHome = getConnectorsHome();
-        const connectorDirName = name.startsWith("connect-") ? name : `connect-${name}`;
-        const tokensPath = join(connectorsHome, connectorDirName, "profiles", "default", "tokens.json");
+        const tokenPaths = getConnectorConfigReadDirs(name, connectorsHome)
+          .map((dir) => join(dir, "profiles", "default", "tokens.json"));
 
         // Check if server is already running
         let serverRunning = false;
@@ -198,7 +199,7 @@ export function registerAuthTools(server: McpServer, stripped: (text: string) =>
         const maxAttempts = 120; // 60 seconds
         while (attempts < maxAttempts) {
           await new Promise<void>((resolve) => setTimeout(resolve, 500));
-          if (existsSync(tokensPath)) {
+          if (tokenPaths.some((tokensPath) => existsSync(tokensPath))) {
             break;
           }
           attempts++;
@@ -212,7 +213,7 @@ export function registerAuthTools(server: McpServer, stripped: (text: string) =>
                 connector: name,
                 status: "waiting",
                 oauthUrl,
-                message: `OAuth server is running on port ${serverPort}. Open the URL to authenticate. Tokens will be saved to ${tokensPath}.`,
+                message: `OAuth server is running on port ${serverPort}. Open the URL to authenticate. Tokens will be saved to ${tokenPaths[0]}.`,
               }, null, 2),
             }],
           };
@@ -220,6 +221,7 @@ export function registerAuthTools(server: McpServer, stripped: (text: string) =>
 
         // Read the tokens to confirm
         try {
+          const tokensPath = tokenPaths.find((path) => existsSync(path)) ?? tokenPaths[0];
           const tokenData = JSON.parse(
             readFileSync(tokensPath, "utf-8")
           );

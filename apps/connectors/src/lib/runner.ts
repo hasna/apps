@@ -19,6 +19,10 @@ import {
   getOAuthConfig,
   loadTokens,
 } from "../server/auth.js";
+import {
+  getConnectorPackagePath,
+  normalizeConnectorName,
+} from "./connector-resolver.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -105,9 +109,10 @@ export function buildEnvWithCredentials(
   baseEnv: NodeJS.ProcessEnv
 ): NodeJS.ProcessEnv {
   const env = { ...baseEnv };
+  const normalizedConnectorName = normalizeConnectorName(connectorName);
 
-  const prefixes = ENV_VAR_NAME_OVERRIDES[connectorName] || [
-    connectorName.toUpperCase().replace(/-/g, "_"),
+  const prefixes = ENV_VAR_NAME_OVERRIDES[normalizedConnectorName] || [
+    normalizedConnectorName.toUpperCase().replace(/-/g, "_"),
   ];
 
   for (const prefix of prefixes) {
@@ -134,11 +139,11 @@ export function buildEnvWithCredentials(
     }
   }
 
-  if (getAuthType(connectorName) === "oauth") {
-    const oauthConfig = getOAuthConfig(connectorName);
-    const tokens = loadTokens(connectorName);
+  if (getAuthType(normalizedConnectorName) === "oauth") {
+    const oauthConfig = getOAuthConfig(normalizedConnectorName);
+    const tokens = loadTokens(normalizedConnectorName);
 
-    for (const { variable } of getEnvVars(connectorName)) {
+    for (const { variable } of getEnvVars(normalizedConnectorName)) {
       if (env[variable]) continue;
 
       if (variable.endsWith("_CLIENT_ID") && oauthConfig.clientId) {
@@ -163,8 +168,8 @@ export function buildEnvWithCredentials(
  * Returns null if the connector has no CLI.
  */
 export function getConnectorCliPath(name: string): string | null {
-  const safeName = name.replace(/[^a-z0-9-]/g, "");
-  const connectorDir = join(CONNECTORS_DIR, `connect-${safeName}`);
+  const safeName = normalizeConnectorName(name).replace(/[^a-z0-9-]/g, "");
+  const connectorDir = getConnectorPackagePath(CONNECTORS_DIR, safeName);
   const cliPath = join(connectorDir, "src", "cli", "index.ts");
   if (existsSync(cliPath)) return cliPath;
   return null;
@@ -277,11 +282,12 @@ export function runConnectorCommand(
   args: string[],
   timeoutMs = 30000
 ): Promise<RunResult> {
+  const connectorName = normalizeConnectorName(name);
   // Touch the shared config home before any connector runs so legacy
   // ~/.connectors or ~/.connect data is migrated into the one-product home.
   getConnectorsHome();
 
-  const internalRuntime = getInternalCommandRuntime(name);
+  const internalRuntime = getInternalCommandRuntime(connectorName);
   if (internalRuntime?.run) {
     return Promise.resolve(internalRuntime.run(args)).then((result) => {
       if (result) {
@@ -298,11 +304,11 @@ export function runConnectorCommand(
         };
       }
 
-      return runLegacyConnectorCommand(name, args, timeoutMs);
+      return runLegacyConnectorCommand(connectorName, args, timeoutMs);
     });
   }
 
-  return runLegacyConnectorCommand(name, args, timeoutMs);
+  return runLegacyConnectorCommand(connectorName, args, timeoutMs);
 }
 
 /**
@@ -315,7 +321,8 @@ export function runConnectorCommand(
 export async function runConnectorOperation<T = unknown>(
   args: RunConnectorOperationArgs
 ): Promise<ConnectorOperationResult<T>> {
-  const internal = getInternalConnectorDefinition(args.connector);
+  const connectorName = normalizeConnectorName(args.connector);
+  const internal = getInternalConnectorDefinition(connectorName);
   if (internal?.operations[args.operation]) {
     try {
       const operationData = await executeConnectorOperation(internal, {
@@ -326,14 +333,14 @@ export async function runConnectorOperation<T = unknown>(
       const commandResult = normalizeOperationReturn<T>(operationData);
 
       return {
-        connector: args.connector,
+        connector: connectorName,
         operation: args.operation,
         profile: args.profile,
         ...commandResult,
       };
     } catch (error) {
       return {
-        connector: args.connector,
+        connector: connectorName,
         operation: args.operation,
         profile: args.profile,
         stdout: "",
@@ -346,14 +353,14 @@ export async function runConnectorOperation<T = unknown>(
 
   const commandArgs = buildConnectorOperationArgs(args);
   const result = await runConnectorCommand(
-    args.connector,
+    connectorName,
     commandArgs,
     args.timeoutMs ?? 30000
   );
 
   const response: ConnectorOperationResult<T> = {
     ...result,
-    connector: args.connector,
+    connector: connectorName,
     operation: args.operation,
     profile: args.profile,
   };
@@ -453,11 +460,12 @@ function runLegacyConnectorCommand(
   args: string[],
   timeoutMs = 30000
 ): Promise<RunResult> {
-  const cliPath = getConnectorCliPath(name);
+  const connectorName = normalizeConnectorName(name);
+  const cliPath = getConnectorCliPath(connectorName);
   if (!cliPath) {
     return Promise.resolve({
       stdout: "",
-      stderr: `Connector '${name}' not found or has no CLI.`,
+      stderr: `Connector '${connectorName}' not found or has no CLI.`,
       exitCode: 1,
       success: false,
     });
@@ -466,7 +474,7 @@ function runLegacyConnectorCommand(
   return new Promise((resolve) => {
     const proc = spawn("bun", ["run", cliPath, ...args], {
       timeout: timeoutMs,
-      env: buildEnvWithCredentials(name, process.env),
+      env: buildEnvWithCredentials(connectorName, process.env),
       stdio: ["pipe", "pipe", "pipe"],
     });
 
@@ -508,7 +516,8 @@ function runLegacyConnectorCommand(
 export async function getConnectorOperations(
   name: string
 ): Promise<ConnectorOperationsResult> {
-  const internalRuntime = getInternalCommandRuntime(name);
+  const connectorName = normalizeConnectorName(name);
+  const internalRuntime = getInternalCommandRuntime(connectorName);
   if (internalRuntime?.commands.length) {
     const operations = internalRuntime.commands.map((command) => ({
       name: command.name,
@@ -523,17 +532,17 @@ export async function getConnectorOperations(
       operations,
       helpText:
         internalRuntime.helpText ??
-        buildInternalHelpText(name, internalRuntime.commands),
+        buildInternalHelpText(connectorName, internalRuntime.commands),
       hasCli: true,
     };
   }
 
-  const cliPath = getConnectorCliPath(name);
+  const cliPath = getConnectorCliPath(connectorName);
   if (!cliPath) {
     return { commands: [], operations: [], helpText: "", hasCli: false };
   }
 
-  const result = await runConnectorCommand(name, ["--help"]);
+  const result = await runConnectorCommand(connectorName, ["--help"]);
   const helpText = result.stdout || result.stderr;
   const operations = parseCommanderHelpOperations(helpText);
 
@@ -552,7 +561,8 @@ export async function getConnectorCommandHelp(
   name: string,
   command: string
 ): Promise<string> {
-  const internalRuntime = getInternalCommandRuntime(name);
+  const connectorName = normalizeConnectorName(name);
+  const internalRuntime = getInternalCommandRuntime(connectorName);
   if (internalRuntime?.getHelp) {
     const help = await internalRuntime.getHelp(command);
     if (help) {
@@ -567,7 +577,7 @@ export async function getConnectorCommandHelp(
     return runtimeCommand.helpText;
   }
 
-  const result = await runConnectorCommand(name, [command, "--help"]);
+  const result = await runConnectorCommand(connectorName, [command, "--help"]);
   return result.stdout || result.stderr;
 }
 
@@ -580,8 +590,7 @@ export function getConnectorsWithCli(): string[] {
   try {
     const dirs = readdirSync(CONNECTORS_DIR);
     for (const dir of dirs) {
-      if (!dir.startsWith("connect-")) continue;
-      const name = dir.replace("connect-", "");
+      const name = normalizeConnectorName(dir);
       if (getConnectorCliPath(name)) {
         connectors.add(name);
       }
