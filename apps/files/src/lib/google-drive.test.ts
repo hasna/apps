@@ -117,6 +117,34 @@ describe("Google Drive discovery", () => {
     }
   });
 
+  test("treats empty Drive media responses as valid zero-byte files", async () => {
+    const previousToken = process.env.GOOGLE_ACCESS_TOKEN;
+    const previousFetch = globalThis.fetch;
+    process.env.GOOGLE_ACCESS_TOKEN = "test-access-token";
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toContain("/files/empty-video");
+      expect(String(input)).toContain("alt=media");
+      expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer test-access-token");
+      return new Response(new Uint8Array(), { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const client = createConnectorProfileGoogleDriveClient("work");
+      const downloaded = await client.downloadFile(file("empty-video", "MOIC4842.MP4", undefined, "video/mp4"));
+
+      expect(downloaded.filename).toBe("MOIC4842.MP4");
+      expect(downloaded.mimeType).toBe("video/mp4");
+      expect(downloaded.data.byteLength).toBe(0);
+    } finally {
+      if (previousToken === undefined) {
+        delete process.env.GOOGLE_ACCESS_TOKEN;
+      } else {
+        process.env.GOOGLE_ACCESS_TOKEN = previousToken;
+      }
+      globalThis.fetch = previousFetch;
+    }
+  });
+
   test("paginates My Drive and shared drives while preserving folder paths", async () => {
     const machine = getCurrentMachine();
     const googleSource = createSource({

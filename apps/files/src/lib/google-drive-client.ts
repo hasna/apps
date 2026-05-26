@@ -139,7 +139,7 @@ class ConnectorSdkGoogleDriveClient implements GoogleDriveClient {
         ? getExportMimeType(file.mimeType, exportFormats)
         : undefined,
     });
-    if (!response.dataBase64) {
+    if (response.dataBase64 === undefined) {
       throw new Error(`Google Drive download for "${file.name}" returned no data`);
     }
     const data = Buffer.from(response.dataBase64, "base64");
