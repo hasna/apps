@@ -219,9 +219,7 @@ export async function syncGoogleDriveSource(source: Source): Promise<IndexStats>
         const existing = getGoogleDriveImportedObject(source.id, item.drive_id, item.id);
         if (existing && !shouldImport(config, item, existing, destination.source.id, destination.storage_type)) continue;
 
-        const downloaded = canDownloadDriveItem(item)
-          ? await client.downloadFile(toApiFile(item), config.export_formats)
-          : createGoogleDriveMetadataArchive(item);
+        const downloaded = await downloadOrArchiveGoogleDriveItem(client, item, config);
         const importedName = basename(downloaded.filename);
         const importedPath = buildImportedPath(config, item, importedName);
         const contentType = downloaded.mimeType || ((mimeLookup(downloaded.filename) || item.mime || "application/octet-stream") as string);
@@ -555,10 +553,33 @@ function canDownloadDriveItem(item: GoogleDriveItem): boolean {
   ].includes(item.mime);
 }
 
-function createGoogleDriveMetadataArchive(item: GoogleDriveItem): GoogleDriveDownloadedFile {
+async function downloadOrArchiveGoogleDriveItem(
+  client: GoogleDriveClient,
+  item: GoogleDriveItem,
+  config: GoogleDriveConfig,
+): Promise<GoogleDriveDownloadedFile> {
+  if (!canDownloadDriveItem(item)) return createGoogleDriveMetadataArchive(item);
+
+  try {
+    return await client.downloadFile(toApiFile(item), config.export_formats);
+  } catch (error) {
+    if (shouldArchiveGoogleDriveDownloadError(item, error)) {
+      return createGoogleDriveMetadataArchive(item, `Google Drive export failed: ${(error as Error).message}`);
+    }
+    throw error;
+  }
+}
+
+function shouldArchiveGoogleDriveDownloadError(item: GoogleDriveItem, error: unknown): boolean {
+  if (!item.mime.startsWith("application/vnd.google-apps.")) return false;
+  const message = (error as Error).message ?? String(error);
+  return /cannot be exported/i.test(message);
+}
+
+function createGoogleDriveMetadataArchive(item: GoogleDriveItem, reason = "Google Drive item is not exportable as file content through Drive export."): GoogleDriveDownloadedFile {
   const metadata = {
     archived_as: "google-drive-metadata",
-    reason: "Google Drive item is not exportable as file content through Drive export.",
+    reason,
     id: item.id,
     name: item.name,
     mime: item.mime,

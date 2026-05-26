@@ -456,6 +456,70 @@ describe("Google Drive sync", () => {
     ]);
   });
 
+  test("falls back to metadata JSON when Google Drive refuses to export a Workspace file", async () => {
+    const machine = getCurrentMachine();
+    const s3Source = createSource({
+      name: "Files bucket",
+      type: "s3",
+      bucket: "files-bucket",
+      region: "us-east-1",
+      config: {},
+      machine_id: machine.id,
+    });
+    const googleSource = createSource({
+      name: "Drive",
+      type: "google_drive",
+      machine_id: machine.id,
+      config: {
+        profile: "work",
+        include_my_drive: true,
+        include_all_shared_drives: false,
+        destination_source_id: s3Source.id,
+        delete_behavior: "ignore",
+      },
+    });
+    const uploads: Array<{ key: string; data: Record<string, unknown>; mime: string }> = [];
+    setGoogleDriveStorageAdapterForTests({
+      uploadS3: async (_source, body, key, contentType) => {
+        uploads.push({
+          key,
+          data: JSON.parse(Buffer.from(body as Uint8Array).toString("utf8")),
+          mime: contentType,
+        });
+        return key;
+      },
+    });
+    const client = new MockDriveClient(() => ({
+      files: [
+        file("presentation-1", "Lane Health Visual Concepts", undefined, "application/vnd.google-apps.presentation", {
+          version: "171",
+        }),
+      ],
+    }));
+    client.downloadFile = async (driveFile) => {
+      client.downloaded.push(driveFile.id);
+      throw new Error("Google Drive request failed (403): This file cannot be exported by the user.");
+    };
+    setGoogleDriveClientFactoryForTests(() => client);
+
+    const stats = await syncGoogleDriveSource(googleSource);
+
+    expect(stats).toMatchObject({ added: 1, updated: 0, deleted: 0, errors: 0 });
+    expect(client.downloaded).toEqual(["presentation-1"]);
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0]).toMatchObject({
+      key: "google-drive/work/my-drive/Lane Health Visual Concepts.gdrive-metadata (presentation-1).json",
+      mime: "application/json",
+    });
+    expect(uploads[0]?.data).toMatchObject({
+      id: "presentation-1",
+      name: "Lane Health Visual Concepts",
+      mime: "application/vnd.google-apps.presentation",
+      archived_as: "google-drive-metadata",
+      reason: "Google Drive export failed: Google Drive request failed (403): This file cannot be exported by the user.",
+    });
+  });
+
   test("skips unchanged Drive files and updates changed revisions on repeated S3 syncs", async () => {
     const machine = getCurrentMachine();
     const s3Source = createSource({
