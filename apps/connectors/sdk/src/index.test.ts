@@ -1,14 +1,20 @@
 import { describe, it, expect, beforeEach, mock, afterEach } from "bun:test";
-import { ConnectorsClient } from "./index";
+import {
+  ConnectorsClient,
+  HostedConnectorsClient,
+  HostedConnectorsError,
+  LocalConnectorsClient,
+  normalizeConnectorSlug,
+} from "./index";
 
 // ── Mock fetch ──────────────────────────────────────────────────────────────
 
-function mockFetch(status: number, body: unknown) {
+function mockFetch(status: number, body: unknown, headers: Record<string, string> = {}) {
   return mock(() =>
     Promise.resolve(
       new Response(JSON.stringify(body), {
         status,
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...headers },
       })
     )
   );
@@ -380,5 +386,181 @@ describe("ConnectorsClient", () => {
       global.fetch = fetchMock;
       await expect(client.install("github")).rejects.toThrow("Request failed with status 500");
     });
+  });
+});
+
+describe("SDK client split", () => {
+  it("keeps ConnectorsClient as the local connectors-serve client", async () => {
+    const fetchMock = mockFetch(200, []);
+    global.fetch = fetchMock;
+    const client = new ConnectorsClient({ serverUrl: "http://localhost:9876" });
+    const local = new LocalConnectorsClient({ serverUrl: "http://localhost:9876" });
+
+    await client.list();
+    await local.list();
+
+    expect(client).toBeInstanceOf(LocalConnectorsClient);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "http://localhost:9876/api/connectors",
+      "http://localhost:9876/api/connectors",
+    ]);
+  });
+
+  it("normalizes hosted and local connector slug inputs", () => {
+    expect(normalizeConnectorSlug(" GitHub ")).toBe("github");
+    expect(normalizeConnectorSlug("connect-github")).toBe("github");
+    expect(normalizeConnectorSlug("@hasna/connect-github")).toBe("github");
+    expect(normalizeConnectorSlug("google-drive")).toBe("google-drive");
+    expect(() => normalizeConnectorSlug("connect-")).toThrow("connector slug is required");
+    expect(() => normalizeConnectorSlug("github/repo")).toThrow("invalid connector slug");
+  });
+});
+
+describe("HostedConnectorsClient", () => {
+  it("requires apiUrl and strips trailing slashes", async () => {
+    expect(() => new HostedConnectorsClient({ apiUrl: "" })).toThrow("apiUrl is required");
+
+    const fetchMock = mockFetch(200, []);
+    const hosted = new HostedConnectorsClient({
+      apiUrl: "https://connectors.example/",
+      apiKey: "pcs_key_test",
+      fetchImpl: fetchMock,
+    });
+
+    await hosted.listConnectors();
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://connectors.example/api/v1/connectors");
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer pcs_key_test");
+  });
+
+  it("maps hosted discovery, OAuth, account, run, approval, billing, and policy methods", async () => {
+    const seen: Array<{ path: string; method: string }> = [];
+    const bodies: Record<string, unknown>[] = [];
+    const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit) => {
+      if (typeof init?.body === "string") {
+        bodies.push(JSON.parse(init.body) as Record<string, unknown>);
+      }
+      seen.push({
+        path: String(input).replace("https://connectors.example/api/v1", ""),
+        method: init?.method ?? "GET",
+      });
+      return Response.json({ ok: true });
+    });
+    const hosted = new HostedConnectorsClient({
+      apiUrl: "https://connectors.example",
+      apiKey: "pcs_key_test",
+      fetchImpl: fetchMock,
+    });
+
+    await hosted.whoami();
+    await hosted.listConnectors({ search: "github" });
+    await hosted.getConnector("connect-github");
+    await hosted.getConnectorDocs("@hasna/connect-github");
+    await hosted.getConnectorOperations("connect-github");
+    await hosted.getConnectorAuthUrl("connect-github", {
+      redirectUrl: "https://app.example/callback",
+      profileName: "prod",
+      scopes: ["repo", "read:user"],
+    });
+    await hosted.listAccounts();
+    await hosted.connectAccount({ connectorSlug: "connect-github", credentials: {} });
+    await hosted.listAccountProfiles("account-id");
+    await hosted.checkAccountCredentials("account-id", "default");
+    await hosted.listRuns();
+    await hosted.submitRun({
+      connectorSlug: "connect-github",
+      operationName: "repos",
+      accountId: "account-id",
+      profileName: "default",
+      input: { visibility: "private" },
+      estimatedCredits: 2,
+      idempotencyKey: "run-1",
+    });
+    await hosted.getRun("run-id");
+    await hosted.listRunLogs("run-id");
+    await hosted.listRunArtifacts("run-id");
+    await hosted.listApprovals();
+    await hosted.requestApproval({
+      actionType: "connector.run",
+      resourceType: "connector_operation",
+      resourceId: "connect-github:repos",
+      requestPayload: { connectorSlug: "connect-github" },
+    });
+    await hosted.decideApproval("approval-id", "approve");
+    await hosted.getBillingStatus();
+    await hosted.createBillingCustomer({ email: "billing@example.com" });
+    await hosted.createCheckoutSession({
+      priceId: "price_123",
+      successUrl: "https://app.example/success",
+      cancelUrl: "https://app.example/cancel",
+      creditPackCredits: 100,
+      idempotencyKey: "checkout",
+    });
+    await hosted.createBillingPortalSession({ returnUrl: "https://app.example/billing", idempotencyKey: "portal" });
+    await hosted.addBillingCredits({ amountCredits: 10, idempotencyKey: "credits" });
+    await hosted.listBillingTransactions();
+    await hosted.listBillingInvoices();
+    await hosted.getUsage();
+    await hosted.getPolicy();
+    await hosted.updatePolicy({
+      connectorAllowlist: ["connect-github"],
+      operationDenylist: ["connect-github:repos"],
+    });
+
+    expect(seen).toEqual([
+      { path: "/auth/whoami", method: "GET" },
+      { path: "/connectors?search=github", method: "GET" },
+      { path: "/connectors/github", method: "GET" },
+      { path: "/connectors/github/docs", method: "GET" },
+      { path: "/connectors/github/operations", method: "GET" },
+      { path: "/connectors/github/auth-url?redirectUrl=https%3A%2F%2Fapp.example%2Fcallback&profileName=prod&scopes=repo%2Cread%3Auser", method: "GET" },
+      { path: "/accounts", method: "GET" },
+      { path: "/accounts", method: "POST" },
+      { path: "/accounts/account-id/profiles", method: "GET" },
+      { path: "/accounts/account-id/profiles/default/credential-check", method: "GET" },
+      { path: "/runs", method: "GET" },
+      { path: "/runs", method: "POST" },
+      { path: "/runs/run-id", method: "GET" },
+      { path: "/runs/run-id/logs", method: "GET" },
+      { path: "/runs/run-id/artifacts", method: "GET" },
+      { path: "/approvals", method: "GET" },
+      { path: "/approvals", method: "POST" },
+      { path: "/approvals/approval-id/approve", method: "POST" },
+      { path: "/billing/status", method: "GET" },
+      { path: "/billing/customers", method: "POST" },
+      { path: "/billing/checkout", method: "POST" },
+      { path: "/billing/portal", method: "POST" },
+      { path: "/billing/credits", method: "POST" },
+      { path: "/billing/transactions", method: "GET" },
+      { path: "/billing/invoices", method: "GET" },
+      { path: "/usage", method: "GET" },
+      { path: "/policy", method: "GET" },
+      { path: "/policy", method: "PUT" },
+    ]);
+    expect(bodies).toContainEqual(expect.objectContaining({ connectorSlug: "github" }));
+    expect(bodies).toContainEqual(expect.objectContaining({
+      connectorAllowlist: ["github"],
+      operationDenylist: ["github:repos"],
+    }));
+  });
+
+  it("throws hosted errors with status, code, payload, and request id", async () => {
+    const hosted = new HostedConnectorsClient({
+      apiUrl: "https://connectors.example",
+      apiKey: "pcs_key_test",
+      fetchImpl: mockFetch(403, { error: "denied", code: "OPERATION_DENIED" }, { "x-request-id": "req_123" }),
+    });
+
+    try {
+      await hosted.submitRun({ connectorSlug: "github", operationName: "repos" });
+      throw new Error("expected hosted error");
+    } catch (error) {
+      expect(error).toBeInstanceOf(HostedConnectorsError);
+      expect((error as HostedConnectorsError).status).toBe(403);
+      expect((error as HostedConnectorsError).code).toBe("OPERATION_DENIED");
+      expect((error as HostedConnectorsError).requestId).toBe("req_123");
+      expect((error as HostedConnectorsError).payload).toEqual({ error: "denied", code: "OPERATION_DENIED" });
+    }
   });
 });

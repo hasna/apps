@@ -8,7 +8,7 @@ Open-source connector platform for enabling, authenticating, and running API con
 ## Install
 
 ```bash
-npm install -g @hasna/connectors
+bun install -g @hasna/connectors
 ```
 
 ## What It Is
@@ -55,6 +55,16 @@ connectors-mcp
 ```bash
 connectors-serve
 ```
+
+The local REST API is served by the one-product runtime at
+`http://localhost:9876`. Use `@hasna/connectors-sdk` with
+`ConnectorsClient` or `LocalConnectorsClient` for this local
+`connectors-serve` API.
+
+Hosted SaaS products should use `HostedConnectorsClient` from
+`@hasna/connectors-sdk`. The hosted client talks to a platform
+`/api/v1` endpoint with bearer API keys and does not require local connector
+installs or individual connector packages.
 
 ## Project Layout
 

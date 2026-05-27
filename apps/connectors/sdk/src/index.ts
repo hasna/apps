@@ -216,9 +216,290 @@ export interface ManifestOptions {
   connectorNames?: string[];
 }
 
+export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
+export interface HostedConnectorsClientOptions {
+  /** Base URL of the hosted platform-connectors API, for example https://connectors.example */
+  apiUrl: string;
+  /** Bearer API key issued by the hosted platform. */
+  apiKey?: string;
+  /** Fetch implementation for tests, browsers, or custom runtimes. Defaults to global fetch. */
+  fetchImpl?: FetchLike;
+  /** Additional headers to send with every hosted API request. */
+  headers?: Record<string, string>;
+}
+
+export interface HostedWhoamiResponse {
+  organizationId: string;
+  userId: string;
+  authMethod: "api_key" | "session" | string;
+  scopes: string[];
+}
+
+export interface HostedConnectorSummary {
+  name: string;
+  displayName: string;
+  description: string;
+  category: string;
+  version?: string | null;
+  tags: string[];
+  hasCommandSurface: boolean;
+}
+
+export interface HostedConnectorAuthUrl {
+  connector: string;
+  provider: string | null;
+  available: boolean;
+  url: string | null;
+  redirectUrl: string;
+  scopes?: string[];
+  state?: string;
+  reason?: string;
+}
+
+export interface HostedAuthUrlOptions {
+  redirectUrl?: string;
+  profileName?: string;
+  scopes?: string[];
+}
+
+export interface HostedAccount {
+  id: string;
+  organizationId?: string;
+  connectorSlug: string;
+  displayName: string;
+  authType: string;
+  externalAccountId?: string | null;
+  status?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+}
+
+export interface HostedProfile {
+  id?: string;
+  accountId?: string;
+  profileName: string;
+  oauthScopes?: string[];
+  expiresAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+}
+
+export interface HostedConnectAccountInput {
+  connectorSlug: string;
+  displayName?: string;
+  authType?: string;
+  externalAccountId?: string;
+  profileName?: string;
+  credentials: Record<string, unknown>;
+  oauthScopes?: string[];
+  expiresAt?: string;
+}
+
+export interface HostedConnectAccountResponse {
+  account: HostedAccount;
+  profile: HostedProfile;
+}
+
+export interface HostedCredentialCheck {
+  available: boolean;
+}
+
+export type HostedRunStatus = "queued" | "running" | "succeeded" | "failed" | "canceled" | string;
+
+export interface HostedRun {
+  id: string;
+  connector: string;
+  connectorSlug?: string;
+  operationName: string;
+  status: HostedRunStatus;
+  accountId?: string | null;
+  profileName?: string | null;
+  idempotencyKey?: string | null;
+  requestSource?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+}
+
+export interface HostedSubmitRunInput {
+  connectorSlug: string;
+  operationName: string;
+  args?: string[];
+  input?: Record<string, unknown>;
+  accountId?: string;
+  profileName?: string;
+  requestedByAgentId?: string;
+  idempotencyKey?: string;
+  estimatedCredits?: number;
+}
+
+export interface HostedApprovalRequiredRun {
+  status: "approval_required";
+  approval: HostedApproval;
+}
+
+export interface HostedRunLog {
+  id?: string;
+  runId?: string;
+  sequence?: number;
+  level?: string;
+  message?: string;
+  createdAt?: string;
+  [key: string]: unknown;
+}
+
+export interface HostedRunArtifact {
+  id?: string;
+  runId?: string;
+  name?: string;
+  contentType?: string;
+  sizeBytes?: number;
+  sha256?: string;
+  url?: string;
+  [key: string]: unknown;
+}
+
+export interface HostedApproval {
+  id: string;
+  status: "pending" | "approved" | "rejected" | "expired" | string;
+  actionType: string;
+  resourceType: string;
+  resourceId?: string | null;
+  reason?: string | null;
+  requestPayload?: Record<string, unknown>;
+  createdAt?: string;
+  expiresAt?: string | null;
+  [key: string]: unknown;
+}
+
+export interface HostedRequestApprovalInput {
+  actionType: string;
+  resourceType: string;
+  resourceId?: string;
+  reason?: string;
+  requestPayload?: Record<string, unknown>;
+  requestedByAgentId?: string;
+  expiresAt?: string;
+}
+
+export interface HostedBillingStatus {
+  customer?: Record<string, unknown> | null;
+  subscription?: Record<string, unknown> | null;
+  creditBalance?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface HostedBillingCustomerInput {
+  email?: string;
+  currency?: string;
+  providerCustomerId?: string;
+}
+
+export interface HostedCheckoutSessionInput {
+  priceId: string;
+  successUrl: string;
+  cancelUrl: string;
+  creditPackCredits?: number;
+  idempotencyKey: string;
+}
+
+export interface HostedPortalSessionInput {
+  returnUrl: string;
+  idempotencyKey: string;
+}
+
+export interface HostedAddCreditsInput {
+  amountCredits: number;
+  idempotencyKey: string;
+  description?: string;
+}
+
+export interface HostedUsage {
+  runs: number;
+  creditsUsed?: number;
+  creditBalance?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface HostedPolicy {
+  connectorAllowlist?: string[];
+  connectorBlocklist?: string[];
+  operationAllowlist?: string[];
+  operationDenylist?: string[];
+  approvalRequiredOperations?: string[];
+  [key: string]: unknown;
+}
+
+export interface HostedApiErrorPayload {
+  error?: string;
+  code?: string;
+  [key: string]: unknown;
+}
+
+export class HostedConnectorsError extends Error {
+  readonly status: number;
+  readonly code?: string;
+  readonly payload: unknown;
+  readonly requestId?: string;
+
+  constructor(message: string, options: {
+    status: number;
+    code?: string;
+    payload: unknown;
+    requestId?: string;
+  }) {
+    super(message);
+    this.name = "HostedConnectorsError";
+    this.status = options.status;
+    this.code = options.code;
+    this.payload = options.payload;
+    this.requestId = options.requestId;
+  }
+}
+
+export function normalizeConnectorSlug(slug: string): string {
+  let normalized = slug.trim().toLowerCase();
+  if (normalized.startsWith("@hasna/")) normalized = normalized.slice("@hasna/".length);
+  if (normalized.startsWith("connect-")) normalized = normalized.slice("connect-".length);
+  if (!normalized) throw new Error("connector slug is required");
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(normalized)) {
+    throw new Error(`invalid connector slug: ${slug}`);
+  }
+  return normalized;
+}
+
+function normalizeOperationKey(value: string): string {
+  const [connectorSlug, ...rest] = value.split(":");
+  return rest.length === 0
+    ? normalizeConnectorSlug(connectorSlug)
+    : `${normalizeConnectorSlug(connectorSlug)}:${rest.join(":")}`;
+}
+
+function normalizePolicyConnectorLists(input: HostedPolicy): HostedPolicy {
+  const copy: HostedPolicy = { ...input };
+  for (const key of ["connectorAllowlist", "connectorBlocklist"] as const) {
+    if (Array.isArray(copy[key])) {
+      copy[key] = copy[key].map((value) =>
+        typeof value === "string" ? normalizeConnectorSlug(value) : value
+      );
+    }
+  }
+  for (const key of ["operationAllowlist", "operationDenylist", "approvalRequiredOperations"] as const) {
+    if (Array.isArray(copy[key])) {
+      copy[key] = copy[key].map((value) =>
+        typeof value === "string" ? normalizeOperationKey(value) : value
+      );
+    }
+  }
+  return copy;
+}
+
 // ── Client ─────────────────────────────────────────────────────────────────
 
-export class ConnectorsClient {
+export class LocalConnectorsClient {
   private readonly baseUrl: string;
 
   constructor(options: ConnectorsClientOptions = {}) {
@@ -264,13 +545,14 @@ export class ConnectorsClient {
    * Get a single connector by name.
    */
   async get(name: string): Promise<Connector> {
-    return this.request<Connector>(`/api/connectors/${encodeURIComponent(name)}`);
+    return this.request<Connector>(`/api/connectors/${encodeURIComponent(normalizeConnectorSlug(name))}`);
   }
 
   /**
    * List runnable operations for a connector.
    */
   async listOperations(name: string): Promise<ConnectorOperationsResponse> {
+    name = normalizeConnectorSlug(name);
     return this.request<ConnectorOperationsResponse>(
       `/api/connectors/${encodeURIComponent(name)}/operations`
     );
@@ -283,6 +565,7 @@ export class ConnectorsClient {
     name: string,
     command: string
   ): Promise<ConnectorOperationHelpResponse> {
+    name = normalizeConnectorSlug(name);
     return this.request<ConnectorOperationHelpResponse>(
       `/api/connectors/${encodeURIComponent(name)}/operations/${encodeURIComponent(command)}`
     );
@@ -294,7 +577,7 @@ export class ConnectorsClient {
   async getManifest(options: ManifestOptions = {}): Promise<ConnectorCapabilityManifest> {
     const params = new URLSearchParams();
     if (options.includeOperations) params.set("includeOperations", "true");
-    if (options.connectorNames?.length) params.set("connectors", options.connectorNames.join(","));
+    if (options.connectorNames?.length) params.set("connectors", options.connectorNames.map(normalizeConnectorSlug).join(","));
     const qs = params.toString() ? `?${params.toString()}` : "";
     return this.request<ConnectorCapabilityManifest>(`/api/connectors/manifest${qs}`);
   }
@@ -307,6 +590,7 @@ export class ConnectorsClient {
     args: string[],
     options: RunOperationOptions = {}
   ): Promise<RunOperationResponse> {
+    name = normalizeConnectorSlug(name);
     return this.request<RunOperationResponse>(
       `/api/connectors/${encodeURIComponent(name)}/operations/run`,
       {
@@ -330,6 +614,7 @@ export class ConnectorsClient {
     name: string,
     options: StructuredRunOperationOptions<TInput>
   ): Promise<StructuredRunOperationResponse<TData>> {
+    name = normalizeConnectorSlug(name);
     return this.request<StructuredRunOperationResponse<TData>>(
       `/api/connectors/${encodeURIComponent(name)}/operations/run`,
       {
@@ -349,6 +634,7 @@ export class ConnectorsClient {
    * Install a connector.
    */
   async install(name: string): Promise<InstallResponse> {
+    name = normalizeConnectorSlug(name);
     return this.request<InstallResponse>(`/api/connectors/${encodeURIComponent(name)}/install`, {
       method: "POST",
     });
@@ -358,6 +644,7 @@ export class ConnectorsClient {
    * Uninstall a connector.
    */
   async uninstall(name: string): Promise<UninstallResponse> {
+    name = normalizeConnectorSlug(name);
     return this.request<UninstallResponse>(`/api/connectors/${encodeURIComponent(name)}/uninstall`, {
       method: "POST",
     });
@@ -370,6 +657,7 @@ export class ConnectorsClient {
    * @param field - Optional field name (for connectors with multiple key fields)
    */
   async setKey(name: string, key: string, field?: string): Promise<SetKeyResponse> {
+    name = normalizeConnectorSlug(name);
     return this.request<SetKeyResponse>(`/api/connectors/${encodeURIComponent(name)}/key`, {
       method: "POST",
       body: JSON.stringify({ key, ...(field ? { field } : {}) }),
@@ -380,6 +668,7 @@ export class ConnectorsClient {
    * Refresh OAuth tokens for a connector.
    */
   async refresh(name: string): Promise<RefreshResponse> {
+    name = normalizeConnectorSlug(name);
     return this.request<RefreshResponse>(`/api/connectors/${encodeURIComponent(name)}/refresh`, {
       method: "POST",
     });
@@ -389,6 +678,7 @@ export class ConnectorsClient {
    * Get profiles for a connector.
    */
   async getProfiles(name: string): Promise<ProfilesResponse> {
+    name = normalizeConnectorSlug(name);
     return this.request<ProfilesResponse>(`/api/connectors/${encodeURIComponent(name)}/profiles`);
   }
 
@@ -396,6 +686,7 @@ export class ConnectorsClient {
    * Switch the active profile for a connector.
    */
   async switchProfile(name: string, profileId: string): Promise<SwitchProfileResponse> {
+    name = normalizeConnectorSlug(name);
     return this.request<SwitchProfileResponse>(`/api/connectors/${encodeURIComponent(name)}/profiles/switch`, {
       method: "POST",
       body: JSON.stringify({ profile: profileId }),
@@ -406,6 +697,7 @@ export class ConnectorsClient {
    * Delete a profile for a connector. Cannot delete the "default" profile.
    */
   async deleteProfile(name: string, profileId: string): Promise<{ success: boolean }> {
+    name = normalizeConnectorSlug(name);
     return this.request<{ success: boolean }>(
       `/api/connectors/${encodeURIComponent(name)}/profiles/${encodeURIComponent(profileId)}`,
       { method: "DELETE" }
@@ -444,6 +736,258 @@ export class ConnectorsClient {
       body: JSON.stringify(data),
     });
   }
+}
+
+export class ConnectorsClient extends LocalConnectorsClient {}
+
+export class HostedConnectorsClient {
+  private readonly apiUrl: string;
+  private readonly apiKey: string | undefined;
+  private readonly fetchImpl: FetchLike;
+  private readonly headers: Record<string, string>;
+
+  constructor(options: HostedConnectorsClientOptions) {
+    if (!options.apiUrl.trim()) throw new Error("apiUrl is required");
+    this.apiUrl = options.apiUrl.replace(/\/+$/, "");
+    this.apiKey = options.apiKey;
+    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.headers = options.headers ?? {};
+  }
+
+  async whoami(): Promise<HostedWhoamiResponse> {
+    return this.request<HostedWhoamiResponse>("/auth/whoami");
+  }
+
+  async listConnectors(options: { search?: string } = {}): Promise<HostedConnectorSummary[]> {
+    const query = new URLSearchParams();
+    if (options.search) query.set("search", options.search);
+    return this.request<HostedConnectorSummary[]>(`/connectors${query.size ? `?${query.toString()}` : ""}`);
+  }
+
+  async getConnector(connectorSlug: string): Promise<HostedConnectorSummary & Record<string, unknown>> {
+    connectorSlug = normalizeConnectorSlug(connectorSlug);
+    return this.request<HostedConnectorSummary & Record<string, unknown>>(`/connectors/${encodeURIComponent(connectorSlug)}`);
+  }
+
+  async getConnectorDocs(connectorSlug: string): Promise<{ connector: string; docs: ConnectorCapabilityDocs }> {
+    connectorSlug = normalizeConnectorSlug(connectorSlug);
+    return this.request<{ connector: string; docs: ConnectorCapabilityDocs }>(`/connectors/${encodeURIComponent(connectorSlug)}/docs`);
+  }
+
+  async getConnectorOperations(connectorSlug: string): Promise<ConnectorOperationsResponse> {
+    connectorSlug = normalizeConnectorSlug(connectorSlug);
+    return this.request<ConnectorOperationsResponse>(`/connectors/${encodeURIComponent(connectorSlug)}/operations`);
+  }
+
+  async getConnectorAuthUrl(
+    connectorSlug: string,
+    options: HostedAuthUrlOptions = {}
+  ): Promise<HostedConnectorAuthUrl> {
+    connectorSlug = normalizeConnectorSlug(connectorSlug);
+    const query = new URLSearchParams();
+    if (options.redirectUrl) query.set("redirectUrl", options.redirectUrl);
+    if (options.profileName) query.set("profileName", options.profileName);
+    if (options.scopes?.length) query.set("scopes", options.scopes.join(","));
+    return this.request<HostedConnectorAuthUrl>(
+      `/connectors/${encodeURIComponent(connectorSlug)}/auth-url${query.size ? `?${query.toString()}` : ""}`
+    );
+  }
+
+  async listAccounts(): Promise<HostedAccount[]> {
+    return this.request<HostedAccount[]>("/accounts");
+  }
+
+  async connectAccount(input: HostedConnectAccountInput): Promise<HostedConnectAccountResponse> {
+    return this.request<HostedConnectAccountResponse>("/accounts", {
+      method: "POST",
+      body: JSON.stringify({
+        ...input,
+        connectorSlug: normalizeConnectorSlug(input.connectorSlug),
+      }),
+    });
+  }
+
+  async listAccountProfiles(accountId: string): Promise<HostedProfile[]> {
+    return this.request<HostedProfile[]>(`/accounts/${encodeURIComponent(accountId)}/profiles`);
+  }
+
+  async checkAccountCredentials(accountId: string, profileName: string): Promise<HostedCredentialCheck> {
+    return this.request<HostedCredentialCheck>(
+      `/accounts/${encodeURIComponent(accountId)}/profiles/${encodeURIComponent(profileName)}/credential-check`
+    );
+  }
+
+  async listRuns(): Promise<HostedRun[]> {
+    return this.request<HostedRun[]>("/runs");
+  }
+
+  async submitRun(input: HostedSubmitRunInput): Promise<HostedRun | HostedApprovalRequiredRun> {
+    return this.request<HostedRun | HostedApprovalRequiredRun>("/runs", {
+      method: "POST",
+      body: JSON.stringify({
+        ...input,
+        connectorSlug: normalizeConnectorSlug(input.connectorSlug),
+      }),
+    });
+  }
+
+  async getRun(runId: string): Promise<HostedRun> {
+    return this.request<HostedRun>(`/runs/${encodeURIComponent(runId)}`);
+  }
+
+  async listRunLogs(runId: string): Promise<HostedRunLog[]> {
+    return this.request<HostedRunLog[]>(`/runs/${encodeURIComponent(runId)}/logs`);
+  }
+
+  async listRunArtifacts(runId: string): Promise<HostedRunArtifact[]> {
+    return this.request<HostedRunArtifact[]>(`/runs/${encodeURIComponent(runId)}/artifacts`);
+  }
+
+  async listApprovals(): Promise<HostedApproval[]> {
+    return this.request<HostedApproval[]>("/approvals");
+  }
+
+  async requestApproval(input: HostedRequestApprovalInput): Promise<HostedApproval> {
+    return this.request<HostedApproval>("/approvals", {
+      method: "POST",
+      body: JSON.stringify(normalizeHostedApprovalInput(input)),
+    });
+  }
+
+  async decideApproval(id: string, decision: "approve" | "reject"): Promise<HostedApproval> {
+    return this.request<HostedApproval>(`/approvals/${encodeURIComponent(id)}/${decision}`, {
+      method: "POST",
+    });
+  }
+
+  async getBillingStatus(): Promise<HostedBillingStatus> {
+    return this.request<HostedBillingStatus>("/billing/status");
+  }
+
+  async createBillingCustomer(input: HostedBillingCustomerInput): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>("/billing/customers", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async createCheckoutSession(input: HostedCheckoutSessionInput): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>("/billing/checkout", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async createBillingPortalSession(input: HostedPortalSessionInput): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>("/billing/portal", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async addBillingCredits(input: HostedAddCreditsInput): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>("/billing/credits", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async listBillingTransactions(): Promise<Array<Record<string, unknown>>> {
+    return this.request<Array<Record<string, unknown>>>("/billing/transactions");
+  }
+
+  async listBillingInvoices(): Promise<Array<Record<string, unknown>>> {
+    return this.request<Array<Record<string, unknown>>>("/billing/invoices");
+  }
+
+  async getUsage(): Promise<HostedUsage> {
+    return this.request<HostedUsage>("/usage");
+  }
+
+  async getPolicy(): Promise<HostedPolicy> {
+    return this.request<HostedPolicy>("/policy");
+  }
+
+  async updatePolicy(input: HostedPolicy): Promise<HostedPolicy> {
+    return this.request<HostedPolicy>("/policy", {
+      method: "PUT",
+      body: JSON.stringify(normalizePolicyConnectorLists(input)),
+    });
+  }
+
+  async emergencyRevokePolicy(input: { reason?: string } = {}): Promise<HostedPolicy> {
+    return this.request<HostedPolicy>("/policy/emergency-revoke", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async emergencyRestorePolicy(): Promise<HostedPolicy> {
+    return this.request<HostedPolicy>("/policy/emergency-restore", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+  }
+
+  private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.headers,
+      ...(init.headers as Record<string, string> | undefined),
+    };
+    if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
+
+    const response = await this.fetchImpl(`${this.apiUrl}/api/v1${path}`, {
+      ...init,
+      headers,
+    });
+    const payload = await readResponsePayload(response);
+
+    if (!response.ok) {
+      const errorPayload = isRecord(payload) ? payload as HostedApiErrorPayload : {};
+      throw new HostedConnectorsError(
+        typeof errorPayload.error === "string"
+          ? errorPayload.error
+          : `request failed with status ${response.status}`,
+        {
+          status: response.status,
+          code: typeof errorPayload.code === "string" ? errorPayload.code : undefined,
+          payload,
+          requestId: response.headers.get("x-request-id") ?? undefined,
+        }
+      );
+    }
+
+    return payload as T;
+  }
+}
+
+function normalizeHostedApprovalInput(input: HostedRequestApprovalInput): HostedRequestApprovalInput {
+  const requestPayload = input.requestPayload && typeof input.requestPayload.connectorSlug === "string"
+    ? {
+        ...input.requestPayload,
+        connectorSlug: normalizeConnectorSlug(input.requestPayload.connectorSlug),
+      }
+    : input.requestPayload;
+  return {
+    ...input,
+    resourceId: input.resourceId ? normalizeOperationKey(input.resourceId) : undefined,
+    requestPayload,
+  };
+}
+
+async function readResponsePayload(response: Response): Promise<unknown> {
+  const text = await response.text();
+  if (!text) return undefined;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export default ConnectorsClient;
