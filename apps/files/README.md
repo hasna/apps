@@ -29,13 +29,13 @@ Add or repair the production S3 destination once. This stores the AWS named
 profile on the source and sets it as the default Google Drive destination:
 
 ```bash
-files sources bootstrap-prod-files
+files sources bootstrap-prod-emails
 files sources add-google-drive --all-profiles --all
 files sources sync-google-drive --dry-run
 files sources sync-google-drive
 ```
 
-The production default is `s3://hasna-xyz-prod-files/google-drive/<profile>/...`
+The production default is `s3://hasna-xyz-prod-emails/drive/<profile>/...`
 using the `hasna-xyz-infra` AWS profile.
 
 For a custom S3 destination, pass the shared AWS profile explicitly:
