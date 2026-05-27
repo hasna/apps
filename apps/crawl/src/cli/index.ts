@@ -992,10 +992,9 @@ program
     try {
       const port = parseInt(opts.port, 10);
       process.stderr.write(chalk.cyan(`Starting server on port ${port}...\n`));
-      // Dynamically import the server to avoid pulling it into the CLI bundle
-      // @ts-ignore — server/index.ts is a separate entry point built independently
-      const mod = await import("../server/index.js") as { startServer: (port: number) => Promise<void> };
-      await mod.startServer(port);
+      // The server entrypoint starts itself from process.env.PORT when imported.
+      process.env.PORT = String(port);
+      await import("../server/index.js");
     } catch (err) {
       process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
       process.exit(1);
