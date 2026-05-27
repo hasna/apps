@@ -81,7 +81,7 @@ describe("sources CLI", () => {
     expect(new TextDecoder().decode(result.stderr)).toContain("Use either --aws-profile");
   });
 
-  test("bootstraps prod-emails Drive archive by updating a stale bucket source and setting Drive default", () => {
+  test("bootstraps prod-files Drive archive by updating a stale bucket source and setting Drive default", () => {
     const env = cliEnv();
     const stale = Bun.spawnSync({
       cmd: ["bun", "run", cliPath, "sources", "add", "s3://hasna-prod-files", "--name", "prod-files"],
@@ -104,10 +104,10 @@ describe("sources CLI", () => {
     };
 
     expect(bootstrapped.source).toMatchObject({
-      name: "prod-emails-drive",
-      bucket: "hasna-xyz-prod-emails",
-      prefix: "drive",
-      region: "us-west-2",
+      name: "prod-files",
+      bucket: "hasna-xyz-prod-files",
+      prefix: "google-drive",
+      region: "us-east-1",
       config: { profile: "hasna-xyz-infra" },
     });
     expect(bootstrapped.google_drive_default_destination_source_id).toBe(bootstrapped.source.id);
@@ -120,7 +120,7 @@ describe("sources CLI", () => {
     });
     const sources = JSON.parse(new TextDecoder().decode(list.stdout)) as Array<{ type: string; bucket?: string; prefix?: string }>;
     expect(sources.filter((source) => source.type === "s3")).toEqual([
-      expect.objectContaining({ bucket: "hasna-xyz-prod-emails", prefix: "drive" }),
+      expect.objectContaining({ bucket: "hasna-xyz-prod-files", prefix: "google-drive" }),
     ]);
 
     const config = Bun.spawnSync({
@@ -211,8 +211,8 @@ describe("sources CLI", () => {
 
     expect(bootstrapped.source.id).toBe(activeId);
     expect(bootstrapped.source).toMatchObject({
-      bucket: "hasna-xyz-prod-emails",
-      prefix: "drive",
+      bucket: "hasna-xyz-prod-files",
+      prefix: "google-drive",
     });
     expect(bootstrapped.google_drive_default_destination_source_id).toBe(activeId);
     expect(bootstrapped.updated_google_drive_source_ids).toEqual([]);
@@ -231,7 +231,7 @@ describe("sources CLI", () => {
       enabled: boolean;
     }>;
     expect(sources.find((source) => source.id === activeId)).toMatchObject({
-      bucket: "hasna-xyz-prod-emails",
+      bucket: "hasna-xyz-prod-files",
       enabled: true,
     });
     expect(sources.find((source) => source.id === disabledId)).toMatchObject({
@@ -284,26 +284,6 @@ describe("sources CLI", () => {
       stderr: "pipe",
     }).exitCode).toBe(0);
 
-    const current = Bun.spawnSync({
-      cmd: ["bun", "run", cliPath, "sources", "add", "s3://hasna-xyz-prod-emails/drive", "--name", "prod-emails-drive"],
-      env,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    expect(current.exitCode).toBe(0);
-
-    list = Bun.spawnSync({
-      cmd: ["bun", "run", cliPath, "sources", "list", "--json"],
-      env,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const currentId = (JSON.parse(new TextDecoder().decode(list.stdout)) as Array<{
-      id: string;
-      type: string;
-      bucket?: string;
-    }>).find((source) => source.type === "s3" && source.bucket === "hasna-xyz-prod-emails")!.id;
-
     const bootstrap = Bun.spawnSync({
       cmd: ["bun", "run", cliPath, "sources", "bootstrap-prod-files", "--json"],
       env,
@@ -315,8 +295,12 @@ describe("sources CLI", () => {
       source: { id: string; bucket?: string; prefix?: string };
       updated_google_drive_source_ids: string[];
     };
-    expect(bootstrapped.source.id).toBe(currentId);
-    expect(bootstrapped.updated_google_drive_source_ids).toHaveLength(1);
+    expect(bootstrapped.source.id).toBe(legacyId);
+    expect(bootstrapped.source).toMatchObject({
+      bucket: "hasna-xyz-prod-files",
+      prefix: "google-drive",
+    });
+    expect(bootstrapped.updated_google_drive_source_ids).toEqual([]);
 
     list = Bun.spawnSync({
       cmd: ["bun", "run", cliPath, "sources", "list", "--json"],
@@ -330,7 +314,7 @@ describe("sources CLI", () => {
       config: { destination_source_id?: string };
     }>;
     const driveSource = sources.find((source) => source.type === "google_drive")!;
-    expect(driveSource.config.destination_source_id).toBe(currentId);
+    expect(driveSource.config.destination_source_id).toBe(legacyId);
   });
 });
 
