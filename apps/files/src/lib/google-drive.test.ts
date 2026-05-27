@@ -19,7 +19,7 @@ process.env.HASNA_FILES_DB_PATH = join(testDir, "files.db");
 
 const { closeDb } = await import("../db/database.js");
 const { getCurrentMachine } = await import("../db/machines.js");
-const { createSource } = await import("../db/sources.js");
+const { createSource, updateSource } = await import("../db/sources.js");
 const { getFile, listFiles } = await import("../db/files.js");
 const {
   listGoogleDriveItems,
@@ -762,6 +762,66 @@ describe("Google Drive sync", () => {
       modified_at: "2026-04-24T10:00:00.000Z",
       version: "2",
     });
+  });
+
+  test("reuploads unchanged Drive files when the S3 destination prefix changes", async () => {
+    const machine = getCurrentMachine();
+    const s3Source = createSource({
+      name: "prod-files",
+      type: "s3",
+      bucket: "hasna-xyz-prod-files",
+      prefix: "google-drive",
+      region: "us-east-1",
+      config: { profile: "hasna-xyz-infra" },
+      machine_id: machine.id,
+    });
+    const googleSource = createSource({
+      name: "Drive",
+      type: "google_drive",
+      machine_id: machine.id,
+      config: {
+        profile: "work",
+        include_my_drive: true,
+        include_all_shared_drives: false,
+        destination_source_id: s3Source.id,
+        delete_behavior: "ignore",
+      },
+    });
+    const uploads: string[] = [];
+    setGoogleDriveStorageAdapterForTests({
+      uploadS3: async (_source, _body, key) => {
+        uploads.push(key);
+        return key;
+      },
+    });
+    setGoogleDriveClientFactoryForTests(() => new MockDriveClient(() => ({
+      files: [file("doc-1", "report.txt", undefined, "text/plain", {
+        md5Checksum: "hash-1",
+        modifiedTime: "2026-04-24T09:00:00.000Z",
+        version: "1",
+      })],
+    })));
+
+    expect(await syncGoogleDriveSource(googleSource)).toMatchObject({ added: 1, updated: 0, errors: 0 });
+    updateSource(s3Source.id, {
+      name: "prod-emails-drive",
+      bucket: "hasna-xyz-prod-emails",
+      prefix: "drive",
+      region: "us-west-2",
+    });
+
+    expect(await syncGoogleDriveSource(googleSource)).toMatchObject({ added: 0, updated: 1, errors: 0 });
+
+    expect(uploads).toEqual([
+      "google-drive/work/my-drive/report (doc-1).txt",
+      "drive/work/my-drive/report (doc-1).txt",
+    ]);
+    expect(listGoogleDriveImportedObjects(googleSource.id)[0]).toMatchObject({
+      destination_source_id: s3Source.id,
+      storage_key: "drive/work/my-drive/report (doc-1).txt",
+      s3_key: "drive/work/my-drive/report (doc-1).txt",
+    });
+    expect(listFiles({ source_id: s3Source.id })[0]?.path).toBe("drive/work/my-drive/report (doc-1).txt");
   });
 
   test("retries Drive files that failed during a previous S3 sync", async () => {

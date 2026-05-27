@@ -235,7 +235,7 @@ export async function syncGoogleDriveSource(source: Source): Promise<IndexStats>
       seen.push({ drive_id: item.drive_id, file_id: item.id });
       try {
         const existing = getGoogleDriveImportedObject(source.id, item.drive_id, item.id);
-        if (existing && !shouldImport(config, item, existing, destination.source.id, destination.storage_type)) continue;
+        if (existing && !shouldImport(config, item, existing, destination.source, destination.storage_type)) continue;
 
         const importResult = await importGoogleDriveItem(client, item, config, destination.source, destination.storage_type);
         const fileRecord = upsertFile({
@@ -613,15 +613,21 @@ function shouldImport(
   config: GoogleDriveConfig,
   item: GoogleDriveItem,
   existing: GoogleDriveImportedObject,
-  destinationSourceId: string,
+  destinationSource: Source,
   storageType: GoogleDriveStorageType,
 ): boolean {
-  return existing.path !== buildImportedPath(config, item, existing.name)
+  const importedPath = buildImportedPath(config, item, existing.name);
+  const storageKey = storageType === "s3" || storageType === "local"
+    ? buildStorageKey(destinationSource, importedPath)
+    : importedPath;
+
+  return existing.path !== importedPath
     || existing.hash !== item.hash
     || existing.modified_at !== item.modified_at
     || existing.version !== item.version
-    || existing.destination_source_id !== destinationSourceId
+    || existing.destination_source_id !== destinationSource.id
     || existing.storage_type !== storageType
+    || existing.storage_key !== storageKey
     || existing.deleted;
 }
 
