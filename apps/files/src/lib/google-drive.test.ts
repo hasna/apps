@@ -522,6 +522,65 @@ describe("Google Drive sync", () => {
     });
   });
 
+  test("streams Drive binaries with unknown size to S3 without buffered download", async () => {
+    const machine = getCurrentMachine();
+    const s3Source = createSource({
+      name: "Files bucket",
+      type: "s3",
+      bucket: "files-bucket",
+      prefix: "imports",
+      region: "us-west-2",
+      config: {},
+      machine_id: machine.id,
+    });
+    const googleSource = createSource({
+      name: "Drive",
+      type: "google_drive",
+      machine_id: machine.id,
+      config: {
+        profile: "work",
+        include_my_drive: true,
+        include_all_shared_drives: false,
+        destination_source_id: s3Source.id,
+        delete_behavior: "ignore",
+      },
+    });
+    const uploads: Array<{ key: string; contentLength?: number; data: string }> = [];
+    setGoogleDriveStorageAdapterForTests({
+      uploadS3: async (_source, body, key, _contentType, contentLength) => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of body as NodeJS.ReadableStream) chunks.push(Buffer.from(chunk as Uint8Array));
+        uploads.push({ key, contentLength, data: Buffer.concat(chunks).toString("utf8") });
+        return key;
+      },
+    });
+    const unknownSizeVideo = file("unknown-video", "MOIC4842.MP4", undefined, "video/mp4", {
+      size: undefined,
+      md5Checksum: undefined,
+      version: "3",
+    });
+    const client = new MockDriveClient(() => ({ files: [unknownSizeVideo] }));
+    client.downloadFile = async () => {
+      throw new Error("buffered download must not be used for unknown-size S3 imports");
+    };
+    setGoogleDriveClientFactoryForTests(() => client);
+
+    const stats = await syncGoogleDriveSource(googleSource);
+
+    expect(stats).toMatchObject({ added: 1, updated: 0, deleted: 0, errors: 0 });
+    expect(client.downloaded).toEqual(["stream:unknown-video"]);
+    expect(uploads).toEqual([{
+      key: "imports/work/my-drive/MOIC4842 (unknown-video).MP4",
+      contentLength: undefined,
+      data: "stream:unknown-video",
+    }]);
+    expect(listGoogleDriveImportedObjects(googleSource.id)[0]).toMatchObject({
+      file_id: "unknown-video",
+      storage_key: "imports/work/my-drive/MOIC4842 (unknown-video).MP4",
+      size: 0,
+    });
+  });
+
   test("uses Drive file IDs in path-based storage keys so duplicate filenames do not collide", async () => {
     const machine = getCurrentMachine();
     const s3Source = createSource({

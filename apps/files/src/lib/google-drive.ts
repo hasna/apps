@@ -389,7 +389,7 @@ function shouldStreamGoogleDriveItem(
   return storageType === "s3"
     && typeof client.downloadFileStream === "function"
     && !item.mime.startsWith("application/vnd.google-apps.")
-    && item.size >= STREAM_TO_S3_THRESHOLD_BYTES;
+    && (!item.size || item.size >= STREAM_TO_S3_THRESHOLD_BYTES);
 }
 
 async function importGoogleDriveStream(
@@ -409,8 +409,13 @@ async function importGoogleDriveStream(
   const importedName = basename(downloaded.filename);
   const importedPath = buildImportedPath(config, item, importedName);
   const contentType = downloaded.mimeType || ((mimeLookup(downloaded.filename) || item.mime || "application/octet-stream") as string);
-  const size = downloaded.size ?? item.size;
-  const storageKey = await writeStreamToDestination(source, storageType, importedPath, downloaded.body, contentType, size);
+  const contentLength = downloaded.size && downloaded.size > 0
+    ? downloaded.size
+    : item.size > 0
+      ? item.size
+      : undefined;
+  const size = contentLength ?? 0;
+  const storageKey = await writeStreamToDestination(source, storageType, importedPath, downloaded.body, contentType, contentLength);
   return {
     importedName,
     importedPath,
