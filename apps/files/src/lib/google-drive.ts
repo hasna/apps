@@ -687,7 +687,7 @@ async function downloadOrArchiveGoogleDriveItem(
 function shouldArchiveGoogleDriveDownloadError(item: GoogleDriveItem, error: unknown): boolean {
   if (!item.mime.startsWith("application/vnd.google-apps.")) return false;
   const message = (error as Error).message ?? String(error);
-  return /cannot be exported/i.test(message);
+  return /(?:cannot|too large to) be exported/i.test(message);
 }
 
 function createGoogleDriveMetadataArchive(item: GoogleDriveItem, reason = "Google Drive item is not exportable as file content through Drive export."): GoogleDriveDownloadedFile {
