@@ -627,7 +627,7 @@ function shouldImport(
     : importedPath;
 
   return existing.path !== importedPath
-    || existing.hash !== item.hash
+    || (!!item.hash && existing.hash !== item.hash)
     || existing.modified_at !== item.modified_at
     || existing.version !== item.version
     || existing.destination_source_id !== destinationSource.id

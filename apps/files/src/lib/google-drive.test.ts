@@ -887,6 +887,54 @@ describe("Google Drive sync", () => {
     });
   });
 
+  test("skips unchanged hashless Google Workspace exports on repeated S3 syncs", async () => {
+    const machine = getCurrentMachine();
+    const s3Source = createSource({
+      name: "prod-files",
+      type: "s3",
+      bucket: "hasna-xyz-prod-files",
+      region: "us-east-1",
+      config: { profile: "hasna-xyz-infra" },
+      machine_id: machine.id,
+    });
+    const googleSource = createSource({
+      name: "Drive",
+      type: "google_drive",
+      machine_id: machine.id,
+      config: {
+        profile: "work",
+        include_my_drive: true,
+        include_all_shared_drives: false,
+        destination_source_id: s3Source.id,
+        delete_behavior: "ignore",
+      },
+    });
+    const uploads: string[] = [];
+    setGoogleDriveStorageAdapterForTests({
+      uploadS3: async (_source, _body, key) => {
+        uploads.push(key);
+        return key;
+      },
+    });
+
+    const client = new MockDriveClient(() => ({
+      files: [
+        file("doc-1", "Proposal", undefined, "application/vnd.google-apps.document", {
+          modifiedTime: "2026-04-24T09:00:00.000Z",
+          version: "1",
+        }),
+      ],
+    }));
+    setGoogleDriveClientFactoryForTests(() => client);
+
+    expect(await syncGoogleDriveSource(googleSource)).toMatchObject({ added: 1, updated: 0, errors: 0 });
+    expect(await syncGoogleDriveSource(googleSource)).toMatchObject({ added: 0, updated: 0, errors: 0 });
+
+    expect(client.downloaded).toEqual(["doc-1"]);
+    expect(uploads).toEqual(["work/my-drive/Proposal (doc-1)"]);
+    expect(listGoogleDriveImportedObjects(googleSource.id)[0]?.hash).toBeString();
+  });
+
   test("reuploads unchanged Drive files when the S3 destination prefix changes", async () => {
     const machine = getCurrentMachine();
     const s3Source = createSource({
