@@ -1,10 +1,52 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdirSync, rmSync, readFileSync } from "fs";
+import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
+import { homedir } from "os";
 
 const MCP = join(import.meta.dir, "..", "..", "bin", "mcp.js");
 const TEST_DIR = join(import.meta.dir, "..", "..", ".test-mcp-tmp");
 const MANIFEST_PATH = join(TEST_DIR, ".connectors", "manifest.json");
+
+function gmailOAuthStateFiles(): string[] {
+  return [
+    join(homedir(), ".hasna", "connectors"),
+    join(homedir(), ".connectors"),
+    join(homedir(), ".connect"),
+  ].flatMap((rootDir) =>
+    ["gmail", "connect-gmail"].flatMap((dirName) => {
+      const connectorDir = join(rootDir, dirName);
+      return [
+        join(connectorDir, "current_profile"),
+        join(connectorDir, "profiles", "default", "tokens.json"),
+        join(connectorDir, "profiles", "default", "config.json"),
+        join(connectorDir, "profiles", "default.json"),
+      ];
+    })
+  );
+}
+
+function temporarilyRemoveFiles(paths: string[]): () => void {
+  const saved = paths.map((path) => ({
+    path,
+    existed: existsSync(path),
+    content: existsSync(path) ? readFileSync(path, "utf-8") : null,
+  }));
+
+  for (const { path, existed } of saved) {
+    if (existed && existsSync(path)) rmSync(path);
+  }
+
+  return () => {
+    for (const { path, existed, content } of saved) {
+      if (existed && content !== null) {
+        mkdirSync(join(path, ".."), { recursive: true });
+        writeFileSync(path, content);
+      } else if (!existed && existsSync(path)) {
+        rmSync(path);
+      }
+    }
+  };
+}
 
 function cleanup() {
   if (existsSync(TEST_DIR)) {
@@ -537,11 +579,17 @@ describe("MCP Server", () => {
 
   describe("connector_oauth", () => {
     test("returns auth URL for oauth connector", async () => {
-      const res = await callMcp("connector_oauth", { name: "gmail" });
-      const data = parseContent(res);
-      expect(data.status).toBe("auth_required");
-      expect(data.authType).toBe("oauth");
-      expect(data.oauthUrl).toContain("/oauth/gmail/start");
+      const restoreOAuthState = temporarilyRemoveFiles(gmailOAuthStateFiles());
+
+      try {
+        const res = await callMcp("connector_oauth", { name: "gmail" });
+        const data = parseContent(res);
+        expect(data.status).toBe("auth_required");
+        expect(data.authType).toBe("oauth");
+        expect(data.oauthUrl).toContain("/oauth/gmail/start");
+      } finally {
+        restoreOAuthState();
+      }
     });
 
     test("errors for non-oauth connector", async () => {
