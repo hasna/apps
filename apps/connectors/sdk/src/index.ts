@@ -234,6 +234,29 @@ export interface HostedWhoamiResponse {
   userId: string;
   authMethod: "api_key" | "session" | string;
   scopes: string[];
+  serviceConsumer?: {
+    serviceSlug: string;
+    externalOrganizationId: string;
+    externalOrganizationSlug?: string | null;
+  } | null;
+}
+
+export interface HostedApiContract {
+  service: string;
+  version: string;
+  basePath: "/api/v1" | string;
+  auth: Record<string, unknown>;
+  endpoints: Array<{
+    method: string;
+    path: string;
+    scopes: string[];
+    description: string;
+  }>;
+  errors: Array<{
+    code: string;
+    status: number;
+    retryable: boolean;
+  }>;
 }
 
 export interface HostedConnectorSummary {
@@ -259,8 +282,17 @@ export interface HostedConnectorAuthUrl {
 
 export interface HostedAuthUrlOptions {
   redirectUrl?: string;
+  returnUrl?: string;
   profileName?: string;
   scopes?: string[];
+}
+
+export interface HostedAccountConnectionStatus {
+  connectorSlug: string;
+  connected: boolean;
+  accountCount: number;
+  profileCount: number;
+  statuses: string[];
 }
 
 export interface HostedAccount {
@@ -307,7 +339,7 @@ export interface HostedCredentialCheck {
   available: boolean;
 }
 
-export type HostedRunStatus = "queued" | "running" | "succeeded" | "failed" | "canceled" | string;
+export type HostedRunStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "canceled" | string;
 
 export interface HostedRun {
   id: string;
@@ -322,6 +354,11 @@ export interface HostedRun {
   createdAt?: string;
   updatedAt?: string;
   [key: string]: unknown;
+}
+
+export interface HostedRunPollingStatus extends HostedRun {
+  terminal: boolean;
+  recommendedPollAfterMs: number | null;
 }
 
 export interface HostedSubmitRunInput {
@@ -354,9 +391,15 @@ export interface HostedRunLog {
 export interface HostedRunArtifact {
   id?: string;
   runId?: string;
+  fileName?: string;
+  storageProvider?: string;
+  storageBucket?: string | null;
+  storageKey?: string | null;
+  sourceUri?: string | null;
   name?: string;
   contentType?: string;
   sizeBytes?: number;
+  byteSize?: number | null;
   sha256?: string;
   url?: string;
   [key: string]: unknown;
@@ -424,6 +467,13 @@ export interface HostedUsage {
   [key: string]: unknown;
 }
 
+export interface HostedQuotas {
+  maxRunsPerMinute: number | null;
+  spendingLimitCredits: number | null;
+  creditsUsed: number;
+  creditBalance?: Record<string, unknown>;
+}
+
 export interface HostedPolicy {
   connectorAllowlist?: string[];
   connectorBlocklist?: string[];
@@ -431,6 +481,35 @@ export interface HostedPolicy {
   operationDenylist?: string[];
   approvalRequiredOperations?: string[];
   [key: string]: unknown;
+}
+
+export interface HostedAuditTimelineEvent {
+  id: string;
+  action: string;
+  resourceType: string;
+  resourceId?: string | null;
+  outcome: string;
+  code: string;
+  message: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface HostedTenantMapping {
+  organizationId: string;
+  serviceSlug: string;
+  externalOrganizationId: string;
+  externalOrganizationSlug?: string | null;
+  displayName?: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface HostedTenantMappingInput {
+  externalOrganizationSlug?: string;
+  displayName?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface HostedApiErrorPayload {
@@ -758,6 +837,10 @@ export class HostedConnectorsClient {
     return this.request<HostedWhoamiResponse>("/auth/whoami");
   }
 
+  async getContract(): Promise<HostedApiContract> {
+    return this.request<HostedApiContract>("/contract");
+  }
+
   async listConnectors(options: { search?: string } = {}): Promise<HostedConnectorSummary[]> {
     const query = new URLSearchParams();
     if (options.search) query.set("search", options.search);
@@ -786,6 +869,7 @@ export class HostedConnectorsClient {
     connectorSlug = normalizeConnectorSlug(connectorSlug);
     const query = new URLSearchParams();
     if (options.redirectUrl) query.set("redirectUrl", options.redirectUrl);
+    if (options.returnUrl) query.set("returnUrl", options.returnUrl);
     if (options.profileName) query.set("profileName", options.profileName);
     if (options.scopes?.length) query.set("scopes", options.scopes.join(","));
     return this.request<HostedConnectorAuthUrl>(
@@ -795,6 +879,10 @@ export class HostedConnectorsClient {
 
   async listAccounts(): Promise<HostedAccount[]> {
     return this.request<HostedAccount[]>("/accounts");
+  }
+
+  async getAccountConnectionStatus(): Promise<HostedAccountConnectionStatus[]> {
+    return this.request<HostedAccountConnectionStatus[]>("/accounts/status");
   }
 
   async connectAccount(input: HostedConnectAccountInput): Promise<HostedConnectAccountResponse> {
@@ -809,6 +897,20 @@ export class HostedConnectorsClient {
 
   async listAccountProfiles(accountId: string): Promise<HostedProfile[]> {
     return this.request<HostedProfile[]>(`/accounts/${encodeURIComponent(accountId)}/profiles`);
+  }
+
+  async revokeAccount(accountId: string): Promise<{ account: HostedAccount; profilesRevoked: number }> {
+    return this.request<{ account: HostedAccount; profilesRevoked: number }>(
+      `/accounts/${encodeURIComponent(accountId)}`,
+      { method: "DELETE" }
+    );
+  }
+
+  async revokeAccountProfile(accountId: string, profileName: string): Promise<HostedProfile> {
+    return this.request<HostedProfile>(
+      `/accounts/${encodeURIComponent(accountId)}/profiles/${encodeURIComponent(profileName)}`,
+      { method: "DELETE" }
+    );
   }
 
   async checkAccountCredentials(accountId: string, profileName: string): Promise<HostedCredentialCheck> {
@@ -833,6 +935,10 @@ export class HostedConnectorsClient {
 
   async getRun(runId: string): Promise<HostedRun> {
     return this.request<HostedRun>(`/runs/${encodeURIComponent(runId)}`);
+  }
+
+  async getRunStatus(runId: string): Promise<HostedRunPollingStatus> {
+    return this.request<HostedRunPollingStatus>(`/runs/${encodeURIComponent(runId)}/status`);
   }
 
   async listRunLogs(runId: string): Promise<HostedRunLog[]> {
@@ -904,6 +1010,10 @@ export class HostedConnectorsClient {
     return this.request<HostedUsage>("/usage");
   }
 
+  async getQuotas(): Promise<HostedQuotas> {
+    return this.request<HostedQuotas>("/quotas");
+  }
+
   async getPolicy(): Promise<HostedPolicy> {
     return this.request<HostedPolicy>("/policy");
   }
@@ -927,6 +1037,28 @@ export class HostedConnectorsClient {
       method: "POST",
       body: JSON.stringify({}),
     });
+  }
+
+  async listAuditTimeline(): Promise<HostedAuditTimelineEvent[]> {
+    return this.request<HostedAuditTimelineEvent[]>("/audit-timeline");
+  }
+
+  async listTenantMappings(): Promise<HostedTenantMapping[]> {
+    return this.request<HostedTenantMapping[]>("/tenant-mappings");
+  }
+
+  async upsertTenantMapping(
+    serviceSlug: string,
+    externalOrganizationId: string,
+    input: HostedTenantMappingInput = {}
+  ): Promise<HostedTenantMapping> {
+    return this.request<HostedTenantMapping>(
+      `/tenant-mappings/${encodeURIComponent(serviceSlug)}/${encodeURIComponent(externalOrganizationId)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(input),
+      }
+    );
   }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {

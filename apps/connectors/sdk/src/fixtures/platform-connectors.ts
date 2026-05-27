@@ -1,4 +1,27 @@
 export const platformConnectorsFixtures = {
+  contract: {
+    service: "platform-connectors",
+    version: "2026-05-27",
+    basePath: "/api/v1",
+    auth: {
+      bearerToken: "session-or-api-key",
+      serviceHeaders: {
+        consumer: "x-connectors-consumer",
+        externalOrganizationId: "x-connectors-external-organization-id",
+      },
+    },
+    endpoints: [
+      {
+        method: "GET",
+        path: "/runs/{runId}/status",
+        scopes: ["connectors:read"],
+        description: "Poll run state with terminal and polling hints.",
+      },
+    ],
+    errors: [
+      { code: "OPERATION_DENIED", status: 403, retryable: false },
+    ],
+  },
   connectors: [
     {
       name: "github",
@@ -54,6 +77,15 @@ export const platformConnectorsFixtures = {
     createdAt: "2026-05-27T00:00:00.000Z",
     updatedAt: "2026-05-27T00:00:00.000Z",
   },
+  runStatus: {
+    id: "00000000-0000-4000-8000-000000000003",
+    connector: "github",
+    connectorSlug: "github",
+    operationName: "repos",
+    status: "queued",
+    terminal: false,
+    recommendedPollAfterMs: 2000,
+  },
   approvalRequiredRun: {
     status: "approval_required",
     approval: {
@@ -82,7 +114,20 @@ export const platformConnectorsFixtures = {
       createdAt: "2026-05-27T00:00:00.000Z",
     },
   ],
-  artifacts: [],
+  artifacts: [
+    {
+      id: "00000000-0000-4000-8000-000000000008",
+      runId: "00000000-0000-4000-8000-000000000003",
+      storageProvider: "s3",
+      storageBucket: "artifacts",
+      storageKey: "runs/result.json",
+      sourceUri: null,
+      fileName: "result.json",
+      contentType: "application/json",
+      byteSize: 2,
+      sha256: "abc123",
+    },
+  ],
   billingStatus: {
     customer: {
       id: "00000000-0000-4000-8000-000000000006",

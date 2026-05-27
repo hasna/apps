@@ -454,18 +454,23 @@ describe("HostedConnectorsClient", () => {
     });
 
     await hosted.whoami();
+    await hosted.getContract();
     await hosted.listConnectors({ search: "github" });
     await hosted.getConnector("connect-github");
     await hosted.getConnectorDocs("@hasna/connect-github");
     await hosted.getConnectorOperations("connect-github");
     await hosted.getConnectorAuthUrl("connect-github", {
       redirectUrl: "https://app.example/callback",
+      returnUrl: "https://app.example/connected",
       profileName: "prod",
       scopes: ["repo", "read:user"],
     });
     await hosted.listAccounts();
+    await hosted.getAccountConnectionStatus();
     await hosted.connectAccount({ connectorSlug: "connect-github", credentials: {} });
     await hosted.listAccountProfiles("account-id");
+    await hosted.revokeAccountProfile("account-id", "default");
+    await hosted.revokeAccount("account-id");
     await hosted.checkAccountCredentials("account-id", "default");
     await hosted.listRuns();
     await hosted.submitRun({
@@ -478,6 +483,7 @@ describe("HostedConnectorsClient", () => {
       idempotencyKey: "run-1",
     });
     await hosted.getRun("run-id");
+    await hosted.getRunStatus("run-id");
     await hosted.listRunLogs("run-id");
     await hosted.listRunArtifacts("run-id");
     await hosted.listApprovals();
@@ -502,26 +508,35 @@ describe("HostedConnectorsClient", () => {
     await hosted.listBillingTransactions();
     await hosted.listBillingInvoices();
     await hosted.getUsage();
+    await hosted.getQuotas();
     await hosted.getPolicy();
     await hosted.updatePolicy({
       connectorAllowlist: ["connect-github"],
       operationDenylist: ["connect-github:repos"],
     });
+    await hosted.listAuditTimeline();
+    await hosted.listTenantMappings();
+    await hosted.upsertTenantMapping("platform-skills", "org_123", { displayName: "Acme Skills" });
 
     expect(seen).toEqual([
       { path: "/auth/whoami", method: "GET" },
+      { path: "/contract", method: "GET" },
       { path: "/connectors?search=github", method: "GET" },
       { path: "/connectors/github", method: "GET" },
       { path: "/connectors/github/docs", method: "GET" },
       { path: "/connectors/github/operations", method: "GET" },
-      { path: "/connectors/github/auth-url?redirectUrl=https%3A%2F%2Fapp.example%2Fcallback&profileName=prod&scopes=repo%2Cread%3Auser", method: "GET" },
+      { path: "/connectors/github/auth-url?redirectUrl=https%3A%2F%2Fapp.example%2Fcallback&returnUrl=https%3A%2F%2Fapp.example%2Fconnected&profileName=prod&scopes=repo%2Cread%3Auser", method: "GET" },
       { path: "/accounts", method: "GET" },
+      { path: "/accounts/status", method: "GET" },
       { path: "/accounts", method: "POST" },
       { path: "/accounts/account-id/profiles", method: "GET" },
+      { path: "/accounts/account-id/profiles/default", method: "DELETE" },
+      { path: "/accounts/account-id", method: "DELETE" },
       { path: "/accounts/account-id/profiles/default/credential-check", method: "GET" },
       { path: "/runs", method: "GET" },
       { path: "/runs", method: "POST" },
       { path: "/runs/run-id", method: "GET" },
+      { path: "/runs/run-id/status", method: "GET" },
       { path: "/runs/run-id/logs", method: "GET" },
       { path: "/runs/run-id/artifacts", method: "GET" },
       { path: "/approvals", method: "GET" },
@@ -535,8 +550,12 @@ describe("HostedConnectorsClient", () => {
       { path: "/billing/transactions", method: "GET" },
       { path: "/billing/invoices", method: "GET" },
       { path: "/usage", method: "GET" },
+      { path: "/quotas", method: "GET" },
       { path: "/policy", method: "GET" },
       { path: "/policy", method: "PUT" },
+      { path: "/audit-timeline", method: "GET" },
+      { path: "/tenant-mappings", method: "GET" },
+      { path: "/tenant-mappings/platform-skills/org_123", method: "PUT" },
     ]);
     expect(bodies).toContainEqual(expect.objectContaining({ connectorSlug: "github" }));
     expect(bodies).toContainEqual(expect.objectContaining({
