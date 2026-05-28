@@ -33,14 +33,14 @@ describe("isHttpMode", () => {
 
 describe("resolveHttpPort", () => {
   it("prefers --port over env and default", () => {
-    expect(resolveHttpPort(8833, { MCP_HTTP_PORT: "9000" }, ["--port", "9100"])).toBe(9100);
+    expect(resolveHttpPort(8876, { MCP_HTTP_PORT: "9000" }, ["--port", "9100"])).toBe(9100);
   });
 
   it("uses MCP_HTTP_PORT when --port is absent", () => {
-    expect(resolveHttpPort(8833, { MCP_HTTP_PORT: "9000" }, [])).toBe(9000);
+    expect(resolveHttpPort(8876, { MCP_HTTP_PORT: "9000" }, [])).toBe(9000);
   });
 
   it("falls back to default port", () => {
-    expect(resolveHttpPort(8833, {}, [])).toBe(8833);
+    expect(resolveHttpPort(8876, {}, [])).toBe(8876);
   });
 });

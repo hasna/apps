@@ -3,7 +3,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 export const MCP_HTTP_HOST = "127.0.0.1";
-export const DEFAULT_MCP_HTTP_PORT = 8833;
+export const DEFAULT_MCP_HTTP_PORT = 8876;
 
 export interface StartMcpHttpOptions {
   port: number;

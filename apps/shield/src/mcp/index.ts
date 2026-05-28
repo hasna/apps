@@ -2,7 +2,7 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 import { PACKAGE_VERSION } from "../lib/version.js";
-import { parseMcpArgs, isHttpMode, resolveHttpPort } from "./args.js";
+import { parseMcpArgs, isStdioMode, resolveHttpPort } from "./args.js";
 import { buildServer, createMcpServer } from "./build-server.js";
 import { startMcpHttpServer, DEFAULT_MCP_HTTP_PORT, MCP_HTTP_HOST } from "./http.js";
 
@@ -16,19 +16,19 @@ if (parsedArgs) {
 }
 
 async function main(): Promise<void> {
-  if (isHttpMode()) {
-    const port = resolveHttpPort(DEFAULT_MCP_HTTP_PORT);
-    await startMcpHttpServer({
-      port,
-      healthName: "security",
-      createServer: createMcpServer,
-    });
-    console.error(`shield-mcp HTTP listening on http://${MCP_HTTP_HOST}:${port}/mcp`);
+  if (isStdioMode()) {
+    const transport = new StdioServerTransport();
+    await buildServer().connect(transport);
     return;
   }
-
-  const transport = new StdioServerTransport();
-  await buildServer().connect(transport);
+  // Default: shared Streamable HTTP server (one process per MCP, many agents).
+  const port = resolveHttpPort(DEFAULT_MCP_HTTP_PORT);
+  await startMcpHttpServer({
+    port,
+    healthName: "security",
+    createServer: createMcpServer,
+  });
+  console.error(`shield-mcp HTTP listening on http://${MCP_HTTP_HOST}:${port}/mcp`);
 }
 
 main().catch((err) => {

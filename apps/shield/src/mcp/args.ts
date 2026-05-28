@@ -9,6 +9,10 @@ export function isHttpMode(env: NodeJS.ProcessEnv = process.env, argv: string[] 
   return argv.includes("--http") || env.MCP_HTTP === "1";
 }
 
+export function isStdioMode(env: NodeJS.ProcessEnv = process.env, argv: string[] = process.argv.slice(2)): boolean {
+  return argv.includes("--stdio") || env.MCP_STDIO === "1";
+}
+
 export function resolveHttpPort(
   defaultPort: number = DEFAULT_MCP_HTTP_PORT,
   env: NodeJS.ProcessEnv = process.env,
