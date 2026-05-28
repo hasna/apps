@@ -1,13 +1,13 @@
 {
   "name": "@hasna/calendar",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Universal calendar management for AI coding agents - CLI + MCP server + interactive TUI",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
     "calendar": "dist/cli/index.js",
-    "calendar-mcp": "dist/mcp/index.js",
+    "calendar-mcp": "dist/mcp/bin.js",
     "calendar-serve": "dist/server/index.js"
   },
   "exports": {
@@ -23,7 +23,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "build": "bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && printf '#!/usr/bin/env bun\\nimport \"./index.js\";\\n' > dist/mcp/bin.js && chmod +x dist/mcp/bin.js && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "BUN_TEST=1 bun test",
     "dev:cli": "bun run src/cli/index.tsx",
