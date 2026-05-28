@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { getPackageVersion } from "../version.js";
 import { buildBackupPlan, runBackup } from "../commands/backup.js";
 import { buildAppsPlan, diffApps, getAppsStatus, listApps, runAppsInstall } from "../commands/apps.js";
 import { buildCertPlan, runCertPlan } from "../commands/cert.js";
@@ -68,6 +69,10 @@ export const MACHINE_MCP_TOOL_NAMES = [
   "machines_serve_info",
   "machines_serve_dashboard",
 ] as const;
+
+export function buildServer(version: string = getPackageVersion()): McpServer {
+  return createMcpServer(version);
+}
 
 export function createMcpServer(version: string): McpServer {
   const server = new McpServer({ name: "machines", version });

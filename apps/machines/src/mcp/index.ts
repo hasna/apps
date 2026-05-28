@@ -1,25 +1,17 @@
 #!/usr/bin/env bun
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { createMcpServer } from "./server.js";
-
-function getPkgVersion(): string {
-  try {
-    const pkgPath = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json");
-    return (JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: string }).version || "0.0.0";
-  } catch {
-    return "0.0.0";
-  }
-}
+import { getPackageVersion } from "../version.js";
+import { isHttpMode, resolveHttpPort, startHttpServer } from "./http.js";
+import { buildServer } from "./server.js";
 
 function printHelp(): void {
   console.log(`Usage: machines-mcp [options]
 
-MCP server for machine fleet management tools (stdio transport)
+MCP server for machine fleet management tools (stdio transport by default)
 
 Options:
+  --http         Start Streamable HTTP transport on 127.0.0.1 (or MCP_HTTP=1)
+  --port <n>     HTTP port (default: 8821, or MCP_HTTP_PORT env)
   -V, --version  output the version number
   -h, --help     display help for command`);
 }
@@ -31,11 +23,14 @@ if (args.includes("--help") || args.includes("-h")) {
 }
 
 if (args.includes("--version") || args.includes("-V")) {
-  console.log(getPkgVersion());
+  console.log(getPackageVersion());
   process.exit(0);
 }
 
-const server = createMcpServer(getPkgVersion());
-
-const transport = new StdioServerTransport();
-await server.connect(transport);
+if (isHttpMode(args)) {
+  startHttpServer({ port: resolveHttpPort(args) });
+} else {
+  const server = buildServer();
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}

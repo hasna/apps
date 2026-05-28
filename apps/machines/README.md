@@ -8,6 +8,21 @@ Machine fleet management for developers — provision, sync, inspect, and operat
 - `machines-mcp`: MCP server exposing fleet tools to AI agents
 - `machines-agent`: lightweight local daemon for heartbeats and runtime reporting
 
+## HTTP mode
+
+Long-lived Streamable HTTP transport for shared agent connections (stdio remains the default):
+
+```bash
+machines-mcp --http
+# or: MCP_HTTP=1 machines-mcp
+# default port: 8821 (override with --port or MCP_HTTP_PORT)
+```
+
+Endpoints on `127.0.0.1` only:
+
+- `GET /health` → `{"status":"ok","name":"machines"}`
+- `POST /mcp` → MCP Streamable HTTP
+
 ## Manifest
 
 `machines.json` is the desired fleet declaration.
