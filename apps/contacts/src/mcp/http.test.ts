@@ -50,7 +50,8 @@ describe("contacts MCP HTTP transport", () => {
     await client.connect(transport);
     const result = await client.callTool({ name: "list_tags", arguments: {} });
     expect(result.isError).not.toBe(true);
-    expect(result.content?.[0]?.type).toBe("text");
+    const content = result.content as Array<{ type: string }> | undefined;
+    expect(content?.[0]?.type).toBe("text");
     await client.close();
   });
 
