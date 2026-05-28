@@ -3,7 +3,7 @@
  */
 
 import { readFileSync, existsSync } from "node:fs";
-import { redactObject } from "./local-encryption.js";
+import { redactValue as redactObject } from "./redaction.js";
 
 export const SECRET_REDACTION_SCHEMA = "todos.secret_redaction.v1";
 export const REDACTION_PLACEHOLDER = "[REDACTED]";
