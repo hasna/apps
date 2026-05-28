@@ -6,7 +6,7 @@
  * Usage:
  *   conversations mcp          # Start MCP server on stdio (40+ tools)
  *   conversations-mcp          # Direct binary
- *   conversations-mcp --http   # Streamable HTTP on 127.0.0.1:8811
+ *   conversations-mcp --http   # Streamable HTTP on 127.0.0.1:8856
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -23,7 +23,7 @@ import { registerChannelBridge } from "./channel.js";
 import { registerTelegramChannel } from "./telegram-channel.js";
 import { registerTmuxTools } from "./tools/tmux.js";
 import { registerTaskTools } from "./tools/tasks.js";
-import { isHttpMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
+import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 
 import pkg from "../../package.json";
 
@@ -85,12 +85,12 @@ async function main() {
 
 Usage:
   conversations-mcp              stdio transport (default)
-  conversations-mcp --http         Streamable HTTP on 127.0.0.1:8811
+  conversations-mcp --http         Streamable HTTP on 127.0.0.1:8856
   conversations-mcp --http --port <n>
 
 Environment:
   MCP_HTTP=1           Enable HTTP mode
-  MCP_HTTP_PORT=<n>    Override default port (8811)
+  MCP_HTTP_PORT=<n>    Override default port (8856)
 `);
     return;
   }
@@ -98,15 +98,16 @@ Environment:
     console.log(pkg.version);
     return;
   }
-  if (isHttpMode(args)) {
-    startMcpHttpServer({
-      name: "conversations",
-      port: resolveMcpHttpPort(args),
-      buildServer: () => buildServer(true),
-    });
+  if (isStdioMode(args)) {
+    await startMcpServer();
     return;
   }
-  await startMcpServer();
+  // Default: shared Streamable HTTP server (one process per MCP, many agents).
+  startMcpHttpServer({
+    name: "conversations",
+    port: resolveMcpHttpPort(args),
+    buildServer: () => buildServer(true),
+  });
 }
 
 if (isDirectRun) {
