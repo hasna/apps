@@ -1057,16 +1057,18 @@ return server;
 
 async function main() {
   const argv = process.argv.slice(2);
-  if ((await import("./http.js")).isHttpMode(argv)) {
-    const { resolveMcpHttpPort } = await import("./http.js");
-    const { startCrawlServer } = await import("../server/index.js");
-    const port = resolveMcpHttpPort(argv);
-    await startCrawlServer({ port, hostname: "127.0.0.1" });
-    await new Promise(() => {});
+  const { isStdioMode } = await import("./http.js");
+  if (isStdioMode(argv)) {
+    const transport = new StdioServerTransport();
+    await buildServer().connect(transport);
     return;
   }
-  const transport = new StdioServerTransport();
-  await buildServer().connect(transport);
+  // Default: shared Streamable HTTP server (one process per MCP, many agents).
+  const { resolveMcpHttpPort } = await import("./http.js");
+  const { startCrawlServer } = await import("../server/index.js");
+  const port = resolveMcpHttpPort(argv);
+  await startCrawlServer({ port, hostname: "127.0.0.1" });
+  await new Promise(() => {});
 }
 
 if (import.meta.main) {

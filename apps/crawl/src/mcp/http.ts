@@ -3,10 +3,14 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 export const MCP_HTTP_HOST = "127.0.0.1";
 export const MCP_SERVER_NAME = "crawl";
-export const DEFAULT_MCP_HTTP_PORT = 8812;
+export const DEFAULT_MCP_HTTP_PORT = 8857;
 
 export function isHttpMode(argv: readonly string[]): boolean {
   return argv.includes("--http") || process.env["MCP_HTTP"] === "1";
+}
+
+export function isStdioMode(argv: readonly string[]): boolean {
+  return argv.includes("--stdio") || process.env["MCP_STDIO"] === "1";
 }
 
 export function resolveMcpHttpPort(argv: readonly string[]): number {
