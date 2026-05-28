@@ -4,25 +4,35 @@ import { sendMessage } from "../lib/messages";
 import { createSpace, joinSpace } from "../lib/spaces";
 import { createProject } from "../lib/projects";
 import { closeDb } from "../lib/db";
-import { unlinkSync } from "fs";
+import { mkdirSync, rmSync, unlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
 const TEST_DB = join(tmpdir(), `conversations-test-server-${Date.now()}.db`);
+const TEST_DASHBOARD_DIST = join(tmpdir(), `conversations-test-dashboard-dist-${Date.now()}`);
 let server: ReturnType<typeof startDashboardServer>;
 
 beforeAll(() => {
   process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+  process.env.CONVERSATIONS_DASHBOARD_DIST = TEST_DASHBOARD_DIST;
+  mkdirSync(TEST_DASHBOARD_DIST, { recursive: true });
+  writeFileSync(
+    join(TEST_DASHBOARD_DIST, "index.html"),
+    "<!doctype html><html><body><div id=\"root\">Conversations Dashboard</div></body></html>",
+    "utf-8"
+  );
   closeDb();
   server = startDashboardServer(0);
 });
 
 afterAll(() => {
   server?.stop();
+  delete process.env.CONVERSATIONS_DASHBOARD_DIST;
   closeDb();
   try { unlinkSync(TEST_DB); } catch {}
   try { unlinkSync(TEST_DB + "-wal"); } catch {}
   try { unlinkSync(TEST_DB + "-shm"); } catch {}
+  rmSync(TEST_DASHBOARD_DIST, { recursive: true, force: true });
 });
 
 const base = () => `http://localhost:${server.port}`;
@@ -631,9 +641,17 @@ describe("API /api/locks", () => {
 });
 
 describe("Static files", () => {
-  test("unknown paths return HTML (SPA fallback) or 404", async () => {
+  test("serves dashboard root from configured dist", async () => {
+    const res = await fetch(`${base()}/`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    await expect(res.text()).resolves.toContain("Conversations Dashboard");
+  });
+
+  test("unknown paths return HTML via SPA fallback", async () => {
     const res = await fetch(`${base()}/some/random/path`);
-    // Either 200 (SPA fallback to index.html) or 404 (no dist)
-    expect([200, 404]).toContain(res.status);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    await expect(res.text()).resolves.toContain("Conversations Dashboard");
   });
 });

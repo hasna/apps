@@ -115,12 +115,29 @@ function isSameOrigin(req: Request): boolean {
   return origin === new URL(req.url).origin;
 }
 
+function resolveDashboardDist(): string | null {
+  const configuredDist = process.env.CONVERSATIONS_DASHBOARD_DIST?.trim();
+  const candidates = [
+    configuredDist,
+    join(import.meta.dir, "../../dashboard/dist"), // source: src/server/serve.ts
+    join(import.meta.dir, "../dashboard/dist"), // bundled CLI: bin/index.js
+    join(process.cwd(), "dashboard/dist"), // local repo fallback
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  for (const candidate of candidates) {
+    const resolved = resolve(candidate);
+    if (existsSync(join(resolved, "index.html"))) {
+      return resolved;
+    }
+  }
+
+  return null;
+}
+
 export function startDashboardServer(port = 0, host?: string) {
   const resolvedPort = normalizePort(port, 0);
   const resolvedHost = normalizeHost(host ?? process.env.CONVERSATIONS_DASHBOARD_HOST);
-  // Resolve dashboard dist directory
-  const dashboardDist = join(import.meta.dir, "../../dashboard/dist");
-  const hasDist = existsSync(dashboardDist);
+  const dashboardDist = resolveDashboardDist();
 
   const server = Bun.serve({
     port: resolvedPort,
@@ -553,7 +570,7 @@ export function startDashboardServer(port = 0, host?: string) {
       }
 
       // ---- Static files (dashboard) ----
-      if (hasDist) {
+      if (dashboardDist) {
         const baseDir = resolve(dashboardDist);
         const safePath = (path === "/" ? "index.html" : path.replace(/^\/+/, ""));
         const filePath = resolve(baseDir, safePath);
