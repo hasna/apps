@@ -21,7 +21,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "build": "bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk --external @hasna/cloud && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @hasna/cloud && bun build src/index.ts --outdir dist --target bun --external @hasna/cloud && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.ts",
@@ -62,6 +62,8 @@
     "@aws-sdk/client-route-53": "^3.1017.0",
     "@aws-sdk/client-route-53-domains": "^3.1017.0",
     "@hasna/cloud": "^0.1.24",
+    "@hasna/contacts": "^0.6.16",
+    "@hasna/wallets": "^0.1.7",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "commander": "^13.1.0",
     "zod": "^3.24.2"
