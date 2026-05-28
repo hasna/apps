@@ -1,14 +1,14 @@
 {
-  "name": "@hasna/security",
-  "version": "0.1.12",
+  "name": "@hasna/shield",
+  "version": "0.1.13",
   "description": "AI-powered security scanner for git repos — CLI, MCP, API, Web Dashboard, SDK with Cerebras LLM",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "security": "bin/security.sh",
-    "security-mcp": "bin/security-mcp.sh",
-    "security-serve": "bin/security-serve.sh"
+    "shield": "bin/shield.sh",
+    "shield-mcp": "bin/shield-mcp.sh",
+    "shield-serve": "bin/shield-serve.sh"
   },
   "exports": {
     ".": {
@@ -35,7 +35,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check src/",
     "clean": "rm -rf dist dashboard/dist",
-    "postinstall": "mkdir -p $HOME/.hasna/security 2>/dev/null || true"
+    "postinstall": "mkdir -p $HOME/.hasna/shield 2>/dev/null || true"
   },
   "dependencies": {
     "@hasna/cloud": "^0.1.24",
@@ -70,7 +70,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/hasna/security.git"
+    "url": "https://github.com/hasna/shield.git"
   },
   "keywords": [
     "security",

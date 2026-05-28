@@ -32,7 +32,7 @@ export function registerAlertsCommand(program: Command): void {
         }
       } else {
         console.log(chalk.gray("\n  No channels configured."));
-        console.log(chalk.gray("  Set env vars or edit .security/alerts.json to add channels."));
+        console.log(chalk.gray("  Set env vars or edit .shield/alerts.json to add channels."));
       }
 
       console.log(chalk.gray("\n  Environment variables:"));

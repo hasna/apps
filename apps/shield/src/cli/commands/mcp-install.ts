@@ -5,24 +5,24 @@ import chalk from "chalk";
 
 function getMcpBinPath(): string {
   try {
-    const resolved = execSync("which security-mcp", { encoding: "utf-8" }).trim();
+    const resolved = execSync("which shield-mcp", { encoding: "utf-8" }).trim();
     if (resolved) return resolved;
   } catch {}
   try {
     const bunBin = execSync("bun pm bin -g", { encoding: "utf-8" }).trim();
-    const candidate = `${bunBin}/security-mcp`;
+    const candidate = `${bunBin}/shield-mcp`;
     if (existsSync(candidate)) return candidate;
   } catch {}
-  return "security-mcp";
+  return "shield-mcp";
 }
 
 function addCodexMcp(configPath: string, mcpBin: string): void {
   let content = "";
   try { content = readFileSync(configPath, "utf-8"); } catch {}
-  if (content.includes("[mcp_servers.security]")) {
-    content = content.replace(/\[mcp_servers\.security\][^\[]*/s, `[mcp_servers.security]\ncommand = "${mcpBin}"\nargs = []\n\n`);
+  if (content.includes("[mcp_servers.shield]")) {
+    content = content.replace(/\[mcp_servers\.shield\][^\[]*/s, `[mcp_servers.shield]\ncommand = "${mcpBin}"\nargs = []\n\n`);
   } else {
-    content += `\n[mcp_servers.security]\ncommand = "${mcpBin}"\nargs = []\n`;
+    content += `\n[mcp_servers.shield]\ncommand = "${mcpBin}"\nargs = []\n`;
   }
   mkdirSync(configPath.replace(/\/[^/]+$/, ""), { recursive: true });
   writeFileSync(configPath, content, "utf-8");
@@ -31,7 +31,7 @@ function addCodexMcp(configPath: string, mcpBin: string): void {
 function removeCodexMcp(configPath: string): void {
   let content = "";
   try { content = readFileSync(configPath, "utf-8"); } catch { return; }
-  content = content.replace(/\n?\[mcp_servers\.security\][^\[]*/s, "");
+  content = content.replace(/\n?\[mcp_servers\.shield\][^\[]*/s, "");
   writeFileSync(configPath, content, "utf-8");
 }
 
@@ -40,21 +40,21 @@ function addGeminiMcp(configPath: string, mcpBin: string): void {
   let config: Record<string, any> = {};
   try { config = JSON.parse(readFileSync(configPath, "utf-8")); } catch {}
   if (!config.mcpServers) config.mcpServers = {};
-  config.mcpServers["security"] = { command: mcpBin, args: [] };
+  config.mcpServers["shield"] = { command: mcpBin, args: [] };
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
 }
 
 function removeGeminiMcp(configPath: string): void {
   let config: Record<string, any> = {};
   try { config = JSON.parse(readFileSync(configPath, "utf-8")); } catch { return; }
-  if (config.mcpServers?.["security"]) delete config.mcpServers["security"];
+  if (config.mcpServers?.["shield"]) delete config.mcpServers["shield"];
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
 }
 
 export function registerMcpInstallCommand(program: Command): void {
   program
     .command("mcp")
-    .description("Install/uninstall security as MCP server for AI agents")
+    .description("Install/uninstall shield as MCP server for AI agents")
     .option("--claude", "Install for Claude Code")
     .option("--codex", "Install for Codex")
     .option("--gemini", "Install for Gemini")
@@ -73,14 +73,14 @@ export function registerMcpInstallCommand(program: Command): void {
       }
 
       if (targets.length === 0) {
-        console.log(chalk.bold("\n  security mcp \u2014 Install MCP server for AI agents\n"));
+        console.log(chalk.bold("\n  shield mcp \u2014 Install MCP server for AI agents\n"));
         console.log("  Usage:");
-        console.log(chalk.gray("    security mcp --claude          Install for Claude Code"));
-        console.log(chalk.gray("    security mcp --codex           Install for Codex"));
-        console.log(chalk.gray("    security mcp --gemini          Install for Gemini"));
-        console.log(chalk.gray("    security mcp --all             Install for all agents"));
-        console.log(chalk.gray("    security mcp --all --uninstall Uninstall from all"));
-        console.log(chalk.gray("    security mcp --claude --scope project  Install per-project\n"));
+        console.log(chalk.gray("    shield mcp --claude          Install for Claude Code"));
+        console.log(chalk.gray("    shield mcp --codex           Install for Codex"));
+        console.log(chalk.gray("    shield mcp --gemini          Install for Gemini"));
+        console.log(chalk.gray("    shield mcp --all             Install for all agents"));
+        console.log(chalk.gray("    shield mcp --all --uninstall Uninstall from all"));
+        console.log(chalk.gray("    shield mcp --claude --scope project  Install per-project\n"));
         return;
       }
 
@@ -90,10 +90,10 @@ export function registerMcpInstallCommand(program: Command): void {
         try {
           if (target === "claude") {
             if (uninstall) {
-              execSync("claude mcp remove security", { stdio: "pipe" });
+              execSync("claude mcp remove shield", { stdio: "pipe" });
               console.log(chalk.green("  Removed from Claude Code"));
             } else {
-              execSync(`claude mcp add --transport stdio --scope ${options.scope || "user"} security -- ${mcpBin}`, { stdio: "pipe" });
+              execSync(`claude mcp add --transport stdio --scope ${options.scope || "user"} shield -- ${mcpBin}`, { stdio: "pipe" });
               console.log(chalk.green(`  Installed for Claude Code (scope: ${options.scope || "user"})`));
             }
           } else if (target === "codex") {
@@ -112,7 +112,7 @@ export function registerMcpInstallCommand(program: Command): void {
 
       console.log();
       if (!uninstall) {
-        console.log(chalk.gray("  Restart your AI agent to use security MCP tools."));
+        console.log(chalk.gray("  Restart your AI agent to use shield MCP tools."));
         console.log();
       }
     });

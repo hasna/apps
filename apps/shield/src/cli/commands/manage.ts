@@ -23,7 +23,7 @@ export function registerManageCommands(program: Command): void {
       const cwd = process.cwd();
       initProject(cwd);
       console.log(chalk.green(`\n  Initialized security in ${chalk.cyan(cwd)}`));
-      console.log(chalk.gray("  Created .security/config.json"));
+      console.log(chalk.gray("  Created .shield/config.json"));
 
       if (options.installPrePush) {
         const result = installPrePushHook(cwd, { force: options.forceHook });

@@ -79,9 +79,9 @@ export function reportFindings(findings: Finding[], scan?: Scan): string {
       {
         tool: {
           driver: {
-            name: "security",
+            name: "shield",
             version: "0.1.0",
-            informationUri: "https://github.com/hasnaxyz/security",
+            informationUri: "https://github.com/hasna/shield",
             rules: Array.from(rulesMap.values()),
           },
         },

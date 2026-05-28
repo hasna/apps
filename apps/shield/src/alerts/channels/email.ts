@@ -59,7 +59,7 @@ export class EmailChannel implements AlertChannel {
 
     <hr style="margin: 20px 0">
     <p style="color: #666; font-size: 12px">
-      Sent by open-security (@hasna/security) — AI-powered supply chain security scanner.<br>
+      Sent by open-shield (@hasna/shield) — AI-powered supply chain security scanner.<br>
       Advisory ID: ${advisory.id}
     </p>
   </div>

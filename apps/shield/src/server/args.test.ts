@@ -5,7 +5,7 @@ describe("parseServerArgs", () => {
   it("returns help text for --help", () => {
     const parsed = parseServerArgs(["--help"], "0.1.8");
     expect(parsed?.type).toBe("help");
-    expect(parsed?.text).toContain("Usage: security-serve");
+    expect(parsed?.text).toContain("Usage: shield-serve");
   });
 
   it("returns version text for --version", () => {

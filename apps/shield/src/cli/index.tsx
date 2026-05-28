@@ -15,7 +15,7 @@ import { registerSecretsCommand } from "./commands/secrets.js";
 const program = new Command();
 
 program
-  .name("security")
+  .name("shield")
   .description("AI-powered security scanner for git repos")
   .version(getVersion());
 

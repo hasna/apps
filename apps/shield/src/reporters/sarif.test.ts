@@ -55,9 +55,9 @@ describe("SARIF reporter", () => {
   test("has correct tool driver info", () => {
     const parsed = JSON.parse(reportFindings([makeFinding()]));
     const driver = parsed.runs[0].tool.driver;
-    expect(driver.name).toBe("security");
+    expect(driver.name).toBe("shield");
     expect(driver.version).toBe("0.1.0");
-    expect(driver.informationUri).toContain("security");
+    expect(driver.informationUri).toContain("shield");
   });
 
   test("maps findings to SARIF results", () => {

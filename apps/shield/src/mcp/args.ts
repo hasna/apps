@@ -8,7 +8,7 @@ export function parseMcpArgs(argv: string[], version: string): ParsedMcpArgResul
     return {
       type: "help",
       text: [
-        "Usage: security-mcp [options]",
+        "Usage: shield-mcp [options]",
         "",
         "Start the Open Security MCP stdio server.",
         "",

@@ -5,7 +5,7 @@ describe("parseMcpArgs", () => {
   it("returns help text for --help", () => {
     const parsed = parseMcpArgs(["--help"], "0.1.8");
     expect(parsed?.type).toBe("help");
-    expect(parsed?.text).toContain("Usage: security-mcp");
+    expect(parsed?.text).toContain("Usage: shield-mcp");
   });
 
   it("returns version text for -V", () => {

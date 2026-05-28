@@ -43,7 +43,7 @@ function getCodeContext(filePath: string, line: number, contextLines = 10): stri
   }
 }
 
-const server = new McpServer({ name: "security", version: PACKAGE_VERSION });
+const server = new McpServer({ name: "shield", version: PACKAGE_VERSION });
 
 // Register tool modules
 registerScanTools(server, jsonResult, getCodeContext);
@@ -125,7 +125,7 @@ server.tool(
 
 // ─── Cloud Tools ─────────────────────────────────────────────────────────────
 
-registerCloudTools(server, "security");
+registerCloudTools(server, "shield");
 
 // Start
 const transport = new StdioServerTransport();

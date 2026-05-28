@@ -1,4 +1,4 @@
-# security
+# shield
 
 AI-powered security scanner for git repos.
 

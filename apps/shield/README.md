@@ -1,23 +1,23 @@
-# @hasna/security
+# @hasna/shield
 
-AI-powered security scanner for git repos with supply chain attack detection.
+AI-powered shield scanner for git repos with supply chain attack detection.
 
-[![npm](https://img.shields.io/npm/v/@hasna/security)](https://www.npmjs.com/package/@hasna/security)
+[![npm](https://img.shields.io/npm/v/@hasna/shield)](https://www.npmjs.com/package/@hasna/shield)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 ## Install
 
 ```bash
-npm install -g @hasna/security
+npm install -g @hasna/shield
 # or
-bun install -g @hasna/security
+bun install -g @hasna/shield
 ```
 
 ## Quick Start
 
 ```bash
 # Scan your repo for security issues
-security scan .
+shield scan .
 
 # Focused secret-exposure scan (repo files, git history, processes, tmux)
 security secrets .
@@ -30,10 +30,10 @@ security check-package litellm 1.82.8 --ecosystem pypi
 security advisories
 
 # Quick scan (secrets + dependencies only)
-security scan . --quick
+shield scan . --quick
 
 # Install a pre-push hook that blocks pushes on exposed secrets
-security init --install-pre-push
+shield init --install-pre-push
 ```
 
 ## Scanners
@@ -63,13 +63,13 @@ The IOC scanner checks against a built-in advisory database of known attacks:
 
 ```bash
 # Run IOC scan
-security scan . --scanner ioc
+shield scan . --scanner ioc
 
 # Run lockfile forensics
-security scan . --scanner lockfile
+shield scan . --scanner lockfile
 
 # Full supply chain check
-security scan . --scanner supply-chain
+shield scan . --scanner supply-chain
 ```
 
 ## Alert Pipeline
@@ -100,10 +100,10 @@ export SECURITY_WEBHOOK_URL=https://your-api.example.com/webhook
 
 ```bash
 # Install for Claude Code
-security mcp --claude
+shield mcp --claude
 
 # Install for all agents
-security mcp --all
+shield mcp --all
 ```
 
 32 tools available including `check_package`, `scan_repo`, `list_advisories`, `get_advisory`.
@@ -111,7 +111,7 @@ security mcp --all
 ## REST API + Dashboard
 
 ```bash
-security serve
+shield serve
 # Opens at http://localhost:19428
 ```
 
@@ -126,20 +126,20 @@ API endpoints:
 ## All CLI Commands
 
 ```
-security scan [path]              Run security scan
+shield scan [path]              Run shield scan
 security secrets [options] [path] Focused secret-exposure scan (files + live context)
-security findings                 List findings
-security explain <id>             AI explanation for a finding
-security fix <id>                 AI-suggested fix
-security review                   Review staged git changes
-security init                     Initialize for this repo
-security baseline                 Mark findings as baseline
-security score                    Show security score
+shield findings                 List findings
+shield explain <id>             AI explanation for a finding
+shield fix <id>                 AI-suggested fix
+shield review                   Review staged git changes
+shield init                     Initialize for this repo
+shield baseline                 Mark findings as baseline
+shield score                    Show shield score
 security check-package <name>     Check if package is compromised
 security advisories               List supply chain advisories
 security alerts status|test|...   Manage alert channels
-security mcp --claude|--all       Install MCP server
-security serve                    Start web dashboard
+shield mcp --claude|--all       Install MCP server
+shield serve                    Start web dashboard
 ```
 
 ## Data
@@ -148,7 +148,7 @@ Stored in `~/.hasna/security/` (override with `SECURITY_DB` env var).
 
 ## Secret Exposure Workflow
 
-`security secrets` combines four sources:
+`shield secrets` combines four sources:
 
 - repository files such as `.env` files and config files
 - git history across all branches

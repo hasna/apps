@@ -8,18 +8,12 @@ let _db: Database | null = null;
 
 function getDbPath(): string {
   if (process.env.SECURITY_DB) return process.env.SECURITY_DB;
-  const local = join(process.cwd(), ".security", "security.db");
+  const local = join(process.cwd(), ".shield", "shield.db");
   if (existsSync(dirname(local))) return local;
 
-  // New path: ~/.hasna/security/
-  const home = homedir();
-  const newPath = join(home, ".hasna", "security", "security.db");
-  // Backward compat: check old ~/.security/ path
-  const oldPath = join(home, ".security", "security.db");
-  if (existsSync(oldPath) && !existsSync(newPath)) return oldPath;
-
-  mkdirSync(dirname(newPath), { recursive: true });
-  return newPath;
+  const dbPath = join(homedir(), ".hasna", "shield", "shield.db");
+  mkdirSync(dirname(dbPath), { recursive: true });
+  return dbPath;
 }
 
 let _postInitCallbacks: Array<() => void> = [];

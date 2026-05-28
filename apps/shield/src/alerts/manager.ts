@@ -15,7 +15,7 @@ import { EmailChannel } from "./channels/email.js";
 function getAlertConfigPath(): string {
   const local = join(process.cwd(), ".security", "alerts.json");
   if (existsSync(local)) return local;
-  return join(homedir(), ".hasna", "security", "alerts.json");
+  return join(homedir(), ".hasna", "shield", "alerts.json");
 }
 
 export function loadAlertConfig(): AlertConfig {
@@ -37,7 +37,7 @@ export function loadAlertConfig(): AlertConfig {
 export function saveAlertConfig(config: AlertConfig, projectPath?: string): void {
   const targetPath = projectPath
     ? join(projectPath, ".security", "alerts.json")
-    : join(homedir(), ".hasna", "security", "alerts.json");
+    : join(homedir(), ".hasna", "shield", "alerts.json");
 
   mkdirSync(dirname(targetPath), { recursive: true });
   writeFileSync(targetPath, JSON.stringify(config, null, 2) + "\n", "utf-8");

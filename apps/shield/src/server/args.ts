@@ -8,7 +8,7 @@ export function parseServerArgs(argv: string[], version: string): ParsedServerAr
     return {
       type: "help",
       text: [
-        "Usage: security-serve [options]",
+        "Usage: shield-serve [options]",
         "",
         "Start the Open Security dashboard API server.",
         "",
