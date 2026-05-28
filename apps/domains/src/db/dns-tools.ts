@@ -1,5 +1,5 @@
 /**
- * DNS tools: WHOIS lookup, DNS propagation, SSL check, zone file import/export,
+ * DNS tools: WHOIS/RDAP lookup, DNS propagation, SSL check, zone file import/export,
  * subdomain discovery, and DNS validation
  */
 
@@ -10,7 +10,181 @@ import { createDnsRecord, listDnsRecords, type DnsRecord } from "./dns-records.j
 import { USER_AGENT } from "../lib/version.js";
 
 // ============================================================
-// WHOIS Lookup
+// RDAP (Registration Data Access Protocol) — WHOIS successor
+// Uses the public rdap.org bootstrap service (free, no API key)
+// ============================================================
+
+export interface RdapEntity {
+  handle?: string;
+  vcardArray?: [string, unknown[]];
+  roles?: string[];
+  entities?: RdapEntity[];
+  remarks?: { title?: string; description?: string | string[] }[];
+}
+
+export interface RdapNameserver {
+  ldhName?: string;
+  unicodeName?: string;
+}
+
+export interface RdapEvent {
+  eventAction: string;
+  eventDate?: string;
+  eventActor?: string;
+}
+
+export interface RdapResponse {
+  handle?: string;
+  rdapConformance?: string[];
+  status?: string[];
+  entities?: RdapEntity[];
+  nameservers?: RdapNameserver[];
+  events?: RdapEvent[];
+  links?: { rel: string; href: string; type?: string }[];
+  [key: string]: unknown;
+}
+
+/**
+ * Query RDAP for a domain via rdap.org public bootstrap.
+ * Returns structured JSON with registrant, registrar, expiry, nameservers.
+ * Throws if the RDAP server returns an error.
+ */
+export async function rdapLookup(domainName: string): Promise<RdapResponse> {
+  const url = `https://rdap.org/domain/${encodeURIComponent(domainName)}`;
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(15000),
+    headers: {
+      "Accept": "application/rdap+json, application/json",
+      "User-Agent": USER_AGENT,
+    },
+  });
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error(`RDAP: domain "${domainName}" not found`);
+    }
+    throw new Error(`RDAP request failed with status ${response.status} for ${domainName}`);
+  }
+
+  return response.json() as Promise<RdapResponse>;
+}
+
+/**
+ * Extract registrant contact info from RDAP entities.
+ * Looks for entities with role "registrant" and parses vCard data.
+ */
+export function extractRegistrantFromRdap(rdap: RdapResponse): {
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  organization: string | null;
+} {
+  const result = {
+    name: null as string | null,
+    email: null as string | null,
+    phone: null as string | null,
+    organization: null as string | null,
+  };
+
+  if (!rdap.entities) return result;
+
+  // Flatten: search all entities and nested entities for registrant
+  const findRegistrant = (entities: RdapEntity[]): RdapEntity | null => {
+    for (const entity of entities) {
+      if (entity.roles?.some((r) => r === "registrant")) return entity;
+      if (entity.entities) {
+        const found = findRegistrant(entity.entities);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+
+  const registrant = findRegistrant(rdap.entities);
+  if (!registrant?.vcardArray) return result;
+
+  const vcard = registrant.vcardArray[1] as unknown[] | undefined;
+  if (!vcard || !Array.isArray(vcard)) return result;
+
+  for (const entry of vcard) {
+    if (!Array.isArray(entry) || entry.length < 3) continue;
+    const [prop, _params, type] = entry;
+
+    if (prop === "fn") result.name = type ?? null;
+    else if (prop === "email") result.email = type ?? null;
+    else if (prop === "tel") result.phone = type ?? null;
+    else if (prop === "org") {
+      result.organization = Array.isArray(type) ? type[0] ?? null : type ?? null;
+    }
+    // Also capture N (structured name) if fn is missing
+    else if (prop === "n" && !result.name) {
+      const parts = Array.isArray(type) ? type.filter(Boolean) : [type];
+      result.name = parts.reverse().join(" ").trim() || null;
+    }
+  }
+
+  // If still no name, try entity handle or remarks
+  if (!result.name && registrant.handle) {
+    result.name = registrant.handle;
+  }
+
+  return result;
+}
+
+/**
+ * Extract registrar name from RDAP data.
+ * Looks for entities with role "registrar" or "sponsor".
+ */
+export function extractRegistrarFromRdap(rdap: RdapResponse): string | null {
+  if (!rdap.entities) return null;
+
+  for (const entity of rdap.entities) {
+    if (entity.roles?.some((r) => r === "registrar" || r === "sponsor")) {
+      if (entity.vcardArray?.[1]) {
+        const vcard = entity.vcardArray[1] as unknown[];
+        for (const entry of vcard) {
+          if (Array.isArray(entry) && entry[0] === "fn") return entry[2] ?? null;
+        }
+      }
+      if (entity.remarks) {
+        for (const remark of entity.remarks) {
+          if (remark.title?.toLowerCase().includes("registrar")) {
+            const desc = Array.isArray(remark.description) ? remark.description[0] : remark.description;
+            if (desc) return desc;
+          }
+        }
+      }
+      return entity.handle ?? null;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Extract expiry date from RDAP events.
+ */
+export function extractExpiryFromRdap(rdap: RdapResponse): string | null {
+  if (!rdap.events) return null;
+
+  const expiryEvent = rdap.events.find(
+    (e) => e.eventAction === "expiration" || e.eventAction === "expiry"
+  );
+  return expiryEvent?.eventDate ?? null;
+}
+
+/**
+ * Extract nameservers from RDAP response.
+ */
+export function extractNameserversFromRdap(rdap: RdapResponse): string[] {
+  if (!rdap.nameservers) return [];
+  return rdap.nameservers
+    .map((ns) => (ns.ldhName ?? ns.unicodeName ?? "").toLowerCase())
+    .filter(Boolean);
+}
+
+// ============================================================
+// WHOIS Lookup (RDAP primary, CLI fallback)
 // ============================================================
 
 export interface WhoisResult {
@@ -19,9 +193,86 @@ export interface WhoisResult {
   expires_at: string | null;
   nameservers: string[];
   raw: string;
+  source: "rdap" | "cli";
+  registrant: {
+    name: string | null;
+    email: string | null;
+    phone: string | null;
+    organization: string | null;
+  };
 }
 
 export function whoisLookup(domainName: string): WhoisResult {
+  // Try RDAP first (structured, reliable, free)
+  try {
+    const rdap = rdapLookupSync(domainName);
+    if (rdap) return rdap;
+  } catch {
+    // Fall through to CLI
+  }
+
+  // Fallback: system whois CLI
+  return whoisCliLookup(domainName);
+}
+
+/**
+ * Synchronous wrapper around rdapLookup for sync callers.
+ * Returns null if RDAP is unavailable (not an error).
+ */
+function rdapLookupSync(domainName: string): WhoisResult | null {
+  // Use sync HTTP via child process with curl (since fetch is async)
+  let stdout: string;
+  try {
+    stdout = execSync(
+      `curl -s -m 15 -H "Accept: application/rdap+json, application/json" -A "${USER_AGENT}" "https://rdap.org/domain/${encodeURIComponent(domainName)}"`,
+      { encoding: "utf-8" },
+    );
+  } catch {
+    return null;
+  }
+
+  if (!stdout || !stdout.startsWith("{")) return null;
+
+  let rdap: RdapResponse;
+  try {
+    rdap = JSON.parse(stdout) as RdapResponse;
+  } catch {
+    return null;
+  }
+
+  // Check for error response
+  if ((rdap as { errorCode?: number }).errorCode) {
+    return null;
+  }
+
+  const registrar = extractRegistrarFromRdap(rdap);
+  const expires_at = extractExpiryFromRdap(rdap);
+  const nameservers = extractNameserversFromRdap(rdap);
+  const registrant = extractRegistrantFromRdap(rdap);
+
+  // Update DB if domain exists
+  const db = getDatabase();
+  const row = db.prepare("SELECT id FROM domains WHERE name = ?").get(domainName) as { id: string } | null;
+  if (row) {
+    const updates: UpdateDomainInput = { whois: rdap as Record<string, unknown> };
+    if (registrar) updates.registrar = registrar;
+    if (expires_at) updates.expires_at = expires_at;
+    if (nameservers.length > 0) updates.nameservers = nameservers;
+    updateDomain(row.id, updates);
+  }
+
+  return {
+    domain: domainName,
+    registrar,
+    expires_at,
+    nameservers,
+    raw: stdout,
+    source: "rdap",
+    registrant,
+  };
+}
+
+function whoisCliLookup(domainName: string): WhoisResult {
   let raw: string;
   try {
     raw = execSync(`whois ${domainName}`, { timeout: 15000, encoding: "utf-8" });
@@ -54,7 +305,6 @@ export function whoisLookup(domainName: string): WhoisResult {
     if (ns && !nameservers.includes(ns)) nameservers.push(ns);
   }
 
-  // Update the DB record if a domain with this name exists
   const db = getDatabase();
   const row = db.prepare("SELECT id FROM domains WHERE name = ?").get(domainName) as { id: string } | null;
   if (row) {
@@ -65,7 +315,15 @@ export function whoisLookup(domainName: string): WhoisResult {
     updateDomain(row.id, updates);
   }
 
-  return { domain: domainName, registrar, expires_at, nameservers, raw };
+  return {
+    domain: domainName,
+    registrar,
+    expires_at,
+    nameservers,
+    raw,
+    source: "cli",
+    registrant: { name: null, email: null, phone: null, organization: null },
+  };
 }
 
 // ============================================================
