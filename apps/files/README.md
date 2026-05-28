@@ -63,6 +63,21 @@ files-mcp
 
 31 tools available.
 
+## HTTP mode
+
+Run a shared Streamable HTTP MCP server (127.0.0.1 only):
+
+```bash
+files-mcp --http              # default port 8818
+files-mcp --http --port 8818
+MCP_HTTP=1 files-mcp
+```
+
+- Health: `GET http://127.0.0.1:8818/health`
+- MCP: `POST http://127.0.0.1:8818/mcp`
+
+Stdio remains the default when no `--http` flag is passed.
+
 ## REST API
 
 ```bash

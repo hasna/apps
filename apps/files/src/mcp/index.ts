@@ -20,14 +20,16 @@ import { existsSync } from "fs";
 import { homedir } from "os";
 import { createRequire } from "module";
 import type { GoogleDriveConfig, S3Config } from "../types/index.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
 
-const server = new McpServer({
-  name: "files",
-  version: pkg.version,
-});
+export function buildServer(): McpServer {
+  const server = new McpServer({
+    name: "files",
+    version: pkg.version,
+  });
 
 type ToolHandler = (params: any) => unknown | Promise<unknown>;
 
@@ -1218,17 +1220,46 @@ registerTool("get_session_activity", "Get all activity within a session", {
   return { content: [{ type: "text" as const, text: JSON.stringify(activity, null, 2) }] };
 });
 
-// ─── Start ────────────────────────────────────────────────────────────────────
+  registerCloudTools(server, "files");
+  return server;
+}
 
 function printHelp(): void {
-  console.log("Usage: files-mcp [options]\n\nRuns the open-files MCP stdio server.\n\nOptions:\n  -h, --help        Show this help text");
+  console.log(`Usage: files-mcp [options]
+
+Runs the open-files MCP server (stdio by default).
+
+Options:
+  --http            Serve MCP over Streamable HTTP (127.0.0.1)
+  --port <number>   HTTP port (default: 8818, env: MCP_HTTP_PORT)
+  -h, --help        Show this help text`);
 }
 
-if (process.argv.includes("-h") || process.argv.includes("--help")) {
-  printHelp();
-  process.exit(0);
+async function main(): Promise<void> {
+  if (process.argv.includes("-h") || process.argv.includes("--help")) {
+    printHelp();
+    return;
+  }
+
+  const { isHttpMode, resolveMcpHttpPort, startMcpHttpServer } = await import("./http.js");
+
+  if (isHttpMode()) {
+    const handle = await startMcpHttpServer(buildServer, {
+      port: resolveMcpHttpPort(),
+    });
+    process.on("SIGINT", () => void handle.close().finally(() => process.exit(0)));
+    process.on("SIGTERM", () => void handle.close().finally(() => process.exit(0)));
+    return;
+  }
+
+  const server = buildServer();
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
 }
 
-const transport = new StdioServerTransport();
-registerCloudTools(server, "files");
-await server.connect(transport);
+if (import.meta.main) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
