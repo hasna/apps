@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { isHttpMode, resolveHttpPort, startHttpServer } from "./http.js";
+import { isStdioMode, resolveHttpPort, startHttpServer } from "./http.js";
 import { buildServer } from "./server.js";
 
 export { buildServer, createMcpServer, VERSION } from "./server.js";
@@ -39,12 +39,12 @@ Options:
     return;
   }
 
-  if (isHttpMode(args)) {
-    startHttpServer({ port: resolveHttpPort(args) });
+  if (isStdioMode(args)) {
+    await startMcpServer();
     return;
   }
-
-  await startMcpServer();
+  // Default: shared Streamable HTTP server (one process per MCP, many agents).
+  startHttpServer({ port: resolveHttpPort(args) });
 }
 
 const isDirectRun =

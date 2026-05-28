@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { buildServer } from "./server.js";
 
-export const DEFAULT_HTTP_PORT = 8823;
+export const DEFAULT_HTTP_PORT = 8866;
 export const HTTP_NAME = "mcps";
 
 export interface StartHttpServerOptions {
@@ -13,6 +13,10 @@ export interface StartHttpServerOptions {
 
 export function isHttpMode(args: string[] = process.argv.slice(2)): boolean {
   return args.includes("--http") || process.env.MCP_HTTP === "1";
+}
+
+export function isStdioMode(args: string[] = process.argv.slice(2)): boolean {
+  return args.includes("--stdio") || process.env.MCP_STDIO === "1";
 }
 
 export function resolveHttpPort(args: string[] = process.argv.slice(2)): number {
