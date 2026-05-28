@@ -4,7 +4,8 @@
   "description": "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   "type": "module",
   "bin": {
-    "open-knowledge": "./src/cli.ts"
+    "open-knowledge": "./src/cli.ts",
+    "open-knowledge-mcp": "./src/mcp.js"
   },
   "scripts": {
     "test": "bun test",
@@ -34,5 +35,9 @@
   "engines": {
     "bun": ">=1.0",
     "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.3.6"
   }
 }
