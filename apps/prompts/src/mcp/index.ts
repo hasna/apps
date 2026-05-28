@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
+import { isHttpMode, startMcpHttpServer, resolveMcpHttpPort } from "./http.js"
 import { registerCloudTools } from "@hasna/cloud"
 import { z } from "zod"
 import { getPrompt, listPrompts, listPromptsSlim, updatePrompt, deletePrompt, usePrompt, upsertPrompt, getPromptStats, pinPrompt, setNextPrompt, setExpiry, getTrending, promptToSaveResult } from "../db/prompts.js"
@@ -19,7 +20,26 @@ import { validateCron, getNextRunTime } from "../lib/cron.js"
 import { diffTexts, formatDiff } from "../lib/diff.js"
 import { lintAll } from "../lib/lint.js"
 import { runAudit } from "../lib/audit.js"
+import { homedir } from "os"
+import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite, mkdirSync as fsMkdir, readdirSync as fsReaddir, statSync as fsStat } from "fs"
+import { join as pathJoin, resolve as pathResolve, dirname as pathDirname } from "path"
 
+const AGENT_CONFIGS_MCP: Record<string, { global: string; local: string; label: string }> = {
+  claude:  { global: ".claude/CLAUDE.md",         local: "CLAUDE.md",                  label: "Claude Code" },
+  agents:  { global: ".agents/AGENTS.md",          local: "AGENTS.md",                  label: "OpenAI Agents SDK" },
+  gemini:  { global: ".gemini/GEMINI.md",           local: ".gemini/GEMINI.md",           label: "Gemini CLI" },
+  codex:   { global: ".codex/CODEX.md",             local: "CODEX.md",                   label: "OpenAI Codex CLI" },
+  cursor:  { global: ".cursor/rules",               local: ".cursorrules",               label: "Cursor" },
+  aider:   { global: ".aider/CONVENTIONS.md",       local: ".aider.conventions.md",      label: "Aider" },
+}
+
+function cfgPath(agent: string, global_: boolean): string | null {
+  const cfg = AGENT_CONFIGS_MCP[agent.toLowerCase()]
+  if (!cfg) return null
+  return global_ ? pathJoin(homedir(), cfg.global) : pathResolve(process.cwd(), cfg.local)
+}
+
+export function buildServer(): McpServer {
 const server = new McpServer({ name: "open-prompts", version: "0.1.0" })
 
 function ok(data: unknown) {
@@ -1122,25 +1142,6 @@ server.registerTool(
 )
 
 // ── prompts_config_list ───────────────────────────────────────────────────────
-const AGENT_CONFIGS_MCP: Record<string, { global: string; local: string; label: string }> = {
-  claude:  { global: ".claude/CLAUDE.md",         local: "CLAUDE.md",                  label: "Claude Code" },
-  agents:  { global: ".agents/AGENTS.md",          local: "AGENTS.md",                  label: "OpenAI Agents SDK" },
-  gemini:  { global: ".gemini/GEMINI.md",           local: ".gemini/GEMINI.md",           label: "Gemini CLI" },
-  codex:   { global: ".codex/CODEX.md",             local: "CODEX.md",                   label: "OpenAI Codex CLI" },
-  cursor:  { global: ".cursor/rules",               local: ".cursorrules",               label: "Cursor" },
-  aider:   { global: ".aider/CONVENTIONS.md",       local: ".aider.conventions.md",      label: "Aider" },
-}
-
-import { homedir } from "os"
-import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite, mkdirSync as fsMkdir, readdirSync as fsReaddir, statSync as fsStat } from "fs"
-import { join as pathJoin, resolve as pathResolve, dirname as pathDirname } from "path"
-
-function cfgPath(agent: string, global_: boolean): string | null {
-  const cfg = AGENT_CONFIGS_MCP[agent.toLowerCase()]
-  if (!cfg) return null
-  return global_ ? pathJoin(homedir(), cfg.global) : pathResolve(process.cwd(), cfg.local)
-}
-
 server.registerTool(
   "prompts_config_list",
   {
@@ -1320,6 +1321,20 @@ server.tool(
   }
 );
 
-const transport = new StdioServerTransport()
 registerCloudTools(server, "prompts")
-await server.connect(transport)
+return server;
+}
+
+async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+  if (isHttpMode(args)) {
+    startMcpHttpServer({ name: "prompts", port: resolveMcpHttpPort(args), buildServer });
+    return;
+  }
+  const transport = new StdioServerTransport();
+  await buildServer().connect(transport);
+}
+
+if (import.meta.main) {
+  await main();
+}

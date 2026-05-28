@@ -8,6 +8,8 @@ import { getDatabase } from "../db/database.js"
 import { searchPrompts, searchPromptsSlim, findSimilar } from "../lib/search.js"
 import { renderTemplate, extractVariableInfo } from "../lib/template.js"
 import { importFromJson, exportToJson } from "../lib/importer.js"
+import { buildServer } from "../mcp/index.js"
+import { handleMcpRequest } from "../mcp/http.js"
 
 const PORT = Number(process.env["PORT"] ?? process.env["PROMPTS_PORT"] ?? 19430)
 
@@ -259,7 +261,12 @@ export default {
 
       // ── GET /health ─────────────────────────────────────────────────────────
       if (path === "/health") {
-        return json({ status: "ok", port: PORT })
+        return json({ status: "ok", name: "prompts", port: PORT })
+      }
+
+      // ── MCP Streamable HTTP ─────────────────────────────────────────────────
+      if (path === "/mcp") {
+        return handleMcpRequest(req, buildServer)
       }
 
       return notFound()
