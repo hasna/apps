@@ -56,9 +56,9 @@ describe("styles MCP transport", () => {
       expect(tools.some((t) => t.name === "list_styles")).toBe(true);
 
       const result = await client.callTool({ name: "list_styles", arguments: {} });
-      expect(result.content[0]?.type).toBe("text");
-      const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-      expect(text.length).toBeGreaterThan(2);
+      const content = result.content as Array<{ type: string; text?: string }>;
+      expect(content[0]?.type).toBe("text");
+      expect(content[0]?.text?.length).toBeGreaterThan(2);
 
       await client.close();
     });
@@ -80,7 +80,8 @@ describe("styles MCP transport", () => {
       );
 
       for (const result of results) {
-        expect(result.content[0]?.type).toBe("text");
+        const content = result.content as Array<{ type: string }>;
+        expect(content[0]?.type).toBe("text");
       }
 
       await Promise.all(clients.map((client) => client.close()));

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/styles",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Style management platform for AI coding agents — profiles, preferences, health checks, and design system enforcement",
   "type": "module",
   "bin": {

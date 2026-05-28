@@ -11,6 +11,9 @@ export async function startStdioServer(): Promise<void> {
   await server.connect(transport);
 }
 
+/** @deprecated use startStdioServer */
+export const startMcpServer = startStdioServer;
+
 async function main(): Promise<void> {
   if (isHttpMode()) {
     await startHttpServer({ port: resolveHttpPort() });
