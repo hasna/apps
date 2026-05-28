@@ -9,6 +9,7 @@ import {
   closeBrowser as closeBrowserBase,
   connectToExistingBrowser,
 } from "@hasna/browser";
+import { applyStealthPatches } from "@hasna/browser/dist/lib/stealth.js";
 
 interface ViewportSize {
   width: number;
@@ -133,7 +134,10 @@ export async function getPage(
 
   try {
     // Delegate to @hasna/browser's getPage which handles context creation
-    return await getBrowserPage(browser, { viewport, userAgent: options?.userAgent, locale: options?.locale });
+    const page = await getBrowserPage(browser, { viewport, userAgent: options?.userAgent, locale: options?.locale });
+    // Apply stealth patches by default for Playwright — hides automation fingerprints
+    try { await applyStealthPatches(page); } catch { /* non-fatal */ }
+    return page;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new BrowserError(`Failed to create page: ${message}`);

@@ -285,6 +285,32 @@ export { ensurePersonaAuthenticated, loginWithAuthConfig } from "./lib/persona-a
 export type { LoginResult } from "./lib/persona-auth.js";
 
 export {
+  discoverRepo,
+  clearDiscoveryCache,
+  getDiscoveryCacheInfo,
+} from "./lib/repo-discovery.js";
+export type {
+  RepoSpec,
+  PackageManagers,
+  DevScripts,
+  ReadinessCheck,
+  RepoPrep,
+  RepoDiscoverySnapshot,
+  DiscoveryOptions,
+} from "./lib/repo-discovery.js";
+
+export {
+  runRepoTests,
+  runPrep,
+} from "./lib/repo-executor.js";
+export type {
+  RepoRunSpecResult,
+  RepoRunOptions,
+  RepoRunResult,
+  PrepResult,
+} from "./lib/repo-executor.js";
+
+export {
   createProdDebugPlan,
   formatProdDebugPlan,
   parseProdDebugTarget,
@@ -305,3 +331,14 @@ export {
   postGitHubComment,
   resolvePullRequestNumber,
 } from "./lib/ci.js";
+
+// ─── Sessions (Chrome extension import) ──────────────────────────────────────
+export {
+  createSession,
+  getSession,
+  listSessions,
+  deleteSession,
+  searchSessions,
+  countSessions,
+} from "./db/sessions.js";
+export type { Session, SessionInput } from "./db/sessions.js";

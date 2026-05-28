@@ -3,6 +3,19 @@ import type { Page } from "playwright";
 import type { Screenshotter } from "./screenshotter.js";
 import { MODEL_MAP, AIClientError } from "../types/index.js";
 import type { ModelPreset, Scenario } from "../types/index.js";
+import { click as browserClick, fill as browserFill, clickRef, typeRef, fillRef, selectRef, checkRef, hoverRef } from "@hasna/browser/dist/lib/actions.js";
+import { takeSnapshot, getRefLocator } from "@hasna/browser/dist/lib/snapshot.js";
+import { getPageInfo, elementExists, getText, getUrl, getTitle, extract as browserExtract, extractTable, getAriaSnapshot } from "@hasna/browser/dist/lib/extractor.js";
+import { crawl as browserCrawl } from "@hasna/browser/dist/lib/crawler.js";
+import { extractStructuredData } from "@hasna/browser/dist/lib/structured-extract.js";
+import { addInterceptRule, clearInterceptRules, startHAR } from "@hasna/browser/dist/lib/network.js";
+import { getPerformanceMetrics, startCoverage, getDeepPerformance } from "@hasna/browser/dist/lib/performance.js";
+import type { HARCapture } from "@hasna/browser/dist/lib/network.js";
+import type { CoverageSession } from "@hasna/browser/dist/lib/performance.js";
+
+// ─── Session state for HAR capture and coverage ─────────────────────────────
+const activeHARs = new Map<string, HARCapture>();
+const activeCoverage = new Map<string, CoverageSession>();
 
 // ─── Model Resolution ───────────────────────────────────────────────────────
 
@@ -332,6 +345,219 @@ export const BROWSER_TOOLS: Anthropic.Tool[] = [
       required: ["status", "reasoning"],
     },
   },
+  // ─── Ref-based tools (snapshot→ref→act workflow) ────────────────────────────
+  {
+    name: "browser_snapshot",
+    description: "Take an ARIA accessibility snapshot of the current page. Returns a tree of interactive elements with refs (e.g. @e0, @e1) that can be used with browser_*_ref tools. Use this before interacting with elements to discover their refs.",
+    input_schema: {
+      type: "object" as const,
+      properties: {},
+    },
+  },
+  {
+    name: "browser_click_ref",
+    description: "Click an element by its snapshot ref (e.g. @e0). More reliable than CSS selectors because it uses ARIA role-based resolution.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        ref: { type: "string", description: "Element ref from snapshot (e.g. @e0)." },
+      },
+      required: ["ref"],
+    },
+  },
+  {
+    name: "browser_type_ref",
+    description: "Type text into an element by its snapshot ref. Optionally clears existing text first.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        ref: { type: "string", description: "Element ref from snapshot (e.g. @e0)." },
+        text: { type: "string", description: "Text to type." },
+        clear: { type: "boolean", description: "Clear existing text before typing (default: false)." },
+      },
+      required: ["ref", "text"],
+    },
+  },
+  {
+    name: "browser_fill_ref",
+    description: "Fill an input element by its snapshot ref. Replaces existing content.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        ref: { type: "string", description: "Element ref from snapshot (e.g. @e0)." },
+        value: { type: "string", description: "Value to fill." },
+      },
+      required: ["ref", "value"],
+    },
+  },
+  {
+    name: "browser_select_ref",
+    description: "Select an option in a dropdown element by its snapshot ref.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        ref: { type: "string", description: "Element ref from snapshot (e.g. @e0)." },
+        value: { type: "string", description: "Option value to select." },
+      },
+      required: ["ref", "value"],
+    },
+  },
+  {
+    name: "browser_check_ref",
+    description: "Check or uncheck a checkbox/radio element by its snapshot ref.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        ref: { type: "string", description: "Element ref from snapshot (e.g. @e0)." },
+        checked: { type: "boolean", description: "True to check, false to uncheck." },
+      },
+      required: ["ref", "checked"],
+    },
+  },
+  {
+    name: "browser_hover_ref",
+    description: "Hover over an element by its snapshot ref.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        ref: { type: "string", description: "Element ref from snapshot (e.g. @e0)." },
+      },
+      required: ["ref"],
+    },
+  },
+  {
+    name: "browser_check",
+    description: "Get a comprehensive page orientation: page info (URL, title, meta, link/image/form counts, console errors, viewport) plus an ARIA accessibility snapshot with interactive element refs. Use this to understand the current page state before testing.",
+    input_schema: {
+      type: "object" as const,
+      properties: {},
+    },
+  },
+  {
+    name: "browser_assert",
+    description: "Run an assertion against the current page state. Supports: element_exists (check selector exists/visible), text_contains (check page text includes substring), url_matches (check URL matches pattern), title_contains (check page title includes substring). Returns pass/fail with details.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        assertion: {
+          type: "string",
+          enum: ["element_exists", "text_contains", "url_matches", "title_contains"],
+          description: "The type of assertion to run.",
+        },
+        selector: {
+          type: "string",
+          description: "CSS selector (required for element_exists).",
+        },
+        expected: {
+          type: "string",
+          description: "Expected value (text substring, URL pattern, or title substring).",
+        },
+        visible: {
+          type: "boolean",
+          description: "For element_exists: also require the element to be visible (default true).",
+        },
+      },
+      required: ["assertion"],
+    },
+  },
+  {
+    name: "browser_extract",
+    description: "Extract structured data from the current page. Modes: 'structured' (tables, lists, JSON-LD, OpenGraph, meta), 'table' (a specific HTML table), 'text' (page or element text), 'aria' (accessibility snapshot). Returns extracted data as JSON.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["structured", "table", "text", "aria"],
+          description: "Extraction mode: 'structured' for auto-detected tables/lists/metadata, 'table' for a specific table selector, 'text' for page/element text, 'aria' for accessibility tree.",
+        },
+        selector: {
+          type: "string",
+          description: "CSS selector for targeted extraction (required for 'table' mode, optional for 'text').",
+        },
+      },
+      required: ["mode"],
+    },
+  },
+  {
+    name: "browser_crawl",
+    description: "Crawl a website starting from a URL. Discovers linked pages within the same domain, up to a configurable depth. Returns a list of found URLs with their status codes and titles.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        url: {
+          type: "string",
+          description: "Starting URL to crawl from.",
+        },
+        maxDepth: {
+          type: "number",
+          description: "Maximum crawl depth (default 2).",
+        },
+        maxPages: {
+          type: "number",
+          description: "Maximum number of pages to visit (default 20).",
+        },
+      },
+      required: ["url"],
+    },
+  },
+  {
+    name: "browser_intercept",
+    description: "Intercept network requests on the current page. Actions: 'block' (block matching requests), 'modify' (rewrite response), 'log' (log matching requests), 'clear' (remove all rules), 'har_start' (start HAR recording), 'har_stop' (stop and return HAR).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        action: {
+          type: "string",
+          enum: ["block", "modify", "log", "clear", "har_start", "har_stop"],
+          description: "Intercept action to perform.",
+        },
+        pattern: {
+          type: "string",
+          description: "URL pattern to match (required for block/modify/log).",
+        },
+        response: {
+          type: "object",
+          description: "Custom response for 'modify' action.",
+          properties: {
+            status: { type: "number" },
+            body: { type: "string" },
+            headers: { type: "object" },
+          },
+        },
+      },
+      required: ["action"],
+    },
+  },
+  {
+    name: "browser_performance",
+    description: "Measure page performance. Modes: 'metrics' (Web Vitals: FCP, LCP, CLS, TTFB), 'deep' (full resource breakdown, third-party analysis, DOM complexity, main thread blocking, memory), 'coverage_start' (start JS/CSS coverage), 'coverage_stop' (stop and report unused code).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["metrics", "deep", "coverage_start", "coverage_stop"],
+          description: "Performance measurement mode.",
+        },
+      },
+      required: ["mode"],
+    },
+  },
+  {
+    name: "browser_a11y",
+    description: "Run an accessibility audit on the current page using the ARIA accessibility tree. Detects missing labels, roles, focus issues, and other common a11y problems. Returns a list of issues with severity and element details.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        level: {
+          type: "string",
+          enum: ["A", "AA", "AAA"],
+          description: "WCAG conformance level to check against (default AA).",
+        },
+      },
+    },
+  },
 ];
 
 // ─── Tool Execution ─────────────────────────────────────────────────────────
@@ -340,6 +566,7 @@ interface ToolContext {
   runId: string;
   scenarioSlug: string;
   stepNumber: number;
+  sessionId: string;
   a11y?: boolean | { level?: "A" | "AA" | "AAA" };
 }
 
@@ -405,9 +632,20 @@ export async function executeTool(
       case "click": {
         const selector = toolInput.selector as string;
         try {
-          await page.click(selector);
+          const healResult = await browserClick(page, selector, { selfHeal: true });
+          const screenshot = await screenshotter.capture(page, {
+            runId: context.runId,
+            scenarioSlug: context.scenarioSlug,
+            stepNumber: context.stepNumber,
+            action: "click",
+          });
+          const healNote = healResult.healed ? ` [self-healed via ${healResult.method}]` : "";
+          return {
+            result: `Clicked element: ${selector}${healNote}`,
+            screenshot,
+          };
         } catch (clickErr) {
-          // Attempt self-healing if selector not found
+          // Programmatic self-heal failed — fall back to AI healer
           const errMsg = clickErr instanceof Error ? clickErr.message : String(clickErr);
           if (errMsg.includes("not found") || errMsg.includes("No element") || errMsg.includes("waiting for selector")) {
             const { healSelector } = await import("./healer.js").catch(() => ({ healSelector: null }));
@@ -416,30 +654,25 @@ export async function executeTool(
               if (heal.healed && heal.newSelector) {
                 await page.click(heal.newSelector);
                 const screenshot = await screenshotter.capture(page, { runId: context.runId, scenarioSlug: context.scenarioSlug, stepNumber: context.stepNumber, action: "click" });
-                return { result: `Clicked element: ${heal.newSelector} [healed from "${selector}" — ${heal.reasoning}]`, screenshot };
+                return { result: `Clicked element: ${heal.newSelector} [AI-healed from "${selector}" — ${heal.reasoning}]`, screenshot };
               }
             }
           }
           throw clickErr;
         }
-        const screenshot = await screenshotter.capture(page, {
-          runId: context.runId,
-          scenarioSlug: context.scenarioSlug,
-          stepNumber: context.stepNumber,
-          action: "click",
-        });
-        return {
-          result: `Clicked element: ${selector}`,
-          screenshot,
-        };
       }
 
       case "fill": {
         const selector = toolInput.selector as string;
         const value = toolInput.value as string;
         try {
-          await page.fill(selector, value);
+          const healResult = await browserFill(page, selector, value, undefined, true);
+          const healNote = healResult.healed ? ` [self-healed via ${healResult.method}]` : "";
+          return {
+            result: `Filled "${selector}" with value${healNote}`,
+          };
         } catch (fillErr) {
+          // Programmatic self-heal failed — fall back to AI healer
           const errMsg = fillErr instanceof Error ? fillErr.message : String(fillErr);
           if (errMsg.includes("not found") || errMsg.includes("No element") || errMsg.includes("waiting for selector")) {
             const { healSelector } = await import("./healer.js").catch(() => ({ healSelector: null }));
@@ -447,15 +680,12 @@ export async function executeTool(
               const heal = await healSelector({ page, failedSelector: selector, intent: `fill the input field "${selector}" with "${value}"` });
               if (heal.healed && heal.newSelector) {
                 await page.fill(heal.newSelector, value);
-                return { result: `Filled "${heal.newSelector}" with value [healed from "${selector}"]` };
+                return { result: `Filled "${heal.newSelector}" with value [AI-healed from "${selector}"]` };
               }
             }
           }
           throw fillErr;
         }
-        return {
-          result: `Filled "${selector}" with value`,
-        };
       }
 
       case "select_option": {
@@ -663,6 +893,298 @@ export async function executeTool(
         };
       }
 
+      case "browser_snapshot": {
+        const snapshot = await takeSnapshot(page, context.sessionId);
+        return {
+          result: snapshot.tree,
+        };
+      }
+
+      case "browser_click_ref": {
+        const ref = toolInput.ref as string;
+        // Auto-snapshot: refresh refs before acting so stale refs get updated
+        await takeSnapshot(page, context.sessionId);
+        await clickRef(page, context.sessionId, ref);
+        const screenshot = await screenshotter.capture(page, {
+          runId: context.runId,
+          scenarioSlug: context.scenarioSlug,
+          stepNumber: context.stepNumber,
+          action: "click_ref",
+        });
+        return {
+          result: `Clicked ref: ${ref}`,
+          screenshot,
+        };
+      }
+
+      case "browser_type_ref": {
+        const ref = toolInput.ref as string;
+        const text = toolInput.text as string;
+        const clear = toolInput.clear as boolean | undefined;
+        await takeSnapshot(page, context.sessionId);
+        await typeRef(page, context.sessionId, ref, text, { clear: clear ?? true });
+        return {
+          result: `Typed into ref ${ref}: "${text}"`,
+        };
+      }
+
+      case "browser_fill_ref": {
+        const ref = toolInput.ref as string;
+        const value = toolInput.value as string;
+        await takeSnapshot(page, context.sessionId);
+        await fillRef(page, context.sessionId, ref, value);
+        return {
+          result: `Filled ref ${ref} with value`,
+        };
+      }
+
+      case "browser_select_ref": {
+        const ref = toolInput.ref as string;
+        const value = toolInput.value as string;
+        await takeSnapshot(page, context.sessionId);
+        const selected = await selectRef(page, context.sessionId, ref, value);
+        return {
+          result: `Selected "${selected.join(", ")}" in ref ${ref}`,
+        };
+      }
+
+      case "browser_check_ref": {
+        const ref = toolInput.ref as string;
+        const checked = toolInput.checked as boolean;
+        await takeSnapshot(page, context.sessionId);
+        await checkRef(page, context.sessionId, ref, checked);
+        return {
+          result: `${checked ? "Checked" : "Unchecked"} ref: ${ref}`,
+        };
+      }
+
+      case "browser_hover_ref": {
+        const ref = toolInput.ref as string;
+        await takeSnapshot(page, context.sessionId);
+        await hoverRef(page, context.sessionId, ref);
+        const screenshot = await screenshotter.capture(page, {
+          runId: context.runId,
+          scenarioSlug: context.scenarioSlug,
+          stepNumber: context.stepNumber,
+          action: "hover_ref",
+        });
+        return {
+          result: `Hovered ref: ${ref}`,
+          screenshot,
+        };
+      }
+
+      case "browser_check": {
+        const [info, snapshot] = await Promise.all([
+          getPageInfo(page),
+          takeSnapshot(page, context.sessionId),
+        ]);
+        const parts = [
+          `URL: ${info.url}`,
+          `Title: ${info.title}`,
+          info.meta_description ? `Description: ${info.meta_description}` : null,
+          `Links: ${info.links_count} | Images: ${info.images_count} | Forms: ${info.forms_count}`,
+          `Text length: ${info.text_length} | Console errors: ${info.has_console_errors}`,
+          `Viewport: ${info.viewport.width}x${info.viewport.height}`,
+          ``,
+          `Interactive elements: ${snapshot.interactive_count}`,
+          ``,
+          snapshot.tree,
+        ].filter(Boolean);
+        return { result: parts.join("\n") };
+      }
+
+      case "browser_assert": {
+        const assertionType = toolInput.assertion_type as string;
+        const selector = toolInput.selector as string | undefined;
+        const expected = toolInput.expected as string | undefined;
+        const sessionId = context.sessionId ?? "default";
+
+        switch (assertionType) {
+          case "element_exists": {
+            if (!selector) return { result: "Error: selector required for element_exists assertion" };
+            const result = await elementExists(page, selector);
+            const pass = result.exists;
+            return { result: pass ? `PASS: element "${selector}" exists (${result.count} match${result.count !== 1 ? "es" : ""}, visible: ${result.visible})` : `FAIL: element "${selector}" not found` };
+          }
+          case "text_contains": {
+            const text = selector ? await getText(page, selector) : await getText(page);
+            const pass = expected !== undefined && text.includes(expected);
+            return { result: pass ? `PASS: text contains "${expected}"` : `FAIL: text does not contain "${expected}". Found: "${text.slice(0, 200)}"` };
+          }
+          case "url_matches": {
+            const url = await getUrl(page);
+            const pattern = expected ?? "";
+            const pass = new RegExp(pattern).test(url);
+            return { result: pass ? `PASS: URL matches /${pattern}/` : `FAIL: URL "${url}" does not match /${pattern}/` };
+          }
+          case "title_contains": {
+            const title = await getTitle(page);
+            const pass = expected !== undefined && title.includes(expected);
+            return { result: pass ? `PASS: title contains "${expected}"` : `FAIL: title "${title}" does not contain "${expected}"` };
+          }
+          default:
+            return { result: `Unknown assertion type: ${assertionType}` };
+        }
+      }
+
+      case "browser_extract": {
+        const mode = toolInput.mode as string;
+        const selector = toolInput.selector as string | undefined;
+
+        switch (mode) {
+          case "structured": {
+            const data = await extractStructuredData(page);
+            return { result: JSON.stringify(data, null, 2) };
+          }
+          case "table": {
+            if (!selector) return { result: "Error: selector required for table extraction" };
+            const rows = await extractTable(page, selector);
+            return { result: JSON.stringify(rows, null, 2) };
+          }
+          case "text": {
+            const text = selector ? await getText(page, selector) : await getText(page);
+            return { result: text };
+          }
+          case "aria": {
+            const aria = await getAriaSnapshot(page);
+            return { result: aria };
+          }
+          default:
+            return { result: `Unknown extract mode: ${mode}` };
+        }
+      }
+
+      case "browser_crawl": {
+        const url = toolInput.url as string;
+        const maxDepth = (toolInput.max_depth as number) ?? 2;
+        const maxPages = (toolInput.max_pages as number) ?? 20;
+        const result = await browserCrawl(url, { maxDepth, maxPages });
+        return { result: JSON.stringify(result, null, 2) };
+      }
+
+      case "browser_intercept": {
+        const action = toolInput.action as string;
+        const pattern = toolInput.pattern as string | undefined;
+        const interceptAction = toolInput.intercept_action as string | undefined;
+        const statusCode = toolInput.status_code as number | undefined;
+        const body = toolInput.body as string | undefined;
+        const sessionId = context.sessionId ?? "default";
+
+        switch (action) {
+          case "block": {
+            if (!pattern) return { result: "Error: pattern required for block action" };
+            await addInterceptRule(page, { pattern, action: "block" });
+            return { result: `Blocked requests matching: ${pattern}` };
+          }
+          case "modify": {
+            if (!pattern) return { result: "Error: pattern required for modify action" };
+            await addInterceptRule(page, { pattern, action: "modify", response: { status: statusCode ?? 200, body: body ?? "" } });
+            return { result: `Modified requests matching: ${pattern} → status ${statusCode ?? 200}` };
+          }
+          case "log": {
+            if (!pattern) return { result: "Error: pattern required for log action" };
+            await addInterceptRule(page, { pattern, action: "log" });
+            return { result: `Logging requests matching: ${pattern}` };
+          }
+          case "clear": {
+            await clearInterceptRules(page);
+            return { result: "Cleared all intercept rules" };
+          }
+          case "har_start": {
+            const harCapture = startHAR(page);
+            activeHARs.set(sessionId, harCapture);
+            return { result: "HAR capture started" };
+          }
+          case "har_stop": {
+            const harCapture = activeHARs.get(sessionId);
+            if (!harCapture) return { result: "Error: no active HAR capture for this session" };
+            const har = harCapture.stop();
+            activeHARs.delete(sessionId);
+            const entryCount = har.log.entries.length;
+            return { result: `HAR capture stopped: ${entryCount} entries captured\n${JSON.stringify(har, null, 2)}` };
+          }
+          default:
+            return { result: `Unknown intercept action: ${action}` };
+        }
+      }
+
+      case "browser_performance": {
+        const mode = toolInput.mode as string;
+        const sessionId = context.sessionId ?? "default";
+
+        switch (mode) {
+          case "metrics": {
+            const metrics = await getPerformanceMetrics(page);
+            return { result: JSON.stringify(metrics, null, 2) };
+          }
+          case "deep": {
+            const { getDeepPerformance: deepPerf } = await import("@hasna/browser/dist/lib/deep-performance.js");
+            const deep = await deepPerf(page);
+            return { result: JSON.stringify(deep, null, 2) };
+          }
+          case "coverage_start": {
+            const session = await startCoverage(page);
+            activeCoverage.set(sessionId, session);
+            return { result: "Coverage tracking started" };
+          }
+          case "coverage_stop": {
+            const session = activeCoverage.get(sessionId);
+            if (!session) return { result: "Error: no active coverage session" };
+            const result = await session.stop();
+            activeCoverage.delete(sessionId);
+            return { result: JSON.stringify(result, null, 2) };
+          }
+          default:
+            return { result: `Unknown performance mode: ${mode}` };
+        }
+      }
+
+      case "browser_a11y": {
+        const level = (toolInput.level as string) ?? "AA";
+        const snapshot = await page.accessibility.snapshot();
+        if (!snapshot) return { result: "Error: could not capture accessibility tree" };
+
+        const issues: string[] = [];
+        const checkNode = (node: any, path: string[] = []): void => {
+          const label = node.name ?? "";
+          const role = node.role ?? "";
+          const nodePath = [...path, `${role}${label ? ` "${label}"` : ""}`];
+
+          // WCAG A: images must have alt text (role=img with no name)
+          if (role === "img" && !label) {
+            issues.push(`[A] Image missing alt text at ${nodePath.join(" > ")}`);
+          }
+          // WCAG A: interactive elements need accessible names
+          if (["button", "link", "textbox", "checkbox", "radio", "combobox", "menuitem"].includes(role) && !label) {
+            issues.push(`[A] ${role} missing accessible name at ${nodePath.join(" > ")}`);
+          }
+          // WCAG AA: form fields need labels
+          if (["textbox", "combobox", "slider", "spinbutton"].includes(role) && !label) {
+            issues.push(`[AA] Form field (${role}) missing label at ${nodePath.join(" > ")}`);
+          }
+          // WCAG AAA: headings should have content
+          if (role.startsWith("heading") && !label) {
+            issues.push(`[AAA] Empty heading at ${nodePath.join(" > ")}`);
+          }
+
+          for (const child of node.children ?? []) {
+            checkNode(child, nodePath);
+          }
+        };
+        checkNode(snapshot);
+
+        const maxLevel = level === "A" ? 0 : level === "AA" ? 1 : 2;
+        const levelMap: Record<number, string[]> = { 0: ["A"], 1: ["A", "AA"], 2: ["A", "AA", "AAA"] };
+        const applicable = levelMap[maxLevel] ?? ["A", "AA"];
+        const filtered = issues.filter((i) => applicable.some((l) => i.includes(`[${l}]`)));
+
+        const summary = filtered.length === 0
+          ? `No a11y issues found at WCAG ${level} level`
+          : `${filtered.length} a11y issue${filtered.length > 1 ? "s" : ""} found at WCAG ${level} level:\n${filtered.join("\n")}`;
+        return { result: summary };
+      }
+
       default:
         return { result: `Unknown tool: ${toolName}` };
     }
@@ -690,6 +1212,7 @@ interface AgentLoopOptions {
   screenshotter: Screenshotter;
   model: string;
   runId: string;
+  sessionId?: string;
   maxTurns?: number;
   onStep?: StepEventHandler;
   persona?: {
@@ -738,6 +1261,7 @@ export async function runAgentLoop(
     screenshotter,
     model,
     runId,
+    sessionId,
     maxTurns = 30,
     onStep,
     persona,
@@ -762,17 +1286,23 @@ export async function runAgentLoop(
     "You are an expert QA testing agent. Your job is to thoroughly test web application scenarios.",
     "You have browser tools to navigate, interact with, and inspect web pages.",
     "",
-    "Strategy:",
-    "1. First navigate to the target page and take a screenshot to understand the layout",
-    "2. If you can't find an element, use get_elements or get_page_html to discover selectors",
-    "3. Use scroll to discover content below the fold",
+    "Strategy (snapshot → ref → act):",
+    "1. Navigate to the target page, then call browser_snapshot to get an accessibility tree with element refs (@e0, @e1, ...)",
+    "2. Use ref-based tools (browser_click_ref, browser_type_ref, browser_fill_ref, etc.) to interact with elements by their ref IDs — this is more reliable than CSS selectors",
+    "3. After actions that change page state, call browser_snapshot again to see the updated tree",
     "4. Use wait_for or wait_for_navigation after actions that trigger page loads",
     "5. Take screenshots after every meaningful state change",
     "6. Use assert_text and assert_visible to verify expected outcomes",
     "7. When done testing, call report_result with detailed pass/fail reasoning",
     "",
+    "When to use CSS-selector tools vs ref-based tools:",
+    "- Prefer ref-based tools (browser_click_ref, etc.) — they resolve via the accessibility snapshot and self-heal on DOM changes",
+    "- Use CSS-selector tools (click, fill) only when you need to target elements by a known stable selector",
+    "- Both click and fill have built-in self-healing: if the selector breaks, they try alternative strategies automatically",
+    "- If built-in healing fails, the AI healer kicks in as a deeper fallback",
+    "",
     "Tips:",
-    "- Try multiple selector strategies: by text, by role, by class, by id",
+    "- Call browser_snapshot before interacting — it gives you the current refs and interactive element count",
     "- If a click triggers navigation, use wait_for_navigation after",
     "- For forms, fill all fields before submitting",
     "- Check for error messages after form submissions",
@@ -902,7 +1432,7 @@ export async function runAgentLoop(
           screenshotter,
           toolBlock.name,
           toolInput,
-          { runId, scenarioSlug, stepNumber, a11y },
+          { runId, scenarioSlug, stepNumber, sessionId, a11y },
         );
 
         // Emit tool result event

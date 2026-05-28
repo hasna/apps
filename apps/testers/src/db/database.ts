@@ -460,6 +460,8 @@ ALTER TABLE scenarios ADD COLUMN required_role TEXT;
   `
 ALTER TABLE results ADD COLUMN har_path TEXT;
   `,
+
+  // Migration 27: Scenario parameters and persona auth extensions
   `
 ALTER TABLE scenarios ADD COLUMN parameters TEXT;
   `,
@@ -468,6 +470,8 @@ ALTER TABLE personas ADD COLUMN auth_strategy TEXT DEFAULT 'form-login';
 ALTER TABLE personas ADD COLUMN auth_headers TEXT;
 ALTER TABLE personas ADD COLUMN auth_script TEXT;
   `,
+
+  // Migration 28: Step-level results for detailed run tracking
   `
 CREATE TABLE IF NOT EXISTS step_results (
   id TEXT PRIMARY KEY,
@@ -485,7 +489,8 @@ CREATE TABLE IF NOT EXISTS step_results (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
   `,
-  // Migration 27: PR metadata on runs for GitHub integration
+
+  // Migration 29: PR metadata on runs for GitHub integration
   `
 ALTER TABLE runs ADD COLUMN pr_number INTEGER;
 ALTER TABLE runs ADD COLUMN pr_title TEXT;
@@ -495,7 +500,30 @@ ALTER TABLE runs ADD COLUMN pr_commit_sha TEXT;
 ALTER TABLE runs ADD COLUMN pr_url TEXT;
 ALTER TABLE runs ADD COLUMN gh_app_installation_id TEXT;
   `,
-  // Migration 28: Saved testing workflows for reusable app QA plans
+  // Migration 30: Sessions table for Chrome extension recording data
+  `
+  CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    tab_id INTEGER NOT NULL,
+    url TEXT,
+    title TEXT,
+    entries TEXT NOT NULL DEFAULT '[]',
+    entry_count INTEGER NOT NULL DEFAULT 0,
+    error_count INTEGER NOT NULL DEFAULT 0,
+    console_count INTEGER NOT NULL DEFAULT 0,
+    nav_count INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'exported' CHECK(status IN ('live','saved','exported')),
+    start_time TEXT NOT NULL,
+    end_time TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_sessions_tab ON sessions(tab_id);
+  CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+  CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at DESC);
+  `,
+
+  // Migration 31: Saved testing workflows for reusable app QA plans
   `
 CREATE TABLE IF NOT EXISTS testing_workflows (
   id TEXT PRIMARY KEY,
@@ -588,6 +616,7 @@ export function resetDatabase(): void {
   database.exec("DELETE FROM agents");
   database.exec("DELETE FROM scan_issues");
   database.exec("DELETE FROM projects");
+  database.exec("DELETE FROM sessions");
 }
 
 export function resolvePartialId(

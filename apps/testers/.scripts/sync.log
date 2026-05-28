@@ -18,3 +18,124 @@ error: Please commit or stash them.
 Committed local changes
 error: cannot pull with rebase: You have unstaged changes.
 error: Please commit or stash them.
+=== 2026-04-03 00:05:01 ===
+[main d519a0c] chore: auto-commit uncommitted changes before sync
+ 1 file changed, 1 insertion(+)
+Committed local changes
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+=== 2026-04-04 00:05:01 ===
+[main b5eab0c] chore: auto-commit uncommitted changes before sync
+ 1 file changed, 6 insertions(+)
+Committed local changes
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+=== 2026-04-05 00:05:01 ===
+[main 6ddaa65] chore: auto-commit uncommitted changes before sync
+ 1 file changed, 6 insertions(+)
+Committed local changes
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+=== 2026-04-06 00:05:01 ===
+[main 318b6dd] chore: auto-commit uncommitted changes before sync
+ 1 file changed, 6 insertions(+)
+Committed local changes
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+=== 2026-04-07 00:05:01 ===
+[main bc2884c] chore: auto-commit uncommitted changes before sync
+ 1 file changed, 6 insertions(+)
+Committed local changes
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+=== 2026-04-08 00:05:01 ===
+[main 9c1d85a] chore: auto-commit uncommitted changes before sync
+ 1 file changed, 6 insertions(+)
+Committed local changes
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+=== 2026-04-09 00:05:01 ===
+[main 4ab5c44] chore: auto-commit uncommitted changes before sync
+ 1 file changed, 6 insertions(+)
+Committed local changes
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+=== 2026-04-10 00:05:01 ===
+[main 72a7b7b] chore: auto-commit uncommitted changes before sync
+ 1 file changed, 6 insertions(+)
+Committed local changes
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+=== 2026-04-11 00:05:01 ===
+[main 717c47d] chore: auto-commit uncommitted changes before sync
+ 1 file changed, 6 insertions(+)
+Committed local changes
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+=== 2026-04-12 00:05:01 ===
+[main 676ead0] chore: auto-commit uncommitted changes before sync
+ 6 files changed, 1347 insertions(+)
+ create mode 100644 src/lib/repo-discovery.ts
+ create mode 100644 src/lib/repo-executor.ts
+ create mode 100644 test-results/.last-run.json
+Committed local changes
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+=== 2026-04-13 00:05:01 ===
+[main f3caad0] chore: auto-commit uncommitted changes before sync
+ 1 file changed, 9 insertions(+)
+Committed local changes
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+=== 2026-04-14 00:05:01 ===
+[main d0b3ac6] chore: auto-commit uncommitted changes before sync
+ 1 file changed, 6 insertions(+)
+Committed local changes
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+=== 2026-04-15 00:05:01 ===
+[main 937af34] chore: auto-commit uncommitted changes before sync
+ 15 files changed, 1092 insertions(+)
+ create mode 100644 extension/build.ts
+ create mode 100644 extension/manifest.json
+ create mode 100644 extension/package.json
+ create mode 100644 extension/src/background/session.ts
+ create mode 100644 extension/src/content/capture.ts
+ create mode 100644 extension/src/popup/popup.html
+ create mode 100644 extension/src/popup/popup.ts
+ create mode 100644 extension/tsconfig.json
+ create mode 100644 extension/types/index.ts
+ create mode 100644 src/db/sessions.ts
+Committed local changes
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+=== 2026-04-16 00:05:01 ===
+[main 3169858] chore: auto-commit uncommitted changes before sync
+ 1 file changed, 16 insertions(+)
+Committed local changes
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+=== 2026-04-17 00:05:01 ===
+[main 819ff7e] chore: auto-commit uncommitted changes before sync
+ 1 file changed, 6 insertions(+)
+Committed local changes
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+=== 2026-04-18 00:05:01 ===
+[main 0482d81] chore: auto-commit uncommitted changes before sync
+ 1 file changed, 6 insertions(+)
+Committed local changes
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+=== 2026-04-19 00:05:01 ===
+[main 4da9e46] chore: auto-commit uncommitted changes before sync
+ 5 files changed, 567 insertions(+), 26 deletions(-)
+Committed local changes
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+=== 2026-04-20 00:05:01 ===
+[main c562b35] chore: auto-commit uncommitted changes before sync
+ 1 file changed, 6 insertions(+)
+Committed local changes
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/testers",
-  "version": "0.0.31",
+  "version": "0.0.32",
   "description": "AI-powered QA testing CLI — spawns cheap AI agents to test web apps with headless browsers",
   "type": "module",
   "main": "dist/index.js",
@@ -30,6 +30,7 @@
     "build:lib": "bun build src/index.ts --outdir dist --target bun --external playwright --external @anthropic-ai/sdk --external @modelcontextprotocol/sdk --external @hasna/browser",
     "build:types": "NODE_OPTIONS='--max-old-space-size=8192' tsc --emitDeclarationOnly --outDir dist --skipLibCheck",
     "build:dashboard": "cd dashboard && bun run build",
+    "build:ext": "cd extension && bun run build",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.tsx",
@@ -40,7 +41,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
-    "@hasna/browser": "^0.3.8",
+    "@hasna/browser": "^0.4.5",
     "@hasna/cloud": "^0.1.24",
     "@hasna/contacts": "^0.6.8",
     "@hasna/projects": "^0.1.42",
@@ -55,6 +56,7 @@
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "@types/chrome": "^0.0.268",
     "@types/react": "^18.3.18",
     "typescript": "^5.7.3"
   },
