@@ -96,12 +96,23 @@ if (args[0] === "prune") {
 // ── MCP commands ─────────────────────────────────────────────────────────────
 
 if (args[0] === "mcp") {
-  if (args[1] === "serve" || args.length === 1) {
-    const { startMcpServer } = await import("./mcp/server.js");
-    startMcpServer().catch((err) => {
-      console.error("MCP server error:", err);
-      process.exit(1);
-    });
+  if (args[1] === "serve" || args.length === 1 || (args[1]?.startsWith("--"))) {
+    const mcpArgs = args.slice(1);
+    const { isHttpMode, resolveMcpHttpPort, startMcpHttpServer } = await import("./mcp/http.js");
+    if (isHttpMode(mcpArgs)) {
+      const { createServer } = await import("./mcp/server.js");
+      startMcpHttpServer({
+        name: "terminal",
+        port: resolveMcpHttpPort(mcpArgs),
+        buildServer: createServer,
+      });
+    } else {
+      const { startMcpServer } = await import("./mcp/server.js");
+      startMcpServer().catch((err) => {
+        console.error("MCP server error:", err);
+        process.exit(1);
+      });
+    }
   } else if (args[1] === "install") {
     // Legacy: `terminal mcp install` still works
     const { handleInstall } = await import("./mcp/install.js");
