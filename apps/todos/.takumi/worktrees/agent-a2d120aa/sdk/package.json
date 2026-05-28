@@ -1,0 +1,35 @@
+{
+  "name": "@hasna/todos-sdk",
+  "version": "0.1.0",
+  "description": "Universal agent SDK for @hasna/todos task management — works with Claude, Codex, Gemini, or any AI agent",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./schemas": {
+      "types": "./dist/schemas.d.ts",
+      "import": "./dist/schemas.js"
+    }
+  },
+  "files": ["dist", "LICENSE", "README.md"],
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target bun && bun build src/schemas.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": ["todos", "tasks", "ai", "agent", "sdk", "claude", "codex", "gemini", "mcp"],
+  "publishConfig": { "access": "public" },
+  "repository": { "type": "git", "url": "https://github.com/hasna/open-todos.git", "directory": "sdk" },
+  "homepage": "https://github.com/hasna/open-todos",
+  "bugs": { "url": "https://github.com/hasna/open-todos/issues" },
+  "author": "Andrei Hasna <andrei@hasna.com>",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/bun": "^1.2.4"
+  }
+}
