@@ -67,6 +67,19 @@ Add to your Claude Code config:
 }
 ```
 
+## HTTP mode
+
+Shared Streamable HTTP transport for multi-agent sessions (stdio remains the default):
+
+```bash
+computer-mcp --http              # http://127.0.0.1:8806/mcp
+MCP_HTTP=1 computer-mcp          # same via env
+computer-mcp --http --port 9000    # override port
+```
+
+- Health: `GET http://127.0.0.1:8806/health` → `{"status":"ok","name":"computer"}`
+- MCP endpoint is also mounted on `computer-serve` at `/mcp`.
+
 **Available tools:**
 - `computer_run_task` — Run a full computer use task
 - `computer_screenshot` — Capture the screen

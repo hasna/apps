@@ -9,6 +9,7 @@ import { checkAction } from "../agent/safety.js";
 import { loadConfig } from "../lib/config.js";
 import { listSessions, getSession, getActionLogs, deleteSession, getStats } from "../db/index.js";
 import type { Provider, DriverAction } from "../types/index.js";
+import { handleMcpHttpRequest } from "../mcp/http.js";
 
 const PORT = parseInt(process.env.COMPUTER_PORT ?? "19450");
 
@@ -41,6 +42,9 @@ const server = Bun.serve({
     const corsHeaders = { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" };
 
     try {
+      const mcpResponse = await handleMcpHttpRequest(req);
+      if (mcpResponse) return mcpResponse;
+
       // POST /run — run a task
       if (method === "POST" && path === "/run") {
         const body = (await req.json()) as Record<string, any>;
@@ -111,7 +115,6 @@ const server = Bun.serve({
           { headers: corsHeaders }
         );
       }
-
       // Serve dashboard static files
       if (DASHBOARD_DIR && method === "GET" && (path.startsWith("/dashboard") || path === "/")) {
         if (path === "/" || path === "/dashboard" || path === "/dashboard/") {
