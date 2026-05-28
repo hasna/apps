@@ -3,6 +3,7 @@ import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 
 const CWD = join(import.meta.dir, "../..");
 
@@ -21,7 +22,7 @@ beforeAll(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), "todos-cli-qol-"));
   dbPath = join(tmpDir, "test.db");
   fakeHome = join(tmpDir, "home");
-  await mkdir(join(fakeHome, ".todos"), { recursive: true });
+  await mkdir(join(fakeHome, ".hasna", "todos"), { recursive: true });
 });
 
 afterAll(async () => {
@@ -29,6 +30,17 @@ afterAll(async () => {
 });
 
 describe("CLI QoL commands", () => {
+  it("config --set writes to ~/.hasna/todos/config.json", () => {
+    run("config --set cli_path_test=true");
+
+    const newConfigPath = join(fakeHome, ".hasna", "todos", "config.json");
+    const legacyConfigPath = join(fakeHome, ".todos", "config.json");
+    const config = JSON.parse(readFileSync(newConfigPath, "utf-8"));
+
+    expect(config.cli_path_test).toBe(true);
+    expect(existsSync(legacyConfigPath)).toBe(false);
+  });
+
   // ── count ──────────────────────────────────────────────────────
 
   it("count should return stats text", () => {

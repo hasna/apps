@@ -2,6 +2,9 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { getDatabase, closeDatabase, resetDatabase, resolvePartialId, isLockExpired, lockExpiryCutoff, clearExpiredLocks, now, uuid } from "./database.js";
 import { createTask, getTask } from "./tasks.js";
 import type { Database } from "bun:sqlite";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 let db: Database;
 
@@ -14,6 +17,149 @@ beforeEach(() => {
 afterEach(() => {
   closeDatabase();
   delete process.env["TODOS_DB_PATH"];
+  delete process.env["HASNA_TODOS_DB_PATH"];
+  delete process.env["TODOS_DB_SCOPE"];
+});
+
+describe("global database path", () => {
+  it("uses ~/.hasna/todos/todos.db when no global database exists", () => {
+    closeDatabase();
+    resetDatabase();
+    delete process.env["TODOS_DB_PATH"];
+
+    const originalHome = process.env["HOME"];
+    const originalCwd = process.cwd();
+    const tmp = join(tmpdir(), `todos-global-db-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const home = join(tmp, "home");
+    const cwd = join(tmp, "workspace");
+    mkdirSync(cwd, { recursive: true });
+
+    try {
+      process.env["HOME"] = home;
+      process.chdir(cwd);
+
+      const globalDb = getDatabase();
+      globalDb.close();
+      resetDatabase();
+
+      expect(existsSync(join(home, ".hasna", "todos", "todos.db"))).toBe(true);
+      expect(existsSync(join(home, ".todos", "todos.db"))).toBe(false);
+    } finally {
+      process.chdir(originalCwd);
+      if (originalHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = originalHome;
+      rmSync(tmp, { recursive: true, force: true });
+      resetDatabase();
+    }
+  });
+
+  it("uses ~/.hasna/todos/todos.db even when a legacy ~/.todos/todos.db exists", () => {
+    closeDatabase();
+    resetDatabase();
+    delete process.env["TODOS_DB_PATH"];
+
+    const originalHome = process.env["HOME"];
+    const originalCwd = process.cwd();
+    const tmp = join(tmpdir(), `todos-legacy-global-db-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const home = join(tmp, "home");
+    const cwd = join(tmp, "workspace");
+    const legacyDir = join(home, ".todos");
+    mkdirSync(cwd, { recursive: true });
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(legacyDir, "todos.db"), "");
+
+    try {
+      process.env["HOME"] = home;
+      process.chdir(cwd);
+
+      const globalDb = getDatabase();
+      globalDb.close();
+      resetDatabase();
+
+      expect(existsSync(join(home, ".hasna", "todos", "todos.db"))).toBe(true);
+      expect(existsSync(join(home, ".todos", "todos.db"))).toBe(true);
+    } finally {
+      process.chdir(originalCwd);
+      if (originalHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = originalHome;
+      rmSync(tmp, { recursive: true, force: true });
+      resetDatabase();
+    }
+  });
+
+  it("uses nearest project .hasna/todos/todos.db instead of the global database", () => {
+    closeDatabase();
+    resetDatabase();
+    delete process.env["TODOS_DB_PATH"];
+
+    const originalHome = process.env["HOME"];
+    const originalCwd = process.cwd();
+    const tmp = join(tmpdir(), `todos-project-db-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const home = join(tmp, "home");
+    const project = join(tmp, "workspace", "project");
+    const nested = join(project, "src");
+    const projectDbDir = join(project, ".hasna", "todos");
+    const projectDbPath = join(projectDbDir, "todos.db");
+    mkdirSync(join(project, ".git"), { recursive: true });
+    mkdirSync(nested, { recursive: true });
+    mkdirSync(projectDbDir, { recursive: true });
+    writeFileSync(projectDbPath, "");
+
+    try {
+      process.env["HOME"] = home;
+      process.chdir(nested);
+
+      const projectDb = getDatabase();
+      projectDb.close();
+      resetDatabase();
+
+      expect(existsSync(projectDbPath)).toBe(true);
+      expect(existsSync(join(home, ".hasna", "todos", "todos.db"))).toBe(false);
+      expect(existsSync(join(project, ".todos", "todos.db"))).toBe(false);
+    } finally {
+      process.chdir(originalCwd);
+      if (originalHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = originalHome;
+      rmSync(tmp, { recursive: true, force: true });
+      resetDatabase();
+    }
+  });
+
+  it("creates project-scoped database under the git root .hasna/todos directory", () => {
+    closeDatabase();
+    resetDatabase();
+    delete process.env["TODOS_DB_PATH"];
+
+    const originalHome = process.env["HOME"];
+    const originalCwd = process.cwd();
+    const tmp = join(tmpdir(), `todos-project-scope-db-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const home = join(tmp, "home");
+    const project = join(tmp, "workspace", "project");
+    const nested = join(project, "src");
+    mkdirSync(join(project, ".git"), { recursive: true });
+    mkdirSync(nested, { recursive: true });
+
+    try {
+      process.env["HOME"] = home;
+      process.env["TODOS_DB_SCOPE"] = "project";
+      process.chdir(nested);
+
+      const projectDb = getDatabase();
+      projectDb.close();
+      resetDatabase();
+
+      expect(existsSync(join(project, ".hasna", "todos", "todos.db"))).toBe(true);
+      expect(existsSync(join(project, ".todos", "todos.db"))).toBe(false);
+      expect(existsSync(join(home, ".hasna", "todos", "todos.db"))).toBe(false);
+    } finally {
+      process.chdir(originalCwd);
+      if (originalHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = originalHome;
+      delete process.env["TODOS_DB_SCOPE"];
+      rmSync(tmp, { recursive: true, force: true });
+      resetDatabase();
+    }
+  });
 });
 
 describe("resolvePartialId", () => {

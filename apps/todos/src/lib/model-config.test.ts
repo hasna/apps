@@ -51,3 +51,18 @@ describe("clearActiveModel", () => {
     expect(getActiveModel()).toBe(DEFAULT_MODEL);
   });
 });
+
+describe("model config path", () => {
+  it("writes active model config to ~/.hasna/todos even when legacy ~/.todos exists", () => {
+    const legacyDir = join(testHomeDir, ".todos");
+    const legacyConfigPath = join(legacyDir, "config.json");
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(legacyConfigPath, JSON.stringify({ activeModel: "ft:legacy-model" }));
+    if (existsSync(configPath)) rmSync(configPath);
+
+    setActiveModel("ft:new-model");
+
+    expect(existsSync(configPath)).toBe(true);
+    expect(getActiveModel()).toBe("ft:new-model");
+  });
+});

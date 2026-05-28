@@ -144,3 +144,56 @@ describe("getCompletionGuardConfig", () => {
     expect(config.window_minutes).toBe(10);
   });
 });
+
+describe("global config path", () => {
+  it("ignores legacy-only ~/.todos/config.json", () => {
+    const originalHome = process.env["HOME"];
+    const legacyHome = `/tmp/todos-test-legacy-config-home-${Date.now()}`;
+    const legacyConfigDir = join(legacyHome, ".todos");
+
+    try {
+      resetConfig();
+      rmSync(legacyHome, { recursive: true, force: true });
+      mkdirSync(legacyConfigDir, { recursive: true });
+      writeFileSync(join(legacyConfigDir, "config.json"), JSON.stringify({
+        sync_agents: ["legacy-agent"],
+      }));
+      process.env["HOME"] = legacyHome;
+
+      expect(getSyncAgentsFromConfig()).toBeNull();
+    } finally {
+      rmSync(legacyHome, { recursive: true, force: true });
+      if (originalHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = originalHome;
+      resetConfig();
+    }
+  });
+
+  it("prefers ~/.hasna/todos/config.json when both new and legacy configs exist", () => {
+    const originalHome = process.env["HOME"];
+    const bothHome = `/tmp/todos-test-both-config-home-${Date.now()}`;
+    const newConfigDir = join(bothHome, ".hasna", "todos");
+    const legacyConfigDir = join(bothHome, ".todos");
+
+    try {
+      resetConfig();
+      rmSync(bothHome, { recursive: true, force: true });
+      mkdirSync(newConfigDir, { recursive: true });
+      mkdirSync(legacyConfigDir, { recursive: true });
+      writeFileSync(join(newConfigDir, "config.json"), JSON.stringify({
+        sync_agents: ["new-agent"],
+      }));
+      writeFileSync(join(legacyConfigDir, "config.json"), JSON.stringify({
+        sync_agents: ["legacy-agent"],
+      }));
+      process.env["HOME"] = bothHome;
+
+      expect(getSyncAgentsFromConfig()).toEqual(["new-agent"]);
+    } finally {
+      rmSync(bothHome, { recursive: true, force: true });
+      if (originalHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = originalHome;
+      resetConfig();
+    }
+  });
+});
