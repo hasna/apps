@@ -2,21 +2,18 @@
 // Reads/writes ~/.hasna/todos/config.json to store the active fine-tuned model ID
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { getTodosGlobalDir } from "./sync-utils.js";
 
 export const DEFAULT_MODEL = "gpt-4o-mini";
 
-function getTodosGlobalDir(): string {
-  const home = homedir();
-  const newDir = join(home, ".hasna", "todos");
-  const legacyDir = join(home, ".todos");
-  if (!existsSync(newDir) && existsSync(legacyDir)) return legacyDir;
-  return newDir;
+function getConfigDir(): string {
+  return getTodosGlobalDir();
 }
 
-const CONFIG_DIR = getTodosGlobalDir();
-const CONFIG_PATH = join(CONFIG_DIR, "config.json");
+function getConfigPath(): string {
+  return join(getConfigDir(), "config.json");
+}
 
 interface ModelConfigJson {
   activeModel?: string;
@@ -24,9 +21,10 @@ interface ModelConfigJson {
 }
 
 function readConfig(): ModelConfigJson {
-  if (!existsSync(CONFIG_PATH)) return {};
+  const configPath = getConfigPath();
+  if (!existsSync(configPath)) return {};
   try {
-    const raw = readFileSync(CONFIG_PATH, "utf-8");
+    const raw = readFileSync(configPath, "utf-8");
     return JSON.parse(raw) as ModelConfigJson;
   } catch {
     return {};
@@ -34,10 +32,11 @@ function readConfig(): ModelConfigJson {
 }
 
 function writeConfig(config: ModelConfigJson): void {
-  if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
+  const configDir = getConfigDir();
+  if (!existsSync(configDir)) {
+    mkdirSync(configDir, { recursive: true });
   }
-  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  writeFileSync(getConfigPath(), JSON.stringify(config, null, 2) + "\n", "utf-8");
 }
 
 /**

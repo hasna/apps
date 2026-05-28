@@ -8,18 +8,10 @@ import {
   writeFileSync,
   readdirSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
-
-function getTodosGlobalDir(): string {
-  const home = homedir();
-  const newDir = join(home, ".hasna", "todos");
-  const legacyDir = join(home, ".todos");
-  if (!existsSync(newDir) && existsSync(legacyDir)) return legacyDir;
-  return newDir;
-}
 import chalk from "chalk";
 import { gatherTrainingData } from "../lib/gatherer.js";
+import { getTodosGlobalDir } from "../lib/sync-utils.js";
 import {
   getActiveModel,
   setActiveModel,

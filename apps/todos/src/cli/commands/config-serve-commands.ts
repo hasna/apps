@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { getDatabase } from "../../db/database.js";
 import { listTasks } from "../../db/tasks.js";
 import { loadConfig } from "../../lib/config.js";
+import { getTodosGlobalDir } from "../../lib/sync-utils.js";
 import { autoProject, output, formatTaskLine, normalizeStatus } from "../helpers.js";
 
 export function registerConfigServeCommands(program: Command) {
@@ -16,10 +17,7 @@ export function registerConfigServeCommands(program: Command) {
     .option("--set <key=value>", "Set a config value (e.g. completion_guard.enabled=true)")
     .action((opts) => {
       const globalOpts = program.opts();
-      const home = process.env["HOME"] || "~";
-      const newPath = join(home, ".hasna", "todos", "config.json");
-      const legacyPath = join(home, ".todos", "config.json");
-      const configPath = (!existsSync(newPath) && existsSync(legacyPath)) ? legacyPath : newPath;
+      const configPath = join(getTodosGlobalDir(), "config.json");
 
       if (opts.get) {
         const config = loadConfig();

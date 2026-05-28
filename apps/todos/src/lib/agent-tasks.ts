@@ -3,10 +3,10 @@ import { join } from "node:path";
 import { listTasks, getTask, createTask, updateTask } from "../db/tasks.js";
 import type { Task, TaskPriority, TaskStatus } from "../types/index.js";
 import {
-  HOME,
   appendSyncConflict,
   ensureDir,
   getFileMtimeMs,
+  getTodosGlobalDir,
   listJsonFiles,
   parseTimestamp,
   readHighWaterMark,
@@ -26,13 +26,6 @@ interface AgentTask {
   assigned_to: string;
   tags: string[];
   metadata: Record<string, unknown>;
-}
-
-function getTodosGlobalDir(): string {
-  const newDir = join(HOME, ".hasna", "todos");
-  const legacyDir = join(HOME, ".todos");
-  if (!existsSync(newDir) && existsSync(legacyDir)) return legacyDir;
-  return newDir;
 }
 
 function agentBaseDir(agent: string): string {

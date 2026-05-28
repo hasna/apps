@@ -555,7 +555,8 @@ export function registerQueryCommands(program: Command) {
         const row = db.query("SELECT COUNT(*) as count FROM tasks").get() as { count: number };
         const { statSync } = await import("node:fs");
         const { join } = await import("node:path");
-        const dbPath = process.env["TODOS_DB_PATH"] || join(process.env["HOME"] || "~", ".todos", "todos.db");
+        const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
+        const dbPath = process.env["HASNA_TODOS_DB_PATH"] || process.env["TODOS_DB_PATH"] || join(home, ".hasna", "todos", "todos.db");
         let size = "unknown";
         try { size = `${(statSync(dbPath).size / 1024 / 1024).toFixed(1)} MB`; } catch {}
         checks.push({ name: "Database", ok: true, message: `${row.count} tasks · ${size} · ${chalk.dim(dbPath)}` });

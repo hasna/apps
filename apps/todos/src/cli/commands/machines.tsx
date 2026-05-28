@@ -23,7 +23,7 @@ function getOrCreateLocalMachineName(): string {
 function findRemoteDbPath(sshAddress: string): string | null {
   try {
     const result = execSync(
-      `ssh ${sshAddress} 'find ~ -name "todos.db" -path "*/.todos/*" 2>/dev/null | head -1'`,
+      `ssh ${sshAddress} 'if [ -f ~/.hasna/todos/todos.db ]; then printf "%s\\n" "$HOME/.hasna/todos/todos.db"; else find ~ -path "*/.hasna/todos/todos.db" 2>/dev/null | head -1; fi'`,
       { encoding: "utf-8", timeout: 10000 },
     ).trim();
     return result || null;

@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { HOME, readJsonFile } from "./sync-utils.js";
+import { getTodosGlobalDir, readJsonFile } from "./sync-utils.js";
 
 export interface AgentConfig {
   task_list_id?: string;
@@ -36,17 +36,6 @@ export interface TodosConfig {
   agent_pool?: string[];
   /** Per-project agent name pools, keyed by working directory path prefix. */
   project_pools?: Record<string, string[]>;
-}
-
-function getTodosGlobalDir(): string {
-  const home = process.env["HOME"] || HOME;
-  const newDir = join(home, ".hasna", "todos");
-  const legacyDir = join(home, ".todos");
-  // Prefer legacy dir if it has the config file and new dir doesn't
-  const newConfig = join(newDir, "config.json");
-  const legacyConfig = join(legacyDir, "config.json");
-  if (!existsSync(newConfig) && existsSync(legacyConfig)) return legacyDir;
-  return newDir;
 }
 
 function getConfigPath(): string {

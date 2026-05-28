@@ -4,6 +4,14 @@ import type { SyncConflict } from "./sync-types.js";
 
 export const HOME = process.env["HOME"] || process.env["USERPROFILE"] || "~";
 
+export function getHomeDir(): string {
+  return process.env["HOME"] || process.env["USERPROFILE"] || "~";
+}
+
+export function getTodosGlobalDir(): string {
+  return join(getHomeDir(), ".hasna", "todos");
+}
+
 export function ensureDir(dir: string): void {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 }

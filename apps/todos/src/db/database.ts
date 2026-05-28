@@ -10,11 +10,14 @@ function isInMemoryDb(path: string): boolean {
   return path === ":memory:" || path.startsWith("file::memory:");
 }
 
-function findNearestTodosDb(startDir: string): string | null {
+function findNearestProjectDb(startDir: string): string | null {
+  const gitRoot = findGitRoot(startDir);
+  const stopAt = gitRoot ? resolve(gitRoot) : resolve(startDir);
   let dir = resolve(startDir);
   while (true) {
-    const candidate = join(dir, ".todos", "todos.db");
+    const candidate = join(dir, ".hasna", "todos", "todos.db");
     if (existsSync(candidate)) return candidate;
+    if (dir === stopAt) break;
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
@@ -42,30 +45,22 @@ function getDbPath(): string {
     return process.env["TODOS_DB_PATH"];
   }
 
-  // 2. Per-project: .todos/todos.db in cwd or any parent (incl. repo root)
+  // 2. Per-project: .hasna/todos/todos.db in cwd or any parent (incl. repo root)
   const cwd = process.cwd();
-  const nearest = findNearestTodosDb(cwd);
+  const nearest = findNearestProjectDb(cwd);
   if (nearest) return nearest;
 
   // 3. Explicit project scope (force repo root)
   if (process.env["TODOS_DB_SCOPE"] === "project") {
     const gitRoot = findGitRoot(cwd);
     if (gitRoot) {
-      return join(gitRoot, ".todos", "todos.db");
+      return join(gitRoot, ".hasna", "todos", "todos.db");
     }
   }
 
-  // 4. Default: ~/.hasna/todos/todos.db (with backward compat for ~/.todos/)
+  // 4. Default: ~/.hasna/todos/todos.db
   const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
-  const newPath = join(home, ".hasna", "todos", "todos.db");
-  const legacyPath = join(home, ".todos", "todos.db");
-
-  // Use legacy DB if it exists and new one doesn't yet (backward compat)
-  if (!existsSync(newPath) && existsSync(legacyPath)) {
-    return legacyPath;
-  }
-
-  return newPath;
+  return join(home, ".hasna", "todos", "todos.db");
 }
 
 function ensureDir(filePath: string): void {
