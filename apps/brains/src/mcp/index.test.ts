@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createMcpServer, MCP_SERVER_INFO } from "./index.js";
+import { createMcpServer, buildServer, MCP_SERVER_INFO } from "./index.js";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 
@@ -13,7 +13,12 @@ describe("MCP server", () => {
     expect(MCP_SERVER_INFO.name).toBe("brains");
   });
 
-  test("createMcpServer returns a server instance", () => {
+  test("buildServer returns a server instance", () => {
+    const server = buildServer();
+    expect(server).toBeDefined();
+  });
+
+  test("createMcpServer alias returns a server instance", () => {
     const server = createMcpServer();
     expect(server).toBeDefined();
   });

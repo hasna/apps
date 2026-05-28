@@ -20,6 +20,7 @@ import type { TrainingExample } from "../lib/gatherers/types.js";
 import { getPackageVersion } from "../lib/package-metadata.js";
 import { McpGatherSchema, McpFinetuneStartSchema, McpFinetuneStatusSchema } from "../lib/schemas.js";
 import { registerCloudTools, sendFeedback } from "@hasna/cloud";
+import { isHttpMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 
 // --- helpers ---
 
@@ -58,7 +59,7 @@ export const MCP_SERVER_INFO = {
   version: getPackageVersion(),
 } as const;
 
-export function createMcpServer() {
+export function buildServer() {
   // Fellow agents: keep MCP/server versioning sourced from package.json to avoid publish drift.
   const server = new Server(MCP_SERVER_INFO, { capabilities: { tools: {} } });
 
@@ -550,22 +551,73 @@ export function createMcpServer() {
     }
   });
 
-  return server;
-}
-
-export async function startMcpServer(transport = new StdioServerTransport()) {
-  const server = createMcpServer();
-  // registerCloudTools expects FastMCP's server.tool() API, but we use the low-level Server class.
-  // Skip cloud tools registration until @hasna/cloud supports the low-level Server API.
   try {
     registerCloudTools(server as any, "brains");
   } catch {
     // Cloud tools not compatible with low-level Server — silently skip
   }
+
+  return server;
+}
+
+/** @deprecated Use buildServer() */
+export const createMcpServer = buildServer;
+
+function hasFlag(...flags: string[]): boolean {
+  return process.argv.some((arg) => flags.includes(arg));
+}
+
+function printHelp(): void {
+  process.stdout.write(
+    `Usage: brains-mcp [options]
+
+Brains MCP server (stdio transport by default)
+
+Options:
+  --http           Serve MCP over Streamable HTTP (127.0.0.1)
+  --port <number>  HTTP port (default: 8801, env: MCP_HTTP_PORT)
+  -h, --help       Show help
+  -V, --version    Show version
+`,
+  );
+}
+
+export async function startMcpServer(transport = new StdioServerTransport()) {
+  const server = buildServer();
   await server.connect(transport);
   return server;
 }
 
-if (import.meta.main) {
+async function main(): Promise<void> {
+  if (hasFlag("--help", "-h")) {
+    printHelp();
+    return;
+  }
+
+  if (hasFlag("--version", "-V")) {
+    process.stdout.write(`${MCP_SERVER_INFO.version}\n`);
+    return;
+  }
+
+  if (isHttpMode()) {
+    const handle = await startMcpHttpServer(buildServer, {
+      port: resolveMcpHttpPort(),
+    });
+    process.on("SIGINT", () => {
+      void handle.close().finally(() => process.exit(0));
+    });
+    process.on("SIGTERM", () => {
+      void handle.close().finally(() => process.exit(0));
+    });
+    return;
+  }
+
   await startMcpServer();
+}
+
+if (import.meta.main) {
+  main().catch((error) => {
+    console.error("MCP server error:", error);
+    process.exit(1);
+  });
 }
