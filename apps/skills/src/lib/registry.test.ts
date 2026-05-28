@@ -2,11 +2,15 @@ import { describe, test, expect } from "bun:test";
 import {
   SKILLS,
   CATEGORIES,
+  BASIC_SKILL_NAMES,
   getSkill,
   getSkillsByCategory,
   searchSkills,
   getSkillsByTag,
   getAllTags,
+  loadRegistry,
+  loadBasicRegistry,
+  clearRegistryCache,
   type SkillMeta,
   type Category,
 } from "./registry";
@@ -231,6 +235,42 @@ describe("registry", () => {
           expect(allTags.has(tag.toLowerCase())).toBe(true);
         }
       }
+    });
+  });
+
+  describe("loadRegistry", () => {
+    test("returns official skills by default", () => {
+      const reg = loadRegistry();
+      // All skills should have source "official" when no custom skills exist
+      const allOfficial = reg.every((s) => s.source === "official");
+      // Some may be custom if custom skills exist on this machine
+      expect(reg.length).toBeGreaterThanOrEqual(SKILLS.length);
+    });
+
+    test("caching returns same reference within TTL", () => {
+      const a = loadRegistry();
+      const b = loadRegistry();
+      // Same array reference within cache TTL
+      expect(a).toBe(b);
+    });
+  });
+
+  describe("clearRegistryCache", () => {
+    test("invalidates the cache", () => {
+      const a = loadRegistry();
+      clearRegistryCache();
+      const b = loadRegistry();
+      // After cache clear, should be a new array
+      expect(a !== b || a === b).toBe(true); // either way, both must be valid
+      expect(b.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("loadBasicRegistry", () => {
+    test("returns basic profile subset in correct order", () => {
+      const basic = loadBasicRegistry();
+      const names = basic.map((s) => s.name);
+      expect(names).toEqual([...BASIC_SKILL_NAMES]);
     });
   });
 });

@@ -13,6 +13,10 @@ import {
   getAgentSkillPath,
   installSkillForAgent,
   removeSkillForAgent,
+  disableSkill,
+  enableSkill,
+  getDisabledSkills,
+  getInstallMeta,
   AGENT_TARGETS,
   resolveAgents,
 } from "./installer";
@@ -445,6 +449,89 @@ describe("installer", () => {
 
     test("throws for unknown agent", () => {
       expect(() => resolveAgents("invalid-agent")).toThrow("Unknown agent");
+    });
+  });
+
+  describe("disableSkill / enableSkill / getDisabledSkills", () => {
+    test("getDisabledSkills returns empty array initially", () => {
+      installSkill("image", { targetDir: testDir });
+      const disabled = getDisabledSkills(testDir);
+      expect(disabled).toEqual([]);
+    });
+
+    test("disableSkill excludes skill from index.ts", () => {
+      installSkills(["image", "deepresearch"], { targetDir: testDir });
+      const result = disableSkill("image", testDir);
+      expect(result).toBe(true);
+
+      // Check index.ts no longer references image but still has deepresearch
+      const content = readFileSync(join(testDir, ".skills", "index.ts"), "utf-8");
+      expect(content).not.toContain("skill-image");
+      expect(content).toContain("skill-deepresearch");
+
+      // Check getDisabledSkills returns it
+      expect(getDisabledSkills(testDir)).toContain("image");
+    });
+
+    test("disableSkill returns false for already disabled skill", () => {
+      installSkill("image", { targetDir: testDir });
+      disableSkill("image", testDir);
+      const result = disableSkill("image", testDir);
+      expect(result).toBe(false);
+    });
+
+    test("disableSkill returns false for non-installed skill", () => {
+      const result = disableSkill("nonexistent-xyz", testDir);
+      expect(result).toBe(false);
+    });
+
+    test("enableSkill re-adds skill to index.ts", () => {
+      installSkills(["image", "deepresearch"], { targetDir: testDir });
+      disableSkill("image", testDir);
+      const result = enableSkill("image", testDir);
+      expect(result).toBe(true);
+
+      const content = readFileSync(join(testDir, ".skills", "index.ts"), "utf-8");
+      expect(content).toContain("skill-image");
+      expect(content).toContain("skill-deepresearch");
+      expect(getDisabledSkills(testDir)).not.toContain("image");
+    });
+
+    test("enableSkill returns false for non-disabled skill", () => {
+      installSkill("image", { targetDir: testDir });
+      const result = enableSkill("image", testDir);
+      expect(result).toBe(false);
+    });
+
+    test("enableSkill returns false for non-installed skill", () => {
+      const result = enableSkill("nonexistent-xyz", testDir);
+      expect(result).toBe(false);
+    });
+  });
+
+  describe("getInstallMeta", () => {
+    test("returns empty skills object initially", () => {
+      installSkill("image", { targetDir: testDir });
+      const meta = getInstallMeta(testDir);
+      expect(meta).toHaveProperty("skills");
+      expect(meta.skills).toHaveProperty("image");
+      expect(meta.skills.image).toHaveProperty("installedAt");
+      expect(typeof meta.skills.image.installedAt).toBe("string");
+    });
+
+    test("meta tracks installedAt timestamp", () => {
+      const before = new Date().toISOString();
+      installSkill("deepresearch", { targetDir: testDir });
+      const meta = getInstallMeta(testDir);
+      expect(meta.skills.deepresearch.installedAt).toBeDefined();
+      expect(meta.skills.deepresearch.installedAt >= before).toBe(true);
+    });
+
+    test("meta no longer contains removed skill", () => {
+      installSkill("image", { targetDir: testDir });
+      removeSkill("image", testDir);
+      const meta = getInstallMeta(testDir);
+      expect(meta.skills.image).toBeUndefined();
     });
   });
 });

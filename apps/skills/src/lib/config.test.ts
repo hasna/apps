@@ -6,7 +6,7 @@ import { tmpdir } from "os";
 // We test the module functions by importing them and overriding cwd/homedir behavior
 // via temp directories and direct file manipulation.
 
-import { loadConfig, saveConfig, getConfigPath, type SkillsConfig, type ConfigScope } from "./config";
+import { loadConfig, saveConfig, getConfigPath, getDataDir, type SkillsConfig, type ConfigScope } from "./config";
 
 describe("config", () => {
   let tmpDir: string;
@@ -85,6 +85,18 @@ describe("config", () => {
       expect(config.defaultAgent).toBe("gemini");
       expect(config.defaultScope).toBe("project");
       expect(config.format).toBe("csv");
+    });
+  });
+
+  describe("getDataDir", () => {
+    test("returns path inside ~/.hasna/skills/", () => {
+      const dir = getDataDir();
+      expect(dir).toContain(join(".hasna", "skills"));
+    });
+
+    test("directory exists after call", () => {
+      const dir = getDataDir();
+      expect(existsSync(dir)).toBe(true);
     });
   });
 
