@@ -98,19 +98,20 @@ if (args[0] === "prune") {
 if (args[0] === "mcp") {
   if (args[1] === "serve" || args.length === 1 || (args[1]?.startsWith("--"))) {
     const mcpArgs = args.slice(1);
-    const { isHttpMode, resolveMcpHttpPort, startMcpHttpServer } = await import("./mcp/http.js");
-    if (isHttpMode(mcpArgs)) {
+    const { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } = await import("./mcp/http.js");
+    if (isStdioMode(mcpArgs)) {
+      const { startMcpServer } = await import("./mcp/server.js");
+      startMcpServer().catch((err) => {
+        console.error("MCP server error:", err);
+        process.exit(1);
+      });
+    } else {
+      // Default: shared Streamable HTTP server (one process per MCP, many agents).
       const { createServer } = await import("./mcp/server.js");
       startMcpHttpServer({
         name: "terminal",
         port: resolveMcpHttpPort(mcpArgs),
         buildServer: createServer,
-      });
-    } else {
-      const { startMcpServer } = await import("./mcp/server.js");
-      startMcpServer().catch((err) => {
-        console.error("MCP server error:", err);
-        process.exit(1);
       });
     }
   } else if (args[1] === "install") {
