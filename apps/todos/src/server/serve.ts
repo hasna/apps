@@ -231,6 +231,18 @@ export async function startServer(port: number, options?: { open?: boolean; host
 
       const jsonWithCors = (data: unknown, status = 200) => json(data, status, corsHeaders);
 
+      // ── MCP Streamable HTTP (shared long-lived server) ──
+      if (path === "/health" && method === "GET") {
+        const { healthResponse } = await import("../mcp/http.js");
+        return healthResponse("todos");
+      }
+
+      if (path === "/mcp") {
+        const { handleMcpHttpRequest } = await import("../mcp/http.js");
+        const { buildServer } = await import("../mcp/index.js");
+        return handleMcpHttpRequest(req, buildServer);
+      }
+
       // ── CORS ──
       if (method === "OPTIONS") {
         return new Response(null, {

@@ -48,12 +48,6 @@ if (hasVersionFlag()) {
   process.exit(0);
 }
 
-const server = new McpServer({
-  name: "todos",
-  version: getMcpVersion(),
-});
-installMcpTokenDiagnostics(server);
-
 // === PROFILE FILTERING ===
 
 function shouldRegisterTool(name: string): boolean {
@@ -201,16 +195,23 @@ function formatTaskDetail(task: Task, maxDescriptionChars?: number): string {
 
 // === REGISTER ALL TOOLS ===
 
-const toolContext = {
-  shouldRegisterTool,
-  resolveId,
-  formatError,
-  formatTask,
-  formatTaskDetail,
-  getAgentFocus,
-};
+export function buildServer() {
+  const server = new McpServer({
+    name: "todos",
+    version: getMcpVersion(),
+  });
+  installMcpTokenDiagnostics(server);
 
-registerTaskCrudTools(server, toolContext);
+  const toolContext = {
+    shouldRegisterTool,
+    resolveId,
+    formatError,
+    formatTask,
+    formatTaskDetail,
+    getAgentFocus,
+  };
+
+  registerTaskCrudTools(server, toolContext);
 registerTaskProjectTools(server, toolContext);
 registerTaskWorkflowTools(server, toolContext);
 registerTaskAutoTools(server, toolContext);
@@ -232,18 +233,37 @@ registerMachineTools(server, { shouldRegisterTool, formatError });
 
 registerDispatchTools(server, { shouldRegisterTool, resolveId, formatError });
 
+  return server;
+}
+
 // === START SERVER ===
 
 async function main() {
+  const { isHttpMode, resolveHttpPort } = await import("./http.js");
+  if (isHttpMode()) {
+    const { startServer } = await import("../server/serve.js");
+    const port = resolveHttpPort();
+    await startServer(port, { open: false, host: "127.0.0.1" });
+    console.error(`todos MCP HTTP mounted at http://127.0.0.1:${port}/mcp`);
+    return;
+  }
+
+  const server = buildServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
 
-main().catch(async (err) => {
-  console.error("MCP server error:", err);
-  await logError(`MCP server startup failed: ${err instanceof Error ? err.message : String(err)}`, {
-    service: "mcp",
-    stack: err instanceof Error ? err.stack : undefined,
-  }).catch(() => {});
-  process.exit(1);
-});
+const isDirectRun = import.meta.main
+  || process.argv[1]?.endsWith("/mcp/index.ts")
+  || process.argv[1]?.endsWith("/mcp/index.js");
+
+if (isDirectRun) {
+  main().catch(async (err) => {
+    console.error("MCP server error:", err);
+    await logError(`MCP server startup failed: ${err instanceof Error ? err.message : String(err)}`, {
+      service: "mcp",
+      stack: err instanceof Error ? err.stack : undefined,
+    }).catch(() => {});
+    process.exit(1);
+  });
+}

@@ -1221,6 +1221,19 @@ indexes, and tightening database file permissions.
 todos-mcp
 ```
 
+## HTTP mode
+
+Shared Streamable HTTP transport for long-lived local MCP (stdio remains the default). MCP is mounted on the existing `todos-serve` HTTP server — no second server:
+
+```bash
+todos-mcp --http              # starts todos-serve with MCP mounted; or MCP_HTTP=1
+todos serve --port 8842       # default MCP HTTP port 8842
+```
+
+- Bind: `127.0.0.1` only
+- Health: `GET /health` → `{"status":"ok","name":"todos"}`
+- MCP: `POST /mcp` on the same server as the dashboard/API (Streamable HTTP, stateless)
+
 The MCP server defaults to the token-saving `TODOS_PROFILE=minimal` profile.
 Use `TODOS_PROFILE=standard` for broader task/project/resource tools, or
 `TODOS_PROFILE=full` when you explicitly need every tool. You can add groups
