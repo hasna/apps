@@ -82,7 +82,12 @@ export function registerCloudSyncTools(server: McpServer): void {
           `RDS Host: ${config.rds.host || "(not configured)"}`,
         ];
 
-        if (config.rds.host && config.rds.username) {
+        // In local mode, completely bypass any PostgreSQL operations
+        if (config.mode === "local") {
+          lines.push("PostgreSQL: skipped in local mode");
+        }
+        // Only attempt PostgreSQL connection if not in local mode and RDS is configured
+        else if (config.rds.host && config.rds.username) {
           try {
             const pg = new PgAdapterAsync(getConnectionString("postgres"));
             await pg.get("SELECT 1 as ok");
