@@ -81,7 +81,7 @@ src/db/        → SQLite data layer
 src/lib/       → Business logic
                  search.ts     — full-text search across task fields
                  sync.ts       — bidirectional sync with agent task lists
-                 config.ts     — config loading (~/.todos/config.json)
+                 config.ts     — config loading (~/.hasna/todos/config.json)
                  claude-tasks.ts — Claude Code task list sync
                  agent-tasks.ts  — Other agent task list sync
 src/cli/       → Commander.js CLI (index.tsx) + React/Ink TUI components (components/)
@@ -140,7 +140,7 @@ bun:sqlite with WAL mode, foreign keys enabled, 5-second busy timeout.
 
 **Schema migrations** (13 total) are version-tracked in a `_migrations` table with forward-only upgrades applied in `getDatabase()`. Migration 5+ uses `ensureTableMigrations()` for backward compatibility with databases that had old SaaS migration IDs.
 
-**Location priority**: `TODOS_DB_PATH` env var → `.todos/todos.db` in cwd → `~/.todos/todos.db` global.
+**Location priority**: `HASNA_TODOS_DB_PATH` env var → `TODOS_DB_PATH` env var → `.hasna/todos/todos.db` in cwd → `~/.hasna/todos/todos.db` global.
 
 **Core tables**: `projects`, `tasks`, `task_lists`, `agents`, `plans`, `task_dependencies`, `task_comments`, `task_tags`, `sessions`.
 
