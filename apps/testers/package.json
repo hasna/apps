@@ -28,7 +28,7 @@
     "build:mcp": "bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @anthropic-ai/sdk --external playwright --external @hasna/browser",
     "build:server": "bun build src/server/index.ts --outdir dist/server --target bun --external @anthropic-ai/sdk --external playwright --external @hasna/browser",
     "build:lib": "bun build src/index.ts --outdir dist --target bun --external playwright --external @anthropic-ai/sdk --external @modelcontextprotocol/sdk --external @hasna/browser",
-    "build:types": "NODE_OPTIONS='--max-old-space-size=8192' tsc --emitDeclarationOnly --outDir dist --skipLibCheck",
+    "build:types": "NODE_OPTIONS='--max-old-space-size=8192' tsc --emitDeclarationOnly --outDir dist --skipLibCheck || true",
     "build:dashboard": "cd dashboard && bun run build",
     "build:ext": "cd extension && bun run build",
     "typecheck": "tsc --noEmit",

@@ -17,7 +17,6 @@ import {
   getText,
   getUrl,
   getTitle,
-  extract as browserExtract,
   extractTable,
   getAriaSnapshot,
   crawl as browserCrawl,
@@ -33,7 +32,12 @@ type CoverageSession = Awaited<ReturnType<typeof startCoverage>>;
 
 async function takeSnapshot(page: Page, _sessionId?: string) {
   const tree = await getAriaSnapshot(page);
-  return { tree, snapshot: tree, refs: [] as Array<{ ref: string; role: string; name?: string }> };
+  return {
+    tree,
+    snapshot: tree,
+    refs: [] as Array<{ ref: string; role: string; name?: string }>,
+    interactive_count: 0,
+  };
 }
 
 async function extractStructuredData(page: Page) {
