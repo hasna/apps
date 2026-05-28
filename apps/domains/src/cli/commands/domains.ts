@@ -13,7 +13,12 @@ import {
   whoisLookup,
   checkSsl,
   exportPortfolio,
+  getDomainByName,
 } from "../../db/domains.js";
+import { listDnsRecords } from "../../db/dns-records.js";
+import { validateDns } from "../../db/dns-tools.js";
+import { getDomainReputationByName } from "../../db/domain-reputation.js";
+import { listDomainOffers } from "../../db/domain-records.js";
 import { writeFileSync } from "node:fs";
 
 export function registerDomainCommands(program: Command): void {
@@ -267,11 +272,19 @@ export function registerDomainCommands(program: Command): void {
         if (opts.json) {
           console.log(JSON.stringify(result, null, 2));
         } else {
-          console.log(`WHOIS for ${result.domain}:`);
+          console.log(`WHOIS for ${result.domain} [${result.source}]:`);
           console.log(`  Registrar: ${result.registrar || "unknown"}`);
           console.log(`  Expires: ${result.expires_at || "unknown"}`);
           if (result.nameservers.length > 0) {
             console.log(`  Nameservers: ${result.nameservers.join(", ")}`);
+          }
+          const r = result.registrant;
+          if (r?.name || r?.email || r?.organization) {
+            console.log(`  Registrant:`);
+            if (r.name) console.log(`    Name: ${r.name}`);
+            if (r.email) console.log(`    Email: ${r.email}`);
+            if (r.phone) console.log(`    Phone: ${r.phone}`);
+            if (r.organization) console.log(`    Org: ${r.organization}`);
           }
         }
       } catch (error: unknown) {
@@ -350,4 +363,210 @@ export function registerDomainCommands(program: Command): void {
         console.log(`\nChecked ${results.length} domain(s)`);
       }
     });
+
+  // ── Compare two domains side-by-side ────────────────────────────────────
+  program
+    .command("compare")
+    .description("Compare two domains side-by-side")
+    .argument("<name1>", "First domain name or ID")
+    .argument("<name2>", "Second domain name or ID")
+    .option("--json", "Output as JSON", false)
+    .action((name1, name2, opts) => {
+      const domain1 = resolveDomain(name1);
+      const domain2 = resolveDomain(name2);
+
+      if (!domain1) {
+        console.error(`Domain '${name1}' not found.`);
+        process.exit(1);
+      }
+      if (!domain2) {
+        console.error(`Domain '${name2}' not found.`);
+        process.exit(1);
+      }
+
+      const dns1 = listDnsRecords(domain1.id);
+      const dns2 = listDnsRecords(domain2.id);
+      const rep1 = getDomainReputationByName(domain1.name);
+      const rep2 = getDomainReputationByName(domain2.name);
+      const offers1 = listDomainOffers(domain1.id);
+      const offers2 = listDomainOffers(domain2.id);
+
+      if (opts.json) {
+        console.log(JSON.stringify(
+          {
+            domain1: { ...domain1, dns_records: dns1, reputation: rep1, offers: offers1 },
+            domain2: { ...domain2, dns_records: dns2, reputation: rep2, offers: offers2 },
+          },
+          null,
+          2,
+        ));
+      } else {
+        const fields: { label: string; key: string }[] = [
+          { label: "Name", key: "name" },
+          { label: "Registrar", key: "registrar" },
+          { label: "Status", key: "status" },
+          { label: "Registered", key: "registered_at" },
+          { label: "Expires", key: "expires_at" },
+          { label: "Auto-renew", key: "auto_renew" },
+          { label: "Premium", key: "is_premium" },
+          { label: "SSL Issuer", key: "ssl_issuer" },
+          { label: "SSL Expires", key: "ssl_expires_at" },
+          { label: "DNS Records", key: "_dns_count" },
+          { label: "Blacklisted", key: "_blacklisted" },
+          { label: "Offers", key: "_offers_count" },
+        ];
+
+        const maxLabelLen = Math.max(...fields.map((f) => f.label.length));
+
+        const val = (d: any, key: string) => {
+          if (key === "_dns_count") return String((d === domain1 ? dns1 : dns2).length);
+          if (key === "_blacklisted") return String((d === domain1 ? rep1 : rep2)?.is_blacklisted ?? false);
+          if (key === "_offers_count") return String((d === domain1 ? offers1 : offers2).length);
+          if (key === "auto_renew") return d[key] ? "yes" : "no";
+          if (key === "is_premium") return d[key] ? "yes" : "no";
+          return d[key] || "—";
+        };
+
+        console.log(
+          `  ${" ".repeat(maxLabelLen)}  ${domain1.name.padEnd(Math.max(domain1.name.length, 25))}  ${domain2.name}`,
+        );
+        console.log(`  ${"─".repeat(maxLabelLen)}  ${"─".repeat(Math.max(domain1.name.length, 25))}  ${"─".repeat(domain2.name.length)}`);
+
+        for (const f of fields) {
+          const v1 = val(domain1, f.key);
+          const v2 = val(domain2, f.key);
+          const mismatch = v1 !== v2 ? " *" : "";
+          console.log(
+            `  ${f.label.padEnd(maxLabelLen)}  ${v1.padEnd(Math.max(domain1.name.length, 25))}  ${v2}${mismatch}`,
+          );
+        }
+        console.log("\n  * = values differ");
+      }
+    });
+
+  // ── Renew all domains ───────────────────────────────────────────────────
+  program
+    .command("renew")
+    .description("Renew a single domain or all domains with a registrar")
+    .option("--all", "Renew all domains that have a registrar configured", false)
+    .option("--dry-run", "Show what would be renewed without executing", false)
+    .option("--json", "Output as JSON", false)
+    .argument("[id]", "Domain ID to renew (required without --all)")
+    .action(async (id, opts) => {
+      if (opts.all) {
+        await renewAllDomains(opts);
+      } else if (!id) {
+        console.error("Provide a domain ID or use --all to renew all domains.");
+        process.exit(1);
+      } else {
+        await renewSingleDomain(id, opts);
+      }
+    });
+}
+
+function resolveDomain(input: string) {
+  // Try as ID first, then as name
+  let domain = getDomain(input);
+  if (!domain) {
+    domain = getDomainByName(input);
+  }
+  return domain;
+}
+
+async function renewAllDomains(opts: { dryRun?: boolean; json?: boolean }) {
+  const domains = listDomains().filter((d) => d.registrar && d.status !== "transferring");
+  if (domains.length === 0) {
+    console.log("No domains with a registrar to renew.");
+    return;
+  }
+
+  const { autoDetectRegistrar, getRegistrarProvider } = await import("../../lib/registrar.js");
+  const results: { domain: string; registrar: string; success: boolean; error?: string }[] = [];
+
+  for (const d of domains) {
+    const providerName = autoDetectRegistrar(d.name, getDomainByName);
+    if (!providerName) {
+      results.push({ domain: d.name, registrar: d.registrar!, success: false, error: "Unknown registrar provider" });
+      continue;
+    }
+    if (opts.dryRun) {
+      results.push({ domain: d.name, registrar: providerName, success: true });
+      continue;
+    }
+
+    try {
+      const provider = getRegistrarProvider(providerName);
+      const renewResult = await provider.renewDomain(d.name);
+      results.push({
+        domain: d.name,
+        registrar: providerName,
+        success: renewResult.success,
+        error: renewResult.success ? undefined : "Renewal failed",
+      });
+    } catch (error: unknown) {
+      results.push({
+        domain: d.name,
+        registrar: providerName,
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  if (opts.json) {
+    console.log(JSON.stringify(results, null, 2));
+  } else {
+    const ok = results.filter((r) => r.success).length;
+    const fail = results.filter((r) => !r.success).length;
+    if (opts.dryRun) {
+      console.log(`Would renew ${results.length} domain(s):`);
+    } else {
+      console.log(`Renewed ${ok} domain(s), ${fail} failed:`);
+    }
+    for (const r of results) {
+      console.log(`  ${r.domain} (${r.registrar}): ${r.success ? "OK" : `FAILED — ${r.error}`}`);
+    }
+  }
+}
+
+async function renewSingleDomain(id: string, opts: { dryRun?: boolean; json?: boolean }) {
+  const domain = getDomain(id);
+  if (!domain) {
+    console.error(`Domain '${id}' not found.`);
+    process.exit(1);
+  }
+  if (!domain.registrar) {
+    console.error(`Domain '${domain.name}' has no registrar set.`);
+    process.exit(1);
+  }
+
+  const { autoDetectRegistrar, getRegistrarProvider } = await import("../../lib/registrar.js");
+  const providerName = autoDetectRegistrar(domain.name, getDomainByName);
+  if (!providerName) {
+    console.error(`Could not detect registrar provider for '${domain.registrar}'`);
+    process.exit(1);
+  }
+
+  if (opts.dryRun) {
+    console.log(`Would renew ${domain.name} via ${providerName}`);
+    return;
+  }
+
+  try {
+    const provider = getRegistrarProvider(providerName);
+    const result = await provider.renewDomain(domain.name);
+    if (opts.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else if (result.success) {
+      console.log(`Renewed ${domain.name} via ${providerName}`);
+      if (result.chargedAmount) console.log(`  Charged: ${result.chargedAmount}`);
+      if (result.orderId) console.log(`  Order: ${result.orderId}`);
+    } else {
+      console.error(`Failed to renew ${domain.name}`);
+      process.exit(1);
+    }
+  } catch (error: unknown) {
+    console.error(`Renewal failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
 }

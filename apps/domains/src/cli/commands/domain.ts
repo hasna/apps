@@ -326,10 +326,18 @@ export function registerDomainCommand(program: Command): void {
     .action((name: string, opts: { json?: boolean }) => {
       const result = whoisLookup(name);
       if (opts.json) { console.log(JSON.stringify(result, null, 2)); return; }
-      console.log(`\nWHOIS for ${result.domain}:`);
+      console.log(`\nWHOIS for ${result.domain} [${result.source}]:`);
       console.log(`  Registrar: ${result.registrar ?? "unknown"}`);
       console.log(`  Expires:   ${result.expires_at ?? "unknown"}`);
       if (result.nameservers.length) { console.log(`  NS: ${result.nameservers.join(", ")}`); }
+      const r = result.registrant;
+      if (r?.name || r?.email || r?.organization) {
+        console.log(`  Registrant:`);
+        if (r.name) console.log(`    Name: ${r.name}`);
+        if (r.email) console.log(`    Email: ${r.email}`);
+        if (r.phone) console.log(`    Phone: ${r.phone}`);
+        if (r.organization) console.log(`    Org: ${r.organization}`);
+      }
       console.log();
     });
 
