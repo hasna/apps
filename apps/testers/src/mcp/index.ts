@@ -2,7 +2,7 @@
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import pkg from "../../package.json";
-import { DEFAULT_MCP_HTTP_PORT, isHttpMode, parseCliPort, startMcpHttpServer } from "./http.js";
+import { DEFAULT_MCP_HTTP_PORT, isStdioMode, parseCliPort, startMcpHttpServer } from "./http.js";
 
 const cliArgs = new Set(process.argv.slice(2));
 if (cliArgs.has("--help") || cliArgs.has("-h")) {
@@ -37,15 +37,15 @@ process.on("uncaughtException", (err) => {
 
 async function main() {
   const args = process.argv.slice(2);
-  if (isHttpMode(args)) {
-    await startMcpHttpServer({ name: "testers", port: parseCliPort(args) });
+  if (isStdioMode(args)) {
+    const { buildServer } = await import("./server.js");
+    const server = buildServer();
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
     return;
   }
-
-  const { buildServer } = await import("./server.js");
-  const server = buildServer();
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  // Default: shared Streamable HTTP server (one process per MCP, many agents).
+  await startMcpHttpServer({ name: "testers", port: parseCliPort(args) });
 }
 
 main().catch((error) => {

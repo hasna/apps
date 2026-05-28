@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-export const DEFAULT_MCP_HTTP_PORT = 8840;
+export const DEFAULT_MCP_HTTP_PORT = 8880;
 const DEFAULT_HOST = "127.0.0.1";
 
 export interface McpHttpServerOptions {
@@ -33,6 +33,10 @@ export function parseCliPort(args: string[]): number | undefined {
 
 export function isHttpMode(args: string[]): boolean {
   return args.includes("--http") || process.env.MCP_HTTP === "1";
+}
+
+export function isStdioMode(args: string[]): boolean {
+  return args.includes("--stdio") || process.env.MCP_STDIO === "1";
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
