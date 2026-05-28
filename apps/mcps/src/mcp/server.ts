@@ -15,6 +15,10 @@ export interface CreateMcpServerOptions {
   tools?: McpsMcpToolDefinition[];
 }
 
+export function buildServer(options: CreateMcpServerOptions = {}): McpServer {
+  return createMcpServer(options);
+}
+
 export function createMcpServer(options: CreateMcpServerOptions = {}): McpServer {
   const server = new McpServer({
     name: options.name ?? "mcps",
