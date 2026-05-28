@@ -11,12 +11,15 @@ export const BUILTIN_TEMPLATE_LIBRARY_SOURCE = "bundled-local-template-library";
 
 export interface BuiltinTemplate {
   name: string;
+  version: number;
   description: string;
   category: string;
   version: string;
   variables: TemplateVariable[];
   tasks: (TemplateTaskInput & { position: number; depends_on_positions?: number[] })[];
 }
+
+export const TEMPLATE_LIBRARY_SCHEMA = "todos.template_library.v1";
 
 export const BUILTIN_TEMPLATES: BuiltinTemplate[] = [
   {
@@ -146,6 +149,8 @@ export const BUILTIN_TEMPLATES: BuiltinTemplate[] = [
   },
   {
     name: "open-source-project",
+    version: 1,
+    category: "project",
     description: "Full open-source project bootstrap — scaffold to publish",
     category: "open-source",
     version: BUILTIN_TEMPLATE_LIBRARY_VERSION,
@@ -167,6 +172,68 @@ export const BUILTIN_TEMPLATES: BuiltinTemplate[] = [
       { position: 10, title_pattern: "Add agent tools (register_agent, heartbeat, set_focus, list_agents)", priority: "medium", depends_on_positions: [3] },
       { position: 11, title_pattern: "Publish @hasna/{name} to npm", priority: "high", depends_on_positions: [6, 7, 8] },
       { position: 12, title_pattern: "Install @hasna/{name} globally and verify", priority: "medium", depends_on_positions: [11] },
+    ],
+  },
+  {
+    name: "release",
+    version: 1,
+    category: "ops",
+    description: "Version release workflow — test, changelog, publish, verify",
+    variables: [
+      { name: "version", required: true, description: "Release version (e.g. 1.2.0)" },
+      { name: "package", required: false, default: "package", description: "Package name" },
+    ],
+    tasks: [
+      { position: 0, title_pattern: "Run full test suite for {package} {version}", priority: "critical" },
+      { position: 1, title_pattern: "Update changelog for {version}", priority: "high", depends_on_positions: [0] },
+      { position: 2, title_pattern: "Bump version to {version}", priority: "high", depends_on_positions: [1] },
+      { position: 3, title_pattern: "Publish {package} {version}", priority: "critical", depends_on_positions: [2] },
+      { position: 4, title_pattern: "Verify {package} {version} install and CLI", priority: "high", depends_on_positions: [3] },
+    ],
+  },
+  {
+    name: "docs-refresh",
+    version: 1,
+    category: "workflow",
+    description: "Documentation refresh — audit, update, verify links",
+    variables: [{ name: "scope", required: true, description: "Docs scope (README, API, AGENTS.md)" }],
+    tasks: [
+      { position: 0, title_pattern: "Audit outdated sections in {scope}", priority: "high" },
+      { position: 1, title_pattern: "Update {scope} for current behavior", priority: "high", depends_on_positions: [0] },
+      { position: 2, title_pattern: "Verify examples in {scope} still work", priority: "medium", depends_on_positions: [1] },
+      { position: 3, title_pattern: "Fix broken links in {scope}", priority: "medium", depends_on_positions: [1] },
+    ],
+  },
+  {
+    name: "migration",
+    version: 1,
+    category: "ops",
+    description: "Schema/data migration workflow",
+    variables: [
+      { name: "migration", required: true, description: "Migration name or ID" },
+      { name: "target", required: false, default: "sqlite", description: "Target store" },
+    ],
+    tasks: [
+      { position: 0, title_pattern: "Write forward migration for {migration} ({target})", priority: "critical" },
+      { position: 1, title_pattern: "Add migration tests for {migration}", priority: "high", depends_on_positions: [0] },
+      { position: 2, title_pattern: "Run migration dry-run on copy", priority: "high", depends_on_positions: [1] },
+      { position: 3, title_pattern: "Apply {migration} and verify integrity", priority: "critical", depends_on_positions: [2] },
+      { position: 4, title_pattern: "Document rollback for {migration}", priority: "medium", depends_on_positions: [3] },
+    ],
+  },
+  {
+    name: "incident-response",
+    version: 1,
+    category: "ops",
+    description: "Incident triage, mitigation, postmortem",
+    variables: [{ name: "incident", required: true, description: "Incident summary" }],
+    tasks: [
+      { position: 0, title_pattern: "Triage: {incident}", priority: "critical", tags: ["incident"] },
+      { position: 1, title_pattern: "Mitigate impact of {incident}", priority: "critical", depends_on_positions: [0], tags: ["incident"] },
+      { position: 2, title_pattern: "Identify root cause: {incident}", priority: "critical", depends_on_positions: [1] },
+      { position: 3, title_pattern: "Permanent fix for {incident}", priority: "high", depends_on_positions: [2] },
+      { position: 4, title_pattern: "Write postmortem for {incident}", priority: "medium", depends_on_positions: [3] },
+      { position: 5, title_pattern: "Add monitoring/alert for {incident} class", priority: "medium", depends_on_positions: [4] },
     ],
   },
 ];

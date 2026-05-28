@@ -332,6 +332,17 @@ export interface SecretSafetyConfig {
   redaction_keys?: string[];
 }
 
+export interface WatchRulePattern {
+  name?: string;
+  project_path?: string;
+  events?: string[];
+  enabled?: boolean;
+  quiet?: boolean;
+  bell?: boolean;
+  desktop_notify?: boolean;
+  hook_command?: string;
+}
+
 export interface TodosConfig {
   /** Local HTTP server URL used by SDK clients. Defaults to http://localhost:19427. */
   apiUrl?: string;

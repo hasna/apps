@@ -442,6 +442,810 @@ export {
 export { createWebhook, getWebhook, listWebhooks, deleteWebhook, dispatchWebhook, listDeliveries } from "./db/webhooks.js";
 export type { WebhookDelivery } from "./db/webhooks.js";
 
+// Artifacts (local-only attachment store)
+export {
+  addArtifact,
+  getArtifact,
+  listArtifacts,
+  softDeleteArtifact,
+  purgeArtifact,
+  cleanupArtifacts,
+  exportArtifacts,
+  importArtifactFromManifestEntry,
+  updateArtifactRedaction,
+  ARTIFACT_ENTITY_TYPES,
+  ARTIFACT_STORAGE_MODES,
+  ARTIFACT_REDACTION_STATUSES,
+} from "./db/artifacts.js";
+export type {
+  Artifact,
+  ArtifactEntityType,
+  ArtifactStorageMode,
+  ArtifactRedactionStatus,
+  AddArtifactInput,
+  ListArtifactsFilter,
+  ImportArtifactInput,
+} from "./db/artifacts.js";
+export {
+  getArtifactStoreRoot,
+  computeContentHash,
+  buildArtifactExportManifest,
+  writeArtifactExportManifest,
+  isArtifactExpired,
+} from "./lib/artifact-store.js";
+export type { ArtifactExportEntry, ArtifactExportManifest, CleanupPolicy, StoredArtifactFile } from "./lib/artifact-store.js";
+
+// Headless boundaries
+export {
+  getHeadlessBoundaryManifest,
+  isAllowedLocalApiUrl,
+  assertHeadlessOutboundUrl,
+  scanSourceForForbiddenWebPatterns,
+  HEADLESS_BOUNDARY_VERSION,
+  FORBIDDEN_HOSTED_HOSTS,
+  FORBIDDEN_WEB_PATTERNS,
+} from "./lib/headless-boundaries.js";
+export type { HeadlessBoundaryManifest } from "./lib/headless-boundaries.js";
+
+// Goal workflow (/goal compatibility)
+export {
+  parseGoalCommand,
+  createGoalWorkflow,
+  getGoalProgress,
+  claimGoalStep,
+  logGoalProgress,
+  formatGoalHandoff,
+  resolvePlanId,
+  getGoalCommandRecipesMarkdown,
+  GOAL_COMMAND_RECIPES,
+  GOAL_WORKFLOW_VERSION,
+} from "./lib/goal-workflow.js";
+export type {
+  GoalStep,
+  GoalInput,
+  GoalManifest,
+  GoalProgress,
+  ParsedGoalCommand,
+} from "./lib/goal-workflow.js";
+
+// Verification providers
+export {
+  loadVerificationProviders,
+  saveVerificationProviders,
+  getVerificationProvider,
+  runVerification,
+  listVerificationRecords,
+  getVerificationRecord,
+  getDefaultProviders,
+  resetVerificationProviderCache,
+  VERIFICATION_SCHEMA_VERSION,
+  VERIFICATION_PROVIDER_TYPES,
+  VERIFICATION_STATUSES,
+} from "./lib/verification-providers.js";
+export type {
+  VerificationProviderConfig,
+  VerificationEvidenceRecord,
+  VerificationProviderType,
+  VerificationStatus,
+  RunVerificationInput,
+  VerificationProvidersFile,
+} from "./lib/verification-providers.js";
+
+// Portable verification evidence
+export {
+  VERIFICATION_EVIDENCE_SCHEMA,
+  createVerificationEvidence,
+  listVerificationEvidence,
+  getVerificationEvidence,
+  exportVerificationEvidence,
+  writeVerificationExport,
+  toPortableEvidence,
+} from "./lib/verification-evidence.js";
+export type {
+  PortableVerificationEvidence,
+  CreateVerificationEvidenceInput,
+  VerificationExportBundle,
+  VerificationCommandEntry,
+  VerificationTestResult,
+  VerificationLinkRef,
+} from "./lib/verification-evidence.js";
+
+// Local encryption
+export {
+  encryptValue,
+  decryptValue,
+  encryptSensitiveFields,
+  decryptSensitiveFields,
+  redactObject,
+  applyExportProfile,
+  assertExportProfileAllowed,
+  initEncryptionKeyFile,
+  loadEncryptionKey,
+  getEncryptionKeySource,
+  isEncryptedPayload,
+  ENCRYPTION_SCHEMA_VERSION,
+  EXPORT_PROFILES,
+} from "./lib/local-encryption.js";
+export type { EncryptedPayload, ExportProfile, ExportBundleOptions } from "./lib/local-encryption.js";
+
+// Context packs
+export {
+  buildContextPack,
+  formatContextPackMarkdown,
+  formatContextPackJson,
+  CONTEXT_PACK_VERSION,
+} from "./lib/context-packs.js";
+export type { ContextPack, ContextPackInput } from "./lib/context-packs.js";
+
+// Policy packs
+export {
+  loadPolicyPacks,
+  savePolicyPacks,
+  getPolicyPack,
+  validateTaskAgainstPolicyPack,
+  assertPolicyPackPassed,
+  resolveProjectPolicyPack,
+  getDefaultPolicyPacks,
+  resetPolicyPackCache,
+  POLICY_PACK_VERSION,
+} from "./lib/policy-packs.js";
+export type { PolicyPack, PolicyRule, PolicyRuleType, PolicyValidationResult } from "./lib/policy-packs.js";
+
+// Resource snapshots
+export {
+  buildResourceSnapshot,
+  subscribeResource,
+  unsubscribeResource,
+  listSubscriptions,
+  isSnapshotStale,
+  getChangedResourcesSince,
+  resourceDiagnostics,
+  resetSubscriptions,
+  RESOURCE_URIS,
+  RESOURCE_SNAPSHOT_VERSION,
+} from "./lib/resource-snapshots.js";
+export type { ResourceSnapshot, ResourceSubscription, ResourceUri } from "./lib/resource-snapshots.js";
+
+// Sandbox profiles
+export {
+  loadSandboxProfiles,
+  saveSandboxProfiles,
+  getSandboxProfile,
+  checkSandboxCommand,
+  getDefaultSandboxProfiles,
+  resetSandboxProfileCache,
+  SANDBOX_PROFILE_VERSION,
+} from "./lib/sandbox-profiles.js";
+export type { SandboxProfile, SandboxCheckInput, SandboxCheckResult } from "./lib/sandbox-profiles.js";
+
+// Agent run dispatcher
+export {
+  loadAgentAdapters,
+  saveAgentAdapters,
+  getAgentAdapter,
+  getDefaultAgentAdapters,
+  resetAgentAdapterCache,
+  enqueueAgentRun,
+  claimNextAgentRun,
+  completeAgentRun,
+  failAgentRun,
+  cancelAgentRun,
+  retryAgentRun,
+  listAgentRuns,
+  getAgentRun,
+  AGENT_RUN_SCHEMA_VERSION,
+} from "./lib/agent-run-dispatcher.js";
+export type {
+  AgentAdapterConfig,
+  AgentRun,
+  AgentRunStatus,
+  EnqueueAgentRunInput,
+  ListAgentRunsFilter,
+} from "./lib/agent-run-dispatcher.js";
+
+// Git traceability
+export {
+  linkTaskToCommit,
+  getTaskCommits,
+  findTaskByCommit,
+  unlinkTaskCommit,
+  getTaskTraceability,
+} from "./db/task-commits.js";
+export type { TaskCommit, CiSnapshot, TaskTraceabilityReport, LinkTaskToCommitInput } from "./db/task-commits.js";
+export {
+  linkTaskGitTrace,
+  inspectGitCommit,
+  getHeadSha,
+  getCurrentBranch,
+  resolveGitRoot,
+  loadCiSnapshot,
+  detectPrForBranch,
+  formatTraceabilityReport,
+  GIT_TRACEABILITY_SCHEMA_VERSION,
+} from "./lib/git-traceability.js";
+export type { GitCommitInfo, LinkGitTraceInput } from "./lib/git-traceability.js";
+
+// Mention resolver
+export {
+  MENTION_RESOLVER_SCHEMA,
+  MENTION_KINDS,
+  parseMentions,
+  resolveMention,
+  resolveMentionsInText,
+  formatResolvedMention,
+  formatMentionResolutionResult,
+  getMentionResolverDocs,
+} from "./lib/mention-resolver.js";
+export type {
+  MentionKind,
+  MentionStatus,
+  ParsedMention,
+  ResolvedMention,
+  MentionResolutionResult,
+  ResolveMentionOptions,
+} from "./lib/mention-resolver.js";
+
+// Labels and custom fields
+export {
+  createLabel, getLabel, listLabels, updateLabel, deleteLabel,
+  assignLabelToTask, removeLabelFromTask, getTaskLabels,
+} from "./db/labels.js";
+export type { Label, CreateLabelInput, UpdateLabelInput } from "./db/labels.js";
+export {
+  createCustomFieldDefinition, getCustomFieldDefinition, listCustomFieldDefinitions,
+  deleteCustomFieldDefinition, setTaskCustomField, getTaskCustomFields,
+  setTaskPriorityMeta, exportTaskFields, CUSTOM_FIELD_TYPES,
+} from "./db/custom-fields.js";
+export type { CustomFieldDefinition, CustomFieldType, TaskCustomFieldValue } from "./db/custom-fields.js";
+
+// Task dedupe and merge
+export {
+  findDuplicateCandidates,
+  scoreDuplicatePair,
+  mergeTasks,
+  formatDuplicatePreview,
+  DEDUPE_SCHEMA_VERSION,
+} from "./lib/task-dedupe.js";
+export type { DuplicateCandidate, DuplicateSignal, FindDuplicatesFilter, MergeTasksInput, MergeTasksResult } from "./lib/task-dedupe.js";
+
+// todos.md markdown
+export {
+  parseTodosMd,
+  serializeTodosMd,
+  exportTodosMd,
+  importTodosMd,
+  syncTodosMd,
+  startTodosMdWatch,
+  stopTodosMdWatch,
+  TODOS_MD_VERSION,
+  TODOS_MD_SCHEMA,
+} from "./lib/todos-md.js";
+export type { TodosMdDocument, TodosMdTaskLine, ImportTodosMdResult, ExportTodosMdOptions, SyncTodosMdResult } from "./lib/todos-md.js";
+
+// Workspace trust
+export {
+  loadWorkspaceTrustConfig,
+  saveWorkspaceTrustConfig,
+  getWorkspaceTrustProfile,
+  getAgentTrustProfile,
+  checkPermission,
+  assertPermission,
+  trustWorkspace,
+  untrustWorkspace,
+  isWorkspaceTrusted,
+  getDefaultWorkspaceTrustProfiles,
+  resetWorkspaceTrustCache,
+  WorkspacePermissionError,
+  WORKSPACE_TRUST_VERSION,
+  PERMISSION_OPERATIONS,
+} from "./lib/workspace-trust.js";
+export type { WorkspaceTrustProfile, WorkspaceTrustConfig, PermissionOperation } from "./lib/workspace-trust.js";
+
+// Approval gates
+export {
+  requestApproval,
+  approveGate,
+  rejectGate,
+  listPendingApprovals,
+  getTaskGateStatus,
+  createManualCheckpoint,
+  enablePlanApprovalGates,
+  assertTaskGate,
+  approveTaskViaGate,
+  listTasksAwaitingApproval,
+  APPROVAL_GATE_SCHEMA,
+  GATE_TYPES,
+} from "./lib/approval-gates.js";
+export type { ApprovalRequest, GateType, TaskGateStatus, RequestApprovalInput } from "./lib/approval-gates.js";
+
+// Agent coordination leases
+export {
+  acquireTaskLease,
+  renewTaskLease,
+  releaseTaskLease,
+  stealTaskLease,
+  recoverStaleLeases,
+  listActiveLeases,
+  listExpiredLeases,
+  getTaskLease,
+  formatLockConflict,
+  AGENT_COORDINATION_SCHEMA,
+  DEFAULT_LEASE_MINUTES,
+} from "./lib/agent-coordination.js";
+export type { TaskLease, LeaseAcquireResult, LockConflict, StaleRecoveryResult } from "./lib/agent-coordination.js";
+
+// Project bootstrap
+export {
+  discoverWorkspace,
+  bootstrapWorkspace,
+  getBootstrapStatus,
+  formatBootstrapReport,
+  BOOTSTRAP_SCHEMA,
+} from "./lib/project-bootstrap.js";
+export type { WorkspaceDiscovery, BootstrapResult } from "./lib/project-bootstrap.js";
+
+// CLI MCP parity
+export {
+  CLI_MCP_PARITY_MANIFEST,
+  getParityReport,
+  validateParityManifest,
+  findParityForMcpTool,
+  findParityForCliCommand,
+  normalizeErrorContract,
+  PARITY_SCHEMA_VERSION,
+} from "./lib/cli-mcp-parity.js";
+export type { ParityEntry, ParityReport, ParityDomain, ErrorContract } from "./lib/cli-mcp-parity.js";
+
+// Secret redaction
+export {
+  scanTextForSecrets,
+  redactText,
+  scanAndRedactText,
+  scanFileForSecrets,
+  safeStringify,
+  assertNoSecrets,
+  redactCommentContent,
+  redactHandoffPayload,
+  redactExportRecord,
+  getDefaultSecretPatterns,
+  registerCustomRedactor,
+  resetCustomRedactors,
+  SECRET_REDACTION_SCHEMA,
+  REDACTION_PLACEHOLDER,
+} from "./lib/secret-redaction.js";
+export type { SecretMatch, SecretScanResult, RedactionOptions, SecretPattern } from "./lib/secret-redaction.js";
+
+// Access profiles
+export {
+  ACCESS_PROFILES,
+  resolveAccessProfile,
+  getAccessProfileMeta,
+  listAccessProfiles,
+  shouldRegisterToolForProfile,
+  assertToolAllowed,
+  getHeadlessUsageNotes,
+  getProfileToolCount,
+  ACCESS_PROFILE_SCHEMA,
+} from "./lib/access-profiles.js";
+export type { AccessProfile, AccessProfileMeta } from "./lib/access-profiles.js";
+
+// Agent adapter docs
+export {
+  ADAPTER_DOCS_SCHEMA_VERSION,
+  AGENT_ADAPTER_HOSTS,
+  AGENT_ADAPTER_DOCS,
+  normalizeAdapterHost,
+  getAgentAdapterDoc,
+  listAgentAdapterDocs,
+  validateAdapterDocs,
+  renderAdapterDocMarkdown,
+  renderAllAdapterDocsMarkdown,
+  getAdapterDocsFingerprint,
+} from "./lib/agent-adapter-docs.js";
+export type { AgentAdapterHost, AgentAdapterDoc, AdapterWorkflowStep, AdapterFailureMode } from "./lib/agent-adapter-docs.js";
+
+// Inbox intake
+export {
+  INBOX_INTAKE_SCHEMA,
+  INTAKE_SOURCE_TYPES,
+  INTAKE_TRIAGE_STATUSES,
+  detectSourceType,
+  parseCiLog,
+  parseErrorPaste,
+  parseFeedback,
+  previewInboxIntake,
+  createInboxIntake,
+  formatIntakePreviewText,
+} from "./lib/inbox-intake.js";
+export type { IntakeSourceType, IntakeTriageStatus, IntakeInput, IntakePreview, IntakeResult, IntakeOptions } from "./lib/inbox-intake.js";
+
+// Natural-language intake
+export {
+  NL_INTAKE_SCHEMA,
+  parseNaturalLanguageTask,
+  previewNlIntake,
+  createNlIntake,
+  formatNlIntakePreviewText,
+} from "./lib/nl-intake.js";
+export type {
+  ParsedNlFields,
+  NlIntakeExplain,
+  NlIntakeInput,
+  NlIntakePreview,
+  NlIntakeResult,
+  ParseNaturalLanguageOptions,
+} from "./lib/nl-intake.js";
+
+// External issue importers
+export {
+  ISSUE_IMPORT_SCHEMA,
+  ISSUE_SOURCES,
+  detectIssueExportSource,
+  parseIssueExport,
+  loadIssueExportFromFile,
+  previewIssueImport,
+  importIssues,
+  formatIssueImportPreviewText,
+  getIssueImportDocs,
+} from "./lib/issue-importers.js";
+export type {
+  IssueSource,
+  ResolvedIssueSource,
+  NormalizedExternalIssue,
+  IssueImportInput,
+  IssueImportPreviewItem,
+  IssueImportPreview,
+  IssueImportOptions,
+  IssueImportResult,
+} from "./lib/issue-importers.js";
+
+// Run records
+export {
+  RUN_RECORD_SCHEMA,
+  RUN_RECORD_STATUSES,
+  createRunRecord,
+  getRunRecord,
+  listRunRecords,
+  appendRunCommand,
+  recordFilesTouched,
+  linkRunVerification,
+  linkRunArtifact,
+  completeRunRecord,
+  failRunRecord,
+  buildRunReplayBundle,
+  exportRunReplay,
+  formatRunRecordMarkdown,
+  getDefaultReplayDir,
+} from "./lib/run-records.js";
+export type {
+  RunRecordStatus,
+  RunRecord,
+  RunCommandEntry,
+  RunStatusTransition,
+  RunVerificationRef,
+  CreateRunRecordInput,
+  ListRunRecordsFilter,
+  RunReplayBundle,
+} from "./lib/run-records.js";
+
+// Release checks
+export {
+  RELEASE_CHECK_SCHEMA,
+  auditPackageContents,
+  scanDistArtifacts,
+  validateReleaseScripts,
+  runReleaseChecks,
+  formatReleaseCheckReport,
+  getReleaseWorkflowDocs,
+} from "./lib/release-checks.js";
+export type { ReleaseCheckSeverity, ReleaseCheckItem, ReleaseCheckReport, ReleaseCheckOptions } from "./lib/release-checks.js";
+
+// Release notes
+export {
+  RELEASE_NOTES_SCHEMA,
+  CHANGELOG_CATEGORIES,
+  parseConventionalCommit,
+  mapCommitTypeToCategory,
+  getLatestGitTag,
+  resolveSinceRef,
+  getGitLogSince,
+  getCompletedTasksForRelease,
+  buildReleaseNotes,
+  formatReleaseNotesMarkdown,
+  formatChangelogSection,
+  updateChangelog,
+  getReleaseNotesDocs,
+} from "./lib/release-notes.js";
+export type {
+  ChangelogCategory,
+  GitCommitEntry,
+  TaskReleaseEntry,
+  ReleaseNotesReport,
+  BuildReleaseNotesInput,
+  UpdateChangelogInput,
+} from "./lib/release-notes.js";
+
+// Database backup
+export {
+  DB_BACKUP_SCHEMA,
+  backupDatabase,
+  restoreDatabase,
+  checkDatabaseIntegrity,
+  compactDatabase,
+  migrationDryRun,
+  defaultBackupPath,
+  writeBackupManifest,
+  readBackupManifest,
+} from "./lib/db-backup.js";
+export type { BackupResult, IntegrityResult, MigrationDryRunResult } from "./lib/db-backup.js";
+
+// JSON schemas
+export {
+  JSON_SCHEMA_CATALOG_VERSION,
+  SCHEMA_SEMVER,
+  SCHEMA_ENTITIES,
+  JSON_SCHEMAS,
+  SCHEMA_CONTRACT_FIXTURES,
+  validateSchemaPayload,
+  validateAllContractFixtures,
+  checkSchemaCompatibility,
+  listJsonSchemas,
+  getJsonSchema,
+  getSchemaSemverGuidance,
+  exportSchemasToDirectory,
+  wrapWithSchemaVersion,
+} from "./lib/json-schemas.js";
+export type {
+  SchemaEntity,
+  JsonSchemaDefinition,
+  JsonSchemaProperty,
+  SchemaValidationIssue,
+  SchemaValidationResult,
+  SchemaCompatibilityResult,
+} from "./lib/json-schemas.js";
+
+// Activity audit
+export {
+  ACTIVITY_LOG_SCHEMA,
+  ACTIVITY_ENTITY_TYPES,
+  logActivity,
+  listActivity,
+  getActivityTimeline,
+  exportActivityLog,
+  importActivityLog,
+  redactActivityRecord,
+  formatActivityRecordText,
+} from "./lib/activity-audit.js";
+export type {
+  ActivityEntityType,
+  ActivityRecord,
+  LogActivityInput,
+  ListActivityFilter,
+  ActivityExportBundle,
+} from "./lib/activity-audit.js";
+
+// Task scheduling
+export {
+  TASK_SCHEDULING_SCHEMA,
+  scheduleTask,
+  listDelayedStartTasks,
+  listReadyScheduledTasks,
+  getAgentSafeQueue,
+  getStaleTaskReport,
+  getSchedulingSummary,
+  previewNextRecurrence,
+  agentClaimNextSafe,
+  getAgentLoopDocs,
+} from "./lib/task-scheduling.js";
+export type { ScheduleTaskInput, StaleTaskReport, SchedulingQueueItem, SchedulingSummary } from "./lib/task-scheduling.js";
+
+// Saved views / unified search
+export {
+  SAVED_VIEWS_SCHEMA,
+  createSavedView,
+  getSavedView,
+  listSavedViews,
+  deleteSavedView,
+  unifiedSearch,
+  runSavedView,
+  getBuiltinSavedViews,
+} from "./lib/saved-views.js";
+export type { SearchEntityType, SavedView, UnifiedSearchInput, SearchHit, UnifiedSearchResult } from "./lib/saved-views.js";
+
+// Notification reminders
+export {
+  NOTIFICATION_REMINDERS_SCHEMA,
+  REMINDER_TYPES,
+  REMINDER_STATUSES,
+  createReminder,
+  getReminder,
+  listReminders,
+  dismissReminder,
+  snoozeReminder,
+  scanReminders,
+  processDueReminders,
+  getReminderSummary,
+  getReminderPreferences,
+  setReminderPreferences,
+  getUpcomingDueTasks,
+  notifyUpcomingDeadlines,
+  getReminderDocs,
+} from "./lib/notification-reminders.js";
+export type {
+  ReminderType,
+  ReminderStatus,
+  ReminderPreferences,
+  NotificationReminder,
+  ScanRemindersResult,
+  ProcessRemindersResult,
+  ReminderSummary,
+  CreateReminderInput,
+} from "./lib/notification-reminders.js";
+
+// Terminal notifications / watch rules
+export {
+  TERMINAL_NOTIFICATIONS_SCHEMA,
+  WATCH_EVENT_TYPES,
+  ensureDefaultWatchRules,
+  createWatchRule,
+  updateWatchRule,
+  deleteWatchRule,
+  getWatchRule,
+  listWatchRules,
+  ruleMatchesEvent,
+  collectWatchEvents,
+  formatTerminalNotification,
+  pollWatchNotifications,
+  getWatchStatus,
+  getWatchPreferences,
+  setWatchPreferences,
+  syncConfigWatchRules,
+  getWatchDocs,
+} from "./lib/terminal-notifications.js";
+export type {
+  WatchEventType,
+  WatchSeverity,
+  WatchEvent,
+  WatchRule,
+  WatchPreferences,
+  CreateWatchRuleInput,
+  UpdateWatchRuleInput,
+  PollWatchOptions,
+  PollWatchResult,
+  WatchStatus,
+} from "./lib/terminal-notifications.js";
+
+// Import/export bridge
+export {
+  BUNDLE_SCHEMA,
+  BUNDLE_TYPES,
+  MERGE_STRATEGIES,
+  exportLocalBundle,
+  validateBundle,
+  previewSync,
+  importBundle,
+  writeBundleFile,
+  readBundleFile,
+  getBridgeDocs,
+} from "./lib/import-export-bridge.js";
+export type {
+  ImportExportBundle,
+  ExportLocalBundleOptions,
+  SyncConflict,
+  SyncPreview,
+  ImportBundleOptions,
+  ImportResult,
+  BundleType,
+  MergeStrategy,
+  ConflictType,
+} from "./lib/import-export-bridge.js";
+
+// Dependency graph
+export {
+  DEPENDENCY_GRAPH_SCHEMA,
+  getReadyTasks,
+  getBlockedTaskReports,
+  getCriticalPath,
+  getUnlockImpact,
+  analyzeDependencyGraph,
+  getDependents,
+  getBlockers,
+} from "./lib/dependency-graph.js";
+export type {
+  DependencyNode,
+  BlockedTaskReport,
+  ReadyTaskReport,
+  CriticalPathEntry,
+  UnlockImpactReport,
+  DependencyGraphAnalysis,
+  GraphFilter,
+} from "./lib/dependency-graph.js";
+
+// Plan execution
+export {
+  PLAN_EXECUTION_SCHEMA,
+  PLAN_EXECUTION_MODES,
+  attachPlanToProject,
+  materializePlanSteps,
+  getPlanExecutionState,
+  claimPlanStep,
+  exportPlanExecutionContract,
+  createPlanWithSteps,
+  resolvePlanRef,
+} from "./lib/plan-execution.js";
+export type {
+  PlanExecutionMode,
+  PlanStepInput,
+  PlanExecutionManifest,
+  PlanExecutionState,
+  AttachPlanInput,
+  MaterializePlanInput,
+} from "./lib/plan-execution.js";
+
+// Handoff packets
+export {
+  HANDOFF_PACKET_SCHEMA,
+  buildHandoffPacket,
+  createHandoffPacket,
+  formatHandoffPacket,
+  exportHandoffPacket,
+  getLatestHandoffPacket,
+  getStoredHandoffAsPacket,
+} from "./lib/handoff-packets.js";
+export type {
+  HandoffPacket,
+  HandoffPacketContext,
+  HandoffTaskSummary,
+  BuildHandoffPacketInput,
+} from "./lib/handoff-packets.js";
+
+// TUI dashboard
+export {
+  TUI_DASHBOARD_SCHEMA,
+  initialDashboardState,
+  reduceDashboardState,
+  loadDashboardData,
+  clampSelectedIndex,
+  executeDashboardTaskAction,
+  listDashboardProjects,
+  KEYBOARD_HELP,
+  DASHBOARD_PANELS,
+} from "./lib/tui-dashboard.js";
+export type {
+  DashboardState,
+  DashboardData,
+  DashboardPanel,
+  DashboardFilter,
+  DashboardAction,
+  DashboardTaskRow,
+} from "./lib/tui-dashboard.js";
+
+// CLI reference, completions, manpage
+export {
+  CLI_REFERENCE_SCHEMA,
+  CLI_COMMAND_GROUPS,
+  ENV_VARS,
+  EXIT_CODES,
+  JSON_OUTPUT_CONTRACT,
+  listTopLevelCommands,
+  NESTED_SUBCOMMANDS,
+  getCommandHelp,
+  getInstallInstructions,
+} from "./lib/cli-reference.js";
+export type { CliCommandRef, CliCommandGroup, ExitCodeRef, EnvVarRef } from "./lib/cli-reference.js";
+export {
+  COMPLETIONS_SCHEMA,
+  generateBashCompletion,
+  generateZshCompletion,
+  generateFishCompletion,
+  generateCompletionInstallScript,
+} from "./lib/cli-completions.js";
+export {
+  MANPAGE_SCHEMA,
+  generateManpage,
+  generateCliReferenceMarkdown,
+} from "./lib/cli-manpage.js";
+
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
 export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";
@@ -459,6 +1263,241 @@ export {
   writeBuiltinTemplateFiles,
 } from "./db/builtin-templates.js";
 export type { BuiltinTemplate } from "./db/builtin-templates.js";
+
+// Template library
+export {
+  listTemplateLibrary,
+  getBuiltinTemplate,
+  previewBuiltinTemplate,
+  installTemplateLibrary,
+  exportTemplateLibraryCatalog,
+  exportInstalledTemplate,
+  importTemplateFromFile,
+  previewInstalledTemplate,
+  getTemplateLibraryDocs,
+} from "./lib/template-library.js";
+export type { TemplateLibraryEntry, TemplateLibraryCatalog, TemplateLibraryExport } from "./lib/template-library.js";
+
+// Machine topology
+export {
+  MACHINE_TOPOLOGY_SCHEMA,
+  registerLocalMachine,
+  getPathOverrides,
+  getMachineAgentSummaries,
+  buildMachineTopologyReport,
+  getReachableHostnames,
+  getTopologyDocs,
+} from "./lib/machine-topology.js";
+export type {
+  MachinePathOverride,
+  MachineAgentSummary,
+  MachineTopologyNode,
+  MachineTopologyReport,
+} from "./lib/machine-topology.js";
+
+// Environment snapshots
+export {
+  ENV_SNAPSHOT_SCHEMA,
+  buildEnvSnapshotPayload,
+  captureEnvSnapshot,
+  getEnvSnapshot,
+  listEnvSnapshots,
+  checkEnvSnapshot,
+  computeSnapshotHash,
+} from "./lib/environment-snapshots.js";
+export type {
+  EnvCommandVersion,
+  EnvSnapshotPayload,
+  EnvSnapshotRecord,
+  CaptureEnvSnapshotInput,
+  EnvSnapshotCheckResult,
+} from "./lib/environment-snapshots.js";
+
+// Decision records and knowledge snapshots
+export {
+  DECISION_RECORD_SCHEMA,
+  KNOWLEDGE_SNAPSHOT_SCHEMA,
+  DECISION_STATUSES,
+  KNOWLEDGE_SNAPSHOT_SOURCES,
+  createDecisionRecord,
+  getDecisionRecord,
+  getDecisionRecordByRef,
+  listDecisionRecords,
+  updateDecisionRecord,
+  setDecisionStatus,
+  supersedeDecisionRecord,
+  formatDecisionRecordMarkdown,
+  exportDecisionRecord,
+  buildKnowledgeSnapshotPayload,
+  captureKnowledgeSnapshot,
+  getKnowledgeSnapshot,
+  listKnowledgeSnapshots,
+  formatKnowledgeSnapshotMarkdown,
+  exportKnowledgeSnapshot,
+  getDecisionRecordsDocs,
+} from "./lib/decision-records.js";
+export type {
+  DecisionStatus,
+  KnowledgeSnapshotSource,
+  DecisionAlternative,
+  DecisionRecord,
+  CreateDecisionRecordInput,
+  UpdateDecisionRecordInput,
+  ListDecisionRecordsFilter,
+  KnowledgeSnapshotDecisionSummary,
+  KnowledgeSnapshotPayload,
+  KnowledgeSnapshotRecord,
+  CaptureKnowledgeSnapshotInput,
+  ListKnowledgeSnapshotsFilter,
+} from "./lib/decision-records.js";
+
+// Report exports
+export {
+  REPORT_EXPORT_SCHEMA,
+  REPORT_KINDS,
+  REPORT_FORMATS,
+  buildReportExportData,
+  formatReportMarkdown,
+  formatReportHtml,
+  formatReportExport,
+  writeReportExport,
+  exportReport,
+  getReportExportDocs,
+} from "./lib/report-exports.js";
+export type {
+  ReportKind,
+  ReportFormat,
+  ReportSection,
+  ReportExportData,
+  BuildReportExportInput,
+} from "./lib/report-exports.js";
+
+// Command aliases
+export {
+  COMMAND_ALIASES_SCHEMA,
+  validateAliasName,
+  loadAliasStore,
+  saveAliasStore,
+  listCommandAliases,
+  getCommandAlias,
+  saveCommandAlias,
+  deleteCommandAlias,
+  resolveCommandQuery,
+  explainCommandQuery,
+  exportCommandAliases,
+  importCommandAliases,
+  getCommandAliasDocs,
+  listBuiltinShortcuts,
+} from "./lib/command-aliases.js";
+export type {
+  CommandAlias,
+  AliasStore,
+  QueryResolution,
+  ImportAliasesResult,
+} from "./lib/command-aliases.js";
+
+// Failure triage
+export {
+  FAILURE_TRIAGE_SCHEMA,
+  FAILURE_CLASSES,
+  buildFailureTriageReport,
+  applyFailureTriage,
+  formatFailureTriageMarkdown,
+  getFailureTriageDocs,
+} from "./lib/failure-triage.js";
+export type {
+  FailureClass,
+  FailureTriageItem,
+  FailureTriageReport,
+  ApplyFailureTriageInput,
+  ApplyFailureTriageResult,
+} from "./lib/failure-triage.js";
+
+// Branch work plans
+export {
+  BRANCH_WORK_PLAN_SCHEMA,
+  analyzeBranchWork,
+  generateSafeWorkPlan,
+  resolveDefaultBaseBranch,
+  formatSafeWorkPlanMarkdown,
+  formatSafeWorkPlanText,
+  getBranchWorkPlanDocs,
+} from "./lib/branch-work-plans.js";
+export type {
+  WorkPlanRisk,
+  WorkPlanStrategy,
+  BranchWorkPlanInput,
+  BranchRefInfo,
+  BranchConflictFile,
+  BranchWorkAnalysis,
+  WorkPlanStep,
+  SafeWorkPlan,
+} from "./lib/branch-work-plans.js";
+
+// User scaffolds
+export {
+  USER_SCAFFOLD_SCHEMA,
+  SCAFFOLD_KINDS,
+  loadUserScaffoldStore,
+  saveUserScaffoldStore,
+  listUserScaffolds,
+  getUserScaffold,
+  createUserScaffold,
+  updateUserScaffold,
+  previewUserScaffold,
+  applyUserScaffold,
+  exportUserScaffold,
+  importUserScaffold,
+  linkTemplateAsScaffold,
+  getUserScaffoldDocs,
+  listLinkedTemplates,
+} from "./lib/user-scaffolds.js";
+export type { ScaffoldKind, UserScaffold, UserScaffoldStore, ScaffoldPreview } from "./lib/user-scaffolds.js";
+
+// Agent workflow demo
+export {
+  AGENT_WORKFLOW_DEMO_SCHEMA,
+  DEMO_DEFAULT_AGENT,
+  DEMO_DEFAULT_PROJECT,
+  DEMO_PROJECT_PATH,
+  runAgentWorkflowDemo,
+  setupEphemeralDemoDb,
+  normalizeAgentWorkflowDemoResult,
+  formatAgentWorkflowDemoReport,
+  getAgentWorkflowDemoDocs,
+} from "./lib/agent-workflow-demo.js";
+export type {
+  DemoStep,
+  AgentWorkflowDemoResult,
+  RunAgentWorkflowDemoOptions,
+  EphemeralDbHandle,
+} from "./lib/agent-workflow-demo.js";
+
+// Feature manifest
+export {
+  FEATURE_MANIFEST_SCHEMA,
+  FEATURE_AREAS,
+  ALL_MCP_TOOLS,
+  buildFeatureManifest,
+  buildMcpToolGroups,
+  getCapabilityDiscovery,
+  normalizeFeatureManifest,
+  formatFeatureManifestReport,
+  getFeatureManifestDocs,
+  validateFeatureManifest,
+  listMcpToolNames,
+  categorizeMcpTool,
+} from "./lib/feature-manifest.js";
+export type {
+  FeatureArea,
+  McpToolGroup,
+  FeatureManifest,
+  CapabilityKind,
+  CapabilityMatch,
+  CapabilityDiscovery,
+  BuildFeatureManifestOptions,
+  GetCapabilityDiscoveryOptions,
+} from "./lib/feature-manifest.js";
 
 // Checklists
 export {

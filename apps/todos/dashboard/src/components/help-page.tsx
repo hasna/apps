@@ -4,6 +4,23 @@ import { KeyboardIcon, TerminalIcon, BookOpenIcon, ServerIcon, ArrowRightIcon } 
 export function HelpPage() {
   return (
     <div className="space-y-6">
+      {/* Agent-native boundary notice */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm">Agent-native &amp; headless</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm text-muted-foreground">
+          <p>
+            <strong className="text-foreground">CLI and MCP are the primary surfaces.</strong> This dashboard is an optional local admin view
+            that talks only to <code className="font-mono">/api/*</code> on your machine — there is no sign-in, no hosted auth, and no connection to todos.md or platform-todos.
+          </p>
+          <p>
+            For agent workflows use <code className="font-mono">todos claim</code>, <code className="font-mono">todos-mcp</code>, or{" "}
+            <code className="font-mono">TODOS_PROFILE=minimal</code>. Cloud sync is explicit opt-in from CLI/MCP only.
+          </p>
+        </CardContent>
+      </Card>
+
       {/* How it works breadcrumb */}
       <Card>
         <CardHeader className="pb-3">
