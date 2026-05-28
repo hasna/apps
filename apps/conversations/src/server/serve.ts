@@ -17,6 +17,8 @@ import { getReactions, getReactionSummary } from "../lib/reactions.js";
 import { listHotSessions } from "../lib/hot.js";
 import { getRelated, getAgentNetwork, getGraphStats } from "../lib/graph.js";
 import { listLocks } from "../lib/locks.js";
+import { handleMcpRequest, healthPayload } from "../mcp/http.js";
+import { buildServer } from "../mcp/index.js";
 import { join, resolve, sep } from "path";
 import { existsSync } from "fs";
 
@@ -145,6 +147,13 @@ export function startDashboardServer(port = 0, host?: string) {
     async fetch(req) {
       const url = new URL(req.url);
       const path = url.pathname;
+
+      if (path === "/health" && req.method === "GET") {
+        return jsonResponse(healthPayload("conversations"));
+      }
+      if (path === "/mcp") {
+        return handleMcpRequest(req, () => buildServer(true));
+      }
 
       // ---- API Routes ----
       if (path === "/api/status") {

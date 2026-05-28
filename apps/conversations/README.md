@@ -30,7 +30,20 @@ conversations-hook --help
 conversations-mcp
 ```
 
-1 tools available.
+## HTTP mode
+
+Long-lived Streamable HTTP transport (stateless, bind `127.0.0.1` only):
+
+```bash
+conversations-mcp --http              # default port 8811
+conversations-mcp --http --port 8811
+MCP_HTTP=1 conversations-mcp
+```
+
+- Health: `GET http://127.0.0.1:8811/health`
+- MCP: `http://127.0.0.1:8811/mcp`
+
+The dashboard server also exposes `/health` and `/mcp` when running.
 
 ## Cloud Sync
 
