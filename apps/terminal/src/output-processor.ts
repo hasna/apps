@@ -8,6 +8,12 @@ import { discoverOutputHints } from "./context-hints.js";
 import { formatProfileHints } from "./tool-profiles.js";
 import { stripAnsi } from "./compression.js";
 import { stripNoise } from "./noise-filter.js";
+import {
+  summarizeDiffStat,
+  summarizeFileListing,
+  summarizeGitShortStatus,
+  summarizeSearchOutput,
+} from "./terminal-summaries.js";
 
 export interface ProcessedOutput {
   /** AI-generated summary (concise, structured) */
@@ -50,11 +56,6 @@ function fingerprint(command: string, output: string, exitCode?: number): string
     return "✓ Success (no output)";
   }
 
-  // Single-line trivial outputs — pass through without AI
-  if (lines.length === 1 && trimmed.length < 80) {
-    return trimmed; // Already concise enough
-  }
-
   // Git: common known patterns
   if (/^Already up to date\.?$/i.test(trimmed)) return "✓ Already up to date";
   if (/^nothing to commit, working tree clean$/i.test(trimmed)) return "✓ Clean working tree, nothing to commit";
@@ -66,12 +67,33 @@ function fingerprint(command: string, output: string, exitCode?: number): string
     const branch = trimmed.match(/^On branch (\S+)/m)?.[1] ?? "?";
     return `✓ Branch ${branch} up to date, clean`;
   }
+  if (/\bgit\s+status\b/.test(command)) {
+    const status = summarizeGitShortStatus(trimmed);
+    if (status) return status;
+  }
+  if (/\bgit\s+diff\b/.test(command) && /--stat\b/.test(command)) {
+    const stat = summarizeDiffStat(trimmed);
+    if (stat) return stat;
+  }
+  if (/^(?:rg|grep)\b/.test(command.trim())) {
+    const search = summarizeSearchOutput(trimmed);
+    if (search) return search;
+  }
+  if (/^(?:find|fd|rg\s+--files)\b/.test(command.trim())) {
+    const listing = summarizeFileListing(trimmed);
+    if (listing) return listing;
+  }
 
   // Build/compile success with no errors
   if (/^(tsc|bun|npm|yarn|pnpm)\s/.test(command)) {
     if (lines.length <= 3 && (exitCode === 0 || exitCode === undefined) && !/error|Error|ERROR|fail|FAIL/.test(trimmed)) {
-      return `✓ Build succeeded${lines.length > 0 ? ` (${lines.length} lines)` : ""}`;
+      return "ok";
     }
+  }
+
+  // Single-line trivial outputs — pass through without AI
+  if (lines.length === 1 && trimmed.length < 80) {
+    return trimmed; // Already concise enough
   }
 
   // npm/bun install success
@@ -146,7 +168,7 @@ export async function processOutput(
 
   // Fingerprint check — skip AI entirely for known patterns (0ms, $0)
   const fp = fingerprint(command, output);
-  if (fp && !originalPrompt) {
+  if (fp) {
     const saved = Math.max(0, estimateTokens(output) - estimateTokens(fp));
     if (saved > 0) recordSaving("compressed", saved);
     return {

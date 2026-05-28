@@ -327,38 +327,31 @@ else if (args[0] === "sessions") {
 // ── Overview command ─────────────────────────────────────────────────────────
 
 else if (args[0] === "overview") {
-  const { existsSync, readFileSync } = await import("fs");
+  const { readFileSync } = await import("fs");
   const { execSync } = await import("child_process");
+  const { formatProjectOverview } = await import("./terminal-summaries.js");
   const run = (cmd: string) => { try { return execSync(cmd, { encoding: "utf8", cwd: process.cwd() }).trim(); } catch { return ""; } };
 
   let pkg: any = null;
   try { pkg = JSON.parse(readFileSync("package.json", "utf8")); } catch {}
 
-  if (pkg) {
-    console.log(`${pkg.name}@${pkg.version}`);
-    if (pkg.scripts) {
-      console.log("\nScripts:");
-      for (const [k, v] of Object.entries(pkg.scripts).slice(0, 10)) console.log(`  ${k}: ${v}`);
-    }
-    if (pkg.dependencies) console.log(`\nDeps: ${Object.keys(pkg.dependencies).join(", ")}`);
-  }
-
   const src = run("ls -1 src/ 2>/dev/null || ls -1 lib/ 2>/dev/null");
-  if (src) console.log(`\nSource:\n${src.split("\n").map(f => "  " + f).join("\n")}`);
+  console.log(formatProjectOverview(pkg, src ? src.split("\n").filter(Boolean) : []));
 }
 
 // ── Repo command ─────────────────────────────────────────────────────────────
 
 else if (args[0] === "repo") {
   const { execSync } = await import("child_process");
+  const { summarizeGitShortStatus } = await import("./terminal-summaries.js");
   const run = (cmd: string) => { try { return execSync(cmd, { encoding: "utf8", cwd: process.cwd() }).trim(); } catch { return ""; } };
-  const branch = run("git branch --show-current");
-  const status = run("git status --short");
-  const log = run("git log --oneline -8 --decorate");
-  console.log(`Branch: ${branch}`);
-  if (status) { console.log(`\nChanges:\n${status}`); }
-  else { console.log("\nClean working tree"); }
-  console.log(`\nRecent:\n${log}`);
+  const status = run("git status --short --branch");
+  const summary = summarizeGitShortStatus(status);
+  console.log(summary ?? status);
+  if (args.includes("--recent")) {
+    const log = run("git log --oneline -5 --decorate");
+    if (log) console.log(`\nRecent:\n${log}`);
+  }
 }
 
 // ── Symbols command ──────────────────────────────────────────────────────────
@@ -476,7 +469,7 @@ else if (args.length > 0) {
   const { processOutput, shouldProcess } = await import("./output-processor.js");
   const { rewriteCommand } = await import("./command-rewriter.js");
   const { shouldBeLazy, toLazy } = await import("./lazy-executor.js");
-  const { saveOutput, formatOutputHint } = await import("./output-store.js");
+  const { saveOutput, formatOutputHint, saveOutputManifest, formatManifestHint } = await import("./output-store.js");
   const { estimateTokens } = await import("./tokens.js");
   const { recordSaving, recordUsage } = await import("./economy.js");
   const { isTestOutput, trackTests, formatWatchResult } = await import("./test-watchlist.js");
@@ -485,6 +478,7 @@ else if (args.length > 0) {
   const { loadContext, saveContext, formatContext } = await import("./session-context.js");
   const { getLearned, recordMapping } = await import("./usage-cache.js");
   const { recordCorrection, findSimilarCorrections, recordOutput } = await import("./sessions-db.js");
+  const { getPromptShortcut } = await import("./prompt-shortcuts.js");
 
   const config = loadConfig();
   const perms = config.permissions;
@@ -498,6 +492,7 @@ else if (args.length > 0) {
   const isDirectCommand = KNOWN_BINARIES.test(prompt.trim()) || /^[.\/~]/.test(prompt.trim()) || /\|/.test(prompt);
 
   // Check usage learning cache first (zero AI cost for repeated queries)
+  const shortcut = getPromptShortcut(prompt);
   const learned = getLearned(prompt);
   if (learned && !offlineMode) {
     console.error(`[open-terminal] cached: $ ${learned}`);
@@ -506,7 +501,9 @@ else if (args.length > 0) {
   // Step 1: Determine command — either direct passthrough or AI translation
   let command: string;
 
-  if (isDirectCommand) {
+  if (shortcut) {
+    command = shortcut.command;
+  } else if (isDirectCommand) {
     // Direct command — skip AI translation entirely (saves 1 AI call)
     command = prompt;
   } else if (offlineMode) {
@@ -549,7 +546,7 @@ else if (args.length > 0) {
   } // close the else (learned/offline) block
 
   // Record the mapping for usage learning
-  if (!offlineMode && !learned) recordMapping(prompt, command);
+  if (!offlineMode && !learned && !shortcut) recordMapping(prompt, command);
 
   // Check permissions
   const blocked = checkPermissions(command, perms);
@@ -608,8 +605,10 @@ else if (args.length > 0) {
     } catch {}
   }
 
-  // Show what we're running
-  console.error(`$ ${command}`);
+  // Show translated commands unless a deterministic local shortcut already names the intent.
+  if (!shortcut || process.env.TERMINAL_SHOW_COMMAND === "1") {
+    console.error(`$ ${shortcut?.displayCommand ?? command}`);
+  }
 
   // Step 3: Rewrite for optimization
   const rw = rewriteCommand(command);
@@ -641,17 +640,23 @@ else if (args.length > 0) {
     if (clean.length > 10) {
       // Try AI answer framing first (especially for questions)
       const processed = await processOutput(actualCmd, clean, prompt);
-      if (processed.aiProcessed) {
+      if (processed.aiProcessed || processed.tokensSaved > 0 || processed.summary !== clean) {
         if (processed.tokensSaved > 0) recordSaving("compressed", processed.tokensSaved);
         // Save full output for lazy recovery — agents can read the file
-        if (processed.tokensSaved > 50) {
+        if (rawTokens > 500 && processed.tokensSaved > 50) {
           const outputPath = saveOutput(actualCmd, clean);
           console.log(processed.summary);
+          const manifestPath = saveOutputManifest(actualCmd, clean);
+          if (manifestPath) console.log(formatManifestHint(manifestPath));
           console.log(formatOutputHint(outputPath));
         } else {
           console.log(processed.summary);
+          const manifestPath = saveOutputManifest(actualCmd, clean);
+          if (manifestPath) console.log(formatManifestHint(manifestPath));
         }
-        if (processed.tokensSaved > 10) console.error(`[open-terminal] ${rawTokens} → ${rawTokens - processed.tokensSaved} tokens (saved ${processed.tokensSaved})`);
+        if (process.env.TERMINAL_SHOW_SAVINGS === "1" && processed.tokensSaved > 10) {
+          console.error(`[open-terminal] ${rawTokens} -> ${rawTokens - processed.tokensSaved} tokens (saved ${processed.tokensSaved})`);
+        }
         process.exit(0);
       }
     }
@@ -668,7 +673,10 @@ else if (args.length > 0) {
     // Fallback: AI unavailable — pass through clean
     console.log(clean);
     const saved = rawTokens - estimateTokens(clean);
-    if (saved > 10) { recordSaving("compressed", saved); console.error(`[open-terminal] saved ${saved} tokens`); }
+    if (saved > 10) {
+      recordSaving("compressed", saved);
+      if (process.env.TERMINAL_SHOW_SAVINGS === "1") console.error(`[open-terminal] saved ${saved} tokens`);
+    }
   } catch (e: any) {
     // Empty result (grep exit 1 = no matches) — not a real error
     const errStdout = e.stdout?.toString() ?? "";
@@ -687,7 +695,7 @@ else if (args.length > 0) {
             const broaderClean = stripNoise(stripAnsi(broaderResult)).cleaned;
             if (broaderClean.trim()) {
               const processed = await processOutput(broaderCmd, broaderClean, prompt);
-              console.log(processed.aiProcessed ? processed.summary : broaderClean);
+              console.log(processed.aiProcessed || processed.tokensSaved > 0 || processed.summary !== broaderClean ? processed.summary : broaderClean);
               process.exit(0);
             }
           }
@@ -718,7 +726,7 @@ else if (args.length > 0) {
             // Record correction — AI learns for next time
             recordCorrection(prompt, actualCmd, errStderr.slice(0, 500), retryCmd, true);
             const processed = await processOutput(retryCmd, retryClean, prompt);
-            console.log(processed.aiProcessed ? processed.summary : retryClean);
+            console.log(processed.aiProcessed || processed.tokensSaved > 0 || processed.summary !== retryClean ? processed.summary : retryClean);
             process.exit(0);
           }
         } catch (retryErr: any) {
@@ -736,7 +744,7 @@ else if (args.length > 0) {
     if (errorClean.length > 20) {
       try {
         const processed = await processOutput(actualCmd, errorClean, prompt);
-        if (processed.aiProcessed) {
+        if (processed.aiProcessed || processed.tokensSaved > 0 || processed.summary !== errorClean) {
           console.log(processed.summary);
           process.exit(e.status ?? 1);
         }

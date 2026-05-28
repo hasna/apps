@@ -185,13 +185,16 @@ export function registerExecuteTools(server: McpServer, h: ToolHelpers): void {
     {
       key: z.string().describe("The detailKey from a previous execute_smart response"),
       grep: z.string().optional().describe("Filter output lines by pattern (e.g., 'FAIL', 'error')"),
+      offset: z.number().optional().describe("Start line offset after filtering (default: 0)"),
+      limit: z.number().optional().describe("Maximum lines to return after filtering"),
+      context: z.number().optional().describe("Context lines around grep matches"),
     },
-    async ({ key, grep }) => {
-      const result = expandOutput(key, grep);
+    async ({ key, grep, offset, limit, context }) => {
+      const result = expandOutput(key, { grep, offset, limit, context });
       if (!result.found) {
         return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Output expired or not found" }) }] };
       }
-      return { content: [{ type: "text" as const, text: JSON.stringify({ output: result.output, lines: result.lines }) }] };
+      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
     }
   );
 

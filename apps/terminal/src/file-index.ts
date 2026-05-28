@@ -3,6 +3,7 @@
 
 import { spawn } from "child_process";
 import { watch, type FSWatcher } from "fs";
+import { getShell } from "./shell.js";
 
 interface FileIndexEntry {
   path: string;
@@ -20,10 +21,11 @@ const INDEX_TTL = 30_000; // 30 seconds
 
 function exec(command: string, cwd: string): Promise<string> {
   return new Promise((resolve) => {
-    const proc = spawn("/bin/zsh", ["-c", command], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn(getShell(), ["-c", command], { cwd, stdio: ["ignore", "pipe", "pipe"] });
     let out = "";
     proc.stdout?.on("data", (d: Buffer) => { out += d.toString(); });
     proc.on("close", () => resolve(out));
+    proc.on("error", () => resolve(""));
   });
 }
 

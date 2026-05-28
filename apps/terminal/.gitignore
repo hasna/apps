@@ -5,7 +5,9 @@ dist/
 .secrets
 .secrets/
 temp/
+.benchmark-artifacts/
 .connectors/
+.takumi/
 *.pem
 *.key
 imported_modules.txt

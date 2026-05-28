@@ -4,6 +4,7 @@
 import { spawn } from "child_process";
 import { readFileSync, existsSync } from "fs";
 import { join, extname } from "path";
+import { getShell } from "../shell.js";
 
 export interface CodeSymbol {
   name: string;
@@ -24,7 +25,7 @@ export interface SemanticSearchResult {
 
 function exec(command: string, cwd: string): Promise<string> {
   return new Promise((resolve) => {
-    const proc = spawn("/bin/zsh", ["-c", command], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn(getShell(), ["-c", command], { cwd, stdio: ["ignore", "pipe", "pipe"] });
     let out = "";
     proc.stdout?.on("data", (d: Buffer) => { out += d.toString(); });
     proc.stderr?.on("data", (d: Buffer) => { /* ignore */ });

@@ -2,6 +2,7 @@
 
 import { spawn } from "child_process";
 import { DEFAULT_EXCLUDE_DIRS, isSourceFile, isExcludedDir, relevanceScore } from "./filters.js";
+import { getShell } from "../shell.js";
 
 export interface FileSearchResult {
   query: string;
@@ -15,7 +16,7 @@ export interface FileSearchResult {
 
 function exec(command: string, cwd: string): Promise<string> {
   return new Promise((resolve) => {
-    const proc = spawn("/bin/zsh", ["-c", command], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn(getShell(), ["-c", command], { cwd, stdio: ["ignore", "pipe", "pipe"] });
     let out = "";
     proc.stdout?.on("data", (d: Buffer) => { out += d.toString(); });
     proc.stderr?.on("data", (d: Buffer) => { out += d.toString(); });

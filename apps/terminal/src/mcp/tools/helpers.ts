@@ -7,6 +7,7 @@ import { rewriteCommand } from "../../command-rewriter.js";
 import { invalidateBootCache } from "../../session-boot.js";
 import { logInteraction } from "../../sessions-db.js";
 import { join } from "path";
+import { getShell } from "../../shell.js";
 
 export { z } from "zod";
 
@@ -42,7 +43,7 @@ export function createHelpers(sessionId: string): ToolHelpers {
     const actualCommand = rw.changed ? rw.rewritten : command;
     return new Promise((resolve) => {
       const start = Date.now();
-      const proc = spawn("/bin/zsh", ["-c", actualCommand], {
+      const proc = spawn(getShell(), ["-c", actualCommand], {
         cwd: cwd ?? process.cwd(),
         stdio: ["ignore", "pipe", "pipe"],
       });

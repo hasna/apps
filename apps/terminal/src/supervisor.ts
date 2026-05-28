@@ -2,6 +2,7 @@
 
 import { spawn, type ChildProcess } from "child_process";
 import { createConnection } from "net";
+import { getShell } from "./shell.js";
 
 export interface ManagedProcess {
   pid: number;
@@ -32,7 +33,7 @@ function detectPort(command: string): number | undefined {
 /** Start a background process */
 export function bgStart(command: string, cwd?: string): ManagedProcess {
   const workDir = cwd ?? process.cwd();
-  const proc = spawn("/bin/zsh", ["-c", command], {
+  const proc = spawn(getShell(), ["-c", command], {
     cwd: workDir,
     stdio: ["ignore", "pipe", "pipe"],
     detached: false,

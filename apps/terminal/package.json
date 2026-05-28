@@ -1,6 +1,6 @@
 {
   "name": "@hasna/terminal",
-  "version": "4.3.4",
+  "version": "4.3.6",
   "description": "Smart terminal wrapper for AI agents and humans — structured output, token compression, MCP server, natural language",
   "type": "module",
   "files": [
@@ -17,7 +17,9 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/cli.tsx",
-    "start": "node dist/cli.js",
+    "start": "bun dist/cli.js",
+    "benchmark": "bun run build && bun benchmarks/benchmark.mjs",
+    "benchmark:real": "bun run build && bun benchmarks/real-cli-benchmark.mjs",
     "test": "bun test",
     "postinstall": "mkdir -p $HOME/.hasna/terminal/profiles $HOME/.hasna/terminal/outputs 2>/dev/null || true"
   },
