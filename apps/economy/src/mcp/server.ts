@@ -15,7 +15,7 @@ import type { Period } from '../types/index.js'
 import type { Agent } from '../lib/agents.js'
 
 export const MCP_NAME = 'economy'
-export const DEFAULT_MCP_HTTP_PORT = 8815
+export const DEFAULT_MCP_HTTP_PORT = 8860
 
 export function buildServer(): any {
 const db = openDatabase()
