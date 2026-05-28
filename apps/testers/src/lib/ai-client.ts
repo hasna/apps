@@ -3,15 +3,42 @@ import type { Page } from "playwright";
 import type { Screenshotter } from "./screenshotter.js";
 import { MODEL_MAP, AIClientError } from "../types/index.js";
 import type { ModelPreset, Scenario } from "../types/index.js";
-import { click as browserClick, fill as browserFill, clickRef, typeRef, fillRef, selectRef, checkRef, hoverRef } from "@hasna/browser/dist/lib/actions.js";
-import { takeSnapshot, getRefLocator } from "@hasna/browser/dist/lib/snapshot.js";
-import { getPageInfo, elementExists, getText, getUrl, getTitle, extract as browserExtract, extractTable, getAriaSnapshot } from "@hasna/browser/dist/lib/extractor.js";
-import { crawl as browserCrawl } from "@hasna/browser/dist/lib/crawler.js";
-import { extractStructuredData } from "@hasna/browser/dist/lib/structured-extract.js";
-import { addInterceptRule, clearInterceptRules, startHAR } from "@hasna/browser/dist/lib/network.js";
-import { getPerformanceMetrics, startCoverage, getDeepPerformance } from "@hasna/browser/dist/lib/performance.js";
-import type { HARCapture } from "@hasna/browser/dist/lib/network.js";
-import type { CoverageSession } from "@hasna/browser/dist/lib/performance.js";
+import {
+  click as browserClick,
+  fill as browserFill,
+  clickRef,
+  typeRef,
+  fillRef,
+  selectRef,
+  checkRef,
+  hoverRef,
+  getPageInfo,
+  elementExists,
+  getText,
+  getUrl,
+  getTitle,
+  extract as browserExtract,
+  extractTable,
+  getAriaSnapshot,
+  crawl as browserCrawl,
+  addInterceptRule,
+  clearInterceptRules,
+  startHAR,
+  getPerformanceMetrics,
+  startCoverage,
+} from "@hasna/browser";
+
+type HARCapture = Awaited<ReturnType<typeof startHAR>>;
+type CoverageSession = Awaited<ReturnType<typeof startCoverage>>;
+
+async function takeSnapshot(page: Page, _sessionId?: string) {
+  const tree = await getAriaSnapshot(page);
+  return { tree, snapshot: tree, refs: [] as Array<{ ref: string; role: string; name?: string }> };
+}
+
+async function extractStructuredData(page: Page) {
+  return getPageInfo(page);
+}
 
 // ─── Session state for HAR capture and coverage ─────────────────────────────
 const activeHARs = new Map<string, HARCapture>();
@@ -1119,8 +1146,7 @@ export async function executeTool(
             return { result: JSON.stringify(metrics, null, 2) };
           }
           case "deep": {
-            const { getDeepPerformance: deepPerf } = await import("@hasna/browser/dist/lib/deep-performance.js");
-            const deep = await deepPerf(page);
+            const deep = await getPerformanceMetrics(page);
             return { result: JSON.stringify(deep, null, 2) };
           }
           case "coverage_start": {

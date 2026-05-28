@@ -19,11 +19,12 @@ describe("testers-mcp CLI", () => {
     const stderr = proc.stderr.toString();
     expect(proc.status).toBe(0);
     expect(stdout).toContain("Usage: testers-mcp [options]");
+    expect(stdout).toContain("--http");
     expect(stderr).not.toContain("Tool wait_for_run is already registered");
   });
 
   test("does not register duplicate tool names", () => {
-    const entry = new URL("./index.ts", import.meta.url).pathname;
+    const entry = new URL("./server.ts", import.meta.url).pathname;
     const source = readFileSync(entry, "utf8");
     const names = [...source.matchAll(/server\.tool\(\s*["']([^"']+)["']/g)].map((match) => match[1]);
     const duplicates = names.filter((name, index) => names.indexOf(name) !== index);
