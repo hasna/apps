@@ -19,6 +19,7 @@ import { createRelation, listRelations, deleteRelation } from "../db/relations.t
 import { listActivity } from "../db/activity.ts";
 import type { TicketType, TicketStatus, Resolution, Priority, Severity, TicketSource, RelationType } from "../types/index.ts";
 
+export function buildServer() {
 const server = new Server(
   { name: "open-tickets", version: "0.1.0" },
   { capabilities: { tools: {}, resources: {} } }
@@ -760,7 +761,30 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   };
 });
 
+return server;
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
+async function main() {
+  const { isHttpMode, resolveHttpPort, startHttpServer } = await import("./http.ts");
+  if (isHttpMode()) {
+    await startHttpServer(resolveHttpPort());
+    return;
+  }
+
+  const server = buildServer();
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
+
+const isDirectRun = import.meta.main
+  || process.argv[1]?.endsWith("/mcp/index.ts")
+  || process.argv[1]?.endsWith("/mcp/index.js");
+
+if (isDirectRun) {
+  main().catch((err) => {
+    console.error("MCP server error:", err);
+    process.exit(1);
+  });
+}

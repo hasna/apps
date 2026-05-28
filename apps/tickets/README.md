@@ -23,6 +23,19 @@ tickets --help
 tickets-mcp
 ```
 
+## HTTP mode
+
+Shared Streamable HTTP transport for long-lived local MCP (stdio remains the default):
+
+```bash
+tickets-mcp --http              # or MCP_HTTP=1
+tickets-mcp --http --port 8841  # default port 8841
+```
+
+- Bind: `127.0.0.1` only
+- Health: `GET /health` → `{"status":"ok","name":"tickets"}`
+- MCP: `POST /mcp` (Streamable HTTP, stateless)
+
 ## REST API
 
 ```bash

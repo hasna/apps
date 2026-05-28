@@ -429,9 +429,15 @@ export function createApp() {
 
 // Only start server when this file is the entrypoint
 const app = createApp();
-serve({ fetch: app.fetch, port: PORT });
-console.log(`open-tickets server running on http://localhost:${PORT}`);
+const isServerDirectRun = import.meta.main
+  || process.argv[1]?.endsWith("/server/index.ts")
+  || process.argv[1]?.endsWith("/server/index.js");
 
-// Initialize DB and start background workers
-getDatabase();
-import("../lib/sla.ts").then(({ startSlaChecker }) => startSlaChecker()).catch(() => {});
+if (isServerDirectRun) {
+  serve({ fetch: app.fetch, port: PORT });
+  console.log(`open-tickets server running on http://localhost:${PORT}`);
+
+  // Initialize DB and start background workers
+  getDatabase();
+  import("../lib/sla.ts").then(({ startSlaChecker }) => startSlaChecker()).catch(() => {});
+}
