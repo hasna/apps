@@ -16,26 +16,35 @@ export interface Credential {
   totp?: string;
 }
 
+export interface CredentialLookup {
+  credential: Credential | null;
+  method: LoginResult["method"];
+}
+
 export interface LoginResult {
   logged_in: boolean;
   redirect_url: string;
   profile_saved: boolean;
-  method: "secrets_vault" | "env_file" | "not_found";
+  method: "secrets_vault" | "env_file" | "process_env" | "not_found";
   error?: string;
 }
 
 // ─── Credential lookup ────────────────────────────────────────────────────────
 
-export async function getCredentials(service: string): Promise<Credential | null> {
-  // 1. Try @hasna/secrets vault
+export async function lookupCredentials(service: string): Promise<CredentialLookup> {
+  // 1. Try @hasna/secrets vault (configurable via env, not hardcoded)
   try {
-    const { getSecret } = await import(
-      `${homedir()}/Workspace/hasna/opensource/opensourcedev/open-secrets/src/store.js`
-    );
-    const email = getSecret(`${service}_email`) ?? getSecret(`${service}_username`) ?? getSecret(`${service}_login`);
-    const password = getSecret(`${service}_password`) ?? getSecret(`${service}_pass`);
-    if (email?.value && password?.value) {
-      return { email: email.value, password: password.value };
+    const secretsVaultPath = process.env["BROWSER_SECRETS_VAULT_PATH"];
+    if (secretsVaultPath) {
+      const { getSecret } = await import(secretsVaultPath);
+      const email = getSecret(`${service}_email`) ?? getSecret(`${service}_username`) ?? getSecret(`${service}_login`);
+      const password = getSecret(`${service}_password`) ?? getSecret(`${service}_pass`);
+      if (email?.value && password?.value) {
+        return {
+          credential: { email: email.value, password: password.value },
+          method: "secrets_vault",
+        };
+      }
     }
   } catch { /* secrets vault not available */ }
 
@@ -46,7 +55,6 @@ export async function getCredentials(service: string): Promise<Credential | null
     try {
       content = readFileSync(secretsPath, "utf8");
     } catch {
-      // ~/.secrets is a directory or unreadable — skip
       content = "";
     }
     const lines = content.split("\n");
@@ -58,16 +66,24 @@ export async function getCredentials(service: string): Promise<Credential | null
     }
     const email = vars[`${prefix}_EMAIL`] ?? vars[`${prefix}_USERNAME`];
     const password = vars[`${prefix}_PASSWORD`];
-    if (email && password) return { email, password };
+    if (email && password) {
+      return { credential: { email, password }, method: "env_file" };
+    }
   }
 
   // 3. Try process.env
   const envPrefix = service.toUpperCase().replace(/[^A-Z0-9]/g, "_");
   const envEmail = process.env[`${envPrefix}_EMAIL`] ?? process.env[`${envPrefix}_USERNAME`];
   const envPass = process.env[`${envPrefix}_PASSWORD`];
-  if (envEmail && envPass) return { email: envEmail, password: envPass };
+  if (envEmail && envPass) {
+    return { credential: { email: envEmail, password: envPass }, method: "process_env" };
+  }
 
-  return null;
+  return { credential: null, method: "not_found" };
+}
+
+export async function getCredentials(service: string): Promise<Credential | null> {
+  return (await lookupCredentials(service)).credential;
 }
 
 // ─── Login flow ───────────────────────────────────────────────────────────────
@@ -82,22 +98,22 @@ export async function loginWithCredentials(
     submitSelector?: string;
     waitForText?: string;
     saveProfile?: string;
+    method?: LoginResult["method"];
   }
 ): Promise<LoginResult> {
-  const { fillForm } = await import("./actions.js");
+  const { fillForm, waitForText } = await import("./actions.js");
   const { saveProfile } = await import("./profiles.js");
 
   try {
-    // Navigate to login page if provided
     if (opts?.loginUrl) {
       await page.goto(opts.loginUrl, { waitUntil: "domcontentloaded" } as any);
       await new Promise(r => setTimeout(r, 500));
     }
 
-    // Build fields map — try common selectors if not specified
+    const urlBefore = page.url();
     const emailSel = opts?.emailSelector ?? 'input[type="email"], input[name="email"], input[id*="email"], input[placeholder*="email" i]';
     const passSel = opts?.passwordSelector ?? 'input[type="password"]';
-    const submitSel = opts?.submitSelector ?? 'button[type="submit"], input[type="submit"], button:contains("Sign in"), button:contains("Log in"), button:contains("Login")';
+    const submitSel = opts?.submitSelector ?? 'button[type="submit"], input[type="submit"]';
 
     const fields: Record<string, string> = {};
     if (credentials.email) fields[emailSel] = credentials.email;
@@ -106,14 +122,43 @@ export async function loginWithCredentials(
 
     const fillResult: FormFillResult = await fillForm(page, fields, submitSel);
 
-    // Wait for navigation or success text
-    const successText = opts?.waitForText ?? "dashboard\|profile\|account\|welcome\|signed in\|logout";
-    await new Promise(r => setTimeout(r, 1500));
+    if (fillResult.errors.some((e) => e.startsWith("submit("))) {
+      try {
+        await page.getByRole("button", { name: /sign in|log in|login|submit/i }).first().click({ timeout: 5000 });
+      } catch {
+        try {
+          await page.locator('input[type="submit"]').first().click({ timeout: 3000 });
+        } catch {}
+      }
+    }
 
-    const currentUrl = (page as any).url?.() ?? "";
-    const logged_in = fillResult.errors.length === 0;
+    const successPattern = opts?.waitForText ?? "dashboard|profile|account|welcome|signed in|logout";
+    const patterns = successPattern.split("|").map((p) => p.trim()).filter(Boolean);
 
-    // Auto-save profile if requested
+    let logged_in = false;
+    for (const pattern of patterns) {
+      try {
+        await waitForText(page, pattern, { timeout: 5000 });
+        logged_in = fillResult.errors.length === 0;
+        break;
+      } catch {}
+    }
+
+    if (!logged_in) {
+      await page.waitForLoadState("domcontentloaded").catch(() => {});
+      await new Promise(r => setTimeout(r, 1000));
+      const currentUrl = page.url();
+      const bodyText = await page.evaluate(() => document.body?.innerText?.toLowerCase() ?? "").catch(() => "");
+      const urlChanged = currentUrl !== urlBefore;
+      const textMatch = patterns.some((p) => {
+        const needle = p.toLowerCase();
+        return bodyText.includes(needle) || currentUrl.toLowerCase().includes(needle);
+      });
+      logged_in = fillResult.errors.length === 0 && (urlChanged || textMatch);
+    }
+
+    const currentUrl = page.url();
+
     let profile_saved = false;
     if (opts?.saveProfile && logged_in) {
       try {
@@ -126,14 +171,14 @@ export async function loginWithCredentials(
       logged_in,
       redirect_url: currentUrl,
       profile_saved,
-      method: "secrets_vault",
+      method: opts?.method ?? "secrets_vault",
     };
   } catch (err) {
     return {
       logged_in: false,
       redirect_url: "",
       profile_saved: false,
-      method: "not_found",
+      method: opts?.method ?? "not_found",
       error: err instanceof Error ? err.message : String(err),
     };
   }
