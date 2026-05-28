@@ -992,9 +992,9 @@ program
     try {
       const port = parseInt(opts.port, 10);
       process.stderr.write(chalk.cyan(`Starting server on port ${port}...\n`));
-      // The server entrypoint starts itself from process.env.PORT when imported.
-      process.env.PORT = String(port);
-      await import("../server/index.js");
+      const { startCrawlServer } = await import("../server/index.js");
+      startCrawlServer({ port });
+      await new Promise(() => {});
     } catch (err) {
       process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
       process.exit(1);

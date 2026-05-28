@@ -30,6 +30,7 @@ const _crawlAgents = new Map<string, _CrawlAgent>();
 
 // ─── Server Setup ────────────────────────────────────────────────────────────
 
+export function buildServer(): McpServer {
 const server = new McpServer({
   name: "open-crawl",
   version: "0.1.0",
@@ -1049,14 +1050,28 @@ server.tool("list_agents", "List all registered agents.", {}, async () => {
   return { content: [{ type: "text" as const, text: JSON.stringify([..._crawlAgents.values()]) }] };
 });
 
+return server;
+}
+
 // ─── Start ───────────────────────────────────────────────────────────────────
 
 async function main() {
+  const argv = process.argv.slice(2);
+  if ((await import("./http.js")).isHttpMode(argv)) {
+    const { resolveMcpHttpPort, startHttpServer } = await import("./http.js");
+    const { startCrawlServer } = await import("../server/index.js");
+    const port = resolveMcpHttpPort(argv);
+    await startCrawlServer({ port, hostname: "127.0.0.1" });
+    await new Promise(() => {});
+    return;
+  }
   const transport = new StdioServerTransport();
-  await server.connect(transport);
+  await buildServer().connect(transport);
 }
 
-main().catch((err) => {
-  process.stderr.write(`Fatal: ${(err as Error).message}\n`);
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch((err) => {
+    process.stderr.write(`Fatal: ${(err as Error).message}\n`);
+    process.exit(1);
+  });
+}

@@ -33,6 +33,21 @@ crawl-mcp
 
 30 tools available.
 
+## HTTP mode
+
+Long-lived Streamable HTTP transport for shared agent sessions (binds `127.0.0.1` only):
+
+```bash
+crawl-mcp --http              # default port 8812
+crawl-mcp --http --port 8812
+MCP_HTTP=1 MCP_HTTP_PORT=8812 crawl-mcp
+```
+
+- `GET /health` → `{"status":"ok","name":"crawl"}`
+- `POST /mcp` — Streamable HTTP MCP endpoint (also mounted on `crawl-serve`)
+
+Stdio remains the default transport for gradual rollout.
+
 ## REST API
 
 ```bash

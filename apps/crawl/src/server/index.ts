@@ -8,8 +8,9 @@ import { validateApiKey, extractBearerToken } from "../lib/api-auth.js";
 import { createApiKey, listApiKeys, revokeApiKey } from "../db/api-keys.js";
 import { getUsageSummary, getRecentEvents } from "../db/usage.js";
 import type { ApiKey } from "../types/index.js";
+import { handleMcpHttpRequest, mcpHealthJson } from "../mcp/http.js";
 
-const PORT = parseInt(process.env.PORT ?? "19700", 10);
+const DEFAULT_PORT = parseInt(process.env.PORT ?? "19700", 10);
 
 const DASHBOARD_HTML = `<!DOCTYPE html>
 <html lang="en">
@@ -165,12 +166,21 @@ function checkAuth(req: Request): { apiKey: ApiKey | null; unauthorized: boolean
   return { apiKey: key, unauthorized: false };
 }
 
-Bun.serve({
-  port: PORT,
-  async fetch(req) {
+export async function handleCrawlRequest(req: Request, port = DEFAULT_PORT): Promise<Response> {
     const url = new URL(req.url);
     const rawPath = url.pathname;
     const method = req.method;
+
+    if (rawPath === "/health" && method === "GET") {
+      return new Response(JSON.stringify(mcpHealthJson()), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (rawPath === "/mcp") {
+      const { buildServer } = await import("../mcp/index.js");
+      return handleMcpHttpRequest(req, buildServer);
+    }
 
     // Dashboard — serve on /dashboard
     if (rawPath === "/dashboard") {
@@ -187,7 +197,7 @@ Bun.serve({
           name: "open-crawl",
           version: "0.2.0",
           apiVersion: "v1",
-          port: PORT,
+          port,
         });
       }
       return new Response(DASHBOARD_HTML, {
@@ -496,7 +506,20 @@ Bun.serve({
     }
 
     return notFound();
-  },
-});
+}
 
-console.log(`open-crawl server running on http://localhost:${PORT}`);
+export function startCrawlServer(options: { port?: number; hostname?: string } = {}) {
+  const port = options.port ?? DEFAULT_PORT;
+  const hostname = options.hostname ?? "127.0.0.1";
+  const server = Bun.serve({
+    port,
+    hostname,
+    fetch: (req) => handleCrawlRequest(req, port),
+  });
+  console.log(`open-crawl server running on http://${hostname}:${server.port}`);
+  return server;
+}
+
+if (import.meta.main) {
+  startCrawlServer({ port: DEFAULT_PORT });
+}
