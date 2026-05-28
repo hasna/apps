@@ -21,7 +21,7 @@ export async function createFailureTasks(
 
   let db: ReturnType<typeof connectToTodos> | null = null;
   try {
-    db = connectToTodos();
+    db = connectToTodos({ readonly: false });
   } catch {
     return { created: 0, skipped: 0 };
   }

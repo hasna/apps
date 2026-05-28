@@ -495,6 +495,26 @@ ALTER TABLE runs ADD COLUMN pr_commit_sha TEXT;
 ALTER TABLE runs ADD COLUMN pr_url TEXT;
 ALTER TABLE runs ADD COLUMN gh_app_installation_id TEXT;
   `,
+  // Migration 28: Saved testing workflows for reusable app QA plans
+  `
+CREATE TABLE IF NOT EXISTS testing_workflows (
+  id TEXT PRIMARY KEY,
+  project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  description TEXT,
+  scenario_filter TEXT NOT NULL DEFAULT '{}',
+  persona_ids TEXT NOT NULL DEFAULT '[]',
+  goal TEXT,
+  execution TEXT NOT NULL DEFAULT '{"target":"local"}',
+  settings TEXT NOT NULL DEFAULT '{}',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_testing_workflows_project ON testing_workflows(project_id);
+CREATE INDEX IF NOT EXISTS idx_testing_workflows_enabled ON testing_workflows(enabled);
+  `,
 ];
 
 function applyMigrations(database: Database): void {
@@ -559,6 +579,7 @@ export function resetDatabase(): void {
   database.exec("DELETE FROM auth_presets");
   database.exec("DELETE FROM environments");
   database.exec("DELETE FROM schedules");
+  database.exec("DELETE FROM testing_workflows");
   database.exec("DELETE FROM api_check_results");
   database.exec("DELETE FROM api_checks");
   database.exec("DELETE FROM runs");

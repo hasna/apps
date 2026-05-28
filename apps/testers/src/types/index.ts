@@ -8,6 +8,7 @@ export type ResultStatus = "passed" | "failed" | "error" | "skipped" | "flaky";
 export type ModelPreset = "quick" | "thorough" | "deep" | "cerebras-fast" | "cerebras-smart";
 export type BrowserEngine = "playwright" | "playwright-firefox" | "playwright-webkit" | "lightpanda" | "bun" | "cdp";
 export type AuthStrategy = "form-login" | "bearer" | "cookie" | "oauth" | "custom_script";
+export type WorkflowExecutionTarget = "local" | "connector:e2b";
 
 export type AssertionType = "visible" | "not_visible" | "text_contains" | "text_equals" | "element_count" | "no_console_errors" | "url_contains" | "title_contains" | "no_a11y_violations" | "cookie_exists" | "cookie_value" | "cookie_not_exists" | "local_storage_exists" | "local_storage_value" | "local_storage_not_exists" | "session_storage_value" | "session_storage_not_exists";
 
@@ -410,6 +411,99 @@ export interface CreateScheduleInput {
   parallel?: number;
   timeoutMs?: number;
   projectId?: string;
+}
+
+// ─── Saved Testing Workflows ─────────────────────────────────────────────────
+
+export interface WorkflowScenarioFilter {
+  scenarioIds?: string[];
+  tags?: string[];
+  priority?: ScenarioPriority;
+}
+
+export interface WorkflowExecutionConfig {
+  target: WorkflowExecutionTarget;
+  connector?: "e2b" | string;
+  operation?: string;
+  sandboxTemplate?: string;
+  timeoutMs?: number;
+  env?: Record<string, string>;
+}
+
+export interface WorkflowGoal {
+  prompt: string;
+  successCriteria: string[];
+  maxIterations: number;
+}
+
+export interface WorkflowRow {
+  id: string;
+  project_id: string | null;
+  name: string;
+  description: string | null;
+  scenario_filter: string;
+  persona_ids: string;
+  goal: string | null;
+  execution: string;
+  settings: string;
+  enabled: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TestingWorkflow {
+  id: string;
+  projectId: string | null;
+  name: string;
+  description: string | null;
+  scenarioFilter: WorkflowScenarioFilter;
+  personaIds: string[];
+  goal: WorkflowGoal | null;
+  execution: WorkflowExecutionConfig;
+  settings: Record<string, unknown>;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateTestingWorkflowInput {
+  name: string;
+  description?: string;
+  projectId?: string;
+  scenarioFilter?: WorkflowScenarioFilter;
+  personaIds?: string[];
+  goal?: Partial<WorkflowGoal> | null;
+  execution?: Partial<WorkflowExecutionConfig>;
+  settings?: Record<string, unknown>;
+  enabled?: boolean;
+}
+
+export interface UpdateTestingWorkflowInput {
+  name?: string;
+  description?: string | null;
+  scenarioFilter?: WorkflowScenarioFilter;
+  personaIds?: string[];
+  goal?: Partial<WorkflowGoal> | null;
+  execution?: Partial<WorkflowExecutionConfig>;
+  settings?: Record<string, unknown>;
+  enabled?: boolean;
+}
+
+export function workflowFromRow(row: WorkflowRow): TestingWorkflow {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    name: row.name,
+    description: row.description,
+    scenarioFilter: JSON.parse(row.scenario_filter || "{}"),
+    personaIds: JSON.parse(row.persona_ids || "[]"),
+    goal: row.goal ? JSON.parse(row.goal) : null,
+    execution: JSON.parse(row.execution || '{"target":"local"}'),
+    settings: JSON.parse(row.settings || "{}"),
+    enabled: row.enabled === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
 }
 
 export interface UpdateScheduleInput {

@@ -29,7 +29,7 @@ function resolveTodosDbPath(): string {
   return join(homedir(), ".todos", "todos.db");
 }
 
-export function connectToTodos(): Database {
+export function connectToTodos(options: { readonly?: boolean } = {}): Database {
   const dbPath = resolveTodosDbPath();
   if (!existsSync(dbPath)) {
     throw new TodosConnectionError(
@@ -37,7 +37,7 @@ export function connectToTodos(): Database {
     );
   }
 
-  const db = new Database(dbPath, { readonly: true });
+  const db = new Database(dbPath, { readonly: options.readonly ?? true });
   db.exec("PRAGMA foreign_keys = ON");
   return db;
 }
@@ -50,7 +50,7 @@ export function pullTasks(
     status?: string;
   } = {}
 ): TodosTask[] {
-  const db = connectToTodos();
+  const db = connectToTodos({ readonly: true });
 
   try {
     let query = "SELECT id, short_id, title, description, status, priority, tags, project_id FROM tasks WHERE 1=1";
@@ -181,6 +181,54 @@ export function markTodoDone(taskId: string): boolean {
     ).run(task.id, task.version);
 
     return true;
+  } finally {
+    db.close();
+  }
+}
+
+export function createTodoTask(input: {
+  title: string;
+  description?: string;
+  projectId?: string;
+  priority?: string;
+  tags?: string[];
+  metadata?: Record<string, unknown>;
+}): { created: boolean; taskId?: string; skippedReason?: string } {
+  const projectId = input.projectId ?? process.env["TESTERS_TODOS_PROJECT_ID"];
+  if (!projectId) return { created: false, skippedReason: "TESTERS_TODOS_PROJECT_ID is not set" };
+
+  let db: Database;
+  try {
+    db = connectToTodos({ readonly: false });
+  } catch (error) {
+    return { created: false, skippedReason: error instanceof Error ? error.message : String(error) };
+  }
+
+  try {
+    const existing = db
+      .query("SELECT id FROM tasks WHERE title = ? AND status NOT IN ('completed', 'cancelled') LIMIT 1")
+      .get(input.title) as { id: string } | null;
+    if (existing) return { created: false, taskId: existing.id, skippedReason: "matching open task already exists" };
+
+    const id = crypto.randomUUID();
+    const timestamp = new Date().toISOString();
+    db.query(`
+      INSERT INTO tasks (id, short_id, title, description, status, priority, tags, project_id, version, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, 1, ?, ?)
+    `).run(
+      id,
+      `TST-${id.slice(0, 6)}`,
+      input.title,
+      input.description ?? null,
+      input.priority ?? "medium",
+      JSON.stringify(input.tags ?? ["testers", "workflow"]),
+      projectId,
+      timestamp,
+      timestamp,
+    );
+    return { created: true, taskId: id };
+  } catch (error) {
+    return { created: false, skippedReason: error instanceof Error ? error.message : String(error) };
   } finally {
     db.close();
   }
