@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { isHttpMode, resolveHttpPort, startHttpServer } from "./http.js";
+import { isStdioMode, resolveHttpPort, startHttpServer } from "./http.js";
 import { buildServer, getPackageVersion } from "./server.js";
 
 export { buildServer, getPackageVersion } from "./server.js";
@@ -37,14 +37,14 @@ export function handleMcpCliArgs(args: string[], log: (msg: string) => void = co
 export async function main(args: string[] = process.argv.slice(2)) {
   if (handleMcpCliArgs(args)) return;
 
-  if (isHttpMode(args)) {
-    startHttpServer({ port: resolveHttpPort(args) });
+  if (isStdioMode(args)) {
+    const server = buildServer();
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
     return;
   }
-
-  const server = buildServer();
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  // Default: shared Streamable HTTP server (one process per MCP, many agents).
+  startHttpServer({ port: resolveHttpPort(args) });
 }
 
 if (import.meta.main) {
