@@ -3,78 +3,72 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z, json, err, resolveSessionId, getSessionPage } from "./helpers.js";
+import { getTerminalState, isTuiHealthy, reconnectTui, waitForTerminalText, type TuiSession } from "../engines/tui.js";
+import { getSessionEngine, getSessionTuiSession } from "../lib/session.js";
+import { stopTuiRecording, trackTuiRecording } from "../lib/tui-recording.js";
 
-// ─── Key mapping for friendly names ─────────────────────────────────────────
+// ─── Configurable defaults ───────────────────────────────────────────────────
+const DEFAULT_TOOL_TIMEOUT_MS = 15_000;
+const RECONNECT_ON_STUCK = true;
+
+// ─── Key mapping ─────────────────────────────────────────────────────────────
 
 const KEY_MAP: Record<string, string> = {
-  // Control keys
-  "ctrl+c": "\x03",
-  "ctrl+d": "\x04",
-  "ctrl+z": "\x1a",
-  "ctrl+l": "\x0c",
-  "ctrl+a": "\x01",
-  "ctrl+e": "\x05",
-  "ctrl+k": "\x0b",
-  "ctrl+u": "\x15",
-  "ctrl+w": "\x17",
-  "ctrl+r": "\x12",
-  "ctrl+p": "\x10",
-  "ctrl+n": "\x0e",
-  // Navigation
-  enter: "Enter",
-  tab: "Tab",
-  escape: "Escape",
-  esc: "Escape",
-  backspace: "Backspace",
-  delete: "Delete",
-  space: " ",
-  // Arrows
-  up: "ArrowUp",
-  down: "ArrowDown",
-  left: "ArrowLeft",
-  right: "ArrowRight",
-  arrow_up: "ArrowUp",
-  arrow_down: "ArrowDown",
-  arrow_left: "ArrowLeft",
-  arrow_right: "ArrowRight",
-  // Other
-  home: "Home",
-  end: "End",
-  page_up: "PageUp",
-  page_down: "PageDown",
+  "ctrl+c": "\x03", "ctrl+d": "\x04", "ctrl+z": "\x1a",
+  "ctrl+l": "\x0c", "ctrl+a": "\x01", "ctrl+e": "\x05",
+  "ctrl+k": "\x0b", "ctrl+u": "\x15", "ctrl+w": "\x17",
+  "ctrl+r": "\x12", "ctrl+p": "\x10", "ctrl+n": "\x0e",
+  enter: "Enter", tab: "Tab", escape: "Escape", esc: "Escape",
+  backspace: "Backspace", delete: "Delete", space: " ",
+  up: "ArrowUp", down: "ArrowDown", left: "ArrowLeft", right: "ArrowRight",
+  arrow_up: "ArrowUp", arrow_down: "ArrowDown",
+  arrow_left: "ArrowLeft", arrow_right: "ArrowRight",
+  home: "Home", end: "End", page_up: "PageUp", page_down: "PageDown",
   f1: "F1", f2: "F2", f3: "F3", f4: "F4", f5: "F5", f6: "F6",
   f7: "F7", f8: "F8", f9: "F9", f10: "F10", f11: "F11", f12: "F12",
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Check if the session is a TUI session (engine === "tui") */
 function assertTuiSession(sessionId: string) {
-  const { getSessionEngine } = require("../lib/session.js");
   const engine = getSessionEngine(sessionId);
   if (engine !== "tui") {
-    throw new Error(`browser_tui_* tools require a TUI session (engine="tui"), but this session uses engine="${engine}". Create a TUI session with: browser_session_create(engine="tui", start_url="your-command")`);
+    throw new Error(`browser_tui_* tools require a TUI session (engine="tui"), but session uses engine="${engine}". Create one with: browser_session_create(engine="tui", start_url="your-command")`);
   }
 }
 
-/** Get terminal text, optionally filtered by row range */
-async function getTermText(page: any, startRow?: number, endRow?: number): Promise<{ text: string; rows: string[]; row_count: number }> {
-  const result = await page.evaluate((args: any) => {
-    const [sr, er] = args;
-    const term = (window as any).term ?? (window as any).terminal;
-    if (!term?.buffer?.active) return { text: "", rows: [] as string[], row_count: 0 };
-    const buf = term.buffer.active;
-    const allRows: string[] = [];
-    for (let i = 0; i < buf.length; i++) {
-      const line = buf.getLine(i);
-      if (line) allRows.push(line.translateToString(true));
-    }
-    const start = sr ?? 0;
-    const end = er ?? allRows.length;
-    const filtered = allRows.slice(start, end);
-    return { text: filtered.join("\n").trimEnd(), rows: filtered, row_count: allRows.length };
-  }, [startRow, endRow]);
-  return result;
+function getTuiSession(sessionId: string): TuiSession {
+  const session = getSessionTuiSession(sessionId);
+  if (!session) {
+    throw new Error(`TUI session handle missing for session ${sessionId}. Close and re-open with engine="tui".`);
+  }
+  return session;
+}
+
+function getTuiMeta(sessionId: string) {
+  const session = getTuiSession(sessionId);
+  return {
+    method: session.method,
+    reconnected: session.reconnectCount > 0,
+  };
+}
+
+function withMeta<T extends Record<string, unknown>>(sessionId: string, data: T): T & { method: TuiSession["method"]; reconnected: boolean } {
+  return { ...data, ...getTuiMeta(sessionId) };
+}
+
+function withStableMeta<T extends Record<string, unknown>>(sessionId: string, data: T): T & { stuck: false; method: TuiSession["method"]; reconnected: boolean } {
+  return { ...data, stuck: false, ...getTuiMeta(sessionId) };
+}
+
+function filterRows(rows: string[], startRow?: number, endRow?: number) {
+  const start = startRow ?? 0;
+  const end = endRow ?? rows.length;
+  const filtered = rows.slice(start, end);
+  return {
+    text: filtered.join("\n").trimEnd(),
+    rows: filtered,
+  };
 }
 
 // ─── In-memory recording state ───────────────────────────────────────────────
@@ -84,12 +78,69 @@ interface TuiRecording {
   startTime: number;
   cols: number;
   rows: number;
-  events: Array<[number, string, string]>; // [relative_time_sec, event_type, data]
+  events: Array<[number, string, string]>;
   intervalId: ReturnType<typeof setInterval>;
   lastText: string;
 }
 
 const activeRecordings = new Map<string, TuiRecording>();
+
+// ─── Health-check wrapper ─────────────────────────────────────────────────────
+
+async function withTuiHealth<T>(
+  sessionId: string,
+  operation: (page: any, session: TuiSession) => Promise<T>,
+  options: {
+    timeoutMs?: number;
+    reconnectOnStuck?: boolean;
+    operationName?: string;
+  } = {}
+): Promise<T & { stuck?: boolean; reconnected?: boolean }> {
+  const {
+    timeoutMs = DEFAULT_TOOL_TIMEOUT_MS,
+    reconnectOnStuck = RECONNECT_ON_STUCK,
+    operationName = "operation",
+  } = options;
+
+  let session = getTuiSession(sessionId);
+  let page = getSessionPage(sessionId);
+
+  const health = await isTuiHealthy(session);
+  if (!health.healthy && reconnectOnStuck && session.reconnectCount < 2) {
+    try {
+      const { getSessionCommand, setSessionTui } = await import("../lib/session.js");
+      const cmd = getSessionCommand?.(sessionId) ?? "bash";
+      const newSession = await reconnectTui(session, cmd, { method: session.method });
+      setSessionTui(sessionId, newSession);
+      session = newSession;
+      page = newSession.page;
+    } catch {
+      // Let the operation fail naturally with the stale page if reconnect couldn't recover.
+    }
+  } else if (!health.healthy) {
+    throw Object.assign(
+      new Error(`TUI session is unhealthy: ${health.reason}. Close and reopen the session.`),
+      { code: "TUI_UNHEALTHY" },
+    );
+  }
+
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const err2 = new Error(`${operationName} timed out after ${timeoutMs}ms — ttyd/playwright connection may be unhealthy. Status: ${health.healthy ? "was healthy before op" : "was already unhealthy"}. Try closing and re-opening the session.`);
+      Object.assign(err2, { code: "TUI_TIMEOUT" });
+      reject(err2);
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([
+      operation(page, session) as Promise<T & { stuck?: boolean; reconnected?: boolean }>,
+      timeout,
+    ]);
+  } finally {
+    clearTimeout(timer!);
+  }
+}
 
 // ─── Registration ────────────────────────────────────────────────────────────
 
@@ -113,35 +164,39 @@ For typing text, use browser_tui_send_text instead.`,
   {
     session_id: z.string().optional(),
     keys: z.string().describe("Comma-separated key names: 'enter', 'ctrl+c', 'tab,tab,enter', 'arrow_down,arrow_down,enter'"),
+    timeout_ms: z.number().optional().default(15000).describe("Hard timeout in ms (default: 15000)"),
   },
-  async ({ session_id, keys }) => {
+  async ({ session_id, keys, timeout_ms }) => {
     try {
       const sid = resolveSessionId(session_id);
       assertTuiSession(sid);
-      const page = getSessionPage(sid);
 
-      const keyList = keys.split(",").map((k) => k.trim().toLowerCase());
-      const sent: string[] = [];
-
-      for (const key of keyList) {
-        const mapped = KEY_MAP[key];
-        if (mapped) {
-          if (mapped.length === 1 && mapped.charCodeAt(0) < 32) {
-            // Control character — type it directly
-            await page.keyboard.insertText(mapped);
+      const result = await withTuiHealth(sid, async (page) => {
+        const keyList = keys.split(",").map((k) => k.trim().toLowerCase());
+        const sent: string[] = [];
+        for (const key of keyList) {
+          const mapped = KEY_MAP[key];
+          if (mapped) {
+            if (mapped.length === 1 && mapped.charCodeAt(0) < 32) {
+              await page.keyboard.insertText(mapped);
+            } else {
+              await page.keyboard.press(mapped);
+            }
+            sent.push(key);
           } else {
-            await page.keyboard.press(mapped);
+            await page.keyboard.press(key);
+            sent.push(key);
           }
-          sent.push(key);
-        } else {
-          // Unknown key — try pressing it as-is (Playwright key name)
-          await page.keyboard.press(key);
-          sent.push(key);
         }
-      }
+        return { sent, count: sent.length };
+      }, { timeoutMs: timeout_ms, operationName: "browser_tui_send_keys" });
 
-      return json({ sent, count: sent.length });
-    } catch (e) { return err(e); }
+      return json(withStableMeta(sid, result));
+    } catch (e) {
+      if ((e as any).code === "TUI_TIMEOUT") return err(e);
+      if ((e as any).code === "TUI_UNHEALTHY") return err(e);
+      return err(e);
+    }
   }
 );
 
@@ -149,36 +204,35 @@ For typing text, use browser_tui_send_text instead.`,
 
 server.tool(
   "browser_tui_send_text",
-  `Type text into a TUI terminal and optionally press Enter. This is the most common way to interact with terminal apps.
-
-Examples:
-- Send a command: text="ls -la", press_enter=true
-- Type without executing: text="partial input", press_enter=false
-- Send to a prompt: text="yes", press_enter=true`,
+  `Type text into a TUI terminal and optionally press Enter. This is the most common way to interact with terminal apps.`,
   {
     session_id: z.string().optional(),
     text: z.string().describe("Text to type into the terminal"),
     press_enter: z.boolean().optional().default(true).describe("Press Enter after typing (default: true)"),
+    timeout_ms: z.number().optional().default(15000).describe("Hard timeout in ms (default: 15000)"),
   },
-  async ({ session_id, text, press_enter }) => {
+  async ({ session_id, text, press_enter, timeout_ms }) => {
     try {
       const sid = resolveSessionId(session_id);
       assertTuiSession(sid);
-      const page = getSessionPage(sid);
 
-      const textarea = await page.$(".xterm-helper-textarea");
-      if (textarea) {
-        await textarea.type(text);
-      } else {
-        await page.keyboard.type(text);
-      }
+      const result = await withTuiHealth(sid, async (page) => {
+        const textarea = await page.$(".xterm-helper-textarea");
+        if (textarea) {
+          await textarea.type(text);
+        } else {
+          await page.keyboard.type(text);
+        }
+        if (press_enter) await page.keyboard.press("Enter");
+        return { typed: text, pressed_enter: press_enter };
+      }, { timeoutMs: timeout_ms, operationName: "browser_tui_send_text" });
 
-      if (press_enter) {
-        await page.keyboard.press("Enter");
-      }
-
-      return json({ typed: text, pressed_enter: press_enter });
-    } catch (e) { return err(e); }
+      return json(withStableMeta(sid, result));
+    } catch (e) {
+      if ((e as any).code === "TUI_TIMEOUT") return err(e);
+      if ((e as any).code === "TUI_UNHEALTHY") return err(e);
+      return err(e);
+    }
   }
 );
 
@@ -186,28 +240,33 @@ Examples:
 
 server.tool(
   "browser_tui_resize",
-  "Resize the terminal to a specific number of columns and rows. Useful for testing responsive TUI layouts at different terminal sizes.",
+  "Resize the terminal to a specific number of columns and rows.",
   {
     session_id: z.string().optional(),
     cols: z.number().describe("Number of columns (e.g. 80, 120, 200)"),
     rows: z.number().describe("Number of rows (e.g. 24, 40, 50)"),
+    timeout_ms: z.number().optional().default(15000).describe("Hard timeout in ms (default: 15000)"),
   },
-  async ({ session_id, cols, rows }) => {
+  async ({ session_id, cols, rows, timeout_ms }) => {
     try {
       const sid = resolveSessionId(session_id);
       assertTuiSession(sid);
-      const page = getSessionPage(sid);
 
-      const result = await page.evaluate((args: any) => {
-        const [c, r] = args;
-        const term = (window as any).term ?? (window as any).terminal;
-        if (!term) return { resized: false, error: "No terminal instance found" };
-        term.resize(c, r);
-        return { resized: true, cols: c, rows: r };
-      }, [cols, rows]);
+      const result = await withTuiHealth(sid, async (page) => {
+        return page.evaluate((args: any) => {
+          const [c, r] = args;
+          const term = (window as any).term ?? (window as any).terminal;
+          if (!term) return { resized: false, error: "No terminal instance found" };
+          term.resize(c, r);
+          return { resized: true, cols: c, rows: r };
+        }, [cols, rows]);
+      }, { timeoutMs: timeout_ms, operationName: "browser_tui_resize" });
 
-      return json(result);
-    } catch (e) { return err(e); }
+      return json(withMeta(sid, result));
+    } catch (e) {
+      if ((e as any).code === "TUI_TIMEOUT" || (e as any).code === "TUI_UNHEALTHY") return err(e);
+      return err(e);
+    }
   }
 );
 
@@ -215,22 +274,33 @@ server.tool(
 
 server.tool(
   "browser_tui_get_text",
-  `Get the text content from the terminal buffer. Returns all visible text, or a specific row range.
-
-Use this to read what the terminal is currently displaying. For waiting until specific text appears, use browser_tui_wait_for_text instead.`,
+  `Get the text content from the terminal buffer. Returns all visible text, or a specific row range.`,
   {
     session_id: z.string().optional(),
     start_row: z.number().optional().describe("First row to read (0-indexed, default: 0)"),
     end_row: z.number().optional().describe("Last row (exclusive). Omit for all rows."),
+    timeout_ms: z.number().optional().default(15000).describe("Hard timeout in ms (default: 15000)"),
   },
-  async ({ session_id, start_row, end_row }) => {
+  async ({ session_id, start_row, end_row, timeout_ms }) => {
     try {
       const sid = resolveSessionId(session_id);
       assertTuiSession(sid);
-      const page = getSessionPage(sid);
-      const result = await getTermText(page, start_row, end_row);
-      return json(result);
-    } catch (e) { return err(e); }
+
+      const result = await withTuiHealth(sid, async (page, session) => {
+        const state = await getTerminalState(page, session.method, timeout_ms);
+        const filtered = filterRows(state.rows, start_row, end_row);
+        return {
+          ...filtered,
+          row_count: state.row_count,
+        };
+      }, { timeoutMs: timeout_ms, operationName: "browser_tui_get_text" });
+
+      return json(withMeta(sid, result));
+    } catch (e) {
+      if ((e as any).code === "TUI_TIMEOUT") return err(e);
+      if ((e as any).code === "TUI_UNHEALTHY") return err(e);
+      return err(e);
+    }
   }
 );
 
@@ -238,9 +308,8 @@ Use this to read what the terminal is currently displaying. For waiting until sp
 
 server.tool(
   "browser_tui_wait_for_text",
-  `Wait for specific text to appear in the terminal output. Polls the terminal buffer until the text is found or timeout is reached.
-
-Use this after sending a command to wait for its output, or to wait for a TUI app to finish loading.`,
+  `Wait for specific text to appear in the terminal output. Polls until found or timeout.
+  Returns stuck:true if the terminal became unresponsive during the wait.`,
   {
     session_id: z.string().optional(),
     text: z.string().describe("Text to wait for (substring match)"),
@@ -250,20 +319,17 @@ Use this after sending a command to wait for its output, or to wait for a TUI ap
     try {
       const sid = resolveSessionId(session_id);
       assertTuiSession(sid);
-      const page = getSessionPage(sid);
 
-      const start = Date.now();
-      while (Date.now() - start < timeout_ms) {
-        const result = await getTermText(page);
-        if (result.text.includes(text)) {
-          return json({ found: true, elapsed_ms: Date.now() - start, terminal_text: result.text });
-        }
-        await new Promise((r) => setTimeout(r, 250));
-      }
+      const result = await withTuiHealth(sid, async (page, session) => {
+        return waitForTerminalText(page, text, timeout_ms, session.method);
+      }, { timeoutMs: timeout_ms + 5_000, operationName: "browser_tui_wait_for_text" });
 
-      const finalText = await getTermText(page);
-      return json({ found: false, elapsed_ms: timeout_ms, terminal_text: finalText.text });
-    } catch (e) { return err(e); }
+      return json(withMeta(sid, result));
+    } catch (e) {
+      if ((e as any).code === "TUI_TIMEOUT") return err(e);
+      if ((e as any).code === "TUI_UNHEALTHY") return err(e);
+      return err(e);
+    }
   }
 );
 
@@ -274,22 +340,25 @@ server.tool(
   "Get the current cursor position (row and column) in the terminal.",
   {
     session_id: z.string().optional(),
+    timeout_ms: z.number().optional().default(15000).describe("Hard timeout in ms (default: 15000)"),
   },
-  async ({ session_id }) => {
+  async ({ session_id, timeout_ms }) => {
     try {
       const sid = resolveSessionId(session_id);
       assertTuiSession(sid);
-      const page = getSessionPage(sid);
 
-      const cursor = await page.evaluate(() => {
-        const term = (window as any).term ?? (window as any).terminal;
-        if (!term?.buffer?.active) return null;
-        return { row: term.buffer.active.cursorY, col: term.buffer.active.cursorX };
-      });
+      const result = await withTuiHealth(sid, async (page, session) => {
+        const state = await getTerminalState(page, session.method, timeout_ms);
+        if (state.cursor_row < 0 || state.cursor_col < 0) return null;
+        return { row: state.cursor_row, col: state.cursor_col };
+      }, { timeoutMs: timeout_ms, operationName: "browser_tui_get_cursor" });
 
-      if (!cursor) return err(new Error("Could not read cursor position — no terminal instance"));
-      return json(cursor);
-    } catch (e) { return err(e); }
+      if (!result) return err(new Error("Could not read cursor — no terminal instance"));
+      return json(withStableMeta(sid, result));
+    } catch (e) {
+      if ((e as any).code === "TUI_TIMEOUT" || (e as any).code === "TUI_UNHEALTHY") return err(e);
+      return err(e);
+    }
   }
 );
 
@@ -304,64 +373,68 @@ CONDITION SYNTAX:
 - "row N contains X"       — row N (0-indexed) contains substring X
 - "cursor at R,C"          — cursor is at row R, column C
 - "row_count > N"          — total rows greater than N
-- "row_count == N"         — total rows equals N
-
-Example: "text contains hello AND row 0 contains $ AND cursor at 1,0"`,
+- "row_count == N"         — total rows equals N`,
   {
     session_id: z.string().optional(),
     condition: z.string().describe("Assertion condition(s), joined with AND"),
+    timeout_ms: z.number().optional().default(15000).describe("Hard timeout in ms (default: 15000)"),
   },
-  async ({ session_id, condition }) => {
+  async ({ session_id, condition, timeout_ms }) => {
     try {
       const sid = resolveSessionId(session_id);
       assertTuiSession(sid);
-      const page = getSessionPage(sid);
 
-      const termData = await getTermText(page);
-      const cursor = await page.evaluate(() => {
-        const term = (window as any).term ?? (window as any).terminal;
-        if (!term?.buffer?.active) return { row: -1, col: -1 };
-        return { row: term.buffer.active.cursorY, col: term.buffer.active.cursorX };
-      });
+      const result = await withTuiHealth(sid, async (page, session) => {
+        const state = await getTerminalState(page, session.method, timeout_ms);
+        const termText = state.text;
+        const cursor = { row: state.cursor_row, col: state.cursor_col };
+        const checks: Array<{ assertion: string; result: boolean }> = [];
+        let allPassed = true;
 
-      const checks: Array<{ assertion: string; result: boolean }> = [];
-      let allPassed = true;
+        for (const part of condition.split(/\s+AND\s+/i)) {
+          const trimmed = part.trim();
+          let passed = false;
 
-      for (const part of condition.split(/\s+AND\s+/i)) {
-        const trimmed = part.trim();
-        let result = false;
-
-        if (/^text\s+contains\s+/i.test(trimmed)) {
-          const needle = trimmed.replace(/^text\s+contains\s+/i, "").replace(/^["']|["']$/g, "");
-          result = termData.text.includes(needle);
-        } else if (/^row\s+(\d+)\s+contains\s+/i.test(trimmed)) {
-          const match = trimmed.match(/^row\s+(\d+)\s+contains\s+(.+)/i);
-          if (match) {
-            const rowIdx = parseInt(match[1]);
-            const needle = match[2].replace(/^["']|["']$/g, "");
-            result = (termData.rows[rowIdx] ?? "").includes(needle);
+          if (/^text\s+contains\s+/i.test(trimmed)) {
+            const needle = trimmed.replace(/^text\s+contains\s+/i, "").replace(/^["']|["']$/g, "");
+            passed = termText.includes(needle);
+          } else if (/^row\s+(\d+)\s+contains\s+/i.test(trimmed)) {
+            const match = trimmed.match(/^row\s+(\d+)\s+contains\s+(.+)/i);
+            if (match) {
+              const rowIdx = parseInt(match[1]);
+              const needle = match[2].replace(/^["']|["']$/g, "");
+              passed = (state.rows[rowIdx] ?? "").includes(needle);
+            }
+          } else if (/^cursor\s+at\s+(\d+)\s*,\s*(\d+)/i.test(trimmed)) {
+            const match = trimmed.match(/^cursor\s+at\s+(\d+)\s*,\s*(\d+)/i);
+            if (match) passed = cursor.row === parseInt(match[1]) && cursor.col === parseInt(match[2]);
+          } else if (/^row_count\s*(>|>=|<|<=|==|!=)\s*(\d+)/i.test(trimmed)) {
+            const match = trimmed.match(/^row_count\s*(>|>=|<|<=|==|!=)\s*(\d+)/i);
+            if (match) {
+              const op = match[1];
+              const n = parseInt(match[2]);
+              const cnt = state.row_count;
+              passed = op === ">" ? cnt > n
+                : op === ">=" ? cnt >= n
+                : op === "<" ? cnt < n
+                : op === "<=" ? cnt <= n
+                : op === "==" ? cnt === n
+                : cnt !== n;
+            }
           }
-        } else if (/^cursor\s+at\s+(\d+)\s*,\s*(\d+)/i.test(trimmed)) {
-          const match = trimmed.match(/^cursor\s+at\s+(\d+)\s*,\s*(\d+)/i);
-          if (match) {
-            result = cursor.row === parseInt(match[1]) && cursor.col === parseInt(match[2]);
-          }
-        } else if (/^row_count\s*(>|>=|<|<=|==|!=)\s*(\d+)/i.test(trimmed)) {
-          const match = trimmed.match(/^row_count\s*(>|>=|<|<=|==|!=)\s*(\d+)/i);
-          if (match) {
-            const op = match[1];
-            const n = parseInt(match[2]);
-            const count = termData.row_count;
-            result = op === ">" ? count > n : op === ">=" ? count >= n : op === "<" ? count < n : op === "<=" ? count <= n : op === "==" ? count === n : count !== n;
-          }
+
+          checks.push({ assertion: trimmed, result: passed });
+          if (!passed) allPassed = false;
         }
 
-        checks.push({ assertion: trimmed, result });
-        if (!result) allPassed = false;
-      }
+        return { passed: allPassed, checks, cursor, row_count: state.row_count };
+      }, { timeoutMs: timeout_ms, operationName: "browser_tui_assert" });
 
-      return json({ passed: allPassed, checks, cursor, row_count: termData.row_count });
-    } catch (e) { return err(e); }
+      return json(withMeta(sid, result));
+    } catch (e) {
+      if ((e as any).code === "TUI_TIMEOUT" || (e as any).code === "TUI_UNHEALTHY") return err(e);
+      return err(e);
+    }
   }
 );
 
@@ -369,40 +442,36 @@ Example: "text contains hello AND row 0 contains $ AND cursor at 1,0"`,
 
 server.tool(
   "browser_tui_snapshot",
-  "Capture a structured snapshot of the terminal buffer: all rows as an array, cursor position, dimensions, and theme. Useful for comparing terminal state before and after actions.",
+  "Capture a structured snapshot of the terminal buffer: all rows, row refs, cursor position, dimensions, and theme.",
   {
     session_id: z.string().optional(),
+    timeout_ms: z.number().optional().default(15000).describe("Hard timeout in ms (default: 15000)"),
   },
-  async ({ session_id }) => {
+  async ({ session_id, timeout_ms }) => {
     try {
       const sid = resolveSessionId(session_id);
       assertTuiSession(sid);
-      const page = getSessionPage(sid);
 
-      const snapshot = await page.evaluate(() => {
-        const term = (window as any).term ?? (window as any).terminal;
-        if (!term?.buffer?.active) return null;
-        const buf = term.buffer.active;
-        const rows: string[] = [];
-        for (let i = 0; i < buf.length; i++) {
-          const line = buf.getLine(i);
-          if (line) rows.push(line.translateToString(true));
-        }
+      const result = await withTuiHealth(sid, async (page, session) => {
+        const state = await getTerminalState(page, session.method, timeout_ms);
         return {
-          rows,
-          cols: term.cols,
-          total_rows: term.rows,
-          buffer_length: buf.length,
-          cursor_row: buf.cursorY,
-          cursor_col: buf.cursorX,
-          font_size: term.options?.fontSize,
-          theme: term.options?.theme?.background === "#ffffff" ? "light" : "dark",
+          rows: state.rows,
+          refs: state.refs,
+          cols: state.cols,
+          total_rows: state.total_rows,
+          buffer_length: state.buffer_length,
+          cursor_row: state.cursor_row,
+          cursor_col: state.cursor_col,
+          font_size: state.font_size,
+          theme: state.theme,
         };
-      });
+      }, { timeoutMs: timeout_ms, operationName: "browser_tui_snapshot" });
 
-      if (!snapshot) return err(new Error("Could not capture snapshot — no terminal instance"));
-      return json(snapshot);
-    } catch (e) { return err(e); }
+      return json(withStableMeta(sid, result));
+    } catch (e) {
+      if ((e as any).code === "TUI_TIMEOUT" || (e as any).code === "TUI_UNHEALTHY") return err(e);
+      return err(e);
+    }
   }
 );
 
@@ -410,7 +479,7 @@ server.tool(
 
 server.tool(
   "browser_tui_record_start",
-  "Start recording the terminal session as an asciicast v2 file (asciinema-compatible). Polls the terminal buffer at an interval and captures changes.",
+  "Start recording the terminal session as an asciicast v2 file.",
   {
     session_id: z.string().optional(),
     interval_ms: z.number().optional().default(500).describe("Polling interval in ms (default: 500)"),
@@ -419,19 +488,15 @@ server.tool(
     try {
       const sid = resolveSessionId(session_id);
       assertTuiSession(sid);
-      const page = getSessionPage(sid);
 
       if (activeRecordings.has(sid)) {
         return err(new Error("Recording already active for this session. Stop it first with browser_tui_record_stop."));
       }
 
-      // Get initial terminal dimensions
-      const dims = await page.evaluate(() => {
-        const term = (window as any).term ?? (window as any).terminal;
-        return term ? { cols: term.cols, rows: term.rows } : { cols: 80, rows: 24 };
-      });
-
-      const initialText = (await getTermText(page)).text;
+      const page = getSessionPage(sid);
+      const session = getTuiSession(sid);
+      const initialState = await getTerminalState(page, session.method);
+      const dims = { cols: initialState.cols ?? 80, rows: initialState.total_rows || initialState.row_count || 24 };
 
       const recording: TuiRecording = {
         sessionId: sid,
@@ -439,21 +504,33 @@ server.tool(
         cols: dims.cols,
         rows: dims.rows,
         events: [],
-        lastText: initialText,
+        lastText: initialState.text,
         intervalId: setInterval(async () => {
           try {
-            const current = await getTermText(page);
-            if (current.text !== recording.lastText) {
+            const currentPage = getSessionPage(sid);
+            const currentSession = getTuiSession(sid);
+            const state = await getTerminalState(currentPage, currentSession.method);
+            if (state.text !== recording.lastText) {
               const elapsed = (Date.now() - recording.startTime) / 1000;
-              recording.events.push([elapsed, "o", current.text.slice(recording.lastText.length) || current.text]);
-              recording.lastText = current.text;
+              recording.events.push([elapsed, "o", state.text.slice(recording.lastText.length) || state.text]);
+              recording.lastText = state.text;
             }
-          } catch {}
+          } catch {
+            // Ignore polling errors while recording; stop path remains explicit.
+          }
         }, interval_ms),
       };
 
       activeRecordings.set(sid, recording);
-      return json({ recording: true, session_id: sid, interval_ms, cols: dims.cols, rows: dims.rows });
+      trackTuiRecording(sid, recording.intervalId);
+      return json({
+        recording: true,
+        session_id: sid,
+        interval_ms,
+        cols: dims.cols,
+        rows: dims.rows,
+        method: session.method,
+      });
     } catch (e) { return err(e); }
   }
 );
@@ -462,10 +539,8 @@ server.tool(
 
 server.tool(
   "browser_tui_record_stop",
-  "Stop recording and return the asciicast v2 JSON. Compatible with asciinema player.",
-  {
-    session_id: z.string().optional(),
-  },
+  "Stop recording and return the asciicast v2 JSON.",
+  { session_id: z.string().optional() },
   async ({ session_id }) => {
     try {
       const sid = resolveSessionId(session_id);
@@ -473,11 +548,10 @@ server.tool(
       if (!recording) return err(new Error("No active recording for this session"));
 
       clearInterval(recording.intervalId);
+      stopTuiRecording(sid);
       activeRecordings.delete(sid);
 
       const duration = (Date.now() - recording.startTime) / 1000;
-
-      // Build asciicast v2 format
       const header = {
         version: 2,
         width: recording.cols,
@@ -488,10 +562,7 @@ server.tool(
       };
 
       const lines = [JSON.stringify(header)];
-      for (const [time, type, data] of recording.events) {
-        lines.push(JSON.stringify([time, type, data]));
-      }
-
+      for (const [time, type, data] of recording.events) lines.push(JSON.stringify([time, type, data]));
       const asciicast = lines.join("\n");
 
       return json({
@@ -499,6 +570,31 @@ server.tool(
         duration_seconds: Math.round(duration * 10) / 10,
         event_count: recording.events.length,
         asciicast,
+        method: getTuiSession(sid).method,
+      });
+    } catch (e) { return err(e); }
+  }
+);
+
+// ── browser_tui_health ───────────────────────────────────────────────────────
+
+server.tool(
+  "browser_tui_health",
+  `Health check for a TUI session. Returns healthy status, latency, reconnect count, and the active read method.
+  Use this to verify a session is still responsive before running other tools.`,
+  { session_id: z.string().optional() },
+  async ({ session_id }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      assertTuiSession(sid);
+      const session = getTuiSession(sid);
+      const health = await isTuiHealthy(session);
+      return json({
+        healthy: health.healthy,
+        latency_ms: health.healthy ? (health as any).latency_ms : null,
+        reason: health.healthy ? null : (health as any).reason,
+        reconnect_count: session.reconnectCount,
+        method: session.method,
       });
     } catch (e) { return err(e); }
   }

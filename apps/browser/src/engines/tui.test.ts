@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll } from "bun:test";
-import { isTuiAvailable, launchTui, closeTui, getTerminalText, waitForTerminalText, sendKeys, sendSpecialKey, type TuiSession } from "./tui.js";
+import { isTuiAvailable, launchTui, closeTui, getTerminalText, getTerminalState, waitForTerminalText, sendKeys, sendSpecialKey, type TuiSession } from "./tui.js";
 import { selectEngine, isEngineAvailable, inferUseCase } from "./selector.js";
 import { UseCase } from "../types/index.js";
 
@@ -55,6 +55,7 @@ describe("TUI engine", () => {
       session = await launchTui("bash -c \"echo TUI_TEST_OUTPUT; exec sleep 30\"", {
         headless: true,
         viewport: { width: 800, height: 600 },
+        method: "buffer",
       });
 
       expect(session).toBeDefined();
@@ -65,32 +66,62 @@ describe("TUI engine", () => {
     }, 30_000);
 
     it("can read terminal text", async () => {
-      if (!session) return;
+      expect(session).toBeDefined();
+      const active = session!;
       // Give xterm.js time to render
       await new Promise((r) => setTimeout(r, 3000));
-      const found = await waitForTerminalText(session.page, "TUI_TEST_OUTPUT", 15_000);
-      if (!found) {
-        const text = await getTerminalText(session.page);
+      const result = await waitForTerminalText(active.page, "TUI_TEST_OUTPUT", 15_000);
+      if (!result.found) {
+        const text = await getTerminalText(active.page);
         console.log("[tui-test] Terminal text:", JSON.stringify(text.slice(0, 500)));
+        console.log("[tui-test] stuck:", result.stuck, "elapsed_ms:", result.elapsed_ms);
       }
-      expect(found).toBe(true);
+      expect(result.found).toBe(true);
 
-      const text = await getTerminalText(session.page);
+      const text = await getTerminalText(active.page, 15_000, "buffer");
       expect(text).toContain("TUI_TEST_OUTPUT");
     }, 25_000);
 
+    it("can produce DOM-style terminal state", async () => {
+      expect(session).toBeDefined();
+      const active = session!;
+      const state = await getTerminalState(active.page, "dom", 15_000);
+      expect(state.method).toBe("dom");
+      expect(Array.isArray(state.rows)).toBe(true);
+      expect(typeof state.refs).toBe("object");
+      const domRoot = await active.page.$("#takumi-tui-dom-root");
+      expect(domRoot).toBeTruthy();
+    }, 15_000);
+
+    it("can launch directly in DOM render mode", async () => {
+      const domSession = await launchTui("bash -c \"echo DOM_RENDER_TEST; exec sleep 5\"", {
+        headless: true,
+        viewport: { width: 800, height: 600 },
+        method: "dom",
+      });
+      try {
+        const state = await getTerminalState(domSession.page, "dom", 15_000);
+        expect(state.text).toContain("DOM_RENDER_TEST");
+        const domRoot = await domSession.page.$("#takumi-tui-dom-root[data-active=\"1\"]");
+        expect(domRoot).toBeTruthy();
+      } finally {
+        await closeTui(domSession);
+      }
+    }, 20_000);
+
     it("can take a screenshot", async () => {
-      if (!session) return;
-      const screenshot = await session.page.screenshot();
+      expect(session).toBeDefined();
+      const active = session!;
+      const screenshot = await active.page.screenshot();
       expect(screenshot).toBeInstanceOf(Buffer);
       expect(screenshot.length).toBeGreaterThan(0);
     }, 10_000);
 
     it("closes cleanly", async () => {
-      if (!session) return;
-      await closeTui(session);
-      // Verify ttyd process is dead
-      expect(session.ttydProcess.killed).toBe(true);
+      expect(session).toBeDefined();
+      const active = session!;
+      await closeTui(active);
+      expect(active.ttydProcess.killed).toBe(true);
       session = null;
     }, 10_000);
   });
