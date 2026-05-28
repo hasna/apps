@@ -133,7 +133,7 @@ function createUntagSchema() {
   });
 }
 
-async function main() {
+export function buildServer() {
   const server = new McpServer({
     name: 'open-knowledge',
     version: '0.1.0',
@@ -529,12 +529,46 @@ async function main() {
     },
   });
 
+  return server;
+}
+
+function printHelp() {
+  console.error(`Usage: open-knowledge-mcp [options]
+
+Runs the @hasna/knowledge MCP server (stdio by default).
+
+Options:
+  --http            Serve MCP over Streamable HTTP (127.0.0.1)
+  --port <number>   HTTP port (default: 8819, env: MCP_HTTP_PORT)
+  -h, --help        Show this help text`);
+}
+
+async function main() {
+  if (process.argv.includes('-h') || process.argv.includes('--help')) {
+    printHelp();
+    return;
+  }
+
+  const { isHttpMode, resolveMcpHttpPort, startMcpHttpServer } = await import('./mcp-http.js');
+
+  if (isHttpMode()) {
+    const handle = await startMcpHttpServer(buildServer, {
+      port: resolveMcpHttpPort(),
+    });
+    process.on('SIGINT', () => void handle.close().finally(() => process.exit(0)));
+    process.on('SIGTERM', () => void handle.close().finally(() => process.exit(0)));
+    return;
+  }
+
+  const server = buildServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('open-knowledge MCP server running on stdio');
 }
 
-main().catch((err) => {
-  console.error('MCP server error:', err);
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch((err) => {
+    console.error('MCP server error:', err);
+    process.exit(1);
+  });
+}

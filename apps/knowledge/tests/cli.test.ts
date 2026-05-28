@@ -34,11 +34,11 @@ describe('open-knowledge cli', () => {
   });
 
   test('version flag works', () => {
+    const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')) as { version: string };
     const result = runCli(['--version']);
     expect(result.exitCode).toBe(0);
     const out = new TextDecoder().decode(result.stdout);
-    expect(out).toContain('@hasna/knowledge');
-    expect(out).toContain('0.1.0');
+    expect(out.trim()).toBe(pkg.version);
   });
 
   test('unknown command includes suggestion', () => {

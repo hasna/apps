@@ -144,3 +144,24 @@ Every command returns structured JSON when `--json` is passed:
 - **Safe deletes**: `--yes` flag required; no accidental deletions
 - **Concurrent-safe**: file locking prevents corruption from parallel agents
 - **Scriptable**: works in pipelines, CI, and any automation tool
+
+## MCP Server
+
+```bash
+open-knowledge-mcp
+```
+
+## HTTP mode
+
+Run a shared Streamable HTTP MCP server (127.0.0.1 only):
+
+```bash
+open-knowledge-mcp --http      # default port 8819
+open-knowledge-mcp --http --port 8819
+MCP_HTTP=1 open-knowledge-mcp
+```
+
+- Health: `GET http://127.0.0.1:8819/health`
+- MCP: `POST http://127.0.0.1:8819/mcp`
+
+Stdio remains the default when no `--http` flag is passed.
