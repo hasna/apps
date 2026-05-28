@@ -1602,16 +1602,18 @@ return server;
 // --- Start ---
 async function main() {
   const argv = process.argv.slice(2);
-  if ((await import("./http.js")).isHttpMode(argv)) {
-    const { resolveMcpHttpPort, startHttpServer } = await import("./http.js");
-    const port = resolveMcpHttpPort(argv);
-    await startHttpServer(buildServer, port);
-    await new Promise(() => {});
+  const { isStdioMode } = await import("./http.js");
+  if (isStdioMode(argv)) {
+    const transport = new StdioServerTransport();
+    await buildServer().connect(transport);
+    console.error("domains MCP server running on stdio");
     return;
   }
-  const transport = new StdioServerTransport();
-  await buildServer().connect(transport);
-  console.error("domains MCP server running on stdio");
+  // Default: shared Streamable HTTP server (one process per MCP, many agents).
+  const { resolveMcpHttpPort, startHttpServer } = await import("./http.js");
+  const port = resolveMcpHttpPort(argv);
+  await startHttpServer(buildServer, port);
+  await new Promise(() => {});
 }
 
 if (import.meta.main) {
