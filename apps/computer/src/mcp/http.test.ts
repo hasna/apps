@@ -36,7 +36,7 @@ describe("computer MCP HTTP transport", () => {
     expect(resolveHttpPort([])).toBe(9003);
     if (prev === undefined) delete process.env.MCP_HTTP_PORT;
     else process.env.MCP_HTTP_PORT = prev;
-    expect(resolveHttpPort([])).toBe(8806);
+    expect(resolveHttpPort([])).toBe(8883);
   });
 
   it("buildServer registers expected tools", async () => {
