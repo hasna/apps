@@ -4,8 +4,9 @@ import { getDataDir } from "./db.js";
 
 export const DEFAULT_MODEL = "gpt-4o-mini";
 
-const CONFIG_DIR = getDataDir();
-const CONFIG_PATH = join(CONFIG_DIR, "config.json");
+function getConfigPath(): string {
+  return process.env.CONVERSATIONS_CONFIG_PATH || join(getDataDir(), "config.json");
+}
 
 interface ConversationsConfig {
   activeModel?: string;
@@ -13,19 +14,22 @@ interface ConversationsConfig {
 }
 
 function readConfig(): ConversationsConfig {
-  if (!existsSync(CONFIG_PATH)) return {};
+  const path = getConfigPath();
+  if (!existsSync(path)) return {};
   try {
-    return JSON.parse(readFileSync(CONFIG_PATH, "utf-8")) as ConversationsConfig;
+    return JSON.parse(readFileSync(path, "utf-8")) as ConversationsConfig;
   } catch {
     return {};
   }
 }
 
 function writeConfig(config: ConversationsConfig): void {
-  if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
+  const path = getConfigPath();
+  const dir = path.substring(0, path.lastIndexOf("/"));
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
   }
-  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
+  writeFileSync(path, JSON.stringify(config, null, 2), "utf-8");
 }
 
 /** Returns the active fine-tuned model ID, or the default model if none is set. */
