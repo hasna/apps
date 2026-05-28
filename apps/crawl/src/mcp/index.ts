@@ -1058,7 +1058,7 @@ return server;
 async function main() {
   const argv = process.argv.slice(2);
   if ((await import("./http.js")).isHttpMode(argv)) {
-    const { resolveMcpHttpPort, startHttpServer } = await import("./http.js");
+    const { resolveMcpHttpPort } = await import("./http.js");
     const { startCrawlServer } = await import("../server/index.js");
     const port = resolveMcpHttpPort(argv);
     await startCrawlServer({ port, hostname: "127.0.0.1" });
