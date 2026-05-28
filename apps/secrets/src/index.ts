@@ -444,14 +444,15 @@ switch (command) {
       const targets = flags.target ? [flags.target] : ["claude", "codex", "gemini"];
       const { installMcp } = await import("./install.js");
       installMcp(targets);
-    } else if (flags.http) {
+    } else if (flags.stdio) {
+      const { startMcpServer } = await import("./mcp.js");
+      await startMcpServer();
+    } else {
+      // Default: shared Streamable HTTP server (one process per MCP, many agents).
       const { buildServer } = await import("./mcp.js");
       const { resolveMcpHttpPort, startMcpHttpServer } = await import("./mcp-http.js");
       const args = flags.port ? ["--port", String(flags.port)] : [];
       startMcpHttpServer({ name: "secrets", port: resolveMcpHttpPort(args), buildServer });
-    } else {
-      const { startMcpServer } = await import("./mcp.js");
-      await startMcpServer();
     }
     break;
   }
