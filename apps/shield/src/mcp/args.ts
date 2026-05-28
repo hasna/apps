@@ -1,6 +1,27 @@
+import { DEFAULT_MCP_HTTP_PORT } from "./http.js";
+
 export interface ParsedMcpArgResult {
   type: "help" | "version";
   text: string;
+}
+
+export function isHttpMode(env: NodeJS.ProcessEnv = process.env, argv: string[] = process.argv.slice(2)): boolean {
+  return argv.includes("--http") || env.MCP_HTTP === "1";
+}
+
+export function resolveHttpPort(
+  defaultPort: number = DEFAULT_MCP_HTTP_PORT,
+  env: NodeJS.ProcessEnv = process.env,
+  argv: string[] = process.argv.slice(2),
+): number {
+  const portIndex = argv.indexOf("--port");
+  if (portIndex !== -1 && argv[portIndex + 1]) {
+    return Number.parseInt(argv[portIndex + 1]!, 10);
+  }
+  if (env.MCP_HTTP_PORT) {
+    return Number.parseInt(env.MCP_HTTP_PORT, 10);
+  }
+  return defaultPort;
 }
 
 export function parseMcpArgs(argv: string[], version: string): ParsedMcpArgResult | null {
@@ -10,11 +31,17 @@ export function parseMcpArgs(argv: string[], version: string): ParsedMcpArgResul
       text: [
         "Usage: shield-mcp [options]",
         "",
-        "Start the Open Security MCP stdio server.",
+        "Start the Open Security MCP server (stdio by default).",
         "",
         "Options:",
+        "  --http         Serve MCP over Streamable HTTP on 127.0.0.1",
+        "  --port <n>     HTTP port (--http or MCP_HTTP=1; default: 8833)",
         "  -h, --help     display help for command",
         "  -V, --version  output the version number",
+        "",
+        "Environment:",
+        "  MCP_HTTP=1         Enable HTTP mode",
+        "  MCP_HTTP_PORT=<n>  HTTP port when MCP_HTTP=1",
       ].join("\n"),
     };
   }

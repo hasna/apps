@@ -1,11 +1,12 @@
 import { describe, expect, it } from "bun:test";
-import { parseMcpArgs } from "./args.js";
+import { parseMcpArgs, isHttpMode, resolveHttpPort } from "./args.js";
 
 describe("parseMcpArgs", () => {
   it("returns help text for --help", () => {
     const parsed = parseMcpArgs(["--help"], "0.1.8");
     expect(parsed?.type).toBe("help");
     expect(parsed?.text).toContain("Usage: shield-mcp");
+    expect(parsed?.text).toContain("--http");
   });
 
   it("returns version text for -V", () => {
@@ -16,5 +17,30 @@ describe("parseMcpArgs", () => {
   it("returns null for normal run arguments", () => {
     const parsed = parseMcpArgs([], "0.1.8");
     expect(parsed).toBeNull();
+  });
+});
+
+describe("isHttpMode", () => {
+  it("detects --http flag", () => {
+    expect(isHttpMode({}, ["--http"])).toBe(true);
+    expect(isHttpMode({}, [])).toBe(false);
+  });
+
+  it("detects MCP_HTTP=1", () => {
+    expect(isHttpMode({ MCP_HTTP: "1" }, [])).toBe(true);
+  });
+});
+
+describe("resolveHttpPort", () => {
+  it("prefers --port over env and default", () => {
+    expect(resolveHttpPort(8833, { MCP_HTTP_PORT: "9000" }, ["--port", "9100"])).toBe(9100);
+  });
+
+  it("uses MCP_HTTP_PORT when --port is absent", () => {
+    expect(resolveHttpPort(8833, { MCP_HTTP_PORT: "9000" }, [])).toBe(9000);
+  });
+
+  it("falls back to default port", () => {
+    expect(resolveHttpPort(8833, {}, [])).toBe(8833);
   });
 });

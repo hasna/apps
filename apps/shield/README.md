@@ -170,6 +170,24 @@ cloud sync push --service security
 cloud sync pull --service security
 ```
 
+## HTTP mode
+
+By default `shield-mcp` uses stdio. For a long-lived shared HTTP server (Streamable HTTP, stateless):
+
+```bash
+shield-mcp --http
+# or: MCP_HTTP=1 shield-mcp
+
+# Custom port (default 8833)
+shield-mcp --http --port 8833
+# or: MCP_HTTP_PORT=8833 MCP_HTTP=1 shield-mcp
+```
+
+Endpoints (bound to `127.0.0.1` only):
+
+- `GET /health` → `{"status":"ok","name":"security"}`
+- `POST /mcp` — MCP Streamable HTTP endpoint
+
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE)
