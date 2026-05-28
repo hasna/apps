@@ -12,7 +12,7 @@ import { register as registerCapture } from "./capture.js";
 import { register as registerNetwork } from "./network.js";
 import { register as registerData } from "./data.js";
 import { register as registerTui } from "./tui.js";
-import { isHttpMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
+import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 
 const _pkg = JSON.parse(readFileSync(join(import.meta.dir, "../../package.json"), "utf8")) as { version: string };
 
@@ -71,24 +71,25 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (isHttpMode()) {
-    const handle = await startMcpHttpServer(buildServer, {
-      port: resolveMcpHttpPort(),
-    });
-    await logStartup(buildServer());
-    process.on("SIGINT", () => {
-      void handle.close().finally(() => process.exit(0));
-    });
-    process.on("SIGTERM", () => {
-      void handle.close().finally(() => process.exit(0));
-    });
+  if (isStdioMode()) {
+    const server = buildServer();
+    await logStartup(server);
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
     return;
   }
 
-  const server = buildServer();
-  await logStartup(server);
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  // Default: shared Streamable HTTP server (one process per MCP, many agents).
+  const handle = await startMcpHttpServer(buildServer, {
+    port: resolveMcpHttpPort(),
+  });
+  await logStartup(buildServer());
+  process.on("SIGINT", () => {
+    void handle.close().finally(() => process.exit(0));
+  });
+  process.on("SIGTERM", () => {
+    void handle.close().finally(() => process.exit(0));
+  });
 }
 
 if (import.meta.main) {

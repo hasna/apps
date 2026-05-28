@@ -3,13 +3,20 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 export const MCP_HTTP_SERVICE_NAME = "browser";
-export const DEFAULT_MCP_HTTP_PORT = 8802;
+export const DEFAULT_MCP_HTTP_PORT = 8851;
 
 export function isHttpMode(
   argv: string[] = process.argv,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   return argv.includes("--http") || env.MCP_HTTP === "1";
+}
+
+export function isStdioMode(
+  argv: string[] = process.argv,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return argv.includes("--stdio") || env.MCP_STDIO === "1";
 }
 
 export function resolveMcpHttpPort(

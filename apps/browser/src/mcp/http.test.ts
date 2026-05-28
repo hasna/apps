@@ -30,9 +30,9 @@ afterAll(() => {
 });
 
 describe("mcp http transport", () => {
-  it("defaults port to 8802", () => {
-    expect(DEFAULT_MCP_HTTP_PORT).toBe(8802);
-    expect(resolveMcpHttpPort(["node"], {})).toBe(8802);
+  it("defaults port to 8851", () => {
+    expect(DEFAULT_MCP_HTTP_PORT).toBe(8851);
+    expect(resolveMcpHttpPort(["node"], {})).toBe(8851);
     expect(resolveMcpHttpPort(["node", "--port", "9001"], {})).toBe(9001);
     expect(resolveMcpHttpPort(["node"], { MCP_HTTP_PORT: "9002" })).toBe(9002);
   });
