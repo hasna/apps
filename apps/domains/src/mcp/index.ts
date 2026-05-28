@@ -68,6 +68,17 @@ import {
   getThreatAssessment,
 } from "../lib/brandsight.js";
 import { getPackageVersion } from "../lib/version.js";
+import {
+  createDomainOwner,
+  getDomainOwner,
+  getDomainOwnerByDomain,
+  listDomainOwners,
+  updateDomainOwner,
+  deleteDomainOwner,
+  extractOwnerFromWhois,
+  listDomainsWithOwners,
+} from "../db/domain-owners.js";
+import { DOMAIN_OWNER_SOURCES } from "../db/domain-owners.js";
 
 const server = new McpServer({
   name: "domains",
@@ -1448,6 +1459,140 @@ server.registerTool(
     } catch (error: unknown) {
       return { content: [{ type: "text", text: `Sync failed: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
     }
+  }
+);
+
+// --- Domain Owner Tracking ---
+
+server.registerTool(
+  "list_domain_owners",
+  {
+    title: "List Domain Owners",
+    description: "List all premium domain owners with optional search and filters.",
+    inputSchema: {
+      search: z.string().optional(),
+      source: z.enum(["whois", "manual", "brandsight", "import"]).optional(),
+      verified_only: z.boolean().optional(),
+      with_domains: z.boolean().optional(),
+    },
+  },
+  async (params) => {
+    if (params.with_domains) {
+      const results = listDomainsWithOwners();
+      return { content: [{ type: "text", text: JSON.stringify({ owners: results, count: results.length }, null, 2) }] };
+    }
+    const owners = listDomainOwners({
+      search: params.search,
+      source: params.source as (typeof DOMAIN_OWNER_SOURCES)[number] | undefined,
+      verified: params.verified_only ? true : undefined,
+    });
+    return { content: [{ type: "text", text: JSON.stringify({ owners, count: owners.length }, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "get_domain_owner",
+  {
+    title: "Get Domain Owner",
+    description: "Get owner info for a domain or by owner ID.",
+    inputSchema: {
+      identifier: z.string().optional(),
+      owner_id: z.string().optional(),
+    },
+  },
+  async ({ identifier, owner_id }) => {
+    if (owner_id) {
+      const o = getDomainOwner(owner_id);
+      if (!o) return { content: [{ type: "text", text: `Owner '${owner_id}' not found.` }], isError: true };
+      return { content: [{ type: "text", text: JSON.stringify(o, null, 2) }] };
+    }
+    if (identifier) {
+      const domain = getDomainByIdentifier(identifier);
+      if (!domain) return { content: [{ type: "text", text: `Domain '${identifier}' not found.` }], isError: true };
+      const o = getDomainOwnerByDomain(domain.id);
+      if (!o) return { content: [{ type: "text", text: `No owner info for ${domain.name}.` }] };
+      return { content: [{ type: "text", text: JSON.stringify(o, null, 2) }] };
+    }
+    return { content: [{ type: "text", text: "Provide identifier or owner_id." }], isError: true };
+  }
+);
+
+server.registerTool(
+  "create_domain_owner",
+  {
+    title: "Create Domain Owner",
+    description: "Add owner info for a tracked domain.",
+    inputSchema: {
+      domain_id: z.string(),
+      contact_id: z.string().optional(),
+      owner_name: z.string().optional(),
+      owner_email: z.string().optional(),
+      owner_phone: z.string().optional(),
+      owner_organization: z.string().optional(),
+      source: z.enum(["whois", "manual", "brandsight", "import"]).optional(),
+      verified: z.boolean().optional(),
+      notes: z.string().optional(),
+    },
+  },
+  async (params) => {
+    if (!params.owner_name && !params.owner_email && !params.owner_organization && !params.contact_id) {
+      return { content: [{ type: "text", text: "At least one of owner_name, owner_email, owner_organization, or contact_id is required." }], isError: true };
+    }
+    const o = createDomainOwner(params as Parameters<typeof createDomainOwner>[0]);
+    return { content: [{ type: "text", text: JSON.stringify(o, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "update_domain_owner",
+  {
+    title: "Update Domain Owner",
+    description: "Update an existing domain owner record.",
+    inputSchema: {
+      owner_id: z.string(),
+      contact_id: z.string().optional(),
+      owner_name: z.string().optional(),
+      owner_email: z.string().optional(),
+      owner_phone: z.string().optional(),
+      owner_organization: z.string().optional(),
+      verified: z.boolean().optional(),
+      notes: z.string().optional(),
+    },
+  },
+  async ({ owner_id, ...rest }) => {
+    const o = updateDomainOwner(owner_id, rest);
+    if (!o) return { content: [{ type: "text", text: `Owner '${owner_id}' not found.` }], isError: true };
+    return { content: [{ type: "text", text: JSON.stringify(o, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "delete_domain_owner",
+  {
+    title: "Delete Domain Owner",
+    description: "Delete a domain owner record.",
+    inputSchema: { owner_id: z.string() },
+  },
+  async ({ owner_id }) => {
+    const deleted = deleteDomainOwner(owner_id);
+    if (!deleted) return { content: [{ type: "text", text: `Owner '${owner_id}' not found.` }], isError: true };
+    return { content: [{ type: "text", text: `Deleted owner ${owner_id}` }] };
+  }
+);
+
+server.registerTool(
+  "extract_domain_owner_from_whois",
+  {
+    title: "Extract Owner from WHOIS",
+    description: "Run WHOIS lookup and extract owner info, saving it to the database.",
+    inputSchema: { domain_name: z.string() },
+  },
+  async ({ domain_name }) => {
+    const whois = whoisLookup(domain_name);
+    if (!whois.raw) return { content: [{ type: "text", text: "WHOIS returned no data." }], isError: true };
+    const o = extractOwnerFromWhois(domain_name, whois.raw);
+    if (!o) return { content: [{ type: "text", text: "No owner information found in WHOIS data." }] };
+    return { content: [{ type: "text", text: JSON.stringify(o, null, 2) }] };
   }
 );
 
