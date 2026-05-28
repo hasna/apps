@@ -26,6 +26,7 @@ function usage(): void {
 secrets — local secrets vault for AI agents
 
 Commands:
+  docs                        show a practical usage guide
   set <key> <value> [--type <type>] [--label <label>] [--ttl <ttl>]
   get <key>
   delete <key>               (aliases: remove, rm, uninstall)
@@ -72,6 +73,79 @@ Examples:
   secrets users register my-agent "My Agent" --type agent
   secrets aws configure
   secrets aws sync
+`);
+}
+
+function docs(): void {
+  console.log(`
+secrets docs
+
+Purpose
+  secrets is a local encrypted vault for API keys, passwords, tokens, and
+  credentials that need to be available to CLIs and AI agents without being
+  committed to source control.
+
+Storage
+  Vault database:   ~/.hasna/secrets/vault.db
+  Key material:     ~/.hasna/secrets/vault.key or vault.key.enc
+  Env-file bridge:  ~/.secrets/{division}/{service}/{env}.env
+
+Key format
+  Use slash-delimited keys:
+    <division>/<service>/<env>/<name>
+
+  Examples:
+    hasnaxyz/anthropic/live/api_key
+    hasna/local/apple03/tool/exa/api-key
+    alumia-production/oauth/youtube_client_secret
+
+Common CLI workflows
+  Store a secret:
+    secrets set hasnaxyz/anthropic/live/api_key "$ANTHROPIC_API_KEY" --type api_key --label "Anthropic API Key (live)"
+
+  Read a secret value:
+    secrets get hasnaxyz/anthropic/live/api_key
+
+  List or search without revealing values:
+    secrets list hasnaxyz/anthropic
+    secrets search anthropic
+
+  Review access history:
+    secrets audit hasnaxyz/anthropic/live/api_key
+
+  Export a redacted backup for review:
+    secrets export --redact
+
+Env-file bridge
+  Import ~/.secrets .env files into the vault:
+    secrets import-env --dir ~/.secrets --dry-run
+    secrets import-env --dir ~/.secrets --overwrite
+
+  Export vault entries back to ~/.secrets .env files:
+    secrets export-env --dir ~/.secrets --dry-run
+    secrets export-env --dir ~/.secrets --force
+
+MCP usage
+  Install the MCP server into local agents:
+    secrets mcp install --target codex
+    secrets mcp install --target claude
+    secrets mcp install --target gemini
+
+  Agents connect over stdio by running:
+    secrets mcp
+
+  MCP tools:
+    list_secrets(namespace?)
+    search_secrets(query)
+    get_secret(key)
+    set_secret(key, value, type?, label?, ttl?)
+    delete_secret(key)
+    audit_log(key?, limit?)
+
+Safety
+  list, search, and export --redact do not print secret values.
+  get and get_secret return raw secret values. Use them only when needed.
+  Never paste secrets into commits, logs, issues, PRs, or chat messages.
 `);
 }
 
@@ -126,6 +200,12 @@ if (!command || command === "--help" || command === "-h") {
 const { flags, positional } = parseArgs(rest);
 
 switch (command) {
+  case "docs":
+  case "guide": {
+    docs();
+    break;
+  }
+
   case "set": {
     const [key, value] = positional;
     if (!key || !value) { console.error("Usage: secrets set <key> <value>"); process.exit(1); }
