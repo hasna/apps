@@ -1,10 +1,6 @@
 {
   "name": "@hasna/conversations",
-<<<<<<< Updated upstream
   "version": "0.2.47",
-=======
-  "version": "0.2.43",
->>>>>>> Stashed changes
   "description": "Real-time CLI messaging for AI agents",
   "type": "module",
   "bin": {
