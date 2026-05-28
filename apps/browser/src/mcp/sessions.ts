@@ -46,7 +46,7 @@ ENGINES:
 - "cdp": Chrome DevTools Protocol — network monitoring, perf profiling, script injection
 - "lightpanda": fast headless for static pages
 - "bun": native Bun.WebView — fastest for screenshots and scraping
-- "tui": terminal UI testing — launches a CLI/TUI app (Ink, Blessed, Bubbletea, etc.) via ttyd and connects Playwright to it. Pass the shell command as start_url (e.g. "htop", "bun run app.tsx"). All browser tools (screenshot, click, type, wait) work on the terminal. Use tui_theme to control dark/light appearance.
+- "tui": terminal UI testing — launches a CLI/TUI app (Ink, Blessed, Bubbletea, etc.) via ttyd and connects Playwright to it. Pass the shell command as start_url (e.g. "htop", "bun run app.tsx"). All browser tools (screenshot, click, type, wait) work on the terminal. Use tui_theme to control dark/light appearance and tui_method to choose between buffer-based reads and DOM-row reads.
 
 TIPS:
 - If agent_id is set and already has an active session, returns the existing one (use force_new to override)
@@ -75,8 +75,10 @@ TIPS:
       .describe("TUI engine only: terminal color theme. 'system' auto-detects OS dark/light mode. Choose 'light' for light backgrounds or 'dark' for dark backgrounds."),
     tui_font_size: z.number().optional().default(14)
       .describe("TUI engine only: terminal font size in pixels (default: 14). Larger = more readable screenshots, smaller = more content visible."),
+    tui_method: z.enum(["buffer", "dom"]).optional().default("buffer")
+      .describe("TUI engine only: how terminal state is read. 'buffer' reads xterm's internal buffer; 'dom' reads rendered DOM rows for a more structured browser-native view."),
   },
-  async ({ engine, use_case, project_id, agent_id, start_url, headless, viewport_width, viewport_height, stealth, auto_gallery, storage_state, force_new, tags, cdp_url, tui_theme, tui_font_size }) => {
+  async ({ engine, use_case, project_id, agent_id, start_url, headless, viewport_width, viewport_height, stealth, auto_gallery, storage_state, force_new, tags, cdp_url, tui_theme, tui_font_size, tui_method }) => {
     try {
       // Auto-reuse: if agent already has an active session, return it
       if (agent_id && !force_new) {
@@ -97,6 +99,7 @@ TIPS:
         cdpUrl: cdp_url,
         tuiTheme: tui_theme as "dark" | "light" | "system" | undefined,
         tuiFontSize: tui_font_size,
+        tuiMethod: tui_method as "buffer" | "dom" | undefined,
       });
       // Apply tags if provided
       if (tags?.length) {

@@ -23,19 +23,13 @@ Object.defineProperty(navigator, 'plugins', {
       { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '', length: 1 },
       { name: 'Native Client', filename: 'internal-nacl-plugin', description: '', length: 2 },
     ];
-    // Mimic PluginArray interface
-    const pluginArray = Object.create(PluginArray.prototype);
+    // Mimic PluginArray interface — guard against removed prototypes
+    const pluginArray = {};
     plugins.forEach((p, i) => {
-      const plugin = Object.create(Plugin.prototype);
-      Object.defineProperties(plugin, {
-        name: { value: p.name, enumerable: true },
-        filename: { value: p.filename, enumerable: true },
-        description: { value: p.description, enumerable: true },
-        length: { value: p.length, enumerable: true },
-      });
+      const plugin = { ...p, item: () => null };
       pluginArray[i] = plugin;
     });
-    Object.defineProperty(pluginArray, 'length', { value: plugins.length });
+    pluginArray.length = plugins.length;
     pluginArray.item = (i) => pluginArray[i] || null;
     pluginArray.namedItem = (name) => plugins.find(p => p.name === name) ? pluginArray[plugins.findIndex(p => p.name === name)] : null;
     pluginArray.refresh = () => {};
@@ -62,6 +56,12 @@ if (!window.chrome.runtime) {
     id: undefined,
   };
 }
+
+// ── 5. Override navigator.userAgent to match HTTP header ─────────────────────
+Object.defineProperty(navigator, 'userAgent', {
+  get: () => "${REALISTIC_USER_AGENT}",
+  configurable: true,
+});
 `;
 
 export async function applyStealthPatches(page: Page): Promise<void> {

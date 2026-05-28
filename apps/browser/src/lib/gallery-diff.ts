@@ -4,7 +4,7 @@ import { getDataDir } from "../db/schema.js";
 import sharp from "sharp";
 import type { GalleryDiffResult } from "../types/index.js";
 
-export async function diffImages(path1: string, path2: string): Promise<GalleryDiffResult> {
+export async function diffImages(path1: string, path2: string, threshold = 10): Promise<GalleryDiffResult> {
   const img1 = sharp(path1);
   const img2 = sharp(path2);
 
@@ -31,7 +31,7 @@ export async function diffImages(path1: string, path2: string): Promise<GalleryD
     const db = Math.abs(raw1[i + 2] - raw2[i + 2]);
     const diff = (dr + dg + db) / 3;
 
-    if (diff > 10) {
+    if (diff > threshold) {
       // Changed pixel — show as red
       changedPixels++;
       diffBuffer[i] = 255;

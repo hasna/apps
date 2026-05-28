@@ -474,14 +474,14 @@ server.tool(
           } else if (/^title\s+contains\s+/i.test(trimmed)) {
             const needle = trimmed.replace(/^title\s+contains\s+/i, "").replace(/^["']|["']$/g, "");
             result = (await getTitle(page)).toLowerCase().includes(needle.toLowerCase());
-          } else if (/^text:["'](.+)["']/i.test(trimmed)) {
-            const text = trimmed.match(/^text:["'](.+)["']/i)?.[1] ?? "";
+          } else if (/^text:["']([^"']+)["']/i.test(trimmed)) {
+            const text = trimmed.match(/^text:["']([^"']+)["']/i)?.[1] ?? "";
             result = await page.evaluate(`document.body?.textContent?.includes(${JSON.stringify(text)}) ?? false`) as boolean;
           } else if (/^element:["'](.+)["']/i.test(trimmed)) {
             const sel = trimmed.match(/^element:["'](.+)["']/i)?.[1] ?? "";
             result = await page.evaluate(`!!document.querySelector(${JSON.stringify(sel)})`) as boolean;
-          } else if (/^count:["'](.+)["']\s*([><=!]+)\s*(\d+)/i.test(trimmed)) {
-            const [, sel, op, n] = trimmed.match(/^count:["'](.+)["']\s*([><=!]+)\s*(\d+)/i)!;
+          } else if (/^count:["']([^"']+)["']\s*([><=!]+)\s*(\d+)/i.test(trimmed)) {
+            const [, sel, op, n] = trimmed.match(/^count:["']([^"']+)["']\s*([><=!]+)\s*(\d+)/i)!;
             const count = await page.evaluate(`document.querySelectorAll(${JSON.stringify(sel)}).length`) as number;
             const num = parseInt(n);
             result = op === ">" ? count > num : op === ">=" ? count >= num : op === "<" ? count < num : op === "<=" ? count <= num : count === num;
@@ -526,7 +526,7 @@ server.tool(
 
       // Diff the two screenshots
       const { diffImages } = await import("../lib/gallery-diff.js");
-      const diff = await diffImages(ss1.path, ss2.path);
+      const diff = await diffImages(ss1.path, ss2.path, threshold);
 
       logEvent(sid, "diff", { url1, url2, changed_percent: diff.changed_percent });
 

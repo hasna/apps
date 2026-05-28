@@ -78,12 +78,13 @@ server.tool(
     try {
       const sid = resolveSessionId(session_id);
       const page = getSessionPage(sid);
-      const { getCredentials, loginWithCredentials } = await import("../lib/auth.js");
-      const creds = await getCredentials(service);
+      const { lookupCredentials, loginWithCredentials } = await import("../lib/auth.js");
+      const { credential: creds, method } = await lookupCredentials(service);
       if (!creds) return err(new Error(`No credentials found for '${service}'. Add them: secrets set ${service}_email yourlogin && secrets set ${service}_password yourpass`));
       const result = await loginWithCredentials(page as any, creds, {
         loginUrl: login_url,
         saveProfile: save_profile ? service : undefined,
+        method,
       });
       return json(result);
     } catch (e) { return err(e); }

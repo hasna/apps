@@ -8,6 +8,7 @@ import { connectLightpanda } from "../engines/lightpanda.js";
 import { BunWebViewSession, isBunWebViewAvailable } from "../engines/bun-webview.js";
 import { selectEngine } from "../engines/selector.js";
 import { launchTui, closeTui, type TuiSession } from "../engines/tui.js";
+import { stopTuiRecording } from "./tui-recording.js";
 import { enableNetworkLogging } from "./network.js";
 import { enableConsoleCapture } from "./console.js";
 import { applyStealthPatches } from "./stealth.js";
@@ -21,10 +22,11 @@ interface SessionHandle {
   tuiSession: TuiSession | null;    // non-null for TUI sessions
   page: Page;                        // Playwright Page or BunWebViewSession proxy
   engine: BrowserEngine;
-  cleanups: Array<() => void>;
+  cleanups: Array<() => void | Promise<void>>;
   tokenBudget: { total: number; used: number };
   lastActivity: number;              // Date.now() timestamp for TTL
   autoGallery: boolean;
+  startUrl: string;         // shell command for TUI (startUrl from SessionOptions)
 }
 
 const handles = new Map<string, SessionHandle>();
@@ -52,15 +54,17 @@ const DB_PRUNE_INTERVAL_MS = 30 * 60_000; // Every 30 minutes
 const DB_RETENTION_HOURS = 24;
 
 const dbPruneInterval = setInterval(() => {
-  try {
-    const { getDatabase } = require("../db/schema.js");
-    const db = getDatabase();
-    const cutoff = new Date(Date.now() - DB_RETENTION_HOURS * 3_600_000).toISOString();
-    // Prune old network_log and console_log entries for closed sessions
-    db.prepare("DELETE FROM network_log WHERE session_id IN (SELECT id FROM sessions WHERE status != 'active') AND timestamp < ?").run(cutoff);
-    db.prepare("DELETE FROM console_log WHERE session_id IN (SELECT id FROM sessions WHERE status != 'active') AND timestamp < ?").run(cutoff);
-    db.prepare("DELETE FROM snapshots WHERE session_id IN (SELECT id FROM sessions WHERE status != 'active') AND timestamp < ?").run(cutoff);
-  } catch {}
+  (async () => {
+    try {
+      const { getDatabase } = await import("../db/schema.js");
+      const db = getDatabase();
+      const cutoff = new Date(Date.now() - DB_RETENTION_HOURS * 3_600_000).toISOString();
+      // Prune old network_log and console_log entries for closed sessions
+      db.prepare("DELETE FROM network_log WHERE session_id IN (SELECT id FROM sessions WHERE status != 'active') AND timestamp < ?").run(cutoff);
+      db.prepare("DELETE FROM console_log WHERE session_id IN (SELECT id FROM sessions WHERE status != 'active') AND timestamp < ?").run(cutoff);
+      db.prepare("DELETE FROM snapshots WHERE session_id IN (SELECT id FROM sessions WHERE status != 'active') AND timestamp < ?").run(cutoff);
+    } catch {}
+  })();
 }, DB_PRUNE_INTERVAL_MS);
 if (dbPruneInterval.unref) dbPruneInterval.unref();
 
@@ -69,6 +73,29 @@ if (dbPruneInterval.unref) dbPruneInterval.unref();
 
 function createBunProxy(view: BunWebViewSession): Page {
   return view as unknown as Page;
+}
+
+function attachPlaywrightListeners(
+  page: Page,
+  sessionId: string,
+  cleanups: Array<() => void | Promise<void>>,
+  opts: { captureNetwork?: boolean; captureConsole?: boolean } = {},
+): void {
+  if (opts.captureNetwork !== false) {
+    try { cleanups.push(enableNetworkLogging(page, sessionId)); } catch {}
+  }
+  if (opts.captureConsole !== false) {
+    try { cleanups.push(enableConsoleCapture(page, sessionId)); } catch {}
+  }
+  try { cleanups.push(setupDialogHandler(page, sessionId)); } catch {}
+}
+
+function detachPlaywrightListeners(cleanups: Array<() => void | Promise<void>>): void {
+  // Index 0 is engine-specific shutdown (e.g. closeTui); listener cleanups follow.
+  while (cleanups.length > 1) {
+    const cleanup = cleanups.pop();
+    try { cleanup?.(); } catch {}
+  }
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -96,7 +123,7 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
       name: opts.name ?? "attached",
     });
 
-    const cleanups: Array<() => void> = [];
+    const cleanups: Array<() => void | Promise<void>> = [];
     if (opts.captureNetwork !== false) {
       try { cleanups.push(enableNetworkLogging(page, session.id)); } catch {}
     }
@@ -105,7 +132,7 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
     }
     try { cleanups.push(setupDialogHandler(page, session.id)); } catch {}
 
-    handles.set(session.id, { browser: cdpBrowser, bunView: null, tuiSession: null, page, engine: "cdp", cleanups, tokenBudget: { total: 0, used: 0 }, lastActivity: Date.now(), autoGallery: opts.autoGallery ?? false });
+    handles.set(session.id, { browser: cdpBrowser, bunView: null, tuiSession: null, page, engine: "cdp", cleanups, tokenBudget: { total: 0, used: 0 }, lastActivity: Date.now(), autoGallery: opts.autoGallery ?? false, startUrl: opts.startUrl ?? "" });
 
     return { session, page };
   }
@@ -119,24 +146,45 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
   let browser: Browser | null = null;
   let bunView: BunWebViewSession | null = null;
   let page: Page;
+  let actualEngine: BrowserEngine = resolvedEngine;
 
   if (resolvedEngine === "bun") {
-    // ── Native Bun.WebView path ──
     if (!isBunWebViewAvailable()) {
       console.warn("[browser] Bun.WebView requested but not available — falling back to playwright. Run: bun upgrade --canary");
-      // Fall through to playwright
+      actualEngine = "playwright";
       browser = await launchPlaywright({ headless: opts.headless ?? true, viewport: opts.viewport, userAgent: opts.userAgent });
       page = await getPlaywrightPage(browser, { viewport: opts.viewport, userAgent: opts.userAgent });
     } else {
-      bunView = new BunWebViewSession({
+      // Create the WebView and verify it actually works (on Linux it needs Chrome CDP)
+      const testView = new BunWebViewSession({
         width: opts.viewport?.width ?? 1280,
         height: opts.viewport?.height ?? 720,
         profile: opts.name ?? undefined,
       });
-      if (opts.stealth) {
-        // Bun.WebView has isTrusted:true by default — stealth is built in
+
+      // Quick smoke test: on Linux, Bun.WebView requires Chrome — if Chrome isn't
+      // installed, the navigate() call will throw "Chrome connection is not available"
+      let bunWorks = true;
+      try {
+        await testView.goto("data:text/html,<html></html>");
+      } catch {
+        bunWorks = false;
+        try { await testView.close(); } catch {}
       }
-      page = createBunProxy(bunView);
+
+      if (!bunWorks) {
+        console.warn("[browser] Bun.WebView exists but Chrome not available — falling back to playwright");
+        actualEngine = "playwright";
+        browser = await launchPlaywright({ headless: opts.headless ?? true, viewport: opts.viewport, userAgent: opts.userAgent });
+        page = await getPlaywrightPage(browser, { viewport: opts.viewport, userAgent: opts.userAgent });
+      } else {
+        actualEngine = "bun";
+        bunView = testView;
+        if (opts.stealth) {
+          // Bun.WebView has isTrusted:true by default — stealth is built in
+        }
+        page = createBunProxy(bunView);
+      }
     }
   } else if (resolvedEngine === "lightpanda") {
     browser = await connectLightpanda();
@@ -150,6 +198,7 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
       viewport: opts.viewport,
       theme: opts.tuiTheme ?? "system",
       fontSize: opts.tuiFontSize,
+      method: opts.tuiMethod ?? "buffer",
     });
     browser = tuiSess.browser;
     page = tuiSess.page;
@@ -162,18 +211,15 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
       name: opts.name ?? "tui",
     });
 
-    const cleanups: Array<() => void> = [];
+    const cleanups: Array<() => void | Promise<void>> = [];
     cleanups.push(() => closeTui(tuiSess));
 
-    if (opts.captureNetwork !== false) {
-      try { cleanups.push(enableNetworkLogging(page, session.id)); } catch {}
-    }
-    if (opts.captureConsole !== false) {
-      try { cleanups.push(enableConsoleCapture(page, session.id)); } catch {}
-    }
-    try { cleanups.push(setupDialogHandler(page, session.id)); } catch {}
+    attachPlaywrightListeners(page, session.id, cleanups, {
+      captureNetwork: opts.captureNetwork,
+      captureConsole: opts.captureConsole,
+    });
 
-    handles.set(session.id, { browser, bunView: null, tuiSession: tuiSess, page, engine: "tui", cleanups, tokenBudget: { total: 0, used: 0 }, lastActivity: Date.now(), autoGallery: opts.autoGallery ?? false });
+    handles.set(session.id, { browser, bunView: null, tuiSession: tuiSess, page, engine: "tui", cleanups, tokenBudget: { total: 0, used: 0 }, lastActivity: Date.now(), autoGallery: opts.autoGallery ?? false, startUrl: opts.startUrl ?? "bash" });
 
     return { session, page };
   } else {
@@ -200,7 +246,7 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
   // Compute session name, falling back gracefully if already taken
   const sessionName = opts.name ?? (opts.startUrl ? (() => { try { return new URL(opts.startUrl!).hostname; } catch { return undefined; } })() : undefined);
   const session = dbCreateSession({
-    engine: bunView ? "bun" : (browser ? resolvedEngine : resolvedEngine),
+    engine: actualEngine,
     projectId: opts.projectId,
     agentId: opts.agentId,
     startUrl: opts.startUrl,
@@ -213,36 +259,15 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
   }
 
   // Auto-attach network + console logging (Playwright only — Bun.WebView doesn't support route interception yet)
-  const cleanups: Array<() => void> = [];
+  const cleanups: Array<() => void | Promise<void>> = [];
   if (!bunView) {
-    if (opts.captureNetwork !== false) {
-      try { cleanups.push(enableNetworkLogging(page, session.id)); } catch {}
-    }
-    if (opts.captureConsole !== false) {
-      try { cleanups.push(enableConsoleCapture(page, session.id)); } catch {}
-    }
-    // Dialog handler (Playwright only)
-    try { cleanups.push(setupDialogHandler(page, session.id)); } catch {}
-  } else {
-    // Bun.WebView console capture via evaluate
-    if (opts.captureConsole !== false) {
-      try {
-        const { logConsoleMessage } = await import("../db/console-log.js");
-        await bunView.addInitScript(`
-          (() => {
-            const orig = { log: console.log, warn: console.warn, error: console.error, debug: console.debug, info: console.info };
-            ['log','warn','error','debug','info'].forEach(level => {
-              console[level] = (...args) => {
-                orig[level](...args);
-              };
-            });
-          })()
-        `);
-      } catch {}
-    }
+    attachPlaywrightListeners(page, session.id, cleanups, {
+      captureNetwork: opts.captureNetwork,
+      captureConsole: opts.captureConsole,
+    });
   }
 
-  handles.set(session.id, { browser, bunView, tuiSession: null, page, engine: bunView ? "bun" : resolvedEngine, cleanups, tokenBudget: { total: 0, used: 0 }, lastActivity: Date.now(), autoGallery: opts.autoGallery ?? false });
+  handles.set(session.id, { browser, bunView, tuiSession: null, page, engine: actualEngine, cleanups, tokenBudget: { total: 0, used: 0 }, lastActivity: Date.now(), autoGallery: opts.autoGallery ?? false, startUrl: opts.startUrl ?? "" });
 
   if (opts.startUrl) {
     try {
@@ -286,7 +311,8 @@ export function getSessionBunView(sessionId: string): BunWebViewSession | null {
 }
 
 export function isBunSession(sessionId: string): boolean {
-  return handles.get(sessionId)?.engine === "bun";
+  const handle = handles.get(sessionId);
+  return handle?.engine === "bun" && handle.bunView !== null;
 }
 
 export function getSessionBrowser(sessionId: string): Browser {
@@ -306,6 +332,30 @@ export function hasActiveHandle(sessionId: string): boolean {
   return handles.has(sessionId);
 }
 
+export function getSessionTuiSession(sessionId: string): TuiSession | null {
+  return handles.get(sessionId)?.tuiSession ?? null;
+}
+
+export function setSessionTui(sessionId: string, tuiSess: TuiSession): void {
+  const handle = handles.get(sessionId);
+  if (!handle) throw new SessionNotFoundError(sessionId);
+  detachPlaywrightListeners(handle.cleanups);
+  handle.tuiSession = tuiSess;
+  handle.page = tuiSess.page;
+  if (tuiSess.browser !== handle.browser) {
+    handle.browser = tuiSess.browser;
+  }
+  attachPlaywrightListeners(tuiSess.page, sessionId, handle.cleanups, {
+    captureNetwork: true,
+    captureConsole: true,
+  });
+  handle.lastActivity = Date.now();
+}
+
+export function getSessionCommand(sessionId: string): string {
+  return handles.get(sessionId)?.startUrl ?? "bash";
+}
+
 export function setSessionPage(sessionId: string, page: Page): void {
   const handle = handles.get(sessionId);
   if (!handle) throw new SessionNotFoundError(sessionId);
@@ -314,25 +364,31 @@ export function setSessionPage(sessionId: string, page: Page): void {
 
 export async function closeSession(sessionId: string): Promise<Session> {
   const handle = handles.get(sessionId);
-  if (handle) {
-    for (const cleanup of handle.cleanups) {
-      try { cleanup(); } catch {}
+  try {
+    if (handle) {
+      if (handle.engine === "tui") {
+        stopTuiRecording(sessionId);
+      }
+      for (const cleanup of handle.cleanups) {
+        try { await cleanup(); } catch {}
+      }
+      if (handle.bunView) {
+        try { await handle.bunView.close(); } catch {}
+      } else if (handle.tuiSession) {
+        // TUI cleanup is handled via cleanups array (closeTui)
+      } else {
+        try { await handle.page.context().close(); } catch {}
+        try { if (handle.browser) pool.release(handle.browser); } catch {}
+      }
     }
-    if (handle.bunView) {
-      try { await handle.bunView.close(); } catch {}
-    } else if (handle.tuiSession) {
-      // TUI cleanup is handled via cleanups array (closeTui)
-    } else {
-      try { await handle.page.context().close(); } catch {}
-      if (handle.browser) pool.release(handle.browser);
-    }
+
+    // Clean up per-session in-memory caches to prevent leaks
+    try { const { clearLastSnapshot, clearSessionRefs } = await import("./snapshot.js"); clearLastSnapshot(sessionId); clearSessionRefs(sessionId); } catch {}
+    try { const { stopAllWatchesForSession } = await import("./actions.js"); stopAllWatchesForSession(sessionId); } catch {}
+    try { const { clearDialogs } = await import("./dialogs.js"); clearDialogs(sessionId); } catch {}
+  } finally {
     handles.delete(sessionId);
   }
-
-  // Clean up per-session in-memory caches to prevent leaks
-  try { const { clearLastSnapshot, clearSessionRefs } = await import("./snapshot.js"); clearLastSnapshot(sessionId); clearSessionRefs(sessionId); } catch {}
-  try { const { stopAllWatchesForSession } = await import("./actions.js"); stopAllWatchesForSession(sessionId); } catch {}
-  try { const { clearDialogs } = await import("./dialogs.js"); clearDialogs(sessionId); } catch {}
 
   return dbCloseSession(sessionId);
 }

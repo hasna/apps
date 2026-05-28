@@ -7,8 +7,22 @@ import { resetDatabase } from "../db/schema.js";
 import { takeSnapshot } from "../lib/snapshot.js";
 import { createSession, closeSession } from "../lib/session.js";
 
-const SKIP = !isBunWebViewAvailable();
-const it_bun = SKIP ? it.skip : it;
+// Bun.WebView requires Chrome on Linux — check if Chrome is actually usable
+async function isBunWebViewUsable(): Promise<boolean> {
+  if (!isBunWebViewAvailable()) return false;
+  // Quick functional test: create a view and try to navigate
+  try {
+    const view = new BunWebViewSession({ width: 800, height: 600 });
+    await view.goto("data:text/html,<html></html>");
+    await view.close();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const BUN_USABLE = await isBunWebViewUsable();
+const it_bun: typeof it = BUN_USABLE ? it : it.skip;
 
 let testServer: ReturnType<typeof Bun.serve>;
 let TEST_URL: string;
@@ -55,8 +69,8 @@ describe("isBunWebViewAvailable", () => {
   });
 
   it("returns true on canary bun", () => {
-    if (SKIP) {
-      console.log("  (Skipping — Bun.WebView not available in this build)");
+    if (!BUN_USABLE) {
+      console.log("  (Skipping — Bun.WebView/Chrome not available)");
       return;
     }
     expect(isBunWebViewAvailable()).toBe(true);

@@ -1,6 +1,21 @@
 import { randomUUID } from "node:crypto";
-import { getDatabase } from "./schema.js";
+import { join, resolve, relative, isAbsolute } from "node:path";
+import { getDatabase, getDataDir } from "./schema.js";
 import type { GalleryEntry, GalleryStats } from "../types/index.js";
+
+// Block path traversal and paths outside the data directory
+function validateDataPath(filePath: string): string {
+  if (filePath.includes("..")) {
+    throw new Error(`File path must not contain '..': ${filePath}`);
+  }
+  const dataDir = resolve(getDataDir());
+  const resolved = resolve(isAbsolute(filePath) ? filePath : join(dataDir, filePath));
+  const rel = relative(dataDir, resolved);
+  if (rel.startsWith("..") || isAbsolute(rel)) {
+    throw new Error(`File path must be within data directory: ${filePath}`);
+  }
+  return filePath;
+}
 
 // ─── Raw DB row ───────────────────────────────────────────────────────────────
 
@@ -39,7 +54,10 @@ function deserialize(row: RawGalleryEntry): GalleryEntry {
     original_size_bytes: row.original_size_bytes ?? undefined,
     compressed_size_bytes: row.compressed_size_bytes ?? undefined,
     compression_ratio: row.compression_ratio ?? undefined,
-    tags: JSON.parse(row.tags) as string[],
+    tags: (() => {
+      try { return JSON.parse(row.tags) as string[]; }
+      catch { return []; }
+    })(),
     notes: row.notes ?? undefined,
     is_favorite: row.is_favorite === 1,
     created_at: row.created_at,
@@ -51,6 +69,8 @@ function deserialize(row: RawGalleryEntry): GalleryEntry {
 export function createEntry(data: Omit<GalleryEntry, "id" | "created_at">): GalleryEntry {
   const db = getDatabase();
   const id = randomUUID();
+  validateDataPath(data.path);
+  if (data.thumbnail_path) validateDataPath(data.thumbnail_path);
   db.prepare(`
     INSERT INTO gallery_entries
       (id, session_id, project_id, url, title, path, thumbnail_path, format,

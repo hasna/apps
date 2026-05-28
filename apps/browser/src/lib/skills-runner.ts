@@ -66,10 +66,10 @@ const BUILT_IN_SKILLS: Record<string, SkillFn> = {
   // Login to a service
   "login": async (page, params) => {
     const { service, login_url } = params as { service: string; login_url?: string };
-    const { getCredentials, loginWithCredentials } = await import("./auth.js");
-    const creds = await getCredentials(service);
+    const { lookupCredentials, loginWithCredentials } = await import("./auth.js");
+    const { credential: creds, method } = await lookupCredentials(service);
     if (!creds) return { logged_in: false, error: `No credentials found for ${service}` };
-    const result = await loginWithCredentials(page, creds, { loginUrl: login_url, saveProfile: service });
+    const result = await loginWithCredentials(page, creds, { loginUrl: login_url, saveProfile: service, method });
     return result as unknown as Record<string, unknown>;
   },
 

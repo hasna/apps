@@ -12,6 +12,13 @@ interface ActiveRecording {
 
 const activeRecordings = new Map<string, ActiveRecording>();
 
+export function resetRecorderState(): void {
+  for (const active of activeRecordings.values()) {
+    try { active.cleanup(); } catch {}
+  }
+  activeRecordings.clear();
+}
+
 export function startRecording(sessionId: string, name: string, startUrl?: string): Recording {
   const steps: RecordingStep[] = [];
 

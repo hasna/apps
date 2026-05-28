@@ -243,11 +243,29 @@ async function execBrowser(cfg: Record<string, unknown>, step: ScriptStep, page:
   }
 }
 
+// Allowed connector names — restricts which binaries can be spawned
+const ALLOWED_CONNECTORS = new Set(["github", "linear", "slack", "jira", "notion", "gitlab"]);
+
+// Validate connector args contain no shell metacharacters or path traversal
+function isValidArg(arg: string): boolean {
+  return /^[a-zA-Z0-9._\-/@:]+$/.test(arg);
+}
+
 async function execConnector(cfg: Record<string, unknown>, step: ScriptStep, vars: Record<string, string>): Promise<void> {
   const connector = cfg.connector as string;
   if (!connector) throw new Error("Connector step missing 'connector' in config");
 
-  const args = (cfg.args as string[]) ?? [];
+  // Allowlist check — reject unknown connectors to prevent arbitrary command execution
+  if (!ALLOWED_CONNECTORS.has(connector)) {
+    throw new Error(`Unknown connector '${connector}'. Allowed: ${[...ALLOWED_CONNECTORS].join(", ")}`);
+  }
+
+  const args = ((cfg.args as unknown[]) ?? [])
+    .filter((a): a is string => typeof a === "string")
+    .filter(a => {
+      if (!isValidArg(a)) throw new Error(`Connector arg '${a}' contains disallowed characters`);
+      return true;
+    });
 
   // Run via Bun.spawn
   const proc = Bun.spawn([`connect-${connector}`, ...args], {

@@ -23,7 +23,7 @@ afterEach(() => {
 
 describe("gallery CRUD", () => {
   const sampleEntry = () => ({
-    path: "/tmp/test.webp",
+    path: join(tmpDir, "test.webp"),
     url: "https://example.com",
     title: "Example Domain",
     format: "webp",

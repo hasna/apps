@@ -20,12 +20,39 @@ import { diffImages } from "../lib/gallery-diff.js";
 import type { BrowserEngine } from "../types/index.js";
 
 const PORT = parseInt(process.env["BROWSER_SERVER_PORT"] ?? "7030");
+const API_KEY = process.env["BROWSER_API_KEY"] ?? null;
+const ALLOWED_ORIGIN = process.env["BROWSER_ALLOWED_ORIGIN"] ?? (API_KEY ? null : "http://localhost:3000");
 const startTime = Date.now();
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-};
+
+function corsHeaders(origin: string | null): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  };
+  if (origin) {
+    // If no API_KEY (dev mode), restrict to localhost origins only
+    if (!API_KEY && !origin.startsWith("http://localhost") && !origin.startsWith("http://127.0.0.1")) {
+      headers["Access-Control-Allow-Origin"] = ALLOWED_ORIGIN ?? "http://localhost:3000";
+    } else {
+      headers["Access-Control-Allow-Origin"] = origin;
+    }
+  }
+  return headers;
+}
+
+// Authenticate request — returns null if valid, Response if not
+function authenticate(req: Request): Response | null {
+  if (!API_KEY) return null; // Dev mode: no key required
+  const header = req.headers.get("Authorization") ?? "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  if (token !== API_KEY) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  return null;
+}
 
 // ─── Active state ─────────────────────────────────────────────────────────────
 const networkCleanup = new Map<string, () => void>();
@@ -34,32 +61,46 @@ const harCaptures = new Map<string, ReturnType<typeof startHAR>>();
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function ok(data: unknown, status = 200): Response {
+// Safely parse request JSON — returns { body, error } instead of throwing
+async function safeJson(req: Request): Promise<{ body: Record<string, unknown> } | { error: Response }> {
+  try {
+    const contentType = req.headers.get("content-type") ?? "";
+    if (!contentType.includes("application/json")) {
+      return { error: badRequest("Content-Type must be application/json") };
+    }
+    const body = await req.json() as Record<string, unknown>;
+    return { body };
+  } catch {
+    return { error: badRequest("Invalid or missing JSON body") };
+  }
+}
+
+function ok(data: unknown, status = 200, extraHeaders?: Record<string, string>): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { "Content-Type": "application/json", ...CORS_HEADERS },
+    headers: { "Content-Type": "application/json", ...(extraHeaders ?? {}) },
   });
 }
 
-function notFound(msg: string): Response {
+function notFound(msg: string, extraHeaders?: Record<string, string>): Response {
   return new Response(JSON.stringify({ error: msg }), {
     status: 404,
-    headers: { "Content-Type": "application/json", ...CORS_HEADERS },
+    headers: { "Content-Type": "application/json", ...(extraHeaders ?? {}) },
   });
 }
 
-function badRequest(msg: string): Response {
+function badRequest(msg: string, extraHeaders?: Record<string, string>): Response {
   return new Response(JSON.stringify({ error: msg }), {
     status: 400,
-    headers: { "Content-Type": "application/json", ...CORS_HEADERS },
+    headers: { "Content-Type": "application/json", ...(extraHeaders ?? {}) },
   });
 }
 
-function serverError(e: unknown): Response {
+function serverError(e: unknown, extraHeaders?: Record<string, string>): Response {
   const msg = e instanceof Error ? e.message : String(e);
   return new Response(JSON.stringify({ error: msg }), {
     status: 500,
-    headers: { "Content-Type": "application/json", ...CORS_HEADERS },
+    headers: { "Content-Type": "application/json", ...(extraHeaders ?? {}) },
   });
 }
 
@@ -71,9 +112,17 @@ const server = Bun.serve({
     const url = new URL(req.url);
     const path = url.pathname;
     const method = req.method;
+    const origin = req.headers.get("Origin") ?? undefined;
+    const headers = corsHeaders(origin ?? null);
 
     if (method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: CORS_HEADERS });
+      return new Response(null, { status: 204, headers });
+    }
+
+    // Authenticate all non-health, non-dashboard requests
+    if (!path.startsWith("/dashboard") && path !== "/health") {
+      const authError = authenticate(req);
+      if (authError) return authError;
     }
 
     try {
@@ -95,7 +144,9 @@ const server = Bun.serve({
       }
 
       if (path === "/api/sessions" && method === "POST") {
-        const body = await req.json() as Record<string, unknown>;
+        const parsed = await safeJson(req);
+        if ("error" in parsed) return parsed.error;
+        const body = parsed.body;
         const { session } = await createSession({
           engine: (body.engine as BrowserEngine) ?? "auto",
           projectId: body.project_id as string | undefined,
@@ -120,28 +171,36 @@ const server = Bun.serve({
 
       // ── Navigate ────────────────────────────────────────────────────────
       if (path === "/api/navigate" && method === "POST") {
-        const body = await req.json() as { session_id: string; url: string };
-        if (!body.session_id || !body.url) return badRequest("session_id and url required");
-        const page = getSessionPage(body.session_id);
-        await navigate(page, body.url);
-        return ok({ url: body.url, title: await page.title(), current_url: page.url() });
+        const parsed = await safeJson(req);
+        if ("error" in parsed) return parsed.error;
+        const body = parsed.body;
+        if (!body.session_id || !body.url) return badRequest("session_id and url required", headers);
+        const sessionId = body.session_id as string;
+        const url = body.url as string;
+        const page = getSessionPage(sessionId);
+        await navigate(page, url);
+        return ok({ url, title: await page.title(), current_url: page.url() });
       }
 
       // ── Extract ─────────────────────────────────────────────────────────
       if (path === "/api/extract" && method === "POST") {
-        const body = await req.json() as { session_id: string; format?: string; selector?: string };
-        if (!body.session_id) return badRequest("session_id required");
-        const page = getSessionPage(body.session_id);
-        const result = await extract(page, { format: body.format as "text" | undefined, selector: body.selector });
+        const parsed = await safeJson(req);
+        if ("error" in parsed) return parsed.error;
+        const body = parsed.body;
+        if (!body.session_id) return badRequest("session_id required", headers);
+        const page = getSessionPage(body.session_id as string);
+        const result = await extract(page, { format: body.format as "text" | undefined, selector: body.selector as string | undefined });
         return ok(result);
       }
 
       // ── Screenshot ──────────────────────────────────────────────────────
       if (path === "/api/screenshot" && method === "POST") {
-        const body = await req.json() as { session_id: string; selector?: string; full_page?: boolean };
-        if (!body.session_id) return badRequest("session_id required");
-        const page = getSessionPage(body.session_id);
-        const result = await takeScreenshot(page, { selector: body.selector, fullPage: body.full_page });
+        const parsed = await safeJson(req);
+        if ("error" in parsed) return parsed.error;
+        const body = parsed.body;
+        if (!body.session_id) return badRequest("session_id required", headers);
+        const page = getSessionPage(body.session_id as string);
+        const result = await takeScreenshot(page, { selector: body.selector as string | undefined, fullPage: body.full_page as boolean | undefined });
         return ok(result);
       }
 
@@ -188,18 +247,22 @@ const server = Bun.serve({
 
       // ── HAR ──────────────────────────────────────────────────────────────
       if (path === "/api/har/start" && method === "POST") {
-        const body = await req.json() as { session_id: string };
-        const page = getSessionPage(body.session_id);
-        harCaptures.set(body.session_id, startHAR(page));
+        const parsed = await safeJson(req);
+        if ("error" in parsed) return parsed.error;
+        const body = parsed.body;
+        const page = getSessionPage(body.session_id as string);
+        harCaptures.set(body.session_id as string, startHAR(page));
         return ok({ started: true });
       }
 
       if (path === "/api/har/stop" && method === "POST") {
-        const body = await req.json() as { session_id: string };
-        const capture = harCaptures.get(body.session_id);
-        if (!capture) return notFound("No active HAR capture");
+        const parsed = await safeJson(req);
+        if ("error" in parsed) return parsed.error;
+        const body = parsed.body;
+        const capture = harCaptures.get(body.session_id as string);
+        if (!capture) return notFound("No active HAR capture", headers);
         const har = capture.stop();
-        harCaptures.delete(body.session_id);
+        harCaptures.delete(body.session_id as string);
         return ok({ har });
       }
 
@@ -209,9 +272,11 @@ const server = Bun.serve({
       }
 
       if (path.match(/^\/api\/recordings\/([^/]+)\/replay$/) && method === "POST") {
+        const parsed = await safeJson(req);
+        if ("error" in parsed) return parsed.error;
+        const body = parsed.body;
         const id = path.split("/")[3];
-        const body = await req.json() as { session_id: string };
-        const page = getSessionPage(body.session_id);
+        const page = getSessionPage(body.session_id as string);
         const result = await replayRecording(id, page);
         return ok(result);
       }
@@ -225,11 +290,13 @@ const server = Bun.serve({
 
       // ── Crawl ────────────────────────────────────────────────────────────
       if (path === "/api/crawl" && method === "POST") {
-        const body = await req.json() as { url: string; max_depth?: number; max_pages?: number; engine?: string };
-        if (!body.url) return badRequest("url required");
-        const result = await crawl(body.url, {
-          maxDepth: body.max_depth ?? 2,
-          maxPages: body.max_pages ?? 50,
+        const parsed = await safeJson(req);
+        if ("error" in parsed) return parsed.error;
+        const body = parsed.body;
+        if (!body.url) return badRequest("url required", headers);
+        const result = await crawl(body.url as string, {
+          maxDepth: (body.max_depth as number) ?? 2,
+          maxPages: (body.max_pages as number) ?? 50,
           engine: body.engine as BrowserEngine | undefined,
         });
         return ok(result);
@@ -241,9 +308,11 @@ const server = Bun.serve({
       }
 
       if (path === "/api/agents" && method === "POST") {
-        const body = await req.json() as { name: string; description?: string; project_id?: string; session_id?: string; working_dir?: string };
-        if (!body.name) return badRequest("name required");
-        const agent = registerAgent(body.name, { description: body.description, projectId: body.project_id, sessionId: body.session_id, workingDir: body.working_dir });
+        const parsed = await safeJson(req);
+        if ("error" in parsed) return parsed.error;
+        const body = parsed.body;
+        if (!body.name) return badRequest("name required", headers);
+        const agent = registerAgent(body.name as string, { description: body.description as string | undefined, projectId: body.project_id as string | undefined, sessionId: body.session_id as string | undefined, workingDir: body.working_dir as string | undefined });
         return ok({ agent }, 201);
       }
 
@@ -266,9 +335,11 @@ const server = Bun.serve({
       }
 
       if (path === "/api/projects" && method === "POST") {
-        const body = await req.json() as { name: string; path: string; description?: string };
-        if (!body.name || !body.path) return badRequest("name and path required");
-        const project = ensureProject(body.name, body.path, body.description);
+        const parsed = await safeJson(req);
+        if ("error" in parsed) return parsed.error;
+        const body = parsed.body;
+        if (!body.name || !body.path) return badRequest("name and path required", headers);
+        const project = ensureProject(body.name as string, body.path as string, body.description as string | undefined);
         return ok({ project }, 201);
       }
 
@@ -285,32 +356,38 @@ const server = Bun.serve({
         return ok(getGalleryStats(url.searchParams.get("project_id") ?? undefined));
       }
       if (path === "/api/gallery/diff" && method === "POST") {
-        const body = await req.json() as { id1: string; id2: string };
-        const e1 = getEntry(body.id1); const e2 = getEntry(body.id2);
-        if (!e1 || !e2) return notFound("Gallery entry not found");
+        const parsed = await safeJson(req);
+        if ("error" in parsed) return parsed.error;
+        const body = parsed.body;
+        const e1 = getEntry(body.id1 as string); const e2 = getEntry(body.id2 as string);
+        if (!e1 || !e2) return notFound("Gallery entry not found", headers);
         return ok(await diffImages(e1.path, e2.path));
       }
       if (path.match(/^\/api\/gallery\/([^/]+)\/tag$/) && method === "POST") {
+        const parsed = await safeJson(req);
+        if ("error" in parsed) return parsed.error;
+        const body = parsed.body;
         const id = path.split("/")[3];
-        const body = await req.json() as { tag: string };
-        return ok({ entry: tagEntry(id, body.tag) });
+        return ok({ entry: tagEntry(id, body.tag as string) });
       }
       if (path.match(/^\/api\/gallery\/([^/]+)\/favorite$/) && method === "PUT") {
+        const parsed = await safeJson(req);
+        if ("error" in parsed) return parsed.error;
+        const body = parsed.body;
         const id = path.split("/")[3];
-        const body = await req.json() as { favorited: boolean };
-        return ok({ entry: favoriteEntry(id, body.favorited) });
+        return ok({ entry: favoriteEntry(id, body.favorited as boolean) });
       }
       if (path.match(/^\/api\/gallery\/([^/]+)\/thumbnail$/) && method === "GET") {
         const id = path.split("/")[3];
         const entry = getEntry(id);
         if (!entry?.thumbnail_path || !existsSync(entry.thumbnail_path)) return notFound("Thumbnail not found");
-        return new Response(Bun.file(entry.thumbnail_path), { headers: { ...CORS_HEADERS } });
+        return new Response(Bun.file(entry.thumbnail_path), { headers: { ...headers } });
       }
       if (path.match(/^\/api\/gallery\/([^/]+)\/image$/) && method === "GET") {
         const id = path.split("/")[3];
         const entry = getEntry(id);
         if (!entry?.path || !existsSync(entry.path)) return notFound("Image not found");
-        return new Response(Bun.file(entry.path), { headers: { ...CORS_HEADERS } });
+        return new Response(Bun.file(entry.path), { headers: { ...headers } });
       }
       if (path.match(/^\/api\/gallery\/([^/]+)$/) && method === "DELETE") {
         const id = path.split("/")[3];
@@ -338,27 +415,33 @@ const server = Bun.serve({
         const id = path.split("/")[3];
         const file = getDownload(id);
         if (!file || !existsSync(file.path)) return notFound("Download not found");
-        return new Response(Bun.file(file.path), { headers: { ...CORS_HEADERS } });
+        return new Response(Bun.file(file.path), { headers: { ...headers } });
       }
       if (path.match(/^\/api\/downloads\/([^/]+)$/) && method === "DELETE") {
         const id = path.split("/")[3];
         return ok({ deleted: deleteDownload(id) });
       }
 
-      // ── Dashboard (static) ───────────────────────────────────────────────
+      // ── Dashboard (static) — path traversal safe ─────────────────────────
       const dashboardDist = join(import.meta.dir, "../../dashboard/dist");
       if (existsSync(dashboardDist)) {
-        const filePath = path === "/" ? join(dashboardDist, "index.html") : join(dashboardDist, path);
+        // Reject any traversal attempts
+        const cleanPath = path.replace(/^\//, "");
+        if (cleanPath.includes("..") || cleanPath.startsWith("/")) return notFound("Not found", headers);
+        const filePath = path === "/" ? join(dashboardDist, "index.html") : join(dashboardDist, cleanPath);
+        // Double-check: resolved path must stay within dashboardDist
+        const resolved = (await Bun.file(filePath).arrayBuffer().then(() => join(dashboardDist, cleanPath))) || "";
+        if (!resolved.startsWith(dashboardDist)) return notFound("Not found", headers);
         if (existsSync(filePath)) {
-          return new Response(Bun.file(filePath), { headers: CORS_HEADERS });
+          return new Response(Bun.file(filePath), { headers });
         }
         // SPA fallback
-        return new Response(Bun.file(join(dashboardDist, "index.html")), { headers: CORS_HEADERS });
+        return new Response(Bun.file(join(dashboardDist, "index.html")), { headers });
       }
 
       if (path === "/" || path === "") {
         return new Response("@hasna/browser REST API running. Dashboard not built.", {
-          headers: { "Content-Type": "text/plain", ...CORS_HEADERS },
+          headers: { "Content-Type": "text/plain", ...headers },
         });
       }
 

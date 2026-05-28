@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { chromium, type Browser, type Page } from "playwright";
 import { resetDatabase } from "../db/schema.js";
-import { startRecording, stopRecording, replayRecording, recordStep, exportRecording } from "./recorder.js";
+import { startRecording, stopRecording, replayRecording, recordStep, exportRecording, resetRecorderState } from "./recorder.js";
 
 let browser: Browser;
 let page: Page;
@@ -14,13 +14,15 @@ beforeAll(async () => {
   browser = await chromium.launch({ headless: true });
   page = await browser.newPage();
   await page.setContent('<html><body><button id="btn">Click</button></body></html>');
-});
+}, 30_000);
 
 afterAll(async () => {
   await browser.close();
 });
 
 beforeEach(() => {
+  resetRecorderState();
+  resetDatabase();
   tmpDir = mkdtempSync(join(tmpdir(), "browser-test-"));
   process.env["BROWSER_DB_PATH"] = join(tmpDir, "test.db");
   process.env["BROWSER_DATA_DIR"] = tmpDir;
@@ -28,6 +30,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetRecorderState();
   resetDatabase();
   try { rmSync(tmpDir, { recursive: true, force: true }); } catch {}
   delete process.env["BROWSER_DB_PATH"];

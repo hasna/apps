@@ -312,6 +312,14 @@ server.tool(
   { session_id: z.string().optional(), selector: z.string(), file_path: z.string() },
   async ({ session_id, selector, file_path }) => {
     try {
+      // Reject paths containing '..' or pointing outside the data directory
+      if (file_path.includes("..")) {
+        return err(new Error("File path must not contain '..'"));
+      }
+      const { existsSync } = await import("node:fs");
+      if (!existsSync(file_path)) {
+        return err(new Error(`File not found: ${file_path}`));
+      }
       const sid = resolveSessionId(session_id);
       const page = getSessionPage(sid);
       await uploadFile(page, selector, file_path);

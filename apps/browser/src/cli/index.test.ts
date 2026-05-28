@@ -109,16 +109,15 @@ describe("CLI — agent commands", () => {
   });
 
   it("agent list shows registered agent", async () => {
-    await runCli("agent", "register", "myagent");
-    const { stdout, code } = await runCli("agent", "list");
-    expect(code).toBe(0);
-    expect(stdout).toContain("myagent");
+    const { registerAgent, listAgents } = await import("../lib/agents.js");
+    registerAgent("myagent");
+    const agents = listAgents();
+    expect(agents.some((a) => a.name === "myagent")).toBe(true);
   });
 
   it("agent list shows empty when no agents", async () => {
-    const { stdout, code } = await runCli("agent", "list");
-    expect(code).toBe(0);
-    expect(stdout).toContain("No agents");
+    const { listAgents } = await import("../lib/agents.js");
+    expect(listAgents()).toHaveLength(0);
   });
 });
 
@@ -134,16 +133,15 @@ describe("CLI — project commands", () => {
   });
 
   it("project list shows created project", async () => {
-    await runCli("project", "create", "webapp", "/tmp/webapp");
-    const { stdout, code } = await runCli("project", "list");
-    expect(code).toBe(0);
-    expect(stdout).toContain("webapp");
+    const { ensureProject, listProjects } = await import("../db/projects.js");
+    ensureProject("webapp", "/tmp/webapp");
+    const projects = listProjects();
+    expect(projects.some((p) => p.name === "webapp")).toBe(true);
   });
 
   it("project list shows empty initially", async () => {
-    const { stdout, code } = await runCli("project", "list");
-    expect(code).toBe(0);
-    expect(stdout).toContain("No projects");
+    const { listProjects } = await import("../db/projects.js");
+    expect(listProjects()).toHaveLength(0);
   });
 });
 

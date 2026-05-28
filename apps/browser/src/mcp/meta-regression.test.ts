@@ -12,7 +12,7 @@ import { ensureProject } from "../db/projects.js";
 let tmpDir: string;
 
 const sampleEntry = () => ({
-  path: "/tmp/test.webp",
+  path: join(tmpDir, "test.webp"),
   url: "https://example.com",
   title: "Example",
   format: "webp" as const,

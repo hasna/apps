@@ -376,16 +376,17 @@ export interface WatchHandle {
   stop: () => void;
 }
 
-const activeWatches = new Map<string, { interval: ReturnType<typeof setInterval>; changes: string[] }>();
+const activeWatches = new Map<string, { interval: ReturnType<typeof setInterval>; changes: string[]; sessionId?: string }>();
 
 export function watchPage(
   page: Page,
-  opts?: { selector?: string; intervalMs?: number; maxChanges?: number }
+  opts?: { selector?: string; intervalMs?: number; maxChanges?: number; sessionId?: string }
 ): WatchHandle {
   const id = `watch-${Date.now()}`;
   const changes: string[] = [];
   const intervalMs = opts?.intervalMs ?? 500;
   const maxChanges = opts?.maxChanges ?? 50;
+  const sessionId = opts?.sessionId;
 
   const interval = setInterval(async () => {
     if (changes.length >= maxChanges) return;
@@ -402,7 +403,7 @@ export function watchPage(
     }
   }, intervalMs);
 
-  activeWatches.set(id, { interval, changes });
+  activeWatches.set(id, { interval, changes, sessionId });
 
   return {
     id,
@@ -425,11 +426,13 @@ export function stopWatch(watchId: string): void {
   }
 }
 
-export function stopAllWatchesForSession(_sessionId?: string): void {
-  // Stop all watches — watches don't track session ownership, so clear everything
-  for (const [id, w] of activeWatches) {
-    clearInterval(w.interval);
-    activeWatches.delete(id);
+export function stopAllWatchesForSession(sessionId?: string): void {
+  for (const [id, w] of [...activeWatches]) {
+    // If sessionId provided, only stop that session's watches; otherwise stop all
+    if (!sessionId || w.sessionId === sessionId) {
+      clearInterval(w.interval);
+      activeWatches.delete(id);
+    }
   }
 }
 

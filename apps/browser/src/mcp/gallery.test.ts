@@ -9,7 +9,7 @@ import { saveToDownloads, listDownloads, getDownload, deleteDownload, cleanStale
 let tmpDir: string;
 
 const sample = () => ({
-  path: "/tmp/test.webp",
+  path: join(tmpDir, "test.webp"),
   url: "https://example.com",
   title: "Example",
   format: "webp",
