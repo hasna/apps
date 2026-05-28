@@ -28,6 +28,13 @@ export type {
   ResultStatus,
   ModelPreset,
   BrowserEngine,
+  TestingWorkflow,
+  CreateTestingWorkflowInput,
+  UpdateTestingWorkflowInput,
+  WorkflowExecutionConfig,
+  WorkflowExecutionTarget,
+  WorkflowGoal,
+  WorkflowScenarioFilter,
 } from "../types/index.js";
 
 export type { MockRule } from "../lib/network-mock.js";
@@ -89,6 +96,34 @@ export {
   listAuthenticatedPersonas,
   savePersonaAuthCookies,
 } from "../db/personas.js";
+
+// ─── Saved Testing Workflows ────────────────────────────────────────────────
+
+export {
+  createTestingWorkflow,
+  getTestingWorkflow,
+  listTestingWorkflows,
+  updateTestingWorkflow,
+  deleteTestingWorkflow,
+} from "../db/workflows.js";
+
+export {
+  buildWorkflowRunPlan,
+  runTestingWorkflow,
+} from "../lib/workflow-runner.js";
+export type { WorkflowRunOptions, WorkflowRunPlan } from "../lib/workflow-runner.js";
+
+export {
+  generateWorkflowActionsWithAi,
+  runWorkflowGoalLoop,
+} from "../lib/workflow-agent.js";
+export type { WorkflowGoalAction, WorkflowGoalLoopOptions, WorkflowGoalLoopResult } from "../lib/workflow-agent.js";
+
+export {
+  exportToOpenProjects,
+  importFromOpenProjects,
+} from "../lib/open-projects.js";
+export type { OpenProjectsMirrorResult } from "../lib/open-projects.js";
 
 // ─── Templates ────────────────────────────────────────────────────────────────
 

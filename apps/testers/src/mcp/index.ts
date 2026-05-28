@@ -28,6 +28,9 @@ import { createPersona, getPersona, listPersonas, updatePersona, deletePersona }
 import { PersonaNotFoundError } from "../types/index.js";
 import { getTestersDir } from "../lib/paths.js";
 import { createProdDebugPlan } from "../lib/prod-debug.js";
+import { createTestingWorkflow, getTestingWorkflow, listTestingWorkflows } from "../db/workflows.js";
+import { runTestingWorkflow } from "../lib/workflow-runner.js";
+import { runWorkflowGoalLoop } from "../lib/workflow-agent.js";
 
 const cliArgs = new Set(process.argv.slice(2));
 if (cliArgs.has("--help") || cliArgs.has("-h")) {
@@ -617,6 +620,134 @@ server.tool(
     try {
       const projects = listProjects();
       return json({ items: projects, total: projects.length });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+server.tool(
+  "import_project_from_open_projects",
+  "Import an app/project from the open-projects SDK by ID, slug, name, or path and mirror it into testers projects.",
+  {
+    ref: z.string().describe("open-projects project ID, slug, name, or path"),
+  },
+  async ({ ref }) => {
+    try {
+      const { importFromOpenProjects } = await import("../lib/open-projects.js");
+      return json(await importFromOpenProjects(ref));
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+server.tool(
+  "create_testing_workflow",
+  "Create a saved testing workflow with scenario filters, personas, goal criteria, and an execution target.",
+  {
+    name: z.string().describe("Workflow name"),
+    description: z.string().optional().describe("Workflow description"),
+    projectId: z.string().optional().describe("Testers project ID"),
+    scenarioIds: z.array(z.string()).optional().describe("Scenario IDs to include"),
+    tags: z.array(z.string()).optional().describe("Scenario tags to include"),
+    priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("Scenario priority filter"),
+    personaIds: z.array(z.string()).optional().describe("Persona IDs to run as a matrix"),
+    goalPrompt: z.string().optional().describe("Goal prompt for the AI SDK workflow agent"),
+    successCriteria: z.array(z.string()).optional().describe("Goal success criteria"),
+    maxIterations: z.number().int().min(1).max(20).optional().describe("Max goal loop iterations"),
+    executionTarget: z.enum(["local", "connector:e2b"]).optional().describe("Run locally or through the open-connectors E2B connector"),
+    e2bTemplate: z.string().optional().describe("E2B sandbox template for connector:e2b"),
+  },
+  async ({ name, description, projectId, scenarioIds, tags, priority, personaIds, goalPrompt, successCriteria, maxIterations, executionTarget, e2bTemplate }) => {
+    try {
+      return json(createTestingWorkflow({
+        name,
+        description,
+        projectId,
+        scenarioFilter: { scenarioIds, tags, priority },
+        personaIds,
+        goal: goalPrompt ? { prompt: goalPrompt, successCriteria, maxIterations } : null,
+        execution: {
+          target: executionTarget ?? "local",
+          connector: executionTarget === "connector:e2b" ? "e2b" : undefined,
+          sandboxTemplate: e2bTemplate,
+        },
+      }));
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+server.tool(
+  "list_testing_workflows",
+  "List saved testing workflows.",
+  {
+    projectId: z.string().optional().describe("Filter by testers project ID"),
+    enabled: z.boolean().optional().describe("Filter by enabled state"),
+  },
+  async ({ projectId, enabled }) => {
+    try {
+      const workflows = listTestingWorkflows({ projectId, enabled });
+      return json({ items: workflows, total: workflows.length });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+server.tool(
+  "run_testing_workflow",
+  "Run a saved testing workflow or dry-run its execution plan.",
+  {
+    id: z.string().describe("Workflow ID, prefix, or name"),
+    url: z.string().describe("Target URL"),
+    model: z.string().optional().describe(MODEL_DESC),
+    headed: z.boolean().optional().describe("Run browser headed"),
+    parallel: z.number().optional().describe("Parallel workers"),
+    dryRun: z.boolean().optional().describe("Return the resolved plan without launching browsers or connector runs"),
+  },
+  async ({ id, url, model, headed, parallel, dryRun }) => {
+    try {
+      return json(await runTestingWorkflow(id, { url, model, headed, parallel, dryRun }));
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+server.tool(
+  "run_testing_workflow_agent",
+  "Run a saved workflow as an AI SDK goal loop. Failed iterations are reviewed by the app AI and can create open-todos next-action tasks.",
+  {
+    id: z.string().describe("Workflow ID, prefix, or name"),
+    url: z.string().describe("Target URL"),
+    model: z.string().optional().describe("AI SDK model ID for the planner"),
+    headed: z.boolean().optional().describe("Run browser headed"),
+    parallel: z.number().optional().describe("Parallel workers"),
+    dryRun: z.boolean().optional().describe("Return a dry-run loop result without launching browsers or AI calls"),
+  },
+  async ({ id, url, model, headed, parallel, dryRun }) => {
+    try {
+      return json(await runWorkflowGoalLoop(id, { url, model, headed, parallel, dryRun }));
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+server.tool(
+  "get_testing_workflow",
+  "Get a saved testing workflow by ID, prefix, or name.",
+  {
+    id: z.string().describe("Workflow ID, prefix, or name"),
+  },
+  async ({ id }) => {
+    try {
+      const workflow = getTestingWorkflow(id);
+      if (!workflow) return errorResponse(notFoundErr(id, "Workflow"));
+      return json(workflow);
     } catch (error) {
       return errorResponse(error);
     }

@@ -33,6 +33,8 @@ import { createSchedule, getSchedule, listSchedules, updateSchedule, deleteSched
 import { getTemplate, listTemplateNames } from "../lib/templates.js";
 import { createAuthPreset, listAuthPresets, deleteAuthPreset } from "../db/auth-presets.js";
 import { addDependency, removeDependency, getDependencies, getDependents, createFlow, getFlow, listFlows, deleteFlow } from "../db/flows.js";
+import { createTestingWorkflow, deleteTestingWorkflow, getTestingWorkflow, listTestingWorkflows } from "../db/workflows.js";
+import { runTestingWorkflow } from "../lib/workflow-runner.js";
 import { createEnvironment, getEnvironment, listEnvironments, deleteEnvironment, setDefaultEnvironment, getDefaultEnvironment } from "../db/environments.js";
 import { generateGitHubActionsWorkflow } from "../lib/ci.js";
 import type { ScenarioPriority } from "../types/index.js";
@@ -1678,6 +1680,45 @@ projectCmd
       log(`  Created:     ${project.createdAt}`);
       log(`  Updated:     ${project.updatedAt}`);
       log("");
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+projectCmd
+  .command("import-open <ref>")
+  .description("Import an app/project from the open-projects SDK by ID, slug, name, or path")
+  .option("--json", "Output as JSON", false)
+  .action(async (ref: string, opts) => {
+    try {
+      const { importFromOpenProjects } = await import("../lib/open-projects.js");
+      const result = await importFromOpenProjects(ref);
+      if (opts.json) {
+        log(JSON.stringify(result, null, 2));
+        return;
+      }
+      log(chalk.green(`${result.created ? "Imported" : "Linked existing"} project ${chalk.bold(result.project.name)} from open-projects ${result.openProject.slug}`));
+      log(chalk.dim(`  Path: ${result.project.path ?? result.openProject.path}`));
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+projectCmd
+  .command("export-open <id>")
+  .description("Register a testers project in open-projects")
+  .option("--json", "Output as JSON", false)
+  .action(async (id: string, opts) => {
+    try {
+      const { exportToOpenProjects } = await import("../lib/open-projects.js");
+      const result = await exportToOpenProjects(id);
+      if (opts.json) {
+        log(JSON.stringify(result, null, 2));
+        return;
+      }
+      log(chalk.green(`${result.created ? "Created" : "Found"} open-projects record ${chalk.bold(result.openProject.slug)} for ${result.project.name}`));
     } catch (error) {
       logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
@@ -3871,6 +3912,177 @@ apiCmd
       logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
+  });
+
+// --- Saved workflow subcommands ---
+
+const workflowCmd = program.command("workflow").description("Manage saved testing workflows");
+
+workflowCmd
+  .command("create <name>")
+  .description("Save a reusable testing workflow")
+  .option("--project <id>", "Project ID")
+  .option("-d, --description <text>", "Workflow description")
+  .option("--scenario <ids>", "Comma-separated scenario IDs")
+  .option("--tag <tag>", "Scenario tag (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
+  .option("--priority <level>", "Scenario priority")
+  .option("--persona <ids>", "Comma-separated persona IDs")
+  .option("--goal <prompt>", "Goal prompt for the agentic testing loop")
+  .option("--success <criteria>", "Success criteria (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
+  .option("--max-iterations <n>", "Goal-loop iteration cap", "10")
+  .option("--target <target>", "Execution target: local or connector:e2b", "local")
+  .option("--e2b-template <name>", "E2B sandbox template name")
+  .option("--connector-operation <name>", "Connector operation for E2B", "run")
+  .option("--timeout <ms>", "Workflow timeout")
+  .option("--json", "Output as JSON", false)
+  .action((name: string, opts) => {
+    try {
+      const workflow = createTestingWorkflow({
+        name,
+        description: opts.description,
+        projectId: opts.project ? resolveProject(opts.project) : undefined,
+        scenarioFilter: {
+          scenarioIds: opts.scenario ? opts.scenario.split(",").map((id: string) => id.trim()).filter(Boolean) : undefined,
+          tags: opts.tag,
+          priority: opts.priority,
+        },
+        personaIds: opts.persona ? opts.persona.split(",").map((id: string) => id.trim()).filter(Boolean) : [],
+        goal: opts.goal ? {
+          prompt: opts.goal,
+          successCriteria: opts.success,
+          maxIterations: parseInt(opts.maxIterations, 10) || 10,
+        } : null,
+        execution: {
+          target: opts.target,
+          connector: opts.target === "connector:e2b" ? "e2b" : undefined,
+          operation: opts.connectorOperation,
+          sandboxTemplate: opts.e2bTemplate,
+          timeoutMs: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
+        },
+      });
+      if (opts.json) log(JSON.stringify(workflow, null, 2));
+      else log(chalk.green(`Workflow saved: ${chalk.bold(workflow.id.slice(0, 8))} — ${workflow.name}`));
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+workflowCmd
+  .command("list")
+  .description("List saved testing workflows")
+  .option("--project <id>", "Project ID")
+  .option("--all", "Include disabled workflows", false)
+  .option("--json", "Output as JSON", false)
+  .action((opts) => {
+    const workflows = listTestingWorkflows({
+      projectId: opts.project ? resolveProject(opts.project) : undefined,
+      enabled: opts.all ? undefined : true,
+    });
+    if (opts.json) { log(JSON.stringify(workflows, null, 2)); return; }
+    if (workflows.length === 0) { log(chalk.dim("\n  No workflows found.\n")); return; }
+    log("");
+    log(chalk.bold("  Testing Workflows"));
+    log("");
+    for (const workflow of workflows) {
+      const target = workflow.execution.target === "connector:e2b" ? chalk.cyan("e2b") : chalk.green("local");
+      log(`  ${chalk.dim(workflow.id.slice(0, 8))}  ${workflow.name}  ${target}  ${chalk.dim(workflow.personaIds.length ? `${workflow.personaIds.length} personas` : "no personas")}`);
+    }
+    log("");
+  });
+
+workflowCmd
+  .command("show <id>")
+  .description("Show workflow details")
+  .option("--json", "Output as JSON", false)
+  .action((id: string, opts) => {
+    const workflow = getTestingWorkflow(id);
+    if (!workflow) { logError(chalk.red(`Workflow not found: ${id}`)); process.exit(1); }
+    if (opts.json) { log(JSON.stringify(workflow, null, 2)); return; }
+    log("");
+    log(chalk.bold(`  Workflow: ${workflow.name}`));
+    log(`  ID:       ${chalk.dim(workflow.id)}`);
+    log(`  Project:  ${workflow.projectId ?? chalk.dim("global")}`);
+    log(`  Target:   ${workflow.execution.target}`);
+    log(`  Filter:   ${JSON.stringify(workflow.scenarioFilter)}`);
+    log(`  Personas: ${workflow.personaIds.length > 0 ? workflow.personaIds.join(", ") : chalk.dim("none")}`);
+    log(`  Goal:     ${workflow.goal?.prompt ?? chalk.dim("none")}`);
+    log("");
+  });
+
+workflowCmd
+  .command("run <id>")
+  .description("Run a saved testing workflow")
+  .requiredOption("-u, --url <url>", "Target URL")
+  .option("-m, --model <model>", "AI model")
+  .option("--headed", "Run headed", false)
+  .option("--parallel <n>", "Parallel workers")
+  .option("--timeout <ms>", "Override timeout")
+  .option("--dry-run", "Print the resolved workflow run plan", false)
+  .option("--json", "Output as JSON", false)
+  .action(async (id: string, opts) => {
+    try {
+      const output = await runTestingWorkflow(id, {
+        url: opts.url,
+        model: opts.model,
+        headed: opts.headed,
+        parallel: opts.parallel ? parseInt(opts.parallel, 10) : undefined,
+        timeout: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
+        dryRun: opts.dryRun,
+      });
+      if (opts.json || opts.dryRun || output.connectorResult) {
+        log(JSON.stringify(output, null, 2));
+        return;
+      }
+      log(formatTerminal(output.run!, output.results));
+      process.exit(getExitCode(output.run!));
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+workflowCmd
+  .command("agent <id>")
+  .description("Run a saved workflow as a goal loop and ask the app AI to create open-todos next actions")
+  .requiredOption("-u, --url <url>", "Target URL")
+  .option("-m, --model <model>", "AI SDK model ID for planning")
+  .option("--headed", "Run headed", false)
+  .option("--parallel <n>", "Parallel workers")
+  .option("--dry-run", "Resolve the loop without launching browsers", false)
+  .option("--json", "Output as JSON", false)
+  .action(async (id: string, opts) => {
+    try {
+      const { runWorkflowGoalLoop } = await import("../lib/workflow-agent.js");
+      const result = await runWorkflowGoalLoop(id, {
+        url: opts.url,
+        model: opts.model,
+        headed: opts.headed,
+        parallel: opts.parallel ? parseInt(opts.parallel, 10) : undefined,
+        dryRun: opts.dryRun,
+      });
+      if (opts.json) {
+        log(JSON.stringify(result, null, 2));
+        return;
+      }
+      const status = result.status === "passed" ? chalk.green("passed") : chalk.red("failed");
+      log(chalk.bold(`Workflow goal ${status} after ${result.iterations} iteration${result.iterations === 1 ? "" : "s"}`));
+      for (const action of result.actions) {
+        log(`  - ${action.type}: ${action.title}${action.todoTaskId ? ` (${action.todoTaskId.slice(0, 8)})` : ""}`);
+      }
+      if (result.status === "failed") process.exit(1);
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+workflowCmd
+  .command("delete <id>")
+  .description("Delete a saved workflow")
+  .action((id: string) => {
+    if (deleteTestingWorkflow(id)) log(chalk.green("Workflow deleted."));
+    else { logError(chalk.red("Workflow not found.")); process.exit(1); }
   });
 
 // ─── testers persona ─────────────────────────────────────────────────────────

@@ -20,6 +20,9 @@ import { listProjects, createProject, getProject, updateProject } from "../db/pr
 import { listEnvironments, createEnvironment, updateEnvironment, deleteEnvironmentById } from "../db/environments.js";
 import { createPersona, getPersona, listPersonas, updatePersona, deletePersona, countPersonas } from "../db/personas.js";
 import { PersonaNotFoundError } from "../types/index.js";
+import { createTestingWorkflow, deleteTestingWorkflow, getTestingWorkflow, listTestingWorkflows, updateTestingWorkflow } from "../db/workflows.js";
+import { runTestingWorkflow } from "../lib/workflow-runner.js";
+import { runWorkflowGoalLoop } from "../lib/workflow-agent.js";
 
 const cliArgs = new Set(process.argv.slice(2));
 if (cliArgs.has("--help") || cliArgs.has("-h")) {
@@ -189,6 +192,41 @@ const CreateRunSchema = z.object({
   projectId: z.string().optional(),
 });
 
+const WorkflowFilterSchema = z.object({
+  scenarioIds: z.array(z.string()).optional(),
+  tags: z.array(z.string()).optional(),
+  priority: z.enum(["low", "medium", "high", "critical"]).optional(),
+}).optional();
+
+const WorkflowExecutionSchema = z.object({
+  target: z.enum(["local", "connector:e2b"]).default("local"),
+  connector: z.string().optional(),
+  operation: z.string().optional(),
+  sandboxTemplate: z.string().optional(),
+  timeoutMs: z.number().int().positive().optional(),
+  env: z.record(z.string()).optional(),
+}).optional();
+
+const WorkflowGoalSchema = z.object({
+  prompt: z.string().min(1),
+  successCriteria: z.array(z.string()).default([]),
+  maxIterations: z.number().int().positive().default(10),
+}).nullable().optional();
+
+const CreateWorkflowSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+  projectId: z.string().optional(),
+  scenarioFilter: WorkflowFilterSchema,
+  personaIds: z.array(z.string()).optional(),
+  goal: WorkflowGoalSchema,
+  execution: WorkflowExecutionSchema,
+  settings: z.record(z.unknown()).optional(),
+  enabled: z.boolean().optional(),
+});
+
+const UpdateWorkflowSchema = CreateWorkflowSchema.partial();
+
 function validationError(issues: z.ZodIssue[]): Response {
   return new Response(
     JSON.stringify({
@@ -292,6 +330,83 @@ async function handleRequest(req: Request): Promise<Response> {
       personaCount: countPersonas(),
       version: pkg.version,
     });
+  }
+
+  // ── Saved Testing Workflows ────────────────────────────────────────────
+
+  if (pathname === "/api/workflows" && method === "GET") {
+    const projectId = searchParams.get("projectId") ?? undefined;
+    const enabledParam = searchParams.get("enabled");
+    const enabled = enabledParam === null ? undefined : enabledParam === "true";
+    return jsonResponse(listTestingWorkflows({ projectId, enabled }));
+  }
+
+  if (pathname === "/api/workflows" && method === "POST") {
+    try {
+      const body = await req.json();
+      const parsed = CreateWorkflowSchema.safeParse(body);
+      if (!parsed.success) return validationError(parsed.error.issues);
+      return jsonResponse(createTestingWorkflow(parsed.data), 201);
+    } catch (err) {
+      return errorResponse(err instanceof Error ? err.message : String(err), 400);
+    }
+  }
+
+  const workflowRunMatch = pathname.match(/^\/api\/workflows\/([^/]+)\/run$/);
+  if (workflowRunMatch && method === "POST") {
+    try {
+      const body = await req.json();
+      const result = await runTestingWorkflow(workflowRunMatch[1]!, {
+        url: body.url,
+        model: body.model,
+        headed: body.headed,
+        parallel: body.parallel,
+        timeout: body.timeout,
+        dryRun: body.dryRun,
+      });
+      return jsonResponse(result);
+    } catch (err) {
+      return errorResponse(err instanceof Error ? err.message : String(err), 400);
+    }
+  }
+
+  const workflowAgentMatch = pathname.match(/^\/api\/workflows\/([^/]+)\/agent$/);
+  if (workflowAgentMatch && method === "POST") {
+    try {
+      const body = await req.json();
+      const result = await runWorkflowGoalLoop(workflowAgentMatch[1]!, {
+        url: body.url,
+        model: body.model,
+        headed: body.headed,
+        parallel: body.parallel,
+        dryRun: body.dryRun,
+      });
+      return jsonResponse(result);
+    } catch (err) {
+      return errorResponse(err instanceof Error ? err.message : String(err), 400);
+    }
+  }
+
+  const workflowMatch = pathname.match(/^\/api\/workflows\/([^/]+)$/);
+  if (workflowMatch && method === "GET") {
+    const workflow = getTestingWorkflow(workflowMatch[1]!);
+    if (!workflow) return errorResponse("Workflow not found", 404);
+    return jsonResponse(workflow);
+  }
+
+  if (workflowMatch && method === "PUT") {
+    try {
+      const body = await req.json();
+      const parsed = UpdateWorkflowSchema.safeParse(body);
+      if (!parsed.success) return validationError(parsed.error.issues);
+      return jsonResponse(updateTestingWorkflow(workflowMatch[1]!, parsed.data));
+    } catch (err) {
+      return errorResponse(err instanceof Error ? err.message : String(err), 400);
+    }
+  }
+
+  if (workflowMatch && method === "DELETE") {
+    return jsonResponse({ deleted: deleteTestingWorkflow(workflowMatch[1]!) });
   }
 
   // ── Scenarios ─────────────────────────────────────────────────────────
