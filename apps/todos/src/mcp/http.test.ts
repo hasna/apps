@@ -28,7 +28,7 @@ describe("todos MCP HTTP transport", () => {
   let dbPath: string;
 
   beforeAll(async () => {
-    port = reserveFreePort(18842);
+    port = reserveFreePort(18881);
     tmpDir = await mkdtemp(join(tmpdir(), "todos-mcp-http-test-"));
     dbPath = join(tmpDir, "test.db");
     process.env["TODOS_DB_PATH"] = dbPath;
@@ -50,10 +50,10 @@ describe("todos MCP HTTP transport", () => {
     const originalEnv = process.env["MCP_HTTP_PORT"];
     try {
       process.argv = ["bun", "todos-mcp", "--port", "9921"];
-      expect(resolveHttpPort(8842)).toBe(9921);
+      expect(resolveHttpPort(8881)).toBe(9921);
       process.argv = ["bun", "todos-mcp"];
       process.env["MCP_HTTP_PORT"] = "9922";
-      expect(resolveHttpPort(8842)).toBe(9922);
+      expect(resolveHttpPort(8881)).toBe(9922);
     } finally {
       process.argv = originalArgv;
       if (originalEnv === undefined) delete process.env["MCP_HTTP_PORT"];

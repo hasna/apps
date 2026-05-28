@@ -239,18 +239,19 @@ registerDispatchTools(server, { shouldRegisterTool, resolveId, formatError });
 // === START SERVER ===
 
 async function main() {
-  const { isHttpMode, resolveHttpPort } = await import("./http.js");
-  if (isHttpMode()) {
-    const { startServer } = await import("../server/serve.js");
-    const port = resolveHttpPort();
-    await startServer(port, { open: false, host: "127.0.0.1" });
-    console.error(`todos MCP HTTP mounted at http://127.0.0.1:${port}/mcp`);
+  const { isStdioMode, resolveHttpPort } = await import("./http.js");
+  if (isStdioMode()) {
+    const server = buildServer();
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
     return;
   }
 
-  const server = buildServer();
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  // Default: shared Streamable HTTP server (one process per MCP, many agents).
+  const { startServer } = await import("../server/serve.js");
+  const port = resolveHttpPort();
+  await startServer(port, { open: false, host: "127.0.0.1" });
+  console.error(`todos MCP HTTP mounted at http://127.0.0.1:${port}/mcp`);
 }
 
 const isDirectRun = import.meta.main
