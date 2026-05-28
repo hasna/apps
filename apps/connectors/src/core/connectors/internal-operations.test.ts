@@ -185,7 +185,7 @@ describe("internal connector operations", () => {
         return new Response(JSON.stringify({ error: { message: "rate limit" } }), { status: 429 });
       }
       return Response.json({ emailAddress: "me@example.com", messagesTotal: 1, threadsTotal: 1 });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     const result = await executeConnectorOperation(gmailConnector, {
       operation: "profile.get",
