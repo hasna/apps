@@ -30,6 +30,21 @@ omp --help
 omp-mcp
 ```
 
+## HTTP mode
+
+Long-lived Streamable HTTP transport for shared agent connections (stdio remains the default):
+
+```bash
+omp-mcp --http
+# or: MCP_HTTP=1 omp-mcp
+# default port: 8822 (override with --port or MCP_HTTP_PORT)
+```
+
+Endpoints on `127.0.0.1` only:
+
+- `GET /health` → `{"status":"ok","name":"markdown"}`
+- `POST /mcp` → MCP Streamable HTTP
+
 ## REST API
 
 ```bash
