@@ -18,7 +18,7 @@ import {
 
 const SECRET_TYPES = ["api_key", "password", "token", "credential", "other"] as const;
 
-export async function startMcpServer(): Promise<void> {
+export function buildServer(): McpServer {
   const server = new McpServer({
     name: "open-secrets",
     version: "0.1.0",
@@ -152,10 +152,14 @@ export async function startMcpServer(): Promise<void> {
     }
   );
 
-  const transport = new StdioServerTransport();
   const vaultPath = process.env.HASNA_SECRETS_DB_PATH ?? process.env.OPEN_SECRETS_DB ?? join(homedir(), ".hasna", "secrets", "vault.db");
   registerCloudTools(server, "secrets", { migrations: PG_MIGRATIONS, dbPath: vaultPath });
-  await server.connect(transport);
+  return server;
+}
+
+export async function startMcpServer(): Promise<void> {
+  const transport = new StdioServerTransport();
+  await buildServer().connect(transport);
 }
 
 function parseTtl(ttl: string): string {
