@@ -15,7 +15,7 @@ describe('economy-mcp entrypoint', () => {
 
     expect(exitCode).toBe(0)
     expect(stdout).toContain('Usage: economy-mcp [options]')
-    expect(stdout).toContain('Runs the @hasna/economy MCP stdio server.')
+    expect(stdout).toContain('Runs the @hasna/economy MCP server (stdio by default).')
     expect(stderr).toBe('')
   })
 

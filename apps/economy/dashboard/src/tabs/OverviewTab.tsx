@@ -186,7 +186,7 @@ export function OverviewTab() {
   const chartConfig = useMemo(() => buildChartConfig(chartAgents), [chartAgents]);
 
   // Spike computation over the full dataset (not filtered)
-  const { spikeDates, spikeCount } = useMemo(
+  const { spikeCount } = useMemo(
     () => computeSpikes(allDailyEntries),
     [allDailyEntries]
   );

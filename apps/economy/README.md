@@ -229,6 +229,19 @@ cd dashboard && bun run lint
 cd menubar && swift build -c release
 ```
 
+## HTTP mode
+
+Shared Streamable HTTP transport for multi-agent sessions (stdio remains the default):
+
+```bash
+economy-mcp --http              # http://127.0.0.1:8815/mcp
+MCP_HTTP=1 economy-mcp            # same
+economy-mcp --http --port 8815    # explicit port
+```
+
+- Health: `GET http://127.0.0.1:8815/health` → `{"status":"ok","name":"economy"}`
+- Override port with `MCP_HTTP_PORT` or `--port`
+
 ## License
 
 Apache-2.0 -- see [LICENSE](LICENSE)

@@ -12,6 +12,7 @@ import { PricingTab } from "@/tabs/PricingTab";
 import { BillingTab } from "@/tabs/BillingTab";
 import { UsageTab } from "@/tabs/UsageTab";
 import { SavingsTab } from "@/tabs/SavingsTab";
+import { FleetTab } from "@/tabs/FleetTab";
 import { ReconciliationTab } from "@/tabs/ReconciliationTab";
 import { Button } from "@/components/ui/button";
 import {
