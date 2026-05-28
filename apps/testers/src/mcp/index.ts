@@ -4,8 +4,10 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { registerCloudTools } from "@hasna/cloud";
+import pkg from "../../package.json";
 
 import { createScenario, getScenario, getScenarioByShortId, listScenarios, updateScenario, deleteScenario, findStaleScenarios } from "../db/scenarios.js";
+import { getTemplate, listTemplateNames, SCENARIO_TEMPLATES } from "../lib/templates.js";
 import { getRun, listRuns, updateRun } from "../db/runs.js";
 import { listResults, getResultsByRun } from "../db/results.js";
 import { listScreenshots } from "../db/screenshots.js";
@@ -25,6 +27,7 @@ import { runApiCheck, runApiChecksByFilter } from "../lib/api-runner.js";
 import { createPersona, getPersona, listPersonas, updatePersona, deletePersona } from "../db/personas.js";
 import { PersonaNotFoundError } from "../types/index.js";
 import { getTestersDir } from "../lib/paths.js";
+import { createProdDebugPlan } from "../lib/prod-debug.js";
 
 const cliArgs = new Set(process.argv.slice(2));
 if (cliArgs.has("--help") || cliArgs.has("-h")) {
@@ -40,7 +43,7 @@ Options:
 }
 
 if (cliArgs.has("--version") || cliArgs.has("-V")) {
-  console.log("0.0.1");
+  console.log(pkg.version);
   process.exit(0);
 }
 
@@ -129,8 +132,34 @@ const MODEL_DESC =
 
 const server = new McpServer({
   name: "testers",
-  version: "0.0.1",
+  version: pkg.version,
 });
+
+server.tool(
+  "create_prod_debug_plan",
+  "Create a safe production debug plan for a URL, session ID, project ID, user report, or request ID. Does not use passwords or raw cookies; browser debugging is blocked unless an audited support URL is supplied or an app adapter can resolve a support grant.",
+  {
+    target: z.string().describe("Production URL, session ID, project ID, request ID, or other target evidence"),
+    app: z.string().optional().describe("App name for reporting"),
+    profile: z.string().optional().describe("prodDebug app profile from testers config"),
+    actor: z.string().optional().describe("Operator/agent identity for audit context"),
+    reason: z.string().optional().describe("Debug reason or support context"),
+    supportUrl: z.string().optional().describe("Audited support browser/session URL minted by the target app"),
+    supportGrantId: z.string().optional().describe("Audited support access grant ID"),
+    ttlMinutes: z.number().optional().describe("Support access TTL in minutes, capped at 60"),
+    includeBrowser: z.boolean().optional().describe("Include user-scoped browser reproduction check"),
+    includeLogs: z.boolean().optional().describe("Include log timeline adapter requirement"),
+    allowWrites: z.boolean().optional().describe("Document that writes require a separate explicit approval"),
+  },
+  async (input) => {
+    try {
+      const config = loadConfig();
+      return json(createProdDebugPlan(input, config.prodDebug));
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
 
 // ─── 1. create_scenario ─────────────────────────────────────────────────────
 
@@ -146,11 +175,107 @@ server.tool(
     model: z.string().optional().describe(MODEL_DESC),
     targetPath: z.string().optional().describe("URL path to navigate to"),
     requiresAuth: z.boolean().optional().describe("Whether scenario requires authentication"),
+    projectId: z.string().optional().describe("Project ID to scope this scenario to"),
   },
-  async ({ name, description, steps, tags, priority, model, targetPath, requiresAuth }) => {
+  async ({ name, description, steps, tags, priority, model, targetPath, requiresAuth, projectId }) => {
     try {
-      const scenario = createScenario({ name, description, steps, tags, priority, model, targetPath, requiresAuth });
+      const scenario = createScenario({ name, description, steps, tags, priority, model, targetPath, requiresAuth, projectId });
       return json(scenario);
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+// ─── 1b. batch_create_scenarios ──────────────────────────────────────────────
+
+server.tool(
+  "batch_create_scenarios",
+  "Create multiple test scenarios in a single call. Each item requires name; description defaults to the name.",
+  {
+    scenarios: z.array(z.object({
+      name: z.string().describe("Scenario name"),
+      description: z.string().optional().describe("What this scenario tests"),
+      steps: z.array(z.string()).optional().describe("Ordered test steps"),
+      tags: z.array(z.string()).optional().describe("Tags for filtering"),
+      priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("Scenario priority"),
+      model: z.string().optional().describe(MODEL_DESC),
+      targetPath: z.string().optional().describe("URL path to navigate to"),
+      url: z.string().optional().describe("Alias for targetPath"),
+      requiresAuth: z.boolean().optional().describe("Whether scenario requires authentication"),
+    })).min(1).max(100).describe("Array of scenarios to create"),
+    projectId: z.string().optional().describe("Project ID to scope all scenarios to"),
+  },
+  async ({ scenarios, projectId }) => {
+    try {
+      const results: { id: string; name: string; shortId: string; error?: string }[] = [];
+      for (const s of scenarios) {
+        try {
+          const scenario = createScenario({
+            ...s,
+            description: s.description ?? s.name,
+            targetPath: s.targetPath ?? s.url,
+            projectId,
+          });
+          results.push({ id: scenario.id, name: scenario.name, shortId: scenario.shortId });
+        } catch (e) {
+          results.push({ id: "", name: s.name, shortId: "", error: e instanceof Error ? e.message : String(e) });
+        }
+      }
+      const created = results.filter((r) => !r.error).length;
+      const failed = results.filter((r) => r.error).length;
+      return json({ created, failed, total: scenarios.length, results });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+// ─── 1c. list_templates ──────────────────────────────────────────────────────
+
+server.tool(
+  "list_templates",
+  "List built-in scenario templates available for quick setup. Use apply_template to create scenarios from a template.",
+  {},
+  async () => {
+    try {
+      const templates = listTemplateNames().map((name) => {
+        const scenarios = getTemplate(name)!;
+        return { name, scenarioCount: scenarios.length, scenarios: scenarios.map((s) => ({ name: s.name, description: s.description, priority: s.priority, tags: s.tags })) };
+      });
+      return json({ templates });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+// ─── 1d. apply_template ──────────────────────────────────────────────────────
+
+server.tool(
+  "apply_template",
+  "Create scenarios from a built-in template. Returns the created scenario IDs and any errors.",
+  {
+    template: z.string().describe("Template name to apply (auth, crud, forms, nav, a11y, checkout, search)"),
+    projectId: z.string().optional().describe("Project ID to scope scenarios to"),
+  },
+  async ({ template, projectId }) => {
+    try {
+      const scenarios = getTemplate(template);
+      if (!scenarios) return errorResponse(new Error(`Template not found: ${template}. Available: ${listTemplateNames().join(", ")}`));
+
+      const results: { id: string; name: string; shortId: string; error?: string }[] = [];
+      for (const s of scenarios) {
+        try {
+          const scenario = createScenario({ ...s, projectId });
+          results.push({ id: scenario.id, name: scenario.name, shortId: scenario.shortId });
+        } catch (e) {
+          results.push({ id: "", name: s.name, shortId: "", error: e instanceof Error ? e.message : String(e) });
+        }
+      }
+      const created = results.filter((r) => !r.error).length;
+      const failed = results.filter((r) => r.error).length;
+      return json({ template, created, failed, total: scenarios.length, results });
     } catch (error) {
       return errorResponse(error);
     }
@@ -262,13 +387,16 @@ server.tool(
     headed: z.boolean().optional().describe("Run browser in headed mode"),
     parallel: z.number().optional().describe("Number of parallel workers"),
     personaId: z.string().optional().describe("Override persona ID for this run"),
+    personaIds: z.array(z.string()).optional().describe("Run with multiple personas for divergence testing (each persona runs all scenarios)"),
     samples: z.number().int().min(1).max(20).optional().describe("Run each scenario N times for flakiness detection (default 1)"),
     flakinessThreshold: z.number().min(0).max(1).optional().describe("Pass rate below which scenario is marked flaky (default 0.95)"),
     maxCostCents: z.number().optional().describe("Hard budget cap in cents — run is rejected before starting if estimated cost exceeds this"),
     cacheMaxAgeMs: z.number().optional().describe("Skip scenarios that passed at the same URL within this many ms (0 = disabled)"),
     minimal: z.boolean().optional().describe("Fastest mode: cheapest model, max parallelism, min turns — ideal for CI smoke checks"),
+    timeoutMs: z.number().optional().describe("Per-scenario timeout in ms (default 120000)"),
+    recordVideo: z.boolean().optional().describe("Record video of each scenario run (Playwright only)"),
   },
-  async ({ url, env, tags, scenarioIds, priority, model, headed, parallel, personaId, samples, flakinessThreshold, maxCostCents, cacheMaxAgeMs, minimal }) => {
+  async ({ url, env, tags, scenarioIds, priority, model, headed, parallel, personaId, personaIds, samples, flakinessThreshold, maxCostCents, cacheMaxAgeMs, minimal, timeoutMs, recordVideo }) => {
     try {
       let resolvedUrl = url;
       if (!resolvedUrl && env) {
@@ -283,8 +411,57 @@ server.tool(
         if (defaultEnv) resolvedUrl = defaultEnv.url;
       }
       if (!resolvedUrl) return errorResponse(new Error("No URL provided and no default environment set. Pass url or env."));
-      const { runId, scenarioCount } = startRunAsync({ url: resolvedUrl, tags, scenarioIds, priority, model, headed, parallel, personaId, samples, flakinessThreshold, maxCostCents, cacheMaxAgeMs, minimal });
+      const { runId, scenarioCount } = startRunAsync({ url: resolvedUrl, tags, scenarioIds, priority, model, headed, parallel, personaId, personaIds, samples, flakinessThreshold, maxCostCents, cacheMaxAgeMs, minimal, timeout: timeoutMs, recordVideo });
       return json({ runId, scenarioCount, url: resolvedUrl, status: "running", message: "Poll with get_run to check progress." });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+// ─── 6b. retry_failed ────────────────────────────────────────────────────────
+
+server.tool(
+  "retry_failed",
+  "Re-run only failed/errored scenarios from a previous run. Creates a new run with only the failing scenarios.",
+  {
+    runId: z.string().describe("Previous run ID to retry failures from"),
+    url: z.string().optional().describe("Target URL (overrides original run URL)"),
+    model: z.string().optional().describe(MODEL_DESC),
+    headed: z.boolean().optional().describe("Run browser in headed mode"),
+    parallel: z.number().optional().describe("Number of parallel workers"),
+    maxRetries: z.number().int().min(0).max(3).optional().describe("Max retries per failed scenario"),
+    maxCostCents: z.number().optional().describe("Hard budget cap in cents"),
+  },
+  async ({ runId, url, model, headed, parallel, maxRetries, maxCostCents }) => {
+    try {
+      const run = getRun(runId);
+      if (!run) return errorResponse(notFoundErr(runId, "Run"));
+      if (run.status !== "failed") return errorResponse(new Error("Run is not in failed state. Can only retry failures from a failed run."));
+
+      const results = getResultsByRun(runId);
+      const failedResultIds = results.filter((r: any) => r.status === "failed" || r.status === "error").map((r: any) => r.scenarioId);
+      if (failedResultIds.length === 0) return errorResponse(new Error("No failed results found in this run."));
+
+      const resolvedUrl = url ?? run.url;
+      const { runId: newRunId, scenarioCount } = startRunAsync({
+        url: resolvedUrl,
+        scenarioIds: failedResultIds,
+        model,
+        headed,
+        parallel,
+        retry: maxRetries ?? 0,
+        maxCostCents,
+      });
+      return json({
+        runId: newRunId,
+        originalRunId: runId,
+        scenarioCount,
+        retriedScenarioIds: failedResultIds,
+        url: resolvedUrl,
+        status: "running",
+        message: "Poll with get_run to check progress.",
+      });
     } catch (error) {
       return errorResponse(error);
     }
@@ -316,12 +493,18 @@ server.tool(
   "list_runs",
   "List test runs with optional filters",
   {
+    projectId: z.string().optional().describe("Filter by project ID"),
     status: z.enum(["pending", "running", "passed", "failed", "cancelled"]).optional().describe("Filter by status"),
+    since: z.string().optional().describe("Filter runs started at or after this ISO date"),
+    until: z.string().optional().describe("Filter runs started at or before this ISO date"),
+    sort: z.enum(["date", "duration", "cost"]).optional().describe("Sort field"),
+    desc: z.boolean().optional().describe("Sort descending (default true)"),
     limit: z.number().optional().describe("Max results to return"),
+    offset: z.number().optional().describe("Number of results to skip"),
   },
-  async ({ status, limit }) => {
+  async ({ projectId, status, since, until, sort, desc, limit, offset }) => {
     try {
-      const runs = listRuns({ status, limit });
+      const runs = listRuns({ projectId, status, since, until, sort, desc, limit, offset });
       return json({ items: runs, total: runs.length });
     } catch (error) {
       return errorResponse(error);
@@ -578,53 +761,6 @@ server.tool(
     } catch (error) {
       return errorResponse(error);
     }
-  },
-);
-
-// ─── 20. batch_create_scenarios ──────────────────────────────────────────────
-
-server.tool(
-  "batch_create_scenarios",
-  "Create multiple scenarios in a single call. Returns created scenarios and any failures.",
-  {
-    scenarios: z.array(
-      z.object({
-        name: z.string().describe("Scenario name"),
-        url: z.string().optional().describe("Target URL (stored as targetPath)"),
-        description: z.string().optional().describe("What this scenario tests"),
-        steps: z.array(z.string()).optional().describe("Ordered test steps"),
-        tags: z.array(z.string()).optional().describe("Tags for filtering"),
-        priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("Scenario priority"),
-      })
-    ).describe("Array of scenarios to create"),
-  },
-  async ({ scenarios }) => {
-    const created: ReturnType<typeof createScenario>[] = [];
-    const failed: { index: number; name: string; error: string }[] = [];
-
-    for (let i = 0; i < scenarios.length; i++) {
-      const input = scenarios[i];
-      try {
-        const scenario = createScenario({
-          name: input.name,
-          description: input.description ?? input.name,
-          steps: input.steps,
-          tags: input.tags,
-          priority: input.priority,
-          targetPath: input.url,
-        });
-        created.push(scenario);
-      } catch (error) {
-        const e = error instanceof Error ? error : new Error(String(error));
-        failed.push({ index: i, name: input.name, error: e.message });
-      }
-    }
-
-    const lines = [
-      `Created: ${created.length} scenario(s)`,
-      ...created.map((s) => `  [${s.shortId}] ${s.name}`),
-    ];
-    return json({ created, failed });
   },
 );
 
@@ -898,15 +1034,16 @@ server.tool(
     url: z.string().describe("URL to scan"),
     pages: z.array(z.string()).optional().describe("Specific paths to include"),
     projectId: z.string().optional().describe("Project ID"),
-    scanners: z.array(z.enum(["console", "network", "links", "performance"])).optional().describe("Which scanners to run (default: console, network, links)"),
+    scanners: z.array(z.enum(["console", "network", "links", "performance", "a11y"])).optional().describe("Which scanners to run (default: console, network, links)"),
     maxPages: z.number().optional().describe("Max pages for link crawl (default 20)"),
+    wcagLevel: z.enum(["A", "AA", "AAA"]).optional().describe("WCAG compliance level for a11y scanner (default: AA)"),
     headed: z.boolean().optional(),
     timeoutMs: z.number().optional(),
   },
-  async ({ url, pages, projectId, scanners, maxPages, headed, timeoutMs }) => {
+  async ({ url, pages, projectId, scanners, maxPages, headed, timeoutMs, wcagLevel }) => {
     try {
       const { runHealthScan } = await import("../lib/health-scan.js");
-      const summary = await runHealthScan({ url, pages, projectId, scanners, maxPages, headed, timeoutMs });
+      const summary = await runHealthScan({ url, pages, projectId, scanners, maxPages, headed, timeoutMs, wcagLevel });
       return json(summary);
     } catch (e) { return errorResponse(e); }
   },
@@ -1929,7 +2066,42 @@ server.tool(
   },
 );
 
-// ─── 59. wait_for_run ────────────────────────────────────────────────────────
+// ─── 59. get_har ──────────────────────────────────────────────────────────────
+
+server.tool(
+  "get_har",
+  `Get HAR (HTTP Archive) file for a test result. Returns metadata by default, or full HAR content when includeContent is true. Useful for debugging network requests, API calls, and CORS issues. ${ID_DESC}`,
+  {
+    resultId: z.string().describe(`Result ID. ${ID_DESC}`),
+    includeContent: z.boolean().optional().describe("Return full HAR JSON content (default: false)"),
+  },
+  async ({ resultId, includeContent }) => {
+    try {
+      const { getResult } = await import("../db/results.js");
+      const result = getResult(resultId);
+      if (!result) return errorResponse(notFoundErr(resultId, "Result"));
+
+      const harPath = (result as { harPath?: string | null }).harPath ?? (result.metadata as { harPath?: string } | null)?.harPath;
+      if (!harPath) return json({ resultId, harAvailable: false, message: "No HAR file recorded for this result." });
+
+      const harFile = Bun.file(harPath);
+      const exists = await harFile.exists();
+      if (!exists) return json({ resultId, harPath, harAvailable: false, message: "HAR file was recorded but has been cleaned up." });
+
+      if (!includeContent) {
+        const size = await harFile.size();
+        return json({ resultId, harPath, harAvailable: true, sizeBytes: size, message: "HAR file available. Use includeContent: true to retrieve." });
+      }
+
+      const harContent = await harFile.text();
+      return json({ resultId, harPath, harAvailable: true, har: JSON.parse(harContent) });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 59b. wait_for_run ───────────────────────────────────────────────────────
 
 server.tool(
   "wait_for_run",
@@ -2345,6 +2517,15 @@ server.tool(
 registerCloudTools(server, "testers");
 
 // ─── Connect ─────────────────────────────────────────────────────────────────
+
+// Keep MCP stdio transport alive even if a tool implementation throws asynchronously.
+process.on("unhandledRejection", (reason) => {
+  const msg = reason instanceof Error ? reason.stack ?? reason.message : String(reason);
+  console.error(`[testers-mcp] Unhandled promise rejection: ${msg}`);
+});
+process.on("uncaughtException", (err) => {
+  console.error(`[testers-mcp] Uncaught exception: ${err.stack ?? err.message}`);
+});
 
 async function main() {
   const transport = new StdioServerTransport();

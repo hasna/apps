@@ -456,7 +456,52 @@ ALTER TABLE scenarios ADD COLUMN required_role TEXT;
   );
   `,
 
-  // Migration 27: Sessions table for Chrome extension recording data
+  // Migration 26: HAR capture path on results
+  `
+ALTER TABLE results ADD COLUMN har_path TEXT;
+  `,
+
+  // Migration 27: Scenario parameters and persona auth extensions
+  `
+ALTER TABLE scenarios ADD COLUMN parameters TEXT;
+  `,
+  `
+ALTER TABLE personas ADD COLUMN auth_strategy TEXT DEFAULT 'form-login';
+ALTER TABLE personas ADD COLUMN auth_headers TEXT;
+ALTER TABLE personas ADD COLUMN auth_script TEXT;
+  `,
+
+  // Migration 28: Step-level results for detailed run tracking
+  `
+CREATE TABLE IF NOT EXISTS step_results (
+  id TEXT PRIMARY KEY,
+  result_id TEXT NOT NULL REFERENCES results(id) ON DELETE CASCADE,
+  step_number INTEGER NOT NULL,
+  action TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('passed','failed','error','running','skipped')),
+  tool_name TEXT,
+  tool_input TEXT,
+  tool_result TEXT,
+  thinking TEXT,
+  error TEXT,
+  duration_ms INTEGER,
+  screenshot_id TEXT REFERENCES screenshots(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+  `,
+
+  // Migration 29: PR metadata on runs for GitHub integration
+  `
+ALTER TABLE runs ADD COLUMN pr_number INTEGER;
+ALTER TABLE runs ADD COLUMN pr_title TEXT;
+ALTER TABLE runs ADD COLUMN pr_branch TEXT;
+ALTER TABLE runs ADD COLUMN pr_base_branch TEXT;
+ALTER TABLE runs ADD COLUMN pr_commit_sha TEXT;
+ALTER TABLE runs ADD COLUMN pr_url TEXT;
+ALTER TABLE runs ADD COLUMN gh_app_installation_id TEXT;
+  `,
+
+  // Migration 30: Sessions table for Chrome extension recording data
   `
   CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,

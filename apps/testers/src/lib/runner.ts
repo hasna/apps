@@ -3,9 +3,12 @@ import { BudgetExceededError } from "../types/index.js";
 import { runEvalScenario } from "./eval-runner.js";
 import { createRun, getRun, updateRun } from "../db/runs.js";
 import { createResult, updateResult } from "../db/results.js";
+import { mkdirSync } from "fs";
+import { join } from "path";
 import { analyzeFailure } from "./failure-analyzer.js";
 import { estimateRunCostCents } from "./costs.js";
 import { createScreenshot } from "../db/screenshots.js";
+import { createStepResult, updateStepResult } from "../db/step-results.js";
 import { listScenarios, updateScenarioPassedCache } from "../db/scenarios.js";
 import { getPersona } from "../db/personas.js";
 import { launchBrowser, getPage, closeBrowser } from "./browser.js";
@@ -41,6 +44,7 @@ export interface RunOptions {
   skipBudgetCheck?: boolean; // bypass maxCostCents check
   cacheMaxAgeMs?: number; // skip scenario if it passed at the same URL within this many ms (0 = disabled)
   minimal?: boolean;  // fastest possible run: cheapest model, fastest browser, max parallelism, min turns
+  recordVideo?: boolean; // record video of each scenario run using Playwright recordVideo
 }
 
 export interface RunEvent {
@@ -179,14 +183,37 @@ export async function runSingleScenario(
 
   let browser: Browser | null = null;
   let page: Page | null = null;
+  let context: import("playwright").BrowserContext | null = null;
+  let harPath: string | null = null;
   let stopNetworkLogging: (() => void) | null = null;
   const networkErrors: Array<{ url: string; status: number; method: string }> = [];
 
   try {
     browser = await launchBrowser({ headless: !(effectiveOptions.headed ?? false), engine: effectiveOptions.engine });
-    page = await getPage(browser, {
-      viewport: config.browser.viewport,
-    });
+    // Create a context with HAR recording for network debugging (Playwright only)
+    const useHar = effectiveOptions.engine !== "lightpanda" && effectiveOptions.engine !== "bun";
+    if (useHar) {
+      const testersDir = process.env["HASNA_TESTERS_DIR"] || join(process.env["HOME"] || "", ".hasna", "testers");
+      const harDir = join(testersDir, "hars");
+      mkdirSync(harDir, { recursive: true });
+      harPath = join(harDir, `${result.id}.har`);
+      const contextOptions: import("playwright").BrowserContextOptions = {
+        viewport: config.browser.viewport,
+        recordHar: { path: harPath, mode: "full" },
+      };
+      if (effectiveOptions.recordVideo) {
+        const videoDir = join(testersDir, "videos");
+        mkdirSync(videoDir, { recursive: true });
+        contextOptions.recordVideo = { dir: videoDir, size: config.browser.viewport };
+      }
+      context = await browser.newContext(contextOptions);
+      page = await context.newPage();
+    } else {
+      page = await getPage(browser, {
+        viewport: config.browser.viewport,
+        engine: effectiveOptions.engine,
+      });
+    }
 
     const targetUrl = scenario.targetPath
       ? `${options.url.replace(/\/$/, "")}${scenario.targetPath}`
@@ -220,7 +247,13 @@ export async function runSingleScenario(
 
     // Attach listeners BEFORE page.goto() to capture initial page load events
     const consoleErrors: string[] = [];
-    page.on("console", (msg) => { if (msg.type() === "error") consoleErrors.push(msg.text()); });
+    const consoleLogs: { step: number | null; type: string; text: string; timestamp: number }[] = [];
+    let currentStep = 0;
+    page.on("console", (msg) => {
+      const logEntry = { step: currentStep > 0 ? currentStep : null, type: msg.type(), text: msg.text(), timestamp: Date.now() };
+      consoleLogs.push(logEntry);
+      if (msg.type() === "error") consoleErrors.push(msg.text());
+    });
     page.on("pageerror", (err) => { consoleErrors.push(err.message); });
 
     // Authenticate using persona credentials (if persona has auth configured)
@@ -253,6 +286,7 @@ export async function runSingleScenario(
 
     // Per-step timing: track when each tool call started
     const stepStartTimes = new Map<number, number>();
+    const stepResultIds = new Map<number, string>();
 
     const agentResult = await withTimeout(runAgentLoop({
       client,
@@ -277,12 +311,33 @@ export async function runSingleScenario(
       onStep: (stepEvent) => {
         let stepDurationMs: number | undefined;
         if (stepEvent.type === "tool_call") {
+          currentStep = stepEvent.stepNumber;
           stepStartTimes.set(stepEvent.stepNumber, Date.now());
+          // Create step_result record
+          const stepResult = createStepResult({
+            resultId: result.id,
+            stepNumber: stepEvent.stepNumber,
+            action: stepEvent.toolName ?? `step-${stepEvent.stepNumber}`,
+            toolName: stepEvent.toolName,
+            toolInput: stepEvent.toolInput,
+            thinking: stepEvent.thinking,
+          });
+          stepResultIds.set(stepEvent.stepNumber, stepResult.id);
         } else if (stepEvent.type === "tool_result") {
           const startTime = stepStartTimes.get(stepEvent.stepNumber);
           if (startTime !== undefined) {
             stepDurationMs = Date.now() - startTime;
             stepStartTimes.delete(stepEvent.stepNumber);
+          }
+          // Update step_result with result
+          const stepResultId = stepResultIds.get(stepEvent.stepNumber);
+          if (stepResultId) {
+            const isSuccess = !stepEvent.toolResult?.toLowerCase().includes("error") && !stepEvent.toolResult?.toLowerCase().includes("failed");
+            updateStepResult(stepResultId, {
+              status: isSuccess ? "passed" : "failed",
+              toolResult: stepEvent.toolResult,
+              durationMs: stepDurationMs,
+            });
           }
         }
         emit({
@@ -335,7 +390,7 @@ export async function runSingleScenario(
       durationMs: Date.now() - new Date(result.createdAt).getTime(),
       tokensUsed: agentResult.tokensUsed,
       costCents: estimateCost(model, agentResult.tokensUsed),
-      metadata: networkErrors.length > 0 ? networkMeta : undefined,
+      metadata: { consoleLogs, ...(networkErrors.length > 0 ? networkMeta : {}) },
     });
 
     // Wire failure analysis for non-passing results
@@ -378,7 +433,18 @@ export async function runSingleScenario(
     emit({ type: "scenario:error", scenarioId: scenario.id, scenarioName: scenario.name, error: errorMsg, runId });
     return updatedResult;
   } finally {
-    if (browser) await closeBrowser(browser, effectiveOptions.engine);
+    // Store HAR path on the result (even for failures — still captures useful network data)
+    if (harPath) {
+      try { updateResult(result.id, { metadata: { harPath } }); } catch { /* ignore */ }
+    }
+    // Never let browser shutdown mask the underlying error or leak a process.
+    if (browser) {
+      try {
+        await closeBrowser(browser, effectiveOptions.engine);
+      } catch {
+        // Best effort — browser process leaks are better than crashing the run reporter.
+      }
+    }
   }
 }
 

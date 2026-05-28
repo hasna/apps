@@ -310,6 +310,28 @@ export type {
   PrepResult,
 } from "./lib/repo-executor.js";
 
+export {
+  createProdDebugPlan,
+  formatProdDebugPlan,
+  parseProdDebugTarget,
+  redactProdDebugText,
+} from "./lib/prod-debug.js";
+export type {
+  ProdDebugAppProfile,
+  ProdDebugCheck,
+  ProdDebugConfig,
+  ProdDebugIdentifiers,
+  ProdDebugInput,
+  ProdDebugPlan,
+} from "./lib/prod-debug.js";
+
+export {
+  generateGitHubActionsWorkflow,
+  formatPRComment,
+  postGitHubComment,
+  resolvePullRequestNumber,
+} from "./lib/ci.js";
+
 // ─── Sessions (Chrome extension import) ──────────────────────────────────────
 export {
   createSession,

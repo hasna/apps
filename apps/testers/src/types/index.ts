@@ -1,12 +1,15 @@
+import type { ProdDebugConfig } from "../lib/prod-debug.js";
+
 // ─── Enums ───────────────────────────────────────────────────────────────────
 
 export type ScenarioPriority = "low" | "medium" | "high" | "critical";
 export type RunStatus = "pending" | "running" | "passed" | "failed" | "cancelled";
 export type ResultStatus = "passed" | "failed" | "error" | "skipped" | "flaky";
 export type ModelPreset = "quick" | "thorough" | "deep" | "cerebras-fast" | "cerebras-smart";
-export type BrowserEngine = "playwright" | "lightpanda" | "bun" | "cdp";
+export type BrowserEngine = "playwright" | "playwright-firefox" | "playwright-webkit" | "lightpanda" | "bun" | "cdp";
+export type AuthStrategy = "form-login" | "bearer" | "cookie" | "oauth" | "custom_script";
 
-export type AssertionType = "visible" | "not_visible" | "text_contains" | "text_equals" | "element_count" | "no_console_errors" | "url_contains" | "title_contains" | "no_a11y_violations";
+export type AssertionType = "visible" | "not_visible" | "text_contains" | "text_equals" | "element_count" | "no_console_errors" | "url_contains" | "title_contains" | "no_a11y_violations" | "cookie_exists" | "cookie_value" | "cookie_not_exists" | "local_storage_exists" | "local_storage_value" | "local_storage_not_exists" | "session_storage_value" | "session_storage_not_exists";
 
 export interface Assertion {
   type: AssertionType;
@@ -71,6 +74,7 @@ export interface ScenarioRow {
   updated_at: string;
   last_passed_at: string | null;
   last_passed_url: string | null;
+  parameters: string | null; // JSON object or array for data-driven scenarios
 }
 
 export interface RunRow {
@@ -90,6 +94,14 @@ export interface RunRow {
   is_baseline: number;
   samples: number;
   flakiness_threshold: number;
+  // PR metadata (OPE9-00279)
+  pr_number: number | null;
+  pr_title: string | null;
+  pr_branch: string | null;
+  pr_base_branch: string | null;
+  pr_commit_sha: string | null;
+  pr_url: string | null;
+  gh_app_installation_id: string | null;
 }
 
 export interface FailureAnalysis {
@@ -120,6 +132,7 @@ export interface ResultRow {
   persona_id: string | null;
   persona_name: string | null;
   failure_analysis: string | null;
+  har_path: string | null;
 }
 
 export interface ScreenshotRow {
@@ -220,6 +233,7 @@ export interface Scenario {
   updatedAt: string;
   lastPassedAt: string | null;
   lastPassedUrl: string | null;
+  parameters: Record<string, unknown> | null;
   flakinessScore?: number | null;
   recentRunCount?: number;
 }
@@ -241,6 +255,14 @@ export interface Run {
   isBaseline: boolean;
   samples: number;
   flakinessThreshold: number;
+  // PR metadata (OPE9-00279)
+  prNumber: number | null;
+  prTitle: string | null;
+  prBranch: string | null;
+  prBaseBranch: string | null;
+  prCommitSha: string | null;
+  prUrl: string | null;
+  ghAppInstallationId: string | null;
 }
 
 export interface Result {
@@ -261,6 +283,7 @@ export interface Result {
   personaId: string | null;
   personaName: string | null;
   failureAnalysis: FailureAnalysis | null;
+  harPath: string | null;
 }
 
 export interface Screenshot {
@@ -312,6 +335,7 @@ export interface CreateScenarioInput {
   assertions?: Assertion[];
   metadata?: Record<string, unknown>;
   projectId?: string;
+  parameters?: Record<string, unknown>;
 }
 
 export interface UpdateScenarioInput {
@@ -327,6 +351,7 @@ export interface UpdateScenarioInput {
   authConfig?: AuthConfig;
   assertions?: Assertion[];
   metadata?: Record<string, unknown>;
+  parameters?: Record<string, unknown>;
 }
 
 export interface CreateRunInput {
@@ -341,6 +366,14 @@ export interface CreateRunInput {
   projectId?: string;
   samples?: number;
   flakinessThreshold?: number;
+  // PR metadata (OPE9-00279)
+  prNumber?: number;
+  prTitle?: string;
+  prBranch?: string;
+  prBaseBranch?: string;
+  prCommitSha?: string;
+  prUrl?: string;
+  ghAppInstallationId?: string;
 }
 
 export interface ScenarioFilter {
@@ -359,6 +392,8 @@ export type RunSortField = "date" | "duration" | "cost";
 export interface RunFilter {
   projectId?: string;
   status?: RunStatus;
+  since?: string;
+  until?: string;
   sort?: "date" | "duration" | "cost";
   desc?: boolean;
   limit?: number;
@@ -433,6 +468,7 @@ export interface TestersConfig {
   selfHeal?: boolean;     // enable self-healing selector repair (default false)
   conversationsSpace?: string;  // conversations MCP space ID to post run results to
   defaultMaxCostCents?: number; // hard budget cap per run in cents
+  prodDebug?: ProdDebugConfig;  // generic app profiles for secure production debugging
 }
 
 // ─── Row Converters ──────────────────────────────────────────────────────────
@@ -488,6 +524,7 @@ export function scenarioFromRow(row: ScenarioRow): Scenario {
     updatedAt: row.updated_at,
     lastPassedAt: row.last_passed_at ?? null,
     lastPassedUrl: row.last_passed_url ?? null,
+    parameters: row.parameters ? JSON.parse(row.parameters) : null,
   };
 }
 
@@ -509,6 +546,13 @@ export function runFromRow(row: RunRow): Run {
     isBaseline: row.is_baseline === 1,
     samples: row.samples ?? 1,
     flakinessThreshold: row.flakiness_threshold ?? 0.95,
+    prNumber: row.pr_number ?? null,
+    prTitle: row.pr_title ?? null,
+    prBranch: row.pr_branch ?? null,
+    prBaseBranch: row.pr_base_branch ?? null,
+    prCommitSha: row.pr_commit_sha ?? null,
+    prUrl: row.pr_url ?? null,
+    ghAppInstallationId: row.gh_app_installation_id ?? null,
   };
 }
 
@@ -531,6 +575,7 @@ export function resultFromRow(row: ResultRow): Result {
     personaId: row.persona_id ?? null,
     personaName: row.persona_name ?? null,
     failureAnalysis: row.failure_analysis ? JSON.parse(row.failure_analysis) : null,
+    harPath: row.har_path ?? null,
   };
 }
 
@@ -824,6 +869,9 @@ export interface PersonaRow {
   auth_password: string | null;
   auth_login_path: string | null;
   auth_cookies: string | null; // JSON — saved session state
+  auth_strategy: string | null; // "form-login" | "bearer" | "cookie" | "oauth" | "custom_script"
+  auth_headers: string | null; // JSON — custom headers for bearer/cookie strategies
+  auth_script: string | null; // JS script content for custom_script strategy
 }
 
 export interface PersonaAuth {
@@ -831,6 +879,31 @@ export interface PersonaAuth {
   password: string;
   loginPath: string;
   cookies: Record<string, unknown>[] | null; // saved session cookies
+  strategy: AuthStrategy;
+  headers?: Record<string, string>; // for bearer/cookie strategies
+  customScript?: string; // for custom_script strategy
+}
+
+export interface AuthProfile {
+  strategy: AuthStrategy;
+  // Common
+  email?: string;
+  password?: string;
+  loginPath?: string;
+  emailFieldSelector?: string;
+  passwordFieldSelector?: string;
+  submitSelector?: string;
+  postLoginWaitFor?: string;
+  // Bearer strategy
+  bearerToken?: string;
+  // Cookie strategy
+  cookies?: { name: string; value: string; domain?: string; path?: string }[];
+  // OAuth strategy
+  oauthProvider?: string;
+  // Custom script strategy
+  customScript?: string;
+  // Custom headers for any strategy
+  headers?: Record<string, string>;
 }
 
 export interface Persona {
@@ -874,6 +947,9 @@ export interface CreatePersonaInput {
   authEmail?: string;
   authPassword?: string;
   authLoginPath?: string;
+  authStrategy?: AuthStrategy;
+  authHeaders?: Record<string, string>;
+  authCustomScript?: string;
 }
 
 export interface UpdatePersonaInput {
@@ -894,6 +970,9 @@ export interface UpdatePersonaInput {
   authPassword?: string;
   authLoginPath?: string;
   authCookies?: Record<string, unknown>[] | null;
+  authStrategy?: AuthStrategy;
+  authHeaders?: Record<string, string>;
+  authCustomScript?: string;
 }
 
 export interface PersonaFilter {
@@ -930,6 +1009,9 @@ export function personaFromRow(row: PersonaRow): Persona {
       password: row.auth_password!,
       loginPath: row.auth_login_path ?? "/login",
       cookies: row.auth_cookies ? JSON.parse(row.auth_cookies) : null,
+      strategy: (row.auth_strategy as AuthStrategy) ?? "form-login",
+      headers: row.auth_headers ? JSON.parse(row.auth_headers) : undefined,
+      customScript: row.auth_script ?? undefined,
     } : null,
   };
 }

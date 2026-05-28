@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { existsSync } from "fs";
 import { join } from "path";
+import pkg from "../../package.json";
 import { getTestersDir } from "../lib/paths.js";
 import { z } from "zod";
 import { listScenarios, createScenario, getScenario, getScenarioByShortId, updateScenario, deleteScenario, countScenarios } from "../db/scenarios.js";
@@ -37,7 +38,7 @@ Environment:
 }
 
 if (cliArgs.has("--version") || cliArgs.has("-V")) {
-  console.log("0.0.1");
+  console.log(pkg.version);
   process.exit(0);
 }
 
@@ -289,7 +290,7 @@ async function handleRequest(req: Request): Promise<Response> {
       runCount: runs.length,
       apiCheckCount: countApiChecks(),
       personaCount: countPersonas(),
-      version: "0.0.1",
+      version: pkg.version,
     });
   }
 
@@ -1123,9 +1124,23 @@ async function handleRequest(req: Request): Promise<Response> {
 
 const port = parseInt(process.env["TESTERS_PORT"] ?? "19450", 10);
 
+// Prevent the server process from dying on async bugs. For long-running server mode
+// we want a single rogue promise to log and keep serving, not crash.
+process.on("unhandledRejection", (reason) => {
+  const msg = reason instanceof Error ? reason.stack ?? reason.message : String(reason);
+  console.error(`[testers-serve] Unhandled promise rejection: ${msg}`);
+});
+process.on("uncaughtException", (err) => {
+  console.error(`[testers-serve] Uncaught exception: ${err.stack ?? err.message}`);
+});
+
 const server = Bun.serve({
   port,
   fetch: handleRequest,
+  error(err: Error) {
+    console.error(`[testers-serve] Request error: ${err.stack ?? err.message}`);
+    return errorResponse("Internal server error", 500);
+  },
 });
 
 console.log(`Open Testers server running at http://localhost:${server.port}`);

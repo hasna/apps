@@ -1,7 +1,6 @@
 import type { Browser, Page } from "playwright";
 import { execSync } from "node:child_process";
 import { BrowserError } from "../types/index.js";
-import type { BrowserEngine } from "../types/index.js";
 // Use @hasna/browser for the Playwright engine launch/close — avoids reimplementing
 // the same chromium launch logic and keeps us in sync with open-browser improvements.
 import {
@@ -20,7 +19,7 @@ interface ViewportSize {
 interface LaunchOptions {
   headless?: boolean;
   viewport?: ViewportSize;
-  engine?: BrowserEngine;
+  engine?: import("../types/index.js").BrowserEngine;
 }
 
 interface PageOptions {
@@ -40,7 +39,7 @@ const DEFAULT_VIEWPORT: ViewportSize = { width: 1280, height: 720 };
  * Launches a Chromium browser instance via Playwright.
  */
 export async function launchBrowser(options?: LaunchOptions): Promise<Browser> {
-  const engine = options?.engine ?? (process.env["TESTERS_BROWSER_ENGINE"] as BrowserEngine | undefined) ?? "playwright";
+  const engine = options?.engine ?? (process.env["TESTERS_BROWSER_ENGINE"] as import("../types/index.js").BrowserEngine | undefined) ?? "playwright";
 
   if (engine === "lightpanda") {
     const { launchLightpanda, isLightpandaAvailable } = await import("./browser-lightpanda.js");
@@ -84,11 +83,24 @@ export async function launchBrowser(options?: LaunchOptions): Promise<Browser> {
     } as unknown as Browser;
   }
 
-  // Default: Playwright — delegate to @hasna/browser
+  // Playwright engines (firefox, webkit) — keep explicit support from HEAD
   const headless = options?.headless ?? true;
   const viewport = options?.viewport ?? DEFAULT_VIEWPORT;
 
   try {
+    if (engine === "playwright-firefox") {
+      const { firefox } = await import("playwright");
+      const browser = await firefox.launch({ headless });
+      return browser;
+    }
+
+    if (engine === "playwright-webkit") {
+      const { webkit } = await import("playwright");
+      const browser = await webkit.launch({ headless });
+      return browser;
+    }
+
+    // Default: Playwright — delegate to @hasna/browser
     return await launchPlaywright({ headless, viewport });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -102,7 +114,7 @@ export async function launchBrowser(options?: LaunchOptions): Promise<Browser> {
  */
 export async function getPage(
   browser: Browser,
-  options?: PageOptions & { engine?: BrowserEngine },
+  options?: PageOptions & { engine?: import("../types/index.js").BrowserEngine },
 ): Promise<Page> {
   const engine = options?.engine ?? "playwright";
 
@@ -135,7 +147,7 @@ export async function getPage(
 /**
  * Closes a browser instance gracefully.
  */
-export async function closeBrowser(browser: Browser, engine?: BrowserEngine): Promise<void> {
+export async function closeBrowser(browser: Browser, engine?: import("../types/index.js").BrowserEngine): Promise<void> {
   if (engine === "lightpanda") {
     const { closeLightpanda } = await import("./browser-lightpanda.js");
     return closeLightpanda(browser);
@@ -165,11 +177,11 @@ export class BrowserPool {
   private readonly headless: boolean;
   private readonly viewport: ViewportSize;
 
-  private readonly engine: BrowserEngine;
+  private readonly engine: import("../types/index.js").BrowserEngine;
 
   constructor(
     size: number,
-    options?: { headless?: boolean; viewport?: ViewportSize; engine?: BrowserEngine },
+    options?: { headless?: boolean; viewport?: ViewportSize; engine?: import("../types/index.js").BrowserEngine },
   ) {
     this.maxSize = size;
     this.headless = options?.headless ?? true;
@@ -253,7 +265,7 @@ export interface BrowserConfig {
 }
 
 export async function launchBrowserEngine(
-  engine: BrowserEngine,
+  engine: import("../types/index.js").BrowserEngine,
   config: BrowserConfig,
 ): Promise<Browser> {
   if (engine === "lightpanda") {
@@ -273,14 +285,16 @@ export async function launchBrowserEngine(
 /**
  * Installs Chromium for Playwright using bunx.
  */
-export async function installBrowser(engine?: BrowserEngine): Promise<void> {
+export async function installBrowser(engine?: import("../types/index.js").BrowserEngine): Promise<void> {
   if (engine === "lightpanda") {
     const { installLightpanda } = await import("./browser-lightpanda.js");
     return installLightpanda();
   }
 
+  const browserName = engine === "playwright-firefox" ? "firefox" : engine === "playwright-webkit" ? "webkit" : "chromium";
+
   try {
-    execSync("bunx playwright install chromium", {
+    execSync(`bunx playwright install ${browserName}`, {
       stdio: "inherit",
     });
   } catch (error) {

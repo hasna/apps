@@ -208,6 +208,7 @@ export async function runHybridScenario(
           updatedAt: new Date().toISOString(),
           lastPassedAt: null,
           lastPassedUrl: null,
+          parameters: null,
         };
 
         try {

@@ -108,7 +108,7 @@ export interface WebhookPayload {
   timestamp: string;
 }
 
-function signPayload(body: string, secret: string): string {
+export function signPayload(body: string, secret: string): string {
   const encoder = new TextEncoder();
   const key = encoder.encode(secret);
   const data = encoder.encode(body);
@@ -120,7 +120,29 @@ function signPayload(body: string, secret: string): string {
   return `sha256=${Math.abs(hash).toString(16).padStart(16, "0")}`;
 }
 
-function formatSlackPayload(payload: WebhookPayload): Record<string, unknown> {
+export function formatDiscordPayload(payload: WebhookPayload): Record<string, unknown> {
+  const isPassed = payload.run.status === "passed";
+  const color = isPassed ? 0x22c55e : 0xef4444;
+
+  return {
+    username: "open-testers",
+    embeds: [
+      {
+        title: `Test Run ${payload.run.status.toUpperCase()}`,
+        color,
+        description:
+          `URL: ${payload.run.url}\n` +
+          `Results: ${payload.run.passed}/${payload.run.total} passed` +
+          (payload.run.failed > 0 ? ` (${payload.run.failed} failed)` : "") +
+          (payload.schedule ? `\nSchedule: ${payload.schedule.name}` : ""),
+        timestamp: payload.timestamp,
+        footer: { text: "open-testers" },
+      },
+    ],
+  };
+}
+
+export function formatSlackPayload(payload: WebhookPayload): Record<string, unknown> {
   const status = payload.run.status === "passed" ? ":white_check_mark:" : ":x:";
   const color = payload.run.status === "passed" ? "#22c55e" : "#ef4444";
 
@@ -171,9 +193,12 @@ export async function dispatchWebhooks(
     if (!webhook.events.includes(event) && !webhook.events.includes("*")) continue;
 
     const isSlack = webhook.url.includes("hooks.slack.com");
+    const isDiscord = webhook.url.includes("discord.com/api/webhooks") || webhook.url.includes("discordapp.com/api/webhooks");
     const body = isSlack
       ? JSON.stringify(formatSlackPayload(payload))
-      : JSON.stringify(payload);
+      : isDiscord
+        ? JSON.stringify(formatDiscordPayload(payload))
+        : JSON.stringify(payload);
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
