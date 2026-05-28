@@ -79,7 +79,25 @@ import {
   listDomainsWithOwners,
 } from "../db/domain-owners.js";
 import { DOMAIN_OWNER_SOURCES } from "../db/domain-owners.js";
+import {
+  checkAvailability as r53CheckAvailability,
+  registerDomain as r53RegisterDomain,
+  getRegistrationStatus as r53GetRegistrationStatus,
+  listRegisteredDomains as r53ListRegisteredDomains,
+  getDomainDetail as r53GetDomainDetail,
+  createHostedZone as r53CreateHostedZone,
+  listHostedZones as r53ListHostedZones,
+  getHostedZone as r53GetHostedZone,
+  deleteHostedZone as r53DeleteHostedZone,
+  findHostedZoneByDomain as r53FindHostedZoneByDomain,
+  listRecords as r53ListRecords,
+  upsertRecord as r53UpsertRecord,
+  deleteRecord as r53DeleteRecord,
+  upsertRecords as r53UpsertRecords,
+  createRoute53Provider,
+} from "../lib/route53.js";
 
+export function buildServer(): McpServer {
 const server = new McpServer({
   name: "domains",
   version: getPackageVersion(),
@@ -965,24 +983,6 @@ server.registerTool(
 
 // --- Route 53 Tools ---
 
-import {
-  checkAvailability as r53CheckAvailability,
-  registerDomain as r53RegisterDomain,
-  getRegistrationStatus as r53GetRegistrationStatus,
-  listRegisteredDomains as r53ListRegisteredDomains,
-  getDomainDetail as r53GetDomainDetail,
-  createHostedZone as r53CreateHostedZone,
-  listHostedZones as r53ListHostedZones,
-  getHostedZone as r53GetHostedZone,
-  deleteHostedZone as r53DeleteHostedZone,
-  findHostedZoneByDomain as r53FindHostedZoneByDomain,
-  listRecords as r53ListRecords,
-  upsertRecord as r53UpsertRecord,
-  deleteRecord as r53DeleteRecord,
-  upsertRecords as r53UpsertRecords,
-  createRoute53Provider,
-} from "../lib/route53.js";
-
 server.registerTool(
   "r53_check_availability",
   {
@@ -1596,14 +1596,27 @@ server.registerTool(
   }
 );
 
+return server;
+}
+
 // --- Start ---
 async function main() {
+  const argv = process.argv.slice(2);
+  if ((await import("./http.js")).isHttpMode(argv)) {
+    const { resolveMcpHttpPort, startHttpServer } = await import("./http.js");
+    const port = resolveMcpHttpPort(argv);
+    await startHttpServer(buildServer, port);
+    await new Promise(() => {});
+    return;
+  }
   const transport = new StdioServerTransport();
-  await server.connect(transport);
+  await buildServer().connect(transport);
   console.error("domains MCP server running on stdio");
 }
 
-main().catch((error) => {
-  console.error("Fatal error:", error);
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch((error) => {
+    console.error("Fatal error:", error);
+    process.exit(1);
+  });
+}

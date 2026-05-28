@@ -100,6 +100,21 @@ Add to your Claude/agent config:
 }
 ```
 
+## HTTP mode
+
+Long-lived Streamable HTTP transport for shared agent sessions (binds `127.0.0.1` only):
+
+```bash
+domains-mcp --http              # default port 8814
+domains-mcp --http --port 8814
+MCP_HTTP=1 MCP_HTTP_PORT=8814 domains-mcp
+```
+
+- `GET /health` → `{"status":"ok","name":"domains"}`
+- `POST /mcp` — Streamable HTTP MCP endpoint
+
+Stdio remains the default transport for gradual rollout.
+
 ## Environment Variables
 
 | Variable | Description |
