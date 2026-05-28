@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { getDatabase, closeDatabase, resetDatabase } from "./database.js";
 import { registerAgent, isAgentConflict, releaseAgent, autoReleaseStaleAgents, getAgent, getAgentByName, listAgents, updateAgentActivity, updateAgent, deleteAgent, archiveAgent, unarchiveAgent, normalizeGeneratedAgentNames, InvalidAgentNameError } from "./agents.js";
-import { PREFERRED_AGENT_NAMES } from "./agent-names.js";
+import { PREFERRED_AGENT_NAMES, suggestAgentNames } from "./agent-names.js";
 
 let uniqueNameCounter = 0;
 
@@ -234,7 +234,7 @@ describe("normalizeGeneratedAgentNames", () => {
     expect(task.locked_by).toBe(renamed[2]!.new_name);
   });
 
-  it("should use alphabetic fallback names when the preferred pool is exhausted", () => {
+  it("should use distinct fallback names when the preferred pool is exhausted", () => {
     const db = getDatabase();
     const timestamp = new Date().toISOString();
     for (const [index, name] of PREFERRED_AGENT_NAMES.entries()) {
@@ -253,6 +253,15 @@ describe("normalizeGeneratedAgentNames", () => {
     expect(renamed[0]!.old_name).toBe("agent-1");
     expect(renamed[0]!.new_name).toMatch(/^[a-z]+$/);
     expect(PREFERRED_AGENT_NAMES).not.toContain(renamed[0]!.new_name as any);
+  });
+
+  it("should not suggest preferred-name suffix variants after exhausting the name pool", () => {
+    const preferredSuffix = new RegExp(`^(${PREFERRED_AGENT_NAMES.join("|")})[a-z]+$`);
+    const suggestions = suggestAgentNames(PREFERRED_AGENT_NAMES);
+
+    expect(suggestions).toHaveLength(20);
+    expect(suggestions.every((name) => /^[a-z]+$/.test(name))).toBe(true);
+    expect(suggestions.some((name) => preferredSuffix.test(name))).toBe(false);
   });
 });
 

@@ -76,10 +76,64 @@ export const NICE_AGENT_NAMES = [
   "zephyr",
 ] as const;
 
+export const EXTENDED_AGENT_NAMES = [
+  "agrippa",
+  "antonius",
+  "aurelian",
+  "aurelius",
+  "camillus",
+  "cassius",
+  "celer",
+  "cincinnatus",
+  "corvus",
+  "drusus",
+  "fabius",
+  "faustus",
+  "flaccus",
+  "gallus",
+  "gaius",
+  "horatius",
+  "lucius",
+  "lucullus",
+  "marius",
+  "marcellus",
+  "maximus",
+  "nerva",
+  "pompey",
+  "quintus",
+  "regulus",
+  "romulus",
+  "scipio",
+  "seneca",
+  "sertorius",
+  "sulla",
+  "tacitus",
+  "varro",
+  "vitruvius",
+  "plato",
+  "socrates",
+  "aristotle",
+  "heraclitus",
+  "democritus",
+  "pythagoras",
+  "hipparchus",
+  "euclid",
+  "archimedes",
+  "zeno",
+  "anaximander",
+  "epictetus",
+  "aeschylus",
+  "sophocles",
+  "euripides",
+  "xenophon",
+  "diogenes",
+] as const;
+
 export const PREFERRED_AGENT_NAMES = [
   ...ROMAN_AGENT_NAMES,
   ...GREEK_AGENT_NAMES,
   ...NICE_AGENT_NAMES,
+  ...EXTENDED_AGENT_NAMES,
 ] as const;
 
 const RESERVED_GENERIC_NAMES = new Set([
@@ -124,28 +178,95 @@ export function isBlockedAgentName(name: string): boolean {
   return isGenericAgentName(normalized) || hasGeneratedNumericSuffix(normalized) || !ONE_WORD_NAME_RE.test(normalized);
 }
 
-function alphabeticSuffix(index: number): string {
-  const letters = "abcdefghijklmnopqrstuvwxyz";
-  let value = index;
-  let suffix = "";
-  do {
-    suffix = letters[value % letters.length] + suffix;
-    value = Math.floor(value / letters.length) - 1;
-  } while (value >= 0);
-  return suffix;
+const FALLBACK_PREFIXES = [
+  "arv",
+  "bel",
+  "cyr",
+  "dax",
+  "elun",
+  "feno",
+  "gavor",
+  "hiro",
+  "ivar",
+  "jaro",
+  "kavo",
+  "lumo",
+  "myr",
+  "navo",
+  "prax",
+  "quor",
+  "riven",
+  "sovan",
+  "tavor",
+  "ulmor",
+  "vexo",
+  "wiro",
+  "yaro",
+  "zel",
+] as const;
+
+const FALLBACK_STEMS = [
+  "al",
+  "ber",
+  "cor",
+  "dren",
+  "el",
+  "far",
+  "gor",
+  "hal",
+  "ion",
+  "jor",
+  "kel",
+  "lor",
+  "mor",
+  "nel",
+  "or",
+  "per",
+  "quil",
+  "ron",
+  "ser",
+  "tor",
+  "um",
+  "ver",
+  "wyn",
+  "xil",
+] as const;
+
+const FALLBACK_ENDINGS = [
+  "a",
+  "en",
+  "ia",
+  "is",
+  "on",
+  "or",
+  "um",
+  "us",
+  "yn",
+  "ar",
+  "el",
+  "ir",
+] as const;
+
+function generatedFallbackAgentName(index: number): string | null {
+  const perPrefix = FALLBACK_STEMS.length * FALLBACK_ENDINGS.length;
+  const total = FALLBACK_PREFIXES.length * perPrefix;
+  if (index >= total) return null;
+
+  const prefix = FALLBACK_PREFIXES[Math.floor(index / perPrefix)]!;
+  const rest = index % perPrefix;
+  const stem = FALLBACK_STEMS[Math.floor(rest / FALLBACK_ENDINGS.length)]!;
+  const ending = FALLBACK_ENDINGS[rest % FALLBACK_ENDINGS.length]!;
+  return `${prefix}${stem}${ending}`;
 }
 
 export function suggestAgentNames(existingNames: Iterable<string> = []): string[] {
   const existing = new Set([...existingNames].map(normalizeAgentNameInput));
   const suggestions: string[] = PREFERRED_AGENT_NAMES.filter((name) => !existing.has(name));
-  for (let suffixIndex = 0; suggestions.length < 20 && suffixIndex < 1000; suffixIndex++) {
-    const suffix = alphabeticSuffix(suffixIndex);
-    for (const base of PREFERRED_AGENT_NAMES) {
-      const candidate = `${base}${suffix}`;
-      if (existing.has(candidate) || suggestions.includes(candidate)) continue;
-      suggestions.push(candidate);
-      if (suggestions.length >= 20) break;
-    }
+  for (let index = 0; suggestions.length < 20; index++) {
+    const candidate = generatedFallbackAgentName(index);
+    if (!candidate) break;
+    if (existing.has(candidate) || suggestions.includes(candidate)) continue;
+    suggestions.push(candidate);
   }
   return suggestions;
 }

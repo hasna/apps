@@ -13,6 +13,8 @@ import {
   completeTask,
   lockTask,
   unlockTask,
+  getTaskLockStatus,
+  stealTask,
   addDependency,
   removeDependency,
   bulkUpdateTasks,
@@ -44,6 +46,7 @@ import { createTaskList, deleteTaskList } from "./task-lists.js";
 import { createProject } from "./projects.js";
 import { registerAgent } from "./agents.js";
 import { createPlan } from "./plans.js";
+import { ensureSchema } from "./schema.js";
 
 let db: Database;
 
@@ -350,6 +353,11 @@ describe("startTask", () => {
       TaskNotFoundError,
     );
   });
+
+  it("should reject restarting completed tasks", () => {
+    const task = createTask({ title: "Already done", status: "completed" }, db);
+    expect(() => startTask(task.id, "claude", db)).toThrow("Task is completed");
+  });
 });
 
 describe("completeTask", () => {
@@ -444,10 +452,33 @@ describe("lockTask / unlockTask", () => {
     expect(result.success).toBe(true);
   });
 
+  it("should renew the same agent lease and expose expiry status", () => {
+    const task = createTask({ title: "Renewed lease" }, db);
+    const oldTime = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    db.run("UPDATE tasks SET locked_by = ?, locked_at = ? WHERE id = ?", ["claude", oldTime, task.id]);
+
+    const result = lockTask(task.id, "claude", db);
+    expect(result.success).toBe(true);
+    expect(result.locked_at).not.toBe(oldTime);
+    expect(result.expires_at).toBeTruthy();
+
+    const status = getTaskLockStatus(task.id, db);
+    expect(status.locked).toBe(true);
+    expect(status.locked_by).toBe("claude");
+    expect(status.expires_at).toBe(result.expires_at);
+  });
+
   it("should throw LockError when wrong agent unlocks", () => {
     const task = createTask({ title: "Locked" }, db);
     lockTask(task.id, "claude", db);
     expect(() => unlockTask(task.id, "codex", db)).toThrow(LockError);
+  });
+
+  it("should refuse locks on completed tasks", () => {
+    const task = createTask({ title: "Closed", status: "completed" }, db);
+    const result = lockTask(task.id, "claude", db);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("completed");
   });
 });
 
@@ -482,6 +513,19 @@ describe("dependencies", () => {
     expect(() => addDependency(a.id, "non-existent", db)).toThrow(
       TaskNotFoundError,
     );
+  });
+
+  it("should repair dependency storage when old local databases are missing the table", () => {
+    db.run("DROP TABLE task_dependencies");
+
+    ensureSchema(db);
+
+    const a = createTask({ title: "A" }, db);
+    const b = createTask({ title: "B" }, db);
+    addDependency(b.id, a.id, db);
+
+    const full = getTaskWithRelations(b.id, db);
+    expect(full!.dependencies.map((dependency) => dependency.id)).toEqual([a.id]);
   });
 });
 
@@ -1656,6 +1700,35 @@ describe("getStaleTasks", () => {
   it("returns empty array when no stale tasks exist", () => {
     const stale = getStaleTasks(30, undefined, db);
     expect(stale.length).toBe(0);
+  });
+
+  it("accepts MCP-style hours and minutes options", () => {
+    const task = createTask({ title: "MCP stale", status: "in_progress" }, db);
+    const oldTime = new Date(Date.now() - 90 * 60 * 1000).toISOString();
+    db.run("UPDATE tasks SET updated_at = ?, locked_at = ? WHERE id = ?", [oldTime, oldTime, task.id]);
+
+    expect(getStaleTasks({ hours: 1 }, undefined, db).map(t => t.id)).toContain(task.id);
+    expect(getStaleTasks({ minutes: 120 }, undefined, db).map(t => t.id)).not.toContain(task.id);
+  });
+
+  it("stealTask returns null if a stale candidate is refreshed before update", () => {
+    const task = createTask({ title: "Race candidate", status: "in_progress" }, db);
+    const oldTime = new Date(Date.now() - 90 * 60 * 1000).toISOString();
+    db.run("UPDATE tasks SET assigned_to = ?, locked_by = ?, updated_at = ?, locked_at = ? WHERE id = ?", ["old-agent", "old-agent", oldTime, oldTime, task.id]);
+
+    const originalRun = db.run.bind(db);
+    let refreshed = false;
+    (db as any).run = (sql: string, ...params: unknown[]) => {
+      if (!refreshed && sql.includes("UPDATE tasks SET assigned_to = ?")) {
+        refreshed = true;
+        originalRun("UPDATE tasks SET updated_at = ?, locked_at = ? WHERE id = ?", [new Date().toISOString(), new Date().toISOString(), task.id]);
+      }
+      return originalRun(sql, ...params as any);
+    };
+
+    const stolen = stealTask("new-agent", { stale_minutes: 30 }, db);
+    expect(stolen).toBeNull();
+    expect(getTask(task.id, db)!.locked_by).toBe("old-agent");
   });
 });
 

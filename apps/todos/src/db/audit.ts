@@ -19,6 +19,22 @@ export function logTaskChange(
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [id, taskId, action, field || null, oldValue ?? null, newValue ?? null, agentId || null, timestamp],
   );
+
+  try {
+    const { logActivity } = require("../lib/activity-audit.js") as typeof import("../lib/activity-audit.js");
+    logActivity({
+      entity_type: "task",
+      entity_id: taskId,
+      action,
+      field,
+      old_value: oldValue ?? null,
+      new_value: newValue ?? null,
+      actor_id: agentId ?? undefined,
+    }, d);
+  } catch {
+    /* activity_log table may not exist in legacy DBs until migration */
+  }
+
   return { id, task_id: taskId, action, field: field || null, old_value: oldValue ?? null, new_value: newValue ?? null, agent_id: agentId || null, created_at: timestamp };
 }
 

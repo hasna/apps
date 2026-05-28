@@ -217,19 +217,48 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
     );
   }
 
+  if (shouldRegisterTool("get_sla_breaches")) {
+    server.tool(
+      "get_sla_breaches",
+      "List unfinished local tasks that are overdue or past their SLA minutes and should be escalated.",
+      {
+        project_id: z.string().optional().describe("Filter by project"),
+        agent_id: z.string().optional().describe("Filter by assignee"),
+        limit: z.number().optional().describe("Max results (default: 50)"),
+      },
+      async ({ project_id, agent_id, limit }) => {
+        try {
+          const { getEscalatedTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const resolvedProjectId = project_id ? resolveId(project_id, "projects") : undefined;
+          const resolvedAgentId = agent_id ? resolveId(agent_id, "agents") : undefined;
+          const escalations = getEscalatedTasks({ project_id: resolvedProjectId, agent_id: resolvedAgentId }).slice(0, limit || 50);
+          if (escalations.length === 0) return { content: [{ type: "text" as const, text: "No SLA breaches or overdue tasks." }] };
+          const lines = escalations.map((item: any) => {
+            const task = item.task;
+            return `${task.short_id || task.id.slice(0, 8)} ${task.title} ${item.reasons.join(",")} breached ${item.breached_at}`;
+          });
+          return { content: [{ type: "text" as const, text: `${escalations.length} escalation(s):\n${lines.join("\n")}` }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
   if (shouldRegisterTool("get_stale_tasks")) {
     server.tool(
       "get_stale_tasks",
       "Get tasks that haven't been updated in a given time window (excluding completed/cancelled).",
       {
         hours: z.number().optional().describe("Hours since last update (default: 48)"),
+        minutes: z.number().optional().describe("Minutes since last update; overrides hours when provided"),
         project_id: z.string().optional().describe("Filter by project"),
       },
-      async ({ hours = 48, project_id }) => {
+      async ({ hours = 48, minutes, project_id }) => {
         try {
           const { getStaleTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolvedProjectId = project_id ? resolveId(project_id, "projects") : undefined;
-          const tasks = getStaleTasks({ hours, project_id: resolvedProjectId });
+          const tasks = getStaleTasks({ hours, minutes, project_id: resolvedProjectId });
           if (tasks.length === 0) return { content: [{ type: "text" as const, text: "No stale tasks." }] };
           const lines = tasks.map((t: any) => `${(t.short_id || t.id.slice(0,8))} [${t.status}] ${t.title} — last updated ${t.updated_at}`);
           return { content: [{ type: "text" as const, text: `${tasks.length} stale task(s):\n${lines.join("\n")}` }] };
@@ -313,6 +342,25 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
             `Agents: ${agents.length} registered`,
           ];
           return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("run_doctor")) {
+    server.tool(
+      "run_doctor",
+      "Run local doctor diagnostics and optionally apply safe repairs after dry-run review.",
+      {
+        apply: z.boolean().optional().describe("Apply safe repairs. Defaults to false/dry-run."),
+      },
+      async ({ apply }) => {
+        try {
+          const { runTodosDoctor } = require("../../lib/doctor.js") as typeof import("../../lib/doctor.js");
+          const result = runTodosDoctor({ apply: Boolean(apply) });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }

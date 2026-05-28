@@ -18,21 +18,21 @@ todos serve  # starts REST API + dashboard at http://localhost:19427
 ## MCP Integration (Recommended)
 
 `TODOS_PROFILE` defaults to `minimal`, which loads the compact agent loop tools
-instead of every admin, cloud, template, and machine tool at session start:
+instead of every admin, template, and machine tool at session start:
 
 ```bash
 # In your Claude Code config or CLAUDE.md:
 TODOS_PROFILE=minimal    # compact default: claim/create/list/get/start/complete/fail/status/context/agent heartbeat
 TODOS_PROFILE=standard   # task/project/resource/agent/metadata tools
 TODOS_PROFILE=agent      # core + task/project/resource tools
-TODOS_TOOL_GROUPS=cloud  # add one group to the selected profile
+TODOS_TOOL_GROUPS=templates  # add one group to the selected profile
 TODOS_PROFILE=full       # all 65+ tools
 ```
 
 High-volume MCP tools are compact by default. Pass `detail: "full"` to
 `get_task`, `get_status`, `get_context`, `bootstrap`, or `task_context` when you
-need the larger payload. Set `TODOS_MCP_TOKEN_TELEMETRY=1` to append approximate
-response token counts for profiling.
+need the larger payload. Set `TODOS_MCP_TOKEN_DIAGNOSTICS=1` to append local
+approximate response token counts for profiling.
 
 ## Recommended Agent Session Pattern
 

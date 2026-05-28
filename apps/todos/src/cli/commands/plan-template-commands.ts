@@ -155,7 +155,15 @@ export function registerPlanTemplateCommands(program: Command) {
     .option("--var <vars...>", "Variable substitutions: key=value (e.g. --var feature=login)")
     .action(async (opts) => {
       const globalOpts = program.opts();
-      const { createTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate } = await import("../../db/templates.js");
+      const {
+        createTemplate,
+        getTemplateWithTasks,
+        listTemplates,
+        deleteTemplate,
+        updateTemplate,
+        taskFromTemplate,
+        tasksFromTemplate,
+      } = await import("../../db/templates.js");
 
       if (opts.add) {
         if (!opts.title) { console.error(chalk.red("--title is required with --add")); process.exit(1); }
@@ -205,6 +213,27 @@ export function registerPlanTemplateCommands(program: Command) {
               variables[v.slice(0, eq)] = v.slice(eq + 1);
             }
           }
+          const template = getTemplateWithTasks(opts.use);
+          if (!template) {
+            console.error(chalk.red("Template not found."));
+            process.exit(1);
+          }
+          if (template.tasks.length > 0) {
+            const tasks = tasksFromTemplate(
+              opts.use,
+              template.project_id || autoProject(globalOpts),
+              Object.keys(variables).length > 0 ? variables : undefined,
+            );
+            if (globalOpts.json) {
+              output(tasks, true);
+            } else {
+              console.log(chalk.green(`${tasks.length} tasks created from template:`));
+              for (const task of tasks) {
+                console.log(formatTaskLine(task));
+              }
+            }
+            return;
+          }
           const input = taskFromTemplate(opts.use, {
             title: opts.title,
             description: opts.description,
@@ -216,6 +245,13 @@ export function registerPlanTemplateCommands(program: Command) {
               title = title.replace(new RegExp(`\\{${k}\\}`, "g"), v);
             }
             input.title = title;
+          }
+          if (input.description) {
+            let description = input.description;
+            for (const [k, v] of Object.entries(variables)) {
+              description = description.replace(new RegExp(`\\{${k}\\}`, "g"), v);
+            }
+            input.description = description;
           }
           const task = createTask({ ...input, agent_id: globalOpts.agent, project_id: input.project_id || autoProject(globalOpts) });
           if (globalOpts.json) { output(task, true); }
@@ -239,7 +275,7 @@ export function registerPlanTemplateCommands(program: Command) {
   program
     .command("template-init")
     .alias("templates-init")
-    .description("Initialize built-in starter templates (open-source-project, bug-fix, feature, security-audit)")
+    .description("Initialize the bundled local template library")
     .action(async () => {
       const globalOpts = program.opts();
       const { initBuiltinTemplates } = await import("../../db/builtin-templates.js");
@@ -250,6 +286,50 @@ export function registerPlanTemplateCommands(program: Command) {
       } else {
         console.log(chalk.green(`Created ${result.created} template(s): ${result.names.join(", ")}. Skipped ${result.skipped} existing.`));
       }
+    });
+
+  // template-library
+  program
+    .command("template-library")
+    .alias("templates-library")
+    .description("List, show, or write the bundled local template library as editable JSON files")
+    .option("--show <name>", "Show one bundled template as JSON")
+    .option("--write <dir>", "Write all bundled templates to editable JSON files")
+    .action(async (opts: { show?: string; write?: string }) => {
+      const globalOpts = program.opts();
+      const {
+        exportBuiltinTemplate,
+        listBuiltinTemplates,
+        writeBuiltinTemplateFiles,
+      } = await import("../../db/builtin-templates.js");
+      try {
+        if (opts.show) {
+          const template = exportBuiltinTemplate(opts.show);
+          output(template, true);
+          return;
+        }
+        if (opts.write) {
+          const result = writeBuiltinTemplateFiles(opts.write);
+          if (globalOpts.json) { output(result, true); return; }
+          console.log(chalk.green(`Wrote ${result.written} editable template file(s) to ${result.directory}`));
+          for (const file of result.files) console.log(chalk.dim(`  ${file}`));
+          return;
+        }
+        const templates = listBuiltinTemplates().map((template) => ({
+          name: template.name,
+          description: template.description,
+          category: template.category,
+          version: template.version,
+          variables: template.variables,
+          task_count: template.tasks.length,
+        }));
+        if (globalOpts.json) { output(templates, true); return; }
+        console.log(chalk.bold(`${templates.length} bundled local template(s):\n`));
+        for (const template of templates) {
+          console.log(`  ${chalk.bold(template.name)} ${chalk.dim(`[${template.category}]`)} ${chalk.yellow(`${template.task_count} tasks`)}`);
+          console.log(chalk.dim(`    ${template.description}`));
+        }
+      } catch (e) { handleError(e); }
     });
 
   // template-preview

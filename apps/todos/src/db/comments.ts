@@ -3,6 +3,7 @@ import type { CreateCommentInput, TaskComment } from "../types/index.js";
 import { TaskNotFoundError } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
 import { getTask } from "./tasks.js";
+import { redactEvidenceText } from "../lib/redaction.js";
 
 export function addComment(
   input: CreateCommentInput,
@@ -26,7 +27,7 @@ export function addComment(
       input.task_id,
       input.agent_id || null,
       input.session_id || null,
-      input.content,
+      redactEvidenceText(input.content),
       input.type || 'comment',
       input.progress_pct ?? null,
       timestamp,
@@ -68,7 +69,7 @@ export function updateComment(
   db?: Database,
 ): TaskComment {
   const d = db || getDatabase();
-  d.run("UPDATE task_comments SET content = ? WHERE id = ?", [input.content, id]);
+  d.run("UPDATE task_comments SET content = ? WHERE id = ?", [redactEvidenceText(input.content), id]);
   const comment = getComment(id, d);
   if (!comment) {
     throw new Error(`Comment not found: ${id}`);

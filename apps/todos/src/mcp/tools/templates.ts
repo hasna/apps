@@ -154,7 +154,7 @@ export function registerTemplateTools(server: McpServer, { shouldRegisterTool, r
   if (shouldRegisterTool("init_templates")) {
     server.tool(
       "init_templates",
-      "Initialize built-in starter templates (open-source-project, bug-fix, feature, security-audit). Skips templates that already exist by name.",
+      "Initialize the bundled local template library. Skips templates that already exist by name.",
       {},
       async () => {
         try {
@@ -162,6 +162,42 @@ export function registerTemplateTools(server: McpServer, { shouldRegisterTool, r
           const result = initBuiltinTemplates();
           if (result.created === 0) return { content: [{ type: "text" as const, text: `All ${result.skipped} built-in template(s) already exist.` }] };
           return { content: [{ type: "text" as const, text: `Created ${result.created} template(s): ${result.names.join(", ")}. Skipped ${result.skipped} existing.` }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_template_library")) {
+    server.tool(
+      "list_template_library",
+      "List the bundled marketplace-free local template library without mutating the database.",
+      {},
+      async () => {
+        try {
+          const { listBuiltinTemplates } = await import("../../db/builtin-templates.js");
+          const templates = listBuiltinTemplates().map((template) => ({
+            name: template.name,
+            description: template.description,
+            category: template.category,
+            version: template.version,
+            variables: template.variables,
+            task_count: template.tasks.length,
+          }));
+          return { content: [{ type: "text" as const, text: JSON.stringify(templates, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("write_template_library")) {
+    server.tool(
+      "write_template_library",
+      "Write the bundled local template library to editable JSON files for review or import.",
+      { directory: z.string() },
+      async ({ directory }) => {
+        try {
+          const { writeBuiltinTemplateFiles } = await import("../../db/builtin-templates.js");
+          return { content: [{ type: "text" as const, text: JSON.stringify(writeBuiltinTemplateFiles(directory), null, 2) }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
       },
     );

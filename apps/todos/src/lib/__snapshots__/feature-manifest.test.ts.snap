@@ -1,0 +1,225 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`feature manifest normalizes manifest for deterministic snapshots 1`] = `
+{
+  "active_profile": "standard",
+  "cli": {
+    "command_count": 162,
+    "group_names": [
+      "tasks",
+      "agents",
+      "projects",
+      "dashboard",
+      "workflow",
+      "bridge",
+      "verification",
+      "meta",
+    ],
+    "nested_subcommand_keys": [
+      "activity",
+      "branch-plan",
+      "bridge",
+      "completion",
+      "db",
+      "decisions",
+      "deps",
+      "docs",
+      "env",
+      "features",
+      "git",
+      "goal",
+      "handoff-packet",
+      "intake",
+      "md",
+      "plan-exec",
+      "refs",
+      "release-notes",
+      "reminders",
+      "report",
+      "runs",
+      "scaffolds",
+      "schedule",
+      "schema",
+      "shortcuts",
+      "trace",
+      "triage",
+      "verify",
+      "views",
+      "watch",
+    ],
+    "top_level_commands": [
+      "active",
+      "activity",
+      "add",
+      "analytics",
+      "artifact",
+      "blocked",
+      "bootstrap",
+      "branch-plan",
+      "bridge",
+      "bulk",
+      "claim",
+      "comment",
+      "completion",
+      "config",
+      "context",
+      "count",
+      "crypto",
+      "dashboard",
+      "db",
+      "decisions",
+      "delete",
+      "deps",
+      "docs",
+      "done",
+      "fail",
+      "git",
+      "goal",
+      "handoff-packet",
+      "hook",
+      "hooks",
+      "init",
+      "inspect",
+      "intake",
+      "labels",
+      "list",
+      "lock",
+      "mcp",
+      "md",
+      "next",
+      "package",
+      "plan-exec",
+      "plans",
+      "policy",
+      "projects",
+      "ready",
+      "recap",
+      "refs",
+      "release",
+      "release-notes",
+      "reminders",
+      "runs",
+      "schedule",
+      "schema",
+      "search",
+      "serve",
+      "show",
+      "stale",
+      "standup",
+      "start",
+      "status",
+      "stream",
+      "sync",
+      "templates",
+      "trace",
+      "unlock",
+      "update",
+      "verify",
+      "views",
+      "watch",
+    ],
+  },
+  "env_vars": [
+    "TODOS_DB_PATH",
+    "TODOS_AUTO_PROJECT",
+    "TODOS_PROFILE",
+    "TODOS_URL",
+    "TODOS_MACHINE_ID",
+    "TODOS_ENCRYPTION_KEY",
+    "JSON_OUTPUT",
+  ],
+  "feature_areas": [
+    "task_workflow",
+    "agent_coordination",
+    "projects_plans",
+    "import_export",
+    "verification_security",
+    "meta_discovery",
+  ],
+  "generated_at": "2026-01-01T00:00:00.000Z",
+  "local_only": true,
+  "mcp": {
+    "tool_group_counts": {
+      "agent_runs": 2,
+      "agents": 5,
+      "cloud": 7,
+      "coordination": 17,
+      "graph": 10,
+      "import_export": 29,
+      "meta": 20,
+      "ops": 8,
+      "projects": 1,
+      "security": 7,
+      "tasks": 162,
+      "workflow": 57,
+    },
+    "tools_for_profile_count": 301,
+    "total_tools": 325,
+  },
+  "profiles": [
+    "read_only",
+    "agent_safe",
+    "minimal",
+    "standard",
+    "full",
+    "admin",
+  ],
+  "schema_version": "todos.feature_manifest.v1",
+  "summary": {
+    "cli_command_count": 162,
+    "env_var_count": 7,
+    "feature_area_count": 6,
+    "mcp_tool_count": 325,
+    "profile_count": 6,
+  },
+}
+`;
+
+exports[`feature manifest formats human-readable report with fixed timestamp 1`] = `
+"=== Todos Feature Manifest (local-only) ===
+Schema: todos.feature_manifest.v1
+Generated: 2026-01-01T00:00:00.000Z
+Active profile: minimal — Low-token MCP session bootstrap and task workflow
+
+Summary:
+  Feature areas: 6
+  CLI commands:  162
+  MCP tools:     325 (8 in active profile)
+  Profiles:      6
+  Env vars:      7
+
+Feature areas:
+  - Task workflow: Create, claim, start, complete, and fail tasks with agent coordination.
+  - Agent coordination: Multi-agent leases, runs, heartbeats, and focus mode.
+  - Projects and plans: Projects, task lists, plans, and bootstrap/discovery.
+  - Import and export: Local bundles, todos.md sync, database backup, and artifacts.
+  - Verification and security: Evidence, sandbox checks, secret scanning, and workspace trust.
+  - Meta and discovery: CLI reference, parity reports, profiles, and capability manifests.
+
+MCP tool groups:
+  - Meta: 20 tools
+  - Tasks: 162 tools
+  - Projects and plans: 1 tools
+  - Agents: 5 tools
+  - Agent runs: 2 tools
+  - Coordination: 17 tools
+  - Graph and dependencies: 10 tools
+  - Import and export: 29 tools
+  - Operations: 8 tools
+  - Security: 7 tools
+  - Cloud bridge: 7 tools
+  - Workflow utilities: 57 tools
+
+Profiles:
+  - read_only: Read tasks, projects, search — no mutations
+  - agent_safe: Agent workflow: claim, start, complete, comment — no destructive ops
+  - minimal: Low-token MCP session bootstrap and task workflow
+  - standard: Default MCP/CLI minus admin/webhook/template tools
+  - full: All local tools including templates and webhooks
+  - admin: Full access including migrations and cloud bridge tools
+
+Try:
+  todos features list              # capability discovery summary
+  todos features manifest --json   # full manifest
+  TODOS_PROFILE=minimal todos-mcp  # low-token MCP session"
+`;

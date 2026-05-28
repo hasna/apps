@@ -1,0 +1,206 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`agent workflow demo normalizes result for deterministic snapshots 1`] = `
+{
+  "agent": {
+    "id": "<id-1>",
+    "name": "demo-agent",
+  },
+  "agent_run": {
+    "adapter": "claude",
+    "id": "<id-4>",
+    "status": "completed",
+    "task_id": "<id-5>",
+  },
+  "completed_at": "2026-01-01T00:00:00.000Z",
+  "db_path": ":memory:",
+  "ephemeral": false,
+  "message": "Demo complete: 3/3 tasks done, 1 agent run, 1 run record",
+  "project": {
+    "id": "<id-2>",
+    "name": "Agent Workflow Demo",
+    "path": "/tmp/todos-agent-workflow-demo",
+    "task_prefix": "AWD",
+  },
+  "run_record": {
+    "id": "<id-6>",
+    "objective": "Demonstrate local run record with evidence",
+    "status": "completed",
+  },
+  "schema_version": "todos.agent_workflow_demo.v1",
+  "status_summary": {
+    "completed": 3,
+    "in_progress": 0,
+    "pending": 0,
+    "total": 3,
+  },
+  "steps": [
+    {
+      "action": "register_agent",
+      "detail": "Registered agent 'demo-agent' (<id>)",
+      "status": "ok",
+      "step": 1,
+    },
+    {
+      "action": "create_project",
+      "detail": "Created project 'Agent Workflow Demo' prefix=AWD",
+      "status": "ok",
+      "step": 2,
+    },
+    {
+      "action": "create_task_list",
+      "detail": "Created task list 'demo-backlog'",
+      "status": "ok",
+      "step": 3,
+    },
+    {
+      "action": "create_tasks",
+      "detail": "Created 3 linked demo tasks",
+      "status": "ok",
+      "step": 4,
+    },
+    {
+      "action": "claim_next_task",
+      "detail": "Claimed <id> — Register agent and bootstrap project",
+      "status": "ok",
+      "step": 5,
+    },
+    {
+      "action": "log_progress",
+      "detail": "Logged 50% progress on first task",
+      "status": "ok",
+      "step": 6,
+    },
+    {
+      "action": "complete_task",
+      "detail": "Completed <id>",
+      "status": "ok",
+      "step": 7,
+    },
+    {
+      "action": "claim_next_task",
+      "detail": "Claimed <id> — Claim and start next task",
+      "status": "ok",
+      "step": 8,
+    },
+    {
+      "action": "complete_task",
+      "detail": "Completed <id>",
+      "status": "ok",
+      "step": 9,
+    },
+    {
+      "action": "enqueue_agent_run",
+      "detail": "Queued agent run on task <id>",
+      "status": "ok",
+      "step": 10,
+    },
+    {
+      "action": "claim_next_agent_run",
+      "detail": "Claimed run <id> (running)",
+      "status": "ok",
+      "step": 11,
+    },
+    {
+      "action": "complete_agent_run",
+      "detail": "Completed run <id>",
+      "status": "ok",
+      "step": 12,
+    },
+    {
+      "action": "create_run_record",
+      "detail": "Created run record <id>",
+      "status": "ok",
+      "step": 13,
+    },
+    {
+      "action": "append_run_command",
+      "detail": "Recorded demo command output (redacted-safe)",
+      "status": "ok",
+      "step": 14,
+    },
+    {
+      "action": "complete_run_record",
+      "detail": "Run record status=completed",
+      "status": "ok",
+      "step": 15,
+    },
+    {
+      "action": "complete_task",
+      "detail": "Completed <id>",
+      "status": "ok",
+      "step": 16,
+    },
+  ],
+  "task_list": {
+    "id": "<id-3>",
+    "name": "Demo Backlog",
+    "slug": "demo-backlog",
+  },
+  "tasks": [
+    {
+      "id": "<id-7>",
+      "short_id": null,
+      "status": "completed",
+      "title": "Claim and start next task",
+    },
+    {
+      "id": "<id-5>",
+      "short_id": null,
+      "status": "completed",
+      "title": "Complete work with run evidence",
+    },
+    {
+      "id": "<id-8>",
+      "short_id": null,
+      "status": "completed",
+      "title": "Register agent and bootstrap project",
+    },
+  ],
+}
+`;
+
+exports[`agent workflow demo formats human-readable report with fixed timestamp 1`] = `
+"=== Agent Workflow Demo (local-only) ===
+Demo complete: 3/3 tasks done, 1 agent run, 1 run record
+Completed: 2026-01-01T00:00:00.000Z
+Database: :memory:
+
+Agent: demo-agent (<id-1>)
+Project: Agent Workflow Demo [AWD] @ /tmp/todos-agent-workflow-demo
+Task list: demo-backlog
+
+Tasks:
+  <id-7>  completed    Claim and start next task
+  <id-5>  completed    Complete work with run evidence
+  <id-8>  completed    Register agent and bootstrap project
+
+Agent run: <id-4>  completed  adapter=claude
+Run record: <id-6>  completed  Demonstrate local run record with evidence
+
+Status: 3/3 completed, 0 pending, 0 in progress
+
+Steps:
+   1. [ok] register_agent: Registered agent 'demo-agent' (<id>)
+   2. [ok] create_project: Created project 'Agent Workflow Demo' prefix=AWD
+   3. [ok] create_task_list: Created task list 'demo-backlog'
+   4. [ok] create_tasks: Created 3 linked demo tasks
+   5. [ok] claim_next_task: Claimed <id> — Register agent and bootstrap project
+   6. [ok] log_progress: Logged 50% progress on first task
+   7. [ok] complete_task: Completed <id>
+   8. [ok] claim_next_task: Claimed <id> — Claim and start next task
+   9. [ok] complete_task: Completed <id>
+  10. [ok] enqueue_agent_run: Queued agent run on task <id>
+  11. [ok] claim_next_agent_run: Claimed run <id> (running)
+  12. [ok] complete_agent_run: Completed run <id>
+  13. [ok] create_run_record: Created run record <id>
+  14. [ok] append_run_command: Recorded demo command output (redacted-safe)
+  15. [ok] complete_run_record: Run record status=completed
+  16. [ok] complete_task: Completed <id>
+
+Try next:
+  todos claim <agent>     # pick + lock + start best pending task
+  todos status            # project health snapshot
+  todos runs queue --task <id> --adapter claude
+  todos mcp               # MCP tools for agents (TODOS_PROFILE=minimal)"
+`;

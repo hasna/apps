@@ -213,12 +213,16 @@ describe("isLockExpired", () => {
     expect(isLockExpired(new Date().toISOString())).toBe(false);
   });
 
-  it("should return true for exactly 30 minutes ago (boundary)", () => {
-    // At exactly 30 minutes, Date.now() - lockTime === expiryMs, so > is false
-    const exactBoundary = new Date(Date.now() - 30 * 60 * 1000).toISOString();
-    // Due to ms precision, this is at the boundary; the check is strictly greater than
-    // so at exactly 30 min it should NOT be expired
-    expect(isLockExpired(exactBoundary)).toBe(false);
+  it("should return false for exactly 30 minutes ago (boundary)", () => {
+    const fixedNow = new Date("2026-01-15T12:00:00.000Z").getTime();
+    const exactBoundary = new Date(fixedNow - 30 * 60 * 1000).toISOString();
+    expect(isLockExpired(exactBoundary, fixedNow)).toBe(false);
+  });
+
+  it("should return true just after the 30 minute boundary", () => {
+    const fixedNow = new Date("2026-01-15T12:00:00.001Z").getTime();
+    const exactBoundary = new Date("2026-01-15T11:30:00.000Z").toISOString();
+    expect(isLockExpired(exactBoundary, fixedNow)).toBe(true);
   });
 });
 

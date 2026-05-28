@@ -208,11 +208,19 @@ export interface DoctorIssue {
   type: string;
   message: string;
   count?: number;
+  repairable?: boolean;
 }
 
 export interface DoctorResponse {
   ok: boolean;
-  issues: DoctorIssue[];
+  dry_run?: boolean;
+  database_path?: string;
+  migration?: { current: number; expected: number };
+  issues?: DoctorIssue[];
+  checks?: DoctorIssue[];
+  repairs?: Array<{ type: string; message: string; applied: boolean; count?: number }>;
+  backup?: { path: string; files: string[] };
+  summary?: { errors: number; warnings: number; infos: number; repairable: number; applied: number };
 }
 
 // ── SSE Event ────────────────────────────────────────────────────────────────

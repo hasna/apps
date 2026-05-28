@@ -1,12 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import { getDatabase, closeDatabase, resetDatabase } from "./database.js";
+import { resetConfig, saveConfig } from "../lib/config.js";
 import {
   addComment,
   getComment,
   listComments,
   deleteComment,
   logProgress,
+  updateComment,
 } from "./comments.js";
 import { createTask, deleteTask } from "./tasks.js";
 import { TaskNotFoundError } from "../types/index.js";
@@ -15,6 +17,7 @@ let db: Database;
 
 beforeEach(() => {
   process.env["TODOS_DB_PATH"] = ":memory:";
+  resetConfig();
   resetDatabase();
   db = getDatabase();
 });
@@ -22,6 +25,7 @@ beforeEach(() => {
 afterEach(() => {
   closeDatabase();
   delete process.env["TODOS_DB_PATH"];
+  resetConfig();
 });
 
 describe("addComment", () => {
@@ -61,6 +65,15 @@ describe("addComment", () => {
         db,
       ),
     ).toThrow(TaskNotFoundError);
+  });
+
+  it("should redact configured secrets before storing comments", () => {
+    saveConfig({ secret_safety: { redaction_patterns: ["INTERNAL-[0-9]{4}"] } });
+    const task = createTask({ title: "Test Task" }, db);
+    const comment = addComment({ task_id: task.id, content: "token INTERNAL-1234" }, db);
+
+    expect(comment.content).toBe("token [REDACTED]");
+    expect(listComments(task.id, db)[0]!.content).not.toContain("INTERNAL-1234");
   });
 });
 
@@ -176,6 +189,16 @@ describe("logProgress", () => {
     const task = createTask({ title: "Test Task" }, db);
     const comment = addComment({ task_id: task.id, content: "regular" }, db);
     expect(comment.type).toBe("comment");
+  });
+
+  it("updateComment should redact secrets before storing content", () => {
+    saveConfig({ secret_safety: { redaction_patterns: ["PRIVATE-[0-9]+"] } });
+    const task = createTask({ title: "Test Task" }, db);
+    const comment = addComment({ task_id: task.id, content: "regular" }, db);
+    const updated = updateComment(comment.id, { content: "leak PRIVATE-42" }, db);
+
+    expect(updated.content).toBe("leak [REDACTED]");
+    expect(getComment(comment.id, db)!.content).not.toContain("PRIVATE-42");
   });
 });
 

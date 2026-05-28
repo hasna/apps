@@ -63,6 +63,10 @@ function getDbPath(): string {
   return join(home, ".hasna", "todos", "todos.db");
 }
 
+export function getDatabasePath(): string {
+  return getDbPath();
+}
+
 function ensureDir(filePath: string): void {
   if (isInMemoryDb(filePath)) return;
   const dir = dirname(resolve(filePath));
@@ -113,11 +117,11 @@ export function uuid(): string {
   return crypto.randomUUID();
 }
 
-export function isLockExpired(lockedAt: string | null): boolean {
+export function isLockExpired(lockedAt: string | null, nowMs = Date.now()): boolean {
   if (!lockedAt) return true;
   const lockTime = new Date(lockedAt).getTime();
   const expiryMs = LOCK_EXPIRY_MINUTES * 60 * 1000;
-  return Date.now() - lockTime > expiryMs;
+  return nowMs - lockTime > expiryMs;
 }
 
 export function lockExpiryCutoff(nowMs = Date.now()): string {
@@ -130,7 +134,7 @@ export function clearExpiredLocks(db: Database): void {
   db.run("UPDATE tasks SET locked_by = NULL, locked_at = NULL WHERE locked_at IS NOT NULL AND locked_at < ?", [cutoff]);
 }
 
-const ALLOWED_TABLES = new Set(["tasks", "projects", "agents", "plans", "task_lists", "task_templates"]);
+const ALLOWED_TABLES = new Set(["tasks", "projects", "agents", "plans", "task_lists", "task_templates", "project_knowledge_records", "project_risks", "local_retrospectives"]);
 
 export function resolvePartialId(db: Database, table: string, partialId: string): string | null {
   if (!ALLOWED_TABLES.has(table)) {

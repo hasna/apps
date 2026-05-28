@@ -1,6 +1,5 @@
 /**
- * Auto-assign tasks to agents using Cerebras LLM for intelligent routing.
- * Falls back to capability-based matching when the API key is unavailable or the call fails.
+ * Auto-assign tasks to agents using local capability and workload data only.
  */
 
 import type { Database } from "bun:sqlite";
@@ -9,14 +8,11 @@ import { getTask, updateTask, listTasks } from "../db/tasks.js";
 import { listAgents, getCapableAgents } from "../db/agents.js";
 import type { Task } from "../types/index.js";
 
-const CEREBRAS_API_URL = "https://api.cerebras.ai/v1/chat/completions";
-const CEREBRAS_MODEL = "llama-3.3-70b";
-
 export interface AutoAssignResult {
   task_id: string;
   assigned_to: string | null;
   agent_name: string | null;
-  method: "cerebras" | "capability_match" | "no_agents";
+  method: "capability_match" | "no_agents";
   reason?: string;
 }
 
@@ -59,63 +55,9 @@ function getAgentWorkloads(d: Database): Map<string, number> {
   return new Map(rows.map(r => [r.assigned_to, r.count]));
 }
 
-function buildPrompt(
-  task: { title: string; description?: string | null; priority: string; tags: string[] },
-  agents: Array<{ id: string; name: string; role: string; capabilities: string[]; in_progress_tasks: number }>
-): string {
-  const agentList = agents.map(a =>
-    `- ${a.name} (role: ${a.role}, caps: [${a.capabilities.join(", ")}], active_tasks: ${a.in_progress_tasks})`
-  ).join("\n");
-
-  return `You are a task routing assistant. Given a task and available agents, choose the SINGLE best agent.
-
-TASK:
-Title: ${task.title}
-Priority: ${task.priority}
-Tags: ${task.tags.join(", ") || "none"}
-Description: ${task.description?.slice(0, 300) || "none"}
-
-AVAILABLE AGENTS:
-${agentList}
-
-Rules:
-- Match task tags/content to agent capabilities
-- Prefer agents with fewer active tasks
-- Prefer agents whose role fits the task (lead for critical, developer for features, qa for testing)
-- If no clear match, pick the agent with fewest active tasks
-
-Respond with ONLY a JSON object: {"agent_name": "<name>", "reason": "<one sentence>"}`;
-}
-
-async function callCerebras(prompt: string, apiKey: string): Promise<{ agent_name: string; reason: string } | null> {
-  try {
-    const resp = await fetch(CEREBRAS_API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model: CEREBRAS_MODEL,
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: 150,
-        temperature: 0,
-      }),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!resp.ok) return null;
-    const data = await resp.json() as any;
-    const content = data?.choices?.[0]?.message?.content?.trim();
-    if (!content) return null;
-    const match = content.match(/\{[^}]+\}/s);
-    if (!match) return null;
-    return JSON.parse(match[0]);
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Auto-assign a task to the best available agent.
- * Uses Cerebras LLM (llama-3.3-70b) if CEREBRAS_API_KEY is set,
- * otherwise falls back to capability-based matching.
+ * Uses only local SQLite state and never calls hosted provider APIs.
  */
 export async function autoAssignTask(taskId: string, db?: Database): Promise<AutoAssignResult> {
   const d = db || getDatabase();
@@ -128,26 +70,9 @@ export async function autoAssignTask(taskId: string, db?: Database): Promise<Aut
   }
 
   const workloads = getAgentWorkloads(d);
-  const apiKey = process.env["CEREBRAS_API_KEY"];
   let selectedAgent: (typeof agents)[number] | null = null;
   let method: AutoAssignResult["method"] = "capability_match";
   let reason: string | undefined;
-
-  if (apiKey) {
-    const agentData = agents.map(a => ({
-      id: a.id, name: a.name, role: a.role || "agent",
-      capabilities: a.capabilities || [],
-      in_progress_tasks: workloads.get(a.id) ?? 0,
-    }));
-    const result = await callCerebras(buildPrompt({
-      title: task.title, description: task.description,
-      priority: task.priority, tags: task.tags || [],
-    }, agentData), apiKey);
-    if (result?.agent_name) {
-      selectedAgent = agents.find(a => a.name === result.agent_name) ?? null;
-      if (selectedAgent) { method = "cerebras"; reason = result.reason; }
-    }
-  }
 
   // Fallback: capability-based matching
   if (!selectedAgent) {

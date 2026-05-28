@@ -1,19 +1,159 @@
 import type { Database } from "bun:sqlite";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { TemplateVariable, TemplateTaskInput } from "../types/index.js";
 import { getDatabase } from "./database.js";
 import { createTemplate, listTemplates } from "./templates.js";
+import type { TemplateExport } from "./templates.js";
+
+export const BUILTIN_TEMPLATE_LIBRARY_VERSION = "2026-05-21";
+export const BUILTIN_TEMPLATE_LIBRARY_SOURCE = "bundled-local-template-library";
 
 export interface BuiltinTemplate {
   name: string;
+  version: number;
   description: string;
+  category: string;
+  version: string;
   variables: TemplateVariable[];
   tasks: (TemplateTaskInput & { position: number; depends_on_positions?: number[] })[];
 }
 
+export const TEMPLATE_LIBRARY_SCHEMA = "todos.template_library.v1";
+
 export const BUILTIN_TEMPLATES: BuiltinTemplate[] = [
   {
+    name: "bug-fix",
+    description: "Reproduce, diagnose, fix, test, and release a defect.",
+    category: "bug-fix",
+    version: BUILTIN_TEMPLATE_LIBRARY_VERSION,
+    variables: [{ name: "bug", required: true, description: "Bug description" }],
+    tasks: [
+      { position: 0, title_pattern: "Reproduce: {bug}", priority: "critical", tags: ["bug", "repro"] },
+      { position: 1, title_pattern: "Diagnose root cause of {bug}", priority: "critical", tags: ["bug", "diagnosis"], depends_on_positions: [0] },
+      { position: 2, title_pattern: "Write regression test for {bug}", priority: "high", tags: ["bug", "test"], depends_on_positions: [1] },
+      { position: 3, title_pattern: "Implement fix for {bug}", priority: "critical", tags: ["bug", "implementation"], depends_on_positions: [2] },
+      { position: 4, title_pattern: "Run full verification for {bug}", priority: "high", tags: ["bug", "verification"], depends_on_positions: [3] },
+      { position: 5, title_pattern: "Publish and smoke test fix for {bug}", priority: "high", tags: ["bug", "release"], depends_on_positions: [4] },
+    ],
+  },
+  {
+    name: "feature-implementation",
+    description: "Plan, build, test, document, and release a product feature.",
+    category: "feature",
+    version: BUILTIN_TEMPLATE_LIBRARY_VERSION,
+    variables: [
+      { name: "feature", required: true, description: "Feature name" },
+      { name: "scope", required: false, default: "medium", description: "Implementation size or risk" },
+    ],
+    tasks: [
+      { position: 0, title_pattern: "Define acceptance criteria for {feature}", priority: "high", tags: ["feature", "spec"] },
+      { position: 1, title_pattern: "Design {scope} implementation plan for {feature}", priority: "high", tags: ["feature", "design"], depends_on_positions: [0] },
+      { position: 2, title_pattern: "Implement {feature}", priority: "critical", tags: ["feature", "implementation"], depends_on_positions: [1] },
+      { position: 3, title_pattern: "Add tests for {feature}", priority: "high", tags: ["feature", "test"], depends_on_positions: [2] },
+      { position: 4, title_pattern: "Update docs for {feature}", priority: "medium", tags: ["feature", "docs"], depends_on_positions: [2] },
+      { position: 5, title_pattern: "Run release checks for {feature}", priority: "high", tags: ["feature", "verification"], depends_on_positions: [3, 4] },
+    ],
+  },
+  {
+    name: "security-review",
+    description: "Threat model, test, remediate, and report on security posture.",
+    category: "security",
+    version: BUILTIN_TEMPLATE_LIBRARY_VERSION,
+    variables: [{ name: "target", required: true, description: "System, package, or change under review" }],
+    tasks: [
+      { position: 0, title_pattern: "Map trust boundaries for {target}", priority: "critical", tags: ["security", "threat-model"] },
+      { position: 1, title_pattern: "Scan {target} for vulnerabilities and secret exposure", priority: "critical", tags: ["security", "scan"], depends_on_positions: [0] },
+      { position: 2, title_pattern: "Review authz, data access, and dependency risks in {target}", priority: "critical", tags: ["security", "review"], depends_on_positions: [0] },
+      { position: 3, title_pattern: "Fix critical security findings in {target}", priority: "critical", tags: ["security", "fix"], depends_on_positions: [1, 2] },
+      { position: 4, title_pattern: "Retest {target} security fixes", priority: "high", tags: ["security", "verification"], depends_on_positions: [3] },
+      { position: 5, title_pattern: "Write local security review report for {target}", priority: "medium", tags: ["security", "report"], depends_on_positions: [4] },
+    ],
+  },
+  {
+    name: "release",
+    description: "Prepare, verify, publish, install, and smoke test a package release.",
+    category: "release",
+    version: BUILTIN_TEMPLATE_LIBRARY_VERSION,
+    variables: [
+      { name: "package", required: true, description: "Package name" },
+      { name: "version", required: false, default: "patch", description: "Release version or bump type" },
+    ],
+    tasks: [
+      { position: 0, title_pattern: "Prepare {package} {version} release notes", priority: "medium", tags: ["release", "docs"] },
+      { position: 1, title_pattern: "Run full tests for {package}", priority: "critical", tags: ["release", "test"] },
+      { position: 2, title_pattern: "Run build and release verification for {package}", priority: "critical", tags: ["release", "verification"], depends_on_positions: [1] },
+      { position: 3, title_pattern: "Scan {package} release diff for secrets", priority: "critical", tags: ["release", "security"], depends_on_positions: [2] },
+      { position: 4, title_pattern: "Publish {package} {version}", priority: "high", tags: ["release", "publish"], depends_on_positions: [3] },
+      { position: 5, title_pattern: "Install and smoke test published {package}", priority: "high", tags: ["release", "smoke"], depends_on_positions: [4] },
+    ],
+  },
+  {
+    name: "migration",
+    description: "Plan, test, apply, and verify a schema or data migration.",
+    category: "migration",
+    version: BUILTIN_TEMPLATE_LIBRARY_VERSION,
+    variables: [{ name: "migration", required: true, description: "Migration name or objective" }],
+    tasks: [
+      { position: 0, title_pattern: "Design migration plan for {migration}", priority: "critical", tags: ["migration", "plan"] },
+      { position: 1, title_pattern: "Write rollback plan for {migration}", priority: "critical", tags: ["migration", "rollback"], depends_on_positions: [0] },
+      { position: 2, title_pattern: "Implement migration {migration}", priority: "critical", tags: ["migration", "implementation"], depends_on_positions: [0] },
+      { position: 3, title_pattern: "Test migration {migration} on fixture data", priority: "high", tags: ["migration", "test"], depends_on_positions: [2] },
+      { position: 4, title_pattern: "Run migration {migration} verification and drift checks", priority: "high", tags: ["migration", "verification"], depends_on_positions: [1, 3] },
+      { position: 5, title_pattern: "Document migration {migration} evidence", priority: "medium", tags: ["migration", "docs"], depends_on_positions: [4] },
+    ],
+  },
+  {
+    name: "incident",
+    description: "Triage, mitigate, repair, verify, and retrospect an incident.",
+    category: "incident",
+    version: BUILTIN_TEMPLATE_LIBRARY_VERSION,
+    variables: [{ name: "incident", required: true, description: "Incident summary" }],
+    tasks: [
+      { position: 0, title_pattern: "Triage incident: {incident}", priority: "critical", tags: ["incident", "triage"] },
+      { position: 1, title_pattern: "Mitigate customer impact for {incident}", priority: "critical", tags: ["incident", "mitigation"], depends_on_positions: [0] },
+      { position: 2, title_pattern: "Diagnose root cause for {incident}", priority: "critical", tags: ["incident", "diagnosis"], depends_on_positions: [0] },
+      { position: 3, title_pattern: "Implement durable repair for {incident}", priority: "critical", tags: ["incident", "repair"], depends_on_positions: [2] },
+      { position: 4, title_pattern: "Verify recovery from {incident}", priority: "high", tags: ["incident", "verification"], depends_on_positions: [1, 3] },
+      { position: 5, title_pattern: "Write retrospective for {incident}", priority: "medium", tags: ["incident", "retro"], depends_on_positions: [4] },
+    ],
+  },
+  {
+    name: "docs-refresh",
+    description: "Audit, update, validate, and publish documentation changes.",
+    category: "docs",
+    version: BUILTIN_TEMPLATE_LIBRARY_VERSION,
+    variables: [{ name: "area", required: true, description: "Documentation area or product surface" }],
+    tasks: [
+      { position: 0, title_pattern: "Audit current docs for {area}", priority: "medium", tags: ["docs", "audit"] },
+      { position: 1, title_pattern: "Update examples and commands for {area}", priority: "medium", tags: ["docs", "examples"], depends_on_positions: [0] },
+      { position: 2, title_pattern: "Validate docs snippets for {area}", priority: "high", tags: ["docs", "verification"], depends_on_positions: [1] },
+      { position: 3, title_pattern: "Refresh screenshots or generated artifacts for {area}", priority: "medium", tags: ["docs", "assets"], depends_on_positions: [1] },
+      { position: 4, title_pattern: "Publish docs refresh for {area}", priority: "medium", tags: ["docs", "release"], depends_on_positions: [2, 3] },
+    ],
+  },
+  {
+    name: "qa",
+    description: "Build a focused QA plan, execute checks, file defects, and sign off.",
+    category: "qa",
+    version: BUILTIN_TEMPLATE_LIBRARY_VERSION,
+    variables: [{ name: "target", required: true, description: "Feature, release, or workflow under QA" }],
+    tasks: [
+      { position: 0, title_pattern: "Create QA matrix for {target}", priority: "high", tags: ["qa", "plan"] },
+      { position: 1, title_pattern: "Run happy-path QA for {target}", priority: "high", tags: ["qa", "manual"], depends_on_positions: [0] },
+      { position: 2, title_pattern: "Run edge-case QA for {target}", priority: "high", tags: ["qa", "edge-cases"], depends_on_positions: [0] },
+      { position: 3, title_pattern: "File and dedupe QA defects for {target}", priority: "medium", tags: ["qa", "bugs"], depends_on_positions: [1, 2] },
+      { position: 4, title_pattern: "Verify QA fixes for {target}", priority: "high", tags: ["qa", "verification"], depends_on_positions: [3] },
+      { position: 5, title_pattern: "Record QA signoff for {target}", priority: "medium", tags: ["qa", "signoff"], depends_on_positions: [4] },
+    ],
+  },
+  {
     name: "open-source-project",
+    version: 1,
+    category: "project",
     description: "Full open-source project bootstrap — scaffold to publish",
+    category: "open-source",
+    version: BUILTIN_TEMPLATE_LIBRARY_VERSION,
     variables: [
       { name: "name", required: true, description: "Service name" },
       { name: "org", required: false, default: "hasna", description: "GitHub org" },
@@ -28,55 +168,144 @@ export const BUILTIN_TEMPLATES: BuiltinTemplate[] = [
       { position: 6, title_pattern: "Write unit tests for {name}", priority: "high", depends_on_positions: [2, 3, 4] },
       { position: 7, title_pattern: "Add Apache 2.0 license and README", priority: "medium", depends_on_positions: [0] },
       { position: 8, title_pattern: "Create GitHub repo {org}/{name}", priority: "medium", depends_on_positions: [7] },
-      { position: 9, title_pattern: "Add @hasna/cloud adapter", priority: "medium", depends_on_positions: [1] },
-      { position: 10, title_pattern: "Write PostgreSQL migrations for {name}", priority: "medium", depends_on_positions: [1] },
-      { position: 11, title_pattern: "Add feedback system + send_feedback MCP tool", priority: "medium", depends_on_positions: [3] },
-      { position: 12, title_pattern: "Add agent tools (register_agent, heartbeat, set_focus, list_agents)", priority: "medium", depends_on_positions: [3] },
-      { position: 13, title_pattern: "Create RDS database for {name}", priority: "low", depends_on_positions: [10] },
-      { position: 14, title_pattern: "Publish @hasna/{name} to npm", priority: "high", depends_on_positions: [6, 7, 8] },
-      { position: 15, title_pattern: "Install @hasna/{name} globally and verify", priority: "medium", depends_on_positions: [14] },
+      { position: 9, title_pattern: "Add local backup and restore workflow for {name}", priority: "medium", depends_on_positions: [1] },
+      { position: 10, title_pattern: "Add agent tools (register_agent, heartbeat, set_focus, list_agents)", priority: "medium", depends_on_positions: [3] },
+      { position: 11, title_pattern: "Publish @hasna/{name} to npm", priority: "high", depends_on_positions: [6, 7, 8] },
+      { position: 12, title_pattern: "Install @hasna/{name} globally and verify", priority: "medium", depends_on_positions: [11] },
     ],
   },
   {
-    name: "bug-fix",
-    description: "Standard bug fix workflow",
-    variables: [{ name: "bug", required: true, description: "Bug description" }],
+    name: "release",
+    version: 1,
+    category: "ops",
+    description: "Version release workflow — test, changelog, publish, verify",
+    variables: [
+      { name: "version", required: true, description: "Release version (e.g. 1.2.0)" },
+      { name: "package", required: false, default: "package", description: "Package name" },
+    ],
     tasks: [
-      { position: 0, title_pattern: "Reproduce: {bug}", priority: "critical" },
-      { position: 1, title_pattern: "Diagnose root cause of {bug}", priority: "critical", depends_on_positions: [0] },
-      { position: 2, title_pattern: "Implement fix for {bug}", priority: "critical", depends_on_positions: [1] },
-      { position: 3, title_pattern: "Write regression test for {bug}", priority: "high", depends_on_positions: [2] },
-      { position: 4, title_pattern: "Publish fix and verify in production", priority: "high", depends_on_positions: [3] },
+      { position: 0, title_pattern: "Run full test suite for {package} {version}", priority: "critical" },
+      { position: 1, title_pattern: "Update changelog for {version}", priority: "high", depends_on_positions: [0] },
+      { position: 2, title_pattern: "Bump version to {version}", priority: "high", depends_on_positions: [1] },
+      { position: 3, title_pattern: "Publish {package} {version}", priority: "critical", depends_on_positions: [2] },
+      { position: 4, title_pattern: "Verify {package} {version} install and CLI", priority: "high", depends_on_positions: [3] },
     ],
   },
   {
-    name: "feature",
-    description: "Standard feature development workflow",
-    variables: [{ name: "feature", required: true }, { name: "scope", required: false, default: "medium" }],
+    name: "docs-refresh",
+    version: 1,
+    category: "workflow",
+    description: "Documentation refresh — audit, update, verify links",
+    variables: [{ name: "scope", required: true, description: "Docs scope (README, API, AGENTS.md)" }],
     tasks: [
-      { position: 0, title_pattern: "Write spec for {feature}", priority: "high" },
-      { position: 1, title_pattern: "Design implementation approach for {feature}", priority: "high", depends_on_positions: [0] },
-      { position: 2, title_pattern: "Implement {feature}", priority: "critical", depends_on_positions: [1] },
-      { position: 3, title_pattern: "Write tests for {feature}", priority: "high", depends_on_positions: [2] },
-      { position: 4, title_pattern: "Code review for {feature}", priority: "medium", depends_on_positions: [3] },
-      { position: 5, title_pattern: "Update docs for {feature}", priority: "medium", depends_on_positions: [2] },
-      { position: 6, title_pattern: "Deploy {feature}", priority: "high", depends_on_positions: [4] },
+      { position: 0, title_pattern: "Audit outdated sections in {scope}", priority: "high" },
+      { position: 1, title_pattern: "Update {scope} for current behavior", priority: "high", depends_on_positions: [0] },
+      { position: 2, title_pattern: "Verify examples in {scope} still work", priority: "medium", depends_on_positions: [1] },
+      { position: 3, title_pattern: "Fix broken links in {scope}", priority: "medium", depends_on_positions: [1] },
     ],
   },
   {
-    name: "security-audit",
-    description: "Security audit workflow",
-    variables: [{ name: "target", required: true }],
+    name: "migration",
+    version: 1,
+    category: "ops",
+    description: "Schema/data migration workflow",
+    variables: [
+      { name: "migration", required: true, description: "Migration name or ID" },
+      { name: "target", required: false, default: "sqlite", description: "Target store" },
+    ],
     tasks: [
-      { position: 0, title_pattern: "Scan {target} for vulnerabilities", priority: "critical" },
-      { position: 1, title_pattern: "Review {target} security findings", priority: "critical", depends_on_positions: [0] },
-      { position: 2, title_pattern: "Fix critical issues in {target}", priority: "critical", depends_on_positions: [1] },
-      { position: 3, title_pattern: "Retest {target} after fixes", priority: "high", depends_on_positions: [2] },
-      { position: 4, title_pattern: "Write security report for {target}", priority: "medium", depends_on_positions: [3] },
-      { position: 5, title_pattern: "Close audit for {target}", priority: "low", depends_on_positions: [4] },
+      { position: 0, title_pattern: "Write forward migration for {migration} ({target})", priority: "critical" },
+      { position: 1, title_pattern: "Add migration tests for {migration}", priority: "high", depends_on_positions: [0] },
+      { position: 2, title_pattern: "Run migration dry-run on copy", priority: "high", depends_on_positions: [1] },
+      { position: 3, title_pattern: "Apply {migration} and verify integrity", priority: "critical", depends_on_positions: [2] },
+      { position: 4, title_pattern: "Document rollback for {migration}", priority: "medium", depends_on_positions: [3] },
+    ],
+  },
+  {
+    name: "incident-response",
+    version: 1,
+    category: "ops",
+    description: "Incident triage, mitigation, postmortem",
+    variables: [{ name: "incident", required: true, description: "Incident summary" }],
+    tasks: [
+      { position: 0, title_pattern: "Triage: {incident}", priority: "critical", tags: ["incident"] },
+      { position: 1, title_pattern: "Mitigate impact of {incident}", priority: "critical", depends_on_positions: [0], tags: ["incident"] },
+      { position: 2, title_pattern: "Identify root cause: {incident}", priority: "critical", depends_on_positions: [1] },
+      { position: 3, title_pattern: "Permanent fix for {incident}", priority: "high", depends_on_positions: [2] },
+      { position: 4, title_pattern: "Write postmortem for {incident}", priority: "medium", depends_on_positions: [3] },
+      { position: 5, title_pattern: "Add monitoring/alert for {incident} class", priority: "medium", depends_on_positions: [4] },
     ],
   },
 ];
+
+function templateMetadata(template: BuiltinTemplate): Record<string, unknown> {
+  return {
+    source: BUILTIN_TEMPLATE_LIBRARY_SOURCE,
+    library_version: template.version,
+    category: template.category,
+    template_file: `${template.name}.json`,
+    local_only: true,
+    marketplace_free: true,
+  };
+}
+
+export function listBuiltinTemplates(): BuiltinTemplate[] {
+  return BUILTIN_TEMPLATES.map((template) => ({
+    ...template,
+    variables: template.variables.map((variable) => ({ ...variable })),
+    tasks: template.tasks.map((task) => ({ ...task, tags: task.tags ? [...task.tags] : undefined })),
+  }));
+}
+
+export function getBuiltinTemplate(name: string): BuiltinTemplate | null {
+  return listBuiltinTemplates().find((template) => template.name === name) ?? null;
+}
+
+export function exportBuiltinTemplate(name: string): TemplateExport {
+  const template = getBuiltinTemplate(name);
+  if (!template) throw new Error(`Built-in template not found: ${name}`);
+  return {
+    name: template.name,
+    title_pattern: `${template.name}: {${template.variables[0]?.name ?? "name"}}`,
+    description: template.description,
+    priority: "medium",
+    tags: [template.category, "local-template"],
+    variables: template.variables,
+    project_id: null,
+    plan_id: null,
+    metadata: templateMetadata(template),
+    tasks: template.tasks.map((task) => ({
+      position: task.position,
+      title_pattern: task.title_pattern,
+      description: task.description ?? null,
+      priority: task.priority ?? "medium",
+      tags: task.tags ?? [template.category],
+      task_type: task.task_type ?? null,
+      condition: task.condition ?? null,
+      include_template_id: task.include_template_id ?? null,
+      depends_on_positions: task.depends_on_positions ?? task.depends_on ?? [],
+      metadata: task.metadata ?? { category: template.category },
+    })),
+  };
+}
+
+export function exportBuiltinTemplateFiles(): Array<{ filename: string; template: TemplateExport }> {
+  return BUILTIN_TEMPLATES.map((template) => ({
+    filename: `${template.name}.json`,
+    template: exportBuiltinTemplate(template.name),
+  }));
+}
+
+export function writeBuiltinTemplateFiles(directory: string): { directory: string; written: number; files: string[] } {
+  mkdirSync(directory, { recursive: true });
+  const files: string[] = [];
+  for (const entry of exportBuiltinTemplateFiles()) {
+    const path = join(directory, entry.filename);
+    writeFileSync(path, `${JSON.stringify(entry.template, null, 2)}\n`, "utf-8");
+    files.push(path);
+  }
+  return { directory, written: files.length, files };
+}
 
 /**
  * Initialize built-in templates. Skips any template whose name already exists.
@@ -112,7 +341,9 @@ export function initBuiltinTemplates(db?: Database): { created: number; skipped:
       name: bt.name,
       title_pattern: `${bt.name}: {${bt.variables[0]?.name || "name"}}`,
       description: bt.description,
+      tags: [bt.category, "local-template"],
       variables: bt.variables,
+      metadata: templateMetadata(bt),
       tasks,
     }, d);
 

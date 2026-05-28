@@ -137,6 +137,51 @@ export interface Machine {
   created_at: string;
 }
 
+export interface MachineTopologyMetadata {
+  tailscale_name?: string;
+  tailscale_ip?: string;
+  lan_address?: string;
+  workspace_path?: string;
+  git_root?: string;
+  arch?: string;
+}
+
+export interface MachineTopologySummary {
+  id: string;
+  name: string;
+  hostname: string | null;
+  platform: string | null;
+  ssh_address: string | null;
+  is_primary: boolean;
+  archived_at: string | null;
+  last_seen_at: string;
+  stale: boolean;
+  stale_minutes: number;
+  topology: MachineTopologyMetadata;
+}
+
+export type MachinePathIssueType = "missing_local_path" | "path_mismatch" | "path_missing";
+
+export interface MachinePathIssue {
+  type: MachinePathIssueType;
+  project_id: string;
+  project_name: string;
+  machine_id?: string;
+  machine_name?: string;
+  path?: string;
+  paths?: Array<{ machine_id: string; machine_name: string; path: string }>;
+  message: string;
+}
+
+export interface MachineTopologyDiagnostics {
+  generated_at: string;
+  stale_after_minutes: number;
+  local_machine: Machine | null;
+  machines: MachineTopologySummary[];
+  stale_machines: MachineTopologySummary[];
+  path_issues: MachinePathIssue[];
+}
+
 export interface MachineRow {
   id: string;
   name: string;
@@ -381,6 +426,7 @@ export interface CreateTaskInput {
   metadata?: Record<string, unknown>;
   due_at?: string;
   estimated_minutes?: number;
+  sla_minutes?: number;
   confidence?: number;
   retry_count?: number;
   max_retries?: number;
@@ -410,6 +456,7 @@ export interface UpdateTaskInput {
   metadata?: Record<string, unknown>;
   due_at?: string | null;
   estimated_minutes?: number;
+  sla_minutes?: number | null;
   actual_minutes?: number;
   completed_at?: string | null;
   confidence?: number | null;
@@ -459,12 +506,194 @@ export interface TaskDependency {
 export interface TaskTimeLog {
   id: string;
   task_id: string;
+  run_id: string | null;
+  focus_session_id: string | null;
   agent_id: string | null;
   started_at: string | null;
   ended_at: string | null;
   minutes: number;
   notes: string | null;
   created_at: string;
+}
+
+export type FocusSessionStatus = "active" | "paused" | "completed" | "cancelled";
+
+export interface FocusSession {
+  id: string;
+  task_id: string | null;
+  plan_id: string | null;
+  run_id: string | null;
+  agent_id: string | null;
+  title: string | null;
+  status: FocusSessionStatus;
+  started_at: string;
+  last_resumed_at: string | null;
+  paused_at: string | null;
+  ended_at: string | null;
+  actual_minutes: number;
+  idle_after_minutes: number | null;
+  notes: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FocusSessionRow {
+  id: string;
+  task_id: string | null;
+  plan_id: string | null;
+  run_id: string | null;
+  agent_id: string | null;
+  title: string | null;
+  status: FocusSessionStatus;
+  started_at: string;
+  last_resumed_at: string | null;
+  paused_at: string | null;
+  ended_at: string | null;
+  actual_minutes: number;
+  idle_after_minutes: number | null;
+  notes: string | null;
+  metadata: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type BoardScope = "tasks" | "plans";
+
+export interface BoardLane {
+  id: string;
+  name: string;
+  statuses: string[];
+  wip_limit: number | null;
+  position: number;
+}
+
+export interface TaskBoard {
+  id: string;
+  name: string;
+  scope: BoardScope;
+  project_id: string | null;
+  task_list_id: string | null;
+  plan_id: string | null;
+  agent_id: string | null;
+  lanes: BoardLane[];
+  filters: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskBoardRow {
+  id: string;
+  name: string;
+  scope: BoardScope;
+  project_id: string | null;
+  task_list_id: string | null;
+  plan_id: string | null;
+  agent_id: string | null;
+  lanes: string | null;
+  filters: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BoardCard {
+  id: string;
+  short_id: string | null;
+  title: string;
+  status: string;
+  priority: TaskPriority | null;
+  project_id: string | null;
+  plan_id: string | null;
+  task_list_id: string | null;
+  assigned_to: string | null;
+  blocked: boolean;
+  ready: boolean;
+  badges: string[];
+  updated_at: string;
+}
+
+export interface BoardLaneSnapshot {
+  lane: BoardLane;
+  count: number;
+  wip_limit: number | null;
+  wip_exceeded: boolean;
+  cards: BoardCard[];
+}
+
+export interface BoardSnapshot {
+  board: TaskBoard;
+  generated_at: string;
+  lanes: BoardLaneSnapshot[];
+  totals: {
+    cards: number;
+    blocked: number;
+    ready: number;
+    wip_exceeded_lanes: number;
+  };
+  keyboard: {
+    move_left: string;
+    move_right: string;
+    move_up: string;
+    move_down: string;
+    open: string;
+    quit: string;
+  };
+}
+
+export type CalendarEventKind = "task_due" | "task_sla" | "task_reminder" | "milestone" | "work_block" | "run" | "imported";
+
+export interface LocalCalendarItem {
+  id: string;
+  kind: CalendarEventKind;
+  title: string;
+  description: string | null;
+  starts_at: string;
+  ends_at: string | null;
+  timezone: string | null;
+  project_id: string | null;
+  task_id: string | null;
+  plan_id: string | null;
+  run_id: string | null;
+  recurrence_rule: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LocalCalendarItemRow {
+  id: string;
+  kind: CalendarEventKind;
+  title: string;
+  description: string | null;
+  starts_at: string;
+  ends_at: string | null;
+  timezone: string | null;
+  project_id: string | null;
+  task_id: string | null;
+  plan_id: string | null;
+  run_id: string | null;
+  recurrence_rule: string | null;
+  metadata: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CalendarEvent {
+  id: string;
+  kind: CalendarEventKind;
+  title: string;
+  description: string | null;
+  starts_at: string;
+  ends_at: string | null;
+  timezone: string | null;
+  project_id: string | null;
+  task_id: string | null;
+  plan_id: string | null;
+  run_id: string | null;
+  recurrence_rule: string | null;
+  source: "task" | "run" | "local";
+  badges: string[];
+  metadata: Record<string, unknown>;
 }
 
 // Task watcher — agent subscription to task events
@@ -591,6 +820,7 @@ export interface LockResult {
   success: boolean;
   locked_by?: string;
   locked_at?: string;
+  expires_at?: string;
   error?: string;
 }
 

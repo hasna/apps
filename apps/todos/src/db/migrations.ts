@@ -855,4 +855,309 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_api_keys_active ON api_keys(revoked_at, expires_at);
   INSERT OR IGNORE INTO _migrations (id) VALUES (50);
   `,
+  // Migration 51: Local git refs and verification evidence linked to tasks
+  `
+  CREATE TABLE IF NOT EXISTS task_git_refs (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    ref_type TEXT NOT NULL CHECK(ref_type IN ('branch', 'pull_request')),
+    name TEXT NOT NULL,
+    url TEXT,
+    provider TEXT,
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(task_id, ref_type, name)
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_git_refs_task ON task_git_refs(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_git_refs_lookup ON task_git_refs(ref_type, name);
+  CREATE INDEX IF NOT EXISTS idx_task_git_refs_url ON task_git_refs(url);
+
+  CREATE TABLE IF NOT EXISTS task_verifications (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    command TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'unknown' CHECK(status IN ('passed', 'failed', 'unknown')),
+    output_summary TEXT,
+    artifact_path TEXT,
+    agent_id TEXT,
+    run_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_verifications_task ON task_verifications(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_verifications_status ON task_verifications(status);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (51);
+  `,
+  // Migration 52: Local run ledger and evidence capture
+  `
+  CREATE TABLE IF NOT EXISTS task_runs (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    agent_id TEXT,
+    title TEXT,
+    status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running', 'completed', 'failed', 'cancelled')),
+    summary TEXT,
+    metadata TEXT DEFAULT '{}',
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_runs_task ON task_runs(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_runs_agent ON task_runs(agent_id);
+  CREATE INDEX IF NOT EXISTS idx_task_runs_status ON task_runs(status);
+  CREATE INDEX IF NOT EXISTS idx_task_runs_started ON task_runs(started_at);
+
+  CREATE TABLE IF NOT EXISTS task_run_events (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES task_runs(id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL CHECK(event_type IN ('started', 'progress', 'claim', 'comment', 'command', 'file', 'artifact', 'completed', 'failed', 'cancelled')),
+    message TEXT,
+    data TEXT DEFAULT '{}',
+    agent_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_run_events_run ON task_run_events(run_id);
+  CREATE INDEX IF NOT EXISTS idx_task_run_events_task ON task_run_events(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_run_events_type ON task_run_events(event_type);
+
+  CREATE TABLE IF NOT EXISTS task_run_commands (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES task_runs(id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    command TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'unknown' CHECK(status IN ('passed', 'failed', 'unknown')),
+    exit_code INTEGER,
+    output_summary TEXT,
+    artifact_path TEXT,
+    agent_id TEXT,
+    started_at TEXT,
+    completed_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_run_commands_run ON task_run_commands(run_id);
+  CREATE INDEX IF NOT EXISTS idx_task_run_commands_task ON task_run_commands(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_run_commands_status ON task_run_commands(status);
+
+  CREATE TABLE IF NOT EXISTS task_run_artifacts (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES task_runs(id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    artifact_type TEXT,
+    description TEXT,
+    size_bytes INTEGER,
+    sha256 TEXT,
+    metadata TEXT DEFAULT '{}',
+    agent_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_run_artifacts_run ON task_run_artifacts(run_id);
+  CREATE INDEX IF NOT EXISTS idx_task_run_artifacts_task ON task_run_artifacts(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_run_artifacts_path ON task_run_artifacts(path);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (52);
+  `,
+  // Migration 53: Local inbox intake for failures, CI logs, and pasted context
+  `
+  CREATE TABLE IF NOT EXISTS inbox_items (
+    id TEXT PRIMARY KEY,
+    task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    source_type TEXT NOT NULL CHECK(source_type IN ('pasted_error', 'ci_log', 'git_context', 'github_issue', 'file', 'other')),
+    source_name TEXT,
+    source_url TEXT,
+    title TEXT NOT NULL,
+    body TEXT,
+    fingerprint TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'triaged' CHECK(status IN ('new', 'triaged', 'ignored')),
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_inbox_items_task ON inbox_items(task_id);
+  CREATE INDEX IF NOT EXISTS idx_inbox_items_source ON inbox_items(source_type, source_name);
+  CREATE INDEX IF NOT EXISTS idx_inbox_items_status ON inbox_items(status);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (53);
+  `,
+  // Migration 54: Rich local handoffs and per-agent acknowledgement state
+  `
+  ALTER TABLE handoffs ADD COLUMN session_id TEXT;
+  ALTER TABLE handoffs ADD COLUMN task_ids TEXT;
+  ALTER TABLE handoffs ADD COLUMN relevant_files TEXT;
+  ALTER TABLE handoffs ADD COLUMN run_ids TEXT;
+  CREATE TABLE IF NOT EXISTS handoff_acknowledgements (
+    handoff_id TEXT NOT NULL REFERENCES handoffs(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL,
+    acknowledged_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (handoff_id, agent_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_handoff_acks_agent ON handoff_acknowledgements(agent_id, acknowledged_at);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (54);
+  `,
+  // Migration 55: Local saved search views and filters
+  `
+  CREATE TABLE IF NOT EXISTS saved_search_views (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    scope TEXT NOT NULL DEFAULT 'tasks' CHECK(scope IN ('all', 'tasks', 'projects', 'plans', 'runs', 'comments')),
+    filters TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_saved_search_views_scope ON saved_search_views(scope);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (55);
+  `,
+  // Migration 56: Local focus sessions and linked task time logs
+  `
+  ALTER TABLE task_time_logs ADD COLUMN run_id TEXT;
+  ALTER TABLE task_time_logs ADD COLUMN focus_session_id TEXT;
+  CREATE INDEX IF NOT EXISTS idx_task_time_logs_run ON task_time_logs(run_id);
+  CREATE INDEX IF NOT EXISTS idx_task_time_logs_focus_session ON task_time_logs(focus_session_id);
+  CREATE TABLE IF NOT EXISTS focus_sessions (
+    id TEXT PRIMARY KEY,
+    task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+    run_id TEXT,
+    agent_id TEXT,
+    title TEXT,
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'paused', 'completed', 'cancelled')),
+    started_at TEXT NOT NULL,
+    last_resumed_at TEXT,
+    paused_at TEXT,
+    ended_at TEXT,
+    actual_minutes INTEGER NOT NULL DEFAULT 0,
+    idle_after_minutes INTEGER,
+    notes TEXT,
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_focus_sessions_task ON focus_sessions(task_id);
+  CREATE INDEX IF NOT EXISTS idx_focus_sessions_plan ON focus_sessions(plan_id);
+  CREATE INDEX IF NOT EXISTS idx_focus_sessions_run ON focus_sessions(run_id);
+  CREATE INDEX IF NOT EXISTS idx_focus_sessions_agent ON focus_sessions(agent_id);
+  CREATE INDEX IF NOT EXISTS idx_focus_sessions_status ON focus_sessions(status);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (56);
+  `,
+  // Migration 57: Local task and plan kanban boards
+  `
+  CREATE TABLE IF NOT EXISTS task_boards (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    scope TEXT NOT NULL DEFAULT 'tasks' CHECK(scope IN ('tasks', 'plans')),
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    task_list_id TEXT REFERENCES task_lists(id) ON DELETE SET NULL,
+    plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+    agent_id TEXT,
+    lanes TEXT NOT NULL DEFAULT '[]',
+    filters TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_boards_scope ON task_boards(scope);
+  CREATE INDEX IF NOT EXISTS idx_task_boards_project ON task_boards(project_id);
+  CREATE INDEX IF NOT EXISTS idx_task_boards_plan ON task_boards(plan_id);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (57);
+  `,
+  // Migration 58: Local calendar items for ICS export/import
+  `
+  CREATE TABLE IF NOT EXISTS local_calendar_items (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK(kind IN ('task_due', 'task_sla', 'task_reminder', 'milestone', 'work_block', 'run', 'imported')),
+    title TEXT NOT NULL,
+    description TEXT,
+    starts_at TEXT NOT NULL,
+    ends_at TEXT,
+    timezone TEXT,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+    run_id TEXT,
+    recurrence_rule TEXT,
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_local_calendar_items_time ON local_calendar_items(starts_at, ends_at);
+  CREATE INDEX IF NOT EXISTS idx_local_calendar_items_task ON local_calendar_items(task_id);
+  CREATE INDEX IF NOT EXISTS idx_local_calendar_items_project ON local_calendar_items(project_id);
+  CREATE INDEX IF NOT EXISTS idx_local_calendar_items_kind ON local_calendar_items(kind);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (58);
+  `,
+  // Migration 59: Local project knowledge records and decision snapshots
+  `
+  CREATE TABLE IF NOT EXISTS project_knowledge_records (
+    id TEXT PRIMARY KEY,
+    record_type TEXT NOT NULL CHECK(record_type IN ('decision','architecture_note','tradeoff','context_snapshot')),
+    title TEXT NOT NULL,
+    content TEXT,
+    decision TEXT,
+    rationale TEXT,
+    alternatives TEXT DEFAULT '[]',
+    task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+    agent_id TEXT,
+    snapshot_id TEXT REFERENCES context_snapshots(id) ON DELETE SET NULL,
+    tags TEXT DEFAULT '[]',
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_project_knowledge_type ON project_knowledge_records(record_type);
+  CREATE INDEX IF NOT EXISTS idx_project_knowledge_project ON project_knowledge_records(project_id);
+  CREATE INDEX IF NOT EXISTS idx_project_knowledge_task ON project_knowledge_records(task_id);
+  CREATE INDEX IF NOT EXISTS idx_project_knowledge_plan ON project_knowledge_records(plan_id);
+  CREATE INDEX IF NOT EXISTS idx_project_knowledge_agent ON project_knowledge_records(agent_id);
+  CREATE INDEX IF NOT EXISTS idx_project_knowledge_snapshot ON project_knowledge_records(snapshot_id);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (59);
+  `,
+  // Migration 60: Local risk register and plan/project health scoring inputs
+  `
+  CREATE TABLE IF NOT EXISTS project_risks (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','mitigating','resolved','accepted')),
+    severity TEXT NOT NULL DEFAULT 'medium' CHECK(severity IN ('low','medium','high','critical')),
+    probability TEXT NOT NULL DEFAULT 'medium' CHECK(probability IN ('low','medium','high')),
+    owner TEXT,
+    mitigation TEXT,
+    due_at TEXT,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+    task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    tags TEXT DEFAULT '[]',
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    closed_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_project_risks_status ON project_risks(status);
+  CREATE INDEX IF NOT EXISTS idx_project_risks_severity ON project_risks(severity);
+  CREATE INDEX IF NOT EXISTS idx_project_risks_project ON project_risks(project_id);
+  CREATE INDEX IF NOT EXISTS idx_project_risks_plan ON project_risks(plan_id);
+  CREATE INDEX IF NOT EXISTS idx_project_risks_task ON project_risks(task_id);
+  CREATE INDEX IF NOT EXISTS idx_project_risks_due ON project_risks(due_at);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (60);
+  `,
+  // Migration 61: Local retrospective records and lessons learned reports
+  `
+  CREATE TABLE IF NOT EXISTS local_retrospectives (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    scope TEXT NOT NULL CHECK(scope IN ('project','plan')),
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+    agent_id TEXT,
+    report_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_local_retrospectives_project ON local_retrospectives(project_id);
+  CREATE INDEX IF NOT EXISTS idx_local_retrospectives_plan ON local_retrospectives(plan_id);
+  CREATE INDEX IF NOT EXISTS idx_local_retrospectives_agent ON local_retrospectives(agent_id);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (61);
+  `,
 ];

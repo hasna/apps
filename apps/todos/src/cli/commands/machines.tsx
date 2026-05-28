@@ -14,10 +14,16 @@ import {
   archiveMachine,
   unarchiveMachine,
   deleteMachine as deleteMachineDb,
+  updateMachineHeartbeat,
+  getMachineTopologyDiagnostics,
 } from "../../db/machines.js";
 
 function getOrCreateLocalMachineName(): string {
   return process.env["TODOS_MACHINE_NAME"] || require("node:os").hostname() || "unknown";
+}
+
+function wantsJson(program: Command, opts: Record<string, unknown>): boolean {
+  return Boolean(opts["json"] || program.opts().json);
 }
 
 function findRemoteDbPath(sshAddress: string): string | null {
@@ -100,21 +106,80 @@ export function registerMachineCommands(program: Command) {
     .description("Register a machine")
     .argument("<name>", "Machine name")
     .option("--hostname <host>", "OS hostname")
+    .option("--platform <platform>", "OS platform")
     .option("--ssh <address>", "SSH address (e.g. user@host)")
     .option("--arch <arch>", "Architecture (e.g. linux-arm64)")
+    .option("--tailscale-name <name>", "User-provided Tailscale/MagicDNS name")
+    .option("--tailscale-ip <ip>", "User-provided Tailscale IP")
+    .option("--lan-address <address>", "User-provided LAN address")
+    .option("--workspace <path>", "Local workspace path for this machine")
+    .option("--git-root <path>", "Local git root for this machine")
     .option("--primary", "Set as primary machine")
+    .option("-j, --json", "Output as JSON")
     .action((name: string, opts) => {
       try {
         const db = getDatabase();
         const machine = registerMachine(name, {
           hostname: opts.hostname,
+          platform: opts.platform,
           ssh_address: opts.ssh,
+          arch: opts.arch,
+          tailscale_name: opts.tailscaleName,
+          tailscale_ip: opts.tailscaleIp,
+          lan_address: opts.lanAddress,
+          workspace_path: opts.workspace,
+          git_root: opts.gitRoot,
           primary: opts.primary,
         }, db);
+        if (wantsJson(program, opts)) {
+          console.log(JSON.stringify(machine));
+          return;
+        }
         console.log(chalk.green(`Machine registered: ${machine.name} (${machine.id.slice(0, 8)})`));
         console.log(chalk.dim(`  Host: ${machine.hostname} | Platform: ${machine.platform}`));
         console.log(chalk.dim(`  Primary: ${machine.is_primary}`));
         if (machine.ssh_address) console.log(chalk.dim(`  SSH: ${machine.ssh_address}`));
+        if (machine.metadata["tailscale_name"]) console.log(chalk.dim(`  Tailscale: ${machine.metadata["tailscale_name"]}`));
+        if (machine.metadata["lan_address"]) console.log(chalk.dim(`  LAN: ${machine.metadata["lan_address"]}`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  machinesCmd
+    .command("heartbeat [name]")
+    .description("Update last-seen and local topology metadata for a machine")
+    .option("--hostname <host>", "OS hostname")
+    .option("--platform <platform>", "OS platform")
+    .option("--ssh <address>", "SSH address (e.g. user@host)")
+    .option("--arch <arch>", "Architecture (e.g. linux-arm64)")
+    .option("--tailscale-name <name>", "User-provided Tailscale/MagicDNS name")
+    .option("--tailscale-ip <ip>", "User-provided Tailscale IP")
+    .option("--lan-address <address>", "User-provided LAN address")
+    .option("--workspace <path>", "Local workspace path for this machine")
+    .option("--git-root <path>", "Local git root for this machine")
+    .option("-j, --json", "Output as JSON")
+    .action((name: string | undefined, opts) => {
+      try {
+        const db = getDatabase();
+        const machine = updateMachineHeartbeat(name, {
+          hostname: opts.hostname,
+          platform: opts.platform,
+          ssh_address: opts.ssh,
+          arch: opts.arch,
+          tailscale_name: opts.tailscaleName,
+          tailscale_ip: opts.tailscaleIp,
+          lan_address: opts.lanAddress,
+          workspace_path: opts.workspace,
+          git_root: opts.gitRoot,
+        }, db);
+        if (wantsJson(program, opts)) {
+          console.log(JSON.stringify(machine));
+          return;
+        }
+        console.log(chalk.green(`Heartbeat recorded: ${machine.name} (${machine.id.slice(0, 8)})`));
+        console.log(chalk.dim(`  Last seen: ${machine.last_seen_at}`));
       } catch (err) {
         console.error(chalk.red(err instanceof Error ? err.message : String(err)));
         process.exit(1);
@@ -236,6 +301,49 @@ export function registerMachineCommands(program: Command) {
       if (!primary) {
         console.log(chalk.yellow("\nWarning: No primary machine set."));
         console.log(chalk.dim("Use `todos machines set-primary <name>` to set one."));
+      }
+    });
+
+  machinesCmd
+    .command("topology")
+    .description("Show local machine topology diagnostics")
+    .option("--stale-minutes <n>", "Minutes before a machine is considered stale", "30")
+    .option("--include-archived", "Include archived machines")
+    .option("-j, --json", "Output as JSON")
+    .action((opts) => {
+      try {
+        const staleMinutes = Number.parseInt(opts.staleMinutes, 10);
+        if (!Number.isFinite(staleMinutes) || staleMinutes < 1) {
+          console.error(chalk.red("Invalid --stale-minutes value. Must be a positive integer."));
+          process.exit(1);
+        }
+        const diagnostics = getMachineTopologyDiagnostics({
+          stale_minutes: staleMinutes,
+          include_archived: opts.includeArchived,
+        }, getDatabase());
+        if (wantsJson(program, opts)) {
+          console.log(JSON.stringify(diagnostics));
+          return;
+        }
+
+        console.log(chalk.bold("\nMachine Topology"));
+        console.log(chalk.dim("─".repeat(60)));
+        for (const machine of diagnostics.machines) {
+          const stale = machine.stale ? chalk.red(` stale ${machine.stale_minutes}m`) : chalk.green(" fresh");
+          const ts = machine.topology.tailscale_ip ? ` ts:${machine.topology.tailscale_ip}` : "";
+          const lan = machine.topology.lan_address ? ` lan:${machine.topology.lan_address}` : "";
+          const workspace = machine.topology.workspace_path ? `\n  workspace: ${machine.topology.workspace_path}` : "";
+          console.log(`${chalk.cyan(machine.name)}${stale}${chalk.dim(ts + lan)}${chalk.dim(workspace)}`);
+        }
+        if (diagnostics.path_issues.length > 0) {
+          console.log(chalk.yellow(`\nPath diagnostics (${diagnostics.path_issues.length})`));
+          for (const issue of diagnostics.path_issues) {
+            console.log(chalk.yellow(`  ${issue.type}: ${issue.message}`));
+          }
+        }
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
       }
     });
 

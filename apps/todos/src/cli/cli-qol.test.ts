@@ -366,16 +366,28 @@ describe("CLI QoL commands", () => {
     expect(help).toContain("assign");
     expect(help).toContain("pin");
     expect(help).toContain("tag");
+    expect(help).toContain("project-bootstrap");
     // Server
     expect(help).toContain("serve");
     expect(help).toContain("stream");
     expect(help).toContain("mcp");
+    // Discoverability
+    expect(help).toContain("completions");
+    expect(help).toContain("manual");
     // Diagnostics
     expect(help).toContain("doctor");
     expect(help).toContain("health");
     // Daily activity
     expect(help).toContain("today");
     expect(help).toContain("yesterday");
+  });
+
+  it("doctor --json should report local dry-run diagnostics", () => {
+    const out = run("--json doctor");
+    const result = JSON.parse(out);
+    expect(result.dry_run).toBe(true);
+    expect(result.checks.some((check: { type: string }) => check.type === "migration_level")).toBe(true);
+    expect(result.checks.some((check: { type: string }) => check.type === "database_permissions")).toBe(true);
   });
 
   it("list --sort priority should sort tasks by priority", () => {

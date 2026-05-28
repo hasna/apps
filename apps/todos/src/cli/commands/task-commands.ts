@@ -65,6 +65,8 @@ export function registerTaskCommands(program: Command) {
     .option("--list <id>", "Task list ID")
     .option("--task-list <id>", "Task list ID (alias for --list)")
     .option("--estimated <minutes>", "Estimated time in minutes")
+    .option("--sla-minutes <minutes>", "SLA minutes before unfinished work is escalated")
+    .option("--sla <minutes>", "Alias for --sla-minutes")
     .option("--approval", "Require approval before completion")
     .option("--recurrence <rule>", "Recurrence rule, e.g. 'every day', 'every weekday', 'every 2 weeks'")
     .option("--due <date>", "Due date (ISO string or YYYY-MM-DD)")
@@ -101,6 +103,7 @@ export function registerTaskCommands(program: Command) {
         project_id: projectId,
         working_dir: process.cwd(),
         estimated_minutes: opts.estimated ? parseInt(opts.estimated, 10) : undefined,
+        sla_minutes: opts.slaMinutes !== undefined || opts.sla !== undefined ? parseInt(opts.slaMinutes ?? opts.sla, 10) : undefined,
         requires_approval: opts.approval || false,
         recurrence_rule: opts.recurrence,
         due_at: opts.due ? (opts.due.length === 10 ? opts.due + "T00:00:00.000Z" : opts.due) : undefined,
@@ -317,6 +320,9 @@ export function registerTaskCommands(program: Command) {
         console.log(`  ${chalk.dim("Approval:")} ${approvalStatus}`);
       }
       if (task.estimated_minutes) console.log(`  ${chalk.dim("Estimate:")} ${task.estimated_minutes} minutes`);
+      if (task.sla_minutes) console.log(`  ${chalk.dim("SLA:")}      ${task.sla_minutes} minutes`);
+      if (task.due_at) console.log(`  ${chalk.dim("Due:")}      ${task.due_at}`);
+      if (task.recurrence_rule) console.log(`  ${chalk.dim("Repeats:")}  ${task.recurrence_rule}`);
       if (task.project_id) console.log(`  ${chalk.dim("Project:")}  ${task.project_id}`);
       if (task.plan_id) console.log(`  ${chalk.dim("Plan:")}     ${task.plan_id}`);
       if (task.working_dir) console.log(`  ${chalk.dim("WorkDir:")}  ${task.working_dir}`);
@@ -527,6 +533,10 @@ export function registerTaskCommands(program: Command) {
     .option("--plan <id>", "Move to a plan")
     .option("--clear-plan", "Remove from its current plan")
     .option("--estimated <minutes>", "Estimated time in minutes")
+    .option("--sla-minutes <minutes>", "SLA minutes before unfinished work is escalated")
+    .option("--sla <minutes>", "Alias for --sla-minutes")
+    .option("--due <date>", "Due date (ISO string or YYYY-MM-DD), empty to clear")
+    .option("--recurrence <rule>", "Recurrence rule, empty to clear")
     .option("--approval", "Require approval before completion")
     .action((id: string, opts) => {
       const globalOpts = program.opts();
@@ -567,6 +577,9 @@ export function registerTaskCommands(program: Command) {
           plan_id: planId,
           task_list_id: taskListId,
           estimated_minutes: opts.estimated !== undefined ? parseInt(opts.estimated, 10) : undefined,
+          sla_minutes: opts.slaMinutes !== undefined || opts.sla !== undefined ? parseInt(opts.slaMinutes ?? opts.sla, 10) : undefined,
+          due_at: opts.due !== undefined ? (opts.due === "" ? null : opts.due.length === 10 ? opts.due + "T00:00:00.000Z" : opts.due) : undefined,
+          recurrence_rule: opts.recurrence !== undefined ? (opts.recurrence === "" ? null : opts.recurrence) : undefined,
           requires_approval: opts.approval !== undefined ? true : undefined,
         });
       } catch (e) {

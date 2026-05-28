@@ -10,11 +10,120 @@ import {
 } from "../../db/projects.js";
 import { addComment } from "../../db/comments.js";
 import { searchTasks } from "../../lib/search.js";
+import {
+  deleteSearchView,
+  listSearchViews,
+  normalizeScope,
+  runSavedSearch,
+  runSearchView,
+  saveSearchView,
+  type SavedSearchFilters,
+  type SavedSearchScope,
+} from "../../lib/saved-search-views.js";
 import { defaultSyncAgents, syncWithAgent, syncWithAgents } from "../../lib/sync.js";
 import { getAgentTaskListId } from "../../lib/config.js";
 import { autoProject, autoDetectProject, handleError, output, formatTaskLine, normalizeStatus, resolveTaskId } from "../helpers.js";
 
+function collectOption(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
+}
+
+function splitList(value: string | string[] | undefined): string[] | undefined {
+  if (!value) return undefined;
+  const values = Array.isArray(value) ? value : [value];
+  const items = values.flatMap((item) => item.split(",").map((part) => part.trim()).filter(Boolean));
+  return items.length > 0 ? items : undefined;
+}
+
+function parseJsonObjectOption(value: string | undefined, label: string): Record<string, unknown> | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  } catch {}
+  throw new Error(`${label} must be a JSON object`);
+}
+
+function buildSearchFilters(query: string | undefined, opts: any, projectId?: string): SavedSearchFilters {
+  const filterPatch = parseJsonObjectOption(opts.filter, "--filter");
+  const customFields = parseJsonObjectOption(opts.fieldCustom, "--field-custom");
+  const labels = splitList(opts.fieldLabel);
+  const tags = splitList(opts.tag);
+  const statuses = splitList(opts.status)?.map(normalizeStatus);
+  const filters: SavedSearchFilters = {
+    query: query || opts.query,
+    project_id: opts.allProjects ? undefined : projectId,
+    status: statuses,
+    priority: splitList(opts.priority) as SavedSearchFilters["priority"],
+    assigned_to: opts.assigned,
+    agent_id: opts.agentId,
+    task_list_id: opts.taskList,
+    plan_id: opts.plan,
+    task_id: opts.task,
+    tags,
+    created_after: opts.createdAfter,
+    updated_after: opts.since || opts.updatedAfter,
+    has_dependencies: opts.hasDeps ? true : undefined,
+    is_blocked: opts.blocked ? true : undefined,
+    depends_on: opts.dependsOn,
+    blocks: opts.blocks,
+    limit: opts.limit ? Number(opts.limit) : undefined,
+    local_fields: labels || opts.fieldOwner || opts.fieldArea || opts.fieldSeverity || customFields
+      ? {
+        labels,
+        owner: opts.fieldOwner,
+        area: opts.fieldArea,
+        severity: opts.fieldSeverity,
+        custom: customFields,
+      }
+      : undefined,
+    ...filterPatch,
+  };
+  return Object.fromEntries(Object.entries(filters).filter(([, value]) => value !== undefined)) as SavedSearchFilters;
+}
+
 export function registerProjectCommands(program: Command) {
+  program
+    .command("project-bootstrap [path]")
+    .description("Discover a local workspace and initialize project task state")
+    .option("--name <name>", "Project display name")
+    .option("--task-list <slug>", "Default task list slug")
+    .option("--dry-run", "Show discovery without writing local state")
+    .action(async (inputPath: string | undefined, opts) => {
+      const globalOpts = program.opts();
+      try {
+        const { bootstrapProject } = await import("../../lib/project-bootstrap.js");
+        const result = bootstrapProject({
+          path: inputPath || globalOpts.project || process.cwd(),
+          name: opts.name,
+          taskListSlug: opts.taskList,
+          dryRun: opts.dryRun,
+        });
+
+        if (globalOpts.json) {
+          output(result, true);
+          return;
+        }
+
+        console.log(chalk.bold("Project bootstrap"));
+        console.log(`  ${chalk.dim("Path:")}       ${result.discovery.projectPath}`);
+        console.log(`  ${chalk.dim("Name:")}       ${result.discovery.projectName}`);
+        if (result.discovery.gitRoot) console.log(`  ${chalk.dim("Git root:")}   ${result.discovery.gitRoot}`);
+        if (result.discovery.workspaceRoot) console.log(`  ${chalk.dim("Workspace:")}  ${result.discovery.workspaceRoot}`);
+        if (result.dryRun) {
+          console.log(chalk.dim("  Dry-run: no local state was changed."));
+          return;
+        }
+        if (result.project) console.log(`  ${chalk.dim("Project:")}    ${result.project.id.slice(0, 8)} ${result.created.project ? "(created)" : "(existing)"}`);
+        if (result.taskList) console.log(`  ${chalk.dim("Task list:")}  ${result.taskList.slug} ${result.created.taskList ? "(created)" : "(existing)"}`);
+        if (result.created.sources.length > 0) {
+          console.log(`  ${chalk.dim("Sources:")}    ${result.created.sources.join(", ")}`);
+        }
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
   // comment
   program
     .command("comment <id> <text>")
@@ -39,38 +148,193 @@ export function registerProjectCommands(program: Command) {
   // search
   program
     .command("search <query>")
-    .description("Search tasks")
+    .description("Search local tasks, or run/save a cross-entity search view")
     .option("--status <status>", "Filter by status")
     .option("--priority <p>", "Filter by priority")
     .option("--assigned <agent>", "Filter by assigned agent")
+    .option("--agent-id <agent>", "Filter by creator/run/comment agent")
+    .option("--task-list <id>", "Filter by task list")
+    .option("--plan <id>", "Filter by plan")
+    .option("--task <id>", "Filter runs/comments by task")
+    .option("--tag <tag>", "Filter by task tag (repeatable or comma-separated)", collectOption, [])
+    .option("--field-label <label>", "Filter by local field label (repeatable or comma-separated)", collectOption, [])
+    .option("--field-owner <owner>", "Filter by local field owner")
+    .option("--field-area <area>", "Filter by local field area")
+    .option("--field-severity <severity>", "Filter by local field severity")
+    .option("--field-custom <json>", "Filter by local custom fields as JSON")
     .option("--since <date>", "Only tasks updated after this date (ISO)")
+    .option("--created-after <date>", "Only records created after this date (ISO)")
     .option("--blocked", "Only blocked tasks (incomplete dependencies)")
     .option("--has-deps", "Only tasks with dependencies")
+    .option("--depends-on <id>", "Only tasks that depend on a task")
+    .option("--blocks <id>", "Only tasks that block a task")
+    .option("--scope <scope>", "Search scope: tasks, projects, plans, runs, comments, all", "tasks")
+    .option("--limit <n>", "Maximum results", "100")
+    .option("--filter <json>", "Merge an advanced saved-search filter JSON object")
+    .option("--save-as <name>", "Save this search as a named view")
+    .option("--description <text>", "Saved view description")
+    .option("--all-projects", "Do not auto-scope the search to the current project")
     .action((query: string, opts) => {
       const globalOpts = program.opts();
-      const projectId = autoProject(globalOpts);
-      const searchOpts: any = { query, project_id: projectId };
-      if (opts.status) searchOpts.status = normalizeStatus(opts.status);
-      if (opts.priority) searchOpts.priority = opts.priority;
-      if (opts.assigned) searchOpts.assigned_to = opts.assigned;
-      if (opts.since) searchOpts.updated_after = opts.since;
-      if (opts.blocked) searchOpts.is_blocked = true;
-      if (opts.hasDeps) searchOpts.has_dependencies = true;
-      const tasks = searchTasks(searchOpts);
+      try {
+        const projectId = opts.allProjects ? undefined : autoProject(globalOpts);
+        const scope = normalizeScope(opts.scope) as SavedSearchScope;
+        const searchOpts = buildSearchFilters(query, opts, projectId);
+        if (opts.saveAs) {
+          const view = saveSearchView({
+            name: opts.saveAs,
+            description: opts.description,
+            scope,
+            filters: searchOpts,
+          });
+          output(view, Boolean(globalOpts.json));
+          if (!globalOpts.json) console.log(chalk.green(`Saved view ${view.name}.`));
+          return;
+        }
+        if (scope !== "tasks") {
+          const result = runSavedSearch(searchOpts, scope);
+          if (globalOpts.json) {
+            output(result, true);
+            return;
+          }
+          if (result.count === 0) {
+            console.log(chalk.dim(`No ${scope} results matching "${query}".`));
+            return;
+          }
+          console.log(chalk.bold(`${result.count} ${scope} result(s) for "${query}":\n`));
+          for (const item of result.results) {
+            const entity = item.entity as any;
+            console.log(`${chalk.cyan(item.entity_type)} ${entity.id?.slice?.(0, 8) || ""} ${entity.name || entity.title || entity.content || entity.summary || ""}`);
+          }
+          return;
+        }
+        const tasks = runSavedSearch(searchOpts, "tasks").results.map((item) => item.entity as ReturnType<typeof searchTasks>[number]);
 
-      if (globalOpts.json) {
-        output(tasks, true);
-        return;
+        if (globalOpts.json) {
+          output(tasks, true);
+          return;
+        }
+
+        if (tasks.length === 0) {
+          console.log(chalk.dim(`No tasks matching "${query}".`));
+          return;
+        }
+
+        console.log(chalk.bold(`${tasks.length} result(s) for "${query}":\n`));
+        for (const t of tasks) {
+          console.log(formatTaskLine(t));
+        }
+      } catch (e) {
+        handleError(e);
       }
+    });
 
-      if (tasks.length === 0) {
-        console.log(chalk.dim(`No tasks matching "${query}".`));
-        return;
+  const views = program
+    .command("views")
+    .description("Manage local saved search views");
+
+  views
+    .command("save <name>")
+    .description("Save a local search view")
+    .option("--query <query>", "Search query")
+    .option("--scope <scope>", "Search scope: tasks, projects, plans, runs, comments, all", "tasks")
+    .option("--description <text>", "Description")
+    .option("--status <status>", "Filter by status")
+    .option("--priority <p>", "Filter by priority")
+    .option("--assigned <agent>", "Filter by assigned agent")
+    .option("--agent-id <agent>", "Filter by creator/run/comment agent")
+    .option("--task-list <id>", "Filter by task list")
+    .option("--plan <id>", "Filter by plan")
+    .option("--task <id>", "Filter runs/comments by task")
+    .option("--tag <tag>", "Filter by task tag (repeatable or comma-separated)", collectOption, [])
+    .option("--field-label <label>", "Filter by local field label (repeatable or comma-separated)", collectOption, [])
+    .option("--field-owner <owner>", "Filter by local field owner")
+    .option("--field-area <area>", "Filter by local field area")
+    .option("--field-severity <severity>", "Filter by local field severity")
+    .option("--field-custom <json>", "Filter by local custom fields as JSON")
+    .option("--since <date>", "Only records updated after this date (ISO)")
+    .option("--created-after <date>", "Only records created after this date (ISO)")
+    .option("--blocked", "Only blocked tasks")
+    .option("--has-deps", "Only tasks with dependencies")
+    .option("--depends-on <id>", "Only tasks that depend on a task")
+    .option("--blocks <id>", "Only tasks that block a task")
+    .option("--limit <n>", "Maximum results", "100")
+    .option("--filter <json>", "Merge an advanced saved-search filter JSON object")
+    .option("--all-projects", "Do not auto-scope the view to the current project")
+    .action((name: string, opts) => {
+      const globalOpts = program.opts();
+      try {
+        const projectId = opts.allProjects ? undefined : autoProject(globalOpts);
+        const view = saveSearchView({
+          name,
+          description: opts.description,
+          scope: normalizeScope(opts.scope),
+          filters: buildSearchFilters(opts.query, opts, projectId),
+        });
+        output(view, Boolean(globalOpts.json));
+        if (!globalOpts.json) console.log(chalk.green(`Saved view ${view.name}.`));
+      } catch (e) {
+        handleError(e);
       }
+    });
 
-      console.log(chalk.bold(`${tasks.length} result(s) for "${query}":\n`));
-      for (const t of tasks) {
-        console.log(formatTaskLine(t));
+  views
+    .command("list")
+    .description("List local saved search views")
+    .option("--scope <scope>", "Filter by scope")
+    .action((opts) => {
+      const globalOpts = program.opts();
+      try {
+        const rows = listSearchViews(opts.scope ? normalizeScope(opts.scope) : undefined);
+        output(rows, Boolean(globalOpts.json));
+        if (!globalOpts.json) {
+          if (rows.length === 0) {
+            console.log(chalk.dim("No saved search views."));
+            return;
+          }
+          for (const row of rows) console.log(`${chalk.cyan(row.name)} ${chalk.dim(`[${row.scope}]`)} ${JSON.stringify(row.filters)}`);
+        }
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  views
+    .command("run <name>")
+    .description("Run a local saved search view")
+    .action((name: string) => {
+      const globalOpts = program.opts();
+      try {
+        const result = runSearchView(name);
+        if (globalOpts.json) {
+          output(result, true);
+          return;
+        }
+        console.log(chalk.bold(`${result.count} result(s) for view "${result.view?.name || name}":\n`));
+        for (const item of result.results) {
+          if (item.entity_type === "tasks") {
+            console.log(formatTaskLine(item.entity as any));
+            continue;
+          }
+          const entity = item.entity as any;
+          console.log(`${chalk.cyan(item.entity_type)} ${entity.id?.slice?.(0, 8) || ""} ${entity.name || entity.title || entity.content || entity.summary || ""}`);
+        }
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  views
+    .command("delete <name>")
+    .description("Delete a local saved search view")
+    .action((name: string) => {
+      const globalOpts = program.opts();
+      try {
+        const deleted = deleteSearchView(name);
+        output({ deleted }, Boolean(globalOpts.json));
+        if (!globalOpts.json) console.log(deleted ? chalk.green(`Deleted view ${name}.`) : chalk.dim(`View not found: ${name}`));
+      } catch (e) {
+        handleError(e);
       }
     });
 
@@ -80,9 +344,11 @@ export function registerProjectCommands(program: Command) {
     .description("Manage task dependencies")
     .option("--needs <dep-id>", "Add dependency (this task needs dep-id)")
     .option("--remove <dep-id>", "Remove dependency")
+    .option("--graph", "Show the dependency graph instead of direct edges")
+    .option("--direction <direction>", "Graph direction: up, down, or both", "both")
     .action(async (id: string, opts) => {
       const globalOpts = program.opts();
-      const { addDependency, removeDependency, getTaskWithRelations } = await import("../../db/tasks.js");
+      const { addDependency, removeDependency, getTaskGraph, getTaskWithRelations } = await import("../../db/tasks.js");
       const resolvedId = resolveTaskId(id);
 
       if (opts.needs) {
@@ -106,6 +372,26 @@ export function registerProjectCommands(program: Command) {
         } else {
           console.log(removed ? chalk.green("Dependency removed.") : chalk.red("Dependency not found."));
         }
+      } else if (opts.graph) {
+        const direction = opts.direction === "up" || opts.direction === "down" || opts.direction === "both"
+          ? opts.direction
+          : "both";
+        const graph = getTaskGraph(resolvedId, direction);
+        if (globalOpts.json) {
+          output(graph, true);
+          return;
+        }
+
+        const printNode = (node: typeof graph, depth: number, edge: "root" | "depends on" | "blocks") => {
+          const indent = "  ".repeat(depth);
+          const marker = edge === "root" ? "" : `${edge}: `;
+          const blocked = node.task.is_blocked ? chalk.red(" blocked") : "";
+          console.log(`${indent}${marker}${chalk.cyan(node.task.short_id || node.task.id.slice(0, 8))} ${node.task.title}${chalk.dim(` [${node.task.status}]`)}${blocked}`);
+          for (const dep of node.depends_on) printNode(dep, depth + 1, "depends on");
+          for (const dependent of node.blocks) printNode(dependent, depth + 1, "blocks");
+        };
+
+        printNode(graph, 0, "root");
       } else {
         // Show dependencies
         const task = getTaskWithRelations(resolvedId);
@@ -311,6 +597,9 @@ export function registerProjectCommands(program: Command) {
     .option("--assign <agent>", "Assign extracted tasks to an agent")
     .option("--list <id>", "Task list ID")
     .option("--ext <extensions>", "Comma-separated file extensions to scan (e.g. ts,py,go)")
+    .option("--exclude <patterns>", "Comma-separated gitignore-style path patterns to skip")
+    .option("--no-gitignore", "Do not read .gitignore from the scanned root")
+    .option("--index", "Include a local source index in JSON output")
     .action(async (scanPath: string, opts) => {
       try {
         const globalOpts = program.opts();
@@ -330,15 +619,30 @@ export function registerProjectCommands(program: Command) {
           agent_id: globalOpts.agent,
           dry_run: opts.dryRun,
           extensions: opts.ext ? opts.ext.split(",").map((e: string) => e.trim()) : undefined,
+          exclude: splitList(opts.exclude),
+          respect_gitignore: opts.gitignore !== false,
+          include_index: Boolean(opts.index),
         });
 
         if (globalOpts.json) {
-          console.log(JSON.stringify(opts.dryRun ? { comments: result.comments } : { tasks_created: result.tasks.length, skipped: result.skipped, comments: result.comments.length }, null, 2));
+          console.log(JSON.stringify(opts.dryRun ? {
+            comments: result.comments,
+            index: result.index,
+          } : {
+            tasks_created: result.tasks.length,
+            skipped: result.skipped,
+            comments: result.comments.length,
+            index: result.index,
+          }, null, 2));
         } else if (opts.dryRun) {
           console.log(chalk.cyan(`Found ${result.comments.length} comment(s):\n`));
           for (const c of result.comments) {
-            console.log(`  ${chalk.yellow(`[${c.tag}]`)} ${c.message}`);
+            const symbol = c.symbol ? chalk.gray(` in ${c.symbol_kind || "symbol"} ${c.symbol}`) : "";
+            console.log(`  ${chalk.yellow(`[${c.tag}]`)} ${c.message}${symbol}`);
             console.log(`    ${chalk.gray(`${c.file}:${c.line}`)}`);
+          }
+          if (result.index) {
+            console.log(chalk.gray(`\nIndexed ${result.index.files.length} file(s), ${result.index.total_symbols} symbol(s).`));
           }
         } else {
           console.log(chalk.green(`Created ${result.tasks.length} task(s)`));
@@ -346,8 +650,68 @@ export function registerProjectCommands(program: Command) {
             console.log(chalk.gray(`Skipped ${result.skipped} duplicate(s)`));
           }
           console.log(chalk.gray(`Total comments found: ${result.comments.length}`));
+          if (result.index) {
+            console.log(chalk.gray(`Indexed ${result.index.files.length} file(s), ${result.index.total_symbols} symbol(s).`));
+          }
           for (const t of result.tasks) {
             console.log(formatTaskLine(t));
+          }
+        }
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  program
+    .command("extract-watch <path>")
+    .description("Poll a local source tree for TODO/FIXME/HACK/BUG/XXX/NOTE comments and create tasks")
+    .option("--dry-run", "Show extracted comments without creating tasks")
+    .option("--once", "Run a single watcher scan and exit", true)
+    .option("--max-runs <n>", "Maximum watcher scans before exiting")
+    .option("--interval <ms>", "Polling interval in milliseconds", "2000")
+    .option("--pattern <tags>", "Comma-separated tags to look for")
+    .option("-t, --tags <tags>", "Extra comma-separated tags to add to created tasks")
+    .option("--assign <agent>", "Assign extracted tasks to an agent")
+    .option("--list <id>", "Task list ID")
+    .option("--ext <extensions>", "Comma-separated file extensions to scan")
+    .option("--exclude <patterns>", "Comma-separated gitignore-style path patterns to skip")
+    .option("--no-gitignore", "Do not read .gitignore from the watched root")
+    .action(async (scanPath: string, opts) => {
+      try {
+        const globalOpts = program.opts();
+        const projectId = autoProject(globalOpts);
+        const { watchSourceTodos, EXTRACT_TAGS } = await import("../../lib/extract.js");
+        const patterns = opts.pattern
+          ? opts.pattern.split(",").map((t: string) => t.trim().toUpperCase()) as typeof EXTRACT_TAGS[number][]
+          : undefined;
+        const taskListId = opts.list ? resolveTaskListId(opts.list) : undefined;
+        const maxRuns = opts.maxRuns ? parseInt(opts.maxRuns, 10) : 1;
+        const result = await watchSourceTodos({
+          path: resolve(scanPath),
+          patterns,
+          project_id: projectId,
+          task_list_id: taskListId,
+          tags: splitList(opts.tags),
+          assigned_to: opts.assign,
+          agent_id: globalOpts.agent,
+          dry_run: opts.dryRun,
+          extensions: splitList(opts.ext),
+          exclude: splitList(opts.exclude),
+          respect_gitignore: opts.gitignore !== false,
+          include_index: true,
+          once: opts.once !== false,
+          max_runs: maxRuns,
+          interval_ms: parseInt(opts.interval, 10),
+        });
+
+        if (globalOpts.json) {
+          console.log(JSON.stringify(result, null, 2));
+          return;
+        }
+        for (const run of result.runs) {
+          console.log(chalk.cyan(`Watcher run ${run.run}: ${run.result.comments.length} comment(s), ${run.changed_files.length} changed file(s)`));
+          if (!opts.dryRun) {
+            console.log(chalk.green(`Created ${run.result.tasks.length} task(s), skipped ${run.result.skipped} duplicate(s)`));
           }
         }
       } catch (e) {
@@ -359,22 +723,131 @@ export function registerProjectCommands(program: Command) {
   program
     .command("export")
     .description("Export tasks")
-    .option("-f, --format <format>", "Format: json or md", "json")
+    .option("-f, --format <format>", "Format: json, md, todos.md, or bridge", "json")
+    .option("-o, --output <path>", "Write export output to a file")
+    .option("--encrypt", "Encrypt bridge exports with a local encryption profile")
+    .option("--encryption-profile <name>", "Encryption profile name", "default")
+    .option("--allow-plaintext-sensitive", "Suppress plaintext bridge export warning")
     .action(async (opts) => {
       const { listTasks } = await import("../../db/tasks.js");
       const globalOpts = program.opts();
       const projectId = autoProject(globalOpts);
-      const tasks = listTasks(projectId ? { project_id: projectId } : {});
-
-      if (opts.format === "md") {
-        console.log("# Tasks\n");
-        for (const t of tasks) {
-          const check = t.status === "completed" ? "x" : " ";
-          console.log(`- [${check}] **${t.title}** (${t.priority}) ${t.status}`);
-          if (t.description) console.log(`  ${t.description}`);
+      const writeOutput = async (content: string) => {
+        if (opts.output) {
+          const { writeFileSync } = await import("node:fs");
+          writeFileSync(resolve(opts.output), content.endsWith("\n") ? content : `${content}\n`);
+        } else {
+          console.log(content);
         }
+      };
+
+      if (opts.format === "bridge") {
+        const { createLocalBridgeBundle } = await import("../../lib/local-bridge.js");
+        const { createEncryptedBridgeBundle } = await import("../../lib/local-encryption.js");
+        const { emitLocalEventHooksQuiet } = await import("../../lib/event-hooks.js");
+        const bundle = createLocalBridgeBundle({ project_id: projectId ?? undefined });
+        const exported = opts.encrypt
+          ? createEncryptedBridgeBundle(bundle, { profile: opts.encryptionProfile })
+          : bundle;
+        const json = JSON.stringify(exported, null, 2);
+        await writeOutput(json);
+        emitLocalEventHooksQuiet({ type: "export.finished", payload: { format: "bridge", encrypted: Boolean(opts.encrypt), project_id: projectId, output: opts.output ? resolve(opts.output) : null, stats: bundle.stats } });
+        if (!opts.encrypt && !opts.allowPlaintextSensitive) {
+          console.error(chalk.yellow("Warning: bridge exports are plaintext JSON. Use --encrypt for sensitive metadata, evidence, and artifact bundles."));
+        }
+        if (opts.output && !globalOpts.json) {
+          console.log(chalk.green(`${opts.encrypt ? "Encrypted bridge export" : "Bridge export"} written to ${resolve(opts.output)}`));
+        }
+        return;
+      }
+
+      const tasks = listTasks(projectId ? { project_id: projectId } : {});
+      const exportedCount = tasks.length;
+      if (["md", "markdown", "todos.md", "todos-md"].includes(opts.format)) {
+        const { exportTodosMarkdown } = await import("../../lib/todos-md.js");
+        await writeOutput(exportTodosMarkdown({ project_id: projectId ?? undefined }));
       } else {
-        console.log(JSON.stringify(tasks, null, 2));
+        await writeOutput(JSON.stringify(tasks, null, 2));
+      }
+      const { emitLocalEventHooksQuiet } = await import("../../lib/event-hooks.js");
+      emitLocalEventHooksQuiet({ type: "export.finished", payload: { format: opts.format, project_id: projectId, output: opts.output ? resolve(opts.output) : null, count: exportedCount } });
+    });
+
+  program
+    .command("bridge-import <file>")
+    .description("Dry-run or apply a local hasna/todos bridge export bundle")
+    .option("--apply", "Apply the import. Defaults to dry-run.")
+    .option("--decrypt", "Decrypt an encrypted bridge export before importing")
+    .option("--resolve-conflicts", "Safely merge existing local tasks by filling blank fields, unioning tags, and recording unresolved divergences")
+    .action(async (file: string, opts) => {
+      const globalOpts = program.opts();
+      try {
+        const { readFileSync } = await import("node:fs");
+        const { importLocalBridgeBundle } = await import("../../lib/local-bridge.js");
+        const { decryptBridgeBundle, isEncryptedBridgeBundle } = await import("../../lib/local-encryption.js");
+        const parsed = JSON.parse(readFileSync(resolve(file), "utf-8"));
+        const bundle = isEncryptedBridgeBundle(parsed)
+          ? (opts.decrypt ? decryptBridgeBundle(parsed) : (() => { throw new Error("Bridge bundle is encrypted. Re-run with --decrypt and the configured key environment variable set."); })())
+          : parsed;
+        const result = importLocalBridgeBundle(bundle, { dryRun: !opts.apply, conflictStrategy: opts.resolveConflicts ? "safe_merge" : "skip" });
+        const { emitLocalEventHooksQuiet } = await import("../../lib/event-hooks.js");
+        emitLocalEventHooksQuiet({ type: "import.finished", payload: { file: resolve(file), dry_run: result.dry_run, ok: result.ok, inserted: result.inserted, skipped: result.skipped, conflicts: result.conflicts.length, issues: result.issues.length } });
+        if (globalOpts.json) {
+          output(result, true);
+          return;
+        }
+        const mode = result.dry_run ? "Dry-run" : "Import";
+        console.log(chalk.bold(`${mode} ${result.ok ? "ready" : "has issues"}`));
+        for (const [key, count] of Object.entries(result.inserted)) {
+          if (count > 0) console.log(`  ${key}: ${count}`);
+        }
+        for (const [key, count] of Object.entries(result.merged)) {
+          if (count > 0) console.log(`  ${key} merged: ${count}`);
+        }
+        if (result.conflicts.length > 0) {
+          console.log(chalk.yellow(`  conflicts: ${result.conflicts.length}`));
+        }
+        for (const issue of result.issues) {
+          console.error(chalk.red(`  ${issue}`));
+        }
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  program
+    .command("todos-md-import <file>")
+    .alias("markdown-import")
+    .alias("import-md")
+    .description("Dry-run or apply a local todos.md Markdown import")
+    .option("--apply", "Apply the import. Defaults to dry-run.")
+    .option("--resolve-conflicts", "Safely merge embedded bridge task conflicts while preserving local divergent fields")
+    .action(async (file: string, opts) => {
+      const globalOpts = program.opts();
+      try {
+        const { readFileSync } = await import("node:fs");
+        const { importTodosMarkdown } = await import("../../lib/todos-md.js");
+        const result = importTodosMarkdown(readFileSync(resolve(file), "utf-8"), { dryRun: !opts.apply, conflictStrategy: opts.resolveConflicts ? "safe_merge" : "skip" });
+        const { emitLocalEventHooksQuiet } = await import("../../lib/event-hooks.js");
+        emitLocalEventHooksQuiet({ type: "import.finished", payload: { file: resolve(file), format: "todos.md", dry_run: result.dry_run, ok: result.ok, inserted: result.inserted, skipped: result.skipped, issues: result.issues.length } });
+        if (globalOpts.json) {
+          output(result, true);
+          return;
+        }
+        const mode = result.dry_run ? "Dry-run" : "Import";
+        console.log(chalk.bold(`${mode} ${result.ok ? "ready" : "has issues"}`));
+        console.log(`  mode: ${result.mode}`);
+        for (const [key, count] of Object.entries(result.inserted)) {
+          if (count > 0) console.log(`  ${key}: ${count}`);
+        }
+        for (const [key, count] of Object.entries(result.merged)) {
+          if (count > 0) console.log(`  ${key} merged: ${count}`);
+        }
+        for (const issue of result.issues) {
+          console.error(chalk.red(`  ${issue}`));
+        }
+      } catch (e) {
+        handleError(e);
       }
     });
 

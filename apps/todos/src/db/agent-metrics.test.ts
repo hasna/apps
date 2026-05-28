@@ -3,7 +3,19 @@ import { getDatabase, resetDatabase, closeDatabase } from "./database.js";
 import { createTask, startTask, completeTask, failTask } from "./tasks.js";
 import { registerAgent } from "./agents.js";
 import { matchCapabilities, getCapableAgents } from "./agents.js";
-import { getAgentMetrics, getLeaderboard, scoreTask } from "./agent-metrics.js";
+import {
+  createAgentReliabilityExport,
+  getAgentMetrics,
+  getAgentReliabilityScorecard,
+  getLeaderboard,
+  listAgentReliabilityScorecards,
+  renderAgentReliabilityMarkdown,
+  scoreTask,
+} from "./agent-metrics.js";
+import { createHandoff } from "./handoffs.js";
+import { createProject } from "./projects.js";
+import { addTaskVerification } from "./task-commits.js";
+import { addTaskRunCommand, finishTaskRun, startTaskRun } from "./task-runs.js";
 import type { Agent } from "../types/index.js";
 
 describe("Agent Capabilities", () => {
@@ -176,6 +188,83 @@ describe("Agent Metrics", () => {
     it("should filter by project", () => {
       const leaderboard = getLeaderboard({ project_id: "nonexistent" }, db);
       expect(leaderboard).toHaveLength(0);
+    });
+  });
+
+  describe("agent reliability scorecards", () => {
+    it("scores agents from local tasks, failed runs, verification evidence, stale locks, handoffs, and retries", () => {
+      const project = createProject({ name: "Reliability", path: "/tmp/reliability" }, db);
+      const completed = createTask({ title: "Completed with evidence", project_id: project.id, agent_id: agent.id }, db);
+      startTask(completed.id, agent.id, db);
+      completeTask(completed.id, agent.id, db, { confidence: 0.9 });
+      addTaskVerification({
+        task_id: completed.id,
+        command: "bun test",
+        status: "passed",
+        output_summary: "green",
+        agent_id: agent.id,
+      }, db);
+
+      const failed = createTask({ title: "Failed implementation", project_id: project.id, agent_id: agent.id }, db);
+      startTask(failed.id, agent.id, db);
+      failTask(failed.id, agent.id, "regression", undefined, db);
+      db.run("UPDATE tasks SET retry_count = 2 WHERE id = ?", [failed.id]);
+      addTaskVerification({
+        task_id: failed.id,
+        command: "bun test",
+        status: "failed",
+        output_summary: "red",
+        agent_id: agent.id,
+      }, db);
+      const run = startTaskRun({ task_id: failed.id, agent_id: agent.id, title: "failed local run" }, db);
+      addTaskRunCommand({ run_id: run.id, command: "bun test", status: "failed", agent_id: agent.id }, db);
+      finishTaskRun({ run_id: run.id, status: "failed", summary: "tests failed", agent_id: agent.id }, db);
+
+      const stale = createTask({ title: "Stale lock", project_id: project.id, agent_id: agent.id }, db);
+      db.run("UPDATE tasks SET status = 'in_progress', locked_by = ?, locked_at = ? WHERE id = ?", [
+        agent.id,
+        "2020-01-01T00:00:00.000Z",
+        stale.id,
+      ]);
+      db.run(
+        "INSERT INTO resource_locks (resource_type, resource_id, agent_id, lock_type, locked_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+        ["file", "src/demo.ts", agent.id, "exclusive", "2020-01-01T00:00:00.000Z", "2020-01-01T01:00:00.000Z"],
+      );
+      createHandoff({
+        agent_id: agent.id,
+        project_id: project.id,
+        summary: "Continue failed implementation",
+        task_ids: [failed.id],
+        blockers: ["verification failed"],
+      }, db);
+
+      const scorecard = getAgentReliabilityScorecard(agent.id, { project_id: project.id, stale_after_hours: 1 }, db)!;
+      expect(scorecard.local_only).toBe(true);
+      expect(scorecard.no_network).toBe(true);
+      expect(scorecard.agent_name).toBe("metricbot");
+      expect(scorecard.signals.tasks_completed).toBe(1);
+      expect(scorecard.signals.tasks_failed).toBe(1);
+      expect(scorecard.signals.tasks_in_progress).toBe(1);
+      expect(scorecard.signals.failed_verifications).toBe(2);
+      expect(scorecard.signals.runs_failed).toBe(1);
+      expect(scorecard.signals.stale_task_locks).toBe(1);
+      expect(scorecard.signals.stale_resource_locks).toBe(1);
+      expect(scorecard.signals.handoffs_created).toBe(1);
+      expect(scorecard.signals.handoffs_with_task_refs).toBe(1);
+      expect(scorecard.signals.retry_count).toBe(2);
+      expect(scorecard.score).toBeLessThan(100);
+      expect(scorecard.recommendations.join(" ")).toContain("failed");
+
+      const listed = listAgentReliabilityScorecards({ project_id: project.id }, db);
+      expect(listed.map((entry) => entry.agent_id)).toContain(agent.id);
+
+      const exported = createAgentReliabilityExport({ agent_id: agent.id, project_id: project.id }, db);
+      expect(exported.count).toBe(1);
+      expect(renderAgentReliabilityMarkdown(exported)).toContain("# Agent Reliability Scorecards");
+    });
+
+    it("returns null for unknown agents", () => {
+      expect(getAgentReliabilityScorecard("unknown-agent", {}, db)).toBeNull();
     });
   });
 });

@@ -8,7 +8,10 @@ import {
   getTaskPrefixConfig,
   getAgentPoolForProject,
   getCompletionGuardConfig,
+  getLocalApiConfig,
+  normalizeApiUrl,
   resetConfig,
+  updateConfig,
 } from "./config.js";
 
 // The config module has an in-memory cache. We set up a config file once
@@ -145,6 +148,7 @@ describe("getCompletionGuardConfig", () => {
   });
 });
 
+<<<<<<< HEAD
 describe("global config path", () => {
   it("ignores legacy-only ~/.todos/config.json", () => {
     const originalHome = process.env["HOME"];
@@ -195,5 +199,58 @@ describe("global config path", () => {
       else process.env["HOME"] = originalHome;
       resetConfig();
     }
+  });
+});
+
+describe("local API config", () => {
+  it("normalizes local API URLs", () => {
+    expect(normalizeApiUrl(" http://localhost:19427/api/// ")).toBe("http://localhost:19427/api");
+    expect(normalizeApiUrl("   ")).toBeNull();
+  });
+
+  it("has no local API URL by default", () => {
+    resetConfig();
+    updateConfig({ apiUrl: undefined, apiKey: undefined });
+    const config = getLocalApiConfig({
+      HOME: testHomeDir,
+      PATH: process.env["PATH"] || "",
+    } as NodeJS.ProcessEnv);
+    expect(config.apiUrl).toBeNull();
+  });
+
+  it("uses config apiUrl for the local server without deleting local config", () => {
+    updateConfig({ apiUrl: "http://localhost:19427/", apiKey: "config-key" });
+    const config = getLocalApiConfig({
+      HOME: testHomeDir,
+      PATH: process.env["PATH"] || "",
+    } as NodeJS.ProcessEnv);
+    expect(config.apiUrl).toBe("http://localhost:19427");
+    expect(config.apiKey).toBe("config-key");
+    expect(config.source.apiUrl).toBe("config");
+  });
+
+  it("lets local env vars override config values", () => {
+    const config = getLocalApiConfig({
+      HOME: testHomeDir,
+      PATH: process.env["PATH"] || "",
+      TODOS_URL: "http://127.0.0.1:19427//",
+      TODOS_API_KEY: "env-key",
+    } as NodeJS.ProcessEnv);
+    expect(config.apiUrl).toBe("http://127.0.0.1:19427");
+    expect(config.apiKey).toBe("env-key");
+    expect(config.source.apiUrl).toBe("TODOS_URL");
+    expect(config.source.apiKey).toBe("TODOS_API_KEY");
+  });
+
+  it("ignores hosted remote environment variables", () => {
+    updateConfig({ apiUrl: undefined, apiKey: undefined });
+    const config = getLocalApiConfig({
+      HOME: testHomeDir,
+      PATH: process.env["PATH"] || "",
+      TODOS_API_URL: "https://env.todos.example//",
+      TODOS_MODE: "remote",
+    } as NodeJS.ProcessEnv);
+    expect(config.apiUrl).toBeNull();
+    expect(config.source.apiUrl).toBe("none");
   });
 });

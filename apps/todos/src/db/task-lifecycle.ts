@@ -9,8 +9,9 @@ import {
   TaskNotFoundError,
   VersionConflictError,
 } from "../types/index.js";
-import { clearExpiredLocks, getDatabase, isLockExpired, lockExpiryCutoff, now } from "./database.js";
+import { LOCK_EXPIRY_MINUTES, clearExpiredLocks, getDatabase, isLockExpired, lockExpiryCutoff, now } from "./database.js";
 import { checkCompletionGuard } from "../lib/completion-guard.js";
+import { emitLocalEventHooksQuiet } from "../lib/event-hooks.js";
 import { logTaskChange } from "./audit.js";
 import { nextOccurrence } from "../lib/recurrence.js";
 import { dispatchWebhook } from "./webhooks.js";
@@ -20,6 +21,16 @@ import { getTaskDependencies } from "./task-graph.js";
 
 // Maximum depth for template-spawned task chains to prevent infinite loops
 const MAX_SPAWN_DEPTH = 10;
+function lockExpiresAt(lockedAt: string | null): string | null {
+  if (!lockedAt) return null;
+  return new Date(new Date(lockedAt).getTime() + LOCK_EXPIRY_MINUTES * 60 * 1000).toISOString();
+}
+
+function assertStartable(task: Task, agentId: string): void {
+  if (task.status === "pending") return;
+  if (task.status === "in_progress") return;
+  throw new Error(`Task is ${task.status} and cannot be started by ${agentId}`);
+}
 
 export function getBlockingDeps(id: string, db?: Database): Task[] {
   const d = db || getDatabase();
@@ -41,11 +52,21 @@ export function startTask(
   const d = db || getDatabase();
   const task = getTask(id, d);
   if (!task) throw new TaskNotFoundError(id);
+  assertStartable(task, agentId);
 
   // Check blocking dependencies
   const blocking = getBlockingDeps(id, d);
   if (blocking.length > 0) {
     const blockerIds = blocking.map(b => b.id.slice(0, 8)).join(", ");
+    emitLocalEventHooksQuiet({
+      type: "task.blocked",
+      payload: {
+        id,
+        agent_id: agentId,
+        title: task.title,
+        blockers: blocking.map((b) => ({ id: b.id, short_id: b.short_id, title: b.title, status: b.status })),
+      },
+    });
     throw new Error(`Task is blocked by ${blocking.length} unfinished dependency(ies): ${blockerIds}`);
   }
 
@@ -53,18 +74,23 @@ export function startTask(
   const timestamp = now();
   const result = d.run(
     `UPDATE tasks SET status = 'in_progress', assigned_to = ?, locked_by = ?, locked_at = ?, started_at = COALESCE(started_at, ?), version = version + 1, updated_at = ?
-     WHERE id = ? AND (locked_by IS NULL OR locked_by = ? OR locked_at < ?)`,
+     WHERE id = ? AND status IN ('pending', 'in_progress') AND (locked_by IS NULL OR locked_by = ? OR locked_at < ?)`,
     [agentId, agentId, timestamp, timestamp, timestamp, id, agentId, cutoff],
   );
 
   if (result.changes === 0) {
-    if (task.locked_by && task.locked_by !== agentId && !isLockExpired(task.locked_at)) {
-      throw new LockError(id, task.locked_by);
+    const current = getTask(id, d);
+    if (!current) throw new TaskNotFoundError(id);
+    assertStartable(current, agentId);
+    if (current.locked_by && current.locked_by !== agentId && !isLockExpired(current.locked_at)) {
+      throw new LockError(id, current.locked_by);
     }
+    throw new Error(`Task ${id} could not be started because it changed during claim`);
   }
 
   logTaskChange(id, "start", "status", "pending", "in_progress", agentId, d);
   dispatchWebhook("task.started", { id, agent_id: agentId, title: task.title }, d).catch(() => {});
+  emitLocalEventHooksQuiet({ type: "task.started", payload: { id, agent_id: agentId, title: task.title } });
 
   // Return constructed result — no re-fetch
   return { ...task, status: "in_progress" as const, assigned_to: agentId, locked_by: agentId, locked_at: timestamp, started_at: task.started_at || timestamp, version: task.version + 1, updated_at: timestamp };
@@ -133,11 +159,12 @@ export function completeTask(
 
   logTaskChange(id, "complete", "status", task.status, "completed", agentId || null, d);
   dispatchWebhook("task.completed", { id, agent_id: agentId, title: task.title, completed_at: timestamp }, d).catch(() => {});
+  emitLocalEventHooksQuiet({ type: "task.completed", payload: { id, agent_id: agentId, title: task.title, completed_at: timestamp } });
 
   // Auto-spawn next recurring task
   let spawnedTask: Task | null = null;
   if (task.recurrence_rule && !options?.skip_recurrence) {
-    spawnedTask = spawnNextRecurrence(task, d);
+    spawnedTask = spawnNextRecurrence(task, d, timestamp);
   }
 
   // Auto-spawn next task from template (pipeline/handoff chains)
@@ -189,6 +216,7 @@ export function completeTask(
     (meta as Record<string, unknown>)._unblocked = unblockedDeps.map(d => ({ id: d.id, short_id: d.short_id, title: d.title }));
     for (const dep of unblockedDeps) {
       dispatchWebhook("task.unblocked", { id: dep.id, unblocked_by: id, title: dep.title }, d).catch(() => {});
+      emitLocalEventHooksQuiet({ type: "task.unblocked", payload: { id: dep.id, unblocked_by: id, title: dep.title } });
     }
   }
 
@@ -203,10 +231,23 @@ export function lockTask(
   const d = db || getDatabase();
   const task = getTask(id, d);
   if (!task) throw new TaskNotFoundError(id);
+  if (task.status === "completed" || task.status === "cancelled") {
+    return {
+      success: false,
+      error: `Task is ${task.status} and cannot be locked`,
+    };
+  }
 
-  // Already locked by same agent
+  // Same-agent locking is a lease renewal: refresh locked_at so long-running
+  // local agents can keep ownership by periodically re-locking.
   if (task.locked_by === agentId && !isLockExpired(task.locked_at)) {
-    return { success: true, locked_by: agentId, locked_at: task.locked_at! };
+    const timestamp = now();
+    d.run(
+      `UPDATE tasks SET locked_at = ?, updated_at = ?, version = version + 1 WHERE id = ? AND locked_by = ?`,
+      [timestamp, timestamp, id, agentId],
+    );
+    logTaskChange(id, "lock_renew", "locked_by", agentId, agentId, agentId, d);
+    return { success: true, locked_by: agentId, locked_at: timestamp, expires_at: lockExpiresAt(timestamp)! };
   }
 
   // Acquire lock (atomically if not locked or expired)
@@ -214,13 +255,19 @@ export function lockTask(
   const timestamp = now();
   const result = d.run(
     `UPDATE tasks SET locked_by = ?, locked_at = ?, version = version + 1, updated_at = ?
-     WHERE id = ? AND (locked_by IS NULL OR locked_by = ? OR locked_at < ?)`,
+     WHERE id = ? AND status NOT IN ('completed', 'cancelled') AND (locked_by IS NULL OR locked_by = ? OR locked_at < ?)`,
     [agentId, timestamp, timestamp, id, agentId, cutoff],
   );
 
   if (result.changes === 0) {
     const current = getTask(id, d);
     if (!current) throw new TaskNotFoundError(id);
+    if (current.status === "completed" || current.status === "cancelled") {
+      return {
+        success: false,
+        error: `Task is ${current.status} and cannot be locked`,
+      };
+    }
     if (current.locked_by && !isLockExpired(current.locked_at)) {
       return {
         success: false,
@@ -229,9 +276,14 @@ export function lockTask(
         error: `Task is locked by ${current.locked_by}`,
       };
     }
+    return {
+      success: false,
+      error: `Task ${id} could not be locked because it changed during lock acquisition`,
+    };
   }
 
-  return { success: true, locked_by: agentId, locked_at: timestamp };
+  logTaskChange(id, "lock", "locked_by", task.locked_by, agentId, agentId, d);
+  return { success: true, locked_by: agentId, locked_at: timestamp, expires_at: lockExpiresAt(timestamp)! };
 }
 
 export function unlockTask(
@@ -256,6 +308,30 @@ export function unlockTask(
   );
 
   return true;
+}
+
+export interface TaskLockStatus {
+  task_id: string;
+  locked: boolean;
+  locked_by: string | null;
+  locked_at: string | null;
+  expires_at: string | null;
+  expired: boolean;
+}
+
+export function getTaskLockStatus(id: string, db?: Database): TaskLockStatus {
+  const d = db || getDatabase();
+  const task = getTask(id, d);
+  if (!task) throw new TaskNotFoundError(id);
+  const expired = isLockExpired(task.locked_at);
+  return {
+    task_id: id,
+    locked: !!task.locked_by && !expired,
+    locked_by: task.locked_by,
+    locked_at: task.locked_at,
+    expires_at: lockExpiresAt(task.locked_at),
+    expired,
+  };
 }
 
 export function claimNextTask(
@@ -407,6 +483,7 @@ export function failTask(
 
   logTaskChange(id, "fail", "status", task.status, "failed", agentId || null, d);
   dispatchWebhook("task.failed", { id, reason, error_code: options?.error_code, agent_id: agentId, title: task.title }, d).catch(() => {});
+  emitLocalEventHooksQuiet({ type: "task.failed", payload: { id, reason, error_code: options?.error_code, agent_id: agentId, title: task.title } });
 
   const failedTask: Task = {
     ...task,
@@ -465,12 +542,25 @@ export function failTask(
   return { task: failedTask, retryTask };
 }
 
+export type StaleTaskQuery = number | {
+  minutes?: number;
+  hours?: number;
+  project_id?: string;
+  task_list_id?: string;
+};
+
 export function getStaleTasks(
-  staleMinutes: number = 30,
+  staleQuery: StaleTaskQuery = 30,
   filters?: { project_id?: string; task_list_id?: string },
   db?: Database,
 ): Task[] {
   const d = db || getDatabase();
+  const staleMinutes = typeof staleQuery === "number"
+    ? staleQuery
+    : staleQuery.minutes ?? (staleQuery.hours !== undefined ? staleQuery.hours * 60 : 30);
+  const effectiveFilters = typeof staleQuery === "number"
+    ? filters
+    : { project_id: staleQuery.project_id, task_list_id: staleQuery.task_list_id };
   const cutoff = new Date(Date.now() - staleMinutes * 60 * 1000).toISOString();
 
   const conditions: string[] = [
@@ -479,8 +569,8 @@ export function getStaleTasks(
   ];
   const params: SQLQueryBindings[] = [cutoff, cutoff];
 
-  if (filters?.project_id) { conditions.push("project_id = ?"); params.push(filters.project_id); }
-  if (filters?.task_list_id) { conditions.push("task_list_id = ?"); params.push(filters.task_list_id); }
+  if (effectiveFilters?.project_id) { conditions.push("project_id = ?"); params.push(effectiveFilters.project_id); }
+  if (effectiveFilters?.task_list_id) { conditions.push("task_list_id = ?"); params.push(effectiveFilters.task_list_id); }
 
   const where = conditions.join(" AND ");
   const rows = d.query(
@@ -510,13 +600,18 @@ export function stealTask(
   const target = staleTasks[0]!;
 
   const timestamp = now();
-  d.run(
-    `UPDATE tasks SET assigned_to = ?, locked_by = ?, locked_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
-    [agentId, agentId, timestamp, timestamp, target.id],
+  const cutoff = new Date(Date.now() - staleMinutes * 60 * 1000).toISOString();
+  const result = d.run(
+    `UPDATE tasks SET assigned_to = ?, locked_by = ?, locked_at = ?, updated_at = ?, version = version + 1
+     WHERE id = ? AND status = 'in_progress' AND (updated_at < ? OR (locked_at IS NOT NULL AND locked_at < ?))`,
+    [agentId, agentId, timestamp, timestamp, target.id, cutoff, cutoff],
   );
+  if (result.changes === 0) return null;
 
   logTaskChange(target.id, "steal", "assigned_to", target.assigned_to, agentId, agentId, d);
+  logTaskChange(target.id, "steal", "locked_by", target.locked_by, agentId, agentId, d);
   dispatchWebhook("task.assigned", { id: target.id, agent_id: agentId, title: target.title, stolen_from: target.assigned_to }, d).catch(() => {});
+  emitLocalEventHooksQuiet({ type: "task.assigned", payload: { id: target.id, agent_id: agentId, title: target.title, stolen_from: target.assigned_to } });
 
   return { ...target, assigned_to: agentId, locked_by: agentId, locked_at: timestamp, updated_at: timestamp, version: target.version + 1 };
 }
@@ -547,8 +642,9 @@ export function claimOrSteal(
 
 // Internal helper — spawn next recurring task
 
-function spawnNextRecurrence(completedTask: Task, db: Database): Task {
-  const dueAt = nextOccurrence(completedTask.recurrence_rule!, new Date());
+function spawnNextRecurrence(completedTask: Task, db: Database, completedAt: string): Task {
+  const recurrenceBase = completedTask.due_at ? new Date(completedTask.due_at) : new Date(completedAt);
+  const dueAt = nextOccurrence(completedTask.recurrence_rule!, recurrenceBase);
 
   // Strip short_id prefix from title if present
   let title = completedTask.title;
@@ -570,6 +666,7 @@ function spawnNextRecurrence(completedTask: Task, db: Database): Task {
     tags: completedTask.tags,
     metadata: completedTask.metadata,
     estimated_minutes: completedTask.estimated_minutes ?? undefined,
+    sla_minutes: completedTask.sla_minutes ?? undefined,
     recurrence_rule: completedTask.recurrence_rule!,
     recurrence_parent_id: recurrenceParentId,
     due_at: dueAt,

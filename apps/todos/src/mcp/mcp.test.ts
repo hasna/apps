@@ -1,8 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { getDatabase, closeDatabase, resetDatabase, resolvePartialId } from "../db/database.js";
-import { createTask, getTask, listTasks, completeTask } from "../db/tasks.js";
+import { addDependency, createTask, getTask, listTasks, completeTask, startTask } from "../db/tasks.js";
 import { createProject } from "../db/projects.js";
+import { createPlan } from "../db/plans.js";
 import { addComment, listComments } from "../db/comments.js";
+import { addTaskRunArtifact, addTaskRunCommand, addTaskRunEvent, finishTaskRun, startTaskRun } from "../db/task-runs.js";
+import { addTaskFile } from "../db/task-files.js";
+import { resetConfig } from "../lib/config.js";
 import { searchTasks } from "../lib/search.js";
 import type { Task } from "../types/index.js";
 import { registerTaskCrudTools } from "./tools/task-crud.js";
@@ -12,6 +16,12 @@ import { registerTaskRelTools } from "./tools/task-rel-tools.js";
 import { registerTaskAdvTools } from "./tools/task-adv-tools.js";
 import { registerTaskAutoTools } from "./tools/task-auto-tools.js";
 import { registerAgentTools } from "./tools/agents.js";
+import { registerTaskResources } from "./tools/task-resources.js";
+import { registerTemplateTools } from "./tools/templates.js";
+import { registerEnvironmentSnapshotTools } from "./tools/environment-snapshots.js";
+import { registerMachineTools } from "./tools/machines.js";
+import { registerWorkflowPrompts } from "./tools/workflow-prompts.js";
+import { registerCodeTools } from "./tools/code-tools.js";
 
 // These tests verify the core operations that the MCP server wraps.
 // The MCP server itself uses stdio transport which is harder to test in unit tests.
@@ -28,6 +38,9 @@ type CapturedTool = {
 function captureTools(register: (server: any, ctx: any) => void): Map<string, CapturedTool> {
   const tools = new Map<string, CapturedTool>();
   const server = {
+    resource() {
+      // Resource handlers are not needed for these tool-wrapper tests.
+    },
     tool(name: string, description: string, schemaOrHandler: Record<string, any> | CapturedTool["handler"], maybeHandler?: CapturedTool["handler"]) {
       const schema = typeof schemaOrHandler === "function" ? {} : schemaOrHandler;
       const handler = typeof schemaOrHandler === "function" ? schemaOrHandler : maybeHandler!;
@@ -126,6 +139,787 @@ describe("MCP tool operations", () => {
     expect(project.name).toBe("MCP Project");
   });
 
+  it("bootstrap_project wrapper creates project state", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const root = mkdtempSync(join(tmpdir(), "todos-mcp-bootstrap-"));
+    mkdirSync(join(root, ".git"));
+    writeFileSync(join(root, "package.json"), `${JSON.stringify({ name: "@hasna/mcp-bootstrap" }, null, 2)}\n`);
+
+    try {
+      const tools = captureTools(registerTaskProjectTools);
+      const result = await callCapturedTool(tools, "bootstrap_project", { path: root });
+      const payload = JSON.parse(result.content[0]!.text);
+      expect(payload.discovery.projectName).toBe("mcp-bootstrap");
+      expect(payload.project.name).toBe("mcp-bootstrap");
+      expect(payload.taskList.slug).toBe("todos-mcp-bootstrap");
+      expect(payload.created.project).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("code tools expose source TODO index and finite watcher scans", async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const root = mkdtempSync(join(tmpdir(), "todos-mcp-source-"));
+    writeFileSync(join(root, ".gitignore"), "ignored.ts\n");
+    writeFileSync(join(root, "ignored.ts"), "// TODO: Ignored\n");
+    writeFileSync(join(root, "app.ts"), "function createProject() {\n  // TODO: Add tasks\n}\n");
+
+    try {
+      const tools = captureTools(registerCodeTools);
+      const extractResult = await callCapturedTool(tools, "extract_todos", {
+        path: root,
+        dry_run: true,
+        include_index: true,
+      });
+      const extractPayload = JSON.parse(extractResult.content[0]!.text);
+      expect(extractPayload.comments).toHaveLength(1);
+      expect(extractPayload.comments[0].symbol).toBe("createProject");
+      expect(extractPayload.index.total_comments).toBe(1);
+
+      const watchResult = await callCapturedTool(tools, "watch_source_todos", {
+        path: root,
+        dry_run: true,
+        max_runs: 1,
+      });
+      const watchPayload = JSON.parse(watchResult.content[0]!.text);
+      expect(watchPayload.runs).toHaveLength(1);
+      expect(watchPayload.runs[0].changed_files).toEqual(["app.ts"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("workspace trust tools manage local permission profiles", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-trust-home-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    const tools = captureTools(registerTaskProjectTools);
+    const root = join(home, "project");
+
+    const savedResult = await callCapturedTool(tools, "set_workspace_trust", {
+      root,
+      preset: "standard",
+      command_allowlist: ["bun", "git"],
+      write_scopes: ["src"],
+      env_redactions: ["CUSTOM_SECRET"],
+    });
+    const saved = JSON.parse(savedResult.content[0]!.text);
+    expect(saved.write_scopes).toEqual(["src"]);
+
+    const checkResult = await callCapturedTool(tools, "check_workspace_permission", {
+      path: root,
+      command: "bun test",
+      write_path: join(root, "src/index.ts"),
+      env: { CUSTOM_SECRET: "set", PATH: "/bin" },
+    });
+    const check = JSON.parse(checkResult.content[0]!.text);
+    expect(check.allowed).toBe(true);
+    expect(check.redacted_env_keys).toEqual(["CUSTOM_SECRET"]);
+
+    const statusResult = await callCapturedTool(tools, "get_workspace_trust", { path: join(root, "src/index.ts") });
+    expect(JSON.parse(statusResult.content[0]!.text).matched_root).toBe(root);
+
+    await callCapturedTool(tools, "remove_workspace_trust", { root });
+    if (previousHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = previousHome;
+    resetConfig();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("secret safety tools manage local redaction and scan without exposing values", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-redaction-home-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    const tools = captureTools(registerTaskProjectTools);
+
+    const savedResult = await callCapturedTool(tools, "set_secret_safety", {
+      redaction_patterns: ["INTERNAL-[0-9]{4}"],
+      redaction_keys: ["license"],
+    });
+    expect(JSON.parse(savedResult.content[0]!.text).redaction_keys).toEqual(["license"]);
+
+    const statusResult = await callCapturedTool(tools, "get_secret_safety", {});
+    expect(JSON.parse(statusResult.content[0]!.text).redaction_patterns).toEqual(["INTERNAL-[0-9]{4}"]);
+
+    const scanResult = await callCapturedTool(tools, "scan_secret_text", { text: "INTERNAL-1234 TOKEN=secretsecret" });
+    const scan = JSON.parse(scanResult.content[0]!.text);
+    expect(scan.ok).toBe(false);
+    expect(scan.findings.map((finding: { pattern: string }) => finding.pattern)).toEqual(expect.arrayContaining([
+      "custom:INTERNAL-[0-9]{4}",
+      "env-secret-assignment",
+    ]));
+    expect(scanResult.content[0]!.text).not.toContain("INTERNAL-1234");
+    expect(scanResult.content[0]!.text).not.toContain("secretsecret");
+
+    if (previousHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = previousHome;
+    resetConfig();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("resolve_mentions exposes local reference backlinks through MCP", async () => {
+    const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const root = mkdtempSync(join(tmpdir(), "todos-mcp-mentions-"));
+    writeFileSync(join(root, "app.ts"), "export function createProject() { return true; }\n");
+
+    try {
+      const tools = captureTools(registerTaskProjectTools);
+      const result = await callCapturedTool(tools, "resolve_mentions", {
+        workspace: root,
+        mentions: ["file:app.ts:1", "symbol:createProject", "pr:123"],
+      });
+      const payload = JSON.parse(result.content[0]!.text);
+      expect(payload.local_only).toBe(true);
+      expect(payload.no_network).toBe(true);
+      expect(payload.references.map((reference: { resolved: boolean }) => reference.resolved)).toEqual([true, true, false]);
+      expect(payload.backlinks.map((item: { key: string }) => item.key)).toEqual(expect.arrayContaining([
+        "file:app.ts:1",
+        "symbol:createProject@app.ts:1",
+      ]));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("knowledge tools expose local decision records and context snapshots through MCP", async () => {
+    const tools = captureTools(registerTaskResources);
+    const project = createProject({ name: "MCP Knowledge", path: "/tmp/mcp-knowledge" }, db);
+    const task = createTask({ title: "Capture MCP decision", project_id: project.id }, db);
+
+    const createdResult = await callCapturedTool(tools, "create_knowledge_record", {
+      record_type: "decision",
+      title: "Keep MCP knowledge local",
+      decision: "Store records in SQLite.",
+      rationale: "Agent clients need offline context.",
+      task_id: task.id,
+      project_id: project.id,
+      tags: ["mcp", "knowledge"],
+    });
+    const created = JSON.parse(createdResult.content[0]!.text);
+    expect(created.record_type).toBe("decision");
+    expect(created.task_id).toBe(task.id);
+
+    const snapshotResult = await callCapturedTool(tools, "create_knowledge_snapshot", {
+      summary: "MCP implementation is ready for verification.",
+      task_id: task.id,
+      project_id: project.id,
+      agent_id: "codex",
+      files_open: ["src/mcp/tools/task-resources.ts"],
+    });
+    const snapshot = JSON.parse(snapshotResult.content[0]!.text);
+    expect(snapshot.snapshot_id).toBeTruthy();
+    expect(snapshot.record.record_type).toBe("context_snapshot");
+
+    const searchResult = await callCapturedTool(tools, "search_knowledge_records", { query: "offline" });
+    const search = JSON.parse(searchResult.content[0]!.text);
+    expect(search.map((record: { id: string }) => record.id)).toContain(created.id);
+
+    const exportResult = await callCapturedTool(tools, "export_knowledge_records", { project_id: project.id });
+    const exported = JSON.parse(exportResult.content[0]!.text);
+    expect(exported.local_only).toBe(true);
+    expect(exported.no_network).toBe(true);
+    expect(exported.records).toHaveLength(2);
+  });
+
+  it("risk tools expose local risk registers and health scoring through MCP", async () => {
+    const tools = captureTools(registerTaskResources);
+    const project = createProject({ name: "MCP Risks", path: "/tmp/mcp-risks" }, db);
+    const plan = createPlan({ name: "MCP risk plan", project_id: project.id }, db);
+    const task = createTask({ title: "MCP risk task", project_id: project.id, plan_id: plan.id }, db);
+
+    const createdResult = await callCapturedTool(tools, "create_risk", {
+      title: "Keep risk scoring local",
+      severity: "high",
+      probability: "medium",
+      owner: "codex",
+      mitigation: "Use SQLite evidence only.",
+      project_id: project.id,
+      plan_id: plan.id,
+      task_id: task.id,
+      tags: ["mcp", "risk"],
+    });
+    const created = JSON.parse(createdResult.content[0]!.text);
+    expect(created.plan_id).toBe(plan.id);
+    expect(created.task_id).toBe(task.id);
+
+    const listResult = await callCapturedTool(tools, "list_risks", { plan_id: plan.id });
+    const listed = JSON.parse(listResult.content[0]!.text);
+    expect(listed.map((risk: { id: string }) => risk.id)).toContain(created.id);
+
+    const healthResult = await callCapturedTool(tools, "score_plan_health", { plan_id: plan.id });
+    const health = JSON.parse(healthResult.content[0]!.text);
+    expect(health.local_only).toBe(true);
+    expect(health.no_network).toBe(true);
+    expect(health.components.open_risks).toBe(1);
+
+    const projectHealthResult = await callCapturedTool(tools, "score_project_health", { project_id: project.id });
+    expect(JSON.parse(projectHealthResult.content[0]!.text).scope).toBe("project");
+
+    const exportResult = await callCapturedTool(tools, "export_risk_register", { project_id: project.id });
+    const exported = JSON.parse(exportResult.content[0]!.text);
+    expect(exported.risks).toHaveLength(1);
+
+    const closedResult = await callCapturedTool(tools, "close_risk", { id: created.id, status: "accepted" });
+    expect(JSON.parse(closedResult.content[0]!.text).status).toBe("accepted");
+  });
+
+  it("retrospective tools expose local lessons learned through MCP", async () => {
+    const tools = captureTools(registerTaskResources);
+    const project = createProject({ name: "MCP Retro", path: "/tmp/mcp-retro" }, db);
+    const plan = createPlan({ name: "MCP retro plan", project_id: project.id }, db);
+    const task = createTask({ title: "MCP retro task", project_id: project.id, plan_id: plan.id, estimated_minutes: 10 }, db);
+    db.run("UPDATE tasks SET status = 'completed', actual_minutes = 30 WHERE id = ?", [task.id]);
+
+    const createdResult = await callCapturedTool(tools, "create_retrospective", {
+      title: "MCP retrospective",
+      plan_id: plan.id,
+      agent_id: "codex",
+    });
+    const created = JSON.parse(createdResult.content[0]!.text);
+    expect(created.report.local_only).toBe(true);
+    expect(created.report.no_network).toBe(true);
+    expect(created.report.summary.missed_estimates).toBe(1);
+
+    const listResult = await callCapturedTool(tools, "list_retrospectives", { plan_id: plan.id });
+    const listed = JSON.parse(listResult.content[0]!.text);
+    expect(listed.map((record: { id: string }) => record.id)).toContain(created.id);
+
+    const exportResult = await callCapturedTool(tools, "export_retrospectives", { plan_id: plan.id });
+    const exported = JSON.parse(exportResult.content[0]!.text);
+    expect(exported.retrospectives).toHaveLength(1);
+  });
+
+  it("local report tools expose agent-ready summaries through MCP", async () => {
+    const tools = captureTools(registerTaskResources);
+    const project = createProject({ name: "MCP Reports", path: "/tmp/mcp-reports" }, db);
+    const task = createTask({ title: "MCP ready report task", project_id: project.id, assigned_to: "codex" }, db);
+    const run = startTaskRun({ task_id: task.id, agent_id: "codex", title: "MCP report run" }, db);
+    addTaskRunCommand({ run_id: run.id, command: "bun test", status: "passed", output_summary: "ok", agent_id: "codex" }, db);
+    finishTaskRun({ run_id: run.id, status: "completed", agent_id: "codex" }, db);
+
+    const typesResult = await callCapturedTool(tools, "list_local_report_types", {});
+    const types = JSON.parse(typesResult.content[0]!.text);
+    expect(types.report_types).toContain("agent_summary");
+    expect(types.local_only).toBe(true);
+
+    const reportResult = await callCapturedTool(tools, "build_local_report", {
+      project_id: project.id,
+      agent_id: "codex",
+      format: "json",
+    });
+    const report = JSON.parse(reportResult.content[0]!.text);
+    expect(report.local_only).toBe(true);
+    expect(report.no_network).toBe(true);
+    expect(report.views.ready.items.map((item: { id: string }) => item.id)).toContain(task.id);
+    expect(report.runs.outcomes.completed).toBe(1);
+    expect(report.verification.outcomes.passed).toBe(1);
+  });
+
+  it("local backup tools create verify restore-preview and integrity-check through MCP", async () => {
+    const tools = captureTools(registerTaskResources);
+    const project = createProject({ name: "MCP Backups", path: "/tmp/mcp-backups" }, db);
+    const task = createTask({ title: "MCP backup task", project_id: project.id }, db);
+    const run = startTaskRun({ task_id: task.id, agent_id: "codex", title: "MCP backup run" }, db);
+    addTaskRunCommand({ run_id: run.id, command: "bun test", status: "passed", output_summary: "ok" }, db);
+
+    const createdResult = await callCapturedTool(tools, "create_local_backup", {
+      project_id: project.id,
+    });
+    const backup = JSON.parse(createdResult.content[0]!.text);
+    expect(backup.local_only).toBe(true);
+    expect(backup.no_network).toBe(true);
+    expect(backup.manifest.bridge.stats.tasks).toBe(1);
+
+    const verifiedResult = await callCapturedTool(tools, "verify_local_backup", { backup });
+    const verified = JSON.parse(verifiedResult.content[0]!.text);
+    expect(verified.ok).toBe(true);
+    expect(verified.checksum.ok).toBe(true);
+
+    const restoreResult = await callCapturedTool(tools, "restore_local_backup", { backup });
+    const restored = JSON.parse(restoreResult.content[0]!.text);
+    expect(restored.dry_run).toBe(true);
+    expect(restored.ok).toBe(true);
+    expect(restored.import_result.skipped.tasks).toBe(1);
+
+    const integrityResult = await callCapturedTool(tools, "check_local_integrity", {
+      project_id: project.id,
+    });
+    const integrity = JSON.parse(integrityResult.content[0]!.text);
+    expect(integrity.local_only).toBe(true);
+    expect(integrity.sqlite.quick_check).toBe("ok");
+    expect(integrity.counts.tasks).toBe(1);
+  });
+
+  it("retention cleanup tools preview and apply local evidence cleanup without leaking content", async () => {
+    const tools = captureTools(registerTaskProjectTools);
+    const project = createProject({ name: "MCP retention", path: "/tmp/mcp-retention" }, db);
+    const task = createTask({ title: "old mcp evidence", project_id: project.id }, db);
+    const token = ["sk", "abcdefghijklmnop"].join("-");
+    db.run("INSERT INTO task_comments (id, task_id, content, type, created_at) VALUES (?, ?, ?, ?, ?)", [
+      "mcp-old-comment",
+      task.id,
+      `legacy ${token} evidence`,
+      "comment",
+      "2026-01-01T00:00:00.000Z",
+    ]);
+
+    const previewResult = await callCapturedTool(tools, "preview_retention_cleanup", {
+      older_than_days: 30,
+      project_id: project.id,
+      now: "2026-05-22T00:00:00.000Z",
+    });
+    const preview = JSON.parse(previewResult.content[0]!.text);
+    expect(preview.dry_run).toBe(true);
+    expect(preview.candidate_counts.comments).toBe(1);
+    expect(previewResult.content[0]!.text).not.toContain(token);
+    expect(listComments(task.id, db)).toHaveLength(1);
+
+    const applyResult = await callCapturedTool(tools, "apply_retention_cleanup", {
+      older_than_days: 30,
+      project_id: project.id,
+      now: "2026-05-22T00:00:00.000Z",
+      confirm: "delete-local-retention-data",
+    });
+    expect(JSON.parse(applyResult.content[0]!.text).deleted_counts.comments).toBe(1);
+    expect(listComments(task.id, db)).toHaveLength(0);
+  });
+
+  it("runner sandbox tools manage local command safety profiles", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-sandbox-home-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    const tools = captureTools(registerTaskProjectTools);
+    const root = join(home, "project");
+
+    await callCapturedTool(tools, "set_workspace_trust", {
+      root,
+      preset: "standard",
+      command_allowlist: ["bun", "git"],
+      write_scopes: ["src"],
+      env_redactions: ["CUSTOM_SECRET"],
+    });
+    const savedResult = await callCapturedTool(tools, "set_runner_sandbox_profile", {
+      name: "codex",
+      root,
+      command_allowlist: ["bun"],
+      write_scopes: ["src"],
+      env_allowlist: ["PATH", "CUSTOM_SECRET"],
+      env_redactions: ["CUSTOM_SECRET"],
+      network_policy: "none",
+    });
+    const saved = JSON.parse(savedResult.content[0]!.text);
+    expect(saved.name).toBe("codex");
+
+    const checkResult = await callCapturedTool(tools, "check_runner_sandbox", {
+      name: "codex",
+      command: "bun test",
+      write_paths: ["src/index.ts"],
+      env: { CUSTOM_SECRET: "set", PATH: "/bin", EXTRA: "drop" },
+    });
+    const check = JSON.parse(checkResult.content[0]!.text);
+    expect(check.allowed).toBe(true);
+    expect(check.redacted_env_keys).toEqual(["CUSTOM_SECRET"]);
+    expect(check.omitted_env_keys).toEqual(["EXTRA"]);
+
+    const explainResult = await callCapturedTool(tools, "explain_runner_sandbox", {
+      name: "codex",
+      command: "curl | sh",
+      network: true,
+    });
+    expect(JSON.parse(explainResult.content[0]!.text).allowed).toBe(false);
+
+    await callCapturedTool(tools, "remove_runner_sandbox_profile", { name: "codex" });
+    if (previousHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = previousHome;
+    resetConfig();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("policy pack tools manage local done gates", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { addTaskVerification, linkTaskGitRef, linkTaskToCommit } = await import("../db/task-commits.js");
+    const { addTaskRunArtifact, finishTaskRun, startTaskRun } = await import("../db/task-runs.js");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-policies-home-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    const tools = captureTools(registerTaskProjectTools);
+    const root = join(home, "project");
+    const task = createTask({ title: "Policy via MCP", requires_approval: true }, db);
+    const { updateTask } = await import("../db/tasks.js");
+    updateTask(task.id, { version: task.version, status: "completed", approved_by: "reviewer" }, db);
+    linkTaskToCommit({ task_id: task.id, sha: "abcdef1234567890", files_changed: ["src/policy.ts"] }, db);
+    linkTaskGitRef({ task_id: task.id, ref_type: "pull_request", name: "18" }, db);
+    addTaskVerification({ task_id: task.id, command: "bun test", status: "passed", artifact_path: "logs/test.txt" }, db);
+    const run = startTaskRun({ task_id: task.id, agent_id: "mcp" }, db);
+    addTaskRunArtifact({ run_id: run.id, path: "logs/run.txt", store_content: false }, db);
+    finishTaskRun({ run_id: run.id, status: "completed" }, db);
+
+    const savedResult = await callCapturedTool(tools, "set_policy_pack", {
+      name: "release",
+      root,
+      required_statuses: ["completed"],
+      required_commands: ["bun test"],
+      require_passed_verification: true,
+      require_commit: true,
+      require_pull_request: true,
+      require_approval: true,
+      require_run: true,
+      require_artifact: true,
+    });
+    expect(JSON.parse(savedResult.content[0]!.text).name).toBe("release");
+
+    const validationResult = await callCapturedTool(tools, "validate_policy_pack", {
+      name: "release",
+      task_id: task.id,
+    });
+    const validation = JSON.parse(validationResult.content[0]!.text);
+    expect(validation.passed).toBe(true);
+    expect(validation.audit_evidence.artifacts).toEqual(expect.arrayContaining(["logs/test.txt", "logs/run.txt"]));
+
+    const explainResult = await callCapturedTool(tools, "explain_policy_pack", {
+      name: "release",
+      task_id: task.id,
+    });
+    expect(JSON.parse(explainResult.content[0]!.text).mode).toBe("explain");
+
+    const listResult = await callCapturedTool(tools, "list_policy_packs", {});
+    expect(JSON.parse(listResult.content[0]!.text)[0].name).toBe("release");
+    await callCapturedTool(tools, "remove_policy_pack", { name: "release" });
+
+    if (previousHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = previousHome;
+    resetConfig();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("approval gate tools manage manual checkpoints", async () => {
+    const { getTaskRunLedger, startTaskRun } = await import("../db/task-runs.js");
+    const tools = captureTools(registerTaskProjectTools);
+    const task = createTask({ title: "Approval via MCP" }, db);
+    const run = startTaskRun({ task_id: task.id, agent_id: "mcp" }, db);
+
+    const missingTool = tools.get("check_approval_gate")!;
+    const missing = await missingTool.handler({ task_id: task.id, gate: "deploy" }) as { isError?: boolean; content: { text: string }[] };
+    expect(missing.isError).toBe(true);
+    expect(JSON.parse(missing.content[0]!.text).allowed).toBe(false);
+
+    const requestedResult = await callCapturedTool(tools, "require_approval_gate", {
+      task_id: task.id.slice(0, 8),
+      gate: "deploy",
+      requester: "codex",
+      reviewer: "reviewer",
+      reason: "production-affecting action",
+      run_id: run.id.slice(0, 8),
+    });
+    const requested = JSON.parse(requestedResult.content[0]!.text);
+    expect(requested.status).toBe("pending");
+    expect(requested.run_id).toBe(run.id);
+
+    await callCapturedTool(tools, "approve_approval_gate", {
+      task_id: task.id,
+      gate: "deploy",
+      reviewer: "reviewer",
+      note: "approved",
+    });
+
+    const checkResult = await callCapturedTool(tools, "check_approval_gate", {
+      task_id: task.id,
+      gate: "deploy",
+    });
+    expect(JSON.parse(checkResult.content[0]!.text).allowed).toBe(true);
+
+    const listResult = await callCapturedTool(tools, "list_approval_gates", { task_id: task.id });
+    expect(JSON.parse(listResult.content[0]!.text)).toHaveLength(1);
+    expect(getTaskRunLedger(run.id, db).events.map((event) => event.message)).toEqual(expect.arrayContaining([
+      "approval gate requested: deploy",
+      "approval gate approved: deploy",
+    ]));
+  });
+
+  it("local event hook tools manage local automation triggers", async () => {
+    const { mkdtempSync, readFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-event-hooks-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    const tools = captureTools(registerTaskProjectTools);
+    const eventPath = join(home, "events.jsonl");
+
+    try {
+      const savedResult = await callCapturedTool(tools, "set_local_event_hook", {
+        name: "audit",
+        events: ["task.completed"],
+        target: "file",
+        file_path: eventPath,
+      });
+      expect(JSON.parse(savedResult.content[0]!.text).name).toBe("audit");
+
+      const testResult = await callCapturedTool(tools, "test_local_event_hook", {
+        name: "audit",
+        event: "task.completed",
+        payload: { id: "task-1" },
+      });
+      expect(JSON.parse(testResult.content[0]!.text)[0].status).toBe("delivered");
+      expect(JSON.parse(readFileSync(eventPath, "utf-8").trim()).type).toBe("task.completed");
+
+      const listResult = await callCapturedTool(tools, "list_local_event_hooks", {});
+      expect(JSON.parse(listResult.content[0]!.text)).toHaveLength(1);
+
+      const removeResult = await callCapturedTool(tools, "remove_local_event_hook", { name: "audit" });
+      expect(JSON.parse(removeResult.content[0]!.text).removed).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      resetConfig();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("terminal notification tools manage local watch rules", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-terminal-notifications-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    const tools = captureTools(registerTaskProjectTools);
+
+    try {
+      const savedResult = await callCapturedTool(tools, "set_terminal_notification_rule", {
+        name: "blocked",
+        events: ["task.blocked", "task.failed"],
+        min_severity: "warning",
+        bell: true,
+        agent_ids: ["codex"],
+        priorities: ["high"],
+        contains: ["deploy"],
+      });
+      expect(JSON.parse(savedResult.content[0]!.text).rule.name).toBe("blocked");
+
+      const testResult = await callCapturedTool(tools, "test_terminal_notification_rule", {
+        name: "blocked",
+        event: "task.failed",
+        payload: { id: "task-1", title: "Deploy failed", agent_id: "codex", priority: "high" },
+      });
+      const testPayload = JSON.parse(testResult.content[0]!.text);
+      expect(testPayload.matched).toBe(true);
+      expect(testPayload.notifications[0].severity).toBe("critical");
+
+      const evaluated = await callCapturedTool(tools, "evaluate_terminal_watch_rules", {
+        event: "task.completed",
+        payload: { title: "Done" },
+      });
+      expect(JSON.parse(evaluated.content[0]!.text)[0].matched).toBe(false);
+
+      createTask({ title: "MCP overdue notification", due_at: "2026-01-02T03:00:00.000Z" }, db);
+      const checked = await callCapturedTool(tools, "check_local_notifications", {
+        now: "2026-01-02T04:00:00.000Z",
+        include_runs: false,
+        include_calendar: false,
+      });
+      const notificationCheck = JSON.parse(checked.content[0]!.text);
+      expect(notificationCheck.counts.task_due).toBe(1);
+      expect(notificationCheck.alerts[0].event_type).toBe("task.due");
+
+      const listResult = await callCapturedTool(tools, "list_terminal_notification_rules", {});
+      expect(JSON.parse(listResult.content[0]!.text)).toHaveLength(1);
+
+      const removeResult = await callCapturedTool(tools, "remove_terminal_notification_rule", { name: "blocked" });
+      expect(JSON.parse(removeResult.content[0]!.text).removed).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      resetConfig();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("branch work plan tool creates local safe branch plans", async () => {
+    const tools = captureTools(registerTaskProjectTools);
+    const task = createTask({ title: "MCP branch plan" }, db);
+
+    const result = await callCapturedTool(tools, "create_branch_work_plan", {
+      task_id: task.id,
+      branch: "task/mcp-branch-plan",
+      base_branch: "main",
+      paths: ["src/mcp-branch-plan.ts"],
+      root: "/tmp/not-a-git-repo",
+      include_git_status: false,
+    });
+
+    const workPlan = JSON.parse(result.content[0]!.text);
+    expect(workPlan.safe_to_start).toBe(true);
+    expect(workPlan.files).toEqual(["src/mcp-branch-plan.ts"]);
+    expect(workPlan.commands).toContain(`todos link-ref ${task.id.slice(0, 8)} task/mcp-branch-plan --type branch --provider git`);
+  });
+
+  it("natural-language intake tool previews local task creation", async () => {
+    const tools = captureTools(registerTaskProjectTools);
+    const result = await callCapturedTool(tools, "preview_natural_language_intake", {
+      text: "Add task fix parser priority high @codex #cli due tomorrow",
+      reference_date: "2026-01-02T12:00:00.000Z",
+    });
+
+    const preview = JSON.parse(result.content[0]!.text);
+    expect(preview.dry_run).toBe(true);
+    expect(preview.tasks[0]).toMatchObject({
+      title: "fix parser",
+      priority: "high",
+      assigned_to: "codex",
+    });
+    expect(preview.tasks[0].due_at).toBe("2026-01-03T12:00:00.000Z");
+  });
+
+  it("local encryption tools manage profiles and JSON values", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const previousKey = process.env["TODOS_TEST_ENCRYPTION_KEY"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-encryption-"));
+    process.env["HOME"] = home;
+    process.env["TODOS_TEST_ENCRYPTION_KEY"] = "local mcp encryption key material";
+    resetConfig();
+    const tools = captureTools(registerTaskProjectTools);
+
+    try {
+      const savedResult = await callCapturedTool(tools, "set_encryption_profile", {
+        name: "secure",
+        key_env: "TODOS_TEST_ENCRYPTION_KEY",
+      });
+      expect(JSON.parse(savedResult.content[0]!.text).key_env).toBe("TODOS_TEST_ENCRYPTION_KEY");
+
+      const statusResult = await callCapturedTool(tools, "get_encryption_status", { name: "secure" });
+      expect(JSON.parse(statusResult.content[0]!.text).locked).toBe(false);
+
+      const encryptedResult = await callCapturedTool(tools, "encrypt_local_value", {
+        profile: "secure",
+        value: { note: "private evidence" },
+      });
+      const envelope = JSON.parse(encryptedResult.content[0]!.text);
+      expect(JSON.stringify(envelope)).not.toContain("private evidence");
+
+      const decryptedResult = await callCapturedTool(tools, "decrypt_local_value", { envelope });
+      expect(JSON.parse(decryptedResult.content[0]!.text)).toEqual({ note: "private evidence" });
+
+      const listResult = await callCapturedTool(tools, "list_encryption_profiles", {});
+      expect(JSON.parse(listResult.content[0]!.text)).toHaveLength(1);
+      const removeResult = await callCapturedTool(tools, "remove_encryption_profile", { name: "secure" });
+      expect(JSON.parse(removeResult.content[0]!.text).removed).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      if (previousKey === undefined) delete process.env["TODOS_TEST_ENCRYPTION_KEY"];
+      else process.env["TODOS_TEST_ENCRYPTION_KEY"] = previousKey;
+      resetConfig();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("agent context pack tool returns local JSON and Markdown bundles", async () => {
+    const tools = captureTools(registerTaskAdvTools);
+    const task = createTask({
+      title: "MCP context pack",
+      description: "Context for a local agent",
+      metadata: { acceptance_criteria: ["has JSON", "has Markdown"] },
+    }, db);
+    addComment({ task_id: task.id, agent_id: "mcp", content: `Use ${["sk", "abcdefghijklmnop"].join("-")} only in redaction tests` }, db);
+
+    const jsonResult = await callCapturedTool(tools, "build_agent_context_pack", {
+      task_id: task.id.slice(0, 8),
+      profile: "codex",
+      format: "json",
+      agent_id: "mcp",
+    });
+    const pack = JSON.parse(jsonResult.content[0]!.text);
+    expect(pack.profile).toBe("codex");
+    expect(pack.acceptance_criteria).toEqual(["has JSON", "has Markdown"]);
+    expect(pack.comments.recent[0].content).toContain("[REDACTED_TOKEN]");
+
+    const markdownResult = await callCapturedTool(tools, "build_agent_context_pack", {
+      task_id: task.id,
+      profile: "claude",
+      format: "markdown",
+    });
+    expect(markdownResult.content[0]!.text).toContain("# Agent Context Pack: MCP context pack");
+    expect(markdownResult.content[0]!.text).toContain("For Claude Code");
+
+    const compactResult = await callCapturedTool(tools, "build_agent_context_pack", {
+      task_id: task.id,
+      profile: "codex",
+      format: "json",
+      token_budget: 180,
+      exclude_sections: ["comments", "runs"],
+      compact: true,
+    });
+    const compactPack = JSON.parse(compactResult.content[0]!.text);
+    expect(compactPack.context_budget.token_budget).toBe(180);
+    expect(compactPack.context_budget.omitted_sections).toEqual(expect.arrayContaining(["comments"]));
+    expect(compactResult.content[0]!.text).not.toContain("\n  ");
+  });
+
+  it("environment snapshot tools capture and compare local run evidence", async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const tools = captureTools(registerEnvironmentSnapshotTools);
+    const root = mkdtempSync(join(tmpdir(), "todos-mcp-env-snapshot-"));
+    writeFileSync(join(root, "package.json"), `${JSON.stringify({ name: "env-snapshot-fixture", version: "1.0.0" }, null, 2)}\n`);
+    writeFileSync(join(root, "bun.lock"), "# lock\n");
+    const outputPath = join(root, "snapshot.json");
+    const task = createTask({ title: "Snapshot target" }, db);
+    const run = startTaskRun({ task_id: task.id, agent_id: "mcp" }, db);
+
+    try {
+      const captureResult = await callCapturedTool(tools, "capture_environment_snapshot", {
+        root,
+        run_id: run.id.slice(0, 8),
+        command: "bun test",
+        output_path: outputPath,
+        agent_id: "mcp",
+      });
+      const recorded = JSON.parse(captureResult.content[0]!.text);
+      expect(recorded.snapshot.package_manager.manager).toBe("bun");
+      expect(recorded.snapshot.target.run_id).toBe(run.id);
+      expect(recorded.run_artifact_id).toBeTruthy();
+
+      const compareResult = await callCapturedTool(tools, "compare_environment_snapshots", {
+        left_path: outputPath,
+        right_path: outputPath,
+      });
+      const comparison = JSON.parse(compareResult.content[0]!.text);
+      expect(comparison.same_runtime).toBe(true);
+      expect(comparison.changed_lockfiles).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("version-based optimistic locking via update_task", () => {
     const task = createTask({ title: "Lockable" }, db);
     const { updateTask } = require("./../../src/db/tasks.js");
@@ -158,6 +952,7 @@ describe("MCP tool wrappers", () => {
       priority: "critical",
       deadline: "2026-05-07T00:00:00.000Z",
       estimate: 45,
+      sla_minutes: 120,
       confidence: 0.8,
       retry_count: 5,
       tags: ["mcp"],
@@ -167,6 +962,7 @@ describe("MCP tool wrappers", () => {
     expect(task.priority).toBe("critical");
     expect(task.due_at).toBe("2026-05-07T00:00:00.000Z");
     expect(task.estimated_minutes).toBe(45);
+    expect(task.sla_minutes).toBe(120);
     expect(task.confidence).toBe(0.8);
     expect(task.max_retries).toBe(5);
   });
@@ -225,6 +1021,40 @@ describe("MCP tool wrappers", () => {
     expect(updated.locked_by).toBe("mcp");
   });
 
+  it("task lock tools acquire renew check and release local leases", async () => {
+    const tools = captureTools(registerTaskProjectTools);
+    const task = createTask({ title: "Lock via MCP" }, db);
+
+    const locked = await callCapturedTool(tools, "lock_task", { task_id: task.id, agent_id: "mcp-agent" });
+    const lockJson = JSON.parse(locked.content[0]!.text);
+    expect(lockJson.success).toBe(true);
+    expect(lockJson.expires_at).toBeTruthy();
+
+    const checked = await callCapturedTool(tools, "check_task_lock", { task_id: task.id });
+    expect(JSON.parse(checked.content[0]!.text).locked_by).toBe("mcp-agent");
+
+    const released = await callCapturedTool(tools, "unlock_task", { task_id: task.id, agent_id: "mcp-agent" });
+    expect(JSON.parse(released.content[0]!.text).success).toBe(true);
+    expect(getTask(task.id, db)!.locked_by).toBeNull();
+  });
+
+  it("get_task_dependencies returns the transitive dependency tree for agent planning", async () => {
+    const tools = captureTools(registerTaskProjectTools);
+    const taskA = createTask({ title: "Task A" }, db);
+    const taskB = createTask({ title: "Task B" }, db);
+    const taskC = createTask({ title: "Task C" }, db);
+    addDependency(taskA.id, taskB.id, db);
+    addDependency(taskB.id, taskC.id, db);
+
+    const result = await callCapturedTool(tools, "get_task_dependencies", {
+      task_id: taskA.id,
+      direction: "upstream",
+    });
+
+    expect(result.content[0]!.text).toContain("Task B");
+    expect(result.content[0]!.text).toContain("Task C");
+  });
+
   it("update_task fetches the current version and maps deadline/estimate aliases", async () => {
     const tools = captureTools(registerTaskCrudTools);
     const task = createTask({ title: "Update via MCP" }, db);
@@ -234,6 +1064,7 @@ describe("MCP tool wrappers", () => {
       title: "Updated via MCP",
       deadline: "2026-05-08T00:00:00.000Z",
       estimate: 60,
+      sla_minutes: 180,
       actual_minutes: 70,
       confidence: 0.7,
     });
@@ -242,6 +1073,7 @@ describe("MCP tool wrappers", () => {
     expect(updated.title).toBe("Updated via MCP");
     expect(updated.due_at).toBe("2026-05-08T00:00:00.000Z");
     expect(updated.estimated_minutes).toBe(60);
+    expect(updated.sla_minutes).toBe(180);
     expect(updated.actual_minutes).toBe(70);
     expect(updated.confidence).toBe(0.7);
   });
@@ -279,13 +1111,933 @@ describe("MCP tool wrappers", () => {
 
   it("relationship tools resolve their database imports from the tools directory", async () => {
     const tools = captureTools(registerTaskRelTools);
+    const task = createTask({ title: "MCP handoff task", assigned_to: "mcp", agent_id: "mcp", session_id: "mcp-session" }, db);
+    startTask(task.id, "mcp", db);
+    addTaskFile({ task_id: task.id, path: "src/mcp/tools/task-rel-tools.ts", agent_id: "mcp" }, db);
+    const run = startTaskRun({ task_id: task.id, agent_id: "mcp", title: "MCP handoff run" }, db);
 
-    await callCapturedTool(tools, "create_handoff", {
+    const createdResult = await callCapturedTool(tools, "create_handoff", {
       agent_id: "mcp",
       summary: "Wrapper handoff",
       completed: ["one"],
       next_steps: ["two"],
+      session_id: "mcp-session",
+      task_ids: [task.id],
+      relevant_files: ["src/mcp/tools/task-rel-tools.ts"],
+      run_ids: [run.id],
     });
+    const created = JSON.parse(createdResult.content[0].text);
+    expect(created.task_ids).toEqual([task.id]);
+    expect(created.relevant_files).toEqual(["src/mcp/tools/task-rel-tools.ts"]);
+
+    const listResult = await callCapturedTool(tools, "list_handoffs", { unread_for: "reviewer" });
+    expect(JSON.parse(listResult.content[0].text)).toHaveLength(1);
+
+    const readResult = await callCapturedTool(tools, "read_handoff", { handoff_id: created.id.slice(0, 8) });
+    expect(JSON.parse(readResult.content[0].text).id).toBe(created.id);
+
+    const ackResult = await callCapturedTool(tools, "acknowledge_handoff", { handoff_id: created.id, agent_id: "reviewer" });
+    expect(JSON.parse(ackResult.content[0].text).acknowledged_by).toEqual(["reviewer"]);
+
+    const recoveryResult = await callCapturedTool(tools, "recover_stale_session_handoff", {
+      agent_id: "mcp",
+      session_id: "mcp-session",
+      recovered_by: "reviewer",
+      reason: "wrapper recovery",
+    });
+    const recovery = JSON.parse(recoveryResult.content[0].text);
+    expect(recovery.task_ids).toEqual([task.id]);
+    expect(recovery.run_ids).toEqual([run.id]);
+
+    const exportResult = await callCapturedTool(tools, "export_handoff", { handoff_id: created.id });
+    const bundle = JSON.parse(exportResult.content[0]!.text);
+    expect(bundle.handoff.id).toBe(created.id);
+
+    const importPreview = await callCapturedTool(tools, "import_handoff", { bundle, apply: false });
+    expect(JSON.parse(importPreview.content[0]!.text).applied).toBe(false);
+  });
+
+  it("review queue tools route claim return approve and manage local rules", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-review-queues-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    try {
+      const tools = captureTools(registerTaskRelTools);
+      const task = createTask({ title: "MCP review queue task", priority: "high", tags: ["security"] }, db);
+
+      const ruleResult = await callCapturedTool(tools, "set_review_routing_rule", {
+        name: "security",
+        queue: "security-review",
+        reviewers: ["reviewer"],
+        tags: ["security"],
+        priorities: ["high"],
+      });
+      expect(JSON.parse(ruleResult.content[0]!.text).queue).toBe("security-review");
+
+      const requestResult = await callCapturedTool(tools, "request_review_queue", {
+        task_id: task.id,
+        requester: "codex",
+        reason: "security review",
+      });
+      const requested = JSON.parse(requestResult.content[0]!.text);
+      expect(requested.queue).toBe("security-review");
+      expect(requested.reviewer).toBe("reviewer");
+
+      const claimResult = await callCapturedTool(tools, "claim_review_item", {
+        task_id: task.id.slice(0, 8),
+        reviewer: "reviewer",
+      });
+      expect(JSON.parse(claimResult.content[0]!.text).state).toBe("claimed");
+
+      const returnResult = await callCapturedTool(tools, "return_review_item", {
+        task_id: task.id,
+        reviewer: "reviewer",
+        changes_requested: ["add regression", "record verification"],
+      });
+      const returned = JSON.parse(returnResult.content[0]!.text);
+      expect(returned.state).toBe("returned");
+      expect(returned.changes_requested).toEqual(["add regression", "record verification"]);
+
+      const listResult = await callCapturedTool(tools, "list_review_queue", {
+        queue: "security-review",
+        reviewer: "reviewer",
+      });
+      expect(JSON.parse(listResult.content[0]!.text)).toHaveLength(1);
+
+      const approveResult = await callCapturedTool(tools, "approve_review_item", {
+        task_id: task.id,
+        reviewer: "reviewer",
+      });
+      expect(JSON.parse(approveResult.content[0]!.text).state).toBe("approved");
+
+      const reopenResult = await callCapturedTool(tools, "reopen_review_item", {
+        task_id: task.id,
+        reviewer: "reviewer",
+      });
+      expect(JSON.parse(reopenResult.content[0]!.text).state).toBe("reopened");
+
+      const rulesResult = await callCapturedTool(tools, "list_review_routing_rules", {});
+      expect(JSON.parse(rulesResult.content[0]!.text).map((item: { name: string }) => item.name)).toEqual(["security"]);
+
+      const removeResult = await callCapturedTool(tools, "remove_review_routing_rule", { name: "security" });
+      expect(JSON.parse(removeResult.content[0]!.text).removed).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      resetConfig();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("roadmap tools manage milestones release groups summaries and bundles", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-roadmaps-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    try {
+      const tools = captureTools(registerTaskProjectTools);
+      const task = createTask({ title: "MCP roadmap task" }, db);
+
+      const createResult = await callCapturedTool(tools, "create_roadmap", {
+        name: "MCP Roadmap",
+        release: "v1",
+        owner: "codex",
+      });
+      const roadmap = JSON.parse(createResult.content[0]!.text);
+      expect(roadmap.name).toBe("MCP Roadmap");
+
+      const milestoneResult = await callCapturedTool(tools, "create_milestone", {
+        roadmap_id: roadmap.id,
+        title: "MCP Milestone",
+        task_ids: [task.id.slice(0, 8)],
+        due_at: "2026-06-01",
+        release: "v1",
+      });
+      const milestone = JSON.parse(milestoneResult.content[0]!.text);
+      expect(milestone.task_ids).toEqual([task.id]);
+
+      const releaseResult = await callCapturedTool(tools, "set_release_group", {
+        roadmap_id: roadmap.id,
+        name: "v1",
+        version: "1.0.0",
+        milestone_ids: [milestone.id],
+        task_ids: [task.id],
+      });
+      expect(JSON.parse(releaseResult.content[0]!.text).version).toBe("1.0.0");
+
+      const summaryResult = await callCapturedTool(tools, "get_roadmap_summary", { roadmap_id: roadmap.id });
+      expect(JSON.parse(summaryResult.content[0]!.text).progress.task_count).toBe(1);
+
+      const markdownResult = await callCapturedTool(tools, "export_roadmap", { roadmap_id: roadmap.id, format: "markdown" });
+      expect(markdownResult.content[0]!.text).toContain("MCP Milestone");
+
+      const bundleResult = await callCapturedTool(tools, "export_roadmap", { roadmap_id: roadmap.id });
+      const bundle = JSON.parse(bundleResult.content[0]!.text);
+      expect(bundle.kind).toBe("hasna.todos.roadmap-bundle");
+
+      const previewResult = await callCapturedTool(tools, "import_roadmap", { bundle, apply: false });
+      expect(JSON.parse(previewResult.content[0]!.text).applied).toBe(false);
+
+      const updatedMilestone = await callCapturedTool(tools, "update_milestone", {
+        milestone_id: milestone.id,
+        status: "active",
+      });
+      expect(JSON.parse(updatedMilestone.content[0]!.text).status).toBe("active");
+
+      const updatedRoadmap = await callCapturedTool(tools, "update_roadmap", {
+        roadmap_id: roadmap.id,
+        status: "active",
+      });
+      expect(JSON.parse(updatedRoadmap.content[0]!.text).status).toBe("active");
+
+      const listResult = await callCapturedTool(tools, "list_roadmaps", {});
+      expect(JSON.parse(listResult.content[0]!.text).map((item: { name: string }) => item.name)).toContain("MCP Roadmap");
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      resetConfig();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("capacity tools manage local profiles and planning forecasts", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-capacity-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    try {
+      const tools = captureTools(registerTaskProjectTools);
+      const project = createProject({ name: "MCP Capacity", path: "/tmp/mcp-capacity" }, db);
+      const plan = createPlan({ name: "MCP Capacity Plan", project_id: project.id }, db);
+      createTask({
+        title: "MCP forecast task",
+        project_id: project.id,
+        plan_id: plan.id,
+        assigned_to: "codex",
+        estimated_minutes: 90,
+      }, db);
+
+      const profileResult = await callCapturedTool(tools, "set_capacity_profile", {
+        agent_id: "codex",
+        project_id: project.id,
+        minutes_per_day: 45,
+      });
+      expect(JSON.parse(profileResult.content[0]!.text).minutes_per_day).toBe(45);
+
+      const forecastResult = await callCapturedTool(tools, "get_planning_forecast", {
+        project_id: project.id,
+        plan_id: plan.id,
+        agent_id: "codex",
+        start_date: "2026-01-01",
+      });
+      const forecast = JSON.parse(forecastResult.content[0]!.text);
+      expect(forecast.remaining_estimated_minutes).toBe(90);
+      expect(forecast.forecast_work_days).toBe(2);
+
+      const markdown = await callCapturedTool(tools, "get_planning_forecast", {
+        project_id: project.id,
+        plan_id: plan.id,
+        agent_id: "codex",
+        format: "markdown",
+      });
+      expect(markdown.content[0]!.text).toContain("MCP forecast task");
+
+      const listResult = await callCapturedTool(tools, "list_capacity_profiles", { agent_id: "codex" });
+      expect(JSON.parse(listResult.content[0]!.text)).toHaveLength(1);
+
+      const removeResult = await callCapturedTool(tools, "remove_capacity_profile", { agent_id_or_id: "codex", project_id: project.id });
+      expect(JSON.parse(removeResult.content[0]!.text).removed).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      resetConfig();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("audit ledger tools seal and verify local evidence", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-audit-ledger-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    try {
+      const tools = captureTools(registerTaskProjectTools);
+      const task = createTask({ title: "MCP ledger task" }, db);
+      const run = startTaskRun({ task_id: task.id, agent_id: "codex" }, db);
+      addTaskRunCommand({ run_id: run.id, command: "bun test", status: "passed" }, db);
+
+      const ledgerResult = await callCapturedTool(tools, "get_audit_ledger", { task_id: task.id, include_entries: true });
+      const ledger = JSON.parse(ledgerResult.content[0]!.text);
+      expect(ledger.entry_count).toBeGreaterThan(0);
+      expect(ledger.entries.length).toBe(ledger.entry_count);
+
+      const sealResult = await callCapturedTool(tools, "seal_audit_ledger", { name: "mcp-checkpoint", task_id: task.id, agent_id: "codex" });
+      const checkpoint = JSON.parse(sealResult.content[0]!.text);
+      expect(checkpoint.name).toBe("mcp-checkpoint");
+
+      const listResult = await callCapturedTool(tools, "list_audit_ledger_checkpoints", {});
+      expect(JSON.parse(listResult.content[0]!.text)).toHaveLength(1);
+
+      const verifyResult = await callCapturedTool(tools, "verify_audit_ledger", { checkpoint: checkpoint.id });
+      expect(JSON.parse(verifyResult.content[0]!.text).ok).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      resetConfig();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("release compatibility tool checks local release readiness", async () => {
+    const tools = captureTools(registerTaskProjectTools);
+
+    const result = await callCapturedTool(tools, "check_release_compatibility", {
+      root: `${import.meta.dir}/../..`,
+      simulated_levels: [0, 1],
+    });
+    const report = JSON.parse(result.content[0]!.text);
+
+    expect(report.ok).toBe(true);
+    expect(report.package.name).toBe("@hasna/todos");
+    expect(report.install_plan.manager).toBe("bun");
+    expect(report.checks.map((check: { id: string }) => check.id)).toContain("migration-level-0");
+
+    const markdown = await callCapturedTool(tools, "check_release_compatibility", {
+      root: `${import.meta.dir}/../..`,
+      simulated_levels: [0],
+      format: "markdown",
+    });
+    expect(markdown.content[0]!.text).toContain("# Release Compatibility");
+  });
+
+  it("usage ledger tool reports aggregate local usage and quotas", async () => {
+    const tools = captureTools(registerTaskResources);
+    const project = createProject({ name: "MCP Usage", path: "/tmp/mcp-usage" }, db);
+    const task = createTask({ title: "MCP usage task", project_id: project.id, assigned_to: "codex" }, db);
+    const run = startTaskRun({
+      task_id: task.id,
+      agent_id: "codex",
+      metadata: { usage: { total_tokens: 25, cost_usd: 0.003 } },
+      started_at: "2026-01-02T03:00:00.000Z",
+    }, db);
+    addTaskRunCommand({ run_id: run.id, command: "bun test", status: "passed", tokens: 50, cost_usd: 0.005 }, db);
+    addTaskRunArtifact({ run_id: run.id, path: "logs/mcp-usage.txt", size_bytes: 2048, store_content: false }, db);
+    finishTaskRun({ run_id: run.id, status: "completed", completed_at: "2026-01-02T03:02:00.000Z" }, db);
+
+    const result = await callCapturedTool(tools, "get_usage_ledger", {
+      project_id: project.id,
+      agent_id: "codex",
+      max_storage_bytes: 1000,
+    });
+    const report = JSON.parse(result.content[0]!.text);
+    expect(report.local_only).toBe(true);
+    expect(report.counts.commands).toBe(1);
+    expect(report.usage.metadata_tokens).toBe(75);
+    expect(report.storage.evidence_bytes).toBe(2048);
+    expect(report.quota.exceeded).toContain("max_storage_bytes");
+    expect(JSON.stringify(report)).not.toContain("bun test");
+    expect(JSON.stringify(report)).not.toContain("logs/mcp-usage.txt");
+
+    const markdown = await callCapturedTool(tools, "get_usage_ledger", { project_id: project.id, format: "markdown" });
+    expect(markdown.content[0]!.text).toContain("Local Usage Ledger");
+  });
+
+  it("time tracking tools manage local focus sessions and reports", async () => {
+    const tools = captureTools(registerTaskRelTools);
+    const task = createTask({ title: "MCP time task", estimated_minutes: 75 }, db);
+
+    const logResult = await callCapturedTool(tools, "log_time", {
+      task_id: task.id,
+      minutes: 10,
+      agent_id: "mcp",
+    });
+    expect(JSON.parse(logResult.content[0].text).minutes).toBe(10);
+
+    const startResult = await callCapturedTool(tools, "start_focus_session", {
+      task_id: task.id,
+      agent_id: "mcp",
+      title: "focus",
+      started_at: "2026-01-01T10:00:00.000Z",
+      idle_after_minutes: 20,
+    });
+    const session = JSON.parse(startResult.content[0].text);
+    expect(session.status).toBe("active");
+
+    const idleResult = await callCapturedTool(tools, "get_idle_focus_prompts", {
+      agent_id: "mcp",
+      now: "2026-01-01T10:25:00.000Z",
+    });
+    expect(JSON.parse(idleResult.content[0].text)[0].idle_minutes).toBe(25);
+
+    const stopResult = await callCapturedTool(tools, "stop_focus_session", {
+      session_id: session.id,
+      ended_at: "2026-01-01T10:30:00.000Z",
+    });
+    expect(JSON.parse(stopResult.content[0].text).actual_minutes).toBe(30);
+
+    const reportResult = await callCapturedTool(tools, "get_time_report", { include_open: true, format: "json" });
+    const report = JSON.parse(reportResult.content[0].text).find((entry: { task_id: string }) => entry.task_id === task.id);
+    expect(report.actual_minutes).toBe(40);
+    expect(getTask(task.id, db)!.actual_minutes).toBe(40);
+
+    const listResult = await callCapturedTool(tools, "list_focus_sessions", { include_completed: true });
+    expect(JSON.parse(listResult.content[0].text).map((item: { id: string }) => item.id)).toContain(session.id);
+  });
+
+  it("kanban board tools create render and move local task boards", async () => {
+    const tools = captureTools(registerTaskRelTools);
+    const task = createTask({ title: "MCP board task", status: "pending" }, db);
+
+    const createdResult = await callCapturedTool(tools, "create_board", {
+      name: "mcp-board",
+      lanes: [
+        { id: "ready", name: "Ready", statuses: ["pending"], wip_limit: null, position: 0 },
+        { id: "doing", name: "Doing", statuses: ["in_progress"], wip_limit: 1, position: 1 },
+      ],
+    });
+    const board = JSON.parse(createdResult.content[0].text);
+    expect(board.name).toBe("mcp-board");
+
+    const snapshotResult = await callCapturedTool(tools, "get_board_snapshot", { board_id: "mcp-board" });
+    const snapshot = JSON.parse(snapshotResult.content[0].text);
+    expect(snapshot.totals.ready).toBe(1);
+    expect(snapshot.keyboard.quit).toBe("q");
+
+    const movedResult = await callCapturedTool(tools, "move_board_card", {
+      board_id: board.id,
+      card_id: task.id,
+      lane_id: "doing",
+    });
+    expect(JSON.parse(movedResult.content[0].text).status).toBe("in_progress");
+
+    const listResult = await callCapturedTool(tools, "list_boards", { scope: "tasks" });
+    expect(JSON.parse(listResult.content[0].text).map((item: { name: string }) => item.name)).toContain("mcp-board");
+  });
+
+  it("calendar tools create list export and import local ICS events", async () => {
+    const tools = captureTools(registerTaskRelTools);
+    const task = createTask({ title: "MCP calendar task", due_at: "2026-06-01T09:00:00.000Z" }, db);
+
+    const createdResult = await callCapturedTool(tools, "create_calendar_item", {
+      title: "MCP milestone",
+      kind: "milestone",
+      starts_at: "2026-06-02T10:00:00.000Z",
+      task_id: task.id,
+    });
+    expect(JSON.parse(createdResult.content[0].text).kind).toBe("milestone");
+
+    const listResult = await callCapturedTool(tools, "list_calendar_events", {});
+    expect(JSON.parse(listResult.content[0].text).map((event: { kind: string }) => event.kind)).toEqual(expect.arrayContaining(["task_due", "milestone"]));
+
+    const exportResult = await callCapturedTool(tools, "export_calendar_ics", { redact: true });
+    const exported = JSON.parse(exportResult.content[0].text);
+    expect(exported.content).toContain("BEGIN:VCALENDAR");
+    expect(exported.content).not.toContain("MCP calendar task");
+
+    const importResult = await callCapturedTool(tools, "import_calendar_ics", {
+      content: "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:mcp@example.com\nDTSTART:20260603T120000Z\nSUMMARY:MCP imported\nEND:VEVENT\nEND:VCALENDAR",
+    });
+    expect(JSON.parse(importResult.content[0].text).imported).toBe(1);
+  });
+
+  it("git traceability tools link refs, commits, and verification evidence", async () => {
+    const tools = captureTools(registerTaskResources);
+    const task = createTask({ title: "Traceable via MCP" }, db);
+
+    await callCapturedTool(tools, "link_task_to_commit", {
+      task_id: task.id,
+      sha: "abcdef1234567890",
+      message: "Implement trace tools",
+      files_changed: ["src/db/task-commits.ts"],
+    });
+    await callCapturedTool(tools, "link_task_git_ref", {
+      task_id: task.id,
+      ref_type: "pull_request",
+      name: "42",
+      url: "https://github.com/hasna/todos/pull/42",
+      provider: "github",
+    });
+    await callCapturedTool(tools, "add_task_verification", {
+      task_id: task.id,
+      command: "bun test src/db/task-commits.test.ts",
+      status: "passed",
+      output_summary: "traceability tests passed",
+    });
+
+    const traceResult = await callCapturedTool(tools, "get_task_traceability", { task_id: task.id });
+    const trace = JSON.parse(traceResult.content[0]!.text);
+    expect(trace.commits[0].sha).toBe("abcdef1234567890");
+    expect(trace.git_refs[0].name).toBe("42");
+    expect(trace.verifications[0].status).toBe("passed");
+
+    const refResult = await callCapturedTool(tools, "find_tasks_by_git_ref", { ref: "pull/42" });
+    const refs = JSON.parse(refResult.content[0]!.text);
+    expect(refs[0].task_id).toBe(task.id);
+  });
+
+  it("release notes tool renders local changelog evidence", async () => {
+    const tools = captureTools(registerTaskResources);
+    const project = createProject({ name: "MCP Release", path: "/tmp/mcp-release" }, db);
+    const task = createTask({
+      title: "Publish MCP release notes",
+      project_id: project.id,
+      tags: ["release"],
+      metadata: { migration_note: "Consumers should read release_notes JSON." },
+    }, db);
+    db.run("UPDATE tasks SET status = 'completed', completed_at = ? WHERE id = ?", [
+      "2026-01-02T03:04:05.000Z",
+      task.id,
+    ]);
+
+    await callCapturedTool(tools, "link_task_to_commit", {
+      task_id: task.id,
+      sha: "1111111222222223333333444444445555555566",
+      message: "Publish release notes",
+    });
+    await callCapturedTool(tools, "add_task_verification", {
+      task_id: task.id,
+      command: "bun test src/lib/release-notes.test.ts",
+      status: "passed",
+    });
+
+    const jsonResult = await callCapturedTool(tools, "generate_release_notes", {
+      project_id: project.id,
+      tag: "release",
+      title: "MCP Release Notes",
+    });
+    const payload = JSON.parse(jsonResult.content[0]!.text);
+    expect(payload.summary.tasks).toBe(1);
+    expect(payload.commits[0].sha).toBe("1111111222222223333333444444445555555566");
+
+    const markdownResult = await callCapturedTool(tools, "generate_release_notes", {
+      project_id: project.id,
+      format: "markdown",
+    });
+    expect(markdownResult.content[0]!.text).toContain("# Release Notes");
+    expect(markdownResult.content[0]!.text).toContain("Publish MCP release notes");
+  });
+
+  it("verification provider tools manage local adapters and record evidence", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-verification-providers-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    try {
+      const tools = captureTools(registerTaskResources);
+      const task = createTask({ title: "MCP provider task" }, db);
+
+      const setResult = await callCapturedTool(tools, "set_verification_provider", {
+        name: "local",
+        kind: "command",
+        command: "printf mcp-provider-ok",
+        capabilities: ["command", "evidence"],
+      });
+      expect(JSON.parse(setResult.content[0]!.text).name).toBe("local");
+
+      const capsResult = await callCapturedTool(tools, "get_verification_provider_capabilities", { name: "local" });
+      expect(JSON.parse(capsResult.content[0]!.text).capabilities).toEqual(expect.arrayContaining(["command", "evidence"]));
+
+      const runResult = await callCapturedTool(tools, "run_verification_provider", {
+        name: "local",
+        task_id: task.id,
+        agent_id: "codex",
+      });
+      const result = JSON.parse(runResult.content[0]!.text);
+      expect(result.status).toBe("passed");
+      expect(result.output_summary).toContain("mcp-provider-ok");
+
+      const listResult = await callCapturedTool(tools, "list_verification_providers", {});
+      expect(JSON.parse(listResult.content[0]!.text)).toHaveLength(1);
+      const removeResult = await callCapturedTool(tools, "remove_verification_provider", { name: "local" });
+      expect(JSON.parse(removeResult.content[0]!.text).removed).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      resetConfig();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("run ledger tools capture local run evidence without hosted calls", async () => {
+    const tools = captureTools(registerTaskResources);
+    const task = createTask({ title: "Run via MCP" }, db);
+
+    const startResult = await callCapturedTool(tools, "start_task_run", {
+      task_id: task.id,
+      agent_id: "mcp",
+      title: "MCP local run",
+      claim: true,
+      metadata: { source: "local" },
+    });
+    const run = JSON.parse(startResult.content[0]!.text);
+    expect(run.status).toBe("running");
+
+    await callCapturedTool(tools, "add_task_run_event", {
+      run_id: run.id,
+      event_type: "comment",
+      message: "progress update",
+      agent_id: "mcp",
+    });
+    await callCapturedTool(tools, "add_task_run_command", {
+      run_id: run.id,
+      command: "bun test src/db/task-runs.test.ts",
+      status: "passed",
+      exit_code: 0,
+      output_summary: "passed",
+      artifact_path: "logs/mcp-run.txt",
+    });
+    await callCapturedTool(tools, "add_task_run_file", {
+      run_id: run.id,
+      path: "src/db/task-runs.ts",
+      status: "modified",
+    });
+    await callCapturedTool(tools, "add_task_run_artifact", {
+      run_id: run.id,
+      path: "logs/mcp-run.txt",
+      artifact_type: "log",
+      description: "local log",
+      store_content: false,
+    });
+    const artifactReportResult = await callCapturedTool(tools, "verify_task_run_artifacts", { run_id: run.id });
+    const artifactReports = JSON.parse(artifactReportResult.content[0]!.text);
+    expect(artifactReports[0].status).toBe("metadata_only");
+    await callCapturedTool(tools, "finish_task_run", {
+      run_id: run.id,
+      status: "completed",
+      summary: "done",
+    });
+
+    const ledgerResult = await callCapturedTool(tools, "get_task_run_ledger", { run_id: run.id });
+    const ledger = JSON.parse(ledgerResult.content[0]!.text);
+    expect(ledger.run.status).toBe("completed");
+    expect(ledger.events.map((event: { event_type: string }) => event.event_type)).toContain("comment");
+    expect(ledger.commands[0].status).toBe("passed");
+    expect(ledger.files[0].path).toBe("src/db/task-runs.ts");
+    expect(ledger.artifacts[0].path).toBe("logs/mcp-run.txt");
+
+    const listResult = await callCapturedTool(tools, "list_task_runs", { task_id: task.id });
+    const runs = JSON.parse(listResult.content[0]!.text);
+    expect(runs[0].id).toBe(run.id);
+  });
+
+  it("simulates local agent replay fixtures through MCP without mutating tasks", async () => {
+    const tools = captureTools(registerTaskResources);
+    const task = createTask({ title: "Replay via MCP" }, db);
+
+    const before = getTask(task.id, db)!.status;
+    const result = await callCapturedTool(tools, "simulate_agent_replay", {
+      agent_id: "mcp",
+      fixture: {
+        task: { id: task.id, title: task.title, status: "pending" },
+        runs: {
+          items: [{
+            status: "failed",
+            events: [{ event_type: "started", message: "start" }, { event_type: "failed", message: "failure" }],
+            commands: [{ command: "bun test", status: "failed", output_summary: "1 fail" }],
+          }],
+        },
+        approvals: [{ gate: "release", status: "pending" }],
+      },
+    });
+
+    const simulation = JSON.parse(result.content[0]!.text);
+    expect(simulation.mutates_database).toBe(false);
+    expect(simulation.task.final_status).toBe("failed");
+    expect(simulation.commands.failed).toBe(1);
+    expect(simulation.approvals.pending).toBe(1);
+    expect(getTask(task.id, db)!.status).toBe(before);
+  });
+
+  it("manages local extension registry through MCP without hosted calls", async () => {
+    const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-extensions-home-"));
+    const source = mkdtempSync(join(tmpdir(), "todos-mcp-extensions-source-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    try {
+      writeFileSync(join(source, "todos.extension.json"), JSON.stringify({
+        name: "mcp-extension",
+        version: "1.0.0",
+        compatibility: { todos: "*" },
+        permissions: ["tasks:read"],
+        mcp_tools: [{ name: "mcp_extension_tool" }],
+        templates: [{ name: "mcp_template", kind: "task", content: "Summarize {{task}}", variables: ["task"] }],
+        renderers: [{ name: "mcp_renderer", target: "task", template: "mcp_template" }],
+      }, null, 2));
+      const tools = captureTools(registerTaskResources);
+
+      const inspected = JSON.parse((await callCapturedTool(tools, "inspect_local_extension", { source })).content[0]!.text);
+      expect(inspected.validation.ok).toBe(true);
+      expect(inspected.checksum).toMatch(/^sha256:/);
+
+      const compatibility = JSON.parse((await callCapturedTool(tools, "test_local_extension_compatibility", { source })).content[0]!.text);
+      expect(compatibility.ok).toBe(true);
+      expect(compatibility.summary.mcp_tools).toBe(1);
+      expect(compatibility.summary.templates).toBe(1);
+      expect(compatibility.summary.renderers).toBe(1);
+
+      const discovered = JSON.parse((await callCapturedTool(tools, "discover_local_extensions", { project_path: source })).content[0]!.text);
+      expect(discovered.local_only).toBe(true);
+      expect(discovered.no_network).toBe(true);
+      expect(discovered.discovered.map((extension: { manifest: { name: string } }) => extension.manifest.name)).toEqual(["mcp-extension"]);
+
+      const installed = JSON.parse((await callCapturedTool(tools, "install_local_extension", {
+        source,
+        checksum: inspected.checksum,
+        trust: true,
+      })).content[0]!.text);
+      expect(installed.status).toBe("trusted");
+      expect(installed.trusted).toBe(true);
+
+      const listed = JSON.parse((await callCapturedTool(tools, "list_local_extensions", {})).content[0]!.text);
+      expect(listed.map((extension: { name: string }) => extension.name)).toEqual(["mcp-extension"]);
+
+      const removed = JSON.parse((await callCapturedTool(tools, "remove_local_extension", { name: "mcp-extension" })).content[0]!.text);
+      expect(removed.removed).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      resetConfig();
+      rmSync(home, { recursive: true, force: true });
+      rmSync(source, { recursive: true, force: true });
+    }
+  });
+
+  it("registers guided local workflow prompts and catalog resource", async () => {
+    const resources = new Map<string, () => unknown>();
+    const prompts = new Map<string, { description: string; handler: (args: Record<string, string>) => unknown }>();
+    const server = {
+      resource(_name: string, uri: string, _metadata: unknown, handler: () => unknown) {
+        resources.set(uri, handler);
+      },
+      prompt(name: string, description: string, _schema: unknown, handler: (args: Record<string, string>) => unknown) {
+        prompts.set(name, { description, handler });
+      },
+    };
+
+    registerWorkflowPrompts(server as any);
+    expect(prompts.has("goal_planning")).toBe(true);
+    expect(prompts.has("incident_response")).toBe(true);
+    expect(resources.has("todos://workflow-prompts")).toBe(true);
+
+    const rendered = prompts.get("goal_planning")!.handler({ objective: "Ship release", task_id: "abcd1234" }) as any;
+    expect(rendered.description).toContain("goal");
+    expect(rendered.messages[0].content.text).toContain("Ship release");
+
+    const catalog = await resources.get("todos://workflow-prompts")!() as any;
+    const promptsJson = JSON.parse(catalog.contents[0].text);
+    expect(promptsJson.map((prompt: { id: string }) => prompt.id)).toContain("verification");
+  });
+
+  it("exposes onboarding fixtures through MCP resources and tools", async () => {
+    const resources = new Map<string, () => unknown>();
+    const server = {
+      resource(_name: string, uri: string, _metadata: unknown, handler: () => unknown) {
+        resources.set(uri, handler);
+      },
+      tool() {},
+    };
+    const ctx = {
+      shouldRegisterTool: () => false,
+      resolveId: () => "",
+      formatError: (error: unknown) => String(error),
+    };
+
+    registerTaskResources(server as any, ctx as any);
+    expect(resources.has("todos://onboarding/fixtures")).toBe(true);
+    expect(resources.has("todos://onboarding/demo")).toBe(true);
+    const catalog = await resources.get("todos://onboarding/fixtures")!() as any;
+    const fixtures = JSON.parse(catalog.contents[0].text);
+    expect(fixtures[0].name).toBe("agent-project-demo");
+
+    const tools = captureTools(registerTaskResources);
+    const listed = JSON.parse((await callCapturedTool(tools, "list_onboarding_fixtures", {})).content[0]!.text);
+    expect(listed[0].stats.tasks).toBe(4);
+    const preview = JSON.parse((await callCapturedTool(tools, "import_onboarding_fixture", {})).content[0]!.text);
+    expect(preview.dry_run).toBe(true);
+    expect(preview.inserted.tasks).toBe(4);
+    const applied = JSON.parse((await callCapturedTool(tools, "import_onboarding_fixture", { apply: true })).content[0]!.text);
+    expect(applied.dry_run).toBe(false);
+    expect(listTasks()).toHaveLength(4);
+  });
+
+  it("exposes local snapshots through MCP resources and tools", async () => {
+    const resources = new Map<string, () => unknown>();
+    const server = {
+      resource(_name: string, uri: string, _metadata: unknown, handler: () => unknown) {
+        resources.set(uri, handler);
+      },
+      tool() {},
+    };
+    const ctx = {
+      shouldRegisterTool: () => false,
+      resolveId: () => "",
+      formatError: (error: unknown) => String(error),
+    };
+
+    registerTaskResources(server as any, ctx as any);
+    expect(resources.has("todos://snapshots/catalog")).toBe(true);
+    expect(resources.has("todos://snapshots/tasks")).toBe(true);
+    const catalog = await resources.get("todos://snapshots/catalog")!() as any;
+    const snapshotResources = JSON.parse(catalog.contents[0].text);
+    expect(snapshotResources.map((resource: { type: string }) => resource.type)).toContain("evidence");
+
+    const tools = captureTools(registerTaskResources);
+    await callCapturedTool(tools, "import_onboarding_fixture", { apply: true });
+    const listed = JSON.parse((await callCapturedTool(tools, "list_local_snapshots", {})).content[0]!.text);
+    expect(listed.map((resource: { uri: string }) => resource.uri)).toContain("todos://snapshots/tasks");
+    const snapshot = JSON.parse((await callCapturedTool(tools, "get_local_snapshot", { type: "tasks" })).content[0]!.text);
+    expect(snapshot.local_only).toBe(true);
+    expect(snapshot.items.length).toBeGreaterThan(0);
+    const markdown = (await callCapturedTool(tools, "get_local_snapshot", { type: "tasks", format: "markdown" })).content[0]!.text;
+    expect(markdown).toContain("# tasks snapshot");
+    const polled = JSON.parse((await callCapturedTool(tools, "poll_local_snapshots", { types: ["tasks", "evidence"] })).content[0]!.text);
+    expect(polled.snapshots.map((item: { type: string }) => item.type)).toEqual(["tasks", "evidence"]);
+  });
+
+  it("agent run dispatcher tools queue and dry-run local adapters", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-agent-runs-home-"));
+    process.env["HOME"] = home;
+    resetConfig();
+
+    const tools = captureTools(registerTaskResources);
+    const task = createTask({ title: "Queued from MCP" }, db);
+    const adapterResult = await callCapturedTool(tools, "set_agent_run_adapter", { name: "codex", command: "printf ok" });
+    expect(JSON.parse(adapterResult.content[0]!.text).name).toBe("codex");
+
+    const queuedResult = await callCapturedTool(tools, "queue_agent_run", { task_id: task.id, adapter: "codex", agent_id: "codex" });
+    const queued = JSON.parse(queuedResult.content[0]!.text);
+    expect(queued.dispatcher.state).toBe("queued");
+
+    const dryRunResult = await callCapturedTool(tools, "run_next_agent_dispatch", { dry_run: true });
+    expect(JSON.parse(dryRunResult.content[0]!.text).dry_run).toBe(true);
+
+    const listResult = await callCapturedTool(tools, "list_agent_run_queue", {});
+    expect(JSON.parse(listResult.content[0]!.text)[0].run.id).toBe(queued.run.id);
+
+    await callCapturedTool(tools, "cancel_agent_run_dispatch", { run_id: queued.run.id });
+    await callCapturedTool(tools, "retry_agent_run_dispatch", { run_id: queued.run.id });
+    await callCapturedTool(tools, "remove_agent_run_adapter", { name: "codex" });
+
+    if (previousHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = previousHome;
+    resetConfig();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("inbox tools capture and dedupe local failure intake", async () => {
+    const tools = captureTools(registerTaskResources);
+
+    const createdResult = await callCapturedTool(tools, "create_inbox_item", {
+      body: `GitHub Actions failed\n${["bearer", "abcdefghijklmnopqrstuvwxyz"].join(" ")}`,
+      source_type: "ci_log",
+      metadata: { secret: "hidden" },
+    });
+    const created = JSON.parse(createdResult.content[0]!.text);
+    expect(created.item.source_type).toBe("ci_log");
+    expect(created.item.body).not.toContain("abcdefghijklmnopqrstuvwxyz");
+    expect(created.item.metadata.secret).toBe("[REDACTED]");
+    expect(created.task.tags).toContain("ci_log");
+
+    const duplicateResult = await callCapturedTool(tools, "create_inbox_item", {
+      body: `GitHub Actions failed\n${["bearer", "abcdefghijklmnopqrstuvwxyz"].join(" ")}`,
+      source_type: "ci_log",
+    });
+    const duplicate = JSON.parse(duplicateResult.content[0]!.text);
+    expect(duplicate.duplicate).toBe(true);
+    expect(duplicate.item.id).toBe(created.item.id);
+
+    const listResult = await callCapturedTool(tools, "list_inbox_items", { source_type: "ci_log" });
+    const items = JSON.parse(listResult.content[0]!.text);
+    expect(items).toHaveLength(1);
+
+    const itemResult = await callCapturedTool(tools, "get_inbox_item", { id: created.item.id.slice(0, 8) });
+    const item = JSON.parse(itemResult.content[0]!.text);
+    expect(item.id).toBe(created.item.id);
+  });
+
+  it("imports external issue data through the MCP resource tool", async () => {
+    const tools = captureTools(registerTaskResources);
+    const project = createProject({ name: "Issue Imports", path: "/tmp/issue-imports" }, db);
+
+    const previewResult = await callCapturedTool(tools, "import_external_issues", {
+      provider: "linear",
+      project_id: project.id.slice(0, 8),
+      json: {
+        issues: [{
+          id: "lin-1",
+          identifier: "ENG-123",
+          title: "MCP imported issue",
+          description: `Failure includes bearer ${"abcdefghijklmnopqrstuvwxyz"}`,
+          url: "https://linear.app/hasna/issue/ENG-123/mcp-imported-issue",
+          state: { name: "Todo" },
+          labels: { nodes: [{ name: "backend" }] },
+          priorityLabel: "High",
+        }],
+      },
+    });
+    const preview = JSON.parse(previewResult.content[0]!.text);
+    expect(preview.dry_run).toBe(true);
+    expect(preview.issues[0].key).toBe("ENG-123");
+    expect(preview.issues[0].body).not.toContain("abcdefghijklmnopqrstuvwxyz");
+
+    const appliedResult = await callCapturedTool(tools, "import_external_issues", {
+      provider: "linear",
+      project_id: project.id.slice(0, 8),
+      apply: true,
+      json: {
+        issues: [{
+          id: "lin-1",
+          identifier: "ENG-123",
+          title: "MCP imported issue",
+          description: "Same imported issue",
+          url: "https://linear.app/hasna/issue/ENG-123/mcp-imported-issue",
+          priorityLabel: "High",
+        }],
+      },
+    });
+    const applied = JSON.parse(appliedResult.content[0]!.text);
+    expect(applied.created_tasks).toHaveLength(1);
+    expect(applied.created_tasks[0].project_id).toBe(project.id);
+    expect(applied.created_tasks[0].tags).toEqual(expect.arrayContaining(["external-issue", "linear"]));
+    expect(applied.inbox_items).toHaveLength(1);
+
+    const duplicateResult = await callCapturedTool(tools, "import_external_issues", {
+      provider: "linear",
+      apply: true,
+      json: {
+        id: "lin-1",
+        identifier: "ENG-123",
+        title: "MCP imported issue",
+        url: "https://linear.app/hasna/issue/ENG-123/mcp-imported-issue",
+      },
+    });
+    const duplicate = JSON.parse(duplicateResult.content[0]!.text);
+    expect(duplicate.created_tasks).toHaveLength(0);
+    expect(duplicate.existing_matches).toHaveLength(1);
   });
 
   it("comment wrappers persist and read the real comment fields", async () => {
@@ -312,6 +2064,133 @@ describe("MCP tool wrappers", () => {
     expect(result.content[0]!.text).toContain("Alias comment body");
   });
 
+  it("activity timeline wrapper returns redacted local task and run events", async () => {
+    const tools = captureTools(registerTaskProjectTools);
+    const task = createTask({ title: "Timeline via MCP" }, db);
+    addComment({ task_id: task.id, content: `${["Bearer", "abcdefghijklmnop"].join(" ")} should redact` }, db);
+    const run = startTaskRun({ task_id: task.id, agent_id: "codex" }, db);
+    addTaskRunEvent({ run_id: run.id, event_type: "progress", message: ["Bearer", "bcdefghijklmnopq"].join(" ") }, db);
+
+    const result = await callCapturedTool(tools, "get_activity_timeline", {
+      entity_type: "task",
+      entity_id: task.id,
+      order: "asc",
+    });
+    const timeline = JSON.parse(result.content[0]!.text);
+    expect(timeline.entries.map((entry: { source: string }) => entry.source)).toEqual(expect.arrayContaining(["comment", "run_event"]));
+    expect(JSON.stringify(timeline.entries)).toContain("[REDACTED]");
+    expect(JSON.stringify(timeline.entries)).not.toContain("abcdefghijklmnop");
+  });
+
+  it("local field wrappers set, get, and query task metadata", async () => {
+    const tools = captureTools(registerTaskProjectTools);
+    const task = createTask({ title: "MCP fielded" }, db);
+
+    const setResult = await callCapturedTool(tools, "set_task_fields", {
+      task_id: task.id,
+      labels: ["mcp", "bug"],
+      priority: "critical",
+      severity: "s0",
+      owner: "codex",
+      area: "metadata",
+      custom: { component: "fields" },
+    });
+    const setPayload = JSON.parse(setResult.content[0]!.text);
+    expect(setPayload.task.priority).toBe("critical");
+    expect(setPayload.fields.labels).toEqual(["bug", "mcp"]);
+
+    const getResult = await callCapturedTool(tools, "get_task_fields", { task_id: task.id });
+    const fields = JSON.parse(getResult.content[0]!.text);
+    expect(fields.owner).toBe("codex");
+    expect(fields.custom.component).toBe("fields");
+
+    const queryResult = await callCapturedTool(tools, "query_tasks_by_fields", {
+      labels: ["mcp"],
+      severity: "s0",
+      custom: { component: "fields" },
+    });
+    const query = JSON.parse(queryResult.content[0]!.text);
+    expect(query.count).toBe(1);
+    expect(query.tasks[0].id).toBe(task.id);
+  });
+
+  it("local workflow state wrappers list, set, migrate, and query states", async () => {
+    const previousHome = process.env["HOME"];
+    const { mkdtempSync, rmSync, writeFileSync, mkdirSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-workflow-home-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    mkdirSync(join(home, ".hasna", "todos"), { recursive: true });
+    writeFileSync(join(home, ".hasna", "todos", "config.json"), JSON.stringify({
+      workflow_states: {
+        states: [
+          { name: "verifying", canonical_status: "in_progress", aliases: ["verify"], transitions: ["released"] },
+          { name: "released", canonical_status: "completed", terminal: true },
+        ],
+      },
+    }));
+    try {
+      const tools = captureTools(registerTaskProjectTools);
+      const task = createTask({ title: "MCP workflowed" }, db);
+
+      const states = JSON.parse((await callCapturedTool(tools, "list_workflow_states", {})).content[0]!.text);
+      expect(states.states.map((state: { name: string }) => state.name)).toContain("verifying");
+
+      const set = JSON.parse((await callCapturedTool(tools, "set_task_workflow_state", {
+        task_id: task.id,
+        state: "verify",
+        actor: "mcp",
+      })).content[0]!.text);
+      expect(set.workflow_state.name).toBe("verifying");
+      expect(set.task.status).toBe("in_progress");
+
+      const queried = JSON.parse((await callCapturedTool(tools, "query_tasks_by_workflow_state", {
+        state: "verifying",
+      })).content[0]!.text);
+      expect(queried.count).toBe(1);
+      expect(queried.tasks[0].id).toBe(task.id);
+
+      const migrated = JSON.parse((await callCapturedTool(tools, "migrate_workflow_states", {
+        apply: false,
+      })).content[0]!.text);
+      expect(migrated.applied).toBe(false);
+      expect(migrated.local_only).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      resetConfig();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("duplicate wrappers scan and merge without dropping task records", async () => {
+    const tools = captureTools(registerTaskProjectTools);
+    const primary = createTask({ title: "MCP duplicate parser crash" }, db);
+    const duplicate = createTask({ title: "MCP duplicate parser crash" }, db);
+
+    const scanResult = await callCapturedTool(tools, "find_duplicate_tasks", { threshold: 0.8 });
+    const scan = JSON.parse(scanResult.content[0]!.text);
+    expect(scan.count).toBeGreaterThanOrEqual(1);
+    expect(scan.candidates.some((candidate: { primary_task: Task; duplicate_task: Task }) => {
+      const pair = new Set([candidate.primary_task.id, candidate.duplicate_task.id]);
+      return pair.has(primary.id) && pair.has(duplicate.id);
+    })).toBe(true);
+
+    const mergeResult = await callCapturedTool(tools, "merge_duplicate_task", {
+      primary_task_id: primary.id,
+      duplicate_task_id: duplicate.id,
+      agent_id: "codex",
+      reason: "same MCP task",
+    });
+    const merge = JSON.parse(mergeResult.content[0]!.text);
+    expect(merge.primary_task.id).toBe(primary.id);
+    expect(merge.archived_duplicate.status).toBe("cancelled");
+    expect(merge.archived_duplicate.metadata.merged_into).toBe(primary.id);
+    expect(getTask(duplicate.id)?.status).toBe("cancelled");
+  });
+
   it("search_tasks wrapper calls the search library", async () => {
     const tools = captureTools(registerTaskProjectTools);
     createTask({ title: "Needle wrapper task" }, db);
@@ -321,6 +2200,68 @@ describe("MCP tool wrappers", () => {
     });
 
     expect(result.content[0]!.text).toContain("Needle wrapper task");
+  });
+
+  it("saved search view wrappers manage local views", async () => {
+    const tools = captureTools(registerTaskProjectTools);
+    const task = createTask({ title: "Needle saved view task", tags: ["views"] }, db);
+
+    const savedResult = await callCapturedTool(tools, "save_search_view", {
+      name: "mcp-needle",
+      query: "Needle",
+      scope: "tasks",
+      tags: ["views"],
+    });
+    expect(JSON.parse(savedResult.content[0]!.text).name).toBe("mcp-needle");
+
+    const listResult = await callCapturedTool(tools, "list_search_views", {});
+    expect(JSON.parse(listResult.content[0]!.text).map((view: { name: string }) => view.name)).toContain("mcp-needle");
+
+    const runResult = await callCapturedTool(tools, "run_search_view", { name: "mcp-needle" });
+    const run = JSON.parse(runResult.content[0]!.text);
+    expect(run.count).toBe(1);
+    expect(run.results[0].entity.id).toBe(task.id);
+
+    const deletedResult = await callCapturedTool(tools, "delete_search_view", { name: "mcp-needle" });
+    expect(JSON.parse(deletedResult.content[0]!.text).deleted).toBe(true);
+  });
+
+  it("task contract wrappers expose acceptance criteria and review gates", async () => {
+    const tools = captureTools(registerTaskAdvTools);
+    const task = createTask({ title: "Contract via MCP" }, db);
+
+    const contractResult = await callCapturedTool(tools, "set_task_contract", {
+      task_id: task.id,
+      acceptance_criteria: ["MCP stores criteria"],
+      verification_commands: ["bun test src/mcp/mcp.test.ts"],
+      expected_artifacts: ["logs/mcp.txt"],
+      risk_level: "high",
+      done_definition: ["review approved"],
+    });
+    expect(contractResult.content[0]!.text).toContain("MCP stores criteria");
+
+    const reviewResult = await callCapturedTool(tools, "request_task_review", {
+      task_id: task.id,
+      requester: "codex",
+      reviewer: "reviewer",
+    });
+    expect(reviewResult.content[0]!.text).toContain("\"state\": \"requested\"");
+
+    const checkResult = await callCapturedTool(tools, "check_task_done_contract", { task_id: task.id });
+    const check = JSON.parse(checkResult.content[0]!.text);
+    expect(check.ok).toBe(false);
+    expect(check.missing).toEqual(expect.arrayContaining(["task_status_completed", "review_approved"]));
+
+    const showResult = await callCapturedTool(tools, "get_task_contract", { task_id: task.id });
+    expect(showResult.content[0]!.text).toContain("\"reviewer\": \"reviewer\"");
+
+    const reopenedResult = await callCapturedTool(tools, "record_task_review", {
+      task_id: task.id,
+      state: "reopened",
+      reviewer: "reviewer",
+      notes: "Needs another pass",
+    });
+    expect(reopenedResult.content[0]!.text).toContain("\"state\": \"reopened\"");
   });
 
   it("auto tools report deadlines and health without dead imports", async () => {
@@ -335,6 +2276,42 @@ describe("MCP tool wrappers", () => {
 
     const health = await callCapturedTool(tools, "get_health", {});
     expect(health.content[0]!.text).toContain("Tasks:");
+
+    const doctor = await callCapturedTool(tools, "run_doctor", { apply: false });
+    expect(doctor.content[0]!.text).toContain("\"dry_run\": true");
+    expect(doctor.content[0]!.text).toContain("migration_level");
+  });
+
+  it("machine tools expose heartbeat and topology diagnostics", async () => {
+    const tools = captureTools(registerMachineTools);
+    await callCapturedTool(tools, "machines_register", {
+      name: "spark02",
+      hostname: "spark02",
+      tailscale_name: "spark02.tailnet",
+      tailscale_ip: "100.64.0.11",
+      lan_address: "192.168.8.11",
+      workspace_path: "/home/hasna/workspace",
+    });
+
+    const heartbeat = await callCapturedTool(tools, "machines_heartbeat", {
+      name: "spark02",
+      workspace_path: "/home/hasna/workspace",
+    });
+    expect(heartbeat.content[0]!.text).toContain("spark02");
+
+    const topology = await callCapturedTool(tools, "machines_topology", { stale_minutes: 30 });
+    expect(topology.content[0]!.text).toContain("spark02");
+    expect(topology.content[0]!.text).toContain("100.64.0.11");
+  });
+
+  it("auto get_stale_tasks accepts MCP hour and minute parameters", async () => {
+    const tools = captureTools(registerTaskAutoTools);
+    const task = createTask({ title: "Stale wrapper task", status: "in_progress" }, db);
+    const staleTime = new Date(Date.now() - 90 * 60 * 1000).toISOString();
+    db.run("UPDATE tasks SET updated_at = ?, locked_at = ? WHERE id = ?", [staleTime, staleTime, task.id]);
+
+    const result = await callCapturedTool(tools, "get_stale_tasks", { minutes: 30 });
+    expect(result.content[0]!.text).toContain("Stale wrapper task");
   });
 
   it("workflow queue tools expose next, claim, changed, status, and context", async () => {
@@ -358,6 +2335,23 @@ describe("MCP tool wrappers", () => {
 
     await callCapturedTool(workflowTools, "claim_next_task", { agent_id: "mcp" });
     expect(getTask(task.id, db)!.status).toBe("in_progress");
+  });
+
+  it("workflow claim_next_task can steal stale local work when requested", async () => {
+    const workflowTools = captureTools(registerTaskWorkflowTools);
+    const task = createTask({ title: "Steal via MCP" }, db);
+    startTask(task.id, "old-agent", db);
+    const staleTime = new Date(Date.now() - 90 * 60 * 1000).toISOString();
+    db.run("UPDATE tasks SET updated_at = ?, locked_at = ? WHERE id = ?", [staleTime, staleTime, task.id]);
+
+    const result = await callCapturedTool(workflowTools, "claim_next_task", {
+      agent_id: "new-agent",
+      steal_stale: true,
+      stale_minutes: 30,
+    });
+
+    expect(result.content[0]!.text).toContain("Stolen");
+    expect(getTask(task.id, db)!.locked_by).toBe("new-agent");
   });
 
   it("task detail tools are compact by default and expand on request", async () => {
@@ -410,6 +2404,30 @@ describe("MCP tool wrappers", () => {
     }) as { isError?: boolean; content: { text: string }[] };
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toContain("Invalid agent name");
+  });
+
+  it("template tools expose the bundled local library and database templates", async () => {
+    const tools = captureTools(registerTemplateTools);
+
+    const library = await callCapturedTool(tools, "list_template_library", {});
+    const templates = JSON.parse(library.content[0]!.text) as Array<{ name: string; task_count: number }>;
+    expect(templates.map((template) => template.name)).toEqual(expect.arrayContaining([
+      "bug-fix",
+      "feature-implementation",
+      "security-review",
+      "release",
+      "migration",
+      "incident",
+      "docs-refresh",
+      "qa",
+    ]));
+    expect(templates.find((template) => template.name === "qa")!.task_count).toBeGreaterThan(0);
+
+    const initialized = await callCapturedTool(tools, "init_templates", {});
+    expect(initialized.content[0]!.text).toContain("Created");
+
+    const listed = await callCapturedTool(tools, "list_templates", {});
+    expect(listed.content[0]!.text).toContain("feature-implementation");
   });
 });
 

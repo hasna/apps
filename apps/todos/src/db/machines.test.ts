@@ -14,10 +14,13 @@ import {
   unarchiveMachine,
   deleteMachine,
   backfillMachineId,
+  updateMachineHeartbeat,
+  getMachineTopologyDiagnostics,
 } from "./machines.js";
 import { createTask } from "./tasks.js";
 import { createProject } from "./projects.js";
 import { registerAgent } from "./agents.js";
+import { setMachineLocalPath } from "./projects.js";
 
 beforeEach(() => {
   process.env["TODOS_DB_PATH"] = ":memory:";
@@ -288,6 +291,79 @@ describe("registerMachine", () => {
     const primary = getPrimaryMachine();
     expect(primary).not.toBeNull();
     expect(primary!.id).toBe(m.id);
+  });
+
+  it("should persist user-provided topology metadata without network probing", () => {
+    const m = registerMachine("spark01", {
+      hostname: "spark01",
+      ssh_address: "hasna@spark01",
+      tailscale_name: "spark01.tailnet",
+      tailscale_ip: "100.64.0.10",
+      lan_address: "192.168.8.10",
+      workspace_path: "/home/hasna/workspace",
+    });
+
+    expect(m.metadata).toMatchObject({
+      tailscale_name: "spark01.tailnet",
+      tailscale_ip: "100.64.0.10",
+      lan_address: "192.168.8.10",
+      workspace_path: "/home/hasna/workspace",
+    });
+  });
+
+  it("should update heartbeat metadata for the local machine", () => {
+    const m = registerMachine("heartbeat-box", { hostname: "old-host" });
+    const updated = updateMachineHeartbeat(m.id, {
+      hostname: "new-host",
+      workspace_path: "/tmp/heartbeat-workspace",
+      lan_address: "10.0.0.5",
+    });
+
+    expect(updated.id).toBe(m.id);
+    expect(updated.hostname).toBe("new-host");
+    expect(updated.metadata).toMatchObject({
+      workspace_path: "/tmp/heartbeat-workspace",
+      lan_address: "10.0.0.5",
+    });
+    expect(Date.parse(updated.last_seen_at)).toBeGreaterThanOrEqual(Date.parse(m.last_seen_at));
+  });
+});
+
+describe("machine topology diagnostics", () => {
+  it("should report stale machines and machine-local path mismatches", () => {
+    const db = getDatabase();
+    process.env["TODOS_MACHINE_NAME"] = "local-box";
+    const local = getOrCreateLocalMachine(db);
+    const remote = registerMachine("remote-box", {
+      hostname: "remote-box",
+      tailscale_name: "remote.tailnet",
+      tailscale_ip: "100.64.0.20",
+      lan_address: "192.168.8.20",
+      workspace_path: "/srv/workspace",
+    }, db);
+    db.run("UPDATE machines SET last_seen_at = ? WHERE id = ?", ["2026-05-21T10:00:00.000Z", remote.id]);
+
+    const project = createProject({ name: "topology-project", path: "/workspace/global-topology" });
+    setMachineLocalPath(project.id, "/workspace/local-topology", db);
+    db.run(
+      "INSERT INTO project_machine_paths (id, project_id, machine_id, path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ["remote-path", project.id, remote.id, "/srv/workspace/topology-project", "2026-05-21T10:01:00.000Z", "2026-05-21T10:01:00.000Z"],
+    );
+
+    const diagnostics = getMachineTopologyDiagnostics({ stale_minutes: 30 }, db, new Date("2026-05-21T11:00:00.000Z"));
+
+    expect(diagnostics.local_machine?.id).toBe(local.id);
+    expect(diagnostics.stale_machines.map((m) => m.name)).toContain("remote-box");
+    expect(diagnostics.path_issues).toContainEqual(expect.objectContaining({
+      type: "path_mismatch",
+      project_id: project.id,
+    }));
+    expect(diagnostics.machines.find((m) => m.name === "remote-box")?.topology).toMatchObject({
+      tailscale_name: "remote.tailnet",
+      tailscale_ip: "100.64.0.20",
+      lan_address: "192.168.8.20",
+      workspace_path: "/srv/workspace",
+    });
   });
 });
 

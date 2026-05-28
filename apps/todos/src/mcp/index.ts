@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { registerCloudSyncTools } from "./tools/cloud.js";
 import { getAgent, getAgentByName } from "../db/agents.js";
 import { getDatabase, resolvePartialId } from "../db/database.js";
 import { logError } from "../lib/logger.js";
@@ -30,8 +29,11 @@ import { registerTaskRelTools } from "./tools/task-rel-tools.js";
 import { registerCodeTools } from "./tools/code-tools.js";
 import { registerMachineTools } from "./tools/machines.js";
 import { registerAgentTools } from "./tools/agents.js";
+import { registerTemplateTools } from "./tools/templates.js";
+import { registerEnvironmentSnapshotTools } from "./tools/environment-snapshots.js";
+import { registerWorkflowPrompts } from "./tools/workflow-prompts.js";
 import { getPackageVersion } from "../lib/package-version.js";
-import { installMcpTokenTelemetry, shouldRegisterToolForProfile } from "./token-utils.js";
+import { installMcpTokenDiagnostics, shouldRegisterToolForProfile } from "./token-utils.js";
 
 function getMcpVersion(): string {
   return getPackageVersion(import.meta.url);
@@ -50,7 +52,7 @@ const server = new McpServer({
   name: "todos",
   version: getMcpVersion(),
 });
-installMcpTokenTelemetry(server);
+installMcpTokenDiagnostics(server);
 
 // === PROFILE FILTERING ===
 
@@ -218,6 +220,9 @@ registerTaskResources(server, toolContext);
 registerTaskRelTools(server, toolContext);
 registerCodeTools(server, toolContext);
 registerAgentTools(server, { ...toolContext, agentFocusMap });
+registerTemplateTools(server, toolContext);
+registerEnvironmentSnapshotTools(server, toolContext);
+registerWorkflowPrompts(server);
 
 // === MACHINES ===
 
@@ -226,10 +231,6 @@ registerMachineTools(server, { shouldRegisterTool, formatError });
 // === DISPATCH ===
 
 registerDispatchTools(server, { shouldRegisterTool, resolveId, formatError });
-
-// === CLOUD ===
-
-registerCloudSyncTools(server, { shouldRegisterTool, formatError });
 
 // === START SERVER ===
 

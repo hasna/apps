@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { getDatabase, closeDatabase, resetDatabase } from "../db/database.js";
-import { extractFromSource, extractTodos, tagToPriority, EXTRACT_TAGS } from "./extract.js";
+import { buildCodebaseIndex, extractFromSource, extractTodos, tagToPriority, watchSourceTodos, EXTRACT_TAGS } from "./extract.js";
 import type { ExtractedComment, ExtractTag } from "./extract.js";
 import { createTask, listTasks } from "../db/tasks.js";
 import { createProject } from "../db/projects.js";
@@ -145,6 +145,16 @@ line4
     const results = extractFromSource(source, "test.ts");
     expect(results[0]!.raw).toBe("  // TODO: indented comment");
   });
+
+  it("should attach nearest source symbol and stable fingerprint", () => {
+    const source = `export function buildPlan() {
+  // TODO: Split this up
+}`;
+    const results = extractFromSource(source, "planner.ts");
+    expect(results[0]!.symbol).toBe("buildPlan");
+    expect(results[0]!.symbol_kind).toBe("function");
+    expect(results[0]!.fingerprint).toHaveLength(24);
+  });
 });
 
 describe("tagToPriority", () => {
@@ -274,6 +284,47 @@ describe("extractTodos (integration)", () => {
     expect(result.comments[0]!.file).toBe("app.ts");
   });
 
+  it("should respect .gitignore patterns by default", () => {
+    writeFileSync(join(tempDir, ".gitignore"), "ignored.ts\nfixtures/\n");
+    mkdirSync(join(tempDir, "fixtures"), { recursive: true });
+    writeFileSync(join(tempDir, "ignored.ts"), `// TODO: Hidden`);
+    writeFileSync(join(tempDir, "fixtures", "fixture.ts"), `// TODO: Hidden fixture`);
+    writeFileSync(join(tempDir, "app.ts"), `// TODO: Visible`);
+
+    const result = extractTodos({ path: tempDir, dry_run: true }, db);
+    expect(result.comments.map((comment) => comment.file)).toEqual(["app.ts"]);
+  });
+
+  it("should support explicit excludes and gitignore opt-out", () => {
+    writeFileSync(join(tempDir, ".gitignore"), "ignored.ts\n");
+    writeFileSync(join(tempDir, "ignored.ts"), `// TODO: Included when disabled`);
+    writeFileSync(join(tempDir, "skip.ts"), `// TODO: Explicitly skipped`);
+
+    const result = extractTodos({
+      path: tempDir,
+      dry_run: true,
+      respect_gitignore: false,
+      exclude: ["skip.ts"],
+    }, db);
+
+    expect(result.comments.map((comment) => comment.file)).toEqual(["ignored.ts"]);
+  });
+
+  it("should build a local codebase index with symbols and comments", () => {
+    writeFileSync(join(tempDir, "app.ts"), `class Runner {
+  start() {}
+}
+// TODO: Wire runner`);
+
+    const index = buildCodebaseIndex({ path: tempDir });
+
+    expect(index.total_comments).toBe(1);
+    expect(index.total_symbols).toBe(2);
+    expect(index.files[0]!.comments[0]!.message).toBe("Wire runner");
+    expect(index.files[0]!.symbols.map((symbol) => symbol.name)).toEqual(["Runner", "start"]);
+    expect(index.respects_gitignore).toBe(true);
+  });
+
   it("should scan a single file", () => {
     const filePath = join(tempDir, "single.ts");
     writeFileSync(filePath, `// TODO: Single file scan\n// FIXME: Another one`);
@@ -305,6 +356,41 @@ describe("extractTodos (integration)", () => {
 
     const result = extractTodos({ path: tempDir, assigned_to: "maximus" }, db);
     expect(result.tasks[0]!.assigned_to).toBe("maximus");
+  });
+
+  it("should deduplicate moved comments by fingerprint", () => {
+    const filePath = join(tempDir, "app.ts");
+    writeFileSync(filePath, `function run() {
+  // TODO: Keep this task stable
+}`);
+
+    const first = extractTodos({ path: tempDir }, db);
+    expect(first.tasks).toHaveLength(1);
+
+    writeFileSync(filePath, `function run() {
+
+  // TODO: Keep this task stable
+}`);
+    const second = extractTodos({ path: tempDir }, db);
+    expect(second.tasks).toHaveLength(0);
+    expect(second.skipped).toBe(1);
+  });
+
+  it("should run a finite local watcher scan", async () => {
+    writeFileSync(join(tempDir, "app.ts"), `// TODO: Watch this`);
+
+    const result = await watchSourceTodos({
+      path: tempDir,
+      dry_run: true,
+      include_index: true,
+      once: true,
+      max_runs: 1,
+    });
+
+    expect(result.runs).toHaveLength(1);
+    expect(result.runs[0]!.changed_files).toEqual(["app.ts"]);
+    expect(result.runs[0]!.result.comments[0]!.message).toBe("Watch this");
+    expect(result.runs[0]!.result.index!.total_comments).toBe(1);
   });
 });
 

@@ -11,6 +11,12 @@ import {
   logTime,
   getTimeLogs,
   getTimeReport,
+  startFocusSession,
+  pauseFocusSession,
+  resumeFocusSession,
+  stopFocusSession,
+  listFocusSessions,
+  getIdleFocusSessionPrompts,
   watchTask,
   unwatchTask,
   getTaskWatchers,
@@ -264,6 +270,62 @@ describe("logTime", () => {
     expect(log.started_at).toBe(started);
     expect(log.ended_at).toBe(ended);
     expect(log.notes).toBe("worked hard");
+  });
+
+  it("rolls up actual minutes on the task", () => {
+    const task = createTask({ title: "Rollup time" }, db);
+    logTime({ task_id: task.id, minutes: 30 }, db);
+    logTime({ task_id: task.id, minutes: 15 }, db);
+
+    expect(getDatabase().query("SELECT actual_minutes FROM tasks WHERE id = ?").get(task.id)).toEqual({ actual_minutes: 45 });
+  });
+});
+
+describe("focus sessions", () => {
+  it("starts pauses resumes and stops a task focus session with a linked time log", () => {
+    const task = createTask({ title: "Focus task", estimated_minutes: 60 }, db);
+    const session = startFocusSession({
+      task_id: task.id,
+      agent_id: "codex",
+      title: "deep work",
+      started_at: "2026-01-01T10:00:00.000Z",
+      idle_after_minutes: 30,
+    }, db);
+
+    expect(session.status).toBe("active");
+    const paused = pauseFocusSession(session.id, "2026-01-01T10:25:00.000Z", db);
+    expect(paused.status).toBe("paused");
+    expect(paused.actual_minutes).toBe(25);
+
+    const resumed = resumeFocusSession(session.id, "2026-01-01T10:35:00.000Z", db);
+    expect(resumed.status).toBe("active");
+    const stopped = stopFocusSession({ id: session.id, ended_at: "2026-01-01T11:05:00.000Z", notes: "finished" }, db);
+    expect(stopped.status).toBe("completed");
+    expect(stopped.actual_minutes).toBe(55);
+
+    const logs = getTimeLogs(task.id, db);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]!.focus_session_id).toBe(session.id);
+    expect(logs[0]!.minutes).toBe(55);
+    const report = getTimeReport({ include_open: true }, db).find((entry) => entry.task_id === task.id)!;
+    expect(report.actual_minutes).toBe(55);
+    expect(report.focus_sessions[0]!.title).toBe("deep work");
+  });
+
+  it("lists sessions and returns local idle prompts without network state", () => {
+    const task = createTask({ title: "Idle task" }, db);
+    const session = startFocusSession({
+      task_id: task.id,
+      agent_id: "codex",
+      started_at: "2026-01-01T10:00:00.000Z",
+      idle_after_minutes: 20,
+    }, db);
+
+    expect(listFocusSessions({ agent_id: "codex" }, db).map((item) => item.id)).toContain(session.id);
+    const prompts = getIdleFocusSessionPrompts({ agent_id: "codex", now: "2026-01-01T10:45:00.000Z" }, db);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]!.idle_minutes).toBe(45);
+    expect(prompts[0]!.message).toContain(session.id.slice(0, 8));
   });
 });
 

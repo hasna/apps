@@ -23,7 +23,6 @@ import {
 import { listProjects, createProject, deleteProject } from "../db/projects.js";
 import { listAgents, registerAgent, isAgentConflict, getOrgChart, getDirectReports, updateAgent, deleteAgent, InvalidAgentNameError } from "../db/agents.js";
 import { createPlan, getPlan, listPlans, updatePlan, deletePlan } from "../db/plans.js";
-import { getDatabase } from "../db/database.js";
 import { listOrgs, createOrg, updateOrg, deleteOrg } from "../db/orgs.js";
 import { getRecentActivity, getTaskHistory } from "../db/audit.js";
 import { listWebhooks, createWebhook, deleteWebhook } from "../db/webhooks.js";
@@ -147,6 +146,11 @@ export function handleHealth(_ctx: RouteContext, json: (data: unknown, status?: 
   const stale = all.filter(t => t.status === "in_progress" && new Date(t.updated_at).getTime() < Date.now() - 30 * 60 * 1000);
   const overdue = all.filter(t => t.recurrence_rule && t.status === "pending" && t.due_at && t.due_at < new Date().toISOString());
   return json({ status: stale.length === 0 && overdue.length === 0 ? "ok" : "warn", tasks: all.length, stale: stale.length, overdue_recurring: overdue.length, timestamp: new Date().toISOString() });
+}
+
+export function handleHeadlessBoundary(_ctx: RouteContext, json: (data: unknown, status?: number) => Response): Response {
+  const { getHeadlessBoundaryManifest } = require("../lib/headless-boundaries.js") as typeof import("../lib/headless-boundaries.js");
+  return json(getHeadlessBoundaryManifest());
 }
 
 export function handleStats(_ctx: RouteContext, json: (data: unknown, status?: number) => Response): Response {
@@ -629,13 +633,8 @@ export async function handleBulkDeleteProjects(req: Request, _ctx: RouteContext,
 }
 
 export function handleDoctor(_ctx: RouteContext, json: (data: unknown, status?: number) => Response): Response {
-  const issues: { severity: string; type: string; message: string; count?: number }[] = [];
-  const staleItems = getStaleTasks(30);
-  if (staleItems.length > 0) issues.push({ severity: "warn", type: "stale_tasks", message: `${staleItems.length} tasks stuck in_progress >30min`, count: staleItems.length });
-  const withParent = getDatabase().query("SELECT COUNT(*) as c FROM tasks t WHERE t.parent_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tasks p WHERE p.id = t.parent_id)").get() as { c: number };
-  if (withParent.c > 0) issues.push({ severity: "error", type: "orphaned_parents", message: `${withParent.c} tasks reference non-existent parent IDs`, count: withParent.c });
-  if (issues.length === 0) issues.push({ severity: "info", type: "healthy", message: "No issues found" });
-  return json({ ok: !issues.some(i => i.severity === "error"), issues });
+  const { runTodosDoctor } = require("../lib/doctor.js") as typeof import("../lib/doctor.js");
+  return json(runTodosDoctor({ apply: false }));
 }
 
 export function handleReport(_req: Request, url: URL, _ctx: RouteContext, json: (data: unknown, status?: number) => Response): Response {

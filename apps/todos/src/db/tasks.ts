@@ -21,6 +21,7 @@ export {
   failTask,
   lockTask,
   unlockTask,
+  getTaskLockStatus,
   claimNextTask,
   getNextTask,
   getActiveWork,
@@ -31,7 +32,7 @@ export {
   getStaleTasks,
 } from "./task-lifecycle.js";
 
-export type { ActiveWorkItem } from "./task-lifecycle.js";
+export type { ActiveWorkItem, StaleTaskQuery, TaskLockStatus } from "./task-lifecycle.js";
 
 export {
   addDependency,
@@ -65,12 +66,20 @@ export {
   getArchivedTasks,
   unarchiveTask,
   getOverdueTasks,
+  getEscalatedTasks,
   notifyUpcomingDeadlines,
   getBlockedTasks,
   getBlockingTasks,
   logTime,
   getTimeLogs,
   getTimeReport,
+  startFocusSession,
+  getFocusSession,
+  listFocusSessions,
+  pauseFocusSession,
+  resumeFocusSession,
+  stopFocusSession,
+  getIdleFocusSessionPrompts,
   watchTask,
   unwatchTask,
   getTaskWatchers,
@@ -78,7 +87,53 @@ export {
   logCost,
 } from "./task-relations.js";
 
-export type { BulkCreateTaskInput, LogTimeInput } from "./task-relations.ts";
+export type {
+  BulkCreateTaskInput,
+  EscalatedTask,
+  FocusSessionQuery,
+  IdleFocusSessionPrompt,
+  LogTimeInput,
+  StartFocusSessionInput,
+  StopFocusSessionInput,
+  TimeReportEntry,
+} from "./task-relations.ts";
+
+export {
+  buildTaskBoardSnapshot,
+  createTaskBoard,
+  deleteTaskBoard,
+  exportTaskBoardBundle,
+  getTaskBoard,
+  importTaskBoardBundle,
+  listTaskBoards,
+  moveBoardCard,
+  renderTaskBoard,
+  updateTaskBoard,
+} from "./boards.js";
+
+export type {
+  CreateTaskBoardInput,
+  MoveBoardCardInput,
+  TaskBoardBundle,
+  TaskBoardQuery,
+  UpdateTaskBoardInput,
+} from "./boards.ts";
+
+export {
+  createCalendarItem,
+  exportCalendarIcs,
+  getCalendarItem,
+  importCalendarIcs,
+  listCalendarEvents,
+  listCalendarItems,
+} from "./calendar.js";
+
+export type {
+  CalendarQuery,
+  CreateCalendarItemInput,
+  IcsExportOptions,
+  IcsImportResult,
+} from "./calendar.ts";
 
 // Re-export types that were previously exported from this file
 export type { TaskFilter } from "../types/index.js";

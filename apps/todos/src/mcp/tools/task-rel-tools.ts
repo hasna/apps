@@ -34,15 +34,155 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
         in_progress: z.array(z.string()).optional().describe("Items still in progress"),
         blockers: z.array(z.string()).optional().describe("Blocking issues"),
         next_steps: z.array(z.string()).optional().describe("Recommended next actions"),
+        session_id: z.string().optional().describe("Agent session ID this handoff belongs to"),
+        task_ids: z.array(z.string()).optional().describe("Task IDs referenced by the handoff"),
+        relevant_files: z.array(z.string()).optional().describe("Relevant local files"),
+        run_ids: z.array(z.string()).optional().describe("Task run IDs with useful evidence"),
       },
-      async ({ agent_id, project_id, summary, completed, in_progress, blockers, next_steps }) => {
+      async ({ agent_id, project_id, summary, completed, in_progress, blockers, next_steps, session_id, task_ids, relevant_files, run_ids }) => {
         try {
           const { createHandoff } = require("../../db/handoffs.js") as any;
           const handoff = createHandoff({
             agent_id, project_id: project_id ? resolveId(project_id, "projects") : undefined,
-            summary, completed, in_progress, blockers, next_steps,
+            summary, completed, in_progress, blockers, next_steps, session_id,
+            task_ids: task_ids?.map((id: string) => resolveId(id, "tasks")),
+            relevant_files,
+            run_ids,
           });
-          return { content: [{ type: "text" as const, text: `Handoff created: ${handoff.id.slice(0, 8)} by ${handoff.agent_id || "unknown"}` }] };
+          return { content: [{ type: "text" as const, text: JSON.stringify(handoff, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_handoffs")) {
+    server.tool(
+      "list_handoffs",
+      "List local session handoffs, optionally only unread for an agent.",
+      {
+        agent_id: z.string().optional().describe("Filter by handoff author"),
+        project_id: z.string().optional().describe("Filter by project"),
+        unread_for: z.string().optional().describe("Only handoffs not acknowledged by this agent"),
+        limit: z.number().optional().describe("Maximum handoffs to return"),
+      },
+      async ({ agent_id, project_id, unread_for, limit }) => {
+        try {
+          const { listHandoffs } = require("../../db/handoffs.js") as any;
+          const handoffs = listHandoffs({
+            agent_id,
+            project_id: project_id ? resolveId(project_id, "projects") : undefined,
+            unread_for,
+            limit,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(handoffs, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("read_handoff")) {
+    server.tool(
+      "read_handoff",
+      "Read one local handoff by ID or prefix.",
+      { handoff_id: z.string().describe("Handoff ID or unique prefix") },
+      async ({ handoff_id }) => {
+        try {
+          const { getHandoff } = require("../../db/handoffs.js") as any;
+          const handoff = getHandoff(handoff_id);
+          if (!handoff) return { content: [{ type: "text" as const, text: "No handoff found." }] };
+          return { content: [{ type: "text" as const, text: JSON.stringify(handoff, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("export_handoff")) {
+    server.tool(
+      "export_handoff",
+      "Export one local handoff as a deterministic JSON bundle.",
+      { handoff_id: z.string().describe("Handoff ID or unique prefix") },
+      async ({ handoff_id }) => {
+        try {
+          const { exportHandoffBundle } = require("../../db/handoffs.js") as any;
+          const bundle = exportHandoffBundle(handoff_id);
+          return { content: [{ type: "text" as const, text: JSON.stringify(bundle, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("import_handoff")) {
+    server.tool(
+      "import_handoff",
+      "Preview or apply a deterministic local handoff bundle.",
+      {
+        bundle: z.any().describe("Handoff bundle JSON object from export_handoff"),
+        apply: z.boolean().optional().describe("Apply import; default false previews only"),
+      },
+      async ({ bundle, apply }) => {
+        try {
+          const { importHandoffBundle } = require("../../db/handoffs.js") as any;
+          const result = importHandoffBundle(bundle, { apply: !!apply });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("acknowledge_handoff")) {
+    server.tool(
+      "acknowledge_handoff",
+      "Mark a local handoff as read for one agent.",
+      {
+        handoff_id: z.string().describe("Handoff ID or unique prefix"),
+        agent_id: z.string().describe("Agent acknowledging the handoff"),
+      },
+      async ({ handoff_id, agent_id }) => {
+        try {
+          const { acknowledgeHandoff } = require("../../db/handoffs.js") as any;
+          const handoff = acknowledgeHandoff(handoff_id, agent_id);
+          return { content: [{ type: "text" as const, text: JSON.stringify(handoff, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("recover_stale_session_handoff")) {
+    server.tool(
+      "recover_stale_session_handoff",
+      "Create a local recovery handoff from an agent's active stale session context.",
+      {
+        agent_id: z.string().describe("Agent whose active session context should be captured"),
+        session_id: z.string().optional().describe("Optional session ID to narrow recovery"),
+        project_id: z.string().optional().describe("Optional project filter"),
+        recovered_by: z.string().optional().describe("Agent creating the recovery handoff"),
+        reason: z.string().optional().describe("Recovery reason"),
+        limit: z.number().optional().describe("Maximum tasks/files/runs to capture"),
+      },
+      async ({ agent_id, session_id, project_id, recovered_by, reason, limit }) => {
+        try {
+          const { createSessionRecoveryHandoff } = require("../../db/handoffs.js") as any;
+          const handoff = createSessionRecoveryHandoff({
+            agent_id,
+            session_id,
+            project_id: project_id ? resolveId(project_id, "projects") : undefined,
+            recovered_by,
+            reason,
+            limit,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(handoff, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }
@@ -478,6 +618,188 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
     );
   }
 
+  if (shouldRegisterTool("list_review_queue")) {
+    server.tool(
+      "list_review_queue",
+      "List local review queue items with explicit queue, reviewer, claim, return, and approval state.",
+      {
+        queue: z.string().optional(),
+        state: z.enum(["requested", "claimed", "approved", "changes_requested", "returned", "reopened"]).optional(),
+        reviewer: z.string().optional(),
+        requester: z.string().optional(),
+        project_id: z.string().optional(),
+        limit: z.number().optional(),
+      },
+      async ({ queue, state, reviewer, requester, project_id, limit }) => {
+        try {
+          const { listReviewQueue } = require("../../lib/review-queues.js") as any;
+          const items = listReviewQueue({
+            queue,
+            state,
+            reviewer,
+            requester,
+            project_id: project_id ? resolveId(project_id, "projects") : undefined,
+            limit,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(items, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("request_review_queue")) {
+    server.tool(
+      "request_review_queue",
+      "Request local review for a task and place it in a review queue.",
+      {
+        task_id: z.string(),
+        requester: z.string(),
+        reviewer: z.string().optional(),
+        queue: z.string().optional(),
+        reason: z.string().optional(),
+        notes: z.string().optional(),
+      },
+      async ({ task_id, requester, reviewer, queue, reason, notes }) => {
+        try {
+          const { requestReviewQueue } = require("../../lib/review-queues.js") as any;
+          const item = requestReviewQueue({ task_id: resolveId(task_id), requester, reviewer, queue, reason, notes });
+          return { content: [{ type: "text" as const, text: JSON.stringify(item, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("claim_review_item")) {
+    server.tool(
+      "claim_review_item",
+      "Claim a task from the local review queue.",
+      { task_id: z.string(), reviewer: z.string(), note: z.string().optional() },
+      async ({ task_id, reviewer, note }) => {
+        try {
+          const { claimReviewItem } = require("../../lib/review-queues.js") as any;
+          const item = claimReviewItem({ task_id: resolveId(task_id), reviewer, note });
+          return { content: [{ type: "text" as const, text: JSON.stringify(item, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("approve_review_item")) {
+    server.tool(
+      "approve_review_item",
+      "Approve a local review queue item.",
+      { task_id: z.string(), reviewer: z.string(), note: z.string().optional() },
+      async ({ task_id, reviewer, note }) => {
+        try {
+          const { approveReviewItem } = require("../../lib/review-queues.js") as any;
+          const item = approveReviewItem({ task_id: resolveId(task_id), reviewer, note });
+          return { content: [{ type: "text" as const, text: JSON.stringify(item, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("return_review_item")) {
+    server.tool(
+      "return_review_item",
+      "Return a local review queue item with requested changes.",
+      { task_id: z.string(), reviewer: z.string(), note: z.string().optional(), changes_requested: z.array(z.string()).optional() },
+      async ({ task_id, reviewer, note, changes_requested }) => {
+        try {
+          const { returnReviewItem } = require("../../lib/review-queues.js") as any;
+          const item = returnReviewItem({ task_id: resolveId(task_id), reviewer, note, changes_requested });
+          return { content: [{ type: "text" as const, text: JSON.stringify(item, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("reopen_review_item")) {
+    server.tool(
+      "reopen_review_item",
+      "Reopen a local review queue item for another review pass.",
+      { task_id: z.string(), reviewer: z.string(), note: z.string().optional() },
+      async ({ task_id, reviewer, note }) => {
+        try {
+          const { reopenReviewItem } = require("../../lib/review-queues.js") as any;
+          const item = reopenReviewItem({ task_id: resolveId(task_id), reviewer, note });
+          return { content: [{ type: "text" as const, text: JSON.stringify(item, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("set_review_routing_rule")) {
+    server.tool(
+      "set_review_routing_rule",
+      "Create or update a local review routing rule for queue and reviewer defaults.",
+      {
+        name: z.string(),
+        queue: z.string().optional(),
+        reviewers: z.array(z.string()).optional(),
+        tags: z.array(z.string()).optional(),
+        priorities: z.array(z.enum(["low", "medium", "high", "critical"])).optional(),
+        project_id: z.string().optional(),
+        enabled: z.boolean().optional(),
+      },
+      async ({ name, queue, reviewers, tags, priorities, project_id, enabled }) => {
+        try {
+          const { upsertReviewRoutingRule } = require("../../lib/review-queues.js") as any;
+          const rule = upsertReviewRoutingRule({ name, queue, reviewers, tags, priorities, project_id: project_id ? resolveId(project_id, "projects") : undefined, enabled });
+          return { content: [{ type: "text" as const, text: JSON.stringify(rule, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_review_routing_rules")) {
+    server.tool(
+      "list_review_routing_rules",
+      "List local review routing rules.",
+      {},
+      async () => {
+        try {
+          const { listReviewRoutingRules } = require("../../lib/review-queues.js") as any;
+          const rules = listReviewRoutingRules();
+          return { content: [{ type: "text" as const, text: JSON.stringify(rules, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("remove_review_routing_rule")) {
+    server.tool(
+      "remove_review_routing_rule",
+      "Remove a local review routing rule.",
+      { name: z.string() },
+      async ({ name }) => {
+        try {
+          const { removeReviewRoutingRule } = require("../../lib/review-queues.js") as any;
+          const removed = removeReviewRoutingRule(name);
+          return { content: [{ type: "text" as const, text: JSON.stringify({ removed }, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
   if (shouldRegisterTool("score_task")) {
     server.tool(
       "score_task",
@@ -499,6 +821,257 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
     );
   }
 
+  // === CALENDAR ===
+
+  if (shouldRegisterTool("create_calendar_item")) {
+    server.tool(
+      "create_calendar_item",
+      "Create a local calendar reminder, milestone, or work block.",
+      {
+        title: z.string(),
+        kind: z.enum(["task_due", "task_sla", "task_reminder", "milestone", "work_block", "run", "imported"]).optional(),
+        starts_at: z.string(),
+        ends_at: z.string().optional(),
+        timezone: z.string().optional(),
+        project_id: z.string().optional(),
+        task_id: z.string().optional(),
+        plan_id: z.string().optional(),
+        run_id: z.string().optional(),
+        recurrence_rule: z.string().optional(),
+        description: z.string().optional(),
+        metadata: z.record(z.unknown()).optional(),
+      },
+      async ({ title, kind, starts_at, ends_at, timezone, project_id, task_id, plan_id, run_id, recurrence_rule, description, metadata }) => {
+        try {
+          const { createCalendarItem } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const item = createCalendarItem({
+            title,
+            kind,
+            starts_at,
+            ends_at,
+            timezone,
+            project_id: project_id ? resolveId(project_id, "projects") : undefined,
+            task_id: task_id ? resolveId(task_id) : undefined,
+            plan_id: plan_id ? resolveId(plan_id, "plans") : undefined,
+            run_id,
+            recurrence_rule,
+            description,
+            metadata,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(item, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_calendar_events")) {
+    server.tool(
+      "list_calendar_events",
+      "List local calendar events derived from tasks, SLA thresholds, runs, and local calendar items.",
+      {
+        project_id: z.string().optional(),
+        task_id: z.string().optional(),
+        plan_id: z.string().optional(),
+        kind: z.enum(["task_due", "task_sla", "task_reminder", "milestone", "work_block", "run", "imported"]).optional(),
+        from: z.string().optional(),
+        to: z.string().optional(),
+        include_completed: z.boolean().optional(),
+        include_runs: z.boolean().optional(),
+        include_sla: z.boolean().optional(),
+        include_local: z.boolean().optional(),
+        limit: z.number().optional(),
+      },
+      async ({ project_id, task_id, plan_id, kind, from, to, include_completed, include_runs, include_sla, include_local, limit }) => {
+        try {
+          const { listCalendarEvents } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const events = listCalendarEvents({
+            project_id: project_id ? resolveId(project_id, "projects") : undefined,
+            task_id: task_id ? resolveId(task_id) : undefined,
+            plan_id: plan_id ? resolveId(plan_id, "plans") : undefined,
+            kind,
+            from,
+            to,
+            include_completed,
+            include_runs,
+            include_sla,
+            include_local,
+            limit,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(events, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("export_calendar_ics")) {
+    server.tool(
+      "export_calendar_ics",
+      "Export local calendar events as deterministic ICS text.",
+      {
+        calendar_name: z.string().optional(),
+        project_id: z.string().optional(),
+        task_id: z.string().optional(),
+        plan_id: z.string().optional(),
+        kind: z.enum(["task_due", "task_sla", "task_reminder", "milestone", "work_block", "run", "imported"]).optional(),
+        from: z.string().optional(),
+        to: z.string().optional(),
+        redact: z.boolean().optional(),
+      },
+      async ({ calendar_name, project_id, task_id, plan_id, kind, from, to, redact }) => {
+        try {
+          const { exportCalendarIcs } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const exported = exportCalendarIcs({
+            calendar_name,
+            project_id: project_id ? resolveId(project_id, "projects") : undefined,
+            task_id: task_id ? resolveId(task_id) : undefined,
+            plan_id: plan_id ? resolveId(plan_id, "plans") : undefined,
+            kind,
+            from,
+            to,
+            redact,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(exported, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("import_calendar_ics")) {
+    server.tool(
+      "import_calendar_ics",
+      "Import VEVENT entries from ICS text as local calendar items.",
+      { content: z.string().describe("ICS file content") },
+      async ({ content }) => {
+        try {
+          const { importCalendarIcs } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const result = importCalendarIcs(content);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  // === KANBAN BOARDS ===
+
+  if (shouldRegisterTool("create_board")) {
+    server.tool(
+      "create_board",
+      "Create a local task or plan kanban board with configurable workflow lanes and WIP limits.",
+      {
+        name: z.string().describe("Board name"),
+        scope: z.enum(["tasks", "plans"]).optional().describe("Board scope"),
+        project_id: z.string().optional().describe("Optional project filter"),
+        task_list_id: z.string().optional().describe("Optional task list filter"),
+        plan_id: z.string().optional().describe("Optional plan filter for task boards"),
+        agent_id: z.string().optional().describe("Optional agent filter"),
+        lanes: z.array(z.object({
+          id: z.string(),
+          name: z.string(),
+          statuses: z.array(z.string()),
+          wip_limit: z.number().nullable().optional(),
+          position: z.number().optional(),
+        })).optional().describe("Configurable board lanes"),
+        filters: z.record(z.unknown()).optional().describe("Saved local board filters"),
+      },
+      async ({ name, scope, project_id, task_list_id, plan_id, agent_id, lanes, filters }) => {
+        try {
+          const { createTaskBoard } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const board = createTaskBoard({
+            name,
+            scope,
+            project_id: project_id ? resolveId(project_id, "projects") : undefined,
+            task_list_id,
+            plan_id: plan_id ? resolveId(plan_id, "plans") : undefined,
+            agent_id,
+            lanes,
+            filters,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(board, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_boards")) {
+    server.tool(
+      "list_boards",
+      "List local task and plan kanban boards.",
+      {
+        scope: z.enum(["tasks", "plans"]).optional(),
+        project_id: z.string().optional(),
+        agent_id: z.string().optional(),
+        limit: z.number().optional(),
+      },
+      async ({ scope, project_id, agent_id, limit }) => {
+        try {
+          const { listTaskBoards } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const boards = listTaskBoards({
+            scope,
+            project_id: project_id ? resolveId(project_id, "projects") : undefined,
+            agent_id,
+            limit,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(boards, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("get_board_snapshot")) {
+    server.tool(
+      "get_board_snapshot",
+      "Return a JSON snapshot of a local kanban board, including WIP limit state and blocked/ready badges.",
+      {
+        board_id: z.string().describe("Board ID or name"),
+        format: z.enum(["json", "text"]).optional(),
+      },
+      async ({ board_id, format }) => {
+        try {
+          const { buildTaskBoardSnapshot, renderTaskBoard } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const snapshot = buildTaskBoardSnapshot(board_id);
+          const text = format === "text" ? renderTaskBoard(snapshot) : JSON.stringify(snapshot, null, 2);
+          return { content: [{ type: "text" as const, text }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("move_board_card")) {
+    server.tool(
+      "move_board_card",
+      "Move a task or plan card to a target lane or explicit workflow status.",
+      {
+        board_id: z.string().describe("Board ID or name"),
+        card_id: z.string().describe("Task or plan ID"),
+        lane_id: z.string().optional().describe("Target lane ID or name"),
+        status: z.string().optional().describe("Explicit target status"),
+      },
+      async ({ board_id, card_id, lane_id, status }) => {
+        try {
+          const { moveBoardCard } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const card = moveBoardCard({ board_id, card_id, lane_id, status });
+          return { content: [{ type: "text" as const, text: JSON.stringify(card, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
   // === TIME TRACKING ===
 
   if (shouldRegisterTool("log_time")) {
@@ -508,16 +1081,155 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       {
         task_id: z.string().describe("Task ID to log time against"),
         minutes: z.number().min(1).describe("Minutes spent"),
+        run_id: z.string().optional().describe("Optional run ID to link"),
+        focus_session_id: z.string().optional().describe("Optional focus session ID to link"),
         agent_id: z.string().optional().describe("Agent logging the time"),
         started_at: z.string().optional().describe("ISO timestamp when work started"),
         ended_at: z.string().optional().describe("ISO timestamp when work ended"),
         notes: z.string().optional().describe("Notes about what was done"),
       },
-      async ({ task_id, minutes, agent_id, started_at, ended_at, notes }) => {
+      async ({ task_id, minutes, run_id, focus_session_id, agent_id, started_at, ended_at, notes }) => {
         try {
           const { logTime } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
-          logTime({ task_id: resolveId(task_id), minutes, agent_id, started_at, ended_at, notes });
-          return { content: [{ type: "text" as const, text: `Logged ${minutes} min on task ${task_id.slice(0,8)}` }] };
+          const log = logTime({ task_id: resolveId(task_id), run_id, focus_session_id, minutes, agent_id, started_at, ended_at, notes });
+          return { content: [{ type: "text" as const, text: JSON.stringify(log, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("start_focus_session")) {
+    server.tool(
+      "start_focus_session",
+      "Start a local focus session for a task, plan, run, or general agent work.",
+      {
+        task_id: z.string().optional().describe("Optional task ID"),
+        plan_id: z.string().optional().describe("Optional plan ID"),
+        run_id: z.string().optional().describe("Optional run ID"),
+        agent_id: z.string().optional().describe("Agent starting focus"),
+        title: z.string().optional().describe("Focus session title"),
+        started_at: z.string().optional().describe("ISO timestamp when focus started"),
+        idle_after_minutes: z.number().optional().describe("Prompt after this many active minutes"),
+        notes: z.string().optional(),
+      },
+      async ({ task_id, plan_id, run_id, agent_id, title, started_at, idle_after_minutes, notes }) => {
+        try {
+          const { startFocusSession } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const session = startFocusSession({
+            task_id: task_id ? resolveId(task_id) : undefined,
+            plan_id: plan_id ? resolveId(plan_id, "plans") : undefined,
+            run_id,
+            agent_id,
+            title,
+            started_at,
+            idle_after_minutes,
+            notes,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(session, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("pause_focus_session")) {
+    server.tool(
+      "pause_focus_session",
+      "Pause an active local focus session.",
+      { session_id: z.string(), paused_at: z.string().optional() },
+      async ({ session_id, paused_at }) => {
+        try {
+          const { pauseFocusSession } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          return { content: [{ type: "text" as const, text: JSON.stringify(pauseFocusSession(session_id, paused_at), null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("resume_focus_session")) {
+    server.tool(
+      "resume_focus_session",
+      "Resume a paused local focus session.",
+      { session_id: z.string(), resumed_at: z.string().optional() },
+      async ({ session_id, resumed_at }) => {
+        try {
+          const { resumeFocusSession } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          return { content: [{ type: "text" as const, text: JSON.stringify(resumeFocusSession(session_id, resumed_at), null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("stop_focus_session")) {
+    server.tool(
+      "stop_focus_session",
+      "Stop a focus session and log task time when linked to a task.",
+      {
+        session_id: z.string(),
+        ended_at: z.string().optional(),
+        notes: z.string().optional(),
+        status: z.enum(["completed", "cancelled"]).optional(),
+      },
+      async ({ session_id, ended_at, notes, status }) => {
+        try {
+          const { stopFocusSession } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          return { content: [{ type: "text" as const, text: JSON.stringify(stopFocusSession({ id: session_id, ended_at, notes, status }), null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_focus_sessions")) {
+    server.tool(
+      "list_focus_sessions",
+      "List local focus sessions with optional task, plan, run, agent, and status filters.",
+      {
+        task_id: z.string().optional(),
+        plan_id: z.string().optional(),
+        run_id: z.string().optional(),
+        agent_id: z.string().optional(),
+        status: z.enum(["active", "paused", "completed", "cancelled"]).optional(),
+        include_completed: z.boolean().optional(),
+        limit: z.number().optional(),
+      },
+      async ({ task_id, plan_id, run_id, agent_id, status, include_completed, limit }) => {
+        try {
+          const { listFocusSessions } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const sessions = listFocusSessions({
+            task_id: task_id ? resolveId(task_id) : undefined,
+            plan_id: plan_id ? resolveId(plan_id, "plans") : undefined,
+            run_id,
+            agent_id,
+            status,
+            include_completed,
+            limit,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(sessions, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("get_idle_focus_prompts")) {
+    server.tool(
+      "get_idle_focus_prompts",
+      "Return local idle prompts for active focus sessions.",
+      { agent_id: z.string().optional(), now: z.string().optional() },
+      async ({ agent_id, now }) => {
+        try {
+          const { getIdleFocusSessionPrompts } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          return { content: [{ type: "text" as const, text: JSON.stringify(getIdleFocusSessionPrompts({ agent_id, now }), null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }
@@ -531,13 +1243,17 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       "Get time tracking report: actual vs estimated minutes for completed tasks.",
       {
         project_id: z.string().optional().describe("Filter by project"),
+        plan_id: z.string().optional().describe("Filter by plan"),
         agent_id: z.string().optional().describe("Filter by assignee"),
         since: z.string().optional().describe("ISO date — only tasks completed after this date"),
+        include_open: z.boolean().optional().describe("Include open tasks with time logs"),
+        format: z.enum(["text", "json"]).optional(),
       },
-      async ({ project_id, agent_id, since }) => {
+      async ({ project_id, plan_id, agent_id, since, include_open, format }) => {
         try {
           const { getTimeReport } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
-          const report = getTimeReport({ project_id: project_id ? resolveId(project_id, "projects") : undefined, agent_id, since });
+          const report = getTimeReport({ project_id: project_id ? resolveId(project_id, "projects") : undefined, plan_id: plan_id ? resolveId(plan_id, "plans") : undefined, agent_id, since, include_open });
+          if (format === "json") return { content: [{ type: "text" as const, text: JSON.stringify(report, null, 2) }] };
           if (report.length === 0) return { content: [{ type: "text" as const, text: "No completed tasks found." }] };
           const lines = report.map(r => {
             const est = r.estimated_minutes ?? "?";

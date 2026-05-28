@@ -5,12 +5,18 @@ import { todosTools } from "./schemas.js";
 const originalEventSource = globalThis.EventSource;
 const originalFetch = globalThis.fetch;
 const originalTodosApiKey = process.env["TODOS_API_KEY"];
+const originalTodosApiUrl = process.env["TODOS_API_URL"];
+const originalTodosUrl = process.env["TODOS_URL"];
 
 afterEach(() => {
   globalThis.EventSource = originalEventSource;
   globalThis.fetch = originalFetch;
   if (originalTodosApiKey === undefined) delete process.env["TODOS_API_KEY"];
   else process.env["TODOS_API_KEY"] = originalTodosApiKey;
+  if (originalTodosApiUrl === undefined) delete process.env["TODOS_API_URL"];
+  else process.env["TODOS_API_URL"] = originalTodosApiUrl;
+  if (originalTodosUrl === undefined) delete process.env["TODOS_URL"];
+  else process.env["TODOS_URL"] = originalTodosUrl;
 });
 
 describe("TodosClient", () => {
@@ -148,6 +154,24 @@ describe("TodosClient baseUrl normalization", () => {
   it("should strip trailing slash from baseUrl", () => {
     const client = new TodosClient({ baseUrl: "http://localhost:3000/" });
     expect(client).toBeDefined();
+  });
+
+  it("should ignore TODOS_API_URL and use local TODOS_URL", async () => {
+    process.env["TODOS_API_URL"] = "https://api-url.todos.test/";
+    process.env["TODOS_URL"] = "http://127.0.0.1:19427/";
+    let observedUrl = "";
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      observedUrl = String(input);
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const client = new TodosClient();
+    await client.listTasks();
+
+    expect(observedUrl).toBe("http://127.0.0.1:19427/api/tasks");
   });
 });
 

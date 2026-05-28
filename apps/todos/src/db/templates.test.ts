@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { getDatabase, closeDatabase, resetDatabase } from "./database.js";
 import {
   createTemplate,
@@ -20,7 +23,12 @@ import {
   getTemplateVersion,
   listTemplateVersions,
 } from "./templates.js";
-import { initBuiltinTemplates, BUILTIN_TEMPLATES } from "./builtin-templates.js";
+import {
+  BUILTIN_TEMPLATES,
+  exportBuiltinTemplate,
+  writeBuiltinTemplateFiles,
+  initBuiltinTemplates,
+} from "./builtin-templates.js";
 import { createTask } from "./tasks.js";
 import { createProject } from "./projects.js";
 import { createTaskList } from "./task-lists.js";
@@ -768,21 +776,28 @@ describe("tasksFromTemplate with variables validation", () => {
 // === Feature 2: Built-in starter templates ===
 
 describe("initBuiltinTemplates", () => {
-  it("should create all 4 built-in templates", () => {
+  it("should create the bundled marketplace-free local template library", () => {
     const result = initBuiltinTemplates(db);
-    expect(result.created).toBe(4);
+    expect(result.created).toBe(9);
     expect(result.skipped).toBe(0);
-    expect(result.names).toContain("open-source-project");
-    expect(result.names).toContain("bug-fix");
-    expect(result.names).toContain("feature");
-    expect(result.names).toContain("security-audit");
+    expect(result.names).toEqual(expect.arrayContaining([
+      "bug-fix",
+      "feature-implementation",
+      "security-review",
+      "release",
+      "migration",
+      "incident",
+      "docs-refresh",
+      "qa",
+      "open-source-project",
+    ]));
   });
 
   it("should skip already existing templates", () => {
     initBuiltinTemplates(db);
     const result2 = initBuiltinTemplates(db);
     expect(result2.created).toBe(0);
-    expect(result2.skipped).toBe(4);
+    expect(result2.skipped).toBe(9);
   });
 
   it("should create templates with variables", () => {
@@ -802,31 +817,63 @@ describe("initBuiltinTemplates", () => {
     const templates = listTemplates(db);
     const osp = templates.find(t => t.name === "open-source-project");
     const withTasks = getTemplateWithTasks(osp!.id, db);
-    expect(withTasks!.tasks.length).toBe(16);
+    expect(withTasks!.tasks.length).toBe(13);
   });
 
-  it("should create bug-fix template with 5 tasks", () => {
+  it("should create bug-fix template with ordered tasks", () => {
     initBuiltinTemplates(db);
     const templates = listTemplates(db);
     const bf = templates.find(t => t.name === "bug-fix");
     const withTasks = getTemplateWithTasks(bf!.id, db);
-    expect(withTasks!.tasks.length).toBe(5);
+    expect(withTasks!.tasks.length).toBe(6);
     expect(withTasks!.tasks[0]!.title_pattern).toBe("Reproduce: {bug}");
+    expect(bf!.metadata.source).toBe("bundled-local-template-library");
+    expect(bf!.metadata.marketplace_free).toBe(true);
   });
 
   it("should only create templates that are missing", () => {
     // Create one manually first
     createTemplate({ name: "bug-fix", title_pattern: "Custom bug fix" }, db);
     const result = initBuiltinTemplates(db);
-    expect(result.created).toBe(3);
+    expect(result.created).toBe(8);
     expect(result.skipped).toBe(1);
     expect(result.names).not.toContain("bug-fix");
+  });
+
+  it("should export bundled templates as editable importable JSON files", () => {
+    const dir = mkdtempSync(join(tmpdir(), "todos-template-library-"));
+    try {
+      const result = writeBuiltinTemplateFiles(dir);
+      expect(result.written).toBe(BUILTIN_TEMPLATES.length);
+      expect(result.files.some((file) => file.endsWith("qa.json"))).toBe(true);
+
+      const qa = JSON.parse(readFileSync(join(dir, "qa.json"), "utf-8"));
+      expect(qa.name).toBe("qa");
+      expect(qa.metadata.local_only).toBe(true);
+
+      const imported = importTemplate(qa, db);
+      const withTasks = getTemplateWithTasks(imported.id, db);
+      expect(withTasks!.tasks.length).toBeGreaterThan(0);
+      expect(withTasks!.metadata.template_file).toBe("qa.json");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
 describe("BUILTIN_TEMPLATES constant", () => {
-  it("should have 4 templates", () => {
-    expect(BUILTIN_TEMPLATES).toHaveLength(4);
+  it("should include the required agent workflow templates", () => {
+    expect(BUILTIN_TEMPLATES.map((template) => template.name)).toEqual(expect.arrayContaining([
+      "bug-fix",
+      "feature-implementation",
+      "security-review",
+      "release",
+      "migration",
+      "incident",
+      "docs-refresh",
+      "qa",
+    ]));
+    expect(exportBuiltinTemplate("release").metadata.marketplace_free).toBe(true);
   });
 
   it("should have required variables in each template", () => {
@@ -949,7 +996,7 @@ describe("previewTemplate", () => {
     const osp = templates.find(t => t.name === "open-source-project");
 
     const preview = previewTemplate(osp!.id, { name: "invoices" }, db);
-    expect(preview.tasks).toHaveLength(16);
+    expect(preview.tasks).toHaveLength(13);
     expect(preview.tasks[0]!.title).toBe("Scaffold invoices package structure");
     expect(preview.tasks[8]!.title).toBe("Create GitHub repo hasna/invoices");
     expect(preview.resolved_variables.org).toBe("hasna");

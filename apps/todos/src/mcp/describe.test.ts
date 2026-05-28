@@ -13,18 +13,18 @@ import { CORE_MCP_TOOLS, shouldRegisterToolForProfile } from "./token-utils.js";
 // This must match the `all` array in search_tools and the keys in describe_tools.
 const ALL_TOOLS = [
   "create_task","list_tasks","get_task","update_task","delete_task",
-  "start_task","complete_task","fail_task","lock_task","unlock_task","approve_task",
+  "start_task","complete_task","fail_task","lock_task","unlock_task","check_task_lock","approve_task",
   "add_dependency","remove_dependency","add_comment",
-  "create_project","list_projects",
+  "bootstrap_project","create_project","list_projects",
   "create_plan","list_plans","get_plan","update_plan","delete_plan",
   "register_agent","list_agents","get_agent","rename_agent","delete_agent",
   "get_my_tasks","get_org_chart","set_reports_to",
   "create_task_list","list_task_lists","get_task_list","update_task_list","delete_task_list",
-  "search_tasks","clone_task","move_task","get_next_task","claim_next_task",
+  "search_tasks","save_search_view","list_search_views","run_search_view","delete_search_view","clone_task","move_task","get_next_task","claim_next_task",
   "get_context","bootstrap","get_health","get_tasks_changed_since","heartbeat","release_agent",
   "get_task_history","get_recent_activity",
   "create_webhook","list_webhooks","delete_webhook",
-  "create_template","list_templates","create_task_from_template","delete_template",
+  "create_template","list_templates","create_task_from_template","delete_template","list_template_library","write_template_library",
   "bulk_update_tasks","bulk_create_tasks","get_task_stats","get_task_graph",
   "get_active_work","get_stale_tasks","get_status",
   "search_tools","describe_tools",
@@ -33,18 +33,18 @@ const ALL_TOOLS = [
 // The descriptions map from describe_tools (keys only — we verify coverage).
 const DESCRIBE_TOOLS_KEYS = [
   "create_task","list_tasks","get_task","update_task","delete_task",
-  "start_task","complete_task","fail_task","lock_task","unlock_task","approve_task",
+  "start_task","complete_task","fail_task","lock_task","unlock_task","check_task_lock","approve_task",
   "add_dependency","remove_dependency","add_comment",
-  "create_project","list_projects",
+  "bootstrap_project","create_project","list_projects",
   "create_plan","list_plans","get_plan","update_plan","delete_plan",
   "register_agent","list_agents","get_agent","rename_agent","delete_agent",
   "get_my_tasks","get_org_chart","set_reports_to",
   "create_task_list","list_task_lists","get_task_list","update_task_list","delete_task_list",
-  "search_tasks","clone_task","move_task","get_next_task","claim_next_task",
+  "search_tasks","save_search_view","list_search_views","run_search_view","delete_search_view","clone_task","move_task","get_next_task","claim_next_task",
   "get_context","bootstrap","get_health","get_tasks_changed_since","heartbeat","release_agent",
   "get_task_history","get_recent_activity",
   "create_webhook","list_webhooks","delete_webhook",
-  "create_template","list_templates","create_task_from_template","delete_template",
+  "create_template","list_templates","create_task_from_template","delete_template","list_template_library","write_template_library",
   "bulk_update_tasks","bulk_create_tasks","get_task_stats","get_task_graph",
   "get_active_work","get_stale_tasks","get_status",
   "search_tools","describe_tools",
@@ -108,11 +108,10 @@ describe("TODOS_PROFILE filtering", () => {
     expect(shouldRegisterToolForProfile("create_webhook", "minimal")).toBe(false);
   });
 
-  it("standard profile excludes webhook/template/cloud-only tools", () => {
+  it("standard profile excludes webhook/template-only tools", () => {
     for (const excluded of [
       "create_webhook", "list_webhooks", "delete_webhook",
-      "create_template", "list_templates", "create_task_from_template", "delete_template",
-      "todos_cloud_status",
+      "create_template", "list_templates", "create_task_from_template", "delete_template", "list_template_library", "write_template_library",
     ]) {
       expect(shouldRegisterToolForProfile(excluded, "standard")).toBe(false);
     }
