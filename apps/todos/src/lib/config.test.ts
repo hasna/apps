@@ -148,7 +148,6 @@ describe("getCompletionGuardConfig", () => {
   });
 });
 
-<<<<<<< HEAD
 describe("global config path", () => {
   it("ignores legacy-only ~/.todos/config.json", () => {
     const originalHome = process.env["HOME"];
