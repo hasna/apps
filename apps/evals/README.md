@@ -240,6 +240,19 @@ evals_run_single(
 → PASS — The response correctly identifies Paris.
 ```
 
+## HTTP mode
+
+Shared Streamable HTTP transport for multi-agent sessions (stdio remains the default):
+
+```bash
+evals-mcp --http              # http://127.0.0.1:8817/mcp
+MCP_HTTP=1 evals-mcp          # same
+evals-mcp --http --port 8817  # explicit port
+```
+
+- Health: `GET http://127.0.0.1:8817/health` → `{"status":"ok","name":"evals"}`
+- Override port with `MCP_HTTP_PORT` or `--port`
+
 ---
 
 ## License
