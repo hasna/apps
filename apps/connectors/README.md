@@ -50,6 +50,15 @@ Key commands:
 connectors-mcp
 ```
 
+## HTTP mode
+
+```bash
+connectors-mcp --http            # http://127.0.0.1:8808/mcp
+MCP_HTTP=1 connectors-mcp
+```
+
+Health: `GET http://127.0.0.1:8808/health`. MCP is also mounted on `connectors-serve` at `/mcp`.
+
 ## REST API
 
 ```bash

@@ -48,6 +48,7 @@ import {
   deleteProfile,
   type AuthStatus,
 } from "./auth.js";
+import { handleMcpHttpRequest } from "../mcp/http.js";
 
 // ── Activity Log ──
 interface ActivityEntry {
@@ -281,6 +282,9 @@ export async function startServer(requestedPort: number, options?: { open?: bool
       const url = new URL(req.url);
       const path = url.pathname;
       const method = req.method;
+
+      const mcpResponse = await handleMcpHttpRequest(req);
+      if (mcpResponse) return mcpResponse;
 
       // ── API Routes ──
 

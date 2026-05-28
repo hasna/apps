@@ -600,12 +600,8 @@ export class LocalConnectorsClient {
   private readonly connectorsDir: string;
 
   constructor(options: ConnectorsClientOptions = {}) {
-<<<<<<< Updated upstream
     this.baseUrl = (options.serverUrl ?? "http://localhost:9876").replace(/\/$/, "");
-=======
-    this.baseUrl = (options.serverUrl ?? "http://localhost:19426").replace(/\/$/, "");
     this.connectorsDir = options.connectorsDir ?? ".connectors";
->>>>>>> Stashed changes
   }
 
   private async request<T>(

@@ -1,5 +1,4 @@
-<<<<<<< Updated upstream
-import { describe, it, expect, beforeEach, mock, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, mock, afterEach, beforeAll, afterAll, spyOn } from "bun:test";
 import {
   ConnectorsClient,
   HostedConnectorsClient,
@@ -7,14 +6,9 @@ import {
   LocalConnectorsClient,
   normalizeConnectorSlug,
 } from "./index";
-=======
-import { describe, it, expect, beforeEach, mock, afterEach, beforeAll, afterAll, spyOn } from "bun:test";
-import { ConnectorsClient } from "./index";
-import type { RunResult } from "./index";
 import { mkdirSync, writeFileSync, chmodSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
->>>>>>> Stashed changes
 
 // ── Mock fetch ──────────────────────────────────────────────────────────────
 
