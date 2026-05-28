@@ -183,4 +183,80 @@ export const MIGRATIONS: MigrationEntry[] = [
       PRAGMA foreign_keys=ON;
     `,
   },
+  {
+    id: 3,
+    name: "domain_owner_tracking",
+    sql: `
+      CREATE TABLE IF NOT EXISTS domain_owners (
+        id TEXT PRIMARY KEY,
+        domain_id TEXT NOT NULL REFERENCES domains(id) ON DELETE CASCADE,
+        contact_id TEXT,
+        owner_name TEXT,
+        owner_email TEXT,
+        owner_phone TEXT,
+        owner_organization TEXT,
+        source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('whois', 'manual', 'brandsight', 'import')),
+        verified INTEGER NOT NULL DEFAULT 0,
+        notes TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      ALTER TABLE domain_offers ADD COLUMN owner_contact_id TEXT REFERENCES domain_owners(id);
+
+      CREATE INDEX idx_domain_owners_domain ON domain_owners(domain_id);
+      CREATE INDEX idx_domain_owners_contact ON domain_owners(contact_id);
+      CREATE INDEX idx_domain_owners_email ON domain_owners(owner_email);
+      CREATE INDEX idx_domain_offers_owner ON domain_offers(owner_contact_id);
+    `,
+  },
+  {
+    id: 4,
+    name: "domain_history_tracking",
+    sql: `
+      CREATE TABLE IF NOT EXISTS domain_history (
+        id TEXT PRIMARY KEY,
+        domain_id TEXT NOT NULL REFERENCES domains(id) ON DELETE CASCADE,
+        snapshot_type TEXT NOT NULL CHECK (snapshot_type IN ('whois', 'rdap', 'dns', 'ssl', 'reputation', 'exa_research')),
+        raw_data TEXT NOT NULL DEFAULT '{}',
+        registrant_name TEXT,
+        registrant_email TEXT,
+        registrant_org TEXT,
+        nameservers TEXT NOT NULL DEFAULT '[]',
+        registrar TEXT,
+        status TEXT,
+        notes TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX idx_domain_history_domain ON domain_history(domain_id);
+      CREATE INDEX idx_domain_history_type ON domain_history(snapshot_type);
+      CREATE INDEX idx_domain_history_created ON domain_history(created_at);
+      CREATE INDEX idx_domain_history_email ON domain_history(registrant_email);
+    `,
+  },
+  {
+    id: 5,
+    name: "domain_reputation_tracking",
+    sql: `
+      CREATE TABLE IF NOT EXISTS domain_reputation (
+        id TEXT PRIMARY KEY,
+        domain_id TEXT NOT NULL REFERENCES domains(id) ON DELETE CASCADE,
+        is_blacklisted INTEGER NOT NULL DEFAULT 0,
+        blacklist_sources TEXT NOT NULL DEFAULT '[]',
+        threat_score INTEGER,
+        spam_score INTEGER,
+        malware_detected INTEGER NOT NULL DEFAULT 0,
+        phishing_detected INTEGER NOT NULL DEFAULT 0,
+        reputation_sources TEXT NOT NULL DEFAULT '[]',
+        last_checked_at TEXT,
+        notes TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX idx_domain_reputation_domain ON domain_reputation(domain_id);
+      CREATE INDEX idx_domain_reputation_blacklisted ON domain_reputation(is_blacklisted);
+    `,
+  },
 ];
