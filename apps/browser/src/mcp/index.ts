@@ -12,25 +12,88 @@ import { register as registerCapture } from "./capture.js";
 import { register as registerNetwork } from "./network.js";
 import { register as registerData } from "./data.js";
 import { register as registerTui } from "./tui.js";
+import { isHttpMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 
 const _pkg = JSON.parse(readFileSync(join(import.meta.dir, "../../package.json"), "utf8")) as { version: string };
 
-const server = new McpServer({
-  name: "@hasna/browser",
-  version: _pkg.version,
-});
+export function buildServer(): McpServer {
+  const server = new McpServer({
+    name: "@hasna/browser",
+    version: _pkg.version,
+  });
 
-registerSessions(server);
-registerActions(server);
-registerCapture(server);
-registerNetwork(server);
-registerData(server);  // already includes meta, recordings, scripts
-registerTui(server);
-registerCloudTools(server, "browser");
+  registerSessions(server);
+  registerActions(server);
+  registerCapture(server);
+  registerNetwork(server);
+  registerData(server);
+  registerTui(server);
+  registerCloudTools(server, "browser");
 
-// Log version to stderr on startup so debugging is instant
-const _startupToolCount = Object.keys((server as any)._registeredTools ?? {}).length;
-console.error(`@hasna/browser v${_pkg.version} — ${_startupToolCount} tools | data: ${(await import("../db/schema.js")).getDataDir()}`);
+  return server;
+}
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
+function hasFlag(...flags: string[]): boolean {
+  return process.argv.some((arg) => flags.includes(arg));
+}
+
+function printHelp(): void {
+  process.stdout.write(
+    `Usage: browser-mcp [options]
+
+Browser MCP server (stdio transport by default)
+
+Options:
+  --http           Serve MCP over Streamable HTTP (127.0.0.1)
+  --port <number>  HTTP port (default: 8802, env: MCP_HTTP_PORT)
+  -h, --help       Show help
+  -V, --version    Show version
+`,
+  );
+}
+
+async function logStartup(server: McpServer): Promise<void> {
+  const startupToolCount = Object.keys((server as any)._registeredTools ?? {}).length;
+  const { getDataDir } = await import("../db/schema.js");
+  console.error(
+    `@hasna/browser v${_pkg.version} — ${startupToolCount} tools | data: ${getDataDir()}`,
+  );
+}
+
+async function main(): Promise<void> {
+  if (hasFlag("--help", "-h")) {
+    printHelp();
+    return;
+  }
+
+  if (hasFlag("--version", "-V")) {
+    process.stdout.write(`${_pkg.version}\n`);
+    return;
+  }
+
+  if (isHttpMode()) {
+    const handle = await startMcpHttpServer(buildServer, {
+      port: resolveMcpHttpPort(),
+    });
+    await logStartup(buildServer());
+    process.on("SIGINT", () => {
+      void handle.close().finally(() => process.exit(0));
+    });
+    process.on("SIGTERM", () => {
+      void handle.close().finally(() => process.exit(0));
+    });
+    return;
+  }
+
+  const server = buildServer();
+  await logStartup(server);
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
+
+if (import.meta.main) {
+  main().catch((error) => {
+    console.error("MCP server error:", error);
+    process.exit(1);
+  });
+}

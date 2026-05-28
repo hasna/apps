@@ -23,7 +23,20 @@ browser --help
 browser-mcp
 ```
 
-1 tools available.
+## HTTP mode
+
+Run a long-lived Streamable HTTP MCP server on `127.0.0.1` (default port **8802**):
+
+```bash
+browser-mcp --http
+# or: MCP_HTTP=1 browser-mcp
+# port override: --port 8802  or  MCP_HTTP_PORT=8802
+```
+
+- Health: `GET http://127.0.0.1:8802/health` → `{"status":"ok","name":"browser"}`
+- MCP: `http://127.0.0.1:8802/mcp`
+
+Stdio remains the default when no `--http` / `MCP_HTTP=1` is set.
 
 ## REST API
 
