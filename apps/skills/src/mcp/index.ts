@@ -14,7 +14,7 @@ import { registerCloudTools } from "@hasna/cloud";
 import pkg from "../../package.json" with { type: "json" };
 
 import { buildServer } from "./server.js";
-import { isMcpHttpMode, parseMcpHttpPort, startSkillsMcpHttpServer } from "./http.js";
+import { isMcpStdioMode, parseMcpHttpPort, startSkillsMcpHttpServer } from "./http.js";
 
 const args = process.argv.slice(2);
 
@@ -41,15 +41,15 @@ if (args.includes("--version") || args.includes("-V")) {
 }
 
 async function main() {
-  if (isMcpHttpMode(args)) {
-    const port = parseMcpHttpPort(args);
-    await startSkillsMcpHttpServer({ port, hostname: "127.0.0.1" });
+  if (isMcpStdioMode(args)) {
+    const server = buildServer();
+    registerCloudTools(server, "skills");
+    await server.connect(new StdioServerTransport());
     return;
   }
-
-  const server = buildServer();
-  registerCloudTools(server, "skills");
-  await server.connect(new StdioServerTransport());
+  // Default: shared Streamable HTTP server (one process per MCP, many agents).
+  const port = parseMcpHttpPort(args);
+  await startSkillsMcpHttpServer({ port, hostname: "127.0.0.1" });
 }
 
 if (import.meta.main) {
