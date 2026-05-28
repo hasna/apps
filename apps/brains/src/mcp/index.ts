@@ -20,7 +20,7 @@ import type { TrainingExample } from "../lib/gatherers/types.js";
 import { getPackageVersion } from "../lib/package-metadata.js";
 import { McpGatherSchema, McpFinetuneStartSchema, McpFinetuneStatusSchema } from "../lib/schemas.js";
 import { registerCloudTools, sendFeedback } from "@hasna/cloud";
-import { isHttpMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
+import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 
 // --- helpers ---
 
@@ -600,24 +600,25 @@ async function main(): Promise<void> {
   }
 
   const args = process.argv.slice(2);
-  if (isHttpMode(args)) {
-    const handle = startMcpHttpServer({
-      name: "brains",
-      port: resolveMcpHttpPort(args),
-      buildServer,
-    });
-    process.on("SIGINT", () => {
-      handle.stop();
-      process.exit(0);
-    });
-    process.on("SIGTERM", () => {
-      handle.stop();
-      process.exit(0);
-    });
+  if (isStdioMode(args)) {
+    await startMcpServer();
     return;
   }
 
-  await startMcpServer();
+  // Default: shared Streamable HTTP server (one process per MCP, many agents).
+  const handle = startMcpHttpServer({
+    name: "brains",
+    port: resolveMcpHttpPort(args),
+    buildServer,
+  });
+  process.on("SIGINT", () => {
+    handle.stop();
+    process.exit(0);
+  });
+  process.on("SIGTERM", () => {
+    handle.stop();
+    process.exit(0);
+  });
 }
 
 if (import.meta.main) {

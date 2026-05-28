@@ -9,6 +9,10 @@ export function isHttpMode(args: string[]): boolean {
   return args.includes("--http") || process.env.MCP_HTTP === "1";
 }
 
+export function isStdioMode(args: string[]): boolean {
+  return args.includes("--stdio") || process.env.MCP_STDIO === "1";
+}
+
 export function resolveMcpHttpPort(args: string[]): number {
   const portIdx = args.indexOf("--port");
   if (portIdx >= 0 && args[portIdx + 1]) {
