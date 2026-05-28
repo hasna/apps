@@ -164,6 +164,36 @@ export interface Persona {
   updatedAt: string;
 }
 
+export interface TestingWorkflow {
+  id: string;
+  projectId: string | null;
+  name: string;
+  description: string | null;
+  scenarioFilter: {
+    scenarioIds?: string[];
+    tags?: string[];
+    priority?: string;
+  };
+  personaIds: string[];
+  goal: {
+    prompt: string;
+    successCriteria: string[];
+    maxIterations: number;
+  } | null;
+  execution: {
+    target: "local" | "connector:e2b";
+    connector?: string;
+    operation?: string;
+    sandboxTemplate?: string;
+    timeoutMs?: number;
+    env?: Record<string, string>;
+  };
+  settings: Record<string, unknown>;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ScanIssue {
   id: string;
   fingerprint: string;

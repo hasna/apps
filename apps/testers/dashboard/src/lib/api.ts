@@ -1,4 +1,4 @@
-import type { Scenario, Run, Result, Screenshot, Schedule, ApiCheck, ApiCheckResult, Project, Environment, Persona } from "../types";
+import type { Scenario, Run, Result, Screenshot, Schedule, ApiCheck, ApiCheckResult, Project, Environment, Persona, TestingWorkflow } from "../types";
 
 const BASE = "/api";
 
@@ -222,3 +222,33 @@ export const updatePersona = (id: string, updates: Partial<Persona> & { version:
 
 export const deletePersona = (id: string): Promise<void> =>
   fetchJSON<void>(`/personas/${id}`, { method: "DELETE" });
+
+// Saved Testing Workflows
+export const getWorkflows = (params?: { projectId?: string; enabled?: boolean }): Promise<TestingWorkflow[]> => {
+  const qs = params ? "?" + new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)]))).toString() : "";
+  return fetchJSON<TestingWorkflow[]>(`/workflows${qs}`);
+};
+
+export const createWorkflow = (input: Partial<TestingWorkflow>): Promise<TestingWorkflow> =>
+  fetchJSON<TestingWorkflow>("/workflows", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
+export const updateWorkflow = (id: string, updates: Partial<TestingWorkflow>): Promise<TestingWorkflow> =>
+  fetchJSON<TestingWorkflow>(`/workflows/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(updates),
+  });
+
+export const runWorkflow = (id: string, input: { url: string; model?: string; headed?: boolean; parallel?: number; dryRun?: boolean }) =>
+  fetchJSON(`/workflows/${id}/run`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
+export const runWorkflowAgent = (id: string, input: { url: string; model?: string; headed?: boolean; parallel?: number; dryRun?: boolean }) =>
+  fetchJSON(`/workflows/${id}/agent`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });

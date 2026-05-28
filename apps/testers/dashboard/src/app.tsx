@@ -11,6 +11,7 @@ import { ProjectsPage } from "./components/ProjectsPage";
 import { ScanIssuesPage } from "./components/ScanIssuesPage";
 import { CoveragePage } from "./components/CoveragePage";
 import { PersonasPage } from "./components/PersonasPage";
+import { WorkflowsPage } from "./components/WorkflowsPage";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 
 type Page =
@@ -23,6 +24,7 @@ type Page =
   | { type: "projects" }
   | { type: "scan-issues" }
   | { type: "coverage" }
+  | { type: "workflows" }
   | { type: "personas" };
 
 // Context for sharing selected scenario + search ref across pages
@@ -165,6 +167,9 @@ export function App() {
             <NavButton active={page.type === "schedules"} onClick={() => setPage({ type: "schedules" })}>
               Schedules
             </NavButton>
+            <NavButton active={page.type === "workflows"} onClick={() => setPage({ type: "workflows" })}>
+              Workflows
+            </NavButton>
             <NavButton active={page.type === "api-checks"} onClick={() => setPage({ type: "api-checks" })}>
               API Checks
             </NavButton>
@@ -228,6 +233,9 @@ export function App() {
             )}
             {page.type === "schedules" && (
               <SchedulesPage />
+            )}
+            {page.type === "workflows" && (
+              <WorkflowsPage />
             )}
             {page.type === "api-checks" && (
               <ApiChecksPage />
