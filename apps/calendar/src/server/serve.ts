@@ -1,3 +1,4 @@
+import { handleMcpFetch, healthPayload } from "../mcp/http.js";
 import {
   createOrg, listOrgs, getOrg, getOrgBySlug, updateOrg, deleteOrg,
   registerAgent, getAgent, getAgentByName, listAgents, heartbeat as agentHeartbeat,
@@ -44,9 +45,18 @@ export function serve(port: number) {
 
   const server = Bun.serve({
     port,
+    hostname: "127.0.0.1",
     async fetch(req: Request): Promise<Response> {
       const url = new URL(req.url);
       const path = url.pathname;
+
+      // ── MCP Streamable HTTP (shared long-lived server) ─────────────────
+      if (path === "/health" && req.method === "GET") {
+        return json(healthPayload("calendar"));
+      }
+      if (path === "/mcp") {
+        return handleMcpFetch(req);
+      }
 
       // ── CORS preflight ────────────────────────────────────────────────────
       if (req.method === "OPTIONS") {
