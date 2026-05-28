@@ -7,6 +7,7 @@ import { defineConnector } from "../connector.js";
 const GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
+const MAX_GMAIL_RETRIES = 5;
 
 interface OAuth2Tokens {
   accessToken?: string;
@@ -321,22 +322,62 @@ async function requestJson<T = unknown>(
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined && value !== null && value !== "") url.searchParams.append(key, String(value));
   }
-  const response = await fetch(url, {
-    method: options.method ?? "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/json",
-      ...(options.body ? { "Content-Type": "application/json" } : {}),
-    },
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
-  const text = await response.text();
-  const data = text ? JSON.parse(text) as T : {} as T;
-  if (!response.ok) {
-    const error = data as { error?: { message?: string } };
-    throw new Error(`Gmail request failed (${response.status}): ${error.error?.message ?? response.statusText}`);
+  let lastError: string | undefined;
+  for (let attempt = 0; attempt <= MAX_GMAIL_RETRIES; attempt++) {
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: options.method ?? "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+          ...(options.body ? { "Content-Type": "application/json" } : {}),
+        },
+        body: options.body ? JSON.stringify(options.body) : undefined,
+      });
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      if (attempt >= MAX_GMAIL_RETRIES) throw error;
+      await sleep(gmailBackoffDelayMs(attempt));
+      continue;
+    }
+
+    const text = await response.text();
+    const data = text ? JSON.parse(text) as T : {} as T;
+    if (response.ok) return data;
+
+    const error = data as { error?: { message?: string; status?: string; errors?: Array<{ reason?: string }> } };
+    lastError = error.error?.message ?? response.statusText;
+    if (!isRetryableGmailResponse(response.status, error) || attempt >= MAX_GMAIL_RETRIES) {
+      throw new Error(`Gmail request failed (${response.status}): ${lastError}`);
+    }
+    await sleep(gmailBackoffDelayMs(attempt, response.headers.get("retry-after")));
   }
-  return data;
+  throw new Error(`Gmail request failed: ${lastError ?? "unknown error"}`);
+}
+
+function isRetryableGmailResponse(
+  status: number,
+  error: { error?: { status?: string; errors?: Array<{ reason?: string }> } },
+): boolean {
+  if ([429, 500, 502, 503, 504].includes(status)) return true;
+  const reasons = error.error?.errors?.map((entry) => entry.reason) ?? [];
+  return reasons.some((reason) => reason === "rateLimitExceeded" || reason === "userRateLimitExceeded");
+}
+
+function gmailBackoffDelayMs(attempt: number, retryAfter: string | null = null): number {
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  }
+  const base = Number(process.env.CONNECTORS_GMAIL_RETRY_BASE_MS ?? "1000");
+  const baseMs = Number.isFinite(base) && base >= 0 ? base : 1000;
+  const jitterMs = Math.floor(Math.random() * 1000);
+  return Math.min((2 ** attempt) * baseMs + jitterMs, 64_000);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function getValidAccessToken(profile: string): Promise<string> {

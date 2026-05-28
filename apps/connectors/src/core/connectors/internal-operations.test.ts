@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test";
+import { afterEach, describe, mock, test, expect } from "bun:test";
 import { mkdirSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -11,6 +11,14 @@ import { stripeConnector } from "./stripe.js";
 import { githubConnector } from "./github.js";
 import { gmailConnector } from "./gmail.js";
 import { googleDriveConnector } from "./googledrive.js";
+
+const originalFetch = globalThis.fetch;
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  delete process.env.GMAIL_ACCESS_TOKEN;
+  delete process.env.CONNECTORS_GMAIL_RETRY_BASE_MS;
+});
 
 describe("internal connector operations", () => {
   test("lists normalized stripe operations", () => {
@@ -165,6 +173,27 @@ describe("internal connector operations", () => {
         process.env.HASNA_GMAIL_CONNECTOR_DIR = previousDir;
       }
     }
+  });
+
+  test("retries transient Gmail quota responses", async () => {
+    process.env.GMAIL_ACCESS_TOKEN = "test-token";
+    process.env.CONNECTORS_GMAIL_RETRY_BASE_MS = "1";
+    let calls = 0;
+    globalThis.fetch = mock(async () => {
+      calls++;
+      if (calls === 1) {
+        return new Response(JSON.stringify({ error: { message: "rate limit" } }), { status: 429 });
+      }
+      return Response.json({ emailAddress: "me@example.com", messagesTotal: 1, threadsTotal: 1 });
+    }) as typeof fetch;
+
+    const result = await executeConnectorOperation(gmailConnector, {
+      operation: "profile.get",
+      profile: "default",
+    });
+
+    expect(calls).toBe(2);
+    expect(result).toMatchObject({ emailAddress: "me@example.com" });
   });
 
   test("throws for unknown operation", async () => {
