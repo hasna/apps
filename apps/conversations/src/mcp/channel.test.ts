@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -7,7 +7,8 @@ import { closeDb } from "../lib/db.js";
 import { readMessages, sendMessage } from "../lib/messages.js";
 import { createSpace } from "../lib/spaces.js";
 import { readSpaceNotifications, subscribeToSpaceNotifications } from "../lib/space-notifications.js";
-import { registerChannelBridge, setSessionAgent } from "./channel.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { registerChannelBridge, setSessionAgent, setClaudeSessionId, getSessionAgent, getClaudeSessionId } from "./channel.js";
 
 function createTestDbPath(): string {
   return join(tmpdir(), `conversations-channel-${Date.now()}-${Math.random().toString(16).slice(2)}.db`);
@@ -131,5 +132,52 @@ describe("channel bridge delivery", () => {
     } finally {
       stop();
     }
+  });
+});
+
+describe("session agent tracking", () => {
+  beforeEach(() => {
+    setSessionAgent("");
+    setClaudeSessionId("");
+    delete process.env.CONVERSATIONS_AGENT_ID;
+    delete process.env.CONVERSATIONS_SESSION_ID;
+  });
+
+  test("setSessionAgent stores agent id", () => {
+    setSessionAgent("test-agent");
+    expect(getSessionAgent()).toBe("test-agent");
+  });
+
+  test("setSessionAgent stores claude session id", () => {
+    setSessionAgent("test-agent", "session-123");
+    expect(getSessionAgent()).toBe("test-agent");
+    expect(getClaudeSessionId()).toBe("session-123");
+  });
+
+  test("setClaudeSessionId stores session id", () => {
+    setClaudeSessionId("my-session");
+    expect(getClaudeSessionId()).toBe("my-session");
+  });
+
+  test("getSessionAgent falls back to env var", () => {
+    process.env.CONVERSATIONS_AGENT_ID = "env-agent";
+    expect(getSessionAgent()).toBe("env-agent");
+  });
+
+  test("getClaudeSessionId falls back to env var", () => {
+    process.env.CONVERSATIONS_SESSION_ID = "env-session";
+    expect(getClaudeSessionId()).toBe("env-session");
+  });
+
+  test("returns null when nothing set", () => {
+    setSessionAgent("");
+    expect(getSessionAgent()).toBeNull();
+  });
+
+  test("registerChannelBridge returns cleanup function", () => {
+    const server = new McpServer({ name: "test-channel-cleanup", version: "0.0.1" });
+    const cleanup = registerChannelBridge(server, { pollIntervalMs: 50000, startDelayMs: 50000 });
+    expect(typeof cleanup).toBe("function");
+    cleanup();
   });
 });
