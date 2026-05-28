@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 import { describe, it, expect, beforeEach, mock, afterEach } from "bun:test";
 import {
   ConnectorsClient,
@@ -6,6 +7,14 @@ import {
   LocalConnectorsClient,
   normalizeConnectorSlug,
 } from "./index";
+=======
+import { describe, it, expect, beforeEach, mock, afterEach, beforeAll, afterAll, spyOn } from "bun:test";
+import { ConnectorsClient } from "./index";
+import type { RunResult } from "./index";
+import { mkdirSync, writeFileSync, chmodSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+>>>>>>> Stashed changes
 
 // ── Mock fetch ──────────────────────────────────────────────────────────────
 
@@ -31,6 +40,47 @@ afterEach(() => {
 });
 
 const originalFetch = global.fetch;
+
+// ── Temp connector binaries for run() tests ─────────────────────────────────
+
+const testDir = join(tmpdir(), `connectors-sdk-test-${Date.now()}`);
+
+beforeAll(() => {
+  mkdirSync(testDir, { recursive: true });
+
+  // connect-echo: prints args as space-separated, exits 0
+  writeFileSync(join(testDir, "connect-echo"), '#!/bin/sh\necho "$@"\n');
+  chmodSync(join(testDir, "connect-echo"), 0o755);
+
+  // connect-json: outputs a JSON object with args
+  writeFileSync(
+    join(testDir, "connect-json"),
+    '#!/bin/sh\necho \'{"args":"\'$(echo "$@")\'","ok":true}\'\n'
+  );
+  chmodSync(join(testDir, "connect-json"), 0o755);
+
+  // connect-fail: exits with code 1 and prints to stderr
+  writeFileSync(join(testDir, "connect-fail"), '#!/bin/sh\necho "error: something broke" >&2\nexit 1\n');
+  chmodSync(join(testDir, "connect-fail"), 0o755);
+
+  // connect-format: prints the --format value if present
+  writeFileSync(
+    join(testDir, "connect-format"),
+    `#!/bin/sh
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --format) shift; echo "format=$1"; shift;;
+    *) shift;;
+  esac
+done
+`
+  );
+  chmodSync(join(testDir, "connect-format"), 0o755);
+});
+
+afterAll(() => {
+  rmSync(testDir, { recursive: true, force: true });
+});
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 
@@ -385,6 +435,204 @@ describe("ConnectorsClient", () => {
       const fetchMock = mockFetch(500, {});
       global.fetch = fetchMock;
       await expect(client.install("github")).rejects.toThrow("Request failed with status 500");
+    });
+  });
+
+  // ── CLI Execution Tests ────────────────────────────────────────────────
+
+  describe("run()", () => {
+    it("executes connector binary and captures stdout", async () => {
+      const c = new ConnectorsClient({ connectorsDir: testDir });
+      const result = await c.run("echo", ["hello", "world"]);
+      expect(result.success).toBe(true);
+      expect(result.exitCode).toBe(0);
+      expect(result.output).toBe("hello world");
+    });
+
+    it("resolves binary path as {connectorsDir}/connect-{name}", async () => {
+      const c = new ConnectorsClient({ connectorsDir: testDir });
+      // connect-echo exists; connect-nonexistent does not
+      const result = await c.run("nonexistent", []);
+      expect(result.success).toBe(false);
+      expect(result.exitCode).not.toBe(0);
+    });
+
+    it("returns failure result when process exits with non-zero code", async () => {
+      const c = new ConnectorsClient({ connectorsDir: testDir });
+      const result = await c.run("fail", []);
+      expect(result.success).toBe(false);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.output).toContain("error: something broke");
+    });
+
+    it("appends --format flag when format option is set", async () => {
+      const c = new ConnectorsClient({ connectorsDir: testDir });
+      const result = await c.run("format", ["search"], { format: "json" });
+      expect(result.success).toBe(true);
+      expect(result.output).toBe("format=json");
+    });
+
+    it("does not append --format flag when format is not set", async () => {
+      const c = new ConnectorsClient({ connectorsDir: testDir });
+      const result = await c.run("echo", ["search"]);
+      expect(result.output).toBe("search");
+      expect(result.output).not.toContain("--format");
+    });
+
+    it("uses default connectorsDir of .connectors", () => {
+      const c = new ConnectorsClient();
+      // We can't easily test the exact path without running, but we verify
+      // the binary path resolution by checking a run against a nonexistent dir fails
+      // (since .connectors/connect-echo won't exist in pwd)
+      expect(c.run("echo", [])).resolves.toHaveProperty("success", false);
+    });
+
+    it("passes cwd option to the child process", async () => {
+      const c = new ConnectorsClient({ connectorsDir: testDir });
+      const result = await c.run("echo", ["test"], { cwd: "/tmp" });
+      expect(result.success).toBe(true);
+      expect(result.output).toBe("test");
+    });
+
+    it("respects timeout option", async () => {
+      // Create a slow connector
+      writeFileSync(join(testDir, "connect-slow"), '#!/bin/sh\nsleep 10\necho done\n');
+      chmodSync(join(testDir, "connect-slow"), 0o755);
+
+      const c = new ConnectorsClient({ connectorsDir: testDir });
+      const result = await c.run("slow", [], { timeout: 500 });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe("runJson()", () => {
+    it("parses JSON output from connector", async () => {
+      const c = new ConnectorsClient({ connectorsDir: testDir });
+
+      // Spy on run to return controlled JSON output
+      const runSpy = spyOn(c, "run").mockResolvedValue({
+        success: true,
+        output: '{"results":[1,2,3]}',
+        exitCode: 0,
+      });
+
+      const data = await c.runJson<{ results: number[] }>("exa", ["search"]);
+      expect(data.results).toEqual([1, 2, 3]);
+
+      // Verify run was called with format: "json"
+      expect(runSpy).toHaveBeenCalledWith("exa", ["search"], { format: "json" });
+      runSpy.mockRestore();
+    });
+
+    it("forces format to json", async () => {
+      const c = new ConnectorsClient({ connectorsDir: testDir });
+      const runSpy = spyOn(c, "run").mockResolvedValue({
+        success: true,
+        output: '{}',
+        exitCode: 0,
+      });
+
+      await c.runJson("exa", ["info"]);
+      expect(runSpy.mock.calls[0][2]).toEqual({ format: "json" });
+      runSpy.mockRestore();
+    });
+
+    it("throws on non-zero exit code", async () => {
+      const c = new ConnectorsClient({ connectorsDir: testDir });
+      const runSpy = spyOn(c, "run").mockResolvedValue({
+        success: false,
+        output: "bad request",
+        exitCode: 2,
+      });
+
+      await expect(c.runJson("exa", ["search"])).rejects.toThrow(
+        'Connector "exa" exited with code 2'
+      );
+      runSpy.mockRestore();
+    });
+
+    it("throws when output is not valid JSON", async () => {
+      const c = new ConnectorsClient({ connectorsDir: testDir });
+      const runSpy = spyOn(c, "run").mockResolvedValue({
+        success: true,
+        output: "not json at all",
+        exitCode: 0,
+      });
+
+      await expect(c.runJson("exa", [])).rejects.toThrow(
+        'Failed to parse JSON output from connector "exa"'
+      );
+      runSpy.mockRestore();
+    });
+
+    it("passes through timeout and cwd options", async () => {
+      const c = new ConnectorsClient({ connectorsDir: testDir });
+      const runSpy = spyOn(c, "run").mockResolvedValue({
+        success: true,
+        output: '{"ok":true}',
+        exitCode: 0,
+      });
+
+      await c.runJson("exa", ["search"], { timeout: 5000, cwd: "/tmp" });
+      expect(runSpy.mock.calls[0][2]).toEqual({ timeout: 5000, cwd: "/tmp", format: "json" });
+      runSpy.mockRestore();
+    });
+  });
+
+  describe("search()", () => {
+    it("calls runJson with exa connector and search args", async () => {
+      const c = new ConnectorsClient({ connectorsDir: testDir });
+      const runJsonSpy = spyOn(c, "runJson").mockResolvedValue({ results: [] });
+
+      await c.search("AI coding agents");
+
+      expect(runJsonSpy).toHaveBeenCalledWith("exa", ["search", "query", "AI coding agents"]);
+      runJsonSpy.mockRestore();
+    });
+
+    it("passes numResults option as --num-results", async () => {
+      const c = new ConnectorsClient({ connectorsDir: testDir });
+      const runJsonSpy = spyOn(c, "runJson").mockResolvedValue({ results: [] });
+
+      await c.search("test", { numResults: 5 });
+
+      expect(runJsonSpy.mock.calls[0][1]).toEqual([
+        "search", "query", "test", "--num-results", "5",
+      ]);
+      runJsonSpy.mockRestore();
+    });
+
+    it("passes type option as --type", async () => {
+      const c = new ConnectorsClient({ connectorsDir: testDir });
+      const runJsonSpy = spyOn(c, "runJson").mockResolvedValue({ results: [] });
+
+      await c.search("test", { type: "neural" });
+
+      expect(runJsonSpy.mock.calls[0][1]).toEqual([
+        "search", "query", "test", "--type", "neural",
+      ]);
+      runJsonSpy.mockRestore();
+    });
+
+    it("passes both numResults and type options", async () => {
+      const c = new ConnectorsClient({ connectorsDir: testDir });
+      const runJsonSpy = spyOn(c, "runJson").mockResolvedValue({ results: [] });
+
+      await c.search("test", { numResults: 3, type: "auto" });
+
+      expect(runJsonSpy.mock.calls[0][1]).toEqual([
+        "search", "query", "test", "--num-results", "3", "--type", "auto",
+      ]);
+      runJsonSpy.mockRestore();
+    });
+
+    it("returns parsed JSON results", async () => {
+      const c = new ConnectorsClient({ connectorsDir: testDir });
+      const mockData = { results: [{ title: "Result 1" }] };
+      spyOn(c, "runJson").mockResolvedValue(mockData);
+
+      const data = await c.search("test");
+      expect(data).toEqual(mockData);
     });
   });
 });

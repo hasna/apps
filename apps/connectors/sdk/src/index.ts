@@ -194,9 +194,26 @@ export interface ApiError {
   error: string;
 }
 
+export interface RunResult {
+  success: boolean;
+  output: string;
+  exitCode: number;
+}
+
+export interface RunOptions {
+  /** Timeout in milliseconds. Default: 30000 */
+  timeout?: number;
+  /** Output format passed to the connector CLI (e.g. "json") */
+  format?: string;
+  /** Working directory for the connector process */
+  cwd?: string;
+}
+
 export interface ConnectorsClientOptions {
   /** Base URL of the connectors server. Defaults to http://localhost:9876 */
   serverUrl?: string;
+  /** Directory where connector binaries are installed. Default: .connectors */
+  connectorsDir?: string;
 }
 
 export interface ListOptions {
@@ -580,9 +597,15 @@ function normalizePolicyConnectorLists(input: HostedPolicy): HostedPolicy {
 
 export class LocalConnectorsClient {
   private readonly baseUrl: string;
+  private readonly connectorsDir: string;
 
   constructor(options: ConnectorsClientOptions = {}) {
+<<<<<<< Updated upstream
     this.baseUrl = (options.serverUrl ?? "http://localhost:9876").replace(/\/$/, "");
+=======
+    this.baseUrl = (options.serverUrl ?? "http://localhost:19426").replace(/\/$/, "");
+    this.connectorsDir = options.connectorsDir ?? ".connectors";
+>>>>>>> Stashed changes
   }
 
   private async request<T>(
@@ -814,6 +837,73 @@ export class LocalConnectorsClient {
       method: "POST",
       body: JSON.stringify(data),
     });
+  }
+  // ── CLI Execution Methods ──────────────────────────────────────────────
+
+  /**
+   * Run a connector CLI binary and capture its output.
+   * @param name - Connector name (e.g. "exa"). Binary is resolved as `{connectorsDir}/connect-{name}`.
+   * @param args - Arguments to pass to the connector CLI.
+   * @param options - Execution options (timeout, format, cwd).
+   */
+  async run(name: string, args: string[] = [], options: RunOptions = {}): Promise<RunResult> {
+    const { timeout = 30_000, format, cwd } = options;
+    const bin = `${this.connectorsDir}/connect-${name}`;
+
+    const fullArgs = format ? [...args, "--format", format] : [...args];
+
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const execFileAsync = promisify(execFile);
+
+    try {
+      const { stdout, stderr } = await execFileAsync(bin, fullArgs, {
+        timeout,
+        cwd,
+        maxBuffer: 10 * 1024 * 1024, // 10 MB
+        env: { ...process.env },
+      });
+      const output = stdout || stderr;
+      return { success: true, output: output.trimEnd(), exitCode: 0 };
+    } catch (err: any) {
+      const exitCode = typeof err.code === "number" ? err.code : (err.status ?? 1);
+      const output = (err.stdout || err.stderr || err.message || "").trimEnd();
+      return { success: false, output, exitCode };
+    }
+  }
+
+  /**
+   * Run a connector CLI binary and parse the output as JSON.
+   * @param name - Connector name.
+   * @param args - Arguments to pass to the connector CLI.
+   * @param options - Execution options (timeout, cwd). Format is forced to "json".
+   */
+  async runJson<T = unknown>(name: string, args: string[] = [], options: Omit<RunOptions, "format"> = {}): Promise<T> {
+    const result = await this.run(name, args, { ...options, format: "json" });
+    if (!result.success) {
+      throw new Error(`Connector "${name}" exited with code ${result.exitCode}: ${result.output}`);
+    }
+    try {
+      return JSON.parse(result.output) as T;
+    } catch {
+      throw new Error(`Failed to parse JSON output from connector "${name}": ${result.output}`);
+    }
+  }
+
+  /**
+   * Convenience method for Exa search.
+   * @param query - Search query string.
+   * @param opts - Search options.
+   */
+  async search(query: string, opts?: { numResults?: number; type?: string }): Promise<any> {
+    const args = ["search", "query", query];
+    if (opts?.numResults !== undefined) {
+      args.push("--num-results", String(opts.numResults));
+    }
+    if (opts?.type) {
+      args.push("--type", opts.type);
+    }
+    return this.runJson("exa", args);
   }
 }
 
