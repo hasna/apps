@@ -80,6 +80,24 @@ const isDirectRun =
 
 async function main() {
   const args = process.argv.slice(2);
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log(`conversations-mcp — MCP server for @hasna/conversations v${pkg.version}
+
+Usage:
+  conversations-mcp              stdio transport (default)
+  conversations-mcp --http         Streamable HTTP on 127.0.0.1:8811
+  conversations-mcp --http --port <n>
+
+Environment:
+  MCP_HTTP=1           Enable HTTP mode
+  MCP_HTTP_PORT=<n>    Override default port (8811)
+`);
+    return;
+  }
+  if (args.includes("--version") || args.includes("-V")) {
+    console.log(pkg.version);
+    return;
+  }
   if (isHttpMode(args)) {
     startMcpHttpServer({
       name: "conversations",
