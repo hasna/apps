@@ -25,6 +25,17 @@ search-mcp
 
 31 tools available.
 
+## HTTP mode
+
+```bash
+search-mcp --http              # default port 8832
+MCP_HTTP=1 search-mcp
+```
+
+- Health: `GET http://127.0.0.1:8832/health`
+- MCP: `http://127.0.0.1:8832/mcp`
+- Stdio remains default. `search-serve` also mounts `/health` and `/mcp`.
+
 ## REST API
 
 ```bash

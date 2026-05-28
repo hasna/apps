@@ -22,6 +22,7 @@ import { listProfiles, createProfile, deleteProfile } from "../db/profiles.js";
 import { transcribeVideo } from "../lib/providers/transcriber.js";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
+import { handleMcpHttpRoutes } from "../mcp/http.js";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -80,6 +81,10 @@ export function startServer(port: number): void {
     async fetch(req) {
       const url = new URL(req.url);
       const path = url.pathname;
+
+      // MCP Streamable HTTP (shared long-lived transport)
+      const mcpResponse = await handleMcpHttpRoutes(req);
+      if (mcpResponse) return mcpResponse;
 
       // CORS preflight
       if (req.method === "OPTIONS") {
