@@ -6,7 +6,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { loadConnectorVersions } from "../lib/registry.js";
 import pkg from "../../package.json" with { type: "json" };
 import { buildServer } from "./server.js";
-import { isHttpMode, resolveHttpPort, startMcpHttpServer } from "./http.js";
+import { isStdioMode, resolveHttpPort, startMcpHttpServer } from "./http.js";
 
 function hasFlag(flag: string): boolean {
   return process.argv.includes(flag);
@@ -39,16 +39,17 @@ loadConnectorVersions();
 async function main() {
   const argv = process.argv.slice(2);
 
-  if (isHttpMode(argv)) {
-    const port = resolveHttpPort(argv);
-    const { port: boundPort } = await startMcpHttpServer(port);
-    console.error(`connectors-mcp HTTP listening on http://127.0.0.1:${boundPort}/mcp`);
+  if (isStdioMode(argv)) {
+    const server = buildServer();
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
     return;
   }
 
-  const server = buildServer();
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  // Default: shared Streamable HTTP server (one process per MCP, many agents).
+  const port = resolveHttpPort(argv);
+  const { port: boundPort } = await startMcpHttpServer(port);
+  console.error(`connectors-mcp HTTP listening on http://127.0.0.1:${boundPort}/mcp`);
 }
 
 main().catch((error) => {

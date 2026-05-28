@@ -37,7 +37,7 @@ afterEach(() => {
 describe("connectors MCP HTTP transport", () => {
   it("isHttpMode and resolveHttpPort work", () => {
     expect(isHttpMode(["--http"])).toBe(true);
-    expect(resolveHttpPort([])).toBe(8808);
+    expect(resolveHttpPort([])).toBe(8854);
   });
 
   it("buildServer constructs a server", async () => {
