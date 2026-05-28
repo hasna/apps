@@ -1,42 +1,80 @@
-import { describe, test, expect, afterAll } from "bun:test";
-import { startHttpServer } from "./http.js";
-import type { Server } from "node:http";
+import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { buildServer } from "./index.js";
+import { handleMcpRequest, resolveMcpHttpPort, DEFAULT_MCP_HTTP_PORT } from "./http.js";
 
-const PORT = 18802;
+describe("brains MCP HTTP transport", () => {
+  let httpServer: ReturnType<typeof Bun.serve>;
+  let port: number;
 
-describe("HTTP transport", () => {
-  let server: Server;
+  beforeAll(() => {
+    httpServer = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/health" && req.method === "GET") {
+          return Response.json({ status: "ok", name: "brains" });
+        }
+        if (url.pathname === "/mcp") {
+          return handleMcpRequest(req, buildServer);
+        }
+        return new Response("Not Found", { status: 404 });
+      },
+    });
+    port = httpServer.port!;
+  });
 
   afterAll(() => {
-    server?.close();
+    httpServer.stop();
   });
 
-  test("GET /health returns ok", async () => {
-    server = startHttpServer(PORT);
-    const res = await fetch(`http://127.0.0.1:${PORT}/health`);
+  test("default port is 8802", () => {
+    expect(DEFAULT_MCP_HTTP_PORT).toBe(8802);
+    expect(resolveMcpHttpPort([])).toBe(8802);
+    expect(resolveMcpHttpPort(["--port", "9001"])).toBe(9001);
+  });
+
+  test("GET /health returns 200", async () => {
+    const res = await fetch(`http://127.0.0.1:${port}/health`);
     expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.status).toBe("ok");
+    expect(await res.json()).toEqual({ status: "ok", name: "brains" });
   });
 
-  test("MCP round-trip over streamable HTTP initializes and lists tools", async () => {
-    const res = await fetch(`http://127.0.0.1:${PORT}/mcp`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/event-stream",
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: {
-          protocolVersion: "2025-03-26",
-          capabilities: {},
-          clientInfo: { name: "test", version: "1.0.0" },
-        },
+  test("MCP initialize + list tools over Streamable HTTP", async () => {
+    const client = new Client({ name: "brains-http-test", version: "0.0.0" });
+    const transport = new StreamableHTTPClientTransport(
+      new URL(`http://127.0.0.1:${port}/mcp`),
+    );
+    await client.connect(transport);
+    const result = await client.listTools();
+    expect(Array.isArray(result.tools)).toBe(true);
+    expect(result.tools.length).toBeGreaterThan(0);
+    await client.close();
+  });
+
+  test("serves multiple concurrent clients from one process", async () => {
+    const clients = await Promise.all(
+      [1, 2, 3].map(async () => {
+        const client = new Client({ name: "brains-http-concurrent", version: "0.0.0" });
+        const transport = new StreamableHTTPClientTransport(
+          new URL(`http://127.0.0.1:${port}/mcp`),
+        );
+        await client.connect(transport);
+        const result = await client.listTools();
+        await client.close();
+        return result;
       }),
-    });
-    expect(res.status).toBe(200);
+    );
+    for (const result of clients) {
+      expect(Array.isArray(result.tools)).toBe(true);
+    }
+  });
+});
+
+describe("brains buildServer", () => {
+  test("builds an MCP server instance", () => {
+    expect(buildServer()).toBeDefined();
   });
 });

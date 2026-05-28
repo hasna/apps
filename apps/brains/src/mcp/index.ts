@@ -599,15 +599,20 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (isHttpMode()) {
-    const handle = await startMcpHttpServer(buildServer, {
-      port: resolveMcpHttpPort(),
+  const args = process.argv.slice(2);
+  if (isHttpMode(args)) {
+    const handle = startMcpHttpServer({
+      name: "brains",
+      port: resolveMcpHttpPort(args),
+      buildServer,
     });
     process.on("SIGINT", () => {
-      void handle.close().finally(() => process.exit(0));
+      handle.stop();
+      process.exit(0);
     });
     process.on("SIGTERM", () => {
-      void handle.close().finally(() => process.exit(0));
+      handle.stop();
+      process.exit(0);
     });
     return;
   }
