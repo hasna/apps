@@ -32,6 +32,19 @@ styles-mcp
 
 28 tools available.
 
+## HTTP mode
+
+Shared Streamable HTTP transport for multi-agent sessions (binds localhost only):
+
+```bash
+styles-mcp --http
+# or: MCP_HTTP=1 styles-mcp
+# port: --port 8837  >  MCP_HTTP_PORT  >  8837 (default)
+```
+
+- Health: `GET http://127.0.0.1:8837/health`
+- MCP: `http://127.0.0.1:8837/mcp`
+
 ## Cloud Sync
 
 This package supports cloud sync via `@hasna/cloud`:

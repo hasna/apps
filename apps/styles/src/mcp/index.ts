@@ -1,29 +1,27 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { registerStyleTools } from "./tools/styles.js";
-import { registerHealthTools } from "./tools/health.js";
-import { registerContextTools } from "./tools/context.js";
-import { registerExtractTools } from "./tools/extract.js";
-import { registerPresenceTools } from "./tools/presence.js";
+import { buildServer } from "./server.js";
+import { isHttpMode, resolveHttpPort, startHttpServer } from "./http.js";
 
-export async function startMcpServer(): Promise<void> {
-  const server = new McpServer({
-    name: "open-styles",
-    version: "0.0.1",
-  });
+export { buildServer, MCP_NAME } from "./server.js";
+export { DEFAULT_MCP_HTTP_PORT, isHttpMode, resolveHttpPort, startHttpServer } from "./http.js";
 
-  registerStyleTools(server);
-  registerHealthTools(server);
-  registerContextTools(server);
-  registerExtractTools(server);
-  registerPresenceTools(server);
-
+export async function startStdioServer(): Promise<void> {
+  const server = buildServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
 
+async function main(): Promise<void> {
+  if (isHttpMode()) {
+    await startHttpServer({ port: resolveHttpPort() });
+    return;
+  }
+
+  await startStdioServer();
+}
+
 if (import.meta.main) {
-  startMcpServer().catch((err) => {
+  main().catch((err) => {
     process.stderr.write("MCP server error: " + String(err) + "\n");
     process.exit(1);
   });
