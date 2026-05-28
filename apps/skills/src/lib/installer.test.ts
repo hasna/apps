@@ -20,7 +20,6 @@ import {
   disableSkill,
   enableSkill,
   getDisabledSkills,
-  getInstallMeta,
   AGENT_TARGETS,
   resolveAgents,
 } from "./installer";
