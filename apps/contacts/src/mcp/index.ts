@@ -5,6 +5,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { registerCloudTools } from "@hasna/cloud";
 import { registerContactsTools } from "./register-tools.js";
+import { isHttpMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 
 function getServerVersion(): string {
   try {
@@ -16,18 +17,37 @@ function getServerVersion(): string {
   }
 }
 
-const server = new McpServer({ name: "contacts", version: getServerVersion() });
-
-registerContactsTools(server);
+export function buildServer(): McpServer {
+  const server = new McpServer({ name: "contacts", version: getServerVersion() });
+  registerContactsTools(server);
+  registerCloudTools(server, "contacts");
+  return server;
+}
 
 async function main() {
+  const args = process.argv.slice(2);
+  if (isHttpMode(args)) {
+    startMcpHttpServer({
+      name: "contacts",
+      port: resolveMcpHttpPort(args),
+      buildServer,
+    });
+    return;
+  }
+
   const transport = new StdioServerTransport();
-  registerCloudTools(server, "contacts");
-  await server.connect(transport);
+  await buildServer().connect(transport);
   console.error("Contacts MCP server running on stdio");
 }
 
-main().catch((err) => {
-  console.error("Fatal error:", err);
-  process.exit(1);
-});
+const isDirectRun =
+  import.meta.url === `file://${process.argv[1]}` ||
+  process.argv[1]?.endsWith("mcp/index.ts") ||
+  process.argv[1]?.endsWith("mcp/index.js");
+
+if (isDirectRun) {
+  main().catch((err) => {
+    console.error("Fatal error:", err);
+    process.exit(1);
+  });
+}

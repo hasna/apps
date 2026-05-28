@@ -30,6 +30,8 @@ import type {
 import { importContacts } from "../lib/import.js";
 import { exportContacts } from "../lib/export.js";
 import { getImagePath, saveImage, deleteImage, getImagesDir } from "../lib/images.js";
+import { handleMcpRequest, healthPayload } from "../mcp/http.js";
+import { buildServer } from "../mcp/index.js";
 
 const DASHBOARD_DIST = join(import.meta.dir, "../../dashboard/dist");
 
@@ -376,6 +378,13 @@ export function startServer(port: number): void {
 
       if (req.method === "OPTIONS") {
         return new Response(null, { status: 204, headers: corsHeaders });
+      }
+
+      if (url.pathname === "/health" && req.method === "GET") {
+        return json(healthPayload("contacts"));
+      }
+      if (url.pathname === "/mcp") {
+        return handleMcpRequest(req, buildServer);
       }
 
       let response: Response;

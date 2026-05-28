@@ -23,6 +23,21 @@ contacts --help
 contacts-mcp
 ```
 
+## HTTP mode
+
+Long-lived Streamable HTTP transport (stateless, bind `127.0.0.1` only):
+
+```bash
+contacts-mcp --http              # default port 8809
+contacts-mcp --http --port 8809
+MCP_HTTP=1 contacts-mcp
+```
+
+- Health: `GET http://127.0.0.1:8809/health`
+- MCP: `http://127.0.0.1:8809/mcp`
+
+The REST server (`contacts-serve`) also exposes `/health` and `/mcp` when running.
+
 ## REST API
 
 ```bash
