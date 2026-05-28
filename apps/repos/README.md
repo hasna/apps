@@ -98,6 +98,21 @@ const repos = listRepos({ org: "myorg" });
 const results = searchAll("authentication");
 ```
 
+## HTTP mode
+
+Run a shared Streamable HTTP MCP server (stateless, `127.0.0.1` only):
+
+```bash
+repos-mcp --http              # default port 8830
+MCP_HTTP=1 repos-mcp          # via env
+repos-mcp --http --port 8830
+```
+
+- Health: `GET http://127.0.0.1:8830/health`
+- MCP: `http://127.0.0.1:8830/mcp`
+- Stdio remains the default when `--http` / `MCP_HTTP=1` are not set.
+- `repos-serve` also mounts `/health` and `/mcp` on its HTTP port.
+
 ## Data Storage
 
 SQLite database at `~/.hasna/repos/repos.db` with WAL mode and FTS5 full-text search.

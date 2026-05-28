@@ -17,8 +17,9 @@ import {
 } from "../db/repos.js";
 import { ensureWorkspaceBootstrap, startAutoIndexWorker } from "../lib/auto-index.js";
 import { getHealthReport } from "../lib/utils.js";
+import { handleMcpHttpRoutes } from "../mcp/http.js";
 
-const VERSION = "0.1.5";
+const VERSION = "0.1.7";
 
 function handleCliFlags(argv: string[]): boolean {
   if (argv.includes("--help") || argv.includes("-h")) {
@@ -108,6 +109,10 @@ Bun.serve({
     const url = new URL(req.url);
     const path = url.pathname;
     const q = parseQuery(url);
+
+    // MCP Streamable HTTP (shared long-lived transport)
+    const mcpResponse = await handleMcpHttpRoutes(req);
+    if (mcpResponse) return mcpResponse;
 
     // CORS preflight
     if (req.method === "OPTIONS") {

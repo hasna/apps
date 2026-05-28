@@ -10,12 +10,12 @@ function runScript(script: string, ...args: string[]) {
 }
 
 describe("entrypoint help/version flags", () => {
-  test("mcp help exits cleanly and prints usage", () => {
+  test("mcp help mentions http mode", () => {
     const result = runScript("src/mcp/index.ts", "--help");
     const out = new TextDecoder().decode(result.stdout);
 
     expect(result.exitCode).toBe(0);
-    expect(out).toContain("Usage: repos-mcp [options]");
+    expect(out).toContain("--http");
   });
 
   test("server help exits cleanly without starting server", () => {
