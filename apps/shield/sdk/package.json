@@ -1,5 +1,5 @@
 {
-  "name": "@hasnaxyz/security-sdk",
+  "name": "@hasna/shield-sdk",
   "version": "0.1.0",
   "description": "REST client SDK for security server",
   "type": "module",

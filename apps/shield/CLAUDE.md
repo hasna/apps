@@ -9,7 +9,7 @@ Monorepo with 5 surfaces sharing a single SQLite database:
 - **MCP** (`src/mcp/`) — Model Context Protocol server (stdio)
 - **API** (`src/server/`) — Express REST API
 - **Web** (`dashboard/`) — React SPA (Vite + TailwindCSS + Radix UI)
-- **SDK** (`sdk/`) — REST client package (@hasnaxyz/security-sdk)
+- **SDK** (`sdk/`) — REST client package (@hasna/shield-sdk)
 
 ## Data Flow
 
