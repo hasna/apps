@@ -21,4 +21,9 @@ registerScript(program);
 registerTools(program);
 registerCloudCommands(program, "browser");
 
-program.parseAsync(process.argv);
+try {
+  await program.parseAsync(process.argv);
+} finally {
+  const { closeAllSessions } = await import("../lib/session.js");
+  await closeAllSessions();
+}

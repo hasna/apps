@@ -20,7 +20,16 @@ function teardownDb() {
   delete process.env["BROWSER_DATA_DIR"];
 }
 
-async function runCli(...args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
+async function runCli(
+  ...args: string[]
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  return runCliWithTimeout(args, 10_000);
+}
+
+async function runCliWithTimeout(
+  args: string[],
+  timeoutMs: number,
+): Promise<{ stdout: string; stderr: string; code: number; timedOut: boolean }> {
   const proc = Bun.spawn(
     ["bun", "run", join(import.meta.dir, "index.tsx"), ...args],
     {
@@ -33,13 +42,47 @@ async function runCli(...args: string[]): Promise<{ stdout: string; stderr: stri
       },
     }
   );
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
+  const stdoutPromise = new Response(proc.stdout).text();
+  const stderrPromise = new Response(proc.stderr).text();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = await Promise.race([
+    proc.exited.then(() => false),
+    new Promise<boolean>((resolve) => {
+      timeout = setTimeout(() => {
+        proc.kill();
+        resolve(true);
+      }, timeoutMs);
+    }),
   ]);
-  const code = await proc.exited;
-  return { stdout, stderr, code };
+  if (timeout) clearTimeout(timeout);
+  const code = timedOut ? -1 : await proc.exited;
+  const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+  return { stdout, stderr, code, timedOut };
 }
+
+describe("CLI — one-shot browse commands", () => {
+  beforeEach(setupDb);
+  afterEach(teardownDb);
+
+  it("check --json closes its Playwright browser and exits", async () => {
+    const { stdout, code, timedOut } = await runCliWithTimeout(
+      [
+        "check",
+        "data:text/html,<title>CLI check</title><a href='https://example.com/next'>next</a>",
+        "--engine",
+        "playwright",
+        "--json",
+      ],
+      5_000,
+    );
+    expect(timedOut).toBe(false);
+    expect(code).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.title).toBe("CLI check");
+    expect(parsed.links_count).toBe(1);
+    expect(parsed.screenshot).toBeString();
+  }, 10_000);
+});
 
 describe("CLI — help flags", () => {
   beforeEach(setupDb);
