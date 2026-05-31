@@ -69,8 +69,6 @@ describe("CLI — one-shot browse commands", () => {
       [
         "check",
         "data:text/html,<title>CLI check</title><a href='https://example.com/next'>next</a>",
-        "--engine",
-        "playwright",
         "--json",
       ],
       5_000,

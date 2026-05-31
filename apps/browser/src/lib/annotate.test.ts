@@ -3,7 +3,7 @@ import { chromium, type Browser, type Page } from "playwright";
 import sharp from "sharp";
 import { annotateScreenshot } from "./annotate.js";
 
-let browser: Browser;
+let browser: Browser | undefined;
 let page: Page;
 let testServer: ReturnType<typeof Bun.serve>;
 
@@ -15,13 +15,23 @@ const HTML = `<!DOCTYPE html><html><body>
 
 beforeAll(async () => {
   testServer = Bun.serve({ port: 0, fetch() { return new Response(HTML, { headers: { "Content-Type": "text/html" } }); } });
-  browser = await chromium.launch({ headless: true });
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      browser = await chromium.launch({ headless: true, timeout: 10_000 });
+      break;
+    } catch (error) {
+      lastError = error;
+      await Bun.sleep(200 * attempt);
+    }
+  }
+  if (!browser) throw lastError;
   page = await browser.newPage();
   await page.goto(`http://localhost:${testServer.port}`);
-});
+}, 35_000);
 
 afterAll(async () => {
-  await browser.close();
+  await browser?.close();
   testServer.stop();
 });
 

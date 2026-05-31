@@ -12,8 +12,24 @@ import { getDataDir } from "../db/schema.js";
 // ─── Availability check ───────────────────────────────────────────────────────
 
 export function isBunWebViewAvailable(): boolean {
-  return typeof (globalThis as any).Bun !== "undefined" &&
-         typeof (globalThis as any).Bun.WebView !== "undefined";
+  if (
+    typeof (globalThis as any).Bun === "undefined" ||
+    typeof (globalThis as any).Bun.WebView === "undefined"
+  ) {
+    return false;
+  }
+
+  // Bun exposes WebView on Linux before the Chrome-backed implementation is
+  // always usable. Let operators opt into probing it, but default to the
+  // reliable Playwright path for one-shot CLI commands.
+  if (
+    process.platform === "linux" &&
+    process.env["BROWSER_ENABLE_BUN_WEBVIEW"] !== "1"
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
 // ─── Profile directory helper ────────────────────────────────────────────────

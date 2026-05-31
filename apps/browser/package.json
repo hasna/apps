@@ -31,7 +31,7 @@
     "build:types": "NODE_OPTIONS='--max-old-space-size=8192' tsc --emitDeclarationOnly --outDir dist --skipLibCheck",
     "build:dashboard": "cd dashboard && bun run build",
     "typecheck": "tsc --noEmit",
-    "test": "bun test",
+    "test": "bash scripts/test.sh",
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",

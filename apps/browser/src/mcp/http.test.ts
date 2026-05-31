@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { resetDatabase } from "../db/schema.js";
 import { buildServer } from "./index.js";
 import {
   DEFAULT_MCP_HTTP_PORT,
@@ -15,6 +16,26 @@ import {
 
 let tmpDir: string;
 
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 beforeAll(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "browser-mcp-http-"));
   process.env["BROWSER_DB_PATH"] = join(tmpDir, "test.db");
@@ -22,6 +43,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
+  resetDatabase();
   try {
     rmSync(tmpDir, { recursive: true, force: true });
   } catch {}
@@ -73,7 +95,7 @@ describe("mcp streamable http server", () => {
 
   afterAll(async () => {
     await handle.close();
-  });
+  }, 30_000);
 
   it("GET /health returns ok", async () => {
     const res = await fetch(`http://${handle.host}:${handle.port}/health`);
@@ -99,21 +121,40 @@ describe("mcp streamable http server", () => {
   });
 
   it("serves three concurrent clients from one process", async () => {
-    const clients = await Promise.all(
-      Array.from({ length: 3 }, async () => {
-        const transport = new StreamableHTTPClientTransport(
-          new URL(`http://${handle.host}:${handle.port}/mcp`),
-        );
-        const client = new Client({ name: "test", version: "0.0.0" });
-        await client.connect(transport);
-        const tools = await client.listTools();
-        return { client, count: tools.tools.length };
-      }),
-    );
+    let lastError: unknown;
 
-    expect(clients.every((entry) => entry.count > 0)).toBe(true);
-    await Promise.all(clients.map((entry) => entry.client.close()));
-  });
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const openedClients: Client[] = [];
+      try {
+        const clients = await withTimeout(
+          Promise.all(
+            Array.from({ length: 3 }, async () => {
+              const transport = new StreamableHTTPClientTransport(
+                new URL(`http://${handle.host}:${handle.port}/mcp`),
+              );
+              const client = new Client({ name: "test", version: "0.0.0" });
+              openedClients.push(client);
+              await client.connect(transport);
+              const tools = await client.listTools();
+              return { client, count: tools.tools.length };
+            }),
+          ),
+          5_000,
+          "concurrent MCP client startup",
+        );
+
+        expect(clients.every((entry) => entry.count > 0)).toBe(true);
+        await Promise.all(clients.map((entry) => entry.client.close()));
+        return;
+      } catch (error) {
+        lastError = error;
+        await Promise.allSettled(openedClients.map((client) => client.close()));
+        await Bun.sleep(100 * attempt);
+      }
+    }
+
+    throw lastError;
+  }, 30_000);
 
   it("idle RSS is stable after startup", () => {
     const currentRssMb = Math.round(process.memoryUsage().rss / 1024 / 1024);

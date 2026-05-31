@@ -57,6 +57,18 @@ export type McpHttpServerHandle = {
   close: () => Promise<void>;
 };
 
+function settleWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise.then(() => undefined, () => undefined),
+    new Promise<void>((resolve) => {
+      timeout = setTimeout(resolve, timeoutMs);
+    }),
+  ]).finally(() => {
+    if (timeout) clearTimeout(timeout);
+  });
+}
+
 export async function startMcpHttpServer(
   buildServer: () => McpServer,
   options?: { port?: number; host?: string; serviceName?: string },
@@ -64,6 +76,7 @@ export async function startMcpHttpServer(
   const host = options?.host ?? "127.0.0.1";
   const requestedPort = options?.port ?? resolveMcpHttpPort();
   const serviceName = options?.serviceName ?? MCP_HTTP_SERVICE_NAME;
+  const activeCloses = new Set<Promise<void>>();
 
   const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     try {
@@ -87,6 +100,24 @@ export async function startMcpHttpServer(
       });
 
       await server.connect(transport);
+      let closed = false;
+      const closeRequestServer = () => {
+        if (closed) return;
+        closed = true;
+
+        const closePromise = settleWithin(
+          Promise.allSettled([
+            transport.close(),
+            server.close(),
+          ]),
+          1_000,
+        );
+
+        activeCloses.add(closePromise);
+        closePromise.finally(() => activeCloses.delete(closePromise));
+      };
+      res.once("close", closeRequestServer);
+      res.once("finish", closeRequestServer);
 
       let parsedBody: unknown;
       if (req.method === "POST") {
@@ -94,11 +125,6 @@ export async function startMcpHttpServer(
       }
 
       await transport.handleRequest(req, res, parsedBody);
-
-      res.on("close", () => {
-        void transport.close();
-        void server.close();
-      });
     } catch (error) {
       console.error(`[${serviceName}-mcp] HTTP error:`, error);
       if (!res.headersSent) {
@@ -127,9 +153,13 @@ export async function startMcpHttpServer(
   return {
     port,
     host,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
+    close: async () => {
+      await settleWithin(new Promise<void>((resolve, reject) => {
         httpServer.close((err) => (err ? reject(err) : resolve()));
-      }),
+        httpServer.closeIdleConnections?.();
+        httpServer.closeAllConnections?.();
+      }), 1_000);
+      await Promise.allSettled(activeCloses);
+    },
   };
 }

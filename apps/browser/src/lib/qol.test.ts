@@ -4,11 +4,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { chromium, type Browser, type Page } from "playwright";
 import { resetDatabase } from "../db/schema.js";
-import { clickText, fillForm, waitForText, withRetry, watchPage, getWatchChanges, stopWatch } from "./actions.js";
+import { clickText, fillForm, waitForText, withRetry, watchPage, getWatchChanges, stopAllWatchesForSession } from "./actions.js";
 import { elementExists, getPageInfo } from "./extractor.js";
 import { ElementNotFoundError } from "../types/index.js";
 
-let browser: Browser;
+let browser: Browser | undefined;
 let page: Page;
 let testServer: ReturnType<typeof Bun.serve>;
 let BASE: string;
@@ -39,15 +39,27 @@ beforeAll(async () => {
     fetch() { return new Response(FORM_HTML, { headers: { "Content-Type": "text/html" } }); },
   });
   BASE = `http://localhost:${testServer.port}`;
-  browser = await chromium.launch({ headless: true });
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      browser = await chromium.launch({ headless: true, timeout: 10_000 });
+      break;
+    } catch (error) {
+      lastError = error;
+      await Bun.sleep(200 * attempt);
+    }
+  }
+  if (!browser) throw lastError;
   page = await browser.newPage();
   await page.goto(BASE);
-});
+}, 35_000);
 
 afterAll(async () => {
-  await browser.close();
+  stopAllWatchesForSession();
+  await page?.close({ runBeforeUnload: false }).catch(() => {});
+  await browser?.close();
   testServer.stop();
-});
+}, 35_000);
 
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "qol-test-"));
