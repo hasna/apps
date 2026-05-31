@@ -47,9 +47,9 @@ describe("conversations MCP HTTP transport", () => {
     }
   });
 
-  test("default port is 8811", () => {
-    expect(DEFAULT_MCP_HTTP_PORT).toBe(8811);
-    expect(resolveMcpHttpPort([])).toBe(8811);
+  test("default port is 8856", () => {
+    expect(DEFAULT_MCP_HTTP_PORT).toBe(8856);
+    expect(resolveMcpHttpPort([])).toBe(8856);
     expect(resolveMcpHttpPort(["--port", "9003"])).toBe(9003);
   });
 

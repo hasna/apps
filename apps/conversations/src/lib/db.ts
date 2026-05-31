@@ -224,6 +224,18 @@ export function getDb(): Database {
     )
   `);
 
+  const initialMsgCols = db.prepare("PRAGMA table_info(messages)").all() as { name: string }[];
+  const initialMsgColNames = initialMsgCols.map((c) => c.name);
+  if (initialMsgColNames.includes("channel") && !initialMsgColNames.includes("space")) {
+    db.exec("ALTER TABLE messages ADD COLUMN space TEXT");
+    db.exec("UPDATE messages SET space = channel WHERE channel IS NOT NULL");
+    db.exec(`
+      UPDATE messages
+      SET session_id = 'space:' || substr(session_id, 9)
+      WHERE session_id LIKE 'channel:%'
+    `);
+  }
+
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_agent)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at)");
