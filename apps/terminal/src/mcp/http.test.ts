@@ -1,5 +1,8 @@
 import { describe, test, expect, afterAll } from "bun:test";
 import type { Server } from "node:http";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -57,5 +60,33 @@ describe("terminal MCP HTTP transport", () => {
     const content = result.content as Array<{ type: string; text: string }>;
     expect(content[0]?.text).toBe("pong:hi");
     await client.close();
+  });
+
+  test("real terminal MCP server initializes over Streamable HTTP under Bun", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "terminal-mcp-http-"));
+    const previousDbPath = process.env.HASNA_TERMINAL_DB_PATH;
+    process.env.HASNA_TERMINAL_DB_PATH = join(tempDir, "sessions.db");
+
+    let realServer: Server | undefined;
+    const client = new Client({ name: "terminal-real-http-test", version: "0.0.0" });
+    try {
+      const { createServer } = await import("./server.js");
+      realServer = await startMcpHttpServer({
+        name: "terminal",
+        port: TEST_PORT + 1,
+        buildServer: createServer,
+      });
+      const transport = new StreamableHTTPClientTransport(
+        new URL(`http://127.0.0.1:${TEST_PORT + 1}/mcp`),
+      );
+      await client.connect(transport);
+      const tools = await client.listTools();
+      expect(tools.tools.some((t) => t.name === "execute")).toBe(true);
+      await client.close();
+    } finally {
+      realServer?.close();
+      process.env.HASNA_TERMINAL_DB_PATH = previousDbPath;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });

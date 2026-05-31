@@ -1,5 +1,5 @@
 // SQLite session database — tracks every terminal interaction
-import Database from "better-sqlite3";
+import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { randomUUID } from "crypto";
@@ -8,13 +8,13 @@ import { getTerminalDir } from "./paths.js";
 const DIR = getTerminalDir();
 const DB_PATH = process.env.HASNA_TERMINAL_DB_PATH ?? process.env.TERMINAL_DB_PATH ?? join(DIR, "sessions.db");
 
-let db: Database.Database | null = null;
+let db: Database | null = null;
 
-function getDb(): Database.Database {
+function getDb(): Database {
   if (db) return db;
   if (!existsSync(DIR)) mkdirSync(DIR, { recursive: true });
   db = new Database(DB_PATH);
-  db.pragma("journal_mode = WAL");
+  db.exec("PRAGMA journal_mode = WAL");
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
@@ -178,7 +178,7 @@ export function updateInteraction(id: number, data: {
   if (data.tokensSaved !== undefined) { sets.push("tokens_saved = ?"); vals.push(data.tokensSaved); }
   if (sets.length === 0) return;
   vals.push(id);
-  getDb().prepare(`UPDATE interactions SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
+  getDb().prepare(`UPDATE interactions SET ${sets.join(", ")} WHERE id = ?`).run(...(vals as any[]));
 }
 
 export function getSessionInteractions(sessionId: string): InteractionRow[] {
