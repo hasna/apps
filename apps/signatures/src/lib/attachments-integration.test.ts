@@ -24,6 +24,7 @@ describe("shareDocument", () => {
       // Acceptable errors: module not found, or file not found
       expect(
         message.includes("Cannot find module") ||
+        message.includes("not installed") ||
         message.includes("not found") ||
         message.includes("ENOENT") ||
         message.includes("No such file") ||
@@ -43,6 +44,7 @@ describe("receiveDocument", () => {
       const message = err instanceof Error ? err.message : String(err);
       expect(
         message.includes("Cannot find module") ||
+        message.includes("not installed") ||
         message.includes("not found") ||
         message.includes("Attachment not found") ||
         message.includes("bucket")

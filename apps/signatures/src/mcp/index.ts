@@ -54,6 +54,12 @@ import { isCerebrasConfigured } from "../lib/pdf-detector.js";
 
 import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 
+function registerCompatibleCloudTools(server: Server): void {
+  if (typeof (server as unknown as { tool?: unknown }).tool === "function") {
+    registerCloudTools(server as never, "signatures");
+  }
+}
+
 export function buildServer(): Server {
   const server = new Server(
     { name: "signatures", version: "0.1.0" },
@@ -809,7 +815,7 @@ async function main() {
   if (isStdioMode(args)) {
     const transport = new StdioServerTransport();
     const s = buildServer();
-    registerCloudTools(s, "signatures");
+    registerCompatibleCloudTools(s);
     await s.connect(transport);
     return;
   }
@@ -819,10 +825,12 @@ async function main() {
     port: resolveMcpHttpPort(args),
     buildServer: () => {
       const s = buildServer();
-      registerCloudTools(s, "signatures");
+      registerCompatibleCloudTools(s);
       return s;
     },
   });
 }
 
-main().catch(console.error);
+if (import.meta.main) {
+  main().catch(console.error);
+}
