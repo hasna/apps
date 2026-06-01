@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, existsSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { spawnSync } from "bun";
@@ -68,5 +68,38 @@ describe("testers project show/use CLI", () => {
     expect(existsSync(configPath)).toBe(true);
     const cfg = JSON.parse(readFileSync(configPath, "utf-8"));
     expect(cfg.activeProject).toBe(project.id);
+  });
+
+  test("ignores stale activeProject when adding a global scenario in a fresh database", () => {
+    const baseDir = mkdtempSync(join(tmpdir(), "testers-stale-active-project-"));
+    const dbPath = join(baseDir, "testers.db");
+    const testersDir = join(baseDir, ".hasna", "testers");
+    cleanupPaths.push(baseDir);
+    mkdirSync(testersDir, { recursive: true });
+    writeFileSync(join(testersDir, "config.json"), JSON.stringify({ activeProject: "missing-project" }));
+
+    const proc = spawnSync({
+      cmd: [
+        "bun",
+        "run",
+        "src/cli/index.tsx",
+        "add",
+        "Global smoke",
+        "--description",
+        "Should not inherit a missing active project",
+        "--path",
+        "/",
+        "--tag",
+        "smoke",
+        "--steps",
+        "Open the page",
+      ],
+      env: { ...process.env, TESTERS_DB_PATH: dbPath, HASNA_TESTERS_DIR: testersDir },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    expect(proc.exitCode).toBe(0);
+    expect(proc.stdout.toString()).toContain("Created scenario");
   });
 });

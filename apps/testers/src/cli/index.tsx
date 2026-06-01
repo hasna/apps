@@ -59,6 +59,11 @@ type AddFormState = {
 
 const PRIORITIES = ["low", "medium", "high", "critical"];
 
+function splitCsvOption(value: string | undefined): string[] | undefined {
+  const items = value?.split(",").map((item) => item.trim()).filter(Boolean) ?? [];
+  return items.length > 0 ? items : undefined;
+}
+
 function AddForm({ onComplete }: { onComplete: (data: AddFormState | null) => void }) {
   const { exit } = useApp();
   const [state, setState] = useState<AddFormState>({
@@ -299,7 +304,10 @@ function getActiveProject(): string | undefined {
 }
 
 function resolveProject(optProject?: string): string | undefined {
-  return optProject ?? getActiveProject();
+  if (optProject) return optProject;
+  const activeProject = getActiveProject();
+  if (!activeProject) return undefined;
+  return getProject(activeProject) ? activeProject : undefined;
 }
 
 // ─── testers add <name> ─────────────────────────────────────────────────────
@@ -689,6 +697,7 @@ program
         logError(chalk.red("No URL provided. Pass a URL argument, use --env <name>, or set a default environment with 'testers env use <name>'."));
         process.exit(2);
       }
+      const scenarioIds = splitCsvOption(opts.scenario);
 
       // Preflight: API key must be present for any non-dry-run. Fail fast with a clear
       // message and exit code 2 so CI can distinguish config errors from test failures.
@@ -787,7 +796,7 @@ program
           tags: opts.tag.length > 0 ? opts.tag : undefined,
           projectId,
         }).filter((s) => {
-          if (opts.scenario && s.id !== opts.scenario && s.shortId !== opts.scenario) return false;
+          if (scenarioIds && !scenarioIds.includes(s.id) && !scenarioIds.includes(s.shortId)) return false;
           if (opts.priority && s.priority !== opts.priority) return false;
           return true;
         });
@@ -835,7 +844,7 @@ program
         const { runId, scenarioCount } = startRunAsync({
           url,
           tags: opts.tag.length > 0 ? opts.tag : undefined,
-          scenarioIds: opts.scenario ? [opts.scenario] : undefined,
+          scenarioIds,
           priority: opts.priority,
           model: opts.model,
           headed: opts.headed,
@@ -1021,7 +1030,7 @@ program
       }
 
       // If no filters provided, run all active scenarios
-      const noFilters = !opts.scenario && opts.tag.length === 0 && !opts.priority;
+      const noFilters = !scenarioIds && opts.tag.length === 0 && !opts.priority;
       if (noFilters && !opts.json && !opts.output) {
         const allScenarios = listScenarios({ projectId });
         log(chalk.bold(`  Running all ${allScenarios.length} scenarios...`));
@@ -1099,7 +1108,7 @@ program
       const { run, results } = await runByFilter({
         url,
         tags: opts.tag.length > 0 ? opts.tag : undefined,
-        scenarioIds: diffScenarioIds ?? (opts.scenario ? [opts.scenario] : undefined),
+        scenarioIds: diffScenarioIds ?? scenarioIds,
         priority: opts.priority,
         model: opts.model,
         headed: opts.headed,
@@ -4398,9 +4407,14 @@ workflowCmd
   .option("--goal <prompt>", "Goal prompt for the agentic testing loop")
   .option("--success <criteria>", "Success criteria (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
   .option("--max-iterations <n>", "Goal-loop iteration cap", "10")
-  .option("--target <target>", "Execution target: local or connector:e2b", "local")
-  .option("--e2b-template <name>", "E2B sandbox template name")
-  .option("--connector-operation <name>", "Connector operation for E2B", "run")
+  .option("--target <target>", "Execution target: local or sandbox", "local")
+  .option("--sandbox-provider <provider>", "Sandbox provider: e2b, daytona, or modal")
+  .option("--sandbox-image <image>", "Sandbox image/template")
+  .option("--sandbox-remote-dir <path>", "Remote working directory for sandbox runs")
+  .option("--sandbox-cleanup <mode>", "Sandbox cleanup mode: delete, stop, or keep", "delete")
+  .option("--sandbox-setup-command <command>", "Shell command to run before testers in the sandbox")
+  .option("--sandbox-package <spec>", "Package spec to execute in the sandbox", "@hasna/testers")
+  .option("--e2b-template <name>", "Legacy alias for --sandbox-image")
   .option("--timeout <ms>", "Workflow timeout")
   .option("--json", "Output as JSON", false)
   .action((name: string, opts) => {
@@ -4422,9 +4436,12 @@ workflowCmd
         } : null,
         execution: {
           target: opts.target,
-          connector: opts.target === "connector:e2b" ? "e2b" : undefined,
-          operation: opts.connectorOperation,
-          sandboxTemplate: opts.e2bTemplate,
+          provider: opts.sandboxProvider ?? (opts.target === "connector:e2b" ? "e2b" : undefined),
+          sandboxImage: opts.sandboxImage ?? opts.e2bTemplate,
+          sandboxRemoteDir: opts.sandboxRemoteDir,
+          sandboxCleanup: opts.sandboxCleanup,
+          setupCommand: opts.sandboxSetupCommand,
+          packageSpec: opts.sandboxPackage,
           timeoutMs: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
         },
       });
@@ -4453,7 +4470,9 @@ workflowCmd
     log(chalk.bold("  Testing Workflows"));
     log("");
     for (const workflow of workflows) {
-      const target = workflow.execution.target === "connector:e2b" ? chalk.cyan("e2b") : chalk.green("local");
+      const target = workflow.execution.target === "sandbox"
+        ? chalk.cyan(`sandbox${workflow.execution.provider ? `:${workflow.execution.provider}` : ""}`)
+        : chalk.green("local");
       log(`  ${chalk.dim(workflow.id.slice(0, 8))}  ${workflow.name}  ${target}  ${chalk.dim(workflow.personaIds.length ? `${workflow.personaIds.length} personas` : "no personas")}`);
     }
     log("");

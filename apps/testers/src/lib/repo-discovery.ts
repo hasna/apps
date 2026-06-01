@@ -135,7 +135,7 @@ function isCacheStale(cached: RepoDiscoverySnapshot, repoPath: string): boolean 
     const configFullPath = join(repoPath, cached.configPath);
     if (!existsSync(configFullPath)) return true;
     try {
-      const stat = statSync(configFullPath);
+      statSync(configFullPath);
       // We don't store config mtime in the cache, so use a simple age heuristic:
       // if cache is older than 1 hour, treat as stale when config exists
       const age = Date.now() - new Date(cached.snapshotAt).getTime();
@@ -246,8 +246,9 @@ function extractTestGlobPatterns(configPath: string | null, repoPath: string): s
 
   // testMatch: '**\/*.spec.ts' or testMatch: ['**\/*.spec.ts']
   const testMatchArray = content.match(/testMatch\s*[:=]\s*\[([^\]]+)\]/);
-  if (testMatchArray) {
-    const items = testMatchArray[1].match(/['"`]([^'"`]+)['"`]/g);
+  const testMatchBody = testMatchArray?.[1];
+  if (testMatchBody) {
+    const items = testMatchBody.match(/['"`]([^'"`]+)['"`]/g);
     if (items) {
       for (const item of items) {
         patterns.push(item.replace(/['"`]/g, ""));
@@ -256,8 +257,9 @@ function extractTestGlobPatterns(configPath: string | null, repoPath: string): s
   }
 
   const testMatchSingle = content.match(/testMatch\s*[:=]\s*['"`]([^'"`]+)['"`]/);
-  if (testMatchSingle) {
-    patterns.push(testMatchSingle[1]);
+  const singleTestMatch = testMatchSingle?.[1];
+  if (singleTestMatch) {
+    patterns.push(singleTestMatch);
   }
 
   // If we extracted a testDir but no testMatch, append common patterns
@@ -409,7 +411,7 @@ function getInstallCommand(pm: PackageManagers): string {
   }
 }
 
-function getPlaywrightInstallCommand(pm: PackageManagers): string | null {
+function getPlaywrightInstallCommand(_pm: PackageManagers): string | null {
   // npx playwright install works regardless of package manager
   return "npx playwright install";
 }

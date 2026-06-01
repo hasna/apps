@@ -32,7 +32,10 @@ export type {
   CreateTestingWorkflowInput,
   UpdateTestingWorkflowInput,
   WorkflowExecutionConfig,
+  WorkflowExecutionInput,
   WorkflowExecutionTarget,
+  LegacyWorkflowExecutionTarget,
+  WorkflowSandboxCleanup,
   WorkflowGoal,
   WorkflowScenarioFilter,
 } from "../types/index.js";
@@ -109,9 +112,18 @@ export {
 
 export {
   buildWorkflowRunPlan,
+  createWorkflowDatabaseBundle,
   runTestingWorkflow,
 } from "../lib/workflow-runner.js";
-export type { WorkflowRunOptions, WorkflowRunPlan } from "../lib/workflow-runner.js";
+export type {
+  WorkflowDatabaseBundle,
+  WorkflowRunOptions,
+  WorkflowRunPlan,
+  WorkflowRunnerDependencies,
+  WorkflowSandboxesRuntime,
+  WorkflowSandboxExecutionResult,
+  WorkflowSandboxPlan,
+} from "../lib/workflow-runner.js";
 
 export {
   generateWorkflowActionsWithAi,

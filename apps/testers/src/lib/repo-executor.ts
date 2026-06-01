@@ -2,11 +2,10 @@
 // Runs discovered specs through the repo's own Playwright install,
 // captures results and maps them onto the existing Run/Result model.
 
-import { execSync, spawn } from "child_process";
-import { existsSync, readFileSync, mkdirSync, writeFileSync } from "fs";
-import { join, resolve } from "path";
+import { execSync } from "child_process";
+import { existsSync, mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
 import { createRun, updateRun } from "../db/runs.js";
-import { updateResult } from "../db/results.js";
 import { getDatabase, uuid, now } from "../db/database.js";
 import { getTestersDir } from "./paths.js";
 import type { RepoDiscoverySnapshot, RepoSpec } from "./repo-discovery.js";
@@ -97,7 +96,7 @@ function runPlaywright(
   timeoutMs: number,
 ): { exitCode: number | null; stdout: string; stderr: string; durationMs: number } {
   const cmd = resolvePlaywrightCmd(repoPath);
-  const args = buildPlaywrightArgs(specFiles, extraArgs, workingDir);
+  const args = buildPlaywrightArgs(specFiles, extraArgs);
 
   const startTime = Date.now();
 
@@ -131,7 +130,7 @@ function runPlaywright(
   }
 }
 
-function parsePlaywrightJsonOutput(stdout: string, stderr: string): RepoRunSpecResult["testResults"] {
+function parsePlaywrightJsonOutput(stdout: string, _stderr: string): RepoRunSpecResult["testResults"] {
   const testResults: RepoRunSpecResult["testResults"] = [];
 
   // Playwright JSON reporter outputs a single large JSON object (pretty-printed)
@@ -259,19 +258,21 @@ export async function runRepoTests(opts: RepoRunOptions): Promise<RepoRunResult>
 
   // Create run record
   const url = opts.url ?? snapshot.suggestedUrl ?? "http://localhost:3000";
-  const run = createRun({
+  const initialRun = createRun({
     projectId: opts.projectId,
     url,
     model: opts.model ?? "repo-native",
     headed: false,
     parallel: 1,
-    metadata: {
+  });
+  const run = updateRun(initialRun.id, {
+    metadata: JSON.stringify({
       runType: "repo-native",
       repoPath,
       configPath: snapshot.configPath,
       cacheKey: snapshot.cacheKey,
       label: opts.label,
-    },
+    }),
   });
 
   const specResults: RepoRunSpecResult[] = [];

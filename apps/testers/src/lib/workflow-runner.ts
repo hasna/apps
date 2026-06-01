@@ -1,7 +1,17 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { getDatabase } from "../db/database.js";
 import { getTestingWorkflow } from "../db/workflows.js";
 import { getPersona } from "../db/personas.js";
 import { runByFilter, type RunOptions } from "./runner.js";
-import type { Result, Run, TestingWorkflow, WorkflowExecutionConfig } from "../types/index.js";
+import type {
+  Result,
+  Run,
+  TestingWorkflow,
+  WorkflowExecutionConfig,
+  WorkflowSandboxCleanup,
+} from "../types/index.js";
 
 export interface WorkflowRunOptions {
   url: string;
@@ -12,10 +22,75 @@ export interface WorkflowRunOptions {
   dryRun?: boolean;
 }
 
+export interface WorkflowSandboxPlan {
+  provider?: string;
+  image?: string;
+  name: string;
+  remoteDir: string;
+  stateRemoteDir: string;
+  command: string;
+  cleanup: WorkflowSandboxCleanup;
+  timeoutMs?: number;
+  env?: Record<string, string>;
+}
+
 export interface WorkflowRunPlan {
   workflow: TestingWorkflow;
   runOptions: RunOptions & { tags?: string[]; priority?: string; scenarioIds?: string[] };
-  connectorCommand: string[] | null;
+  sandbox: WorkflowSandboxPlan | null;
+}
+
+export interface WorkflowDatabaseBundle {
+  localDir: string;
+  remoteDir: string;
+  cleanup?: () => void;
+}
+
+export interface WorkflowSandboxExecutionResult {
+  sandboxId: string;
+  sessionId: string;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  cleanup: string;
+}
+
+interface SandboxCommandResult {
+  sandbox: { id: string };
+  session: { id: string };
+  result: {
+    exit_code?: number;
+    exitCode?: number;
+    stdout?: string;
+    stderr?: string;
+  };
+  cleanup: string;
+}
+
+export interface WorkflowSandboxesRuntime {
+  runCommandInSandbox(input: {
+    command: string;
+    provider?: string;
+    name?: string;
+    image?: string;
+    sandboxTimeout?: number;
+    commandTimeoutMs?: number;
+    projectId?: string;
+    config?: Record<string, unknown>;
+    sandboxEnvVars?: Record<string, string>;
+    cwd?: string;
+    upload: { localDir: string; remoteDir: string };
+    cleanup?: WorkflowSandboxCleanup;
+    onStdout?: (data: string) => void;
+    onStderr?: (data: string) => void;
+  }): Promise<SandboxCommandResult>;
+}
+
+export interface WorkflowRunnerDependencies {
+  runByFilter?: typeof runByFilter;
+  sandboxes?: WorkflowSandboxesRuntime;
+  createSandboxesSDK?: () => WorkflowSandboxesRuntime | Promise<WorkflowSandboxesRuntime>;
+  createDatabaseBundle?: (workflow: TestingWorkflow, plan: WorkflowRunPlan) => WorkflowDatabaseBundle;
 }
 
 export function buildWorkflowRunPlan(workflow: TestingWorkflow, options: WorkflowRunOptions): WorkflowRunPlan {
@@ -35,8 +110,8 @@ export function buildWorkflowRunPlan(workflow: TestingWorkflow, options: Workflo
   return {
     workflow,
     runOptions,
-    connectorCommand: workflow.execution.target === "connector:e2b"
-      ? buildConnectorCommand(workflow.execution, runOptions)
+    sandbox: workflow.execution.target === "sandbox"
+      ? buildSandboxPlan(workflow, workflow.execution, runOptions)
       : null,
   };
 }
@@ -44,7 +119,13 @@ export function buildWorkflowRunPlan(workflow: TestingWorkflow, options: Workflo
 export async function runTestingWorkflow(
   workflowId: string,
   options: WorkflowRunOptions,
-): Promise<{ run: Run | null; results: Result[]; plan: WorkflowRunPlan; connectorResult?: string }> {
+  dependencies: WorkflowRunnerDependencies = {},
+): Promise<{
+  run: Run | null;
+  results: Result[];
+  plan: WorkflowRunPlan;
+  sandboxResult?: WorkflowSandboxExecutionResult;
+}> {
   const workflow = getTestingWorkflow(workflowId);
   if (!workflow) throw new Error(`Testing workflow not found: ${workflowId}`);
   if (!workflow.enabled) throw new Error(`Testing workflow is disabled: ${workflow.name}`);
@@ -53,13 +134,28 @@ export async function runTestingWorkflow(
   const plan = buildWorkflowRunPlan(workflow, options);
   if (options.dryRun) return { run: null, results: [], plan };
 
-  if (workflow.execution.target === "connector:e2b") {
-    const connectorResult = await runViaConnector(plan);
-    return { run: null, results: [], plan, connectorResult };
+  if (workflow.execution.target === "sandbox") {
+    const sandboxResult = await runViaSandbox(plan, dependencies);
+    return { run: null, results: [], plan, sandboxResult };
   }
 
-  const { run, results } = await runByFilter(plan.runOptions);
+  const runLocal = dependencies.runByFilter ?? runByFilter;
+  const { run, results } = await runLocal(plan.runOptions);
   return { run, results, plan };
+}
+
+export function createWorkflowDatabaseBundle(
+  workflow: TestingWorkflow,
+  plan: WorkflowRunPlan,
+): WorkflowDatabaseBundle {
+  if (!plan.sandbox) throw new Error(`Workflow is not configured for sandbox execution: ${workflow.name}`);
+  const localDir = mkdtempSync(join(tmpdir(), `testers-workflow-${workflow.id.slice(0, 8)}-`));
+  writeFileSync(join(localDir, "testers.db"), getDatabase().serialize());
+  return {
+    localDir,
+    remoteDir: plan.sandbox.stateRemoteDir,
+    cleanup: () => rmSync(localDir, { recursive: true, force: true }),
+  };
 }
 
 function validatePersonaIds(workflow: TestingWorkflow): void {
@@ -70,49 +166,127 @@ function validatePersonaIds(workflow: TestingWorkflow): void {
   }
 }
 
-function buildConnectorCommand(
+function buildSandboxPlan(
+  workflow: TestingWorkflow,
   execution: WorkflowExecutionConfig,
   runOptions: RunOptions & { tags?: string[]; priority?: string; scenarioIds?: string[] },
-): string[] {
-  const connector = execution.connector ?? "e2b";
-  const operation = execution.operation ?? "run";
-  const payload = JSON.stringify({
-    operation,
-    template: execution.sandboxTemplate,
+): WorkflowSandboxPlan {
+  const remoteDir = execution.sandboxRemoteDir ?? `/tmp/testers-workflow-${workflow.id.slice(0, 8)}`;
+  const stateRemoteDir = `${remoteDir.replace(/\/+$/, "")}/.testers-state`;
+  return {
+    provider: execution.provider,
+    image: execution.sandboxImage,
+    name: `testers-${workflow.id.slice(0, 8)}`,
+    remoteDir,
+    stateRemoteDir,
+    cleanup: execution.sandboxCleanup ?? "delete",
     timeoutMs: execution.timeoutMs,
-    env: execution.env ?? {},
-    command: [
-      "bunx",
-      "@hasna/testers",
-      "run",
-      runOptions.url,
-      ...(runOptions.scenarioIds?.length ? ["--scenario", runOptions.scenarioIds.join(",")] : []),
-      ...(runOptions.tags?.length ? runOptions.tags.flatMap((tag) => ["--tag", tag]) : []),
-      ...(runOptions.priority ? ["--priority", runOptions.priority] : []),
-      ...(runOptions.projectId ? ["--project", runOptions.projectId] : []),
-      ...(runOptions.model ? ["--model", runOptions.model] : []),
-      "--json",
-    ],
-  });
-  return ["connectors", "run", connector, operation, payload];
+    env: execution.env,
+    command: buildSandboxCommand({
+      runOptions,
+      remoteDir,
+      dbPath: `${stateRemoteDir}/testers.db`,
+      setupCommand: execution.setupCommand,
+      packageSpec: execution.packageSpec ?? "@hasna/testers",
+    }),
+  };
 }
 
-async function runViaConnector(plan: WorkflowRunPlan): Promise<string> {
-  if (!plan.connectorCommand) throw new Error("Workflow does not have a connector command");
+function buildSandboxCommand(input: {
+  runOptions: RunOptions & { tags?: string[]; priority?: string; scenarioIds?: string[] };
+  remoteDir: string;
+  dbPath: string;
+  setupCommand?: string;
+  packageSpec: string;
+}): string {
+  const args = [
+    "bunx",
+    input.packageSpec,
+    "run",
+    input.runOptions.url,
+    ...(input.runOptions.scenarioIds?.length ? ["--scenario", input.runOptions.scenarioIds.join(",")] : []),
+    ...(input.runOptions.tags?.length ? input.runOptions.tags.flatMap((tag) => ["--tag", tag]) : []),
+    ...(input.runOptions.priority ? ["--priority", input.runOptions.priority] : []),
+    ...(input.runOptions.projectId ? ["--project", input.runOptions.projectId] : []),
+    ...(input.runOptions.model ? ["--model", input.runOptions.model] : []),
+    ...(input.runOptions.headed ? ["--headed"] : []),
+    ...(input.runOptions.parallel ? ["--parallel", String(input.runOptions.parallel)] : []),
+    ...(input.runOptions.timeout ? ["--timeout", String(input.runOptions.timeout)] : []),
+    ...(input.runOptions.personaIds?.length ? ["--persona", input.runOptions.personaIds.join(",")] : []),
+    "--no-auto-generate",
+    "--json",
+  ];
 
-  const proc = Bun.spawn(plan.connectorCommand, {
-    stdout: "pipe",
-    stderr: "pipe",
-    env: process.env,
-  });
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
+  return [
+    "set -euo pipefail",
+    `mkdir -p ${shellQuote(input.remoteDir)}`,
+    `cd ${shellQuote(input.remoteDir)}`,
+    input.setupCommand,
+    `HASNA_TESTERS_DB_PATH=${shellQuote(input.dbPath)} ${args.map(shellQuote).join(" ")}`,
+  ].filter(Boolean).join("\n");
+}
 
-  if (exitCode !== 0) {
-    throw new Error(`Connector execution failed (${exitCode}): ${stderr || stdout}`);
+async function runViaSandbox(
+  plan: WorkflowRunPlan,
+  dependencies: WorkflowRunnerDependencies,
+): Promise<WorkflowSandboxExecutionResult> {
+  if (!plan.sandbox) throw new Error("Workflow does not have a sandbox plan");
+  const sandboxes = await resolveSandboxesRuntime(dependencies);
+  const createBundle = dependencies.createDatabaseBundle ?? createWorkflowDatabaseBundle;
+  const bundle = createBundle(plan.workflow, plan);
+
+  try {
+    const raw = await sandboxes.runCommandInSandbox({
+      command: plan.sandbox.command,
+      provider: plan.sandbox.provider,
+      name: plan.sandbox.name,
+      image: plan.sandbox.image,
+      sandboxTimeout: plan.sandbox.timeoutMs,
+      commandTimeoutMs: plan.sandbox.timeoutMs,
+      projectId: plan.workflow.projectId ?? undefined,
+      config: {
+        source: "testers",
+        workflowId: plan.workflow.id,
+        workflowName: plan.workflow.name,
+      },
+      sandboxEnvVars: plan.sandbox.env,
+      cleanup: plan.sandbox.cleanup,
+      upload: {
+        localDir: bundle.localDir,
+        remoteDir: bundle.remoteDir,
+      },
+    });
+    const exitCode = raw.result.exit_code ?? raw.result.exitCode ?? 0;
+    const stdout = raw.result.stdout ?? "";
+    const stderr = raw.result.stderr ?? "";
+    if (exitCode !== 0) {
+      throw new Error(`Sandbox workflow execution failed (${exitCode}): ${stderr || stdout}`);
+    }
+    return {
+      sandboxId: raw.sandbox.id,
+      sessionId: raw.session.id,
+      exitCode,
+      stdout,
+      stderr,
+      cleanup: raw.cleanup,
+    };
+  } finally {
+    bundle.cleanup?.();
   }
-  return stdout.trim();
+}
+
+async function resolveSandboxesRuntime(
+  dependencies: WorkflowRunnerDependencies,
+): Promise<WorkflowSandboxesRuntime> {
+  if (dependencies.sandboxes) return dependencies.sandboxes;
+  if (dependencies.createSandboxesSDK) return dependencies.createSandboxesSDK();
+
+  const mod = await import("@hasna/sandboxes") as unknown as {
+    createSandboxesSDK: () => WorkflowSandboxesRuntime;
+  };
+  return mod.createSandboxesSDK();
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\"'\"'")}'`;
 }

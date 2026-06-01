@@ -1029,7 +1029,6 @@ export async function executeTool(
         const assertionType = toolInput.assertion_type as string;
         const selector = toolInput.selector as string | undefined;
         const expected = toolInput.expected as string | undefined;
-        const sessionId = context.sessionId ?? "default";
 
         switch (assertionType) {
           case "element_exists": {
@@ -1097,7 +1096,6 @@ export async function executeTool(
       case "browser_intercept": {
         const action = toolInput.action as string;
         const pattern = toolInput.pattern as string | undefined;
-        const interceptAction = toolInput.intercept_action as string | undefined;
         const statusCode = toolInput.status_code as number | undefined;
         const body = toolInput.body as string | undefined;
         const sessionId = context.sessionId ?? "default";
@@ -1172,7 +1170,34 @@ export async function executeTool(
 
       case "browser_a11y": {
         const level = (toolInput.level as string) ?? "AA";
-        const snapshot = await page.accessibility.snapshot();
+        const snapshot = await page.evaluate(() => {
+          function readRole(el: Element): string {
+            return el.getAttribute("role") ?? el.tagName.toLowerCase();
+          }
+
+          function readName(el: Element): string {
+            const labelledBy = el.getAttribute("aria-labelledby");
+            if (labelledBy) {
+              const labelledText = labelledBy
+                .split(/\s+/)
+                .map((id) => document.getElementById(id)?.textContent?.trim())
+                .filter(Boolean)
+                .join(" ");
+              if (labelledText) return labelledText;
+            }
+            return el.getAttribute("aria-label") ?? el.getAttribute("alt") ?? el.textContent?.trim() ?? "";
+          }
+
+          function walk(el: Element): { role: string; name: string; children: ReturnType<typeof walk>[] } {
+            return {
+              role: readRole(el),
+              name: readName(el),
+              children: Array.from(el.children).map((child) => walk(child)),
+            };
+          }
+
+          return document.body ? walk(document.body) : null;
+        });
         if (!snapshot) return { result: "Error: could not capture accessibility tree" };
 
         const issues: string[] = [];
@@ -1243,6 +1268,7 @@ interface AgentLoopOptions {
   model: string;
   runId: string;
   sessionId?: string;
+  baseUrl?: string;
   maxTurns?: number;
   onStep?: StepEventHandler;
   persona?: {
@@ -1276,6 +1302,45 @@ interface AgentLoopResult {
   }>;
 }
 
+function resolveStartUrl(baseUrl: string, targetPath: string): string {
+  try {
+    return new URL(targetPath, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
+  } catch {
+    return `${baseUrl.replace(/\/+$/, "")}/${targetPath.replace(/^\/+/, "")}`;
+  }
+}
+
+export function buildScenarioUserMessage(scenario: Scenario, baseUrl?: string): string {
+  const userParts: string[] = [
+    `**Scenario:** ${scenario.name}`,
+    `**Description:** ${scenario.description}`,
+  ];
+
+  if (baseUrl) {
+    const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
+    userParts.push(`**Base URL:** ${normalizedBaseUrl}`);
+    if (scenario.targetPath) {
+      userParts.push(`**Start URL:** ${resolveStartUrl(normalizedBaseUrl, scenario.targetPath)}`);
+    }
+    userParts.push(
+      "**Navigation Boundary:** Treat the Base URL as the application under test. Resolve relative paths and in-app navigation against this origin. Do not navigate to another host unless a step explicitly includes an absolute external URL.",
+    );
+  }
+
+  if (scenario.targetPath) {
+    userParts.push(`**Target Path:** ${scenario.targetPath}`);
+  }
+
+  if (scenario.steps.length > 0) {
+    userParts.push("**Steps:**");
+    for (let i = 0; i < scenario.steps.length; i++) {
+      userParts.push(`${i + 1}. ${scenario.steps[i]}`);
+    }
+  }
+
+  return userParts.join("\n");
+}
+
 /**
  * Runs the AI agent loop: sends the scenario to Claude, processes tool calls,
  * executes browser actions, and collects results until the agent reports
@@ -1292,6 +1357,7 @@ export async function runAgentLoop(
     model,
     runId,
     sessionId,
+    baseUrl,
     maxTurns = 30,
     onStep,
     persona,
@@ -1339,24 +1405,7 @@ export async function runAgentLoop(
     "- Verify both positive and negative states",
   ].join("\n") + personaSection;
 
-  // Build the user message from the scenario
-  const userParts: string[] = [
-    `**Scenario:** ${scenario.name}`,
-    `**Description:** ${scenario.description}`,
-  ];
-
-  if (scenario.targetPath) {
-    userParts.push(`**Target Path:** ${scenario.targetPath}`);
-  }
-
-  if (scenario.steps.length > 0) {
-    userParts.push("**Steps:**");
-    for (let i = 0; i < scenario.steps.length; i++) {
-      userParts.push(`${i + 1}. ${scenario.steps[i]}`);
-    }
-  }
-
-  const userMessage = userParts.join("\n");
+  const userMessage = buildScenarioUserMessage(scenario, baseUrl);
 
   const screenshots: AgentLoopResult["screenshots"] = [];
   let tokensUsed = 0;
@@ -1462,7 +1511,7 @@ export async function runAgentLoop(
           screenshotter,
           toolBlock.name,
           toolInput,
-          { runId, scenarioSlug, stepNumber, sessionId, a11y },
+          { runId, scenarioSlug, stepNumber, sessionId: sessionId ?? runId, a11y },
         );
 
         // Emit tool result event

@@ -637,10 +637,31 @@ server.tool(
     goalPrompt: z.string().optional().describe("Goal prompt for the AI SDK workflow agent"),
     successCriteria: z.array(z.string()).optional().describe("Goal success criteria"),
     maxIterations: z.number().int().min(1).max(20).optional().describe("Max goal loop iterations"),
-    executionTarget: z.enum(["local", "connector:e2b"]).optional().describe("Run locally or through the open-connectors E2B connector"),
-    e2bTemplate: z.string().optional().describe("E2B sandbox template for connector:e2b"),
+    executionTarget: z.enum(["local", "sandbox", "connector:e2b"]).optional().describe("Run locally or through the sandboxes SDK"),
+    sandboxProvider: z.string().optional().describe("Sandbox provider: e2b, daytona, or modal"),
+    sandboxImage: z.string().optional().describe("Sandbox image/template"),
+    sandboxRemoteDir: z.string().optional().describe("Remote working directory for sandbox runs"),
+    sandboxCleanup: z.enum(["delete", "stop", "keep"]).optional().describe("Sandbox cleanup mode"),
+    e2bTemplate: z.string().optional().describe("Legacy alias for sandboxImage"),
   },
-  async ({ name, description, projectId, scenarioIds, tags, priority, personaIds, goalPrompt, successCriteria, maxIterations, executionTarget, e2bTemplate }) => {
+  async ({
+    name,
+    description,
+    projectId,
+    scenarioIds,
+    tags,
+    priority,
+    personaIds,
+    goalPrompt,
+    successCriteria,
+    maxIterations,
+    executionTarget,
+    sandboxProvider,
+    sandboxImage,
+    sandboxRemoteDir,
+    sandboxCleanup,
+    e2bTemplate,
+  }) => {
     try {
       return json(createTestingWorkflow({
         name,
@@ -651,8 +672,10 @@ server.tool(
         goal: goalPrompt ? { prompt: goalPrompt, successCriteria, maxIterations } : null,
         execution: {
           target: executionTarget ?? "local",
-          connector: executionTarget === "connector:e2b" ? "e2b" : undefined,
-          sandboxTemplate: e2bTemplate,
+          provider: sandboxProvider ?? (executionTarget === "connector:e2b" ? "e2b" : undefined),
+          sandboxImage: sandboxImage ?? e2bTemplate,
+          sandboxRemoteDir,
+          sandboxCleanup,
         },
       }));
     } catch (error) {
@@ -2630,4 +2653,3 @@ registerCloudTools(server, "testers");
 
 return server;
 }
-

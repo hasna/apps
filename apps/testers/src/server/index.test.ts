@@ -174,6 +174,34 @@ describe("GET /api/runs", () => {
   });
 });
 
+describe("POST /api/workflows", () => {
+  test("accepts sandbox execution config", async () => {
+    const res = await fetch(`${baseUrl}/api/workflows`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "server-sandbox-workflow",
+        execution: {
+          target: "sandbox",
+          provider: "e2b",
+          sandboxImage: "bun-playwright",
+          sandboxRemoteDir: "/workspace/testers",
+          sandboxCleanup: "stop",
+        },
+      }),
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.execution).toMatchObject({
+      target: "sandbox",
+      provider: "e2b",
+      sandboxImage: "bun-playwright",
+      sandboxRemoteDir: "/workspace/testers",
+      sandboxCleanup: "stop",
+    });
+  });
+});
+
 describe("CORS", () => {
   test("OPTIONS returns 204 with CORS headers", async () => {
     const res = await fetch(`${baseUrl}/api/status`, { method: "OPTIONS" });

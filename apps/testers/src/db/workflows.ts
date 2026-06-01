@@ -3,9 +3,11 @@ import {
   type TestingWorkflow,
   type UpdateTestingWorkflowInput,
   type WorkflowExecutionConfig,
+  type WorkflowExecutionInput,
   type WorkflowGoal,
   type WorkflowRow,
   type WorkflowScenarioFilter,
+  workflowExecutionFromValue,
   workflowFromRow,
 } from "../types/index.js";
 import { getDatabase, now, resolvePartialId, uuid } from "./database.js";
@@ -31,19 +33,8 @@ function normalizeFilter(input: WorkflowScenarioFilter | undefined): WorkflowSce
   };
 }
 
-function normalizeExecution(input: Partial<WorkflowExecutionConfig> | undefined): WorkflowExecutionConfig {
-  const target = input?.target ?? "local";
-  if (target === "connector:e2b") {
-    return {
-      target,
-      connector: input?.connector ?? "e2b",
-      operation: input?.operation ?? "run",
-      sandboxTemplate: input?.sandboxTemplate,
-      timeoutMs: input?.timeoutMs,
-      env: input?.env,
-    };
-  }
-  return { ...DEFAULT_EXECUTION, timeoutMs: input?.timeoutMs };
+function normalizeExecution(input: WorkflowExecutionInput | undefined): WorkflowExecutionConfig {
+  return input ? workflowExecutionFromValue(input) : DEFAULT_EXECUTION;
 }
 
 export function createTestingWorkflow(input: CreateTestingWorkflowInput): TestingWorkflow {

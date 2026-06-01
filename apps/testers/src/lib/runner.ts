@@ -1,15 +1,15 @@
-import type { Scenario, Run, Result } from "../types/index.js";
+import type { Scenario, Run, Result, ResultStatus } from "../types/index.js";
 import { BudgetExceededError } from "../types/index.js";
 import { runEvalScenario } from "./eval-runner.js";
 import { createRun, getRun, updateRun } from "../db/runs.js";
-import { createResult, updateResult } from "../db/results.js";
+import { createResult, getResult, updateResult } from "../db/results.js";
 import { mkdirSync } from "fs";
 import { join } from "path";
 import { analyzeFailure } from "./failure-analyzer.js";
 import { estimateRunCostCents } from "./costs.js";
 import { createScreenshot } from "../db/screenshots.js";
 import { createStepResult, updateStepResult } from "../db/step-results.js";
-import { listScenarios, updateScenarioPassedCache } from "../db/scenarios.js";
+import { getScenario, listScenarios, updateScenarioPassedCache } from "../db/scenarios.js";
 import { getPersona } from "../db/personas.js";
 import { launchBrowser, getPage, closeBrowser } from "./browser.js";
 import { Screenshotter } from "./screenshotter.js";
@@ -21,6 +21,12 @@ import { registerSession, closeSession as closeTrackedSession } from "./session-
 import { dispatchWebhooks } from "./webhooks.js";
 import { pushFailedRunToLogs } from "./logs-integration.js";
 import { createFailureTasks, notifyFailureToConversations, notifyRunToConversations } from "./failure-pipeline.js";
+import {
+  allAssertionsPassed,
+  evaluateAssertions,
+  formatAssertionResults,
+  type AssertionResult,
+} from "./assertions.js";
 import type { Browser, Page } from "playwright";
 
 export interface RunOptions {
@@ -87,6 +93,86 @@ export function onRunEvent(handler: RunEventHandler): void {
 
 function emit(event: RunEvent): void {
   if (eventHandler) eventHandler(event);
+}
+
+type AgentScenarioStatus = Extract<ResultStatus, "passed" | "failed" | "error">;
+
+export interface StructuredAssertionOutcome {
+  status: AgentScenarioStatus;
+  reasoning: string;
+  assertionsPassed: string[];
+  assertionsFailed: string[];
+  assertionResults: Array<{
+    type: string;
+    description: string;
+    passed: boolean;
+    actual: string;
+    error?: string;
+  }>;
+}
+
+function assertionDescription(result: AssertionResult): string {
+  return (
+    result.assertion.description ||
+    `${result.assertion.type}${result.assertion.selector ? ` ${result.assertion.selector}` : ""}`
+  );
+}
+
+function summarizeAssertionResult(result: AssertionResult): string {
+  const description = assertionDescription(result);
+  if (result.passed) return description;
+
+  const suffix = result.error ? `; ${result.error}` : "";
+  return `${description} (actual: ${result.actual}${suffix})`;
+}
+
+export async function applyStructuredAssertionsToResult(input: {
+  page: Page;
+  scenario: Scenario;
+  consoleErrors: string[];
+  status: AgentScenarioStatus;
+  reasoning: string;
+}): Promise<StructuredAssertionOutcome> {
+  const assertions = input.scenario.assertions ?? [];
+  if (assertions.length === 0) {
+    return {
+      status: input.status,
+      reasoning: input.reasoning,
+      assertionsPassed: [],
+      assertionsFailed: [],
+      assertionResults: [],
+    };
+  }
+
+  const results = await evaluateAssertions(input.page, assertions, {
+    consoleErrors: input.consoleErrors,
+  });
+  const assertionsPassed = results.filter((r) => r.passed).map(summarizeAssertionResult);
+  const assertionsFailed = results.filter((r) => !r.passed).map(summarizeAssertionResult);
+  const assertionResults = results.map((result) => ({
+    type: result.assertion.type,
+    description: assertionDescription(result),
+    passed: result.passed,
+    actual: result.actual,
+    ...(result.error ? { error: result.error } : {}),
+  }));
+
+  const assertionsOk = allAssertionsPassed(results);
+  const status = assertionsOk || input.status !== "passed" ? input.status : "failed";
+  const assertionHeading = assertionsOk
+    ? "Structured assertions passed:"
+    : "Structured assertions failed:";
+  const reasoningParts = [input.reasoning, `${assertionHeading}\n${formatAssertionResults(results)}`]
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  return {
+    status,
+    reasoning: reasoningParts.join("\n\n"),
+    assertionsPassed,
+    assertionsFailed,
+    assertionResults,
+  };
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -296,6 +382,7 @@ export async function runSingleScenario(
       model,
       runId,
       sessionId: result.id,
+      baseUrl: options.url,
       maxTurns: effectiveOptions.minimal ? 10 : 30,
       a11y: effectiveOptions.a11y,
       persona: persona ? {
@@ -383,26 +470,47 @@ export async function runSingleScenario(
 
     const lightpandaNote = options.engine === "lightpanda" ? " (Running with Lightpanda — no screenshots)" : options.engine === "bun" ? " (Running with Bun.WebView — native, ~11x faster)" : "";
     const networkMeta = networkErrors.length > 0 ? { networkErrors: networkErrors.slice(0, 20) } : {};
-    let updatedResult = updateResult(result.id, {
+    const baseReasoning = agentResult.reasoning ? agentResult.reasoning + lightpandaNote : lightpandaNote || "";
+    const assertionOutcome = await applyStructuredAssertionsToResult({
+      page,
+      scenario,
+      consoleErrors,
       status: agentResult.status,
-      reasoning: agentResult.reasoning ? agentResult.reasoning + lightpandaNote : lightpandaNote || undefined,
+      reasoning: baseReasoning,
+    });
+    const structuredAssertionMeta = assertionOutcome.assertionResults.length > 0
+      ? {
+          structuredAssertions: {
+            passed: assertionOutcome.assertionsPassed,
+            failed: assertionOutcome.assertionsFailed,
+            results: assertionOutcome.assertionResults,
+          },
+        }
+      : {};
+    let updatedResult = updateResult(result.id, {
+      status: assertionOutcome.status,
+      reasoning: assertionOutcome.reasoning || undefined,
       stepsCompleted: agentResult.stepsCompleted,
       durationMs: Date.now() - new Date(result.createdAt).getTime(),
       tokensUsed: agentResult.tokensUsed,
       costCents: estimateCost(model, agentResult.tokensUsed),
-      metadata: { consoleLogs, ...(networkErrors.length > 0 ? networkMeta : {}) },
+      metadata: {
+        consoleLogs,
+        ...(networkErrors.length > 0 ? networkMeta : {}),
+        ...structuredAssertionMeta,
+      },
     });
 
     // Wire failure analysis for non-passing results
-    if (agentResult.status === "failed" || agentResult.status === "error") {
-      const failureAnalysis = analyzeFailure(null, agentResult.reasoning ?? null);
+    if (assertionOutcome.status === "failed" || assertionOutcome.status === "error") {
+      const failureAnalysis = analyzeFailure(null, assertionOutcome.reasoning ?? null);
       if (failureAnalysis) {
         updatedResult = updateResult(result.id, { failureAnalysis });
       }
     }
 
     // Update the cache when the scenario passes
-    if (agentResult.status === "passed") {
+    if (assertionOutcome.status === "passed") {
       try {
         updateScenarioPassedCache(scenario.id, options.url);
       } catch {
@@ -410,7 +518,7 @@ export async function runSingleScenario(
       }
     }
 
-    const eventType = agentResult.status === "passed" ? "scenario:pass" : "scenario:fail";
+    const eventType = assertionOutcome.status === "passed" ? "scenario:pass" : "scenario:fail";
     emit({ type: eventType, scenarioId: scenario.id, scenarioName: scenario.name, resultId: result.id, runId });
 
     return updatedResult;
@@ -435,7 +543,10 @@ export async function runSingleScenario(
   } finally {
     // Store HAR path on the result (even for failures — still captures useful network data)
     if (harPath) {
-      try { updateResult(result.id, { metadata: { harPath } }); } catch { /* ignore */ }
+      try {
+        const existing = getResult(result.id);
+        updateResult(result.id, { metadata: { ...(existing?.metadata ?? {}), harPath } });
+      } catch { /* ignore */ }
     }
     // Never let browser shutdown mask the underlying error or leak a process.
     if (browser) {
@@ -657,27 +768,43 @@ export async function runBatch(
   return { run: finalRun, results };
 }
 
+function findScenarioInList(scenarios: Scenario[], id: string): Scenario | null {
+  return scenarios.find((scenario) =>
+    scenario.id === id ||
+    scenario.shortId === id ||
+    scenario.id.startsWith(id)
+  ) ?? null;
+}
+
+export function resolveScenariosForRun(
+  options: RunOptions & { tags?: string[]; priority?: string; scenarioIds?: string[] },
+): Scenario[] {
+  if (options.scenarioIds && options.scenarioIds.length > 0) {
+    const scoped = listScenarios({ projectId: options.projectId });
+    const resolved: Scenario[] = [];
+    const seen = new Set<string>();
+
+    for (const id of options.scenarioIds) {
+      const scenario = findScenarioInList(scoped, id) ?? getScenario(id);
+      if (scenario && !seen.has(scenario.id)) {
+        resolved.push(scenario);
+        seen.add(scenario.id);
+      }
+    }
+    return resolved;
+  }
+
+  return listScenarios({
+    projectId: options.projectId,
+    tags: options.tags,
+    priority: options.priority as "low" | "medium" | "high" | "critical" | undefined,
+  });
+}
+
 export async function runByFilter(
   options: RunOptions & { tags?: string[]; priority?: string; scenarioIds?: string[] }
 ): Promise<{ run: Run; results: Result[] }> {
-  let scenarios: Scenario[];
-
-  if (options.scenarioIds && options.scenarioIds.length > 0) {
-    // When explicit scenario IDs are provided, search within project first, then globally
-    const all = listScenarios({ projectId: options.projectId });
-    scenarios = all.filter((s) => options.scenarioIds!.includes(s.id) || options.scenarioIds!.includes(s.shortId));
-    // Fallback: if not found in project scope, search globally
-    if (scenarios.length === 0 && options.projectId) {
-      const global = listScenarios({});
-      scenarios = global.filter((s) => options.scenarioIds!.includes(s.id) || options.scenarioIds!.includes(s.shortId));
-    }
-  } else {
-    scenarios = listScenarios({
-      projectId: options.projectId,
-      tags: options.tags,
-      priority: options.priority as "low" | "medium" | "high" | "critical" | undefined,
-    });
-  }
+  const scenarios = resolveScenariosForRun(options);
 
   if (scenarios.length === 0) {
     const config = loadConfig();
@@ -700,17 +827,7 @@ export function startRunAsync(
   const config = loadConfig();
   const model = resolveModel(options.model ?? config.defaultModel);
 
-  let scenarios: Scenario[];
-  if (options.scenarioIds && options.scenarioIds.length > 0) {
-    const all = listScenarios({ projectId: options.projectId });
-    scenarios = all.filter((s) => options.scenarioIds!.includes(s.id) || options.scenarioIds!.includes(s.shortId));
-  } else {
-    scenarios = listScenarios({
-      projectId: options.projectId,
-      tags: options.tags,
-      priority: options.priority as "low" | "medium" | "high" | "critical" | undefined,
-    });
-  }
+  const scenarios = resolveScenariosForRun(options);
 
   // Budget guard: check before creating the run record
   if (!options.skipBudgetCheck) {

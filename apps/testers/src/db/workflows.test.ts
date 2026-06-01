@@ -41,25 +41,54 @@ describe("testing workflows", () => {
     expect(workflow.enabled).toBe(true);
   });
 
-  test("persists connector-backed E2B execution config without storing secrets", () => {
+  test("persists sandbox execution config without storing secrets", () => {
     const workflow = createTestingWorkflow({
       name: "sandbox smoke",
       execution: {
-        target: "connector:e2b",
-        sandboxTemplate: "node-bun-playwright",
+        target: "sandbox",
+        provider: "e2b",
+        sandboxImage: "node-bun-playwright",
+        sandboxRemoteDir: "/workspace/testers",
+        sandboxCleanup: "stop",
         timeoutMs: 120000,
         env: { APP_ENV: "preview" },
       },
     });
 
     expect(workflow.execution).toEqual({
-      target: "connector:e2b",
-      connector: "e2b",
-      operation: "run",
-      sandboxTemplate: "node-bun-playwright",
+      target: "sandbox",
+      provider: "e2b",
+      sandboxImage: "node-bun-playwright",
+      sandboxRemoteDir: "/workspace/testers",
+      sandboxCleanup: "stop",
       timeoutMs: 120000,
       env: { APP_ENV: "preview" },
     });
+  });
+
+  test("normalizes legacy connector:e2b workflows to sandbox execution", () => {
+    const workflow = createTestingWorkflow({
+      name: "legacy sandbox",
+      execution: {
+        target: "connector:e2b",
+        operation: "runCommand",
+        sandboxTemplate: "bun-playwright",
+      },
+    });
+
+    expect(workflow.execution).toMatchObject({
+      target: "sandbox",
+      provider: "e2b",
+      sandboxImage: "bun-playwright",
+    });
+    expect(workflow.execution.operation).toBeUndefined();
+  });
+
+  test("rejects unknown execution targets instead of falling back to local", () => {
+    expect(() => createTestingWorkflow({
+      name: "bad target",
+      execution: { target: "sandcastle" } as never,
+    })).toThrow("Unsupported workflow execution target: sandcastle");
   });
 
   test("gets by id prefix or name and filters by project/enabled", () => {
@@ -78,13 +107,13 @@ describe("testing workflows", () => {
     const updated = updateTestingWorkflow(workflow.id, {
       name: "after",
       enabled: false,
-      execution: { target: "connector:e2b", operation: "runCommand" },
+      execution: { target: "sandbox", provider: "e2b" },
     });
 
     expect(updated.name).toBe("after");
     expect(updated.enabled).toBe(false);
-    expect(updated.execution.target).toBe("connector:e2b");
-    expect(updated.execution.operation).toBe("runCommand");
+    expect(updated.execution.target).toBe("sandbox");
+    expect(updated.execution.provider).toBe("e2b");
 
     expect(deleteTestingWorkflow(workflow.id)).toBe(true);
     expect(getTestingWorkflow(workflow.id)).toBeNull();

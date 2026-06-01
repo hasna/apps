@@ -98,4 +98,12 @@ describe("SDK/library API (OPE9-00273)", () => {
     expect(typeof sdk.runByFilter).toBe("function");
     expect(typeof sdk.onRunEvent).toBe("function");
   });
+
+  test("re-exports saved workflow runner functions", async () => {
+    const sdk = await import("../sdk/index.js");
+    expect(typeof sdk.createTestingWorkflow).toBe("function");
+    expect(typeof sdk.buildWorkflowRunPlan).toBe("function");
+    expect(typeof sdk.createWorkflowDatabaseBundle).toBe("function");
+    expect(typeof sdk.runTestingWorkflow).toBe("function");
+  });
 });

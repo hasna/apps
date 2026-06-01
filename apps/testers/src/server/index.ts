@@ -199,10 +199,16 @@ const WorkflowFilterSchema = z.object({
 }).optional();
 
 const WorkflowExecutionSchema = z.object({
-  target: z.enum(["local", "connector:e2b"]).default("local"),
+  target: z.enum(["local", "sandbox", "connector:e2b"]).default("local"),
   connector: z.string().optional(),
   operation: z.string().optional(),
+  provider: z.string().optional(),
+  sandboxImage: z.string().optional(),
+  sandboxRemoteDir: z.string().optional(),
+  sandboxCleanup: z.enum(["delete", "stop", "keep"]).optional(),
   sandboxTemplate: z.string().optional(),
+  setupCommand: z.string().optional(),
+  packageSpec: z.string().optional(),
   timeoutMs: z.number().int().positive().optional(),
   env: z.record(z.string()).optional(),
 }).optional();

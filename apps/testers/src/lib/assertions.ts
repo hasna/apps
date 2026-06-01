@@ -9,15 +9,20 @@ export interface AssertionResult {
   error?: string;
 }
 
+export interface AssertionEvaluationContext {
+  consoleErrors?: string[];
+}
+
 export async function evaluateAssertions(
   page: Page,
   assertions: Assertion[],
+  context: AssertionEvaluationContext = {},
 ): Promise<AssertionResult[]> {
   const results: AssertionResult[] = [];
 
   for (const assertion of assertions) {
     try {
-      const result = await evaluateOne(page, assertion);
+      const result = await evaluateOne(page, assertion, context);
       results.push(result);
     } catch (err) {
       results.push({
@@ -35,6 +40,7 @@ export async function evaluateAssertions(
 async function evaluateOne(
   page: Page,
   assertion: Assertion,
+  context: AssertionEvaluationContext,
 ): Promise<AssertionResult> {
   switch (assertion.type) {
     case "visible": {
@@ -86,6 +92,18 @@ async function evaluateOne(
     }
 
     case "no_console_errors": {
+      if (context.consoleErrors !== undefined) {
+        const errors = context.consoleErrors.filter(Boolean);
+        return {
+          assertion,
+          passed: errors.length === 0,
+          actual:
+            errors.length === 0
+              ? "No console errors captured"
+              : errors.slice(0, 3).join(" | "),
+        };
+      }
+
       // Check for common error indicators on the page as a fallback
       // since console listener would need to be attached before navigation
       const errorElements = await page

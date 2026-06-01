@@ -31,6 +31,16 @@ export type {
   FlowRow,
   Flow,
   CreateFlowInput,
+  TestingWorkflow,
+  CreateTestingWorkflowInput,
+  UpdateTestingWorkflowInput,
+  WorkflowExecutionConfig,
+  WorkflowExecutionInput,
+  WorkflowExecutionTarget,
+  LegacyWorkflowExecutionTarget,
+  WorkflowSandboxCleanup,
+  WorkflowGoal,
+  WorkflowScenarioFilter,
   AuthConfig,
   BrowserConfig,
   ScreenshotConfig,
@@ -130,6 +140,14 @@ export {
 } from "./db/schedules.js";
 
 export {
+  createTestingWorkflow,
+  getTestingWorkflow,
+  listTestingWorkflows,
+  updateTestingWorkflow,
+  deleteTestingWorkflow,
+} from "./db/workflows.js";
+
+export {
   addDependency,
   removeDependency,
   getDependencies,
@@ -189,6 +207,21 @@ export {
   onRunEvent,
 } from "./lib/runner.js";
 export type { RunOptions, RunEvent, RunEventHandler } from "./lib/runner.js";
+
+export {
+  buildWorkflowRunPlan,
+  createWorkflowDatabaseBundle,
+  runTestingWorkflow,
+} from "./lib/workflow-runner.js";
+export type {
+  WorkflowDatabaseBundle,
+  WorkflowRunOptions,
+  WorkflowRunPlan,
+  WorkflowRunnerDependencies,
+  WorkflowSandboxesRuntime,
+  WorkflowSandboxExecutionResult,
+  WorkflowSandboxPlan,
+} from "./lib/workflow-runner.js";
 
 export {
   formatTerminal,

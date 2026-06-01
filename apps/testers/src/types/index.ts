@@ -8,7 +8,9 @@ export type ResultStatus = "passed" | "failed" | "error" | "skipped" | "flaky";
 export type ModelPreset = "quick" | "thorough" | "deep" | "cerebras-fast" | "cerebras-smart";
 export type BrowserEngine = "playwright" | "playwright-firefox" | "playwright-webkit" | "lightpanda" | "bun" | "cdp";
 export type AuthStrategy = "form-login" | "bearer" | "cookie" | "oauth" | "custom_script";
-export type WorkflowExecutionTarget = "local" | "connector:e2b";
+export type WorkflowExecutionTarget = "local" | "sandbox";
+export type LegacyWorkflowExecutionTarget = WorkflowExecutionTarget | "connector:e2b";
+export type WorkflowSandboxCleanup = "delete" | "stop" | "keep";
 
 export type AssertionType = "visible" | "not_visible" | "text_contains" | "text_equals" | "element_count" | "no_console_errors" | "url_contains" | "title_contains" | "no_a11y_violations" | "cookie_exists" | "cookie_value" | "cookie_not_exists" | "local_storage_exists" | "local_storage_value" | "local_storage_not_exists" | "session_storage_value" | "session_storage_not_exists";
 
@@ -423,9 +425,27 @@ export interface WorkflowScenarioFilter {
 
 export interface WorkflowExecutionConfig {
   target: WorkflowExecutionTarget;
+  provider?: "e2b" | "daytona" | "modal" | string;
+  sandboxImage?: string;
+  sandboxRemoteDir?: string;
+  sandboxCleanup?: WorkflowSandboxCleanup;
+  setupCommand?: string;
+  packageSpec?: string;
+  timeoutMs?: number;
+  env?: Record<string, string>;
+}
+
+export interface WorkflowExecutionInput {
+  target?: LegacyWorkflowExecutionTarget;
+  provider?: "e2b" | "daytona" | "modal" | string;
   connector?: "e2b" | string;
   operation?: string;
+  sandboxImage?: string;
   sandboxTemplate?: string;
+  sandboxRemoteDir?: string;
+  sandboxCleanup?: WorkflowSandboxCleanup;
+  setupCommand?: string;
+  packageSpec?: string;
   timeoutMs?: number;
   env?: Record<string, string>;
 }
@@ -473,7 +493,7 @@ export interface CreateTestingWorkflowInput {
   scenarioFilter?: WorkflowScenarioFilter;
   personaIds?: string[];
   goal?: Partial<WorkflowGoal> | null;
-  execution?: Partial<WorkflowExecutionConfig>;
+  execution?: WorkflowExecutionInput;
   settings?: Record<string, unknown>;
   enabled?: boolean;
 }
@@ -484,9 +504,70 @@ export interface UpdateTestingWorkflowInput {
   scenarioFilter?: WorkflowScenarioFilter;
   personaIds?: string[];
   goal?: Partial<WorkflowGoal> | null;
-  execution?: Partial<WorkflowExecutionConfig>;
+  execution?: WorkflowExecutionInput;
   settings?: Record<string, unknown>;
   enabled?: boolean;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function stringMap(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value)) return undefined;
+  const entries = Object.entries(value)
+    .filter((entry): entry is [string, string] => typeof entry[1] === "string");
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function cleanupValue(value: unknown): WorkflowSandboxCleanup | undefined {
+  if (value === "delete" || value === "stop" || value === "keep") return value;
+  return undefined;
+}
+
+export function workflowExecutionFromValue(value: unknown): WorkflowExecutionConfig {
+  const input = isRecord(value) ? value : {};
+  const rawTarget = stringValue(input["target"]) ?? "local";
+
+  if (rawTarget === "local") {
+    const timeoutMs = numberValue(input["timeoutMs"]);
+    return timeoutMs === undefined ? { target: "local" } : { target: "local", timeoutMs };
+  }
+
+  if (rawTarget !== "sandbox" && rawTarget !== "connector:e2b") {
+    throw new Error(`Unsupported workflow execution target: ${rawTarget}`);
+  }
+
+  const provider = rawTarget === "connector:e2b"
+    ? "e2b"
+    : stringValue(input["provider"]) ?? stringValue(input["connector"]);
+  const sandboxImage = stringValue(input["sandboxImage"]) ?? stringValue(input["sandboxTemplate"]);
+  const sandboxRemoteDir = stringValue(input["sandboxRemoteDir"]);
+  const sandboxCleanup = cleanupValue(input["sandboxCleanup"]);
+  const setupCommand = stringValue(input["setupCommand"]);
+  const packageSpec = stringValue(input["packageSpec"]);
+  const timeoutMs = numberValue(input["timeoutMs"]);
+  const env = stringMap(input["env"]);
+
+  return {
+    target: "sandbox",
+    ...(provider ? { provider } : {}),
+    ...(sandboxImage ? { sandboxImage } : {}),
+    ...(sandboxRemoteDir ? { sandboxRemoteDir } : {}),
+    ...(sandboxCleanup ? { sandboxCleanup } : {}),
+    ...(setupCommand ? { setupCommand } : {}),
+    ...(packageSpec ? { packageSpec } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    ...(env ? { env } : {}),
+  };
 }
 
 export function workflowFromRow(row: WorkflowRow): TestingWorkflow {
@@ -498,7 +579,7 @@ export function workflowFromRow(row: WorkflowRow): TestingWorkflow {
     scenarioFilter: JSON.parse(row.scenario_filter || "{}"),
     personaIds: JSON.parse(row.persona_ids || "[]"),
     goal: row.goal ? JSON.parse(row.goal) : null,
-    execution: JSON.parse(row.execution || '{"target":"local"}'),
+    execution: workflowExecutionFromValue(JSON.parse(row.execution || '{"target":"local"}')),
     settings: JSON.parse(row.settings || "{}"),
     enabled: row.enabled === 1,
     createdAt: row.created_at,
