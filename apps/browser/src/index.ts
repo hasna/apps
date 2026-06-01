@@ -2,6 +2,7 @@
 
 // Types
 export * from "./types/index.js";
+export * from "./sdk.js";
 
 // DB
 export { getDatabase, getDataDir, resetDatabase } from "./db/schema.js";

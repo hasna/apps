@@ -1,0 +1,259 @@
+import type { Page } from "playwright";
+import type {
+  PageInfo,
+  ScreenshotOptions,
+  ScreenshotResult,
+  Session,
+  SessionOptions,
+} from "./types/index.js";
+import {
+  closeSession as closeBrowserSession,
+  createSession as createBrowserSession,
+  getSessionPage as getBrowserSessionPage,
+} from "./lib/session.js";
+import {
+  click as clickAction,
+  fill as fillAction,
+  navigate as navigateAction,
+  pressKey as pressKeyAction,
+  type as typeTextAction,
+  waitForSelector as waitForSelectorAction,
+} from "./lib/actions.js";
+import { getPageInfo as getBrowserPageInfo } from "./lib/extractor.js";
+import { takeScreenshot as takeBrowserScreenshot } from "./lib/screenshot.js";
+
+export interface BrowserSDKSession {
+  id: string;
+  session: Session;
+  page: Page;
+}
+
+export type BrowserSDKSessionRef = string | BrowserSDKSession;
+
+export interface BrowserSDKDependencies {
+  createSession?: (opts?: SessionOptions) => Promise<{ session: Session; page: Page }>;
+  closeSession?: (sessionId: string) => Promise<Session>;
+  getSessionPage?: (sessionId: string) => Page;
+  getPageInfo?: (page: Page) => Promise<PageInfo>;
+  navigate?: (page: Page, url: string, timeout?: number) => Promise<void>;
+  click?: typeof clickAction;
+  typeText?: typeof typeTextAction;
+  fill?: typeof fillAction;
+  pressKey?: typeof pressKeyAction;
+  waitForSelector?: typeof waitForSelectorAction;
+  takeScreenshot?: typeof takeBrowserScreenshot;
+}
+
+export interface BrowserSDKOptions {
+  dependencies?: BrowserSDKDependencies;
+}
+
+export type BrowserSDKStep =
+  | { type: "navigate"; url: string; timeout?: number }
+  | { type: "click"; selector: string; timeout?: number; selfHeal?: boolean }
+  | { type: "fill"; selector: string; value: string; timeout?: number; selfHeal?: boolean }
+  | { type: "type"; selector: string; text: string; timeout?: number; clear?: boolean; selfHeal?: boolean }
+  | { type: "press"; key: string }
+  | { type: "wait"; selector: string; timeout?: number; state?: "attached" | "detached" | "visible" | "hidden" }
+  | { type: "screenshot"; options?: ScreenshotOptions }
+  | { type: "pageInfo" };
+
+export interface BrowserSDKStepResult {
+  type: BrowserSDKStep["type"];
+  ok: true;
+  info?: PageInfo;
+  screenshot?: ScreenshotResult;
+}
+
+export interface BrowserSDKRunOptions {
+  session?: BrowserSDKSessionRef;
+  sessionOptions?: SessionOptions;
+  steps: BrowserSDKStep[];
+  autoClose?: boolean;
+}
+
+export interface BrowserSDKRunResult {
+  session: Session;
+  pageInfo: PageInfo;
+  steps: BrowserSDKStepResult[];
+}
+
+type RequiredBrowserSDKDependencies = Required<BrowserSDKDependencies>;
+
+function buildDependencies(input?: BrowserSDKDependencies): RequiredBrowserSDKDependencies {
+  return {
+    createSession: input?.createSession ?? createBrowserSession,
+    closeSession: input?.closeSession ?? closeBrowserSession,
+    getSessionPage: input?.getSessionPage ?? getBrowserSessionPage,
+    getPageInfo: input?.getPageInfo ?? getBrowserPageInfo,
+    navigate: input?.navigate ?? navigateAction,
+    click: input?.click ?? clickAction,
+    typeText: input?.typeText ?? typeTextAction,
+    fill: input?.fill ?? fillAction,
+    pressKey: input?.pressKey ?? pressKeyAction,
+    waitForSelector: input?.waitForSelector ?? waitForSelectorAction,
+    takeScreenshot: input?.takeScreenshot ?? takeBrowserScreenshot,
+  };
+}
+
+export class BrowserSDK {
+  private readonly deps: RequiredBrowserSDKDependencies;
+  private readonly sessions = new Map<string, BrowserSDKSession>();
+
+  constructor(options: BrowserSDKOptions = {}) {
+    this.deps = buildDependencies(options.dependencies);
+  }
+
+  async open(options: SessionOptions = {}): Promise<BrowserSDKSession> {
+    const { session, page } = await this.deps.createSession(options);
+    const handle = { id: session.id, session, page };
+    this.sessions.set(handle.id, handle);
+    return handle;
+  }
+
+  async createSession(options: SessionOptions = {}): Promise<BrowserSDKSession> {
+    return this.open(options);
+  }
+
+  getPage(ref: BrowserSDKSessionRef): Page {
+    if (typeof ref !== "string") return ref.page;
+    return this.sessions.get(ref)?.page ?? this.deps.getSessionPage(ref);
+  }
+
+  async pageInfo(ref: BrowserSDKSessionRef): Promise<PageInfo> {
+    return this.deps.getPageInfo(this.getPage(ref));
+  }
+
+  async navigate(ref: BrowserSDKSessionRef, url: string, opts?: { timeout?: number }): Promise<PageInfo> {
+    await this.deps.navigate(this.getPage(ref), url, opts?.timeout);
+    return this.pageInfo(ref);
+  }
+
+  async click(ref: BrowserSDKSessionRef, selector: string, opts?: { timeout?: number; selfHeal?: boolean }): ReturnType<typeof clickAction> {
+    return this.deps.click(this.getPage(ref), selector, {
+      timeout: opts?.timeout,
+      selfHeal: opts?.selfHeal,
+    });
+  }
+
+  async fill(ref: BrowserSDKSessionRef, selector: string, value: string, opts?: { timeout?: number; selfHeal?: boolean }): ReturnType<typeof fillAction> {
+    return this.deps.fill(this.getPage(ref), selector, value, opts?.timeout, opts?.selfHeal);
+  }
+
+  async type(ref: BrowserSDKSessionRef, selector: string, text: string, opts?: { timeout?: number; clear?: boolean; selfHeal?: boolean }): ReturnType<typeof typeTextAction> {
+    return this.deps.typeText(this.getPage(ref), selector, text, {
+      timeout: opts?.timeout,
+      clear: opts?.clear,
+      selfHeal: opts?.selfHeal,
+    });
+  }
+
+  async pressKey(ref: BrowserSDKSessionRef, key: string): ReturnType<typeof pressKeyAction> {
+    return this.deps.pressKey(this.getPage(ref), key);
+  }
+
+  async waitForSelector(ref: BrowserSDKSessionRef, selector: string, opts?: { timeout?: number; state?: "attached" | "detached" | "visible" | "hidden" }): ReturnType<typeof waitForSelectorAction> {
+    return this.deps.waitForSelector(this.getPage(ref), selector, opts);
+  }
+
+  async screenshot(ref: BrowserSDKSessionRef, options?: ScreenshotOptions): Promise<ScreenshotResult> {
+    const sessionId = typeof ref === "string" ? ref : ref.id;
+    return this.deps.takeScreenshot(this.getPage(ref), {
+      ...options,
+      sessionId,
+    });
+  }
+
+  async close(ref: BrowserSDKSessionRef): Promise<Session> {
+    const sessionId = typeof ref === "string" ? ref : ref.id;
+    this.sessions.delete(sessionId);
+    return this.deps.closeSession(sessionId);
+  }
+
+  async run(options: BrowserSDKRunOptions): Promise<BrowserSDKRunResult> {
+    const ownsSession = !options.session;
+    const handle = options.session
+      ? this.resolveHandle(options.session)
+      : await this.open(options.sessionOptions);
+    const stepResults: BrowserSDKStepResult[] = [];
+
+    try {
+      for (const step of options.steps) {
+        stepResults.push(await this.runStep(handle, step));
+      }
+
+      return {
+        session: handle.session,
+        pageInfo: await this.pageInfo(handle),
+        steps: stepResults,
+      };
+    } finally {
+      const shouldClose = options.autoClose ?? ownsSession;
+      if (shouldClose) {
+        await this.close(handle);
+      }
+    }
+  }
+
+  private resolveHandle(ref: BrowserSDKSessionRef): BrowserSDKSession {
+    if (typeof ref !== "string") return ref;
+    const cached = this.sessions.get(ref);
+    if (cached) return cached;
+    return {
+      id: ref,
+      session: {
+        id: ref,
+        engine: "playwright",
+        status: "active",
+        created_at: new Date(0).toISOString(),
+      },
+      page: this.deps.getSessionPage(ref),
+    };
+  }
+
+  private async runStep(handle: BrowserSDKSession, step: BrowserSDKStep): Promise<BrowserSDKStepResult> {
+    switch (step.type) {
+      case "navigate":
+        await this.navigate(handle, step.url, { timeout: step.timeout });
+        return { type: step.type, ok: true };
+      case "click":
+        await this.click(handle, step.selector, { timeout: step.timeout, selfHeal: step.selfHeal });
+        return { type: step.type, ok: true };
+      case "fill":
+        await this.fill(handle, step.selector, step.value, { timeout: step.timeout, selfHeal: step.selfHeal });
+        return { type: step.type, ok: true };
+      case "type":
+        await this.type(handle, step.selector, step.text, {
+          timeout: step.timeout,
+          clear: step.clear,
+          selfHeal: step.selfHeal,
+        });
+        return { type: step.type, ok: true };
+      case "press":
+        await this.pressKey(handle, step.key);
+        return { type: step.type, ok: true };
+      case "wait":
+        await this.waitForSelector(handle, step.selector, {
+          timeout: step.timeout,
+          state: step.state,
+        });
+        return { type: step.type, ok: true };
+      case "screenshot":
+        return {
+          type: step.type,
+          ok: true,
+          screenshot: await this.screenshot(handle, step.options),
+        };
+      case "pageInfo":
+        return {
+          type: step.type,
+          ok: true,
+          info: await this.pageInfo(handle),
+        };
+    }
+  }
+}
+
+export function createBrowserSDK(options?: BrowserSDKOptions): BrowserSDK {
+  return new BrowserSDK(options);
+}
