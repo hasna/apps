@@ -19,6 +19,7 @@ import { importFromTodos } from "../lib/todos-connector.js";
 import { installBrowser } from "../lib/browser.js";
 import { initProject } from "../lib/init.js";
 import { runSmoke, formatSmokeReport } from "../lib/smoke.js";
+import { runQuickQa, formatQuickQaReport, getQuickQaExitCode, normalizeQuickQaWcagLevel, resolveQuickQaSelection } from "../lib/quick-qa.js";
 import { diffRuns, formatDiffTerminal, formatDiffJSON } from "../lib/diff.js";
 import { setBaseline, getBaseline, compareRunScreenshots, formatVisualDiffTerminal } from "../lib/visual-diff.js";
 import { generateHtmlReport, generateLatestReport } from "../lib/report.js";
@@ -2802,6 +2803,71 @@ program
         (i) => i.severity === "critical" || i.severity === "high"
       );
       process.exit(hasCritical ? 1 : 0);
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers quick-qa <url> ─────────────────────────────────────────────────
+
+program
+  .command("quick-qa <url>")
+  .alias("quick-check")
+  .description("Run a fast QA pass: health scan plus optional autonomous smoke")
+  .option("-p, --page <path>", "Page path to visit during page-based checks (repeatable)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
+  .option("--max-pages <n>", "Max pages to crawl for link checks", "20")
+  .option("--skip <check>", "Skip a check: console|network|links|perf|smoke|a11y (repeatable)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
+  .option("--a11y [level]", "Include WCAG accessibility scan at A, AA, or AAA (default AA)")
+  .option("--no-smoke", "Skip autonomous smoke exploration")
+  .option("-m, --model <model>", "AI model for autonomous smoke", "quick")
+  .option("--headed", "Run browser checks in headed mode", false)
+  .option("--timeout <ms>", "Navigation timeout per page in ms", "15000")
+  .option("--project <id>", "Project ID for issue tracking")
+  .option("--json", "Output results as JSON", false)
+  .option("-o, --output <file>", "Write JSON results to a file")
+  .action(async (url: string, opts) => {
+    try {
+      const projectId = resolveProject(opts.project);
+      const includeA11y = opts.a11y !== undefined;
+      const wcagLevel = includeA11y ? normalizeQuickQaWcagLevel(opts.a11y) : undefined;
+      const selection = resolveQuickQaSelection({
+        skip: opts.skip as string[],
+        includeA11y,
+        includeSmoke: opts.smoke !== false,
+      });
+
+      if (!opts.json) {
+        log(chalk.blue(`Running quick QA against ${chalk.bold(url)}...`));
+        log(chalk.dim(`  Checks: ${selection.scanners.join(", ")}${selection.includeSmoke ? ", smoke" : ""}`));
+        log("");
+      }
+
+      const result = await runQuickQa({
+        url,
+        pages: opts.page,
+        projectId,
+        headed: opts.headed,
+        timeoutMs: parseInt(opts.timeout, 10),
+        maxPages: parseInt(opts.maxPages, 10),
+        scanners: selection.scanners,
+        includeSmoke: selection.includeSmoke,
+        model: opts.model,
+        wcagLevel,
+      });
+
+      if (opts.output) {
+        writeFileSync(resolve(opts.output), JSON.stringify(result, null, 2));
+      }
+
+      if (opts.json) {
+        log(JSON.stringify(result, null, 2));
+      } else {
+        log(formatQuickQaReport(result));
+        if (opts.output) log(chalk.dim(`Wrote JSON results to ${resolve(opts.output)}`));
+      }
+
+      process.exit(getQuickQaExitCode(result));
     } catch (error) {
       logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);

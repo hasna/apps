@@ -265,6 +265,22 @@ export {
 export type { SmokeResult, SmokeIssue } from "./lib/smoke.js";
 
 export {
+  runQuickQa,
+  buildQuickQaResult,
+  formatQuickQaReport,
+  getQuickQaExitCode,
+  normalizeQuickQaWcagLevel,
+  resolveQuickQaSelection,
+} from "./lib/quick-qa.js";
+export type {
+  QuickQaOptions,
+  QuickQaResult,
+  QuickQaScanner,
+  QuickQaSelection,
+  QuickQaStatus,
+} from "./lib/quick-qa.js";
+
+export {
   diffRuns,
   formatDiffTerminal,
   formatDiffJSON,

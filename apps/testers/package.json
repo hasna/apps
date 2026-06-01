@@ -1,6 +1,6 @@
 {
   "name": "@hasna/testers",
-  "version": "0.0.36",
+  "version": "0.0.37",
   "description": "AI-powered QA testing CLI — spawns cheap AI agents to test web apps with headless browsers",
   "type": "module",
   "main": "dist/index.js",
@@ -19,6 +19,7 @@
   "files": [
     "dist/",
     "dashboard/dist/",
+    "skills/",
     "LICENSE",
     "README.md"
   ],
