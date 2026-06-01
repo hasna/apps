@@ -706,10 +706,11 @@ program
         const hasOpenAI = Boolean(process.env["OPENAI_API_KEY"]);
         const hasGoogle = Boolean(process.env["GOOGLE_API_KEY"]);
         const hasCerebras = Boolean(process.env["CEREBRAS_API_KEY"]);
-        if (!hasAnthropic && !hasOpenAI && !hasGoogle && !hasCerebras) {
+        const hasZai = Boolean(process.env["ZAI_API_KEY"]);
+        if (!hasAnthropic && !hasOpenAI && !hasGoogle && !hasCerebras && !hasZai) {
           logError(
             chalk.red(
-              "No AI API key found. Set ANTHROPIC_API_KEY (recommended), or OPENAI_API_KEY / GOOGLE_API_KEY / CEREBRAS_API_KEY.",
+              "No AI API key found. Set ANTHROPIC_API_KEY (recommended), or OPENAI_API_KEY / GOOGLE_API_KEY / CEREBRAS_API_KEY / ZAI_API_KEY.",
             ),
           );
           logError(
@@ -3921,11 +3922,13 @@ program
     const openaiKey = !!process.env["OPENAI_API_KEY"];
     const googleKey = !!process.env["GOOGLE_API_KEY"];
     const cerebrasKey = !!process.env["CEREBRAS_API_KEY"];
+    const zaiKey = !!process.env["ZAI_API_KEY"];
     log((anthropicKey ? chalk.green("  ✓") : chalk.red("  ✗")) + ` Anthropic (ANTHROPIC_API_KEY)${!anthropicKey ? " — required for default model" : ""}`);
     log((openaiKey ? chalk.green("  ✓") : chalk.dim("  ○")) + ` OpenAI (OPENAI_API_KEY) — optional, enables gpt-* models`);
     log((googleKey ? chalk.green("  ✓") : chalk.dim("  ○")) + ` Google Gemini (GOOGLE_API_KEY) — optional, enables gemini-* models`);
     log((cerebrasKey ? chalk.green("  ✓") : chalk.dim("  ○")) + ` Cerebras (CEREBRAS_API_KEY) — optional, enables llama-*/qwen-* at ~20x faster inference`);
-    if (!anthropicKey && !openaiKey && !googleKey && !cerebrasKey) {
+    log((zaiKey ? chalk.green("  ✓") : chalk.dim("  ○")) + ` Z.AI (ZAI_API_KEY) — optional, enables glm-* models such as glm-5.1`);
+    if (!anthropicKey && !openaiKey && !googleKey && !cerebrasKey && !zaiKey) {
       log(chalk.red("  ✗") + " No AI provider API keys found — at least one is required");
       allPassed = false;
     }

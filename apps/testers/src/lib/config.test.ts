@@ -78,4 +78,16 @@ describe("loadConfig", () => {
     expect(config.browser.viewport).toEqual(defaults.browser.viewport);
     expect(config.models).toEqual(defaults.models);
   });
+
+  it("allows self-healing to be enabled by environment override", () => {
+    const original = process.env["TESTERS_SELF_HEAL"];
+    process.env["TESTERS_SELF_HEAL"] = "true";
+
+    try {
+      expect(loadConfig().selfHeal).toBe(true);
+    } finally {
+      if (original === undefined) delete process.env["TESTERS_SELF_HEAL"];
+      else process.env["TESTERS_SELF_HEAL"] = original;
+    }
+  });
 });

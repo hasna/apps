@@ -13,7 +13,7 @@ import { getScenario, listScenarios, updateScenarioPassedCache } from "../db/sce
 import { getPersona } from "../db/personas.js";
 import { launchBrowser, getPage, closeBrowser } from "./browser.js";
 import { Screenshotter } from "./screenshotter.js";
-import { createClientForModel, runAgentLoop, resolveModel } from "./ai-client.js";
+import { createClientForModel, resolveProviderApiKeyForModel, runAgentLoop, resolveModel } from "./ai-client.js";
 import { loadConfig } from "./config.js";
 import { ensurePersonaAuthenticated, loginWithAuthConfig } from "./persona-auth.js";
 import { enableNetworkLogging } from "@hasna/browser";
@@ -93,6 +93,14 @@ export function onRunEvent(handler: RunEventHandler): void {
 
 function emit(event: RunEvent): void {
   if (eventHandler) eventHandler(event);
+}
+
+export function resolveAgentApiKeyForModel(
+  model: string,
+  explicitApiKey?: string,
+  configuredAnthropicApiKey?: string,
+): string | undefined {
+  return resolveProviderApiKeyForModel(model, explicitApiKey, configuredAnthropicApiKey);
 }
 
 type AgentScenarioStatus = Extract<ResultStatus, "passed" | "failed" | "error">;
@@ -247,7 +255,10 @@ export async function runSingleScenario(
       });
     }
   }
-  const client = createClientForModel(model, effectiveOptions.apiKey ?? config.anthropicApiKey);
+  const client = createClientForModel(
+    model,
+    resolveAgentApiKeyForModel(model, effectiveOptions.apiKey, config.anthropicApiKey),
+  );
   const screenshotter = new Screenshotter({
     baseDir: effectiveOptions.screenshotDir ?? config.screenshots.dir,
   });

@@ -22,7 +22,7 @@
 import type { Page, Browser } from "playwright";
 import { launchBrowser, getPage, closeBrowser } from "./browser.js";
 import { Screenshotter } from "./screenshotter.js";
-import { createClientForModel, runAgentLoop, resolveModel } from "./ai-client.js";
+import { createClientForModel, resolveProviderApiKeyForModel, runAgentLoop, resolveModel } from "./ai-client.js";
 import { loadConfig } from "./config.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -177,7 +177,10 @@ export async function runHybridScenario(
       if (step.type === "ai" || step.type === "ai_verify") {
         // AI-driven step
         const model = resolveModel(step.model ?? scenario.model ?? config.defaultModel);
-        const client = createClientForModel(model, options?.apiKey ?? config.anthropicApiKey);
+        const client = createClientForModel(
+          model,
+          resolveProviderApiKeyForModel(model, options?.apiKey, config.anthropicApiKey),
+        );
 
         const instruction = step.type === "ai_verify"
           ? `Verify the following assertion about the current page state: "${step.assertion}". Do NOT navigate. Just inspect the page and call report_result with pass or fail.`

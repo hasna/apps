@@ -12,7 +12,7 @@
 
 import type { Page } from "playwright";
 import Anthropic from "@anthropic-ai/sdk";
-import { detectProvider, callOpenAICompatible } from "./ai-client.js";
+import { callOpenAICompatible, createOpenAICompatibleConfig, detectProvider } from "./ai-client.js";
 import { AIClientError } from "../types/index.js";
 import { loadConfig } from "./config.js";
 
@@ -76,17 +76,13 @@ Please identify the correct selector from the screenshot.`;
 
   let rawResponse = "";
   try {
-    if (provider === "openai" || provider === "google") {
-      const baseUrl = provider === "openai"
-        ? "https://api.openai.com/v1"
-        : "https://generativelanguage.googleapis.com/v1beta/openai";
-      const apiKey = provider === "openai"
-        ? (process.env["OPENAI_API_KEY"] ?? "")
-        : (process.env["GOOGLE_API_KEY"] ?? "");
-
+    if (provider !== "anthropic") {
+      const compat = createOpenAICompatibleConfig(provider);
       // For OpenAI-compat, pass image as base64 in message content
       const resp = await callOpenAICompatible({
-        baseUrl, apiKey, model,
+        baseUrl: compat.baseUrl,
+        apiKey: compat.apiKey,
+        model,
         system: HEAL_SYSTEM,
         messages: [{ role: "user", content: userMessage }],
         tools: [],

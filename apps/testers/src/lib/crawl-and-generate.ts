@@ -4,7 +4,7 @@
  * Given any URL:
  * 1. Crawls the app with a headless browser to discover pages
  * 2. Visits each page, captures a screenshot + simplified HTML
- * 3. Sends both to Claude with a prompt to write test scenarios
+ * 3. Sends the page context to the configured model to write test scenarios
  * 4. Creates the scenarios in the DB under the given project
  *
  * Works for any web app — no manual setup required.
@@ -12,9 +12,15 @@
 
 import { launchBrowser, getPage, closeBrowser } from "./browser.js";
 import { createScenario } from "../db/scenarios.js";
-import { createClient } from "./ai-client.js";
+import {
+  callOpenAICompatible,
+  createClientForModel,
+  detectProvider,
+  resolveModel,
+  resolveProviderApiKeyForModel,
+  type OpenAICompatConfig,
+} from "./ai-client.js";
 import { loadConfig } from "./config.js";
-import { resolveModel } from "./ai-client.js";
 import type { Browser } from "playwright";
 import type Anthropic from "@anthropic-ai/sdk";
 
@@ -113,7 +119,7 @@ async function getPageContext(
 }
 
 async function generateScenariosForPage(
-  client: ReturnType<typeof createClient>,
+  client: ReturnType<typeof createClientForModel>,
   model: string,
   pageContext: { title: string; path: string; html: string; screenshot: Buffer | null },
   baseUrl: string,
@@ -163,16 +169,35 @@ Rules:
   const messages: Anthropic.MessageParam[] = [{ role: "user", content: contentParts }];
 
   try {
-    const response = await anthropicClient.messages.create({
-      model,
-      max_tokens: 2048,
-      messages,
-    });
+    let text: string;
+    const provider = detectProvider(model);
+    if (provider !== "anthropic") {
+      const compat = client as OpenAICompatConfig;
+      const response = await callOpenAICompatible({
+        baseUrl: compat.baseUrl,
+        apiKey: compat.apiKey,
+        model,
+        system: "You are a QA engineer.",
+        messages: [{ role: "user", content: prompt }],
+        tools: [],
+        maxTokens: 2048,
+      });
+      text = response.content
+        .filter((b) => b.type === "text")
+        .map((b) => (b as { type: "text"; text: string }).text)
+        .join("");
+    } else {
+      const response = await anthropicClient.messages.create({
+        model,
+        max_tokens: 2048,
+        messages,
+      });
 
-    const text = response.content
-      .filter((b) => b.type === "text")
-      .map((b) => (b as { type: "text"; text: string }).text)
-      .join("");
+      text = response.content
+        .filter((b) => b.type === "text")
+        .map((b) => (b as { type: "text"; text: string }).text)
+        .join("");
+    }
 
     // Extract JSON array from response
     const match = text.match(/\[[\s\S]*\]/);
@@ -210,7 +235,10 @@ export async function crawlAndGenerate(options: CrawlAndGenerateOptions): Promis
 
   const config = loadConfig();
   const model = resolveModel(options.model ?? config.defaultModel ?? "thorough");
-  const client = createClient(options.apiKey ?? config.anthropicApiKey);
+  const client = createClientForModel(
+    model,
+    resolveProviderApiKeyForModel(model, options.apiKey, config.anthropicApiKey),
+  );
 
   const rootOrigin = new URL(url).origin;
   const visited = new Set<string>();

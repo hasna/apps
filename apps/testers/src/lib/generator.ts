@@ -10,7 +10,7 @@
  */
 
 import { launchBrowser, getPage, closeBrowser } from "./browser.js";
-import { callOpenAICompatible, detectProvider } from "./ai-client.js";
+import { callOpenAICompatible, createOpenAICompatibleConfig, detectProvider } from "./ai-client.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { loadConfig } from "./config.js";
 import { AIClientError } from "../types/index.js";
@@ -151,16 +151,12 @@ ${summary}`;
   let rawText = "";
   let tokensUsed = 0;
 
-  if (provider === "openai" || provider === "google") {
-    const baseUrl = provider === "openai"
-      ? "https://api.openai.com/v1"
-      : "https://generativelanguage.googleapis.com/v1beta/openai";
-    const apiKey = provider === "openai"
-      ? (process.env["OPENAI_API_KEY"] ?? "")
-      : (process.env["GOOGLE_API_KEY"] ?? "");
-
+  if (provider !== "anthropic") {
+    const compat = createOpenAICompatibleConfig(provider);
     const resp = await callOpenAICompatible({
-      baseUrl, apiKey, model,
+      baseUrl: compat.baseUrl,
+      apiKey: compat.apiKey,
+      model,
       system: GENERATOR_SYSTEM,
       messages: [{ role: "user", content: prompt }],
       tools: [],

@@ -82,6 +82,11 @@ export function loadConfig(): TestersConfig {
     config.anthropicApiKey = envApiKey;
   }
 
+  const envSelfHeal = process.env["TESTERS_SELF_HEAL"];
+  if (envSelfHeal !== undefined) {
+    config.selfHeal = ["1", "true", "yes", "on"].includes(envSelfHeal.toLowerCase());
+  }
+
   return config;
 }
 

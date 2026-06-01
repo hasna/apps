@@ -7,18 +7,23 @@
  * Provider resolution order:
  *   1. config.model (explicit) → detectProvider()
  *   2. ANTHROPIC_API_KEY env
- *   3. OPENAI_API_KEY env
- *   4. GOOGLE_API_KEY env
+ *   3. OPENAI_API_KEY / GOOGLE_API_KEY / CEREBRAS_API_KEY / ZAI_API_KEY env
  */
 
-import { detectProvider, callOpenAICompatible } from "./ai-client.js";
+import {
+  callOpenAICompatible,
+  createOpenAICompatibleConfig,
+  detectProvider,
+  type AIProvider,
+  type OpenAICompatProvider,
+} from "./ai-client.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { AIClientError } from "../types/index.js";
 import { loadConfig } from "./config.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type JudgeProvider = "anthropic" | "openai" | "google" | "cerebras" | "auto";
+export type JudgeProvider = AIProvider | "auto";
 
 export interface JudgeConfig {
   model?: string;
@@ -114,11 +119,11 @@ function evalDeterministic(input: JudgeInput): JudgeResult | null {
 
 // ─── LLM Judge ───────────────────────────────────────────────────────────────
 
-function resolveJudgeModel(config?: JudgeConfig): { model: string; provider: "anthropic" | "openai" | "google" | "cerebras"; apiKey: string } {
+function resolveJudgeModel(config?: JudgeConfig): { model: string; provider: AIProvider; apiKey: string } {
   const globalConfig = loadConfig();
   const model = config?.model ?? globalConfig.judgeModel ?? "claude-haiku-4-5-20251001";
   const provider = (config?.provider && config.provider !== "auto")
-    ? config.provider as "anthropic" | "openai" | "google" | "cerebras"
+    ? config.provider as AIProvider
     : detectProvider(model);
 
   // API key resolution: explicit → env vars by provider
@@ -128,11 +133,10 @@ function resolveJudgeModel(config?: JudgeConfig): { model: string; provider: "an
     else if (provider === "openai") apiKey = process.env["OPENAI_API_KEY"];
     else if (provider === "google") apiKey = process.env["GOOGLE_API_KEY"];
     else if (provider === "cerebras") apiKey = process.env["CEREBRAS_API_KEY"];
+    else if (provider === "zai") apiKey = process.env["ZAI_API_KEY"];
   }
-  // Fallback: try any available key in priority order
   if (!apiKey) {
-    apiKey = process.env["ANTHROPIC_API_KEY"] ?? process.env["CEREBRAS_API_KEY"] ?? process.env["OPENAI_API_KEY"] ?? process.env["GOOGLE_API_KEY"] ?? globalConfig.anthropicApiKey;
-    if (!apiKey) throw new AIClientError("No API key found for judge. Set ANTHROPIC_API_KEY, CEREBRAS_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY.");
+    throw new AIClientError(`No API key found for ${provider} judge provider.`);
   }
 
   return { model, provider, apiKey };
@@ -151,15 +155,12 @@ async function callJudge(prompt: string, config?: JudgeConfig): Promise<{ score:
   const { model, provider, apiKey } = resolveJudgeModel(config);
   const threshold = 0.7;
 
-  if (provider === "openai" || provider === "google" || provider === "cerebras") {
-    const baseUrl = provider === "openai"
-      ? "https://api.openai.com/v1"
-      : provider === "cerebras"
-      ? "https://api.cerebras.ai/v1"
-      : "https://generativelanguage.googleapis.com/v1beta/openai";
-
+  if (provider !== "anthropic") {
+    const compat = createOpenAICompatibleConfig(provider as OpenAICompatProvider, apiKey);
     const resp = await callOpenAICompatible({
-      baseUrl, apiKey, model,
+      baseUrl: compat.baseUrl,
+      apiKey: compat.apiKey,
+      model,
       system: LLM_SYSTEM,
       messages: [{ role: "user", content: prompt }],
       tools: [],

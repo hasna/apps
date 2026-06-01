@@ -232,9 +232,18 @@ export async function convertSessionToScenario(
   let steps: string[];
 
   // Try AI synthesis if model provided and API key available
-  if (options?.model && (process.env["ANTHROPIC_API_KEY"] || process.env["OPENAI_API_KEY"] || process.env["GOOGLE_API_KEY"])) {
+  if (
+    options?.model &&
+    (
+      process.env["ANTHROPIC_API_KEY"] ||
+      process.env["OPENAI_API_KEY"] ||
+      process.env["GOOGLE_API_KEY"] ||
+      process.env["CEREBRAS_API_KEY"] ||
+      process.env["ZAI_API_KEY"]
+    )
+  ) {
     try {
-      const { callOpenAICompatible, detectProvider } = await import("./ai-client.js");
+      const { callOpenAICompatible, createOpenAICompatibleConfig, detectProvider } = await import("./ai-client.js");
       const model = options.model;
       const provider = detectProvider(model);
       const condensed = events
@@ -246,10 +255,9 @@ export async function convertSessionToScenario(
       const prompt = `Convert these recorded browser session events into clear, human-readable test scenario steps. Each step should be a single action. Output ONLY the steps, one per line, no numbering, no extra text.\n\nEvents:\n${condensed}`;
 
       let rawText = "";
-      if (provider === "openai" || provider === "google") {
-        const baseUrl = provider === "openai" ? "https://api.openai.com/v1" : "https://generativelanguage.googleapis.com/v1beta/openai";
-        const apiKey = provider === "openai" ? (process.env["OPENAI_API_KEY"] ?? "") : (process.env["GOOGLE_API_KEY"] ?? "");
-        const resp = await callOpenAICompatible({ baseUrl, apiKey, model, system: "You are a QA engineer.", messages: [{ role: "user", content: prompt }], tools: [], maxTokens: 1024 });
+      if (provider !== "anthropic") {
+        const compat = createOpenAICompatibleConfig(provider);
+        const resp = await callOpenAICompatible({ baseUrl: compat.baseUrl, apiKey: compat.apiKey, model, system: "You are a QA engineer.", messages: [{ role: "user", content: prompt }], tools: [], maxTokens: 1024 });
         const block = resp.content.find((b) => b.type === "text") as { text: string } | undefined;
         rawText = block?.text ?? "";
       } else {

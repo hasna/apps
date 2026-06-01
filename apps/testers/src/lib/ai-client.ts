@@ -1576,14 +1576,28 @@ export async function runAgentLoop(
  * Detects the AI provider from a model name.
  * - "gpt-*" or "o1-*" / "o3-*" → openai
  * - "gemini-*" → google
+ * - "glm-*" / "zai/*" / "zai-*" → Z.AI
+ * - "llama-*" / "qwen-*" / names containing "cerebras" → Cerebras
  * - everything else → anthropic (default)
  */
-export function detectProvider(model: string): "anthropic" | "openai" | "google" | "cerebras" {
+export type AIProvider = "anthropic" | "openai" | "google" | "cerebras" | "zai";
+
+export function detectProvider(model: string): AIProvider {
   if (model.startsWith("gpt-") || /^o\d/.test(model)) return "openai";
   if (model.startsWith("gemini-")) return "google";
+  if (model.startsWith("glm-") || model.startsWith("zai/") || model.startsWith("zai-")) return "zai";
   // Cerebras: llama-* or qwen-* models, or explicit cerebras env key set
   if (model.startsWith("llama-") || model.startsWith("qwen-") || model.includes("cerebras")) return "cerebras";
   return "anthropic";
+}
+
+export function resolveProviderApiKeyForModel(
+  model: string,
+  explicitApiKey?: string,
+  configuredAnthropicApiKey?: string,
+): string | undefined {
+  if (explicitApiKey) return explicitApiKey;
+  return detectProvider(model) === "anthropic" ? configuredAnthropicApiKey : undefined;
 }
 
 /**
@@ -1714,10 +1728,13 @@ export async function callOpenAICompatible(options: {
 // ─── Unified AgentLLMClient ─────────────────────────────────────────────────
 // Single interface for all providers — no if/else branching in the agent loop.
 
-export type OpenAICompatConfig = { provider: "openai" | "google" | "cerebras"; baseUrl: string; apiKey: string };
+export type OpenAICompatProvider = Exclude<AIProvider, "anthropic">;
+export type OpenAICompatConfig = { provider: OpenAICompatProvider; baseUrl: string; apiKey: string };
 
-export function createClientForModel(model: string, apiKey?: string): Anthropic | OpenAICompatConfig {
-  const provider = detectProvider(model);
+export function createOpenAICompatibleConfig(
+  provider: OpenAICompatProvider,
+  apiKey?: string,
+): OpenAICompatConfig {
   if (provider === "openai") {
     const key = apiKey ?? process.env["OPENAI_API_KEY"];
     if (!key) throw new AIClientError("No OpenAI API key. Set OPENAI_API_KEY or pass it explicitly.");
@@ -1733,5 +1750,14 @@ export function createClientForModel(model: string, apiKey?: string): Anthropic 
     if (!key) throw new AIClientError("No Cerebras API key. Set CEREBRAS_API_KEY or pass it explicitly.");
     return { provider: "cerebras", baseUrl: "https://api.cerebras.ai/v1", apiKey: key };
   }
+
+  const key = apiKey ?? process.env["ZAI_API_KEY"];
+  if (!key) throw new AIClientError("No Z.AI API key. Set ZAI_API_KEY or pass it explicitly.");
+  return { provider: "zai", baseUrl: "https://api.z.ai/api/paas/v4", apiKey: key };
+}
+
+export function createClientForModel(model: string, apiKey?: string): Anthropic | OpenAICompatConfig {
+  const provider = detectProvider(model);
+  if (provider !== "anthropic") return createOpenAICompatibleConfig(provider, apiKey);
   return createClient(apiKey);
 }

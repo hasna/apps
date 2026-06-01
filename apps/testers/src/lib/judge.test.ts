@@ -91,6 +91,76 @@ describe("judgeAll", () => {
   });
 });
 
+// ─── OpenAI-compatible judge providers ───────────────────────────────────────
+
+describe("judge — OpenAI-compatible providers", () => {
+  it("routes GLM judge calls to Z.AI with the Z.AI provider key", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalZaiKey = process.env["ZAI_API_KEY"];
+    const originalAnthropicKey = process.env["ANTHROPIC_API_KEY"];
+    process.env["ZAI_API_KEY"] = "zai-provider-test-key";
+    process.env["ANTHROPIC_API_KEY"] = "anthropic-key-should-not-be-used";
+
+    let requestBody: { model?: string } | undefined;
+    try {
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        expect(String(input)).toBe("https://api.z.ai/api/paas/v4/chat/completions");
+        expect(init?.headers).toMatchObject({
+          Authorization: "Bearer zai-provider-test-key",
+          "Content-Type": "application/json",
+        });
+        requestBody = JSON.parse(String(init?.body)) as { model?: string };
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              role: "assistant",
+              content: JSON.stringify({ score: 1, pass: true, reason: "ok" }),
+            },
+            finish_reason: "stop",
+          }],
+          usage: { prompt_tokens: 3, completion_tokens: 2 },
+        }), { status: 200 });
+      }) as typeof fetch;
+
+      const result = await judge(
+        { input: "question", output: "answer", rubric: { type: "llm", prompt: "Score this." } },
+        { model: "glm-5.1" },
+      );
+
+      expect(requestBody?.model).toBe("glm-5.1");
+      expect(result.provider).toBe("zai");
+      expect(result.model).toBe("glm-5.1");
+      expect(result.pass).toBe(true);
+      expect(result.tokensUsed).toBe(5);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalZaiKey === undefined) delete process.env["ZAI_API_KEY"];
+      else process.env["ZAI_API_KEY"] = originalZaiKey;
+      if (originalAnthropicKey === undefined) delete process.env["ANTHROPIC_API_KEY"];
+      else process.env["ANTHROPIC_API_KEY"] = originalAnthropicKey;
+    }
+  });
+
+  it("does not fall back to Anthropic keys for GLM judge calls", async () => {
+    const originalZaiKey = process.env["ZAI_API_KEY"];
+    const originalAnthropicKey = process.env["ANTHROPIC_API_KEY"];
+    delete process.env["ZAI_API_KEY"];
+    process.env["ANTHROPIC_API_KEY"] = "anthropic-key-should-not-be-used";
+
+    try {
+      await expect(judge(
+        { input: "question", output: "answer", rubric: { type: "llm", prompt: "Score this." } },
+        { model: "glm-5.1" },
+      )).rejects.toThrow("No API key found for zai judge provider.");
+    } finally {
+      if (originalZaiKey === undefined) delete process.env["ZAI_API_KEY"];
+      else process.env["ZAI_API_KEY"] = originalZaiKey;
+      if (originalAnthropicKey === undefined) delete process.env["ANTHROPIC_API_KEY"];
+      else process.env["ANTHROPIC_API_KEY"] = originalAnthropicKey;
+    }
+  });
+});
+
 // ─── rubricType metadata ──────────────────────────────────────────────────────
 
 describe("judge — rubricType field", () => {
