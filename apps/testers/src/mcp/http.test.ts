@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { startMcpHttpServer } from "./http.js";
+import { DEFAULT_MCP_HTTP_PORT, isHttpMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 
 process.env.TESTERS_DB_PATH = ":memory:";
 
@@ -81,6 +81,28 @@ describe("testers-mcp HTTP transport", () => {
     };
 
     await Promise.all([runClient(), runClient(), runClient()]);
+  });
+});
+
+describe("testers-mcp transport mode helpers", () => {
+  it("keeps HTTP opt-in and uses the documented default port", () => {
+    const previous = process.env.MCP_HTTP;
+    delete process.env.MCP_HTTP;
+
+    try {
+      expect(isHttpMode([])).toBe(false);
+      expect(isHttpMode(["--http"])).toBe(true);
+      process.env.MCP_HTTP = "1";
+      expect(isHttpMode([])).toBe(true);
+      expect(resolveMcpHttpPort()).toBe(DEFAULT_MCP_HTTP_PORT);
+      expect(DEFAULT_MCP_HTTP_PORT).toBe(8840);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.MCP_HTTP;
+      } else {
+        process.env.MCP_HTTP = previous;
+      }
+    }
   });
 });
 
