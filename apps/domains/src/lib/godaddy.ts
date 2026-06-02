@@ -272,3 +272,28 @@ export async function syncToLocalDb(dbFns: {
 
   return result;
 }
+
+export interface GodaddyCapability {
+  configured: boolean;
+  gated: boolean;
+  notes: string;
+}
+
+/**
+ * GoDaddy retail Domains API capability. Since 2024 GoDaddy gated the Domains
+ * API behind account thresholds (>=10 domains / Discount Domain Club): the
+ * availability endpoint often still works, but production purchase and DNS
+ * writes require a qualifying account. We therefore treat purchase/DNS as gated.
+ */
+export function godaddyCapability(
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): GodaddyCapability {
+  const configured = !!(env["GODADDY_API_KEY"] && env["GODADDY_API_SECRET"]);
+  return {
+    configured,
+    gated: true,
+    notes: configured
+      ? "Credentials present; availability checks may work, but purchase + DNS writes require a qualifying account (>=10 domains / DDC). Prefer Route53."
+      : "Not configured; and retail Domains API is gated for purchase/DNS since 2024.",
+  };
+}
