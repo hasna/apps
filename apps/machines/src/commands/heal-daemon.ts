@@ -132,7 +132,7 @@ export function startHealDaemon(): void {
 }
 
 function sh(cmd: string, timeoutMs = 15000): { ok: boolean; out: string } {
-  const r = Bun.spawnSync(["bash", "-lc", cmd], { stdout: "pipe", stderr: "pipe", env: process.env, timeout: timeoutMs });
+  const r = Bun.spawnSync(["bash", "-c", cmd], { stdout: "pipe", stderr: "pipe", env: process.env, timeout: timeoutMs });
   return { ok: r.exitCode === 0, out: `${r.stdout.toString("utf8")}${r.stderr.toString("utf8")}`.trim() };
 }
 

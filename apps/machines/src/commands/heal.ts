@@ -332,7 +332,9 @@ export function decideAction(input: {
 // ---------------------------------------------------------------------------
 
 function sh(cmd: string, timeoutMs = 8000): { ok: boolean; out: string } {
-  const r = Bun.spawnSync(["bash", "-lc", cmd], { stdout: "pipe", stderr: "pipe", env: process.env, timeout: timeoutMs });
+  // Non-login shell: a login shell (`-l`) sources profile scripts that can emit
+  // MOTD/banner output to stdout and reset PATH, which corrupts parsed results.
+  const r = Bun.spawnSync(["bash", "-c", cmd], { stdout: "pipe", stderr: "pipe", env: process.env, timeout: timeoutMs });
   return { ok: r.exitCode === 0, out: r.stdout.toString("utf8").trim() };
 }
 
@@ -361,20 +363,19 @@ export function getAssociatedSsid(): string | null {
 
 export function pingHost(host: string): boolean {
   if (!host) return false;
-  return sh(`ping -c1 -W2 ${host} >/dev/null 2>&1 && echo ok`, 5000).out === "ok";
+  return sh(`ping -c1 -W2 ${host} >/dev/null 2>&1`, 5000).ok;
 }
 
 export function internetReachable(url: string): boolean {
-  return sh(`curl -sf -m5 -o /dev/null ${url} && echo ok`, 8000).out === "ok";
+  return sh(`curl -sf -m5 -o /dev/null ${url}`, 8000).ok;
 }
 
 export function tailscalePing(host: string): boolean {
-  return sh(`timeout 8 tailscale ping --until-direct=false ${host} 2>/dev/null | grep -q pong && echo ok`, 10000).out === "ok";
+  return sh(`timeout 8 tailscale ping --until-direct=false ${host} 2>/dev/null | grep -q pong`, 10000).ok;
 }
 
 export function gpuBusy(): boolean {
-  const r = sh(`command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -q . && echo busy`, 6000);
-  return r.out === "busy";
+  return sh(`command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -q .`, 6000).ok;
 }
 
 /** Auto-discover online tailscale peers (excluding self) as anchors. */
