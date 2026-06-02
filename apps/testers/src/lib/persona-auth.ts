@@ -5,6 +5,10 @@ import { resolveCredential } from "./secrets-resolver.js";
 
 const COOKIE_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
 
+export function isSessionCookie(cookieName: string): boolean {
+  return !/(?:csrf|xsrf)/i.test(cookieName);
+}
+
 export interface LoginResult {
   success: boolean;
   method: "cookies" | "login" | "none";
@@ -19,6 +23,9 @@ export interface LoginResult {
 function areCookiesFresh(persona: Persona): boolean {
   if (!persona.auth?.cookies?.length) return false;
   const cookies = persona.auth.cookies as Array<{ expires?: number }>;
+  if (!cookies.some((cookie) => "name" in cookie && isSessionCookie(String((cookie as { name?: unknown }).name)))) {
+    return false;
+  }
   // Check if any cookie has an explicit expiry in the future
   const now = Date.now() / 1000;
   const hasFutureExpiry = cookies.some((c) => c.expires && c.expires > now + 60);
@@ -94,6 +101,7 @@ async function performLogin(
 
   try {
     await page.goto(loginUrl, { timeout: 30_000, waitUntil: "domcontentloaded" });
+    await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
   } catch (err) {
     return { success: false, method: "login", error: `Navigation to login page failed: ${err instanceof Error ? err.message : String(err)}` };
   }
@@ -163,12 +171,28 @@ async function performLogin(
     return { success: false, method: "login", error: "Could not find password field on login page" };
   }
 
+  // React/Next forms often render the submit button before hydration and keep it
+  // disabled briefly. Wait for the primary submit control to become actionable
+  // so a visible-but-disabled button does not make login look successful.
+  await page.waitForFunction(() => {
+    const submits = Array.from(document.querySelectorAll('button[type="submit"], input[type="submit"]')) as Array<HTMLButtonElement | HTMLInputElement>;
+    return submits.length === 0 || submits.some((submit) => {
+      const rect = submit.getBoundingClientRect();
+      const visible = rect.width > 0 || rect.height > 0 || submit.getClientRects().length > 0;
+      return visible && !submit.disabled;
+    });
+  }, null, { timeout: 5_000 }).catch(() => {});
+
   // Submit — try clicking a submit button, fall back to pressing Enter
   let submitted = false;
   for (const sel of submitSelectors) {
     try {
-      const el = page.locator(sel).first();
-      if (await el.isVisible({ timeout: 2_000 })) {
+      const matches = page.locator(sel);
+      const count = await matches.count().catch(() => 0);
+      for (let i = 0; i < Math.min(count, 10); i++) {
+        const el = matches.nth(i);
+        if (!(await el.isVisible({ timeout: 500 }).catch(() => false))) continue;
+        if (!(await el.isEnabled({ timeout: 2_000 }).catch(() => false))) continue;
         await Promise.all([
           page.waitForNavigation({ timeout: 15_000, waitUntil: "domcontentloaded" }).catch(() => {}),
           el.click({ timeout: 5_000 }),
@@ -176,6 +200,7 @@ async function performLogin(
         submitted = true;
         break;
       }
+      if (submitted) break;
     } catch { /* try next */ }
   }
 
@@ -201,6 +226,12 @@ async function performLogin(
     currentUrl.includes("/auth");
 
   if (isStillOnLogin) {
+    const cookies = await page.context().cookies().catch(() => []);
+    const authCookies = cookies.filter((cookie) => isSessionCookie(cookie.name));
+    if (authCookies.length > 0) {
+      return { success: true, method: "login" };
+    }
+
     // Check for visible error messages
     let errorText = "";
     try {

@@ -766,6 +766,12 @@ program
         }, overallTimeoutMs).unref();
       }
 
+      // Parse persona IDs early so ad-hoc, background, and filtered runs all
+      // honor the same --persona option.
+      const personaIdList: string[] | undefined = opts.persona
+        ? opts.persona.split(",").map((s: string) => s.trim()).filter(Boolean)
+        : undefined;
+
       // Budget warning check (OPE9-00080)
       if (!opts.dryRun && !opts.background) {
         const budgetResult = checkBudget(0); // 0 = just check daily threshold
@@ -856,6 +862,8 @@ program
           maxTurns: opts.maxTurns ? parseInt(opts.maxTurns, 10) : undefined,
           projectId,
           engine: opts.browser,
+          personaId: personaIdList?.[0],
+          personaIds: personaIdList && personaIdList.length > 1 ? personaIdList : undefined,
         });
         log(chalk.green(`Run started in background: ${chalk.bold(runId.slice(0, 8))}`));
         log(chalk.dim(`  Scenarios: ${scenarioCount}`));
@@ -1002,6 +1010,8 @@ program
           flakinessThreshold: parseFloat(opts.flakinessThreshold ?? "0.95"),
           a11y: opts.a11y ? (typeof opts.a11y === "string" ? { level: opts.a11y as "A" | "AA" | "AAA" } : true) : undefined,
           selfHeal: opts.selfHeal || undefined,
+          personaId: personaIdList?.[0],
+          personaIds: personaIdList && personaIdList.length > 1 ? personaIdList : undefined,
         });
 
         if (opts.json || opts.output) {
@@ -1106,10 +1116,6 @@ program
       }
 
       // Run by filter
-      // Parse persona IDs: support comma-separated list for divergence testing
-      const personaIdList: string[] | undefined = opts.persona
-        ? opts.persona.split(",").map((s: string) => s.trim()).filter(Boolean)
-        : undefined;
       const { run, results } = await runByFilter({
         url,
         tags: opts.tag.length > 0 ? opts.tag : undefined,
