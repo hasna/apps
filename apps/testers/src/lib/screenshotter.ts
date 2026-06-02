@@ -5,16 +5,26 @@ import { getTestersDir } from "./paths.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-export function slugify(text: string): string {
-  return text
+const MAX_ACTION_SLUG_LENGTH = 80;
+const MAX_SCENARIO_SLUG_LENGTH = 96;
+
+function truncateSlug(slug: string, maxLength: number): string {
+  if (slug.length <= maxLength) return slug;
+  const truncated = slug.slice(0, maxLength).replace(/-+$/g, "");
+  return truncated || slug.slice(0, maxLength);
+}
+
+export function slugify(text: string, maxLength?: number): string {
+  const slug = text
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+  return maxLength ? truncateSlug(slug, maxLength) : slug;
 }
 
 export function generateFilename(stepNumber: number, action: string): string {
   const padded = String(stepNumber).padStart(3, "0");
-  const slug = slugify(action);
+  const slug = slugify(action, MAX_ACTION_SLUG_LENGTH);
   return `${padded}_${slug}.png`;
 }
 
@@ -41,7 +51,8 @@ export function getScreenshotDir(
   const project = projectName ?? "default";
   const dateDir = formatDate(now);
   const timeDir = `${formatTime(now)}_${runId.slice(0, 8)}`;
-  return join(baseDir, project, dateDir, timeDir, scenarioSlug);
+  const safeScenarioSlug = slugify(scenarioSlug, MAX_SCENARIO_SLUG_LENGTH) || "scenario";
+  return join(baseDir, project, dateDir, timeDir, safeScenarioSlug);
 }
 
 export function ensureDir(dirPath: string): void {

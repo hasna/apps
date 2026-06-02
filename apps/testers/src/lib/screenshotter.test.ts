@@ -2,7 +2,7 @@ process.env.TESTERS_DB_PATH = ":memory:";
 
 import { describe, it, expect, afterAll } from "bun:test";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { existsSync, rmSync } from "node:fs";
 import {
   slugify,
@@ -51,6 +51,13 @@ describe("generateFilename", () => {
       "100_verify-results.png",
     );
   });
+
+  it("caps long action names so screenshot filenames stay filesystem-safe", () => {
+    const filename = generateFilename(1, "verify ".repeat(80));
+    expect(filename).toStartWith("001_verify-verify");
+    expect(filename).toEndWith(".png");
+    expect(filename.length).toBeLessThanOrEqual(88);
+  });
 });
 
 describe("getScreenshotDir", () => {
@@ -70,6 +77,12 @@ describe("getScreenshotDir", () => {
     const ts = new Date("2026-01-15T08:05:30.000Z");
     const dir = getScreenshotDir("/screenshots", "run-abc", "my-scenario", "project-x", ts);
     expect(dir).toBe("/screenshots/project-x/2026-01-15/08-05-30_run-abc/my-scenario");
+  });
+
+  it("caps long scenario slugs so screenshot directory segments stay filesystem-safe", () => {
+    const ts = new Date("2026-01-15T08:05:30.000Z");
+    const dir = getScreenshotDir("/screenshots", "run-abc", "open-test-org-lab-and-verify-chat-ui-".repeat(12), "project-x", ts);
+    expect(basename(dir).length).toBeLessThanOrEqual(96);
   });
 });
 
