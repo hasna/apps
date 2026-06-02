@@ -19,7 +19,7 @@ import { importFromTodos } from "../lib/todos-connector.js";
 import { installBrowser } from "../lib/browser.js";
 import { initProject } from "../lib/init.js";
 import { runSmoke, formatSmokeReport } from "../lib/smoke.js";
-import { runQuickQa, formatQuickQaReport, getQuickQaExitCode, normalizeQuickQaWcagLevel, resolveQuickQaSelection } from "../lib/quick-qa.js";
+import { DEFAULT_QUICK_QA_OVERALL_TIMEOUT_MS, runQuickQa, formatQuickQaReport, getQuickQaExitCode, normalizeQuickQaWcagLevel, resolveQuickQaSelection } from "../lib/quick-qa.js";
 import { diffRuns, formatDiffTerminal, formatDiffJSON } from "../lib/diff.js";
 import { setBaseline, getBaseline, compareRunScreenshots, formatVisualDiffTerminal } from "../lib/visual-diff.js";
 import { generateHtmlReport, generateLatestReport } from "../lib/report.js";
@@ -663,6 +663,7 @@ program
   .option("--failed-only", "Only show failed/error scenarios in output (passed count shown as summary)", false)
   .option("--smoke", "Run only smoke-tagged scenarios (fast validation suite, <2 min)", false)
   .option("--minimal", "Fastest possible run: cheapest model, max parallelism, min turns (ideal for CI)", false)
+  .option("--max-turns <n>", "Maximum AI browser-agent turns before reporting an error")
   .option("--github-comment", "Post pass/fail summary as a GitHub PR comment (requires GITHUB_TOKEN env var)", false)
   .option("--pr <number>", "GitHub PR number (auto-detected from GITHUB_REF if not provided)")
   .option("--persona <id>", "Override persona for this run (comma-separated IDs for divergence testing)")
@@ -852,6 +853,7 @@ program
           headed: opts.headed,
           parallel: parseInt(opts.parallel, 10),
           timeout: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
+          maxTurns: opts.maxTurns ? parseInt(opts.maxTurns, 10) : undefined,
           projectId,
           engine: opts.browser,
         });
@@ -992,6 +994,7 @@ program
           headed: opts.headed,
           parallel: parseInt(opts.parallel, 10),
           timeout: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
+          maxTurns: opts.maxTurns ? parseInt(opts.maxTurns, 10) : undefined,
           retry: parseInt(opts.retry ?? "0", 10),
           projectId,
           engine: opts.browser,
@@ -1116,6 +1119,7 @@ program
         headed: opts.headed,
         parallel: parseInt(opts.parallel, 10),
         timeout: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
+        maxTurns: opts.maxTurns ? parseInt(opts.maxTurns, 10) : undefined,
         retry: parseInt(opts.retry ?? "0", 10),
         projectId,
         engine: opts.browser,
@@ -2823,6 +2827,7 @@ program
   .option("-m, --model <model>", "AI model for autonomous smoke", "quick")
   .option("--headed", "Run browser checks in headed mode", false)
   .option("--timeout <ms>", "Navigation timeout per page in ms", "15000")
+  .option("--overall-timeout <ms>", "Hard overall timeout for the quick QA run in milliseconds", String(DEFAULT_QUICK_QA_OVERALL_TIMEOUT_MS))
   .option("--project <id>", "Project ID for issue tracking")
   .option("--json", "Output results as JSON", false)
   .option("-o, --output <file>", "Write JSON results to a file")
@@ -2849,6 +2854,7 @@ program
         projectId,
         headed: opts.headed,
         timeoutMs: parseInt(opts.timeout, 10),
+        overallTimeoutMs: parseInt(opts.overallTimeout, 10),
         maxPages: parseInt(opts.maxPages, 10),
         scanners: selection.scanners,
         includeSmoke: selection.includeSmoke,

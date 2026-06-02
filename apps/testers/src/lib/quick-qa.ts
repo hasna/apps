@@ -4,6 +4,7 @@ import { runSmoke, type SmokeResult } from "./smoke.js";
 export type QuickQaScanner = NonNullable<HealthScanOptions["scanners"]>[number];
 export type QuickQaSkipTarget = QuickQaScanner | "smoke";
 export type QuickQaStatus = "passed" | "warn" | "failed";
+export const DEFAULT_QUICK_QA_OVERALL_TIMEOUT_MS = 120_000;
 
 export const DEFAULT_QUICK_QA_SCANNERS: QuickQaScanner[] = [
   "console",
@@ -38,11 +39,14 @@ export interface QuickQaOptions {
   projectId?: string;
   headed?: boolean;
   timeoutMs?: number;
+  overallTimeoutMs?: number;
   maxPages?: number;
   scanners?: QuickQaScanner[];
   includeSmoke?: boolean;
   model?: string;
   wcagLevel?: "A" | "AA" | "AAA";
+  healthScanner?: typeof runHealthScan;
+  smokeRunner?: typeof runSmoke;
 }
 
 export interface QuickQaCheckSummary {
@@ -108,7 +112,18 @@ export function resolveQuickQaSelection(options: {
 
 export async function runQuickQa(options: QuickQaOptions): Promise<QuickQaResult> {
   const start = Date.now();
-  const health = await runHealthScan({
+  const timeoutMs = options.overallTimeoutMs ?? DEFAULT_QUICK_QA_OVERALL_TIMEOUT_MS;
+  return withQuickQaTimeout(runQuickQaUnbounded(options, start), {
+    url: options.url,
+    start,
+    timeoutMs,
+  });
+}
+
+async function runQuickQaUnbounded(options: QuickQaOptions, start: number): Promise<QuickQaResult> {
+  const healthScanner = options.healthScanner ?? runHealthScan;
+  const smokeRunner = options.smokeRunner ?? runSmoke;
+  const health = await healthScanner({
     url: options.url,
     pages: options.pages,
     projectId: options.projectId,
@@ -121,7 +136,7 @@ export async function runQuickQa(options: QuickQaOptions): Promise<QuickQaResult
 
   const smoke = options.includeSmoke === false
     ? null
-    : await runSmoke({
+    : await smokeRunner({
       url: options.url,
       model: options.model,
       headed: options.headed,
@@ -134,6 +149,76 @@ export async function runQuickQa(options: QuickQaOptions): Promise<QuickQaResult
     health,
     smoke,
     durationMs: Date.now() - start,
+  });
+}
+
+function withQuickQaTimeout(
+  promise: Promise<QuickQaResult>,
+  options: { url: string; start: number; timeoutMs: number },
+): Promise<QuickQaResult> {
+  if (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0) return promise;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      resolve(buildQuickQaTimeoutResult({
+        url: options.url,
+        start: options.start,
+        timeoutMs: options.timeoutMs,
+      }));
+    }, options.timeoutMs);
+
+    promise.then(
+      (result) => {
+        clearTimeout(timer);
+        resolve(result);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+export function buildQuickQaTimeoutResult(input: {
+  url: string;
+  start: number;
+  timeoutMs: number;
+}): QuickQaResult {
+  const now = new Date();
+  const durationMs = Math.max(0, Date.now() - input.start);
+  const message = `Quick QA timed out after ${input.timeoutMs}ms before all checks finished. Increase --overall-timeout or skip slow checks.`;
+  const health: HealthScanSummary = {
+    url: input.url,
+    scannedAt: now.toISOString(),
+    durationMs,
+    totalIssues: 1,
+    newIssues: 1,
+    regressedIssues: 0,
+    existingIssues: 0,
+    results: [{
+      url: input.url,
+      pages: [input.url],
+      scannedAt: now.toISOString(),
+      durationMs,
+      issues: [{
+        type: "performance",
+        severity: "high",
+        pageUrl: input.url,
+        message,
+        detail: {
+          check: "quick-qa",
+          timeoutMs: input.timeoutMs,
+        },
+      }],
+    }],
+  };
+
+  return buildQuickQaResult({
+    url: input.url,
+    health,
+    smoke: null,
+    durationMs,
   });
 }
 

@@ -50,6 +50,7 @@ export interface RunOptions {
   skipBudgetCheck?: boolean; // bypass maxCostCents check
   cacheMaxAgeMs?: number; // skip scenario if it passed at the same URL within this many ms (0 = disabled)
   minimal?: boolean;  // fastest possible run: cheapest model, fastest browser, max parallelism, min turns
+  maxTurns?: number; // maximum AI browser-agent turns before reporting an error
   recordVideo?: boolean; // record video of each scenario run using Playwright recordVideo
 }
 
@@ -101,6 +102,14 @@ export function resolveAgentApiKeyForModel(
   configuredAnthropicApiKey?: string,
 ): string | undefined {
   return resolveProviderApiKeyForModel(model, explicitApiKey, configuredAnthropicApiKey);
+}
+
+export function resolveAgentMaxTurns(options: Pick<RunOptions, "minimal" | "maxTurns">): number {
+  if (options.maxTurns !== undefined) {
+    const parsed = Math.floor(options.maxTurns);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return options.minimal ? 10 : 30;
 }
 
 type AgentScenarioStatus = Extract<ResultStatus, "passed" | "failed" | "error">;
@@ -394,7 +403,7 @@ export async function runSingleScenario(
       runId,
       sessionId: result.id,
       baseUrl: options.url,
-      maxTurns: effectiveOptions.minimal ? 10 : 30,
+      maxTurns: resolveAgentMaxTurns(effectiveOptions),
       a11y: effectiveOptions.a11y,
       persona: persona ? {
         name: persona.name,

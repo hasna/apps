@@ -7,6 +7,7 @@ import {
   getQuickQaExitCode,
   normalizeQuickQaWcagLevel,
   resolveQuickQaSelection,
+  runQuickQa,
 } from "./quick-qa.js";
 
 function health(overrides: Partial<HealthScanSummary> = {}): HealthScanSummary {
@@ -109,5 +110,20 @@ describe("quick-qa orchestration", () => {
     expect(result.issueCounts.actionable).toBe(0);
     expect(getQuickQaExitCode(result)).toBe(0);
     expect(formatQuickQaReport(result)).toContain("Quick QA Report");
+  });
+
+  test("returns a failed artifact when the overall timeout elapses", async () => {
+    const result = await runQuickQa({
+      url: "https://app.example.com",
+      includeSmoke: false,
+      overallTimeoutMs: 1,
+      healthScanner: () => new Promise(() => {}),
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.smoke).toBeNull();
+    expect(result.health.newIssues).toBe(1);
+    expect(result.health.results[0]?.issues[0]?.message).toContain("Quick QA timed out");
+    expect(getQuickQaExitCode(result)).toBe(1);
   });
 });
