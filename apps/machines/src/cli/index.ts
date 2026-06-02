@@ -40,6 +40,17 @@ import { runSelfTest } from "../commands/self-test.js";
 import { getServeInfo, startDashboardServer } from "../commands/serve.js";
 import { clearClipboardHistory, getDefaultClipboardConfig, getOrCreateClipboardKey, getClipboardStatus, readClipboardConfig, readClipboardHistory, writeClipboardConfig, getConfigPath } from "../commands/clipboard.js";
 import { startClipboardDaemon, stopClipboardDaemon } from "../commands/clipboard-daemon.js";
+import { readHealConfig, writeHealConfig, readHealState, type HealConfig } from "../commands/heal.js";
+import {
+  runHealOnce,
+  startHealDaemon,
+  stopHealDaemon,
+  applyDeterminism,
+  enableHardwareWatchdog,
+  installHealService,
+  uninstallHealService,
+  healServiceStatus,
+} from "../commands/heal-daemon.js";
 import { getManifestPath, getClipboardKeyPath } from "../paths.js";
 import { parseIntegerOption, renderKeyValueTable, renderList } from "../cli-utils.js";
 import { rmSync } from "node:fs";
@@ -727,6 +738,138 @@ program
     }
     const server = startDashboardServer({ host: info.host, port: info.port });
     console.log(chalk.green(`machines dashboard listening on http://${server.hostname}:${server.port}`));
+  });
+
+const healCommand = program.command("heal").description("Self-healing network watchdog: keeps a Wi-Fi node reachable (SSID pinning + peer-reachability + gated reboot)");
+
+function requireRoot(): boolean {
+  const uid = process.getuid ? process.getuid() : 1;
+  if (uid !== 0) {
+    console.error(chalk.red("error: this command must run as root (try: sudo machines heal install)"));
+    return false;
+  }
+  return true;
+}
+
+healCommand
+  .command("config")
+  .description("View or update self-healing config (e.g. --set '{\"preferredSsid\":\"X81ND\",\"fallbackSsid\":\"DIGI-s2N5\"}')")
+  .option("--set <json>", "Merge a JSON object into the config")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { set?: string; json?: boolean }) => {
+    if (options.set) {
+      const current = readHealConfig();
+      const partial = JSON.parse(options.set) as Partial<HealConfig>;
+      writeHealConfig({
+        ...current,
+        ...partial,
+        thresholds: { ...current.thresholds, ...(partial.thresholds || {}) },
+      });
+    }
+    const config = readHealConfig();
+    printJsonOrText(config, renderKeyValueTable([
+      ["enabled", String(config.enabled)],
+      ["preferredSsid", config.preferredSsid || chalk.yellow("(unset)")],
+      ["fallbackSsid", config.fallbackSsid || "(none)"],
+      ["anchors", config.tailscaleAnchors.length ? config.tailscaleAnchors.join(", ") : "(auto-discover)"],
+      ["quorumRequired", String(config.quorumRequired)],
+      ["intervalSec", String(config.intervalSec)],
+      ["thresholds", `reconnect=${config.thresholds.reconnect} nm=${config.thresholds.nmRestart} fallback=${config.thresholds.fallback} reboot=${config.thresholds.reboot}`],
+      ["allowReboot", String(config.allowReboot)],
+      ["gpuJobGuard", String(config.gpuJobGuard)],
+    ]), options.json);
+  });
+
+healCommand
+  .command("check")
+  .description("Run one health + decision tick read-only (no side effects)")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { json?: boolean }) => {
+    const result = runHealOnce(readHealConfig(), { dryRun: true });
+    printJsonOrText(result, renderList("heal check", [
+      `health: ${result.healthy ? chalk.green("HEALTHY") : chalk.red("UNHEALTHY")} (remote quorum ${result.remoteScore})`,
+      `reasons: ${result.reasons.length ? result.reasons.join(", ") : "none"}`,
+      `would do: ${result.action}${result.suppressedReason ? ` (reboot suppressed: ${result.suppressedReason})` : ""}`,
+      `consecutive fails: ${result.failCount}`,
+    ]), options.json);
+  });
+
+healCommand
+  .command("status")
+  .description("Show watchdog service status and last persisted state")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { json?: boolean }) => {
+    const svc = healServiceStatus();
+    const state = readHealState();
+    const config = readHealConfig();
+    printJsonOrText({ service: svc, state, config }, renderKeyValueTable([
+      ["service installed", svc.installed ? chalk.green("yes") : "no"],
+      ["service active", svc.active ? chalk.green("yes") : chalk.yellow("no")],
+      ["service enabled", svc.enabled ? "yes" : "no"],
+      ["preferredSsid", config.preferredSsid || chalk.yellow("(unset)")],
+      ["consecutive fails", String(state.failCount)],
+      ["pending reboot recovery", String(state.pendingRebootRecovery)],
+      ["failed boot recoveries", String(state.failedBootRecoveries)],
+    ]), options.json);
+  });
+
+healCommand
+  .command("daemon")
+  .description("Run the watchdog loop in the foreground (used by systemd)")
+  .action(() => {
+    startHealDaemon();
+  });
+
+healCommand
+  .command("stop")
+  .description("Stop a foreground daemon started via `heal daemon`")
+  .action(() => {
+    const r = stopHealDaemon();
+    console.log(r.stopped ? `stopped heal daemon (pid ${r.pid})` : "heal daemon not running");
+  });
+
+healCommand
+  .command("determinism")
+  .description("Pin the preferred SSID, disable other autoconnects, turn off Wi-Fi power save")
+  .action(() => {
+    const log = applyDeterminism(readHealConfig());
+    console.log(renderList("determinism", log));
+  });
+
+healCommand
+  .command("install")
+  .description("Install the watchdog: determinism + hardware watchdog + systemd service (requires root)")
+  .option("--no-determinism", "Skip SSID pinning / power-save changes")
+  .option("--no-watchdog", "Skip enabling the systemd hardware watchdog")
+  .option("--no-service", "Skip installing the systemd service")
+  .action((options: { determinism?: boolean; watchdog?: boolean; service?: boolean }) => {
+    if (!requireRoot()) {
+      process.exitCode = 1;
+      return;
+    }
+    const config = readHealConfig();
+    if (!config.preferredSsid) {
+      console.error(chalk.red("error: set preferredSsid first: machines heal config --set '{\"preferredSsid\":\"X81ND\"}'"));
+      process.exitCode = 1;
+      return;
+    }
+    const out: string[] = [];
+    if (options.determinism !== false) out.push(...applyDeterminism(config));
+    if (options.watchdog !== false) out.push(...enableHardwareWatchdog());
+    if (options.service !== false) out.push(...installHealService());
+    console.log(renderList("install", out));
+    console.log(chalk.green("self-healing watchdog installed"));
+  });
+
+healCommand
+  .command("uninstall")
+  .description("Remove the systemd watchdog service (requires root)")
+  .action(() => {
+    if (!requireRoot()) {
+      process.exitCode = 1;
+      return;
+    }
+    console.log(renderList("uninstall", uninstallHealService()));
   });
 
 await program.parseAsync(process.argv);
