@@ -17,20 +17,40 @@ export interface LoginResult {
 
 /**
  * Checks whether saved persona cookies are still fresh (< 1 hour old).
- * Uses the first cookie's expiry or falls back to a fixed TTL tracked via
- * the persona's updatedAt timestamp.
+ * Explicit cookie expiries are authoritative; browser-session cookies without
+ * an expiry use a fixed TTL tracked via the persona's updatedAt timestamp.
  */
-function areCookiesFresh(persona: Persona): boolean {
+function getCookieExpires(cookie: { expires?: unknown }): number | null {
+  if (typeof cookie.expires === "number" && Number.isFinite(cookie.expires)) {
+    return cookie.expires;
+  }
+  if (typeof cookie.expires === "string") {
+    const parsed = Number(cookie.expires);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+export function hasFreshAuthCookies(persona: Persona): boolean {
   if (!persona.auth?.cookies?.length) return false;
   const cookies = persona.auth.cookies as Array<{ expires?: number }>;
-  if (!cookies.some((cookie) => "name" in cookie && isSessionCookie(String((cookie as { name?: unknown }).name)))) {
+  const sessionCookies = cookies.filter((cookie) => "name" in cookie && isSessionCookie(String((cookie as { name?: unknown }).name)));
+  if (sessionCookies.length === 0) {
     return false;
   }
-  // Check if any cookie has an explicit expiry in the future
+
+  // If the app saved explicit expiries for session cookies, trust those over
+  // persona.updatedAt. A recent persona update should not revive expired auth.
   const now = Date.now() / 1000;
-  const hasFutureExpiry = cookies.some((c) => c.expires && c.expires > now + 60);
-  if (hasFutureExpiry) return true;
-  // Fall back: treat cookies as fresh if persona was updated < 1h ago
+  const expiringSessionCookies = sessionCookies
+    .map(getCookieExpires)
+    .filter((expires): expires is number => expires !== null && expires > 0);
+  if (expiringSessionCookies.length > 0) {
+    return expiringSessionCookies.some((expires) => expires > now + 60);
+  }
+
+  // Browser-session cookies commonly have no expiry or expires=-1. For those
+  // only, fall back to treating recent captured cookies as reusable.
   const updatedAt = new Date(persona.updatedAt).getTime();
   return Date.now() - updatedAt < COOKIE_MAX_AGE_MS;
 }
@@ -314,7 +334,7 @@ export async function ensurePersonaAuthenticated(
   }
 
   // Fast path: restore saved cookies if they're still fresh
-  if (areCookiesFresh(persona)) {
+  if (hasFreshAuthCookies(persona)) {
     const restored = await restoreCookies(page, persona);
     if (restored) {
       return { success: true, method: "cookies" };

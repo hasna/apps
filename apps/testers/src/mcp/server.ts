@@ -31,6 +31,7 @@ import { createProdDebugPlan } from "../lib/prod-debug.js";
 import { createTestingWorkflow, getTestingWorkflow, listTestingWorkflows } from "../db/workflows.js";
 import { runTestingWorkflow } from "../lib/workflow-runner.js";
 import { runWorkflowGoalLoop } from "../lib/workflow-agent.js";
+import { redactPersona, redactPersonas } from "../lib/persona-redaction.js";
 
 function json(data: unknown): { content: [{ type: "text"; text: string }] } {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
@@ -1455,7 +1456,7 @@ server.tool(
         authPassword,
         authLoginPath,
       });
-      return json(persona);
+      return json(redactPersona(persona));
     } catch (error) {
       return errorResponse(error);
     }
@@ -1475,7 +1476,7 @@ server.tool(
   async ({ projectId, enabled, globalOnly }) => {
     try {
       const personas = listPersonas({ projectId, enabled, globalOnly });
-      return json({ items: personas, total: personas.length });
+      return json({ items: redactPersonas(personas), total: personas.length });
     } catch (error) {
       return errorResponse(error);
     }
@@ -1501,7 +1502,7 @@ server.tool(
         .all(persona.id) as { id: string; short_id: string; name: string }[];
 
       return json({
-        ...persona,
+        ...redactPersona(persona),
         usedByScenarios: scenarioRows.map((r) => ({ id: r.id, shortId: r.short_id, name: r.name })),
       });
     } catch (error) {
@@ -1532,7 +1533,7 @@ server.tool(
   async ({ id, version, ...updates }) => {
     try {
       const persona = updatePersona(id, updates, version);
-      return json(persona);
+      return json(redactPersona(persona));
     } catch (error) {
       return errorResponse(error, {
         fetchCurrent: () => getPersona(id),
@@ -1578,7 +1579,7 @@ server.tool(
       if (!scenario) return errorResponse(notFoundErr(scenarioId, "Scenario"));
 
       const updated = updateScenario(scenario.id, { personaId: persona.id } as Parameters<typeof updateScenario>[1], scenario.version);
-      return json({ ...updated, attachedPersona: persona });
+      return json({ ...updated, attachedPersona: redactPersona(persona) });
     } catch (error) {
       return errorResponse(error);
     }
@@ -2096,7 +2097,7 @@ server.tool(
         personaId: persona.id,
       });
 
-      return json({ ...clone, attachedPersona: persona, clonedFrom: scenario.id });
+      return json({ ...clone, attachedPersona: redactPersona(persona), clonedFrom: scenario.id });
     } catch (e) {
       return errorResponse(e);
     }
@@ -2461,7 +2462,7 @@ server.tool(
       const { syncPersonaFromContact } = await import("../lib/contacts-connector.js");
       const updated = syncPersonaFromContact(persona.id);
       if (!updated) return json({ synced: false, message: "No linked contact found or no changes needed" });
-      return json({ synced: true, persona: updated });
+      return json({ synced: true, persona: redactPersona(updated) });
     } catch (e) {
       return errorResponse(e);
     }

@@ -25,6 +25,7 @@ import { setBaseline, getBaseline, compareRunScreenshots, formatVisualDiffTermin
 import { generateHtmlReport, generateLatestReport } from "../lib/report.js";
 import { getCostSummary, formatCostsTerminal, formatCostsJSON, formatCostsCsv, checkBudget, getCostsByScenario, formatCostsByScenarioTerminal } from "../lib/costs.js";
 import { createProdDebugPlan, formatProdDebugPlan } from "../lib/prod-debug.js";
+import { redactPersonas } from "../lib/persona-redaction.js";
 
 import { createProject, getProject, listProjects, ensureProject } from "../db/projects.js";
 import { createPersona, getPersona, listPersonas, deletePersona } from "../db/personas.js";
@@ -4670,7 +4671,7 @@ personaCmd
         globalOnly: opts.global ? true : undefined,
       });
       if (opts.json) {
-        log(JSON.stringify(personas, null, 2));
+        log(JSON.stringify(redactPersonas(personas), null, 2));
         return;
       }
       if (personas.length === 0) {
