@@ -21,6 +21,7 @@ import { registerResearchCommand } from "./commands/research.js";
 import { registerOutreachCommand } from "./commands/outreach.js";
 import { registerSedoCommand } from "./commands/sedo.js";
 import { registerWalletCommand } from "./commands/wallet.js";
+import { registerProvisionCommand } from "./commands/provision.js";
 import { getPackageVersion } from "../lib/version.js";
 
 const program = new Command();
@@ -64,5 +65,6 @@ registerSedoCommand(program);  // domains sedo <search|status|portfolio|add|edit
 
 // ── Wallet payment integration ───────────────────────────────────────────
 registerWalletCommand(program);  // domains wallet <cards|buy|renew>
+registerProvisionCommand(program);  // domains provision <status>
 
 program.parse(process.argv);
