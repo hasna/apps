@@ -106,6 +106,7 @@ export {
   checkAvailability as r53CheckAvailability,
   registerDomain as r53RegisterDomain,
   getRegistrationStatus as r53GetRegistrationStatus,
+  updateNameservers as r53UpdateNameservers,
   listRegisteredDomains as r53ListRegisteredDomains,
   createHostedZone as r53CreateHostedZone,
   listHostedZones as r53ListHostedZones,

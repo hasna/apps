@@ -28,6 +28,7 @@ import {
   GetDomainDetailCommand,
   ListDomainsCommand,
   ListPricesCommand,
+  UpdateDomainNameserversCommand,
   type CountryCode,
 } from "@aws-sdk/client-route-53-domains";
 import type {
@@ -255,6 +256,35 @@ export async function getDomainDetail(domain: string, config?: Route53Config): P
     created: result.CreationDate?.toISOString() ?? "",
     nameservers: (result.Nameservers ?? []).map((ns) => ns.Name ?? "").filter(Boolean),
   };
+}
+
+/** Minimal Route53 Domains client surface — lets tests inject a fake `send`. */
+type Route53DomainsSend = { send: (cmd: unknown) => Promise<{ OperationId?: string }> };
+
+/**
+ * Point a domain's nameservers at a new set (the Cloudflare zone NS).
+ *
+ * Enforces the always-Cloudflare-DNS rule: after a domain is registered with
+ * ANY registrar, delegate DNS to Cloudflare by calling this with the Cloudflare
+ * zone's nameservers. Returns the async operation id (poll getOperationDetail).
+ */
+export async function updateNameservers(
+  domain: string,
+  nameservers: string[],
+  config?: Route53Config,
+  client?: Route53DomainsSend,
+): Promise<{ operationId: string }> {
+  if (!nameservers.length) {
+    throw new Error("updateNameservers requires at least one nameserver");
+  }
+  const domains = client ?? makeClients(config).domains;
+  const result = await domains.send(
+    new UpdateDomainNameserversCommand({
+      DomainName: domain,
+      Nameservers: nameservers.map((name) => ({ Name: name })),
+    }),
+  );
+  return { operationId: result.OperationId ?? "" };
 }
 
 export async function listRegisteredDomains(config?: Route53Config): Promise<RegisteredDomain[]> {
