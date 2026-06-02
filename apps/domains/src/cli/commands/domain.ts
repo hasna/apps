@@ -22,8 +22,9 @@ import {
 } from "../../db/domains.js";
 import { getAvailableProviders, getRegistrarProvider, getDnsProvider, autoDetectRegistrar } from "../../lib/registrar.js";
 import { loadConfig, resolveContact } from "../../lib/config.js";
-import { registerDomain, checkAvailability, getRegistrationStatus, createHostedZone } from "../../lib/route53.js";
+import { registerDomain, checkAvailability, getRegistrationStatus, createHostedZone, updateNameservers } from "../../lib/route53.js";
 import { createZone as cfCreateZone } from "../../lib/cloudflare.js";
+import { delegateDomainToCloudflare } from "../../lib/delegate.js";
 
 const DOMAIN_STATUS_HELP = DOMAIN_STATUSES.join("/");
 const DOMAIN_OFFER_STATUS_HELP = DOMAIN_OFFER_STATUSES.join("/");
@@ -593,10 +594,13 @@ export function registerDomainCommand(program: Command): void {
     .option("--auto-renew <bool>", "Auto-renew for recorded purchases (true/false)")
     .option("--years <n>", "Years", "1")
     .option("--wait", "Poll until registration completes")
+    .option("--dns <provider>", "DNS provider to delegate to after purchase (always cloudflare)", "cloudflare")
+    .option("--no-delegate", "Skip delegating DNS to Cloudflare after purchase")
     .action(async (name: string, opts: {
       provider?: string; registrar?: string; email?: string; firstName?: string; lastName?: string;
       phone?: string; address?: string; city?: string; state?: string;
-      country?: string; zip?: string; org?: string; price?: string; expires?: string; autoRenew?: string; years: string; wait?: boolean;
+      country?: string; zip?: string; org?: string; price?: string; expires?: string; autoRenew?: string;
+      years: string; wait?: boolean; dns?: string; delegate?: boolean;
     }) => {
       const recordedPrice = parseOptionalNumber(opts.price, "--price");
       if (recordedPrice !== undefined) {
@@ -674,6 +678,32 @@ export function registerDomainCommand(program: Command): void {
           });
         }
         console.log(`✓ Added to portfolio`);
+
+        // Always-Cloudflare-DNS rule: delegate DNS to Cloudflare after purchase.
+        // Requires registration to have completed, so only when --wait is set.
+        const dnsProvider = opts.dns ?? "cloudflare";
+        if (opts.delegate !== false && dnsProvider === "cloudflare") {
+          if (!opts.wait) {
+            console.log(`  DNS: run 'domains domain buy ${name} --wait' or delegate later — registration must finish before NS can change.`);
+          } else {
+            try {
+              console.log(`Delegating DNS to Cloudflare...`);
+              const del = await delegateDomainToCloudflare(name, {
+                createCloudflareZone: async (d) => {
+                  const z = await cfCreateZone(d);
+                  return { id: z.id, nameservers: z.nameservers };
+                },
+                updateNameservers: (d, ns) => updateNameservers(d, ns),
+              });
+              const existing2 = getDomainByName(name);
+              if (existing2) updateDomain(existing2.id, { nameservers: del.nameservers });
+              console.log(`✓ Cloudflare zone ${del.zoneId}; nameservers → ${del.nameservers.join(", ")} (op ${del.operationId})`);
+            } catch (e) {
+              console.error(`⚠ DNS delegation failed (domain is registered): ${e instanceof Error ? e.message : String(e)}`);
+              console.error(`  Retry: create the Cloudflare zone and point Route53 NS at it.`);
+            }
+          }
+        }
         if (!opts.wait) console.log(`  Check: domains r53 status ${reg.operationId}`);
       } catch (e) {
         console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
