@@ -57,6 +57,13 @@ export function registerDoctorCommand(program: Command): void {
       if (missingContact.length === 0) ok("Registrant contact info complete");
       else fail(`Missing contact fields: ${missingContact.join(", ")}`, "domains config set contact.<field> <value>");
 
+      section("Provisioning Credentials");
+      const { checkProvisioningCredentials } = await import("../../lib/creds-check.js");
+      for (const c of checkProvisioningCredentials()) {
+        if (c.configured) ok(`${c.provider}: ${c.mode} — ${c.detail}`);
+        else fail(`${c.provider}: not configured (${c.detail})`);
+      }
+
       section("Providers");
       const providers = getAvailableProviders().filter((p) => p.name !== "brandsight");
       for (const p of providers) {
