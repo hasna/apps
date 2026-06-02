@@ -18,8 +18,53 @@ import { USER_AGENT } from "./version.js";
 
 export interface BrandsightConfig {
   apiKey: string;
+  apiSecret?: string;
+  customerId?: string;
+  shopperId?: string;
   accountId?: string;
   baseUrl?: string;
+}
+
+/**
+ * Resolve Brandsight (GoDaddy Corporate Domains) credentials from env, including
+ * the HASNAXYZ vault names which carry the full GoDaddy-style credential set
+ * (api_key + api_secret + customer_id + shopper_id). Pure / testable.
+ */
+export function resolveBrandsightConfig(
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): BrandsightConfig {
+  return {
+    apiKey: env["BRANDSIGHT_API_KEY"] ?? env["HASNAXYZ_BRANDSIGHT_LIVE_API_KEY"] ?? "",
+    apiSecret: env["BRANDSIGHT_API_SECRET"] ?? env["HASNAXYZ_BRANDSIGHT_LIVE_API_SECRET"],
+    customerId: env["BRANDSIGHT_CUSTOMER_ID"] ?? env["HASNAXYZ_BRANDSIGHT_LIVE_CUSTOMER_ID"],
+    shopperId: env["BRANDSIGHT_SHOPPER_ID"] ?? env["HASNAXYZ_BRANDSIGHT_LIVE_SHOPPER_ID"],
+    accountId: env["BRANDSIGHT_ACCOUNT_ID"] ?? env["HASNAXYZ_BRANDSIGHT_LIVE_CUSTOMER_ID"],
+  };
+}
+
+export interface BrandsightCapability {
+  configured: boolean;
+  gated: boolean;
+  notes: string;
+}
+
+/**
+ * Brandsight is GoDaddy Corporate Domains — an enterprise/contract-only
+ * registrar. Even with credentials present, automated self-serve purchase is
+ * gated, so callers must not attempt it blindly.
+ */
+export function brandsightCapability(
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): BrandsightCapability {
+  const cfg = resolveBrandsightConfig(env);
+  const configured = !!(cfg.apiKey && cfg.apiSecret && cfg.customerId);
+  return {
+    configured,
+    gated: true,
+    notes: configured
+      ? "Credentials present, but GoDaddy Corporate Domains (Brandsight) is enterprise/contract-only; use Route53 for automated purchase."
+      : "Not configured and enterprise/contract-only; not usable for automated purchase.",
+  };
 }
 
 export interface BrandsightDomain {
