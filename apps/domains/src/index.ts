@@ -127,3 +127,29 @@ export {
   type Route53Record,
   type Route53RecordInput,
 } from "./lib/route53.js";
+
+// ─── Provisioning integration contract (consumed by open-emails) ────────────
+// Stable surface for automated domain purchase + Cloudflare delegation.
+export {
+  createZone as cfCreateZone,
+  getZone as cfGetZone,
+  ensureZone as cfEnsureZone,
+  upsertRecord as cfUpsertRecord,
+  type CloudflareZone,
+} from "./lib/cloudflare.js";
+export { resolveCloudflareConfig, cloudflareAuthHeaders, type CloudflareConfig } from "./lib/cloudflare-auth.js";
+export { delegateDomainToCloudflare, type DelegateResult } from "./lib/delegate.js";
+export {
+  PROVIDER_CAPABILITIES,
+  getCapability,
+  canBuy,
+  selectBuyRegistrar,
+  selectDnsProvider,
+  type ProviderCapability,
+} from "./lib/capability.js";
+export {
+  classifyRegistrationStatus,
+  pollRegistrationUntilDone,
+  type RegVerdict,
+  type PollResult as RegistrationPollResult,
+} from "./lib/registration-poll.js";
