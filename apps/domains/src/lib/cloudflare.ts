@@ -7,13 +7,15 @@
  */
 
 import type { DnsProvider, ProviderDnsRecord } from "./registrar.js";
+import {
+  resolveCloudflareConfig,
+  cloudflareAuthHeaders,
+  type CloudflareConfig,
+} from "./cloudflare-auth.js";
+
+export type { CloudflareConfig };
 
 // ─── Types ───────────────────────────────────────────────────────────────────
-
-export interface CloudflareConfig {
-  apiToken?: string;
-  accountId?: string;
-}
 
 export interface CloudflareZone {
   id: string;
@@ -36,18 +38,12 @@ export interface CloudflareRecord {
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 export function getConfig(): CloudflareConfig {
-  return {
-    apiToken: process.env["CLOUDFLARE_API_TOKEN"],
-    accountId: process.env["CLOUDFLARE_ACCOUNT_ID"],
-  };
+  return resolveCloudflareConfig();
 }
 
 function checkCredentials(cfg: CloudflareConfig): void {
-  if (!cfg.apiToken) {
-    throw new Error(
-      "Cloudflare credentials not configured. Set CLOUDFLARE_API_TOKEN environment variable."
-    );
-  }
+  // Throws if neither a scoped token nor a global key + email is present.
+  cloudflareAuthHeaders(cfg);
 }
 
 // ─── API Client ──────────────────────────────────────────────────────────────
@@ -64,7 +60,7 @@ async function cfFetch<T>(
   const res = await fetch(`${CF_BASE}${path}`, {
     method: opts.method ?? "GET",
     headers: {
-      Authorization: `Bearer ${cfg.apiToken}`,
+      ...cloudflareAuthHeaders(cfg),
       "Content-Type": "application/json",
     },
     body: opts.body ? JSON.stringify(opts.body) : undefined,
@@ -120,6 +116,31 @@ export async function createZone(domain: string, config?: CloudflareConfig): Pro
     { method: "POST", body: { name: domain, account: { id: cfg.accountId }, jump_start: false }, config: cfg }
   );
   return { id: result.id, name: result.name, status: result.status, nameservers: result.name_servers };
+}
+
+/**
+ * Find-or-create a Cloudflare zone and return its assigned nameservers.
+ * Idempotent: reuses an existing zone for the domain if present. The returned
+ * nameservers are what the registrar should be delegated to (always-Cloudflare).
+ *
+ * `deps` is injectable for testing; defaults to the real getZone/createZone.
+ */
+export async function ensureZone(
+  domain: string,
+  config?: CloudflareConfig,
+  deps?: {
+    getZone: (d: string, c?: CloudflareConfig) => Promise<CloudflareZone | null>;
+    createZone: (d: string, c?: CloudflareConfig) => Promise<CloudflareZone>;
+  },
+): Promise<CloudflareZone> {
+  const get = deps?.getZone ?? getZone;
+  const create = deps?.createZone ?? createZone;
+  const existing = await get(domain, config);
+  const zone = existing ?? (await create(domain, config));
+  if (!zone.nameservers || zone.nameservers.length === 0) {
+    throw new Error(`Cloudflare zone for ${domain} has no nameservers yet`);
+  }
+  return zone;
 }
 
 export async function deleteZone(zoneId: string, config?: CloudflareConfig): Promise<void> {
