@@ -187,15 +187,28 @@ export function enableHardwareWatchdog(): string[] {
 }
 
 function binPath(): string {
-  // Resolve the installed `machines` binary for the systemd ExecStart.
-  const r = sh("command -v machines");
-  return r.ok && r.out ? r.out.split("\n")[0]!.trim() : "machines";
+  // Resolve an absolute path to the `machines` binary for the systemd ExecStart.
+  // Root's PATH won't include the user's bun bin, so prefer concrete candidates.
+  const candidates: string[] = [];
+  const which = sh("command -v machines").out.split("\n")[0]?.trim();
+  if (which) candidates.push(which);
+  if (process.argv[1]) candidates.push(process.argv[1]);
+  const home = process.env["HOME"] || "/home/hasna";
+  candidates.push(`${home}/.bun/bin/machines`, "/home/hasna/.bun/bin/machines", "/root/.bun/bin/machines", "/usr/local/bin/machines");
+  for (const c of candidates) {
+    if (c && existsSync(c)) return c;
+  }
+  return "machines";
 }
+
+/** Shared root-owned data dir so the installer and the daemon read the same config/state. */
+const ROOT_DATA_DIR = "/etc/machines-heal";
 
 /** Install + enable the systemd service that runs the daemon as root. */
 export function installHealService(): string[] {
   const log: string[] = [];
   const exec = binPath();
+  const binDir = exec.includes("/") ? exec.slice(0, exec.lastIndexOf("/")) : "/usr/local/bin";
   const unit = `[Unit]
 Description=Hasna machines self-healing network watchdog
 After=network.target NetworkManager.service tailscaled.service
@@ -206,8 +219,9 @@ Type=simple
 ExecStart=${exec} heal daemon
 Restart=always
 RestartSec=10
-# Persisted state/config live in root's data dir.
 Environment=HOME=/root
+Environment=HASNA_MACHINES_DIR=${ROOT_DATA_DIR}
+Environment=PATH=${binDir}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 [Install]
 WantedBy=multi-user.target
