@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Persona } from "../types/index.js";
-import { hasFreshAuthCookies, isSessionCookie } from "./persona-auth.js";
+import { hasFreshAuthCookies, isPrimarySessionCookie, isSessionCookie } from "./persona-auth.js";
 
 describe("persona auth cookie classification", () => {
   test("does not treat CSRF cookies as authenticated sessions", () => {
@@ -11,6 +11,11 @@ describe("persona auth cookie classification", () => {
   test("treats ordinary app cookies as session evidence", () => {
     expect(isSessionCookie("accessToken")).toBe(true);
     expect(isSessionCookie("refreshToken")).toBe(true);
+  });
+
+  test("does not treat refresh cookies as primary session evidence", () => {
+    expect(isPrimarySessionCookie("accessToken")).toBe(true);
+    expect(isPrimarySessionCookie("refreshToken")).toBe(false);
   });
 });
 
@@ -63,6 +68,17 @@ describe("persona auth cookie freshness", () => {
     ]);
 
     expect(hasFreshAuthCookies(persona)).toBe(true);
+  });
+
+  test("does not trust a future refresh token when the primary access token is expired", () => {
+    const expired = Math.floor(Date.now() / 1000) - 60;
+    const future = Math.floor(Date.now() / 1000) + 3600;
+    const persona = personaWithCookies([
+      { name: "accessToken", value: "expired-access", expires: expired },
+      { name: "refreshToken", value: "fresh-refresh", expires: future },
+    ]);
+
+    expect(hasFreshAuthCookies(persona)).toBe(false);
   });
 
   test("uses the updatedAt fallback only for session cookies without explicit expiry", () => {

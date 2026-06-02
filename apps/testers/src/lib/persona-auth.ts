@@ -9,6 +9,10 @@ export function isSessionCookie(cookieName: string): boolean {
   return !/(?:csrf|xsrf)/i.test(cookieName);
 }
 
+export function isPrimarySessionCookie(cookieName: string): boolean {
+  return isSessionCookie(cookieName) && !/refresh/i.test(cookieName);
+}
+
 export interface LoginResult {
   success: boolean;
   method: "cookies" | "login" | "none";
@@ -34,7 +38,7 @@ function getCookieExpires(cookie: { expires?: unknown }): number | null {
 export function hasFreshAuthCookies(persona: Persona): boolean {
   if (!persona.auth?.cookies?.length) return false;
   const cookies = persona.auth.cookies as Array<{ expires?: number }>;
-  const sessionCookies = cookies.filter((cookie) => "name" in cookie && isSessionCookie(String((cookie as { name?: unknown }).name)));
+  const sessionCookies = cookies.filter((cookie) => "name" in cookie && isPrimarySessionCookie(String((cookie as { name?: unknown }).name)));
   if (sessionCookies.length === 0) {
     return false;
   }
