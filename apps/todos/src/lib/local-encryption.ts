@@ -301,3 +301,29 @@ export function decryptBridgeBundle<T>(
   }, env);
   return JSON.parse(plaintext) as T;
 }
+
+// Export profiles: control how exported bundles handle sensitive data.
+export type ExportProfile = "plaintext" | "redacted" | "encrypted";
+
+export function assertExportProfileAllowed(profile: string): ExportProfile {
+  if (profile === "plaintext" || profile === "redacted" || profile === "encrypted") return profile;
+  throw new Error(`Unknown export profile: ${profile}. Allowed: plaintext, redacted, encrypted.`);
+}
+
+export function applyExportProfile(
+  data: unknown,
+  options: { profile?: string; acknowledge_plaintext?: boolean; env?: NodeJS.ProcessEnv } = {},
+): { profile: ExportProfile; data: unknown; warnings: string[] } {
+  const profile = assertExportProfileAllowed(options.profile ?? "redacted");
+  const warnings: string[] = [];
+  if (profile === "plaintext") {
+    if (!options.acknowledge_plaintext) {
+      warnings.push("Export profile 'plaintext' includes unredacted data; pass acknowledge_plaintext=true to confirm.");
+    }
+    return { profile, data, warnings };
+  }
+  if (profile === "encrypted") {
+    return { profile, data: encryptSensitiveFields(data, { profile: DEFAULT_ENCRYPTION_PROFILE, env: options.env }), warnings };
+  }
+  return { profile, data: redactValue(data), warnings };
+}
