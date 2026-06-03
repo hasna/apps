@@ -8,7 +8,6 @@ const RETRY_BASE_DELAY_MS = 1000; // 1s, 2s, 4s exponential backoff
 /** Check if an IP address is in a private/reserved range (SSRF prevention) */
 function isPrivateOrInternal(ip: string): boolean {
   const parts = ip.split(".").map(Number);
-<<<<<<< Updated upstream
   if (parts.length !== 4) return true;
   const a = parts[0]!;
   const b = parts[1]!;
@@ -73,37 +72,6 @@ export function validateWebhookUrl(urlString: string): { valid: false; error: st
     }
     return { valid: false, error: `Invalid webhook URL: ${urlString}` };
   }
-=======
-  if (parts.length !== 4 || parts.some(p => isNaN(p) || p < 0 || p > 255)) return true;
-  if (parts[0] === 10) return true;
-  if (parts[0] === 127) return true;
-  if (parts[0] === 169 && parts[1] === 254) return true;
-  if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
-  if (parts[0] === 192 && parts[1] === 168) return true;
-  if (parts[0] === 0) return true;
-  return false;
-}
-
-/** Validate a webhook URL, rejecting private/internal addresses (SSRF prevention) */
-export function validateWebhookUrl(urlStr: string): { valid: false; error: string } | { valid: true } {
-  let url: URL;
-  try {
-    url = new URL(urlStr);
-  } catch {
-    return { valid: false, error: "Invalid URL format" };
-  }
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    return { valid: false, error: `Unsupported scheme: ${url.protocol}` };
-  }
-  const hostname = url.hostname.toLowerCase();
-  if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "0.0.0.0" || hostname === "::1") {
-    return { valid: false, error: "Webhook URL must not point to localhost" };
-  }
-  if (hostname === "metadata.google.internal" || hostname.endsWith(".internal") || hostname === "169.254.169.254") {
-    return { valid: false, error: "Webhook URL must not point to internal/metadata endpoints" };
-  }
-  return { valid: true };
->>>>>>> Stashed changes
 }
 
 /** Resolve hostname and check if the resolved IP is private (SSRF prevention) */
@@ -113,7 +81,6 @@ async function resolveAndCheckIp(hostname: string): Promise<{ allowed: false; er
     if (!resolved) return { allowed: false, error: `Could not resolve hostname: ${hostname}` };
     const addresses = Array.isArray(resolved) ? resolved : [resolved];
     for (const addr of addresses) {
-<<<<<<< Updated upstream
       const ip = typeof addr === "string" ? addr : addr.address;
       if (isPrivateOrInternal(ip)) {
         return { allowed: false, error: `Hostname ${hostname} resolves to blocked address ${ip}` };
@@ -121,13 +88,6 @@ async function resolveAndCheckIp(hostname: string): Promise<{ allowed: false; er
     }
     const first = addresses[0] as string | { address: string } | undefined;
     return { allowed: true, ip: typeof first === "string" ? first : (first?.address ?? "") };
-=======
-      if (isPrivateOrInternal(addr)) {
-        return { allowed: false, error: `Hostname ${hostname} resolves to blocked address ${addr}` };
-      }
-    }
-    return { allowed: true, ip: addresses[0]! };
->>>>>>> Stashed changes
   } catch {
     return { allowed: true, ip: "" };
   }
