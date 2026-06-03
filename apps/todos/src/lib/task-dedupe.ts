@@ -529,3 +529,6 @@ export function mergeDuplicateTask(input: MergeDuplicateTaskInput, db?: Database
 
   return tx();
 }
+
+// Alias kept for callers that use the candidate-oriented name.
+export const findDuplicateCandidates = findDuplicateTasks;
