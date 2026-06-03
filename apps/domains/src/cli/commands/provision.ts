@@ -37,4 +37,38 @@ export function registerProvisionCommand(program: Command): void {
       const idx = path.indexOf(state as never);
       console.log(`Progress: ${idx >= 0 ? idx + 1 : "?"}/${path.length}  [${path.join(" → ")}]`);
     });
+
+  provision
+    .command("daemon")
+    .description("Reconcile domains toward ready (CF zone + NS delegation + propagation)")
+    .option("--domains <list>", "Comma-separated domains (default: all active in the portfolio)")
+    .option("--once", "Run a single reconcile tick and exit")
+    .option("--interval <sec>", "Seconds between ticks", "30")
+    .option("--max-ticks <n>", "Stop after N ticks")
+    .action(async (opts: { domains?: string; once?: boolean; interval: string; maxTicks?: string }) => {
+      const { applyPurchaseProfile } = await import("../../lib/config.js");
+      applyPurchaseProfile();
+      const { makeDomainDaemonDeps } = await import("../../lib/domain-daemon-deps.js");
+      const { reconcileDomainTick, runDomainDaemon } = await import("../../lib/domain-daemon.js");
+      const deps = { ...makeDomainDaemonDeps(), log: (e: string, d: Record<string, unknown>) => console.log(`[${e}] ${JSON.stringify(d)}`) };
+
+      const listDomains = async (): Promise<string[]> => {
+        if (opts.domains) return opts.domains.split(",").map((d) => d.trim());
+        const { listDomains: dbList } = await import("../../db/domains.js");
+        return dbList({ status: "active" }).map((d) => d.name);
+      };
+
+      if (opts.once) {
+        const s = await reconcileDomainTick(await listDomains(), deps);
+        console.log(`✓ tick: ${s.advanced} advanced, ${s.ready} ready, ${s.errors} errors (${s.processed} processed)`);
+        return;
+      }
+      console.log(`Domain provisioning daemon started (interval ${opts.interval}s). Ctrl-C to stop.`);
+      const total = await runDomainDaemon(listDomains, {
+        ...deps,
+        intervalSec: parseInt(opts.interval, 10),
+        maxTicks: opts.maxTicks ? parseInt(opts.maxTicks, 10) : undefined,
+      });
+      console.log(`daemon stopped: ${total.advanced} advanced, ${total.ready} ready, ${total.errors} errors`);
+    });
 }
