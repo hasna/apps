@@ -821,7 +821,7 @@ export {
   resolveAccessProfile,
   getAccessProfileMeta,
   listAccessProfiles,
-  shouldRegisterToolForProfile,
+  shouldRegisterToolForProfile as shouldRegisterToolForAccessProfile,
   assertToolAllowed,
   getHeadlessUsageNotes,
   getProfileToolCount,
@@ -1267,7 +1267,7 @@ export type { BuiltinTemplate } from "./db/builtin-templates.js";
 // Template library
 export {
   listTemplateLibrary,
-  getBuiltinTemplate,
+  getBuiltinTemplate as getBuiltinTemplateFromLibrary,
   previewBuiltinTemplate,
   installTemplateLibrary,
   exportTemplateLibraryCatalog,
@@ -1578,7 +1578,7 @@ export { RELATIONSHIP_TYPES } from "./db/task-relationships.js";
 export type { TaskRelationship, AddTaskRelationshipInput, RelationshipType } from "./db/task-relationships.js";
 
 // Knowledge Graph
-export { syncKgEdges, getRelated, findPath, getImpactAnalysis, getCriticalPath, addKgEdge, removeKgEdges } from "./db/kg.js";
+export { syncKgEdges, getRelated, findPath, getImpactAnalysis, getCriticalPath as getKgCriticalPath, addKgEdge, removeKgEdges } from "./db/kg.js";
 export type { KgEdge } from "./db/kg.js";
 
 // Patrol & Review
@@ -1689,7 +1689,7 @@ export type {
   RunnerSandboxNetworkPolicy,
   RunnerSandboxProfile,
   WorkspacePermissionPreset,
-  WorkspaceTrustProfile,
+  WorkspaceTrustProfile as WorkspaceTrustProfileConfig,
 } from "./lib/config.js";
 export {
   checkWorkspacePermission,
@@ -1738,7 +1738,6 @@ export type {
 } from "./lib/runner-sandbox.js";
 export {
   explainPolicyPack,
-  getPolicyPack,
   listPolicyPacks,
   removePolicyPack,
   upsertPolicyPack,
@@ -1832,10 +1831,7 @@ export {
   createEncryptedBridgeBundle,
   decryptBridgeBundle,
   decryptString,
-  decryptValue,
-  encryptSensitiveFields,
   encryptString,
-  encryptValue,
   encryptionProfileStatus,
   isEncryptedBridgeBundle,
   isEncryptedValue,
