@@ -74,8 +74,13 @@ export function registerTaskCommands(program: Command) {
     .option("--project <id>", "Assign to project by ID or slug (overrides auto-detect)")
     .action((title: string, opts) => {
       const globalOpts = program.opts();
-      const projectId = opts.project
-        ? resolveProjectIdOrSlug(opts.project)
+      // `--project` can land on either the command opts or the global program
+      // opts depending on its position; commander routes it to globalOpts when a
+      // global --project option exists. Honor both (matches the list/audit
+      // commands) so `todos add … --project <id>` actually assigns the project.
+      const explicitProject = opts.project || globalOpts.project;
+      const projectId = explicitProject
+        ? resolveProjectIdOrSlug(explicitProject)
         : autoProject(globalOpts);
       opts.tags = opts.tags || opts.tag;
       opts.list = opts.list || opts.taskList;

@@ -125,4 +125,24 @@ describe("OSS local-first runtime defaults", () => {
       server.stop(true);
     }
   });
+
+  // Regression: `--project` is parsed onto the global program opts, so the add
+  // command (which only read its local opts.project) silently dropped it and
+  // left project_id null. It must honor opts.project || globalOpts.project.
+  test("`add --project <id>` actually assigns the project", async () => {
+    const seeded = await runCli(
+      ["projects", "--add", fakeHome, "--name", "RegProj", "--json"],
+      {},
+    );
+    expect(seeded.exitCode).toBe(0);
+    const projectId = JSON.parse(seeded.stdout).id as string;
+    expect(projectId).toBeTruthy();
+
+    const added = await runCli(
+      ["add", "Task with project", "--project", projectId, "--json"],
+      {},
+    );
+    expect(added.exitCode).toBe(0);
+    expect(JSON.parse(added.stdout).project_id).toBe(projectId);
+  });
 });
