@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { getDatabasePath } from "../db/database.js";
 import { redactEvidenceText, redactValue } from "./redaction.js";
@@ -278,4 +278,152 @@ export function importStoredArtifactContent(content: ExportedArtifactContent): A
 
 export function redactArtifactMetadata<T>(value: T): T {
   return redactValue(value);
+}
+
+// ---------------------------------------------------------------------------
+// File-level artifact storage (the layer src/db/artifacts.ts builds on).
+//
+// `storeArtifactContent` above is the redacting, content-addressed primitive
+// used for evidence. The functions below are the file-oriented layer: they copy
+// the *original* file into a per-artifact location (or reference it in place)
+// and provide retention/export helpers. Behavior is pinned by
+// src/db/artifacts.test.ts.
+// ---------------------------------------------------------------------------
+
+export type ArtifactStorageModeValue = "copy" | "reference";
+
+export interface StoreArtifactFileInput {
+  artifactId: string;
+  sourcePath: string;
+  storageMode?: ArtifactStorageModeValue;
+  name?: string;
+  dbPath?: string;
+}
+
+export interface StoredArtifactFile {
+  sourcePath: string;
+  localPath: string;
+  contentHash: string;
+  mimeType: string;
+  sizeBytes: number;
+}
+
+export interface CleanupPolicy {
+  deleted_retention_days?: number;
+  now?: Date;
+}
+
+export interface ArtifactExportEntry {
+  id: string;
+  entity_type: string;
+  entity_id: string;
+  name: string | null;
+  storage_mode: string;
+  source_path: string | null;
+  local_path: string | null;
+  content_hash: string | null;
+  mime_type: string | null;
+  size_bytes: number | null;
+  redaction_status: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ArtifactExportManifest {
+  schema_version: "todos.artifacts.v1";
+  store_root: string;
+  exported_at: string;
+  artifacts: ArtifactExportEntry[];
+}
+
+const DEFAULT_DELETED_RETENTION_DAYS = 30;
+
+/** Root directory of the local artifact store for a given (or default) db path. */
+export function getArtifactStoreRoot(dbPath?: string): string {
+  if (process.env["HASNA_TODOS_ARTIFACTS_DIR"]) return resolve(process.env["HASNA_TODOS_ARTIFACTS_DIR"]);
+  if (process.env["TODOS_ARTIFACTS_DIR"]) return resolve(process.env["TODOS_ARTIFACTS_DIR"]);
+  const path = dbPath ?? getDatabasePath();
+  if (isInMemoryDb(path)) return join(tmpdir(), "hasna-todos-artifacts");
+  return join(dirname(resolve(path)), "artifacts");
+}
+
+/** sha256 of a file's raw bytes. */
+export function computeContentHash(path: string): string {
+  return sha256(readFileSync(resolve(path)));
+}
+
+/**
+ * Copy (or reference) a source file into the local artifact store, preserving
+ * the original bytes. Copies live at `<store-root>/<artifactId>/<name>`.
+ */
+export function storeArtifactFile(input: StoreArtifactFileInput): StoredArtifactFile {
+  const sourcePath = resolve(input.sourcePath);
+  if (!existsSync(sourcePath)) {
+    throw new Error(`Source file not found: ${input.sourcePath}`);
+  }
+  if (!statSync(sourcePath).isFile()) {
+    throw new Error(`Source path is not a file: ${input.sourcePath}`);
+  }
+  const buffer = readFileSync(sourcePath);
+  const contentHash = sha256(buffer);
+  const mimeType = mediaTypeFor(sourcePath, isTextLike(buffer, sourcePath));
+  const storageMode: ArtifactStorageModeValue = input.storageMode ?? "copy";
+
+  let localPath = sourcePath;
+  if (storageMode === "copy") {
+    const fileName = input.name && input.name.trim().length > 0 ? basename(input.name) : basename(sourcePath);
+    const destination = join(getArtifactStoreRoot(input.dbPath), input.artifactId, fileName);
+    mkdirSync(dirname(destination), { recursive: true });
+    writeFileSync(destination, buffer);
+    localPath = destination;
+  }
+
+  return { sourcePath, localPath, contentHash, mimeType, sizeBytes: buffer.length };
+}
+
+/** Remove a stored artifact copy. Reference-mode sources are never touched. */
+export function deleteStoredArtifactFile(
+  localPath: string | null,
+  storageMode: string,
+  _dbPath?: string,
+): boolean {
+  if (storageMode === "reference") return false;
+  if (!localPath || !existsSync(localPath)) return false;
+  rmSync(localPath, { force: true });
+  try {
+    rmSync(dirname(localPath), { recursive: false });
+  } catch {
+    /* per-artifact directory not empty or already gone */
+  }
+  return true;
+}
+
+/** Whether a soft-deleted artifact has aged past the retention window. */
+export function isArtifactExpired(deletedAt: string | null, policy: CleanupPolicy = {}): boolean {
+  if (!deletedAt) return false;
+  const retentionDays = policy.deleted_retention_days ?? DEFAULT_DELETED_RETENTION_DAYS;
+  const now = policy.now ?? new Date();
+  const ageMs = now.getTime() - new Date(deletedAt).getTime();
+  return ageMs > retentionDays * 24 * 60 * 60 * 1000;
+}
+
+/** Build an export manifest tied to the local store root. */
+export function buildArtifactExportManifest(
+  artifacts: ArtifactExportEntry[],
+  dbPath?: string,
+): ArtifactExportManifest {
+  return {
+    schema_version: "todos.artifacts.v1",
+    store_root: getArtifactStoreRoot(dbPath),
+    exported_at: new Date().toISOString(),
+    artifacts,
+  };
+}
+
+/** Write an export manifest to disk as pretty JSON. */
+export function writeArtifactExportManifest(manifest: ArtifactExportManifest, outputPath: string): string {
+  const destination = resolve(outputPath);
+  mkdirSync(dirname(destination), { recursive: true });
+  writeFileSync(destination, `${JSON.stringify(manifest, null, 2)}\n`);
+  return destination;
 }
