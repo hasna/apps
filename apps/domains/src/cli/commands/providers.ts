@@ -12,7 +12,9 @@ import {
   getAvailableProviders,
   syncAll,
   autoDetectRegistrar,
+  getRegistrarProvider,
 } from "../../lib/registrar.js";
+import { loadConfig } from "../../lib/config.js";
 import {
   createDomain,
   updateDomain,
@@ -194,21 +196,24 @@ export function registerProviderCommands(program: Command): void {
 
   program
     .command("check")
-    .description("Check domain availability")
+    .description("Check domain availability via a registrar provider (route53, namecheap, godaddy)")
     .argument("<name>", "Domain name (e.g. example.com)")
+    .option("--provider <name>", "Registrar provider — defaults to config default-registrar, else namecheap")
     .option("--json", "Output as JSON", false)
-    .action(async (name, opts) => {
+    .action(async (name, opts: { provider?: string; json?: boolean }) => {
       try {
-        const result = await namecheapCheck(name);
+        const providerName = opts.provider ?? loadConfig().default_registrar ?? "namecheap";
+        // Namecheap keeps its dedicated path; any other registrar (route53,
+        // godaddy, …) routes through the provider registry so this one command
+        // works against AWS Route 53 without dropping to the raw aws CLI.
+        const result = providerName === "namecheap"
+          ? await namecheapCheck(name)
+          : await getRegistrarProvider(providerName).checkAvailability(name);
 
         if (opts.json) {
-          console.log(JSON.stringify(result, null, 2));
+          console.log(JSON.stringify({ provider: providerName, ...result }, null, 2));
         } else {
-          if (result.available) {
-            console.log(`${result.domain} is AVAILABLE`);
-          } else {
-            console.log(`${result.domain} is NOT available`);
-          }
+          console.log(`${result.domain} is ${result.available ? "AVAILABLE" : "NOT available"} (via ${providerName})`);
         }
       } catch (error: unknown) {
         console.error(`Availability check failed: ${error instanceof Error ? error.message : String(error)}`);

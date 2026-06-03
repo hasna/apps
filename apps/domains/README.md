@@ -78,13 +78,25 @@ domains sync --provider namecheap
 domains sync --provider godaddy
 domains sync --all
 domains renew example.com --provider namecheap
-domains check example.com
+
+# Availability checks — pick the registrar with --provider
+domains check example.com                     # default registrar (config default-registrar, else namecheap)
+domains check --provider route53 example.com  # AWS Route 53 availability
+domains check --provider godaddy example.com
+domains r53 check example.com                  # Route 53-specific subcommand (same backend)
 
 # Brand monitoring
 domains monitor mybrand
 domains similar example.com
 domains threats example.com
 ```
+
+> **Prefer the `domains` CLI over raw `aws` commands.** For Route 53 availability,
+> registration status, and DNS, use `domains check --provider route53`,
+> `domains r53 status`, and `domains dns …` instead of `aws route53domains …` /
+> `aws route53 …`. The CLI applies the configured purchase profile, records the
+> result in the local portfolio DB, and works the same across registrars — raw
+> `aws` calls bypass all of that.
 
 ## MCP Server
 
