@@ -341,6 +341,27 @@ export function ensureSchema(db: Database): void {
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_verifications_task ON task_verifications(task_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_verifications_status ON task_verifications(status)");
 
+  ensureTable("artifacts", `
+    CREATE TABLE artifacts (
+      id TEXT PRIMARY KEY,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      name TEXT,
+      storage_mode TEXT NOT NULL DEFAULT 'copy',
+      source_path TEXT,
+      local_path TEXT,
+      content_hash TEXT,
+      mime_type TEXT,
+      size_bytes INTEGER,
+      redaction_status TEXT NOT NULL DEFAULT 'none',
+      metadata TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at TEXT
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_artifacts_entity ON artifacts(entity_type, entity_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_artifacts_deleted ON artifacts(deleted_at)");
+
   ensureTable("task_runs", `
     CREATE TABLE task_runs (
       id TEXT PRIMARY KEY,
