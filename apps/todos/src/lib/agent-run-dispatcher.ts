@@ -272,3 +272,177 @@ export async function runNextAgentDispatch(input: RunNextAgentDispatchInput = {}
   }, d);
   return { run_id: next.run.id, task_id: next.run.task_id, command, dry_run: false, status, exit_code: exitCode, output_summary: outputSummary };
 }
+
+// Compatibility wrappers for callers using the run-oriented names.
+export function listAgentRuns(
+  filter: { task_id?: string; status?: string; agent_id?: string; limit?: number } = {},
+  db?: Database,
+): QueuedAgentRun[] {
+  let runs = listAgentRunQueue(db);
+  if (filter.task_id) runs = runs.filter((r) => (r as { task_id?: string }).task_id === filter.task_id);
+  if (filter.status) runs = runs.filter((r) => (r as { status?: string }).status === filter.status);
+  if (filter.agent_id) runs = runs.filter((r) => (r as { agent_id?: string }).agent_id === filter.agent_id);
+  if (filter.limit && filter.limit > 0) runs = runs.slice(0, filter.limit);
+  return runs;
+}
+
+export function retryAgentRun(runId: string, db?: Database): QueuedAgentRun {
+  return retryAgentRunDispatch(runId, db);
+}
+
+// ---------------------------------------------------------------------------
+// Agent-run lifecycle API (claim model) layered over the task_runs queue.
+// Consumers: mcp/tools/agent-runs, agent-workflow-demo, failure-triage.
+// ---------------------------------------------------------------------------
+
+export const AGENT_RUN_SCHEMA_VERSION = "todos.agent_run.v1";
+export type AgentRunStatus = AgentRunDispatchState;
+export type AgentAdapterConfig = AgentRunAdapterConfig;
+
+export interface EnqueueAgentRunInput {
+  task_id: string;
+  adapter?: string;
+  agent_id?: string;
+  command?: string;
+  plan_id?: string;
+  evidence?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AgentRun {
+  id: string;
+  task_id: string;
+  agent_id: string | null;
+  adapter: string | null;
+  status: AgentRunStatus;
+  command: string | null;
+  evidence: Record<string, unknown>;
+  queued_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface ListAgentRunsFilter {
+  task_id?: string;
+  agent_id?: string;
+  status?: AgentRunStatus;
+  adapter?: string;
+  limit?: number;
+}
+
+function toAgentRun(item: QueuedAgentRun): AgentRun {
+  const md = (item.run.metadata || {}) as Record<string, unknown>;
+  return {
+    id: item.run.id,
+    task_id: item.run.task_id,
+    agent_id: item.run.agent_id,
+    adapter: item.dispatcher.adapter ?? null,
+    status: item.dispatcher.state,
+    command: item.dispatcher.command ?? null,
+    evidence: (md["agent_run_evidence"] as Record<string, unknown>) ?? {},
+    queued_at: item.dispatcher.queued_at,
+    started_at: item.dispatcher.started_at ?? null,
+    completed_at: item.dispatcher.completed_at ?? null,
+    metadata: md,
+  };
+}
+
+function queuedRunById(runId: string, db?: Database): QueuedAgentRun | null {
+  const d = db || getDatabase();
+  const run = getTaskRun(resolveTaskRunId(runId, d), d);
+  if (!run) return null;
+  const item = { run, dispatcher: dispatcherFromRun(run) };
+  return item.dispatcher ? (item as QueuedAgentRun) : null;
+}
+
+export function enqueueAgentRun(input: EnqueueAgentRunInput, db?: Database): AgentRun {
+  const command = input.command || resolveAdapter(input.adapter)?.command || `agent-run:${input.adapter ?? "custom"}`;
+  const queued = queueAgentRun(
+    {
+      task_id: input.task_id,
+      agent_id: input.agent_id,
+      adapter: input.adapter,
+      command,
+      metadata: {
+        ...input.metadata,
+        ...(input.plan_id ? { plan_id: input.plan_id } : {}),
+        ...(input.evidence ? { agent_run_evidence: input.evidence } : {}),
+      },
+    },
+    db,
+  );
+  return toAgentRun(queued);
+}
+
+export function claimNextAgentRun(
+  agentId: string,
+  options: { adapter?: string } = {},
+  db?: Database,
+): AgentRun | null {
+  const d = db || getDatabase();
+  const next = listAgentRunQueue(d).find(
+    (item) => item.dispatcher.state === "queued" && (!options.adapter || item.dispatcher.adapter === options.adapter),
+  );
+  if (!next) return null;
+  const dispatcher = { ...next.dispatcher, state: "running" as const, started_at: new Date().toISOString() };
+  const updated = updateDispatcherMetadata(next.run.id, dispatcher, d);
+  if (agentId) d.run("UPDATE task_runs SET agent_id = ?, updated_at = ? WHERE id = ?", [agentId, now(), next.run.id]);
+  const reread = getTaskRun(next.run.id, d) ?? updated;
+  return toAgentRun({ run: reread, dispatcher });
+}
+
+export function completeAgentRun(runId: string, evidence: Record<string, unknown> = {}, db?: Database): AgentRun {
+  const d = db || getDatabase();
+  const item = queuedRunById(runId, d);
+  if (!item) throw new Error(`Agent run not found: ${runId}`);
+  const dispatcher = { ...item.dispatcher, state: "completed" as const, completed_at: new Date().toISOString() };
+  updateDispatcherMetadata(item.run.id, dispatcher, d);
+  const md = { ...(item.run.metadata || {}), agent_run_evidence: { ...(item.run.metadata?.["agent_run_evidence"] as object), ...evidence } };
+  d.run("UPDATE task_runs SET metadata = ? WHERE id = ?", [JSON.stringify(md), item.run.id]);
+  finishTaskRun({ run_id: item.run.id, status: "completed", summary: "agent run completed", agent_id: item.run.agent_id ?? undefined }, d);
+  return toAgentRun({ run: getTaskRun(item.run.id, d)!, dispatcher });
+}
+
+export function failAgentRun(runId: string, error?: string, db?: Database): AgentRun {
+  const d = db || getDatabase();
+  const item = queuedRunById(runId, d);
+  if (!item) throw new Error(`Agent run not found: ${runId}`);
+  const dispatcher = { ...item.dispatcher, state: "failed" as const, completed_at: new Date().toISOString(), last_error: error };
+  updateDispatcherMetadata(item.run.id, dispatcher, d);
+  finishTaskRun({ run_id: item.run.id, status: "failed", summary: error || "agent run failed", agent_id: item.run.agent_id ?? undefined }, d);
+  return toAgentRun({ run: getTaskRun(item.run.id, d)!, dispatcher });
+}
+
+export function cancelAgentRun(runId: string, db?: Database): AgentRun {
+  return toAgentRun(cancelAgentRunDispatch(runId, db));
+}
+
+export function getAgentRun(runId: string, db?: Database): AgentRun | null {
+  const item = queuedRunById(runId, db);
+  return item ? toAgentRun(item) : null;
+}
+
+// Adapter config helpers (back the agent_run_adapters config map).
+export function loadAgentAdapters(): AgentAdapterConfig[] {
+  return listAgentRunAdapters();
+}
+
+export function saveAgentAdapters(adapters: AgentAdapterConfig[]): void {
+  const config = loadConfig();
+  const map: Record<string, AgentAdapterConfig> = {};
+  for (const a of adapters) map[a.name] = a;
+  saveConfig({ ...config, agent_run_adapters: map });
+}
+
+export function getAgentAdapter(name: string): AgentAdapterConfig | null {
+  return loadConfig().agent_run_adapters?.[name] ?? null;
+}
+
+export function getDefaultAgentAdapters(): AgentAdapterConfig[] {
+  return listAgentRunAdapters();
+}
+
+export function resetAgentAdapterCache(): void {
+  // Config is read fresh via loadConfig(); no in-process cache to clear.
+}
