@@ -14,7 +14,7 @@ describe("purchase profile", () => {
     expect(process.env["AWS_PROFILE"]).toBe("hasna-xyz-infra");
   });
   it("applyPurchaseProfile does NOT override explicit AWS_ACCESS_KEY_ID", () => {
-    process.env["AWS_ACCESS_KEY_ID"] = "AKIAX";
+    process.env["AWS_ACCESS_KEY_ID"] = "fake-test-key-id";
     process.env["DOMAINS_PURCHASE_AWS_PROFILE"] = "hasna-xyz-infra";
     applyPurchaseProfile();
     expect(process.env["AWS_PROFILE"]).toBeUndefined();
