@@ -6,6 +6,8 @@ import {
   domainRowLabel,
   filterLabel,
   stripAnsi,
+  resolveInitialFilter,
+  clampSelectedIndex,
 } from "./format.js";
 import type { Domain } from "../../db/domains.js";
 
@@ -23,6 +25,20 @@ describe("tui format helpers", () => {
     const future = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString();
     expect(daysUntil(future)).toBe("5d");
     expect(daysUntil(null)).toBe("—");
+    expect(daysUntil("not-a-date")).toBe("—");
+  });
+
+  test("resolveInitialFilter maps CLI status values", () => {
+    expect(resolveInitialFilter("active")).toBe("active");
+    expect(resolveInitialFilter("premium")).toBe("premium");
+    expect(resolveInitialFilter("expiring")).toBe("expiring");
+    expect(resolveInitialFilter(undefined)).toBe("all");
+  });
+
+  test("clampSelectedIndex stays in range", () => {
+    expect(clampSelectedIndex(-1, 3)).toBe(0);
+    expect(clampSelectedIndex(99, 3)).toBe(2);
+    expect(clampSelectedIndex(1, 0)).toBe(0);
   });
 
   test("domainRowLabel aligns columns", () => {

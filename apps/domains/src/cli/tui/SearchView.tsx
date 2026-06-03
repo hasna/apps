@@ -28,6 +28,11 @@ export function SearchView({
     }
   });
 
+  const emptyMessage =
+    query.trim().length < 2
+      ? "Type at least 2 characters to search."
+      : "No matching domains. Refine your query or press [esc] to go back.";
+
   return (
     <Box flexDirection="column">
       <Box marginBottom={1}>
@@ -44,9 +49,13 @@ export function SearchView({
           placeholder="name, registrar, notes…"
         />
       </Box>
-      <Text dimColor>[enter] open · [esc] back</Text>
+      <Text dimColor>[enter] open · [esc] back · [q] quit · ↑↓ navigate results</Text>
       <Box marginTop={1}>
-        <DomainTable domains={results} selectedIndex={selectedIndex} />
+        <DomainTable
+          domains={results}
+          selectedIndex={selectedIndex}
+          emptyMessage={emptyMessage}
+        />
       </Box>
     </Box>
   );

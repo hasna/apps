@@ -13,7 +13,7 @@ import { DomainTable } from "./DomainTable.js";
 import { DomainDetail } from "./DomainDetail.js";
 import { SearchView } from "./SearchView.js";
 import type { DomainFilter } from "./format.js";
-import { DOMAIN_FILTERS } from "./format.js";
+import { DOMAIN_FILTERS, clampSelectedIndex, resolveInitialFilter } from "./format.js";
 
 type View = "list" | "detail" | "search";
 
@@ -37,12 +37,7 @@ function loadDomainsForFilter(activeFilter: DomainFilter): Domain[] {
 export function App({ initialStatus }: AppProps) {
   const { exit } = useApp();
   const [view, setView] = useState<View>("list");
-  const initialFilter: DomainFilter =
-    initialStatus === "active"
-      ? "active"
-      : initialStatus === "premium"
-        ? "premium"
-        : "all";
+  const initialFilter = resolveInitialFilter(initialStatus);
   const [filter, setFilter] = useState<DomainFilter>(initialFilter);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [details, setDetails] = useState<DomainDetails | null>(null);
@@ -54,7 +49,7 @@ export function App({ initialStatus }: AppProps) {
   const refresh = useCallback(() => {
     const next = loadDomainsForFilter(filter);
     setDomains(next);
-    setSelectedIndex((current) => Math.min(current, Math.max(0, next.length - 1)));
+    setSelectedIndex((current) => clampSelectedIndex(current, next.length));
     return next;
   }, [filter]);
 
@@ -62,7 +57,7 @@ export function App({ initialStatus }: AppProps) {
     refresh();
   }, [refresh]);
 
-  const selectedDomain = domains[selectedIndex] ?? null;
+  const selectedDomain = domains[clampSelectedIndex(selectedIndex, domains.length)] ?? null;
 
   const previewDetails = useMemo(() => {
     if (!selectedDomain) return null;
@@ -75,16 +70,17 @@ export function App({ initialStatus }: AppProps) {
   }, [selectedDomain]);
 
   useInput((input, key) => {
-    if (input === "q" && view !== "search") {
+    if (input === "q") {
       exit();
       return;
     }
 
     if (view === "list") {
       if (key.upArrow || input === "k") {
-        setSelectedIndex((index) => Math.max(0, index - 1));
+        setSelectedIndex((index) => clampSelectedIndex(index - 1, domains.length));
       } else if (key.downArrow || input === "j") {
-        setSelectedIndex((index) => Math.min(domains.length - 1, index + 1));
+        if (domains.length === 0) return;
+        setSelectedIndex((index) => clampSelectedIndex(index + 1, domains.length));
       } else if (key.return && selectedDomain) {
         const full = getDomainDetails(selectedDomain.id);
         if (full) {
@@ -100,6 +96,7 @@ export function App({ initialStatus }: AppProps) {
           const index = DOMAIN_FILTERS.indexOf(current);
           return DOMAIN_FILTERS[(index + 1) % DOMAIN_FILTERS.length]!;
         });
+        setSelectedIndex(0);
       } else if (input === "r") {
         refresh();
       }
@@ -107,10 +104,11 @@ export function App({ initialStatus }: AppProps) {
     }
 
     if (view === "search") {
-      if (key.upArrow || input === "k") {
-        setSearchIndex((index) => Math.max(0, index - 1));
-      } else if (key.downArrow || input === "j") {
-        setSearchIndex((index) => Math.min(searchResults.length - 1, index + 1));
+      if (key.upArrow) {
+        setSearchIndex((index) => clampSelectedIndex(index - 1, searchResults.length));
+      } else if (key.downArrow) {
+        if (searchResults.length === 0) return;
+        setSearchIndex((index) => clampSelectedIndex(index + 1, searchResults.length));
       }
       return;
     }
@@ -146,6 +144,7 @@ export function App({ initialStatus }: AppProps) {
   }, []);
 
   const detailDns = details ? listDnsRecords(details.domain.id) : [];
+  const listSelectedIndex = clampSelectedIndex(selectedIndex, domains.length);
 
   return (
     <Box flexDirection="column" padding={1}>
@@ -153,7 +152,7 @@ export function App({ initialStatus }: AppProps) {
 
       {view === "list" && (
         <Box flexDirection="column">
-          <DomainTable domains={domains} selectedIndex={selectedIndex} />
+          <DomainTable domains={domains} selectedIndex={listSelectedIndex} />
           {previewDetails && (
             <Box marginTop={1} flexDirection="column">
               <Text bold dimColor>Selected</Text>
@@ -175,7 +174,7 @@ export function App({ initialStatus }: AppProps) {
       {view === "search" && (
         <SearchView
           results={searchResults}
-          selectedIndex={searchIndex}
+          selectedIndex={clampSelectedIndex(searchIndex, searchResults.length)}
           onSearch={handleSearch}
           onSelect={handleSearchSelect}
           onBack={() => setView("list")}

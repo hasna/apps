@@ -4,6 +4,7 @@ import type { Domain } from "../../db/domains.js";
 import {
   TABLE_COLS,
   STATUS_COLORS,
+  clampSelectedIndex,
   daysUntil,
   formatDate,
   pad,
@@ -15,21 +16,29 @@ interface DomainTableProps {
   domains: Domain[];
   selectedIndex: number;
   compact?: boolean;
+  emptyMessage?: string;
 }
 
-export function DomainTable({ domains, selectedIndex, compact = false }: DomainTableProps) {
+export function DomainTable({
+  domains,
+  selectedIndex,
+  compact = false,
+  emptyMessage = "No domains match this filter. Press [f] to change filter or [r] to refresh.",
+}: DomainTableProps) {
   if (domains.length === 0) {
     return (
       <Box flexDirection="column" paddingLeft={compact ? 0 : 1}>
-        <Text dimColor>No domains match this filter. Press [f] to change filter or [r] to refresh.</Text>
+        <Text dimColor>{emptyMessage}</Text>
       </Box>
     );
   }
 
+  const safeSelectedIndex = clampSelectedIndex(selectedIndex, domains.length);
+
   const start = Math.max(
     0,
     Math.min(
-      selectedIndex - Math.floor(VISIBLE_ROWS / 2),
+      safeSelectedIndex - Math.floor(VISIBLE_ROWS / 2),
       Math.max(0, domains.length - VISIBLE_ROWS),
     ),
   );
@@ -54,7 +63,7 @@ export function DomainTable({ domains, selectedIndex, compact = false }: DomainT
 
       {visible.map((domain, offset) => {
         const index = start + offset;
-        const selected = index === selectedIndex;
+        const selected = index === safeSelectedIndex;
         const statusColor = STATUS_COLORS[domain.status] ?? "white";
 
         return (

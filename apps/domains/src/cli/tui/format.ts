@@ -19,8 +19,11 @@ export function formatDate(iso: string | null | undefined): string {
 
 export function daysUntil(iso: string | null | undefined): string {
   if (!iso) return "—";
-  const ms = new Date(iso).getTime() - Date.now();
+  const parsed = new Date(iso).getTime();
+  if (!Number.isFinite(parsed)) return "—";
+  const ms = parsed - Date.now();
   const days = Math.ceil(ms / (1000 * 60 * 60 * 24));
+  if (!Number.isFinite(days)) return "—";
   if (days < 0) return "expired";
   if (days === 0) return "today";
   return `${days}d`;
@@ -64,4 +67,16 @@ export function filterLabel(filter: DomainFilter): string {
     case "premium":
       return "Premium";
   }
+}
+
+export function resolveInitialFilter(initialStatus?: string): DomainFilter {
+  if (initialStatus === "active") return "active";
+  if (initialStatus === "premium") return "premium";
+  if (initialStatus === "expiring") return "expiring";
+  return "all";
+}
+
+export function clampSelectedIndex(index: number, length: number): number {
+  if (length <= 0) return 0;
+  return Math.max(0, Math.min(index, length - 1));
 }
