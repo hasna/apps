@@ -37,7 +37,7 @@ export function SearchView({
         <Text dimColor>Query: </Text>
         <TextInput
           value={query}
-          onChange={(value) => {
+          onChange={(value: string) => {
             setQuery(value);
             onSearch(value);
           }}
