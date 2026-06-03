@@ -61,16 +61,30 @@ export const SECURITY_HEADERS: Record<string, string> = {
   "Permissions-Policy": "camera=, microphone=, geolocation=",
 };
 
+<<<<<<< Updated upstream
 function getProvidedApiKey(req: Request): string | null {
   const headerKey = req.headers.get("x-api-key");
   if (headerKey) return headerKey.trim();
   const auth = req.headers.get("authorization");
   if (!auth) return null;
   return auth.replace(/^Bearer\s+/i, "").trim() || null;
+=======
+/** Build CORS headers for a given request origin and port */
+function corsHeaders(origin: string | undefined, port?: number): Record<string, string> {
+  if (origin) {
+    const isAllowed = origin === `http://localhost:${port}` || origin === "http://localhost:0";
+    return {
+      "Access-Control-Allow-Origin": isAllowed ? origin : "null",
+      "Vary": "Origin",
+    };
+  }
+  return {};
+>>>>>>> Stashed changes
 }
 
 /** Check API key auth — returns a Response if unauthorized, null if OK */
 function checkAuth(req: Request, apiKey: string | null): Response | null {
+<<<<<<< Updated upstream
   const generatedKeysEnabled = hasActiveApiKeys();
   if (!apiKey && !generatedKeysEnabled) return null; // no key configured, skip auth
 
@@ -81,6 +95,14 @@ function checkAuth(req: Request, apiKey: string | null): Response | null {
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
       status: 401,
       headers: { "Content-Type": "application/json", "WWW-Authenticate": "Bearer", ...SECURITY_HEADERS },
+=======
+  if (!apiKey) return null; // no key configured, skip auth
+  const provided = req.headers.get("x-api-key") || req.headers.get("authorization")?.replace("Bearer ", "");
+  if (!provided || provided !== apiKey) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json", ...SECURITY_HEADERS },
+>>>>>>> Stashed changes
     });
   }
   return null;
@@ -105,7 +127,11 @@ function checkRateLimit(ip: string): { allowed: boolean; retryAfter?: number } {
   return { allowed: true };
 }
 
+<<<<<<< Updated upstream
 export function json(data: unknown, status = 200, headers?: HeadersInit): Response {
+=======
+function json(data: unknown, status = 200, port?: number): Response {
+>>>>>>> Stashed changes
   return new Response(JSON.stringify(data), {
     status,
     headers: {
@@ -245,8 +271,19 @@ export async function startServer(port: number, options?: { open?: boolean; host
 
       // ── CORS ──
       if (method === "OPTIONS") {
+        const reqOrigin = req.headers.get("origin") || undefined;
+        const allowed = reqOrigin && (reqOrigin === `http://localhost:${port}` || reqOrigin === "http://localhost:0");
         return new Response(null, {
+<<<<<<< Updated upstream
           headers: corsHeaders || {
+=======
+          headers: allowed ? {
+            "Access-Control-Allow-Origin": reqOrigin,
+            "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, X-API-Key, Authorization",
+            "Vary": "Origin",
+          } : {
+>>>>>>> Stashed changes
             "Vary": "Origin",
           },
         });
@@ -272,14 +309,83 @@ export async function startServer(port: number, options?: { open?: boolean; host
 
       // ── SSE Event Stream (supports optional agent_id/project_id filtering) ──
       if (path === "/api/events" && method === "GET") {
+<<<<<<< Updated upstream
         const res = handlers.handleSseEvents(req, url, ctx);
         if (res) return res;
+=======
+        const agentId = url.searchParams.get("agent_id") || undefined;
+        const projectId = url.searchParams.get("project_id") || undefined;
+        if (agentId || projectId) {
+          // Filtered SSE — reuse the filtered client infrastructure
+          const client: FilteredClient = { controller: null as any, agentId, projectId, events: undefined };
+          const stream = new ReadableStream({
+            start(controller) {
+              client.controller = controller;
+              filteredSseClients.add(client);
+              controller.enqueue(`data: ${JSON.stringify({ type: "connected", agent_id: agentId, project_id: projectId, timestamp: new Date().toISOString() })}\n\n`);
+            },
+            cancel() { filteredSseClients.delete(client); },
+          });
+          return new Response(stream, {
+            headers: {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              "Connection": "keep-alive",
+              "Access-Control-Allow-Origin": `http://localhost:${port}`,
+              "Vary": "Origin",
+            },
+          });
+        }
+        // Unfiltered dashboard SSE
+        const stream = new ReadableStream({
+          start(controller) {
+            sseClients.add(controller);
+            controller.enqueue(`data: ${JSON.stringify({ type: "connected", timestamp: new Date().toISOString() })}\n\n`);
+          },
+          cancel(controller) {
+            sseClients.delete(controller);
+          },
+        });
+        return new Response(stream, {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": `http://localhost:${port}`,
+          },
+        });
+>>>>>>> Stashed changes
       }
 
       // ── SSE Agent Task Stream ──
       if (path === "/api/tasks/stream" && method === "GET") {
+<<<<<<< Updated upstream
         const res = handlers.handleTasksStream(req, url, ctx);
         if (res) return res;
+=======
+        const agentId = url.searchParams.get("agent_id") || undefined;
+        const projectId = url.searchParams.get("project_id") || undefined;
+        const eventsParam = url.searchParams.get("events");
+        const eventFilter = eventsParam ? new Set(eventsParam.split(",").map(e => e.trim())) : undefined;
+        const client: FilteredClient = { controller: null as any, agentId, projectId, events: eventFilter };
+        const stream = new ReadableStream({
+          start(controller) {
+            client.controller = controller;
+            filteredSseClients.add(client);
+            controller.enqueue(`: connected\n\ndata: ${JSON.stringify({ type: "connected", agent_id: agentId, timestamp: new Date().toISOString() })}\n\n`);
+          },
+          cancel() { filteredSseClients.delete(client); },
+        });
+        return new Response(stream, {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": `http://localhost:${port}`,
+            "Vary": "Origin",
+          },
+        });
+>>>>>>> Stashed changes
       }
 
       // ── API: Health ──
@@ -344,7 +450,31 @@ export async function startServer(port: number, options?: { open?: boolean; host
 
       // ── API: Task Context (for agent prompt injection) ──
       if (path === "/api/tasks/context" && method === "GET") {
+<<<<<<< Updated upstream
         return handlers.handleTasksContext(req, url, ctx, jsonWithCors, taskToSummary);
+=======
+        const agentId = url.searchParams.get("agent_id") || undefined;
+        const projectId = url.searchParams.get("project_id") || undefined;
+        const format = url.searchParams.get("format") || "text"; // text | compact | json
+        const { getStatus, getNextTask } = await import("../db/tasks.js");
+        const filters = projectId ? { project_id: projectId } : undefined;
+        const status = getStatus(filters, agentId);
+        const next = getNextTask(agentId, filters);
+        if (format === "json") {
+          return json({ status, next_task: next ? taskToSummary(next) : null }, 200, port);
+        }
+        // Text format for prompt injection
+        const lines = [];
+        lines.push(`Tasks: ${status.pending} pending | ${status.in_progress} active | ${status.completed} done`);
+        if (status.stale_count > 0) lines.push(`⚠ ${status.stale_count} stale tasks stuck in-progress`);
+        if (status.overdue_recurring > 0) lines.push(`🔁 ${status.overdue_recurring} overdue recurring tasks`);
+        if (status.active_work.length > 0) {
+          lines.push(`Active: ${status.active_work.slice(0, 3).map(w => `${w.short_id || w.id.slice(0, 8)} (${w.assigned_to || '?'})`).join(", ")}`);
+        }
+        if (next) lines.push(`Next up: ${next.short_id || next.id.slice(0, 8)} [${next.priority}] ${next.title}`);
+        const text = lines.join("\n");
+        return new Response(text, { headers: { "Content-Type": "text/plain", ...SECURITY_HEADERS } });
+>>>>>>> Stashed changes
       }
 
       // ── API: Task attachments ──
@@ -372,7 +502,29 @@ export async function startServer(port: number, options?: { open?: boolean; host
 
         // PATCH /api/tasks/:id
         if (method === "PATCH") {
+<<<<<<< Updated upstream
           return handlers.handlePatchTask(id, req, ctx, jsonWithCors, taskToSummary);
+=======
+          try {
+            const body = await req.json() as Record<string, unknown>;
+            const task = getTask(id);
+            if (!task) return json({ error: "Task not found" }, 404, port);
+            // Allowlist of safe fields — exclude approved_by, requires_approval, recurrence_rule,
+            // status transitions (use dedicated start/complete/fail endpoints), and internal fields
+            const ALLOWED = new Set(["title", "description", "priority", "assigned_to", "plan_id", "task_list_id", "tags", "metadata", "due_at", "estimated_minutes", "task_type"]);
+            const safeBody: Record<string, unknown> = {};
+            for (const [key, value] of Object.entries(body)) {
+              if (ALLOWED.has(key)) safeBody[key] = value;
+            }
+            const updated = updateTask(id, {
+              ...safeBody,
+              version: task.version,
+            } as Parameters<typeof updateTask>[1]);
+            return json(taskToSummary(updated), 200, port);
+          } catch (e) {
+            return json({ error: e instanceof Error ? e.message : "Failed to update task" }, 500, port);
+          }
+>>>>>>> Stashed changes
         }
 
         // DELETE /api/tasks/:id
