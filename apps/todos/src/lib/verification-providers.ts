@@ -311,3 +311,65 @@ export async function runVerificationProvider(input: RunVerificationProviderInpu
 
   return result;
 }
+
+// Verification records query layer (reads task_verifications written by
+// db/task-commits.ts). Consumers: verification-evidence, import-export-bridge,
+// resource-snapshots, the verification MCP tool.
+interface VerificationRecordResult {
+  id: string;
+  task_id: string;
+  command: string;
+  status: VerificationProviderStatus;
+  output_summary: string | null;
+  artifact_path: string | null;
+  agent_id: string | null;
+  run_at: string;
+  created_at: string;
+  evidence: Record<string, unknown>;
+}
+
+function verificationRowToRecord(row: Record<string, unknown>): VerificationRecordResult {
+  return {
+    id: String(row["id"]),
+    task_id: String(row["task_id"]),
+    command: String(row["command"] ?? ""),
+    status: (row["status"] as VerificationProviderStatus) ?? "unknown",
+    output_summary: (row["output_summary"] as string | null) ?? null,
+    artifact_path: (row["artifact_path"] as string | null) ?? null,
+    agent_id: (row["agent_id"] as string | null) ?? null,
+    run_at: String(row["run_at"] ?? ""),
+    created_at: String(row["created_at"] ?? ""),
+    evidence: {
+      command: row["command"] ?? null,
+      status: row["status"] ?? "unknown",
+      output_summary: row["output_summary"] ?? null,
+      artifact_path: row["artifact_path"] ?? null,
+      agent_id: row["agent_id"] ?? null,
+      run_record_id: null,
+    },
+  };
+}
+
+export function getVerificationRecord(id: string, db?: Database): VerificationRecordResult | null {
+  const d = db || getDatabase();
+  const row = d.query("SELECT * FROM task_verifications WHERE id = ?").get(id) as Record<string, unknown> | null;
+  return row ? verificationRowToRecord(row) : null;
+}
+
+export function listVerificationRecords(
+  filter: { task_id?: string; agent_id?: string; status?: string; run_record_id?: string; provider?: string; limit?: number } = {},
+  db?: Database,
+): VerificationRecordResult[] {
+  const d = db || getDatabase();
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
+  if (filter.task_id) { conditions.push("task_id = ?"); params.push(filter.task_id); }
+  if (filter.agent_id) { conditions.push("agent_id = ?"); params.push(filter.agent_id); }
+  if (filter.status) { conditions.push("status = ?"); params.push(filter.status); }
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const limitClause = filter.limit && filter.limit > 0 ? ` LIMIT ${Math.floor(filter.limit)}` : "";
+  const rows = d
+    .query(`SELECT * FROM task_verifications ${where} ORDER BY run_at DESC, created_at DESC${limitClause}`)
+    .all(...params) as Record<string, unknown>[];
+  return rows.map(verificationRowToRecord);
+}
