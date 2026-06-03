@@ -22,7 +22,28 @@ export interface DomainContact {
 export interface DomainsConfig {
   default_registrar?: string;
   default_dns?: string;
+  /** AWS profile/account used for domain purchases (Route53 Domains). */
+  purchase_aws_profile?: string;
   contact?: DomainContact;
+}
+
+/**
+ * AWS profile to use for domain purchases. For this app, domains are bought in
+ * the hasna-xyz-infra account. Resolved from config, then env. Applying it sets
+ * process.env.AWS_PROFILE when no explicit AWS creds are already present.
+ */
+export function getPurchaseProfile(): string | undefined {
+  return loadConfig().purchase_aws_profile
+    ?? process.env["DOMAINS_PURCHASE_AWS_PROFILE"]
+    ?? undefined;
+}
+
+/** Set AWS_PROFILE from config for purchase ops if no explicit creds are set. */
+export function applyPurchaseProfile(): string | undefined {
+  if (process.env["AWS_ACCESS_KEY_ID"] || process.env["AWS_PROFILE"]) return process.env["AWS_PROFILE"];
+  const profile = getPurchaseProfile();
+  if (profile) process.env["AWS_PROFILE"] = profile;
+  return profile;
 }
 
 function configPath(): string {

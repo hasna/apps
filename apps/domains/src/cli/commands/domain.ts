@@ -21,7 +21,7 @@ import {
   exportPortfolio, checkAllDomains, whoisLookup,
 } from "../../db/domains.js";
 import { getAvailableProviders, getRegistrarProvider, getDnsProvider, autoDetectRegistrar } from "../../lib/registrar.js";
-import { loadConfig, resolveContact } from "../../lib/config.js";
+import { loadConfig, resolveContact, applyPurchaseProfile } from "../../lib/config.js";
 import { registerDomain, checkAvailability, getRegistrationStatus, createHostedZone, updateNameservers } from "../../lib/route53.js";
 import { createZone as cfCreateZone } from "../../lib/cloudflare.js";
 import { delegateDomainToCloudflare } from "../../lib/delegate.js";
@@ -623,6 +623,11 @@ export function registerDomainCommand(program: Command): void {
 
       const cfg = loadConfig();
       const providerName = opts.registrar ?? opts.provider ?? cfg.default_registrar ?? "route53";
+
+      // Use the configured purchase AWS account (hasna-xyz-infra) unless explicit
+      // AWS creds/profile are already set in the environment.
+      const purchaseProfile = applyPurchaseProfile();
+      if (purchaseProfile) console.log(`Using purchase AWS profile: ${purchaseProfile}`);
 
       // Only Route 53 supports direct purchase via this tool
       if (providerName !== "route53") {
