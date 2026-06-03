@@ -17,6 +17,7 @@ Domain portfolio and DNS management for AI agents — CLI + MCP server with SQLi
 - **Registrar sync** — Namecheap and GoDaddy integration
 - **Brand monitoring** — typosquat/threat detection via Brandsight API
 - **MCP server** — full Model Context Protocol support for AI agents
+- **Interactive TUI** — browse your portfolio in the terminal with `domains interactive`
 
 ## Installation
 
@@ -29,7 +30,10 @@ Data is stored at `~/.hasna/domains/domains.db`. Override with `HASNA_DOMAINS_DI
 ## CLI Usage
 
 ```bash
-# Domain management
+# Interactive portfolio browser (Ink TUI)
+domains interactive
+domains interactive --status active
+```
 domains add --name example.com --registrar Namecheap --expires-at 2025-01-01
 domains list
 domains list --status active --registrar Namecheap

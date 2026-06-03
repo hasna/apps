@@ -192,5 +192,5 @@ describe("Bulk Domain Check", () => {
       expect(result.dns_validation).toHaveProperty("errors");
       expect(Array.isArray(result.dns_validation.errors)).toBe(true);
     }
-  });
+  }, 30_000);
 });

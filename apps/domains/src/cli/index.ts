@@ -22,6 +22,7 @@ import { registerOutreachCommand } from "./commands/outreach.js";
 import { registerSedoCommand } from "./commands/sedo.js";
 import { registerWalletCommand } from "./commands/wallet.js";
 import { registerProvisionCommand } from "./commands/provision.js";
+import { registerInteractiveCommand } from "./commands/interactive.js";
 import { getPackageVersion } from "../lib/version.js";
 
 const program = new Command();
@@ -66,5 +67,8 @@ registerSedoCommand(program);  // domains sedo <search|status|portfolio|add|edit
 // ── Wallet payment integration ───────────────────────────────────────────
 registerWalletCommand(program);  // domains wallet <cards|buy|renew>
 registerProvisionCommand(program);  // domains provision <status>
+
+// ── Interactive Ink TUI ────────────────────────────────────────────────────
+registerInteractiveCommand(program);  // domains interactive
 
 program.parse(process.argv);

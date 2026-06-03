@@ -698,11 +698,11 @@ describe("getDomainByName", () => {
 
 describe("Subdomain Discovery", () => {
   test("discoverSubdomains returns structured result", async () => {
-    // We test the function structure — network call may fail in CI
+    // Network call to crt.sh — allow extra time in CI/slow networks
     const result = await discoverSubdomains("example.com");
     expect(result).toHaveProperty("domain", "example.com");
     expect(result).toHaveProperty("subdomains");
     expect(result).toHaveProperty("source", "crt.sh");
     expect(Array.isArray(result.subdomains)).toBe(true);
-  });
+  }, 30_000);
 });
