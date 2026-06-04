@@ -1,0 +1,50 @@
+{
+  "name": "@hasna/ui",
+  "version": "0.0.1",
+  "description": "Offline-first UI design toolkit: mirror the ui.sh design skill locally and preview variants with a self-contained, dependency-free picker — no remote MCP, no hosted picker script.",
+  "type": "module",
+  "license": "MIT",
+  "author": "hasna",
+  "homepage": "https://github.com/hasna/ui#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/ui.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hasna/ui/issues"
+  },
+  "keywords": [
+    "ui",
+    "tailwind",
+    "design-system",
+    "mcp",
+    "ui.sh",
+    "variant-picker",
+    "bun",
+    "offline"
+  ],
+  "module": "src/index.ts",
+  "bin": {
+    "ui": "src/cli.ts"
+  },
+  "files": [
+    "src",
+    "public/ui-picker.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "scripts": {
+    "harvest": "bun run src/harvest.ts",
+    "build:picker": "bun build src/picker.ts --outfile public/ui-picker.js --target browser --minify",
+    "serve": "bun run src/server.ts",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "5.6.3"
+  }
+}
