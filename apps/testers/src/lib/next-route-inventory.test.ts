@@ -20,7 +20,8 @@ function makeRepo(): string {
   writeFileSync(join(root, "packages", "web", "app", "(public)", "(pages)", "pricing", "page.tsx"), "export default function Page() { return null; }\n");
 
   mkdirSync(join(root, "packages", "web", "app", "(dashboard)", "[orgSlug]", "billing"), { recursive: true });
-  writeFileSync(join(root, "packages", "web", "app", "(dashboard)", "[orgSlug]", "billing", "page.tsx"), "export default function Page() { return null; }\n");
+  writeFileSync(join(root, "packages", "web", "app", "(dashboard)", "[orgSlug]", "billing", "page.tsx"), "import { BillingActions } from './billing-actions';\nexport default function Page() { return <><a href=\"/[orgSlug]/billing/history\">History</a><BillingActions /></>; }\n");
+  writeFileSync(join(root, "packages", "web", "app", "(dashboard)", "[orgSlug]", "billing", "billing-actions.tsx"), "export function BillingActions() { return <form aria-label=\"Top up credits\"><button aria-label=\"Add credits\">Add credits</button><input name=\"amount\" placeholder=\"Credit amount\" /></form>; }\n");
 
   mkdirSync(join(root, "packages", "web", "app", "api", "v1", "(commerce)", "billing", "top-ups"), { recursive: true });
   writeFileSync(join(root, "packages", "web", "app", "api", "v1", "(commerce)", "billing", "top-ups", "route.ts"), "export async function GET() {}\nexport async function POST() {}\n");
@@ -56,10 +57,14 @@ describe("next route inventory", () => {
     expect(billingPage.requiresAuth).toBe(true);
     expect(billingPage.tags).toContain("area:commerce");
     expect(billingPage.tags).toContain("dynamic-route");
+    expect(billingPage.fixtureParams).toEqual(["orgSlug"]);
+    expect(billingPage.actions.map((action) => action.label)).toContain("Add credits");
+    expect(billingPage.actions.map((action) => action.label)).toContain("Credit amount");
 
     const topUpsApi = inventory.items.find((item) => item.routePath === "/api/v1/billing/top-ups")!;
     expect(topUpsApi.kind).toBe("api");
     expect(topUpsApi.methods).toEqual(["GET", "POST"]);
+    expect(topUpsApi.actions.map((action) => action.label)).toEqual(["GET", "POST"]);
     expect(topUpsApi.priority).toBe("critical");
   });
 
@@ -90,6 +95,12 @@ describe("next route inventory", () => {
     expect(apiScenario.requiresAuth).toBe(true);
     expect(apiScenario.tags).toContain("route:api");
     expect(apiScenario.metadata?.methods).toEqual(["DELETE"]);
+    expect(apiScenario.metadata?.fixtureParams).toEqual(["id"]);
+    expect(apiScenario.metadata?.actionCount).toBe(1);
+
+    const billingScenario = scenarios.find((scenario) => scenario.name === "Next page: /:orgSlug/billing")!;
+    expect(billingScenario.steps.some((step) => step.includes("Add credits"))).toBe(true);
+    expect(billingScenario.metadata?.actionCount).toBeGreaterThan(0);
 
     const workflows = listTestingWorkflows({ projectId: project.id });
     expect(workflows.some((workflow) => workflow.name === "Next route inventory commerce page")).toBe(true);

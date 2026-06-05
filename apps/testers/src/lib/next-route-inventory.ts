@@ -12,6 +12,16 @@ import type {
 } from "../types/index.js";
 
 export type NextRouteKind = "page" | "api";
+export type NextRouteActionKind = "link" | "button" | "form" | "input" | "api-method";
+
+export interface NextRouteAction {
+  kind: NextRouteActionKind;
+  label: string;
+  target?: string;
+  sourceFile: string;
+  destructive: boolean;
+  requiresFixture: boolean;
+}
 
 export interface NextRouteInventoryItem {
   kind: NextRouteKind;
@@ -22,6 +32,8 @@ export interface NextRouteInventoryItem {
   methods: string[];
   dynamic: boolean;
   requiresAuth: boolean;
+  fixtureParams: string[];
+  actions: NextRouteAction[];
   tags: string[];
   priority: ScenarioPriority;
 }
@@ -81,6 +93,16 @@ const WALK_EXCLUDES = new Set([
 ]);
 
 const SAFE_PAGE_ASSERTIONS: Assertion[] = [{ type: "no_console_errors" }];
+const IMPORT_SCAN_LIMIT = 40;
+const IMPORT_SCAN_DEPTH = 3;
+
+const SOURCE_EXTENSIONS = [
+  ".tsx",
+  ".ts",
+  ".jsx",
+  ".js",
+  ".mdx",
+];
 
 export function discoverNextRouteInventory(options: {
   rootDir: string;
@@ -124,20 +146,31 @@ export function scenarioInputForNextRoute(
 ): CreateScenarioInput {
   const label = item.kind === "page" ? "page" : "API route";
   const methodList = item.methods.length > 0 ? item.methods.join(", ") : "discovered methods";
+  const fixtureStep = item.fixtureParams.length > 0
+    ? `Bind dynamic fixture values for ${item.fixtureParams.map((name) => `:${name}`).join(", ")} before running route actions.`
+    : undefined;
   const dynamicStep = item.dynamic
     ? "Substitute dynamic path parameters with valid fixture values from the target org before opening or calling the route."
     : undefined;
+  const actionSteps = item.actions.slice(0, 16).map(formatActionStep);
   const pageSteps = [
+    fixtureStep,
     dynamicStep,
     `Open the Next.js ${label} ${item.routePath}.`,
     "Wait for the route to finish loading and verify it does not show a blank shell, framework error page, or unexpected auth loop.",
-    "Exercise visible primary navigation, tabs, filters, dialogs, forms, and safe buttons on this route.",
+    ...(
+      actionSteps.length > 0
+        ? actionSteps
+        : ["Exercise visible primary navigation, tabs, filters, dialogs, forms, and safe buttons on this route."]
+    ),
     "Verify the route stays within the expected org/workspace context and does not emit console errors.",
   ].filter(Boolean) as string[];
 
   const apiSteps = [
+    fixtureStep,
     dynamicStep,
     `Call the ${methodList} handler(s) for ${item.routePath} using safe fixture data.`,
+    ...actionSteps,
     "Verify expected authentication, authorization, validation, and tenant isolation behavior.",
     "For mutating methods, use harmless test payloads and confirm the response does not create cross-org side effects.",
     "Verify response status, JSON shape, and error messages are stable and regression-safe.",
@@ -159,6 +192,9 @@ export function scenarioInputForNextRoute(
       category: item.category,
       methods: item.methods,
       dynamic: item.dynamic,
+      fixtureParams: item.fixtureParams,
+      actions: item.actions,
+      actionCount: item.actions.length,
       groups: item.groups,
     },
     projectId,
@@ -273,9 +309,22 @@ function routeItemFromFile(rootDir: string, appDir: string, file: string): NextR
     .filter(Boolean);
   const routePath = `/${pathSegments.join("/")}`.replace(/\/+/g, "/");
   const normalizedRoutePath = routePath === "/" ? "/" : routePath.replace(/\/$/, "");
-  const methods = kind === "api" ? extractRouteMethods(file) : [];
+  const sources = collectRouteSources(rootDir, file);
+  const primarySource = sources[0]?.source ?? readFileSync(file, "utf8");
+  const methods = kind === "api" ? extractRouteMethods(primarySource) : [];
   const category = classifyRoute(normalizedRoutePath, groups, relativeFile);
   const dynamic = routeSegments.some((segment) => segment.includes("["));
+  const fixtureParams = extractFixtureParams(normalizedRoutePath);
+  const actions = kind === "api"
+    ? methods.map((method): NextRouteAction => ({
+        kind: "api-method",
+        label: method,
+        target: normalizedRoutePath,
+        sourceFile: relativeFile,
+        destructive: isDestructiveAction(method, normalizedRoutePath),
+        requiresFixture: fixtureParams.length > 0,
+      }))
+    : extractPageActions(rootDir, sources, fixtureParams);
   const requiresAuth = inferRequiresAuth(normalizedRoutePath, groups, kind);
 
   return {
@@ -287,6 +336,8 @@ function routeItemFromFile(rootDir: string, appDir: string, file: string): NextR
     methods,
     dynamic,
     requiresAuth,
+    fixtureParams,
+    actions,
     tags: tagsForRoute({ kind, routePath: normalizedRoutePath, category, groups, dynamic, requiresAuth }),
     priority: priorityForRoute(normalizedRoutePath, category, kind),
   };
@@ -305,8 +356,7 @@ function normalizeRouteSegment(segment: string): string {
   return segment;
 }
 
-function extractRouteMethods(file: string): string[] {
-  const source = readFileSync(file, "utf8");
+function extractRouteMethods(source: string): string[] {
   const methods = new Set<string>();
   const pattern = /\b(?:export\s+)?(?:async\s+)?function\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b|\bexport\s+const\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/g;
   for (const match of source.matchAll(pattern)) {
@@ -314,6 +364,249 @@ function extractRouteMethods(file: string): string[] {
     if (method) methods.add(method);
   }
   return [...methods].sort();
+}
+
+function collectRouteSources(rootDir: string, entryFile: string): Array<{ file: string; source: string }> {
+  const seen = new Set<string>();
+  const sources: Array<{ file: string; source: string }> = [];
+
+  function visit(file: string, depth: number): void {
+    if (seen.has(file) || sources.length >= IMPORT_SCAN_LIMIT) return;
+    if (!existsSync(file) || !statSync(file).isFile()) return;
+    seen.add(file);
+    const source = readFileSync(file, "utf8");
+    sources.push({ file: relative(rootDir, file), source });
+    if (depth >= IMPORT_SCAN_DEPTH) return;
+
+    for (const specifier of localImportSpecifiers(source)) {
+      const resolved = resolveImportFile(file, specifier);
+      if (resolved) visit(resolved, depth + 1);
+    }
+  }
+
+  visit(entryFile, 0);
+  return sources;
+}
+
+function localImportSpecifiers(source: string): string[] {
+  const specifiers: string[] = [];
+  const pattern = /\bimport\b(?:[\s\S]*?\bfrom\s*)?["'](\.{1,2}\/[^"']+)["']|\bimport\(\s*["'](\.{1,2}\/[^"']+)["']\s*\)/g;
+  for (const match of source.matchAll(pattern)) {
+    const specifier = match[1] ?? match[2];
+    if (specifier) specifiers.push(specifier);
+  }
+  return specifiers;
+}
+
+function resolveImportFile(fromFile: string, specifier: string): string | null {
+  const base = resolve(join(fromFile, ".."), specifier);
+  const candidates = [
+    base,
+    ...SOURCE_EXTENSIONS.map((ext) => `${base}${ext}`),
+    ...SOURCE_EXTENSIONS.map((ext) => join(base, `index${ext}`)),
+  ];
+  return candidates.find((candidate) => existsSync(candidate) && statSync(candidate).isFile()) ?? null;
+}
+
+function extractPageActions(
+  rootDir: string,
+  sources: Array<{ file: string; source: string }>,
+  fixtureParams: string[],
+): NextRouteAction[] {
+  const actions: NextRouteAction[] = [];
+  for (const source of sources) {
+    actions.push(...extractLinkedActions(source, fixtureParams));
+    actions.push(...extractButtonActions(source, fixtureParams));
+    actions.push(...extractFormActions(source, fixtureParams));
+    actions.push(...extractInputActions(source, fixtureParams));
+  }
+
+  const deduped = new Map<string, NextRouteAction>();
+  for (const action of actions) {
+    const key = [
+      action.kind,
+      normalizeLabel(action.label),
+      action.target ?? "",
+      action.sourceFile,
+    ].join("|");
+    if (!deduped.has(key)) deduped.set(key, action);
+  }
+
+  return [...deduped.values()]
+    .sort((a, b) => `${a.kind}:${a.label}:${a.target ?? ""}`.localeCompare(`${b.kind}:${b.label}:${b.target ?? ""}`))
+    .slice(0, 40)
+    .map((action) => ({ ...action, sourceFile: relative(rootDir, resolve(rootDir, action.sourceFile)) }));
+}
+
+function extractLinkedActions(
+  source: { file: string; source: string },
+  fixtureParams: string[],
+): NextRouteAction[] {
+  const actions: NextRouteAction[] = [];
+  const pattern = /<(Link|a)\b([^>]*)>([\s\S]*?)<\/\1>/g;
+  for (const match of source.source.matchAll(pattern)) {
+    const attrs = match[2] ?? "";
+    const body = match[3] ?? "";
+    const href = attributeValue(attrs, "href");
+    const label = firstNonEmpty(
+      attributeValue(attrs, "aria-label"),
+      attributeValue(attrs, "title"),
+      textFromJsx(body),
+      href,
+    );
+    if (!label) continue;
+    actions.push({
+      kind: "link",
+      label: clamp(label),
+      target: href ? clamp(href, 180) : undefined,
+      sourceFile: source.file,
+      destructive: isDestructiveAction(label, href ?? ""),
+      requiresFixture: requiresFixture(href ?? "", fixtureParams),
+    });
+  }
+  return actions;
+}
+
+function extractButtonActions(
+  source: { file: string; source: string },
+  fixtureParams: string[],
+): NextRouteAction[] {
+  const actions: NextRouteAction[] = [];
+  const pattern = /<(button|Button|IconButton|DropdownMenuItem|CommandItem|SelectItem|TabsTrigger)\b([^>]*?)(?:>([\s\S]*?)<\/\1>|\/>)/g;
+  for (const match of source.source.matchAll(pattern)) {
+    const attrs = match[2] ?? "";
+    const body = match[3] ?? "";
+    const label = firstNonEmpty(
+      attributeValue(attrs, "aria-label"),
+      attributeValue(attrs, "title"),
+      attributeValue(attrs, "data-testid"),
+      textFromJsx(body),
+      attributeValue(attrs, "value"),
+    );
+    if (!label) continue;
+    const target = attributeValue(attrs, "href") ?? attributeValue(attrs, "data-testid");
+    actions.push({
+      kind: "button",
+      label: clamp(label),
+      target: target ? clamp(target, 180) : undefined,
+      sourceFile: source.file,
+      destructive: isDestructiveAction(label, attrs),
+      requiresFixture: requiresFixture(`${label} ${target ?? ""}`, fixtureParams),
+    });
+  }
+  return actions;
+}
+
+function extractFormActions(
+  source: { file: string; source: string },
+  fixtureParams: string[],
+): NextRouteAction[] {
+  const actions: NextRouteAction[] = [];
+  const pattern = /<form\b([^>]*)>/g;
+  for (const match of source.source.matchAll(pattern)) {
+    const attrs = match[1] ?? "";
+    const label = firstNonEmpty(
+      attributeValue(attrs, "aria-label"),
+      attributeValue(attrs, "name"),
+      attributeValue(attrs, "data-testid"),
+      attributeValue(attrs, "action"),
+      `form in ${source.file}`,
+    );
+    const target = attributeValue(attrs, "action");
+    actions.push({
+      kind: "form",
+      label: clamp(label),
+      target: target ? clamp(target, 180) : undefined,
+      sourceFile: source.file,
+      destructive: isDestructiveAction(label, attrs),
+      requiresFixture: requiresFixture(`${label} ${target ?? ""}`, fixtureParams),
+    });
+  }
+  return actions;
+}
+
+function extractInputActions(
+  source: { file: string; source: string },
+  fixtureParams: string[],
+): NextRouteAction[] {
+  const actions: NextRouteAction[] = [];
+  const pattern = /<(input|Input|Textarea|Select|Combobox)\b([^>]*?)(?:\/>|>)/g;
+  for (const match of source.source.matchAll(pattern)) {
+    const attrs = match[2] ?? "";
+    const label = firstNonEmpty(
+      attributeValue(attrs, "aria-label"),
+      attributeValue(attrs, "placeholder"),
+      attributeValue(attrs, "name"),
+      attributeValue(attrs, "data-testid"),
+    );
+    if (!label) continue;
+    actions.push({
+      kind: "input",
+      label: clamp(label),
+      target: attributeValue(attrs, "name") ?? attributeValue(attrs, "data-testid") ?? undefined,
+      sourceFile: source.file,
+      destructive: false,
+      requiresFixture: requiresFixture(label, fixtureParams),
+    });
+  }
+  return actions;
+}
+
+function attributeValue(attrs: string, name: string): string | undefined {
+  const pattern = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|\\{\\s*["']([^"']+)["']\\s*\\})`, "i");
+  const match = attrs.match(pattern);
+  const value = match?.[1] ?? match?.[2] ?? match?.[3];
+  return value?.trim() || undefined;
+}
+
+function textFromJsx(value: string): string | undefined {
+  const text = value
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\{[^}]*\}/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text || undefined;
+}
+
+function firstNonEmpty(...values: Array<string | undefined>): string {
+  return values.find((value) => value && value.trim())?.trim() ?? "";
+}
+
+function clamp(value: string, max = 120): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  return compact.length > max ? `${compact.slice(0, max - 1)}…` : compact;
+}
+
+function normalizeLabel(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function extractFixtureParams(routePath: string): string[] {
+  const params = new Set<string>();
+  for (const match of routePath.matchAll(/:([A-Za-z0-9_]+)(?:\*\??)?/g)) {
+    if (match[1]) params.add(match[1]);
+  }
+  return [...params];
+}
+
+function requiresFixture(value: string, fixtureParams: string[]): boolean {
+  if (fixtureParams.length === 0) return false;
+  const normalized = value.toLowerCase();
+  return fixtureParams.some((param) => normalized.includes(param.toLowerCase()) || normalized.includes(`[${param}]`));
+}
+
+function isDestructiveAction(label: string, context = ""): boolean {
+  return /\b(delete|destroy|remove|revoke|refund|void|archive|suspend|pause|disable|cancel|reset|purge|terminate)\b/i.test(`${label} ${context}`);
+}
+
+function formatActionStep(action: NextRouteAction): string {
+  const target = action.target ? ` (${action.target})` : "";
+  const fixture = action.requiresFixture ? " after binding fixture values" : "";
+  const guard = action.destructive ? " without confirming the destructive final action" : "";
+  if (action.kind === "api-method") {
+    return `Exercise API method ${action.label}${target}${fixture}${guard}.`;
+  }
+  return `Exercise ${action.kind} "${action.label}"${target}${fixture}${guard}.`;
 }
 
 function classifyRoute(routePath: string, groups: string[], file: string): string {
