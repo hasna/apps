@@ -8,8 +8,10 @@ import {
   checkWorkflowFanoutReadiness,
   normalizeFanoutWorkerCount,
   resolveWorkflowFanoutBatch,
+  resolveWorkflowFanoutBatchRange,
   resolveWorkflowFanoutSelection,
   runWorkflowFanout,
+  runWorkflowFanoutBatches,
 } from "./workflow-fanout.js";
 
 describe("workflow fanout", () => {
@@ -88,6 +90,23 @@ describe("workflow fanout", () => {
     expect(() => resolveWorkflowFanoutBatch(workflows, { batch: 1 })).toThrow("requires batch size");
     expect(() => resolveWorkflowFanoutBatch(workflows, { batchSize: 1, batch: 1, offset: 0 })).toThrow("cannot both be set");
     expect(() => resolveWorkflowFanoutBatch(workflows, { offset: 99 })).toThrow("batch selection");
+  });
+
+  test("resolves validated fanout batch ranges", () => {
+    expect(resolveWorkflowFanoutBatchRange(5, { batchSize: 2 })).toEqual({
+      batchSize: 2,
+      batchStart: 1,
+      batchEnd: 3,
+      totalBatches: 3,
+    });
+    expect(resolveWorkflowFanoutBatchRange(5, { batchSize: 2, batchStart: 2, batchEnd: 3 })).toEqual({
+      batchSize: 2,
+      batchStart: 2,
+      batchEnd: 3,
+      totalBatches: 3,
+    });
+    expect(() => resolveWorkflowFanoutBatchRange(5, { batchSize: 2, batchStart: 4, batchEnd: 4 })).toThrow("exceeds total batches");
+    expect(() => resolveWorkflowFanoutBatchRange(5, { batchSize: 2, batchStart: 3, batchEnd: 2 })).toThrow("less than or equal");
   });
 
   test("runs workflows with bounded sandbox concurrency", async () => {
@@ -180,6 +199,153 @@ describe("workflow fanout", () => {
       batchSize: 2,
       totalBatches: 3,
     });
+  });
+
+  test("runs a workflow fanout batch range in sequence", async () => {
+    const workflows = Array.from({ length: 5 }, (_, index) => createTestingWorkflow({
+      name: `workflow-${index + 1}`,
+      execution: { target: "sandbox", provider: "e2b" },
+    }));
+    const launched: string[] = [];
+
+    const result = await runWorkflowFanoutBatches({
+      workflowIds: workflows.map((workflow) => workflow.id),
+      url: "https://preview.example",
+      workers: 2,
+      batchSize: 2,
+      batchStart: 2,
+      batchEnd: 3,
+      dryRun: true,
+    }, {
+      async preflight() {
+        return { ok: true, checks: [] };
+      },
+      async runTestingWorkflow(workflowId) {
+        const workflow = workflows.find((item) => item.id === workflowId)!;
+        launched.push(workflow.name);
+        return {
+          run: null,
+          results: [],
+          plan: {
+            workflow,
+            runOptions: { url: "https://preview.example", dryRun: true },
+            sandbox: null,
+          },
+          sandboxResult: undefined,
+        };
+      },
+    });
+
+    expect(result.status).toBe("dry-run");
+    expect(result.matched).toBe(5);
+    expect(result.total).toBe(3);
+    expect(result.batchStart).toBe(2);
+    expect(result.batchEnd).toBe(3);
+    expect(result.totalBatches).toBe(3);
+    expect(result.stoppedEarly).toBe(false);
+    expect(result.batches.map((batch) => batch.selection.batch)).toEqual([2, 3]);
+    expect(launched).toEqual(["workflow-3", "workflow-4", "workflow-5"]);
+  });
+
+  test("stops multi-batch fanout on the first failed batch by default", async () => {
+    const workflows = Array.from({ length: 5 }, (_, index) => createTestingWorkflow({
+      name: `workflow-${index + 1}`,
+      execution: { target: "sandbox", provider: "e2b" },
+    }));
+    const launched: string[] = [];
+
+    const result = await runWorkflowFanoutBatches({
+      workflowIds: workflows.map((workflow) => workflow.id),
+      url: "https://preview.example",
+      workers: 2,
+      batchSize: 2,
+    }, {
+      async preflight() {
+        return { ok: true, checks: [] };
+      },
+      async runTestingWorkflow(workflowId) {
+        const workflow = workflows.find((item) => item.id === workflowId)!;
+        launched.push(workflow.name);
+        if (workflow.name === "workflow-3") {
+          throw new Error("action failed");
+        }
+        return {
+          run: null,
+          results: [],
+          plan: {
+            workflow,
+            runOptions: { url: "https://preview.example" },
+            sandbox: null,
+          },
+          sandboxResult: {
+            sandboxId: `sb_${workflowId.slice(0, 8)}`,
+            sessionId: `sess_${workflowId.slice(0, 8)}`,
+            exitCode: 0,
+            stdout: "",
+            stderr: "",
+            cleanup: "deleted",
+          },
+        };
+      },
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.stoppedEarly).toBe(true);
+    expect(result.batches.map((batch) => batch.selection.batch)).toEqual([1, 2]);
+    expect(result.total).toBe(4);
+    expect(result.failed).toBe(1);
+    expect(launched).toEqual(["workflow-1", "workflow-2", "workflow-3", "workflow-4"]);
+  });
+
+  test("can continue multi-batch fanout after failed batches", async () => {
+    const workflows = Array.from({ length: 5 }, (_, index) => createTestingWorkflow({
+      name: `workflow-${index + 1}`,
+      execution: { target: "sandbox", provider: "e2b" },
+    }));
+    const launched: string[] = [];
+
+    const result = await runWorkflowFanoutBatches({
+      workflowIds: workflows.map((workflow) => workflow.id),
+      url: "https://preview.example",
+      workers: 2,
+      batchSize: 2,
+      continueOnFailure: true,
+    }, {
+      async preflight() {
+        return { ok: true, checks: [] };
+      },
+      async runTestingWorkflow(workflowId) {
+        const workflow = workflows.find((item) => item.id === workflowId)!;
+        launched.push(workflow.name);
+        if (workflow.name === "workflow-3") {
+          throw new Error("action failed");
+        }
+        return {
+          run: null,
+          results: [],
+          plan: {
+            workflow,
+            runOptions: { url: "https://preview.example" },
+            sandbox: null,
+          },
+          sandboxResult: {
+            sandboxId: `sb_${workflowId.slice(0, 8)}`,
+            sessionId: `sess_${workflowId.slice(0, 8)}`,
+            exitCode: 0,
+            stdout: "",
+            stderr: "",
+            cleanup: "deleted",
+          },
+        };
+      },
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.stoppedEarly).toBe(false);
+    expect(result.batches.map((batch) => batch.selection.batch)).toEqual([1, 2, 3]);
+    expect(result.total).toBe(5);
+    expect(result.failed).toBe(1);
+    expect(launched).toEqual(["workflow-1", "workflow-2", "workflow-3", "workflow-4", "workflow-5"]);
   });
 
   test("preflight reports missing sandbox provider credentials", async () => {

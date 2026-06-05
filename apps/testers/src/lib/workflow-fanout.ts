@@ -14,6 +14,9 @@ export interface WorkflowFanoutOptions extends WorkflowRunOptions {
   batchSize?: number;
   batch?: number;
   offset?: number;
+  batchStart?: number;
+  batchEnd?: number;
+  continueOnFailure?: boolean;
 }
 
 export interface WorkflowFanoutItem {
@@ -38,6 +41,21 @@ export interface WorkflowFanoutResult {
   failed: number;
   items: WorkflowFanoutItem[];
   preflight?: WorkflowFanoutPreflightResult;
+}
+
+export interface WorkflowFanoutBatchesResult {
+  status: "passed" | "failed" | "dry-run";
+  workers: number;
+  matched: number;
+  batchSize: number;
+  batchStart: number;
+  batchEnd: number;
+  totalBatches: number;
+  stoppedEarly: boolean;
+  total: number;
+  passed: number;
+  failed: number;
+  batches: WorkflowFanoutResult[];
 }
 
 export interface WorkflowFanoutDependencies extends WorkflowRunnerDependencies {
@@ -135,6 +153,35 @@ export function resolveWorkflowFanoutBatch(
       ...(batchSize !== undefined ? { batchSize, totalBatches: Math.ceil(workflows.length / batchSize) } : {}),
     },
   };
+}
+
+export function resolveWorkflowFanoutBatchRange(
+  matched: number,
+  options: Pick<WorkflowFanoutOptions, "batchSize" | "batchStart" | "batchEnd">,
+): { batchSize: number; batchStart: number; batchEnd: number; totalBatches: number } {
+  const batchSize = normalizeOptionalPositiveInteger(options.batchSize, "workflow fanout batch size");
+  if (batchSize === undefined) {
+    throw new Error("workflow fanout batch range requires batch size");
+  }
+  if (matched < 1) {
+    throw new Error("workflow fanout batch range requires at least one matched workflow");
+  }
+
+  const totalBatches = Math.ceil(matched / batchSize);
+  const batchStart = normalizeOptionalPositiveInteger(options.batchStart, "workflow fanout start batch") ?? 1;
+  const batchEnd = normalizeOptionalPositiveInteger(options.batchEnd, "workflow fanout end batch") ?? totalBatches;
+
+  if (batchStart > batchEnd) {
+    throw new Error("workflow fanout start batch must be less than or equal to end batch");
+  }
+  if (batchStart > totalBatches) {
+    throw new Error(`workflow fanout start batch ${batchStart} exceeds total batches ${totalBatches}`);
+  }
+  if (batchEnd > totalBatches) {
+    throw new Error(`workflow fanout end batch ${batchEnd} exceeds total batches ${totalBatches}`);
+  }
+
+  return { batchSize, batchStart, batchEnd, totalBatches };
 }
 
 export function resolveWorkflowFanoutSelection(options: Pick<WorkflowFanoutOptions, "workflowIds" | "projectId" | "tags" | "includeDisabled">): TestingWorkflow[] {
@@ -389,6 +436,58 @@ export async function runWorkflowFanout(
     failed,
     items,
     preflight,
+  };
+}
+
+export async function runWorkflowFanoutBatches(
+  options: WorkflowFanoutOptions,
+  dependencies: WorkflowFanoutDependencies = {},
+): Promise<WorkflowFanoutBatchesResult> {
+  if (options.batch !== undefined || options.offset !== undefined) {
+    throw new Error("workflow fanout all-batches cannot be combined with batch or offset");
+  }
+
+  const workers = normalizeFanoutWorkerCount(options.workers);
+  const matchedWorkflows = resolveWorkflowFanoutSelection(options);
+  const { batchSize, batchStart, batchEnd, totalBatches } = resolveWorkflowFanoutBatchRange(matchedWorkflows.length, options);
+  const batches: WorkflowFanoutResult[] = [];
+  let stoppedEarly = false;
+
+  for (let batch = batchStart; batch <= batchEnd; batch++) {
+    const result = await runWorkflowFanout({
+      ...options,
+      batchSize,
+      batch,
+      batchStart: undefined,
+      batchEnd: undefined,
+      offset: undefined,
+    }, dependencies);
+    batches.push(result);
+
+    if (result.status === "failed" && !options.continueOnFailure) {
+      stoppedEarly = batch < batchEnd;
+      break;
+    }
+  }
+
+  const total = batches.reduce((sum, batch) => sum + batch.total, 0);
+  const passed = batches.reduce((sum, batch) => sum + batch.passed, 0);
+  const failed = batches.reduce((sum, batch) => sum + batch.failed, 0);
+  const dryRun = options.dryRun === true;
+
+  return {
+    status: dryRun ? "dry-run" : failed > 0 || stoppedEarly ? "failed" : "passed",
+    workers,
+    matched: matchedWorkflows.length,
+    batchSize,
+    batchStart,
+    batchEnd,
+    totalBatches,
+    stoppedEarly,
+    total,
+    passed,
+    failed,
+    batches,
   };
 }
 

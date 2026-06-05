@@ -4866,6 +4866,10 @@ workflowCmd
   .option("--batch-size <n>", "Limit this run to a batch of selected workflows")
   .option("--batch <n>", "1-based batch number to run with --batch-size")
   .option("--offset <n>", "0-based selected-workflow offset for staged fanout")
+  .option("--all-batches", "Run all selected workflow batches sequentially with --batch-size", false)
+  .option("--from-batch <n>", "First batch to run when using --all-batches")
+  .option("--to-batch <n>", "Last batch to run when using --all-batches")
+  .option("--continue-on-failure", "Continue later batches after a failed batch", false)
   .option("-m, --model <model>", "AI model")
   .option("--headed", "Run headed", false)
   .option("--parallel <n>", "Parallel browser workers inside each sandbox")
@@ -4874,8 +4878,7 @@ workflowCmd
   .option("--json", "Output as JSON", false)
   .action(async (ids: string[] | undefined, opts) => {
     try {
-      const { runWorkflowFanout } = await import("../lib/workflow-fanout.js");
-      const result = await runWorkflowFanout({
+      const fanoutOptions = {
         workflowIds: ids,
         projectId: opts.project ? resolveProject(opts.project) : undefined,
         tags: opts.tag,
@@ -4884,13 +4887,50 @@ workflowCmd
         batchSize: opts.batchSize ? parseInt(opts.batchSize, 10) : undefined,
         batch: opts.batch ? parseInt(opts.batch, 10) : undefined,
         offset: opts.offset ? parseInt(opts.offset, 10) : undefined,
+        batchStart: opts.fromBatch ? parseInt(opts.fromBatch, 10) : undefined,
+        batchEnd: opts.toBatch ? parseInt(opts.toBatch, 10) : undefined,
+        continueOnFailure: opts.continueOnFailure,
         url: opts.url,
         model: opts.model,
         headed: opts.headed,
         parallel: opts.parallel ? parseInt(opts.parallel, 10) : undefined,
         timeout: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
         dryRun: opts.dryRun,
-      });
+      };
+      const runAllBatches = opts.allBatches || opts.fromBatch !== undefined || opts.toBatch !== undefined;
+
+      if (runAllBatches) {
+        const { runWorkflowFanoutBatches } = await import("../lib/workflow-fanout.js");
+        const result = await runWorkflowFanoutBatches(fanoutOptions);
+
+        if (opts.json || opts.dryRun) {
+          log(JSON.stringify(result, null, 2));
+        } else {
+          const status = result.status === "passed" ? chalk.green("passed") : chalk.red("failed");
+          const stop = result.stoppedEarly ? chalk.yellow(" stopped early") : "";
+          log(chalk.bold(`Sandbox workflow fanout batches ${status}: ${result.passed}/${result.total} passed across ${result.batches.length} batch(es)${stop}`));
+          log(chalk.dim(`Selected ${result.matched} workflow(s), batch size ${result.batchSize}, running batch ${result.batchStart}-${result.batchEnd}/${result.totalBatches} with ${result.workers} worker(s).`));
+          for (const batch of result.batches) {
+            const batchStatus = batch.status === "passed" ? chalk.green(batch.status) : batch.status === "dry-run" ? chalk.yellow(batch.status) : chalk.red(batch.status);
+            const batchNumber = batch.selection.batch ?? "?";
+            log(`  ${batchStatus}  batch ${batchNumber}/${batch.selection.totalBatches ?? result.totalBatches}: ${batch.passed}/${batch.total} passed`);
+            const failedItems = batch.items.filter((item) => item.status === "failed").slice(0, 5);
+            for (const item of failedItems) {
+              const error = item.error ? chalk.dim(` ${item.error}`) : "";
+              log(`    ${chalk.red("failed")}  ${item.workflowName}${error}`);
+            }
+            if (batch.items.filter((item) => item.status === "failed").length > failedItems.length) {
+              log(chalk.dim(`    ... ${batch.items.filter((item) => item.status === "failed").length - failedItems.length} more failure(s)`));
+            }
+          }
+        }
+
+        if (result.status === "failed") process.exit(1);
+        return;
+      }
+
+      const { runWorkflowFanout } = await import("../lib/workflow-fanout.js");
+      const result = await runWorkflowFanout(fanoutOptions);
 
       if (opts.json || opts.dryRun) {
         log(JSON.stringify(result, null, 2));
