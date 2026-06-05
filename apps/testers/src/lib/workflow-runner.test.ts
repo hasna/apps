@@ -82,8 +82,10 @@ describe("workflow runner", () => {
     const originalOpenAIKey = process.env.OPENAI_API_KEY;
     process.env.SMOKE_TEST_PASSWORD = "sandbox-secret";
     delete process.env.OPENAI_API_KEY;
+    const project = createProject({ name: "sandbox project" });
     const workflow = createTestingWorkflow({
       name: "sandbox",
+      projectId: project.id,
       scenarioFilter: { tags: ["checkout"] },
       execution: {
         target: "sandbox",
@@ -148,6 +150,13 @@ describe("workflow runner", () => {
           remoteDir: "/workspace/testers/.testers-state",
           syncStrategy: "rsync",
         },
+      });
+      expect(calls[0]).not.toHaveProperty("projectId");
+      expect(calls[0]).toHaveProperty("config", {
+        source: "testers",
+        testersProjectId: project.id,
+        workflowId: workflow.id,
+        workflowName: workflow.name,
       });
       expect(calls[0]).toHaveProperty("command");
       expect(calls[1]).toEqual({ cleanup: true });

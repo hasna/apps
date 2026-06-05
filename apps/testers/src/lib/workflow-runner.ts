@@ -391,9 +391,9 @@ async function runViaSandbox(
       image: plan.sandbox.image,
       sandboxTimeout: plan.sandbox.timeoutMs,
       commandTimeoutMs: plan.sandbox.timeoutMs,
-      projectId: plan.workflow.projectId ?? undefined,
       config: {
         source: "testers",
+        testersProjectId: plan.workflow.projectId ?? undefined,
         workflowId: plan.workflow.id,
         workflowName: plan.workflow.name,
       },
