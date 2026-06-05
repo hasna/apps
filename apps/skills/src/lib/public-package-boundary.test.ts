@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   ARTICLE_GENERATION_SLUG,
@@ -36,6 +37,60 @@ function readPackedFiles(): string[] {
   const output = new TextDecoder().decode(result.stdout);
   const manifests = JSON.parse(output) as PackManifest[];
   return manifests[0].files.map((file) => file.path).sort();
+}
+
+function buildEntryPointsForBoundaryScan(): string[] {
+  const outputDir = mkdtempSync(join(tmpdir(), "hasna-skills-boundary-"));
+  const builds: string[][] = [
+    [
+      "bun",
+      "build",
+      "./src/cli/index.tsx",
+      "--outdir",
+      join(outputDir, "bin"),
+      "--target",
+      "bun",
+      "--external",
+      "ink",
+      "--external",
+      "react",
+      "--external",
+      "chalk",
+    ],
+    [
+      "bun",
+      "build",
+      "./src/mcp/index.ts",
+      "--outfile",
+      join(outputDir, "bin", "mcp.js"),
+      "--target",
+      "bun",
+    ],
+    [
+      "bun",
+      "build",
+      "./src/index.ts",
+      "--outdir",
+      join(outputDir, "dist"),
+      "--target",
+      "bun",
+    ],
+  ];
+
+  for (const command of builds) {
+    const result = Bun.spawnSync(command, {
+      cwd: process.cwd(),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
+  }
+
+  return [
+    join(outputDir, "bin", "index.js"),
+    join(outputDir, "bin", "mcp.js"),
+    join(outputDir, "dist", "index.js"),
+  ];
 }
 
 describe("public package boundary", () => {
@@ -80,12 +135,7 @@ describe("public package boundary", () => {
   });
 
   test("keeps private implementation markers out of built entrypoints", () => {
-    const builtFiles = [
-      "bin/index.js",
-      "bin/mcp.js",
-      "dist/index.js",
-    ].filter((path) => existsSync(join(process.cwd(), path)));
-    expect(builtFiles.length).toBeGreaterThan(0);
+    const builtFiles = buildEntryPointsForBoundaryScan();
 
     const forbiddenMarkers = [
       "@hasna/cloud",
@@ -99,11 +149,15 @@ describe("public package boundary", () => {
       "production-stripe",
     ];
 
-    for (const file of builtFiles) {
-      const content = readFileSync(join(process.cwd(), file), "utf8");
-      for (const marker of forbiddenMarkers) {
-        expect(content).not.toContain(marker);
+    try {
+      for (const file of builtFiles) {
+        const content = readFileSync(file, "utf8");
+        for (const marker of forbiddenMarkers) {
+          expect(content).not.toContain(marker);
+        }
       }
+    } finally {
+      rmSync(join(builtFiles[0], "..", ".."), { recursive: true, force: true });
     }
   });
 });
