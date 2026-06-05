@@ -26,6 +26,13 @@ import { generateHtmlReport, generateLatestReport } from "../lib/report.js";
 import { getCostSummary, formatCostsTerminal, formatCostsJSON, formatCostsCsv, checkBudget, getCostsByScenario, formatCostsByScenarioTerminal } from "../lib/costs.js";
 import { createProdDebugPlan, formatProdDebugPlan } from "../lib/prod-debug.js";
 import { redactPersonas } from "../lib/persona-redaction.js";
+import {
+  MODEL_PROVIDER_ENV_KEYS,
+  checkModelCredential,
+  resolveModelCredential,
+  type ModelCredentialCheck,
+} from "../lib/model-credentials.js";
+import type { AIProvider } from "../lib/ai-client.js";
 
 import { createProject, getProject, listProjects, ensureProject } from "../db/projects.js";
 import { createPersona, getPersona, listPersonas, deletePersona } from "../db/personas.js";
@@ -64,6 +71,79 @@ const PRIORITIES = ["low", "medium", "high", "critical"];
 function splitCsvOption(value: string | undefined): string[] | undefined {
   const items = value?.split(",").map((item) => item.trim()).filter(Boolean) ?? [];
   return items.length > 0 ? items : undefined;
+}
+
+function splitRepeatedValues(values: string[] | undefined): string[] {
+  return (values ?? [])
+    .flatMap((value) => value.split(","))
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+const MODEL_CREDENTIAL_SAMPLE_MODELS: Record<AIProvider, string> = {
+  anthropic: "quick",
+  openai: "gpt-4o-mini",
+  google: "gemini-2.0-flash",
+  cerebras: "cerebras-fast",
+  zai: "glm-4.6",
+};
+
+function modelCredentialProviderFromTarget(target: string): AIProvider | null {
+  const normalized = target.trim();
+  const providerName = normalized.toLowerCase();
+  const envName = normalized.toUpperCase();
+
+  for (const provider of Object.keys(MODEL_PROVIDER_ENV_KEYS) as AIProvider[]) {
+    if (provider === providerName || MODEL_PROVIDER_ENV_KEYS[provider] === envName) {
+      return provider;
+    }
+  }
+
+  return null;
+}
+
+function parseModelCredentialAssignments(values: string[] | undefined): Partial<Record<AIProvider, string>> {
+  const assignments: Partial<Record<AIProvider, string>> = {};
+
+  for (const value of values ?? []) {
+    const separator = value.indexOf("=");
+    if (separator < 0) {
+      throw new Error(`Invalid credential assignment: ${value}. Use provider=reference or ENV_KEY=reference.`);
+    }
+
+    const target = value.slice(0, separator).trim();
+    const reference = value.slice(separator + 1).trim();
+    if (!reference) {
+      throw new Error(`Invalid credential assignment: ${value}. Reference cannot be empty.`);
+    }
+
+    const provider = modelCredentialProviderFromTarget(target);
+    if (!provider) {
+      throw new Error(`Unknown model provider or env key: ${target}`);
+    }
+
+    assignments[provider] = reference;
+  }
+
+  return assignments;
+}
+
+function sanitizeCredentialReference(reference: string, source: ModelCredentialCheck["source"]): string {
+  if (source === "literal") return "[literal]";
+  return reference;
+}
+
+function toModelCredentialCliItem(check: ModelCredentialCheck) {
+  return {
+    provider: check.provider,
+    model: check.model,
+    envKey: check.envKey,
+    reference: sanitizeCredentialReference(check.reference, check.source),
+    source: check.source,
+    ok: check.ok,
+    ...(check.status !== undefined ? { status: check.status } : {}),
+    ...(check.message ? { message: check.message } : {}),
+  };
 }
 
 function describeStoredAssertion(value: unknown): string {
@@ -3418,6 +3498,69 @@ envCmd
         const marker = env.isDefault ? chalk.green(" ★ default") : "";
         const auth = env.authPresetName ? chalk.dim(` (auth: ${env.authPresetName})`) : "";
         log(`  ${chalk.bold(env.name)}  ${env.url}${auth}${marker}`);
+      }
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+envCmd
+  .command("validate-models [models...]")
+  .description("Validate model provider credentials without launching browser or sandbox runs")
+  .option("--model <model>", "Model or preset to validate (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
+  .option("--credential <assignment>", "Credential reference override, e.g. anthropic=@secrets:path or OPENAI_API_KEY=$OPENAI_API_KEY (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
+  .option("--all-providers", "Validate representative models for every supported model provider", false)
+  .option("--json", "Output as JSON", false)
+  .action(async (models: string[] = [], opts) => {
+    try {
+      const requestedModels = splitRepeatedValues([
+        ...models,
+        ...((opts.model ?? []) as string[]),
+      ]);
+      const providerSamples = opts.allProviders
+        ? Object.values(MODEL_CREDENTIAL_SAMPLE_MODELS)
+        : [];
+      const modelsToCheck = [...new Set([...providerSamples, ...requestedModels])];
+      const inputs: Array<string | undefined> = modelsToCheck.length > 0 ? modelsToCheck : [undefined];
+      const credentialAssignments = parseModelCredentialAssignments(opts.credential);
+      const checks: ModelCredentialCheck[] = [];
+
+      for (const modelInput of inputs) {
+        const resolution = resolveModelCredential(modelInput);
+        const reference = credentialAssignments[resolution.provider] ?? `$${resolution.envKey}`;
+        checks.push(await checkModelCredential(modelInput, { reference }));
+      }
+
+      const items = checks.map(toModelCredentialCliItem);
+      const passed = items.filter((item) => item.ok).length;
+      const failed = items.length - passed;
+      const result = {
+        ok: failed === 0,
+        total: items.length,
+        passed,
+        failed,
+        items,
+      };
+
+      if (opts.json) {
+        log(JSON.stringify(result, null, 2));
+      } else {
+        const heading = result.ok
+          ? chalk.green(`Model credential validation passed: ${passed}/${items.length}`)
+          : chalk.red(`Model credential validation failed: ${passed}/${items.length}`);
+        log(chalk.bold(heading));
+        for (const item of items) {
+          const status = item.status !== undefined ? ` status=${item.status}` : "";
+          const message = item.message ? ` ${item.message}` : "";
+          const state = item.ok ? chalk.green("OK") : chalk.red("FAIL");
+          log(`  ${state} ${item.model} (${item.provider}, ${item.envKey})${status}${message}`);
+          log(chalk.dim(`     reference: ${item.reference} (${item.source})`));
+        }
+      }
+
+      if (!result.ok) {
+        process.exit(1);
       }
     } catch (error) {
       logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
