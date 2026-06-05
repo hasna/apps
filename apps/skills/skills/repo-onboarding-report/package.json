@@ -4,7 +4,8 @@
   "private": true,
   "description": "Hosted premium repository onboarding report generator",
   "type": "module",
-  "bin": {
-    "repo-onboarding-report": "./src/index.ts"
+  "skills": {
+    "runtime": "hosted",
+    "source": "remote"
   }
 }

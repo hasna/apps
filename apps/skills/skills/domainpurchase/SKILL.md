@@ -1,46 +1,29 @@
 ---
 name: domainpurchase
-description: Purchase and manage domains via GoDaddy API with CLI and HTTP server
+description: Public contract for domain purchase workflows through hosted or external registrar connectors.
 ---
 
 # Domain Purchase
 
-Purchase and manage domains via the GoDaddy API. Provides both a CLI tool and an HTTP server for domain purchasing workflows.
-
-## Features
-
-- Purchase domains through GoDaddy API
-- Manage domain configurations and settings
-- HTTP server mode for API-driven purchases
-- AWS Secrets Manager integration for credential storage
-- Remote server proxy mode for centralized domain management
+This public skill describes domain purchase and management workflows for agents.
+The OSS package intentionally does not ship registrar purchasing logic, remote
+server proxy code, or cloud secret-store integration.
 
 ## Usage
 
 ```bash
-# Run the CLI
-domainpurchase
-
-# Start the HTTP server
-bun run start
-
-# Development mode with watch
-bun run dev
+skills run domainpurchase --help
 ```
 
-## Environment Variables
+For production domain purchase workflows, route execution through a hosted or
+external connector that owns registrar credentials, audit logs, payment
+approval, and account-specific policy.
 
-| Variable | Description |
-|----------|-------------|
-| `DOMAIN_API_KEY` | GoDaddy API key |
-| `DOMAIN_API_SECRET` | GoDaddy API secret |
-| `DOMAIN_CUSTOMER_ID` | GoDaddy customer ID |
-| `DOMAIN_API_URL` | API base URL (default: `https://api.godaddy.com`) |
-| `DOMAIN_USE_REMOTE_SERVER` | Use remote server proxy (`true`/`false`) |
-| `DOMAIN_REMOTE_SERVER_URL` | Remote server URL |
-| `DOMAIN_REMOTE_API_KEY` | Remote server API key |
-| `AWS_SECRET_NAME` | AWS Secrets Manager secret name for credentials |
+## Boundary
 
-## Configuration
+- Local package: skill metadata, docs, and a CLI stub.
+- Hosted or external connector: registrar API calls, credentials, approvals,
+  purchase records, and billing-sensitive workflows.
 
-Config is stored at `~/.config/service-domainpurchase/config.json`. Environment variables take priority over the config file. AWS Secrets Manager is also supported as a credential source.
+Provider credentials and cloud secret names must not be stored in this OSS
+skill package.

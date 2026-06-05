@@ -62,7 +62,7 @@ describe("hasna/skills module audit", () => {
     expect(content).toContain("must not become the hosted execution");
     expect(content).toContain("server-controlled sandbox");
     expect(content).toContain("The local scheduler is file/config oriented");
-    expect(content).toContain("future hosted web app");
+    expect(content).toContain("does not own the production web app or server backend");
     expect(content).toContain("first-class API client");
   });
 

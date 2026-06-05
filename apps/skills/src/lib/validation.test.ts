@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { fileURLToPath } from "url";
 import { SKILLS } from "./registry";
+import { getAllPremiumSlugs } from "./pricing";
 import { generateSkillMd } from "./skillinfo";
 import {
   parseSkillFrontmatter,
@@ -58,13 +59,25 @@ function countSecurityAuditFiles(dir: string): number {
   return count;
 }
 
-const SKILLS_DIR = findSkillsDir();
-
 // Get all bundled skill directories from the filesystem
+const SKILLS_DIR = findSkillsDir();
 const skillDirs = readdirSync(SKILLS_DIR).filter((f) => {
   const fullPath = join(SKILLS_DIR, f);
   return f !== "_common" && !f.startsWith(".") && statSync(fullPath).isDirectory();
 });
+const HOSTED_METADATA_SKILLS = new Set([
+  ...getAllPremiumSlugs(),
+  ...skillDirs.filter((dir) => {
+    const pkgPath = join(SKILLS_DIR, dir, "package.json");
+    if (!existsSync(pkgPath)) return false;
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { skills?: { runtime?: string; source?: string } };
+    return pkg.skills?.runtime === "hosted" || pkg.skills?.source === "remote" || pkg.skills?.source === "private-hosted";
+  }),
+]);
+
+function validationFor(dir: string) {
+  return validateSkillDirectory(dir, join(SKILLS_DIR, dir), SKILLS.find((skill) => skill.name === dir));
+}
 
 describe("structural validation of all registered skills", () => {
   test("every skill in the SKILLS registry has a corresponding skills/{name}/ directory", () => {
@@ -88,23 +101,28 @@ describe("structural validation of all registered skills", () => {
 
   test("every skill directory has a valid package.json (parseable JSON)", () => {
     const failures = skillDirs
-      .map((dir) => validateSkillDirectory(dir, join(SKILLS_DIR, dir), SKILLS.find((skill) => skill.name === dir)))
+      .map((dir) => validationFor(dir))
       .filter((result) => result.issues.some((issue) => issue.code.startsWith("package.")))
       .map((result) => `${result.name}: ${result.issues.map((issue) => issue.message).join(", ")}`);
     expect(failures).toEqual([]);
   });
 
-  test("every skill package declares a bin command", () => {
+  test("local skill packages declare bin commands and hosted metadata packages do not", () => {
     const failures = skillDirs
-      .map((dir) => validateSkillDirectory(dir, join(SKILLS_DIR, dir), SKILLS.find((skill) => skill.name === dir)))
-      .filter((result) => result.issues.some((issue) => issue.code === "package.bin_missing" || issue.code === "package.bin_invalid"))
-      .map((result) => result.name);
+      .map((dir) => validationFor(dir))
+      .filter((result) => {
+        if (HOSTED_METADATA_SKILLS.has(result.name)) {
+          return result.metadata.binCommands.length !== 0;
+        }
+        return result.issues.some((issue) => issue.code === "package.bin_missing" || issue.code === "package.bin_invalid");
+      })
+      .map((result) => `${result.name}: ${result.metadata.binCommands.join(",") || "no bin"}`);
     expect(failures).toEqual([]);
   });
 
   test("SKILL.md frontmatter is valid when present", () => {
     const failures = skillDirs
-      .map((dir) => validateSkillDirectory(dir, join(SKILLS_DIR, dir), SKILLS.find((skill) => skill.name === dir)))
+      .map((dir) => validationFor(dir))
       .filter((result) => result.issues.some((issue) => issue.code.startsWith("skill.frontmatter")))
       .map((result) => `${result.name}: ${result.issues.map((issue) => issue.message).join(", ")}`);
     expect(failures).toEqual([]);
@@ -134,10 +152,16 @@ describe("structural validation of all registered skills", () => {
     expect(missingCount).toBe(0);
   });
 
-  test("all skills have a non-trivial src/index.ts", () => {
+  test("local skills have non-trivial src/index.ts and hosted skills have no source", () => {
     const minimal: string[] = [];
     const missing: string[] = [];
+    const leakedHostedSource: string[] = [];
     for (const dir of skillDirs) {
+      const srcDir = join(SKILLS_DIR, dir, "src");
+      if (HOSTED_METADATA_SKILLS.has(dir)) {
+        if (existsSync(srcDir)) leakedHostedSource.push(dir);
+        continue;
+      }
       const tsIndexPath = join(SKILLS_DIR, dir, "src", "index.ts");
       const jsIndexPath = join(SKILLS_DIR, dir, "src", "index.js");
       const indexPath = existsSync(tsIndexPath) ? tsIndexPath : jsIndexPath;
@@ -149,6 +173,7 @@ describe("structural validation of all registered skills", () => {
       if (size < 50) minimal.push(`${dir} (${size}B)`);
     }
 
+    expect(leakedHostedSource).toEqual([]);
     expect(missing).toEqual([]);
     if (minimal.length > 0) {
       console.warn(`Skills with minimal src/index.ts (<50B): ${minimal.join(", ")}`);
@@ -325,6 +350,7 @@ tags:
       const result = validateSkillDirectory("demo-skill", skillDir);
       expect(result.valid).toBe(true);
       expect(result.issues).toEqual([]);
+      expect(result.metadata.runtime).toBe("local");
       expect(result.metadata.packageName).toBe("demo-skill");
       expect(result.metadata.binCommands).toEqual(["demo-skill"]);
       expect(result.metadata.skillMdFrontmatter?.source).toBe("official");
@@ -373,6 +399,80 @@ source: untrusted-mirror
       expect(result.issues.map((issue) => issue.message)).toContain("package.json name 'wrong-package' does not match 'demo-skill'");
       expect(result.issues.map((issue) => issue.message)).toContain("package.json bin 'demo-skill' target '../outside.ts' must stay inside the skill directory");
       expect(result.issues.map((issue) => issue.message)).toContain("Reserved file '.env' is not allowed in skill packages");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("accepts a hosted metadata fixture without local source or bin", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "skill-validation-"));
+    try {
+      const skillDir = join(tempDir, "hosted-demo");
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(join(skillDir, "SKILL.md"), `---
+name: hosted-demo
+description: Hosted metadata-only skill fixture.
+source: private-hosted
+tags:
+  - premium
+  - remote
+---
+
+# Hosted Demo
+`);
+      writeFileSync(join(skillDir, "package.json"), JSON.stringify({
+        name: "hosted-demo",
+        version: "0.1.0",
+        private: true,
+        type: "module",
+        skills: {
+          runtime: "hosted",
+          source: "remote",
+        },
+      }, null, 2));
+
+      const result = validateSkillDirectory("hosted-demo", skillDir);
+      expect(result.valid).toBe(true);
+      expect(result.issues).toEqual([]);
+      expect(result.metadata.runtime).toBe("hosted");
+      expect(result.metadata.binCommands).toEqual([]);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects local source and bin declarations for hosted metadata fixtures", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "skill-validation-"));
+    try {
+      const skillDir = join(tempDir, "hosted-demo");
+      mkdirSync(join(skillDir, "src"), { recursive: true });
+      writeFileSync(join(skillDir, "SKILL.md"), `---
+name: hosted-demo
+description: Hosted metadata-only skill fixture.
+source: private-hosted
+---
+
+# Hosted Demo
+`);
+      writeFileSync(join(skillDir, "package.json"), JSON.stringify({
+        name: "hosted-demo",
+        version: "0.1.0",
+        private: true,
+        type: "module",
+        bin: { "hosted-demo": "src/index.ts" },
+        skills: {
+          runtime: "hosted",
+          source: "remote",
+        },
+      }, null, 2));
+      writeFileSync(join(skillDir, "src", "index.ts"), "#!/usr/bin/env bun\nconsole.log('hosted source leak');\n");
+
+      const result = validateSkillDirectory("hosted-demo", skillDir);
+      expect(result.valid).toBe(false);
+      expect(result.issues.map((issue) => issue.code)).toEqual([
+        "package.hosted_bin_forbidden",
+        "skill.hosted_source_forbidden",
+      ]);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

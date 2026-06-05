@@ -27,24 +27,24 @@ describe("runSkill", () => {
   });
 
   test("runs bundled package source and ignores project .skills source folders", async () => {
-    const skillDir = join(testDir, ".skills", "skills", "image");
+    const skillDir = join(testDir, ".skills", "skills", "lorem-generator");
     mkdirSync(join(skillDir, "src"), { recursive: true });
-    writeFileSync(join(skillDir, "package.json"), JSON.stringify({ name: "image", bin: { image: "src/index.ts" } }));
+    writeFileSync(join(skillDir, "package.json"), JSON.stringify({ name: "lorem-generator", bin: { "lorem-generator": "src/index.ts" } }));
     writeFileSync(join(skillDir, "src", "index.ts"), 'console.log("from copied project source");');
 
-    const result = await runSkill("image", ["--help"], { stdio: "pipe" });
+    const result = await runSkill("lorem-generator", ["--help"], { stdio: "pipe" });
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("Skill Image CLI");
+    expect(result.stdout).toContain("lorem-generator");
     expect(result.stdout).not.toContain("from copied project source");
   });
 
   test("passes run metadata environment to bundled skills", async () => {
-    const result = await runSkill("image", ["--help"], {
+    const result = await runSkill("lorem-generator", ["--help"], {
       stdio: "pipe",
       env: {
         SKILLS_RUN_ID: "run_test",
         SKILLS_RUN_DIR: join(testDir, ".skills", "runs", "today", "run_test"),
-        SKILLS_EXPORT_DIR: join(testDir, ".skills", "exports", "image", "run_test"),
+        SKILLS_EXPORT_DIR: join(testDir, ".skills", "exports", "lorem-generator", "run_test"),
       },
     });
     expect(result.exitCode).toBe(0);

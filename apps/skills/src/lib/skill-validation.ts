@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "fs";
 import { isAbsolute, join, normalize } from "path";
+import { isPremiumSkill } from "./pricing.js";
 import type { SkillMeta } from "./registry.js";
 
 export interface SkillValidationMessage {
@@ -20,6 +21,7 @@ export interface SkillValidationResult {
     docFiles: string[];
     skillMdFrontmatter?: SkillFrontmatter;
     provenance?: SkillValidationProvenance;
+    runtime?: "local" | "hosted";
   };
 }
 
@@ -46,6 +48,7 @@ export interface SkillValidationProvenance {
   packageVersion?: string;
   frontmatterSource?: string;
   registrySource?: string;
+  packageSkillSource?: string;
 }
 
 interface PackageJson {
@@ -53,6 +56,7 @@ interface PackageJson {
   version?: unknown;
   bin?: unknown;
   scripts?: unknown;
+  skills?: unknown;
 }
 
 const DOC_FILES = ["SKILL.md", "README.md", "CLAUDE.md"];
@@ -124,6 +128,27 @@ function isSafeRelativePath(value: string): boolean {
   return normalized !== ".." && !normalized.startsWith("../") && !normalized.includes("/../");
 }
 
+function isHostedPackageMetadata(pkg: PackageJson): boolean {
+  const skills = asRecord(pkg.skills);
+  if (!skills) return false;
+  const runtime = typeof skills.runtime === "string" ? skills.runtime.trim().toLowerCase() : "";
+  const source = typeof skills.source === "string" ? skills.source.trim().toLowerCase() : "";
+  return runtime === "hosted" || source === "remote" || source === "private-hosted";
+}
+
+function isHostedMetadataSkill(
+  skillName: string,
+  frontmatter: SkillFrontmatter | undefined,
+  registryMeta: SkillMeta | undefined,
+  packageDeclaresHosted: boolean,
+): boolean {
+  if (packageDeclaresHosted) return true;
+  if (isPremiumSkill(skillName)) return true;
+  if (frontmatter?.source === "private-hosted") return true;
+  if (frontmatter?.source === "remote" && !registryMeta?.tags.includes("local")) return true;
+  return false;
+}
+
 export function parseSkillFrontmatter(content: string): SkillFrontmatter | null {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match) return null;
@@ -174,6 +199,8 @@ export function validateSkillDirectory(
   const bareName = name;
   const issues: SkillValidationMessage[] = [];
   const warnings: SkillValidationMessage[] = [];
+  let packageDeclaresHosted = false;
+  let packageSkillSource: string | undefined;
   const metadata: SkillValidationResult["metadata"] = {
     binCommands: [],
     docFiles: [],
@@ -259,6 +286,14 @@ export function validateSkillDirectory(
       if (!packageRecord) {
         add(issues, "package.invalid_shape", "package.json must be an object");
       } else {
+        packageDeclaresHosted = isHostedPackageMetadata(pkg);
+        const skillsRecord = asRecord(pkg.skills);
+        if (skillsRecord && typeof skillsRecord.source === "string") {
+          packageSkillSource = skillsRecord.source;
+        }
+        const hostedMetadata = isHostedMetadataSkill(bareName, metadata.skillMdFrontmatter, registryMeta, packageDeclaresHosted);
+        metadata.runtime = hostedMetadata ? "hosted" : "local";
+
         if (typeof pkg.name === "string") {
           metadata.packageName = pkg.name;
           if (pkg.name !== bareName) {
@@ -276,12 +311,18 @@ export function validateSkillDirectory(
           ...(typeof pkg.name === "string" ? { packageName: pkg.name } : {}),
           ...(typeof pkg.version === "string" && pkg.version.trim() ? { packageVersion: pkg.version } : {}),
           ...(registryMeta?.source ? { registrySource: registryMeta.source } : {}),
+          ...(packageSkillSource ? { packageSkillSource } : {}),
         };
 
         const binRecord = asRecord(pkg.bin);
         if (!binRecord || Object.keys(binRecord).length === 0) {
-          add(issues, "package.bin_missing", "package.json missing non-empty bin object");
+          if (!hostedMetadata) {
+            add(issues, "package.bin_missing", "package.json missing non-empty bin object");
+          }
         } else {
+          if (hostedMetadata) {
+            add(issues, "package.hosted_bin_forbidden", "Hosted metadata packages must not expose a local bin entry");
+          }
           for (const [command, target] of Object.entries(binRecord)) {
             if (!VALID_BIN_COMMAND.test(command)) {
               add(issues, "package.bin_command_invalid", `package.json bin command '${command}' must use lowercase letters, numbers, dots, underscores, or hyphens`);
@@ -309,8 +350,14 @@ export function validateSkillDirectory(
     }
   }
 
+  const hostedMetadata = isHostedMetadataSkill(bareName, metadata.skillMdFrontmatter, registryMeta, packageDeclaresHosted);
+  metadata.runtime = hostedMetadata ? "hosted" : "local";
   const srcDir = join(skillPath, "src");
-  if (!existsSync(srcDir)) {
+  if (hostedMetadata) {
+    if (existsSync(srcDir)) {
+      add(issues, "skill.hosted_source_forbidden", "Hosted metadata skills must not include local implementation source");
+    }
+  } else if (!existsSync(srcDir)) {
     add(issues, "skill.src_missing", "Missing src/ directory");
   } else if (!existsSync(join(srcDir, "index.ts")) && !existsSync(join(srcDir, "index.js"))) {
     add(issues, "skill.src_index_missing", "Missing src/index.ts or src/index.js");

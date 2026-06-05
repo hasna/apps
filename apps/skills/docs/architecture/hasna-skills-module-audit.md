@@ -6,14 +6,15 @@ infrastructure.
 
 ## Executive Decision
 
-Keep `hasna/skills` as the upstream engine and source corpus. Build hosted
+Keep `hasna/skills` as the upstream engine and public skill corpus. Build hosted
 products as wrappers around stable upstream contracts instead of copying the
 skill engine into a private-only product.
 
-Hosted wrappers may depend on upstream package APIs, consume its `skills/`
-corpus, and propose generic improvements back to `hasna/skills`. They must not
-push private account state, billing systems, deployment code, hosted execution
-secrets, or wrapper-specific product flows into upstream.
+Hosted wrappers may depend on upstream package APIs, consume its local skill
+source and hosted skill metadata, and propose generic improvements back to
+`hasna/skills`. They must not push private account state, billing systems,
+deployment code, hosted execution secrets, hosted worker source, or
+wrapper-specific product flows into upstream.
 
 ## Source Inventory
 
@@ -30,9 +31,7 @@ secrets, or wrapper-specific product flows into upstream.
 | API types | `src/types/api.ts` | Reuse and expand upstream | Keep CLI/MCP/web responses machine-readable and SDK-friendly. |
 | CLI | `src/cli/index.tsx` | Reuse as client surface | Add hosted commands and keep local-first commands intact. |
 | MCP server | `src/mcp/index.ts` | Reuse as agent protocol surface | Wrap registry, pinning, run, validation, and session tools with stable JSON. |
-| Local server | `src/server/serve.ts` | Demo/reference only | Not a production hosted backend. |
-| Vite dashboard | `dashboard/` | Demo/reference only | Useful UX reference, not the future hosted web app. |
-| Skill corpus | `skills/*` | Source corpus | Sync into hosted registry, validation, packaging, and remote execution. |
+| Skill corpus | `skills/*` | Public corpus | Local OSS skills keep source; hosted skills keep docs and metadata only. |
 | Shared skill helpers | `skills/_common` | Reuse carefully | Promote stable helpers upstream; server workers can vendor by package import. |
 | Workflows | `.github/workflows/*` | Reference only | Public CI/publish workflows are not hosted deployment pipelines. |
 
@@ -57,7 +56,7 @@ even without the private SaaS:
 - Public boundary automation: keep scripts and docs that make package ownership
   boundaries explicit.
 - Skill corpus hygiene: fix package shape, metadata, docs, and source entry
-  point issues in upstream when they are generic skill quality problems.
+  point issues in upstream when they are generic local skill quality problems.
 
 ## Hosted-Only Modules To Build
 
@@ -71,7 +70,7 @@ These must live in the private product layer, not upstream:
   export upload, logs, idempotency, retries, and cancellation.
 - Billing service: hosted checkout, customer portal, webhooks, credit grants,
   refunds, payment approval records, and test fixtures.
-- Web app: future interface on the same API contracts as CLI/MCP.
+- Web app: interface on the same API contracts as CLI/MCP.
 - Agent API: versioned REST endpoints and MCP-facing endpoints under a hosted
   domain.
 - Deployment: infrastructure, secret stores, previews, production deploys,
@@ -90,9 +89,9 @@ The local scheduler is file/config oriented. Hosted scheduling needs server
 state, worker queues, account-level authorization, idempotency keys, and
 observable job attempts.
 
-The local dashboard and server are development/demo surfaces. They should not
-be upgraded into the production web app; the production web app should consume
-the same versioned API that CLI and MCP consume.
+The OSS package does not own the production web app or server backend. The
+production web app should consume the same versioned API that CLI and MCP
+consume.
 
 The CLI and MCP currently remain local-first. Hosted behavior should be
 additive and explicit through API URL configuration, API keys, remote registry
@@ -110,7 +109,7 @@ metadata, and remote runs.
    status, duration, and credit transactions.
 6. Keep local source execution available for upstream/local skills but make the
    hosted path the default for SaaS-pinned skills.
-7. Add web UI later as a first-class API client, not as a separate backend.
+7. Keep the web UI as a first-class API client in the hosted platform.
 
 ## Test Expectations
 

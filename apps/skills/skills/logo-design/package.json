@@ -2,8 +2,10 @@
   "name": "logo-design",
   "version": "0.1.0",
   "private": true,
+  "description": "Hosted skill metadata for logo-design",
   "type": "module",
-  "bin": {
-    "logo-design": "./src/index.ts"
+  "skills": {
+    "runtime": "hosted",
+    "source": "remote"
   }
 }

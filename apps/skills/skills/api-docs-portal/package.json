@@ -1,9 +1,11 @@
 {
   "name": "api-docs-portal",
   "version": "0.1.0",
-  "type": "module",
   "private": true,
-  "bin": {
-    "api-docs-portal": "src/index.ts"
+  "description": "Hosted skill metadata for api-docs-portal",
+  "type": "module",
+  "skills": {
+    "runtime": "hosted",
+    "source": "remote"
   }
 }

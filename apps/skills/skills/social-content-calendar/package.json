@@ -1,14 +1,11 @@
 {
   "name": "social-content-calendar",
   "version": "0.1.0",
+  "private": true,
   "description": "Hosted premium social content calendar artifact generator",
   "type": "module",
-  "bin": {
-    "social-content-calendar": "./src/index.ts"
-  },
-  "dependencies": {},
-  "devDependencies": {
-    "@types/bun": "latest",
-    "typescript": "^5.7.0"
+  "skills": {
+    "runtime": "hosted",
+    "source": "remote"
   }
 }

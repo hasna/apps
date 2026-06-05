@@ -4,7 +4,8 @@
   "private": true,
   "description": "Hosted premium short-form video package generator",
   "type": "module",
-  "bin": {
-    "short-video-pack": "./src/index.ts"
+  "skills": {
+    "runtime": "hosted",
+    "source": "remote"
   }
 }

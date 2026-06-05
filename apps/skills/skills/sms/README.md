@@ -1,71 +1,33 @@
-# mcp-sms
+# SMS
 
-MCP SMS server for AI agents - Bun/TypeScript with Twilio
+Local MCP SMS skill for AI agents using user-provided Twilio credentials.
 
-## Overview
+## Boundary
 
-This server provides SMS functionality for AI agents using Twilio. Each AI agent can send and receive SMS messages through their assigned phone number.
-
-## Features
-
-- Send SMS messages
-- List messages for a phone number
-- Read specific messages
-- List phone numbers
-- Buy new phone numbers
-- HTTP API with Bearer token authentication
-
-## Agent Phone Numbers
-
-| Agent | Phone Number | Display Name |
-|-------|--------------|--------------|
-| Claude | +1 (555) 000-0000 | Claude (AI Agent) |
+The OSS package ships only the stdio MCP implementation. It does not ship an
+HTTP server, SSE server, phone-number purchasing scripts, hosted account state,
+or billing logic.
 
 ## Usage
 
-### HTTP Server
+```bash
+skills run sms --help
+```
+
+To run the MCP server directly:
 
 ```bash
-# Set environment variables
 export TWILIO_ACCOUNT_SID="your_account_sid"
 export TWILIO_AUTH_TOKEN="your_auth_token"
-export MCP_SMS_API_KEY="your_api_key"
-
-# Start server
-bun run server
+bun run src/index.ts
 ```
 
-### API Endpoints
+## Environment Variables
 
-- `GET /health` - Health check
-- `POST /send` - Send SMS
-- `GET /messages/:phone` - List messages
-- `GET /message/:sid` - Get specific message
-- `GET /numbers` - List phone numbers
-- `POST /numbers/buy` - Buy a phone number
-- `GET /agent/:name` - Get agent info
+| Variable | Description |
+| --- | --- |
+| `TWILIO_ACCOUNT_SID` | Twilio account SID |
+| `TWILIO_AUTH_TOKEN` | Twilio auth token |
 
-### Send SMS Example
-
-```bash
-curl -X POST http://localhost:3848/send \
-  -H "Authorization: Bearer $API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "agent_name": "claude",
-    "from_number": "+15550000000",
-    "to": "+15550000001",
-    "body": "Hello from the SMS agent!"
-  }'
-```
-
-## Development
-
-```bash
-bun install
-bun run dev
-```
-
-## License
-
-MIT
+Hosted SMS workflows, number purchase approvals, billing, and tenant-level
+message history belong in the hosted platform or an external connector.

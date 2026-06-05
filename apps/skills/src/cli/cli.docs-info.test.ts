@@ -84,9 +84,9 @@ describe("CLI docs and validation", () => {
     });
 
     test("shows npm dependencies", async () => {
-      const { stdout } = await runCli(["requires", "deepresearch"]);
+      const { stdout } = await runCli(["requires", "read-csv"]);
       expect(stdout).toContain("npm dependencies");
-      expect(stdout).toContain("commander");
+      expect(stdout).toContain("csv-parse");
     });
   });
 
@@ -102,7 +102,8 @@ describe("CLI docs and validation", () => {
       expect(data).toHaveProperty("metadata");
       expect(Array.isArray(data.issues)).toBe(true);
       expect(Array.isArray(data.warnings)).toBe(true);
-      expect(data.metadata.binCommands).toContain("image");
+      expect(data.metadata.runtime).toBe("hosted");
+      expect(data.metadata.binCommands).toEqual([]);
     });
 
     test("outputs structured validation errors for missing skills", async () => {

@@ -557,5 +557,11 @@ export function formatCost(cents: number): string {
 }
 
 export function getAllPremiumSlugs(): string[] {
-  return [...PREMIUM_SKILLS.map((s) => s.slug), ARTICLE_GENERATION_SLUG];
+  return [
+    ...new Set([
+      ...PREMIUM_SKILLS.map((skill) => skill.slug),
+      ...MEDIA_GENERATION_PRICES.map((price) => price.slug),
+      ARTICLE_GENERATION_SLUG,
+    ]),
+  ].sort();
 }

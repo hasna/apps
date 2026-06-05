@@ -4,7 +4,8 @@
   "private": true,
   "description": "Hosted premium product mockup artifact generator",
   "type": "module",
-  "bin": {
-    "product-mockup": "./src/index.ts"
+  "skills": {
+    "runtime": "hosted",
+    "source": "remote"
   }
 }

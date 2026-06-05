@@ -4,7 +4,8 @@
   "private": true,
   "description": "Hosted premium contract review report generator",
   "type": "module",
-  "bin": {
-    "contract-review-report": "./src/index.ts"
+  "skills": {
+    "runtime": "hosted",
+    "source": "remote"
   }
 }

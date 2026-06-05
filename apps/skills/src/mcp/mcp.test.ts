@@ -299,6 +299,50 @@ describe("MCP Server", () => {
     }
   }, 15000);
 
+  test("run_skill keeps free local skills local even when hosted auth is configured", async () => {
+    const { mkdtempSync, rmSync } = require("fs");
+    const { tmpdir } = require("os");
+    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-local-with-auth-"));
+    let remoteCalls = 0;
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        remoteCalls += 1;
+        return Response.json({ error: "local skills should not use hosted API" }, { status: 500 });
+      },
+    });
+    const client = new McpClient({
+      HOME: tmpDir,
+      SKILLS_API_KEY: "sk_test_local_should_stay_local",
+      SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+      SKILLS_TEST_MODE: "1",
+    });
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "run_skill",
+        arguments: {
+          name: "lorem-generator",
+          args: ["--help"],
+        },
+      }, 85);
+      expect(response).not.toBeNull();
+      expect(response.result.isError).toBeUndefined();
+      const payload = JSON.parse(response.result.content[0].text);
+      expect(payload).toMatchObject({
+        exitCode: 0,
+        skill: "lorem-generator",
+      });
+      expect(payload.stdout).toContain("lorem-generator");
+      expect(payload.remote).toBeUndefined();
+      expect(remoteCalls).toBe(0);
+    } finally {
+      await client.close();
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
   test("lists resources", async () => {
     const client = new McpClient();
     try {
@@ -847,7 +891,8 @@ describe("MCP Server", () => {
       expect(validResponse).not.toBeNull();
       const validResult = JSON.parse(validResponse.result.content[0].text);
       expect(validResult.valid).toBe(true);
-      expect(validResult.metadata.binCommands).toContain("image");
+      expect(validResult.metadata.runtime).toBe("hosted");
+      expect(validResult.metadata.binCommands).toEqual([]);
 
       const missingResponse = await client.request("tools/call", {
         name: "validate_skill",

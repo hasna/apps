@@ -19,9 +19,7 @@
     ]
   },
   "include": [
-    "src/**/*",
-    "bin/**/*",
-    "scripts/**/*"
+    "src/**/*"
   ],
   "exclude": [
     "node_modules"

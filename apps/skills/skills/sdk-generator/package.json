@@ -4,7 +4,8 @@
   "private": true,
   "description": "Hosted premium SDK scaffold generator",
   "type": "module",
-  "bin": {
-    "sdk-generator": "./src/index.ts"
+  "skills": {
+    "runtime": "hosted",
+    "source": "remote"
   }
 }

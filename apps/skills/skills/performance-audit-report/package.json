@@ -4,7 +4,8 @@
   "private": true,
   "description": "Hosted premium performance audit report generator",
   "type": "module",
-  "bin": {
-    "performance-audit-report": "./src/index.ts"
+  "skills": {
+    "runtime": "hosted",
+    "source": "remote"
   }
 }

@@ -4,7 +4,8 @@
   "private": true,
   "description": "Hosted premium meeting artifact package generator",
   "type": "module",
-  "bin": {
-    "meeting-pack": "./src/index.ts"
+  "skills": {
+    "runtime": "hosted",
+    "source": "remote"
   }
 }

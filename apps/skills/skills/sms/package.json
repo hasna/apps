@@ -11,9 +11,7 @@
     "start": "bun run src/index.ts",
     "dev": "bun --watch src/index.ts",
     "build": "bun build src/index.ts --outdir dist --target node",
-    "test": "bun test",
-    "test:send": "bun run scripts/test-send.ts",
-    "server": "bun run src/server.ts"
+    "test": "bun test"
   },
   "keywords": [
     "mcp",

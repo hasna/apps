@@ -4,7 +4,8 @@
   "private": true,
   "description": "Hosted premium voiceover and jingle package generator",
   "type": "module",
-  "bin": {
-    "voiceover-jingle-pack": "./src/index.ts"
+  "skills": {
+    "runtime": "hosted",
+    "source": "remote"
   }
 }

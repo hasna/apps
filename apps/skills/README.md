@@ -113,7 +113,6 @@ requirements explicitly document local provider use.
 | `skills schedule list` | | List all schedules (enabled/disabled/last run) |
 | `skills mcp` | | Start MCP server on stdio |
 | `skills mcp --register claude` | | Register the Skills MCP server in an agent config (also `codex`, `gemini`, `opencode`, `all`) |
-| `skills serve` | | Start the HTTP dashboard on localhost |
 | `skills self-update` | | Update this package to the latest version |
 | `skills completion <shell>` | | Generate shell completions (bash, zsh, fish) |
 
@@ -224,22 +223,12 @@ Hosted account, billing, and credit management use the configured hosted API.
 The public package only stores local configuration and CLI credentials; Stripe,
 customer records, and hosted execution remain platform concerns.
 
-## Dashboard
-
-```bash
-skills serve              # Start HTTP server (opens browser automatically)
-skills serve --no-open    # Start without opening the browser
-```
-
-Dashboard features: searchable/filterable skills table, detail dialogs, stats cards, dark/light/system theme, oklch color tokens.
-
 ## Project Structure
 
 ```
 src/
 ├── cli/index.tsx           # Commander.js CLI + Ink TUI
 ├── mcp/index.ts            # MCP server (stdio) with ~20 tools
-├── server/serve.ts          # Bun.serve HTTP server + REST API
 ├── lib/
 │   ├── registry.ts          # 202+ entries, search, categories, tags
 │   ├── installer.ts         # Project pins and disabled source-copy paths
@@ -254,9 +243,7 @@ src/
 
 skills/                      # 202+ public skill contracts and local OSS skills
 ├── _common/                 # Shared utilities
-└── */                       # Local skills include src/; premium package output excludes private src/
-
-dashboard/                   # Next.js + React 19 + Tailwind v4 app
+└── */                       # Local skills include src/; hosted skills are metadata-only
 ```
 
 ## Project Runtime State
@@ -283,8 +270,6 @@ belong in `~/.cache/skills` or the remote API, not inside project `.skills`.
 bun install
 bun run build              # Build CLI, MCP, library, and types
 bun run dev                # Run CLI in dev mode (no build needed)
-bun run dashboard:dev       # Vite dev server for web dashboard
-bun run server:dev          # HTTP server with --watch
 bun test                   # Run all tests
 bun run typecheck          # TypeScript type checking
 ```

@@ -4,7 +4,8 @@
   "private": true,
   "description": "Hosted premium one-page website bundle generator",
   "type": "module",
-  "bin": {
-    "one-page-website": "./src/index.ts"
+  "skills": {
+    "runtime": "hosted",
+    "source": "remote"
   }
 }

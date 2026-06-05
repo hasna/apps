@@ -1,5 +1,5 @@
 /**
- * run / mcp / serve / self-update — runtime commands
+ * run / mcp / self-update — runtime commands
  */
 
 import chalk from "chalk";

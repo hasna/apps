@@ -25,8 +25,17 @@ const EXPECTED_PACKAGE_DEPS: Record<string, string[]> = {
   excel: ["openai", "xlsx"],
 };
 
-function readPackageJson(skill: string): { bin?: Record<string, string>; dependencies?: Record<string, string> } {
+function readPackageJson(skill: string): {
+  bin?: Record<string, string>;
+  dependencies?: Record<string, string>;
+  skills?: { runtime?: string; source?: string };
+} {
   return JSON.parse(readFileSync(join(getSkillPath(skill), "package.json"), "utf8"));
+}
+
+function isHostedMetadataSkill(skill: string): boolean {
+  const pkg = readPackageJson(skill);
+  return pkg.skills?.runtime === "hosted" || pkg.skills?.source === "remote" || pkg.skills?.source === "private-hosted";
 }
 
 function readSkillMdFrontmatterName(skill: string): string | null {
@@ -79,10 +88,15 @@ describe("basic skill profile for Takumi", () => {
       expect(readSkillMdFrontmatterName(skill), `${skill} frontmatter name should match registry`).toBe(skill);
 
       const pkg = readPackageJson(skill);
-      expect(pkg.bin, `${skill} needs a bin entry`).toBeDefined();
-      const entry = Object.values(pkg.bin!)[0];
-      expect(entry, `${skill} needs a callable entry`).toBeTruthy();
-      expect(existsSync(join(getSkillPath(skill), entry)), `${skill} bin entry must exist`).toBe(true);
+      if (isHostedMetadataSkill(skill)) {
+        expect(pkg.bin, `${skill} hosted metadata must not expose local bin`).toBeUndefined();
+        expect(existsSync(join(getSkillPath(skill), "src")), `${skill} hosted metadata must not include local source`).toBe(false);
+      } else {
+        expect(pkg.bin, `${skill} needs a bin entry`).toBeDefined();
+        const entry = Object.values(pkg.bin!)[0];
+        expect(entry, `${skill} needs a callable entry`).toBeTruthy();
+        expect(existsSync(join(getSkillPath(skill), entry)), `${skill} bin entry must exist`).toBe(true);
+      }
 
       const reqs = getSkillRequirements(skill);
       expect(reqs?.cliCommand, `${skill} needs a CLI command`).toBeTruthy();
@@ -111,7 +125,7 @@ describe("basic skill profile for Takumi", () => {
   test("every basic skill exposes help without requiring provider credentials", async () => {
     const failures: string[] = [];
 
-    for (const skill of BASIC_SKILLS) {
+    for (const skill of BASIC_SKILLS.filter((name) => !isHostedMetadataSkill(name))) {
       const result = await runSkillHelp(skill);
       if (result.exitCode !== 0 || !/usage|commands?|options?/i.test(result.stdout)) {
         failures.push(`${skill}: exit=${result.exitCode} stdout=${result.stdout.slice(0, 120)} stderr=${result.stderr.slice(0, 120)}`);

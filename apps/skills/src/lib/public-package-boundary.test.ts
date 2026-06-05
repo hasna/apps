@@ -1,12 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  ARTICLE_GENERATION_SLUG,
-  MEDIA_GENERATION_PRICES,
-  PREMIUM_SKILLS,
-} from "./pricing";
 
 interface PackedFile {
   path: string;
@@ -14,16 +9,6 @@ interface PackedFile {
 
 interface PackManifest {
   files: PackedFile[];
-}
-
-function premiumPackageSlugs(): string[] {
-  return [
-    ...new Set([
-      ...PREMIUM_SKILLS.map((skill) => skill.slug),
-      ...MEDIA_GENERATION_PRICES.map((price) => price.slug),
-      ARTICLE_GENERATION_SLUG,
-    ]),
-  ].sort();
 }
 
 function readPackedFiles(): string[] {
@@ -37,6 +22,20 @@ function readPackedFiles(): string[] {
   const output = new TextDecoder().decode(result.stdout);
   const manifests = JSON.parse(output) as PackManifest[];
   return manifests[0].files.map((file) => file.path).sort();
+}
+
+function hostedMetadataSlugs(): string[] {
+  const skillsDir = join(process.cwd(), "skills");
+  return readdirSync(skillsDir)
+    .filter((entry) => {
+      const skillDir = join(skillsDir, entry);
+      if (!statSync(skillDir).isDirectory()) return false;
+      const pkgPath = join(skillDir, "package.json");
+      if (!existsSync(pkgPath)) return false;
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { skills?: { runtime?: string; source?: string } };
+      return pkg.skills?.runtime === "hosted" || pkg.skills?.source === "remote" || pkg.skills?.source === "private-hosted";
+    })
+    .sort();
 }
 
 function buildEntryPointsForBoundaryScan(): string[] {
@@ -117,7 +116,7 @@ describe("public package boundary", () => {
   test("keeps premium implementation source out of the packed public package", () => {
     const files = readPackedFiles();
     const packed = new Set(files);
-    const premiumSlugs = premiumPackageSlugs().filter((slug) => existsSync(join(process.cwd(), "skills", slug)));
+    const premiumSlugs = hostedMetadataSlugs();
 
     const leakedPremiumSource = files.filter((path) =>
       premiumSlugs.some((slug) => path.startsWith(`skills/${slug}/src/`)),
@@ -129,9 +128,33 @@ describe("public package boundary", () => {
     }
   });
 
+  test("keeps hosted premium implementation source out of the public repository", () => {
+    const leakedPremiumSource = hostedMetadataSlugs()
+      .filter((slug) => existsSync(join(process.cwd(), "skills", slug, "src")));
+
+    expect(leakedPremiumSource).toEqual([]);
+  });
+
   test("does not strip free local skill source from the packed public package", () => {
     const files = readPackedFiles();
     expect(files).toContain("skills/brand-style-guide/src/index.ts");
+  });
+
+  test("keeps legacy service server and cloud scaffolds out of the public package", () => {
+    const files = readPackedFiles();
+    for (const forbidden of [
+      "skills/domainpurchase/src/lib/config.ts",
+      "skills/domainpurchase/src/lib/api-client.ts",
+      "skills/domainpurchase/.env.example",
+      "skills/sms/src/server.ts",
+      "skills/sms/src/sse-server.ts",
+      "skills/sms/scripts/buy-number.ts",
+      "skills/managemcp/src/db/index.ts",
+      "skills/managemcp/scripts/migrate.ts",
+      "skills/managemcp/.env.example",
+    ]) {
+      expect(files).not.toContain(forbidden);
+    }
   });
 
   test("keeps private implementation markers out of built entrypoints", () => {

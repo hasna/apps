@@ -24,7 +24,7 @@ describe("README remote premium onboarding", () => {
       "It is not a provider",
       "`OPENAI_API_KEY`",
       "free/local OSS skills",
-      "premium package output excludes private src",
+      "hosted skills are metadata-only",
     ]) {
       expect(readme).toContain(phrase);
     }

@@ -115,9 +115,9 @@ describe("skillinfo", () => {
     });
 
     test("extracts dependencies from package.json", () => {
-      const reqs = getSkillRequirements("deepresearch");
+      const reqs = getSkillRequirements("read-csv");
       expect(reqs).not.toBeNull();
-      expect(reqs!.dependencies).toHaveProperty("commander");
+      expect(reqs!.dependencies).toHaveProperty("csv-parse");
     });
   });
 
@@ -184,10 +184,10 @@ describe("skillinfo", () => {
     });
 
     test("includes CLI section for skills with bin entry", () => {
-      const md = generateSkillMd("deepresearch");
+      const md = generateSkillMd("read-csv");
       expect(md).not.toBeNull();
       expect(md!).toContain("## CLI");
-      expect(md!).toContain("skills run deepresearch");
+      expect(md!).toContain("skills run read-csv");
     });
 
     test("returns null for nonexistent skill", () => {

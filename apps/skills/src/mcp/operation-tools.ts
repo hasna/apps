@@ -285,7 +285,7 @@ export function registerOperationTools(server: McpServer): void {
       return mcpError("AUTH_REQUIRED", `${error}. Local run metadata: ${run.paths.runDir}/run.json`, ["skills auth login"]);
     }
 
-    if (apiKey) {
+    if (isPremiumSkill(skillName) && apiKey) {
       try {
         const { RemoteSkillsClient } = await import("../lib/remote-client.js");
         const client = new RemoteSkillsClient(apiKey);
@@ -314,13 +314,10 @@ export function registerOperationTools(server: McpServer): void {
           nextActions: remoteRunNextActions(remoteRunId),
         });
       } catch (err) {
-        console.error(`[skills] hosted API failed for ${skillName}, falling back to local:`, (err as Error).message);
-        if (isPremiumSkill(skillName)) {
-          const error = `Hosted skill ${skillName} requires hosted access: ${(err as Error).message}`;
-          writeRunLogs(runContext, "", error + "\n");
-          const localRun = completeSkillRun(runContext, { status: "failed", error });
-          return mcpError("PLATFORM_ERROR", `${error}. Local run metadata: ${localRun.paths.runDir}/run.json`);
-        }
+        const error = `Hosted skill ${skillName} requires hosted access: ${(err as Error).message}`;
+        writeRunLogs(runContext, "", error + "\n");
+        const localRun = completeSkillRun(runContext, { status: "failed", error });
+        return mcpError("PLATFORM_ERROR", `${error}. Local run metadata: ${localRun.paths.runDir}/run.json`);
       }
     }
 
