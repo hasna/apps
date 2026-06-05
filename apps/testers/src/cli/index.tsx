@@ -4856,6 +4856,20 @@ workflowCmd
       if (opts.json || opts.dryRun) {
         log(JSON.stringify(result, null, 2));
       } else {
+        const preflightChecks = result.preflight?.checks ?? [];
+        const failedRequiredChecks = preflightChecks.filter((check) => !check.ok && check.required);
+        const warnings = preflightChecks.filter((check) => !check.ok && !check.required);
+        if (failedRequiredChecks.length > 0 || warnings.length > 0) {
+          const label = failedRequiredChecks.length > 0 ? chalk.red("failed") : chalk.yellow("warnings");
+          log(chalk.bold(`Preflight ${label}:`));
+          for (const check of failedRequiredChecks) {
+            log(`  ${chalk.red("failed")}  ${check.message}`);
+          }
+          for (const check of warnings) {
+            log(`  ${chalk.yellow("warning")} ${check.message}`);
+          }
+        }
+
         const status = result.status === "passed" ? chalk.green("passed") : chalk.red("failed");
         log(chalk.bold(`Sandbox workflow fanout ${status}: ${result.passed}/${result.total} passed with ${result.workers} worker(s)`));
         for (const item of result.items) {

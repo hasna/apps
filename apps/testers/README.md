@@ -41,7 +41,7 @@ testers workflow fanout --project alumia --workers 6 --url https://preview.examp
 testers workflow fanout wf_abc,wf_def wf_xyz --workers 12 --url https://preview.example.com --json
 ```
 
-`--workers` is bounded to 1-12 concurrent sandboxes. Use `--dry-run` to inspect the remote commands and upload plans without spawning sandboxes.
+`--workers` is bounded to 1-12 concurrent sandboxes. Fanout preflights provider credentials, required sandbox environment references, `rsync`, and app source directories before launching workers. Use `--dry-run` to inspect the remote commands, upload plans, and preflight checks without spawning sandboxes.
 
 ### Common Flags
 
