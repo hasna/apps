@@ -12,7 +12,6 @@ import {
   upsertScenario,
 } from "./scenarios.js";
 import { createProject } from "./projects.js";
-import { createProject } from "./projects.js";
 import { VersionConflictError } from "../types/index.js";
 
 describe("scenarios", () => {
@@ -398,6 +397,67 @@ describe("scenarios", () => {
         description: "Global scenario",
       });
       expect(b.action).toBe("deduped");
+    });
+
+    test("updates metadata, assertions, target path, auth, and parameters", () => {
+      const first = upsertScenario({
+        name: "rich-upsert",
+        description: "Global scenario",
+        targetPath: "/:orgSlug",
+        requiresAuth: true,
+        metadata: { fixtureParams: ["orgSlug"] },
+        assertions: [{ type: "no_console_errors" }],
+        parameters: { routeFixtures: { orgSlug: "test-org" } },
+      });
+      expect(first.action).toBe("created");
+
+      const second = upsertScenario({
+        name: "rich-upsert",
+        description: "Global scenario",
+        targetPath: "/:orgSlug/settings",
+        requiresAuth: true,
+        metadata: { fixtureParams: ["orgSlug"], actionCount: 1 },
+        assertions: [{ type: "no_console_errors" }],
+        parameters: { routeFixtures: { orgSlug: "acme" } },
+      });
+
+      expect(second.action).toBe("updated");
+      expect(second.scenario.targetPath).toBe("/:orgSlug/settings");
+      expect(second.scenario.metadata?.actionCount).toBe(1);
+      expect(second.scenario.parameters?.routeFixtures).toEqual({ orgSlug: "acme" });
+    });
+
+    test("dedupes generated metadata with undefined object fields", () => {
+      const first = upsertScenario({
+        name: "metadata-undefined-dedup",
+        description: "Generated route metadata",
+        metadata: {
+          actions: [
+            {
+              kind: "button",
+              label: "Save",
+              target: undefined,
+            },
+          ],
+        },
+      });
+      expect(first.action).toBe("created");
+
+      const second = upsertScenario({
+        name: "metadata-undefined-dedup",
+        description: "Generated route metadata",
+        metadata: {
+          actions: [
+            {
+              kind: "button",
+              label: "Save",
+              target: undefined,
+            },
+          ],
+        },
+      });
+
+      expect(second.action).toBe("deduped");
     });
   });
 

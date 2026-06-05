@@ -26,6 +26,7 @@ import {
   getPerformanceMetrics,
   startCoverage,
 } from "@hasna/browser";
+import { materializeScenarioRoute, resolveStartUrl } from "./route-fixtures.js";
 
 type HARCapture = Awaited<ReturnType<typeof startHAR>>;
 type CoverageSession = Awaited<ReturnType<typeof startCoverage>>;
@@ -1302,39 +1303,41 @@ interface AgentLoopResult {
   }>;
 }
 
-function resolveStartUrl(baseUrl: string, targetPath: string): string {
-  try {
-    return new URL(targetPath, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
-  } catch {
-    return `${baseUrl.replace(/\/+$/, "")}/${targetPath.replace(/^\/+/, "")}`;
-  }
-}
-
 export function buildScenarioUserMessage(scenario: Scenario, baseUrl?: string): string {
+  const { scenario: materializedScenario, resolution } = materializeScenarioRoute(scenario);
   const userParts: string[] = [
-    `**Scenario:** ${scenario.name}`,
-    `**Description:** ${scenario.description}`,
+    `**Scenario:** ${materializedScenario.name}`,
+    `**Description:** ${materializedScenario.description}`,
   ];
 
   if (baseUrl) {
     const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
     userParts.push(`**Base URL:** ${normalizedBaseUrl}`);
-    if (scenario.targetPath) {
-      userParts.push(`**Start URL:** ${resolveStartUrl(normalizedBaseUrl, scenario.targetPath)}`);
+    if (materializedScenario.targetPath) {
+      userParts.push(`**Start URL:** ${resolveStartUrl(normalizedBaseUrl, materializedScenario.targetPath)}`);
     }
     userParts.push(
       "**Navigation Boundary:** Treat the Base URL as the application under test. Resolve relative paths and in-app navigation against this origin. Do not navigate to another host unless a step explicitly includes an absolute external URL.",
     );
   }
 
-  if (scenario.targetPath) {
-    userParts.push(`**Target Path:** ${scenario.targetPath}`);
+  if (materializedScenario.targetPath) {
+    userParts.push(`**Target Path:** ${materializedScenario.targetPath}`);
   }
 
-  if (scenario.steps.length > 0) {
+  if (resolution.params.length > 0) {
+    userParts.push("**Route Fixtures:**");
+    for (const param of resolution.params) {
+      const source = resolution.sources[param];
+      const synthetic = source === "default" ? " synthetic" : "";
+      userParts.push(`- :${param} = ${resolution.values[param]} (${source}${synthetic})`);
+    }
+  }
+
+  if (materializedScenario.steps.length > 0) {
     userParts.push("**Steps:**");
-    for (let i = 0; i < scenario.steps.length; i++) {
-      userParts.push(`${i + 1}. ${scenario.steps[i]}`);
+    for (let i = 0; i < materializedScenario.steps.length; i++) {
+      userParts.push(`${i + 1}. ${materializedScenario.steps[i]}`);
     }
   }
 

@@ -97,6 +97,9 @@ describe("next route inventory", () => {
     expect(apiScenario.metadata?.methods).toEqual(["DELETE"]);
     expect(apiScenario.metadata?.fixtureParams).toEqual(["id"]);
     expect(apiScenario.metadata?.actionCount).toBe(1);
+    expect(apiScenario.parameters?.routeFixtures).toEqual({
+      id: "00000000-0000-4000-8000-000000000000",
+    });
 
     const billingScenario = scenarios.find((scenario) => scenario.name === "Next page: /:orgSlug/billing")!;
     expect(billingScenario.steps.some((step) => step.includes("Add credits"))).toBe(true);

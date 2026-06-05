@@ -14,6 +14,7 @@ import { getPersona } from "../db/personas.js";
 import { launchBrowser, getPage, closeBrowser } from "./browser.js";
 import { Screenshotter } from "./screenshotter.js";
 import { createClientForModel, resolveProviderApiKeyForModel, runAgentLoop, resolveModel } from "./ai-client.js";
+import { materializeScenarioRoute, resolveStartUrl } from "./route-fixtures.js";
 import { loadConfig } from "./config.js";
 import { ensurePersonaAuthenticated, loginWithAuthConfig } from "./persona-auth.js";
 import { enableNetworkLogging } from "@hasna/browser";
@@ -222,10 +223,11 @@ export async function runSingleScenario(
   runId: string,
   options: RunOptions
 ): Promise<Result> {
+  const { scenario: materializedScenario, resolution: routeFixtureResolution } = materializeScenarioRoute(scenario);
   // Dispatch eval scenarios to the eval runner
-  const scenarioType = (scenario as Scenario & { scenarioType?: string }).scenarioType ?? "browser";
+  const scenarioType = (materializedScenario as Scenario & { scenarioType?: string }).scenarioType ?? "browser";
   if (scenarioType === "eval") {
-    return runEvalScenario(scenario, { runId, baseUrl: options.url });
+    return runEvalScenario(materializedScenario, { runId, baseUrl: options.url });
   }
 
   const config = loadConfig();
@@ -280,7 +282,7 @@ export async function runSingleScenario(
     runId,
     scenarioId: scenario.id,
     model,
-    stepsTotal: scenario.steps.length || 10,
+    stepsTotal: materializedScenario.steps.length || 10,
     personaId: persona?.id ?? null,
     personaName: persona?.name ?? null,
   });
@@ -321,17 +323,17 @@ export async function runSingleScenario(
       });
     }
 
-    const targetUrl = scenario.targetPath
-      ? `${options.url.replace(/\/$/, "")}${scenario.targetPath}`
+    const targetUrl = materializedScenario.targetPath
+      ? resolveStartUrl(options.url.replace(/\/$/, ""), materializedScenario.targetPath)
       : options.url;
 
-    const scenarioTimeout = scenario.timeoutMs ?? options.timeout ?? config.browser.timeout ?? 60000;
+    const scenarioTimeout = materializedScenario.timeoutMs ?? options.timeout ?? config.browser.timeout ?? 60000;
 
     // Register session in open-browser's session DB (enables cross-tool session visibility)
     registerSession({
       resultId: result.id,
       runId,
-      scenarioId: scenario.id,
+      scenarioId: materializedScenario.id,
       engine: effectiveOptions.engine ?? "playwright",
       startUrl: targetUrl,
     });
@@ -397,7 +399,7 @@ export async function runSingleScenario(
     const agentResult = await withTimeout(runAgentLoop({
       client,
       page,
-      scenario,
+      scenario: materializedScenario,
       screenshotter,
       model,
       runId,
@@ -493,7 +495,7 @@ export async function runSingleScenario(
     const baseReasoning = agentResult.reasoning ? agentResult.reasoning + lightpandaNote : lightpandaNote || "";
     const assertionOutcome = await applyStructuredAssertionsToResult({
       page,
-      scenario,
+      scenario: materializedScenario,
       consoleErrors,
       status: agentResult.status,
       reasoning: baseReasoning,
@@ -516,6 +518,7 @@ export async function runSingleScenario(
       costCents: estimateCost(model, agentResult.tokensUsed),
       metadata: {
         consoleLogs,
+        ...(routeFixtureResolution.params.length > 0 ? { routeFixtureResolution } : {}),
         ...(networkErrors.length > 0 ? networkMeta : {}),
         ...structuredAssertionMeta,
       },

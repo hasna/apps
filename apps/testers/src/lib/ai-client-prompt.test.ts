@@ -39,4 +39,25 @@ describe("buildScenarioUserMessage", () => {
     expect(message).toContain("**Start URL:** http://localhost:3337/pricing");
     expect(message).toContain("Do not navigate to another host");
   });
+
+  test("materializes dynamic target paths from scenario route fixtures", () => {
+    const scenario = {
+      ...makeScenario(),
+      targetPath: "/:orgSlug/projects/:projectId",
+      metadata: { fixtureParams: ["orgSlug", "projectId"] },
+      parameters: {
+        routeFixtures: {
+          orgSlug: "acme",
+          projectId: "11111111-1111-4111-8111-111111111111",
+        },
+      },
+      steps: ["Open /:orgSlug/projects/:projectId."],
+    };
+
+    const message = buildScenarioUserMessage(scenario, "http://localhost:3337");
+
+    expect(message).toContain("**Start URL:** http://localhost:3337/acme/projects/11111111-1111-4111-8111-111111111111");
+    expect(message).toContain("- :orgSlug = acme (scenario)");
+    expect(message).toContain("Open /acme/projects/11111111-1111-4111-8111-111111111111.");
+  });
 });

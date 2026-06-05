@@ -9,6 +9,20 @@ import {
 } from "../types/index.js";
 import { getDatabase, now, uuid, shortUuid, resolvePartialId } from "./database.js";
 
+function stableJson(value: unknown): string {
+  if (value === undefined) return "";
+  if (value === null) return "null";
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, val]) => val !== undefined)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, val]) => `${JSON.stringify(key)}:${stableJson(val)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
 function nextShortId(projectId?: string): string {
   const db = getDatabase();
 
@@ -365,6 +379,9 @@ export function upsertScenario(input: CreateScenarioInput & { name: string }): U
   // Check if content is actually different (dedup)
   const existingSteps = JSON.parse(existing.steps) as string[];
   const existingTags = JSON.parse(existing.tags) as string[];
+  const existingMetadata = existing.metadata ? JSON.parse(existing.metadata) as Record<string, unknown> : undefined;
+  const existingAssertions = JSON.parse(existing.assertions || "[]") as unknown[];
+  const existingParameters = existing.parameters ? JSON.parse(existing.parameters) as Record<string, unknown> : undefined;
   const newSteps = input.steps ?? [];
   const newTags = input.tags ?? [];
   const isIdentical =
@@ -373,7 +390,12 @@ export function upsertScenario(input: CreateScenarioInput & { name: string }): U
     existingSteps.every((s, i) => s === newSteps[i]) &&
     existingTags.length === newTags.length &&
     existingTags.every((t, i) => t === newTags[i]) &&
-    existing.priority === (input.priority ?? "medium");
+    existing.priority === (input.priority ?? "medium") &&
+    existing.target_path === (input.targetPath ?? null) &&
+    Boolean(existing.requires_auth) === Boolean(input.requiresAuth) &&
+    stableJson(existingMetadata) === stableJson(input.metadata) &&
+    stableJson(existingAssertions) === stableJson(input.assertions ?? []) &&
+    stableJson(existingParameters) === stableJson(input.parameters);
 
   if (isIdentical) {
     return { scenario: scenarioFromRow(existing), action: "deduped" };
@@ -394,6 +416,7 @@ export function upsertScenario(input: CreateScenarioInput & { name: string }): U
   if (input.authConfig !== undefined) { sets.push("auth_config = ?"); params.push(JSON.stringify(input.authConfig)); }
   if (input.metadata !== undefined) { sets.push("metadata = ?"); params.push(JSON.stringify(input.metadata)); }
   if (input.assertions !== undefined) { sets.push("assertions = ?"); params.push(JSON.stringify(input.assertions)); }
+  if (input.parameters !== undefined) { sets.push("parameters = ?"); params.push(JSON.stringify(input.parameters)); }
 
   sets.push("version = ?", "updated_at = ?");
   params.push(existing.version + 1, now());

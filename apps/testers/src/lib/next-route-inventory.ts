@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
 import { upsertScenario } from "../db/scenarios.js";
 import { createTestingWorkflow, listTestingWorkflows, updateTestingWorkflow } from "../db/workflows.js";
+import { defaultRouteFixturesForParams } from "./route-fixtures.js";
 import type {
   Assertion,
   CreateScenarioInput,
@@ -197,6 +198,12 @@ export function scenarioInputForNextRoute(
       actionCount: item.actions.length,
       groups: item.groups,
     },
+    parameters: item.fixtureParams.length > 0
+      ? {
+          routeFixtures: defaultRouteFixturesForParams(item.fixtureParams),
+          routeFixtureParams: item.fixtureParams,
+        }
+      : undefined,
     projectId,
   };
 }
