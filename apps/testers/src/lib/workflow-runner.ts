@@ -120,6 +120,8 @@ const APP_SOURCE_EXCLUDES = [
   "__pycache__",
 ];
 
+const MAX_CAPTURED_SANDBOX_OUTPUT = 120_000;
+
 export function buildWorkflowRunPlan(workflow: TestingWorkflow, options: WorkflowRunOptions): WorkflowRunPlan {
   const runOptions = {
     url: options.url,
@@ -326,6 +328,7 @@ function buildSandboxCommand(input: {
 
   return [
     "set -euo pipefail",
+    buildBunBootstrapCommand(),
     `mkdir -p ${shellQuote(input.remoteDir)}`,
     `mkdir -p ${shellQuote(input.stateRemoteDir)}`,
     input.appRemoteDir ? `mkdir -p ${shellQuote(input.appRemoteDir)}` : undefined,
@@ -334,6 +337,17 @@ function buildSandboxCommand(input: {
     buildAppStartCommand(input),
     `HASNA_TESTERS_DB_PATH=${shellQuote(input.dbPath)} ${args.map(shellQuote).join(" ")}`,
   ].filter(Boolean).join("\n");
+}
+
+function buildBunBootstrapCommand(): string {
+  return [
+    'export BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"',
+    'export PATH="$BUN_INSTALL/bin:$PATH"',
+    "if ! command -v bun >/dev/null 2>&1; then",
+    "  curl -fsSL https://bun.sh/install | bash",
+    "fi",
+    "command -v bun >/dev/null 2>&1",
+  ].join("\n");
 }
 
 function buildAppStartCommand(input: {
@@ -382,6 +396,11 @@ async function runViaSandbox(
   const sandboxes = await resolveSandboxesRuntime(dependencies);
   const createBundle = dependencies.createDatabaseBundle ?? createWorkflowDatabaseBundle;
   const bundle = createBundle(plan.workflow, plan);
+  const sandboxTimeoutSeconds = plan.sandbox.timeoutMs === undefined
+    ? undefined
+    : Math.ceil(plan.sandbox.timeoutMs / 1000);
+  let capturedStdout = "";
+  let capturedStderr = "";
 
   try {
     const raw = await sandboxes.runCommandInSandbox({
@@ -389,8 +408,8 @@ async function runViaSandbox(
       provider: plan.sandbox.provider,
       name: plan.sandbox.name,
       image: plan.sandbox.image,
-      sandboxTimeout: plan.sandbox.timeoutMs,
-      commandTimeoutMs: plan.sandbox.timeoutMs,
+      sandboxTimeout: sandboxTimeoutSeconds,
+      commandTimeoutMs: sandboxTimeoutSeconds,
       config: {
         source: "testers",
         testersProjectId: plan.workflow.projectId ?? undefined,
@@ -403,6 +422,12 @@ async function runViaSandbox(
         localDir: bundle.localDir,
         remoteDir: bundle.remoteDir,
         syncStrategy: plan.sandbox.syncStrategy,
+      },
+      onStdout: (data) => {
+        capturedStdout = appendCapturedSandboxOutput(capturedStdout, data);
+      },
+      onStderr: (data) => {
+        capturedStderr = appendCapturedSandboxOutput(capturedStderr, data);
       },
     });
     const exitCode = raw.result.exit_code ?? raw.result.exitCode ?? 0;
@@ -419,9 +444,28 @@ async function runViaSandbox(
       stderr,
       cleanup: raw.cleanup,
     };
+  } catch (error) {
+    if (capturedStdout || capturedStderr) {
+      throw buildSandboxStreamError(error, capturedStdout, capturedStderr);
+    }
+    throw error;
   } finally {
     bundle.cleanup?.();
   }
+}
+
+function appendCapturedSandboxOutput(current: string, data: string): string {
+  const next = current + data;
+  if (next.length <= MAX_CAPTURED_SANDBOX_OUTPUT) return next;
+  return next.slice(next.length - MAX_CAPTURED_SANDBOX_OUTPUT);
+}
+
+function buildSandboxStreamError(error: unknown, stdout: string, stderr: string): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  const parts = [`Sandbox workflow execution failed: ${message}`];
+  if (stdout.trim()) parts.push(`stdout:\n${stdout.trimEnd()}`);
+  if (stderr.trim()) parts.push(`stderr:\n${stderr.trimEnd()}`);
+  return new Error(parts.join("\n"));
 }
 
 function resolveSandboxEnv(env: Record<string, string> | undefined): Record<string, string> | undefined {

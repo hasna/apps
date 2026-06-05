@@ -71,10 +71,14 @@ describe("workflow runner", () => {
       syncStrategy: "rsync",
     });
     expect(plan.sandbox?.command).toContain("HASNA_TESTERS_DB_PATH=");
+    expect(plan.sandbox?.command).toContain("https://bun.sh/install");
     expect(plan.sandbox?.command).toContain("bunx");
     expect(plan.sandbox?.command).toContain("@hasna/testers");
     expect(plan.sandbox?.command).toContain("--scenario");
     expect(plan.sandbox?.command).toContain("S1,S2");
+    expect(plan.sandbox?.command.indexOf("https://bun.sh/install")).toBeLessThan(
+      plan.sandbox?.command.indexOf("HASNA_TESTERS_DB_PATH=") ?? 0,
+    );
   });
 
   test("runs sandbox workflows through the sandboxes SDK with a portable DB bundle", async () => {
@@ -141,8 +145,8 @@ describe("workflow runner", () => {
       expect(calls[0]).toMatchObject({
         provider: "daytona",
         image: "node-bun-playwright",
-        sandboxTimeout: 120000,
-        commandTimeoutMs: 120000,
+        sandboxTimeout: 120,
+        commandTimeoutMs: 120,
         sandboxEnvVars: { APP_ENV: "preview", SMOKE_TEST_PASSWORD: "sandbox-secret" },
         cleanup: "delete",
         upload: {
@@ -152,6 +156,8 @@ describe("workflow runner", () => {
         },
       });
       expect(calls[0]).not.toHaveProperty("projectId");
+      expect(typeof (calls[0] as { onStdout?: unknown }).onStdout).toBe("function");
+      expect(typeof (calls[0] as { onStderr?: unknown }).onStderr).toBe("function");
       expect(calls[0]).toHaveProperty("config", {
         source: "testers",
         testersProjectId: project.id,
@@ -166,6 +172,38 @@ describe("workflow runner", () => {
       if (originalOpenAIKey === undefined) delete process.env.OPENAI_API_KEY;
       else process.env.OPENAI_API_KEY = originalOpenAIKey;
     }
+  });
+
+  test("includes streamed sandbox output when sandbox execution throws", async () => {
+    const workflow = createTestingWorkflow({
+      name: "sandbox failure",
+      scenarioFilter: { scenarioIds: ["S1"] },
+      execution: {
+        target: "sandbox",
+        provider: "e2b",
+        sandboxRemoteDir: "/workspace/testers",
+      },
+    });
+    const calls: unknown[] = [];
+
+    await expect(runTestingWorkflow(workflow.id, {
+      url: "https://preview.example",
+    }, {
+      createDatabaseBundle: () => ({
+        localDir: "/tmp/testers-db",
+        remoteDir: "/workspace/testers/.testers-state",
+        cleanup: () => calls.push({ cleanup: true }),
+      }),
+      sandboxes: {
+        async runCommandInSandbox(input) {
+          input.onStdout?.("run output\n");
+          input.onStderr?.("run error\n");
+          throw new Error("exit status 1");
+        },
+      },
+    })).rejects.toThrow(/stdout:\nrun output/);
+
+    expect(calls).toContainEqual({ cleanup: true });
   });
 
   test("builds and bundles app source for sandbox workflows that start the app", () => {
@@ -207,6 +245,9 @@ describe("workflow runner", () => {
     expect(plan.sandbox?.command).toContain("( bun run dev --host 0.0.0.0 )");
     expect(plan.sandbox?.command).toContain("'run' 'http://127.0.0.1:3325'");
     expect(plan.sandbox?.command).toContain("Timed out waiting for");
+    expect(plan.sandbox?.command.indexOf("https://bun.sh/install")).toBeLessThan(
+      plan.sandbox?.command.indexOf("( bun run dev --host 0.0.0.0 )") ?? 0,
+    );
 
     const bundle = createWorkflowDatabaseBundle(workflow, plan);
     cleanupPaths.push(bundle.localDir);
