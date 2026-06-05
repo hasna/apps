@@ -3,6 +3,8 @@ import { existsSync, statSync } from "node:fs";
 import { getTestingWorkflow, listTestingWorkflows } from "../db/workflows.js";
 import { runTestingWorkflow, type WorkflowRunOptions, type WorkflowRunnerDependencies } from "./workflow-runner.js";
 import { resolveCredential } from "./secrets-resolver.js";
+import { detectProvider, resolveModel, type AIProvider } from "./ai-client.js";
+import { loadConfig } from "./config.js";
 import type { TestingWorkflow } from "../types/index.js";
 
 export interface WorkflowFanoutOptions extends WorkflowRunOptions {
@@ -17,6 +19,7 @@ export interface WorkflowFanoutOptions extends WorkflowRunOptions {
   batchStart?: number;
   batchEnd?: number;
   continueOnFailure?: boolean;
+  validateModelCredentials?: boolean;
 }
 
 export interface WorkflowFanoutItem {
@@ -62,6 +65,7 @@ export interface WorkflowFanoutDependencies extends WorkflowRunnerDependencies {
   runTestingWorkflow?: typeof runTestingWorkflow;
   preflight?: (workflows: TestingWorkflow[]) => WorkflowFanoutPreflightResult | Promise<WorkflowFanoutPreflightResult>;
   providerApiKeyResolver?: (provider: string, env: Record<string, string | undefined>) => string | undefined | Promise<string | undefined>;
+  modelCredentialValidator?: (input: WorkflowFanoutModelCredentialValidationInput) => Promise<WorkflowFanoutModelCredentialValidationResult>;
   commandExists?: (command: string) => boolean;
   credentialResolver?: (value: string) => string | null;
   env?: Record<string, string | undefined>;
@@ -92,6 +96,9 @@ export interface WorkflowFanoutSelection {
 
 interface WorkflowFanoutPreflightDependencies {
   providerApiKeyResolver?: WorkflowFanoutDependencies["providerApiKeyResolver"];
+  model?: string;
+  validateModelCredentials?: boolean;
+  modelCredentialValidator?: WorkflowFanoutDependencies["modelCredentialValidator"];
   commandExists?: WorkflowFanoutDependencies["commandExists"];
   credentialResolver?: WorkflowFanoutDependencies["credentialResolver"];
   env?: Record<string, string | undefined>;
@@ -102,6 +109,26 @@ const PROVIDER_ENV_KEYS: Record<string, string> = {
   daytona: "DAYTONA_API_KEY",
   modal: "MODAL_TOKEN_ID",
 };
+
+const MODEL_PROVIDER_ENV_KEYS: Record<AIProvider, string> = {
+  anthropic: "ANTHROPIC_API_KEY",
+  openai: "OPENAI_API_KEY",
+  google: "GOOGLE_API_KEY",
+  cerebras: "CEREBRAS_API_KEY",
+  zai: "ZAI_API_KEY",
+};
+
+export interface WorkflowFanoutModelCredentialValidationInput {
+  provider: AIProvider;
+  model: string;
+  apiKey: string;
+}
+
+export interface WorkflowFanoutModelCredentialValidationResult {
+  ok: boolean;
+  status?: number;
+  message?: string;
+}
 
 function splitWorkflowIds(ids: string[] | undefined): string[] {
   return (ids ?? [])
@@ -222,6 +249,9 @@ export async function checkWorkflowFanoutReadiness(
 ): Promise<WorkflowFanoutPreflightResult> {
   const checks: WorkflowFanoutPreflightCheck[] = [];
   const env = dependencies.env ?? process.env;
+  const model = resolveModel(dependencies.model ?? loadConfig().defaultModel);
+  const modelProvider = detectProvider(model);
+  const modelEnvKey = MODEL_PROVIDER_ENV_KEYS[modelProvider];
 
   for (const [provider, providerWorkflows] of groupWorkflowsByProvider(workflows)) {
     const envKey = PROVIDER_ENV_KEYS[provider];
@@ -312,6 +342,51 @@ export async function checkWorkflowFanoutReadiness(
     });
   }
 
+  const modelCredentialResolution = collectModelCredentialReadiness(
+    workflows,
+    modelProvider,
+    modelEnvKey,
+    env,
+    dependencies.credentialResolver,
+  );
+  checks.push({
+    name: `model:${modelProvider}`,
+    ok: modelCredentialResolution.missing.length === 0,
+    required: true,
+    message: modelCredentialResolution.missing.length === 0
+      ? `Model provider "${modelProvider}" credential is available for ${workflows.length} workflow(s)`
+      : `Missing sandbox model credential for "${modelProvider}". Add ${modelEnvKey} to workflow sandbox env or choose a model for a provider with credentials`,
+    workflows: modelCredentialResolution.missing.length > 0
+      ? [...new Set(modelCredentialResolution.missing.map((item) => item.workflowName))]
+      : workflows.map((workflow) => workflow.name),
+    details: {
+      provider: modelProvider,
+      model,
+      envKey: modelEnvKey,
+      ...(modelCredentialResolution.missing.length > 0 ? { missing: modelCredentialResolution.missing } : {}),
+    },
+  });
+
+  if (dependencies.validateModelCredentials && modelCredentialResolution.available.length > 0) {
+    const validator = dependencies.modelCredentialValidator ?? defaultModelCredentialValidator;
+    const sample = modelCredentialResolution.available[0]!;
+    const validation = await validator({ provider: modelProvider, model, apiKey: sample.apiKey });
+    checks.push({
+      name: `model:${modelProvider}:live`,
+      ok: validation.ok,
+      required: true,
+      message: validation.ok
+        ? `Model provider "${modelProvider}" credential passed live validation`
+        : `Model provider "${modelProvider}" credential failed live validation${validation.status ? ` (${validation.status})` : ""}: ${validation.message ?? "provider rejected the credential"}`,
+      workflows: workflows.map((workflow) => workflow.name),
+      details: {
+        provider: modelProvider,
+        model,
+        status: validation.status,
+      },
+    });
+  }
+
   return {
     ok: checks.every((check) => check.ok || !check.required),
     checks,
@@ -359,6 +434,9 @@ export async function runWorkflowFanout(
     ? await preflightOverride(workflows)
     : await checkWorkflowFanoutReadiness(workflows, {
         providerApiKeyResolver,
+        model: options.model,
+        validateModelCredentials: options.validateModelCredentials,
+        modelCredentialValidator: dependencies.modelCredentialValidator,
         commandExists,
         credentialResolver,
         env,
@@ -578,6 +656,51 @@ function collectMissingSandboxEnvRefs(
   return { requiredMissing, optionalMissing };
 }
 
+function collectModelCredentialReadiness(
+  workflows: TestingWorkflow[],
+  provider: AIProvider,
+  envKey: string,
+  env: Record<string, string | undefined>,
+  credentialResolver: WorkflowFanoutPreflightDependencies["credentialResolver"],
+): {
+  missing: Array<{ workflowId: string; workflowName: string; provider: AIProvider; key: string; reference?: string }>;
+  available: Array<{ workflowId: string; workflowName: string; provider: AIProvider; key: string; apiKey: string }>;
+} {
+  const missing: Array<{ workflowId: string; workflowName: string; provider: AIProvider; key: string; reference?: string }> = [];
+  const available: Array<{ workflowId: string; workflowName: string; provider: AIProvider; key: string; apiKey: string }> = [];
+
+  for (const workflow of workflows) {
+    const reference = workflow.execution.env?.[envKey];
+    if (!reference) {
+      missing.push({ workflowId: workflow.id, workflowName: workflow.name, provider, key: envKey });
+      continue;
+    }
+
+    const resolved = reference.startsWith("$?")
+      ? resolveOptionalSandboxEnvReference(reference, env)
+      : isResolvableEnvReference(reference)
+        ? resolveSandboxEnvReference(reference, env, credentialResolver)
+        : reference;
+
+    if (!resolved) {
+      missing.push({ workflowId: workflow.id, workflowName: workflow.name, provider, key: envKey, reference });
+      continue;
+    }
+
+    available.push({ workflowId: workflow.id, workflowName: workflow.name, provider, key: envKey, apiKey: resolved });
+  }
+
+  return { missing, available };
+}
+
+function resolveOptionalSandboxEnvReference(
+  value: string,
+  env: Record<string, string | undefined>,
+): string | null {
+  const varName = value.slice(2).trim();
+  return varName ? env[varName] ?? null : null;
+}
+
 function isResolvableEnvReference(value: string): boolean {
   return value.startsWith("$") || value.startsWith("@secrets:");
 }
@@ -593,6 +716,87 @@ function resolveSandboxEnvReference(
   }
 
   return (credentialResolver ?? resolveCredential)(value);
+}
+
+async function defaultModelCredentialValidator(
+  input: WorkflowFanoutModelCredentialValidationInput,
+): Promise<WorkflowFanoutModelCredentialValidationResult> {
+  const endpoint = getModelCredentialValidationEndpoint(input.provider);
+  if (!endpoint) {
+    return { ok: true, message: `No live validation endpoint configured for provider ${input.provider}` };
+  }
+
+  try {
+    const response = await fetch(endpoint.url, {
+      headers: endpoint.headers(input.apiKey),
+    });
+    if (response.ok) return { ok: true, status: response.status };
+
+    const text = await response.text().catch(() => "");
+    return {
+      ok: false,
+      status: response.status,
+      message: summarizeModelCredentialValidationError(text) ?? response.statusText,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function getModelCredentialValidationEndpoint(provider: AIProvider): {
+  url: string;
+  headers: (apiKey: string) => Record<string, string>;
+} | null {
+  if (provider === "anthropic") {
+    return {
+      url: "https://api.anthropic.com/v1/models",
+      headers: (apiKey) => ({
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      }),
+    };
+  }
+  if (provider === "openai") {
+    return {
+      url: "https://api.openai.com/v1/models",
+      headers: (apiKey) => ({ Authorization: `Bearer ${apiKey}` }),
+    };
+  }
+  if (provider === "cerebras") {
+    return {
+      url: "https://api.cerebras.ai/v1/models",
+      headers: (apiKey) => ({ Authorization: `Bearer ${apiKey}` }),
+    };
+  }
+  if (provider === "zai") {
+    return {
+      url: "https://api.z.ai/api/paas/v4/models",
+      headers: (apiKey) => ({ Authorization: `Bearer ${apiKey}` }),
+    };
+  }
+  if (provider === "google") {
+    return {
+      url: "https://generativelanguage.googleapis.com/v1beta/openai/models",
+      headers: (apiKey) => ({ Authorization: `Bearer ${apiKey}` }),
+    };
+  }
+  return null;
+}
+
+function summarizeModelCredentialValidationError(text: string): string | undefined {
+  if (!text.trim()) return undefined;
+  try {
+    const parsed = JSON.parse(text) as {
+      error?: { type?: string; message?: string; code?: string };
+      message?: string;
+    };
+    return parsed.error?.type ?? parsed.error?.code ?? parsed.error?.message ?? parsed.message;
+  } catch {
+    return text.trim().slice(0, 200);
+  }
 }
 
 function summarizePreflightFailures(preflight: WorkflowFanoutPreflightResult): string {

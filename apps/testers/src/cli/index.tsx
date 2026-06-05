@@ -4875,6 +4875,7 @@ workflowCmd
   .option("--headed", "Run headed", false)
   .option("--parallel <n>", "Parallel browser workers inside each sandbox")
   .option("--timeout <ms>", "Override workflow timeout")
+  .option("--validate-model-credentials", "Call model provider auth endpoints during fanout preflight", false)
   .option("--dry-run", "Print resolved sandbox plans without spawning sandboxes", false)
   .option("--json", "Output as JSON", false)
   .action(async (ids: string[] | undefined, opts) => {
@@ -4896,6 +4897,7 @@ workflowCmd
         headed: opts.headed,
         parallel: opts.parallel ? parseInt(opts.parallel, 10) : undefined,
         timeout: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
+        validateModelCredentials: opts.validateModelCredentials,
         dryRun: opts.dryRun,
       };
       const runAllBatches = opts.allBatches || opts.fromBatch !== undefined || opts.toBatch !== undefined;

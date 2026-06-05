@@ -351,7 +351,11 @@ describe("workflow fanout", () => {
   test("preflight reports missing sandbox provider credentials", async () => {
     const workflow = createTestingWorkflow({
       name: "e2b workflow",
-      execution: { target: "sandbox", provider: "e2b" },
+      execution: {
+        target: "sandbox",
+        provider: "e2b",
+        env: { ANTHROPIC_API_KEY: "$ANTHROPIC_API_KEY" },
+      },
     });
 
     const preflight = await checkWorkflowFanoutReadiness([workflow], {
@@ -374,6 +378,7 @@ describe("workflow fanout", () => {
         target: "sandbox",
         provider: "e2b",
         env: {
+          ANTHROPIC_API_KEY: "$ANTHROPIC_API_KEY",
           REQUIRED_TOKEN: "$MISSING_REQUIRED",
           OPTIONAL_TOKEN: "$?MISSING_OPTIONAL",
           LITERAL: "plain-value",
@@ -382,7 +387,7 @@ describe("workflow fanout", () => {
     });
 
     const failedPreflight = await checkWorkflowFanoutReadiness([workflow], {
-      env: { E2B_API_KEY: "set" },
+      env: { E2B_API_KEY: "set", ANTHROPIC_API_KEY: "model-key" },
       providerApiKeyResolver: () => "set",
       commandExists: () => true,
     });
@@ -392,7 +397,7 @@ describe("workflow fanout", () => {
     expect(failedPreflight.checks.find((check) => check.name === "env:optional")?.required).toBe(false);
 
     const warningOnlyPreflight = await checkWorkflowFanoutReadiness([workflow], {
-      env: { E2B_API_KEY: "set", MISSING_REQUIRED: "now-set" },
+      env: { E2B_API_KEY: "set", ANTHROPIC_API_KEY: "model-key", MISSING_REQUIRED: "now-set" },
       providerApiKeyResolver: () => "set",
       commandExists: () => true,
     });
@@ -407,8 +412,25 @@ describe("workflow fanout", () => {
       execution: {
         target: "sandbox",
         provider: "e2b",
+        env: { ANTHROPIC_API_KEY: "$ANTHROPIC_API_KEY" },
         appSourceDir: "/tmp/open-testers-missing-app-source",
       },
+    });
+
+    const preflight = await checkWorkflowFanoutReadiness([workflow], {
+      env: { E2B_API_KEY: "set", ANTHROPIC_API_KEY: "model-key" },
+      providerApiKeyResolver: () => "set",
+      commandExists: () => true,
+    });
+
+    expect(preflight.ok).toBe(false);
+    expect(preflight.checks.find((check) => check.name === "app-source")?.message).toContain("missing");
+  });
+
+  test("preflight requires sandbox env for the selected model provider", async () => {
+    const workflow = createTestingWorkflow({
+      name: "model workflow",
+      execution: { target: "sandbox", provider: "e2b" },
     });
 
     const preflight = await checkWorkflowFanoutReadiness([workflow], {
@@ -417,8 +439,42 @@ describe("workflow fanout", () => {
       commandExists: () => true,
     });
 
+    const modelCheck = preflight.checks.find((check) => check.name === "model:anthropic");
     expect(preflight.ok).toBe(false);
-    expect(preflight.checks.find((check) => check.name === "app-source")?.message).toContain("missing");
+    expect(modelCheck?.ok).toBe(false);
+    expect(modelCheck?.required).toBe(true);
+    expect(modelCheck?.message).toContain("ANTHROPIC_API_KEY");
+  });
+
+  test("preflight validates selected model credentials when requested", async () => {
+    const workflow = createTestingWorkflow({
+      name: "live model workflow",
+      execution: {
+        target: "sandbox",
+        provider: "e2b",
+        env: { CEREBRAS_API_KEY: "$CEREBRAS_API_KEY" },
+      },
+    });
+
+    const preflight = await checkWorkflowFanoutReadiness([workflow], {
+      model: "cerebras-fast",
+      validateModelCredentials: true,
+      env: { E2B_API_KEY: "set", CEREBRAS_API_KEY: "invalid-model-key" },
+      providerApiKeyResolver: () => "set",
+      commandExists: () => true,
+      modelCredentialValidator: async (input) => ({
+        ok: input.apiKey === "valid-model-key",
+        status: 401,
+        message: "Wrong API Key",
+      }),
+    });
+
+    const modelCheck = preflight.checks.find((check) => check.name === "model:cerebras");
+    const liveCheck = preflight.checks.find((check) => check.name === "model:cerebras:live");
+    expect(modelCheck?.ok).toBe(true);
+    expect(liveCheck?.ok).toBe(false);
+    expect(liveCheck?.message).toContain("Wrong API Key");
+    expect(preflight.ok).toBe(false);
   });
 
   test("does not launch sandbox workers when required preflight checks fail", async () => {
