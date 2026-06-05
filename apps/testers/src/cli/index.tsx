@@ -1652,11 +1652,12 @@ program
   .command("install-browser")
   .description("Install browser engine")
   .option("--engine <engine>", "Engine to install: playwright, lightpanda, or all", "playwright")
+  .option("--with-deps", "Install Playwright OS dependencies for fresh Linux sandboxes", false)
   .action(async (opts) => {
     try {
       if (opts.engine === "all" || opts.engine === "playwright") {
         log(chalk.blue("Installing Playwright Chromium..."));
-        await installBrowser("playwright");
+        await installBrowser("playwright", { withDeps: opts.withDeps });
         log(chalk.green("Playwright Chromium installed."));
       }
       if (opts.engine === "all" || opts.engine === "lightpanda") {

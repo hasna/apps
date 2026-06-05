@@ -331,6 +331,7 @@ function buildSandboxCommand(input: {
     "install-browser",
     "--engine",
     "playwright",
+    "--with-deps",
   ];
 
   return [

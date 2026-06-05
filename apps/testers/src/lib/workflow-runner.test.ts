@@ -73,6 +73,7 @@ describe("workflow runner", () => {
     expect(plan.sandbox?.command).toContain("HASNA_TESTERS_DB_PATH=");
     expect(plan.sandbox?.command).toContain("https://bun.sh/install");
     expect(plan.sandbox?.command).toContain("install-browser");
+    expect(plan.sandbox?.command).toContain("--with-deps");
     expect(plan.sandbox?.command).toContain("TESTERS_SANDBOX_SKIP_BROWSER_INSTALL");
     expect(plan.sandbox?.command).toContain("bunx");
     expect(plan.sandbox?.command).toContain("@hasna/testers");

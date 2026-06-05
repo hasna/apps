@@ -282,16 +282,20 @@ export async function launchBrowserEngine(
 /**
  * Installs Chromium for Playwright using bunx.
  */
-export async function installBrowser(engine?: import("../types/index.js").BrowserEngine): Promise<void> {
+export async function installBrowser(
+  engine?: import("../types/index.js").BrowserEngine,
+  options: { withDeps?: boolean } = {},
+): Promise<void> {
   if (engine === "lightpanda") {
     const { installLightpanda } = await import("./browser-lightpanda.js");
     return installLightpanda();
   }
 
   const browserName = engine === "playwright-firefox" ? "firefox" : engine === "playwright-webkit" ? "webkit" : "chromium";
+  const dependencyFlag = options.withDeps ? " --with-deps" : "";
 
   try {
-    execSync(`bunx playwright install ${browserName}`, {
+    execSync(`bunx playwright install${dependencyFlag} ${browserName}`, {
       stdio: "inherit",
     });
   } catch (error) {
