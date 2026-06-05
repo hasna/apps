@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { buildServer } from './server.js'
-import { DEFAULT_MCP_HTTP_PORT, MCP_NAME, startHttpServer } from './http.js'
+import { DEFAULT_MCP_HTTP_PORT, MCP_HTTP_IDLE_TIMEOUT_SECONDS, MCP_NAME, startHttpServer } from './http.js'
 
 const roots: string[] = []
 const servers: Array<ReturnType<typeof startHttpServer>> = []
@@ -56,6 +56,10 @@ describe('economy-mcp HTTP transport', () => {
 
   it('uses the assigned default port constant', () => {
     expect(DEFAULT_MCP_HTTP_PORT).toBe(8860)
+  })
+
+  it('disables Bun request idle timeout for long-lived MCP requests', () => {
+    expect(MCP_HTTP_IDLE_TIMEOUT_SECONDS).toBe(0)
   })
 })
 

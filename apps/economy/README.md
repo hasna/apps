@@ -268,12 +268,12 @@ cd menubar && swift build -c release
 Shared Streamable HTTP transport for multi-agent sessions (stdio remains the default):
 
 ```bash
-economy-mcp --http              # http://127.0.0.1:8815/mcp
+economy-mcp --http              # http://127.0.0.1:8860/mcp
 MCP_HTTP=1 economy-mcp            # same
 economy-mcp --http --port 8815    # explicit port
 ```
 
-- Health: `GET http://127.0.0.1:8815/health` → `{"status":"ok","name":"economy"}`
+- Health: `GET http://127.0.0.1:8860/health` -> `{"status":"ok","name":"economy"}`
 - Override port with `MCP_HTTP_PORT` or `--port`
 
 ## License

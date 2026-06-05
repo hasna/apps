@@ -11,13 +11,13 @@ Runs the ${packageMetadata.name} MCP server (stdio by default).
 
 Options:
       --http         Serve MCP over Streamable HTTP on 127.0.0.1
-  -p, --port <port>  HTTP port (default: MCP_HTTP_PORT or 8815)
+  -p, --port <port>  HTTP port (default: MCP_HTTP_PORT or 8860)
   -V, --version      output the version number
   -h, --help         display help for command
 
 Environment:
   MCP_HTTP=1         Enable HTTP mode
-  MCP_HTTP_PORT      Override default HTTP port (8815)`)
+  MCP_HTTP_PORT      Override default HTTP port (8860)`)
 }
 
 const args = process.argv.slice(2)

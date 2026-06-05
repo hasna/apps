@@ -3,6 +3,8 @@ import { buildServer, DEFAULT_MCP_HTTP_PORT, MCP_NAME } from './server.js'
 
 export { DEFAULT_MCP_HTTP_PORT, MCP_NAME }
 
+export const MCP_HTTP_IDLE_TIMEOUT_SECONDS = 0
+
 export function isHttpMode(argv: string[] = process.argv.slice(2)): boolean {
   return argv.includes('--http') || process.env['MCP_HTTP'] === '1'
 }
@@ -67,6 +69,7 @@ export function startHttpServer(options: StartHttpServerOptions = {}): ReturnTyp
   const server = Bun.serve({
     port,
     hostname,
+    idleTimeout: MCP_HTTP_IDLE_TIMEOUT_SECONDS,
     fetch: handleMcpHttpRequest,
   })
 

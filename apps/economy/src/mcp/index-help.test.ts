@@ -16,6 +16,8 @@ describe('economy-mcp entrypoint', () => {
     expect(exitCode).toBe(0)
     expect(stdout).toContain('Usage: economy-mcp [options]')
     expect(stdout).toContain('Runs the @hasna/economy MCP server (stdio by default).')
+    expect(stdout).toContain('HTTP port (default: MCP_HTTP_PORT or 8860)')
+    expect(stdout).toContain('MCP_HTTP_PORT      Override default HTTP port (8860)')
     expect(stderr).toBe('')
   })
 
