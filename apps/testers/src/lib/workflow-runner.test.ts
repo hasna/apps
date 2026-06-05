@@ -78,6 +78,8 @@ describe("workflow runner", () => {
   });
 
   test("runs sandbox workflows through the sandboxes SDK with a portable DB bundle", async () => {
+    const originalSmokePassword = process.env.SMOKE_TEST_PASSWORD;
+    process.env.SMOKE_TEST_PASSWORD = "sandbox-secret";
     const workflow = createTestingWorkflow({
       name: "sandbox",
       scenarioFilter: { tags: ["checkout"] },
@@ -88,60 +90,65 @@ describe("workflow runner", () => {
         sandboxRemoteDir: "/workspace/testers",
         sandboxCleanup: "delete",
         timeoutMs: 120000,
-        env: { APP_ENV: "preview" },
+        env: { APP_ENV: "preview", SMOKE_TEST_PASSWORD: "$SMOKE_TEST_PASSWORD" },
       },
     });
     const calls: unknown[] = [];
-    const output = await runTestingWorkflow(workflow.id, {
-      url: "https://preview.example",
-      model: "quick",
-    }, {
-      createDatabaseBundle: () => ({
-        localDir: "/tmp/testers-db",
-        remoteDir: "/workspace/testers/.testers-state",
-        cleanup: () => calls.push({ cleanup: true }),
-      }),
-      sandboxes: {
-        async runCommandInSandbox(input) {
-          calls.push(input);
-          return {
-            sandbox: { id: "sb_123", provider: "daytona" },
-            session: { id: "sess_123" },
-            result: {
-              exit_code: 0,
-              stdout: "{\"run\":{\"id\":\"remote\"},\"results\":[]}",
-              stderr: "",
-            },
-            cleanup: "deleted",
-          };
+    try {
+      const output = await runTestingWorkflow(workflow.id, {
+        url: "https://preview.example",
+        model: "quick",
+      }, {
+        createDatabaseBundle: () => ({
+          localDir: "/tmp/testers-db",
+          remoteDir: "/workspace/testers/.testers-state",
+          cleanup: () => calls.push({ cleanup: true }),
+        }),
+        sandboxes: {
+          async runCommandInSandbox(input) {
+            calls.push(input);
+            return {
+              sandbox: { id: "sb_123", provider: "daytona" },
+              session: { id: "sess_123" },
+              result: {
+                exit_code: 0,
+                stdout: "{\"run\":{\"id\":\"remote\"},\"results\":[]}",
+                stderr: "",
+              },
+              cleanup: "deleted",
+            };
+          },
         },
-      },
-    });
+      });
 
-    expect(output.run).toBeNull();
-    expect(output.results).toEqual([]);
-    expect(output.sandboxResult).toMatchObject({
-      sandboxId: "sb_123",
-      sessionId: "sess_123",
-      exitCode: 0,
-      stdout: "{\"run\":{\"id\":\"remote\"},\"results\":[]}",
-      cleanup: "deleted",
-    });
-    expect(calls[0]).toMatchObject({
-      provider: "daytona",
-      image: "node-bun-playwright",
-      sandboxTimeout: 120000,
-      commandTimeoutMs: 120000,
-      sandboxEnvVars: { APP_ENV: "preview" },
-      cleanup: "delete",
-      upload: {
-        localDir: "/tmp/testers-db",
-        remoteDir: "/workspace/testers/.testers-state",
-        syncStrategy: "rsync",
-      },
-    });
-    expect(calls[0]).toHaveProperty("command");
-    expect(calls[1]).toEqual({ cleanup: true });
+      expect(output.run).toBeNull();
+      expect(output.results).toEqual([]);
+      expect(output.sandboxResult).toMatchObject({
+        sandboxId: "sb_123",
+        sessionId: "sess_123",
+        exitCode: 0,
+        stdout: "{\"run\":{\"id\":\"remote\"},\"results\":[]}",
+        cleanup: "deleted",
+      });
+      expect(calls[0]).toMatchObject({
+        provider: "daytona",
+        image: "node-bun-playwright",
+        sandboxTimeout: 120000,
+        commandTimeoutMs: 120000,
+        sandboxEnvVars: { APP_ENV: "preview", SMOKE_TEST_PASSWORD: "sandbox-secret" },
+        cleanup: "delete",
+        upload: {
+          localDir: "/tmp/testers-db",
+          remoteDir: "/workspace/testers/.testers-state",
+          syncStrategy: "rsync",
+        },
+      });
+      expect(calls[0]).toHaveProperty("command");
+      expect(calls[1]).toEqual({ cleanup: true });
+    } finally {
+      if (originalSmokePassword === undefined) delete process.env.SMOKE_TEST_PASSWORD;
+      else process.env.SMOKE_TEST_PASSWORD = originalSmokePassword;
+    }
   });
 
   test("builds and bundles app source for sandbox workflows that start the app", () => {

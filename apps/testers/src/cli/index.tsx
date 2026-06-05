@@ -33,7 +33,7 @@ import { createApiCheck, getApiCheck, listApiChecks, deleteApiCheck } from "../d
 import { runApiCheck, runApiChecksByFilter } from "../lib/api-runner.js";
 import { createSchedule, getSchedule, listSchedules, updateSchedule, deleteSchedule } from "../db/schedules.js";
 import { getTemplate, listTemplateNames } from "../lib/templates.js";
-import { createAuthPreset, listAuthPresets, deleteAuthPreset } from "../db/auth-presets.js";
+import { createAuthPreset, getAuthPreset, listAuthPresets, deleteAuthPreset } from "../db/auth-presets.js";
 import { addDependency, removeDependency, getDependencies, getDependents, createFlow, getFlow, listFlows, deleteFlow } from "../db/flows.js";
 import { createTestingWorkflow, deleteTestingWorkflow, getTestingWorkflow, listTestingWorkflows } from "../db/workflows.js";
 import { runTestingWorkflow } from "../lib/workflow-runner.js";
@@ -90,6 +90,31 @@ function validateStoredAssertion(value: unknown): string | null {
   }
 
   return describeStoredAssertion(value);
+}
+
+function envCredentialRef(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  return trimmed.startsWith("$") ? trimmed : `$${trimmed}`;
+}
+
+function parseSandboxEnv(values: string[] | undefined): Record<string, string> | undefined {
+  if (!values?.length) return undefined;
+
+  const env: Record<string, string> = {};
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+
+    const separator = trimmed.indexOf("=");
+    const key = separator >= 0 ? trimmed.slice(0, separator).trim() : trimmed;
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+      throw new Error(`Invalid sandbox env var name: ${key || value}`);
+    }
+    env[key] = separator >= 0 ? trimmed.slice(separator + 1) : `$${key}`;
+  }
+
+  return Object.keys(env).length > 0 ? env : undefined;
 }
 
 function AddForm({ onComplete }: { onComplete: (data: AddFormState | null) => void }) {
@@ -351,6 +376,7 @@ program
   .option("-m, --model <model>", "AI model to use")
   .option("--path <path>", "Target path on the URL")
   .option("--auth", "Requires authentication", false)
+  .option("--auth-preset <name>", "Attach email/password/loginPath from a named auth preset")
   .option("--timeout <ms>", "Timeout in milliseconds")
   .option("--project <id>", "Project ID")
   .option("--template <name>", "Seed scenarios from a template (auth, crud, forms, nav, a11y)")
@@ -358,7 +384,7 @@ program
   .action(async (name: string | undefined, opts) => {
     try {
       // Interactive mode: no name and no meaningful flags provided
-      const hasFlags = opts.description || opts.steps?.length || opts.tag?.length || opts.model || opts.path || opts.auth || opts.timeout || opts.template || opts.assert?.length;
+      const hasFlags = opts.description || opts.steps?.length || opts.tag?.length || opts.model || opts.path || opts.auth || opts.authPreset || opts.timeout || opts.template || opts.assert?.length;
       if (!name && !hasFlags) {
         const projectId = resolveProject(opts.project);
         await runInteractiveAdd(projectId);
@@ -386,6 +412,11 @@ program
 
       const assertions = (opts.assert as string[]).map(parseAssertionString);
       const projectId = resolveProject(opts.project);
+      const authPreset = opts.authPreset ? getAuthPreset(opts.authPreset) : null;
+      if (opts.authPreset && !authPreset) {
+        logError(chalk.red(`Auth preset not found: ${opts.authPreset}`));
+        process.exit(1);
+      }
       const scenario = createScenario({
         name,
         description: opts.description || name,
@@ -394,7 +425,12 @@ program
         priority: opts.priority as ScenarioPriority,
         model: opts.model,
         targetPath: opts.path,
-        requiresAuth: opts.auth,
+        requiresAuth: opts.auth || Boolean(authPreset),
+        authConfig: authPreset ? {
+          email: authPreset.email,
+          password: authPreset.password,
+          loginPath: authPreset.loginPath,
+        } : undefined,
         timeoutMs: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
         assertions: assertions.length > 0 ? assertions : undefined,
         projectId,
@@ -3014,15 +3050,27 @@ const authCmd = program.command("auth").description("Manage auth presets");
 authCmd
   .command("add <name>")
   .description("Create an auth preset")
-  .requiredOption("--email <email>", "Login email")
-  .requiredOption("--password <password>", "Login password")
+  .option("--email <email>", "Login email or credential reference")
+  .option("--password <password>", "Login password or credential reference")
+  .option("--email-env <name>", "Environment variable name for the login email")
+  .option("--password-env <name>", "Environment variable name for the login password")
   .option("--login-path <path>", "Login page path", "/login")
   .action((name: string, opts) => {
     try {
+      const email = opts.email ?? envCredentialRef(opts.emailEnv);
+      const password = opts.password ?? envCredentialRef(opts.passwordEnv);
+      if (!email) {
+        logError(chalk.red("Error: provide --email or --email-env"));
+        process.exit(1);
+      }
+      if (!password) {
+        logError(chalk.red("Error: provide --password or --password-env"));
+        process.exit(1);
+      }
       const preset = createAuthPreset({
         name,
-        email: opts.email,
-        password: opts.password,
+        email,
+        password,
         loginPath: opts.loginPath,
       });
       log(chalk.green(`Created auth preset ${chalk.bold(preset.name)} (${preset.email})`));
@@ -4526,6 +4574,7 @@ workflowCmd
   .option("--sandbox-sync <strategy>", "Sandbox upload sync strategy: rsync or archive", "rsync")
   .option("--sandbox-setup-command <command>", "Shell command to run before testers in the sandbox")
   .option("--sandbox-package <spec>", "Package spec to execute in the sandbox", "@hasna/testers")
+  .option("--sandbox-env <assignment>", "Sandbox env var; KEY forwards host KEY, KEY=value stores value (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
   .option("--sandbox-app-source <path>", "Local app source directory to upload into the sandbox")
   .option("--sandbox-app-remote-dir <path>", "Remote app directory inside the sandbox (default: <sandbox-remote-dir>/app)")
   .option("--sandbox-app-start-command <command>", "Shell command to start the app before testers runs")
@@ -4561,6 +4610,7 @@ workflowCmd
           sandboxSyncStrategy: opts.sandboxSync,
           setupCommand: opts.sandboxSetupCommand,
           packageSpec: opts.sandboxPackage,
+          env: parseSandboxEnv(opts.sandboxEnv),
           appSourceDir: opts.sandboxAppSource,
           appRemoteDir: opts.sandboxAppRemoteDir,
           appStartCommand: opts.sandboxAppStartCommand,

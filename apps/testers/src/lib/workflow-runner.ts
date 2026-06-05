@@ -6,6 +6,7 @@ import { getDatabase } from "../db/database.js";
 import { getTestingWorkflow } from "../db/workflows.js";
 import { getPersona } from "../db/personas.js";
 import { runByFilter, type RunOptions } from "./runner.js";
+import { resolveCredential } from "./secrets-resolver.js";
 import type {
   Result,
   Run,
@@ -394,7 +395,7 @@ async function runViaSandbox(
         workflowId: plan.workflow.id,
         workflowName: plan.workflow.name,
       },
-      sandboxEnvVars: plan.sandbox.env,
+      sandboxEnvVars: resolveSandboxEnv(plan.sandbox.env),
       cleanup: plan.sandbox.cleanup,
       upload: {
         localDir: bundle.localDir,
@@ -419,6 +420,20 @@ async function runViaSandbox(
   } finally {
     bundle.cleanup?.();
   }
+}
+
+function resolveSandboxEnv(env: Record<string, string> | undefined): Record<string, string> | undefined {
+  if (!env || Object.keys(env).length === 0) return undefined;
+
+  const resolved: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    const resolvedValue = resolveCredential(value);
+    if (resolvedValue === null) {
+      throw new Error(`Missing sandbox env value for ${key}`);
+    }
+    resolved[key] = resolvedValue;
+  }
+  return resolved;
 }
 
 async function resolveSandboxesRuntime(
