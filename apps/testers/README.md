@@ -54,7 +54,7 @@ testers inventory next /path/to/app \
   --create-action-scenarios \
   --create-workflows \
   --create-action-workflows \
-  --action-workflow-grouping route \
+  --action-workflow-grouping action \
   --sandbox-provider e2b \
   --sandbox-sync rsync \
   --sandbox-app-source /path/to/app \
@@ -63,10 +63,10 @@ testers inventory next /path/to/app \
   --sandbox-app-wait-url http://127.0.0.1:3000/health \
   --sandbox-env-optional OPENAI_API_KEY
 
-testers workflow fanout --project alumia --tag next-action --workers 6 --url https://preview.example.com --dry-run
+testers workflow fanout --project alumia --tag action-specific --workers 6 --url https://preview.example.com --dry-run
 ```
 
-Use `--action-workflow-grouping route` for route-specific workflows or `--action-workflow-grouping area-kind` for broader workflows such as commerce buttons or admin API methods. Add the `--sandbox-app-*` flags when the sandbox should rsync, install, start, and test the app source instead of only testing an already-running URL.
+Use `--action-workflow-grouping action` for one workflow per discovered action, `route` for route-specific workflows, or `area-kind` for broader workflows such as commerce buttons or admin API methods. Add the `--sandbox-app-*` flags when the sandbox should rsync, install, start, and test the app source instead of only testing an already-running URL.
 
 ### Common Flags
 

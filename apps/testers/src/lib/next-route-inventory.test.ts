@@ -171,8 +171,10 @@ describe("next route inventory", () => {
       .find((scenario) => scenario.name === "Next page action: /:orgSlug/billing :: button Add credits #1")!;
     expect(actionScenario).toBeTruthy();
     expect(actionScenario.tags).toContain("next-action");
+    expect(actionScenario.tags).toContain("action-specific");
     expect(actionScenario.tags).toContain("action:button");
     expect(actionScenario.tags).toContain("route-path:/:orgSlug/billing");
+    expect(actionScenario.tags).toContain("action-ordinal:1");
     expect(actionScenario.metadata?.source).toBe("next-route-action-inventory");
     expect(actionScenario.metadata?.action).toMatchObject({ kind: "button", label: "Add credits" });
     expect(actionScenario.steps.some((step) => step.includes("Add credits"))).toBe(true);
@@ -230,5 +232,42 @@ describe("next route inventory", () => {
     expect(names).toContain("Next action inventory commerce input");
     expect(names).toContain("Next action inventory commerce api-method");
     expect(names).toContain("Next action inventory admin api-method");
+  });
+
+  test("can create one workflow per discovered action", () => {
+    const root = makeRepo();
+    const project = createProject({ name: "alumia", scenarioPrefix: "ALM" });
+
+    const result = importNextRouteInventory({
+      rootDir: root,
+      projectId: project.id,
+      createActionScenarios: true,
+      createActionWorkflows: true,
+      actionWorkflowGrouping: "action",
+      workflowTarget: "sandbox",
+      workflowProvider: "e2b",
+    });
+
+    expect(result.actionScenarios.length).toBe(8);
+    expect(result.workflows.length).toBe(8);
+
+    const billingActionWorkflow = result.workflows.find((workflow) =>
+      workflow.name === "Next action inventory page /:orgSlug/billing #1 button Add credits"
+    )!;
+    expect(billingActionWorkflow).toBeTruthy();
+    expect(billingActionWorkflow.scenarioFilter.tags).toEqual([
+      "next-action",
+      "action-specific",
+      "route:page",
+      "route-path:/:orgSlug/billing",
+      "action-ordinal:1",
+    ]);
+    expect(billingActionWorkflow.execution.target).toBe("sandbox");
+    expect(billingActionWorkflow.execution.provider).toBe("e2b");
+
+    const matchingScenarios = listScenarios({ projectId: project.id, tags: billingActionWorkflow.scenarioFilter.tags });
+    expect(matchingScenarios.map((scenario) => scenario.name)).toEqual([
+      "Next page action: /:orgSlug/billing :: button Add credits #1",
+    ]);
   });
 });

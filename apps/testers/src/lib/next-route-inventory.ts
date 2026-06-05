@@ -62,7 +62,7 @@ export interface ImportNextRouteInventoryOptions {
   createActionScenarios?: boolean;
   createWorkflows?: boolean;
   createActionWorkflows?: boolean;
-  actionWorkflowGrouping?: "route" | "area-kind";
+  actionWorkflowGrouping?: "route" | "area-kind" | "action";
   workflowTarget?: "local" | "sandbox";
   workflowProvider?: string;
   workflowExecution?: Partial<WorkflowExecutionInput>;
@@ -267,7 +267,7 @@ function scenarioInputForNextRouteAction(
     name: `Next ${label}: ${item.routePath} :: ${action.kind} ${action.label} #${index + 1}`,
     description: `Source-discovered ${label} ${index + 1} from ${action.sourceFile}. Verify ${action.kind} "${action.label}" on ${item.routePath}.`,
     steps: item.kind === "page" ? pageSteps : apiSteps,
-    tags: actionTagsForRoute(item, action),
+    tags: actionTagsForRoute(item, action, index),
     priority: action.destructive ? "critical" : item.priority,
     targetPath: item.routePath,
     requiresAuth: item.requiresAuth,
@@ -399,6 +399,29 @@ function upsertRouteInventoryActionWorkflows(
         scenarioFilter: { tags: scenarioTags },
         execution: workflowExecutionFromOptions(options),
       }));
+    }
+    return workflows;
+  }
+
+  if (grouping === "action") {
+    for (const item of inventory.items.filter((route) => route.actions.length > 0)) {
+      item.actions.forEach((action, index) => {
+        const name = `Next action inventory ${item.kind} ${item.routePath} #${index + 1} ${action.kind} ${action.label}`;
+        const scenarioTags = [
+          "next-action",
+          "action-specific",
+          `route:${item.kind}`,
+          `route-path:${item.routePath}`,
+          `action-ordinal:${index + 1}`,
+        ];
+        workflows.push(upsertTestingWorkflow(existingWorkflows, name, {
+          name,
+          description: `Source-discovered action #${index + 1} coverage for ${item.kind} route ${item.routePath}: ${action.kind} "${action.label}".`,
+          projectId: options.projectId,
+          scenarioFilter: { tags: scenarioTags },
+          execution: workflowExecutionFromOptions(options),
+        }));
+      });
     }
     return workflows;
   }
@@ -834,12 +857,14 @@ function tagsForRoute(input: {
   return [...tags];
 }
 
-function actionTagsForRoute(item: NextRouteInventoryItem, action: NextRouteAction): string[] {
+function actionTagsForRoute(item: NextRouteInventoryItem, action: NextRouteAction, index: number): string[] {
   const tags = new Set<string>([
     ...item.tags,
     "next-action",
+    "action-specific",
     `action:${action.kind}`,
     `route-path:${item.routePath}`,
+    `action-ordinal:${index + 1}`,
   ]);
   if (action.destructive) tags.add("destructive-action");
   if (action.requiresFixture) tags.add("fixture-required");

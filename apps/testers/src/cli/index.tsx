@@ -3509,7 +3509,7 @@ inventoryCmd
   .option("--create-action-scenarios", "Upsert one source-derived scenario per discovered page/API action", false)
   .option("--create-workflows", "Upsert grouped workflows by area and route kind", false)
   .option("--create-action-workflows", "Upsert action-focused workflows for discovered action scenarios", false)
-  .option("--action-workflow-grouping <mode>", "Action workflow grouping: route or area-kind", "route")
+  .option("--action-workflow-grouping <mode>", "Action workflow grouping: route, area-kind, or action", "route")
   .option("--workflow-target <target>", "Workflow execution target: local or sandbox", "sandbox")
   .option("--sandbox-provider <provider>", "Sandbox provider for created workflows", "e2b")
   .option("--sandbox-image <image>", "Sandbox image/template for created workflows")
@@ -3533,8 +3533,8 @@ inventoryCmd
       const { importNextRouteInventory } = await import("../lib/next-route-inventory.js");
       const projectId = resolveProject(opts.project) ?? undefined;
       const env = parseSandboxEnv(opts.sandboxEnv, opts.sandboxEnvOptional);
-      if (!["route", "area-kind"].includes(opts.actionWorkflowGrouping)) {
-        throw new Error("--action-workflow-grouping must be route or area-kind");
+      if (!["route", "area-kind", "action"].includes(opts.actionWorkflowGrouping)) {
+        throw new Error("--action-workflow-grouping must be route, area-kind, or action");
       }
       const result = importNextRouteInventory({
         rootDir: root ?? process.cwd(),
