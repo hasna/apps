@@ -38,6 +38,20 @@ function hostedMetadataSlugs(): string[] {
     .sort();
 }
 
+function collectSkillFiles(dir: string): string[] {
+  const result: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    const entryPath = join(dir, entry);
+    const stats = statSync(entryPath);
+    if (stats.isDirectory()) {
+      result.push(...collectSkillFiles(entryPath));
+    } else {
+      result.push(entryPath);
+    }
+  }
+  return result;
+}
+
 function buildEntryPointsForBoundaryScan(): string[] {
   const outputDir = mkdtempSync(join(tmpdir(), "hasna-skills-boundary-"));
   const builds: string[][] = [
@@ -133,6 +147,40 @@ describe("public package boundary", () => {
       .filter((slug) => existsSync(join(process.cwd(), "skills", slug, "src")));
 
     expect(leakedPremiumSource).toEqual([]);
+  });
+
+  test("keeps hosted metadata free of provider credential instructions", () => {
+    const forbiddenProviderEnvVars = [
+      "OPENAI_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "GEMINI_API_KEY",
+      "GOOGLE_API_KEY",
+      "GOOGLE_PROJECT_ID",
+      "XAI_API_KEY",
+      "FIRECRAWL_API_KEY",
+      "EXA_API_KEY",
+      "ELEVENLABS_API_KEY",
+      "BROWSER_USE_API_KEY",
+      "MINIMAX_API_KEY",
+      "DEEPGRAM_API_KEY",
+      "REPLICATE_API_KEY",
+      "FAL_API_KEY",
+      "STABILITY_API_KEY",
+    ];
+    const leaks: string[] = [];
+
+    for (const slug of hostedMetadataSlugs()) {
+      const skillDir = join(process.cwd(), "skills", slug);
+      for (const file of collectSkillFiles(skillDir)) {
+        const relative = file.replace(`${process.cwd()}/`, "");
+        const content = readFileSync(file, "utf8");
+        for (const marker of forbiddenProviderEnvVars) {
+          if (content.includes(marker)) leaks.push(`${relative}: ${marker}`);
+        }
+      }
+    }
+
+    expect(leaks).toEqual([]);
   });
 
   test("does not strip free local skill source from the packed public package", () => {

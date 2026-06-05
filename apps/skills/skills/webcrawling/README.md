@@ -1,77 +1,24 @@
-# service-webcrawling
+# Web Crawling
 
-Web crawling service using Firecrawl API.
+Hosted web crawling and page extraction skill.
 
-## Installation
-
-```bash
-bun install -g @hasnaxyz/service-webcrawling
-```
-
-## Quick Start
+## Usage
 
 ```bash
-export FIRECRAWL_API_KEY=fc-...
-
-# Scrape a single URL
-service-webcrawling scrape https://example.com
-
-# Crawl a website
-service-webcrawling crawl https://example.com -d 2 -l 20
-
-# List sessions
-service-webcrawling sessions
+skills setup --mode hosted
+skills auth login
+skills run webcrawling --url https://example.com --depth 2
 ```
 
-## CLI Commands
-
-### scrape
-
-Scrape a single URL.
+Poll and download results:
 
 ```bash
-service-webcrawling scrape <url> [options]
-
-Options:
-  -f, --format <format>  markdown, html, json (default: markdown)
-  --full-page            Include full page, not just main content
+skills runs status <run-id>
+skills exports download <run-id>
 ```
 
-### crawl
+## Boundary
 
-Crawl an entire website.
-
-```bash
-service-webcrawling crawl <url> [options]
-
-Options:
-  -d, --depth <number>   Max depth (default: 2)
-  -l, --limit <number>   Max pages (default: 10)
-  --exclude <paths>      Exclude paths (comma-separated)
-  --include <paths>      Include only paths (comma-separated)
-```
-
-### sessions
-
-List crawl sessions.
-
-```bash
-service-webcrawling sessions [--json]
-```
-
-### config
-
-```bash
-service-webcrawling config view
-service-webcrawling config set firecrawlApiKey fc-...
-```
-
-## Environment Variables
-
-```bash
-FIRECRAWL_API_KEY=fc-...  # Required
-```
-
-## License
-
-MIT
+The OSS package contains metadata and documentation only. Crawling providers,
+credentials, rate limits, worker orchestration, logs, and artifacts are owned by
+the hosted runtime.

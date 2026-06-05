@@ -1,50 +1,41 @@
 ---
 name: deepresearch
-description: Perform deep research on any topic using Exa.ai for parallel semantic search and Claude/OpenAI for synthesis. Use when you need comprehensive research reports with citations, analysis of topics from multiple angles, or thorough investigation of technical subjects.
+description: Run hosted deep research with parallel search, synthesis, citations, source notes, and downloadable report artifacts.
 ---
 
 # Deep Research
 
-Agentic deep research skill using Exa.ai for search and Claude/OpenAI for synthesis.
+Deep Research is a hosted premium skill. The OSS package exposes public
+metadata and usage guidance only; search providers, model routing, prompts,
+worker orchestration, and credentials stay server-side.
 
-## Invocation
+## Usage
 
-```
-/deepresearch <topic>
+```bash
+skills setup --mode hosted
+skills auth login
+skills run deepresearch "Best practices for building production RAG systems" --depth normal
+skills runs status <run-id>
+skills exports download <run-id>
 ```
 
 ## Options
 
 | Option | Description | Default |
-|--------|-------------|---------|
-| `--depth <level>` | Research depth: quick (6 queries), normal (15), deep (30) | normal |
-| `--model <provider>` | LLM: claude or openai | claude |
-| `--output <path>` | Custom output path | ~/.skills/deepresearch/exports/ |
-| `--json` | Also save sources as JSON | false |
-| `--no-firecrawl` | Skip deep scraping | false |
-
-## Examples
-
-```bash
-# Quick overview of a topic
-/deepresearch "What is RAG?" --depth quick
-
-# Standard research with Claude
-/deepresearch "Best practices for building production ML systems"
-
-# Deep research with OpenAI, custom output
-/deepresearch "Compare Next.js vs Remix" --depth deep --model openai --output ./research.md
-```
+| --- | --- | --- |
+| `--depth <level>` | Research depth: `quick`, `normal`, or `deep` | `normal` |
+| `--output <path>` | Requested output path inside the exported artifact bundle | hosted export |
+| `--json` | Request raw source metadata in the exported bundle | `false` |
 
 ## Requirements
 
-- `EXA_API_KEY` - Required for search
-- `ANTHROPIC_API_KEY` - Required for Claude synthesis
-- `OPENAI_API_KEY` - Required for OpenAI synthesis
-- `FIRECRAWL_API_KEY` - Optional for deep scraping
+- Authenticate with `skills auth login` or provide `SKILLS_API_KEY`.
+- Provider credentials are managed by the hosted runtime and are not part of the
+  OSS package.
 
-## Output
+## Outputs
 
-Reports are saved to `~/.skills/deepresearch/exports/` with format:
-- `report-{topic-slug}-{timestamp}.md` - Full research report
-- `sources-{topic-slug}-{timestamp}.json` - Raw sources (if --json)
+- Research report
+- Source notes
+- Citation metadata
+- Run manifest

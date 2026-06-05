@@ -1,22 +1,11 @@
-# service-webcrawling
+# Web Crawling
 
-Web crawling service using Firecrawl API.
-
-## Tech Stack
-
-- Runtime: Bun
-- Language: TypeScript
-- CLI: Commander.js
-- API: Firecrawl
-
-## CLI
+Use this skill through the hosted Skills runtime.
 
 ```bash
-service-webcrawling scrape https://example.com
-service-webcrawling crawl https://example.com -d 2 -l 20
-service-webcrawling sessions
+skills run webcrawling --url https://example.com --depth 2
 ```
 
-## Environment
-
-- `FIRECRAWL_API_KEY` - Required
+The public package does not include provider credentials, crawler client code,
+hosted worker implementation, logs, or artifact storage. Authenticate with
+`skills auth login` before running.

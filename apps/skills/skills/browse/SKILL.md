@@ -1,56 +1,35 @@
 ---
 name: browse
-description: AI-powered browser automation using Browser-Use Cloud API
+description: Run hosted browser automation and page extraction through the Skills runtime.
 ---
 
-# browse
+# Browse
 
-Browser automation skill that leverages Browser-Use Cloud API to perform AI-powered web browsing, data extraction, and automation tasks.
+Browse is a hosted premium skill for browser automation, page interaction, and
+structured extraction. The OSS package exposes the public contract only; browser
+infrastructure, provider credentials, proxies, model routing, worker code, and
+logs stay server-side.
 
-## Key Features
-
-- **Natural Language Tasks**: Describe browser actions in plain English
-- **AI-Powered Automation**: Uses LLMs to interpret and execute complex browsing tasks
-- **Data Extraction**: Extract structured data from any website
-- **Real-Time Monitoring**: Live URL to watch agent actions
-- **Multiple LLM Support**: Choose from GPT-4o, O3, Claude, Gemini, and more
-- **Proxy Support**: Built-in proxy for captcha bypass with country selection
-- **Task Management**: Pause, resume, and stop tasks as needed
-
-## Supported Models
-
-- **GPT-4o**: Default, great balance of speed and accuracy
-- **O3**: Best accuracy, recommended for complex tasks
-- **Claude Sonnet 4**: Anthropic's latest model
-- **Gemini Flash**: Google's fast model
-- **Browser-Use**: Proprietary model, 3-5x faster
-
-## Use Cases
-
-- Web scraping and data extraction
-- Form filling and submission
-- Website testing and monitoring
-- Automated research and data gathering
-- Price monitoring and comparison
-- Content aggregation
-
-## Configuration
-
-Environment variables:
-- `BROWSER_USE_API_KEY`: API key (required)
-- `BROWSER_USE_MODEL`: Default model
-- `BROWSER_USE_PROXY`: Default proxy setting
-- `BROWSER_USE_PROXY_COUNTRY`: Default proxy country
-
-## Quick Start
+## Usage
 
 ```bash
-# Basic browsing task
-bun run src/index.ts browse \
-  --task "Go to hacker-news.com and find the top 3 posts"
-
-# Extract data with output
-bun run src/index.ts extract \
-  --task "Search amazon.com for 'laptop' and extract top 5 products" \
-  --output ./products.json
+skills setup --mode hosted
+skills auth login
+skills run browse --task "Open example.com and summarize the page"
+skills runs status <run-id>
+skills exports download <run-id>
 ```
+
+## Options
+
+| Option | Description |
+| --- | --- |
+| `--task <text>` | Browser task or extraction goal |
+| `--url <url>` | Optional starting URL |
+| `--output <format>` | Requested artifact format |
+
+## Requirements
+
+- Authenticate with `skills auth login` or provide `SKILLS_API_KEY`.
+- Browser/provider credentials and proxy settings are managed by the hosted
+  runtime, not by the OSS package.
