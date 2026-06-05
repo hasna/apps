@@ -6,7 +6,7 @@ import { render, Box, Text, useInput, useApp } from "ink";
 import React, { useState } from "react";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { createScenario, getScenario, getScenarioByShortId, listScenarios, updateScenario, deleteScenario } from "../db/scenarios.js";
 import { getRun, listRuns } from "../db/runs.js";
@@ -144,6 +144,15 @@ function toModelCredentialCliItem(check: ModelCredentialCheck) {
     ...(check.status !== undefined ? { status: check.status } : {}),
     ...(check.message ? { message: check.message } : {}),
   };
+}
+
+function writeJsonOutputFile(filePath: string | undefined, value: unknown): string | null {
+  if (!filePath) return null;
+  const resolved = resolve(filePath);
+  const dir = dirname(resolved);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  writeFileSync(resolved, JSON.stringify(value, null, 2) + "\n", "utf-8");
+  return resolved;
 }
 
 function describeStoredAssertion(value: unknown): string {
@@ -5021,6 +5030,7 @@ workflowCmd
   .option("--validate-model-credentials", "Call model provider auth endpoints during fanout preflight", false)
   .option("--dry-run", "Print resolved sandbox plans without spawning sandboxes", false)
   .option("--json", "Output as JSON", false)
+  .option("-o, --output <file>", "Write the fanout JSON result to a file")
   .action(async (ids: string[] | undefined, opts) => {
     try {
       const fanoutOptions = {
@@ -5048,10 +5058,12 @@ workflowCmd
       if (runAllBatches) {
         const { runWorkflowFanoutBatches } = await import("../lib/workflow-fanout.js");
         const result = await runWorkflowFanoutBatches(fanoutOptions);
+        const outputPath = writeJsonOutputFile(opts.output, result);
 
         if (opts.json || opts.dryRun) {
           log(JSON.stringify(result, null, 2));
         } else {
+          if (outputPath) log(chalk.green(`Fanout result written to ${outputPath}`));
           const status = result.status === "passed" ? chalk.green("passed") : chalk.red("failed");
           const stop = result.stoppedEarly ? chalk.yellow(" stopped early") : "";
           log(chalk.bold(`Sandbox workflow fanout batches ${status}: ${result.passed}/${result.total} passed across ${result.batches.length} batch(es)${stop}`));
@@ -5077,10 +5089,12 @@ workflowCmd
 
       const { runWorkflowFanout } = await import("../lib/workflow-fanout.js");
       const result = await runWorkflowFanout(fanoutOptions);
+      const outputPath = writeJsonOutputFile(opts.output, result);
 
       if (opts.json || opts.dryRun) {
         log(JSON.stringify(result, null, 2));
       } else {
+        if (outputPath) log(chalk.green(`Fanout result written to ${outputPath}`));
         const preflightChecks = result.preflight?.checks ?? [];
         const failedRequiredChecks = preflightChecks.filter((check) => !check.ok && check.required);
         const warnings = preflightChecks.filter((check) => !check.ok && !check.required);
