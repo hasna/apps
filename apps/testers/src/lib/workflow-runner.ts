@@ -114,6 +114,8 @@ const APP_SOURCE_EXCLUDES = [
   ".next",
   ".turbo",
   ".cache",
+  ".env",
+  ".env.*",
   ".venv",
   "__pycache__",
 ];
@@ -427,6 +429,12 @@ function resolveSandboxEnv(env: Record<string, string> | undefined): Record<stri
 
   const resolved: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
+    if (value.startsWith("$?")) {
+      const optionalName = value.slice(2).trim();
+      const optionalValue = optionalName ? process.env[optionalName] : undefined;
+      if (optionalValue !== undefined) resolved[key] = optionalValue;
+      continue;
+    }
     const resolvedValue = resolveCredential(value);
     if (resolvedValue === null) {
       throw new Error(`Missing sandbox env value for ${key}`);

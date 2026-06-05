@@ -124,6 +124,8 @@ describe("testers auth preset CLI", () => {
         "SMOKE_TEST_EMAIL",
         "--sandbox-env",
         "SMOKE_TEST_PASSWORD",
+        "--sandbox-env-optional",
+        "ANTHROPIC_API_KEY",
       ],
       env,
       stdout: "pipe",
@@ -138,6 +140,36 @@ describe("testers auth preset CLI", () => {
     expect(workflow.execution.env).toEqual({
       SMOKE_TEST_EMAIL: "$SMOKE_TEST_EMAIL",
       SMOKE_TEST_PASSWORD: "$SMOKE_TEST_PASSWORD",
+      ANTHROPIC_API_KEY: "$?ANTHROPIC_API_KEY",
+    });
+
+    closeDatabase();
+    const updateProc = spawnSync({
+      cmd: [
+        "bun",
+        "run",
+        "src/cli/index.tsx",
+        "workflow",
+        "update",
+        workflow.id,
+        "--sandbox-env-optional",
+        "OPENAI_API_KEY",
+      ],
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    expect(updateProc.exitCode).toBe(0);
+
+    process.env.TESTERS_DB_PATH = dbPath;
+    process.env.HASNA_TESTERS_DIR = testersDir;
+    const updatedWorkflow = listTestingWorkflows({ projectId: project.id })[0]!;
+    expect(updatedWorkflow.execution.env).toEqual({
+      SMOKE_TEST_EMAIL: "$SMOKE_TEST_EMAIL",
+      SMOKE_TEST_PASSWORD: "$SMOKE_TEST_PASSWORD",
+      ANTHROPIC_API_KEY: "$?ANTHROPIC_API_KEY",
+      OPENAI_API_KEY: "$?OPENAI_API_KEY",
     });
   });
 });

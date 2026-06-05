@@ -79,7 +79,9 @@ describe("workflow runner", () => {
 
   test("runs sandbox workflows through the sandboxes SDK with a portable DB bundle", async () => {
     const originalSmokePassword = process.env.SMOKE_TEST_PASSWORD;
+    const originalOpenAIKey = process.env.OPENAI_API_KEY;
     process.env.SMOKE_TEST_PASSWORD = "sandbox-secret";
+    delete process.env.OPENAI_API_KEY;
     const workflow = createTestingWorkflow({
       name: "sandbox",
       scenarioFilter: { tags: ["checkout"] },
@@ -90,7 +92,11 @@ describe("workflow runner", () => {
         sandboxRemoteDir: "/workspace/testers",
         sandboxCleanup: "delete",
         timeoutMs: 120000,
-        env: { APP_ENV: "preview", SMOKE_TEST_PASSWORD: "$SMOKE_TEST_PASSWORD" },
+        env: {
+          APP_ENV: "preview",
+          SMOKE_TEST_PASSWORD: "$SMOKE_TEST_PASSWORD",
+          OPENAI_API_KEY: "$?OPENAI_API_KEY",
+        },
       },
     });
     const calls: unknown[] = [];
@@ -148,6 +154,8 @@ describe("workflow runner", () => {
     } finally {
       if (originalSmokePassword === undefined) delete process.env.SMOKE_TEST_PASSWORD;
       else process.env.SMOKE_TEST_PASSWORD = originalSmokePassword;
+      if (originalOpenAIKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = originalOpenAIKey;
     }
   });
 
@@ -155,6 +163,7 @@ describe("workflow runner", () => {
     const sourceDir = mkdtempSync(join(tmpdir(), "testers-app-source-"));
     cleanupPaths.push(sourceDir);
     writeFileSync(join(sourceDir, "package.json"), JSON.stringify({ scripts: { dev: "next dev" } }));
+    writeFileSync(join(sourceDir, ".env.local"), "SECRET_SHOULD_NOT_UPLOAD=1\n");
     mkdirSync(join(sourceDir, "src"), { recursive: true });
     writeFileSync(join(sourceDir, "src", "index.ts"), "export const ok = true;\n");
     mkdirSync(join(sourceDir, "node_modules", "skip"), { recursive: true });
@@ -195,6 +204,7 @@ describe("workflow runner", () => {
     expect(bundle.remoteDir).toBe("/workspace/testers");
     expect(existsSync(join(bundle.localDir, ".testers-state", "testers.db"))).toBe(true);
     expect(readFileSync(join(bundle.localDir, "app", "src", "index.ts"), "utf8")).toContain("ok = true");
+    expect(existsSync(join(bundle.localDir, "app", ".env.local"))).toBe(false);
     expect(existsSync(join(bundle.localDir, "app", "node_modules"))).toBe(false);
   });
 });

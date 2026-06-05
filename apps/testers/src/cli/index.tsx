@@ -35,7 +35,7 @@ import { createSchedule, getSchedule, listSchedules, updateSchedule, deleteSched
 import { getTemplate, listTemplateNames } from "../lib/templates.js";
 import { createAuthPreset, getAuthPreset, listAuthPresets, deleteAuthPreset } from "../db/auth-presets.js";
 import { addDependency, removeDependency, getDependencies, getDependents, createFlow, getFlow, listFlows, deleteFlow } from "../db/flows.js";
-import { createTestingWorkflow, deleteTestingWorkflow, getTestingWorkflow, listTestingWorkflows } from "../db/workflows.js";
+import { createTestingWorkflow, deleteTestingWorkflow, getTestingWorkflow, listTestingWorkflows, updateTestingWorkflow } from "../db/workflows.js";
 import { runTestingWorkflow } from "../lib/workflow-runner.js";
 import { createEnvironment, getEnvironment, listEnvironments, deleteEnvironment, setDefaultEnvironment, getDefaultEnvironment } from "../db/environments.js";
 import { generateGitHubActionsWorkflow } from "../lib/ci.js";
@@ -98,20 +98,33 @@ function envCredentialRef(value: string | undefined): string | undefined {
   return trimmed.startsWith("$") ? trimmed : `$${trimmed}`;
 }
 
-function parseSandboxEnv(values: string[] | undefined): Record<string, string> | undefined {
-  if (!values?.length) return undefined;
+function assertEnvVarName(key: string, rawValue: string): void {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+    throw new Error(`Invalid sandbox env var name: ${key || rawValue}`);
+  }
+}
+
+function parseSandboxEnv(
+  values: string[] | undefined,
+  optionalValues: string[] | undefined = [],
+): Record<string, string> | undefined {
+  if (!values?.length && !optionalValues?.length) return undefined;
 
   const env: Record<string, string> = {};
-  for (const value of values) {
+  for (const value of values ?? []) {
     const trimmed = value.trim();
     if (!trimmed) continue;
 
     const separator = trimmed.indexOf("=");
     const key = separator >= 0 ? trimmed.slice(0, separator).trim() : trimmed;
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
-      throw new Error(`Invalid sandbox env var name: ${key || value}`);
-    }
+    assertEnvVarName(key, value);
     env[key] = separator >= 0 ? trimmed.slice(separator + 1) : `$${key}`;
+  }
+  for (const value of optionalValues ?? []) {
+    const key = value.trim();
+    if (!key) continue;
+    assertEnvVarName(key, value);
+    env[key] = `$?${key}`;
   }
 
   return Object.keys(env).length > 0 ? env : undefined;
@@ -4575,6 +4588,7 @@ workflowCmd
   .option("--sandbox-setup-command <command>", "Shell command to run before testers in the sandbox")
   .option("--sandbox-package <spec>", "Package spec to execute in the sandbox", "@hasna/testers")
   .option("--sandbox-env <assignment>", "Sandbox env var; KEY forwards host KEY, KEY=value stores value (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
+  .option("--sandbox-env-optional <name>", "Optional sandbox env var; forwards host NAME only when set (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
   .option("--sandbox-app-source <path>", "Local app source directory to upload into the sandbox")
   .option("--sandbox-app-remote-dir <path>", "Remote app directory inside the sandbox (default: <sandbox-remote-dir>/app)")
   .option("--sandbox-app-start-command <command>", "Shell command to start the app before testers runs")
@@ -4610,7 +4624,7 @@ workflowCmd
           sandboxSyncStrategy: opts.sandboxSync,
           setupCommand: opts.sandboxSetupCommand,
           packageSpec: opts.sandboxPackage,
-          env: parseSandboxEnv(opts.sandboxEnv),
+          env: parseSandboxEnv(opts.sandboxEnv, opts.sandboxEnvOptional),
           appSourceDir: opts.sandboxAppSource,
           appRemoteDir: opts.sandboxAppRemoteDir,
           appStartCommand: opts.sandboxAppStartCommand,
@@ -4622,6 +4636,36 @@ workflowCmd
       });
       if (opts.json) log(JSON.stringify(workflow, null, 2));
       else log(chalk.green(`Workflow saved: ${chalk.bold(workflow.id.slice(0, 8))} — ${workflow.name}`));
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+workflowCmd
+  .command("update <id>")
+  .description("Update a saved testing workflow")
+  .option("--sandbox-env <assignment>", "Sandbox env var; KEY forwards host KEY, KEY=value stores value (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
+  .option("--sandbox-env-optional <name>", "Optional sandbox env var; forwards host NAME only when set (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
+  .option("--clear-sandbox-env", "Replace existing sandbox env vars instead of merging", false)
+  .option("--json", "Output as JSON", false)
+  .action((id: string, opts) => {
+    try {
+      const workflow = getTestingWorkflow(id);
+      if (!workflow) { logError(chalk.red(`Workflow not found: ${id}`)); process.exit(1); }
+
+      const envPatch = parseSandboxEnv(opts.sandboxEnv, opts.sandboxEnvOptional);
+      const execution = {
+        ...workflow.execution,
+        env: opts.clearSandboxEnv
+          ? envPatch
+          : { ...(workflow.execution.env ?? {}), ...(envPatch ?? {}) },
+      };
+      if (Object.keys(execution.env ?? {}).length === 0) delete execution.env;
+
+      const updated = updateTestingWorkflow(workflow.id, { execution });
+      if (opts.json) log(JSON.stringify(updated, null, 2));
+      else log(chalk.green(`Workflow updated: ${chalk.bold(updated.id.slice(0, 8))} — ${updated.name}`));
     } catch (error) {
       logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
