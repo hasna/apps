@@ -3512,16 +3512,27 @@ inventoryCmd
   .option("--action-workflow-grouping <mode>", "Action workflow grouping: route or area-kind", "route")
   .option("--workflow-target <target>", "Workflow execution target: local or sandbox", "sandbox")
   .option("--sandbox-provider <provider>", "Sandbox provider for created workflows", "e2b")
+  .option("--sandbox-image <image>", "Sandbox image/template for created workflows")
+  .option("--sandbox-remote-dir <path>", "Remote working directory for sandbox runs")
   .option("--sandbox-cleanup <mode>", "Sandbox cleanup mode: delete, stop, or keep", "delete")
   .option("--sandbox-sync <strategy>", "Sandbox upload sync strategy: rsync or archive", "rsync")
+  .option("--sandbox-setup-command <command>", "Shell command to run before testers in the sandbox")
+  .option("--sandbox-package <spec>", "Package spec to execute in the sandbox", "@hasna/testers")
+  .option("--sandbox-env <assignment>", "Sandbox env var; KEY forwards host KEY, KEY=value stores value (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
   .option("--sandbox-env-optional <name>", "Optional sandbox env var; forwards host NAME only when set (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
+  .option("--sandbox-app-source <path>", "Local app source directory to upload into the sandbox")
+  .option("--sandbox-app-remote-dir <path>", "Remote app directory inside the sandbox (default: <sandbox-remote-dir>/app)")
+  .option("--sandbox-app-start-command <command>", "Shell command to start the app before testers runs")
+  .option("--sandbox-app-url <url>", "URL testers should target inside the sandbox after the app starts")
+  .option("--sandbox-app-wait-url <url>", "URL to poll before starting testers (defaults to --sandbox-app-url)")
+  .option("--sandbox-app-wait-timeout <ms>", "App readiness wait timeout in milliseconds")
   .option("--timeout <ms>", "Workflow timeout in milliseconds")
   .option("--json", "Output as JSON", false)
   .action(async (root: string | undefined, opts) => {
     try {
       const { importNextRouteInventory } = await import("../lib/next-route-inventory.js");
       const projectId = resolveProject(opts.project) ?? undefined;
-      const env = parseSandboxEnv(undefined, opts.sandboxEnvOptional);
+      const env = parseSandboxEnv(opts.sandboxEnv, opts.sandboxEnvOptional);
       if (!["route", "area-kind"].includes(opts.actionWorkflowGrouping)) {
         throw new Error("--action-workflow-grouping must be route or area-kind");
       }
@@ -3542,10 +3553,20 @@ inventoryCmd
         workflowExecution: {
           target: opts.workflowTarget,
           provider: opts.workflowTarget === "sandbox" ? opts.sandboxProvider : undefined,
+          sandboxImage: opts.sandboxImage,
+          sandboxRemoteDir: opts.sandboxRemoteDir,
           sandboxCleanup: opts.sandboxCleanup,
           sandboxSyncStrategy: opts.sandboxSync,
+          setupCommand: opts.sandboxSetupCommand,
+          packageSpec: opts.sandboxPackage,
           timeoutMs: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
           env,
+          appSourceDir: opts.sandboxAppSource,
+          appRemoteDir: opts.sandboxAppRemoteDir,
+          appStartCommand: opts.sandboxAppStartCommand,
+          appUrl: opts.sandboxAppUrl,
+          appWaitUrl: opts.sandboxAppWaitUrl,
+          appWaitTimeoutMs: opts.sandboxAppWaitTimeout ? parseInt(opts.sandboxAppWaitTimeout, 10) : undefined,
         },
       });
 

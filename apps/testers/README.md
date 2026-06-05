@@ -57,12 +57,16 @@ testers inventory next /path/to/app \
   --action-workflow-grouping route \
   --sandbox-provider e2b \
   --sandbox-sync rsync \
+  --sandbox-app-source /path/to/app \
+  --sandbox-app-start-command "bun install && bun dev --hostname 0.0.0.0" \
+  --sandbox-app-url http://127.0.0.1:3000 \
+  --sandbox-app-wait-url http://127.0.0.1:3000/health \
   --sandbox-env-optional OPENAI_API_KEY
 
 testers workflow fanout --project alumia --tag next-action --workers 6 --url https://preview.example.com --dry-run
 ```
 
-Use `--action-workflow-grouping route` for route-specific workflows or `--action-workflow-grouping area-kind` for broader workflows such as commerce buttons or admin API methods.
+Use `--action-workflow-grouping route` for route-specific workflows or `--action-workflow-grouping area-kind` for broader workflows such as commerce buttons or admin API methods. Add the `--sandbox-app-*` flags when the sandbox should rsync, install, start, and test the app source instead of only testing an already-running URL.
 
 ### Common Flags
 

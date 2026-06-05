@@ -83,7 +83,17 @@ describe("next route inventory", () => {
       workflowExecution: {
         target: "sandbox",
         provider: "e2b",
-        env: { OPENAI_API_KEY: "$?OPENAI_API_KEY" },
+        sandboxImage: "node-22",
+        sandboxRemoteDir: "/tmp/alumia-qa",
+        setupCommand: "bun install",
+        packageSpec: "@hasna/testers@0.0.55",
+        appSourceDir: root,
+        appRemoteDir: "/tmp/alumia-qa/app",
+        appStartCommand: "bun dev",
+        appUrl: "http://127.0.0.1:3000",
+        appWaitUrl: "http://127.0.0.1:3000/health",
+        appWaitTimeoutMs: 180000,
+        env: { OPENAI_API_KEY: "$?OPENAI_API_KEY", DATABASE_URL: "$DATABASE_URL" },
       },
     });
 
@@ -138,7 +148,17 @@ describe("next route inventory", () => {
       workflowExecution: {
         target: "sandbox",
         provider: "e2b",
-        env: { OPENAI_API_KEY: "$?OPENAI_API_KEY" },
+        sandboxImage: "node-22",
+        sandboxRemoteDir: "/tmp/alumia-qa",
+        setupCommand: "bun install",
+        packageSpec: "@hasna/testers@0.0.55",
+        appSourceDir: root,
+        appRemoteDir: "/tmp/alumia-qa/app",
+        appStartCommand: "bun dev",
+        appUrl: "http://127.0.0.1:3000",
+        appWaitUrl: "http://127.0.0.1:3000/health",
+        appWaitTimeoutMs: 180000,
+        env: { OPENAI_API_KEY: "$?OPENAI_API_KEY", DATABASE_URL: "$DATABASE_URL" },
       },
     });
 
@@ -164,8 +184,19 @@ describe("next route inventory", () => {
     expect(billingWorkflow.scenarioFilter.tags).toEqual(["next-action", "route:page", "route-path:/:orgSlug/billing"]);
     expect(billingWorkflow.execution.target).toBe("sandbox");
     expect(billingWorkflow.execution.provider).toBe("e2b");
+    expect(billingWorkflow.execution.sandboxImage).toBe("node-22");
+    expect(billingWorkflow.execution.sandboxRemoteDir).toBe("/tmp/alumia-qa");
     expect(billingWorkflow.execution.sandboxSyncStrategy).toBe("rsync");
+    expect(billingWorkflow.execution.setupCommand).toBe("bun install");
+    expect(billingWorkflow.execution.packageSpec).toBe("@hasna/testers@0.0.55");
+    expect(billingWorkflow.execution.appSourceDir).toBe(root);
+    expect(billingWorkflow.execution.appRemoteDir).toBe("/tmp/alumia-qa/app");
+    expect(billingWorkflow.execution.appStartCommand).toBe("bun dev");
+    expect(billingWorkflow.execution.appUrl).toBe("http://127.0.0.1:3000");
+    expect(billingWorkflow.execution.appWaitUrl).toBe("http://127.0.0.1:3000/health");
+    expect(billingWorkflow.execution.appWaitTimeoutMs).toBe(180000);
     expect(billingWorkflow.execution.env?.OPENAI_API_KEY).toBe("$?OPENAI_API_KEY");
+    expect(billingWorkflow.execution.env?.DATABASE_URL).toBe("$DATABASE_URL");
 
     const second = importNextRouteInventory({
       rootDir: root,
