@@ -15,9 +15,11 @@ import {
   upsertRecord,
   upsertRecords,
   deleteRecord,
+  updateNameservers,
   createRoute53Provider,
 } from "../../lib/route53.js";
 import type { DomainContactInfo } from "../../lib/route53.js";
+import { setupDomainZone } from "../../lib/zone-setup.js";
 import { createDomain, getDomainByName, updateDomain } from "../../db/domains.js";
 import { resolveContact } from "../../lib/config.js";
 
@@ -484,27 +486,47 @@ export function registerRoute53Commands(program: Command): void {
         const reg = await registerDomain(domain, contact, parseInt(opts.years));
         console.log(`  ✓ Submitted (operation: ${reg.operationId})`);
 
-        if (opts.wait) {
-          console.log(`  Waiting for registration to complete...`);
-          let status = "IN_PROGRESS";
-          while (status === "IN_PROGRESS" || status === "SUBMITTED") {
-            await new Promise((r) => setTimeout(r, 10_000));
-            const s = await getRegistrationStatus(reg.operationId);
-            status = s.status;
-            process.stdout.write(`  Status: ${status}\r`);
-          }
-          console.log();
-          if (status !== "SUCCESSFUL") {
-            console.error(`✗ Registration ${status}`);
-            process.exit(1);
-          }
-          console.log(`  ✓ Registration complete`);
+        // Route 53 auto-creates the hosted zone during registration, so we must
+        // wait for registration to complete before touching zones — otherwise we
+        // can't see (and would duplicate) the auto-created zone.
+        console.log(`  Waiting for registration to complete...`);
+        let status = "IN_PROGRESS";
+        while (status === "IN_PROGRESS" || status === "SUBMITTED") {
+          await new Promise((r) => setTimeout(r, 10_000));
+          const s = await getRegistrationStatus(reg.operationId);
+          status = s.status;
+          process.stdout.write(`  Status: ${status}\r`);
         }
+        console.log();
+        if (status !== "SUCCESSFUL") {
+          console.error(`✗ Registration ${status}`);
+          process.exit(1);
+        }
+        console.log(`  ✓ Registration complete`);
 
-        // 3. Create hosted zone
-        console.log(`[3/4] Creating hosted zone...`);
-        const zone = await createHostedZone(domain, `Managed by @hasna/domains`);
-        console.log(`  ✓ Zone created (${zone.id})`);
+        // 3. Configure hosted zone — reuse the auto-created zone (don't duplicate
+        // it) and align the registry delegation to the managed zone.
+        console.log(`[3/4] Configuring hosted zone...`);
+        const setup = await setupDomainZone(domain, {
+          findExistingZone: async (d) => {
+            const z = await findHostedZoneByDomain(d);
+            if (!z) return null;
+            const full = await getHostedZone(z.id);
+            return { id: full.id, name_servers: full.name_servers };
+          },
+          createZone: async (d) => {
+            const z = await createHostedZone(d, `Managed by @hasna/domains`);
+            return { id: z.id, name_servers: z.name_servers ?? [] };
+          },
+          getRegistrarNs: async (d) => (await getDomainDetail(d)).nameservers,
+          setRegistrarNs: async (d, ns) => {
+            await updateNameservers(d, ns);
+          },
+        });
+        console.log(
+          `  ✓ Zone ${setup.created ? "created" : "reused"} (${setup.zoneId})` +
+            (setup.nsUpdated ? ` — registry NS repointed to this zone` : ``),
+        );
 
         // 4. Add to local DB
         console.log(`[4/4] Adding to local database...`);
@@ -513,21 +535,16 @@ export function registerRoute53Commands(program: Command): void {
           registrar: "AWS Route 53",
           status: "active",
           auto_renew: true,
-          nameservers: zone.name_servers,
+          nameservers: setup.nameServers,
         });
         console.log(`  ✓ Added to portfolio`);
 
         // Summary
         console.log(`\n✓ Full setup complete for ${domain}`);
-        if (!opts.wait) {
-          console.log(`  Registration may take a few minutes.`);
-          console.log(`  ⚠ Hosted zone created before registration confirmed.`);
-          console.log(`    If registration fails, clean up: domains r53 zone-delete ${zone.id} --force`);
-        }
         console.log(`  Check: domains r53 status ${reg.operationId}`);
-        if (zone.name_servers && zone.name_servers.length > 0) {
+        if (setup.nameServers && setup.nameServers.length > 0) {
           console.log(`\n  Name servers:`);
-          for (const ns of zone.name_servers) {
+          for (const ns of setup.nameServers) {
             console.log(`    ${ns}`);
           }
         }
