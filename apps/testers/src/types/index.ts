@@ -11,6 +11,7 @@ export type AuthStrategy = "form-login" | "bearer" | "cookie" | "oauth" | "custo
 export type WorkflowExecutionTarget = "local" | "sandbox";
 export type LegacyWorkflowExecutionTarget = WorkflowExecutionTarget | "connector:e2b";
 export type WorkflowSandboxCleanup = "delete" | "stop" | "keep";
+export type WorkflowSandboxSyncStrategy = "archive" | "rsync";
 
 export type AssertionType = "visible" | "not_visible" | "text_contains" | "text_equals" | "element_count" | "no_console_errors" | "url_contains" | "title_contains" | "no_a11y_violations" | "cookie_exists" | "cookie_value" | "cookie_not_exists" | "local_storage_exists" | "local_storage_value" | "local_storage_not_exists" | "session_storage_value" | "session_storage_not_exists";
 
@@ -429,6 +430,7 @@ export interface WorkflowExecutionConfig {
   sandboxImage?: string;
   sandboxRemoteDir?: string;
   sandboxCleanup?: WorkflowSandboxCleanup;
+  sandboxSyncStrategy?: WorkflowSandboxSyncStrategy;
   setupCommand?: string;
   packageSpec?: string;
   timeoutMs?: number;
@@ -444,6 +446,7 @@ export interface WorkflowExecutionInput {
   sandboxTemplate?: string;
   sandboxRemoteDir?: string;
   sandboxCleanup?: WorkflowSandboxCleanup;
+  sandboxSyncStrategy?: WorkflowSandboxSyncStrategy;
   setupCommand?: string;
   packageSpec?: string;
   timeoutMs?: number;
@@ -533,6 +536,11 @@ function cleanupValue(value: unknown): WorkflowSandboxCleanup | undefined {
   return undefined;
 }
 
+function syncStrategyValue(value: unknown): WorkflowSandboxSyncStrategy | undefined {
+  if (value === "archive" || value === "rsync") return value;
+  return undefined;
+}
+
 export function workflowExecutionFromValue(value: unknown): WorkflowExecutionConfig {
   const input = isRecord(value) ? value : {};
   const rawTarget = stringValue(input["target"]) ?? "local";
@@ -552,6 +560,7 @@ export function workflowExecutionFromValue(value: unknown): WorkflowExecutionCon
   const sandboxImage = stringValue(input["sandboxImage"]) ?? stringValue(input["sandboxTemplate"]);
   const sandboxRemoteDir = stringValue(input["sandboxRemoteDir"]);
   const sandboxCleanup = cleanupValue(input["sandboxCleanup"]);
+  const sandboxSyncStrategy = syncStrategyValue(input["sandboxSyncStrategy"]);
   const setupCommand = stringValue(input["setupCommand"]);
   const packageSpec = stringValue(input["packageSpec"]);
   const timeoutMs = numberValue(input["timeoutMs"]);
@@ -563,6 +572,7 @@ export function workflowExecutionFromValue(value: unknown): WorkflowExecutionCon
     ...(sandboxImage ? { sandboxImage } : {}),
     ...(sandboxRemoteDir ? { sandboxRemoteDir } : {}),
     ...(sandboxCleanup ? { sandboxCleanup } : {}),
+    ...(sandboxSyncStrategy ? { sandboxSyncStrategy } : {}),
     ...(setupCommand ? { setupCommand } : {}),
     ...(packageSpec ? { packageSpec } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
@@ -633,6 +643,7 @@ export interface ScreenshotConfig {
 
 export interface TestersConfig {
   defaultModel: string;
+  defaultImageModel: string;
   models: Record<ModelPreset, string>;
   browser: BrowserConfig;
   screenshots: ScreenshotConfig;

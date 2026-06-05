@@ -1561,6 +1561,7 @@ program
       log(`  ANTHROPIC_API_KEY: ${hasApiKey ? chalk.green("set") : chalk.red("not set")}`);
       log(`  Database:          ${dbPath}`);
       log(`  Default model:     ${config.defaultModel}`);
+      log(`  Image model:       ${config.defaultImageModel}`);
       log(`  Screenshots dir:   ${config.screenshots.dir}`);
       log("");
     } catch (error) {
@@ -4494,6 +4495,7 @@ workflowCmd
   .option("--sandbox-image <image>", "Sandbox image/template")
   .option("--sandbox-remote-dir <path>", "Remote working directory for sandbox runs")
   .option("--sandbox-cleanup <mode>", "Sandbox cleanup mode: delete, stop, or keep", "delete")
+  .option("--sandbox-sync <strategy>", "Sandbox upload sync strategy: rsync or archive", "rsync")
   .option("--sandbox-setup-command <command>", "Shell command to run before testers in the sandbox")
   .option("--sandbox-package <spec>", "Package spec to execute in the sandbox", "@hasna/testers")
   .option("--e2b-template <name>", "Legacy alias for --sandbox-image")
@@ -4522,6 +4524,7 @@ workflowCmd
           sandboxImage: opts.sandboxImage ?? opts.e2bTemplate,
           sandboxRemoteDir: opts.sandboxRemoteDir,
           sandboxCleanup: opts.sandboxCleanup,
+          sandboxSyncStrategy: opts.sandboxSync,
           setupCommand: opts.sandboxSetupCommand,
           packageSpec: opts.sandboxPackage,
           timeoutMs: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
@@ -4599,12 +4602,63 @@ workflowCmd
         timeout: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
         dryRun: opts.dryRun,
       });
-      if (opts.json || opts.dryRun || output.connectorResult) {
+      if (opts.json || opts.dryRun || output.sandboxResult) {
         log(JSON.stringify(output, null, 2));
         return;
       }
       log(formatTerminal(output.run!, output.results));
       process.exit(getExitCode(output.run!));
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+workflowCmd
+  .command("fanout [ids...]")
+  .description("Run multiple saved sandbox workflows concurrently")
+  .requiredOption("-u, --url <url>", "Target URL")
+  .option("--project <id>", "Project ID")
+  .option("--tag <tag>", "Workflow scenario tag filter (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
+  .option("--all", "Include disabled workflows when selecting by project/tag", false)
+  .option("--workers <n>", "Concurrent sandboxes, 1-12 (default: 6)", "6")
+  .option("-m, --model <model>", "AI model")
+  .option("--headed", "Run headed", false)
+  .option("--parallel <n>", "Parallel browser workers inside each sandbox")
+  .option("--timeout <ms>", "Override workflow timeout")
+  .option("--dry-run", "Print resolved sandbox plans without spawning sandboxes", false)
+  .option("--json", "Output as JSON", false)
+  .action(async (ids: string[] | undefined, opts) => {
+    try {
+      const { runWorkflowFanout } = await import("../lib/workflow-fanout.js");
+      const result = await runWorkflowFanout({
+        workflowIds: ids,
+        projectId: opts.project ? resolveProject(opts.project) : undefined,
+        tags: opts.tag,
+        includeDisabled: opts.all,
+        workers: opts.workers ? parseInt(opts.workers, 10) : undefined,
+        url: opts.url,
+        model: opts.model,
+        headed: opts.headed,
+        parallel: opts.parallel ? parseInt(opts.parallel, 10) : undefined,
+        timeout: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
+        dryRun: opts.dryRun,
+      });
+
+      if (opts.json || opts.dryRun) {
+        log(JSON.stringify(result, null, 2));
+      } else {
+        const status = result.status === "passed" ? chalk.green("passed") : chalk.red("failed");
+        log(chalk.bold(`Sandbox workflow fanout ${status}: ${result.passed}/${result.total} passed with ${result.workers} worker(s)`));
+        for (const item of result.items) {
+          const itemStatus = item.status === "passed" ? chalk.green(item.status) : chalk.red(item.status);
+          const sandbox = item.sandboxId ? chalk.dim(` sandbox=${item.sandboxId.slice(0, 8)}`) : "";
+          const error = item.error ? chalk.dim(` ${item.error}`) : "";
+          log(`  ${itemStatus}  ${item.workflowName}${sandbox}${error}`);
+        }
+      }
+
+      if (result.status === "failed") process.exit(1);
     } catch (error) {
       logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);

@@ -22,6 +22,27 @@ testers run https://my-preview.example.com
 
 Passing a URL as the first argument will, by default, crawl the site and auto-generate scenarios if none exist for the project. Disable with `--no-auto-generate`.
 
+### Sandbox Workflow Fanout
+
+Saved workflows can run in E2B-backed sandboxes through `@hasna/sandboxes`. Sandbox workflow uploads default to `rsync` staging and the image-model default is `gpt-image-2`.
+
+```bash
+export E2B_API_KEY=...
+
+testers workflow create "Projects CRUD" \
+  --project alumia \
+  --tag projects \
+  --target sandbox \
+  --sandbox-provider e2b \
+  --sandbox-sync rsync \
+  --timeout 600000
+
+testers workflow fanout --project alumia --workers 6 --url https://preview.example.com
+testers workflow fanout wf_abc,wf_def wf_xyz --workers 12 --url https://preview.example.com --json
+```
+
+`--workers` is bounded to 1-12 concurrent sandboxes. Use `--dry-run` to inspect the remote commands and upload plans without spawning sandboxes.
+
 ### Common Flags
 
 - `--json --output results.json` — write structured results to a file for downstream tooling.

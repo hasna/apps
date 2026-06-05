@@ -50,6 +50,7 @@ describe("testing workflows", () => {
         sandboxImage: "node-bun-playwright",
         sandboxRemoteDir: "/workspace/testers",
         sandboxCleanup: "stop",
+        sandboxSyncStrategy: "rsync",
         timeoutMs: 120000,
         env: { APP_ENV: "preview" },
       },
@@ -61,6 +62,7 @@ describe("testing workflows", () => {
       sandboxImage: "node-bun-playwright",
       sandboxRemoteDir: "/workspace/testers",
       sandboxCleanup: "stop",
+      sandboxSyncStrategy: "rsync",
       timeoutMs: 120000,
       env: { APP_ENV: "preview" },
     });

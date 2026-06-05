@@ -12,6 +12,11 @@ describe("getDefaultConfig", () => {
     expect(config.defaultModel).toBe("claude-haiku-4-5-20251001");
   });
 
+  it("uses GPT Image 2 as the default image model", () => {
+    const config = getDefaultConfig();
+    expect(config.defaultImageModel).toBe("gpt-image-2");
+  });
+
   it("returns correct default viewport", () => {
     const config = getDefaultConfig();
     expect(config.browser.viewport).toEqual({ width: 1280, height: 720 });
@@ -88,6 +93,18 @@ describe("loadConfig", () => {
     } finally {
       if (original === undefined) delete process.env["TESTERS_SELF_HEAL"];
       else process.env["TESTERS_SELF_HEAL"] = original;
+    }
+  });
+
+  it("allows the default image model to be overridden by environment", () => {
+    const original = process.env["TESTERS_IMAGE_MODEL"];
+    process.env["TESTERS_IMAGE_MODEL"] = "gpt-image-2-custom";
+
+    try {
+      expect(loadConfig().defaultImageModel).toBe("gpt-image-2-custom");
+    } finally {
+      if (original === undefined) delete process.env["TESTERS_IMAGE_MODEL"];
+      else process.env["TESTERS_IMAGE_MODEL"] = original;
     }
   });
 });

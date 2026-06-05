@@ -11,6 +11,7 @@ import type {
   TestingWorkflow,
   WorkflowExecutionConfig,
   WorkflowSandboxCleanup,
+  WorkflowSandboxSyncStrategy,
 } from "../types/index.js";
 
 export interface WorkflowRunOptions {
@@ -30,6 +31,7 @@ export interface WorkflowSandboxPlan {
   stateRemoteDir: string;
   command: string;
   cleanup: WorkflowSandboxCleanup;
+  syncStrategy: WorkflowSandboxSyncStrategy;
   timeoutMs?: number;
   env?: Record<string, string>;
 }
@@ -79,7 +81,11 @@ export interface WorkflowSandboxesRuntime {
     config?: Record<string, unknown>;
     sandboxEnvVars?: Record<string, string>;
     cwd?: string;
-    upload: { localDir: string; remoteDir: string };
+    upload: {
+      localDir: string;
+      remoteDir: string;
+      syncStrategy?: WorkflowSandboxSyncStrategy;
+    };
     cleanup?: WorkflowSandboxCleanup;
     onStdout?: (data: string) => void;
     onStderr?: (data: string) => void;
@@ -180,6 +186,7 @@ function buildSandboxPlan(
     remoteDir,
     stateRemoteDir,
     cleanup: execution.sandboxCleanup ?? "delete",
+    syncStrategy: execution.sandboxSyncStrategy ?? "rsync",
     timeoutMs: execution.timeoutMs,
     env: execution.env,
     command: buildSandboxCommand({
@@ -254,6 +261,7 @@ async function runViaSandbox(
       upload: {
         localDir: bundle.localDir,
         remoteDir: bundle.remoteDir,
+        syncStrategy: plan.sandbox.syncStrategy,
       },
     });
     const exitCode = raw.result.exit_code ?? raw.result.exitCode ?? 0;

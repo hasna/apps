@@ -60,6 +60,7 @@ describe("workflow runner", () => {
       remoteDir: "/workspace/testers",
       stateRemoteDir: "/workspace/testers/.testers-state",
       cleanup: "stop",
+      syncStrategy: "rsync",
     });
     expect(plan.sandbox?.command).toContain("HASNA_TESTERS_DB_PATH=");
     expect(plan.sandbox?.command).toContain("bunx");
@@ -128,6 +129,7 @@ describe("workflow runner", () => {
       upload: {
         localDir: "/tmp/testers-db",
         remoteDir: "/workspace/testers/.testers-state",
+        syncStrategy: "rsync",
       },
     });
     expect(calls[0]).toHaveProperty("command");

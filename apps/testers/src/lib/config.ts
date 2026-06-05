@@ -6,6 +6,7 @@ import { getTestersDir } from "./paths.js";
 
 const CONFIG_DIR = getTestersDir();
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
+export const DEFAULT_IMAGE_MODEL = "gpt-image-2";
 
 /**
  * Returns the hardcoded default configuration.
@@ -13,6 +14,7 @@ const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 export function getDefaultConfig(): TestersConfig {
   return {
     defaultModel: "claude-haiku-4-5-20251001",
+    defaultImageModel: DEFAULT_IMAGE_MODEL,
     models: { ...MODEL_MAP },
     browser: {
       headless: true,
@@ -48,6 +50,7 @@ export function loadConfig(): TestersConfig {
 
   const config: TestersConfig = {
     defaultModel: fileConfig.defaultModel ?? defaults.defaultModel,
+    defaultImageModel: fileConfig.defaultImageModel ?? defaults.defaultImageModel,
     models: fileConfig.models
       ? { ...defaults.models, ...fileConfig.models }
       : { ...defaults.models },
@@ -70,6 +73,11 @@ export function loadConfig(): TestersConfig {
   const envModel = process.env["TESTERS_MODEL"];
   if (envModel) {
     config.defaultModel = envModel;
+  }
+
+  const envImageModel = process.env["TESTERS_IMAGE_MODEL"];
+  if (envImageModel) {
+    config.defaultImageModel = envImageModel;
   }
 
   const envScreenshotsDir = process.env["TESTERS_SCREENSHOTS_DIR"];
