@@ -1205,7 +1205,7 @@ private struct ManageSectionRow: View {
     HStack(spacing: 10) {
       Image(systemName: "line.3.horizontal")
         .font(.system(size: 10, weight: .medium))
-        .foregroundStyle(isDragging ? tint : .tertiary)
+        .foregroundStyle(isDragging ? AnyShapeStyle(tint) : AnyShapeStyle(.tertiary))
         .frame(width: 12)
         .help("Drag to reorder")
 
