@@ -66,6 +66,32 @@ function splitCsvOption(value: string | undefined): string[] | undefined {
   return items.length > 0 ? items : undefined;
 }
 
+function describeStoredAssertion(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function validateStoredAssertion(value: unknown): string | null {
+  if (typeof value === "string") {
+    try {
+      parseAssertionString(value);
+      return null;
+    } catch {
+      return value;
+    }
+  }
+
+  if (value && typeof value === "object" && typeof (value as { type?: unknown }).type === "string") {
+    return null;
+  }
+
+  return describeStoredAssertion(value);
+}
+
 function AddForm({ onComplete }: { onComplete: (data: AddFormState | null) => void }) {
   const { exit } = useApp();
   const [state, setState] = useState<AddFormState>({
@@ -821,7 +847,8 @@ program
             // Validate assertion syntax
             const assertionErrors: string[] = [];
             for (const a of (s.assertions ?? [])) {
-              try { parseAssertionString(a); } catch { assertionErrors.push(a); }
+              const error = validateStoredAssertion(a);
+              if (error) assertionErrors.push(error);
             }
             // Check auth preset exists if required
             let authOk = true;
