@@ -50,6 +50,7 @@ describe("next route inventory", () => {
     expect(inventory.pages).toBe(2);
     expect(inventory.apiRoutes).toBe(2);
     expect(inventory.dynamic).toBe(2);
+    expect(inventory.actions).toBe(7);
     expect(inventory.categories).toMatchObject({ public: 1, commerce: 2, admin: 1 });
 
     const billingPage = inventory.items.find((item) => item.routePath === "/:orgSlug/billing")!;
@@ -121,5 +122,81 @@ describe("next route inventory", () => {
 
     expect(second.deduped).toBe(4);
     expect(listTestingWorkflows({ projectId: project.id }).length).toBe(4);
+  });
+
+  test("upserts action scenarios and route-scoped sandbox workflows", () => {
+    const root = makeRepo();
+    const project = createProject({ name: "alumia", scenarioPrefix: "ALM" });
+
+    const result = importNextRouteInventory({
+      rootDir: root,
+      projectId: project.id,
+      createActionScenarios: true,
+      createActionWorkflows: true,
+      workflowTarget: "sandbox",
+      workflowProvider: "e2b",
+      workflowExecution: {
+        target: "sandbox",
+        provider: "e2b",
+        env: { OPENAI_API_KEY: "$?OPENAI_API_KEY" },
+      },
+    });
+
+    expect(result.created).toBe(7);
+    expect(result.actionScenarios.length).toBe(7);
+    expect(result.workflows.length).toBe(3);
+
+    const actionScenario = listScenarios({ projectId: project.id })
+      .find((scenario) => scenario.name === "Next page action: /:orgSlug/billing :: button Add credits")!;
+    expect(actionScenario).toBeTruthy();
+    expect(actionScenario.tags).toContain("next-action");
+    expect(actionScenario.tags).toContain("action:button");
+    expect(actionScenario.tags).toContain("route-path:/:orgSlug/billing");
+    expect(actionScenario.metadata?.source).toBe("next-route-action-inventory");
+    expect(actionScenario.metadata?.action).toMatchObject({ kind: "button", label: "Add credits" });
+    expect(actionScenario.steps.some((step) => step.includes("Add credits"))).toBe(true);
+    expect(actionScenario.parameters?.routeFixtures).toEqual({ orgSlug: "test-org" });
+
+    const workflows = listTestingWorkflows({ projectId: project.id });
+    const billingWorkflow = workflows.find((workflow) => workflow.name === "Next action inventory page /:orgSlug/billing")!;
+    expect(billingWorkflow).toBeTruthy();
+    expect(billingWorkflow.scenarioFilter.tags).toEqual(["next-action", "route:page", "route-path:/:orgSlug/billing"]);
+    expect(billingWorkflow.execution.target).toBe("sandbox");
+    expect(billingWorkflow.execution.provider).toBe("e2b");
+    expect(billingWorkflow.execution.sandboxSyncStrategy).toBe("rsync");
+    expect(billingWorkflow.execution.env?.OPENAI_API_KEY).toBe("$?OPENAI_API_KEY");
+
+    const second = importNextRouteInventory({
+      rootDir: root,
+      projectId: project.id,
+      createActionScenarios: true,
+      createActionWorkflows: true,
+      workflowTarget: "sandbox",
+      workflowProvider: "e2b",
+    });
+
+    expect(second.deduped).toBe(7);
+    expect(listTestingWorkflows({ projectId: project.id }).length).toBe(3);
+  });
+
+  test("can group action workflows by area and action kind", () => {
+    const root = makeRepo();
+    const project = createProject({ name: "alumia", scenarioPrefix: "ALM" });
+
+    const result = importNextRouteInventory({
+      rootDir: root,
+      projectId: project.id,
+      createActionWorkflows: true,
+      actionWorkflowGrouping: "area-kind",
+      workflowTarget: "sandbox",
+      workflowProvider: "e2b",
+    });
+
+    const names = result.workflows.map((workflow) => workflow.name);
+    expect(names).toContain("Next action inventory commerce button");
+    expect(names).toContain("Next action inventory commerce form");
+    expect(names).toContain("Next action inventory commerce input");
+    expect(names).toContain("Next action inventory commerce api-method");
+    expect(names).toContain("Next action inventory admin api-method");
   });
 });

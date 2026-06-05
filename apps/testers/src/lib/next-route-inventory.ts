@@ -46,6 +46,7 @@ export interface NextRouteInventory {
   pages: number;
   apiRoutes: number;
   dynamic: number;
+  actions: number;
   categories: Record<string, number>;
   items: NextRouteInventoryItem[];
 }
@@ -58,7 +59,10 @@ export interface ImportNextRouteInventoryOptions {
   includeApi?: boolean;
   limit?: number;
   createScenarios?: boolean;
+  createActionScenarios?: boolean;
   createWorkflows?: boolean;
+  createActionWorkflows?: boolean;
+  actionWorkflowGrouping?: "route" | "area-kind";
   workflowTarget?: "local" | "sandbox";
   workflowProvider?: string;
   workflowExecution?: Partial<WorkflowExecutionInput>;
@@ -70,6 +74,7 @@ export interface ImportNextRouteInventoryResult {
   updated: number;
   deduped: number;
   scenarios: Scenario[];
+  actionScenarios: Scenario[];
   workflows: TestingWorkflow[];
 }
 
@@ -136,6 +141,7 @@ export function discoverNextRouteInventory(options: {
     pages: items.filter((item) => item.kind === "page").length,
     apiRoutes: items.filter((item) => item.kind === "api").length,
     dynamic: items.filter((item) => item.dynamic).length,
+    actions: items.reduce((sum, item) => sum + item.actions.length, 0),
     categories,
     items,
   };
@@ -208,6 +214,87 @@ export function scenarioInputForNextRoute(
   };
 }
 
+export function scenarioInputsForNextRouteActions(
+  item: NextRouteInventoryItem,
+  projectId?: string,
+): CreateScenarioInput[] {
+  return item.actions.map((action, index) => scenarioInputForNextRouteAction(item, action, index, projectId));
+}
+
+function scenarioInputForNextRouteAction(
+  item: NextRouteInventoryItem,
+  action: NextRouteAction,
+  index: number,
+  projectId?: string,
+): CreateScenarioInput {
+  const label = item.kind === "page" ? "page action" : "API action";
+  const fixtureStep = item.fixtureParams.length > 0
+    ? `Bind dynamic fixture values for ${item.fixtureParams.map((name) => `:${name}`).join(", ")} before exercising this action.`
+    : undefined;
+  const dynamicStep = item.dynamic
+    ? "Substitute dynamic path parameters with valid fixture values from the target org before opening or calling the route."
+    : undefined;
+  const destructiveGuard = action.destructive
+    ? "If the action reaches a destructive confirmation or mutating final step, verify the warning/cancel path and stop before confirming."
+    : undefined;
+
+  const pageSteps = [
+    fixtureStep,
+    dynamicStep,
+    `Open the Next.js page ${item.routePath}.`,
+    "Wait for the route to finish loading and verify it does not show a blank shell, framework error page, or unexpected auth loop.",
+    `Locate source-discovered ${action.kind} "${action.label}" from ${action.sourceFile}.`,
+    formatActionStep(action),
+    destructiveGuard,
+    action.kind === "input"
+      ? "Fill the input with safe test data and verify the UI accepts, validates, or rejects it predictably."
+      : "Verify the action produces the expected navigation, modal, toast, table change, validation state, or disabled state.",
+    "Verify the route stays within the expected org/workspace context and does not emit console errors.",
+  ].filter(Boolean) as string[];
+
+  const apiSteps = [
+    fixtureStep,
+    dynamicStep,
+    `Call ${action.label} ${item.routePath} using safe fixture data.`,
+    action.destructive
+      ? "Use a harmless dry-run/no-op fixture when available; otherwise verify authentication, authorization, validation, or confirmation blocks without creating destructive side effects."
+      : "Verify the method accepts valid safe input and rejects invalid input with a stable response shape.",
+    "Verify expected authentication, authorization, validation, and tenant isolation behavior.",
+    "Verify response status, JSON shape, and error messages are stable and regression-safe.",
+  ].filter(Boolean) as string[];
+
+  return {
+    name: `Next ${label}: ${item.routePath} :: ${action.kind} ${action.label}`,
+    description: `Source-discovered ${label} ${index + 1} from ${action.sourceFile}. Verify ${action.kind} "${action.label}" on ${item.routePath}.`,
+    steps: item.kind === "page" ? pageSteps : apiSteps,
+    tags: actionTagsForRoute(item, action),
+    priority: action.destructive ? "critical" : item.priority,
+    targetPath: item.routePath,
+    requiresAuth: item.requiresAuth,
+    assertions: item.kind === "page" ? SAFE_PAGE_ASSERTIONS : [],
+    metadata: {
+      source: "next-route-action-inventory",
+      routeFile: item.file,
+      routeKind: item.kind,
+      routePath: item.routePath,
+      category: item.category,
+      methods: item.methods,
+      dynamic: item.dynamic,
+      fixtureParams: item.fixtureParams,
+      actionIndex: index,
+      action,
+      groups: item.groups,
+    },
+    parameters: item.fixtureParams.length > 0
+      ? {
+          routeFixtures: defaultRouteFixturesForParams(item.fixtureParams),
+          routeFixtureParams: item.fixtureParams,
+        }
+      : undefined,
+    projectId,
+  };
+}
+
 export function importNextRouteInventory(
   options: ImportNextRouteInventoryOptions,
 ): ImportNextRouteInventoryResult {
@@ -216,6 +303,7 @@ export function importNextRouteInventory(
   let updated = 0;
   let deduped = 0;
   const scenarios: Scenario[] = [];
+  const actionScenarios: Scenario[] = [];
   const workflows: TestingWorkflow[] = [];
 
   if (options.createScenarios) {
@@ -228,11 +316,28 @@ export function importNextRouteInventory(
     }
   }
 
+  if (options.createActionScenarios) {
+    for (const item of inventory.items) {
+      for (const input of scenarioInputsForNextRouteActions(item, options.projectId)) {
+        const result = upsertScenario(input);
+        scenarios.push(result.scenario);
+        actionScenarios.push(result.scenario);
+        if (result.action === "created") created++;
+        else if (result.action === "updated") updated++;
+        else deduped++;
+      }
+    }
+  }
+
   if (options.createWorkflows) {
     workflows.push(...upsertRouteInventoryWorkflows(inventory, options));
   }
 
-  return { inventory, created, updated, deduped, scenarios, workflows };
+  if (options.createActionWorkflows) {
+    workflows.push(...upsertRouteInventoryActionWorkflows(inventory, options));
+  }
+
+  return { inventory, created, updated, deduped, scenarios, actionScenarios, workflows };
 }
 
 function upsertRouteInventoryWorkflows(
@@ -266,6 +371,70 @@ function upsertRouteInventoryWorkflows(
     }
   }
   return workflows;
+}
+
+function upsertRouteInventoryActionWorkflows(
+  inventory: NextRouteInventory,
+  options: ImportNextRouteInventoryOptions,
+): TestingWorkflow[] {
+  const workflows: TestingWorkflow[] = [];
+  const grouping = options.actionWorkflowGrouping ?? "route";
+  const existingWorkflows = listTestingWorkflows({ projectId: options.projectId, enabled: undefined });
+
+  if (grouping === "area-kind") {
+    const keys = new Set<string>();
+    for (const item of inventory.items) {
+      for (const action of item.actions) {
+        keys.add(`${item.category}|${action.kind}`);
+      }
+    }
+    for (const key of [...keys].sort()) {
+      const [category, actionKind] = key.split("|") as [string, NextRouteActionKind];
+      const name = `Next action inventory ${category} ${actionKind}`;
+      const scenarioTags = ["next-action", `area:${category}`, `action:${actionKind}`];
+      workflows.push(upsertTestingWorkflow(existingWorkflows, name, {
+        name,
+        description: `Source-discovered ${actionKind} action coverage for ${category} routes.`,
+        projectId: options.projectId,
+        scenarioFilter: { tags: scenarioTags },
+        execution: workflowExecutionFromOptions(options),
+      }));
+    }
+    return workflows;
+  }
+
+  for (const item of inventory.items.filter((route) => route.actions.length > 0)) {
+    const name = `Next action inventory ${item.kind} ${item.routePath}`;
+    const scenarioTags = ["next-action", `route:${item.kind}`, `route-path:${item.routePath}`];
+    workflows.push(upsertTestingWorkflow(existingWorkflows, name, {
+      name,
+      description: `Source-discovered action coverage for ${item.kind} route ${item.routePath}.`,
+      projectId: options.projectId,
+      scenarioFilter: { tags: scenarioTags },
+      execution: workflowExecutionFromOptions(options),
+    }));
+  }
+
+  return workflows;
+}
+
+function workflowExecutionFromOptions(options: ImportNextRouteInventoryOptions): WorkflowExecutionInput {
+  return {
+    target: options.workflowTarget ?? "sandbox",
+    provider: options.workflowProvider,
+    sandboxCleanup: "delete",
+    sandboxSyncStrategy: "rsync",
+    ...options.workflowExecution,
+  };
+}
+
+function upsertTestingWorkflow(
+  existingWorkflows: TestingWorkflow[],
+  name: string,
+  input: Parameters<typeof createTestingWorkflow>[0],
+): TestingWorkflow {
+  const existing = existingWorkflows.find((workflow) => workflow.name === name);
+  return existing ? updateTestingWorkflow(existing.id, input) : createTestingWorkflow(input);
 }
 
 function resolveAppDir(rootDir: string, appDir?: string): string {
@@ -662,6 +831,18 @@ function tagsForRoute(input: {
   if (input.dynamic) tags.add("dynamic-route");
   if (input.requiresAuth) tags.add("auth-required");
   if (input.routePath.startsWith("/api/")) tags.add("api");
+  return [...tags];
+}
+
+function actionTagsForRoute(item: NextRouteInventoryItem, action: NextRouteAction): string[] {
+  const tags = new Set<string>([
+    ...item.tags,
+    "next-action",
+    `action:${action.kind}`,
+    `route-path:${item.routePath}`,
+  ]);
+  if (action.destructive) tags.add("destructive-action");
+  if (action.requiresFixture) tags.add("fixture-required");
   return [...tags];
 }
 

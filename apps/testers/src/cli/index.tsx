@@ -3506,7 +3506,10 @@ inventoryCmd
   .option("--no-api", "Do not include route.ts/route.js API routes")
   .option("--limit <n>", "Limit discovered routes")
   .option("--create-scenarios", "Upsert source-derived route coverage scenarios", false)
+  .option("--create-action-scenarios", "Upsert one source-derived scenario per discovered page/API action", false)
   .option("--create-workflows", "Upsert grouped workflows by area and route kind", false)
+  .option("--create-action-workflows", "Upsert action-focused workflows for discovered action scenarios", false)
+  .option("--action-workflow-grouping <mode>", "Action workflow grouping: route or area-kind", "route")
   .option("--workflow-target <target>", "Workflow execution target: local or sandbox", "sandbox")
   .option("--sandbox-provider <provider>", "Sandbox provider for created workflows", "e2b")
   .option("--sandbox-cleanup <mode>", "Sandbox cleanup mode: delete, stop, or keep", "delete")
@@ -3519,6 +3522,9 @@ inventoryCmd
       const { importNextRouteInventory } = await import("../lib/next-route-inventory.js");
       const projectId = resolveProject(opts.project) ?? undefined;
       const env = parseSandboxEnv(undefined, opts.sandboxEnvOptional);
+      if (!["route", "area-kind"].includes(opts.actionWorkflowGrouping)) {
+        throw new Error("--action-workflow-grouping must be route or area-kind");
+      }
       const result = importNextRouteInventory({
         rootDir: root ?? process.cwd(),
         appDir: opts.appDir,
@@ -3527,7 +3533,10 @@ inventoryCmd
         includeApi: opts.api !== false,
         limit: opts.limit ? parseInt(opts.limit, 10) : undefined,
         createScenarios: opts.createScenarios,
+        createActionScenarios: opts.createActionScenarios,
         createWorkflows: opts.createWorkflows,
+        createActionWorkflows: opts.createActionWorkflows,
+        actionWorkflowGrouping: opts.actionWorkflowGrouping,
         workflowTarget: opts.workflowTarget,
         workflowProvider: opts.workflowTarget === "sandbox" ? opts.sandboxProvider : undefined,
         workflowExecution: {
@@ -3551,6 +3560,7 @@ inventoryCmd
       log(chalk.dim(`  App:  ${result.inventory.appDir}`));
       log("");
       log(`  Routes: ${chalk.cyan(String(result.inventory.total))} (${result.inventory.pages} pages, ${result.inventory.apiRoutes} API, ${result.inventory.dynamic} dynamic)`);
+      log(`  Actions: ${chalk.cyan(String(result.inventory.actions))}`);
       log(`  Scenarios: ${chalk.green(String(result.created))} created, ${chalk.yellow(String(result.updated))} updated, ${chalk.dim(String(result.deduped))} deduped`);
       log(`  Workflows: ${result.workflows.length}`);
       log("");
@@ -3559,7 +3569,9 @@ inventoryCmd
       }
       log("");
       if (!opts.createScenarios) log(chalk.dim("  Add --create-scenarios to upsert route scenarios."));
+      if (!opts.createActionScenarios) log(chalk.dim("  Add --create-action-scenarios to upsert one scenario per discovered action."));
       if (!opts.createWorkflows) log(chalk.dim("  Add --create-workflows to upsert grouped workflows."));
+      if (!opts.createActionWorkflows) log(chalk.dim("  Add --create-action-workflows to upsert action-focused workflows."));
       log("");
     } catch (error) {
       logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));

@@ -43,6 +43,27 @@ testers workflow fanout wf_abc,wf_def wf_xyz --workers 12 --url https://preview.
 
 `--workers` is bounded to 1-12 concurrent sandboxes. Fanout preflights provider credentials, required sandbox environment references, `rsync`, and app source directories before launching workers. Use `--dry-run` to inspect the remote commands, upload plans, and preflight checks without spawning sandboxes.
 
+### Next.js Route and Action Inventory
+
+For large apps, generate source-derived route coverage from the Next.js app directory. The importer can create route-level scenarios and one scenario per discovered link, button, form, input, or API method, then group those action scenarios into sandbox workflows for fanout.
+
+```bash
+testers inventory next /path/to/app \
+  --project alumia \
+  --create-scenarios \
+  --create-action-scenarios \
+  --create-workflows \
+  --create-action-workflows \
+  --action-workflow-grouping route \
+  --sandbox-provider e2b \
+  --sandbox-sync rsync \
+  --sandbox-env-optional OPENAI_API_KEY
+
+testers workflow fanout --project alumia --tag next-action --workers 6 --url https://preview.example.com --dry-run
+```
+
+Use `--action-workflow-grouping route` for route-specific workflows or `--action-workflow-grouping area-kind` for broader workflows such as commerce buttons or admin API methods.
+
 ### Common Flags
 
 - `--json --output results.json` — write structured results to a file for downstream tooling.
