@@ -1610,6 +1610,7 @@ projectCmd
         name,
         path: opts.path,
         description: opts.description,
+        scenarioPrefix: opts.prefix,
       });
       log(chalk.green(`Created project ${chalk.bold(project.name)} (${project.id})`));
     } catch (error) {

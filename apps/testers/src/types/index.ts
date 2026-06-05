@@ -40,6 +40,8 @@ export interface ProjectRow {
   base_url: string | null;
   port: number | null;
   settings: string | null;
+  scenario_prefix: string | null;
+  scenario_counter: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -182,6 +184,8 @@ export interface Project {
   baseUrl: string | null;
   port: number | null;
   settings: Record<string, unknown>;
+  scenarioPrefix: string;
+  scenarioCounter: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -193,6 +197,7 @@ export interface CreateProjectInput {
   baseUrl?: string;
   port?: number;
   settings?: Record<string, unknown>;
+  scenarioPrefix?: string;
 }
 
 export interface UpdateProjectInput {
@@ -668,6 +673,8 @@ export function projectFromRow(row: ProjectRow): Project {
     baseUrl: row.base_url ?? null,
     port: row.port ?? null,
     settings: row.settings ? JSON.parse(row.settings) : {},
+    scenarioPrefix: row.scenario_prefix ?? "TST",
+    scenarioCounter: row.scenario_counter ?? 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

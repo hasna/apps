@@ -25,8 +25,20 @@ describe("projects", () => {
       expect(project.name).toBe("my-app");
       expect(project.path).toBe("/home/user/my-app");
       expect(project.description).toBe("A test application");
+      expect(project.scenarioPrefix).toBe("TST");
+      expect(project.scenarioCounter).toBe(0);
       expect(project.createdAt).toBeDefined();
       expect(project.updatedAt).toBeDefined();
+    });
+
+    test("persists a custom scenario prefix", () => {
+      const project = createProject({
+        name: "alumia",
+        scenarioPrefix: "alm",
+      });
+
+      expect(project.scenarioPrefix).toBe("ALM");
+      expect(project.scenarioCounter).toBe(0);
     });
 
     test("creates a project with minimal fields", () => {

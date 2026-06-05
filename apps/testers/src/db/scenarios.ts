@@ -18,9 +18,16 @@ function nextShortId(projectId?: string): string {
       .get(projectId) as { scenario_prefix: string; scenario_counter: number } | null;
 
     if (project) {
-      const next = project.scenario_counter + 1;
+      let next = (project.scenario_counter ?? 0) + 1;
+      let shortId = `${project.scenario_prefix || "TST"}-${next}`;
+
+      while (db.query("SELECT 1 FROM scenarios WHERE short_id = ?").get(shortId)) {
+        next += 1;
+        shortId = `${project.scenario_prefix || "TST"}-${next}`;
+      }
+
       db.query("UPDATE projects SET scenario_counter = ? WHERE id = ?").run(next, projectId);
-      return `${project.scenario_prefix}-${next}`;
+      return shortId;
     }
   }
 

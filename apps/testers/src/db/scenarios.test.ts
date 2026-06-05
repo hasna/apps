@@ -74,6 +74,24 @@ describe("scenarios", () => {
       expect(s1.projectId).toBe(project.id);
     });
 
+    test("skips existing short IDs when projects share a prefix", () => {
+      const firstProject = createProject({ name: "first" });
+      const secondProject = createProject({ name: "second" });
+
+      const s1 = createScenario({ name: "Test 1", description: "First", projectId: firstProject.id });
+      const s2 = createScenario({ name: "Test 2", description: "Second", projectId: secondProject.id });
+
+      expect(s1.shortId).toBe("TST-1");
+      expect(s2.shortId).toBe("TST-2");
+    });
+
+    test("uses a project custom scenario prefix", () => {
+      const project = createProject({ name: "alumia", scenarioPrefix: "ALM" });
+      const scenario = createScenario({ name: "Smoke", description: "Smoke", projectId: project.id });
+
+      expect(scenario.shortId).toBe("ALM-1");
+    });
+
     test("creates a scenario with auth config", () => {
       const scenario = createScenario({
         name: "Auth test",

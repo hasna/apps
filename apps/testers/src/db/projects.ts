@@ -7,14 +7,20 @@ import {
 } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
 
+function normalizeScenarioPrefix(prefix?: string): string {
+  const normalized = (prefix ?? "TST").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return normalized || "TST";
+}
+
 export function createProject(input: CreateProjectInput): Project {
   const db = getDatabase();
   const id = uuid();
   const timestamp = now();
+  const scenarioPrefix = normalizeScenarioPrefix(input.scenarioPrefix);
 
   db.query(`
-    INSERT INTO projects (id, name, path, description, base_url, port, settings, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO projects (id, name, path, description, base_url, port, settings, scenario_prefix, scenario_counter, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
   `).run(
     id,
     input.name,
@@ -23,6 +29,7 @@ export function createProject(input: CreateProjectInput): Project {
     input.baseUrl ?? null,
     input.port ?? null,
     input.settings ? JSON.stringify(input.settings) : "{}",
+    scenarioPrefix,
     timestamp,
     timestamp,
   );
