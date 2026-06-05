@@ -7,6 +7,7 @@ import { createTestingWorkflow } from "../db/workflows.js";
 import {
   checkWorkflowFanoutReadiness,
   normalizeFanoutWorkerCount,
+  resolveWorkflowFanoutBatch,
   resolveWorkflowFanoutSelection,
   runWorkflowFanout,
 } from "./workflow-fanout.js";
@@ -56,6 +57,39 @@ describe("workflow fanout", () => {
     expect(() => normalizeFanoutWorkerCount(13)).toThrow("between 1 and 12");
   });
 
+  test("resolves deterministic fanout batches and offsets", () => {
+    const workflows = Array.from({ length: 5 }, (_, index) => createTestingWorkflow({
+      name: `workflow-${index + 1}`,
+      execution: { target: "sandbox", provider: "e2b" },
+    }));
+
+    const secondBatch = resolveWorkflowFanoutBatch(workflows, { batchSize: 2, batch: 2 });
+    expect(secondBatch.workflows.map((workflow) => workflow.name)).toEqual(["workflow-3", "workflow-4"]);
+    expect(secondBatch.selection).toEqual({
+      matched: 5,
+      offset: 2,
+      limit: 2,
+      batch: 2,
+      batchSize: 2,
+      totalBatches: 3,
+    });
+
+    const manualOffset = resolveWorkflowFanoutBatch(workflows, { offset: 4 });
+    expect(manualOffset.workflows.map((workflow) => workflow.name)).toEqual(["workflow-5"]);
+    expect(manualOffset.selection).toEqual({ matched: 5, offset: 4 });
+  });
+
+  test("rejects invalid fanout batch selections", () => {
+    const workflows = Array.from({ length: 2 }, (_, index) => createTestingWorkflow({
+      name: `workflow-${index + 1}`,
+      execution: { target: "sandbox", provider: "e2b" },
+    }));
+
+    expect(() => resolveWorkflowFanoutBatch(workflows, { batch: 1 })).toThrow("requires batch size");
+    expect(() => resolveWorkflowFanoutBatch(workflows, { batchSize: 1, batch: 1, offset: 0 })).toThrow("cannot both be set");
+    expect(() => resolveWorkflowFanoutBatch(workflows, { offset: 99 })).toThrow("batch selection");
+  });
+
   test("runs workflows with bounded sandbox concurrency", async () => {
     const workflows = Array.from({ length: 5 }, (_, index) => createTestingWorkflow({
       name: `workflow-${index + 1}`,
@@ -100,7 +134,52 @@ describe("workflow fanout", () => {
     expect(result.status).toBe("passed");
     expect(result.total).toBe(5);
     expect(result.passed).toBe(5);
+    expect(result.selection).toEqual({ matched: 5, offset: 0 });
     expect(maxActive).toBeLessThanOrEqual(3);
+  });
+
+  test("runs only the selected workflow fanout batch", async () => {
+    const workflows = Array.from({ length: 5 }, (_, index) => createTestingWorkflow({
+      name: `workflow-${index + 1}`,
+      execution: { target: "sandbox", provider: "e2b" },
+    }));
+
+    const result = await runWorkflowFanout({
+      workflowIds: workflows.map((workflow) => workflow.id),
+      url: "https://preview.example",
+      workers: 1,
+      batchSize: 2,
+      batch: 2,
+      dryRun: true,
+    }, {
+      async preflight() {
+        return { ok: true, checks: [] };
+      },
+      async runTestingWorkflow(workflowId) {
+        return {
+          run: null,
+          results: [],
+          plan: {
+            workflow: workflows.find((workflow) => workflow.id === workflowId)!,
+            runOptions: { url: "https://preview.example", dryRun: true },
+            sandbox: null,
+          },
+          sandboxResult: undefined,
+        };
+      },
+    });
+
+    expect(result.status).toBe("dry-run");
+    expect(result.total).toBe(2);
+    expect(result.items.map((item) => item.workflowName)).toEqual(["workflow-3", "workflow-4"]);
+    expect(result.selection).toEqual({
+      matched: 5,
+      offset: 2,
+      limit: 2,
+      batch: 2,
+      batchSize: 2,
+      totalBatches: 3,
+    });
   });
 
   test("preflight reports missing sandbox provider credentials", async () => {

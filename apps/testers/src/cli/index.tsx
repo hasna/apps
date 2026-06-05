@@ -4863,6 +4863,9 @@ workflowCmd
   .option("--tag <tag>", "Workflow scenario tag filter (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
   .option("--all", "Include disabled workflows when selecting by project/tag", false)
   .option("--workers <n>", "Concurrent sandboxes, 1-12 (default: 6)", "6")
+  .option("--batch-size <n>", "Limit this run to a batch of selected workflows")
+  .option("--batch <n>", "1-based batch number to run with --batch-size")
+  .option("--offset <n>", "0-based selected-workflow offset for staged fanout")
   .option("-m, --model <model>", "AI model")
   .option("--headed", "Run headed", false)
   .option("--parallel <n>", "Parallel browser workers inside each sandbox")
@@ -4878,6 +4881,9 @@ workflowCmd
         tags: opts.tag,
         includeDisabled: opts.all,
         workers: opts.workers ? parseInt(opts.workers, 10) : undefined,
+        batchSize: opts.batchSize ? parseInt(opts.batchSize, 10) : undefined,
+        batch: opts.batch ? parseInt(opts.batch, 10) : undefined,
+        offset: opts.offset ? parseInt(opts.offset, 10) : undefined,
         url: opts.url,
         model: opts.model,
         headed: opts.headed,
@@ -4901,6 +4907,13 @@ workflowCmd
           for (const check of warnings) {
             log(`  ${chalk.yellow("warning")} ${check.message}`);
           }
+        }
+
+        if (result.selection.matched !== result.total) {
+          const batch = result.selection.batch !== undefined && result.selection.totalBatches !== undefined
+            ? ` batch ${result.selection.batch}/${result.selection.totalBatches}`
+            : "";
+          log(chalk.dim(`Selected ${result.total}/${result.selection.matched} workflow(s) from offset ${result.selection.offset}${batch}.`));
         }
 
         const status = result.status === "passed" ? chalk.green("passed") : chalk.red("failed");

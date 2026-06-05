@@ -39,9 +39,10 @@ testers workflow create "Projects CRUD" \
 
 testers workflow fanout --project alumia --workers 6 --url https://preview.example.com
 testers workflow fanout wf_abc,wf_def wf_xyz --workers 12 --url https://preview.example.com --json
+testers workflow fanout --project alumia --tag action-specific --workers 6 --batch-size 12 --batch 1 --url https://preview.example.com
 ```
 
-`--workers` is bounded to 1-12 concurrent sandboxes. Fanout preflights provider credentials, required sandbox environment references, `rsync`, and app source directories before launching workers. Use `--dry-run` to inspect the remote commands, upload plans, and preflight checks without spawning sandboxes.
+`--workers` is bounded to 1-12 concurrent sandboxes. Use `--batch-size` with a 1-based `--batch` to run large workflow corpora in deterministic waves, or `--offset` for a manual selected-workflow cursor. Fanout preflights provider credentials, required sandbox environment references, `rsync`, and app source directories before launching workers. Use `--dry-run` to inspect the remote commands, upload plans, and preflight checks without spawning sandboxes.
 
 ### Next.js Route and Action Inventory
 
@@ -63,7 +64,7 @@ testers inventory next /path/to/app \
   --sandbox-app-wait-url http://127.0.0.1:3000/health \
   --sandbox-env-optional OPENAI_API_KEY
 
-testers workflow fanout --project alumia --tag action-specific --workers 6 --url https://preview.example.com --dry-run
+testers workflow fanout --project alumia --tag action-specific --workers 6 --batch-size 12 --batch 1 --url https://preview.example.com --dry-run
 ```
 
 Use `--action-workflow-grouping action` for one workflow per discovered action, `route` for route-specific workflows, or `area-kind` for broader workflows such as commerce buttons or admin API methods. Add the `--sandbox-app-*` flags when the sandbox should rsync, install, start, and test the app source instead of only testing an already-running URL.

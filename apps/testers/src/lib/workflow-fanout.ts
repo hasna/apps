@@ -11,6 +11,9 @@ export interface WorkflowFanoutOptions extends WorkflowRunOptions {
   tags?: string[];
   includeDisabled?: boolean;
   workers?: number;
+  batchSize?: number;
+  batch?: number;
+  offset?: number;
 }
 
 export interface WorkflowFanoutItem {
@@ -29,6 +32,7 @@ export interface WorkflowFanoutItem {
 export interface WorkflowFanoutResult {
   status: "passed" | "failed" | "dry-run";
   workers: number;
+  selection: WorkflowFanoutSelection;
   total: number;
   passed: number;
   failed: number;
@@ -59,6 +63,15 @@ export interface WorkflowFanoutPreflightResult {
   checks: WorkflowFanoutPreflightCheck[];
 }
 
+export interface WorkflowFanoutSelection {
+  matched: number;
+  offset: number;
+  limit?: number;
+  batch?: number;
+  batchSize?: number;
+  totalBatches?: number;
+}
+
 interface WorkflowFanoutPreflightDependencies {
   providerApiKeyResolver?: WorkflowFanoutDependencies["providerApiKeyResolver"];
   commandExists?: WorkflowFanoutDependencies["commandExists"];
@@ -85,6 +98,43 @@ export function normalizeFanoutWorkerCount(value: number | undefined): number {
     throw new Error("workflow fanout workers must be between 1 and 12");
   }
   return workers;
+}
+
+export function resolveWorkflowFanoutBatch(
+  workflows: TestingWorkflow[],
+  options: Pick<WorkflowFanoutOptions, "batchSize" | "batch" | "offset"> = {},
+): { workflows: TestingWorkflow[]; selection: WorkflowFanoutSelection } {
+  const batchSize = normalizeOptionalPositiveInteger(options.batchSize, "workflow fanout batch size");
+  const batch = normalizeOptionalPositiveInteger(options.batch, "workflow fanout batch");
+  const offset = normalizeOptionalNonNegativeInteger(options.offset, "workflow fanout offset");
+
+  if (batch !== undefined && offset !== undefined) {
+    throw new Error("workflow fanout batch and offset cannot both be set");
+  }
+  if (batch !== undefined && batchSize === undefined) {
+    throw new Error("workflow fanout batch requires batch size");
+  }
+
+  const resolvedOffset = batch !== undefined && batchSize !== undefined
+    ? (batch - 1) * batchSize
+    : offset ?? 0;
+  const limit = batchSize;
+  const selected = workflows.slice(resolvedOffset, limit === undefined ? undefined : resolvedOffset + limit);
+
+  if (selected.length === 0) {
+    throw new Error(`No testing workflows matched the fanout batch selection (matched ${workflows.length}, offset ${resolvedOffset})`);
+  }
+
+  return {
+    workflows: selected,
+    selection: {
+      matched: workflows.length,
+      offset: resolvedOffset,
+      ...(limit !== undefined ? { limit } : {}),
+      ...(batch !== undefined ? { batch } : {}),
+      ...(batchSize !== undefined ? { batchSize, totalBatches: Math.ceil(workflows.length / batchSize) } : {}),
+    },
+  };
 }
 
 export function resolveWorkflowFanoutSelection(options: Pick<WorkflowFanoutOptions, "workflowIds" | "projectId" | "tags" | "includeDisabled">): TestingWorkflow[] {
@@ -247,7 +297,8 @@ export async function runWorkflowFanout(
   dependencies: WorkflowFanoutDependencies = {},
 ): Promise<WorkflowFanoutResult> {
   const workers = normalizeFanoutWorkerCount(options.workers);
-  const workflows = resolveWorkflowFanoutSelection(options);
+  const matchedWorkflows = resolveWorkflowFanoutSelection(options);
+  const { workflows, selection } = resolveWorkflowFanoutBatch(matchedWorkflows, options);
   const {
     runTestingWorkflow: runOne = runTestingWorkflow,
     preflight: preflightOverride,
@@ -271,6 +322,7 @@ export async function runWorkflowFanout(
     return {
       status: "failed",
       workers,
+      selection,
       total: workflows.length,
       passed: 0,
       failed: workflows.length,
@@ -331,6 +383,7 @@ export async function runWorkflowFanout(
   return {
     status: dryRun ? "dry-run" : failed > 0 ? "failed" : "passed",
     workers,
+    selection,
     total: items.length,
     passed,
     failed,
@@ -375,6 +428,24 @@ async function resolveProviderApiKey(
 function defaultCommandExists(command: string): boolean {
   const result = spawnSync(command, ["--version"], { encoding: "utf8" });
   return !result.error && result.status === 0;
+}
+
+function normalizeOptionalPositiveInteger(value: number | undefined, label: string): number | undefined {
+  if (value === undefined) return undefined;
+  const normalized = Math.floor(value);
+  if (!Number.isFinite(normalized) || normalized < 1) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return normalized;
+}
+
+function normalizeOptionalNonNegativeInteger(value: number | undefined, label: string): number | undefined {
+  if (value === undefined) return undefined;
+  const normalized = Math.floor(value);
+  if (!Number.isFinite(normalized) || normalized < 0) {
+    throw new Error(`${label} must be a non-negative integer`);
+  }
+  return normalized;
 }
 
 function collectMissingSandboxEnvRefs(
