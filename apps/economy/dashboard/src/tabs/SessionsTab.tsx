@@ -72,6 +72,7 @@ export function SessionsTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [account, setAccount] = useState("");
 
   // Pagination
   const [page, setPage] = useState(0);
@@ -95,6 +96,7 @@ export function SessionsTab() {
     try {
       const res = await getSessions({
         search: search || undefined,
+        account: account || undefined,
         limit: pageSize,
         offset: page * pageSize,
         since: dateFrom || undefined,
@@ -105,7 +107,7 @@ export function SessionsTab() {
     } finally {
       setLoading(false);
     }
-  }, [search, page, pageSize, dateFrom]);
+  }, [search, account, page, pageSize, dateFrom]);
 
   useEffect(() => {
     const t = setTimeout(() => load(), 300);
@@ -170,6 +172,15 @@ export function SessionsTab() {
                 setPage(0);
               }}
               className="h-8 w-48 text-sm"
+            />
+            <Input
+              placeholder="Account key, name, or email"
+              value={account}
+              onChange={(e) => {
+                setAccount(e.target.value);
+                setPage(0);
+              }}
+              className="h-8 w-52 text-sm"
             />
             <div className="flex items-center gap-1.5 ml-auto">
               <span className="text-xs text-muted-foreground">From:</span>

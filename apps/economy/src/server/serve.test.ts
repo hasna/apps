@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
-import { openDatabase, upsertRequest, upsertSession, upsertBudget, upsertGoal, upsertModelPricing, upsertBillingDaily } from '../db/database.js'
+import { openDatabase, upsertRequest, upsertSession, upsertBudget, upsertGoal, upsertModelPricing, upsertBillingDaily, upsertUsageSnapshot } from '../db/database.js'
 import { createHandler, createServerFetch, startServer } from './serve.js'
 import type { SqliteAdapter as Database } from '@hasna/cloud'
 import { Database as BunDatabase } from 'bun:sqlite'
@@ -25,11 +25,15 @@ function seedData(db: Database) {
   upsertSession(db, {
     id: 'sess-1', agent: 'claude', project_path: '/proj/a', project_name: 'proj-a',
     started_at: NOW, ended_at: null, total_cost_usd: 1.5, total_tokens: 5000, request_count: 3,
+    account_key: 'claude:work', account_tool: 'claude', account_name: 'work',
+    account_email: 'work@example.com', account_source: 'current',
   })
   upsertRequest(db, {
     id: 'req-1', agent: 'claude', session_id: 'sess-1', model: 'claude-sonnet-4-6',
     input_tokens: 1000, output_tokens: 500, cache_read_tokens: 0, cache_create_tokens: 0,
-    cost_usd: 1.5, duration_ms: 2000, timestamp: NOW, source_request_id: 'src-1',
+    cost_usd: 1.5, cost_basis: 'metered_api', duration_ms: 2000, timestamp: NOW, source_request_id: 'src-1',
+    account_key: 'claude:work', account_tool: 'claude', account_name: 'work',
+    account_email: 'work@example.com', account_source: 'current',
   })
   upsertBudget(db, {
     id: 'bud-1', project_path: null, agent: null, period: 'monthly',
@@ -120,6 +124,15 @@ describe('REST API server', () => {
     expect(((response.data as Record<string, unknown>)['data'] as unknown[]).length).toBe(1)
   })
 
+  it('GET /api/sessions supports account filters', async () => {
+    const response = await req(handler, '/api/sessions?account=work@example.com')
+
+    expect(response.status).toBe(200)
+    const sessions = (response.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]?.['account_key']).toBe('claude:work')
+  })
+
   it('GET /api/sessions supports compact field selection', async () => {
     const { status, data } = await req(handler, '/api/sessions?fields=id,total_cost_usd')
     expect(status).toBe(200)
@@ -207,6 +220,105 @@ describe('REST API server', () => {
     expect(Array.isArray((data as Record<string, unknown>)['data'])).toBe(true)
   })
 
+  it('GET /api/projects supports period filters', async () => {
+    upsertSession(db, {
+      id: 'old-project', agent: 'claude', project_path: '/proj/old', project_name: 'proj-old',
+      started_at: '2000-01-01T00:00:00.000Z', ended_at: null, total_cost_usd: 100, total_tokens: 1000, request_count: 1,
+    })
+
+    const { status, data } = await req(handler, '/api/projects?period=month')
+
+    expect(status).toBe(200)
+    const rows = (data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
+    expect(rows.map(row => row['project_name'])).not.toContain('proj-old')
+    expect(rows.map(row => row['project_name'])).toContain('proj-a')
+  })
+
+  it('GET /api/accounts returns account breakdown', async () => {
+    const { status, data } = await req(handler, '/api/accounts?period=all')
+
+    expect(status).toBe(200)
+    const accounts = (data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
+    expect(accounts[0]).toMatchObject({
+      account_key: 'claude:work@example.com',
+      account_tool: 'claude',
+      account_name: 'work',
+      account_email: 'work@example.com',
+      sessions: 1,
+      requests: 1,
+      api_equivalent_usd: 1.5,
+      billable_usd: 1.5,
+      metered_api_usd: 1.5,
+      subscription_included_usd: 0,
+    })
+  })
+
+  it('manages subscriptions through the REST API', async () => {
+    const created = await req(handler, '/api/subscriptions', 'POST', {
+      id: 'sub-1',
+      provider: 'cursor',
+      plan: 'pro',
+      agent: 'cursor',
+      monthly_fee_usd: 20,
+      included_usage_usd: 20,
+      billing_cycle_start: '2026-06-01',
+    })
+
+    expect(created.status).toBe(200)
+    expect((created.data as Record<string, unknown>)['data']).toMatchObject({
+      id: 'sub-1',
+      provider: 'cursor',
+      plan: 'pro',
+      agent: 'cursor',
+      monthly_fee_usd: 20,
+      included_usage_usd: 20,
+      active: 1,
+    })
+
+    const listed = await req(handler, '/api/subscriptions')
+    const rows = (listed.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
+    expect(rows.map(row => row['id'])).toContain('sub-1')
+
+    const invalidAgent = await req(handler, '/api/subscriptions', 'POST', {
+      provider: 'cursor',
+      plan: 'pro',
+      agent: 'unknown',
+    })
+    expect(invalidAgent.status).toBe(400)
+
+    const removed = await req(handler, '/api/subscriptions/sub-1', 'DELETE')
+    expect(removed.status).toBe(200)
+    const afterRemove = await req(handler, '/api/subscriptions')
+    expect(((afterRemove.data as Record<string, unknown>)['data'] as unknown[]).length).toBe(0)
+  })
+
+  it('GET /api/usage filters snapshots by period', async () => {
+    upsertUsageSnapshot(db, {
+      agent: 'cursor',
+      date: '2000-01-01',
+      metric: 'included_consumed_usd',
+      value: 1,
+      unit: 'usd',
+      machine_id: 'test-machine',
+    })
+    upsertUsageSnapshot(db, {
+      agent: 'cursor',
+      date: NOW.substring(0, 10),
+      metric: 'included_consumed_usd',
+      value: 2,
+      unit: 'usd',
+      machine_id: 'test-machine',
+    })
+
+    const today = await req(handler, '/api/usage?period=today&agent=cursor')
+    const todaySnapshots = ((today.data as Record<string, unknown>)['data'] as Record<string, unknown>)['snapshots'] as Array<Record<string, unknown>>
+    expect(todaySnapshots.map(row => row['value'])).toEqual([2])
+
+    const all = await req(handler, '/api/usage?period=all&agent=cursor')
+    const allSnapshots = ((all.data as Record<string, unknown>)['data'] as Record<string, unknown>)['snapshots'] as Array<Record<string, unknown>>
+    expect(allSnapshots.map(row => row['value']).sort()).toEqual([1, 2])
+  })
+
   it('GET /api/breakdown returns model and project aliases', async () => {
     let response = await req(handler, '/api/breakdown')
     expect(response.status).toBe(200)
@@ -216,6 +328,18 @@ describe('REST API server', () => {
     expect(response.status).toBe(200)
     const projects = (response.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
     expect(projects[0]?.['project_path']).toBe('/proj/a')
+
+    response = await req(handler, '/api/breakdown?by=agent&period=all')
+    expect(response.status).toBe(200)
+    const agents = (response.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
+    expect(agents[0]?.['agent']).toBe('claude')
+    expect(agents[0]?.['billable_usd']).toBe(1.5)
+
+    response = await req(handler, '/api/breakdown?by=account&period=all')
+    expect(response.status).toBe(200)
+    const accounts = (response.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
+    expect(accounts[0]?.['account_key']).toBe('claude:work@example.com')
+    expect(accounts[0]?.['billable_usd']).toBe(1.5)
   })
 
   it('manages project registry records', async () => {
@@ -557,6 +681,38 @@ describe('REST API server', () => {
     expect(Array.isArray((data as Record<string, unknown>)['data'])).toBe(true)
   })
 
+  it('GET /api/hourly returns hourly activity for today', async () => {
+    const { status, data } = await req(handler, '/api/hourly')
+    expect(status).toBe(200)
+    const rows = (data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
+    expect(Array.isArray(rows)).toBe(true)
+    if (rows.length > 0) {
+      expect(rows[0]).toHaveProperty('hour')
+      expect(rows[0]).toHaveProperty('cost_usd')
+    }
+  })
+
+  it('GET /api/hourly?machine= filters hourly activity by machine', async () => {
+    upsertRequest(db, {
+      id: 'hourly-spark', agent: 'claude', session_id: 'hourly-spark-session', model: 'claude-sonnet-4-6',
+      input_tokens: 100, output_tokens: 50, cache_read_tokens: 0, cache_create_tokens: 0,
+      cost_usd: 1, duration_ms: 100, timestamp: NOW, source_request_id: 'hourly-spark', machine_id: 'spark02',
+    })
+    upsertRequest(db, {
+      id: 'hourly-apple', agent: 'claude', session_id: 'hourly-apple-session', model: 'claude-sonnet-4-6',
+      input_tokens: 100, output_tokens: 50, cache_read_tokens: 0, cache_create_tokens: 0,
+      cost_usd: 2, duration_ms: 100, timestamp: NOW, source_request_id: 'hourly-apple', machine_id: 'apple06',
+    })
+
+    const { status, data } = await req(handler, '/api/hourly?machine=spark02')
+    const rows = (data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
+    const totalCost = rows.reduce((sum, row) => sum + Number(row['cost_usd'] ?? 0), 0)
+
+    expect(status).toBe(200)
+    expect(totalCost).toBeCloseTo(1)
+    expect(rows.every(row => row['agent'] === 'claude')).toBe(true)
+  })
+
   it('OPTIONS returns 204 with CORS headers', async () => {
     const r = new Request('http://localhost:3456/api/summary', { method: 'OPTIONS' })
     const res = await handler(r)
@@ -653,6 +809,34 @@ describe('REST API server', () => {
     expect(Array.isArray((data as Record<string, unknown>)['data'])).toBe(true)
   })
 
+  it('GET /api/fleet applies period filters to machine rows', async () => {
+    upsertSession(db, {
+      id: 'fleet-old-spark', agent: 'claude', project_path: '/proj/fleet', project_name: 'fleet',
+      started_at: '2000-01-01T00:00:00.000Z', ended_at: null, total_cost_usd: 99, total_tokens: 99, request_count: 9, machine_id: 'spark02',
+    })
+    upsertSession(db, {
+      id: 'fleet-old-apple', agent: 'claude', project_path: '/proj/fleet', project_name: 'fleet',
+      started_at: '2000-01-01T00:00:00.000Z', ended_at: null, total_cost_usd: 99, total_tokens: 99, request_count: 9, machine_id: 'apple06',
+    })
+    upsertRequest(db, {
+      id: 'fleet-spark-today', agent: 'claude', session_id: 'fleet-old-spark', model: 'claude-sonnet-4-6',
+      input_tokens: 100, output_tokens: 50, cache_read_tokens: 0, cache_create_tokens: 0,
+      cost_usd: 0.5, duration_ms: 100, timestamp: NOW, source_request_id: 'fleet-spark-today', machine_id: 'spark02',
+    })
+    upsertRequest(db, {
+      id: 'fleet-apple-old', agent: 'claude', session_id: 'fleet-old-apple', model: 'claude-sonnet-4-6',
+      input_tokens: 100, output_tokens: 50, cache_read_tokens: 0, cache_create_tokens: 0,
+      cost_usd: 0.5, duration_ms: 100, timestamp: '2000-01-01T00:00:00.000Z', source_request_id: 'fleet-apple-old', machine_id: 'apple06',
+    })
+
+    const { data } = await req(handler, '/api/fleet?period=today')
+    const fleet = (data as Record<string, unknown>)['data'] as Record<string, unknown>
+    const machines = fleet['machines'] as Array<Record<string, unknown>>
+
+    expect(machines.some(machine => machine['machine_id'] === 'spark02')).toBe(true)
+    expect(machines.some(machine => machine['machine_id'] === 'apple06')).toBe(false)
+  })
+
   it('GET /api/summary?machine= filters by machine', async () => {
     upsertRequest(db, {
       id: 'req-m1', agent: 'claude', session_id: 'sess-m1', model: 'claude-sonnet-4-6',
@@ -676,5 +860,58 @@ describe('REST API server', () => {
     const { data } = await req(handler, '/api/sessions?machine=apple03')
     const sessions = (data as Record<string, unknown>)['data'] as unknown[]
     expect(sessions.length).toBe(1)
+  })
+
+  it('machine= filters breakdown endpoints', async () => {
+    upsertSession(db, {
+      id: 'sess-spark-breakdown', agent: 'claude', project_path: '/proj/spark-breakdown', project_name: 'spark-breakdown',
+      started_at: NOW, ended_at: null, total_cost_usd: 1, total_tokens: 150, request_count: 1, machine_id: 'spark02',
+      account_key: 'claude:spark', account_tool: 'claude', account_name: 'spark', account_source: 'test',
+    })
+    upsertSession(db, {
+      id: 'sess-apple-breakdown', agent: 'codex', project_path: '/proj/apple-breakdown', project_name: 'apple-breakdown',
+      started_at: NOW, ended_at: null, total_cost_usd: 2, total_tokens: 150, request_count: 1, machine_id: 'apple03',
+      account_key: 'codex:apple', account_tool: 'codex', account_name: 'apple', account_source: 'test',
+    })
+    upsertRequest(db, {
+      id: 'req-spark-breakdown', agent: 'claude', session_id: 'sess-spark-breakdown', model: 'claude-sonnet-4-6',
+      input_tokens: 100, output_tokens: 50, cache_read_tokens: 0, cache_create_tokens: 0,
+      cost_usd: 1, duration_ms: 100, timestamp: NOW, source_request_id: 'req-spark-breakdown', machine_id: 'spark02',
+      account_key: 'claude:spark', account_tool: 'claude', account_name: 'spark', account_source: 'test',
+    })
+    upsertRequest(db, {
+      id: 'req-apple-breakdown', agent: 'codex', session_id: 'sess-apple-breakdown', model: 'gpt-5-codex',
+      input_tokens: 100, output_tokens: 50, cache_read_tokens: 0, cache_create_tokens: 0,
+      cost_usd: 2, duration_ms: 100, timestamp: NOW, source_request_id: 'req-apple-breakdown', machine_id: 'apple03',
+      account_key: 'codex:apple', account_tool: 'codex', account_name: 'apple', account_source: 'test',
+    })
+    upsertSession(db, {
+      id: 'sess-legacy-spark-breakdown', agent: 'claude', project_path: '/proj/legacy-spark-breakdown', project_name: 'legacy-spark-breakdown',
+      started_at: NOW, ended_at: null, total_cost_usd: 0, total_tokens: 0, request_count: 0, machine_id: '',
+      account_key: 'claude:legacy', account_tool: 'claude', account_name: 'legacy', account_source: 'test',
+    })
+    upsertRequest(db, {
+      id: 'req-legacy-spark-breakdown', agent: 'claude', session_id: 'sess-legacy-spark-breakdown', model: 'claude-sonnet-4-6',
+      input_tokens: 100, output_tokens: 50, cache_read_tokens: 0, cache_create_tokens: 0,
+      cost_usd: 3, duration_ms: 100, timestamp: NOW, source_request_id: 'req-legacy-spark-breakdown', machine_id: 'spark02',
+      account_key: 'claude:legacy', account_tool: 'claude', account_name: 'legacy', account_source: 'test',
+    })
+
+    const projects = await req(handler, '/api/projects?period=all&machine=spark02')
+    const projectRows = ((projects.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>).map(row => row['project_name'])
+    expect(projectRows).toEqual(['legacy-spark-breakdown', 'spark-breakdown'])
+
+    const agents = await req(handler, '/api/breakdown?by=agent&period=all&machine=spark02')
+    const agentRows = ((agents.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>).map(row => row['agent'])
+    expect(agentRows).toEqual(['claude'])
+
+    const accounts = await req(handler, '/api/accounts?period=all&machine=spark02')
+    const accountRows = ((accounts.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>).map(row => row['account_key'])
+    expect(accountRows).toEqual(['claude:legacy', 'claude:spark'])
+
+    const daily = await req(handler, '/api/daily?days=14&machine=spark02')
+    const dailyCost = ((daily.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>)
+      .reduce((sum, row) => sum + Number(row['cost_usd'] ?? 0), 0)
+    expect(dailyCost).toBeCloseTo(4)
   })
 })

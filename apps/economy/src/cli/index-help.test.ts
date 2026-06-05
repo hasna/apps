@@ -77,6 +77,24 @@ describe('economy CLI help', () => {
     expect(stdout).toContain('--gemini')
     expect(stderr).toBe('')
   })
+
+  test('documents account-scoped session filtering', async () => {
+    const { stdout, stderr, exitCode } = await runCli(['sessions', '--help'])
+
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain('--account <query>')
+    expect(stdout).toContain('Filter by account key, name, or email')
+    expect(stderr).toBe('')
+  })
+
+  test('documents account usage command', async () => {
+    const { stdout, stderr, exitCode } = await runCli(['accounts', '--help'])
+
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain('List account usage by email address and coding agent')
+    expect(stdout).toContain('--json')
+    expect(stderr).toBe('')
+  })
 })
 
 describe('economy brains CLI', () => {

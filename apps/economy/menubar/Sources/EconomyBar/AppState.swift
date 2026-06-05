@@ -9,7 +9,17 @@ final class AppState: ObservableObject {
   @Published var week: CostSummary = CostSummary(total_usd: 0, sessions: 0, requests: 0, tokens: 0)
   @Published var month: CostSummary = CostSummary(total_usd: 0, sessions: 0, requests: 0, tokens: 0)
   @Published var dailyEntries: [DailyEntry] = []
+  @Published var hourlyEntries: [HourlyEntry] = []
   @Published var topProjects: [ProjectStat] = []
+  @Published var todayProjects: [ProjectStat] = []
+  @Published var weekProjects: [ProjectStat] = []
+  @Published var topAgents: [AgentStat] = []
+  @Published var todayAgents: [AgentStat] = []
+  @Published var weekAgents: [AgentStat] = []
+  @Published var topAccounts: [AccountStat] = []
+  @Published var todayAccounts: [AccountStat] = []
+  @Published var weekAccounts: [AccountStat] = []
+  @Published var subscriptionPlans: [SubscriptionPlan] = []
   @Published var recentSessions: [SessionStat] = []
   @Published var isOffline: Bool = false
   @Published var isSyncing: Bool = false
@@ -18,8 +28,14 @@ final class AppState: ObservableObject {
   @Published var sessionQuery: String = ""
   @Published var isEditingServer: Bool = false
   @Published var savedUsd: Double = 0
-  @Published var claudeQuotaPct: Double? = nil
+  @Published var quotaBadgePct: Double? = nil
+  @Published var quotaBadgeLabel: String? = nil
+  @Published var quotaSnapshots: [UsageSnapshot] = []
   @Published var machineCount: Int = 0
+  @Published var fleetMachines: [FleetMachine] = []
+  @Published var weekFleetMachines: [FleetMachine] = []
+  @Published var currentMachine: String = ""
+  @Published var selectedMachineID: String? = nil
 
   private let client = APIClient()
   private var pollTask: Task<Void, Never>?
@@ -81,6 +97,13 @@ final class AppState: ObservableObject {
     }
   }
 
+  func setMachineFilter(_ machineID: String?) {
+    selectedMachineID = machineID?.isEmpty == true ? nil : machineID
+    Task { [weak self] in
+      await self?.refresh()
+    }
+  }
+
   func refresh() async {
     let online = await client.isOnline()
     guard online else {
@@ -88,33 +111,116 @@ final class AppState: ObservableObject {
       return
     }
     isOffline = false
-    async let todayResult = try? await client.fetchSummary(period: "today")
-    async let weekResult = try? await client.fetchSummary(period: "week")
-    async let monthResult = try? await client.fetchSummary(period: "month")
-    async let dailyResult = try? await client.fetchDaily(days: 14)
-    async let projectsResult = try? await client.fetchProjects()
-    async let sessionsResult = try? await client.fetchSessions(search: sessionQuery, limit: sessionQuery.isEmpty ? 6 : 10)
+    let machine = selectedMachineID
+    async let todayResult = try? await client.fetchSummary(period: "today", machine: machine)
+    async let weekResult = try? await client.fetchSummary(period: "week", machine: machine)
+    async let monthResult = try? await client.fetchSummary(period: "month", machine: machine)
+    async let dailyResult = try? await client.fetchDaily(days: 14, machine: machine)
+    async let hourlyResult = try? await client.fetchHourly(machine: machine)
+    async let projectsResult = try? await client.fetchProjects(period: "month", machine: machine)
+    async let todayProjectsResult = try? await client.fetchProjects(period: "today", machine: machine)
+    async let weekProjectsResult = try? await client.fetchProjects(period: "week", machine: machine)
+    async let agentsResult = try? await client.fetchAgents(period: "month", machine: machine)
+    async let todayAgentsResult = try? await client.fetchAgents(period: "today", machine: machine)
+    async let weekAgentsResult = try? await client.fetchAgents(period: "week", machine: machine)
+    async let accountsResult = try? await client.fetchAccounts(period: "month", machine: machine)
+    async let todayAccountsResult = try? await client.fetchAccounts(period: "today", machine: machine)
+    async let weekAccountsResult = try? await client.fetchAccounts(period: "week", machine: machine)
+    async let sessionsResult = try? await client.fetchSessions(search: sessionQuery, limit: sessionQuery.isEmpty ? 6 : 10, machine: machine)
     async let savingsResult = try? await client.fetchSavings()
     async let usageResult = try? await client.fetchUsage()
-    async let fleetResult = try? await client.fetchFleet()
-    let (todaySummary, weekSummary, monthSummary, daily, projects, sessions, savings, usage, fleet) = await (
-      todayResult, weekResult, monthResult, dailyResult, projectsResult, sessionsResult,
-      savingsResult, usageResult, fleetResult
+    async let subscriptionsResult = try? await client.fetchSubscriptions()
+    async let todayFleetResult = try? await client.fetchFleet(period: "today", machine: machine)
+    async let weekFleetResult = try? await client.fetchFleet(period: "week", machine: machine)
+    let (
+      todaySummary, weekSummary, monthSummary, daily, hourly,
+      projects, todayProjectsData, weekProjectsData,
+      agents, todayAgentsData, weekAgentsData,
+      accounts, todayAccountsData, weekAccountsData,
+      sessions, savings, usage, subscriptions,
+      todayFleet, weekFleet
+    ) = await (
+      todayResult, weekResult, monthResult, dailyResult, hourlyResult,
+      projectsResult, todayProjectsResult, weekProjectsResult,
+      agentsResult, todayAgentsResult, weekAgentsResult,
+      accountsResult, todayAccountsResult, weekAccountsResult,
+      sessionsResult, savingsResult, usageResult, subscriptionsResult,
+      todayFleetResult, weekFleetResult
     )
-    if let todaySummary { today = todaySummary }
-    if let weekSummary { week = weekSummary }
+    if let todayFleet {
+      today = todayFleet.summary
+      machineCount = todayFleet.machines.count
+      fleetMachines = todayFleet.machines.sorted { $0.total_cost_usd > $1.total_cost_usd }
+      currentMachine = todayFleet.current_machine
+    } else if let todaySummary {
+      today = todaySummary
+    }
+    if let weekFleet {
+      week = weekFleet.summary
+      weekFleetMachines = weekFleet.machines.sorted { $0.total_cost_usd > $1.total_cost_usd }
+      if currentMachine.isEmpty { currentMachine = weekFleet.current_machine }
+    } else if let weekSummary {
+      week = weekSummary
+    }
     if let monthSummary { month = monthSummary }
     if let daily { dailyEntries = daily }
+    if let hourly { hourlyEntries = hourly }
     if let projects {
       let sorted = projects.sorted { $0.cost_usd > $1.cost_usd }
       topProjects = sorted.prefix(3).map { $0 }
     }
+    if let todayProjectsData {
+      let sorted = todayProjectsData.sorted { $0.cost_usd > $1.cost_usd }
+      todayProjects = sorted.prefix(4).map { $0 }
+    }
+    if let weekProjectsData {
+      let sorted = weekProjectsData.sorted { $0.cost_usd > $1.cost_usd }
+      weekProjects = sorted.prefix(4).map { $0 }
+    }
+    if let agents {
+      let sorted = agents.sorted { $0.api_equivalent_usd > $1.api_equivalent_usd }
+      topAgents = sorted.prefix(4).map { $0 }
+    }
+    if let todayAgentsData {
+      let sorted = todayAgentsData.sorted { $0.api_equivalent_usd > $1.api_equivalent_usd }
+      todayAgents = sorted.prefix(4).map { $0 }
+    }
+    if let weekAgentsData {
+      let sorted = weekAgentsData.sorted { $0.api_equivalent_usd > $1.api_equivalent_usd }
+      weekAgents = sorted.prefix(4).map { $0 }
+    }
+    if let accounts {
+      let sorted = accounts.sorted { $0.cost_usd > $1.cost_usd }
+      topAccounts = sorted.prefix(3).map { $0 }
+    }
+    if let todayAccountsData {
+      let sorted = todayAccountsData.sorted { $0.cost_usd > $1.cost_usd }
+      todayAccounts = sorted.prefix(4).map { $0 }
+    }
+    if let weekAccountsData {
+      let sorted = weekAccountsData.sorted { $0.cost_usd > $1.cost_usd }
+      weekAccounts = sorted.prefix(4).map { $0 }
+    }
     if let sessions { recentSessions = sessions }
     if let savings { savedUsd = savings.saved_usd }
     if let usage {
-      claudeQuotaPct = usage.snapshots.first(where: { $0.agent == "claude" && $0.metric == "five_hour_utilization" })?.value
+      let snapshots = usage.snapshots
+      quotaSnapshots = Array(snapshots.prefix(8))
+      if let badge = snapshots.first(where: { $0.unit == "percent" && $0.value > 0 }) {
+        quotaBadgePct = badge.value
+        quotaBadgeLabel = badge.displayAgent
+      } else {
+        quotaBadgePct = nil
+        quotaBadgeLabel = nil
+      }
     }
-    if let fleet { machineCount = fleet.machines.count }
+    if let subscriptions {
+      subscriptionPlans = subscriptions
+        .filter { $0.active != 0 }
+        .sorted { $0.monthly_fee_usd > $1.monthly_fee_usd }
+        .prefix(4)
+        .map { $0 }
+    }
     lastUpdated = Date()
   }
 }

@@ -8,10 +8,11 @@ import {
 } from '../db/database.js'
 import { computeCostFromDb } from '../lib/pricing.js'
 import { defaultCostBasisForAgent } from '../lib/savings.js'
+import { resolveAccountForAgent, withAccount } from '../lib/accounts.js'
 
 const DEFAULT_CODEX_DB_PATH = join(homedir(), '.codex', 'state_5.sqlite')
 const DEFAULT_CODEX_CONFIG_PATH = join(homedir(), '.codex', 'config.toml')
-const CODEX_INGEST_VERSION = 'rollout-token-dedupe-v2'
+const CODEX_INGEST_VERSION = 'rollout-aggregate-v3'
 
 interface CodexThread {
   id: string
@@ -70,10 +71,31 @@ function buildThreadQuery(codexDb: BunDatabase): string {
   `
 }
 
+function openCodexDb(dbPath: string, verbose: boolean): BunDatabase | null {
+  let lastError: unknown
+  for (const readonly of [true, false]) {
+    let codexDb: BunDatabase | null = null
+    try {
+      codexDb = readonly ? new BunDatabase(dbPath, { readonly: true }) : new BunDatabase(dbPath)
+      codexDb.prepare('PRAGMA schema_version').get()
+      return codexDb
+    } catch (error) {
+      lastError = error
+      codexDb?.close()
+    }
+  }
+  if (verbose) {
+    const message = lastError instanceof Error ? lastError.message : String(lastError)
+    console.log('Codex DB unreadable:', dbPath, message)
+  }
+  return null
+}
+
 function readTokenEvents(rolloutPath: string | null): CodexTokenEvent[] {
   if (!rolloutPath || !existsSync(rolloutPath)) return []
-  const events: CodexTokenEvent[] = []
-  const seen = new Set<string>()
+  const fallbackUsages = new Map<string, CodexTokenUsage>()
+  let fallbackTimestamp: string | undefined
+  let aggregate: CodexTokenEvent | null = null
   for (const line of readFileSync(rolloutPath, 'utf-8').split('\n')) {
     if (!line.trim()) continue
     let entry: unknown
@@ -82,20 +104,49 @@ function readTokenEvents(rolloutPath: string | null): CodexTokenEvent[] {
     const payload = (entry as Record<string, unknown>)['payload'] as Record<string, unknown> | undefined
     if (!payload || payload['type'] !== 'token_count') continue
     const info = payload['info'] as Record<string, unknown> | undefined
+    const timestamp = (entry as Record<string, unknown>)['timestamp']
+    const entryTimestamp = typeof timestamp === 'string' ? timestamp : undefined
+    const totalUsage = info?.['total_token_usage'] as CodexTokenUsage | undefined
+    if (totalUsage && tokenTotal(totalUsage) > 0) {
+      aggregate = { usage: totalUsage, timestamp: entryTimestamp }
+      continue
+    }
+
     const usage = info?.['last_token_usage'] as CodexTokenUsage | undefined
     if (!usage) continue
-    const total = usage.total_tokens ?? ((usage.input_tokens ?? 0) + (usage.output_tokens ?? 0))
-    if (total <= 0) continue
+    if (tokenTotal(usage) <= 0) continue
 
-    // Codex can emit the same final usage payload more than once in a rollout.
-    // The thread tokens_used counter matches the sum of distinct payloads.
+    // Older rollouts may only have per-call usage. Deduplicate repeated payloads
+    // and aggregate them into one Economy request to keep historical sync fast.
     const key = JSON.stringify(usage)
-    if (seen.has(key)) continue
-    seen.add(key)
-    const timestamp = (entry as Record<string, unknown>)['timestamp']
-    events.push({ usage, timestamp: typeof timestamp === 'string' ? timestamp : undefined })
+    if (!fallbackUsages.has(key)) fallbackUsages.set(key, usage)
+    fallbackTimestamp = entryTimestamp ?? fallbackTimestamp
   }
-  return events
+  if (aggregate) return [aggregate]
+  if (fallbackUsages.size === 0) return []
+  return [{ usage: sumTokenUsages([...fallbackUsages.values()]), timestamp: fallbackTimestamp }]
+}
+
+function tokenTotal(usage: CodexTokenUsage): number {
+  return usage.total_tokens ?? ((usage.input_tokens ?? 0) + (usage.output_tokens ?? 0))
+}
+
+function sumTokenUsages(usages: CodexTokenUsage[]): CodexTokenUsage {
+  const result: CodexTokenUsage = {
+    input_tokens: 0,
+    cached_input_tokens: 0,
+    output_tokens: 0,
+    reasoning_output_tokens: 0,
+    total_tokens: 0,
+  }
+  for (const usage of usages) {
+    result.input_tokens = (result.input_tokens ?? 0) + (usage.input_tokens ?? 0)
+    result.cached_input_tokens = (result.cached_input_tokens ?? 0) + (usage.cached_input_tokens ?? 0)
+    result.output_tokens = (result.output_tokens ?? 0) + (usage.output_tokens ?? 0)
+    result.reasoning_output_tokens = (result.reasoning_output_tokens ?? 0) + (usage.reasoning_output_tokens ?? 0)
+    result.total_tokens = (result.total_tokens ?? 0) + tokenTotal(usage)
+  }
+  return result
 }
 
 function fallbackEvents(totalTokens: number): CodexTokenEvent[] {
@@ -121,9 +172,12 @@ export async function ingestCodex(db: Database, verbose = false): Promise<{ sess
   let codexDb: BunDatabase | null = null
   let ingested = 0
   let requests = 0
+  const account = await resolveAccountForAgent('codex')
 
   try {
-    codexDb = new BunDatabase(dbPath, { readonly: true })
+    codexDb = openCodexDb(dbPath, verbose)
+    if (!codexDb) return { sessions: 0, requests: 0 }
+
     const threads = codexDb.prepare(buildThreadQuery(codexDb)).all() as CodexThread[]
 
     for (const thread of threads) {
@@ -142,7 +196,7 @@ export async function ingestCodex(db: Database, verbose = false): Promise<{ sess
         ? new Date(thread.updated_at * 1000).toISOString()
         : null
 
-      upsertSession(db, {
+      upsertSession(db, withAccount({
         id: sessionId,
         agent: 'codex',
         project_path: projectPath,
@@ -153,10 +207,11 @@ export async function ingestCodex(db: Database, verbose = false): Promise<{ sess
         total_tokens: 0,
         request_count: 0,
         machine_id: machineId,
-      })
+      }, account))
 
       const events = readTokenEvents(thread.rollout_path)
       const tokenEvents = events.length > 0 ? events : fallbackEvents(thread.tokens_used)
+      const ingestedTokens = tokenEvents.reduce((sum, event) => sum + tokenTotal(event.usage), 0)
 
       db.prepare(`DELETE FROM requests WHERE session_id = ?`).run(sessionId)
 
@@ -171,7 +226,7 @@ export async function ingestCodex(db: Database, verbose = false): Promise<{ sess
           ? new Date((thread.created_at * 1000) + index).toISOString()
           : new Date().toISOString())
         const requestId = `${sessionId}-${index}`
-        upsertRequest(db, {
+        upsertRequest(db, withAccount({
           id: requestId,
           agent: 'codex',
           session_id: sessionId,
@@ -186,14 +241,14 @@ export async function ingestCodex(db: Database, verbose = false): Promise<{ sess
           timestamp,
           source_request_id: requestId,
           machine_id: machineId,
-        })
+        }, account))
         requests++
       })
 
       rollupSession(db, sessionId)
       setIngestState(db, 'codex', thread.id, stateValue)
       ingested++
-      if (verbose) console.log(`Codex session ${thread.id}: ${thread.tokens_used} tokens on ${model}`)
+      if (verbose) console.log(`Codex session ${thread.id}: ${ingestedTokens} tokens on ${model}`)
     }
   } finally {
     codexDb?.close()

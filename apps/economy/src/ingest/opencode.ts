@@ -8,7 +8,7 @@ import {
 } from '../db/database.js'
 import { computeCostFromDb, normalizeModelName } from '../lib/pricing.js'
 import { defaultCostBasisForAgent } from '../lib/savings.js'
-import type { EconomySession } from '../types/index.js'
+import { resolveAccountForAgent, withAccount } from '../lib/accounts.js'
 
 const OPENCODE_STORAGE = join(homedir(), '.local', 'share', 'opencode', 'storage')
 
@@ -54,6 +54,7 @@ export async function ingestOpenCode(db: Database, verbose = false): Promise<{ f
   const touched = new Set<string>()
   const machineId = getMachineId()
   const now = new Date().toISOString()
+  const account = await resolveAccountForAgent('opencode')
 
   for (const file of files) {
     const mtime = statSync(file).mtimeMs
@@ -87,7 +88,7 @@ export async function ingestOpenCode(db: Database, verbose = false): Promise<{ f
 
     const costUsd = usage.cost ?? computeCostFromDb(db, model, input, output, cacheRead, cacheWrite, 0)
 
-    upsertRequest(db, {
+    upsertRequest(db, withAccount({
       id: reqId,
       agent: 'opencode',
       session_id: sessionId,
@@ -103,11 +104,11 @@ export async function ingestOpenCode(db: Database, verbose = false): Promise<{ f
       source_request_id: sourceId,
       machine_id: machineId,
       updated_at: now,
-    })
+    }, account))
     requests++
 
     if (!touched.has(sessionId)) {
-      upsertSession(db, {
+      upsertSession(db, withAccount({
         id: sessionId,
         agent: 'opencode',
         project_path: '',
@@ -119,7 +120,7 @@ export async function ingestOpenCode(db: Database, verbose = false): Promise<{ f
         request_count: 0,
         machine_id: machineId,
         updated_at: now,
-      })
+      }, account))
       touched.add(sessionId)
     }
 

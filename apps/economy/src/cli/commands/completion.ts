@@ -2,7 +2,7 @@ const TOP_LEVEL = [
   'sync', 'today', 'week', 'month', 'all', 'sessions', 'top', 'watch',
   'budget', 'project', 'pricing', 'goal', 'billing', 'cloud', 'machines',
   'usage', 'savings', 'subscriptions', 'status', 'doctor', 'init', 'estimate',
-  'fleet', 'todos', 'serve', 'mcp', 'completion', 'tui', 'waybar', 'bar',
+  'accounts', 'breakdown', 'fleet', 'merge-db', 'todos', 'serve', 'mcp', 'completion', 'tui', 'waybar', 'bar',
 ] as const
 
 const AGENTS = [

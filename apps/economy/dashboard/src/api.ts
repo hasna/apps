@@ -41,6 +41,12 @@ export interface DailyEntry {
   agent: string
 }
 
+export interface HourlyEntry {
+  hour: string
+  cost_usd: number
+  agent: string
+}
+
 export interface Session {
   id: string
   agent: string
@@ -65,6 +71,27 @@ export interface ProjectStat {
   project_path: string
   project_name: string
   sessions: number
+  requests: number
+  total_tokens: number
+  cost_usd: number
+  last_active: string
+}
+
+export interface AccountStat {
+  account_key: string
+  account_tool: string
+  account_name: string
+  account_email: string | null
+  account_source: string
+  sessions: number
+  requests: number
+  total_tokens: number
+  api_equivalent_usd: number
+  billable_usd: number
+  metered_api_usd: number
+  subscription_included_usd: number
+  estimated_usd: number
+  unknown_usd: number
   cost_usd: number
   last_active: string
 }
@@ -176,13 +203,34 @@ export interface MutationOk {
   ok: boolean
 }
 
+export interface Subscription {
+  id: string
+  agent: Agent | null
+  provider: string
+  plan: string
+  monthly_fee_usd: number
+  included_usage_usd: number
+  billing_cycle_start: string | null
+  reset_policy: string
+  active: number
+  created_at: string
+  updated_at: string
+}
+
 // Summary
-export const getSummary = (period: 'today' | 'week' | 'month' | 'all') =>
+export const getSummary = (period: 'today' | 'yesterday' | 'week' | 'month' | 'year' | 'all') =>
   request<{ data: Summary }>(`/api/summary?period=${period}`)
 
 // Daily
 export const getDaily = (days = 30) =>
   request<{ data: DailyEntry[] }>(`/api/daily?days=${days}`)
+
+export const getHourly = (machine?: string) => {
+  const q = new URLSearchParams()
+  if (machine) q.set('machine', machine)
+  const query = q.toString()
+  return request<{ data: HourlyEntry[] }>(`/api/hourly${query ? `?${query}` : ''}`)
+}
 
 export interface SessionRequest {
   id: string
@@ -202,6 +250,7 @@ export interface SessionRequest {
 export const getSessions = (params: {
   agent?: string
   search?: string
+  account?: string
   limit?: number
   offset?: number
   since?: string
@@ -209,6 +258,7 @@ export const getSessions = (params: {
   const q = new URLSearchParams()
   if (params.agent) q.set('agent', params.agent)
   if (params.search) q.set('search', params.search)
+  if (params.account) q.set('account', params.account)
   if (params.limit != null) q.set('limit', String(params.limit))
   if (params.offset != null) q.set('offset', String(params.offset))
   if (params.since) q.set('since', params.since)
@@ -228,12 +278,21 @@ export const getModels = () =>
   request<{ data: ModelStat[] }>('/api/models')
 
 // Projects
-export const getProjects = () =>
-  request<{ data: ProjectStat[] }>('/api/projects')
+export const getProjects = (period: 'today' | 'week' | 'month' | 'year' | 'all' = 'all') =>
+  request<{ data: ProjectStat[] }>(`/api/projects?period=${period}`)
+
+export const getAccounts = (period: 'today' | 'week' | 'month' | 'year' | 'all' = 'all') =>
+  request<{ data: AccountStat[] }>(`/api/accounts?period=${period}`)
 
 // Breakdown
-export const getBreakdown = (by: 'model' | 'project') =>
-  request<{ data: BreakdownEntry[] }>(`/api/breakdown?by=${by}`)
+export const getBreakdown = (
+  by: 'model' | 'project' | 'agent' | 'account',
+  period?: 'today' | 'week' | 'month' | 'year' | 'all',
+) => {
+  const q = new URLSearchParams({ by })
+  if (period) q.set('period', period)
+  return request<{ data: BreakdownEntry[] }>(`/api/breakdown?${q}`)
+}
 
 // Budgets
 export const getBudgets = () =>
@@ -284,19 +343,41 @@ export const deletePricing = (model: string) =>
 export type SyncSource = 'all' | Agent
 
 // Usage & savings
-export const getUsage = (period: 'today' | 'week' | 'month' | 'all' = 'month', agent?: string) => {
+export const getUsage = (period: 'today' | 'week' | 'month' | 'year' | 'all' = 'month', agent?: string) => {
   const q = new URLSearchParams({ period })
   if (agent) q.set('agent', agent)
   return request<{ data: UsageResponse }>(`/api/usage?${q}`)
 }
 
-export const getSavings = (period: 'today' | 'week' | 'month' | 'all' = 'month', agent?: string) => {
+export const getSavings = (period: 'today' | 'week' | 'month' | 'year' | 'all' = 'month', agent?: string) => {
   const q = new URLSearchParams({ period })
   if (agent) q.set('agent', agent)
   return request<{ data: SavingsSummary }>(`/api/savings?${q}`)
 }
 
-export const getFleet = (period: 'today' | 'week' | 'month' | 'all' = 'month') =>
+export const getSubscriptions = () =>
+  request<{ data: Subscription[] }>('/api/subscriptions')
+
+export const createSubscription = (body: {
+  id?: string
+  agent?: Agent | null
+  provider: string
+  plan: string
+  monthly_fee_usd?: number
+  included_usage_usd?: number
+  billing_cycle_start?: string | null
+  reset_policy?: string
+  active?: boolean | number
+}) =>
+  request<{ data: Subscription }>('/api/subscriptions', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+
+export const deleteSubscription = (id: string) =>
+  request<{ data: MutationOk }>(`/api/subscriptions/${encodeURIComponent(id)}`, { method: 'DELETE' })
+
+export const getFleet = (period: 'today' | 'week' | 'month' | 'year' | 'all' = 'month') =>
   request<{ data: FleetResponse }>(`/api/fleet?period=${period}`)
 
 // Sync

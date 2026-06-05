@@ -1,14 +1,16 @@
 # @hasna/economy
 
-AI coding cost tracker for Claude Code, Takumi, Codex, and Gemini. It ships as a CLI, MCP server, REST API, web dashboard, and native macOS menu bar app.
+AI coding cost tracker for Claude Code, Takumi, Codex, Gemini, OpenCode, Cursor, Pi, and Hermes. It ships as a CLI, MCP server, REST API, web dashboard, and native macOS menu bar app.
 
 [![npm](https://img.shields.io/npm/v/@hasna/economy)](https://www.npmjs.com/package/@hasna/economy)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 ## Features
 
-- Ingests local Claude Code, Takumi, Codex, and Gemini CLI usage.
+- Ingests local Claude Code, Takumi, Codex, Gemini, OpenCode, Cursor, Pi, and Hermes usage.
 - Tracks sessions, requests, projects, machines, models, cache tokens, budgets, goals, and provider billing.
+- Attributes usage to `@hasna/accounts` profiles when agents run under managed account/profile config dirs.
+- Breaks down API-equivalent, metered API, subscription-included, estimated, and unknown cost by account and coding agent.
 - Seeds editable model pricing with input, output, cache-read, 5-minute cache-write, 1-hour cache-write, and context-cache storage rates.
 - Handles tiered pricing such as Gemini long-prompt rates and OpenAI long-context rates.
 - Reconciles estimates against Anthropic, OpenAI, and Gemini billing sources.
@@ -69,7 +71,7 @@ Gemini settings:
 }
 ```
 
-The MCP server exposes read tools for summaries, sessions, machines, pricing, daily spend, budgets, goals, and provider billing. It also exposes mutation tools for budgets, pricing rows, and goals so Claude Code, Codex, and Gemini can manage Economy data through the same validated surface as the CLI and REST API.
+The MCP server exposes read tools for summaries, sessions, machines, pricing, daily spend, budgets, goals, provider billing, usage snapshots, savings, project/account/agent breakdowns, and subscriptions. It also exposes mutation tools for budgets, pricing rows, goals, and subscriptions so coding agents can manage Economy data through the same validated surface as the CLI and REST API.
 
 ## Ingest
 
@@ -86,6 +88,10 @@ economy sync --claude
 economy sync --codex
 economy sync --gemini
 economy sync --takumi
+economy sync --opencode
+economy sync --cursor
+economy sync --pi
+economy sync --hermes
 ```
 
 Useful repair options:
@@ -97,6 +103,27 @@ economy sync --backfill-machine
 ```
 
 Full sync also imports active project metadata from `@hasna/projects` when the registry is available.
+
+Account attribution is automatic when `@hasna/accounts` has a matching active, applied, or env-dir profile for the agent. Account identity is the email address plus coding agent, so `work@example.com` under Codex and Claude is reported as two accounts. You can also force attribution for a process with `ECONOMY_ACCOUNT=tool:name` or agent-specific overrides such as `ECONOMY_CODEX_ACCOUNT=codex:work`.
+
+Session drilldown can be scoped to an account key, account name, or email:
+
+```bash
+economy sessions --account work@example.com
+economy accounts month
+economy breakdown --by account
+```
+
+Account breakdowns report `api_equivalent_usd` for the API list-price value of the usage, plus `billable_usd`/`metered_api_usd` for known direct API spend and `subscription_included_usd` for usage covered by a subscription.
+
+Subscription plans can be configured locally and are used by savings calculations:
+
+```bash
+economy subscriptions set --provider cursor --plan pro --fee 20 --included 20 --agent cursor
+economy subscriptions list
+economy savings month
+economy usage month --agent cursor
+```
 
 ## Pricing
 
@@ -145,7 +172,7 @@ economy config set webhook-url https://example.com/economy-webhook
 economy config webhook-test
 ```
 
-Budgets and goals can be global, project-scoped with `--project`, agent-scoped with `--agent`, or both. Valid agent scopes are `claude`, `takumi`, `codex`, and `gemini`.
+Budgets and goals can be global, project-scoped with `--project`, agent-scoped with `--agent`, or both. Valid agent scopes are `claude`, `takumi`, `codex`, `gemini`, `opencode`, `cursor`, `pi`, and `hermes`.
 
 Budget webhooks fire after sync when the alert threshold is crossed. Failed webhook deliveries are not marked as fired, so the next sync can retry them.
 
@@ -161,10 +188,17 @@ Common endpoints:
 
 - `GET /health`
 - `GET /api/summary?period=today`
-- `GET /api/sessions?agent=codex&limit=20`
+- `GET /api/sessions?agent=codex&account=work@example.com&limit=20`
 - `GET /api/sessions/:id/requests`
 - `GET /api/models`
-- `GET /api/projects`
+- `GET /api/projects?period=month`
+- `GET /api/breakdown?by=agent&period=month`
+- `GET /api/accounts?period=month`
+- `GET /api/usage?period=month`
+- `GET /api/savings?period=month`
+- `GET /api/subscriptions`
+- `POST /api/subscriptions`
+- `DELETE /api/subscriptions/:id`
 - `GET /api/budgets`
 - `POST /api/budgets`
 - `DELETE /api/budgets/:id`
@@ -178,13 +212,13 @@ Common endpoints:
 - `POST /api/sync`
 - `POST /api/billing/sync`
 
-Budget and goal mutation endpoints validate agent scopes against `claude`, `takumi`, `codex`, and `gemini`.
+Budget, goal, and subscription mutation endpoints validate agent scopes against `claude`, `takumi`, `codex`, `gemini`, `opencode`, `cursor`, `pi`, and `hermes`.
 
-The server also serves the built dashboard when `dashboard/dist` is present.
+The server also serves the built dashboard when `dashboard/dist` is present. The dashboard includes account-scoped session filtering, subscription plan create/update/delete controls in Savings, and savings/usage/account tables for subscription-aware cost analysis.
 
 ## Native macOS Menubar
 
-The `menubar/` app is a native SwiftUI `MenuBarExtra` app, not Electron. It targets Swift 5.9+ and macOS 14+, and talks to the REST API exposed by `economy-serve`. The default server URL is `http://127.0.0.1:3456`.
+The `menubar/` app is a native SwiftUI `MenuBarExtra` app, not Electron. It targets Swift 5.9+ and macOS 14+, and talks to the REST API exposed by `economy-serve`. It shows today/week/month spend, token and request counts, top agents, top accounts, top projects, active subscription plans, subscription savings, multi-agent usage snapshots, recent sessions, and fleet status. The default server URL is `http://127.0.0.1:3456`.
 
 Build it on macOS:
 

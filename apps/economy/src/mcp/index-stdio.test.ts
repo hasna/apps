@@ -39,7 +39,7 @@ describe('economy-mcp stdio server', () => {
 
       const tools = await client.listTools(undefined, { timeout: 5_000 })
       const names = new Set(tools.tools.map((tool) => tool.name))
-      for (const expected of ['get_cost_summary', 'get_sessions', 'get_pricing', 'set_budget', 'set_pricing', 'get_billing_summary', 'sync', 'describe_tools']) {
+      for (const expected of ['get_cost_summary', 'get_sessions', 'get_pricing', 'set_budget', 'set_pricing', 'get_billing_summary', 'get_usage', 'get_savings', 'list_subscriptions', 'set_subscription', 'remove_subscription', 'sync', 'describe_tools']) {
         expect(names.has(expected)).toBe(true)
       }
 
@@ -83,6 +83,39 @@ describe('economy-mcp stdio server', () => {
         { timeout: 5_000 },
       )
 
+      const subscriptionSet = await client.callTool(
+        {
+          name: 'set_subscription',
+          arguments: {
+            id: 'sub-stdio',
+            provider: 'cursor',
+            plan: 'pro',
+            agent: 'cursor',
+            monthly_fee_usd: 20,
+            included_usage_usd: 20,
+          },
+        },
+        undefined,
+        { timeout: 5_000 },
+      )
+      const subscriptionSetText = subscriptionSet.content[0]?.type === 'text' ? subscriptionSet.content[0].text : ''
+      expect(subscriptionSetText).toContain('"id": "sub-stdio"')
+
+      const subscriptions = await client.callTool(
+        { name: 'list_subscriptions', arguments: {} },
+        undefined,
+        { timeout: 5_000 },
+      )
+      const subscriptionsText = subscriptions.content[0]?.type === 'text' ? subscriptions.content[0].text : ''
+      expect(subscriptionsText).toContain('cursor')
+      expect(subscriptionsText).toContain('$20.00')
+
+      await client.callTool(
+        { name: 'remove_subscription', arguments: { id: 'sub-stdio' } },
+        undefined,
+        { timeout: 5_000 },
+      )
+
       await client.callTool(
         {
           name: 'set_pricing',
@@ -111,16 +144,19 @@ describe('economy-mcp stdio server', () => {
       )
 
       const description = await client.callTool(
-        { name: 'describe_tools', arguments: { names: ['sync', 'get_billing_summary', 'get_pricing', 'set_budget', 'set_pricing'] } },
+        { name: 'describe_tools', arguments: { names: ['sync', 'get_sessions', 'get_billing_summary', 'get_pricing', 'set_budget', 'set_pricing', 'list_subscriptions', 'set_subscription'] } },
         undefined,
         { timeout: 5_000 },
       )
       const text = description.content[0]?.type === 'text' ? description.content[0].text : ''
       expect(text).toContain('sync: sources(all|claude|takumi|codex|gemini|opencode|cursor|pi|hermes)')
+      expect(text).toContain('get_sessions: agent(claude|takumi|codex|gemini|opencode|cursor|pi|hermes), project(partial), account?(key/name/email)')
       expect(text).toContain('get_billing_summary: period(today|yesterday|week|month|year|all)')
       expect(text).toContain('get_pricing: no params -> model pricing rows')
       expect(text).toContain('set_budget: period(daily|weekly|monthly)')
       expect(text).toContain('set_pricing: model, input_per_1m')
+      expect(text).toContain('list_subscriptions: no params')
+      expect(text).toContain('set_subscription: provider, plan')
     } finally {
       await client.close()
     }

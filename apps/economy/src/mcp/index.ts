@@ -2,7 +2,7 @@
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { packageMetadata } from '../lib/package-metadata.js'
 import { buildServer } from './server.js'
-import { isStdioMode, resolveHttpPort, startHttpServer } from './http.js'
+import { isHttpMode, isStdioMode, resolveHttpPort, startHttpServer } from './http.js'
 
 function printHelp(): void {
   console.log(`Usage: economy-mcp [options]
@@ -32,13 +32,13 @@ if (args.includes('--version') || args.includes('-V')) {
 }
 
 async function main(): Promise<void> {
-  if (isStdioMode(args)) {
+  if (isStdioMode(args) || !isHttpMode(args)) {
     const server = buildServer()
     const transport = new StdioServerTransport()
     await server.connect(transport)
     return
   }
-  // Default: shared Streamable HTTP server (one process per MCP, many agents).
+
   startHttpServer({ port: resolveHttpPort(args) })
   await new Promise<never>(() => {})
 }

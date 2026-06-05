@@ -23,18 +23,19 @@ afterEach(() => {
 })
 
 describe('EconomyClient', () => {
-  it('passes search and machine filters to sessions endpoint', async () => {
+  it('passes search, machine, and account filters to sessions endpoint', async () => {
     globalThis.fetch = (async (url, init) => {
       calls.push({ url: String(url), init })
       return mockJson({ data: [], meta: {} })
     }) as typeof fetch
 
     const client = new EconomyClient({ baseUrl: 'http://economy.test', retries: 0 })
-    await client.getSessions({ agent: 'gemini', search: 'open-economy', machine: 'spark02', limit: 5 })
+    await client.getSessions({ agent: 'gemini', search: 'open-economy', account: 'work@example.com', machine: 'spark02', limit: 5 })
 
     const url = new URL(calls[0]!.url)
     expect(url.origin + url.pathname).toBe('http://economy.test/api/sessions')
     expect(url.searchParams.get('agent')).toBe('gemini')
+    expect(url.searchParams.get('account')).toBe('work@example.com')
     expect(url.searchParams.get('machine')).toBe('spark02')
     expect(url.searchParams.get('search')).toBe('open-economy')
     expect(url.searchParams.get('limit')).toBe('5')
@@ -62,7 +63,9 @@ describe('EconomyClient', () => {
     const client = new EconomyClient({ baseUrl: 'http://economy.test', retries: 0 })
     await client.getTopSessions(3, 'codex')
     await client.getModelBreakdown()
-    await client.getProjectBreakdown()
+    await client.getProjectBreakdown('month')
+    await client.getAgentBreakdown('week')
+    await client.getAccountBreakdown('month')
     await client.getBudgets()
     await client.getDaily(14)
     await client.getPricing()
@@ -71,7 +74,9 @@ describe('EconomyClient', () => {
     expect(calls.map(call => call.url)).toEqual([
       'http://economy.test/api/top?n=3&agent=codex',
       'http://economy.test/api/models',
-      'http://economy.test/api/projects',
+      'http://economy.test/api/projects?period=month',
+      'http://economy.test/api/breakdown?by=agent&period=week',
+      'http://economy.test/api/accounts?period=month',
       'http://economy.test/api/budgets',
       'http://economy.test/api/daily?days=14',
       'http://economy.test/api/pricing',
@@ -104,15 +109,15 @@ describe('EconomyClient', () => {
   it('sync accepts all supported ingestion sources', async () => {
     globalThis.fetch = (async (url, init) => {
       calls.push({ url: String(url), init })
-      return mockJson({ data: { gemini: { sessions: 1 } }, meta: {} })
+      return mockJson({ data: { hermes: { sessions: 1 } }, meta: {} })
     }) as typeof fetch
 
     const client = new EconomyClient({ baseUrl: 'http://economy.test', retries: 0 })
-    await client.sync('gemini')
+    await client.sync('hermes')
 
     expect(calls[0]!.url).toBe('http://economy.test/api/sync')
     expect(calls[0]!.init?.method).toBe('POST')
-    expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({ sources: 'gemini' })
+    expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({ sources: 'hermes' })
   })
 
   it('exposes usage, savings, fleet, and billing diff endpoints', async () => {
@@ -249,6 +254,61 @@ describe('EconomyClient', () => {
     expect(goal).toMatchObject({ id: 'goal-1', is_on_track: true, percent_used: 2 })
   })
 
+  it('exposes subscription management endpoints', async () => {
+    globalThis.fetch = (async (url, init) => {
+      calls.push({ url: String(url), init })
+      const path = new URL(String(url)).pathname
+      if (init?.method === 'DELETE') return mockJson({ data: { ok: true }, meta: {} })
+      if (init?.method === 'POST') {
+        return mockJson({
+          data: {
+            id: 'sub-1',
+            provider: 'cursor',
+            plan: 'pro',
+            agent: 'cursor',
+            monthly_fee_usd: 20,
+            included_usage_usd: 20,
+            billing_cycle_start: null,
+            reset_policy: 'monthly',
+            active: 1,
+            created_at: '2026-06-01T00:00:00.000Z',
+            updated_at: '2026-06-01T00:00:00.000Z',
+          },
+          meta: {},
+        })
+      }
+      expect(path).toBe('/api/subscriptions')
+      return mockJson({ data: [], meta: {} })
+    }) as typeof fetch
+
+    const client = new EconomyClient({ baseUrl: 'http://economy.test', retries: 0 })
+    await client.getSubscriptions()
+    const created = await client.createSubscription({
+      provider: 'cursor',
+      plan: 'pro',
+      agent: 'cursor',
+      monthly_fee_usd: 20,
+      included_usage_usd: 20,
+    })
+    const removed = await client.deleteSubscription('sub/with spaces')
+
+    expect(calls.map(call => call.url)).toEqual([
+      'http://economy.test/api/subscriptions',
+      'http://economy.test/api/subscriptions',
+      'http://economy.test/api/subscriptions/sub%2Fwith%20spaces',
+    ])
+    expect(calls.map(call => call.init?.method)).toEqual([undefined, 'POST', 'DELETE'])
+    expect(JSON.parse(String(calls[1]!.init?.body))).toEqual({
+      provider: 'cursor',
+      plan: 'pro',
+      agent: 'cursor',
+      monthly_fee_usd: 20,
+      included_usage_usd: 20,
+    })
+    expect(created).toMatchObject({ id: 'sub-1', provider: 'cursor', agent: 'cursor' })
+    expect(removed).toEqual({ ok: true })
+  })
+
   it('does not retry client errors', async () => {
     globalThis.fetch = (async (url, init) => {
       calls.push({ url: String(url), init })
@@ -279,6 +339,7 @@ describe('EconomyClient', () => {
 
 describe('economyTools schemas', () => {
   it('advertise the SDK read surface and supported agent/source filters', () => {
+    const supportedAgents = ['claude', 'takumi', 'codex', 'gemini', 'opencode', 'cursor', 'pi', 'hermes']
     const sessions = economyTools.find(t => t.name === 'economy_get_sessions')!
     const top = economyTools.find(t => t.name === 'economy_get_top_sessions')!
     const sync = economyTools.find(t => t.name === 'economy_sync')!
@@ -293,26 +354,44 @@ describe('economyTools schemas', () => {
     const setGoal = economyTools.find(t => t.name === 'economy_set_goal')!
     const removeGoal = economyTools.find(t => t.name === 'economy_remove_goal')!
     const machines = economyTools.find(t => t.name === 'economy_list_machines')!
+    const projects = economyTools.find(t => t.name === 'economy_get_project_breakdown')!
+    const agents = economyTools.find(t => t.name === 'economy_get_agent_breakdown')!
+    const accounts = economyTools.find(t => t.name === 'economy_get_account_breakdown')!
+    const usage = economyTools.find(t => t.name === 'economy_get_usage')!
+    const savings = economyTools.find(t => t.name === 'economy_get_savings')!
+    const subscriptions = economyTools.find(t => t.name === 'economy_list_subscriptions')!
+    const setSubscription = economyTools.find(t => t.name === 'economy_set_subscription')!
+    const removeSubscription = economyTools.find(t => t.name === 'economy_remove_subscription')!
 
-    expect(sessions.parameters.properties.agent.enum).toContain('gemini')
-    expect(sessions.parameters.properties.agent.enum).toContain('takumi')
+    expect(sessions.parameters.properties.agent.enum).toEqual(supportedAgents)
+    expect(sessions.parameters.properties.account.type).toBe('string')
     expect(sessions.parameters.properties.machine.type).toBe('string')
     expect(sessions.parameters.properties.search.type).toBe('string')
-    expect(top.parameters.properties.agent.enum).toContain('gemini')
-    expect(top.parameters.properties.agent.enum).toContain('takumi')
-    expect(sync.parameters.properties.sources.enum).toEqual(['all', 'claude', 'takumi', 'codex', 'gemini'])
+    expect(top.parameters.properties.agent.enum).toEqual(supportedAgents)
+    expect(sync.parameters.properties.sources.enum).toEqual(['all', ...supportedAgents])
     expect(pricing.description).toContain('context-cache storage')
     expect(setPricing.parameters.required).toEqual(['model', 'input_per_1m', 'output_per_1m'])
     expect(removePricing.parameters.required).toEqual(['model'])
     expect(setBudget.parameters.properties.period.enum).toEqual(['daily', 'weekly', 'monthly'])
+    expect(setBudget.parameters.properties.agent.enum).toEqual(supportedAgents)
     expect(setBudget.parameters.required).toEqual(['period', 'limit_usd'])
     expect(removeBudget.parameters.required).toEqual(['id'])
     expect(detail.parameters.required).toEqual(['session_id'])
     expect(daily.parameters.properties.days.type).toBe('number')
     expect(goals.parameters.properties).toEqual({})
     expect(setGoal.parameters.properties.period.enum).toEqual(['day', 'week', 'month', 'year'])
+    expect(setGoal.parameters.properties.agent.enum).toEqual(supportedAgents)
     expect(setGoal.parameters.required).toEqual(['period', 'limit_usd'])
     expect(removeGoal.parameters.required).toEqual(['id'])
     expect(machines.parameters.properties).toEqual({})
+    expect(projects.parameters.properties.period.enum).toEqual(['today', 'week', 'month', 'year', 'all'])
+    expect(agents.parameters.properties.period.enum).toEqual(['today', 'week', 'month', 'year', 'all'])
+    expect(accounts.parameters.properties.period.enum).toEqual(['today', 'week', 'month', 'year', 'all'])
+    expect(usage.parameters.properties.agent.enum).toEqual(supportedAgents)
+    expect(savings.parameters.properties.agent.enum).toEqual(supportedAgents)
+    expect(subscriptions.parameters.properties).toEqual({})
+    expect(setSubscription.parameters.required).toEqual(['provider', 'plan'])
+    expect(setSubscription.parameters.properties.agent.enum).toEqual(supportedAgents)
+    expect(removeSubscription.parameters.required).toEqual(['id'])
   })
 })

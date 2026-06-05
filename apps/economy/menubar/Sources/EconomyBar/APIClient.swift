@@ -56,16 +56,46 @@ actor APIClient {
     }
   }
 
-  func fetchSummary(period: String) async throws -> CostSummary {
-    try await get("/api/summary?period=\(period)")
+  func fetchSummary(period: String, machine: String? = nil) async throws -> CostSummary {
+    try await get(path("/api/summary", [
+      URLQueryItem(name: "period", value: period),
+      machineQueryItem(machine),
+    ]))
   }
 
-  func fetchDaily(days: Int) async throws -> [DailyEntry] {
-    try await get("/api/daily?days=\(days)")
+  func fetchDaily(days: Int, machine: String? = nil) async throws -> [DailyEntry] {
+    try await get(path("/api/daily", [
+      URLQueryItem(name: "days", value: String(days)),
+      machineQueryItem(machine),
+    ]))
   }
 
-  func fetchProjects() async throws -> [ProjectStat] {
-    try await get("/api/projects")
+  func fetchHourly(machine: String? = nil) async throws -> [HourlyEntry] {
+    try await get(path("/api/hourly", [
+      machineQueryItem(machine),
+    ]))
+  }
+
+  func fetchProjects(period: String = "month", machine: String? = nil) async throws -> [ProjectStat] {
+    try await get(path("/api/projects", [
+      URLQueryItem(name: "period", value: period),
+      machineQueryItem(machine),
+    ]))
+  }
+
+  func fetchAgents(period: String = "month", machine: String? = nil) async throws -> [AgentStat] {
+    try await get(path("/api/breakdown", [
+      URLQueryItem(name: "by", value: "agent"),
+      URLQueryItem(name: "period", value: period),
+      machineQueryItem(machine),
+    ]))
+  }
+
+  func fetchAccounts(period: String = "month", machine: String? = nil) async throws -> [AccountStat] {
+    try await get(path("/api/accounts", [
+      URLQueryItem(name: "period", value: period),
+      machineQueryItem(machine),
+    ]))
   }
 
   func fetchSavings() async throws -> SavingsSummary {
@@ -76,16 +106,26 @@ actor APIClient {
     try await get("/api/usage?period=month")
   }
 
-  func fetchFleet() async throws -> FleetResponse {
-    try await get("/api/fleet?period=month")
+  func fetchSubscriptions() async throws -> [SubscriptionPlan] {
+    try await get("/api/subscriptions")
   }
 
-  func fetchSessions(search: String, limit: Int) async throws -> [SessionStat] {
+  func fetchFleet(period: String = "today", machine: String? = nil) async throws -> FleetResponse {
+    try await get(path("/api/fleet", [
+      URLQueryItem(name: "period", value: period),
+      machineQueryItem(machine),
+    ]))
+  }
+
+  func fetchSessions(search: String, limit: Int, machine: String? = nil) async throws -> [SessionStat] {
     guard var components = URLComponents(string: "\(base)/api/sessions") else { throw APIError.offline }
     var queryItems = [URLQueryItem(name: "limit", value: String(limit))]
     let trimmed = search.trimmingCharacters(in: .whitespacesAndNewlines)
     if !trimmed.isEmpty {
       queryItems.append(URLQueryItem(name: "search", value: trimmed))
+    }
+    if let machine, !machine.isEmpty {
+      queryItems.append(URLQueryItem(name: "machine", value: machine))
     }
     components.queryItems = queryItems
     guard let url = components.url else { throw APIError.offline }
@@ -107,6 +147,18 @@ actor APIClient {
   private func get<T: Decodable>(_ path: String) async throws -> T {
     guard let url = URL(string: "\(base)\(path)") else { throw APIError.offline }
     return try await get(url)
+  }
+
+  private func path(_ path: String, _ queryItems: [URLQueryItem?]) -> String {
+    var components = URLComponents()
+    components.path = path
+    components.queryItems = queryItems.compactMap { $0 }
+    return components.string ?? path
+  }
+
+  private func machineQueryItem(_ machine: String?) -> URLQueryItem? {
+    guard let machine, !machine.isEmpty else { return nil }
+    return URLQueryItem(name: "machine", value: machine)
   }
 
   private func get<T: Decodable>(_ url: URL) async throws -> T {

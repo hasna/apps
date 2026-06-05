@@ -7,6 +7,7 @@ import {
   getIngestState, setIngestState, getMachineId,
 } from '../db/database.js'
 import { defaultCostBasisForAgent } from '../lib/savings.js'
+import { resolveAccountForAgent, withAccount } from '../lib/accounts.js'
 
 const PI_SESSION_DIR = process.env['PI_CODING_AGENT_SESSION_DIR']
   ?? join(homedir(), '.pi', 'agent', 'sessions')
@@ -27,7 +28,7 @@ interface PiTurn {
 interface PiSessionFile {
   id?: string
   turns?: PiTurn[]
-  messages?: Array<{ role?: string; model?: string; usage?: PiTurn['usage']; timestamp?: string }>
+  messages?: Array<{ role?: string; model?: string; provider?: string; usage?: PiTurn['usage']; timestamp?: string }>
 }
 
 function walkSessions(dir: string, acc: string[] = []): string[] {
@@ -46,6 +47,7 @@ export async function ingestPi(db: Database, verbose = false): Promise<{ files: 
   const touched = new Set<string>()
   const machineId = getMachineId()
   const now = new Date().toISOString()
+  const account = await resolveAccountForAgent('pi')
 
   for (const file of files) {
     const mtime = statSync(file).mtimeMs
@@ -74,7 +76,7 @@ export async function ingestPi(db: Database, verbose = false): Promise<{ files: 
       const timestamp = turn.timestamp ?? new Date(statSync(file).mtime).toISOString()
       const reqId = `pi-${sessionId}-${i}`
 
-      upsertRequest(db, {
+      upsertRequest(db, withAccount({
         id: reqId,
         agent: 'pi',
         session_id: sessionId,
@@ -90,12 +92,12 @@ export async function ingestPi(db: Database, verbose = false): Promise<{ files: 
         source_request_id: `${sessionId}-${i}`,
         machine_id: machineId,
         updated_at: now,
-      })
+      }, account))
       requests++
     }
 
     if (turns.length > 0) {
-      upsertSession(db, {
+      upsertSession(db, withAccount({
         id: sessionId,
         agent: 'pi',
         project_path: '',
@@ -107,7 +109,7 @@ export async function ingestPi(db: Database, verbose = false): Promise<{ files: 
         request_count: 0,
         machine_id: machineId,
         updated_at: now,
-      })
+      }, account))
       touched.add(sessionId)
     }
 

@@ -2,12 +2,13 @@ import { randomUUID } from 'crypto'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { registerCloudTools } from '@hasna/cloud'
 import { z } from 'zod'
-import { openDatabase, getDbPath, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId, queryBillingSummary, listModelPricing, upsertModelPricing, deleteModelPricing } from '../db/database.js'
+import { openDatabase, getDbPath, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryAgentBreakdown, queryAccountBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertGoal, deleteGoal, getGoalStatuses, listSubscriptions, upsertSubscription, deleteSubscription, listMachines, getMachineId, queryBillingSummary, listModelPricing, upsertModelPricing, deleteModelPricing } from '../db/database.js'
 import { PG_MIGRATIONS } from '../db/pg-migrations.js'
 import { syncAll } from '../lib/sync-all.js'
 import { AGENTS } from '../lib/agents.js'
 import { querySavingsSummary } from '../lib/savings.js'
 import { queryUsageSnapshots } from '../db/database.js'
+import { usageSnapshotFilterForPeriod } from '../lib/periods.js'
 import { computeCostFromDb } from '../lib/pricing.js'
 import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
@@ -37,6 +38,8 @@ const TOOL_NAMES = [
   'get_top_sessions',
   'get_model_breakdown',
   'get_project_breakdown',
+  'get_agent_breakdown',
+  'get_account_breakdown',
   'get_budget_status',
   'set_budget',
   'remove_budget',
@@ -46,6 +49,11 @@ const TOOL_NAMES = [
   'get_daily',
   'get_billing_summary',
   'get_session_detail',
+  'get_usage',
+  'get_savings',
+  'list_subscriptions',
+  'set_subscription',
+  'remove_subscription',
   'sync',
   'search_tools',
   'describe_tools',
@@ -62,11 +70,13 @@ const TOOL_NAMES = [
 
 const TOOL_DESCRIPTIONS: Record<string, string> = {
   get_cost_summary: 'period(today|week|month|year|all), machine?(hostname) -> {total_usd, sessions, requests, tokens, summary}',
-  get_sessions: 'agent(claude|takumi|codex|gemini), project(partial), machine?(hostname), limit(20) -> compact session table',
-  get_top_sessions: 'n(10), agent(claude|takumi|codex|gemini) -> top sessions by cost',
+  get_sessions: `agent(${AGENTS.join('|')}), project(partial), account?(key/name/email), machine?(hostname), limit(20) -> compact session table`,
+  get_top_sessions: `n(10), agent(${AGENTS.join('|')}) -> top sessions by cost`,
   list_machines: 'no params -> machine_id, sessions, requests, cost, last_active',
   get_model_breakdown: 'no params -> model, requests, tokens, cost',
-  get_project_breakdown: 'no params -> project_name, sessions, cost',
+  get_project_breakdown: 'period?(today|week|month|year|all) -> project_name, sessions, tokens, cost',
+  get_agent_breakdown: 'period?(today|week|month|year|all) -> agent, sessions, requests, tokens, api-equivalent, billable, included',
+  get_account_breakdown: 'period?(today|week|month|year|all) -> account profile, sessions, requests, tokens, api-equivalent, billable, included',
   get_budget_status: 'no params -> budget limits, current spend, percent_used, is_over_alert',
   set_budget: 'period(daily|weekly|monthly), limit_usd, project_path?, agent?, alert_at_percent? -> create budget',
   remove_budget: 'id -> delete budget',
@@ -76,6 +86,11 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   get_daily: 'days(30) -> daily cost table grouped by date and agent',
   get_billing_summary: 'period(today|yesterday|week|month|year|all) -> actual provider billing totals',
   get_session_detail: 'session_id(prefix ok) -> per-request breakdown with model, tokens, cost',
+  get_usage: `period(today|week|month|year|all), agent?(${AGENTS.join('|')}) -> usage snapshots and all-machine summary`,
+  get_savings: `period(today|week|month|year|all), agent?(${AGENTS.join('|')}) -> subscription/API-equivalent savings`,
+  list_subscriptions: 'no params -> configured subscription plans and included usage',
+  set_subscription: `provider, plan, monthly_fee_usd?, included_usage_usd?, agent?(${AGENTS.join('|')}) -> create/update subscription plan`,
+  remove_subscription: 'id -> delete subscription plan',
   sync: `sources(all|${AGENTS.join('|')}) -> ingest latest cost data`,
   search_tools: 'query substring -> tool name list',
   describe_tools: 'names[] -> one-line parameter hints',
@@ -151,17 +166,19 @@ server.tool(
 
 server.tool(
   'get_sessions',
-  'List sessions. Returns compact table. Params: agent, project, machine, limit(20)',
+  'List sessions. Returns compact table. Params: agent, project, account, machine, limit(20)',
   {
-    agent: z.enum(['claude', 'takumi', 'codex', 'gemini']).optional(),
+    agent: z.enum(AGENTS).optional(),
     project: z.string().optional(),
+    account: z.string().optional(),
     machine: z.string().optional(),
     limit: z.number().int().positive().max(100).optional(),
   },
-  async ({ agent, project, machine, limit }: { agent?: Agent; project?: string; machine?: string; limit?: number }) => {
+  async ({ agent, project, account, machine, limit }: { agent?: Agent; project?: string; account?: string; machine?: string; limit?: number }) => {
     const sessions = querySessions(db, {
       agent,
       project,
+      account,
       machine,
       limit: limit ?? 20,
     }) as unknown as Array<Record<string, unknown>>
@@ -176,7 +193,7 @@ server.tool(
   'Top sessions by cost. Params: n(10), agent',
   {
     n: z.number().int().positive().max(100).optional(),
-    agent: z.enum(['claude', 'takumi', 'codex', 'gemini']).optional(),
+    agent: z.enum(AGENTS).optional(),
   },
   async ({ n, agent }: { n?: number; agent?: Agent }) => {
     const sessions = queryTopSessions(db, n ?? 10, agent) as unknown as Array<Record<string, unknown>>
@@ -192,9 +209,9 @@ server.tool(
   {},
   async () => {
     const rows = queryModelBreakdown(db) as unknown as Array<Record<string, unknown>>
-    const lines = ['model                          reqs    tokens   cost']
+    const lines = ['model                          agent     reqs    tokens   cost']
     for (const row of rows) {
-      lines.push(`${String(row['model']).slice(0, 30).padEnd(31)}${String(row['requests']).padEnd(8)}${fmtTok(Number(row['total_tokens'])).padEnd(9)}${fmtUsd(Number(row['cost_usd']))}`)
+      lines.push(`${String(row['model']).slice(0, 30).padEnd(31)}${String(row['agent']).padEnd(10)}${String(row['requests']).padEnd(8)}${fmtTok(Number(row['total_tokens'])).padEnd(9)}${fmtUsd(Number(row['cost_usd']))}`)
     }
     return text(lines.join('\n'))
   },
@@ -202,14 +219,62 @@ server.tool(
 
 server.tool(
   'get_project_breakdown',
-  'Cost per project. No params.',
-  {},
-  async () => {
-    const rows = queryProjectBreakdown(db) as unknown as Array<Record<string, unknown>>
+  'Cost per project. Params: period(today|week|month|year|all).',
+  { period: z.enum(['today', 'week', 'month', 'year', 'all']).optional() },
+  async ({ period }: { period?: Exclude<Period, 'yesterday'> }) => {
+    const rows = queryProjectBreakdown(db, period ?? 'all') as unknown as Array<Record<string, unknown>>
     const lines = ['project              sessions tokens   cost']
     for (const row of rows) {
       const name = String(row['project_name'] || row['project_path'] || '—').slice(0, 20)
       lines.push(`${name.padEnd(21)}${String(row['sessions']).padEnd(9)}${fmtTok(Number(row['total_tokens'])).padEnd(9)}${fmtUsd(Number(row['cost_usd']))}`)
+    }
+    return text(lines.join('\n'))
+  },
+)
+
+server.tool(
+  'get_agent_breakdown',
+  'Cost per coding agent. Params: period(today|week|month|year|all). Shows API-equivalent, billable API, and subscription-included usage.',
+  { period: z.enum(['today', 'week', 'month', 'year', 'all']).optional() },
+  async ({ period }: { period?: Exclude<Period, 'yesterday'> }) => {
+    const rows = queryAgentBreakdown(db, period ?? 'all') as unknown as Array<Record<string, unknown>>
+    if (rows.length === 0) return text('No agent usage yet.')
+    const lines = ['agent      sessions requests tokens   api_eq    billable  included']
+    for (const row of rows) {
+      lines.push(
+        `${String(row['agent']).slice(0, 10).padEnd(11)}` +
+        `${String(row['sessions']).padEnd(9)}` +
+        `${String(row['requests']).padEnd(9)}` +
+        `${fmtTok(Number(row['total_tokens'])).padEnd(9)}` +
+        `${fmtUsd(Number(row['api_equivalent_usd'] ?? row['cost_usd'])).padEnd(10)}` +
+        `${fmtUsd(Number(row['billable_usd'] ?? 0)).padEnd(10)}` +
+        `${fmtUsd(Number(row['subscription_included_usd'] ?? 0))}`,
+      )
+    }
+    return text(lines.join('\n'))
+  },
+)
+
+server.tool(
+  'get_account_breakdown',
+  'Cost per account/profile. Params: period(today|week|month|year|all). Shows API-equivalent, billable API, and subscription-included usage.',
+  { period: z.enum(['today', 'week', 'month', 'year', 'all']).optional() },
+  async ({ period }: { period?: Exclude<Period, 'yesterday'> }) => {
+    const rows = queryAccountBreakdown(db, period ?? 'all') as unknown as Array<Record<string, unknown>>
+    if (rows.length === 0) return text('No account-attributed sessions yet.')
+    const lines = ['account              agent      sessions requests tokens   api_eq    billable  included']
+    for (const row of rows) {
+      const label = String(row['account_email'] || row['account_name'] || row['account_key'] || '—').slice(0, 20)
+      lines.push(
+        `${label.padEnd(21)}` +
+        `${String(row['account_tool'] ?? '').slice(0, 10).padEnd(11)}` +
+        `${String(row['sessions']).padEnd(9)}` +
+        `${String(row['requests']).padEnd(9)}` +
+        `${fmtTok(Number(row['total_tokens'])).padEnd(9)}` +
+        `${fmtUsd(Number(row['api_equivalent_usd'] ?? row['cost_usd'])).padEnd(10)}` +
+        `${fmtUsd(Number(row['billable_usd'] ?? 0)).padEnd(10)}` +
+        `${fmtUsd(Number(row['subscription_included_usd'] ?? 0))}`,
+      )
     }
     return text(lines.join('\n'))
   },
@@ -241,7 +306,7 @@ server.tool(
     period: z.enum(['daily', 'weekly', 'monthly']),
     limit_usd: z.number().positive(),
     project_path: z.string().optional(),
-    agent: z.enum(['claude', 'takumi', 'codex', 'gemini']).optional(),
+    agent: z.enum(AGENTS).optional(),
     alert_at_percent: z.number().positive().max(100).optional(),
   },
   async ({ period, limit_usd, project_path, agent, alert_at_percent }: { period: 'daily' | 'weekly' | 'monthly'; limit_usd: number; project_path?: string; agent?: Agent; alert_at_percent?: number }) => {
@@ -421,11 +486,11 @@ server.tool(
 
 server.tool(
   'get_usage',
-  'Usage snapshots and fleet summary. period: today|week|month',
-  { period: z.enum(['today', 'week', 'month']).optional(), agent: z.enum(AGENTS).optional() },
-  async ({ period, agent }: { period?: 'today' | 'week' | 'month'; agent?: Agent }) => {
+  'Usage snapshots and fleet summary. period: today|week|month|year|all',
+  { period: z.enum(['today', 'week', 'month', 'year', 'all']).optional(), agent: z.enum(AGENTS).optional() },
+  async ({ period, agent }: { period?: Exclude<Period, 'yesterday'>; agent?: Agent }) => {
     const p = (period ?? 'month') as Period
-    const snaps = queryUsageSnapshots(db, { agent })
+    const snaps = queryUsageSnapshots(db, { agent, ...usageSnapshotFilterForPeriod(p) })
     const summary = querySummary(db, p, undefined, true)
     return text(JSON.stringify({ snapshots: snaps, summary }, null, 2))
   },
@@ -437,6 +502,73 @@ server.tool(
   { period: z.enum(['today', 'week', 'month', 'year', 'all']).optional(), agent: z.enum(AGENTS).optional() },
   async ({ period, agent }: { period?: Period; agent?: Agent }) => {
     return text(JSON.stringify(querySavingsSummary(db, period ?? 'month', agent), null, 2))
+  },
+)
+
+server.tool(
+  'list_subscriptions',
+  'List configured subscription plans used by savings calculations.',
+  {},
+  async () => {
+    const rows = listSubscriptions(db)
+    if (rows.length === 0) return text('No subscriptions configured.')
+    const lines = ['id                 provider   plan       agent      fee       included  active']
+    for (const row of rows) {
+      lines.push(
+        `${row.id.slice(0, 18).padEnd(19)}` +
+        `${row.provider.slice(0, 10).padEnd(11)}` +
+        `${row.plan.slice(0, 10).padEnd(11)}` +
+        `${(row.agent ?? 'all').slice(0, 10).padEnd(11)}` +
+        `${fmtUsd(row.monthly_fee_usd).padEnd(10)}` +
+        `${fmtUsd(row.included_usage_usd).padEnd(10)}` +
+        `${row.active ? 'yes' : 'no'}`,
+      )
+    }
+    return text(lines.join('\n'))
+  },
+)
+
+server.tool(
+  'set_subscription',
+  'Create or update a subscription plan used by subscription-vs-API savings calculations.',
+  {
+    id: z.string().optional(),
+    provider: z.string().min(1),
+    plan: z.string().min(1),
+    agent: z.enum(AGENTS).optional(),
+    monthly_fee_usd: z.number().nonnegative().optional(),
+    included_usage_usd: z.number().nonnegative().optional(),
+    billing_cycle_start: z.string().optional(),
+    reset_policy: z.string().optional(),
+    active: z.boolean().optional(),
+  },
+  async (input: { id?: string; provider: string; plan: string; agent?: Agent; monthly_fee_usd?: number; included_usage_usd?: number; billing_cycle_start?: string; reset_policy?: string; active?: boolean }) => {
+    const now = new Date().toISOString()
+    const row = {
+      id: input.id ?? randomUUID(),
+      provider: input.provider,
+      plan: input.plan,
+      agent: input.agent ?? null,
+      monthly_fee_usd: input.monthly_fee_usd ?? 0,
+      included_usage_usd: input.included_usage_usd ?? 0,
+      billing_cycle_start: input.billing_cycle_start ?? null,
+      reset_policy: input.reset_policy ?? 'monthly',
+      active: input.active === false ? 0 : 1,
+      created_at: now,
+      updated_at: now,
+    }
+    upsertSubscription(db, row)
+    return text(JSON.stringify(row, null, 2))
+  },
+)
+
+server.tool(
+  'remove_subscription',
+  'Delete a subscription plan by id.',
+  { id: z.string() },
+  async ({ id }: { id: string }) => {
+    deleteSubscription(db, id)
+    return text('Subscription removed.')
   },
 )
 

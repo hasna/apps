@@ -11,6 +11,7 @@ import { GoalsTab } from "@/tabs/GoalsTab";
 import { PricingTab } from "@/tabs/PricingTab";
 import { BillingTab } from "@/tabs/BillingTab";
 import { UsageTab } from "@/tabs/UsageTab";
+import { AccountsTab } from "@/tabs/AccountsTab";
 import { SavingsTab } from "@/tabs/SavingsTab";
 import { FleetTab } from "@/tabs/FleetTab";
 import { ReconciliationTab } from "@/tabs/ReconciliationTab";
@@ -31,6 +32,7 @@ type Tab =
   | "budgets"
   | "goals"
   | "usage"
+  | "accounts"
   | "savings"
   | "fleet"
   | "reconciliation"
@@ -45,6 +47,7 @@ const navItems: { key: Tab; label: string }[] = [
   { key: "budgets", label: "Budgets" },
   { key: "goals", label: "Goals" },
   { key: "usage", label: "Usage" },
+  { key: "accounts", label: "Accounts" },
   { key: "savings", label: "Savings" },
   { key: "fleet", label: "Fleet" },
   { key: "reconciliation", label: "Reconcile" },
@@ -162,6 +165,7 @@ function AppInner() {
         {tab === "budgets" && <BudgetsTab key={reloadKey} />}
         {tab === "goals" && <GoalsTab key={reloadKey} />}
         {tab === "usage" && <UsageTab key={reloadKey} />}
+        {tab === "accounts" && <AccountsTab key={reloadKey} />}
         {tab === "savings" && <SavingsTab key={reloadKey} />}
         {tab === "fleet" && <FleetTab key={reloadKey} />}
         {tab === "reconciliation" && <ReconciliationTab key={reloadKey} />}

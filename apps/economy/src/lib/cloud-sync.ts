@@ -57,20 +57,13 @@ export function isCloudIncrementalEnabled(): boolean {
 }
 
 export async function cloudPush(opts?: { tables?: string[] }): Promise<{ rows: number; machine: string }> {
-  const { syncPush, incrementalSyncPush, ensureSyncMetaTable, SqliteAdapter } = await import('@hasna/cloud')
+  const { syncPush, SqliteAdapter } = await import('@hasna/cloud')
   const cloud = await getCloudPg()
   const local = new SqliteAdapter(getDbPath())
   await runCloudMigrations(cloud)
   const tables = opts?.tables ?? [...CLOUD_TABLES]
-  let rows = 0
-  if (isCloudIncrementalEnabled()) {
-    ensureSyncMetaTable(local)
-    const results = incrementalSyncPush(local, cloud, tables, { conflictColumn: 'updated_at' })
-    rows = results.reduce((s, r) => s + r.synced_rows, 0)
-  } else {
-    const results = await syncPush(local, cloud, { tables, conflictColumn: 'updated_at' }) as Array<{ rowsWritten: number }>
-    rows = results.reduce((s, r) => s + r.rowsWritten, 0)
-  }
+  const results = await syncPush(local, cloud, { tables, conflictColumn: 'updated_at' }) as Array<{ rowsWritten: number }>
+  const rows = results.reduce((s, r) => s + r.rowsWritten, 0)
   touchMachineRegistry(local, 'push')
   local.close()
   await cloud.close()
@@ -78,20 +71,13 @@ export async function cloudPush(opts?: { tables?: string[] }): Promise<{ rows: n
 }
 
 export async function cloudPull(opts?: { tables?: string[] }): Promise<{ rows: number; machine: string }> {
-  const { syncPull, incrementalSyncPull, ensureSyncMetaTable, SqliteAdapter } = await import('@hasna/cloud')
+  const { syncPull, SqliteAdapter } = await import('@hasna/cloud')
   const cloud = await getCloudPg()
   const local = new SqliteAdapter(getDbPath())
   await runCloudMigrations(cloud)
   const tables = opts?.tables ?? [...CLOUD_TABLES]
-  let rows = 0
-  if (isCloudIncrementalEnabled()) {
-    ensureSyncMetaTable(local)
-    const results = incrementalSyncPull(cloud, local, tables, { conflictColumn: 'updated_at' })
-    rows = results.reduce((s, r) => s + r.synced_rows, 0)
-  } else {
-    const results = await syncPull(cloud, local, { tables, conflictColumn: 'updated_at' }) as Array<{ rowsWritten: number }>
-    rows = results.reduce((s, r) => s + r.rowsWritten, 0)
-  }
+  const results = await syncPull(cloud, local, { tables, conflictColumn: 'updated_at' }) as Array<{ rowsWritten: number }>
+  const rows = results.reduce((s, r) => s + r.rowsWritten, 0)
   touchMachineRegistry(local, 'pull')
   local.close()
   await cloud.close()

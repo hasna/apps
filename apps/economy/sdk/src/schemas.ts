@@ -17,6 +17,8 @@ export type EconomyToolName =
   | 'economy_list_machines'
   | 'economy_get_model_breakdown'
   | 'economy_get_project_breakdown'
+  | 'economy_get_agent_breakdown'
+  | 'economy_get_account_breakdown'
   | 'economy_get_budget_status'
   | 'economy_set_budget'
   | 'economy_remove_budget'
@@ -28,7 +30,15 @@ export type EconomyToolName =
   | 'economy_set_goal'
   | 'economy_remove_goal'
   | 'economy_get_billing_summary'
+  | 'economy_get_usage'
+  | 'economy_get_savings'
+  | 'economy_list_subscriptions'
+  | 'economy_set_subscription'
+  | 'economy_remove_subscription'
   | 'economy_sync'
+
+const agentEnum = ['claude', 'takumi', 'codex', 'gemini', 'opencode', 'cursor', 'pi', 'hermes'] as const
+const sourceEnum = ['all', ...agentEnum] as const
 
 export const economyTools = [
   {
@@ -44,12 +54,13 @@ export const economyTools = [
   },
   {
     name: 'economy_get_sessions',
-    description: 'List coding sessions with cost data from Claude Code, Takumi, Codex, or Gemini.',
+    description: 'List coding sessions with cost data from supported AI coding agents.',
     parameters: {
       type: 'object',
       properties: {
-        agent: { type: 'string', enum: ['claude', 'takumi', 'codex', 'gemini'], description: 'Filter by AI agent' },
+        agent: { type: 'string', enum: agentEnum, description: 'Filter by AI agent' },
         project: { type: 'string', description: 'Filter by project path (partial match)' },
+        account: { type: 'string', description: 'Filter by account key, name, or email' },
         machine: { type: 'string', description: 'Filter by machine/host id' },
         search: { type: 'string', description: 'Search session id, agent, or project fields' },
         limit: { type: 'number', description: 'Max results (default 20)' },
@@ -75,7 +86,7 @@ export const economyTools = [
       type: 'object',
       properties: {
         n: { type: 'number', description: 'Number of sessions (default 10)' },
-        agent: { type: 'string', enum: ['claude', 'takumi', 'codex', 'gemini'], description: 'Filter by agent' },
+        agent: { type: 'string', enum: agentEnum, description: 'Filter by agent' },
       },
     },
   },
@@ -92,7 +103,32 @@ export const economyTools = [
   {
     name: 'economy_get_project_breakdown',
     description: 'Get cost breakdown by project — shows sessions, tokens, and cost per project',
-    parameters: { type: 'object', properties: {} },
+    parameters: {
+      type: 'object',
+      properties: {
+        period: { type: 'string', enum: ['today', 'week', 'month', 'year', 'all'], description: 'Optional period filter' },
+      },
+    },
+  },
+  {
+    name: 'economy_get_agent_breakdown',
+    description: 'Get cost breakdown by coding agent — shows sessions, requests, tokens, API-equivalent cost, billable API spend, subscription-included usage, and last activity',
+    parameters: {
+      type: 'object',
+      properties: {
+        period: { type: 'string', enum: ['today', 'week', 'month', 'year', 'all'], description: 'Optional period filter' },
+      },
+    },
+  },
+  {
+    name: 'economy_get_account_breakdown',
+    description: 'Get cost breakdown by account — shows account identity, sessions, requests, tokens, API-equivalent cost, billable API spend, subscription-included usage, and last activity',
+    parameters: {
+      type: 'object',
+      properties: {
+        period: { type: 'string', enum: ['today', 'week', 'month', 'year', 'all'], description: 'Optional period filter' },
+      },
+    },
   },
   {
     name: 'economy_get_budget_status',
@@ -108,7 +144,7 @@ export const economyTools = [
         period: { type: 'string', enum: ['daily', 'weekly', 'monthly'], description: 'Budget period' },
         limit_usd: { type: 'number', description: 'Budget limit in USD; must be positive' },
         project_path: { type: 'string', description: 'Optional project path scope' },
-        agent: { type: 'string', enum: ['claude', 'takumi', 'codex', 'gemini'], description: 'Optional agent scope' },
+        agent: { type: 'string', enum: agentEnum, description: 'Optional agent scope' },
         alert_at_percent: { type: 'number', description: 'Alert threshold percentage, 1-100; default 80' },
       },
       required: ['period', 'limit_usd'],
@@ -182,7 +218,7 @@ export const economyTools = [
         period: { type: 'string', enum: ['day', 'week', 'month', 'year'], description: 'Goal period' },
         limit_usd: { type: 'number', description: 'Goal limit in USD; must be positive' },
         project_path: { type: 'string', description: 'Optional project path scope' },
-        agent: { type: 'string', enum: ['claude', 'takumi', 'codex', 'gemini'], description: 'Optional agent scope' },
+        agent: { type: 'string', enum: agentEnum, description: 'Optional agent scope' },
       },
       required: ['period', 'limit_usd'],
     },
@@ -209,12 +245,69 @@ export const economyTools = [
     },
   },
   {
-    name: 'economy_sync',
-    description: 'Trigger cost data ingestion from Claude Code, Takumi, Codex, and Gemini sessions',
+    name: 'economy_get_usage',
+    description: 'Get subscription quota and usage snapshots with an all-machine cost summary.',
     parameters: {
       type: 'object',
       properties: {
-        sources: { type: 'string', enum: ['all', 'claude', 'takumi', 'codex', 'gemini'], description: 'Which sources to sync (default: all)' },
+        period: { type: 'string', enum: ['today', 'week', 'month', 'year', 'all'], description: 'Time period', default: 'month' },
+        agent: { type: 'string', enum: agentEnum, description: 'Optional agent filter' },
+      },
+    },
+  },
+  {
+    name: 'economy_get_savings',
+    description: 'Get subscription-vs-API-equivalent savings, including subscription fee, included consumption, on-demand spend, API equivalent, and saved USD.',
+    parameters: {
+      type: 'object',
+      properties: {
+        period: { type: 'string', enum: ['today', 'week', 'month', 'year', 'all'], description: 'Time period', default: 'month' },
+        agent: { type: 'string', enum: agentEnum, description: 'Optional agent filter' },
+      },
+    },
+  },
+  {
+    name: 'economy_list_subscriptions',
+    description: 'List configured subscription plans used by savings calculations.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'economy_set_subscription',
+    description: 'Create or update a subscription plan used by subscription-vs-API savings calculations.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Optional id to update an existing subscription' },
+        provider: { type: 'string', description: 'Provider name, for example claude, openai, cursor, or codex' },
+        plan: { type: 'string', description: 'Plan name' },
+        agent: { type: 'string', enum: agentEnum, description: 'Optional agent scope' },
+        monthly_fee_usd: { type: 'number', description: 'Monthly fee in USD; must be non-negative' },
+        included_usage_usd: { type: 'number', description: 'Included usage value in USD; must be non-negative' },
+        billing_cycle_start: { type: 'string', description: 'Optional billing cycle start date' },
+        reset_policy: { type: 'string', description: 'Reset policy, default monthly' },
+        active: { type: 'boolean', description: 'Whether the subscription is active' },
+      },
+      required: ['provider', 'plan'],
+    },
+  },
+  {
+    name: 'economy_remove_subscription',
+    description: 'Delete a subscription plan by id.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Subscription id' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'economy_sync',
+    description: 'Trigger cost data ingestion from supported AI coding agent sessions',
+    parameters: {
+      type: 'object',
+      properties: {
+        sources: { type: 'string', enum: sourceEnum, description: 'Which sources to sync (default: all)' },
       },
     },
   },

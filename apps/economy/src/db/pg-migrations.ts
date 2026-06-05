@@ -21,7 +21,12 @@ export const PG_MIGRATIONS: string[] = [
     duration_ms INTEGER DEFAULT 0,
     timestamp TEXT NOT NULL,
     source_request_id TEXT,
-    machine_id TEXT DEFAULT ''
+    machine_id TEXT DEFAULT '',
+    account_key TEXT DEFAULT '',
+    account_tool TEXT DEFAULT '',
+    account_name TEXT DEFAULT '',
+    account_email TEXT DEFAULT '',
+    account_source TEXT DEFAULT ''
   )`,
 
   // Sessions table — aggregated session-level data
@@ -35,7 +40,12 @@ export const PG_MIGRATIONS: string[] = [
     total_cost_usd REAL DEFAULT 0,
     total_tokens INTEGER DEFAULT 0,
     request_count INTEGER DEFAULT 0,
-    machine_id TEXT DEFAULT ''
+    machine_id TEXT DEFAULT '',
+    account_key TEXT DEFAULT '',
+    account_tool TEXT DEFAULT '',
+    account_name TEXT DEFAULT '',
+    account_email TEXT DEFAULT '',
+    account_source TEXT DEFAULT ''
   )`,
 
   // Projects table
@@ -177,12 +187,24 @@ export const PG_MIGRATIONS: string[] = [
 
   `ALTER TABLE requests ADD COLUMN IF NOT EXISTS cost_basis TEXT DEFAULT 'estimated'`,
   `ALTER TABLE requests ADD COLUMN IF NOT EXISTS attribution_tag TEXT DEFAULT ''`,
+  `ALTER TABLE requests ADD COLUMN IF NOT EXISTS account_key TEXT DEFAULT ''`,
+  `ALTER TABLE requests ADD COLUMN IF NOT EXISTS account_tool TEXT DEFAULT ''`,
+  `ALTER TABLE requests ADD COLUMN IF NOT EXISTS account_name TEXT DEFAULT ''`,
+  `ALTER TABLE requests ADD COLUMN IF NOT EXISTS account_email TEXT DEFAULT ''`,
+  `ALTER TABLE requests ADD COLUMN IF NOT EXISTS account_source TEXT DEFAULT ''`,
   `ALTER TABLE requests ADD COLUMN IF NOT EXISTS updated_at TEXT DEFAULT ''`,
   `ALTER TABLE requests ADD COLUMN IF NOT EXISTS synced_at TEXT DEFAULT ''`,
   `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS attribution_tag TEXT DEFAULT ''`,
+  `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS account_key TEXT DEFAULT ''`,
+  `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS account_tool TEXT DEFAULT ''`,
+  `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS account_name TEXT DEFAULT ''`,
+  `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS account_email TEXT DEFAULT ''`,
+  `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS account_source TEXT DEFAULT ''`,
   `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS updated_at TEXT DEFAULT ''`,
   `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS synced_at TEXT DEFAULT ''`,
 
   `CREATE INDEX IF NOT EXISTS idx_usage_agent_date ON usage_snapshots(agent, date)`,
   `CREATE INDEX IF NOT EXISTS idx_savings_date ON savings_daily(date)`,
+  `CREATE INDEX IF NOT EXISTS idx_requests_account ON requests(account_key)`,
+  `CREATE INDEX IF NOT EXISTS idx_sessions_account ON sessions(account_key)`,
 ];

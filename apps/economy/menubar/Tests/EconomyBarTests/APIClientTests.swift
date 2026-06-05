@@ -1,16 +1,20 @@
 import Foundation
-import Testing
+import XCTest
 @testable import EconomyBar
 
-@Suite(.serialized)
-struct APIClientTests {
-  @Test func normalizeBaseURL() {
-    #expect(APIClient.normalizeBaseURL(" economy.local:3456/ ") == "http://economy.local:3456")
-    #expect(APIClient.normalizeBaseURL("https://economy.local/api/") == "https://economy.local/api")
-    #expect(APIClient.normalizeBaseURL("   ") == APIClient.defaultBaseURL)
+final class APIClientTests: XCTestCase {
+  override func tearDown() {
+    MockURLProtocol.handler = nil
+    super.tearDown()
   }
 
-  @Test func setBaseURLNormalizesAndPersists() async {
+  func testNormalizeBaseURL() {
+    XCTAssertEqual(APIClient.normalizeBaseURL(" economy.local:3456/ "), "http://economy.local:3456")
+    XCTAssertEqual(APIClient.normalizeBaseURL("https://economy.local/api/"), "https://economy.local/api")
+    XCTAssertEqual(APIClient.normalizeBaseURL("   "), APIClient.defaultBaseURL)
+  }
+
+  func testSetBaseURLNormalizesAndPersists() async {
     let previous = UserDefaults.standard.string(forKey: APIClient.defaultsKey)
     defer {
       if let previous {
@@ -23,22 +27,15 @@ struct APIClientTests {
     let client = APIClient(baseURL: APIClient.defaultBaseURL, session: makeSession())
     let normalized = await client.setBaseURL(" economy.test:4567/ ")
 
-    #expect(normalized == "http://economy.test:4567")
-    #expect(APIClient.storedBaseURL() == "http://economy.test:4567")
+    XCTAssertEqual(normalized, "http://economy.test:4567")
+    XCTAssertEqual(APIClient.storedBaseURL(), "http://economy.test:4567")
   }
 
-  @Test func fetchSessionsEncodesSearchAndDecodesWrappedResponse() async throws {
-    defer { MockURLProtocol.handler = nil }
+  func testFetchSessionsEncodesSearchAndDecodesWrappedResponse() async throws {
     var capturedRequest: URLRequest?
     MockURLProtocol.handler = { request in
       capturedRequest = request
-      let response = HTTPURLResponse(
-        url: request.url!,
-        statusCode: 200,
-        httpVersion: nil,
-        headerFields: ["Content-Type": "application/json"]
-      )!
-      let data = Data("""
+      return ok("""
       {
         "data": [
           {
@@ -54,63 +51,396 @@ struct APIClientTests {
           }
         ]
       }
-      """.utf8)
-      return (response, data)
+      """, request: request)
     }
 
     let client = APIClient(baseURL: "https://economy.test/", session: makeSession())
     let sessions = try await client.fetchSessions(search: " codex project ", limit: 10)
 
-    #expect(sessions.count == 1)
-    #expect(sessions[0].agent == "codex")
-    #expect(sessions[0].displayProject == "open-economy")
+    XCTAssertEqual(sessions.count, 1)
+    XCTAssertEqual(sessions[0].agent, "codex")
+    XCTAssertEqual(sessions[0].displayProject, "open-economy")
 
-    let requestURL = try #require(capturedRequest?.url)
-    let components = try #require(URLComponents(url: requestURL, resolvingAgainstBaseURL: false))
-    #expect(components.scheme == "https")
-    #expect(components.host == "economy.test")
-    #expect(components.path == "/api/sessions")
-    #expect(components.queryItems?.first(where: { $0.name == "limit" })?.value == "10")
-    #expect(components.queryItems?.first(where: { $0.name == "search" })?.value == "codex project")
+    let requestURL = try XCTUnwrap(capturedRequest?.url)
+    let components = try XCTUnwrap(URLComponents(url: requestURL, resolvingAgainstBaseURL: false))
+    XCTAssertEqual(components.scheme, "https")
+    XCTAssertEqual(components.host, "economy.test")
+    XCTAssertEqual(components.path, "/api/sessions")
+    XCTAssertEqual(components.queryItems?.first(where: { $0.name == "limit" })?.value, "10")
+    XCTAssertEqual(components.queryItems?.first(where: { $0.name == "search" })?.value, "codex project")
   }
 
-  @Test func isOnlineRequiresSuccessfulHTTPStatus() async {
-    defer { MockURLProtocol.handler = nil }
+  func testFetchAccountsDecodesWrappedResponse() async throws {
+    var capturedRequest: URLRequest?
+    MockURLProtocol.handler = { request in
+      capturedRequest = request
+      return ok("""
+      {
+        "data": [
+          {
+            "account_key": "claude:work@example.com",
+            "account_tool": "claude",
+            "account_name": "work",
+            "account_email": "work@example.com",
+            "account_source": "current",
+            "sessions": 2,
+            "requests": 3,
+            "total_tokens": 4567,
+            "api_equivalent_usd": 1.75,
+            "billable_usd": 1.25,
+            "metered_api_usd": 1.25,
+            "subscription_included_usd": 0.5,
+            "estimated_usd": 0,
+            "unknown_usd": 0,
+            "cost_usd": 1.75,
+            "last_active": "2026-06-04T10:00:00Z"
+          }
+        ]
+      }
+      """, request: request)
+    }
+
+    let client = APIClient(baseURL: "https://economy.test/", session: makeSession())
+    let accounts = try await client.fetchAccounts()
+
+    XCTAssertEqual(accounts.count, 1)
+    XCTAssertEqual(accounts[0].displayName, "work@example.com")
+    XCTAssertEqual(accounts[0].agentLabel, "Claude")
+    XCTAssertEqual(accounts[0].account_email, "work@example.com")
+    XCTAssertEqual(accounts[0].api_equivalent_usd, 1.75)
+    XCTAssertEqual(accounts[0].billable_usd, 1.25)
+    XCTAssertEqual(accounts[0].subscription_included_usd, 0.5)
+
+    let requestURL = try XCTUnwrap(capturedRequest?.url)
+    XCTAssertEqual(requestURL.path, "/api/accounts")
+    XCTAssertEqual(URLComponents(url: requestURL, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "period" })?.value, "month")
+  }
+
+  func testFetchProjectsDecodesWrappedResponseAndPassesPeriod() async throws {
+    var capturedRequest: URLRequest?
+    MockURLProtocol.handler = { request in
+      capturedRequest = request
+      return ok("""
+      {
+        "data": [
+          {
+            "project_path": "/workspace/open-economy",
+            "project_name": "open-economy",
+            "sessions": 2,
+            "requests": 4,
+            "total_tokens": 9876,
+            "cost_usd": 3.25,
+            "last_active": "2026-06-04T10:00:00Z"
+          }
+        ]
+      }
+      """, request: request)
+    }
+
+    let client = APIClient(baseURL: "https://economy.test/", session: makeSession())
+    let projects = try await client.fetchProjects(period: "week")
+
+    XCTAssertEqual(projects.count, 1)
+    XCTAssertEqual(projects[0].displayName, "open-economy")
+    XCTAssertEqual(projects[0].requests, 4)
+    XCTAssertEqual(projects[0].total_tokens, 9876)
+
+    let requestURL = try XCTUnwrap(capturedRequest?.url)
+    XCTAssertEqual(requestURL.path, "/api/projects")
+    XCTAssertEqual(URLComponents(url: requestURL, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "period" })?.value, "week")
+  }
+
+  func testFetchAgentsDecodesWrappedResponse() async throws {
+    var capturedRequest: URLRequest?
+    MockURLProtocol.handler = { request in
+      capturedRequest = request
+      return ok("""
+      {
+        "data": [
+          {
+            "agent": "codex",
+            "sessions": 4,
+            "requests": 8,
+            "total_tokens": 123456,
+            "api_equivalent_usd": 12.5,
+            "billable_usd": 0,
+            "metered_api_usd": 0,
+            "subscription_included_usd": 12.5,
+            "estimated_usd": 0,
+            "unknown_usd": 0,
+            "cost_usd": 12.5,
+            "last_active": "2026-06-04T10:00:00Z"
+          }
+        ]
+      }
+      """, request: request)
+    }
+
+    let client = APIClient(baseURL: "https://economy.test/", session: makeSession())
+    let agents = try await client.fetchAgents()
+
+    XCTAssertEqual(agents.count, 1)
+    XCTAssertEqual(agents[0].displayName, "Codex")
+    XCTAssertEqual(agents[0].total_tokens, 123456)
+    XCTAssertEqual(agents[0].api_equivalent_usd, 12.5)
+    XCTAssertEqual(agents[0].subscription_included_usd, 12.5)
+
+    let requestURL = try XCTUnwrap(capturedRequest?.url)
+    let components = URLComponents(url: requestURL, resolvingAgainstBaseURL: false)
+    XCTAssertEqual(requestURL.path, "/api/breakdown")
+    XCTAssertEqual(components?.queryItems?.first(where: { $0.name == "by" })?.value, "agent")
+    XCTAssertEqual(components?.queryItems?.first(where: { $0.name == "period" })?.value, "month")
+  }
+
+  func testFetchSubscriptionsDecodesWrappedResponse() async throws {
+    var capturedRequest: URLRequest?
+    MockURLProtocol.handler = { request in
+      capturedRequest = request
+      return ok("""
+      {
+        "data": [
+          {
+            "id": "anthropic-claude-max",
+            "agent": "claude",
+            "provider": "anthropic",
+            "plan": "claude max",
+            "monthly_fee_usd": 200,
+            "included_usage_usd": 200,
+            "billing_cycle_start": null,
+            "reset_policy": "monthly",
+            "active": 1,
+            "created_at": "2026-06-04T10:00:00Z",
+            "updated_at": "2026-06-04T10:00:00Z"
+          }
+        ]
+      }
+      """, request: request)
+    }
+
+    let client = APIClient(baseURL: "https://economy.test/", session: makeSession())
+    let subscriptions = try await client.fetchSubscriptions()
+
+    XCTAssertEqual(subscriptions.count, 1)
+    XCTAssertEqual(subscriptions[0].displayName, "anthropic / claude max")
+    XCTAssertEqual(subscriptions[0].agentLabel, "Claude")
+    XCTAssertEqual(subscriptions[0].monthly_fee_usd, 200)
+    XCTAssertEqual(subscriptions[0].included_usage_usd, 200)
+
+    let requestURL = try XCTUnwrap(capturedRequest?.url)
+    XCTAssertEqual(requestURL.path, "/api/subscriptions")
+  }
+
+  func testFetchUsageDecodesMultiAgentSnapshots() async throws {
+    var capturedRequest: URLRequest?
+    MockURLProtocol.handler = { request in
+      capturedRequest = request
+      return ok("""
+      {
+        "data": {
+          "snapshots": [
+            {
+              "id": "claude-usage",
+              "agent": "claude",
+              "metric": "five_hour_utilization",
+              "value": 82,
+              "unit": "percent",
+              "date": "2026-06-04",
+              "machine_id": "spark02"
+            },
+            {
+              "id": "cursor-usage",
+              "agent": "cursor",
+              "metric": "monthly_quota_used",
+              "value": 41,
+              "unit": "percent",
+              "date": "2026-06-04",
+              "machine_id": "apple01"
+            }
+          ],
+          "summary": {
+            "total_usd": 0,
+            "sessions": 0,
+            "requests": 0,
+            "tokens": 0
+          }
+        }
+      }
+      """, request: request)
+    }
+
+    let client = APIClient(baseURL: "https://economy.test/", session: makeSession())
+    let usage = try await client.fetchUsage()
+
+    XCTAssertEqual(usage.snapshots.count, 2)
+    XCTAssertEqual(usage.snapshots[0].id, "claude-usage")
+    XCTAssertEqual(usage.snapshots[0].displayAgent, "Claude")
+    XCTAssertEqual(usage.snapshots[0].displayMetric, "five hour utilization")
+    XCTAssertEqual(usage.snapshots[0].displayValue, "82%")
+    XCTAssertEqual(usage.snapshots[1].displayAgent, "Cursor")
+
+    let requestURL = try XCTUnwrap(capturedRequest?.url)
+    XCTAssertEqual(requestURL.path, "/api/usage")
+    XCTAssertEqual(URLComponents(url: requestURL, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "period" })?.value, "month")
+  }
+
+  func testFetchFleetDecodesSummaryAndMachineRows() async throws {
+    var capturedRequest: URLRequest?
+    MockURLProtocol.handler = { request in
+      capturedRequest = request
+      return ok("""
+      {
+        "data": {
+          "summary": {
+            "total_usd": 383.87,
+            "sessions": 7,
+            "requests": 587,
+            "tokens": 152579348
+          },
+          "machines": [
+            {
+              "machine_id": "spark02",
+              "sessions": 6,
+              "requests": 356,
+              "total_cost_usd": 329.72,
+              "last_active": "2026-06-05T07:08:54.631Z"
+            },
+            {
+              "machine_id": "apple06",
+              "sessions": 1,
+              "requests": 231,
+              "total_cost_usd": 54.14,
+              "last_active": "2026-06-05T09:12:04.230Z"
+            }
+          ],
+          "current_machine": "apple06"
+        }
+      }
+      """, request: request)
+    }
+
+    let client = APIClient(baseURL: "https://economy.test/", session: makeSession())
+    let fleet = try await client.fetchFleet(period: "today")
+
+    XCTAssertEqual(fleet.summary.sessions, 7)
+    XCTAssertEqual(fleet.machines.count, 2)
+    XCTAssertEqual(fleet.machines[0].machine_id, "spark02")
+    XCTAssertEqual(fleet.machines[0].sessions, 6)
+    XCTAssertEqual(fleet.machines[0].requests, 356)
+    XCTAssertEqual(fleet.current_machine, "apple06")
+
+    let requestURL = try XCTUnwrap(capturedRequest?.url)
+    XCTAssertEqual(requestURL.path, "/api/fleet")
+    XCTAssertEqual(URLComponents(url: requestURL, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "period" })?.value, "today")
+  }
+
+  func testFetchHourlyDecodesRowsAndEncodesMachineFilter() async throws {
+    var capturedRequest: URLRequest?
+    MockURLProtocol.handler = { request in
+      capturedRequest = request
+      return ok("""
+      {
+        "data": [
+          {
+            "hour": "09",
+            "agent": "codex",
+            "cost_usd": 4.25
+          },
+          {
+            "hour": "10",
+            "agent": "claude",
+            "cost_usd": 2.5
+          }
+        ]
+      }
+      """, request: request)
+    }
+
+    let client = APIClient(baseURL: "https://economy.test/", session: makeSession())
+    let hourly = try await client.fetchHourly(machine: "apple06")
+
+    XCTAssertEqual(hourly.count, 2)
+    XCTAssertEqual(hourly[0].hour, "09")
+    XCTAssertEqual(hourly[0].agent, "codex")
+    XCTAssertEqual(hourly[0].cost_usd, 4.25)
+
+    let requestURL = try XCTUnwrap(capturedRequest?.url)
+    XCTAssertEqual(requestURL.path, "/api/hourly")
+    XCTAssertEqual(URLComponents(url: requestURL, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "machine" })?.value, "apple06")
+  }
+
+  func testMachineFilteredFetchesEncodeMachineQueryItems() async throws {
+    var capturedPaths: [String] = []
+    MockURLProtocol.handler = { request in
+      capturedPaths.append(self.pathWithQuery(request))
+
+      switch request.url?.path {
+      case "/api/summary":
+        return ok(#"{"data":{"total_usd":1,"sessions":1,"requests":1,"tokens":150}}"#, request: request)
+      case "/api/daily":
+        return ok(#"{"data":[]}"#, request: request)
+      case "/api/hourly":
+        return ok(#"{"data":[]}"#, request: request)
+      case "/api/projects":
+        return ok(#"{"data":[]}"#, request: request)
+      case "/api/breakdown":
+        return ok(#"{"data":[]}"#, request: request)
+      case "/api/accounts":
+        return ok(#"{"data":[]}"#, request: request)
+      case "/api/fleet":
+        return ok(#"{"data":{"summary":{"total_usd":1,"sessions":1,"requests":1,"tokens":150},"machines":[],"current_machine":"apple06"}}"#, request: request)
+      case "/api/sessions":
+        return ok(#"{"data":[]}"#, request: request)
+      default:
+        return response(#"{"error":"unexpected path"}"#, request: request, status: 404)
+      }
+    }
+
+    let client = APIClient(baseURL: "https://economy.test/", session: makeSession())
+
+    _ = try await client.fetchSummary(period: "today", machine: "apple06")
+    _ = try await client.fetchDaily(days: 7, machine: "apple06")
+    _ = try await client.fetchHourly(machine: "apple06")
+    _ = try await client.fetchProjects(period: "week", machine: "apple06")
+    _ = try await client.fetchAgents(period: "week", machine: "apple06")
+    _ = try await client.fetchAccounts(period: "month", machine: "apple06")
+    _ = try await client.fetchFleet(period: "today", machine: "apple06")
+    _ = try await client.fetchSessions(search: " open economy ", limit: 5, machine: "apple06")
+
+    XCTAssertEqual(capturedPaths, [
+      "/api/summary?period=today&machine=apple06",
+      "/api/daily?days=7&machine=apple06",
+      "/api/hourly?machine=apple06",
+      "/api/projects?period=week&machine=apple06",
+      "/api/breakdown?by=agent&period=week&machine=apple06",
+      "/api/accounts?period=month&machine=apple06",
+      "/api/fleet?period=today&machine=apple06",
+      "/api/sessions?limit=5&search=open%20economy&machine=apple06",
+    ])
+  }
+
+  func testIsOnlineRequiresSuccessfulHTTPStatus() async {
     let client = APIClient(baseURL: "http://economy.test", session: makeSession())
 
     MockURLProtocol.handler = { request in
-      let response = HTTPURLResponse(
-        url: request.url!,
-        statusCode: 200,
-        httpVersion: nil,
-        headerFields: ["Content-Type": "application/json"]
-      )!
-      return (response, Data(#"{"data":{"status":"ok"}}"#.utf8))
+      ok(#"{"data":{"status":"ok"}}"#, request: request)
     }
-    #expect(await client.isOnline())
+    XCTAssertTrue(await client.isOnline())
 
     MockURLProtocol.handler = { request in
-      let response = HTTPURLResponse(
-        url: request.url!,
-        statusCode: 503,
-        httpVersion: nil,
-        headerFields: ["Content-Type": "application/json"]
-      )!
-      return (response, Data(#"{"error":"unavailable"}"#.utf8))
+      response(#"{"error":"unavailable"}"#, request: request, status: 503)
     }
-    #expect(await client.isOnline() == false)
+    XCTAssertFalse(await client.isOnline())
   }
 
-  @Test func invalidBaseURLReportsOfflineInsteadOfCrashing() async {
-    defer { MockURLProtocol.handler = nil }
+  func testInvalidBaseURLReportsOfflineInsteadOfCrashing() async {
     MockURLProtocol.handler = { _ in
-      Issue.record("Invalid URLs should not start a network request")
+      XCTFail("Invalid URLs should not start a network request")
       throw APIError.offline
     }
 
     let client = APIClient(baseURL: "http://%", session: makeSession())
 
-    #expect(await client.isOnline() == false)
+    XCTAssertFalse(await client.isOnline())
 
     var sawOffline = false
     do {
@@ -120,19 +450,12 @@ struct APIClientTests {
     } catch {
       sawOffline = false
     }
-    #expect(sawOffline)
+    XCTAssertTrue(sawOffline)
   }
 
-  @Test func serverStatusThrowsServerError() async throws {
-    defer { MockURLProtocol.handler = nil }
+  func testServerStatusThrowsServerError() async throws {
     MockURLProtocol.handler = { request in
-      let response = HTTPURLResponse(
-        url: request.url!,
-        statusCode: 503,
-        httpVersion: nil,
-        headerFields: ["Content-Type": "application/json"]
-      )!
-      return (response, Data(#"{"data":{}}"#.utf8))
+      response(#"{"data":{}}"#, request: request, status: 503)
     }
 
     let client = APIClient(baseURL: "http://economy.test", session: makeSession())
@@ -141,32 +464,36 @@ struct APIClientTests {
     do {
       _ = try await client.fetchSummary(period: "today")
     } catch APIError.serverError(let statusCode) {
-      #expect(statusCode == 503)
+      XCTAssertEqual(statusCode, 503)
       sawServerError = true
     } catch {
       sawServerError = false
     }
-    #expect(sawServerError)
+    XCTAssertTrue(sawServerError)
   }
 
-  @Test func modelDisplayFallbacks() {
+  func testModelDisplayFallbacks() {
     let namedProject = ProjectStat(
       project_path: "/workspace/hasna/open-economy",
       project_name: "Economy",
       sessions: 3,
+      requests: 7,
+      total_tokens: 99_000,
       cost_usd: 12.5,
       last_active: nil
     )
-    #expect(namedProject.displayName == "Economy")
+    XCTAssertEqual(namedProject.displayName, "Economy")
 
     let pathProject = ProjectStat(
       project_path: "/workspace/hasna/open-economy",
       project_name: nil,
       sessions: 3,
+      requests: 7,
+      total_tokens: 99_000,
       cost_usd: 12.5,
       last_active: nil
     )
-    #expect(pathProject.displayName == "open-economy")
+    XCTAssertEqual(pathProject.displayName, "open-economy")
 
     let session = SessionStat(
       id: "session-abcdef1234567890",
@@ -179,15 +506,42 @@ struct APIClientTests {
       started_at: "not-a-date",
       ended_at: nil
     )
-    #expect(session.displayProject == "open-economy")
-    #expect(session.shortId == "session-abcd")
-    #expect(session.startedAtLabel == "not-a-date")
+    XCTAssertEqual(session.displayProject, "open-economy")
+    XCTAssertEqual(session.shortId, "session-abcd")
+    XCTAssertEqual(session.startedAtLabel, "not-a-date")
+  }
+
+  private func pathWithQuery(_ request: URLRequest) -> String {
+    guard
+      let url = request.url,
+      let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+    else { return "" }
+
+    if let query = components.percentEncodedQuery, !query.isEmpty {
+      return "\(components.path)?\(query)"
+    }
+
+    return components.path
   }
 
   private func makeSession() -> URLSession {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [MockURLProtocol.self]
     return URLSession(configuration: configuration)
+  }
+
+  private func ok(_ body: String, request: URLRequest) -> (HTTPURLResponse, Data) {
+    response(body, request: request, status: 200)
+  }
+
+  private func response(_ body: String, request: URLRequest, status: Int) -> (HTTPURLResponse, Data) {
+    let response = HTTPURLResponse(
+      url: request.url!,
+      statusCode: status,
+      httpVersion: nil,
+      headerFields: ["Content-Type": "application/json"]
+    )!
+    return (response, Data(body.utf8))
   }
 }
 

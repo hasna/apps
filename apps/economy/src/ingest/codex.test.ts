@@ -85,6 +85,10 @@ function writeRollout(...usages: Array<Record<string, number> & { timestamp?: st
   })).join('\n') + '\n')
 }
 
+function writeRolloutEntries(entries: unknown[]) {
+  writeFileSync(rolloutPath, entries.map((entry) => JSON.stringify(entry)).join('\n') + '\n')
+}
+
 describe('ingestCodex', () => {
   it('computes current GPT-5 Codex cost from official text-token rates', () => {
     expect(computeCost('gpt-5-codex', 1_000_000, 1_000_000, 1_000_000)).toBeCloseTo(11.375)
@@ -92,6 +96,14 @@ describe('ingestCodex', () => {
 
   it('returns zero counts when the Codex SQLite database is missing', async () => {
     const result = await ingestCodex(db)
+    expect(result).toEqual({ sessions: 0, requests: 0 })
+  })
+
+  it('returns zero counts when the Codex SQLite path cannot be opened', async () => {
+    mkdirSync(codexDbPath)
+
+    const result = await ingestCodex(db, true)
+
     expect(result).toEqual({ sessions: 0, requests: 0 })
   })
 
@@ -106,7 +118,7 @@ describe('ingestCodex', () => {
     expect(readCodexModel()).toBe('gpt-5-codex')
   })
 
-  it('ingests model identity and per-request token usage from Codex rollout token events', async () => {
+  it('ingests model identity and aggregate token usage from Codex rollout token events', async () => {
     writeCodexDb()
     writeRollout({
       input_tokens: 1000,
@@ -131,6 +143,44 @@ describe('ingestCodex', () => {
     expect(session['request_count']).toBe(1)
     expect(session['total_tokens']).toBe(1200)
     expect(Number(session['total_cost_usd'])).toBeCloseTo(0.0092)
+  })
+
+  it('uses final Codex total_token_usage snapshots as one aggregate request', async () => {
+    writeCodexDb(1700)
+    writeRolloutEntries([
+      {
+        timestamp: '2026-05-08T10:00:00.000Z',
+        payload: {
+          type: 'token_count',
+          info: {
+            last_token_usage: { input_tokens: 1000, cached_input_tokens: 100, output_tokens: 100, total_tokens: 1100 },
+            total_token_usage: { input_tokens: 1000, cached_input_tokens: 100, output_tokens: 100, total_tokens: 1100 },
+          },
+        },
+      },
+      {
+        timestamp: '2026-05-08T10:00:01.000Z',
+        payload: {
+          type: 'token_count',
+          info: {
+            last_token_usage: { input_tokens: 500, cached_input_tokens: 200, output_tokens: 100, total_tokens: 600 },
+            total_token_usage: { input_tokens: 1500, cached_input_tokens: 300, output_tokens: 200, total_tokens: 1700 },
+          },
+        },
+      },
+    ])
+
+    const result = await ingestCodex(db)
+    expect(result).toEqual({ sessions: 1, requests: 1 })
+
+    const row = db.prepare(`SELECT * FROM requests WHERE agent = 'codex'`).get() as Record<string, number | string>
+    expect(row['input_tokens']).toBe(1200)
+    expect(row['cache_read_tokens']).toBe(300)
+    expect(row['output_tokens']).toBe(200)
+    expect(row['timestamp']).toBe('2026-05-08T10:00:01.000Z')
+
+    const session = db.prepare(`SELECT total_tokens FROM sessions WHERE id = ?`).get('codex-thread-1') as { total_tokens: number }
+    expect(session.total_tokens).toBe(1700)
   })
 
   it('supports legacy thread schemas and falls back to aggregate token estimates', async () => {
@@ -172,12 +222,14 @@ describe('ingestCodex', () => {
     )
 
     const result = await ingestCodex(db)
-    expect(result).toEqual({ sessions: 1, requests: 2 })
+    expect(result).toEqual({ sessions: 1, requests: 1 })
     const count = db.prepare(`SELECT COUNT(*) as n FROM requests WHERE session_id = ?`).get('codex-thread-1') as { n: number }
-    expect(count.n).toBe(2)
+    expect(count.n).toBe(1)
+    const session = db.prepare(`SELECT total_tokens FROM sessions WHERE id = ?`).get('codex-thread-1') as { total_tokens: number }
+    expect(session.total_tokens).toBe(1600)
   })
 
-  it('dedupes repeated rollout usage payloads and removes stale request rows on reprocess', async () => {
+  it('dedupes repeated rollout usage payloads and removes stale aggregate request rows on reprocess', async () => {
     writeCodexDb(2400, 2)
     writeRollout(
       { input_tokens: 1000, cached_input_tokens: 400, output_tokens: 200, total_tokens: 1200 },
@@ -186,7 +238,7 @@ describe('ingestCodex', () => {
     )
     await ingestCodex(db)
     let count = db.prepare(`SELECT COUNT(*) as n FROM requests WHERE session_id = ?`).get('codex-thread-1') as { n: number }
-    expect(count.n).toBe(2)
+    expect(count.n).toBe(1)
     let session = db.prepare(`SELECT total_tokens FROM sessions WHERE id = ?`).get('codex-thread-1') as { total_tokens: number }
     expect(session.total_tokens).toBe(2400)
 

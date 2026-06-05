@@ -31,30 +31,46 @@ describe("dashboard API client", () => {
     await api.getSummary("week")
     await api.getDaily()
     await api.getDaily(7)
+    await api.getHourly()
+    await api.getHourly("apple06")
     await api.getTop()
     await api.getTop(3)
     await api.getModels()
     await api.getProjects()
+    await api.getProjects("month")
+    await api.getAccounts()
+    await api.getAccounts("month")
     await api.getBreakdown("project")
+    await api.getBreakdown("agent", "week")
+    await api.getBreakdown("account")
     await api.getBudgets()
     await api.getPricing()
     await api.getBilling()
     await api.getBilling("year")
+    await api.getSubscriptions()
     await api.getGoals()
 
     expect(requestPaths()).toEqual([
       "/api/summary?period=week",
       "/api/daily?days=30",
       "/api/daily?days=7",
+      "/api/hourly",
+      "/api/hourly?machine=apple06",
       "/api/top?n=10",
       "/api/top?n=3",
       "/api/models",
-      "/api/projects",
+      "/api/projects?period=all",
+      "/api/projects?period=month",
+      "/api/accounts?period=all",
+      "/api/accounts?period=month",
       "/api/breakdown?by=project",
+      "/api/breakdown?by=agent&period=week",
+      "/api/breakdown?by=account",
       "/api/budgets",
       "/api/pricing",
       "/api/billing?period=month",
       "/api/billing?period=year",
+      "/api/subscriptions",
       "/api/goals",
     ])
   })
@@ -63,6 +79,7 @@ describe("dashboard API client", () => {
     await api.getSessions({
       agent: "codex",
       search: "open economy",
+      account: "work@example.com",
       limit: 25,
       offset: 5,
       since: "2026-05-09T00:00:00Z",
@@ -73,6 +90,7 @@ describe("dashboard API client", () => {
     expect(url.pathname).toBe("/api/sessions")
     expect(url.searchParams.get("agent")).toBe("codex")
     expect(url.searchParams.get("search")).toBe("open economy")
+    expect(url.searchParams.get("account")).toBe("work@example.com")
     expect(url.searchParams.get("limit")).toBe("25")
     expect(url.searchParams.get("offset")).toBe("5")
     expect(url.searchParams.get("since")).toBe("2026-05-09T00:00:00Z")
@@ -87,6 +105,7 @@ describe("dashboard API client", () => {
     await api.getSessionRequests("session/with spaces")
     const budgetDelete = await api.deleteBudget("budget/with spaces")
     const pricingDelete = await api.deletePricing("openai/gpt 5.5")
+    const subscriptionDelete = await api.deleteSubscription("subscription/with spaces")
     const goalDelete = await api.deleteGoalApi("goal/with spaces")
 
     expect(new URL(requests[0].url).pathname).toBe("/api/sessions/session%2Fwith%20spaces/requests")
@@ -94,10 +113,13 @@ describe("dashboard API client", () => {
     expect(requests[1].init?.method).toBe("DELETE")
     expect(new URL(requests[2].url).pathname).toBe("/api/pricing/openai%2Fgpt%205.5")
     expect(requests[2].init?.method).toBe("DELETE")
-    expect(new URL(requests[3].url).pathname).toBe("/api/goals/goal%2Fwith%20spaces")
+    expect(new URL(requests[3].url).pathname).toBe("/api/subscriptions/subscription%2Fwith%20spaces")
     expect(requests[3].init?.method).toBe("DELETE")
+    expect(new URL(requests[4].url).pathname).toBe("/api/goals/goal%2Fwith%20spaces")
+    expect(requests[4].init?.method).toBe("DELETE")
     expect(budgetDelete.data.ok).toBe(true)
     expect(pricingDelete.data.ok).toBe(true)
+    expect(subscriptionDelete.data.ok).toBe(true)
     expect(goalDelete.data.ok).toBe(true)
   })
 
@@ -120,6 +142,7 @@ describe("dashboard API client", () => {
       if (path === "/api/budgets") return jsonResponse({ data: { id: "budget-1" } })
       if (path === "/api/pricing") return jsonResponse({ data: { model: "custom-model" } })
       if (path === "/api/goals") return jsonResponse({ data: { id: "goal-1" } })
+      if (path === "/api/subscriptions") return jsonResponse({ data: { id: "sub-1" } })
       return jsonResponse({ data: {} })
     }
 
@@ -136,6 +159,7 @@ describe("dashboard API client", () => {
     const geminiSync = await api.syncSources("gemini")
     const allSync = await api.syncSources()
     await api.createGoal({ period: "week", limit_usd: 50, project_path: "/workspace/open-economy", agent: "codex" })
+    await api.createSubscription({ provider: "cursor", plan: "pro", agent: "cursor", monthly_fee_usd: 20, included_usage_usd: 20 })
 
     expect(requestPaths()).toEqual([
       "/api/budgets",
@@ -143,8 +167,9 @@ describe("dashboard API client", () => {
       "/api/sync",
       "/api/sync",
       "/api/goals",
+      "/api/subscriptions",
     ])
-    expect(requests.map((request) => request.init?.method)).toEqual(["POST", "POST", "POST", "POST", "POST"])
+    expect(requests.map((request) => request.init?.method)).toEqual(["POST", "POST", "POST", "POST", "POST", "POST"])
     expect(JSON.parse(String(requests[0].init?.body))).toEqual({
       project_path: "/workspace/open-economy",
       agent: "takumi",
@@ -170,6 +195,13 @@ describe("dashboard API client", () => {
       limit_usd: 50,
       project_path: "/workspace/open-economy",
       agent: "codex",
+    })
+    expect(JSON.parse(String(requests[5].init?.body))).toEqual({
+      provider: "cursor",
+      plan: "pro",
+      agent: "cursor",
+      monthly_fee_usd: 20,
+      included_usage_usd: 20,
     })
   })
 

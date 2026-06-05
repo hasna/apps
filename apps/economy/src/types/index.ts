@@ -21,6 +21,11 @@ export interface EconomyRequest {
   source_request_id: string
   machine_id?: string
   attribution_tag?: string
+  account_key?: string
+  account_tool?: string
+  account_name?: string
+  account_email?: string
+  account_source?: string
   updated_at?: string
   synced_at?: string
 }
@@ -37,6 +42,11 @@ export interface EconomySession {
   request_count: number
   machine_id?: string
   attribution_tag?: string
+  account_key?: string
+  account_tool?: string
+  account_name?: string
+  account_email?: string
+  account_source?: string
   updated_at?: string
   synced_at?: string
 }
@@ -102,6 +112,40 @@ export interface ProjectBreakdown {
   last_active: string
 }
 
+export interface AgentBreakdown {
+  agent: import('../lib/agents.js').Agent
+  sessions: number
+  requests: number
+  total_tokens: number
+  api_equivalent_usd: number
+  billable_usd: number
+  metered_api_usd: number
+  subscription_included_usd: number
+  estimated_usd: number
+  unknown_usd: number
+  cost_usd: number
+  last_active: string
+}
+
+export interface AccountBreakdown {
+  account_key: string
+  account_tool: string
+  account_name: string
+  account_email: string | null
+  account_source: string
+  sessions: number
+  requests: number
+  total_tokens: number
+  api_equivalent_usd: number
+  billable_usd: number
+  metered_api_usd: number
+  subscription_included_usd: number
+  estimated_usd: number
+  unknown_usd: number
+  cost_usd: number
+  last_active: string
+}
+
 export interface ModelPricing {
   inputPer1M: number
   outputPer1M: number
@@ -126,6 +170,7 @@ export interface SyncOptions {
 export interface SessionFilter {
   agent?: import('../lib/agents.js').Agent
   project?: string
+  account?: string
   limit?: number
   offset?: number
   since?: string

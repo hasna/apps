@@ -7,15 +7,16 @@ import { registerExtendedCommands, registerFleetCommands } from './commands/extr
 import { AGENTS, parseAgent } from '../lib/agents.js'
 import { syncAll } from '../lib/sync-all.js'
 import { maybePullFromCloud, cloudPush, cloudPull, cloudSyncFull, getCloudDatabaseUrl, getCloudPg } from '../lib/cloud-sync.js'
+import { mergePeerDatabase } from '../lib/peer-sync.js'
 import type { Agent } from '../lib/agents.js'
-import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertProject, deleteProject, getProject, listModelPricing, upsertModelPricing, deleteModelPricing, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId, listMachineRegistry } from '../db/database.js'
+import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryAgentBreakdown, queryAccountBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertProject, deleteProject, getProject, listModelPricing, upsertModelPricing, deleteModelPricing, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId, listMachineRegistry } from '../db/database.js'
 import { queryBillingSummary } from '../db/database.js'
 import { syncAnthropicBilling, syncOpenAIBilling, syncGeminiBilling } from '../ingest/billing.js'
 import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
 import { randomUUID } from 'crypto'
 import { execSync } from 'child_process'
-import type { Period } from '../types/index.js'
+import type { AccountBreakdown, Period } from '../types/index.js'
 
 const program = new Command()
 
@@ -150,6 +151,27 @@ function printTable(headers: string[], rows: string[][]): void {
     console.log(`│${line}│`)
   }
   console.log(`└${sep.replace(/┼/g, '┴')}┘`)
+}
+
+function accountDisplayName(row: AccountBreakdown): string {
+  return row.account_email || row.account_name || row.account_key || 'unknown'
+}
+
+function printAccountBreakdown(rows: AccountBreakdown[]): void {
+  printTable(
+    ['Account', 'Agent', 'Source', 'Sessions', 'Requests', 'Tokens', 'API Eq', 'Billable', 'Included'],
+    rows.map(r => [
+      chalk.white(accountDisplayName(r)),
+      fmtAgent(r.account_tool),
+      chalk.dim(r.account_source || 'unknown'),
+      String(r.sessions),
+      String(r.requests),
+      chalk.cyan(fmtTokens(r.total_tokens)),
+      fmt(r.api_equivalent_usd),
+      fmt(r.billable_usd),
+      fmt(r.subscription_included_usd),
+    ]),
+  )
 }
 
 // ── parseSinceDate ─────────────────────────────────────────────────────────────
@@ -322,12 +344,13 @@ program
   .description('List coding sessions with costs')
   .option('--agent <agent>', 'Filter by agent (claude|takumi|codex|gemini)')
   .option('--project <path>', 'Filter by project path')
+  .option('--account <query>', 'Filter by account key, name, or email')
   .option('--machine <id>', 'Filter by machine hostname (e.g. spark01, apple01)')
   .option('--limit <n>', 'Number of sessions', '20')
   .option('--format <fmt>', 'Output format: table|compact|csv|json', 'table')
   .option('--since <date>', 'Filter sessions since date or relative (e.g. 2026-03-01, 7d, 30d)')
   .option('--search <query>', 'Search by project name, session id prefix, or agent')
-  .action(async (opts: { agent?: string; project?: string; machine?: string; limit?: string; format?: string; since?: string; search?: string }) => {
+  .action(async (opts: { agent?: string; project?: string; account?: string; machine?: string; limit?: string; format?: string; since?: string; search?: string }) => {
     const limit = parsePositiveCliInteger(opts.limit ?? '20', '--limit')
     const agent = parseOptionalCliAgent(opts.agent)
     await autoSync()
@@ -336,6 +359,7 @@ program
     let sessions = querySessions(db, {
       agent,
       project: opts.project,
+      account: opts.account,
       machine: opts.machine,
       limit,
       since: sinceDate,
@@ -407,8 +431,8 @@ program
 
 program
   .command('breakdown')
-  .description('Cost breakdown by model, agent, or project')
-  .option('--by <dimension>', 'Dimension: model|agent|project', 'model')
+  .description('Cost breakdown by model, agent, project, or account')
+  .option('--by <dimension>', 'Dimension: model|agent|project|account', 'model')
   .option('--since <date>', 'Filter since date or relative (e.g. 2026-03-01, 7d, 30d)')
   .action((opts: { by?: string; since?: string }) => {
     const db = openDatabase()
@@ -437,6 +461,139 @@ program
           fmt(r.cost_usd),
         ]),
       )
+    } else if (opts.by === 'agent') {
+      const rows = sinceDate
+        ? db.prepare(`
+          SELECT agent,
+                 COUNT(DISTINCT session_id) as sessions,
+                 COUNT(*) as requests,
+                 COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_create_tokens), 0) as total_tokens,
+                 COALESCE(SUM(cost_usd), 0) as api_equivalent_usd,
+                 COALESCE(SUM(CASE WHEN cost_basis = 'metered_api' THEN cost_usd ELSE 0 END), 0) as billable_usd,
+                 COALESCE(SUM(CASE WHEN cost_basis = 'subscription_included' THEN cost_usd ELSE 0 END), 0) as subscription_included_usd,
+                 MAX(timestamp) as last_active
+          FROM requests
+          WHERE timestamp >= ?
+          GROUP BY agent
+          ORDER BY api_equivalent_usd DESC
+        `).all(sinceDate) as Array<{ agent: string; sessions: number; requests: number; total_tokens: number; api_equivalent_usd: number; billable_usd: number; subscription_included_usd: number }>
+        : queryAgentBreakdown(db)
+      printTable(
+        ['Agent', 'Sessions', 'Requests', 'Tokens', 'API Eq', 'Billable', 'Included'],
+        rows.map(r => [
+          fmtAgent(r.agent),
+          String(r.sessions),
+          String(r.requests),
+          chalk.cyan(fmtTokens(r.total_tokens)),
+          fmt(r.api_equivalent_usd),
+          fmt(r.billable_usd),
+          fmt(r.subscription_included_usd),
+        ]),
+      )
+    } else if (opts.by === 'account') {
+      const rows = sinceDate
+        ? db.prepare(`
+          WITH request_rows AS (
+            SELECT
+              r.session_id as session_id,
+              COALESCE(NULLIF(r.agent, ''), NULLIF(s.agent, ''), NULLIF(r.account_tool, ''), NULLIF(s.account_tool, ''), 'unknown') as account_agent,
+              COALESCE(NULLIF(r.account_key, ''), NULLIF(s.account_key, ''), '') as raw_account_key,
+              COALESCE(NULLIF(r.account_name, ''), NULLIF(s.account_name, ''), '') as raw_account_name,
+              LOWER(TRIM(COALESCE(NULLIF(r.account_email, ''), NULLIF(s.account_email, ''), ''))) as raw_account_email,
+              COALESCE(NULLIF(r.account_source, ''), NULLIF(s.account_source, ''), 'unknown') as account_source,
+              1 as requests,
+              COALESCE(r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_create_tokens, 0) as total_tokens,
+              COALESCE(r.cost_usd, 0) as cost_usd,
+              COALESCE(NULLIF(r.cost_basis, ''), 'estimated') as cost_basis,
+              r.timestamp as last_active
+            FROM requests r
+            LEFT JOIN sessions s ON s.id = r.session_id
+            WHERE r.timestamp >= ?
+              AND (
+                COALESCE(NULLIF(r.account_key, ''), NULLIF(s.account_key, ''), '') != ''
+                OR COALESCE(NULLIF(r.account_tool, ''), NULLIF(s.account_tool, ''), '') != ''
+                OR COALESCE(NULLIF(r.account_name, ''), NULLIF(s.account_name, ''), '') != ''
+                OR COALESCE(NULLIF(r.account_email, ''), NULLIF(s.account_email, ''), '') != ''
+              )
+          ),
+          session_only_rows AS (
+            SELECT
+              s.id as session_id,
+              COALESCE(NULLIF(s.agent, ''), NULLIF(s.account_tool, ''), 'unknown') as account_agent,
+              s.account_key as raw_account_key,
+              s.account_name as raw_account_name,
+              LOWER(TRIM(COALESCE(s.account_email, ''))) as raw_account_email,
+              COALESCE(NULLIF(s.account_source, ''), 'unknown') as account_source,
+              COALESCE(s.request_count, 0) as requests,
+              COALESCE(s.total_tokens, 0) as total_tokens,
+              COALESCE(s.total_cost_usd, 0) as cost_usd,
+              'estimated' as cost_basis,
+              s.started_at as last_active
+            FROM sessions s
+            WHERE s.started_at >= ?
+              AND s.id NOT IN (SELECT DISTINCT session_id FROM requests)
+              AND (s.account_key != '' OR s.account_tool != '' OR s.account_name != '' OR s.account_email != '')
+          ),
+          normalized AS (
+            SELECT
+              CASE
+                WHEN raw_account_email != '' THEN account_agent || ':' || raw_account_email
+                WHEN raw_account_name != '' THEN account_agent || ':' || raw_account_name
+                ELSE raw_account_key
+              END as account_key,
+              account_agent as account_tool,
+              raw_account_name as account_name,
+              raw_account_email as account_email,
+              account_source,
+              session_id,
+              requests,
+              total_tokens,
+              cost_usd,
+              cost_basis,
+              last_active
+            FROM request_rows
+            UNION ALL
+            SELECT
+              CASE
+                WHEN raw_account_email != '' THEN account_agent || ':' || raw_account_email
+                WHEN raw_account_name != '' THEN account_agent || ':' || raw_account_name
+                ELSE raw_account_key
+              END as account_key,
+              account_agent as account_tool,
+              raw_account_name as account_name,
+              raw_account_email as account_email,
+              account_source,
+              session_id,
+              requests,
+              total_tokens,
+              cost_usd,
+              cost_basis,
+              last_active
+            FROM session_only_rows
+          )
+          SELECT account_key,
+                 account_tool,
+                 COALESCE(MAX(NULLIF(account_name, '')), MAX(NULLIF(account_email, '')), account_key) as account_name,
+                 NULLIF(account_email, '') as account_email,
+                 COALESCE(MAX(NULLIF(account_source, 'unknown')), 'unknown') as account_source,
+                 COUNT(DISTINCT session_id) as sessions,
+                 COALESCE(SUM(requests), 0) as requests,
+                 COALESCE(SUM(total_tokens), 0) as total_tokens,
+                 COALESCE(SUM(cost_usd), 0) as api_equivalent_usd,
+                 COALESCE(SUM(CASE WHEN cost_basis = 'metered_api' THEN cost_usd ELSE 0 END), 0) as billable_usd,
+                 COALESCE(SUM(CASE WHEN cost_basis = 'metered_api' THEN cost_usd ELSE 0 END), 0) as metered_api_usd,
+                 COALESCE(SUM(CASE WHEN cost_basis = 'subscription_included' THEN cost_usd ELSE 0 END), 0) as subscription_included_usd,
+                 COALESCE(SUM(CASE WHEN cost_basis NOT IN ('metered_api', 'subscription_included', 'unknown') THEN cost_usd ELSE 0 END), 0) as estimated_usd,
+                 COALESCE(SUM(CASE WHEN cost_basis = 'unknown' THEN cost_usd ELSE 0 END), 0) as unknown_usd,
+                 COALESCE(SUM(cost_usd), 0) as cost_usd,
+                 MAX(last_active) as last_active
+          FROM normalized
+          WHERE account_key != ''
+          GROUP BY account_key, account_tool, account_email
+          ORDER BY api_equivalent_usd DESC
+        `).all(sinceDate, sinceDate) as AccountBreakdown[]
+        : queryAccountBreakdown(db)
+      printAccountBreakdown(rows)
     } else {
       const rows = sinceDate
         ? db.prepare(`
@@ -461,6 +618,35 @@ program
         ]),
       )
     }
+    console.log()
+  })
+
+// ── accounts ──────────────────────────────────────────────────────────────────
+
+const ACCOUNT_PERIODS = ['today', 'week', 'month', 'year', 'all'] as const
+
+program
+  .command('accounts [period]')
+  .description('List account usage by email address and coding agent')
+  .option('--json', 'Output JSON')
+  .action((periodArg: string | undefined, opts: { json?: boolean }) => {
+    const period = requireCliChoice(periodArg, 'period', ACCOUNT_PERIODS)
+    const rows = queryAccountBreakdown(openDatabase(), period)
+
+    if (opts.json) {
+      console.log(JSON.stringify(rows, null, 2))
+      return
+    }
+
+    if (rows.length === 0) {
+      console.log(chalk.yellow('No account-attributed sessions yet. Run `economy sync` first.'))
+      return
+    }
+
+    console.log()
+    console.log(chalk.bold.cyan(`  Accounts — ${period}`))
+    console.log()
+    printAccountBreakdown(rows)
     console.log()
   })
 
@@ -972,6 +1158,34 @@ program
       ]),
     )
     console.log(`\n  ${chalk.dim('Current machine:')} ${chalk.bold(current)}`)
+    console.log()
+  })
+
+program
+  .command('merge-db <source-db>')
+  .description('Merge another Economy SQLite database into this machine')
+  .option('--source-machine <id>', 'Machine id to use for source rows that do not have one')
+  .option('--json', 'Output JSON')
+  .action((sourceDb: string, opts: { sourceMachine?: string; json?: boolean }) => {
+    const db = openDatabase()
+    const result = mergePeerDatabase(db, sourceDb, { sourceMachine: opts.sourceMachine })
+    if (opts.json) {
+      console.log(JSON.stringify(result, null, 2))
+      return
+    }
+
+    console.log()
+    console.log(chalk.bold.cyan(`  Merged Economy DB — ${result.source_machine}`))
+    console.log(`  Rows written: ${fmtCount(result.rows_written)} · collisions remapped: ${fmtCount(result.collisions)} · deduped: ${fmtCount(result.deduped)}`)
+    for (const table of result.tables) {
+      console.log(
+        `  ${chalk.white(table.table.padEnd(16))}`
+        + ` inserted ${fmtCount(table.inserted).padStart(6)}`
+        + `  updated ${fmtCount(table.updated).padStart(6)}`
+        + `  skipped ${fmtCount(table.skipped).padStart(6)}`
+        + `  collisions ${fmtCount(table.collisions).padStart(3)}`,
+      )
+    }
     console.log()
   })
 

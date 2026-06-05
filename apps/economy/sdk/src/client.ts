@@ -6,6 +6,8 @@ import type {
   SessionRequest,
   ModelBreakdown,
   ProjectBreakdown,
+  AgentBreakdown,
+  AccountBreakdown,
   BudgetStatus,
   CreateBudgetInput,
   DailyPoint,
@@ -18,6 +20,8 @@ import type {
   SessionFilter,
   CreateGoalInput,
   GoalStatus,
+  Subscription,
+  CreateSubscriptionInput,
   MutationOk,
   UsageResponse,
   SavingsSummary,
@@ -104,6 +108,7 @@ export class EconomyClient {
     const params = new URLSearchParams()
     if (filter?.agent) params.set('agent', filter.agent)
     if (filter?.project) params.set('project', filter.project)
+    if (filter?.account) params.set('account', filter.account)
     if (filter?.machine) params.set('machine', filter.machine)
     if (filter?.search) params.set('search', filter.search)
     if (filter?.limit != null) params.set('limit', String(filter.limit))
@@ -133,8 +138,19 @@ export class EconomyClient {
     return this.request<ModelBreakdown[]>('/api/models')
   }
 
-  async getProjectBreakdown(): Promise<ProjectBreakdown[]> {
-    return this.request<ProjectBreakdown[]>('/api/projects')
+  async getProjectBreakdown(period?: Period): Promise<ProjectBreakdown[]> {
+    const qs = period ? `?period=${encodeURIComponent(period)}` : ''
+    return this.request<ProjectBreakdown[]>(`/api/projects${qs}`)
+  }
+
+  async getAgentBreakdown(period?: Period): Promise<AgentBreakdown[]> {
+    const qs = period ? `?by=agent&period=${encodeURIComponent(period)}` : '?by=agent'
+    return this.request<AgentBreakdown[]>(`/api/breakdown${qs}`)
+  }
+
+  async getAccountBreakdown(period?: Period): Promise<AccountBreakdown[]> {
+    const qs = period ? `?period=${encodeURIComponent(period)}` : ''
+    return this.request<AccountBreakdown[]>(`/api/accounts${qs}`)
   }
 
   async getBudgets(): Promise<BudgetStatus[]> {
@@ -191,6 +207,23 @@ export class EconomyClient {
 
   async deleteGoal(id: string): Promise<MutationOk> {
     return this.request<MutationOk>(`/api/goals/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    })
+  }
+
+  async getSubscriptions(): Promise<Subscription[]> {
+    return this.request<Subscription[]>('/api/subscriptions')
+  }
+
+  async createSubscription(input: CreateSubscriptionInput): Promise<Subscription> {
+    return this.request<Subscription>('/api/subscriptions', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  }
+
+  async deleteSubscription(id: string): Promise<MutationOk> {
+    return this.request<MutationOk>(`/api/subscriptions/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     })
   }

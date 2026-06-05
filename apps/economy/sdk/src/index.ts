@@ -19,6 +19,8 @@ export type {
   BillingSyncResult,
   CreateGoalInput,
   GoalStatus,
+  Subscription,
+  CreateSubscriptionInput,
   MutationOk,
   MutationResult,
   SyncResult,

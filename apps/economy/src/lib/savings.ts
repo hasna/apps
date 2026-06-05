@@ -25,7 +25,6 @@ function periodWhere(period: Period, column: string): string {
 
 function prorateMonthlyFee(monthlyFee: number, period: Period): number {
   const now = new Date()
-  const dayOfMonth = now.getDate()
   const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
   switch (period) {
     case 'today':
@@ -40,6 +39,11 @@ function prorateMonthlyFee(monthlyFee: number, period: Period): number {
     case 'all':
       return monthlyFee
   }
+}
+
+function proratedIncludedConsumed(includedUsage: number, includedCap: number, period: Period): number {
+  const cap = prorateMonthlyFee(includedCap, period)
+  return cap > 0 ? Math.min(includedUsage, cap) : includedUsage
 }
 
 /** saved = max(0, api_equivalent - on_demand - prorated_subscription_fee) */
@@ -83,26 +87,80 @@ export function querySavingsSummary(
   `).get(...params) as { total: number }
 
   const subs = db.prepare(`
-    SELECT COALESCE(SUM(monthly_fee_usd), 0) as total
+    SELECT
+      COALESCE(SUM(monthly_fee_usd), 0) as fee,
+      COALESCE(SUM(included_usage_usd), 0) as included
     FROM subscriptions
-    WHERE active = 1${agent ? ' AND agent = ?' : ''}
-  `).get(...(agent ? [agent] : [])) as { total: number }
+    WHERE active = 1${agent ? ' AND (agent = ? OR agent IS NULL)' : ''}
+  `).get(...(agent ? [agent] : [])) as { fee: number; included: number }
 
-  const subscriptionFee = prorateMonthlyFee(subs.total, period)
+  const subscriptionFee = prorateMonthlyFee(subs.fee, period)
   const apiEquivalent = apiRow.total + includedRow.total
+  const includedConsumed = proratedIncludedConsumed(includedRow.total, subs.included, period)
   const onDemand = onDemandRow.total
   const saved = computeSavedUsd(apiEquivalent, onDemand, subscriptionFee)
 
   const byAgent: Record<string, Partial<SavingsSummary>> = {}
   if (!agent) {
+    const onDemandByAgent = new Map<string, number>()
     for (const row of db.prepare(`
-      SELECT agent, COALESCE(SUM(cost_usd), 0) as api_eq
+      SELECT agent, COALESCE(SUM(value), 0) as total
+      FROM usage_snapshots
+      WHERE ${subWhere}
+        AND metric = 'on_demand_usd'
+      GROUP BY agent
+    `).all() as Array<{ agent: string; total: number }>) {
+      onDemandByAgent.set(row.agent, row.total)
+    }
+
+    const subscriptionByAgent = new Map<string, { fee: number; included: number }>()
+    for (const row of db.prepare(`
+      SELECT agent,
+             COALESCE(SUM(monthly_fee_usd), 0) as fee,
+             COALESCE(SUM(included_usage_usd), 0) as included
+      FROM subscriptions
+      WHERE active = 1 AND agent IS NOT NULL
+      GROUP BY agent
+    `).all() as Array<{ agent: string; fee: number; included: number }>) {
+      subscriptionByAgent.set(row.agent, row)
+    }
+
+    const globalSubs = db.prepare(`
+      SELECT
+        COALESCE(SUM(monthly_fee_usd), 0) as fee,
+        COALESCE(SUM(included_usage_usd), 0) as included
+      FROM subscriptions
+      WHERE active = 1 AND agent IS NULL
+    `).get() as { fee: number; included: number }
+
+    const rows = db.prepare(`
+      SELECT agent,
+             COALESCE(SUM(cost_usd), 0) as api_eq,
+             COALESCE(SUM(CASE WHEN cost_basis = 'subscription_included' THEN cost_usd ELSE 0 END), 0) as included
       FROM requests WHERE ${where}
       GROUP BY agent
-    `).all() as Array<{ agent: string; api_eq: number }>) {
+    `).all() as Array<{ agent: string; api_eq: number; included: number }>
+    const totalAgentApiEq = rows.reduce((sum, row) => sum + row.api_eq, 0)
+
+    for (const row of db.prepare(`
+      SELECT agent,
+             COALESCE(SUM(cost_usd), 0) as api_eq,
+             COALESCE(SUM(CASE WHEN cost_basis = 'subscription_included' THEN cost_usd ELSE 0 END), 0) as included
+      FROM requests WHERE ${where}
+      GROUP BY agent
+    `).all() as Array<{ agent: string; api_eq: number; included: number }>) {
+      const agentSubs = subscriptionByAgent.get(row.agent) ?? { fee: 0, included: 0 }
+      const globalShare = totalAgentApiEq > 0 ? row.api_eq / totalAgentApiEq : 0
+      const agentFee = prorateMonthlyFee(agentSubs.fee + globalSubs.fee * globalShare, period)
+      const agentIncludedCap = agentSubs.included + globalSubs.included * globalShare
+      const agentIncludedConsumed = proratedIncludedConsumed(row.included, agentIncludedCap, period)
+      const agentOnDemand = onDemandByAgent.get(row.agent) ?? 0
       byAgent[row.agent] = {
         api_equivalent_usd: row.api_eq,
-        saved_usd: row.api_eq,
+        subscription_fee_usd: agentFee,
+        included_consumed_usd: agentIncludedConsumed,
+        on_demand_usd: agentOnDemand,
+        saved_usd: computeSavedUsd(row.api_eq, agentOnDemand, agentFee),
       }
     }
   }
@@ -111,7 +169,7 @@ export function querySavingsSummary(
     period,
     api_equivalent_usd: apiEquivalent,
     subscription_fee_usd: subscriptionFee,
-    included_consumed_usd: includedRow.total,
+    included_consumed_usd: includedConsumed,
     on_demand_usd: onDemand,
     saved_usd: saved,
     by_agent: byAgent,

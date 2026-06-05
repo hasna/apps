@@ -1,11 +1,13 @@
 import type { SqliteAdapter as Database } from '@hasna/cloud'
 import {
   querySummary, querySessions, queryTopSessions,
-  queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown,
+  queryModelBreakdown, queryProjectBreakdown, queryAgentBreakdown, queryDailyBreakdown, queryHourlyBreakdown,
+  queryAccountBreakdown,
   getBudgetStatuses, upsertBudget, deleteBudget,
   listProjects, upsertProject, deleteProject,
   listModelPricing, upsertModelPricing, deleteModelPricing,
   upsertGoal, deleteGoal, getGoalStatuses,
+  listSubscriptions, upsertSubscription, deleteSubscription,
   listMachines, getMachineId,
   listMachineRegistry,
   queryBillingSummary,
@@ -15,6 +17,7 @@ import { ensurePricingSeeded } from '../lib/pricing.js'
 import { AGENTS, isAgent } from '../lib/agents.js'
 import { syncAll } from '../lib/sync-all.js'
 import { querySavingsSummary } from '../lib/savings.js'
+import { usageSnapshotFilterForPeriod } from '../lib/periods.js'
 import { queryBillingDiff } from '../lib/billing-diff.js'
 import { queryUsageSnapshots } from '../db/database.js'
 import { isAuthorizedRequest } from '../lib/serve-auth.js'
@@ -168,9 +171,10 @@ export function createHandler(db: Database) {
 
     if (path === '/api/fleet' && method === 'GET') {
       const period = (url.searchParams.get('period') ?? 'month') as Period
+      const machine = url.searchParams.get('machine') ?? undefined
       return ok({
-        summary: querySummary(db, period, undefined, true),
-        machines: listMachines(db),
+        summary: querySummary(db, period, machine),
+        machines: listMachines(db, period),
         registry: listMachineRegistry(db),
         current_machine: getMachineId(),
       })
@@ -179,7 +183,13 @@ export function createHandler(db: Database) {
     // Daily breakdown for charts
     if (path === '/api/daily' && method === 'GET') {
       const days = Number(url.searchParams.get('days') ?? 30)
-      return ok(queryDailyBreakdown(db, days))
+      const machine = url.searchParams.get('machine') ?? undefined
+      return ok(queryDailyBreakdown(db, days, machine))
+    }
+
+    if (path === '/api/hourly' && method === 'GET') {
+      const machine = url.searchParams.get('machine') ?? undefined
+      return ok(queryHourlyBreakdown(db, machine))
     }
 
     // Sessions — supports ?search=project|agent|session and legacy ?project=
@@ -188,6 +198,7 @@ export function createHandler(db: Database) {
       const project = url.searchParams.get('project') ?? undefined
       const search = url.searchParams.get('search') ?? undefined
       const machine = url.searchParams.get('machine') ?? undefined
+      const account = url.searchParams.get('account') ?? undefined
       const limit = Number(url.searchParams.get('limit') ?? 50)
       const offset = Number(url.searchParams.get('offset') ?? 0)
       const since = url.searchParams.get('since') ?? undefined
@@ -198,6 +209,7 @@ export function createHandler(db: Database) {
         project,
         search,
         machine,
+        account,
         limit,
         offset,
         since,
@@ -252,13 +264,26 @@ export function createHandler(db: Database) {
 
     // Project breakdown
     if (path === '/api/projects' && method === 'GET') {
-      return ok(queryProjectBreakdown(db))
+      const period = (url.searchParams.get('period') ?? 'all') as Period
+      const machine = url.searchParams.get('machine') ?? undefined
+      return ok(queryProjectBreakdown(db, period, machine))
+    }
+
+    if (path === '/api/accounts' && method === 'GET') {
+      const period = (url.searchParams.get('period') ?? 'all') as Period
+      const machine = url.searchParams.get('machine') ?? undefined
+      return ok(queryAccountBreakdown(db, period, machine))
     }
 
     // Breakdown (alias)
     if (path === '/api/breakdown' && method === 'GET') {
       const by = url.searchParams.get('by') ?? 'model'
-      return ok(by === 'project' ? queryProjectBreakdown(db) : queryModelBreakdown(db))
+      const period = (url.searchParams.get('period') ?? 'all') as Period
+      const machine = url.searchParams.get('machine') ?? undefined
+      if (by === 'project') return ok(queryProjectBreakdown(db, period, machine))
+      if (by === 'agent') return ok(queryAgentBreakdown(db, period, machine))
+      if (by === 'account') return ok(queryAccountBreakdown(db, period, machine))
+      return ok(queryModelBreakdown(db))
     }
 
     // Budgets
@@ -384,9 +409,11 @@ export function createHandler(db: Database) {
     if (path === '/api/usage' && method === 'GET') {
       const period = (url.searchParams.get('period') ?? 'month') as Period
       const agent = url.searchParams.get('agent') ?? undefined
-      const since = period === 'month' ? new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().substring(0, 10) : undefined
       return ok({
-        snapshots: queryUsageSnapshots(db, { agent: agent && isAgent(agent) ? agent : undefined, since }),
+        snapshots: queryUsageSnapshots(db, {
+          agent: agent && isAgent(agent) ? agent : undefined,
+          ...usageSnapshotFilterForPeriod(period),
+        }),
         summary: querySummary(db, period, undefined, true),
       })
     }
@@ -395,6 +422,47 @@ export function createHandler(db: Database) {
       const period = (url.searchParams.get('period') ?? 'month') as Period
       const agent = url.searchParams.get('agent') ?? undefined
       return ok(querySavingsSummary(db, period, agent && isAgent(agent) ? agent : undefined))
+    }
+
+    if (path === '/api/subscriptions' && method === 'GET') {
+      return ok(listSubscriptions(db))
+    }
+
+    if (path === '/api/subscriptions' && method === 'POST') {
+      const body = await jsonBody(req)
+      if (!body) return err('invalid JSON body')
+      const provider = optionalString(body['provider'])?.trim()
+      const plan = optionalString(body['plan'])?.trim()
+      if (!provider) return err('provider is required')
+      if (!plan) return err('plan is required')
+      const monthlyFee = finiteNumber(body['monthly_fee_usd'] ?? body['fee_usd'] ?? 0)
+      const includedUsage = finiteNumber(body['included_usage_usd'] ?? 0)
+      if (monthlyFee == null || monthlyFee < 0) return err('monthly_fee_usd must be a non-negative number')
+      if (includedUsage == null || includedUsage < 0) return err('included_usage_usd must be a non-negative number')
+      const agent = optionalAgent(body['agent'])
+      if (agent === undefined) return err(AGENT_ERROR)
+      const now = new Date().toISOString()
+      const subscription = {
+        id: optionalString(body['id'])?.trim() || randomUUID(),
+        agent,
+        provider,
+        plan,
+        monthly_fee_usd: monthlyFee,
+        included_usage_usd: includedUsage,
+        billing_cycle_start: optionalString(body['billing_cycle_start']),
+        reset_policy: optionalString(body['reset_policy']) ?? 'monthly',
+        active: body['active'] === false || body['active'] === 0 ? 0 : 1,
+        created_at: optionalString(body['created_at']) ?? now,
+        updated_at: now,
+      }
+      upsertSubscription(db, subscription)
+      return ok(subscription)
+    }
+
+    const subscriptionMatch = path.match(/^\/api\/subscriptions\/(.+)$/)
+    if (subscriptionMatch && method === 'DELETE') {
+      deleteSubscription(db, decodeURIComponent(subscriptionMatch[1]!))
+      return ok({ ok: true })
     }
 
     // Session requests detail

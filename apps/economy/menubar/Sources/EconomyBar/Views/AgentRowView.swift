@@ -1,24 +1,30 @@
 import SwiftUI
 
-struct ProjectRowView: View {
-  let project: ProjectStat
+struct AgentRowView: View {
+  let agent: AgentStat
 
   var body: some View {
     HStack(alignment: .firstTextBaseline) {
       VStack(alignment: .leading, spacing: 1) {
-        Text(project.displayName)
+        Text(agent.displayName)
           .font(.system(size: 12))
           .lineLimit(1)
-          .truncationMode(.middle)
-        Text("\(project.sessions) sessions / \(project.requests ?? 0) req / \(fmtTokens(project.total_tokens ?? 0)) tok")
+        Text("\(agent.sessions) sessions / \(agent.requests) req / \(fmtTokens(agent.total_tokens)) tok")
           .font(.system(size: 10).monospacedDigit())
           .foregroundStyle(.secondary)
           .lineLimit(1)
       }
       Spacer()
-      Text(fmtCost(project.cost_usd))
-        .font(.system(size: 12, weight: .medium).monospacedDigit())
-        .foregroundStyle(.primary)
+      VStack(alignment: .trailing, spacing: 1) {
+        Text(fmtCost(agent.api_equivalent_usd))
+          .font(.system(size: 12, weight: .medium).monospacedDigit())
+          .foregroundStyle(.primary)
+        Text(agent.billable_usd > 0
+          ? "billable \(fmtCost(agent.billable_usd))"
+          : "included \(fmtCost(agent.subscription_included_usd))")
+          .font(.system(size: 10).monospacedDigit())
+          .foregroundStyle(.secondary)
+      }
     }
   }
 

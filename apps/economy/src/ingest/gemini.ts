@@ -5,6 +5,7 @@ import type { SqliteAdapter as Database } from '@hasna/cloud'
 import { upsertRequest, upsertSession, rollupSession, getIngestState, setIngestState, getMachineId } from '../db/database.js'
 import { computeCostFromDb } from '../lib/pricing.js'
 import { defaultCostBasisForAgent } from '../lib/savings.js'
+import { resolveAccountForAgent, withAccount } from '../lib/accounts.js'
 import type { EconomySession } from '../types/index.js'
 
 const DEFAULT_GEMINI_TMP_DIR = join(homedir(), '.gemini', 'tmp')
@@ -112,6 +113,7 @@ export async function ingestGemini(db: Database, verbose?: boolean): Promise<{ s
   let totalSessions = 0
   let totalRequests = 0
   const touchedSessions = new Set<string>()
+  const account = await resolveAccountForAgent('gemini')
 
   const projectDirs = listProjectDirs(tmpDir, historyDir)
 
@@ -160,7 +162,7 @@ export async function ingestGemini(db: Database, verbose?: boolean): Promise<{ s
           request_count: 0,
           machine_id: machineId,
         }
-        upsertSession(db, session)
+        upsertSession(db, withAccount(session, account))
         totalSessions++
       }
       touchedSessions.add(sessionId)
@@ -199,7 +201,7 @@ export async function ingestGemini(db: Database, verbose?: boolean): Promise<{ s
         const costUsd = numberField(message.costUsd, message.cost_usd) || computedCost
         const timestamp = message.timestamp ?? chatData.lastUpdated ?? startTime
         const requestId = `gemini-${sessionId}-${message.id ?? index}`
-        upsertRequest(db, {
+        upsertRequest(db, withAccount({
           id: requestId,
           agent: 'gemini',
           session_id: sessionId,
@@ -214,7 +216,7 @@ export async function ingestGemini(db: Database, verbose?: boolean): Promise<{ s
           timestamp,
           source_request_id: message.id ?? requestId,
           machine_id: machineId,
-        })
+        }, account))
         totalRequests++
       }
 

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from 'fs'
+import { existsSync, statSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import type { SqliteAdapter as Database } from '@hasna/cloud'
@@ -7,6 +7,7 @@ import {
   getIngestState, setIngestState, getMachineId,
 } from '../db/database.js'
 import { defaultCostBasisForAgent } from '../lib/savings.js'
+import { resolveAccountForAgent, withAccount } from '../lib/accounts.js'
 
 const HERMES_DB = join(homedir(), '.hermes', 'state.db')
 
@@ -59,6 +60,7 @@ export async function ingestHermes(db: Database, verbose = false): Promise<{ ses
   const machineId = getMachineId()
   const now = new Date().toISOString()
   let requests = 0
+  const account = await resolveAccountForAgent('hermes')
 
   for (const row of rows) {
     const sessionId = `hermes-${row.id}`
@@ -67,7 +69,7 @@ export async function ingestHermes(db: Database, verbose = false): Promise<{ ses
     const cost = row.actual_cost_usd ?? row.estimated_cost_usd ?? 0
     const tokens = row.input_tokens + row.output_tokens + row.cache_read_tokens + row.cache_write_tokens + row.reasoning_tokens
 
-    upsertSession(db, {
+    upsertSession(db, withAccount({
       id: sessionId,
       agent: 'hermes',
       project_path: row.source ?? '',
@@ -79,10 +81,10 @@ export async function ingestHermes(db: Database, verbose = false): Promise<{ ses
       request_count: 1,
       machine_id: machineId,
       updated_at: now,
-    })
+    }, account))
 
     const reqId = `hermes-${row.id}-rollup`
-    upsertRequest(db, {
+    upsertRequest(db, withAccount({
       id: reqId,
       agent: 'hermes',
       session_id: sessionId,
@@ -98,7 +100,7 @@ export async function ingestHermes(db: Database, verbose = false): Promise<{ ses
       source_request_id: row.id,
       machine_id: machineId,
       updated_at: now,
-    })
+    }, account))
     requests++
     rollupSession(db, sessionId)
     if (verbose) console.log(`  hermes: ${sessionId} $${cost.toFixed(4)}`)

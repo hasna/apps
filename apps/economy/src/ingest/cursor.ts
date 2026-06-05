@@ -3,7 +3,7 @@ import {
   getIngestState, setIngestState, getMachineId,
   upsertRequest, upsertSession, rollupSession, upsertUsageSnapshot,
 } from '../db/database.js'
-import { defaultCostBasisForAgent } from '../lib/savings.js'
+import { resolveAccountForAgent, withAccount } from '../lib/accounts.js'
 
 interface CursorUsageResponse {
   premiumRequests?: number
@@ -50,6 +50,7 @@ export async function ingestCursor(db: Database, verbose = false): Promise<{ req
   const machineId = getMachineId()
   const now = new Date().toISOString()
   let snapshots = 0
+  const account = await resolveAccountForAgent('cursor')
 
   const usage = await cursorFetch('/api/usage', token) as CursorUsageResponse | null
   if (usage?.premiumRequests != null && usage.maxPremiumRequests) {
@@ -100,7 +101,7 @@ export async function ingestCursor(db: Database, verbose = false): Promise<{ req
 
   const sessionId = `cursor-${today}-${machineId}`
   if (onDemand + included > 0) {
-    upsertSession(db, {
+    upsertSession(db, withAccount({
       id: sessionId,
       agent: 'cursor',
       project_path: '',
@@ -112,8 +113,8 @@ export async function ingestCursor(db: Database, verbose = false): Promise<{ req
       request_count: 1,
       machine_id: machineId,
       updated_at: now,
-    })
-    upsertRequest(db, {
+    }, account))
+    upsertRequest(db, withAccount({
       id: `cursor-${today}-${machineId}-usage`,
       agent: 'cursor',
       session_id: sessionId,
@@ -129,7 +130,7 @@ export async function ingestCursor(db: Database, verbose = false): Promise<{ req
       source_request_id: today,
       machine_id: machineId,
       updated_at: now,
-    })
+    }, account))
     rollupSession(db, sessionId)
   }
 

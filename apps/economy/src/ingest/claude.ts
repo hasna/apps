@@ -12,6 +12,7 @@ function autoDetectProject(cwd: string, projects: Array<{path: string, name: str
 }
 import { computeCostFromDb, normalizeModelName } from '../lib/pricing.js'
 import { defaultCostBasisForAgent } from '../lib/savings.js'
+import { resolveAccountForAgent, withAccount } from '../lib/accounts.js'
 import type { EconomySession, Agent } from '../types/index.js'
 
 const CLAUDE_PROJECTS_DIR = join(homedir(), '.claude', 'projects')
@@ -109,6 +110,7 @@ export async function ingestJsonlProjects(
 
   // Load registered projects once for auto-detection (longest path first for best match)
   const registeredProjects = db.prepare(`SELECT path, name FROM projects ORDER BY LENGTH(path) DESC`).all() as Array<{path: string, name: string}>
+  const account = await resolveAccountForAgent(agentName)
 
   const projectDirs = readdirSync(projectsDir, { withFileTypes: true })
     .filter(d => d.isDirectory())
@@ -175,7 +177,7 @@ export async function ingestJsonlProjects(
         const sourceRequestId = entry.requestId ?? entry.request_id ?? entry.message.id ?? entry.uuid ?? `${sessionId}-${timestamp}`
         const reqId = `${agentName}-${sourceRequestId}`
 
-        upsertRequest(db, {
+        upsertRequest(db, withAccount({
           id: reqId,
           agent: agentName,
           session_id: sessionId,
@@ -192,7 +194,7 @@ export async function ingestJsonlProjects(
           timestamp,
           source_request_id: sourceRequestId,
           machine_id: machineId,
-        })
+        }, account))
 
         // Ensure session exists
         if (!touchedSessions.has(sessionId)) {
@@ -213,7 +215,7 @@ export async function ingestJsonlProjects(
               request_count: 0,
               machine_id: machineId,
             }
-            upsertSession(db, session)
+            upsertSession(db, withAccount(session, account))
           }
           touchedSessions.add(sessionId)
         }

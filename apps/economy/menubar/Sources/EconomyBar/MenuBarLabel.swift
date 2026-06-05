@@ -4,7 +4,7 @@ struct MenuBarLabel: View {
   let todayCost: Double
   let weekCost: Double
   let monthCost: Double
-  let claudeQuotaPct: Double?
+  let quotaBadgePct: Double?
   let isOffline: Bool
 
   private var displayCost: Double {
@@ -29,7 +29,7 @@ struct MenuBarLabel: View {
       HStack(spacing: 4) {
         Text(fmtCost(displayCost) + periodHint)
           .font(.system(size: 12, weight: .medium).monospacedDigit())
-        if let quota = claudeQuotaPct, quota > 0 {
+        if let quota = quotaBadgePct, quota > 0 {
           Text(String(format: "%.0f%%", quota))
             .font(.system(size: 10, weight: .regular).monospacedDigit())
             .foregroundStyle(quota >= 80 ? .orange : .secondary)

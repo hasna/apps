@@ -111,6 +111,40 @@ export interface ProjectBreakdown {
   last_active: string
 }
 
+export interface AgentBreakdown {
+  agent: Agent
+  sessions: number
+  requests: number
+  total_tokens: number
+  api_equivalent_usd: number
+  billable_usd: number
+  metered_api_usd: number
+  subscription_included_usd: number
+  estimated_usd: number
+  unknown_usd: number
+  cost_usd: number
+  last_active: string
+}
+
+export interface AccountBreakdown {
+  account_key: string
+  account_tool: string
+  account_name: string
+  account_email: string | null
+  account_source: string
+  sessions: number
+  requests: number
+  total_tokens: number
+  api_equivalent_usd: number
+  billable_usd: number
+  metered_api_usd: number
+  subscription_included_usd: number
+  estimated_usd: number
+  unknown_usd: number
+  cost_usd: number
+  last_active: string
+}
+
 export interface DailyPoint {
   date: string
   cost_usd: number
@@ -158,6 +192,32 @@ export interface CreateGoalInput {
   limit_usd: number
   project_path?: string
   agent?: Agent
+}
+
+export interface Subscription {
+  id: string
+  agent: Agent | null
+  provider: string
+  plan: string
+  monthly_fee_usd: number
+  included_usage_usd: number
+  billing_cycle_start: string | null
+  reset_policy: string
+  active: number
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateSubscriptionInput {
+  id?: string
+  agent?: Agent | null
+  provider: string
+  plan: string
+  monthly_fee_usd?: number
+  included_usage_usd?: number
+  billing_cycle_start?: string | null
+  reset_policy?: string
+  active?: boolean | number
 }
 
 export interface GoalStatus {
@@ -270,6 +330,7 @@ export interface BillingDiffSummary {
 export interface SessionFilter {
   agent?: Agent
   project?: string
+  account?: string
   machine?: string
   limit?: number
   offset?: number

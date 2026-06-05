@@ -11,18 +11,17 @@ import {
   listMachines,
   listMachineRegistry,
   queryBillingSummary,
-  getModelPricing,
   dedupeRequests,
 } from '../../db/database.js'
 import { querySavingsSummary } from '../../lib/savings.js'
 import { queryBillingDiff } from '../../lib/billing-diff.js'
+import { usageSnapshotFilterForPeriod } from '../../lib/periods.js'
 import { buildStatusLine } from './tui.js'
 import { computeCostFromDb, ensurePricingSeeded } from '../../lib/pricing.js'
 import { AGENTS, parseAgent } from '../../lib/agents.js'
 import type { Period } from '../../types/index.js'
 import {
   getCloudDatabaseUrl,
-  getLastCloudPull,
   getCloudScheduleStatus,
   registerCloudSchedule,
   removeCloudSchedule,
@@ -55,11 +54,7 @@ export function registerExtendedCommands(program: Command): void {
       const db = openDatabase()
       const period = parsePeriod(periodArg, 'month')
       const agent = parseAgent(opts.agent, '--agent')
-      const since = period === 'today' ? new Date().toISOString().substring(0, 10)
-        : period === 'week' ? new Date(Date.now() - 7 * 86400000).toISOString().substring(0, 10)
-        : period === 'month' ? new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().substring(0, 10)
-        : undefined
-      const snaps = queryUsageSnapshots(db, { agent, since })
+      const snaps = queryUsageSnapshots(db, { agent, ...usageSnapshotFilterForPeriod(period) })
       const summary = querySummary(db, period, undefined, true)
 
       if (opts.json) {
@@ -339,7 +334,7 @@ export function registerFleetCommands(program: Command): void {
       const db = openDatabase()
       const period = parsePeriod(opts.period, 'today')
       const summary = querySummary(db, period, undefined, true)
-      const machines = listMachines(db)
+      const machines = listMachines(db, period)
       const registry = listMachineRegistry(db)
 
       if (opts.json) {
