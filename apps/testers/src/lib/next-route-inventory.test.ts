@@ -21,7 +21,7 @@ function makeRepo(): string {
 
   mkdirSync(join(root, "packages", "web", "app", "(dashboard)", "[orgSlug]", "billing"), { recursive: true });
   writeFileSync(join(root, "packages", "web", "app", "(dashboard)", "[orgSlug]", "billing", "page.tsx"), "import { BillingActions } from './billing-actions';\nexport default function Page() { return <><a href=\"/[orgSlug]/billing/history\">History</a><BillingActions /></>; }\n");
-  writeFileSync(join(root, "packages", "web", "app", "(dashboard)", "[orgSlug]", "billing", "billing-actions.tsx"), "export function BillingActions() { return <form aria-label=\"Top up credits\"><button aria-label=\"Add credits\">Add credits</button><input name=\"amount\" placeholder=\"Credit amount\" /></form>; }\n");
+  writeFileSync(join(root, "packages", "web", "app", "(dashboard)", "[orgSlug]", "billing", "billing-actions.tsx"), "export function BillingActions() { return <form aria-label=\"Top up credits\"><button aria-label=\"Add credits\">Add credits</button><button aria-label=\"Add credits\" data-testid=\"add-credits-secondary\">Add credits</button><input name=\"amount\" placeholder=\"Credit amount\" /></form>; }\n");
 
   mkdirSync(join(root, "packages", "web", "app", "api", "v1", "(commerce)", "billing", "top-ups"), { recursive: true });
   writeFileSync(join(root, "packages", "web", "app", "api", "v1", "(commerce)", "billing", "top-ups", "route.ts"), "export async function GET() {}\nexport async function POST() {}\n");
@@ -50,7 +50,7 @@ describe("next route inventory", () => {
     expect(inventory.pages).toBe(2);
     expect(inventory.apiRoutes).toBe(2);
     expect(inventory.dynamic).toBe(2);
-    expect(inventory.actions).toBe(7);
+    expect(inventory.actions).toBe(8);
     expect(inventory.categories).toMatchObject({ public: 1, commerce: 2, admin: 1 });
 
     const billingPage = inventory.items.find((item) => item.routePath === "/:orgSlug/billing")!;
@@ -142,12 +142,13 @@ describe("next route inventory", () => {
       },
     });
 
-    expect(result.created).toBe(7);
-    expect(result.actionScenarios.length).toBe(7);
+    expect(result.created).toBe(8);
+    expect(result.actionScenarios.length).toBe(8);
+    expect(new Set(result.actionScenarios.map((scenario) => scenario.name)).size).toBe(8);
     expect(result.workflows.length).toBe(3);
 
     const actionScenario = listScenarios({ projectId: project.id })
-      .find((scenario) => scenario.name === "Next page action: /:orgSlug/billing :: button Add credits")!;
+      .find((scenario) => scenario.name === "Next page action: /:orgSlug/billing :: button Add credits #1")!;
     expect(actionScenario).toBeTruthy();
     expect(actionScenario.tags).toContain("next-action");
     expect(actionScenario.tags).toContain("action:button");
@@ -175,7 +176,7 @@ describe("next route inventory", () => {
       workflowProvider: "e2b",
     });
 
-    expect(second.deduped).toBe(7);
+    expect(second.deduped).toBe(8);
     expect(listTestingWorkflows({ projectId: project.id }).length).toBe(3);
   });
 

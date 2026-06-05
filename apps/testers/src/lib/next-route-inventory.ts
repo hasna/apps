@@ -264,7 +264,7 @@ function scenarioInputForNextRouteAction(
   ].filter(Boolean) as string[];
 
   return {
-    name: `Next ${label}: ${item.routePath} :: ${action.kind} ${action.label}`,
+    name: `Next ${label}: ${item.routePath} :: ${action.kind} ${action.label} #${index + 1}`,
     description: `Source-discovered ${label} ${index + 1} from ${action.sourceFile}. Verify ${action.kind} "${action.label}" on ${item.routePath}.`,
     steps: item.kind === "page" ? pageSteps : apiSteps,
     tags: actionTagsForRoute(item, action),
