@@ -1,6 +1,7 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix as pathPosix } from "node:path";
 import { getDatabase } from "../db/database.js";
 import { getTestingWorkflow } from "../db/workflows.js";
 import { getPersona } from "../db/personas.js";
@@ -29,6 +30,12 @@ export interface WorkflowSandboxPlan {
   name: string;
   remoteDir: string;
   stateRemoteDir: string;
+  appSourceDir?: string;
+  appRemoteDir?: string;
+  appStartCommand?: string;
+  appUrl?: string;
+  appWaitUrl?: string;
+  appWaitTimeoutMs?: number;
   command: string;
   cleanup: WorkflowSandboxCleanup;
   syncStrategy: WorkflowSandboxSyncStrategy;
@@ -99,6 +106,17 @@ export interface WorkflowRunnerDependencies {
   createDatabaseBundle?: (workflow: TestingWorkflow, plan: WorkflowRunPlan) => WorkflowDatabaseBundle;
 }
 
+const APP_SOURCE_EXCLUDES = [
+  "node_modules",
+  ".git",
+  "dist",
+  ".next",
+  ".turbo",
+  ".cache",
+  ".venv",
+  "__pycache__",
+];
+
 export function buildWorkflowRunPlan(workflow: TestingWorkflow, options: WorkflowRunOptions): WorkflowRunPlan {
   const runOptions = {
     url: options.url,
@@ -156,10 +174,18 @@ export function createWorkflowDatabaseBundle(
 ): WorkflowDatabaseBundle {
   if (!plan.sandbox) throw new Error(`Workflow is not configured for sandbox execution: ${workflow.name}`);
   const localDir = mkdtempSync(join(tmpdir(), `testers-workflow-${workflow.id.slice(0, 8)}-`));
-  writeFileSync(join(localDir, "testers.db"), getDatabase().serialize());
+  const stateDir = join(localDir, ".testers-state");
+  mkdirSync(stateDir, { recursive: true });
+  writeDatabaseSnapshot(join(stateDir, "testers.db"));
+
+  if (plan.sandbox.appSourceDir && plan.sandbox.appRemoteDir) {
+    const relativeAppDir = relativeRemotePath(plan.sandbox.remoteDir, plan.sandbox.appRemoteDir);
+    copyAppSource(plan.sandbox.appSourceDir, join(localDir, relativeAppDir));
+  }
+
   return {
     localDir,
-    remoteDir: plan.sandbox.stateRemoteDir,
+    remoteDir: plan.sandbox.remoteDir,
     cleanup: () => rmSync(localDir, { recursive: true, force: true }),
   };
 }
@@ -172,6 +198,55 @@ function validatePersonaIds(workflow: TestingWorkflow): void {
   }
 }
 
+function relativeRemotePath(remoteDir: string, remoteChildDir: string): string {
+  if (!remoteChildDir.startsWith("/")) {
+    const relative = remoteChildDir.replace(/^\/+/, "").replace(/\/+$/, "");
+    if (!relative || relative === ".") {
+      throw new Error("Sandbox app remote directory must be a child directory, not the workflow root");
+    }
+    return relative;
+  }
+
+  const base = remoteDir.replace(/\/+$/, "") || "/";
+  const child = remoteChildDir.replace(/\/+$/, "") || "/";
+  const relative = pathPosix.relative(base, child);
+  if (!relative || relative === "." || relative.startsWith("..") || pathPosix.isAbsolute(relative)) {
+    throw new Error(
+      `Sandbox app remote directory must be inside the workflow remote directory (${remoteDir}): ${remoteChildDir}`
+    );
+  }
+  return relative;
+}
+
+function copyAppSource(sourceDir: string, targetDir: string): void {
+  if (!existsSync(sourceDir) || !statSync(sourceDir).isDirectory()) {
+    throw new Error(`Sandbox app source directory does not exist or is not a directory: ${sourceDir}`);
+  }
+  mkdirSync(targetDir, { recursive: true });
+  const result = spawnSync("rsync", [
+    "-a",
+    "--delete",
+    ...APP_SOURCE_EXCLUDES.flatMap((item) => ["--exclude", item]),
+    `${sourceDir.replace(/\/+$/, "")}/`,
+    `${targetDir.replace(/\/+$/, "")}/`,
+  ], { encoding: "utf8" });
+
+  if (result.error) {
+    throw new Error(`Failed to rsync sandbox app source: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    throw new Error(`Failed to rsync sandbox app source (${result.status}): ${result.stderr.trim()}`);
+  }
+}
+
+function writeDatabaseSnapshot(targetPath: string): void {
+  getDatabase().exec(`VACUUM INTO ${sqlString(targetPath)}`);
+}
+
+function sqlString(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
 function buildSandboxPlan(
   workflow: TestingWorkflow,
   execution: WorkflowExecutionConfig,
@@ -179,12 +254,21 @@ function buildSandboxPlan(
 ): WorkflowSandboxPlan {
   const remoteDir = execution.sandboxRemoteDir ?? `/tmp/testers-workflow-${workflow.id.slice(0, 8)}`;
   const stateRemoteDir = `${remoteDir.replace(/\/+$/, "")}/.testers-state`;
+  const appRemoteDir = execution.appSourceDir
+    ? execution.appRemoteDir ?? `${remoteDir.replace(/\/+$/, "")}/app`
+    : execution.appRemoteDir;
   return {
     provider: execution.provider,
     image: execution.sandboxImage,
     name: `testers-${workflow.id.slice(0, 8)}`,
     remoteDir,
     stateRemoteDir,
+    ...(execution.appSourceDir ? { appSourceDir: execution.appSourceDir } : {}),
+    ...(appRemoteDir ? { appRemoteDir } : {}),
+    ...(execution.appStartCommand ? { appStartCommand: execution.appStartCommand } : {}),
+    ...(execution.appUrl ? { appUrl: execution.appUrl } : {}),
+    ...(execution.appWaitUrl ? { appWaitUrl: execution.appWaitUrl } : {}),
+    ...(execution.appWaitTimeoutMs !== undefined ? { appWaitTimeoutMs: execution.appWaitTimeoutMs } : {}),
     cleanup: execution.sandboxCleanup ?? "delete",
     syncStrategy: execution.sandboxSyncStrategy ?? "rsync",
     timeoutMs: execution.timeoutMs,
@@ -192,6 +276,12 @@ function buildSandboxPlan(
     command: buildSandboxCommand({
       runOptions,
       remoteDir,
+      stateRemoteDir,
+      appRemoteDir,
+      appStartCommand: execution.appStartCommand,
+      appUrl: execution.appUrl,
+      appWaitUrl: execution.appWaitUrl,
+      appWaitTimeoutMs: execution.appWaitTimeoutMs,
       dbPath: `${stateRemoteDir}/testers.db`,
       setupCommand: execution.setupCommand,
       packageSpec: execution.packageSpec ?? "@hasna/testers",
@@ -202,15 +292,22 @@ function buildSandboxPlan(
 function buildSandboxCommand(input: {
   runOptions: RunOptions & { tags?: string[]; priority?: string; scenarioIds?: string[] };
   remoteDir: string;
+  stateRemoteDir: string;
+  appRemoteDir?: string;
+  appStartCommand?: string;
+  appUrl?: string;
+  appWaitUrl?: string;
+  appWaitTimeoutMs?: number;
   dbPath: string;
   setupCommand?: string;
   packageSpec: string;
 }): string {
+  const targetUrl = input.appUrl ?? input.runOptions.url;
   const args = [
     "bunx",
     input.packageSpec,
     "run",
-    input.runOptions.url,
+    targetUrl,
     ...(input.runOptions.scenarioIds?.length ? ["--scenario", input.runOptions.scenarioIds.join(",")] : []),
     ...(input.runOptions.tags?.length ? input.runOptions.tags.flatMap((tag) => ["--tag", tag]) : []),
     ...(input.runOptions.priority ? ["--priority", input.runOptions.priority] : []),
@@ -227,10 +324,51 @@ function buildSandboxCommand(input: {
   return [
     "set -euo pipefail",
     `mkdir -p ${shellQuote(input.remoteDir)}`,
-    `cd ${shellQuote(input.remoteDir)}`,
+    `mkdir -p ${shellQuote(input.stateRemoteDir)}`,
+    input.appRemoteDir ? `mkdir -p ${shellQuote(input.appRemoteDir)}` : undefined,
+    `cd ${shellQuote(input.appRemoteDir ?? input.remoteDir)}`,
     input.setupCommand,
+    buildAppStartCommand(input),
     `HASNA_TESTERS_DB_PATH=${shellQuote(input.dbPath)} ${args.map(shellQuote).join(" ")}`,
   ].filter(Boolean).join("\n");
+}
+
+function buildAppStartCommand(input: {
+  appStartCommand?: string;
+  appUrl?: string;
+  appWaitUrl?: string;
+  appWaitTimeoutMs?: number;
+  runOptions: RunOptions;
+  stateRemoteDir: string;
+}): string | undefined {
+  if (!input.appStartCommand) return undefined;
+  const waitUrl = input.appWaitUrl ?? input.appUrl ?? input.runOptions.url;
+  const waitTimeoutMs = input.appWaitTimeoutMs ?? 120000;
+  return [
+    `( ${input.appStartCommand} ) > ${shellQuote(`${input.stateRemoteDir}/app.log`)} 2>&1 &`,
+    "APP_PID=$!",
+    `echo "$APP_PID" > ${shellQuote(`${input.stateRemoteDir}/app.pid`)}`,
+    "trap 'kill \"$APP_PID\" 2>/dev/null || true' EXIT",
+    waitUrl ? buildWaitForUrlCommand(waitUrl, waitTimeoutMs) : undefined,
+  ].filter(Boolean).join("\n");
+}
+
+function buildWaitForUrlCommand(url: string, timeoutMs: number): string {
+  const script = `
+const url = ${JSON.stringify(url)};
+const timeoutMs = ${JSON.stringify(timeoutMs)};
+const deadline = Date.now() + timeoutMs;
+while (Date.now() <= deadline) {
+  try {
+    const response = await fetch(url);
+    if (response.status >= 200 && response.status < 500) process.exit(0);
+  } catch {}
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+}
+console.error(\`Timed out waiting for \${url} after \${timeoutMs}ms\`);
+process.exit(1);
+`.trim();
+  return `bun -e ${shellQuote(script)}`;
 }
 
 async function runViaSandbox(

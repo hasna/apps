@@ -1,10 +1,15 @@
 process.env.TESTERS_DB_PATH = ":memory:";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { closeDatabase, resetDatabase } from "../db/database.js";
 import { createProject } from "../db/projects.js";
 import { createTestingWorkflow } from "../db/workflows.js";
-import { buildWorkflowRunPlan, runTestingWorkflow } from "./workflow-runner.js";
+import { buildWorkflowRunPlan, createWorkflowDatabaseBundle, runTestingWorkflow } from "./workflow-runner.js";
+
+const cleanupPaths: string[] = [];
 
 describe("workflow runner", () => {
   beforeEach(() => {
@@ -13,6 +18,9 @@ describe("workflow runner", () => {
 
   afterEach(() => {
     closeDatabase();
+    for (const dir of cleanupPaths.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("builds local run options from a saved workflow", () => {
@@ -134,5 +142,52 @@ describe("workflow runner", () => {
     });
     expect(calls[0]).toHaveProperty("command");
     expect(calls[1]).toEqual({ cleanup: true });
+  });
+
+  test("builds and bundles app source for sandbox workflows that start the app", () => {
+    const sourceDir = mkdtempSync(join(tmpdir(), "testers-app-source-"));
+    cleanupPaths.push(sourceDir);
+    writeFileSync(join(sourceDir, "package.json"), JSON.stringify({ scripts: { dev: "next dev" } }));
+    mkdirSync(join(sourceDir, "src"), { recursive: true });
+    writeFileSync(join(sourceDir, "src", "index.ts"), "export const ok = true;\n");
+    mkdirSync(join(sourceDir, "node_modules", "skip"), { recursive: true });
+    writeFileSync(join(sourceDir, "node_modules", "skip", "index.js"), "module.exports = {};\n");
+
+    const workflow = createTestingWorkflow({
+      name: "sandbox app",
+      scenarioFilter: { scenarioIds: ["APP-1"] },
+      execution: {
+        target: "sandbox",
+        provider: "e2b",
+        sandboxRemoteDir: "/workspace/testers",
+        sandboxSyncStrategy: "rsync",
+        appSourceDir: sourceDir,
+        appStartCommand: "bun run dev --host 0.0.0.0",
+        appUrl: "http://127.0.0.1:3325",
+        appWaitTimeoutMs: 45000,
+      },
+    });
+
+    const plan = buildWorkflowRunPlan(workflow, { url: "https://ignored.example" });
+    expect(plan.sandbox).toMatchObject({
+      remoteDir: "/workspace/testers",
+      stateRemoteDir: "/workspace/testers/.testers-state",
+      appSourceDir: sourceDir,
+      appRemoteDir: "/workspace/testers/app",
+      appStartCommand: "bun run dev --host 0.0.0.0",
+      appUrl: "http://127.0.0.1:3325",
+      appWaitTimeoutMs: 45000,
+    });
+    expect(plan.sandbox?.command).toContain("cd '/workspace/testers/app'");
+    expect(plan.sandbox?.command).toContain("( bun run dev --host 0.0.0.0 )");
+    expect(plan.sandbox?.command).toContain("'run' 'http://127.0.0.1:3325'");
+    expect(plan.sandbox?.command).toContain("Timed out waiting for");
+
+    const bundle = createWorkflowDatabaseBundle(workflow, plan);
+    cleanupPaths.push(bundle.localDir);
+    expect(bundle.remoteDir).toBe("/workspace/testers");
+    expect(existsSync(join(bundle.localDir, ".testers-state", "testers.db"))).toBe(true);
+    expect(readFileSync(join(bundle.localDir, "app", "src", "index.ts"), "utf8")).toContain("ok = true");
+    expect(existsSync(join(bundle.localDir, "app", "node_modules"))).toBe(false);
   });
 });

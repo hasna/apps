@@ -438,6 +438,12 @@ export interface WorkflowExecutionConfig {
   sandboxSyncStrategy?: WorkflowSandboxSyncStrategy;
   setupCommand?: string;
   packageSpec?: string;
+  appSourceDir?: string;
+  appRemoteDir?: string;
+  appStartCommand?: string;
+  appUrl?: string;
+  appWaitUrl?: string;
+  appWaitTimeoutMs?: number;
   timeoutMs?: number;
   env?: Record<string, string>;
 }
@@ -454,6 +460,12 @@ export interface WorkflowExecutionInput {
   sandboxSyncStrategy?: WorkflowSandboxSyncStrategy;
   setupCommand?: string;
   packageSpec?: string;
+  appSourceDir?: string;
+  appRemoteDir?: string;
+  appStartCommand?: string;
+  appUrl?: string;
+  appWaitUrl?: string;
+  appWaitTimeoutMs?: number;
   timeoutMs?: number;
   env?: Record<string, string>;
 }
@@ -568,6 +580,12 @@ export function workflowExecutionFromValue(value: unknown): WorkflowExecutionCon
   const sandboxSyncStrategy = syncStrategyValue(input["sandboxSyncStrategy"]);
   const setupCommand = stringValue(input["setupCommand"]);
   const packageSpec = stringValue(input["packageSpec"]);
+  const appSourceDir = stringValue(input["appSourceDir"]);
+  const appRemoteDir = stringValue(input["appRemoteDir"]);
+  const appStartCommand = stringValue(input["appStartCommand"]);
+  const appUrl = stringValue(input["appUrl"]);
+  const appWaitUrl = stringValue(input["appWaitUrl"]);
+  const appWaitTimeoutMs = numberValue(input["appWaitTimeoutMs"]);
   const timeoutMs = numberValue(input["timeoutMs"]);
   const env = stringMap(input["env"]);
 
@@ -580,6 +598,12 @@ export function workflowExecutionFromValue(value: unknown): WorkflowExecutionCon
     ...(sandboxSyncStrategy ? { sandboxSyncStrategy } : {}),
     ...(setupCommand ? { setupCommand } : {}),
     ...(packageSpec ? { packageSpec } : {}),
+    ...(appSourceDir ? { appSourceDir } : {}),
+    ...(appRemoteDir ? { appRemoteDir } : {}),
+    ...(appStartCommand ? { appStartCommand } : {}),
+    ...(appUrl ? { appUrl } : {}),
+    ...(appWaitUrl ? { appWaitUrl } : {}),
+    ...(appWaitTimeoutMs !== undefined ? { appWaitTimeoutMs } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     ...(env ? { env } : {}),
   };

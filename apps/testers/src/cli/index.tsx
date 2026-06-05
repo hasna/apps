@@ -4526,6 +4526,12 @@ workflowCmd
   .option("--sandbox-sync <strategy>", "Sandbox upload sync strategy: rsync or archive", "rsync")
   .option("--sandbox-setup-command <command>", "Shell command to run before testers in the sandbox")
   .option("--sandbox-package <spec>", "Package spec to execute in the sandbox", "@hasna/testers")
+  .option("--sandbox-app-source <path>", "Local app source directory to upload into the sandbox")
+  .option("--sandbox-app-remote-dir <path>", "Remote app directory inside the sandbox (default: <sandbox-remote-dir>/app)")
+  .option("--sandbox-app-start-command <command>", "Shell command to start the app before testers runs")
+  .option("--sandbox-app-url <url>", "URL testers should target inside the sandbox after the app starts")
+  .option("--sandbox-app-wait-url <url>", "URL to poll before starting testers (defaults to --sandbox-app-url)")
+  .option("--sandbox-app-wait-timeout <ms>", "App readiness wait timeout in milliseconds")
   .option("--e2b-template <name>", "Legacy alias for --sandbox-image")
   .option("--timeout <ms>", "Workflow timeout")
   .option("--json", "Output as JSON", false)
@@ -4555,6 +4561,12 @@ workflowCmd
           sandboxSyncStrategy: opts.sandboxSync,
           setupCommand: opts.sandboxSetupCommand,
           packageSpec: opts.sandboxPackage,
+          appSourceDir: opts.sandboxAppSource,
+          appRemoteDir: opts.sandboxAppRemoteDir,
+          appStartCommand: opts.sandboxAppStartCommand,
+          appUrl: opts.sandboxAppUrl,
+          appWaitUrl: opts.sandboxAppWaitUrl,
+          appWaitTimeoutMs: opts.sandboxAppWaitTimeout ? parseInt(opts.sandboxAppWaitTimeout, 10) : undefined,
           timeoutMs: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
         },
       });
