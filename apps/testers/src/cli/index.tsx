@@ -3493,6 +3493,80 @@ program
     }
   });
 
+// ─── testers inventory next <root> ─────────────────────────────────────────
+
+const inventoryCmd = program.command("inventory").description("Discover source-derived app route/action inventories");
+
+inventoryCmd
+  .command("next [root]")
+  .description("Discover Next.js app routes and optionally import route coverage scenarios")
+  .option("--app-dir <path>", "Next.js app directory relative to root (default: packages/web/app or app)")
+  .option("--project <id>", "Project ID")
+  .option("--no-pages", "Do not include page.tsx/page.ts routes")
+  .option("--no-api", "Do not include route.ts/route.js API routes")
+  .option("--limit <n>", "Limit discovered routes")
+  .option("--create-scenarios", "Upsert source-derived route coverage scenarios", false)
+  .option("--create-workflows", "Upsert grouped workflows by area and route kind", false)
+  .option("--workflow-target <target>", "Workflow execution target: local or sandbox", "sandbox")
+  .option("--sandbox-provider <provider>", "Sandbox provider for created workflows", "e2b")
+  .option("--sandbox-cleanup <mode>", "Sandbox cleanup mode: delete, stop, or keep", "delete")
+  .option("--sandbox-sync <strategy>", "Sandbox upload sync strategy: rsync or archive", "rsync")
+  .option("--sandbox-env-optional <name>", "Optional sandbox env var; forwards host NAME only when set (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
+  .option("--timeout <ms>", "Workflow timeout in milliseconds")
+  .option("--json", "Output as JSON", false)
+  .action(async (root: string | undefined, opts) => {
+    try {
+      const { importNextRouteInventory } = await import("../lib/next-route-inventory.js");
+      const projectId = resolveProject(opts.project) ?? undefined;
+      const env = parseSandboxEnv(undefined, opts.sandboxEnvOptional);
+      const result = importNextRouteInventory({
+        rootDir: root ?? process.cwd(),
+        appDir: opts.appDir,
+        projectId,
+        includePages: opts.pages !== false,
+        includeApi: opts.api !== false,
+        limit: opts.limit ? parseInt(opts.limit, 10) : undefined,
+        createScenarios: opts.createScenarios,
+        createWorkflows: opts.createWorkflows,
+        workflowTarget: opts.workflowTarget,
+        workflowProvider: opts.workflowTarget === "sandbox" ? opts.sandboxProvider : undefined,
+        workflowExecution: {
+          target: opts.workflowTarget,
+          provider: opts.workflowTarget === "sandbox" ? opts.sandboxProvider : undefined,
+          sandboxCleanup: opts.sandboxCleanup,
+          sandboxSyncStrategy: opts.sandboxSync,
+          timeoutMs: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
+          env,
+        },
+      });
+
+      if (opts.json) {
+        log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      log("");
+      log(chalk.bold("  Next.js Route Inventory"));
+      log(chalk.dim(`  Root: ${result.inventory.rootDir}`));
+      log(chalk.dim(`  App:  ${result.inventory.appDir}`));
+      log("");
+      log(`  Routes: ${chalk.cyan(String(result.inventory.total))} (${result.inventory.pages} pages, ${result.inventory.apiRoutes} API, ${result.inventory.dynamic} dynamic)`);
+      log(`  Scenarios: ${chalk.green(String(result.created))} created, ${chalk.yellow(String(result.updated))} updated, ${chalk.dim(String(result.deduped))} deduped`);
+      log(`  Workflows: ${result.workflows.length}`);
+      log("");
+      for (const [category, count] of Object.entries(result.inventory.categories).sort()) {
+        log(`  ${category.padEnd(18)} ${count}`);
+      }
+      log("");
+      if (!opts.createScenarios) log(chalk.dim("  Add --create-scenarios to upsert route scenarios."));
+      if (!opts.createWorkflows) log(chalk.dim("  Add --create-workflows to upsert grouped workflows."));
+      log("");
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
 // ─── testers generate <url> ─────────────────────────────────────────────────
 
 program
