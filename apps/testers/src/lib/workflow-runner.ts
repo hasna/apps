@@ -325,6 +325,13 @@ function buildSandboxCommand(input: {
     "--no-auto-generate",
     "--json",
   ];
+  const installBrowserArgs = [
+    "bunx",
+    input.packageSpec,
+    "install-browser",
+    "--engine",
+    "playwright",
+  ];
 
   return [
     "set -euo pipefail",
@@ -335,6 +342,7 @@ function buildSandboxCommand(input: {
     `cd ${shellQuote(input.appRemoteDir ?? input.remoteDir)}`,
     input.setupCommand,
     buildAppStartCommand(input),
+    buildSandboxBrowserInstallCommand(installBrowserArgs),
     `HASNA_TESTERS_DB_PATH=${shellQuote(input.dbPath)} ${args.map(shellQuote).join(" ")}`,
   ].filter(Boolean).join("\n");
 }
@@ -347,6 +355,14 @@ function buildBunBootstrapCommand(): string {
     "  curl -fsSL https://bun.sh/install | bash",
     "fi",
     "command -v bun >/dev/null 2>&1",
+  ].join("\n");
+}
+
+function buildSandboxBrowserInstallCommand(args: string[]): string {
+  return [
+    'if [ "${TESTERS_SANDBOX_SKIP_BROWSER_INSTALL:-}" != "1" ]; then',
+    `  ${args.map(shellQuote).join(" ")}`,
+    "fi",
   ].join("\n");
 }
 

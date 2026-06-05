@@ -72,11 +72,16 @@ describe("workflow runner", () => {
     });
     expect(plan.sandbox?.command).toContain("HASNA_TESTERS_DB_PATH=");
     expect(plan.sandbox?.command).toContain("https://bun.sh/install");
+    expect(plan.sandbox?.command).toContain("install-browser");
+    expect(plan.sandbox?.command).toContain("TESTERS_SANDBOX_SKIP_BROWSER_INSTALL");
     expect(plan.sandbox?.command).toContain("bunx");
     expect(plan.sandbox?.command).toContain("@hasna/testers");
     expect(plan.sandbox?.command).toContain("--scenario");
     expect(plan.sandbox?.command).toContain("S1,S2");
     expect(plan.sandbox?.command.indexOf("https://bun.sh/install")).toBeLessThan(
+      plan.sandbox?.command.indexOf("HASNA_TESTERS_DB_PATH=") ?? 0,
+    );
+    expect(plan.sandbox?.command.indexOf("install-browser")).toBeLessThan(
       plan.sandbox?.command.indexOf("HASNA_TESTERS_DB_PATH=") ?? 0,
     );
   });
@@ -247,6 +252,9 @@ describe("workflow runner", () => {
     expect(plan.sandbox?.command).toContain("Timed out waiting for");
     expect(plan.sandbox?.command.indexOf("https://bun.sh/install")).toBeLessThan(
       plan.sandbox?.command.indexOf("( bun run dev --host 0.0.0.0 )") ?? 0,
+    );
+    expect(plan.sandbox?.command.indexOf("install-browser")).toBeLessThan(
+      plan.sandbox?.command.indexOf("'run' 'http://127.0.0.1:3325'") ?? 0,
     );
 
     const bundle = createWorkflowDatabaseBundle(workflow, plan);
