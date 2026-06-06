@@ -188,11 +188,11 @@ private struct ManageSectionItem: Identifiable {
 }
 
 private var adaptiveSubtleFill: Color {
-  Color.primary.opacity(0.035)
+  Color.primary.opacity(0.025)
 }
 
 private var adaptiveControlFill: Color {
-  Color.primary.opacity(0.055)
+  Color.primary.opacity(0.045)
 }
 
 private var adaptiveBadgeFill: Color {
@@ -200,10 +200,6 @@ private var adaptiveBadgeFill: Color {
 }
 
 private var adaptiveSelectedFill: Color {
-  Color.primary.opacity(0.12)
-}
-
-private var adaptiveStroke: Color {
   Color.primary.opacity(0.10)
 }
 
@@ -326,7 +322,7 @@ struct ContentView: View {
       footer
     }
     .frame(width: 520, height: 660)
-    .background(.regularMaterial)
+    .background(.ultraThinMaterial)
     .onAppear {
       draftAPIBaseURL = appState.apiBaseURL
     }
@@ -357,7 +353,7 @@ struct ContentView: View {
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       .frame(height: 32)
-      .background(adaptiveControlFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+      .nativeGlassSurface(cornerRadius: 12, material: .ultraThinMaterial, shadow: false)
 
       HStack(spacing: 4) {
         Button(action: openDashboard) {
@@ -1182,11 +1178,7 @@ private struct ManageSectionsGroup<Content: View>: View {
       VStack(alignment: .leading, spacing: 0) {
         content
       }
-      .background(adaptiveSubtleFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-      .overlay(
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .stroke(adaptiveStroke, lineWidth: 1)
-      )
+      .nativeGlassSurface(cornerRadius: 10, material: .ultraThinMaterial, shadow: false)
     }
   }
 }
@@ -1422,27 +1414,23 @@ private struct TopNavItem: View {
   var selected: Bool = false
 
   var body: some View {
-    VStack(spacing: 0) {
-      HStack(spacing: 5) {
-        Text(title)
-        if let badge, badge > 0 {
-          Text("\(badge)")
-            .font(.system(size: 9, weight: .semibold).monospacedDigit())
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
-            .background(selected ? Color.accentColor.opacity(0.16) : adaptiveBadgeFill, in: Capsule())
-        }
+    HStack(spacing: 5) {
+      Text(title)
+      if let badge, badge > 0 {
+        Text("\(badge)")
+          .font(.system(size: 9, weight: .semibold).monospacedDigit())
+          .foregroundStyle(selected ? .primary : .secondary)
+          .padding(.horizontal, 5)
+          .padding(.vertical, 2)
+          .background(selected ? Color.primary.opacity(0.10) : adaptiveBadgeFill, in: Capsule())
       }
-      .frame(height: 26)
-
-      RoundedRectangle(cornerRadius: 1, style: .continuous)
-        .fill(selected ? Color.accentColor : Color.clear)
-        .frame(height: 2)
     }
     .font(.system(size: 12, weight: .medium))
     .foregroundStyle(selected ? .primary : .secondary)
-    .padding(.horizontal, 8)
-    .contentShape(Rectangle())
+    .frame(height: 26)
+    .padding(.horizontal, 9)
+    .background(selected ? adaptiveSelectedFill : Color.clear, in: Capsule())
+    .contentShape(Capsule())
   }
 }
 
@@ -1450,25 +1438,16 @@ private struct PeriodSegmentedControl: View {
   @Binding var selection: WorkPeriod
 
   var body: some View {
-    HStack(spacing: 0) {
+    Picker("Period", selection: $selection) {
       ForEach(WorkPeriod.allCases) { period in
-        Button {
-          selection = period
-        } label: {
-          Text(period.title)
-            .font(.system(size: 12, weight: period == selection ? .medium : .regular))
-            .frame(width: 86, height: 28)
-            .background(
-              period == selection ? Color.accentColor : Color.clear,
-              in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-            )
-            .foregroundStyle(period == selection ? .white : .primary)
-        }
-        .buttonStyle(.plain)
+        Text(period.title)
+          .tag(period)
       }
     }
-    .padding(2)
-    .background(adaptiveControlFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .labelsHidden()
+    .pickerStyle(.segmented)
+    .controlSize(.small)
+    .frame(width: 168)
   }
 }
 
@@ -1484,7 +1463,7 @@ private struct StatusPill: View {
       .foregroundStyle(tint)
       .padding(.horizontal, 9)
       .padding(.vertical, 5)
-      .background(tint.opacity(0.12), in: Capsule())
+      .background(adaptiveControlFill, in: Capsule())
   }
 }
 
@@ -1529,10 +1508,10 @@ private struct MachineFilterMenu: View {
           .font(.system(size: 8, weight: .bold))
       }
       .font(.system(size: 10, weight: .medium))
-      .foregroundStyle(.blue)
+      .foregroundStyle(.secondary)
       .padding(.horizontal, 9)
       .padding(.vertical, 5)
-      .background(.blue.opacity(0.12), in: Capsule())
+      .background(adaptiveControlFill, in: Capsule())
     }
     .menuStyle(.borderlessButton)
     .fixedSize(horizontal: false, vertical: false)
@@ -1665,11 +1644,7 @@ private struct SectionGlassCard<Content: View>: View {
       VStack(alignment: .leading, spacing: 0) {
         content
       }
-      .background(adaptiveSubtleFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-      .overlay(
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .stroke(adaptiveStroke, lineWidth: 1)
-      )
+      .nativeGlassSurface(cornerRadius: 10, material: .ultraThinMaterial, shadow: false)
     }
   }
 }
@@ -1681,11 +1656,7 @@ private struct GlassCard<Content: View>: View {
     content
       .padding(12)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-      .overlay(
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .stroke(adaptiveStroke, lineWidth: 1)
-      )
+      .nativeGlassSurface(cornerRadius: 12, material: .thinMaterial)
   }
 }
 
@@ -1873,12 +1844,12 @@ private struct RowIcon: View {
   var body: some View {
     ZStack {
       Circle()
-        .fill(tint.opacity(0.17))
+        .fill(tint.opacity(0.12))
       Image(systemName: systemName)
-        .font(.system(size: 12, weight: .semibold))
+        .font(.system(size: 11, weight: .medium))
         .foregroundStyle(tint)
     }
-    .frame(width: 28, height: 28)
+    .frame(width: 24, height: 24)
   }
 }
 
@@ -1892,10 +1863,42 @@ private struct IconFooterButton: View {
       Image(systemName: systemName)
         .font(.system(size: 12, weight: .semibold))
         .frame(width: 28, height: 28)
-        .background(adaptiveControlFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(adaptiveControlFill, in: Circle())
     }
     .buttonStyle(.plain)
     .help(help)
+  }
+}
+
+private extension View {
+  @ViewBuilder
+  func nativeGlassSurface(cornerRadius: CGFloat, material: Material, shadow: Bool = true) -> some View {
+    let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+
+    #if compiler(>=6.2)
+    if #available(macOS 26.0, *) {
+      self
+        .glassEffect(.regular, in: shape)
+        .softNativeShadow(enabled: shadow)
+    } else {
+      self
+        .background(material, in: shape)
+        .softNativeShadow(enabled: shadow)
+    }
+    #else
+    self
+      .background(material, in: shape)
+      .softNativeShadow(enabled: shadow)
+    #endif
+  }
+
+  @ViewBuilder
+  func softNativeShadow(enabled: Bool = true) -> some View {
+    if enabled {
+      self.shadow(color: .black.opacity(0.07), radius: 8, x: 0, y: 3)
+    } else {
+      self
+    }
   }
 }
 
