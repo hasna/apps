@@ -24,7 +24,17 @@ export function registerRegistry(parent: Command) {
     .action((options) => handleRegistrySync(options));
 }
 
-function handleRegistrySync(options: {
+async function writeJson(value: unknown, space?: number) {
+  const text = `${JSON.stringify(value, null, space)}\n`;
+  await new Promise<void>((resolve, reject) => {
+    process.stdout.write(text, (error?: Error | null) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
+
+async function handleRegistrySync(options: {
   profile: string;
   output?: string;
   docs: boolean;
@@ -34,7 +44,7 @@ function handleRegistrySync(options: {
 }) {
   if (options.profile !== "basic" && options.profile !== "all") {
     const error = `Unknown registry profile: ${options.profile}. Available: basic, all`;
-    if (options.json) console.log(JSON.stringify({ error }));
+    if (options.json) await writeJson({ error });
     else console.error(chalk.red(error));
     process.exitCode = 1;
     return;
@@ -53,7 +63,7 @@ function handleRegistrySync(options: {
   }
 
   if (options.json || !options.output) {
-    console.log(JSON.stringify(artifact, null, 2));
+    await writeJson(artifact, 2);
     return;
   }
 

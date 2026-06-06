@@ -117,6 +117,29 @@ describe("CLI discovery", () => {
       }
     });
 
+    test("flushes complete registry sync JSON through a shell pipe", async () => {
+      const parser = [
+        'let s="";',
+        'process.stdin.setEncoding("utf8");',
+        'process.stdin.on("data",(chunk)=>s+=chunk);',
+        'process.stdin.on("end",()=>{const data=JSON.parse(s);console.log(JSON.stringify({length:s.length,count:data.skills.length}));});',
+      ].join("");
+      const command = `bun run ${shellQuote(CLI_PATH)} -- registry sync --profile all --json | node -e ${shellQuote(parser)}`;
+      const proc = Bun.spawn(["bash", "-lc", command], {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, NO_COLOR: "1", SKILLS_TEST_MODE: "1" },
+      });
+      const stdout = await new Response(proc.stdout).text();
+      const stderr = await new Response(proc.stderr).text();
+      const exitCode = await proc.exited;
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(data.length).toBeGreaterThan(65_536);
+      expect(data.count).toBe(EXPECTED_ALL_SKILL_COUNT);
+    }, SLOW_TEST_TIMEOUT);
+
     test("rejects unknown registry profiles", async () => {
       const { stdout, exitCode } = await runCli([
         "registry",
