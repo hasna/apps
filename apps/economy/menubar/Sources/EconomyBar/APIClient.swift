@@ -98,8 +98,10 @@ actor APIClient {
     ]))
   }
 
-  func fetchSavings() async throws -> SavingsSummary {
-    try await get("/api/savings?period=month")
+  func fetchSavings(period: String = "month") async throws -> SavingsSummary {
+    try await get(path("/api/savings", [
+      URLQueryItem(name: "period", value: period),
+    ]))
   }
 
   func fetchUsage() async throws -> UsageResponse {

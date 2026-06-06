@@ -268,6 +268,10 @@ struct ContentView: View {
     selectedPeriod == .today ? appState.todayAccounts : appState.weekAccounts
   }
 
+  private var selectedSavedUsd: Double {
+    selectedPeriod == .today ? appState.todaySavedUsd : appState.weekSavedUsd
+  }
+
   private var topMachine: FleetMachine? {
     selectedMachines.first
   }
@@ -559,7 +563,8 @@ struct ContentView: View {
         tint: .green,
         title: "SPEND",
         value: formatCost(selectedSummary.total_usd),
-        trend: spendTrendText,
+        detail: selectedSavedUsd > 0 ? "\(formatCost(selectedSavedUsd)) saved" : nil,
+        trendIcon: spendTrendIcon,
         trendColor: spendTrendColor
       )
 
@@ -986,11 +991,9 @@ struct ContentView: View {
     .padding(.vertical, 10)
   }
 
-  private var spendTrendText: String? {
-    guard selectedPeriod == .today, averageDaySpend > 0 else { return selectedPeriod.title }
-    let delta = selectedSummary.total_usd - averageDaySpend
-    let sign = delta >= 0 ? "+" : "-"
-    return "\(sign)\(formatCost(abs(delta))) vs avg"
+  private var spendTrendIcon: String? {
+    guard selectedPeriod == .today, averageDaySpend > 0 else { return nil }
+    return selectedSummary.total_usd <= averageDaySpend ? "arrow.down" : "arrow.up"
   }
 
   private var spendTrendColor: Color {
@@ -1528,7 +1531,9 @@ private struct StatTile: View {
   let tint: Color
   let title: String
   let value: String
-  let trend: String?
+  var detail: String? = nil
+  var trend: String? = nil
+  var trendIcon: String? = nil
   let trendColor: Color
 
   var body: some View {
@@ -1551,7 +1556,12 @@ private struct StatTile: View {
 
           Spacer()
 
-          if let trend {
+          if let trendIcon {
+            Image(systemName: trendIcon)
+              .font(.system(size: 10, weight: .semibold))
+              .foregroundStyle(trendColor)
+              .frame(width: 16, height: 16)
+          } else if let trend {
             Text(trend)
               .font(.system(size: 9, weight: .regular).monospacedDigit())
               .foregroundStyle(trendColor)
@@ -1560,10 +1570,20 @@ private struct StatTile: View {
           }
         }
 
-        Text(value)
-          .font(.system(size: 14, weight: .regular).monospacedDigit())
-          .lineLimit(1)
-          .minimumScaleFactor(0.55)
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+          Text(value)
+            .font(.system(size: 14, weight: .regular).monospacedDigit())
+            .lineLimit(1)
+            .minimumScaleFactor(0.55)
+
+          if let detail {
+            Text(detail)
+              .font(.system(size: 10, weight: .medium).monospacedDigit())
+              .foregroundStyle(.green)
+              .lineLimit(1)
+              .minimumScaleFactor(0.7)
+          }
+        }
       }
       .frame(height: 50, alignment: .top)
     }

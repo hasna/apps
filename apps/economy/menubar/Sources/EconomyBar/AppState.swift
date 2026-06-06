@@ -27,6 +27,8 @@ final class AppState: ObservableObject {
   @Published var apiBaseURL: String = APIClient.storedBaseURL()
   @Published var sessionQuery: String = ""
   @Published var isEditingServer: Bool = false
+  @Published var todaySavedUsd: Double = 0
+  @Published var weekSavedUsd: Double = 0
   @Published var savedUsd: Double = 0
   @Published var quotaBadgePct: Double? = nil
   @Published var quotaBadgeLabel: String? = nil
@@ -127,7 +129,9 @@ final class AppState: ObservableObject {
     async let todayAccountsResult = try? await client.fetchAccounts(period: "today", machine: machine)
     async let weekAccountsResult = try? await client.fetchAccounts(period: "week", machine: machine)
     async let sessionsResult = try? await client.fetchSessions(search: sessionQuery, limit: sessionQuery.isEmpty ? 6 : 10, machine: machine)
-    async let savingsResult = try? await client.fetchSavings()
+    async let todaySavingsResult = try? await client.fetchSavings(period: "today")
+    async let weekSavingsResult = try? await client.fetchSavings(period: "week")
+    async let savingsResult = try? await client.fetchSavings(period: "month")
     async let usageResult = try? await client.fetchUsage()
     async let subscriptionsResult = try? await client.fetchSubscriptions()
     async let todayFleetResult = try? await client.fetchFleet(period: "today", machine: machine)
@@ -137,14 +141,14 @@ final class AppState: ObservableObject {
       projects, todayProjectsData, weekProjectsData,
       agents, todayAgentsData, weekAgentsData,
       accounts, todayAccountsData, weekAccountsData,
-      sessions, savings, usage, subscriptions,
+      sessions, todaySavings, weekSavings, savings, usage, subscriptions,
       todayFleet, weekFleet
     ) = await (
       todayResult, weekResult, monthResult, dailyResult, hourlyResult,
       projectsResult, todayProjectsResult, weekProjectsResult,
       agentsResult, todayAgentsResult, weekAgentsResult,
       accountsResult, todayAccountsResult, weekAccountsResult,
-      sessionsResult, savingsResult, usageResult, subscriptionsResult,
+      sessionsResult, todaySavingsResult, weekSavingsResult, savingsResult, usageResult, subscriptionsResult,
       todayFleetResult, weekFleetResult
     )
     if let todayFleet {
@@ -202,6 +206,8 @@ final class AppState: ObservableObject {
       weekAccounts = sorted.prefix(4).map { $0 }
     }
     if let sessions { recentSessions = sessions }
+    if let todaySavings { todaySavedUsd = todaySavings.saved_usd }
+    if let weekSavings { weekSavedUsd = weekSavings.saved_usd }
     if let savings { savedUsd = savings.saved_usd }
     if let usage {
       let snapshots = usage.snapshots
