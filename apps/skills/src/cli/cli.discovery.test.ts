@@ -9,6 +9,10 @@ import {
   runCliInCwd,
 } from "./cli.test-utils";
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 describe("CLI discovery", () => {
   describe("help", () => {
     test("outputs compact JSON skills list in non-TTY mode (no arguments)", async () => {
@@ -263,6 +267,29 @@ describe("CLI discovery", () => {
         expect(data.length).toBe(EXPECTED_ALL_SKILL_COUNT);
       }
     });
+
+    test("flushes complete full JSON through a shell pipe", async () => {
+      const parser = [
+        'let s="";',
+        'process.stdin.setEncoding("utf8");',
+        'process.stdin.on("data",(chunk)=>s+=chunk);',
+        'process.stdin.on("end",()=>{const data=JSON.parse(s);console.log(JSON.stringify({length:s.length,count:data.length}));});',
+      ].join("");
+      const command = `bun run ${shellQuote(CLI_PATH)} -- list --all --json | node -e ${shellQuote(parser)}`;
+      const proc = Bun.spawn(["bash", "-lc", command], {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, NO_COLOR: "1", SKILLS_TEST_MODE: "1" },
+      });
+      const stdout = await new Response(proc.stdout).text();
+      const stderr = await new Response(proc.stderr).text();
+      const exitCode = await proc.exited;
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(data.length).toBeGreaterThan(65_536);
+      expect(data.count).toBe(EXPECTED_ALL_SKILL_COUNT);
+    }, SLOW_TEST_TIMEOUT);
 
     test("lists by category with --json", async () => {
       const { stdout } = await runCli(["list", "--category", "Event Management", "--all", "--json"]);

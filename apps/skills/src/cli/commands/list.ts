@@ -93,6 +93,16 @@ function handleBrowseError(error: unknown) {
   process.exitCode = 1;
 }
 
+async function writeJson(value: unknown, space?: number) {
+  const text = `${JSON.stringify(value, null, space)}\n`;
+  await new Promise<void>((resolve, reject) => {
+    process.stdout.write(text, (error?: Error | null) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
+
 async function getBrowseRegistry(options: { all?: boolean; remote?: boolean }): Promise<SkillMeta[]> {
   if (options.remote) return loadRemoteRegistry();
   const profile: SkillRegistryProfile = options.all ? "all" : "basic";
@@ -122,11 +132,11 @@ async function handleList(options: any) {
     if (options.json) {
       const meta = getInstallMeta();
       const registry = loadRegistry();
-      console.log(JSON.stringify(installed.map((name) => {
+      await writeJson(installed.map((name) => {
         const m = meta.skills[name];
         const s = registry.find((r) => r.name === name);
         return { name, version: m?.version ?? null, installedAt: m?.installedAt ?? null, source: s?.source ?? "official" };
-      })));
+      }));
       return;
     }
     if (installed.length === 0) { console.log(chalk.dim("No pinned skills")); return; }
@@ -151,7 +161,7 @@ async function handleList(options: any) {
     let skills = registry.filter((s) => s.category === category);
     if (tagFilter) skills = skills.filter((s) => s.tags.some((tag) => tagFilter.includes(tag.toLowerCase())));
     const output = enrichDiscovery(skills);
-    if (options.json) { console.log(JSON.stringify(output, null, 2)); return; }
+    if (options.json) { await writeJson(output, 2); return; }
     if (brief) { for (const s of output) console.log(formatBrief(s)); return; }
     console.log(chalk.bold(`\n${category} (${skills.length}):\n`));
     for (const s of output) console.log(formatSkillLine(s));
@@ -161,7 +171,7 @@ async function handleList(options: any) {
   if (tagFilter) {
     const skills = registry.filter((s) => s.tags.some((tag) => tagFilter.includes(tag.toLowerCase())));
     const output = enrichDiscovery(skills);
-    if (options.json) { console.log(JSON.stringify(output, null, 2)); return; }
+    if (options.json) { await writeJson(output, 2); return; }
     if (brief) { for (const s of output) console.log(formatBrief(s)); return; }
     console.log(chalk.bold(`\nSkills matching tags [${tagFilter.join(", ")}] (${skills.length}):\n`));
     for (const s of output) console.log(`  ${chalk.cyan(s.name)}${s.source === "custom" ? chalk.yellow(" [custom]") : ""} ${chalk.dim(`[${s.category}]`)} ${chalk.dim(`(${publicDiscoveryPriceLabel(s)})`)} - ${s.description}`);
@@ -169,7 +179,7 @@ async function handleList(options: any) {
   }
 
   const allSkills = enrichDiscovery(registry);
-  if (options.json) { console.log(JSON.stringify(allSkills, null, 2)); return; }
+  if (options.json) { await writeJson(allSkills, 2); return; }
   if (fmt === "compact") { for (const s of allSkills) console.log(s.name); return; }
   if (fmt === "csv") {
     console.log("name,category,price,description,source");
@@ -215,7 +225,7 @@ async function handleSearch(query: string, options: any) {
   const fmt = !options.json ? options.format : undefined;
 
   const output = enrichDiscovery(results);
-  if (options.json) { console.log(JSON.stringify(output, null, 2)); return; }
+  if (options.json) { await writeJson(output, 2); return; }
   if (results.length === 0) {
     console.log(chalk.dim(`No skills found for "${query}"`));
     const similar = findSimilarSkills(query, 5, registry);
@@ -243,7 +253,7 @@ async function handleCategories(options: { json: boolean; remote: boolean }) {
     name: category,
     count: registry.filter((skill) => skill.category === category).length,
   }));
-  if (options.json) { console.log(JSON.stringify(cats, null, 2)); return; }
+  if (options.json) { await writeJson(cats, 2); return; }
   console.log(chalk.bold("\nCategories:\n"));
   for (const { name, count } of cats) console.log(`  ${name} (${count})`);
 }
@@ -254,7 +264,7 @@ async function handleTags(options: { json: boolean; remote: boolean }) {
     for (const tag of skill.tags) tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
   }
   const sorted = Array.from(tagCounts.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([name, count]) => ({ name, count }));
-  if (options.json) { console.log(JSON.stringify(sorted, null, 2)); return; }
+  if (options.json) { await writeJson(sorted, 2); return; }
   console.log(chalk.bold("\nTags:\n"));
   for (const { name, count } of sorted) console.log(`  ${chalk.cyan(name)} (${count})`);
 }
