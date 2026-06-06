@@ -513,10 +513,12 @@ struct ContentView: View {
   private var workHeader: some View {
     VStack(alignment: .leading, spacing: 10) {
       HStack(alignment: .center) {
-        Text("YOUR WORK")
-          .font(.system(size: 11, weight: .semibold))
-          .foregroundStyle(.secondary)
-          .tracking(0.8)
+        MachineFilterMenu(
+          selectedMachineID: appState.selectedMachineID,
+          currentMachine: appState.currentMachine,
+          machines: machineOptions,
+          onSelect: appState.setMachineFilter
+        )
 
         Spacer()
 
@@ -531,12 +533,6 @@ struct ContentView: View {
       .foregroundStyle(.blue)
 
       HStack(spacing: 8) {
-        MachineFilterMenu(
-          selectedMachineID: appState.selectedMachineID,
-          currentMachine: appState.currentMachine,
-          machines: machineOptions,
-          onSelect: appState.setMachineFilter
-        )
         StatusPill(
           icon: "clock",
           text: lastUpdatedText,
@@ -1483,6 +1479,15 @@ private struct MachineFilterMenu: View {
     selectedMachineID ?? "All machines"
   }
 
+  private var isAllMachines: Bool {
+    selectedMachineID == nil
+  }
+
+  private var machineCountLabel: String? {
+    guard isAllMachines, !machines.isEmpty else { return nil }
+    return "\(machines.count)"
+  }
+
   var body: some View {
     Menu {
       Button {
@@ -1503,21 +1508,39 @@ private struct MachineFilterMenu: View {
         }
       }
     } label: {
-      HStack(spacing: 6) {
-        Image(systemName: selectedMachineID == nil ? "rectangle.stack" : "desktopcomputer")
-          .font(.system(size: 10, weight: .medium))
+      HStack(spacing: 7) {
+        ZStack {
+          Circle()
+            .fill(isAllMachines ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.08))
+          Image(systemName: isAllMachines ? "rectangle.stack" : "desktopcomputer")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(isAllMachines ? Color.accentColor : Color.secondary)
+        }
+        .frame(width: 22, height: 22)
+
         Text(labelText)
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(.primary)
           .lineLimit(1)
           .truncationMode(.middle)
-          .frame(maxWidth: 150, alignment: .leading)
+          .frame(maxWidth: 118, alignment: .leading)
+
+        if let machineCountLabel {
+          Text(machineCountLabel)
+            .font(.system(size: 9, weight: .semibold).monospacedDigit())
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(adaptiveBadgeFill, in: Capsule())
+        }
+
         Image(systemName: "chevron.down")
           .font(.system(size: 8, weight: .bold))
+          .foregroundStyle(.tertiary)
       }
-      .font(.system(size: 10, weight: .medium))
-      .foregroundStyle(.secondary)
       .padding(.horizontal, 9)
       .padding(.vertical, 5)
-      .background(adaptiveControlFill, in: Capsule())
+      .nativeGlassSurface(cornerRadius: 12, material: .ultraThinMaterial, shadow: false)
     }
     .menuStyle(.borderlessButton)
     .fixedSize(horizontal: false, vertical: false)
