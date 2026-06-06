@@ -358,4 +358,15 @@ describe("resolvePartialId - additional", () => {
     const resolved = resolvePartialId(db, "projects", project.id.slice(0, 8));
     expect(resolved).toBe(project.id);
   });
+
+  it("resolves an agent by NAME (regression: MCP assigned_to='<name>' threw UNKNOWN_ERROR)", () => {
+    const { registerAgent } = require("../db/agents.js");
+    const agent = registerAgent({ name: "gaius" }, db);
+    // MCP create_task/list_tasks/update_task call resolveId(name, "agents").
+    // Before the fix, resolvePartialId had no agents-by-name fallback, so a
+    // name returned null -> resolveId threw -> UNKNOWN_ERROR.
+    expect(resolvePartialId(db, "agents", "gaius")).toBe(agent.id);
+    expect(resolvePartialId(db, "agents", "GAIUS")).toBe(agent.id); // case-insensitive
+    expect(resolvePartialId(db, "agents", agent.id.slice(0, 8))).toBe(agent.id); // id prefix still works
+  });
 });

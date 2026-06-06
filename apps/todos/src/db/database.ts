@@ -176,5 +176,13 @@ export function resolvePartialId(db: Database, table: string, partialId: string)
     if (nameRow) return nameRow.id;
   }
 
+  // For agents table, also try matching on name (case-insensitive). Agent names
+  // are UNIQUE, and MCP tools document assigned_to as "Agent ID or name" — without
+  // this, a name resolves to null and the caller throws UNKNOWN_ERROR.
+  if (table === "agents") {
+    const nameRow = db.query("SELECT id FROM agents WHERE lower(name) = ?").get(partialId.toLowerCase()) as { id: string } | null;
+    if (nameRow) return nameRow.id;
+  }
+
   return null;
 }
