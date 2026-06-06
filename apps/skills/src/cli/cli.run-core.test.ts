@@ -54,6 +54,39 @@ describe("CLI run core", () => {
       }
     });
 
+    test("keeps free local skills local even when hosted auth is configured", async () => {
+      const { mkdtempSync, rmSync } = require("fs");
+      const { tmpdir } = require("os");
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-local-with-hosted-auth-"));
+      let remoteCalls = 0;
+      const server = Bun.serve({
+        port: 0,
+        fetch() {
+          remoteCalls += 1;
+          return Response.json({ error: "local skills should not call hosted API" }, { status: 500 });
+        },
+      });
+      try {
+        const { stdout, stderr, exitCode } = await runCliInCwd(["run", "--json", "lorem-generator", "--help"], tmpDir, {
+          HOME: tmpDir,
+          NO_COLOR: "1",
+          SKILLS_API_KEY: "sk_test_local_stays_local",
+          SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+        });
+        const data = JSON.parse(stdout);
+        expect(stderr).toBe("");
+        expect(exitCode).toBe(0);
+        expect(data.exitCode).toBe(0);
+        expect(data.stdout).toContain("lorem-generator");
+        expect(data.remote).not.toBe(true);
+        expect(data.run.remote).toBe(false);
+        expect(remoteCalls).toBe(0);
+      } finally {
+        server.stop(true);
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
     test("premium skills never use test mode as a local execution bypass", async () => {
       const { mkdtempSync, rmSync } = require("fs");
       const { tmpdir } = require("os");
@@ -121,6 +154,51 @@ describe("CLI run core", () => {
       }
     });
 
+    test("premium skills require explicit paid approval before remote submission", async () => {
+      const { mkdtempSync, rmSync } = require("fs");
+      const { tmpdir } = require("os");
+      const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-premium-approval-required-"));
+      let remoteCalls = 0;
+      const server = Bun.serve({
+        port: 0,
+        fetch() {
+          remoteCalls += 1;
+          return Response.json({ error: "run should be blocked before remote submission" }, { status: 500 });
+        },
+      });
+      try {
+        const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", "run", "--json", "logo-design", "make a mark"], {
+          stdout: "pipe",
+          stderr: "pipe",
+          cwd: tmpDir,
+          env: {
+            ...process.env,
+            HOME: tmpDir,
+            NO_COLOR: "1",
+            SKILLS_API_KEY: "sk_test_approval_required",
+            SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+          },
+        });
+        const [stdout, stderr, exitCode] = await Promise.all([
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+          proc.exited,
+        ]);
+        const data = JSON.parse(stdout);
+        expect(stderr).toBe("");
+        expect(exitCode).not.toBe(0);
+        expect(data.approvalRequired).toBe(true);
+        expect(data.error).toContain("paid hosted skill");
+        expect(data.error).toContain("--yes");
+        expect(data.run.remote).toBe(true);
+        expect(data.run.status).toBe("failed");
+        expect(remoteCalls).toBe(0);
+      } finally {
+        server.stop(true);
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
     test("premium skills submit async remote runs and expose status next actions", async () => {
       const { mkdtempSync, rmSync } = require("fs");
       const { tmpdir } = require("os");
@@ -162,7 +240,7 @@ describe("CLI run core", () => {
         SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
       };
       try {
-        const runProc = Bun.spawn(["bun", "run", CLI_PATH, "--", "run", "--json", "logo-design", "make a mark"], {
+        const runProc = Bun.spawn(["bun", "run", CLI_PATH, "--", "run", "--yes", "--json", "logo-design", "make a mark"], {
           stdout: "pipe",
           stderr: "pipe",
           cwd: tmpDir,
@@ -220,7 +298,7 @@ describe("CLI run core", () => {
       const { tmpdir } = require("os");
       const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-premium-skillsmd-down-"));
       try {
-        const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", "run", "--json", "image", "--help"], {
+        const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", "run", "--yes", "--json", "image", "--help"], {
           stdout: "pipe",
           stderr: "pipe",
           cwd: tmpDir,
@@ -309,6 +387,7 @@ describe("CLI run core", () => {
           CLI_PATH,
           "--",
           "run",
+          "--yes",
           "--json",
           "--wait",
           "--poll-interval-ms",
@@ -378,7 +457,7 @@ describe("CLI run core", () => {
         },
       });
       try {
-        const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", "run", "--json", "logo-design", "bad prompt"], {
+        const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", "run", "--yes", "--json", "logo-design", "bad prompt"], {
           stdout: "pipe",
           stderr: "pipe",
           cwd: tmpDir,

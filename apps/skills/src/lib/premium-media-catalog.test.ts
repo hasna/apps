@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { getSkill } from "./registry";
+import { getSkill, loadRegistry } from "./registry";
+import { getSkillPath } from "./installer";
 import { getSkillRequirements } from "./skillinfo";
 import {
   getPublicSkillPricing,
@@ -18,7 +19,22 @@ const NEW_MEDIA_SKILLS = [
   "brand-photo-shoot",
 ] as const;
 
+function isHostedMetadataSkill(slug: string): boolean {
+  const pkgPath = join(getSkillPath(slug), "package.json");
+  if (!existsSync(pkgPath)) return false;
+  const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { skills?: { runtime?: string; source?: string } };
+  return pkg.skills?.runtime === "hosted" || pkg.skills?.source === "remote" || pkg.skills?.source === "private-hosted";
+}
+
 describe("premium media catalog", () => {
+  test("routes every hosted metadata skill through premium hosted billing", () => {
+    for (const skill of loadRegistry()) {
+      if (!isHostedMetadataSkill(skill.name)) continue;
+      expect(isPremiumSkill(skill.name), `${skill.name} hosted metadata should be premium`).toBe(true);
+      expect(getPublicSkillPricing(skill.name).tier, `${skill.name} public pricing should be premium`).toBe("premium");
+    }
+  });
+
   test("registers new hosted media skills as premium remote catalog entries", () => {
     for (const slug of NEW_MEDIA_SKILLS) {
       const skill = getSkill(slug);
@@ -34,8 +50,8 @@ describe("premium media catalog", () => {
   test("documents hosted auth without exposing provider keys", () => {
     for (const slug of NEW_MEDIA_SKILLS) {
       const reqs = getSkillRequirements(slug);
-      expect(reqs?.envVars, `${slug} should require hosted auth`).toContain("SKILL_API_KEY");
-      expect(reqs?.envVars, `${slug} should document CLI auth env`).toContain("SKILLS_API_KEY");
+      expect(reqs?.envVars, `${slug} should require hosted auth`).toContain("SKILLS_API_KEY");
+      expect(reqs?.envVars, `${slug} should not expose legacy hosted auth env`).not.toContain("SKILL_API_KEY");
       const docs = readFileSync(join(process.cwd(), "skills", slug, "SKILL.md"), "utf8");
       expect(docs).toContain("Hosted premium execution requires `SKILLS_API_KEY`");
       expect(docs).toContain("Provider keys stay server-side");

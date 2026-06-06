@@ -289,7 +289,7 @@ describe("CLI runtime and misc commands", () => {
       }
     });
 
-    test("due premium schedules require remote auth and do not run locally in test mode", async () => {
+    test("due premium schedules require paid approval and remote auth without local fallback", async () => {
       const { mkdtempSync, readFileSync, rmSync, writeFileSync } = require("fs");
       const { tmpdir } = require("os");
       const { join } = require("path");
@@ -305,21 +305,27 @@ describe("CLI runtime and misc commands", () => {
         writeFileSync(schedulesPath, JSON.stringify(data, null, 2));
 
         const run = await runCliInCwd(["schedule", "run", "--json"], tmpDir, env);
-        expect(run.exitCode).toBe(0);
+        expect(run.exitCode).toBe(1);
         const result = JSON.parse(run.stdout);
-        expect(result).toMatchObject({
-          ran: 1,
-          results: [
-            {
-              name: "premium-image",
-              skill: "image",
-              status: "error",
-            },
-          ],
-        });
-        expect(result.results[0].error).toContain("hosted skill");
-        expect(result.results[0].error).toContain("skills auth login");
-        expect(result.results[0].error).not.toContain("Skill Image CLI");
+        expect(result.approvalRequired).toBe(true);
+        expect(result.ran).toBe(0);
+        expect(result.paidTotalCents).toBeGreaterThan(0);
+        expect(result.error).toContain("Due paid hosted schedules cost");
+        expect(result.error).toContain("--allow-paid");
+        expect(result.error).toContain("--max-paid-cents");
+        expect(result.schedules[0]).toMatchObject({ name: "premium-image", skill: "image", paid: true });
+        expect(result.schedules[0].cost).toContain("$");
+
+        const afterApprovalData = JSON.parse(readFileSync(schedulesPath, "utf-8"));
+        afterApprovalData.schedules[0].nextRun = "2020-01-01T00:00:00.000Z";
+        writeFileSync(schedulesPath, JSON.stringify(afterApprovalData, null, 2));
+
+        const approvedRun = await runCliInCwd(["schedule", "run", "--allow-paid", "--max-paid-cents", String(result.paidTotalCents), "--json"], tmpDir, env);
+        expect(approvedRun.exitCode).toBe(0);
+        const approvedResult = JSON.parse(approvedRun.stdout);
+        expect(approvedResult.results[0].error).toContain("hosted skill");
+        expect(approvedResult.results[0].error).toContain("skills auth login");
+        expect(approvedResult.results[0].error).not.toContain("Skill Image CLI");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }

@@ -13,7 +13,7 @@ const SKILL_META = {
   description: 'Article writing skill that spawns parallel AI agents to research and write articles with image generation',
   version: '1.0.0',
   commands: `Use: write --help`,
-  requiredEnvVars: ['SKILL_API_KEY'],
+  requiredEnvVars: [],
 };
 
 if (await handleInstallCommand(SKILL_META, process.argv.slice(2))) {
@@ -36,6 +36,7 @@ function parseArgs(): {
   filename?: string;
 } {
   const args = process.argv.slice(2);
+  if (args[0] === '--help' || args[0] === '-h') args[0] = 'help';
   const parsed: any = { command: args[0] || 'help' };
 
   for (let i = 1; i < args.length; i++) {

@@ -128,8 +128,10 @@ export function sanitizePublicDiscoveryText(text: string): string {
 
 export function publicDiscoveryEnvVars(skillName: string, envVars: string[]): string[] {
   if (!isPremiumSkill(skillName)) return envVars;
-  const filtered = envVars.filter((envVar) => !VENDOR_ENV_PREFIXES.some((prefix) => envVar.startsWith(prefix)));
-  return filtered.includes("SKILL_API_KEY") ? filtered : ["SKILL_API_KEY", ...filtered];
+  const filtered = envVars.filter((envVar) =>
+    envVar !== "SKILL_API_KEY" && !VENDOR_ENV_PREFIXES.some((prefix) => envVar.startsWith(prefix))
+  );
+  return filtered.includes("SKILLS_API_KEY") ? filtered : ["SKILLS_API_KEY", ...filtered];
 }
 
 export function publicDiscoveryDependencies(
@@ -150,7 +152,7 @@ export function publicDiscoveryDocumentation(skill: SkillMeta, documentation: st
     `# ${skill.displayName || skill.name}`,
     sanitizePublicDiscoveryText(skill.description),
     `Pricing: ${getPublicSkillPricing(skill.name).formattedCost}.`,
-    "Set `SKILL_API_KEY` for hosted runtime execution. Runtime routing and model selection are managed by the hosted Skills runtime.",
+    "Set `SKILLS_API_KEY` or run `skills auth login` for hosted runtime execution. Runtime routing and model selection are managed by the hosted Skills runtime.",
   ].join("\n\n");
 }
 

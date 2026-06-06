@@ -2,14 +2,14 @@
   "name": "extract",
   "version": "1.0.0",
   "description": "Extract text and structured data from images and PDFs using OpenAI Vision",
-  "main": "src/index.ts",
+  "main": "src/index-local.ts",
   "type": "module",
   "bin": {
-    "extract": "src/index.ts"
+    "extract": "src/index-local.ts"
   },
   "scripts": {
-    "start": "bun run src/index.ts",
-    "extract": "bun run src/index.ts extract"
+    "start": "bun run src/index-local.ts",
+    "extract": "bun run src/index-local.ts extract"
   },
   "keywords": [
     "extraction",

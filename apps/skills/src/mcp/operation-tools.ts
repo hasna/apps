@@ -243,8 +243,9 @@ export function registerOperationTools(server: McpServer): void {
       name: z.string(),
       input: z.record(z.string(), z.unknown()).optional(),
       args: z.array(z.string()).optional(),
+      approved: z.boolean().optional(),
     },
-  }, async ({ name, input, args }) => {
+  }, async ({ name, input, args, approved }) => {
     const skill = getSkill(name);
     if (!skill) {
       return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
@@ -283,6 +284,17 @@ export function registerOperationTools(server: McpServer): void {
       writeRunLogs(runContext, "", error + "\n");
       const run = completeSkillRun(runContext, { status: "failed", error, costCents });
       return mcpError("AUTH_REQUIRED", `${error}. Local run metadata: ${run.paths.runDir}/run.json`, ["skills auth login"]);
+    }
+
+    if (isPremiumSkill(skillName) && apiKey && approved !== true) {
+      const cost = formatCost(costCents ?? 0);
+      const error = `${skillName} is a paid hosted skill (${cost}). Call quote_skill first, then call run_skill with approved: true after user approval.`;
+      writeRunLogs(runContext, "", error + "\n");
+      const run = completeSkillRun(runContext, { status: "failed", error, costCents });
+      return mcpError("APPROVAL_REQUIRED", `${error}. Local run metadata: ${run.paths.runDir}/run.json`, [
+        "quote_skill",
+        "run_skill approved=true",
+      ]);
     }
 
     if (isPremiumSkill(skillName) && apiKey) {

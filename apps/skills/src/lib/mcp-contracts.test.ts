@@ -55,6 +55,7 @@ describe("MCP contract manifest", () => {
       name: { type: "string", description: expect.any(String) },
       input: { type: "object", additionalProperties: true },
       args: { type: "array", items: { type: "string" } },
+      approved: { type: "boolean", description: expect.stringContaining("approved") },
     });
     expect(byName.get("validate_skill")?.outputSchema.properties).toHaveProperty("issues");
 

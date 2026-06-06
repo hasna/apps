@@ -13,7 +13,7 @@ const SKILL_META = {
   description: 'Code quality CLI for auto-linting, formatting, and fixing code issues',
   version: '1.0.0',
   commands: `Use: codefix --help`,
-  requiredEnvVars: ['SKILL_API_KEY'],
+  requiredEnvVars: [],
 };
 
 if (await handleInstallCommand(SKILL_META, process.argv.slice(2))) {
@@ -49,6 +49,7 @@ function parseArgs(): {
   verbose?: boolean;
 } {
   const args = process.argv.slice(2);
+  if (args[0] === '--help' || args[0] === '-h') args[0] = 'help';
   const parsed: Record<string, unknown> = { command: args[0] || 'help' };
 
   for (let i = 1; i < args.length; i++) {

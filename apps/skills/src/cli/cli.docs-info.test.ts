@@ -50,7 +50,7 @@ describe("CLI docs and validation", () => {
     test("shows requirements for a skill", async () => {
       const { stdout } = await runCli(["requires", "image"]);
       expect(stdout).toContain("Requirements for image");
-      expect(stdout).toContain("SKILL_API_KEY");
+      expect(stdout).toContain("SKILLS_API_KEY");
     });
 
     test("shows CLI command", async () => {
@@ -68,7 +68,8 @@ describe("CLI docs and validation", () => {
       const { stdout } = await runCli(["requires", "image", "--json"]);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data.envVars)).toBe(true);
-      expect(data.envVars).toContain("SKILL_API_KEY");
+      expect(data.envVars).toContain("SKILLS_API_KEY");
+      expect(data.envVars).not.toContain("SKILL_API_KEY");
       expect(data.envVars).not.toContain("OPENAI_API_KEY");
       expect(data.cliCommand).toBe("skills run image");
       expect(data).toHaveProperty("systemDeps");
@@ -79,7 +80,7 @@ describe("CLI docs and validation", () => {
       const { stdout } = await runCli(["requires", "brand-style-guide", "--json"]);
       const data = JSON.parse(stdout);
       expect(data.envVars).toContain("OPENAI_API_KEY");
-      expect(data.envVars).not.toContain("SKILL_API_KEY");
+      expect(data.envVars).not.toContain("SKILLS_API_KEY");
       expect(data.cliCommand).toBe("skills run brand-style-guide");
     });
 
@@ -122,7 +123,8 @@ describe("CLI docs and validation", () => {
       const { stdout } = await runCli(["info", "image", "--json"]);
       const data = JSON.parse(stdout);
       expect(data.name).toBe("image");
-      expect(data.envVars).toContain("SKILL_API_KEY");
+      expect(data.envVars).toContain("SKILLS_API_KEY");
+      expect(data.envVars).not.toContain("SKILL_API_KEY");
       expect(data.envVars).not.toContain("OPENAI_API_KEY");
       expect(data.envVars).not.toContain("GEMINI_API_KEY");
       expect(data.cliCommand).toBe("skills run image");
@@ -132,7 +134,7 @@ describe("CLI docs and validation", () => {
     test("human-readable shows env vars", async () => {
       const { stdout } = await runCli(["info", "image"]);
       expect(stdout).toContain("Env vars:");
-      expect(stdout).toContain("SKILL_API_KEY");
+      expect(stdout).toContain("SKILLS_API_KEY");
       expect(stdout).toContain("Pricing: $0.04 estimated");
       expect(stdout.toLowerCase()).not.toContain("openai");
       expect(stdout.toLowerCase()).not.toContain("gemini");

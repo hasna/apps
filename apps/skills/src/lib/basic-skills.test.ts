@@ -106,7 +106,8 @@ describe("basic skill profile for Takumi", () => {
   test("connector-backed basic skills declare the hosted runtime key", () => {
     for (const skill of [...CONNECTOR_BACKED_SKILLS, "read-pdf", "pdf-read", "pdf-to-markdown"]) {
       const reqs = getSkillRequirements(skill);
-      expect(reqs?.envVars, `${skill} should disclose SKILL_API_KEY`).toContain("SKILL_API_KEY");
+      expect(reqs?.envVars, `${skill} should disclose SKILLS_API_KEY`).toContain("SKILLS_API_KEY");
+      expect(reqs?.envVars, `${skill} should not expose legacy SKILL_API_KEY`).not.toContain("SKILL_API_KEY");
       for (const envVar of HOSTED_RUNTIME_PROVIDER_KEYS) {
         expect(reqs?.envVars, `${skill} should not require local ${envVar}`).not.toContain(envVar);
       }

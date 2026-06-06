@@ -222,6 +222,7 @@ describe("MCP Server", () => {
         arguments: {
           name: "image",
           args: ["--help"],
+          approved: true,
         },
       }, 83);
       expect(response).not.toBeNull();
@@ -232,6 +233,47 @@ describe("MCP Server", () => {
       expect(error.message).not.toContain("Skill Image CLI");
     } finally {
       await client.close();
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  test("run_skill requires explicit approval before paid hosted submission", async () => {
+    const { mkdtempSync, rmSync } = require("fs");
+    const { tmpdir } = require("os");
+    const tmpDir = mkdtempSync(join(tmpdir(), "mcp-premium-approval-required-"));
+    let remoteCalls = 0;
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        remoteCalls += 1;
+        return Response.json({ error: "run should be blocked before remote submission" }, { status: 500 });
+      },
+    });
+    const client = new McpClient({
+      HOME: tmpDir,
+      SKILLS_API_KEY: "sk_test_mcp_approval_required",
+      SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+      SKILLS_TEST_MODE: "1",
+    });
+    try {
+      await client.initialize();
+      const response = await client.request("tools/call", {
+        name: "run_skill",
+        arguments: {
+          name: "logo-design",
+          args: ["make a mark"],
+        },
+      }, 84);
+      expect(response).not.toBeNull();
+      expect(response.result.isError).toBe(true);
+      const error = JSON.parse(response.result.content[0].text);
+      expect(error).toMatchObject({ code: "APPROVAL_REQUIRED" });
+      expect(error.message).toContain("paid hosted skill");
+      expect(error.message).toContain("approved: true");
+      expect(remoteCalls).toBe(0);
+    } finally {
+      await client.close();
+      server.stop(true);
       rmSync(tmpDir, { recursive: true, force: true });
     }
   }, 15000);
@@ -269,8 +311,9 @@ describe("MCP Server", () => {
         arguments: {
           name: "logo-design",
           args: ["make a mark"],
+          approved: true,
         },
-      }, 84);
+      }, 85);
       expect(response).not.toBeNull();
       const payload = JSON.parse(response.result.content[0].text);
       expect(payload).toMatchObject({
@@ -325,7 +368,7 @@ describe("MCP Server", () => {
           name: "lorem-generator",
           args: ["--help"],
         },
-      }, 85);
+      }, 86);
       expect(response).not.toBeNull();
       expect(response.result.isError).toBeUndefined();
       const payload = JSON.parse(response.result.content[0].text);
@@ -419,7 +462,8 @@ describe("MCP Server", () => {
         tier: "premium",
         quoteDependsOnInput: true,
       });
-      expect(info.envVars).toContain("SKILL_API_KEY");
+      expect(info.envVars).toContain("SKILLS_API_KEY");
+      expect(info.envVars).not.toContain("SKILL_API_KEY");
       expect(info.envVars).not.toContain("OPENAI_API_KEY");
       expect(info.mcp.schemas.run.inputSchema.properties.name).toMatchObject({
         const: "image",
@@ -495,7 +539,8 @@ describe("MCP Server", () => {
       expect(response.result).toBeDefined();
       const reqs = JSON.parse(response.result.content[0].text);
       expect(Array.isArray(reqs.envVars)).toBe(true);
-      expect(reqs.envVars).toContain("SKILL_API_KEY");
+      expect(reqs.envVars).toContain("SKILLS_API_KEY");
+      expect(reqs.envVars).not.toContain("SKILL_API_KEY");
       expect(reqs.envVars).not.toContain("OPENAI_API_KEY");
       expect(reqs.cliCommand).toBe("skills run image");
     } finally {
@@ -749,8 +794,9 @@ describe("MCP Server", () => {
         tier: "premium",
         quoteDependsOnInput: true,
       });
-      expect(info.documentation).toContain("SKILL_API_KEY");
-      expect(info.requirements.envVars).toContain("SKILL_API_KEY");
+      expect(info.documentation).toContain("SKILLS_API_KEY");
+      expect(info.requirements.envVars).toContain("SKILLS_API_KEY");
+      expect(info.requirements.envVars).not.toContain("SKILL_API_KEY");
       expect(info.requirements.envVars).not.toContain("OPENAI_API_KEY");
       expect(info.mcp).toMatchObject({
         schemaVersion: 1,

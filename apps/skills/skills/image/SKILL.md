@@ -7,7 +7,7 @@ description: Generate images using OpenAI, Minimax, or Gemini through the hosted
 
 Generate high-quality images from text prompts using provider-backed image models.
 
-This CLI is API-backed. Set `SKILL_API_KEY` when routing through the hosted Skills runtime; provider-specific keys are managed by that runtime and billed at the selected provider/model cost.
+This CLI is API-backed. Set `SKILLS_API_KEY` when routing through the hosted Skills runtime; provider-specific keys are managed by that runtime and billed at the selected provider/model cost.
 
 ## Supported Providers
 
@@ -46,4 +46,4 @@ image generate --provider gemini --model imagen-4.0-fast-generate-001 --prompt "
 
 ## Environment Variables
 
-Set `SKILL_API_KEY` for hosted runtime execution.
+Set `SKILLS_API_KEY` for hosted runtime execution.

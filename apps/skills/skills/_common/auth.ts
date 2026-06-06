@@ -4,28 +4,24 @@
  */
 
 export function checkSkillAuth(): void {
-  const SKILL_API_KEY = process.env.SKILL_API_KEY;
+  const skillsApiKey = process.env.SKILLS_API_KEY || process.env.SKILL_API_KEY;
   
-  // Check if SKILL_API_KEY is set
-  if (!SKILL_API_KEY) {
-    console.error('❌ Error: SKILL_API_KEY environment variable not set');
+  if (!skillsApiKey) {
+    console.error('Error: SKILLS_API_KEY environment variable not set');
     console.error('');
-    console.error('To use this skill, you must set your SKILL_API_KEY:');
+    console.error('To use hosted execution, set your SKILLS_API_KEY:');
     console.error('');
-    console.error('  export SKILL_API_KEY=your-api-key-here');
+    console.error('  export SKILLS_API_KEY=your-api-key-here');
     console.error('');
-    console.error('Contact your administrator to get your API key.');
+    console.error('You can also use the root `skills auth login` command.');
     process.exit(1);
   }
 
-  // Validate key format
-  if (!SKILL_API_KEY.startsWith('sk-skill-')) {
-    console.error('❌ Error: Invalid SKILL_API_KEY format');
+  if (!skillsApiKey.startsWith('sk-skill-')) {
+    console.error('Error: Invalid SKILLS_API_KEY format');
     console.error('Expected format: sk-skill-xxxxxxxxxxxx');
     process.exit(1);
   }
-
-  // Key is valid - skill can proceed
 }
 
 /**

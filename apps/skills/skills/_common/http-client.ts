@@ -5,7 +5,7 @@
  * Usage: import and call executeSkill() from your skill CLI
  */
 
-const SKILL_API_URL = process.env.SKILL_API_URL || "https://skill.hasnaxyz.com";
+const SKILL_API_URL = process.env.SKILLS_API_URL || process.env.SKILL_API_URL || "https://skills.md/api/v1";
 
 export interface SkillRequest {
   skill: string;
@@ -33,12 +33,12 @@ export async function executeSkill(request: SkillRequest): Promise<SkillResponse
   const url = `${SKILL_API_URL}/${skill}/`;
 
   // Get API key from environment
-  const apiKey = process.env.SKILL_API_KEY;
+  const apiKey = process.env.SKILLS_API_KEY || process.env.SKILL_API_KEY;
   if (!apiKey) {
     return {
       success: false,
-      error: "Missing SKILL_API_KEY",
-      details: "Set SKILL_API_KEY environment variable"
+      error: "Missing SKILLS_API_KEY",
+      details: "Set SKILLS_API_KEY environment variable or run `skills auth login`"
     };
   }
 

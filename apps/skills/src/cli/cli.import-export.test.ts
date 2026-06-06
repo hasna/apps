@@ -291,7 +291,7 @@ describe("CLI import export and env checks", () => {
       const { stdout, exitCode } = await runCli(["env-check", "image"]);
       expect(exitCode).toBe(0);
       expect(stdout).toContain("Auth status for image");
-      expect(stdout).toContain("SKILL_API_KEY");
+      expect(stdout).toContain("SKILLS_API_KEY");
     });
 
     test("shows set/missing markers for env vars", async () => {
@@ -312,10 +312,10 @@ describe("CLI import export and env checks", () => {
       expect(typeof data.envVars[0].set).toBe("boolean");
     });
 
-    test("JSON output contains SKILL_API_KEY for image skill", async () => {
+    test("JSON output contains SKILLS_API_KEY for image skill", async () => {
       const { stdout } = await runCli(["env-check", "image", "--json"]);
       const data = JSON.parse(stdout);
-      const skillApiKey = data.envVars.find((v: { name: string }) => v.name === "SKILL_API_KEY");
+      const skillApiKey = data.envVars.find((v: { name: string }) => v.name === "SKILLS_API_KEY");
       expect(skillApiKey).toBeDefined();
     });
 

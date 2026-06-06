@@ -3,13 +3,13 @@
   "version": "1.0.0",
   "description": "File format conversion CLI - convert between images, PDFs, documents, and data formats with AI-powered extraction",
   "type": "module",
-  "main": "src/index.ts",
+  "main": "src/index-local.ts",
   "bin": {
-    "convert": "src/index.ts"
+    "convert": "src/index-local.ts"
   },
   "scripts": {
-    "start": "bun run src/index.ts",
-    "dev": "bun run --watch src/index.ts"
+    "start": "bun run src/index-local.ts",
+    "dev": "bun run --watch src/index-local.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.36.3",

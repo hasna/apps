@@ -32,4 +32,4 @@ audio generate --provider gemini --text "Studio announcement" --output ./voice.w
 
 ## Environment
 
-- `SKILL_API_KEY`: required for hosted runtime execution
+- `SKILLS_API_KEY`: required for hosted runtime execution

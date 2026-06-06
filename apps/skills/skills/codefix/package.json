@@ -3,13 +3,13 @@
   "version": "1.0.0",
   "description": "Code quality CLI for auto-linting, formatting, and fixing code issues",
   "type": "module",
-  "main": "src/index.ts",
+  "main": "src/index-local.ts",
   "bin": {
-    "codefix": "src/index.ts"
+    "codefix": "src/index-local.ts"
   },
   "scripts": {
-    "start": "bun run src/index.ts",
-    "dev": "bun run --watch src/index.ts"
+    "start": "bun run src/index-local.ts",
+    "dev": "bun run --watch src/index-local.ts"
   },
   "dependencies": {},
   "devDependencies": {

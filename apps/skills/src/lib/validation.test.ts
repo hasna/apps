@@ -59,6 +59,29 @@ function countSecurityAuditFiles(dir: string): number {
   return count;
 }
 
+function listSecurityAuditFiles(dir: string): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    const path = join(dir, entry);
+    const stats = statSync(path);
+    if (stats.isDirectory()) {
+      if (["node_modules", ".git", "dist", "build"].includes(entry)) {
+        continue;
+      }
+      files.push(...listSecurityAuditFiles(path));
+      continue;
+    }
+    if ([...SECURITY_AUDIT_EXTENSIONS].some((ext) => entry.endsWith(ext))) {
+      files.push(path);
+    }
+  }
+  return files;
+}
+
+function hasLegacyHostedWrapper(source: string): boolean {
+  return /Calls the remote skill API server/i.test(source) || /executeSkill.*from ['"]\.\.\/\.\.\/_common/s.test(source);
+}
+
 // Get all bundled skill directories from the filesystem
 const SKILLS_DIR = findSkillsDir();
 const skillDirs = readdirSync(SKILLS_DIR).filter((f) => {
@@ -117,6 +140,42 @@ describe("structural validation of all registered skills", () => {
         return result.issues.some((issue) => issue.code === "package.bin_missing" || issue.code === "package.bin_invalid");
       })
       .map((result) => `${result.name}: ${result.metadata.binCommands.join(",") || "no bin"}`);
+    expect(failures).toEqual([]);
+  });
+
+  test("free local package entrypoints do not point at legacy hosted HTTP wrappers", () => {
+    const failures: string[] = [];
+    for (const dir of skillDirs) {
+      if (HOSTED_METADATA_SKILLS.has(dir)) continue;
+      const pkgPath = join(SKILLS_DIR, dir, "package.json");
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as {
+        bin?: Record<string, string>;
+        main?: string;
+        scripts?: Record<string, string>;
+      };
+      const entries = new Set<string>([pkg.main, ...Object.values(pkg.bin ?? {})].filter((entry): entry is string => Boolean(entry)));
+      for (const script of Object.values(pkg.scripts ?? {})) {
+        const match = script.match(/\bbun run\s+([^ ]+)/);
+        if (match) entries.add(match[1]);
+      }
+
+      for (const entry of entries) {
+        const entryPath = join(SKILLS_DIR, dir, entry);
+        const source = existsSync(entryPath) ? readFileSync(entryPath, "utf8") : "";
+        if (hasLegacyHostedWrapper(source)) {
+          failures.push(`${dir}: ${entry}`);
+        }
+      }
+    }
+
+    expect(failures).toEqual([]);
+  });
+
+  test("bundled source does not reference legacy Hasna skill host", () => {
+    const failures = listSecurityAuditFiles(SKILLS_DIR)
+      .filter((file) => readFileSync(file, "utf8").includes("skill.hasnaxyz.com"))
+      .map((file) => file.replace(`${process.cwd()}/`, ""));
+
     expect(failures).toEqual([]);
   });
 

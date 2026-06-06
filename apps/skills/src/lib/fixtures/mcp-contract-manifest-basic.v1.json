@@ -33,6 +33,7 @@
         "name"
       ],
       "properties": [
+        "approved",
         "args",
         "input",
         "name"

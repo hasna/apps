@@ -75,7 +75,8 @@ describe("skillinfo", () => {
     test("extracts only hosted runtime env vars from API-backed image skill", () => {
       const reqs = getSkillRequirements("image");
       expect(reqs).not.toBeNull();
-      expect(reqs!.envVars).toContain("SKILL_API_KEY");
+      expect(reqs!.envVars).toContain("SKILLS_API_KEY");
+      expect(reqs!.envVars).not.toContain("SKILL_API_KEY");
       expect(reqs!.envVars).not.toContain("OPENAI_API_KEY");
       expect(reqs!.envVars).not.toContain("GEMINI_API_KEY");
       expect(reqs!.envVars).not.toContain("XAI_API_KEY");
@@ -86,7 +87,7 @@ describe("skillinfo", () => {
       const reqs = getSkillRequirements("brand-style-guide");
       expect(reqs).not.toBeNull();
       expect(reqs!.envVars).toContain("OPENAI_API_KEY");
-      expect(reqs!.envVars).not.toContain("SKILL_API_KEY");
+      expect(reqs!.envVars).not.toContain("SKILLS_API_KEY");
     });
 
     test("extracts CLI command from package.json", () => {
@@ -135,7 +136,8 @@ describe("skillinfo", () => {
     test("generates env example from pinned skills", () => {
       installSkill("image", { targetDir: testDir });
       const result = generateEnvExample(testDir);
-      expect(result).toContain("SKILL_API_KEY");
+      expect(result).toContain("SKILLS_API_KEY");
+      expect(result).not.toContain("SKILL_API_KEY");
       expect(result).not.toContain("OPENAI_API_KEY");
       expect(result).not.toContain("GEMINI_API_KEY");
       expect(result).not.toContain("XAI_API_KEY");

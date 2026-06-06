@@ -34,4 +34,4 @@ video generate --provider gemini --model veo-3.1-fast-generate-preview --prompt 
 
 ## Environment
 
-- `SKILL_API_KEY`: required for hosted runtime execution
+- `SKILLS_API_KEY`: required for hosted runtime execution

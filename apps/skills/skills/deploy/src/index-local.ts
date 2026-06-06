@@ -13,7 +13,7 @@ const SKILL_META = {
   description: 'Deployment CLI for managing EC2 deployments with automated health checks',
   version: '1.0.0',
   commands: `Use: deploy --help`,
-  requiredEnvVars: ['SKILL_API_KEY'],
+  requiredEnvVars: [],
 };
 
 if (await handleInstallCommand(SKILL_META, process.argv.slice(2))) {
@@ -38,6 +38,7 @@ function parseArgs(): {
   parallel?: boolean;
 } {
   const args = process.argv.slice(2);
+  if (args[0] === '--help' || args[0] === '-h') args[0] = 'help';
   const parsed: Record<string, any> = {
     command: args[0] || 'help',
     hosts: [],

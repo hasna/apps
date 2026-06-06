@@ -3,13 +3,13 @@
   "version": "1.0.0",
   "description": "Article writing skill that spawns parallel AI agents to research and write articles with image generation",
   "type": "module",
-  "main": "src/index.ts",
+  "main": "src/index-local.ts",
   "bin": {
-    "write": "src/index.ts"
+    "write": "src/index-local.ts"
   },
   "scripts": {
-    "start": "bun run src/index.ts",
-    "dev": "bun run --watch src/index.ts"
+    "start": "bun run src/index-local.ts",
+    "dev": "bun run --watch src/index-local.ts"
   },
   "keywords": [
     "article",

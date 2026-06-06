@@ -9,7 +9,7 @@ description: File format conversion and transformation CLI between images, PDFs,
 
 File format conversion skill with AI-powered extraction capabilities. Converts between images, PDFs, documents, and data formats with optional quality control and AI cleanup.
 
-This CLI is API-backed. Set `SKILL_API_KEY` when routing through the hosted skills/connectors runtime; provider-specific keys are managed by that runtime.
+This CLI is API-backed. Set `SKILLS_API_KEY` when routing through the hosted skills/connectors runtime; provider-specific keys are managed by that runtime.
 
 ## Category
 
@@ -65,7 +65,7 @@ bun run src/index.ts formats
 - `openai` - GPT-4o AI
 
 ### API Key
-- `SKILL_API_KEY` - Hosted runtime access. Provider credentials for AI features are managed remotely.
+- `SKILLS_API_KEY` - Hosted runtime access. Provider credentials for AI features are managed remotely.
 
 ## Conversion Categories
 

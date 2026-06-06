@@ -46,6 +46,7 @@ export function registerRuntime(parent: Command) {
     .allowUnknownOption(true)
     .passThroughOptions(true)
     .option("--json", "Output result as JSON", false)
+    .option("-y, --yes", "Approve paid hosted execution without an interactive prompt", false)
     .option("--wait", "Poll remote runs until a terminal status", false)
     .option("--poll-interval-ms <ms>", "Remote polling interval in milliseconds", "1000")
     .option("--poll-timeout-ms <ms>", "Maximum time to wait for a remote run", "300000")
@@ -265,6 +266,7 @@ function handleQuote(name: string, args: string[], options: { json: boolean }) {
 
 interface RunCommandOptions {
   json: boolean;
+  yes?: boolean;
   wait?: boolean;
   pollIntervalMs?: string;
   pollTimeoutMs?: string;
@@ -312,6 +314,34 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
         const run = completeSkillRun(runContext, { status: "failed", error, costCents });
         if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, skill: skill.name, args, exitCode: 1, remote: true, error, pricing: publicPricing, run }, null, 2));
         else console.error(chalk.red(error));
+        process.exitCode = 1;
+        return;
+      }
+
+      const approval = await approvePaidHostedRun({
+        skill: skill.name,
+        formattedCost: publicPricing.formattedCost,
+        json: options.json,
+        yes: Boolean(options.yes),
+      });
+      if (!approval.approved) {
+        writeRunLogs(runContext, "", approval.error + "\n");
+        const run = completeSkillRun(runContext, { status: "failed", error: approval.error, costCents });
+        if (options.json) {
+          console.log(JSON.stringify({
+            contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION,
+            skill: skill.name,
+            args,
+            exitCode: 1,
+            remote: true,
+            approvalRequired: true,
+            error: approval.error,
+            pricing: publicPricing,
+            run,
+          }, null, 2));
+        } else {
+          console.error(chalk.red(approval.error));
+        }
         process.exitCode = 1;
         return;
       }
@@ -415,6 +445,24 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
     console.log(chalk.dim(`Exports: ${completed.paths.exportDir}`));
   }
   process.exitCode = result.exitCode;
+}
+
+async function approvePaidHostedRun(params: {
+  skill: string;
+  formattedCost: string;
+  json: boolean;
+  yes: boolean;
+}): Promise<{ approved: true } | { approved: false; error: string }> {
+  if (params.yes) return { approved: true };
+
+  const error = `${params.skill} is a paid hosted skill (${params.formattedCost}). Run skills quote ${params.skill} first, then rerun with --yes to approve the charge.`;
+  if (params.json || !process.stdin.isTTY || !process.stdout.isTTY) {
+    return { approved: false, error };
+  }
+
+  const answer = await promptLine(`Run paid hosted skill ${params.skill} for ${params.formattedCost}? [y/N] `);
+  if (/^(y|yes)$/i.test(answer.trim())) return { approved: true };
+  return { approved: false, error: `Paid hosted run for ${params.skill} was not approved.` };
 }
 
 function writeBlogArticleValidationError(errors: string[], json: boolean) {

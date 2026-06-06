@@ -6,6 +6,20 @@ import { getApiKey, getAuthConfig, saveAuthConfig, clearAuthConfig, getApiUrl } 
 const isTTY = process.stdin.isTTY && process.stdout.isTTY;
 const DEFAULT_DEVICE_POLL_TIMEOUT_MS = 10 * 60 * 1000;
 
+class HostedApiError extends Error {
+  readonly status?: number;
+  readonly code?: string;
+  readonly detail?: string;
+
+  constructor(message: string, options: { status?: number; code?: string; detail?: string } = {}) {
+    super(message);
+    this.name = "HostedApiError";
+    this.status = options.status;
+    this.code = options.code;
+    this.detail = options.detail;
+  }
+}
+
 function prompt(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => {
@@ -18,11 +32,62 @@ function prompt(question: string): Promise<string> {
 
 async function apiRequest(path: string, options?: RequestInit) {
   const url = getApiUrl();
-  const res = await fetch(`${url}${path}`, {
-    ...options,
-    headers: { "Content-Type": "application/json", ...options?.headers },
-  });
-  return res.json() as Promise<any>;
+  let res: Response;
+  try {
+    res = await fetch(`${url}${path}`, {
+      ...options,
+      headers: { "Content-Type": "application/json", ...options?.headers },
+    });
+  } catch (err) {
+    throw new HostedApiError(`Unable to reach hosted Skills API: ${(err as Error).message}`);
+  }
+
+  const text = await res.text();
+  const body = text ? parseJsonBody(text) : {};
+  if (!res.ok) {
+    const record = isRecord(body) ? body : {};
+    const detail = typeof record.detail === "string" ? record.detail : undefined;
+    const error = typeof record.error === "string" ? record.error : undefined;
+    const code = typeof record.code === "string" ? record.code : undefined;
+    throw new HostedApiError(detail || error || `${res.status} ${res.statusText}`, {
+      status: res.status,
+      code,
+      detail,
+    });
+  }
+
+  return body as any;
+}
+
+function parseJsonBody(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { detail: text };
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function commandErrorPayload(err: unknown, fallback: string): Record<string, unknown> {
+  if (err instanceof HostedApiError) {
+    return {
+      error: err.message || fallback,
+      ...(err.status !== undefined ? { status: err.status } : {}),
+      ...(err.code ? { code: err.code } : {}),
+      ...(err.detail && err.detail !== err.message ? { detail: err.detail } : {}),
+    };
+  }
+  return { error: (err as Error)?.message || fallback };
+}
+
+function writeCommandError(err: unknown, fallback: string, json?: boolean): void {
+  const payload = commandErrorPayload(err, fallback);
+  if (json) console.log(JSON.stringify(payload, null, 2));
+  else console.error(chalk.red(String(payload.detail || payload.error || fallback)));
+  process.exitCode = 1;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -87,29 +152,34 @@ function printLoginSuccess(loginResult: any, json: boolean) {
   }
 }
 
-async function doLogin(email: string, code?: string) {
+async function doLogin(email: string, code?: string, json?: boolean) {
   if (!email || !email.includes("@")) {
-    console.error(chalk.red("Invalid email"));
+    writeCommandError(new Error("Invalid email"), "Invalid email", json);
     process.exitCode = 1;
     return;
   }
 
   if (!code) {
-    console.log(chalk.dim("Sending code..."));
-    const sendRes = await apiRequest("/api/auth/login", {
-      method: "POST",
-      body: JSON.stringify({ email }),
-    });
-
-    if (sendRes.error) {
-      console.error(chalk.red(sendRes.error));
-      process.exitCode = 1;
+    if (!json) console.log(chalk.dim("Sending code..."));
+    let sendRes: any;
+    try {
+      sendRes = await apiRequest("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      });
+    } catch (err) {
+      writeCommandError(err, "Failed to request login code", json);
       return;
     }
 
-    console.log(chalk.green("✓ Code sent to " + email));
+    if (sendRes.error) {
+      writeCommandError(new Error(sendRes.error), "Failed to request login code", json);
+      return;
+    }
 
-    if (!isTTY) {
+    if (!json) console.log(chalk.green("✓ Code sent to " + email));
+
+    if (json || !isTTY) {
       console.log(JSON.stringify({ status: "code_sent", email, message: "Check email for 6-digit code, then run: skills auth login --email " + email + " --code <CODE>" }));
       return;
     }
@@ -117,25 +187,35 @@ async function doLogin(email: string, code?: string) {
     code = await prompt(chalk.bold("Code: "));
   }
 
-  const verifyRes = await apiRequest("/api/auth/verify", {
-    method: "POST",
-    body: JSON.stringify({ email, code }),
-  });
+  let verifyRes: any;
+  try {
+    verifyRes = await apiRequest("/api/auth/verify", {
+      method: "POST",
+      body: JSON.stringify({ email, code }),
+    });
+  } catch (err) {
+    writeCommandError(err, "Failed to verify login code", json);
+    return;
+  }
 
   if (verifyRes.error) {
-    console.error(chalk.red(verifyRes.error));
-    process.exitCode = 1;
+    writeCommandError(new Error(verifyRes.error), "Failed to verify login code", json);
     return;
   }
 
-  const storedKey = await persistLoginResult(verifyRes);
+  let storedKey: string | undefined;
+  try {
+    storedKey = await persistLoginResult(verifyRes);
+  } catch (err) {
+    writeCommandError(err, "Login succeeded but API key creation failed", json);
+    return;
+  }
   if (!storedKey) {
-    console.error(chalk.red("Login succeeded but API key creation failed"));
-    process.exitCode = 1;
+    writeCommandError(new Error("Login succeeded but API key creation failed"), "Login succeeded but API key creation failed", json);
     return;
   }
 
-  printLoginSuccess(verifyRes, false);
+  printLoginSuccess(verifyRes, Boolean(json));
 }
 
 interface DeviceLoginOptions {
@@ -146,14 +226,19 @@ interface DeviceLoginOptions {
 }
 
 async function doDeviceLogin(options: DeviceLoginOptions) {
-  const start = await apiRequest("/api/auth/device/start", {
-    method: "POST",
-    body: JSON.stringify({ client: "skills-cli" }),
-  });
+  let start: any;
+  try {
+    start = await apiRequest("/api/auth/device/start", {
+      method: "POST",
+      body: JSON.stringify({ client: "skills-cli" }),
+    });
+  } catch (err) {
+    writeCommandError(err, "Failed to start device login", options.json);
+    return;
+  }
 
   if (start.error) {
-    console.error(chalk.red(start.error));
-    process.exitCode = 1;
+    writeCommandError(new Error(start.error), "Failed to start device login", options.json);
     return;
   }
 
@@ -195,10 +280,16 @@ async function doDeviceLogin(options: DeviceLoginOptions) {
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    const tokenRes = await apiRequest("/api/auth/device/token", {
-      method: "POST",
-      body: JSON.stringify({ deviceCode: start.deviceCode }),
-    });
+    let tokenRes: any;
+    try {
+      tokenRes = await apiRequest("/api/auth/device/token", {
+        method: "POST",
+        body: JSON.stringify({ deviceCode: start.deviceCode }),
+      });
+    } catch (err) {
+      writeCommandError(err, "Failed to poll device login", options.json);
+      return;
+    }
 
     if (tokenRes.error === "authorization_pending" || tokenRes.status === "pending") {
       await sleep(intervalMs);
@@ -206,15 +297,19 @@ async function doDeviceLogin(options: DeviceLoginOptions) {
     }
 
     if (tokenRes.error) {
-      console.error(chalk.red(tokenRes.detail || tokenRes.error));
-      process.exitCode = 1;
+      writeCommandError(new Error(tokenRes.detail || tokenRes.error), "Failed to poll device login", options.json);
       return;
     }
 
-    const storedKey = await persistLoginResult(tokenRes);
+    let storedKey: string | undefined;
+    try {
+      storedKey = await persistLoginResult(tokenRes);
+    } catch (err) {
+      writeCommandError(err, "Login succeeded but API key creation failed", options.json);
+      return;
+    }
     if (!storedKey) {
-      console.error(chalk.red("Login succeeded but API key creation failed"));
-      process.exitCode = 1;
+      writeCommandError(new Error("Login succeeded but API key creation failed"), "Login succeeded but API key creation failed", options.json);
       return;
     }
 
@@ -267,7 +362,7 @@ export function registerAuth(parent: Command) {
         return;
       }
 
-      await doLogin(email, options.code);
+      await doLogin(email, options.code, options.json);
     });
 
   auth
@@ -373,9 +468,8 @@ async function handleBillingStatus(options: { json?: boolean } = {}) {
     }
     console.log(chalk.bold("Plan:    ") + res.plan);
     console.log(chalk.bold("Balance: ") + res.balance);
-  } catch {
-    console.error(chalk.red("Failed to fetch billing status"));
-    process.exitCode = 1;
+  } catch (err) {
+    writeCommandError(err, "Failed to fetch billing status", options.json);
   }
 }
 
@@ -383,13 +477,18 @@ async function handleCheckout(options: { json?: boolean } = {}) {
   const config = requireHostedAuth(options.json);
   if (!config) return;
 
-  const res = await apiRequest("/api/v1/billing/checkout", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${config.apiKey}` },
-  });
+  let res: any;
+  try {
+    res = await apiRequest("/api/v1/billing/checkout", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${config.apiKey}` },
+    });
+  } catch (err) {
+    writeCommandError(err, "Failed to create checkout session", options.json);
+    return;
+  }
   if (res.error || !res.url) {
-    console.error(chalk.red(res.detail || res.error || "Failed to create checkout session"));
-    process.exitCode = 1;
+    writeCommandError(new Error(res.detail || res.error || "Failed to create checkout session"), "Failed to create checkout session", options.json);
     return;
   }
   if (options.json) console.log(JSON.stringify(res, null, 2));
@@ -400,13 +499,18 @@ async function handlePortal(options: { json?: boolean } = {}) {
   const config = requireHostedAuth(options.json);
   if (!config) return;
 
-  const res = await apiRequest("/api/v1/billing/portal", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${config.apiKey}` },
-  });
+  let res: any;
+  try {
+    res = await apiRequest("/api/v1/billing/portal", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${config.apiKey}` },
+    });
+  } catch (err) {
+    writeCommandError(err, "Failed to create customer portal session", options.json);
+    return;
+  }
   if (res.error || !res.url) {
-    console.error(chalk.red(res.detail || res.error || "Failed to create customer portal session"));
-    process.exitCode = 1;
+    writeCommandError(new Error(res.detail || res.error || "Failed to create customer portal session"), "Failed to create customer portal session", options.json);
     return;
   }
   if (options.json) console.log(JSON.stringify(res, null, 2));
@@ -417,14 +521,19 @@ async function handleBuyCredits(amount: string, options: { json?: boolean } = {}
   const config = requireHostedAuth(options.json);
   if (!config) return;
 
-  const res = await apiRequest("/api/v1/billing/credits", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${config.apiKey}` },
-    body: JSON.stringify({ amount }),
-  });
+  let res: any;
+  try {
+    res = await apiRequest("/api/v1/billing/credits", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${config.apiKey}` },
+      body: JSON.stringify({ amount }),
+    });
+  } catch (err) {
+    writeCommandError(err, "Failed to create credit checkout session", options.json);
+    return;
+  }
   if (res.error || !res.url) {
-    console.error(chalk.red(res.detail || res.error || "Failed to create credit checkout session"));
-    process.exitCode = 1;
+    writeCommandError(new Error(res.detail || res.error || "Failed to create credit checkout session"), "Failed to create credit checkout session", options.json);
     return;
   }
   if (options.json) console.log(JSON.stringify(res, null, 2));
@@ -435,12 +544,17 @@ async function handleListCreditPacks(options: { json?: boolean } = {}) {
   const config = requireHostedAuth(options.json);
   if (!config) return;
 
-  const res = await apiRequest("/api/v1/billing/credits", {
-    headers: { Authorization: `Bearer ${config.apiKey}` },
-  });
+  let res: any;
+  try {
+    res = await apiRequest("/api/v1/billing/credits", {
+      headers: { Authorization: `Bearer ${config.apiKey}` },
+    });
+  } catch (err) {
+    writeCommandError(err, "Failed to list credit packs", options.json);
+    return;
+  }
   if (res.error) {
-    console.error(chalk.red(res.detail || res.error || "Failed to list credit packs"));
-    process.exitCode = 1;
+    writeCommandError(new Error(res.detail || res.error || "Failed to list credit packs"), "Failed to list credit packs", options.json);
     return;
   }
   if (options.json) {

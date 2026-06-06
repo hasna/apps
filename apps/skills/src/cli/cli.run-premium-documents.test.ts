@@ -47,6 +47,7 @@ describe("CLI run premium documents", () => {
           CLI_PATH,
           "--",
           "run",
+          "--yes",
           "--json",
           "slide-deck-generator",
           "--brief",

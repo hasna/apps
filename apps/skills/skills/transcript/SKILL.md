@@ -7,7 +7,7 @@ description: Transcribe audio and video files using ElevenLabs Scribe, OpenAI Wh
 
 This skill provides high-quality speech-to-text transcription using multiple AI providers. It automatically handles large files through compression and chunking.
 
-This CLI is API-backed. Set `SKILL_API_KEY` when routing through the hosted skills/connectors runtime; provider-specific keys are managed by that runtime.
+This CLI is API-backed. Set `SKILLS_API_KEY` when routing through the hosted skills/connectors runtime; provider-specific keys are managed by that runtime.
 
 ## Supported Providers
 
@@ -85,7 +85,7 @@ The skill automatically handles files larger than provider limits:
 ## Configuration
 
 ```bash
-export SKILL_API_KEY=your_skill_api_key
+export SKILLS_API_KEY=your_skill_api_key
 ```
 
 ## Dependencies

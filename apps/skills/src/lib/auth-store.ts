@@ -48,6 +48,7 @@ export function clearAuthConfig(): void {
 
 export function getApiKey(): string | null {
   if (process.env.SKILLS_API_KEY) return process.env.SKILLS_API_KEY;
+  if (process.env.SKILL_API_KEY) return process.env.SKILL_API_KEY;
   return getAuthConfig()?.apiKey || null;
 }
 

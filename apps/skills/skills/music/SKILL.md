@@ -30,4 +30,4 @@ music generate --provider gemini --model lyria-3-clip-preview --prompt "30 secon
 
 ## Environment
 
-- `SKILL_API_KEY`: required for hosted runtime execution
+- `SKILLS_API_KEY`: required for hosted runtime execution

@@ -87,7 +87,8 @@ export function getSkillRequirements(name: string): SkillRequirements | null {
         envVars.delete(envVar);
       }
     }
-    envVars.add("SKILL_API_KEY");
+    envVars.delete("SKILL_API_KEY");
+    envVars.add("SKILLS_API_KEY");
   }
 
   // Extract system deps

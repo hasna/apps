@@ -145,6 +145,10 @@ const runArgsSchema: JsonSchemaObject = {
   default: [],
   description: "CLI-style string arguments passed to the skill.",
 };
+const paidRunApprovalSchema: JsonSchemaObject = {
+  type: "boolean",
+  description: "Set true only after the user has approved the quoted cost for a paid hosted run.",
+};
 
 const errorSchema = objectSchema({
   code: stringSchema("Stable error code."),
@@ -380,11 +384,16 @@ const toolContracts: McpToolContract[] = [
     name: "run_skill",
     title: "Run Skill",
     description: "Run a skill locally or through a configured remote runner.",
-    params: ["name", "input?", "args?"],
+    params: ["name", "input?", "args?", "approved?"],
     category: "execution",
     sideEffects: "local-process-or-remote-run",
     stable: true,
-    inputSchema: objectSchema({ name: skillNameInput, input: runInputSchema, args: runArgsSchema }, ["name"]),
+    inputSchema: objectSchema({
+      name: skillNameInput,
+      input: runInputSchema,
+      args: runArgsSchema,
+      approved: paidRunApprovalSchema,
+    }, ["name"]),
     outputSchema: runOutputSchema,
   },
   {

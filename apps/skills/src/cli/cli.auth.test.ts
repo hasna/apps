@@ -146,4 +146,39 @@ describe("CLI hosted auth and billing", () => {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  test("hosted auth and billing failures stay structured with --json", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "cli-hosted-json-errors-"));
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => new Response("temporary outage", { status: 503, statusText: "Unavailable" }),
+    });
+
+    try {
+      const env = {
+        HOME: tmpDir,
+        SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+        SKILLS_API_KEY: "sk_json_errors",
+      };
+      for (const args of [
+        ["billing", "status", "--json"],
+        ["billing", "checkout", "--json"],
+        ["billing", "portal", "--json"],
+        ["credits", "buy", "5", "--json"],
+        ["credits", "packs", "--json"],
+        ["auth", "login", "--device", "--json"],
+      ]) {
+        const result = await runCliInCwd(args, tmpDir, env);
+        expect(result.exitCode, args.join(" ")).not.toBe(0);
+        expect(result.stderr, args.join(" ")).toBe("");
+        const payload = JSON.parse(result.stdout);
+        expect(payload).toMatchObject({ error: "temporary outage", status: 503 });
+        expect(result.stdout, args.join(" ")).not.toContain("Stack trace");
+        expect(result.stdout, args.join(" ")).not.toContain("bin/index.js");
+      }
+    } finally {
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
