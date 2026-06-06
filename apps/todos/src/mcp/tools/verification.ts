@@ -15,9 +15,9 @@ export function registerVerificationTools(server: McpServer, { shouldRegisterToo
       {},
       async () => {
         try {
-          const { loadVerificationProviders } = await import("../../lib/verification-providers.js");
-          const providers = loadVerificationProviders();
-          const text = providers.map((p) => `${p.name} (${p.type})${p.command ? ` — ${p.command}` : ""}`).join("\n");
+          const { listVerificationProviders } = await import("../../lib/verification-providers.js");
+          const providers = listVerificationProviders();
+          const text = providers.map((p) => `${p.name} (${p.kind})${p.command ? ` — ${p.command}` : ""}`).join("\n");
           return { content: [{ type: "text" as const, text: text || "No providers configured." }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -40,9 +40,15 @@ export function registerVerificationTools(server: McpServer, { shouldRegisterToo
       },
       async (params) => {
         try {
-          const { runVerification } = await import("../../lib/verification-providers.js");
+          const { runVerificationProvider } = await import("../../lib/verification-providers.js");
           const taskId = params.task_id ? resolveId(params.task_id, "tasks") ?? params.task_id : undefined;
-          const record = runVerification({ ...params, task_id: taskId });
+          const record = await runVerificationProvider({
+            name: params.provider,
+            task_id: taskId,
+            cwd: params.cwd,
+            artifact_path: params.snapshot_path,
+            metadata: params.note ? { note: params.note, evidence_path: params.evidence_path } : { evidence_path: params.evidence_path },
+          });
           return { content: [{ type: "text" as const, text: JSON.stringify(record, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };

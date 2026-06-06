@@ -14,8 +14,8 @@ export function registerWorkspaceTrustTools(server: McpServer, { shouldRegisterT
       {},
       async () => {
         try {
-          const { loadWorkspaceTrustConfig } = await import("../../lib/workspace-trust.js");
-          return { content: [{ type: "text" as const, text: JSON.stringify(loadWorkspaceTrustConfig(), null, 2) }] };
+          const { listWorkspaceTrustProfiles } = await import("../../lib/workspace-trust.js");
+          return { content: [{ type: "text" as const, text: JSON.stringify(listWorkspaceTrustProfiles(), null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }
@@ -26,16 +26,17 @@ export function registerWorkspaceTrustTools(server: McpServer, { shouldRegisterT
   if (shouldRegisterTool("check_workspace_permission")) {
     server.tool(
       "check_workspace_permission",
-      "Check if an operation is allowed for a trust profile or agent.",
+      "Check whether an operation (command/tool/write path) is allowed under the workspace trust profile.",
       {
-        operation: z.string(),
-        profile: z.string().optional(),
-        agent_id: z.string().optional(),
+        path: z.string().optional().describe("Workspace path to evaluate (defaults to cwd)"),
+        command: z.string().optional().describe("Shell command to check against the allow/deny lists"),
+        tool: z.string().optional().describe("Tool name to check against tool permissions"),
+        write_path: z.string().optional().describe("Filesystem path a write would target"),
       },
-      async ({ operation, profile, agent_id }) => {
+      async ({ path, command, tool, write_path }) => {
         try {
-          const { checkPermission } = await import("../../lib/workspace-trust.js");
-          const result = checkPermission(operation as any, { profile, agent_id });
+          const { checkWorkspacePermission } = await import("../../lib/workspace-trust.js");
+          const result = checkWorkspacePermission({ path, command, tool, write_path });
           return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -47,12 +48,16 @@ export function registerWorkspaceTrustTools(server: McpServer, { shouldRegisterT
   if (shouldRegisterTool("trust_workspace")) {
     server.tool(
       "trust_workspace",
-      "Add a workspace path to the trusted list.",
-      { path: z.string() },
-      async ({ path }) => {
+      "Add (or update) a workspace path as trusted.",
+      {
+        path: z.string(),
+        preset: z.enum(["restricted", "readonly", "standard", "trusted"]).optional(),
+      },
+      async ({ path, preset }) => {
         try {
-          const { trustWorkspace } = await import("../../lib/workspace-trust.js");
-          return { content: [{ type: "text" as const, text: JSON.stringify(trustWorkspace(path), null, 2) }] };
+          const { upsertWorkspaceTrustProfile } = await import("../../lib/workspace-trust.js");
+          const profile = upsertWorkspaceTrustProfile({ root: path, trusted: true, preset });
+          return { content: [{ type: "text" as const, text: JSON.stringify(profile, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }

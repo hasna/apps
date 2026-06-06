@@ -28,6 +28,8 @@ import {
 } from "../../db/comments.js";
 import { resolveTaskRunId } from "../../db/task-runs.js";
 import { bootstrapProject } from "../../lib/project-bootstrap.js";
+import { getDatabase } from "../../db/database.js";
+import { listLabels } from "../../db/labels.js";
 import {
   getSecretSafetyConfig,
   listSecretFindings,
@@ -1451,6 +1453,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       "Create a new project.",
       {
         name: z.string().describe("Project name"),
+        path: z.string().describe("Unique filesystem path for the project"),
         description: z.string().optional(),
         status: z.enum(["active", "completed", "on_hold", "archived"]).optional(),
         short_id: z.string().nullable().optional().describe("Short ID (auto-generated if omitted)"),
@@ -1477,7 +1480,9 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ status, limit }) => {
         try {
-          const projects = listProjects({ status, limit });
+          let projects = listProjects();
+          if (status) projects = projects.filter((p) => p.status === status);
+          if (limit) projects = projects.slice(0, limit);
           if (projects.length === 0) return { content: [{ type: "text" as const, text: "No projects found." }] };
           const lines = projects.map(p => `[${p.status}] ${p.short_id || p.id.slice(0,8)} ${p.name}`);
           return { content: [{ type: "text" as const, text: lines.join("\n") }] };
@@ -2310,12 +2315,14 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
   if (shouldRegisterTool("list_tags")) {
     server.tool(
       "list_tags",
-      "List all tags.",
+      "List all distinct task tags in use, with task counts.",
       async () => {
         try {
-          const tags = listTags();
-          if (tags.length === 0) return { content: [{ type: "text" as const, text: "No tags found." }] };
-          const lines = tags.map(t => `${t.color ? "[" + t.color + "] " : ""}${t.name}`);
+          const rows = getDatabase()
+            .query("SELECT tag, COUNT(*) AS count FROM task_tags GROUP BY tag ORDER BY tag")
+            .all() as { tag: string; count: number }[];
+          if (rows.length === 0) return { content: [{ type: "text" as const, text: "No tags found." }] };
+          const lines = rows.map((r) => `${r.tag} (${r.count})`);
           return { content: [{ type: "text" as const, text: lines.join("\n") }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
