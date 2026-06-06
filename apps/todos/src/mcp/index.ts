@@ -202,8 +202,23 @@ export function buildServer() {
   });
   installMcpTokenDiagnostics(server);
 
+  // First-wins de-duplication: some tools were split into dedicated files but
+  // left registered in their original big file too. The MCP SDK throws
+  // ("Tool X is already registered") on the second server.tool() call, which
+  // crashed server startup. Gate every registration through this per-build set
+  // so a duplicate is skipped instead of fatal. Scoped per buildServer() call
+  // (HTTP mode builds a server per request), so it never suppresses tools on a
+  // later build.
+  const registeredToolNames = new Set<string>();
+  const shouldRegisterToolOnce = (name: string): boolean => {
+    if (!shouldRegisterTool(name)) return false;
+    if (registeredToolNames.has(name)) return false;
+    registeredToolNames.add(name);
+    return true;
+  };
+
   const toolContext = {
-    shouldRegisterTool,
+    shouldRegisterTool: shouldRegisterToolOnce,
     resolveId,
     formatError,
     formatTask,
@@ -227,11 +242,11 @@ registerWorkflowPrompts(server);
 
 // === MACHINES ===
 
-registerMachineTools(server, { shouldRegisterTool, formatError });
+registerMachineTools(server, { shouldRegisterTool: shouldRegisterToolOnce, formatError });
 
 // === DISPATCH ===
 
-registerDispatchTools(server, { shouldRegisterTool, resolveId, formatError });
+registerDispatchTools(server, { shouldRegisterTool: shouldRegisterToolOnce, resolveId, formatError });
 
   return server;
 }
