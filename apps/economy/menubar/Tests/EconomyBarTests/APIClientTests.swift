@@ -365,6 +365,7 @@ final class APIClientTests: XCTestCase {
 
     let requestURL = try XCTUnwrap(capturedRequest?.url)
     XCTAssertEqual(requestURL.path, "/api/hourly")
+    XCTAssertEqual(URLComponents(url: requestURL, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "hours" })?.value, "12")
     XCTAssertEqual(URLComponents(url: requestURL, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "machine" })?.value, "apple06")
   }
 
@@ -409,7 +410,7 @@ final class APIClientTests: XCTestCase {
     XCTAssertEqual(capturedPaths, [
       "/api/summary?period=today&machine=apple06",
       "/api/daily?days=7&machine=apple06",
-      "/api/hourly?machine=apple06",
+      "/api/hourly?hours=12&machine=apple06",
       "/api/projects?period=week&machine=apple06",
       "/api/breakdown?by=agent&period=week&machine=apple06",
       "/api/accounts?period=month&machine=apple06",

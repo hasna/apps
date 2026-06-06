@@ -292,13 +292,16 @@ struct ContentView: View {
   private var activityBars: [ActivityBarEntry] {
     switch selectedPeriod {
     case .today:
-      let grouped = Dictionary(grouping: appState.hourlyEntries, by: \.hour)
-      let entries = grouped.keys.sorted().compactMap { hour -> ActivityBarEntry? in
-        let cost = grouped[hour]?.reduce(0) { $0 + $1.cost_usd } ?? 0
-        guard cost > 0 else { return nil }
-        return ActivityBarEntry(label: activityHourLabel(hour), valueLabel: activityValue(cost), cost: cost)
+      let costsByHour = Dictionary(grouping: appState.hourlyEntries, by: \.hour)
+        .mapValues { entries in entries.reduce(0) { $0 + $1.cost_usd } }
+      let currentHour = currentUTCHour()
+
+      return (0..<12).map { offset in
+        let hour = (currentHour - 11 + offset + 24) % 24
+        let key = String(format: "%02d", hour)
+        let cost = costsByHour[key] ?? 0
+        return ActivityBarEntry(label: activityHourLabel(key), valueLabel: activityValue(cost), cost: cost)
       }
-      return Array(entries.suffix(8))
     case .week:
       let grouped = Dictionary(grouping: appState.dailyEntries, by: \.date)
       let entries = grouped.keys.sorted().compactMap { date -> ActivityBarEntry? in
@@ -604,7 +607,7 @@ struct ContentView: View {
           Text("Activity")
             .font(.system(size: 13, weight: .medium))
           Spacer()
-          Text(selectedPeriod == .today ? "Today by hour" : "Last 7 days")
+          Text(selectedPeriod == .today ? "Last 12 hours" : "Last 7 days")
             .font(.system(size: 11, weight: .regular))
             .foregroundStyle(.secondary)
         }
@@ -1038,7 +1041,7 @@ struct ContentView: View {
     case .workStats:
       return "\(selectedSummary.sessions) sessions, \(formatCost(selectedSummary.total_usd)) \(selectedPeriod.sectionSuffix)"
     case .activity:
-      return selectedPeriod == .today ? "Hourly spend and request pace" : "Daily spend and request pace"
+      return selectedPeriod == .today ? "Last 12 hours of spend and request pace" : "Daily spend and request pace"
     case .workDetails:
       return selectedPeriod == .today ? "Current pace for today" : "Current pace this week"
     case .machines:
@@ -1597,8 +1600,16 @@ private struct ActivityBars: View {
     max(entries.map(\.cost).max() ?? 0, 1)
   }
 
+  private var barSpacing: CGFloat {
+    entries.count > 8 ? 8 : 16
+  }
+
+  private var barWidth: CGFloat {
+    entries.count > 8 ? 20 : 24
+  }
+
   var body: some View {
-    HStack(alignment: .bottom, spacing: 16) {
+    HStack(alignment: .bottom, spacing: barSpacing) {
       ForEach(Array(entries.enumerated()), id: \.offset) { index, entry in
         VStack(spacing: 6) {
           Text(entry.valueLabel)
@@ -1607,7 +1618,7 @@ private struct ActivityBars: View {
 
           RoundedRectangle(cornerRadius: 5, style: .continuous)
             .fill(barColor(index: index))
-            .frame(width: 24, height: max(14, CGFloat(entry.cost / maxCost) * 54))
+            .frame(width: barWidth, height: max(14, CGFloat(entry.cost / maxCost) * 54))
 
           Text(index == entries.count - 1 ? "now" : entry.label)
             .font(.system(size: 9, weight: .medium))
@@ -1948,6 +1959,12 @@ private func activityValue(_ cost: Double) -> String {
   if cost >= 1 { return String(format: "$%.0f", cost) }
   if cost > 0 { return String(format: "%.1f", cost) }
   return "$0"
+}
+
+private func currentUTCHour() -> Int {
+  var calendar = Calendar(identifier: .gregorian)
+  calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+  return calendar.component(.hour, from: Date())
 }
 
 private func activityDateLabel(_ date: String) -> String {

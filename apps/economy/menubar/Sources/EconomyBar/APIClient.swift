@@ -70,8 +70,9 @@ actor APIClient {
     ]))
   }
 
-  func fetchHourly(machine: String? = nil) async throws -> [HourlyEntry] {
+  func fetchHourly(hours: Int = 12, machine: String? = nil) async throws -> [HourlyEntry] {
     try await get(path("/api/hourly", [
+      URLQueryItem(name: "hours", value: String(hours)),
       machineQueryItem(machine),
     ]))
   }

@@ -189,7 +189,16 @@ export function createHandler(db: Database) {
 
     if (path === '/api/hourly' && method === 'GET') {
       const machine = url.searchParams.get('machine') ?? undefined
-      return ok(queryHourlyBreakdown(db, machine))
+      const rawHours = url.searchParams.get('hours')
+      let hours: number | undefined
+      if (rawHours != null) {
+        const parsedHours = Number(rawHours)
+        if (!Number.isInteger(parsedHours) || parsedHours < 1 || parsedHours > 48) {
+          return err('hours must be between 1 and 48')
+        }
+        hours = parsedHours
+      }
+      return ok(queryHourlyBreakdown(db, machine, hours))
     }
 
     // Sessions — supports ?search=project|agent|session and legacy ?project=

@@ -879,13 +879,20 @@ export function queryDailyBreakdown(db: Database, days = 30, machine?: string): 
   `).all(...params) as Array<{ date: string; cost_usd: number; agent: string }>
 }
 
-export function queryHourlyBreakdown(db: Database, machine?: string): Array<{ hour: string; cost_usd: number; agent: string }> {
-  const machineClause = machine ? ' AND machine_id = ?' : ''
-  const params = machine ? [machine] : []
+export function queryHourlyBreakdown(db: Database, machine?: string, hours?: number): Array<{ hour: string; cost_usd: number; agent: string }> {
+  const clauses = hours == null
+    ? [`DATE(timestamp) = DATE('now')`]
+    : [`DATETIME(timestamp) >= DATETIME('now', ?)`]
+  const params: unknown[] = hours == null ? [] : [`-${hours} hours`]
+  if (machine) {
+    clauses.push('machine_id = ?')
+    params.push(machine)
+  }
+
   return db.prepare(`
     SELECT STRFTIME('%H', timestamp) as hour, agent, COALESCE(SUM(cost_usd), 0) as cost_usd
     FROM requests
-    WHERE DATE(timestamp) = DATE('now')${machineClause}
+    WHERE ${clauses.join(' AND ')}
     GROUP BY STRFTIME('%H', timestamp), agent
     ORDER BY hour ASC
   `).all(...params) as Array<{ hour: string; cost_usd: number; agent: string }>

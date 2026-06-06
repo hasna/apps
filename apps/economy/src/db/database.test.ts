@@ -793,6 +793,22 @@ describe('queryDailyBreakdown', () => {
     expect(spark.reduce((sum, row) => sum + row.cost_usd, 0)).toBeCloseTo(1)
     expect(spark[0]).toHaveProperty('hour')
   })
+
+  it('queryHourlyBreakdown supports rolling hour windows', () => {
+    const db = makeDb()
+    const thirteenHoursAgo = new Date(Date.now() - 13 * 60 * 60 * 1000).toISOString()
+    upsertRequest(db, sampleRequest({ id: 'hour-current', source_request_id: 'hour-current', cost_usd: 1 }))
+    upsertRequest(db, sampleRequest({
+      id: 'hour-old',
+      source_request_id: 'hour-old',
+      cost_usd: 2,
+      timestamp: thirteenHoursAgo,
+    }))
+
+    const rolling = queryHourlyBreakdown(db, undefined, 12)
+
+    expect(rolling.reduce((sum, row) => sum + row.cost_usd, 0)).toBeCloseTo(1)
+  })
 })
 
 describe('queryRequestsSince', () => {

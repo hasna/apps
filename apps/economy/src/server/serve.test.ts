@@ -692,6 +692,13 @@ describe('REST API server', () => {
     }
   })
 
+  it('GET /api/hourly validates rolling hour windows', async () => {
+    const { status, data } = await req(handler, '/api/hourly?hours=0')
+
+    expect(status).toBe(400)
+    expect((data as Record<string, unknown>)['error']).toBe('hours must be between 1 and 48')
+  })
+
   it('GET /api/hourly?machine= filters hourly activity by machine', async () => {
     upsertRequest(db, {
       id: 'hourly-spark', agent: 'claude', session_id: 'hourly-spark-session', model: 'claude-sonnet-4-6',
