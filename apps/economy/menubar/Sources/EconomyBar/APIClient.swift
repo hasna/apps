@@ -120,6 +120,10 @@ actor APIClient {
     ]))
   }
 
+  func fetchMachines() async throws -> [FleetMachine] {
+    try await get("/api/machines")
+  }
+
   func fetchSessions(search: String, limit: Int, machine: String? = nil) async throws -> [SessionStat] {
     guard var components = URLComponents(string: "\(base)/api/sessions") else { throw APIError.offline }
     var queryItems = [URLQueryItem(name: "limit", value: String(limit))]

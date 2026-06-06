@@ -243,7 +243,7 @@ struct ContentView: View {
     var seen = Set<String>()
     var machines: [String] = []
 
-    for machine in (appState.fleetMachines + appState.weekFleetMachines).map(\.machine_id) {
+    for machine in (appState.allMachines + appState.fleetMachines + appState.weekFleetMachines).map(\.machine_id) {
       if !machine.isEmpty && seen.insert(machine).inserted {
         machines.append(machine)
       }
@@ -339,7 +339,15 @@ struct ContentView: View {
   }
 
   private var topNavigation: some View {
-    HStack(spacing: 10) {
+    HStack(spacing: 8) {
+      MachineFilterMenu(
+        selectedMachineID: appState.selectedMachineID,
+        currentMachine: appState.currentMachine,
+        machines: machineOptions,
+        onSelect: appState.setMachineFilter
+      )
+      .layoutPriority(1)
+
       ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: 4) {
           ForEach(WorkTab.allCases) { tab in
@@ -513,26 +521,6 @@ struct ContentView: View {
   private var workHeader: some View {
     VStack(alignment: .leading, spacing: 10) {
       HStack(alignment: .center) {
-        MachineFilterMenu(
-          selectedMachineID: appState.selectedMachineID,
-          currentMachine: appState.currentMachine,
-          machines: machineOptions,
-          onSelect: appState.setMachineFilter
-        )
-
-        Spacer()
-
-        PeriodSegmentedControl(selection: $selectedPeriod)
-      }
-
-      Button(action: openDashboard) {
-        Label("Open web app", systemImage: "arrow.up.right.square")
-          .font(.system(size: 11, weight: .regular))
-      }
-      .buttonStyle(.plain)
-      .foregroundStyle(.blue)
-
-      HStack(spacing: 8) {
         StatusPill(
           icon: "clock",
           text: lastUpdatedText,
@@ -545,7 +533,18 @@ struct ContentView: View {
             tint: quota >= 80 ? .orange : .green
           )
         }
+
+        Spacer()
+
+        PeriodSegmentedControl(selection: $selectedPeriod)
       }
+
+      Button(action: openDashboard) {
+        Label("Open web app", systemImage: "arrow.up.right.square")
+          .font(.system(size: 11, weight: .regular))
+      }
+      .buttonStyle(.plain)
+      .foregroundStyle(.blue)
     }
   }
 

@@ -89,6 +89,12 @@ struct EconomyBarSnapshot {
       FleetMachine(machine_id: "apple06", sessions: 32, requests: 1_495, total_cost_usd: 920.25, last_active: nil),
       FleetMachine(machine_id: "apple03", sessions: 1, requests: 12, total_cost_usd: 11.47, last_active: nil),
     ]
+    appState.allMachines = [
+      FleetMachine(machine_id: "spark02", sessions: 16, requests: 3_376, total_cost_usd: 2_691.10, last_active: nil),
+      FleetMachine(machine_id: "apple06", sessions: 32, requests: 1_495, total_cost_usd: 920.25, last_active: nil),
+      FleetMachine(machine_id: "apple03", sessions: 1, requests: 12, total_cost_usd: 11.47, last_active: nil),
+      FleetMachine(machine_id: "spark01", sessions: 0, requests: 0, total_cost_usd: 0, last_active: nil),
+    ]
     appState.todayAgents = [
       AgentStat(agent: "codex", sessions: 5, requests: 390, total_tokens: 101_000_000, api_equivalent_usd: 250, billable_usd: 0, metered_api_usd: 0, subscription_included_usd: 0, estimated_usd: 0, unknown_usd: 0, cost_usd: 250, last_active: nil),
       AgentStat(agent: "claude", sessions: 3, requests: 198, total_tokens: 52_237_370, api_equivalent_usd: 134.68, billable_usd: 0, metered_api_usd: 0, subscription_included_usd: 0, estimated_usd: 0, unknown_usd: 0, cost_usd: 134.68, last_active: nil),
@@ -112,7 +118,7 @@ struct EconomyBarSnapshot {
     appState.savedUsd = 1_200
     appState.quotaBadgePct = 42
     appState.quotaBadgeLabel = "Codex"
-    appState.machineCount = 3
+    appState.machineCount = 4
     appState.currentMachine = "apple06"
     appState.lastUpdated = Date()
   }

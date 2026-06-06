@@ -333,6 +333,47 @@ final class APIClientTests: XCTestCase {
     XCTAssertEqual(URLComponents(url: requestURL, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "period" })?.value, "today")
   }
 
+  func testFetchMachinesDecodesKnownMachines() async throws {
+    var capturedRequest: URLRequest?
+    MockURLProtocol.handler = { request in
+      capturedRequest = request
+      return ok("""
+      {
+        "data": [
+          {
+            "machine_id": "spark02",
+            "sessions": 16,
+            "requests": 3376,
+            "total_cost_usd": 2691.1,
+            "last_active": "2026-06-05T07:08:54.631Z"
+          },
+          {
+            "machine_id": "spark01",
+            "sessions": 0,
+            "requests": 0,
+            "total_cost_usd": 0,
+            "last_active": null
+          }
+        ],
+        "meta": {
+          "current_machine": "apple06"
+        }
+      }
+      """, request: request)
+    }
+
+    let client = APIClient(baseURL: "https://economy.test/", session: makeSession())
+    let machines = try await client.fetchMachines()
+
+    XCTAssertEqual(machines.count, 2)
+    XCTAssertEqual(machines[0].machine_id, "spark02")
+    XCTAssertEqual(machines[1].machine_id, "spark01")
+    XCTAssertEqual(machines[1].total_cost_usd, 0)
+
+    let requestURL = try XCTUnwrap(capturedRequest?.url)
+    XCTAssertEqual(requestURL.path, "/api/machines")
+  }
+
   func testFetchHourlyDecodesRowsAndEncodesMachineFilter() async throws {
     var capturedRequest: URLRequest?
     MockURLProtocol.handler = { request in

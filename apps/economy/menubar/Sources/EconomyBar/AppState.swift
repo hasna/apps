@@ -34,6 +34,7 @@ final class AppState: ObservableObject {
   @Published var quotaBadgeLabel: String? = nil
   @Published var quotaSnapshots: [UsageSnapshot] = []
   @Published var machineCount: Int = 0
+  @Published var allMachines: [FleetMachine] = []
   @Published var fleetMachines: [FleetMachine] = []
   @Published var weekFleetMachines: [FleetMachine] = []
   @Published var currentMachine: String = ""
@@ -136,20 +137,21 @@ final class AppState: ObservableObject {
     async let subscriptionsResult = try? await client.fetchSubscriptions()
     async let todayFleetResult = try? await client.fetchFleet(period: "today", machine: machine)
     async let weekFleetResult = try? await client.fetchFleet(period: "week", machine: machine)
+    async let machinesResult = try? await client.fetchMachines()
     let (
       todaySummary, weekSummary, monthSummary, daily, hourly,
       projects, todayProjectsData, weekProjectsData,
       agents, todayAgentsData, weekAgentsData,
       accounts, todayAccountsData, weekAccountsData,
       sessions, todaySavings, weekSavings, savings, usage, subscriptions,
-      todayFleet, weekFleet
+      todayFleet, weekFleet, machines
     ) = await (
       todayResult, weekResult, monthResult, dailyResult, hourlyResult,
       projectsResult, todayProjectsResult, weekProjectsResult,
       agentsResult, todayAgentsResult, weekAgentsResult,
       accountsResult, todayAccountsResult, weekAccountsResult,
       sessionsResult, todaySavingsResult, weekSavingsResult, savingsResult, usageResult, subscriptionsResult,
-      todayFleetResult, weekFleetResult
+      todayFleetResult, weekFleetResult, machinesResult
     )
     if let todayFleet {
       today = todayFleet.summary
@@ -165,6 +167,15 @@ final class AppState: ObservableObject {
       if currentMachine.isEmpty { currentMachine = weekFleet.current_machine }
     } else if let weekSummary {
       week = weekSummary
+    }
+    if let machines {
+      allMachines = machines.sorted { left, right in
+        if left.total_cost_usd == right.total_cost_usd {
+          return left.machine_id < right.machine_id
+        }
+        return left.total_cost_usd > right.total_cost_usd
+      }
+      machineCount = max(machineCount, allMachines.count)
     }
     if let monthSummary { month = monthSummary }
     if let daily { dailyEntries = daily }
