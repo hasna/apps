@@ -328,7 +328,7 @@ struct ContentView: View {
       Divider()
       footer
     }
-    .frame(width: 520, height: 660)
+    .frame(width: 416, height: 660)
     .background(.ultraThinMaterial)
     .onAppear {
       draftAPIBaseURL = appState.apiBaseURL
