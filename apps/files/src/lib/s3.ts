@@ -2,6 +2,8 @@ import {
   S3Client,
   ListObjectsV2Command,
   GetObjectCommand,
+  PutObjectCommand,
+  CopyObjectCommand,
   DeleteObjectCommand,
   HeadObjectCommand,
   type _Object,
@@ -155,6 +157,8 @@ export async function uploadBufferToS3(
   s3Key: string,
   contentType = "application/octet-stream",
   contentLength?: number,
+  metadata?: Record<string, string>,
+  checksumSha256?: string,
 ): Promise<string> {
   if (!source.bucket) throw new Error("S3 source missing bucket");
   const client = makeClient(source);
@@ -167,6 +171,8 @@ export async function uploadBufferToS3(
       Body: body,
       ContentType: contentType,
       ...(contentLength !== undefined ? { ContentLength: contentLength } : {}),
+      ...(metadata ? { Metadata: metadata } : {}),
+      ...(checksumSha256 ? { ChecksumSHA256: normalizeSha256Checksum(checksumSha256) } : {}),
     },
   });
 
@@ -180,6 +186,24 @@ export async function deleteFromS3(source: Source, filePath: string): Promise<vo
   await client.send(new DeleteObjectCommand({ Bucket: source.bucket, Key: filePath }));
 }
 
+export async function copyS3Object(
+  source: Source,
+  fromKey: string,
+  toKey: string,
+  metadata?: Record<string, string>,
+  contentType?: string,
+): Promise<void> {
+  if (!source.bucket) throw new Error("S3 source missing bucket");
+  const client = makeClient(source);
+  await client.send(new CopyObjectCommand({
+    Bucket: source.bucket,
+    Key: toKey,
+    CopySource: `${source.bucket}/${encodeS3CopySourceKey(fromKey)}`,
+    ...(contentType ? { ContentType: contentType } : {}),
+    ...(metadata ? { Metadata: metadata, MetadataDirective: "REPLACE" } : {}),
+  }));
+}
+
 export async function getPresignedUrl(source: Source, filePath: string, expiresIn = 3600): Promise<string> {
   if (!source.bucket) throw new Error("S3 source missing bucket");
   const client = makeClient(source);
@@ -190,7 +214,40 @@ export async function getPresignedUrl(source: Source, filePath: string, expiresI
   );
 }
 
-export async function headS3Object(source: Source, filePath: string): Promise<{ size: number; mime: string; modified_at: string } | null> {
+export async function getPresignedPutUrl(
+  source: Source,
+  filePath: string,
+  opts: {
+    expiresIn?: number;
+    contentType?: string;
+    contentLength?: number;
+    checksumSha256?: string;
+    metadata?: Record<string, string>;
+  } = {},
+): Promise<string> {
+  if (!source.bucket) throw new Error("S3 source missing bucket");
+  const client = makeClient(source);
+  return getSignedUrl(
+    client,
+    new PutObjectCommand({
+      Bucket: source.bucket,
+      Key: filePath,
+      ContentType: opts.contentType,
+      ...(opts.contentLength !== undefined ? { ContentLength: opts.contentLength } : {}),
+      ...(opts.checksumSha256 ? { ChecksumSHA256: normalizeSha256Checksum(opts.checksumSha256) } : {}),
+      ...(opts.metadata ? { Metadata: opts.metadata } : {}),
+    }),
+    { expiresIn: opts.expiresIn ?? 600 },
+  );
+}
+
+export async function headS3Object(source: Source, filePath: string): Promise<{
+  size: number;
+  mime: string;
+  modified_at: string;
+  checksum_sha256?: string;
+  metadata: Record<string, string>;
+} | null> {
   if (!source.bucket) return null;
   try {
     const client = makeClient(source);
@@ -199,8 +256,20 @@ export async function headS3Object(source: Source, filePath: string): Promise<{ 
       size: resp.ContentLength ?? 0,
       mime: resp.ContentType ?? "application/octet-stream",
       modified_at: resp.LastModified?.toISOString() ?? new Date().toISOString(),
+      checksum_sha256: resp.ChecksumSHA256,
+      metadata: resp.Metadata ?? {},
     };
   } catch {
     return null;
   }
+}
+
+function encodeS3CopySourceKey(key: string): string {
+  return key.split("/").map(encodeURIComponent).join("/");
+}
+
+function normalizeSha256Checksum(checksum: string): string {
+  return /^[a-f0-9]{64}$/i.test(checksum)
+    ? Buffer.from(checksum, "hex").toString("base64")
+    : checksum;
 }

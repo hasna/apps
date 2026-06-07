@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { registerCloudTools } from "@hasna/cloud";
 import { z } from "zod";
 import { getCurrentMachine, listMachines } from "../db/machines.js";
 import { createSource, listSources, getSource, deleteSource } from "../db/sources.js";
@@ -13,6 +12,7 @@ import { createProject, updateProject, listProjects, getProject, deleteProject, 
 import { indexLocalSource } from "../lib/indexer.js";
 import { listGoogleDriveItems, listGoogleDriveProfiles, preflightGoogleDriveSource, syncGoogleDriveSource } from "../lib/google-drive.js";
 import { createS3ClientConfig, indexS3Source, downloadFromS3, uploadToS3, getPresignedUrl } from "../lib/s3.js";
+import { registerEvidenceTools } from "./evidence-tools.js";
 import { registerAgent, getAgent, listAgents as listDbAgents, updateAgentHeartbeat, setAgentFocus } from "../db/agents.js";
 import { logActivity, getFileHistory, getAgentActivity, getSessionActivity } from "../db/activity.js";
 import { join } from "path";
@@ -20,7 +20,6 @@ import { existsSync } from "fs";
 import { homedir } from "os";
 import { createRequire } from "module";
 import type { GoogleDriveConfig, S3Config } from "../types/index.js";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
@@ -41,6 +40,8 @@ function registerTool(
 ): void {
   (server.tool as any)(name, description, inputSchema, handler);
 }
+
+registerEvidenceTools(registerTool);
 
 // ─── Sources ──────────────────────────────────────────────────────────────────
 
@@ -1220,7 +1221,6 @@ registerTool("get_session_activity", "Get all activity within a session", {
   return { content: [{ type: "text" as const, text: JSON.stringify(activity, null, 2) }] };
 });
 
-  registerCloudTools(server, "files");
   return server;
 }
 

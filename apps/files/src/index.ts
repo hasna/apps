@@ -7,6 +7,7 @@ export { getCurrentMachine, listMachines, getMachine, upsertMachine } from "./db
 export { createSource, getSource, listSources, updateSource, deleteSource, markSourceIndexed } from "./db/sources.js";
 export { getGoogleDriveSyncState, upsertGoogleDriveSyncState, markGoogleDriveSynced, markGoogleDriveSyncError, getGoogleDriveImportedObject, listGoogleDriveImportedObjects, upsertGoogleDriveImportedObject, markMissingGoogleDriveObjectsDeleted, listDeletedGoogleDriveImportedObjects } from "./db/google-drive.js";
 export { upsertFile, getFile, listFiles, searchFiles as searchFilesDb, markFileDeleted, markFileDeletedById, deleteFile, getFileByPath, refreshAllFts, annotateFile, getMaxSyncVersion, getFilesSince } from "./db/files.js";
+export { createFileAsset, getFileAsset, listFileAssets, createFileUploadIntent, getFileUploadIntent, markFileUploadIntentCompleted, updateFileAssetStatus, createFileLink, listFileLinks, createFileAccessEvent, listFileAccessEvents } from "./db/evidence.js";
 export { listTags, getOrCreateTag, deleteTag, tagFile, untagFile, getFileTags } from "./db/tags.js";
 export { createCollection, updateCollection, listCollections, getCollection, deleteCollection, addToCollection, removeFromCollection, autoPopulateCollection } from "./db/collections.js";
 export { createProject, updateProject, listProjects, getProject, deleteProject, addToProject, removeFromProject } from "./db/projects.js";
@@ -19,8 +20,9 @@ export { indexLocalSource } from "./lib/indexer.js";
 export { listGoogleDriveProfiles, listGoogleDriveProfileStatuses, listGoogleDriveSharedDrives, listGoogleDriveItems, preflightGoogleDriveSource, syncGoogleDriveSource } from "./lib/google-drive.js";
 export { createConnectorProfileGoogleDriveClient } from "./lib/google-drive-client.js";
 export { indexS3Source, downloadFromS3, uploadToS3, uploadBufferToS3, deleteFromS3, headS3Object } from "./lib/s3.js";
+export { createEvidenceUploadIntent, uploadEvidenceFile, completeEvidenceUpload, linkEvidenceAsset, signEvidenceDownload, verifyEvidenceAsset, buildEvidenceObjectKey, getEvidenceStorageOptions } from "./lib/evidence.js";
 export { watchSource, unwatchSource, stopAllWatchers } from "./lib/watcher.js";
-export { hashFile, hashBuffer } from "./lib/hasher.js";
+export { hashFile, hashBuffer, sha256File, sha256Buffer } from "./lib/hasher.js";
 export { syncWithPeer, syncWithPeers } from "./lib/sync.js";
 export { normalizeFileName, generateCanonicalName } from "./lib/normalize.js";
 
@@ -30,4 +32,7 @@ export type {
   SearchResult, ListFilesOptions, IndexStats, SourceType, FileStatus, S3Config,
   Agent, AgentActivity, ActionType, AutoRules, ProjectStatus, GoogleDriveConfig,
   GoogleDriveSharedDrive, GoogleDriveItem, GoogleDriveSyncState, GoogleDriveImportedObject,
+  FileAsset, FileAssetStatus, FileScanStatus, FileStorageProvider, FileUploadIntent,
+  FileLink, FileAccessEvent, FileAccessAction, CreateFileAssetInput,
+  CreateFileLinkInput, CreateFileAccessEventInput,
 } from "./types/index.js";

@@ -44,7 +44,7 @@ test("MCP help exits without creating or opening the files database", async () =
 test("MCP initialize responds without creating or opening the files database", async () => {
   const dataDir = makeDataDir();
   const proc = Bun.spawn({
-    cmd: ["bun", "run", mcpEntry],
+    cmd: ["bun", "run", mcpEntry, "--stdio"],
     cwd: repoRoot,
     env: { ...process.env, HASNA_FILES_DATA_DIR: dataDir },
     stdin: "pipe",

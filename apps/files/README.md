@@ -61,7 +61,7 @@ Synced files are indexed under the actual S3 or local destination source, so
 files-mcp
 ```
 
-31 tools available.
+Includes file, source, Google Drive, project, collection, agent activity, and evidence-vault tools.
 
 ## HTTP mode
 
@@ -84,15 +84,41 @@ Stdio remains the default when no `--http` flag is passed.
 files-serve
 ```
 
-## Cloud Sync
+## Evidence Vault
 
-This package supports cloud sync via `@hasna/cloud`:
+`@hasna/files` is also the shared evidence layer for Hasna internal apps. Apps
+store `file_asset_id` plus domain metadata; this package owns durable storage,
+upload intents, checksum verification, quarantine promotion, signed downloads,
+retention metadata, and access audit.
+
+Production evidence storage defaults to the shared `hasna-files-prod` S3 bucket:
 
 ```bash
-cloud setup
-cloud sync push --service files
-cloud sync pull --service files
+files evidence configure-prod
 ```
+
+For local development and tests:
+
+```bash
+files evidence upload ./receipt.pdf \
+  --org org_hasna \
+  --company co_us \
+  --app iapp-accounting \
+  --kind receipt \
+  --storage local \
+  --local-root ./.tmp/evidence
+```
+
+The future web interface can use the REST endpoints under `/evidence/*`, and
+agents can use the MCP tools such as `create_evidence_upload_intent`,
+`upload_evidence_file`, `link_evidence_asset`, and `sign_evidence_download`.
+
+See [docs/evidence-storage.md](docs/evidence-storage.md) for the storage
+boundary and object layout.
+
+## Storage
+
+Files stores metadata locally in SQLite under the Hasna data directory. The repo includes its own S3 integrations and PostgreSQL migration definitions for remote deployments without depending on the shared cloud package.
 
 ## Data Directory
 

@@ -1,4 +1,5 @@
 import { blake3 } from "@noble/hashes/blake3";
+import { createHash } from "crypto";
 import { readFileSync } from "fs";
 
 export function hashFile(filePath: string): string {
@@ -9,4 +10,12 @@ export function hashFile(filePath: string): string {
 
 export function hashBuffer(data: Uint8Array): string {
   return Buffer.from(blake3(data)).toString("hex");
+}
+
+export function sha256File(filePath: string): string {
+  return createHash("sha256").update(readFileSync(filePath)).digest("hex");
+}
+
+export function sha256Buffer(data: Uint8Array): string {
+  return createHash("sha256").update(data).digest("hex");
 }

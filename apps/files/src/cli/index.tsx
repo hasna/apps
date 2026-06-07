@@ -10,6 +10,7 @@ import { createCollection, listCollections, addToCollection, deleteCollection } 
 import { createProject, listProjects, addToProject, deleteProject } from "../db/projects.js";
 import { listPeers, addPeer, removePeer } from "../db/peers.js";
 import { getConfigPath, loadConfig, setConfigValue } from "../lib/config.js";
+import { registerEvidenceCommands } from "./evidence.js";
 import { indexLocalSource } from "../lib/indexer.js";
 import { listGoogleDriveItems, listGoogleDriveProfiles, listGoogleDriveSharedDrives, preflightGoogleDriveSource, syncGoogleDriveSource } from "../lib/google-drive.js";
 import { indexS3Source, downloadFromS3, uploadToS3 } from "../lib/s3.js";
@@ -29,6 +30,8 @@ program
   .name("files")
   .description("Agent-first file management — index, sync, search, and retrieve files across local, S3, and Google Drive sources")
   .version(_pkg.version);
+
+registerEvidenceCommands(program);
 
 // ─── sources ────────────────────────────────────────────────────────────────
 

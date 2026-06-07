@@ -8,10 +8,22 @@ import { createProject, listProjects, addToProject, removeFromProject } from "..
 import { indexLocalSource } from "../lib/indexer.js";
 import { syncGoogleDriveSource } from "../lib/google-drive.js";
 import { indexS3Source, downloadFromS3 } from "../lib/s3.js";
+import {
+  completeEvidenceUpload,
+  createEvidenceUploadIntent,
+  getFileAsset,
+  linkEvidenceAsset,
+  listFileAccessEvents,
+  listFileAssets,
+  listFileLinks,
+  signEvidenceDownload,
+  verifyEvidenceAsset,
+  type EvidenceStorageOptions,
+} from "../lib/evidence.js";
 import { join } from "path";
 import { homedir } from "os";
 import { createRequire } from "module";
-import type { GoogleDriveConfig, S3Config, SourceType } from "../types/index.js";
+import type { FileAssetStatus, GoogleDriveConfig, S3Config, SourceType } from "../types/index.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
@@ -30,6 +42,61 @@ function err(msg: string, status = 400): Response {
 async function parseBody(req: Request): Promise<Record<string, unknown>> {
   try { return await req.json() as Record<string, unknown>; }
   catch { return {}; }
+}
+
+const FILE_ASSET_STATUSES = ["pending_upload", "uploaded", "verified", "archived", "deleted"] as const satisfies readonly FileAssetStatus[];
+
+function evidenceStorageFromBody(body: Record<string, unknown>): EvidenceStorageOptions {
+  const provider = optionalString(body.storage_provider) ?? optionalString(body.storage);
+  return {
+    provider: provider as EvidenceStorageOptions["provider"] | undefined,
+    bucket: optionalString(body.bucket),
+    region: optionalString(body.region),
+    profile: optionalString(body.aws_profile),
+    prefix: optionalString(body.prefix),
+    localRoot: optionalString(body.local_root),
+  };
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length ? value : undefined;
+}
+
+function requiredString(body: Record<string, unknown>, key: string): string {
+  const value = optionalString(body[key]);
+  if (!value) throw new Error(`${key} is required`);
+  return value;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.length) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function requiredNumber(body: Record<string, unknown>, key: string): number {
+  const value = optionalNumber(body[key]);
+  if (value === undefined) throw new Error(`${key} is required`);
+  return value;
+}
+
+function optionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function optionalRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function optionalAssetStatus(value: string | null): FileAssetStatus | undefined {
+  if (!value) return undefined;
+  if ((FILE_ASSET_STATUSES as readonly string[]).includes(value)) return value as FileAssetStatus;
+  throw new Error(`Invalid status: ${value}`);
 }
 
 export function startServer(port: number): void {
@@ -210,6 +277,96 @@ export function startServer(port: number): void {
         const limit = parseInt(url.searchParams.get("limit") ?? "50");
         const offset = parseInt(url.searchParams.get("offset") ?? "0");
         return json(getFileHistory(fileId, { limit, offset }));
+      }
+
+      // ── Evidence Vault ─────────────────────────────────────────────────
+      try {
+        if (path === "/evidence/assets" && method === "GET") {
+          return json(listFileAssets({
+            org_id: url.searchParams.get("org_id") ?? undefined,
+            company_id: url.searchParams.get("company_id") ?? undefined,
+            app: url.searchParams.get("app") ?? undefined,
+            kind: url.searchParams.get("kind") ?? undefined,
+            status: optionalAssetStatus(url.searchParams.get("status")),
+            checksum: url.searchParams.get("checksum") ?? undefined,
+            limit: parseInt(url.searchParams.get("limit") ?? "50"),
+            offset: parseInt(url.searchParams.get("offset") ?? "0"),
+          }));
+        }
+
+        if (path === "/evidence/upload-intents" && method === "POST") {
+          const body = await parseBody(req);
+          const result = await createEvidenceUploadIntent({
+            org_id: requiredString(body, "org_id"),
+            company_id: optionalString(body.company_id),
+            app: requiredString(body, "app"),
+            kind: requiredString(body, "kind"),
+            original_name: requiredString(body, "original_name"),
+            content_type: optionalString(body.content_type),
+            size: requiredNumber(body, "size"),
+            checksum: requiredString(body, "checksum"),
+            classification: optionalString(body.classification),
+            retention_until: optionalString(body.retention_until),
+            retention_policy: optionalString(body.retention_policy),
+            storage_class: optionalString(body.storage_class),
+            legal_hold: optionalBoolean(body.legal_hold),
+            immutable: optionalBoolean(body.immutable),
+            metadata: optionalRecord(body.metadata),
+            expires_in_seconds: optionalNumber(body.expires_in_seconds),
+          }, evidenceStorageFromBody(body));
+          return json(result, 201);
+        }
+
+        const completeMatch = path.match(/^\/evidence\/upload-intents\/([^/]+)\/complete$/);
+        if (completeMatch && method === "POST") {
+          const body = await parseBody(req);
+          return json(await completeEvidenceUpload(completeMatch[1]!, evidenceStorageFromBody(body)));
+        }
+
+        const linkMatch = path.match(/^\/evidence\/assets\/([^/]+)\/links$/);
+        if (linkMatch && method === "POST") {
+          const body = await parseBody(req);
+          return json(linkEvidenceAsset({
+            asset_id: linkMatch[1]!,
+            org_id: requiredString(body, "org_id"),
+            company_id: optionalString(body.company_id),
+            app: requiredString(body, "app"),
+            source_type: requiredString(body, "source_type"),
+            source_id: requiredString(body, "source_id"),
+            kind: requiredString(body, "kind"),
+            metadata: optionalRecord(body.metadata),
+          }), 201);
+        }
+
+        const signMatch = path.match(/^\/evidence\/assets\/([^/]+)\/download-url$/);
+        if (signMatch && method === "POST") {
+          const body = await parseBody(req);
+          return json(await signEvidenceDownload({
+            asset_id: signMatch[1]!,
+            actor_id: optionalString(body.actor_id),
+            purpose: optionalString(body.purpose),
+            expires_in_seconds: optionalNumber(body.expires_in_seconds),
+          }, evidenceStorageFromBody(body)));
+        }
+
+        const verifyMatch = path.match(/^\/evidence\/assets\/([^/]+)\/verify$/);
+        if (verifyMatch && method === "POST") {
+          const body = await parseBody(req);
+          return json(await verifyEvidenceAsset(verifyMatch[1]!, evidenceStorageFromBody(body)));
+        }
+
+        const auditMatch = path.match(/^\/evidence\/assets\/([^/]+)\/audit$/);
+        if (auditMatch && method === "GET") {
+          const asset = getFileAsset(auditMatch[1]!);
+          if (!asset) return err("Evidence asset not found", 404);
+          return json({
+            asset,
+            links: listFileLinks(asset.id),
+            events: listFileAccessEvents(asset.id, parseInt(url.searchParams.get("limit") ?? "50")),
+          });
+        }
+      } catch (error) {
+        return err((error as Error).message);
       }
 
       // ── Stats ──────────────────────────────────────────────────────────

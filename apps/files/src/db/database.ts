@@ -80,6 +80,7 @@ function migrate(db: Database): void {
     { version: 8, sql: migration_v8 },
     { version: 9, sql: migration_v9 },
     { version: 10, sql: migration_v10 },
+    { version: 11, sql: migration_v11 },
   ];
 
   for (const m of migrations) {
@@ -442,6 +443,94 @@ const migration_v10 = `
     ON google_drive_imported_objects(source_id, storage_type, storage_key);
   CREATE INDEX IF NOT EXISTS idx_google_drive_imported_objects_destination
     ON google_drive_imported_objects(destination_source_id);
+`;
+
+// v11: shared evidence vault metadata for internal apps
+const migration_v11 = `
+  CREATE TABLE IF NOT EXISTS file_assets (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    company_id TEXT,
+    app TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    classification TEXT NOT NULL DEFAULT 'general',
+    original_name TEXT NOT NULL,
+    content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+    size INTEGER NOT NULL,
+    checksum TEXT NOT NULL,
+    checksum_algorithm TEXT NOT NULL DEFAULT 'sha256',
+    storage_provider TEXT NOT NULL CHECK(storage_provider IN ('s3', 'local')),
+    bucket TEXT,
+    region TEXT,
+    object_key TEXT NOT NULL,
+    quarantine_key TEXT,
+    status TEXT NOT NULL DEFAULT 'pending_upload' CHECK(status IN ('pending_upload', 'uploaded', 'verified', 'archived', 'deleted')),
+    scan_status TEXT NOT NULL DEFAULT 'pending' CHECK(scan_status IN ('pending', 'clean', 'skipped', 'suspicious', 'blocked')),
+    retention_until TEXT,
+    retention_policy TEXT,
+    storage_class TEXT,
+    legal_hold INTEGER NOT NULL DEFAULT 0,
+    immutable INTEGER NOT NULL DEFAULT 0,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    verified_at TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS file_upload_intents (
+    id TEXT PRIMARY KEY,
+    asset_id TEXT NOT NULL REFERENCES file_assets(id) ON DELETE CASCADE,
+    method TEXT NOT NULL DEFAULT 'PUT',
+    expires_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'completed', 'expired', 'cancelled')),
+    expected_checksum TEXT NOT NULL,
+    expected_checksum_algorithm TEXT NOT NULL DEFAULT 'sha256',
+    expected_size INTEGER NOT NULL,
+    required_headers TEXT NOT NULL DEFAULT '{}',
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS file_links (
+    id TEXT PRIMARY KEY,
+    asset_id TEXT NOT NULL REFERENCES file_assets(id) ON DELETE CASCADE,
+    org_id TEXT NOT NULL,
+    company_id TEXT,
+    app TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(asset_id, app, source_type, source_id, kind)
+  );
+
+  CREATE TABLE IF NOT EXISTS file_access_events (
+    id TEXT PRIMARY KEY,
+    asset_id TEXT NOT NULL REFERENCES file_assets(id) ON DELETE CASCADE,
+    org_id TEXT NOT NULL,
+    company_id TEXT,
+    app TEXT,
+    actor_id TEXT,
+    action TEXT NOT NULL,
+    purpose TEXT,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_file_assets_org ON file_assets(org_id);
+  CREATE INDEX IF NOT EXISTS idx_file_assets_company ON file_assets(org_id, company_id);
+  CREATE INDEX IF NOT EXISTS idx_file_assets_app_kind ON file_assets(app, kind);
+  CREATE INDEX IF NOT EXISTS idx_file_assets_checksum ON file_assets(checksum_algorithm, checksum);
+  CREATE INDEX IF NOT EXISTS idx_file_assets_status ON file_assets(status, scan_status);
+  CREATE INDEX IF NOT EXISTS idx_file_assets_retention ON file_assets(retention_until);
+  CREATE INDEX IF NOT EXISTS idx_file_upload_intents_asset ON file_upload_intents(asset_id);
+  CREATE INDEX IF NOT EXISTS idx_file_upload_intents_status ON file_upload_intents(status, expires_at);
+  CREATE INDEX IF NOT EXISTS idx_file_links_asset ON file_links(asset_id);
+  CREATE INDEX IF NOT EXISTS idx_file_links_source ON file_links(app, source_type, source_id);
+  CREATE INDEX IF NOT EXISTS idx_file_access_events_asset ON file_access_events(asset_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_file_access_events_org ON file_access_events(org_id, created_at);
 `;
 
 export function closeDb(): void {

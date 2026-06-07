@@ -1,5 +1,9 @@
 export type SourceType = "local" | "s3" | "google_drive";
 export type FileStatus = "active" | "deleted" | "moved";
+export type FileAssetStatus = "pending_upload" | "uploaded" | "verified" | "archived" | "deleted";
+export type FileScanStatus = "pending" | "clean" | "skipped" | "suspicious" | "blocked";
+export type FileStorageProvider = "s3" | "local";
+export type FileAccessAction = "create_upload" | "complete_upload" | "link" | "sign_download" | "download" | "verify" | "archive" | "delete";
 
 export interface S3Config {
   accessKeyId?: string;
@@ -77,6 +81,125 @@ export interface FileRecord {
   created_at: string;
 }
 
+export interface FileAsset {
+  id: string;
+  org_id: string;
+  company_id?: string;
+  app: string;
+  kind: string;
+  classification: string;
+  original_name: string;
+  content_type: string;
+  size: number;
+  checksum: string;
+  checksum_algorithm: string;
+  storage_provider: FileStorageProvider;
+  bucket?: string;
+  region?: string;
+  object_key: string;
+  quarantine_key?: string;
+  status: FileAssetStatus;
+  scan_status: FileScanStatus;
+  retention_until?: string;
+  retention_policy?: string;
+  storage_class?: string;
+  legal_hold: boolean;
+  immutable: boolean;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  verified_at?: string;
+}
+
+export interface FileUploadIntent {
+  id: string;
+  asset_id: string;
+  method: "PUT";
+  upload_url?: string;
+  expires_at: string;
+  status: "pending" | "completed" | "expired" | "cancelled";
+  expected_checksum: string;
+  expected_checksum_algorithm: string;
+  expected_size: number;
+  required_headers: Record<string, string>;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  completed_at?: string;
+}
+
+export interface FileLink {
+  id: string;
+  asset_id: string;
+  org_id: string;
+  company_id?: string;
+  app: string;
+  source_type: string;
+  source_id: string;
+  kind: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface FileAccessEvent {
+  id: string;
+  asset_id: string;
+  org_id: string;
+  company_id?: string;
+  app?: string;
+  actor_id?: string;
+  action: FileAccessAction;
+  purpose?: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface CreateFileAssetInput {
+  id?: string;
+  org_id: string;
+  company_id?: string;
+  app: string;
+  kind: string;
+  classification?: string;
+  original_name: string;
+  content_type: string;
+  size: number;
+  checksum: string;
+  checksum_algorithm?: string;
+  storage_provider: FileStorageProvider;
+  bucket?: string;
+  region?: string;
+  object_key: string;
+  quarantine_key?: string;
+  retention_until?: string;
+  retention_policy?: string;
+  storage_class?: string;
+  legal_hold?: boolean;
+  immutable?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CreateFileLinkInput {
+  asset_id: string;
+  org_id: string;
+  company_id?: string;
+  app: string;
+  source_type: string;
+  source_id: string;
+  kind: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CreateFileAccessEventInput {
+  asset_id: string;
+  org_id: string;
+  company_id?: string;
+  app?: string;
+  actor_id?: string;
+  action: FileAccessAction;
+  purpose?: string;
+  metadata?: Record<string, unknown>;
+}
+
 export interface FileWithTags extends FileRecord {
   tags: string[];
 }
@@ -149,7 +272,9 @@ export interface ListFilesOptions {
 export type ActionType =
   | "upload" | "download" | "tag" | "untag" | "move"
   | "delete" | "read" | "create" | "index" | "search"
-  | "annotate" | "import" | "copy" | "rename" | "restore";
+  | "annotate" | "import" | "copy" | "rename" | "restore"
+  | "evidence_create_upload" | "evidence_complete_upload" | "evidence_link"
+  | "evidence_sign_download" | "evidence_verify";
 
 export interface Agent {
   id: string;
