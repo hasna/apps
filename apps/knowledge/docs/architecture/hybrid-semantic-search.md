@@ -180,3 +180,12 @@ Reindexing is driven by source revisions:
 - Permission filters run before model context assembly.
 - Retrieval internals can swap from JSON vectors to pgvector or managed vector
   stores without changing CLI/MCP result contracts.
+
+## Evaluation Fixtures
+
+`tests/semantic-evals.test.ts` and `tests/fixtures/semantic-eval-fixtures.ts`
+seed no-network corpora for retrieval quality checks. The fixtures cover
+keyword hits, deterministic fake-vector fallback for synonym-style prompts,
+citation correctness, stale revision filtering, non-read-only provenance
+filtering, rerank ordering, generated wiki-page retrieval, missing-source
+answers, and `knowledge <prompt>` context assembly.

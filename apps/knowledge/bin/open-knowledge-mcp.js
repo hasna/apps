@@ -13660,7 +13660,7 @@ import { existsSync as existsSync7, readFileSync as readFileSync7, writeFileSync
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.19",
+  version: "0.2.20",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   bin: {
