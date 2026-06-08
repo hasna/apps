@@ -162,6 +162,51 @@ describe('open-knowledge cli', () => {
     expect(existsSync(join(dir, '.open-knowledge', 'db.json'))).toBe(false);
   });
 
+  test('setup, auth, and remote commands expose hosted-aware JSON contracts', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-hosted-cli-'));
+    const authDir = join(dir, 'auth');
+    const env = { HASNA_KNOWLEDGE_AUTH_DIR: authDir };
+
+    const setup = runCli(['setup', '--mode', 'hosted', '--api-url', 'https://knowledge.example.com/api/v1', '--scope', 'project', '--json'], dir, env);
+    expect(setup.exitCode).toBe(0);
+    const setupOut = JSON.parse(new TextDecoder().decode(setup.stdout));
+    expect(setupOut.mode).toBe('hosted');
+    expect(setupOut.api_url).toBe('https://knowledge.example.com');
+
+    const storage = runCli(['storage', 'status', '--scope', 'project', '--json'], dir, env);
+    expect(storage.exitCode).toBe(0);
+    const storageOut = JSON.parse(new TextDecoder().decode(storage.stdout));
+    expect(storageOut.hosted.enabled).toBe(true);
+    expect(storageOut.hosted.api_url).toBe('https://knowledge.example.com');
+
+    const before = runCli(['auth', 'whoami', '--scope', 'project', '--json'], dir, env);
+    expect(before.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(before.stdout)).authenticated).toBe(false);
+
+    const login = runCli(['auth', 'login', '--api-key', 'kh_cli', '--email', 'agent@example.com', '--org', 'hasna', '--scope', 'project', '--json'], dir, env);
+    expect(login.exitCode).toBe(0);
+    const loginOut = JSON.parse(new TextDecoder().decode(login.stdout));
+    expect(loginOut.authenticated).toBe(true);
+    expect(loginOut.email).toBe('agent@example.com');
+    expect(existsSync(join(authDir, 'auth.json'))).toBe(true);
+
+    const remote = runCli(['remote', 'status', '--scope', 'project', '--json'], dir, env);
+    expect(remote.exitCode).toBe(0);
+    const remoteOut = JSON.parse(new TextDecoder().decode(remote.stdout));
+    expect(remoteOut.client_ready).toBe(true);
+    expect(remoteOut.capabilities).toContain('s3-generated-artifacts');
+
+    const contracts = runCli(['remote', 'contracts', '--scope', 'project', '--json'], dir, env);
+    expect(contracts.exitCode).toBe(0);
+    const contractsOut = JSON.parse(new TextDecoder().decode(contracts.stdout));
+    expect(contractsOut.contract.source_contract.owner).toBe('open-files');
+    expect(contractsOut.contract.endpoints.ask).toBe('/api/v1/knowledge/ask');
+
+    const logout = runCli(['auth', 'logout', '--scope', 'project', '--json'], dir, env);
+    expect(logout.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(logout.stdout)).removed).toBe(true);
+  });
+
   test('db init and stats create project knowledge.db', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-db-cli-'));
 

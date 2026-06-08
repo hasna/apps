@@ -13656,11 +13656,11 @@ function date4(params) {
 // node_modules/zod/v4/classic/external.js
 config(en_default());
 // src/mcp.js
-import { existsSync as existsSync7, readFileSync as readFileSync7, writeFileSync as writeFileSync4 } from "fs";
+import { existsSync as existsSync8, readFileSync as readFileSync8, writeFileSync as writeFileSync5 } from "fs";
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.20",
+  version: "0.2.21",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   bin: {
@@ -13761,6 +13761,9 @@ function defaultKnowledgeConfig() {
   return {
     version: 1,
     mode: "local",
+    hosted: {
+      api_url: "https://knowledge.hasna.xyz"
+    },
     storage: {
       type: "local",
       artifacts_root: "artifacts"
@@ -13845,6 +13848,11 @@ function ensureParentDir(path) {
 function readKnowledgeConfig(path) {
   const raw = readFileSync(path, "utf8");
   return JSON.parse(raw);
+}
+function writeKnowledgeConfig(path, config2) {
+  ensureParentDir(path);
+  writeFileSync(path, `${JSON.stringify(config2, null, 2)}
+`);
 }
 
 // src/store.ts
@@ -14133,6 +14141,91 @@ function createArtifactStore(config2, workspace) {
     });
   }
   return new LocalArtifactStore(workspace.artifactsDir);
+}
+
+// src/auth.ts
+import { existsSync as existsSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync4, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "fs";
+import { homedir as homedir2 } from "os";
+import { dirname as dirname3, join as join3 } from "path";
+var DEFAULT_KNOWLEDGE_API_URL = "https://knowledge.hasna.xyz";
+function normalizeKnowledgeApiOrigin(apiUrl) {
+  const url2 = new URL(apiUrl);
+  if (url2.protocol !== "http:" && url2.protocol !== "https:") {
+    throw new Error("Knowledge API URL must use http or https.");
+  }
+  const pathname = url2.pathname.replace(/\/+$/, "");
+  if (pathname === "/api" || pathname === "/api/v1") {
+    url2.pathname = "/";
+  } else if (pathname.endsWith("/api/v1")) {
+    url2.pathname = pathname.slice(0, -"/api/v1".length) || "/";
+  } else if (pathname.endsWith("/api")) {
+    url2.pathname = pathname.slice(0, -"/api".length) || "/";
+  }
+  return url2.toString().replace(/\/+$/, "");
+}
+function knowledgeAuthPath(env = process.env) {
+  if (env.HASNA_KNOWLEDGE_AUTH_PATH)
+    return env.HASNA_KNOWLEDGE_AUTH_PATH;
+  const root = env.HASNA_KNOWLEDGE_AUTH_DIR ?? join3(homedir2(), ".hasna", "knowledge");
+  return join3(root, "auth.json");
+}
+function resolveKnowledgeApiUrl(config2, env = process.env) {
+  return normalizeKnowledgeApiOrigin(env.KNOWLEDGE_API_URL ?? config2?.hosted?.api_url ?? DEFAULT_KNOWLEDGE_API_URL);
+}
+function getKnowledgeAuth(env = process.env) {
+  try {
+    const path = knowledgeAuthPath(env);
+    if (!existsSync4(path))
+      return null;
+    const parsed = JSON.parse(readFileSync4(path, "utf8"));
+    return typeof parsed.api_key === "string" && parsed.api_key.length > 0 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+function saveKnowledgeAuth(auth, env = process.env) {
+  const path = knowledgeAuthPath(env);
+  const stored = {
+    ...auth,
+    api_url: auth.api_url ? normalizeKnowledgeApiOrigin(auth.api_url) : undefined,
+    created_at: auth.created_at ?? new Date().toISOString()
+  };
+  mkdirSync3(dirname3(path), { recursive: true, mode: 448 });
+  writeFileSync4(path, `${JSON.stringify(stored, null, 2)}
+`, { mode: 384 });
+  return stored;
+}
+function clearKnowledgeAuth(env = process.env) {
+  try {
+    unlinkSync2(knowledgeAuthPath(env));
+    return true;
+  } catch {
+    return false;
+  }
+}
+function getKnowledgeApiKey(env = process.env) {
+  if (env.KNOWLEDGE_API_KEY)
+    return { apiKey: env.KNOWLEDGE_API_KEY, source: "env" };
+  if (env.HASNA_KNOWLEDGE_API_KEY)
+    return { apiKey: env.HASNA_KNOWLEDGE_API_KEY, source: "env" };
+  const auth = getKnowledgeAuth(env);
+  return auth?.api_key ? { apiKey: auth.api_key, source: "file" } : { apiKey: null, source: "none" };
+}
+function knowledgeAuthStatus(config2, env = process.env) {
+  const auth = getKnowledgeAuth(env);
+  const key = getKnowledgeApiKey(env);
+  const apiUrl = env.KNOWLEDGE_API_URL ? resolveKnowledgeApiUrl(config2, env) : auth?.api_url ? normalizeKnowledgeApiOrigin(auth.api_url) : resolveKnowledgeApiUrl(config2, env);
+  return {
+    authenticated: Boolean(key.apiKey),
+    source: key.source,
+    api_url: apiUrl,
+    auth_path: knowledgeAuthPath(env),
+    email: key.source === "file" ? auth?.email ?? null : null,
+    org_id: key.source === "file" ? auth?.org_id ?? null : null,
+    org_slug: key.source === "file" ? auth?.org_slug ?? null : null,
+    user_id: key.source === "file" ? auth?.user_id ?? null : null,
+    api_key_present: Boolean(key.apiKey)
+  };
 }
 
 // src/agent.ts
@@ -15930,7 +16023,7 @@ ${answer}`;
 
 // src/outbox-consume.ts
 import { createHash as createHash4, randomUUID as randomUUID5 } from "crypto";
-import { existsSync as existsSync4, readFileSync as readFileSync4 } from "fs";
+import { existsSync as existsSync5, readFileSync as readFileSync5 } from "fs";
 import { basename } from "path";
 
 // src/safety.ts
@@ -16203,9 +16296,9 @@ async function readS3Text(uri, config2, safetyPolicy) {
 async function readOutboxInput(input, config2, safetyPolicy) {
   if (input.startsWith("s3://"))
     return readS3Text(input, config2, safetyPolicy);
-  if (!existsSync4(input))
+  if (!existsSync5(input))
     throw new Error(`Outbox not found: ${input}`);
-  return readFileSync4(input, "utf8");
+  return readFileSync5(input, "utf8");
 }
 function mergeJson(existing, patch) {
   let base = {};
@@ -16439,7 +16532,7 @@ async function consumeOpenFilesOutbox(options) {
 
 // src/manifest-ingest.ts
 import { createHash as createHash5 } from "crypto";
-import { existsSync as existsSync5, readFileSync as readFileSync5 } from "fs";
+import { existsSync as existsSync6, readFileSync as readFileSync6 } from "fs";
 import { basename as basename2 } from "path";
 function stableId4(prefix, value) {
   return `${prefix}_${createHash5("sha256").update(value).digest("hex").slice(0, 20)}`;
@@ -16611,9 +16704,9 @@ async function readS3Text2(uri, config2, safetyPolicy) {
 async function readManifestInput(input, config2, safetyPolicy) {
   if (input.startsWith("s3://"))
     return readS3Text2(input, config2, safetyPolicy);
-  if (!existsSync5(input))
+  if (!existsSync6(input))
     throw new Error(`Manifest not found: ${input}`);
-  return readFileSync5(input, "utf8");
+  return readFileSync6(input, "utf8");
 }
 function chunkText(text, maxChars, overlapChars) {
   const normalized = text.replace(/\r\n/g, `
@@ -16857,7 +16950,7 @@ async function ingestOpenFilesManifestItems(options) {
 
 // src/source-ingest.ts
 import { createHash as createHash6 } from "crypto";
-import { existsSync as existsSync6, readFileSync as readFileSync6 } from "fs";
+import { existsSync as existsSync7, readFileSync as readFileSync7 } from "fs";
 import { basename as basename3 } from "path";
 
 // src/source-resolver.ts
@@ -17207,9 +17300,9 @@ function titleForRef(parsed) {
 }
 async function readDirectSourceText(parsed, config2, safetyPolicy) {
   if (parsed.kind === "file") {
-    if (!existsSync6(parsed.path))
+    if (!existsSync7(parsed.path))
       throw new Error(`Source file not found: ${parsed.path}`);
-    const text = readFileSync6(parsed.path, "utf8");
+    const text = readFileSync7(parsed.path, "utf8");
     return {
       text,
       contentSource: "file",
@@ -17560,6 +17653,164 @@ async function refreshEmbeddingIndex(options) {
   };
 }
 
+// src/remote-client.ts
+var REMOTE_KNOWLEDGE_CONTRACT_VERSION = 1;
+function isRecord(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+function stringValue(record2, key) {
+  const value = record2[key];
+  return typeof value === "string" ? value : undefined;
+}
+function numberValue(record2, key) {
+  const value = record2[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+function arrayValue(record2, key) {
+  const value = record2[key];
+  return Array.isArray(value) ? value : undefined;
+}
+function normalizeRemoteKnowledgeRunContract(payload, fallback) {
+  const record2 = isRecord(payload) ? payload : {};
+  return {
+    contract_version: REMOTE_KNOWLEDGE_CONTRACT_VERSION,
+    id: stringValue(record2, "id") ?? fallback?.id,
+    type: stringValue(record2, "type") ?? fallback?.type,
+    status: stringValue(record2, "status") ?? fallback?.status,
+    query: stringValue(record2, "query") ?? fallback?.query,
+    prompt: stringValue(record2, "prompt") ?? fallback?.prompt,
+    output_preview: Object.prototype.hasOwnProperty.call(record2, "output_preview") ? record2.output_preview : fallback?.output_preview,
+    citations: arrayValue(record2, "citations") ?? fallback?.citations,
+    artifacts: arrayValue(record2, "artifacts") ?? fallback?.artifacts,
+    usage: isRecord(record2.usage) ? record2.usage : fallback?.usage,
+    created_at: stringValue(record2, "created_at") ?? fallback?.created_at,
+    started_at: stringValue(record2, "started_at") ?? fallback?.started_at,
+    completed_at: stringValue(record2, "completed_at") ?? fallback?.completed_at,
+    duration_ms: numberValue(record2, "duration_ms") ?? fallback?.duration_ms,
+    error_code: stringValue(record2, "error_code") ?? fallback?.error_code,
+    error_message: stringValue(record2, "error_message") ?? fallback?.error_message,
+    error: stringValue(record2, "error") ?? fallback?.error,
+    details: Object.prototype.hasOwnProperty.call(record2, "details") ? record2.details : fallback?.details
+  };
+}
+function knowledgeRegistryContract(input) {
+  return {
+    contract_version: REMOTE_KNOWLEDGE_CONTRACT_VERSION,
+    service: "open-knowledge",
+    mode: input.mode,
+    capabilities: [
+      "registry",
+      "search",
+      "ask",
+      "build",
+      "sync",
+      "status",
+      "logs",
+      "artifacts",
+      "open-files-source-refs",
+      "s3-generated-artifacts"
+    ],
+    endpoints: {
+      registry: "/api/v1/knowledge/registry",
+      search: "/api/v1/knowledge/search",
+      ask: "/api/v1/knowledge/ask",
+      build: "/api/v1/knowledge/build",
+      sync: "/api/v1/knowledge/sync",
+      run_status: "/api/v1/knowledge/runs/{run_id}",
+      run_logs: "/api/v1/knowledge/runs/{run_id}/logs",
+      run_artifacts: "/api/v1/knowledge/runs/{run_id}/artifacts"
+    },
+    source_contract: {
+      owner: "open-files",
+      preferred_ref: "open-files",
+      allowed_schemes: input.sourceSchemes,
+      raw_source_bytes_stored_in_open_knowledge: false
+    },
+    artifact_contract: {
+      storage_type: input.storageType,
+      uri_prefix: input.artifactUriPrefix,
+      generated_only: true
+    }
+  };
+}
+
+class RemoteKnowledgeClient {
+  apiKey;
+  apiUrl;
+  constructor(apiKey, apiUrl) {
+    this.apiKey = apiKey;
+    this.apiUrl = apiUrl;
+  }
+  static fromConfig(config2, env = process.env) {
+    const key = getKnowledgeApiKey(env);
+    if (!key.apiKey)
+      return null;
+    return new RemoteKnowledgeClient(key.apiKey, resolveKnowledgeApiUrl(config2, env));
+  }
+  async request(path, options = {}) {
+    return fetch(`${this.apiUrl}${path}`, {
+      ...options,
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        "Content-Type": "application/json",
+        ...options.headers
+      }
+    });
+  }
+  async registry() {
+    const response = await this.request("/api/v1/knowledge/registry");
+    return response.json();
+  }
+  async search(request) {
+    const response = await this.request("/api/v1/knowledge/search", {
+      method: "POST",
+      body: JSON.stringify(request)
+    });
+    return normalizeRemoteKnowledgeRunContract(await response.json(), { type: "search", query: request.query });
+  }
+  async ask(request) {
+    const response = await this.request("/api/v1/knowledge/ask", {
+      method: "POST",
+      body: JSON.stringify(request)
+    });
+    return normalizeRemoteKnowledgeRunContract(await response.json(), { type: "ask", prompt: request.prompt });
+  }
+  async build(request) {
+    const response = await this.request("/api/v1/knowledge/build", {
+      method: "POST",
+      body: JSON.stringify(request)
+    });
+    return normalizeRemoteKnowledgeRunContract(await response.json(), { type: "build", prompt: request.prompt });
+  }
+  async sync(request = {}) {
+    const response = await this.request("/api/v1/knowledge/sync", {
+      method: "POST",
+      body: JSON.stringify(request)
+    });
+    return normalizeRemoteKnowledgeRunContract(await response.json(), { type: "sync" });
+  }
+  async runStatus(runId) {
+    const response = await this.request(`/api/v1/knowledge/runs/${encodeURIComponent(runId)}`);
+    if (!response.ok)
+      return null;
+    return normalizeRemoteKnowledgeRunContract(await response.json(), { id: runId, type: "status" });
+  }
+  async runLogs(runId) {
+    const response = await this.request(`/api/v1/knowledge/runs/${encodeURIComponent(runId)}/logs`);
+    if (!response.ok)
+      return [];
+    const payload = await response.json();
+    return Array.isArray(payload) ? payload : [];
+  }
+  async runArtifacts(runId) {
+    const response = await this.request(`/api/v1/knowledge/runs/${encodeURIComponent(runId)}/artifacts`);
+    if (!response.ok)
+      return [];
+    const payload = await response.json();
+    return Array.isArray(payload) ? payload : [];
+  }
+}
+
 // src/web-search.ts
 import { createHash as createHash8, randomUUID as randomUUID7 } from "crypto";
 function stableHash(value) {
@@ -17895,6 +18146,15 @@ function resolveStorageContract(config2, workspace, scope = "global") {
         kms_key_configured: Boolean(s3.kms_key_id)
       } : null
     },
+    hosted: {
+      enabled: config2.mode === "hosted",
+      api_url: normalizeKnowledgeApiOrigin(config2.hosted?.api_url ?? DEFAULT_KNOWLEDGE_API_URL),
+      api_url_env: "KNOWLEDGE_API_URL",
+      api_key_env: "KNOWLEDGE_API_KEY",
+      auth_storage: "~/.hasna/knowledge/auth.json",
+      remote_contract_version: REMOTE_KNOWLEDGE_CONTRACT_VERSION,
+      requires_hosted_account_for_local_use: false
+    },
     source_ownership: {
       owner: "open-files",
       preferred_ref: config2.sources.preferred_ref,
@@ -17949,6 +18209,13 @@ function validateStorageConfig(config2, workspace) {
   }
   if (!config2.sources.allowed_schemes.includes("open-files")) {
     errors3.push("sources.allowed_schemes must include open-files.");
+  }
+  if (config2.mode === "hosted" && config2.hosted?.api_url) {
+    try {
+      normalizeKnowledgeApiOrigin(config2.hosted.api_url);
+    } catch {
+      errors3.push("hosted.api_url must be an http(s) URL when mode is hosted.");
+    }
   }
   return {
     ok: errors3.length === 0,
@@ -18188,6 +18455,17 @@ function recordWikiLayoutCatalog(db, artifacts, now = new Date) {
 }
 
 // src/service.ts
+function normalizeMode(value) {
+  if (!value)
+    return;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "local" || normalized === "offline")
+    return "local";
+  if (normalized === "hosted" || normalized === "remote" || normalized === "knowledge.hasna.xyz")
+    return "hosted";
+  throw new Error("Invalid setup mode. Use hosted or local.");
+}
+
 class KnowledgeService {
   options;
   ensuredWorkspace;
@@ -18227,6 +18505,59 @@ class KnowledgeService {
   }
   validateStorage() {
     return validateStorageConfig(this.config(), this.ensureWorkspace());
+  }
+  setup(options = {}) {
+    const workspace = this.ensureWorkspace();
+    const current = this.config();
+    const mode = normalizeMode(options.mode) ?? current.mode;
+    const apiUrl = options.apiUrl ? normalizeKnowledgeApiOrigin(options.apiUrl) : current.hosted?.api_url ? normalizeKnowledgeApiOrigin(current.hosted.api_url) : null;
+    const nextConfig = {
+      ...current,
+      mode,
+      hosted: {
+        ...current.hosted ?? {},
+        ...apiUrl ? { api_url: apiUrl } : {}
+      }
+    };
+    writeKnowledgeConfig(workspace.configPath, nextConfig);
+    this.cachedConfig = nextConfig;
+    return {
+      ok: true,
+      mode,
+      api_url: nextConfig.hosted?.api_url ?? null,
+      config_path: workspace.configPath,
+      next: mode === "hosted" ? ["open-knowledge auth login --api-key <key>", "open-knowledge remote contracts --json"] : ["open-knowledge search <query>", "knowledge <prompt>"],
+      message: `Set knowledge mode to ${mode}`
+    };
+  }
+  authStatus(env = process.env) {
+    return knowledgeAuthStatus(this.config(), env);
+  }
+  saveAuth(input, env = process.env) {
+    const apiUrl = input.apiUrl ?? this.config().hosted?.api_url;
+    return saveKnowledgeAuth({
+      api_key: input.apiKey,
+      email: input.email,
+      org_id: input.orgId,
+      org_slug: input.orgSlug,
+      user_id: input.userId,
+      api_url: apiUrl
+    }, env);
+  }
+  clearAuth(env = process.env) {
+    return clearKnowledgeAuth(env);
+  }
+  remoteContract() {
+    const storage = this.storageContract();
+    return knowledgeRegistryContract({
+      mode: this.config().mode,
+      sourceSchemes: this.config().sources.allowed_schemes,
+      storageType: storage.artifact_store.type,
+      artifactUriPrefix: storage.artifact_store.uri_prefix
+    });
+  }
+  remoteClient(env = process.env) {
+    return RemoteKnowledgeClient.fromConfig(this.config(), env);
   }
   paths() {
     const workspace = this.ensureWorkspace();
@@ -18970,7 +19301,7 @@ function buildServer() {
     const storePath = resolveStorePath(store_path, scope);
     return readStoreLocked(storePath, (db) => {
       const filePath = file2 || "./knowledge-export.json";
-      writeFileSync4(filePath, JSON.stringify(db, null, 2));
+      writeFileSync5(filePath, JSON.stringify(db, null, 2));
       return jsonText({ ok: true, file: filePath, count: db.items.length });
     });
   });
@@ -18979,9 +19310,9 @@ function buildServer() {
     store_path: storePathField,
     scope: scopeField
   }, async ({ file: file2, store_path, scope }) => {
-    if (!existsSync7(file2))
+    if (!existsSync8(file2))
       return errorText(`File not found: ${file2}`);
-    const imported = JSON.parse(readFileSync7(file2, "utf8"));
+    const imported = JSON.parse(readFileSync8(file2, "utf8"));
     if (!imported || !Array.isArray(imported.items))
       return errorText('Invalid import file: expected {"items": [...]}');
     const storePath = resolveStorePath(store_path, scope);

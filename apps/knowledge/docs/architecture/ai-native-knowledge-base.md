@@ -43,6 +43,14 @@ The future hosted/SaaS wrapper owns:
 The OSS package must stay useful without a hosted account. Hosted mode should be
 an optional remote client over explicit API contracts.
 
+The local hosted-aware contract follows the `open-skills` pattern: `mode` is
+`local` by default, `setup --mode hosted` records `hosted.api_url`, env vars
+`KNOWLEDGE_API_URL` and `KNOWLEDGE_API_KEY` can override local config, and
+credentials live outside project state in `~/.hasna/knowledge/auth.json`.
+`remote contracts` publishes the registry/search/ask/build/sync/status/logs and
+artifact endpoints that a SaaS wrapper can implement. Local use, local search,
+and local artifact generation do not require this remote API.
+
 ## Local Workspace
 
 Project-local state lives at:

@@ -55,6 +55,13 @@ interface Flags {
   generate?: boolean;
   approveWrite?: boolean;
   provider?: string;
+  mode?: string;
+  apiUrl?: string;
+  apiKey?: string;
+  email?: string;
+  org?: string;
+  orgId?: string;
+  userId?: string;
   domain?: string[];
   fileResults?: boolean;
   full?: boolean;
@@ -72,7 +79,7 @@ interface ParseResult {
   flags: Flags;
 }
 
-const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'export', 'prune', 'dedupe', 'stats', 'paths', 'storage', 'db', 'wiki', 'source', 'ingest', 'reindex', 'search', 'web', 'ask', 'build', 'embeddings', 'providers', 'safety', 'help'];
+const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'export', 'prune', 'dedupe', 'stats', 'paths', 'setup', 'auth', 'remote', 'storage', 'db', 'wiki', 'source', 'ingest', 'reindex', 'search', 'web', 'ask', 'build', 'embeddings', 'providers', 'safety', 'help'];
 const COMMAND_ALIASES: Record<string, string> = {
   ls: 'list',
   rm: 'delete',
@@ -116,6 +123,13 @@ function parseArgs(argv: string[]): ParseResult {
       case '--generate': flags.generate = true; break;
       case '--approve-write': flags.approveWrite = true; break;
       case '--provider': flags.provider = argv[i + 1]; i += 1; break;
+      case '--mode': flags.mode = argv[i + 1]; i += 1; break;
+      case '--api-url': flags.apiUrl = argv[i + 1]; i += 1; break;
+      case '--api-key': flags.apiKey = argv[i + 1]; i += 1; break;
+      case '--email': flags.email = argv[i + 1]; i += 1; break;
+      case '--org': flags.org = argv[i + 1]; i += 1; break;
+      case '--org-id': flags.orgId = argv[i + 1]; i += 1; break;
+      case '--user-id': flags.userId = argv[i + 1]; i += 1; break;
       case '--domain': flags.domain = [...(flags.domain ?? []), argv[i + 1]]; i += 1; break;
       case '--file-results': flags.fileResults = true; break;
       case '--full': flags.full = true; break;
@@ -190,6 +204,9 @@ Commands:
   dedupe                       Remove duplicate items by title+content (requires --yes)
   stats                        Show knowledge base statistics
   paths                        Show resolved workspace/store paths
+  setup                        Configure local or hosted mode
+  auth login|whoami|logout     Manage hosted API credentials
+  remote contracts|status      Inspect hosted client contracts/readiness
   storage status|validate      Inspect local/S3 artifact storage contract
   db init|stats                Initialize or inspect local knowledge.db
   wiki init                    Initialize scalable wiki/schema/index/log artifacts
@@ -216,6 +233,13 @@ Global Options:
   --generate                   Call AI SDK text generation for ask/build
   --approve-write              Record approval intent for future durable wiki writes
   --provider <name>            Provider override for web search
+  --mode local|hosted          Configure OSS local or hosted-aware mode
+  --api-url <url>              Hosted API origin (or KNOWLEDGE_API_URL)
+  --api-key <key>              Hosted API key for auth login
+  --email <email>              Hosted account email metadata
+  --org <slug>                 Hosted organization slug metadata
+  --org-id <id>                Hosted organization id metadata
+  --user-id <id>               Hosted user id metadata
   --domain <domain>            Restrict provider web search to a domain
   --file-results               File web snippets as web source refs
   --full                       Force full embedding index rebuild
@@ -274,6 +298,9 @@ function printCommandHelp(command: string): void {
   if (command === 'dedupe') { console.log('Usage: open-knowledge dedupe --yes [--json]'); return; }
   if (command === 'stats') { console.log('Usage: open-knowledge stats [--json]'); return; }
   if (command === 'paths') { console.log('Usage: open-knowledge paths [--scope local|global|project] [--json]'); return; }
+  if (command === 'setup') { console.log('Usage: open-knowledge setup --mode local|hosted [--api-url https://...] [--scope local|global|project] [--json]'); return; }
+  if (command === 'auth') { console.log('Usage: open-knowledge auth login|whoami|logout [--api-key <key>] [--email <email>] [--org <slug>] [--api-url https://...] [--scope local|global|project] [--json]'); return; }
+  if (command === 'remote') { console.log('Usage: open-knowledge remote contracts|status [--scope local|global|project] [--json]'); return; }
   if (command === 'storage') { console.log('Usage: open-knowledge storage status|validate [--scope local|global|project] [--json]'); return; }
   if (command === 'db') { console.log('Usage: open-knowledge db init|stats [--scope local|global|project] [--json]'); return; }
   if (command === 'wiki') { console.log('Usage: open-knowledge wiki init [--scope local|global|project] [--json]'); return; }
@@ -330,11 +357,11 @@ async function run(argv: string[]): Promise<void> {
   if (flags.completions) {
     const shell = flags.completions;
     if (shell === 'bash') {
-      console.log(`_open_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats paths storage db wiki source ingest reindex search web ask build embeddings providers safety help ls rm edit unarchive knowledge --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --purpose --model --dimensions --semantic --context --generate --approve-write --provider --domain --file-results --full --fake --no-color --scope --archived --include-archived" -- "$cur")); }; complete -F _open_knowledge open-knowledge`);
+      console.log(`_open_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats paths setup auth remote storage db wiki source ingest reindex search web ask build embeddings providers safety help ls rm edit unarchive knowledge --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --purpose --model --dimensions --semantic --context --generate --approve-write --provider --mode --api-url --api-key --email --org --org-id --user-id --domain --file-results --full --fake --no-color --scope --archived --include-archived" -- "$cur")); }; complete -F _open_knowledge open-knowledge`);
     } else if (shell === 'zsh') {
-      console.log(`#compdef open-knowledge\n_open_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats paths storage db wiki source ingest reindex search web ask build embeddings providers safety help ls rm edit unarchive knowledge)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--semantic)--semantic" "(--context)--context" "(--generate)--generate" "(--approve-write)--approve-write" "(--file-results)--file-results" "(--full)--full" "(--fake)--fake" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--provider)--provider[provider]:" "(--domain)--domain[domain]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" }; _open_knowledge`);
+      console.log(`#compdef open-knowledge\n_open_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats paths setup auth remote storage db wiki source ingest reindex search web ask build embeddings providers safety help ls rm edit unarchive knowledge)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--semantic)--semantic" "(--context)--context" "(--generate)--generate" "(--approve-write)--approve-write" "(--file-results)--file-results" "(--full)--full" "(--fake)--fake" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--provider)--provider[provider]:" "(--mode)--mode"\{local,hosted\}:" "(--api-url)--api-url[hosted API URL]:" "(--api-key)--api-key[hosted API key]:" "(--email)--email[email]:" "(--org)--org[org slug]:" "(--org-id)--org-id[org id]:" "(--user-id)--user-id[user id]:" "(--domain)--domain[domain]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" }; _open_knowledge`);
     } else if (shell === 'fish') {
-      console.log(`complete -c open-knowledge -f; complete -c open-knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats paths storage db wiki source ingest reindex search web ask build embeddings providers safety help ls rm edit unarchive knowledge"; complete -c open-knowledge -l json; complete -c open-knowledge -l yes -s y; complete -c open-knowledge -l help -s h; complete -c open-knowledge -l version -s v; complete -c open-knowledge -l desc; complete -c open-knowledge -l archived; complete -c open-knowledge -l include-archived; complete -c open-knowledge -l semantic; complete -c open-knowledge -l context; complete -c open-knowledge -l generate; complete -c open-knowledge -l approve-write; complete -c open-knowledge -l provider; complete -c open-knowledge -l domain; complete -c open-knowledge -l file-results; complete -c open-knowledge -l full; complete -c open-knowledge -l fake; complete -c open-knowledge -s p -l page; complete -c open-knowledge -s l -l limit; complete -c open-knowledge -s s -l search; complete -c open-knowledge -l sort; complete -c open-knowledge -l id; complete -c open-knowledge -l store; complete -c open-knowledge -l title; complete -c open-knowledge -l content; complete -c open-knowledge -l url; complete -c open-knowledge -s t -l tag; complete -c open-knowledge -l format; complete -c open-knowledge -l completions; complete -c open-knowledge -l purpose; complete -c open-knowledge -l model; complete -c open-knowledge -l dimensions; complete -c open-knowledge -l no-color; complete -c open-knowledge -l scope -a "local global project"`);
+      console.log(`complete -c open-knowledge -f; complete -c open-knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats paths setup auth remote storage db wiki source ingest reindex search web ask build embeddings providers safety help ls rm edit unarchive knowledge"; complete -c open-knowledge -l json; complete -c open-knowledge -l yes -s y; complete -c open-knowledge -l help -s h; complete -c open-knowledge -l version -s v; complete -c open-knowledge -l desc; complete -c open-knowledge -l archived; complete -c open-knowledge -l include-archived; complete -c open-knowledge -l semantic; complete -c open-knowledge -l context; complete -c open-knowledge -l generate; complete -c open-knowledge -l approve-write; complete -c open-knowledge -l provider; complete -c open-knowledge -l mode; complete -c open-knowledge -l api-url; complete -c open-knowledge -l api-key; complete -c open-knowledge -l email; complete -c open-knowledge -l org; complete -c open-knowledge -l org-id; complete -c open-knowledge -l user-id; complete -c open-knowledge -l domain; complete -c open-knowledge -l file-results; complete -c open-knowledge -l full; complete -c open-knowledge -l fake; complete -c open-knowledge -s p -l page; complete -c open-knowledge -s l -l limit; complete -c open-knowledge -s s -l search; complete -c open-knowledge -l sort; complete -c open-knowledge -l id; complete -c open-knowledge -l store; complete -c open-knowledge -l title; complete -c open-knowledge -l content; complete -c open-knowledge -l url; complete -c open-knowledge -s t -l tag; complete -c open-knowledge -l format; complete -c open-knowledge -l completions; complete -c open-knowledge -l purpose; complete -c open-knowledge -l model; complete -c open-knowledge -l dimensions; complete -c open-knowledge -l no-color; complete -c open-knowledge -l scope -a "local global project"`);
     } else {
       throw new Error("Invalid --completions value. Use 'bash', 'zsh', or 'fish'.");
     }
@@ -363,6 +390,84 @@ async function run(argv: string[]): Promise<void> {
   if (command === 'paths') {
     output(service.paths(), flags.json);
     return;
+  }
+
+  if (command === 'setup') {
+    const result = service.setup({
+      mode: flags.mode,
+      apiUrl: flags.apiUrl,
+    });
+    output(result, flags.json);
+    return;
+  }
+
+  if (command === 'auth') {
+    const action = positional[1] ?? 'whoami';
+    if (action === 'whoami' || action === 'status') {
+      const result = service.authStatus(process.env);
+      output({ ok: true, ...result, message: result.authenticated ? `Authenticated via ${result.source}` : 'Not authenticated' }, flags.json);
+      return;
+    }
+    if (action === 'login') {
+      const apiKey = flags.apiKey ?? process.env.KNOWLEDGE_API_KEY ?? process.env.HASNA_KNOWLEDGE_API_KEY;
+      if (!apiKey) throw new Error('Usage: open-knowledge auth login --api-key <key> [--email <email>]');
+      const auth = service.saveAuth({
+        apiKey,
+        email: flags.email,
+        orgSlug: flags.org,
+        orgId: flags.orgId,
+        userId: flags.userId,
+        apiUrl: flags.apiUrl,
+      }, process.env);
+      output({
+        ok: true,
+        authenticated: true,
+        email: auth.email ?? null,
+        org_slug: auth.org_slug ?? null,
+        api_url: auth.api_url ?? service.authStatus(process.env).api_url,
+        auth_path: service.authStatus(process.env).auth_path,
+        message: `Saved hosted credentials for ${auth.email ?? 'API key'}`,
+      }, flags.json);
+      return;
+    }
+    if (action === 'logout') {
+      const removed = service.clearAuth(process.env);
+      output({ ok: true, removed, message: removed ? 'Removed hosted credentials' : 'No hosted credentials found' }, flags.json);
+      return;
+    }
+    throw new Error("Invalid auth action. Use 'login', 'whoami', or 'logout'.");
+  }
+
+  if (command === 'remote') {
+    const action = positional[1] ?? 'status';
+    if (action === 'contracts' || action === 'contract') {
+      const auth = service.authStatus(process.env);
+      output({
+        ok: true,
+        authenticated: auth.authenticated,
+        api_url: auth.api_url,
+        contract: service.remoteContract(),
+        message: `Remote contract v${service.remoteContract().contract_version}`,
+      }, flags.json);
+      return;
+    }
+    if (action === 'status') {
+      const auth = service.authStatus(process.env);
+      const contract = service.remoteContract();
+      output({
+        ok: true,
+        mode: service.config().mode,
+        authenticated: auth.authenticated,
+        auth_source: auth.source,
+        api_url: auth.api_url,
+        client_ready: Boolean(service.remoteClient(process.env)),
+        contract_version: contract.contract_version,
+        capabilities: contract.capabilities,
+        message: auth.authenticated ? `Remote client ready for ${auth.api_url}` : 'Remote client not authenticated',
+      }, flags.json);
+      return;
+    }
+    throw new Error("Invalid remote action. Use 'contracts' or 'status'.");
   }
 
   if (command === 'storage') {

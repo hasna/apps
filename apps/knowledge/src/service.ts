@@ -1,4 +1,11 @@
 import { createArtifactStore } from './artifact-store';
+import {
+  clearKnowledgeAuth,
+  knowledgeAuthStatus,
+  normalizeKnowledgeApiOrigin,
+  saveKnowledgeAuth,
+  type KnowledgeAuthStatus,
+} from './auth';
 import { runKnowledgePrompt, type KnowledgePromptOptions } from './agent';
 import {
   embeddingIndexStatus,
@@ -14,6 +21,7 @@ import { ingestSourceRef } from './source-ingest';
 import { resolveOpenFilesSource } from './source-resolver';
 import { providerStatus, listModelRegistry, type ProviderStatusResult, type ModelRegistryEntry } from './providers';
 import { enqueueMissingEmbeddings, refreshEmbeddingIndex, reindexHealth, type ReindexRuntimeOptions } from './reindex';
+import { knowledgeRegistryContract, RemoteKnowledgeClient, type RemoteKnowledgeRegistryContract } from './remote-client';
 import { retrieveKnowledgeContext, type RetrievalOptions } from './retrieval';
 import { hybridSearch, type HybridSearchOptions } from './search';
 import { resolveSafetyPolicy } from './safety';
@@ -30,6 +38,7 @@ import {
   ensureKnowledgeWorkspace,
   readKnowledgeConfig,
   resolveScopedWorkspace,
+  writeKnowledgeConfig,
   type KnowledgeConfig,
   type KnowledgeWorkspace,
 } from './workspace';
@@ -54,6 +63,23 @@ export interface KnowledgePathsResult {
   wiki_dir: string;
   config: KnowledgeConfig;
   message: string;
+}
+
+export interface KnowledgeSetupResult {
+  ok: true;
+  mode: KnowledgeConfig['mode'];
+  api_url: string | null;
+  config_path: string;
+  next: string[];
+  message: string;
+}
+
+function normalizeMode(value: string | undefined): KnowledgeConfig['mode'] | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'local' || normalized === 'offline') return 'local';
+  if (normalized === 'hosted' || normalized === 'remote' || normalized === 'knowledge.hasna.xyz') return 'hosted';
+  throw new Error('Invalid setup mode. Use hosted or local.');
 }
 
 export class KnowledgeService {
@@ -101,6 +127,78 @@ export class KnowledgeService {
 
   validateStorage(): StorageValidationResult {
     return validateStorageConfig(this.config(), this.ensureWorkspace());
+  }
+
+  setup(options: { mode?: string; apiUrl?: string } = {}): KnowledgeSetupResult {
+    const workspace = this.ensureWorkspace();
+    const current = this.config();
+    const mode = normalizeMode(options.mode) ?? current.mode;
+    const apiUrl = options.apiUrl
+      ? normalizeKnowledgeApiOrigin(options.apiUrl)
+      : current.hosted?.api_url
+        ? normalizeKnowledgeApiOrigin(current.hosted.api_url)
+        : null;
+    const nextConfig: KnowledgeConfig = {
+      ...current,
+      mode,
+      hosted: {
+        ...(current.hosted ?? {}),
+        ...(apiUrl ? { api_url: apiUrl } : {}),
+      },
+    };
+    writeKnowledgeConfig(workspace.configPath, nextConfig);
+    this.cachedConfig = nextConfig;
+    return {
+      ok: true,
+      mode,
+      api_url: nextConfig.hosted?.api_url ?? null,
+      config_path: workspace.configPath,
+      next: mode === 'hosted'
+        ? ['open-knowledge auth login --api-key <key>', 'open-knowledge remote contracts --json']
+        : ['open-knowledge search <query>', 'knowledge <prompt>'],
+      message: `Set knowledge mode to ${mode}`,
+    };
+  }
+
+  authStatus(env: Record<string, string | undefined> = process.env): KnowledgeAuthStatus {
+    return knowledgeAuthStatus(this.config(), env);
+  }
+
+  saveAuth(input: {
+    apiKey: string;
+    email?: string;
+    orgId?: string;
+    orgSlug?: string;
+    userId?: string;
+    apiUrl?: string;
+  }, env: Record<string, string | undefined> = process.env) {
+    const apiUrl = input.apiUrl ?? this.config().hosted?.api_url;
+    return saveKnowledgeAuth({
+      api_key: input.apiKey,
+      email: input.email,
+      org_id: input.orgId,
+      org_slug: input.orgSlug,
+      user_id: input.userId,
+      api_url: apiUrl,
+    }, env);
+  }
+
+  clearAuth(env: Record<string, string | undefined> = process.env) {
+    return clearKnowledgeAuth(env);
+  }
+
+  remoteContract(): RemoteKnowledgeRegistryContract {
+    const storage = this.storageContract();
+    return knowledgeRegistryContract({
+      mode: this.config().mode,
+      sourceSchemes: this.config().sources.allowed_schemes,
+      storageType: storage.artifact_store.type,
+      artifactUriPrefix: storage.artifact_store.uri_prefix,
+    });
+  }
+
+  remoteClient(env: Record<string, string | undefined> = process.env): RemoteKnowledgeClient | null {
+    return RemoteKnowledgeClient.fromConfig(this.config(), env);
   }
 
   paths(): KnowledgePathsResult {

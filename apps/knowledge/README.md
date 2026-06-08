@@ -65,6 +65,11 @@ open-knowledge paths --scope project --json
 # Inspect local/S3 artifact storage and source ownership
 open-knowledge storage status --scope project --json
 
+# Configure optional hosted mode and inspect remote contracts
+open-knowledge setup --mode hosted --api-url https://knowledge.hasna.xyz --scope project --json
+open-knowledge auth whoami --scope project --json
+open-knowledge remote contracts --scope project --json
+
 # Initialize the project SQLite catalog
 open-knowledge db init --scope project
 
@@ -203,6 +208,23 @@ runs, and exports. S3 mode stores generated artifacts under the configured
 knowledge bucket/prefix while `open-files` remains the source of truth for raw
 source bytes. The command also reports artifact classes, allowed source ref
 schemes, and warnings for non-scalable or unsafe config.
+
+### setup / auth / remote
+```bash
+open-knowledge setup --mode local [--scope project] [--json]
+open-knowledge setup --mode hosted [--api-url https://knowledge.hasna.xyz] [--scope project] [--json]
+open-knowledge auth login --api-key <key> [--email you@example.com] [--org <slug>] [--scope project] [--json]
+open-knowledge auth whoami [--scope project] [--json]
+open-knowledge auth logout [--scope project] [--json]
+open-knowledge remote status [--scope project] [--json]
+open-knowledge remote contracts [--scope project] [--json]
+```
+Hosted mode mirrors the `open-skills` open-core pattern: the OSS package stays
+local-first, while `hosted.api_url`, `KNOWLEDGE_API_URL`, and
+`KNOWLEDGE_API_KEY` define an optional remote client boundary. Credentials are
+stored locally in `~/.hasna/knowledge/auth.json` or supplied by env vars.
+`remote contracts` prints the typed registry/search/ask/build/sync/status/logs
+and artifact API contract that a future SaaS wrapper can implement.
 
 ### db
 ```bash

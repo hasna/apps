@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Database } from 'bun:sqlite';
+import { DEFAULT_KNOWLEDGE_API_URL, normalizeKnowledgeApiOrigin } from './auth';
+import { REMOTE_KNOWLEDGE_CONTRACT_VERSION } from './remote-client';
 import type { KnowledgeConfig, KnowledgeWorkspace } from './workspace';
 import { HASNA_KNOWLEDGE_APP_PATH } from './workspace';
 
@@ -33,6 +35,15 @@ export interface StorageContract {
       server_side_encryption: string | null;
       kms_key_configured: boolean;
     } | null;
+  };
+  hosted: {
+    enabled: boolean;
+    api_url: string;
+    api_url_env: 'KNOWLEDGE_API_URL';
+    api_key_env: 'KNOWLEDGE_API_KEY';
+    auth_storage: '~/.hasna/knowledge/auth.json';
+    remote_contract_version: typeof REMOTE_KNOWLEDGE_CONTRACT_VERSION;
+    requires_hosted_account_for_local_use: false;
   };
   source_ownership: {
     owner: 'open-files';
@@ -160,6 +171,15 @@ export function resolveStorageContract(
           }
         : null,
     },
+    hosted: {
+      enabled: config.mode === 'hosted',
+      api_url: normalizeKnowledgeApiOrigin(config.hosted?.api_url ?? DEFAULT_KNOWLEDGE_API_URL),
+      api_url_env: 'KNOWLEDGE_API_URL',
+      api_key_env: 'KNOWLEDGE_API_KEY',
+      auth_storage: '~/.hasna/knowledge/auth.json',
+      remote_contract_version: REMOTE_KNOWLEDGE_CONTRACT_VERSION,
+      requires_hosted_account_for_local_use: false,
+    },
     source_ownership: {
       owner: 'open-files',
       preferred_ref: config.sources.preferred_ref,
@@ -217,6 +237,14 @@ export function validateStorageConfig(config: KnowledgeConfig, workspace: Knowle
 
   if (!config.sources.allowed_schemes.includes('open-files')) {
     errors.push('sources.allowed_schemes must include open-files.');
+  }
+
+  if (config.mode === 'hosted' && config.hosted?.api_url) {
+    try {
+      normalizeKnowledgeApiOrigin(config.hosted.api_url);
+    } catch {
+      errors.push('hosted.api_url must be an http(s) URL when mode is hosted.');
+    }
   }
 
   return {
