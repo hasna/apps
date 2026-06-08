@@ -16,7 +16,7 @@ describe('knowledge sqlite store', () => {
     const dbPath = join(dir, 'knowledge.db');
 
     const migration = migrateKnowledgeDb(dbPath);
-    expect(migration.schema_version).toBe(4);
+    expect(migration.schema_version).toBe(5);
 
     const db = openKnowledgeDb(dbPath);
     try {
@@ -36,17 +36,19 @@ describe('knowledge sqlite store', () => {
       expect(tables).toContain('storage_objects');
       expect(tables).toContain('audit_events');
       expect(tables).toContain('approval_gates');
+      expect(tables).toContain('reindex_queue');
     } finally {
       db.close();
     }
 
     const stats = getKnowledgeDbStats(dbPath);
-    expect(stats.schema_version).toBe(4);
+    expect(stats.schema_version).toBe(5);
     expect(stats.sources).toBe(0);
     expect(stats.runs).toBe(0);
     expect(stats.redaction_findings).toBe(0);
     expect(stats.audit_events).toBe(0);
     expect(stats.approval_gates).toBe(0);
+    expect(stats.reindex_queue).toBe(0);
   });
 
   test('ingests open-files manifests into sources, revisions, chunks, and FTS', async () => {
@@ -90,7 +92,7 @@ describe('knowledge sqlite store', () => {
     });
 
     const stats = getKnowledgeDbStats(dbPath);
-    expect(stats.schema_version).toBe(4);
+    expect(stats.schema_version).toBe(5);
     expect(stats.sources).toBe(2);
     expect(stats.source_revisions).toBe(2);
     expect(stats.chunks).toBe(1);

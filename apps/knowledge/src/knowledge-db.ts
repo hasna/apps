@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { ensureParentDir } from './workspace';
 
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 
 export interface KnowledgeDbStats {
   schema_version: number;
@@ -19,6 +19,7 @@ export interface KnowledgeDbStats {
   storage_objects: number;
   embeddings: number;
   vector_entries: number;
+  reindex_queue: number;
 }
 
 const MIGRATION_1 = `
@@ -271,6 +272,29 @@ INSERT OR IGNORE INTO schema_versions(version, applied_at)
 VALUES (4, datetime('now'));
 `;
 
+const MIGRATION_5 = `
+CREATE TABLE IF NOT EXISTS reindex_queue (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  source_uri TEXT,
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(kind, target_id, reason)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reindex_queue_status ON reindex_queue(status);
+CREATE INDEX IF NOT EXISTS idx_reindex_queue_kind_target ON reindex_queue(kind, target_id);
+CREATE INDEX IF NOT EXISTS idx_reindex_queue_source_uri ON reindex_queue(source_uri);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (5, datetime('now'));
+`;
+
 export function openKnowledgeDb(path: string): Database {
   ensureParentDir(path);
   const db = new Database(path);
@@ -286,6 +310,7 @@ export function migrateKnowledgeDb(path: string): { path: string; schema_version
     if (getSchemaVersion(db) < 2) db.exec(MIGRATION_2);
     if (getSchemaVersion(db) < 3) db.exec(MIGRATION_3);
     if (getSchemaVersion(db) < 4) db.exec(MIGRATION_4);
+    if (getSchemaVersion(db) < 5) db.exec(MIGRATION_5);
     return { path, schema_version: getSchemaVersion(db) };
   } finally {
     db.close();
@@ -321,6 +346,7 @@ export function getKnowledgeDbStats(path: string): KnowledgeDbStats {
       storage_objects: count(db, 'storage_objects'),
       embeddings: count(db, 'chunk_embeddings'),
       vector_entries: count(db, 'vector_index_entries'),
+      reindex_queue: count(db, 'reindex_queue'),
     };
   } finally {
     db.close();

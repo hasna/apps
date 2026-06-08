@@ -57,6 +57,7 @@ interface Flags {
   provider?: string;
   domain?: string[];
   fileResults?: boolean;
+  full?: boolean;
   noColor?: boolean;
   scope?: string;
   olderThan?: number;
@@ -117,6 +118,7 @@ function parseArgs(argv: string[]): ParseResult {
       case '--provider': flags.provider = argv[i + 1]; i += 1; break;
       case '--domain': flags.domain = [...(flags.domain ?? []), argv[i + 1]]; i += 1; break;
       case '--file-results': flags.fileResults = true; break;
+      case '--full': flags.full = true; break;
       case '--fake': flags.fake = true; break;
       case '--no-color': flags.noColor = true; break;
       case '--scope': flags.scope = argv[i + 1]; i += 1; break;
@@ -194,7 +196,7 @@ Commands:
   source resolve <source-ref>  Resolve read-only source content and citation evidence
   ingest manifest <file|s3://> Ingest an open-files manifest into knowledge.db
   ingest source <source-ref>   Ingest a read-only source ref into knowledge.db
-  reindex outbox <file|s3://>  Consume open-files change events and invalidate chunks
+  reindex status|enqueue|embeddings|outbox Inspect/refresh search indexes
   search <query>               Hybrid search sources, wiki pages, indexes, or context
   web search <query>           Provider-native web search with citations
   ask|build <prompt>           Build a read-only citation answer/context pack
@@ -216,6 +218,7 @@ Global Options:
   --provider <name>            Provider override for web search
   --domain <domain>            Restrict provider web search to a domain
   --file-results               File web snippets as web source refs
+  --full                       Force full embedding index rebuild
   --fake                       Use deterministic fake embeddings for local tests
   --scope local|global|project  Store scope (default: global ~/.hasna/apps/knowledge/)
   --no-color                  Disable color output
@@ -276,7 +279,7 @@ function printCommandHelp(command: string): void {
   if (command === 'wiki') { console.log('Usage: open-knowledge wiki init [--scope local|global|project] [--json]'); return; }
   if (command === 'source') { console.log('Usage: open-knowledge source resolve <source-ref> [--purpose knowledge_answer|knowledge_index] [--limit <n>] [--scope local|global|project] [--json]'); return; }
   if (command === 'ingest') { console.log('Usage: open-knowledge ingest manifest <file|s3://bucket/key> | source <source-ref> [--purpose knowledge_index] [--scope local|global|project] [--json]'); return; }
-  if (command === 'reindex') { console.log('Usage: open-knowledge reindex outbox <file|s3://bucket/key> [--scope local|global|project] [--json]'); return; }
+  if (command === 'reindex') { console.log('Usage: open-knowledge reindex status|enqueue|embeddings|outbox [file|s3://bucket/key] [--full] [--fake] [--scope local|global|project] [--json]'); return; }
   if (command === 'search') { console.log('Usage: open-knowledge search <query> [--context] [--semantic] [--model openai:text-embedding-3-small] [--limit <n>] [--dimensions <n>] [--fake] [--scope local|global|project] [--json]'); return; }
   if (command === 'web') { console.log('Usage: open-knowledge web search <query> [--provider openai|anthropic] [--model provider:model] [--domain <domain>] [--file-results] [--fake] [--scope local|global|project] [--json]'); return; }
   if (command === 'ask' || command === 'build' || command === 'knowledge') { console.log('Usage: open-knowledge ask|build <prompt> [--generate] [--semantic] [--model default|provider:model] [--approve-write] [--scope local|global|project] [--json]'); return; }
@@ -327,11 +330,11 @@ async function run(argv: string[]): Promise<void> {
   if (flags.completions) {
     const shell = flags.completions;
     if (shell === 'bash') {
-      console.log(`_open_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats paths storage db wiki source ingest reindex search web ask build embeddings providers safety help ls rm edit unarchive knowledge --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --purpose --model --dimensions --semantic --context --generate --approve-write --provider --domain --file-results --fake --no-color --scope --archived --include-archived" -- "$cur")); }; complete -F _open_knowledge open-knowledge`);
+      console.log(`_open_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats paths storage db wiki source ingest reindex search web ask build embeddings providers safety help ls rm edit unarchive knowledge --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --purpose --model --dimensions --semantic --context --generate --approve-write --provider --domain --file-results --full --fake --no-color --scope --archived --include-archived" -- "$cur")); }; complete -F _open_knowledge open-knowledge`);
     } else if (shell === 'zsh') {
-      console.log(`#compdef open-knowledge\n_open_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats paths storage db wiki source ingest reindex search web ask build embeddings providers safety help ls rm edit unarchive knowledge)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--semantic)--semantic" "(--context)--context" "(--generate)--generate" "(--approve-write)--approve-write" "(--file-results)--file-results" "(--fake)--fake" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--provider)--provider[provider]:" "(--domain)--domain[domain]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" }; _open_knowledge`);
+      console.log(`#compdef open-knowledge\n_open_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats paths storage db wiki source ingest reindex search web ask build embeddings providers safety help ls rm edit unarchive knowledge)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--semantic)--semantic" "(--context)--context" "(--generate)--generate" "(--approve-write)--approve-write" "(--file-results)--file-results" "(--full)--full" "(--fake)--fake" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--provider)--provider[provider]:" "(--domain)--domain[domain]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" }; _open_knowledge`);
     } else if (shell === 'fish') {
-      console.log(`complete -c open-knowledge -f; complete -c open-knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats paths storage db wiki source ingest reindex search web ask build embeddings providers safety help ls rm edit unarchive knowledge"; complete -c open-knowledge -l json; complete -c open-knowledge -l yes -s y; complete -c open-knowledge -l help -s h; complete -c open-knowledge -l version -s v; complete -c open-knowledge -l desc; complete -c open-knowledge -l archived; complete -c open-knowledge -l include-archived; complete -c open-knowledge -l semantic; complete -c open-knowledge -l context; complete -c open-knowledge -l generate; complete -c open-knowledge -l approve-write; complete -c open-knowledge -l provider; complete -c open-knowledge -l domain; complete -c open-knowledge -l file-results; complete -c open-knowledge -l fake; complete -c open-knowledge -s p -l page; complete -c open-knowledge -s l -l limit; complete -c open-knowledge -s s -l search; complete -c open-knowledge -l sort; complete -c open-knowledge -l id; complete -c open-knowledge -l store; complete -c open-knowledge -l title; complete -c open-knowledge -l content; complete -c open-knowledge -l url; complete -c open-knowledge -s t -l tag; complete -c open-knowledge -l format; complete -c open-knowledge -l completions; complete -c open-knowledge -l purpose; complete -c open-knowledge -l model; complete -c open-knowledge -l dimensions; complete -c open-knowledge -l no-color; complete -c open-knowledge -l scope -a "local global project"`);
+      console.log(`complete -c open-knowledge -f; complete -c open-knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats paths storage db wiki source ingest reindex search web ask build embeddings providers safety help ls rm edit unarchive knowledge"; complete -c open-knowledge -l json; complete -c open-knowledge -l yes -s y; complete -c open-knowledge -l help -s h; complete -c open-knowledge -l version -s v; complete -c open-knowledge -l desc; complete -c open-knowledge -l archived; complete -c open-knowledge -l include-archived; complete -c open-knowledge -l semantic; complete -c open-knowledge -l context; complete -c open-knowledge -l generate; complete -c open-knowledge -l approve-write; complete -c open-knowledge -l provider; complete -c open-knowledge -l domain; complete -c open-knowledge -l file-results; complete -c open-knowledge -l full; complete -c open-knowledge -l fake; complete -c open-knowledge -s p -l page; complete -c open-knowledge -s l -l limit; complete -c open-knowledge -s s -l search; complete -c open-knowledge -l sort; complete -c open-knowledge -l id; complete -c open-knowledge -l store; complete -c open-knowledge -l title; complete -c open-knowledge -l content; complete -c open-knowledge -l url; complete -c open-knowledge -s t -l tag; complete -c open-knowledge -l format; complete -c open-knowledge -l completions; complete -c open-knowledge -l purpose; complete -c open-knowledge -l model; complete -c open-knowledge -l dimensions; complete -c open-knowledge -l no-color; complete -c open-knowledge -l scope -a "local global project"`);
     } else {
       throw new Error("Invalid --completions value. Use 'bash', 'zsh', or 'fish'.");
     }
@@ -574,13 +577,44 @@ async function run(argv: string[]): Promise<void> {
   }
 
   if (command === 'reindex') {
-    const action = positional[1] ?? '';
-    if (action !== 'outbox') throw new Error("Invalid reindex action. Use 'outbox'.");
-    const input = positional[2];
-    if (!input) throw new Error('Usage: open-knowledge reindex outbox <file|s3://bucket/key>');
-    const result = await service.consumeOutbox(input);
-    output({ ok: true, ...result, message: `Consumed ${result.events_seen} outbox event(s)` }, flags.json);
-    return;
+    const action = positional[1] ?? 'status';
+    if (action === 'status') {
+      const result = service.reindexHealth({
+        modelRef: flags.model,
+        dimensions: flags.dimensions,
+        fake: flags.fake,
+      });
+      output({ ok: true, ...result, message: `${result.missing_embeddings} chunk(s) missing embeddings` }, flags.json);
+      return;
+    }
+    if (action === 'enqueue') {
+      const result = service.enqueueReindex({
+        modelRef: flags.model,
+        dimensions: flags.dimensions,
+        fake: flags.fake,
+      });
+      output({ ok: true, ...result, message: `Queued ${result.enqueued} embedding refresh item(s)` }, flags.json);
+      return;
+    }
+    if (action === 'embeddings') {
+      const result = await service.refreshEmbeddings({
+        full: flags.full,
+        limit: flags.limit,
+        modelRef: flags.model,
+        dimensions: flags.dimensions,
+        fake: flags.fake,
+      });
+      output({ ok: true, ...result, message: `Embedded ${result.indexed.chunks_embedded} chunk(s)` }, flags.json);
+      return;
+    }
+    if (action === 'outbox') {
+      const input = positional[2];
+      if (!input) throw new Error('Usage: open-knowledge reindex outbox <file|s3://bucket/key>');
+      const result = await service.consumeOutbox(input);
+      output({ ok: true, ...result, message: `Consumed ${result.events_seen} outbox event(s)` }, flags.json);
+      return;
+    }
+    throw new Error("Invalid reindex action. Use 'status', 'enqueue', 'embeddings', or 'outbox'.");
   }
 
   if (command === 'embeddings') {

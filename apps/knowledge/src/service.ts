@@ -13,6 +13,7 @@ import { ingestOpenFilesManifest } from './manifest-ingest';
 import { ingestSourceRef } from './source-ingest';
 import { resolveOpenFilesSource } from './source-resolver';
 import { providerStatus, listModelRegistry, type ProviderStatusResult, type ModelRegistryEntry } from './providers';
+import { enqueueMissingEmbeddings, refreshEmbeddingIndex, reindexHealth, type ReindexRuntimeOptions } from './reindex';
 import { retrieveKnowledgeContext, type RetrievalOptions } from './retrieval';
 import { hybridSearch, type HybridSearchOptions } from './search';
 import { resolveSafetyPolicy } from './safety';
@@ -185,6 +186,33 @@ export class KnowledgeService {
       input,
       config: this.config(),
       safetyPolicy: this.safetyPolicy(),
+    });
+  }
+
+  reindexHealth(options: Omit<ReindexRuntimeOptions, 'dbPath' | 'config'> = {}) {
+    const workspace = this.ensureWorkspace();
+    return reindexHealth({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config(),
+    });
+  }
+
+  enqueueReindex(options: Omit<ReindexRuntimeOptions, 'dbPath' | 'config'> = {}) {
+    const workspace = this.ensureWorkspace();
+    return enqueueMissingEmbeddings({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config(),
+    });
+  }
+
+  async refreshEmbeddings(options: Omit<ReindexRuntimeOptions & { full?: boolean; limit?: number }, 'dbPath' | 'config'> = {}) {
+    const workspace = this.ensureWorkspace();
+    return refreshEmbeddingIndex({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config(),
     });
   }
 

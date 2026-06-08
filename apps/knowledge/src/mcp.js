@@ -153,6 +153,50 @@ export function buildServer() {
     }
   });
 
+  registerTool(server, 'ok_reindex_status', 'Reindex status', 'Inspect missing embeddings, queued jobs, stale revisions, and vector index health', {
+    scope: scopeField,
+    model: z.string().optional().describe('Embedding model ref, default openai:text-embedding-3-small'),
+    dimensions: z.number().optional().describe('Embedding dimensions for deterministic fake mode'),
+    fake: z.boolean().optional().describe('Use deterministic fake embeddings for local tests'),
+  }, async ({ scope, model, dimensions, fake }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText({ ok: true, ...service.reindexHealth({ modelRef: model, dimensions, fake }) });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'ok_reindex_enqueue', 'Enqueue reindex work', 'Queue missing embedding refresh jobs for indexed source chunks', {
+    scope: scopeField,
+    model: z.string().optional().describe('Embedding model ref, default openai:text-embedding-3-small'),
+    dimensions: z.number().optional().describe('Embedding dimensions for deterministic fake mode'),
+    fake: z.boolean().optional().describe('Use deterministic fake embeddings for local tests'),
+  }, async ({ scope, model, dimensions, fake }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText({ ok: true, ...service.enqueueReindex({ modelRef: model, dimensions, fake }) });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'ok_reindex_embeddings', 'Refresh embedding index', 'Run incremental or full embedding refresh jobs with run-ledger tracking', {
+    scope: scopeField,
+    full: z.boolean().optional().describe('Delete and rebuild all embedding/vector rows first'),
+    limit: z.number().optional().describe('Maximum chunks to embed'),
+    model: z.string().optional().describe('Embedding model ref, default openai:text-embedding-3-small'),
+    dimensions: z.number().optional().describe('Embedding dimensions for deterministic fake mode'),
+    fake: z.boolean().optional().describe('Use deterministic fake embeddings for local tests'),
+  }, async ({ scope, full, limit, model, dimensions, fake }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText({ ok: true, ...await service.refreshEmbeddings({ full, limit, modelRef: model, dimensions, fake }) });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
   registerTool(server, 'ok_semantic_search', 'Semantic search', 'Search the local vector index and return cited chunks with provenance', {
     scope: scopeField,
     query: z.string().describe('Semantic query'),

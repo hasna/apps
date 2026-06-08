@@ -229,6 +229,13 @@ freshness and permission notes, graph evidence, and final rerank scores. The
 local SQLite index can later move to pgvector or a managed hosted vector store
 without changing CLI/MCP result shape.
 
+Index freshness is explicit. `reindex_queue` tracks missing or stale embedding
+work, `open-knowledge reindex status|enqueue|embeddings` operates the local
+queue, and MCP exposes the same controls through `ok_reindex_status`,
+`ok_reindex_enqueue`, and `ok_reindex_embeddings`. Hosted mode can map the same
+contract to worker queues, S3/object artifact sync, Postgres/pgvector, or a
+managed vector index while preserving the local command shape.
+
 ## Agent Workflow
 
 The target user flow is:

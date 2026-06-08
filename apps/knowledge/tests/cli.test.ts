@@ -168,13 +168,13 @@ describe('open-knowledge cli', () => {
     const init = runCli(['db', 'init', '--scope', 'project', '--json'], dir);
     expect(init.exitCode).toBe(0);
     const initOut = JSON.parse(new TextDecoder().decode(init.stdout));
-    expect(initOut.schema_version).toBe(4);
+    expect(initOut.schema_version).toBe(5);
     expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'knowledge.db'))).toBe(true);
 
     const stats = runCli(['db', 'stats', '--scope', 'project', '--json'], dir);
     expect(stats.exitCode).toBe(0);
     const statsOut = JSON.parse(new TextDecoder().decode(stats.stdout));
-    expect(statsOut.schema_version).toBe(4);
+    expect(statsOut.schema_version).toBe(5);
     expect(statsOut.sources).toBe(0);
     expect(statsOut.runs).toBe(0);
   });
@@ -303,6 +303,46 @@ describe('open-knowledge cli', () => {
     const searchOut = JSON.parse(new TextDecoder().decode(search.stdout));
     expect(searchOut.results).toHaveLength(1);
     expect(searchOut.results[0].provenance.source_uri).toBe(sourceRef);
+  });
+
+  test('reindex commands inspect queue and refresh embeddings', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-reindex-cli-'));
+    const source = join(dir, 'source.md');
+    writeFileSync(source, 'CLI reindex command should queue and refresh embeddings.');
+    const sourceRef = `file://${source}`;
+
+    const ingest = runCli(['ingest', 'source', sourceRef, '--purpose', 'knowledge_index', '--scope', 'project', '--json'], dir);
+    expect(ingest.exitCode).toBe(0);
+
+    const status = runCli(['reindex', 'status', '--scope', 'project', '--fake', '--dimensions', '8', '--json'], dir);
+    expect(status.exitCode).toBe(0);
+    const statusOut = JSON.parse(new TextDecoder().decode(status.stdout));
+    expect(statusOut.missing_embeddings).toBe(1);
+    expect(statusOut.queued.pending ?? 0).toBe(0);
+
+    const enqueue = runCli(['reindex', 'enqueue', '--scope', 'project', '--fake', '--dimensions', '8', '--json'], dir);
+    expect(enqueue.exitCode).toBe(0);
+    const enqueueOut = JSON.parse(new TextDecoder().decode(enqueue.stdout));
+    expect(enqueueOut.enqueued).toBe(1);
+
+    const refresh = runCli(['reindex', 'embeddings', '--scope', 'project', '--fake', '--dimensions', '8', '--json'], dir);
+    expect(refresh.exitCode).toBe(0);
+    const refreshOut = JSON.parse(new TextDecoder().decode(refresh.stdout));
+    expect(refreshOut.indexed.vector_entries_upserted).toBe(1);
+    expect(refreshOut.completed_queue_items).toBe(1);
+
+    const after = runCli(['reindex', 'status', '--scope', 'project', '--fake', '--dimensions', '8', '--json'], dir);
+    expect(after.exitCode).toBe(0);
+    const afterOut = JSON.parse(new TextDecoder().decode(after.stdout));
+    expect(afterOut.missing_embeddings).toBe(0);
+    expect(afterOut.queued.completed).toBe(1);
+
+    const full = runCli(['reindex', 'embeddings', '--full', '--scope', 'project', '--fake', '--dimensions', '8', '--json'], dir);
+    expect(full.exitCode).toBe(0);
+    const fullOut = JSON.parse(new TextDecoder().decode(full.stdout));
+    expect(fullOut.full).toBe(true);
+    expect(fullOut.deleted_vector_entries).toBe(1);
+    expect(fullOut.indexed.vector_entries_upserted).toBe(1);
   });
 
   test('search command returns hybrid source, wiki, and semantic results', () => {

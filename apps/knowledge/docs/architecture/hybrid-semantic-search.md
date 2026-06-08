@@ -35,6 +35,8 @@ Local mode starts with SQLite:
 - `vector_index_entries` stores searchable embedding rows with provider/model,
   dimensions, source revision/hash, chunk offsets, status, timestamps, and
   provenance metadata.
+- `reindex_queue` stores idempotent refresh jobs for missing/stale embedding
+  work.
 - `wiki_pages`, `wiki_backlinks`, and `citations` provide graph and provenance
   signals.
 - `knowledge_indexes` tracks generated machine-readable shards.
@@ -50,6 +52,8 @@ The current local command surface is:
 open-knowledge search "company wiki policy" --scope project --json
 open-knowledge search "company wiki policy" --scope project --semantic --json
 open-knowledge search "company wiki policy" --scope project --context --json
+open-knowledge reindex status --scope project --json
+open-knowledge reindex embeddings --scope project --fake --json
 open-knowledge embeddings index --scope project --model openai:text-embedding-3-small
 open-knowledge embeddings search "company wiki policy" --scope project --json
 ```
@@ -57,7 +61,8 @@ open-knowledge embeddings search "company wiki policy" --scope project --json
 `search` is the structured hybrid layer for agents. `embeddings search` is the
 lower-level vector-only command. MCP exposes the same capability through
 `ok_search`, `knowledge_search`, `ok_embeddings_status`, `ok_embeddings_index`,
-and `ok_semantic_search`. Deterministic `--fake` embeddings exist for tests and
+`ok_semantic_search`, `ok_reindex_status`, `ok_reindex_enqueue`, and
+`ok_reindex_embeddings`. Deterministic `--fake` embeddings exist for tests and
 offline verification only.
 
 ## Hosted Indexes
@@ -158,6 +163,10 @@ Reindexing is driven by source revisions:
 - Local outbox consumption deletes stale `chunk_embeddings` and
   `vector_index_entries` for deleted revisions, so semantic search cannot return
   removed source chunks.
+- `reindex status` reports missing embeddings, stale revisions, queued work, and
+  vector counts; `reindex enqueue` records missing work in `reindex_queue`.
+- `reindex embeddings` performs incremental refreshes, while `--full` clears and
+  rebuilds `chunk_embeddings` and `vector_index_entries`.
 - Wiki pages should track the source revisions they cite so lint can flag stale
   pages.
 - Embedding refresh jobs should be idempotent and checkpointed in `runs` and

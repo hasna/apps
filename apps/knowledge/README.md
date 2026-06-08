@@ -80,6 +80,11 @@ open-knowledge ingest source file:///absolute/path/to/handbook.md --purpose know
 # Consume open-files change events and invalidate stale source chunks
 open-knowledge reindex outbox ./open-files-outbox.jsonl --scope project --json
 
+# Inspect and refresh the embedding queue after source changes
+open-knowledge reindex status --scope project --json
+open-knowledge reindex enqueue --scope project --json
+open-knowledge reindex embeddings --scope project --fake --json
+
 # Resolve indexed source text and citation evidence through the read-only source boundary
 open-knowledge source resolve open-files://file/f_123/revision/rev_456 --scope project --json
 
@@ -243,11 +248,23 @@ resolver API lands.
 
 ### reindex
 ```bash
+open-knowledge reindex status [--model openai:text-embedding-3-small] [--scope project] [--json]
+open-knowledge reindex enqueue [--model openai:text-embedding-3-small] [--scope project] [--json]
+open-knowledge reindex embeddings [--full] [--limit <n>] [--model openai:text-embedding-3-small] [--scope project] [--json]
 open-knowledge reindex outbox <file|s3://bucket/key> [--scope project] [--json]
 ```
-Consume open-files JSON or JSONL change events. This invalidates matching
-source chunks and embeddings by source ref, revision, or hash, updates
-permission/path/delete metadata, and records a local run ledger.
+Inspect and operate index refresh work. `reindex status` reports missing
+embedding rows, stale revisions, queued jobs, and vector counts. `reindex
+enqueue` adds missing source chunks to `reindex_queue` idempotently. `reindex
+embeddings` records an `embedding-refresh` run, indexes missing chunks, and
+marks completed queue rows; `--full` first clears `chunk_embeddings` and
+`vector_index_entries` so the current source catalog is rebuilt from scratch.
+
+`reindex outbox` consumes open-files JSON or JSONL change events. This
+invalidates matching source chunks and embeddings by source ref, revision, or
+hash, updates permission/path/delete metadata, and records a local run ledger.
+Outbox inputs can be local files or allowed S3 objects, but raw source files
+remain owned by `open-files`.
 
 ### search
 ```bash
@@ -369,12 +386,13 @@ The MCP server exposes item tools (`ok_add`, `ok_list`, `ok_get`, `ok_update`,
 `ok_import`, `ok_batch`), workspace/storage inspection (`ok_paths`,
 `ok_storage_status`), provider/embedding tools (`ok_provider_status`,
 `ok_provider_models`, `ok_embeddings_status`, `ok_embeddings_index`,
-`ok_semantic_search`), hybrid retrieval (`ok_search`), and source-ref
-parsing/resolution (`ok_parse_source_ref`, `ok_resolve_source`). The
-`knowledge_search` MCP tool returns reranked citation context packs for agent
-prompts, and `knowledge_ask` runs the same prompt flow exposed by
-`open-knowledge ask`. `ok_web_search` exposes safety-gated provider web search
-to MCP clients.
+`ok_semantic_search`), reindex tools (`ok_reindex_status`,
+`ok_reindex_enqueue`, `ok_reindex_embeddings`), hybrid retrieval (`ok_search`),
+and source-ref parsing/resolution (`ok_parse_source_ref`,
+`ok_resolve_source`). The `knowledge_search` MCP tool returns reranked citation
+context packs for agent prompts, and `knowledge_ask` runs the same prompt flow
+exposed by `open-knowledge ask`. `ok_web_search` exposes safety-gated provider
+web search to MCP clients.
 
 ## Source And Artifact Boundary
 

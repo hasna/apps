@@ -69,6 +69,9 @@ describe('open-knowledge MCP', () => {
       expect(tools.tools.some((tool) => tool.name === 'ok_embeddings_status')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_embeddings_index')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_semantic_search')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'ok_reindex_status')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'ok_reindex_enqueue')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'ok_reindex_embeddings')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_search')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_search')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_ask')).toBe(true);
@@ -140,11 +143,31 @@ describe('open-knowledge MCP', () => {
       }));
       expect(embeddingStatus.total_vector_entries).toBe(0);
 
+      const reindexStatus = parseToolJson(await client.callTool({
+        name: 'ok_reindex_status',
+        arguments: { scope: 'project', fake: true, dimensions: 8 },
+      }));
+      expect(reindexStatus.missing_embeddings).toBe(1);
+
       const embeddingIndex = parseToolJson(await client.callTool({
         name: 'ok_embeddings_index',
         arguments: { scope: 'project', fake: true, dimensions: 8 },
       }));
       expect(embeddingIndex.vector_entries_upserted).toBe(1);
+
+      const reindexEnqueue = parseToolJson(await client.callTool({
+        name: 'ok_reindex_enqueue',
+        arguments: { scope: 'project', fake: true, dimensions: 8 },
+      }));
+      expect(reindexEnqueue.enqueued).toBe(0);
+
+      const reindexEmbeddings = parseToolJson(await client.callTool({
+        name: 'ok_reindex_embeddings',
+        arguments: { scope: 'project', full: true, fake: true, dimensions: 8 },
+      }));
+      expect(reindexEmbeddings.full).toBe(true);
+      expect(reindexEmbeddings.deleted_vector_entries).toBe(1);
+      expect(reindexEmbeddings.indexed.vector_entries_upserted).toBe(1);
 
       const semanticSearch = parseToolJson(await client.callTool({
         name: 'ok_semantic_search',

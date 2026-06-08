@@ -13660,7 +13660,7 @@ import { existsSync as existsSync7, readFileSync as readFileSync7, writeFileSync
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.18",
+  version: "0.2.19",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   bin: {
@@ -14386,6 +14386,28 @@ CREATE INDEX IF NOT EXISTS idx_vector_index_status ON vector_index_entries(statu
 INSERT OR IGNORE INTO schema_versions(version, applied_at)
 VALUES (4, datetime('now'));
 `;
+var MIGRATION_5 = `
+CREATE TABLE IF NOT EXISTS reindex_queue (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  source_uri TEXT,
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(kind, target_id, reason)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reindex_queue_status ON reindex_queue(status);
+CREATE INDEX IF NOT EXISTS idx_reindex_queue_kind_target ON reindex_queue(kind, target_id);
+CREATE INDEX IF NOT EXISTS idx_reindex_queue_source_uri ON reindex_queue(source_uri);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (5, datetime('now'));
+`;
 function openKnowledgeDb(path) {
   ensureParentDir(path);
   const db = new Database(path);
@@ -14403,6 +14425,8 @@ function migrateKnowledgeDb(path) {
       db.exec(MIGRATION_3);
     if (getSchemaVersion(db) < 4)
       db.exec(MIGRATION_4);
+    if (getSchemaVersion(db) < 5)
+      db.exec(MIGRATION_5);
     return { path, schema_version: getSchemaVersion(db) };
   } finally {
     db.close();
@@ -14434,7 +14458,8 @@ function getKnowledgeDbStats(path) {
       approval_gates: count(db, "approval_gates"),
       storage_objects: count(db, "storage_objects"),
       embeddings: count(db, "chunk_embeddings"),
-      vector_entries: count(db, "vector_index_entries")
+      vector_entries: count(db, "vector_index_entries"),
+      reindex_queue: count(db, "reindex_queue")
     };
   } finally {
     db.close();
@@ -17348,10 +17373,197 @@ async function ingestSourceRef(options) {
   };
 }
 
-// src/web-search.ts
+// src/reindex.ts
 import { createHash as createHash7, randomUUID as randomUUID6 } from "crypto";
+function stableId5(prefix, value) {
+  return `${prefix}_${createHash7("sha256").update(value).digest("hex").slice(0, 20)}`;
+}
+function queueCounts(dbPath) {
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const rows = db.query(`SELECT status, COUNT(*) AS n FROM reindex_queue GROUP BY status ORDER BY status`).all();
+    return Object.fromEntries(rows.map((row) => [row.status, row.n]));
+  } finally {
+    db.close();
+  }
+}
+function missingEmbeddingRows(dbPath, options) {
+  const modelRef = resolveEmbeddingModelRef(options.modelRef, options.config);
+  const parsed = parseModelRef(modelRef);
+  const db = openKnowledgeDb(dbPath);
+  try {
+    return db.query(`SELECT c.id AS chunk_id, c.source_revision_id, s.uri AS source_uri
+       FROM chunks c
+       LEFT JOIN source_revisions sr ON sr.id = c.source_revision_id
+       LEFT JOIN sources s ON s.id = sr.source_id
+       LEFT JOIN vector_index_entries v ON v.chunk_id = c.id AND v.provider = ? AND v.model = ?
+       WHERE v.id IS NULL
+       ORDER BY c.created_at ASC, c.ordinal ASC`).all(parsed.provider, parsed.model);
+  } finally {
+    db.close();
+  }
+}
+function reindexHealth(options) {
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    const version2 = db.query("SELECT MAX(version) AS version FROM schema_versions").get()?.version ?? 0;
+    const chunks = db.query("SELECT COUNT(*) AS n FROM chunks").get()?.n ?? 0;
+    const vectorEntries = db.query("SELECT COUNT(*) AS n FROM vector_index_entries").get()?.n ?? 0;
+    const missing = missingEmbeddingRows(options.dbPath, options).length;
+    const stale = db.query(`SELECT COUNT(*) AS n FROM source_revisions
+       WHERE metadata_json LIKE '%"reindex_required":true%' OR metadata_json LIKE '%"status":"stale"%'`).get()?.n ?? 0;
+    return {
+      schema_version: version2,
+      chunks,
+      vector_entries: vectorEntries,
+      missing_embeddings: missing,
+      queued: queueCounts(options.dbPath),
+      stale_revisions: stale
+    };
+  } finally {
+    db.close();
+  }
+}
+function enqueueMissingEmbeddings(options) {
+  migrateKnowledgeDb(options.dbPath);
+  const now = (options.now ?? new Date).toISOString();
+  const reason = options.reason ?? "missing_embedding";
+  const rows = missingEmbeddingRows(options.dbPath, options);
+  const db = openKnowledgeDb(options.dbPath);
+  let enqueued = 0;
+  let alreadyQueued = 0;
+  try {
+    const write = db.transaction(() => {
+      for (const row of rows) {
+        const id = stableId5("rq", `embedding\x00${row.chunk_id}\x00${reason}`);
+        const before = db.query("SELECT id FROM reindex_queue WHERE kind = ? AND target_id = ? AND reason = ?").get("embedding", row.chunk_id, reason);
+        if (before) {
+          alreadyQueued += 1;
+          continue;
+        }
+        db.run(`INSERT INTO reindex_queue (id, kind, target_id, source_uri, reason, status, metadata_json, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+          id,
+          "embedding",
+          row.chunk_id,
+          row.source_uri,
+          reason,
+          "pending",
+          JSON.stringify({ source_revision_id: row.source_revision_id }),
+          now,
+          now
+        ]);
+        enqueued += 1;
+      }
+    });
+    write();
+  } finally {
+    db.close();
+  }
+  return { enqueued, already_queued: alreadyQueued, reason };
+}
+function clearEmbeddingIndex(dbPath) {
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const embeddings = db.query("SELECT COUNT(*) AS n FROM chunk_embeddings").get()?.n ?? 0;
+    const vectorEntries = db.query("SELECT COUNT(*) AS n FROM vector_index_entries").get()?.n ?? 0;
+    db.run("DELETE FROM vector_index_entries");
+    db.run("DELETE FROM chunk_embeddings");
+    return { embeddings, vectorEntries };
+  } finally {
+    db.close();
+  }
+}
+function completeIndexedQueueItems(dbPath, options, now) {
+  const modelRef = resolveEmbeddingModelRef(options.modelRef, options.config);
+  const parsed = parseModelRef(modelRef);
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const result = db.run(`UPDATE reindex_queue
+       SET status = ?, updated_at = ?
+       WHERE kind = ?
+         AND status = ?
+         AND EXISTS (
+           SELECT 1 FROM vector_index_entries v
+           WHERE v.chunk_id = reindex_queue.target_id
+             AND v.provider = ?
+             AND v.model = ?
+         )`, ["completed", now, "embedding", "pending", parsed.provider, parsed.model]);
+    return result.changes;
+  } finally {
+    db.close();
+  }
+}
+async function refreshEmbeddingIndex(options) {
+  migrateKnowledgeDb(options.dbPath);
+  const now = (options.now ?? new Date).toISOString();
+  const runId = `run_${randomUUID6()}`;
+  const deleted = options.full ? clearEmbeddingIndex(options.dbPath) : { embeddings: 0, vectorEntries: 0 };
+  const queued = enqueueMissingEmbeddings({ ...options, reason: options.full ? "full_embedding_rebuild" : "missing_embedding" });
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    db.run(`INSERT INTO runs (id, type, prompt, status, provider, model, metadata_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      runId,
+      "embedding-refresh",
+      options.full ? "full" : "incremental",
+      "running",
+      "local",
+      resolveEmbeddingModelRef(options.modelRef, options.config),
+      JSON.stringify({ full: options.full === true, queued }),
+      now,
+      now
+    ]);
+  } finally {
+    db.close();
+  }
+  const indexed = await indexKnowledgeEmbeddings({
+    dbPath: options.dbPath,
+    config: options.config,
+    env: options.env,
+    modelRef: options.modelRef,
+    dimensions: options.dimensions,
+    fake: options.fake,
+    limit: options.limit,
+    now: options.now
+  });
+  const completedQueueItems = completeIndexedQueueItems(options.dbPath, options, now);
+  const doneDb = openKnowledgeDb(options.dbPath);
+  try {
+    doneDb.run(`UPDATE runs SET status = ?, metadata_json = ?, updated_at = ? WHERE id = ?`, [
+      "completed",
+      JSON.stringify({ full: options.full === true, queued, indexed, completed_queue_items: completedQueueItems }),
+      now,
+      runId
+    ]);
+    doneDb.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`, [
+      `evt_${randomUUID6()}`,
+      runId,
+      "info",
+      "embedding_refresh_completed",
+      JSON.stringify({ queued, indexed, completed_queue_items: completedQueueItems }),
+      now
+    ]);
+  } finally {
+    doneDb.close();
+  }
+  return {
+    run_id: runId,
+    full: options.full === true,
+    deleted_embeddings: deleted.embeddings,
+    deleted_vector_entries: deleted.vectorEntries,
+    queued,
+    indexed,
+    completed_queue_items: completedQueueItems
+  };
+}
+
+// src/web-search.ts
+import { createHash as createHash8, randomUUID as randomUUID7 } from "crypto";
 function stableHash(value) {
-  return `sha256:${createHash7("sha256").update(value).digest("hex")}`;
+  return `sha256:${createHash8("sha256").update(value).digest("hex")}`;
 }
 function estimateTokens2(text) {
   const words = text.trim().split(/\s+/).filter(Boolean).length;
@@ -17492,7 +17704,7 @@ async function runProviderWebSearch(options) {
   const parsed = parseModelRef(modelRef);
   const provider = options.provider ?? parsed.provider;
   const model = parsed.provider === provider ? parsed.model : providerSettings(options.config, provider).default_model;
-  const runId = `run_${randomUUID6()}`;
+  const runId = `run_${randomUUID7()}`;
   if (!options.fake && options.safetyPolicy)
     assertWebSearchAllowed(options.safetyPolicy);
   if (!options.fake && provider !== "openai" && provider !== "anthropic") {
@@ -17564,7 +17776,7 @@ async function runProviderWebSearch(options) {
     ]);
     writeDb.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`, [
-      `evt_${randomUUID6()}`,
+      `evt_${randomUUID7()}`,
       runId,
       "info",
       "provider_web_search_completed",
@@ -17600,7 +17812,7 @@ async function runProviderWebSearch(options) {
 }
 
 // src/storage-contract.ts
-import { createHash as createHash8, randomUUID as randomUUID7 } from "crypto";
+import { createHash as createHash9, randomUUID as randomUUID8 } from "crypto";
 var GENERATED_ARTIFACTS = [
   {
     kind: "schema",
@@ -17636,7 +17848,7 @@ var GENERATED_ARTIFACTS = [
 function hashArtifactBody(body) {
   const bytes = typeof body === "string" ? Buffer.from(body) : Buffer.from(body);
   return {
-    hash: `sha256:${createHash8("sha256").update(bytes).digest("hex")}`,
+    hash: `sha256:${createHash9("sha256").update(bytes).digest("hex")}`,
     size_bytes: bytes.byteLength
   };
 }
@@ -17761,7 +17973,7 @@ function recordStorageObjects(db, objects, now = new Date) {
   `);
   const insert = db.transaction((entries) => {
     for (const entry of entries) {
-      statement.run(randomUUID7(), entry.uri, entry.kind, entry.content_type ?? null, entry.hash ?? null, entry.size_bytes ?? null, JSON.stringify({
+      statement.run(randomUUID8(), entry.uri, entry.kind, entry.content_type ?? null, entry.hash ?? null, entry.size_bytes ?? null, JSON.stringify({
         key: entry.key,
         ...entry.metadata ?? {}
       }), timestamp, timestamp);
@@ -17771,15 +17983,15 @@ function recordStorageObjects(db, objects, now = new Date) {
 }
 
 // src/wiki-layout.ts
-import { createHash as createHash9 } from "crypto";
+import { createHash as createHash10 } from "crypto";
 function todayParts(now) {
   const year = String(now.getUTCFullYear());
   const month = String(now.getUTCMonth() + 1).padStart(2, "0");
   const day = String(now.getUTCDate()).padStart(2, "0");
   return { year, month, day };
 }
-function stableId5(prefix, value) {
-  return `${prefix}_${createHash9("sha256").update(value).digest("hex").slice(0, 20)}`;
+function stableId6(prefix, value) {
+  return `${prefix}_${createHash10("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
 function estimateTokenCount2(text) {
   const words = text.trim().split(/\s+/).filter(Boolean).length;
@@ -17897,7 +18109,7 @@ function provenanceFor(artifact) {
 }
 function recordWikiChunk(db, pageId, title, artifact, body, now) {
   const provenance = provenanceFor(artifact);
-  const chunkId = stableId5("chk", `${pageId}\x00${artifact.hash ?? artifact.uri}`);
+  const chunkId = stableId6("chk", `${pageId}\x00${artifact.hash ?? artifact.uri}`);
   const existing = db.query("SELECT id FROM chunks WHERE wiki_page_id = ?").all(pageId);
   for (const row of existing)
     db.run("DELETE FROM chunks_fts WHERE chunk_id = ?", [row.id]);
@@ -17933,7 +18145,7 @@ function recordWikiLayoutCatalog(db, artifacts, now = new Date) {
          artifact_uri = excluded.artifact_uri,
          metadata_json = excluded.metadata_json,
          updated_at = excluded.updated_at`, [
-      stableId5("idx", "root:indexes/root.md"),
+      stableId6("idx", "root:indexes/root.md"),
       "root",
       "root",
       rootIndex.uri,
@@ -17948,7 +18160,7 @@ function recordWikiLayoutCatalog(db, artifacts, now = new Date) {
     ]);
   }
   if (wikiReadme) {
-    const wikiPageId = stableId5("wiki", "wiki/README.md");
+    const wikiPageId = stableId6("wiki", "wiki/README.md");
     db.run(`INSERT INTO wiki_pages (id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(path) DO UPDATE SET
@@ -18092,6 +18304,30 @@ class KnowledgeService {
       input,
       config: this.config(),
       safetyPolicy: this.safetyPolicy()
+    });
+  }
+  reindexHealth(options = {}) {
+    const workspace = this.ensureWorkspace();
+    return reindexHealth({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config()
+    });
+  }
+  enqueueReindex(options = {}) {
+    const workspace = this.ensureWorkspace();
+    return enqueueMissingEmbeddings({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config()
+    });
+  }
+  async refreshEmbeddings(options = {}) {
+    const workspace = this.ensureWorkspace();
+    return refreshEmbeddingIndex({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config()
     });
   }
   providerStatus(env = process.env) {
@@ -18283,6 +18519,47 @@ function buildServer() {
     const service = createKnowledgeService({ scope });
     try {
       return jsonText({ ok: true, ...await service.indexEmbeddings({ limit, modelRef: model, dimensions, fake }) });
+    } catch (error48) {
+      return errorText(error48 instanceof Error ? error48.message : String(error48));
+    }
+  });
+  registerTool(server, "ok_reindex_status", "Reindex status", "Inspect missing embeddings, queued jobs, stale revisions, and vector index health", {
+    scope: scopeField,
+    model: exports_external.string().optional().describe("Embedding model ref, default openai:text-embedding-3-small"),
+    dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
+    fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings for local tests")
+  }, async ({ scope, model, dimensions, fake }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText({ ok: true, ...service.reindexHealth({ modelRef: model, dimensions, fake }) });
+    } catch (error48) {
+      return errorText(error48 instanceof Error ? error48.message : String(error48));
+    }
+  });
+  registerTool(server, "ok_reindex_enqueue", "Enqueue reindex work", "Queue missing embedding refresh jobs for indexed source chunks", {
+    scope: scopeField,
+    model: exports_external.string().optional().describe("Embedding model ref, default openai:text-embedding-3-small"),
+    dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
+    fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings for local tests")
+  }, async ({ scope, model, dimensions, fake }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText({ ok: true, ...service.enqueueReindex({ modelRef: model, dimensions, fake }) });
+    } catch (error48) {
+      return errorText(error48 instanceof Error ? error48.message : String(error48));
+    }
+  });
+  registerTool(server, "ok_reindex_embeddings", "Refresh embedding index", "Run incremental or full embedding refresh jobs with run-ledger tracking", {
+    scope: scopeField,
+    full: exports_external.boolean().optional().describe("Delete and rebuild all embedding/vector rows first"),
+    limit: exports_external.number().optional().describe("Maximum chunks to embed"),
+    model: exports_external.string().optional().describe("Embedding model ref, default openai:text-embedding-3-small"),
+    dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
+    fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings for local tests")
+  }, async ({ scope, full, limit, model, dimensions, fake }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText({ ok: true, ...await service.refreshEmbeddings({ full, limit, modelRef: model, dimensions, fake }) });
     } catch (error48) {
       return errorText(error48 instanceof Error ? error48.message : String(error48));
     }
