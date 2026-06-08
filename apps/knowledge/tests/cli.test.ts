@@ -336,6 +336,12 @@ describe('open-knowledge cli', () => {
     const semanticOut = JSON.parse(new TextDecoder().decode(semantic.stdout));
     expect(semanticOut.mode.semantic).toBe(true);
     expect(semanticOut.counts.semantic_results).toBeGreaterThan(0);
+
+    const context = runCli(['search', 'company', 'wiki', 'content', '--context', '--scope', 'project', '--semantic', '--fake', '--dimensions', '8', '--json'], dir);
+    expect(context.exitCode).toBe(0);
+    const contextOut = JSON.parse(new TextDecoder().decode(context.stdout));
+    expect(contextOut.excerpts.length).toBeGreaterThan(0);
+    expect(contextOut.citations[0].provenance.source_owner).toBe('open-files');
   });
 
   test('safety commands expose policy, approvals, redaction, audit, and S3 denial', () => {

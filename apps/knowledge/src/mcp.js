@@ -186,6 +186,23 @@ export function buildServer() {
     }
   });
 
+  registerTool(server, 'knowledge_search', 'Knowledge context search', 'Return a reranked citation context pack for agent prompts', {
+    scope: scopeField,
+    query: z.string().describe('Search query or prompt'),
+    limit: z.number().optional().describe('Maximum context results'),
+    semantic: z.boolean().optional().describe('Include vector semantic results'),
+    model: z.string().optional().describe('Embedding model ref, default openai:text-embedding-3-small'),
+    dimensions: z.number().optional().describe('Embedding dimensions for deterministic fake mode'),
+    fake: z.boolean().optional().describe('Use deterministic fake embeddings for local tests'),
+  }, async ({ scope, query, limit, semantic, model, dimensions, fake }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText({ ok: true, ...await service.retrieveContext({ query, limit, semantic, modelRef: model, dimensions, fake }) });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
   registerTool(server, 'ok_add', 'Add a knowledge item', 'Add a new item to the knowledge store', {
     title: z.string().describe('Item title'),
     content: z.string().describe('Item content/body'),

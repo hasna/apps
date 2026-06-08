@@ -49,14 +49,15 @@ The current local command surface is:
 ```bash
 open-knowledge search "company wiki policy" --scope project --json
 open-knowledge search "company wiki policy" --scope project --semantic --json
+open-knowledge search "company wiki policy" --scope project --context --json
 open-knowledge embeddings index --scope project --model openai:text-embedding-3-small
 open-knowledge embeddings search "company wiki policy" --scope project --json
 ```
 
 `search` is the structured hybrid layer for agents. `embeddings search` is the
 lower-level vector-only command. MCP exposes the same capability through
-`ok_search`, `ok_embeddings_status`, `ok_embeddings_index`, and
-`ok_semantic_search`. Deterministic `--fake` embeddings exist for tests and
+`ok_search`, `knowledge_search`, `ok_embeddings_status`, `ok_embeddings_index`,
+and `ok_semantic_search`. Deterministic `--fake` embeddings exist for tests and
 offline verification only.
 
 ## Hosted Indexes
@@ -131,6 +132,12 @@ They should receive context packs:
 - Suggested durable wiki updates.
 
 This keeps agent prompts stable while the retrieval internals evolve.
+
+The local context-pack implementation is available through
+`open-knowledge search --context` and MCP `knowledge_search`. It reranks merged
+search rows using exact-term coverage, citation availability, source freshness,
+and source/wiki authority, then emits excerpts and citation objects that preserve
+source refs, artifact URIs, revision/hash metadata, offsets, and provenance.
 
 ## Reindexing
 

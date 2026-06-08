@@ -70,6 +70,7 @@ describe('open-knowledge MCP', () => {
       expect(tools.tools.some((tool) => tool.name === 'ok_embeddings_index')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_semantic_search')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_search')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_search')).toBe(true);
 
       const add = parseToolJson(await client.callTool({
         name: 'ok_add',
@@ -156,6 +157,13 @@ describe('open-knowledge MCP', () => {
       }));
       expect(hybridSearch.results.some((entry: any) => entry.kind === 'source_chunk')).toBe(true);
       expect(hybridSearch.counts.semantic_results).toBeGreaterThan(0);
+
+      const contextSearch = parseToolJson(await client.callTool({
+        name: 'knowledge_search',
+        arguments: { scope: 'project', query: 'resolver source text', semantic: true, fake: true, dimensions: 8 },
+      }));
+      expect(contextSearch.excerpts.length).toBeGreaterThan(0);
+      expect(contextSearch.citations[0].source_uri).toBe('open-files://file/file_mcp');
 
       const batch = parseToolJson(await client.callTool({
         name: 'ok_batch',

@@ -223,8 +223,11 @@ generated metadata rows, not raw source bytes, and pins each row to `open-files`
 provenance: source ref/URI, revision/hash, chunk offsets, token count, provider,
 model, dimensions, status, and timestamps. The structured `search` contract
 merges keyword FTS, wiki/index catalog hits, generated wiki chunks, and optional
-vector results so the local SQLite index can later move to pgvector or a managed
-hosted vector store without changing CLI/MCP result shape.
+vector results. `open-knowledge search --context` and MCP `knowledge_search`
+turn those rows into reranked citation context packs with selected excerpts,
+freshness and permission notes, graph evidence, and final rerank scores. The
+local SQLite index can later move to pgvector or a managed hosted vector store
+without changing CLI/MCP result shape.
 
 ## Agent Workflow
 

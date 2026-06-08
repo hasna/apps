@@ -12,6 +12,7 @@ import { ingestOpenFilesManifest } from './manifest-ingest';
 import { ingestSourceRef } from './source-ingest';
 import { resolveOpenFilesSource } from './source-resolver';
 import { providerStatus, listModelRegistry, type ProviderStatusResult, type ModelRegistryEntry } from './providers';
+import { retrieveKnowledgeContext, type RetrievalOptions } from './retrieval';
 import { hybridSearch, type HybridSearchOptions } from './search';
 import { resolveSafetyPolicy } from './safety';
 import {
@@ -219,6 +220,15 @@ export class KnowledgeService {
   async search(options: Omit<HybridSearchOptions, 'dbPath' | 'config'>) {
     const workspace = this.ensureWorkspace();
     return hybridSearch({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config(),
+    });
+  }
+
+  async retrieveContext(options: Omit<RetrievalOptions, 'dbPath' | 'config'>) {
+    const workspace = this.ensureWorkspace();
+    return retrieveKnowledgeContext({
       ...options,
       dbPath: workspace.knowledgeDbPath,
       config: this.config(),

@@ -97,6 +97,7 @@ open-knowledge embeddings search "company wiki policy" --scope project --json
 # Hybrid search over source chunks, generated wiki pages, indexes, and optional vectors
 open-knowledge search "company wiki policy" --scope project --json
 open-knowledge search "company wiki policy" --scope project --semantic --json
+open-knowledge search "company wiki policy" --scope project --context --json
 ```
 
 ## Commands
@@ -245,12 +246,18 @@ permission/path/delete metadata, and records a local run ledger.
 ```bash
 open-knowledge search <query> [--scope project] [--limit <n>] [--json]
 open-knowledge search <query> --semantic [--model openai:text-embedding-3-small] [--scope project] [--json]
+open-knowledge search <query> --context [--semantic] [--scope project] [--json]
 ```
 Run hybrid search over `chunks_fts`, generated wiki chunks, wiki/index catalog
 rows, and optional vector results. The default path is local-only keyword and
 catalog search. `--semantic` embeds the query and merges vector results from
 `vector_index_entries`, preserving source refs, artifact URIs, citations,
 revision/hash metadata, and provenance in each structured result.
+
+`--context` returns a reranked context pack for agents: selected excerpts,
+assembled citations, freshness and permission notes, graph evidence from
+`citations`/`wiki_backlinks`, and final rerank scores. This is the shape future
+`knowledge <prompt>` flows should send to a model instead of raw search rows.
 
 ### safety
 ```bash
@@ -331,7 +338,9 @@ The MCP server exposes item tools (`ok_add`, `ok_list`, `ok_get`, `ok_update`,
 `ok_storage_status`), provider/embedding tools (`ok_provider_status`,
 `ok_provider_models`, `ok_embeddings_status`, `ok_embeddings_index`,
 `ok_semantic_search`), hybrid retrieval (`ok_search`), and source-ref
-parsing/resolution (`ok_parse_source_ref`, `ok_resolve_source`).
+parsing/resolution (`ok_parse_source_ref`, `ok_resolve_source`). The
+`knowledge_search` MCP tool returns reranked citation context packs for agent
+prompts.
 
 ## Source And Artifact Boundary
 
