@@ -4,7 +4,7 @@
  * Licensed under the Apache License, Version 2.0
  */
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -160,6 +160,32 @@ describe('open-knowledge cli', () => {
     expect(add.exitCode).toBe(0);
     expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'db.json'))).toBe(true);
     expect(existsSync(join(dir, '.open-knowledge', 'db.json'))).toBe(false);
+  });
+
+  test('global store migrates legacy .open-knowledge data into the Hasna app path', () => {
+    const home = mkdtempSync(join(tmpdir(), 'ok-legacy-home-'));
+    const legacyDir = join(home, '.open-knowledge');
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(legacyDir, 'db.json'), `${JSON.stringify({
+      items: [{
+        id: 'k_legacy_contract',
+        short_id: 'legacy_contr',
+        title: 'Legacy global item',
+        content: 'Migrated into the Hasna app workspace.',
+        tags: ['legacy'],
+        metadata: {},
+        archived: false,
+        created_at: '2026-06-08T00:00:00.000Z',
+        updated_at: '2026-06-08T00:00:00.000Z',
+      }],
+    }, null, 2)}\n`);
+
+    const list = runCli(['list', '--json'], undefined, { HOME: home });
+    expect(list.exitCode).toBe(0);
+    const listOut = JSON.parse(new TextDecoder().decode(list.stdout));
+    expect(listOut.total).toBe(1);
+    expect(listOut.items[0].title).toBe('Legacy global item');
+    expect(existsSync(join(home, '.hasna', 'apps', 'knowledge', 'db.json'))).toBe(true);
   });
 
   test('setup, auth, and remote commands expose hosted-aware JSON contracts', () => {
@@ -455,6 +481,58 @@ describe('open-knowledge cli', () => {
     expect(stats.exitCode).toBe(0);
     const statsOut = JSON.parse(new TextDecoder().decode(stats.stdout));
     expect(statsOut.runs).toBe(2);
+  });
+
+  test('build command JSON contract records fake provider runs without durable writes', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-build-contract-cli-'));
+    const source = join(dir, 'source.md');
+    writeFileSync(source, 'CLI build contract should cite source context and keep wiki writes explicit.');
+    const sourceRef = `file://${source}`;
+
+    const ingest = runCli(['ingest', 'source', sourceRef, '--purpose', 'knowledge_index', '--scope', 'project', '--json'], dir);
+    expect(ingest.exitCode).toBe(0);
+
+    const build = runCli(['build', 'Summarize', 'the', 'build', 'contract', '--scope', 'project', '--generate', '--fake', '--model', 'openai:gpt-5-mini', '--approve-write', '--json'], dir);
+    expect(build.exitCode).toBe(0);
+    const buildOut = JSON.parse(new TextDecoder().decode(build.stdout));
+    expect(Object.keys(buildOut)).toEqual(expect.arrayContaining([
+      'ok',
+      'run_id',
+      'prompt',
+      'generated',
+      'provider',
+      'model',
+      'answer',
+      'context',
+      'citations',
+      'proposed_wiki_updates',
+      'write_policy',
+      'usage',
+      'warnings',
+      'message',
+    ]));
+    expect(buildOut.generated).toBe(true);
+    expect(buildOut.provider).toBe('openai');
+    expect(buildOut.model).toBe('gpt-5-mini');
+    expect(buildOut.answer).toContain('Fake generated answer');
+    expect(buildOut.citations[0].source_uri).toBe(sourceRef);
+    expect(buildOut.proposed_wiki_updates[0]).toMatchObject({
+      kind: 'answer_note',
+      requires_approval: true,
+    });
+    expect(buildOut.write_policy).toMatchObject({
+      approved: true,
+      durable_writes_performed: false,
+    });
+    expect(buildOut.usage.input_tokens).toBeGreaterThan(0);
+    expect(buildOut.usage.output_tokens).toBeGreaterThan(0);
+
+    const stats = runCli(['db', 'stats', '--scope', 'project', '--json'], dir);
+    expect(stats.exitCode).toBe(0);
+    const statsOut = JSON.parse(new TextDecoder().decode(stats.stdout));
+    expect(statsOut.runs).toBe(1);
+    expect(statsOut.run_events).toBeGreaterThanOrEqual(2);
+    expect(statsOut.wiki_pages).toBe(0);
   });
 
   test('wiki compile, file-answer, and lint commands manage durable cited pages', () => {
