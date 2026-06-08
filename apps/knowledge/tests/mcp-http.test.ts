@@ -41,6 +41,11 @@ describe('knowledge buildServer stdio registration', () => {
 
     const tools = await client.listTools();
     expect(tools.tools.some((tool) => tool.name === 'ok_stats')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'knowledge_build')).toBe(true);
+
+    const resources = await client.listResources();
+    expect(resources.resources.some((resource) => resource.uri === 'knowledge://project/config')).toBe(true);
+    expect(resources.resources.some((resource) => resource.uri === 'knowledge://project/runs')).toBe(true);
 
     await client.close();
     await server.close();

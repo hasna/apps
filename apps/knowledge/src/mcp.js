@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import pkg from '../package.json' with { type: 'json' };
+import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db.ts';
 import { defaultStorePath, loadStore, saveStore, makeId, withLock } from './store.ts';
 import { parseSourceRef } from './source-ref.ts';
 import { createKnowledgeService } from './service.ts';
@@ -61,8 +62,641 @@ function activeItems(items, includeArchived) {
   return includeArchived ? items : items.filter((item) => !item.archived);
 }
 
+function limitNumber(value, fallback = 20, max = 100) {
+  if (!Number.isFinite(value) || value <= 0) return fallback;
+  return Math.min(Math.floor(value), max);
+}
+
+function parseJsonObject(value) {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function jsonResource(uri, data) {
+  return {
+    contents: [{
+      uri: uri.toString(),
+      mimeType: 'application/json',
+      text: JSON.stringify(data, null, 2),
+    }],
+  };
+}
+
 function registerTool(server, name, title, description, inputSchema, handler) {
   server.registerTool(name, { title, description, inputSchema }, handler);
+}
+
+function registerJsonResource(server, name, uri, title, description, read) {
+  server.registerResource(name, uri, {
+    title,
+    description,
+    mimeType: 'application/json',
+  }, async (resourceUri) => jsonResource(resourceUri, await read(resourceUri)));
+}
+
+function registerJsonTemplate(server, name, template, title, description, list, read) {
+  server.registerResource(name, new ResourceTemplate(template, { list }), {
+    title,
+    description,
+    mimeType: 'application/json',
+  }, async (resourceUri, variables) => jsonResource(resourceUri, await read(resourceUri, variables)));
+}
+
+function projectService() {
+  return createKnowledgeService({ scope: 'project' });
+}
+
+function openProjectDb(service = projectService()) {
+  const workspace = service.ensureWorkspace();
+  migrateKnowledgeDb(workspace.knowledgeDbPath);
+  return openKnowledgeDb(workspace.knowledgeDbPath);
+}
+
+function itemResources(storePath = createKnowledgeService({ scope: 'project' }).jsonStorePath()) {
+  return readStoreLocked(storePath, (db) => activeItems(db.items, false).slice(0, 100).map((item) => ({
+    uri: `knowledge://project/items/${encodeURIComponent(item.id)}`,
+    name: item.title,
+    description: `Knowledge item ${item.id}`,
+    mimeType: 'application/json',
+  })));
+}
+
+function listRows(db, sql, params = []) {
+  return db.query(sql).all(...params);
+}
+
+function rowWithJson(row, fields = ['metadata_json', 'acl_json']) {
+  if (!row) return null;
+  const next = { ...row };
+  for (const field of fields) {
+    if (field in next) {
+      const name = field.endsWith('_json') ? field.slice(0, -5) : field;
+      next[name] = parseJsonObject(next[field]);
+      delete next[field];
+    }
+  }
+  return next;
+}
+
+function dbStatsSnapshot(service = projectService()) {
+  const stats = service.dbStats();
+  const db = openProjectDb(service);
+  try {
+    return {
+      ok: true,
+      scope: 'project',
+      path: service.workspace.knowledgeDbPath,
+      stats,
+      schema_versions: listRows(db, 'SELECT version, applied_at FROM schema_versions ORDER BY version ASC'),
+    };
+  } finally {
+    db.close();
+  }
+}
+
+function storageSnapshot(service = projectService()) {
+  const validation = service.validateStorage();
+  return {
+    ok: validation.ok,
+    scope: 'project',
+    paths: service.paths(),
+    storage: service.storageContract(),
+    validation,
+  };
+}
+
+function configSnapshot(service = projectService()) {
+  return {
+    ok: true,
+    scope: 'project',
+    package: {
+      name: pkg.name,
+      version: pkg.version,
+    },
+    paths: service.paths(),
+    storage: service.storageContract(),
+    provider_status: service.providerStatus(),
+    model_registry: service.modelRegistry(),
+  };
+}
+
+function sourceRows(limit = 50, service = projectService()) {
+  const db = openProjectDb(service);
+  try {
+    return listRows(db, `
+      SELECT
+        s.id,
+        s.uri,
+        s.kind,
+        s.title,
+        s.metadata_json,
+        s.acl_json,
+        s.created_at,
+        s.updated_at,
+        COUNT(DISTINCT sr.id) AS revisions,
+        COUNT(DISTINCT c.id) AS chunks
+      FROM sources s
+      LEFT JOIN source_revisions sr ON sr.source_id = s.id
+      LEFT JOIN chunks c ON c.source_revision_id = sr.id
+      GROUP BY s.id
+      ORDER BY s.updated_at DESC
+      LIMIT ?
+    `, [limitNumber(limit, 50, 200)]).map((row) => rowWithJson(row));
+  } finally {
+    db.close();
+  }
+}
+
+function sourceSnapshot(id, { limit = 10, service = projectService() } = {}) {
+  const db = openProjectDb(service);
+  try {
+    const source = rowWithJson(db.query(`
+      SELECT id, uri, kind, title, metadata_json, acl_json, created_at, updated_at
+      FROM sources
+      WHERE id = ? OR uri = ?
+    `).get(id, id));
+    if (!source) return null;
+    const revisions = listRows(db, `
+      SELECT id, revision, hash, extracted_text_uri, metadata_json, created_at
+      FROM source_revisions
+      WHERE source_id = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `, [source.id, limitNumber(limit, 10, 100)]).map((row) => rowWithJson(row, ['metadata_json']));
+    const chunks = listRows(db, `
+      SELECT c.id, c.kind, c.ordinal, c.text, c.token_count, c.start_offset, c.end_offset, c.metadata_json, c.created_at,
+             sr.revision, sr.hash
+      FROM chunks c
+      JOIN source_revisions sr ON sr.id = c.source_revision_id
+      WHERE sr.source_id = ?
+      ORDER BY sr.created_at DESC, c.ordinal ASC
+      LIMIT ?
+    `, [source.id, limitNumber(limit, 10, 50)]).map((row) => rowWithJson(row, ['metadata_json']));
+    return { source, revisions, chunks };
+  } finally {
+    db.close();
+  }
+}
+
+function openFilesSnapshot(service = projectService()) {
+  const db = openProjectDb(service);
+  try {
+    const rows = listRows(db, `
+      SELECT
+        s.id,
+        s.uri,
+        s.title,
+        sr.revision,
+        sr.hash,
+        c.metadata_json,
+        COUNT(c.id) AS chunks
+      FROM sources s
+      JOIN source_revisions sr ON sr.source_id = s.id
+      LEFT JOIN chunks c ON c.source_revision_id = sr.id
+      WHERE s.uri LIKE 'open-files://%'
+      GROUP BY s.id, sr.id
+      ORDER BY s.updated_at DESC
+      LIMIT 100
+    `);
+    return {
+      ok: true,
+      scope: 'project',
+      source_ownership: 'open-files',
+      raw_source_bytes_exposed: false,
+      refs: rows.map((row) => {
+        const metadata = parseJsonObject(row.metadata_json);
+        return {
+          id: row.id,
+          uri: row.uri,
+          source_ref: typeof metadata.source_ref === 'string' ? metadata.source_ref : row.uri,
+          title: row.title,
+          revision: row.revision,
+          hash: row.hash,
+          chunks: row.chunks,
+        };
+      }),
+    };
+  } finally {
+    db.close();
+  }
+}
+
+function wikiRows(limit = 50, service = projectService()) {
+  const db = openProjectDb(service);
+  try {
+    return listRows(db, `
+      SELECT id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at
+      FROM wiki_pages
+      ORDER BY updated_at DESC
+      LIMIT ?
+    `, [limitNumber(limit, 50, 200)]).map((row) => rowWithJson(row, ['metadata_json']));
+  } finally {
+    db.close();
+  }
+}
+
+async function wikiSnapshot(id, { includeContent = true, service = projectService() } = {}) {
+  const db = openProjectDb(service);
+  try {
+    const page = rowWithJson(db.query(`
+      SELECT id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at
+      FROM wiki_pages
+      WHERE id = ? OR path = ?
+    `).get(id, id), ['metadata_json']);
+    if (!page) return null;
+    const citations = listRows(db, `
+      SELECT id, chunk_id, source_uri, quote, start_offset, end_offset, metadata_json, created_at
+      FROM citations
+      WHERE wiki_page_id = ?
+      ORDER BY created_at ASC
+      LIMIT 100
+    `, [page.id]).map((row) => rowWithJson(row, ['metadata_json']));
+    let content = null;
+    if (includeContent) {
+      const artifactKey = page.metadata?.artifact_key ?? page.path;
+      if (typeof artifactKey === 'string') {
+        try {
+          content = await service.artifactStore().getText(artifactKey);
+        } catch {
+          content = null;
+        }
+      }
+    }
+    return { page, citations, content };
+  } finally {
+    db.close();
+  }
+}
+
+function indexRows(limit = 50, service = projectService()) {
+  const db = openProjectDb(service);
+  try {
+    return listRows(db, `
+      SELECT id, kind, name, artifact_uri, shard_key, metadata_json, created_at, updated_at
+      FROM knowledge_indexes
+      ORDER BY updated_at DESC
+      LIMIT ?
+    `, [limitNumber(limit, 50, 200)]).map((row) => rowWithJson(row, ['metadata_json']));
+  } finally {
+    db.close();
+  }
+}
+
+function indexSnapshot(id, service = projectService()) {
+  const db = openProjectDb(service);
+  try {
+    const index = rowWithJson(db.query(`
+      SELECT id, kind, name, artifact_uri, shard_key, metadata_json, created_at, updated_at
+      FROM knowledge_indexes
+      WHERE id = ? OR name = ? OR shard_key = ?
+    `).get(id, id, id), ['metadata_json']);
+    if (!index) return null;
+    const vector_counts = listRows(db, `
+      SELECT provider, model, dimensions, status, COUNT(*) AS entries
+      FROM vector_index_entries
+      GROUP BY provider, model, dimensions, status
+      ORDER BY entries DESC
+      LIMIT 50
+    `);
+    return { index, vector_counts };
+  } finally {
+    db.close();
+  }
+}
+
+function runRows(limit = 50, service = projectService()) {
+  const db = openProjectDb(service);
+  try {
+    return listRows(db, `
+      SELECT id, type, prompt, status, provider, model, cost_tokens, cost_usd, metadata_json, created_at, updated_at
+      FROM runs
+      ORDER BY updated_at DESC
+      LIMIT ?
+    `, [limitNumber(limit, 50, 200)]).map((row) => rowWithJson(row, ['metadata_json']));
+  } finally {
+    db.close();
+  }
+}
+
+function runSnapshot(id, { limit = 50, service = projectService() } = {}) {
+  const db = openProjectDb(service);
+  try {
+    const run = rowWithJson(db.query(`
+      SELECT id, type, prompt, status, provider, model, cost_tokens, cost_usd, metadata_json, created_at, updated_at
+      FROM runs
+      WHERE id = ?
+    `).get(id), ['metadata_json']);
+    if (!run) return null;
+    const events = listRows(db, `
+      SELECT id, level, event, metadata_json, created_at
+      FROM run_events
+      WHERE run_id = ?
+      ORDER BY created_at ASC
+      LIMIT ?
+    `, [id, limitNumber(limit, 50, 200)]).map((row) => rowWithJson(row, ['metadata_json']));
+    const usage = listRows(db, `
+      SELECT id, provider, model, input_tokens, output_tokens, cost_usd, metadata_json, created_at
+      FROM provider_usage
+      WHERE run_id = ?
+      ORDER BY created_at ASC
+      LIMIT 100
+    `, [id]).map((row) => rowWithJson(row, ['metadata_json']));
+    return { run, events, usage };
+  } finally {
+    db.close();
+  }
+}
+
+function decisionsSnapshot(limit = 50, service = projectService()) {
+  const db = openProjectDb(service);
+  try {
+    return {
+      ok: true,
+      scope: 'project',
+      approval_gates: listRows(db, `
+        SELECT id, action, target_uri, status, reason, approved_by, metadata_json, created_at, updated_at
+        FROM approval_gates
+        ORDER BY updated_at DESC
+        LIMIT ?
+      `, [limitNumber(limit, 50, 200)]).map((row) => rowWithJson(row, ['metadata_json'])),
+      audit_events: listRows(db, `
+        SELECT id, event_type, action, target_uri, decision, metadata_json, created_at
+        FROM audit_events
+        ORDER BY created_at DESC
+        LIMIT ?
+      `, [limitNumber(limit, 50, 200)]).map((row) => rowWithJson(row, ['metadata_json'])),
+    };
+  } finally {
+    db.close();
+  }
+}
+
+function decisionSnapshot(id, service = projectService()) {
+  const db = openProjectDb(service);
+  try {
+    const approval = rowWithJson(db.query(`
+      SELECT id, action, target_uri, status, reason, approved_by, metadata_json, created_at, updated_at
+      FROM approval_gates
+      WHERE id = ? OR target_uri = ?
+    `).get(id, id), ['metadata_json']);
+    if (approval) return { kind: 'approval_gate', decision: approval };
+    const audit = rowWithJson(db.query(`
+      SELECT id, event_type, action, target_uri, decision, metadata_json, created_at
+      FROM audit_events
+      WHERE id = ? OR target_uri = ?
+    `).get(id, id), ['metadata_json']);
+    return audit ? { kind: 'audit_event', decision: audit } : null;
+  } finally {
+    db.close();
+  }
+}
+
+async function getKnowledgeRecord(kind, id, options = {}) {
+  const normalized = kind ?? 'auto';
+  const service = createKnowledgeService({ scope: options.scope });
+  const attempts = normalized === 'auto'
+    ? ['item', 'source', 'wiki_page', 'run', 'index', 'decision']
+    : [normalized];
+
+  for (const entry of attempts) {
+    if (entry === 'item') {
+      const storePath = resolveStorePath(options.store_path, options.scope);
+      const item = readStoreLocked(storePath, (db) => findItem(db, id));
+      if (item) return { kind: 'item', item, store_path: storePath };
+    }
+    if (entry === 'source') {
+      const source = sourceSnapshot(id, { limit: options.limit, service });
+      if (source) return { kind: 'source', ...source };
+    }
+    if (entry === 'wiki_page') {
+      const page = await wikiSnapshot(id, { includeContent: options.include_content !== false, service });
+      if (page) return { kind: 'wiki_page', ...page };
+    }
+    if (entry === 'run') {
+      const run = runSnapshot(id, { limit: options.limit, service });
+      if (run) return { kind: 'run', ...run };
+    }
+    if (entry === 'index') {
+      const index = indexSnapshot(id, service);
+      if (index) return { kind: 'index', ...index };
+    }
+    if (entry === 'decision') {
+      const decision = decisionSnapshot(id, service);
+      if (decision) return { kind: 'decision', ...decision };
+    }
+  }
+
+  return null;
+}
+
+function registerKnowledgeResources(server) {
+  registerJsonResource(
+    server,
+    'knowledge-project-config',
+    'knowledge://project/config',
+    'Project knowledge config',
+    'Resolved project workspace config, provider registry, and storage contract',
+    async () => configSnapshot(),
+  );
+  registerJsonResource(
+    server,
+    'knowledge-project-storage',
+    'knowledge://project/storage',
+    'Project knowledge storage',
+    'Artifact storage contract and validation for project knowledge',
+    async () => storageSnapshot(),
+  );
+  registerJsonResource(
+    server,
+    'knowledge-project-schema',
+    'knowledge://project/schema',
+    'Project knowledge schema',
+    'SQLite schema version and table counts for project knowledge',
+    async () => dbStatsSnapshot(),
+  );
+  registerJsonResource(
+    server,
+    'knowledge-project-sources',
+    'knowledge://project/sources',
+    'Project knowledge sources',
+    'Indexed source refs and revision/chunk counts without raw source bytes',
+    async () => ({ ok: true, scope: 'project', sources: sourceRows() }),
+  );
+  registerJsonResource(
+    server,
+    'knowledge-project-open-files',
+    'knowledge://project/open-files',
+    'Project open-files refs',
+    'Open-files source refs known to the project knowledge catalog',
+    async () => openFilesSnapshot(),
+  );
+  registerJsonResource(
+    server,
+    'knowledge-project-wiki-pages',
+    'knowledge://project/wiki/pages',
+    'Project wiki pages',
+    'Generated wiki pages and citation artifact metadata',
+    async () => ({ ok: true, scope: 'project', pages: wikiRows() }),
+  );
+  registerJsonResource(
+    server,
+    'knowledge-project-indexes',
+    'knowledge://project/indexes',
+    'Project knowledge indexes',
+    'Sharded knowledge indexes and vector-index status',
+    async () => ({
+      ok: true,
+      scope: 'project',
+      indexes: indexRows(),
+      embeddings: projectService().embeddingStatus(),
+    }),
+  );
+  registerJsonResource(
+    server,
+    'knowledge-project-runs',
+    'knowledge://project/runs',
+    'Project knowledge runs',
+    'Recent prompt, ingestion, web search, and reindex run ledger entries',
+    async () => ({ ok: true, scope: 'project', runs: runRows() }),
+  );
+  registerJsonResource(
+    server,
+    'knowledge-project-decisions',
+    'knowledge://project/decisions',
+    'Project knowledge decisions',
+    'Approval gates and audit decisions for generated knowledge operations',
+    async () => decisionsSnapshot(),
+  );
+
+  registerJsonTemplate(
+    server,
+    'knowledge-project-items',
+    'knowledge://project/items/{id}',
+    'Project knowledge item',
+    'Read a compatibility JSON-store item by id',
+    async () => ({ resources: itemResources() }),
+    async (_uri, variables) => {
+      const id = decodeURIComponent(String(variables.id));
+      const record = await getKnowledgeRecord('item', id, { scope: 'project' });
+      return record ? { ok: true, ...record } : { ok: false, error: `Item not found: ${id}` };
+    },
+  );
+  registerJsonTemplate(
+    server,
+    'knowledge-project-source',
+    'knowledge://project/sources/{id}',
+    'Project source',
+    'Read indexed source metadata, revisions, and derived chunks',
+    async () => ({
+      resources: sourceRows().map((source) => ({
+        uri: `knowledge://project/sources/${encodeURIComponent(source.id)}`,
+        name: source.title ?? source.uri,
+        description: `${source.kind} source with ${source.chunks} chunk(s)`,
+        mimeType: 'application/json',
+      })),
+    }),
+    async (_uri, variables) => {
+      const id = decodeURIComponent(String(variables.id));
+      const record = sourceSnapshot(id);
+      return record ? { ok: true, kind: 'source', ...record } : { ok: false, error: `Source not found: ${id}` };
+    },
+  );
+  registerJsonTemplate(
+    server,
+    'knowledge-project-wiki-page',
+    'knowledge://project/wiki/pages/{id}',
+    'Project wiki page',
+    'Read generated wiki page metadata, citations, and artifact text',
+    async () => ({
+      resources: wikiRows().map((page) => ({
+        uri: `knowledge://project/wiki/pages/${encodeURIComponent(page.id)}`,
+        name: page.title,
+        description: page.path,
+        mimeType: 'application/json',
+      })),
+    }),
+    async (_uri, variables) => {
+      const id = decodeURIComponent(String(variables.id));
+      const record = await wikiSnapshot(id);
+      return record ? { ok: true, kind: 'wiki_page', ...record } : { ok: false, error: `Wiki page not found: ${id}` };
+    },
+  );
+  registerJsonTemplate(
+    server,
+    'knowledge-project-index',
+    'knowledge://project/indexes/{id}',
+    'Project knowledge index',
+    'Read a knowledge index row and vector-count snapshot',
+    async () => ({
+      resources: indexRows().map((index) => ({
+        uri: `knowledge://project/indexes/${encodeURIComponent(index.id)}`,
+        name: index.name,
+        description: `${index.kind} index${index.shard_key ? ` shard ${index.shard_key}` : ''}`,
+        mimeType: 'application/json',
+      })),
+    }),
+    async (_uri, variables) => {
+      const id = decodeURIComponent(String(variables.id));
+      const record = indexSnapshot(id);
+      return record ? { ok: true, kind: 'index', ...record } : { ok: false, error: `Index not found: ${id}` };
+    },
+  );
+  registerJsonTemplate(
+    server,
+    'knowledge-project-run',
+    'knowledge://project/runs/{id}',
+    'Project run',
+    'Read a knowledge run ledger entry with events and usage',
+    async () => ({
+      resources: runRows().map((run) => ({
+        uri: `knowledge://project/runs/${encodeURIComponent(run.id)}`,
+        name: `${run.type}: ${run.status}`,
+        description: run.prompt ?? run.id,
+        mimeType: 'application/json',
+      })),
+    }),
+    async (_uri, variables) => {
+      const id = decodeURIComponent(String(variables.id));
+      const record = runSnapshot(id);
+      return record ? { ok: true, kind: 'run', ...record } : { ok: false, error: `Run not found: ${id}` };
+    },
+  );
+  registerJsonTemplate(
+    server,
+    'knowledge-project-decision',
+    'knowledge://project/decisions/{id}',
+    'Project decision',
+    'Read an approval gate or audit decision',
+    async () => {
+      const decisions = decisionsSnapshot();
+      return {
+        resources: [
+          ...decisions.approval_gates.map((entry) => ({
+            uri: `knowledge://project/decisions/${encodeURIComponent(entry.id)}`,
+            name: `${entry.action}: ${entry.status}`,
+            description: entry.target_uri ?? entry.id,
+            mimeType: 'application/json',
+          })),
+          ...decisions.audit_events.map((entry) => ({
+            uri: `knowledge://project/decisions/${encodeURIComponent(entry.id)}`,
+            name: `${entry.action}: ${entry.decision}`,
+            description: entry.target_uri ?? entry.id,
+            mimeType: 'application/json',
+          })),
+        ],
+      };
+    },
+    async (_uri, variables) => {
+      const id = decodeURIComponent(String(variables.id));
+      const record = decisionSnapshot(id);
+      return record ? { ok: true, ...record } : { ok: false, error: `Decision not found: ${id}` };
+    },
+  );
 }
 
 export function buildServer() {
@@ -70,6 +704,8 @@ export function buildServer() {
     name: 'open-knowledge',
     version: pkg.version,
   });
+
+  registerKnowledgeResources(server);
 
   registerTool(server, 'ok_paths', 'Knowledge workspace paths', 'Show resolved workspace and store paths', {
     scope: scopeField,
@@ -261,6 +897,158 @@ export function buildServer() {
     const service = createKnowledgeService({ scope });
     try {
       return jsonText({ ok: true, ...await service.runPrompt({ prompt, limit, semantic, generate, approveWrite: approve_write, modelRef: model, dimensions, fake }) });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'knowledge_get', 'Get knowledge record', 'Read a knowledge item, indexed source, wiki page, run, index, or decision by id without raw source-byte access', {
+    scope: scopeField,
+    kind: z.enum(['auto', 'item', 'source', 'wiki_page', 'run', 'index', 'decision']).optional().describe('Record kind; auto tries all supported kinds'),
+    id: z.string().describe('Record id, short id, source URI, wiki path, index shard/name, or decision target URI'),
+    include_content: z.boolean().optional().describe('Include generated wiki artifact text when reading wiki pages'),
+    limit: z.number().optional().describe('Maximum related chunks/events to return'),
+    store_path: storePathField,
+  }, async ({ scope, kind, id, include_content, limit, store_path }) => {
+    try {
+      const record = await getKnowledgeRecord(kind ?? 'auto', id, {
+        scope,
+        include_content,
+        limit,
+        store_path,
+      });
+      return record ? jsonText({ ok: true, ...record }) : errorText(`Knowledge record not found: ${id}`);
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'knowledge_ingest', 'Ingest knowledge source', 'Ingest an open-files/S3/file/web source ref or open-files manifest into the derived knowledge catalog', {
+    scope: scopeField,
+    source_ref: z.string().optional().describe('Source reference URI to ingest, e.g. open-files://file/<id>/revision/<rev>'),
+    manifest: z.string().optional().describe('Manifest file path or s3:// URI to ingest'),
+    purpose: z.string().optional().describe('Read-only purpose label, default knowledge_answer'),
+  }, async ({ scope, source_ref, manifest, purpose }) => {
+    if (!source_ref && !manifest) return errorText('Missing input. Provide source_ref or manifest.');
+    if (source_ref && manifest) return errorText('Use either source_ref or manifest, not both.');
+    const service = createKnowledgeService({ scope });
+    try {
+      const result = source_ref
+        ? await service.ingestSource(source_ref, purpose)
+        : await service.ingestManifest(manifest);
+      return jsonText({ ok: true, mode: source_ref ? 'source' : 'manifest', ...result });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'knowledge_build', 'Build knowledge answer', 'Run the knowledge prompt flow and optionally file the cited answer into generated wiki artifacts after approval', {
+    scope: scopeField,
+    prompt: z.string().describe('Prompt to answer and build durable knowledge from'),
+    limit: z.number().optional().describe('Maximum context results'),
+    semantic: z.boolean().optional().describe('Include vector semantic results'),
+    generate: z.boolean().optional().describe('Call AI SDK text generation; omitted returns a local citation draft'),
+    approve_write: z.boolean().optional().describe('Approve durable wiki filing for this call'),
+    file_answer: z.boolean().optional().describe('Attempt wiki answer filing; writes only with approve_write=true'),
+    model: z.string().optional().describe('Model alias/ref, default configured provider default'),
+    dimensions: z.number().optional().describe('Embedding dimensions for deterministic fake mode'),
+    fake: z.boolean().optional().describe('Use deterministic fake embeddings/generation for local tests'),
+  }, async ({ scope, prompt, limit, semantic, generate, approve_write, file_answer, model, dimensions, fake }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      const result = await service.runPrompt({ prompt, limit, semantic, generate, approveWrite: approve_write, modelRef: model, dimensions, fake });
+      let wiki_file = null;
+      if (file_answer === true || approve_write === true) {
+        wiki_file = await service.fileAnswer({
+          prompt,
+          answer: result.answer,
+          approveWrite: approve_write,
+          limit,
+          semantic,
+          modelRef: model,
+          dimensions,
+          fake,
+        });
+      }
+      return jsonText({ ok: true, ...result, wiki_file });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'knowledge_web_search', 'Knowledge web search', 'Run safety-gated provider-native web search and optionally file snippets as web source refs', {
+    scope: scopeField,
+    query: z.string().describe('Web search query'),
+    limit: z.number().optional().describe('Maximum sources'),
+    provider: z.enum(['openai', 'anthropic', 'deepseek']).optional().describe('Provider override'),
+    model: z.string().optional().describe('Model alias/ref'),
+    domains: z.array(z.string()).optional().describe('Allowed domains'),
+    fake: z.boolean().optional().describe('Use deterministic fake web results'),
+    file_results: z.boolean().optional().describe('File web snippets as web source refs'),
+  }, async ({ scope, query, limit, provider, model, domains, fake, file_results }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText({ ok: true, ...await service.webSearch({ query, limit, provider, modelRef: model, domains, fake, fileResults: file_results }) });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'knowledge_lint', 'Lint knowledge wiki', 'Check generated wiki pages for missing citations, stale citations, duplicates, or source issues', {
+    scope: scopeField,
+  }, async ({ scope }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText({ ok: true, ...service.lintWiki() });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'knowledge_run_status', 'Knowledge run status', 'List recent runs or inspect one run ledger with events and provider usage', {
+    scope: scopeField,
+    run_id: z.string().optional().describe('Run id to inspect; omitted lists recent runs'),
+    limit: z.number().optional().describe('Maximum runs or events to return'),
+  }, async ({ scope, run_id, limit }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      if (run_id) {
+        const run = runSnapshot(run_id, { limit, service });
+        return run ? jsonText({ ok: true, kind: 'run', ...run }) : errorText(`Run not found: ${run_id}`);
+      }
+      return jsonText({ ok: true, runs: runRows(limit, service) });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'knowledge_storage', 'Knowledge storage contract', 'Inspect local/S3 artifact storage, source ownership, and hosted/SaaS boundary metadata', {
+    scope: scopeField,
+  }, async ({ scope }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      const validation = service.validateStorage();
+      return jsonText({
+        ok: validation.ok,
+        ...service.storageContract(),
+        validation,
+        remote_contract: service.remoteContract(),
+      });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'knowledge_resolve_source', 'Resolve knowledge source', 'Resolve indexed source chunks through the read-only open-files/source boundary with citation evidence', {
+    source_ref: z.string().describe('Source reference URI, preferably open-files://...'),
+    purpose: z.string().optional().describe('Read-only purpose label, default knowledge_answer'),
+    limit: z.number().optional().describe('Maximum chunks to return, default 10'),
+    scope: scopeField,
+  }, async ({ source_ref, purpose, limit, scope }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      const result = await service.resolveSource(source_ref, { purpose, limit });
+      return jsonText({ ok: true, ...result });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }

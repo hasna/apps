@@ -29,6 +29,12 @@ function parseToolJson(result: any): any {
   return JSON.parse(text);
 }
 
+function parseResourceJson(result: any): any {
+  const text = result.contents?.[0]?.text;
+  expect(typeof text).toBe('string');
+  return JSON.parse(text);
+}
+
 describe('open-knowledge MCP', () => {
   test('registers tools and can add/get through stdio', async () => {
     const dir = makeTempDir('ok-mcp-');
@@ -75,7 +81,31 @@ describe('open-knowledge MCP', () => {
       expect(tools.tools.some((tool) => tool.name === 'ok_search')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_search')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_ask')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_get')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_ingest')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_build')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_web_search')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_lint')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_run_status')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_storage')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_resolve_source')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_web_search')).toBe(true);
+
+      const resourceTemplates = await client.listResourceTemplates();
+      expect(resourceTemplates.resourceTemplates.some((resource) => resource.uriTemplate === 'knowledge://project/runs/{id}')).toBe(true);
+      expect(resourceTemplates.resourceTemplates.some((resource) => resource.uriTemplate === 'knowledge://project/wiki/pages/{id}')).toBe(true);
+
+      const resources = await client.listResources();
+      expect(resources.resources.some((resource) => resource.uri === 'knowledge://project/config')).toBe(true);
+      expect(resources.resources.some((resource) => resource.uri === 'knowledge://project/schema')).toBe(true);
+      expect(resources.resources.some((resource) => resource.uri === 'knowledge://project/sources')).toBe(true);
+
+      const schemaResource = parseResourceJson(await client.readResource({ uri: 'knowledge://project/schema' }));
+      expect(schemaResource.stats.sources).toBe(1);
+      expect(schemaResource.stats.chunks).toBe(1);
+
+      const sourceResource = parseResourceJson(await client.readResource({ uri: 'knowledge://project/sources' }));
+      expect(sourceResource.sources[0].uri).toBe('open-files://file/file_mcp');
 
       const add = parseToolJson(await client.callTool({
         name: 'ok_add',
@@ -96,6 +126,12 @@ describe('open-knowledge MCP', () => {
       }));
       expect(get.item.title).toBe('MCP item');
 
+      const stableGetItem = parseToolJson(await client.callTool({
+        name: 'knowledge_get',
+        arguments: { kind: 'item', id: add.item.short_id, store_path: store },
+      }));
+      expect(stableGetItem.item.title).toBe('MCP item');
+
       const source = parseToolJson(await client.callTool({
         name: 'ok_parse_source_ref',
         arguments: { uri: 'open-files://file/file_123/revision/rev_456' },
@@ -111,6 +147,20 @@ describe('open-knowledge MCP', () => {
       expect(storageStatus.source_ownership.owner).toBe('open-files');
       expect(storageStatus.source_ownership.raw_source_bytes_stored_in_open_knowledge).toBe(false);
 
+      const stableStorage = parseToolJson(await client.callTool({
+        name: 'knowledge_storage',
+        arguments: { scope: 'project' },
+      }));
+      expect(stableStorage.remote_contract.contract_version).toBe(1);
+      expect(stableStorage.remote_contract.endpoints.build).toBe('/api/v1/knowledge/build');
+
+      const ingest = parseToolJson(await client.callTool({
+        name: 'knowledge_ingest',
+        arguments: { scope: 'project', manifest },
+      }));
+      expect(ingest.mode).toBe('manifest');
+      expect(ingest.items_seen).toBe(1);
+
       const resolved = parseToolJson(await client.callTool({
         name: 'ok_resolve_source',
         arguments: {
@@ -123,6 +173,24 @@ describe('open-knowledge MCP', () => {
       expect(resolved.content.bytes_exposed).toBe(false);
       expect(resolved.chunks[0].text).toContain('MCP resolver source text');
       expect(resolved.chunks[0].evidence.read_only).toBe(true);
+
+      const stableResolved = parseToolJson(await client.callTool({
+        name: 'knowledge_resolve_source',
+        arguments: {
+          source_ref: 'open-files://file/file_mcp/revision/rev_mcp',
+          purpose: 'knowledge_answer',
+          scope: 'project',
+        },
+      }));
+      expect(stableResolved.resolved).toBe(true);
+      expect(stableResolved.chunks[0].provenance.source_ref).toBe('open-files://file/file_mcp/revision/rev_mcp');
+
+      const stableSourceGet = parseToolJson(await client.callTool({
+        name: 'knowledge_get',
+        arguments: { kind: 'source', id: 'open-files://file/file_mcp', scope: 'project' },
+      }));
+      expect(stableSourceGet.source.uri).toBe('open-files://file/file_mcp');
+      expect(stableSourceGet.chunks[0].text).toContain('MCP resolver source text');
 
       const providerStatus = parseToolJson(await client.callTool({
         name: 'ok_provider_status',
@@ -197,12 +265,76 @@ describe('open-knowledge MCP', () => {
       expect(answer.generated).toBe(true);
       expect(answer.answer).toContain('Fake generated answer');
 
+      const build = parseToolJson(await client.callTool({
+        name: 'knowledge_build',
+        arguments: {
+          scope: 'project',
+          prompt: 'Build wiki answer from resolver source text',
+          generate: true,
+          fake: true,
+          model: 'openai:gpt-5-mini',
+          approve_write: true,
+        },
+      }));
+      expect(build.generated).toBe(true);
+      expect(build.wiki_file.durable_writes_performed).toBe(true);
+      expect(build.wiki_file.page_id).toStartWith('wiki_');
+
+      const runStatus = parseToolJson(await client.callTool({
+        name: 'knowledge_run_status',
+        arguments: { scope: 'project', run_id: build.run_id },
+      }));
+      expect(runStatus.run.id).toBe(build.run_id);
+      expect(runStatus.events.some((event: any) => event.event === 'context_retrieved')).toBe(true);
+
+      const runsList = parseToolJson(await client.callTool({
+        name: 'knowledge_run_status',
+        arguments: { scope: 'project', limit: 5 },
+      }));
+      expect(runsList.runs.some((run: any) => run.id === build.run_id)).toBe(true);
+
+      const stableGetRun = parseToolJson(await client.callTool({
+        name: 'knowledge_get',
+        arguments: { kind: 'run', id: build.run_id, scope: 'project' },
+      }));
+      expect(stableGetRun.run.status).toBe('completed');
+
+      const stableGetWiki = parseToolJson(await client.callTool({
+        name: 'knowledge_get',
+        arguments: { kind: 'wiki_page', id: build.wiki_file.page_id, scope: 'project' },
+      }));
+      expect(stableGetWiki.page.id).toBe(build.wiki_file.page_id);
+      expect(stableGetWiki.content).toContain('Fake generated answer');
+
+      const wikiPageResource = parseResourceJson(await client.readResource({
+        uri: `knowledge://project/wiki/pages/${encodeURIComponent(build.wiki_file.page_id)}`,
+      }));
+      expect(wikiPageResource.page.id).toBe(build.wiki_file.page_id);
+      expect(wikiPageResource.content).toContain('Fake generated answer');
+
+      const lint = parseToolJson(await client.callTool({
+        name: 'knowledge_lint',
+        arguments: { scope: 'project' },
+      }));
+      expect(lint.ok).toBeBoolean();
+      expect(lint.issue_count).toBeNumber();
+
       const web = parseToolJson(await client.callTool({
         name: 'ok_web_search',
         arguments: { scope: 'project', query: 'company wiki policy', provider: 'openai', model: 'openai:gpt-5-mini', fake: true, file_results: true, limit: 1 },
       }));
       expect(web.sources).toHaveLength(1);
       expect(web.filed_sources).toBe(1);
+
+      const stableWeb = parseToolJson(await client.callTool({
+        name: 'knowledge_web_search',
+        arguments: { scope: 'project', query: 'company wiki policy', provider: 'openai', model: 'openai:gpt-5-mini', fake: true, limit: 1 },
+      }));
+      expect(stableWeb.sources).toHaveLength(1);
+
+      const openFilesResource = parseResourceJson(await client.readResource({ uri: 'knowledge://project/open-files' }));
+      expect(openFilesResource.raw_source_bytes_exposed).toBe(false);
+      expect(openFilesResource.refs.some((ref: any) => ref.uri === 'open-files://file/file_mcp')).toBe(true);
 
       const batch = parseToolJson(await client.callTool({
         name: 'ok_batch',

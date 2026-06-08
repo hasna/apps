@@ -59,11 +59,11 @@ open-knowledge embeddings search "company wiki policy" --scope project --json
 ```
 
 `search` is the structured hybrid layer for agents. `embeddings search` is the
-lower-level vector-only command. MCP exposes the same capability through
-`ok_search`, `knowledge_search`, `ok_embeddings_status`, `ok_embeddings_index`,
-`ok_semantic_search`, `ok_reindex_status`, `ok_reindex_enqueue`, and
-`ok_reindex_embeddings`. Deterministic `--fake` embeddings exist for tests and
-offline verification only.
+lower-level vector-only command. MCP exposes the agent-facing path through
+`knowledge_search`, `knowledge_ask`, `knowledge_build`, `knowledge_get`,
+`knowledge_run_status`, and `knowledge_lint`, with lower-level compatibility
+tools for `ok_search`, embeddings, and reindexing. Deterministic `--fake`
+embeddings exist for tests and offline verification only.
 
 ## Hosted Indexes
 
@@ -144,13 +144,14 @@ search rows using exact-term coverage, citation availability, source freshness,
 and source/wiki authority, then emits excerpts and citation objects that preserve
 source refs, artifact URIs, revision/hash metadata, offsets, and provenance.
 `open-knowledge ask|build <prompt>`, the installed `knowledge <prompt>` alias,
-and MCP `knowledge_ask` wrap this context pack in a run ledger and return a
-citation draft or explicit AI SDK generated answer.
+and MCP `knowledge_ask|knowledge_build` wrap this context pack in a run ledger
+and return a citation draft or explicit AI SDK generated answer.
 
 Provider-native web search lives beside local retrieval. `open-knowledge web
-search` and MCP `ok_web_search` are safety-gated, capture provider sources, and
-can file snippets as read-only `web` source refs so later local retrieval treats
-them like other cited sources.
+search` and MCP `knowledge_web_search` are safety-gated, capture provider
+sources, and can file snippets as read-only `web` source refs so later local
+retrieval treats them like other cited sources. The lower-level `ok_web_search`
+tool remains for compatibility.
 
 ## Reindexing
 

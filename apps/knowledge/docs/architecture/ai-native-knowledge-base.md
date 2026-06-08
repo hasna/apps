@@ -245,6 +245,20 @@ freshness and permission notes, graph evidence, and final rerank scores. The
 local SQLite index can later move to pgvector or a managed hosted vector store
 without changing CLI/MCP result shape.
 
+MCP has a stable agent-facing contract layered over the older `ok_*`
+compatibility tools. Agents should prefer `knowledge_search`, `knowledge_ask`,
+`knowledge_build`, `knowledge_get`, `knowledge_ingest`,
+`knowledge_web_search`, `knowledge_lint`, `knowledge_run_status`,
+`knowledge_storage`, and `knowledge_resolve_source`. The same server publishes
+project-scope JSON resources at `knowledge://project/config`,
+`knowledge://project/storage`, `knowledge://project/schema`,
+`knowledge://project/sources`, `knowledge://project/open-files`,
+`knowledge://project/wiki/pages`, `knowledge://project/indexes`,
+`knowledge://project/runs`, and `knowledge://project/decisions`, plus templated
+reads for individual items, sources, wiki pages, indexes, runs, and decisions.
+These resources expose derived chunks, generated wiki artifacts, citations, run
+ledgers, and storage/index metadata without exposing raw source bytes.
+
 Index freshness is explicit. `reindex_queue` tracks missing or stale embedding
 work, `open-knowledge reindex status|enqueue|embeddings` operates the local
 queue, and MCP exposes the same controls through `ok_reindex_status`,

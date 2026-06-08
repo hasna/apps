@@ -418,19 +418,54 @@ location with `--store <path>`.
 open-knowledge-mcp
 ```
 
-The MCP server exposes item tools (`ok_add`, `ok_list`, `ok_get`, `ok_update`,
-`ok_delete`, `ok_archive`, `ok_restore`, `ok_upsert`, `ok_untag`,
-`ok_bulk_delete`, `ok_prune`, `ok_dedupe`, `ok_stats`, `ok_export`,
-`ok_import`, `ok_batch`), workspace/storage inspection (`ok_paths`,
-`ok_storage_status`), provider/embedding tools (`ok_provider_status`,
-`ok_provider_models`, `ok_embeddings_status`, `ok_embeddings_index`,
-`ok_semantic_search`), reindex tools (`ok_reindex_status`,
-`ok_reindex_enqueue`, `ok_reindex_embeddings`), hybrid retrieval (`ok_search`),
-and source-ref parsing/resolution (`ok_parse_source_ref`,
-`ok_resolve_source`). The `knowledge_search` MCP tool returns reranked citation
-context packs for agent prompts, and `knowledge_ask` runs the same prompt flow
-exposed by `open-knowledge ask`. `ok_web_search` exposes safety-gated provider
-web search to MCP clients.
+The stable agent-facing MCP tools are:
+
+- `knowledge_search`: return a reranked citation context pack.
+- `knowledge_ask`: answer with read-only local knowledge and optional AI SDK
+  generation.
+- `knowledge_build`: run the prompt flow and optionally file a cited wiki answer
+  when `approve_write=true`.
+- `knowledge_get`: read an item, indexed source, wiki page, run, index, or
+  decision by id.
+- `knowledge_ingest`: ingest an open-files/S3/file/web source ref or open-files
+  manifest into the derived catalog.
+- `knowledge_web_search`: run safety-gated provider-native web search.
+- `knowledge_lint`: lint generated wiki pages for citation/source issues.
+- `knowledge_run_status`: list recent runs or inspect one run ledger.
+- `knowledge_storage`: inspect the local/S3/hosted storage contract.
+- `knowledge_resolve_source`: resolve indexed source chunks through the
+  read-only source boundary.
+
+Compatibility and lower-level tools remain available with the `ok_*` prefix:
+item tools (`ok_add`, `ok_list`, `ok_get`, `ok_update`, `ok_delete`,
+`ok_archive`, `ok_restore`, `ok_upsert`, `ok_untag`, `ok_bulk_delete`,
+`ok_prune`, `ok_dedupe`, `ok_stats`, `ok_export`, `ok_import`, `ok_batch`),
+workspace/storage inspection (`ok_paths`, `ok_storage_status`), providers,
+embeddings, reindexing, hybrid search, source parsing/resolution, and
+`ok_web_search`.
+
+MCP also publishes project-scope JSON resources for agent inspection:
+
+- `knowledge://project/config`
+- `knowledge://project/storage`
+- `knowledge://project/schema`
+- `knowledge://project/sources`
+- `knowledge://project/open-files`
+- `knowledge://project/wiki/pages`
+- `knowledge://project/indexes`
+- `knowledge://project/runs`
+- `knowledge://project/decisions`
+- Templated reads:
+  `knowledge://project/items/{id}`,
+  `knowledge://project/sources/{id}`,
+  `knowledge://project/wiki/pages/{id}`,
+  `knowledge://project/indexes/{id}`,
+  `knowledge://project/runs/{id}`,
+  `knowledge://project/decisions/{id}`
+
+These resources expose compact metadata, derived chunks, generated wiki text,
+run ledgers, and citation evidence. They do not expose raw source bytes from
+`open-files`, local files, or S3.
 
 ## Source And Artifact Boundary
 
