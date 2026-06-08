@@ -344,6 +344,34 @@ describe('open-knowledge cli', () => {
     expect(contextOut.citations[0].provenance.source_owner).toBe('open-files');
   });
 
+  test('ask and knowledge commands build citation drafts with run ledger', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-ask-cli-'));
+    const source = join(dir, 'source.md');
+    writeFileSync(source, 'CLI ask command should cite company handbook source context.');
+    const sourceRef = `file://${source}`;
+
+    const ingest = runCli(['ingest', 'source', sourceRef, '--purpose', 'knowledge_index', '--scope', 'project', '--json'], dir);
+    expect(ingest.exitCode).toBe(0);
+
+    const ask = runCli(['ask', 'How', 'should', 'we', 'cite', 'the', 'handbook?', '--scope', 'project', '--json'], dir);
+    expect(ask.exitCode).toBe(0);
+    const askOut = JSON.parse(new TextDecoder().decode(ask.stdout));
+    expect(askOut.generated).toBe(false);
+    expect(askOut.citations[0].source_uri).toBe(sourceRef);
+    expect(askOut.write_policy.durable_writes_performed).toBe(false);
+
+    const knowledge = runCli(['knowledge', 'Generate', 'fake', 'answer', '--scope', 'project', '--generate', '--fake', '--model', 'openai:gpt-5-mini', '--json'], dir);
+    expect(knowledge.exitCode).toBe(0);
+    const knowledgeOut = JSON.parse(new TextDecoder().decode(knowledge.stdout));
+    expect(knowledgeOut.generated).toBe(true);
+    expect(knowledgeOut.answer).toContain('Fake generated answer');
+
+    const stats = runCli(['db', 'stats', '--scope', 'project', '--json'], dir);
+    expect(stats.exitCode).toBe(0);
+    const statsOut = JSON.parse(new TextDecoder().decode(stats.stdout));
+    expect(statsOut.runs).toBe(2);
+  });
+
   test('safety commands expose policy, approvals, redaction, audit, and S3 denial', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-safety-cli-'));
 

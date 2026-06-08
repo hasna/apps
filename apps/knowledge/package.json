@@ -1,9 +1,10 @@
 {
   "name": "@hasna/knowledge",
-  "version": "0.2.16",
+  "version": "0.2.17",
   "description": "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   "type": "module",
   "bin": {
+    "knowledge": "bin/open-knowledge.js",
     "open-knowledge": "bin/open-knowledge.js",
     "open-knowledge-mcp": "bin/open-knowledge-mcp.js"
   },

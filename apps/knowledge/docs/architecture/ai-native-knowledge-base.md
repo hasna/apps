@@ -249,6 +249,12 @@ The command should:
 7. Record a run ledger with tool calls, sources, costs, outputs, and generated
    records.
 
+The first implementation exposes this as `open-knowledge ask|build <prompt>`
+and the installed `knowledge <prompt>` bin alias. It retrieves read-only context,
+returns a local citation draft by default, optionally calls AI SDK generation via
+`--generate`, records `runs`, `run_events`, and `provider_usage`, and only
+proposes durable wiki updates until the wiki compile/write task owns writes.
+
 ## Provider Registry
 
 AI provider setup is BYOK and AI SDK v6 based. The local provider layer tracks:

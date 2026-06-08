@@ -128,7 +128,7 @@ const BUILTIN_ALIASES: Record<string, string> = {
 };
 
 function providerConfig(config?: KnowledgeConfig): AiProvidersConfig {
-  return (config as KnowledgeConfig & { providers?: AiProvidersConfig }).providers ?? {};
+  return (config as KnowledgeConfig & { providers?: AiProvidersConfig } | undefined)?.providers ?? {};
 }
 
 export function providerSettings(config: KnowledgeConfig | undefined, provider: AiProviderId): AiProviderSettings {

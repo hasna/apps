@@ -138,6 +138,9 @@ The local context-pack implementation is available through
 search rows using exact-term coverage, citation availability, source freshness,
 and source/wiki authority, then emits excerpts and citation objects that preserve
 source refs, artifact URIs, revision/hash metadata, offsets, and provenance.
+`open-knowledge ask|build <prompt>`, the installed `knowledge <prompt>` alias,
+and MCP `knowledge_ask` wrap this context pack in a run ledger and return a
+citation draft or explicit AI SDK generated answer.
 
 ## Reindexing
 

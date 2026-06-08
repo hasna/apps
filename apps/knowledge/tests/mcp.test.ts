@@ -71,6 +71,7 @@ describe('open-knowledge MCP', () => {
       expect(tools.tools.some((tool) => tool.name === 'ok_semantic_search')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_search')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_search')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_ask')).toBe(true);
 
       const add = parseToolJson(await client.callTool({
         name: 'ok_add',
@@ -164,6 +165,13 @@ describe('open-knowledge MCP', () => {
       }));
       expect(contextSearch.excerpts.length).toBeGreaterThan(0);
       expect(contextSearch.citations[0].source_uri).toBe('open-files://file/file_mcp');
+
+      const answer = parseToolJson(await client.callTool({
+        name: 'knowledge_ask',
+        arguments: { scope: 'project', prompt: 'Answer with resolver source text', generate: true, fake: true, model: 'openai:gpt-5-mini' },
+      }));
+      expect(answer.generated).toBe(true);
+      expect(answer.answer).toContain('Fake generated answer');
 
       const batch = parseToolJson(await client.callTool({
         name: 'ok_batch',

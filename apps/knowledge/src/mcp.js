@@ -203,6 +203,25 @@ export function buildServer() {
     }
   });
 
+  registerTool(server, 'knowledge_ask', 'Knowledge prompt answer', 'Answer a prompt using read-only knowledge context and optional AI SDK generation', {
+    scope: scopeField,
+    prompt: z.string().describe('Prompt to answer with the knowledge base'),
+    limit: z.number().optional().describe('Maximum context results'),
+    semantic: z.boolean().optional().describe('Include vector semantic results'),
+    generate: z.boolean().optional().describe('Call AI SDK text generation; omitted returns a local citation draft'),
+    approve_write: z.boolean().optional().describe('Record approval intent for future durable wiki writes'),
+    model: z.string().optional().describe('Model alias/ref, default configured provider default'),
+    dimensions: z.number().optional().describe('Embedding dimensions for deterministic fake mode'),
+    fake: z.boolean().optional().describe('Use deterministic fake embeddings/generation for local tests'),
+  }, async ({ scope, prompt, limit, semantic, generate, approve_write, model, dimensions, fake }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText({ ok: true, ...await service.runPrompt({ prompt, limit, semantic, generate, approveWrite: approve_write, modelRef: model, dimensions, fake }) });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
   registerTool(server, 'ok_add', 'Add a knowledge item', 'Add a new item to the knowledge store', {
     title: z.string().describe('Item title'),
     content: z.string().describe('Item content/body'),

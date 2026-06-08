@@ -1,4 +1,5 @@
 import { createArtifactStore } from './artifact-store';
+import { runKnowledgePrompt, type KnowledgePromptOptions } from './agent';
 import {
   embeddingIndexStatus,
   indexKnowledgeEmbeddings,
@@ -229,6 +230,15 @@ export class KnowledgeService {
   async retrieveContext(options: Omit<RetrievalOptions, 'dbPath' | 'config'>) {
     const workspace = this.ensureWorkspace();
     return retrieveKnowledgeContext({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config(),
+    });
+  }
+
+  async runPrompt(options: Omit<KnowledgePromptOptions, 'dbPath' | 'config'>) {
+    const workspace = this.ensureWorkspace();
+    return runKnowledgePrompt({
       ...options,
       dbPath: workspace.knowledgeDbPath,
       config: this.config(),

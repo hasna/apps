@@ -98,6 +98,10 @@ open-knowledge embeddings search "company wiki policy" --scope project --json
 open-knowledge search "company wiki policy" --scope project --json
 open-knowledge search "company wiki policy" --scope project --semantic --json
 open-knowledge search "company wiki policy" --scope project --context --json
+
+# Build a citation answer/context draft for a prompt
+open-knowledge ask "How do we cite handbook policy?" --scope project --json
+knowledge "How do we cite handbook policy?" --scope project --json
 ```
 
 ## Commands
@@ -259,6 +263,19 @@ assembled citations, freshness and permission notes, graph evidence from
 `citations`/`wiki_backlinks`, and final rerank scores. This is the shape future
 `knowledge <prompt>` flows should send to a model instead of raw search rows.
 
+### ask / build
+```bash
+open-knowledge ask <prompt> [--scope project] [--json]
+open-knowledge build <prompt> [--generate] [--model default|provider:model] [--scope project] [--json]
+knowledge <prompt> [--scope project] [--json]
+```
+Build an agent-native prompt run. The command first creates a read-only context
+pack, returns a local citation draft by default, records a run ledger in
+`runs`/`run_events`, and proposes durable wiki updates without writing them.
+`--generate` explicitly calls AI SDK text generation; `--fake --generate` keeps
+the flow deterministic for local tests. `--approve-write` records approval
+intent, but durable wiki writes remain deferred to the wiki compile/write task.
+
 ### safety
 ```bash
 open-knowledge safety status [--scope project] [--json]
@@ -340,7 +357,8 @@ The MCP server exposes item tools (`ok_add`, `ok_list`, `ok_get`, `ok_update`,
 `ok_semantic_search`), hybrid retrieval (`ok_search`), and source-ref
 parsing/resolution (`ok_parse_source_ref`, `ok_resolve_source`). The
 `knowledge_search` MCP tool returns reranked citation context packs for agent
-prompts.
+prompts, and `knowledge_ask` runs the same prompt flow exposed by
+`open-knowledge ask`.
 
 ## Source And Artifact Boundary
 

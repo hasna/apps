@@ -13660,10 +13660,11 @@ import { existsSync as existsSync7, readFileSync as readFileSync7, writeFileSync
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.16",
+  version: "0.2.17",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   bin: {
+    knowledge: "bin/open-knowledge.js",
     "open-knowledge": "bin/open-knowledge.js",
     "open-knowledge-mcp": "bin/open-knowledge-mcp.js"
   },
@@ -14134,8 +14135,8 @@ function createArtifactStore(config2, workspace) {
   return new LocalArtifactStore(workspace.artifactsDir);
 }
 
-// src/embeddings.ts
-import { createHash } from "crypto";
+// src/agent.ts
+import { randomUUID as randomUUID3 } from "crypto";
 
 // src/knowledge-db.ts
 import { Database } from "bun:sqlite";
@@ -14441,6 +14442,7 @@ function getKnowledgeDbStats(path) {
 }
 
 // src/providers.ts
+import { randomUUID as randomUUID2 } from "crypto";
 var DEFAULT_PROVIDER_SETTINGS = {
   openai: {
     api_key_env: "OPENAI_API_KEY",
@@ -14496,7 +14498,7 @@ var BUILTIN_ALIASES = {
   "deepseek-reasoning": "deepseek:deepseek-reasoner"
 };
 function providerConfig(config2) {
-  return config2.providers ?? {};
+  return config2?.providers ?? {};
 }
 function providerSettings(config2, provider) {
   const configured = providerConfig(config2)[provider] ?? {};
@@ -14570,6 +14572,80 @@ function assertProviderCredentials(provider, config2, env = process.env) {
     throw new Error(`Missing ${status.api_key_env} for ${provider}. Set the env var to use this provider.`);
   return status;
 }
+async function defaultFactory(provider) {
+  if (provider === "openai") {
+    const { createOpenAI } = await import("@ai-sdk/openai");
+    return createOpenAI;
+  }
+  if (provider === "anthropic") {
+    const { createAnthropic } = await import("@ai-sdk/anthropic");
+    return createAnthropic;
+  }
+  const { createDeepSeek } = await import("@ai-sdk/deepseek");
+  return createDeepSeek;
+}
+async function createAiSdkProviderRegistry(options = {}) {
+  const { createProviderRegistry } = await import("ai");
+  const env = options.env ?? process.env;
+  const providers = {};
+  for (const provider of Object.keys(DEFAULT_PROVIDER_SETTINGS)) {
+    const settings = providerSettings(options.config, provider);
+    const apiKey = env[settings.api_key_env];
+    if (!apiKey)
+      continue;
+    const factory = options.factories?.[provider] ?? await defaultFactory(provider);
+    providers[provider] = factory({ apiKey, baseURL: settings.base_url });
+  }
+  return createProviderRegistry(providers);
+}
+async function languageModelFor(aliasOrRef, options = {}) {
+  const modelRef = resolveModelRef(aliasOrRef, options.config);
+  const parsed = parseModelRef(modelRef);
+  assertProviderCredentials(parsed.provider, options.config, options.env);
+  const registry2 = await createAiSdkProviderRegistry(options);
+  return registry2.languageModel(modelRef);
+}
+function usageNumber(usage, keys) {
+  for (const key of keys) {
+    const value = usage[key];
+    if (typeof value === "number" && Number.isFinite(value))
+      return value;
+  }
+  return 0;
+}
+function normalizeAiSdkUsage(input) {
+  const usage = input.usage ?? {};
+  return {
+    provider: input.provider,
+    model: input.model,
+    input_tokens: usageNumber(usage, ["inputTokens", "promptTokens", "input_tokens", "prompt_tokens"]),
+    output_tokens: usageNumber(usage, ["outputTokens", "completionTokens", "output_tokens", "completion_tokens"]),
+    cost_usd: input.costUsd ?? 0,
+    metadata: {
+      usage,
+      provider_metadata: input.providerMetadata ?? {}
+    }
+  };
+}
+function recordProviderUsage(db, input) {
+  const id = `usage_${randomUUID2()}`;
+  db.run(`INSERT INTO provider_usage (id, run_id, provider, model, input_tokens, output_tokens, cost_usd, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+    id,
+    input.run_id ?? null,
+    input.provider,
+    input.model,
+    input.input_tokens,
+    input.output_tokens,
+    input.cost_usd,
+    JSON.stringify(input.metadata),
+    input.created_at ?? new Date().toISOString()
+  ]);
+  return id;
+}
+
+// src/retrieval.ts
+import { createHash as createHash2 } from "crypto";
 
 // src/provenance.ts
 function isStaleStatus(status) {
@@ -14614,6 +14690,7 @@ function withProvenance(metadata, provenance) {
 }
 
 // src/embeddings.ts
+import { createHash } from "crypto";
 var DEFAULT_EMBEDDING_MODEL_REF = "openai:text-embedding-3-small";
 var DEFAULT_EMBEDDING_DIMENSIONS = 1536;
 function embeddingConfig(config2) {
@@ -14948,13 +15025,891 @@ async function searchVectorIndex(options) {
   }
 }
 
+// src/search.ts
+function parseJsonObject2(value) {
+  if (!value)
+    return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function metadataString2(metadata, keys) {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "string" && value.length > 0)
+      return value;
+  }
+  return null;
+}
+function metadataNumber2(metadata, keys) {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "number" && Number.isFinite(value))
+      return value;
+  }
+  return null;
+}
+function unique(values) {
+  return Array.from(new Set(values));
+}
+function queryTerms(query) {
+  const terms = query.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [];
+  return unique(terms.filter((term) => term.length > 0)).slice(0, 16);
+}
+function ftsQueryForTerms(terms) {
+  if (terms.length === 0)
+    return null;
+  return terms.map((term) => `${term}*`).join(" OR ");
+}
+function escapeLikeTerm(term) {
+  return term.replace(/[\\%_]/g, (char) => `\\${char}`);
+}
+function likeParams(terms, fieldsPerTerm) {
+  return terms.flatMap((term) => Array.from({ length: fieldsPerTerm }, () => `%${escapeLikeTerm(term)}%`));
+}
+function scoreFromRank(rank, index) {
+  const rankScore = Number.isFinite(rank) ? 1 / (1 + Math.abs(rank)) : 0;
+  const orderScore = 1 / (1 + index);
+  return roundScore(Math.max(rankScore, orderScore));
+}
+function catalogScore(haystack, terms) {
+  if (terms.length === 0)
+    return 0;
+  const matched = terms.filter((term) => haystack.includes(term)).length;
+  if (matched === 0)
+    return 0;
+  return roundScore(Math.min(0.85, 0.35 + matched / terms.length * 0.5));
+}
+function semanticScore(score) {
+  return roundScore(Math.max(0, Math.min(1, (score + 1) / 2)));
+}
+function roundScore(score) {
+  return Number(score.toFixed(6));
+}
+function combinedScore(scores, citation) {
+  const keyword = scores.keyword ?? 0;
+  const semantic = scores.semantic ?? 0;
+  const catalog = scores.catalog ?? 0;
+  const citationBoost = citation?.chunk_id ? 0.05 : 0;
+  return roundScore(Math.min(1, keyword * 0.55 + semantic * 0.4 + catalog * 0.35 + citationBoost));
+}
+function existingProvenance(metadata) {
+  const provenance = metadata.provenance;
+  return provenance && typeof provenance === "object" && !Array.isArray(provenance) ? provenance : null;
+}
+function provenanceForChunk2(row) {
+  const metadata = parseJsonObject2(row.chunk_metadata_json);
+  const existing = existingProvenance(metadata);
+  if (existing)
+    return existing;
+  if (!row.source_revision_id && !row.source_uri)
+    return null;
+  return sourceProvenance({
+    source_ref: metadataString2(metadata, ["source_ref"]),
+    source_uri: row.source_uri ?? metadataString2(metadata, ["source_uri"]),
+    source_kind: row.source_kind ?? metadataString2(metadata, ["source_kind"]),
+    source_revision_id: row.source_revision_id,
+    revision: row.revision ?? metadataString2(metadata, ["revision"]),
+    hash: row.hash ?? metadataString2(metadata, ["hash"]),
+    chunk_id: row.chunk_id,
+    start_offset: row.start_offset ?? metadataNumber2(metadata, ["start_offset"]),
+    end_offset: row.end_offset ?? metadataNumber2(metadata, ["end_offset"]),
+    status: metadataString2(metadata, ["status"]),
+    resolver: "open-files-read-only"
+  });
+}
+function selectFtsChunks(db, ftsQuery, limit) {
+  if (!ftsQuery)
+    return [];
+  return db.query(`SELECT
+       chunks_fts.chunk_id,
+       c.kind AS chunk_kind,
+       c.wiki_page_id,
+       c.text,
+       c.token_count,
+       c.start_offset,
+       c.end_offset,
+       c.metadata_json AS chunk_metadata_json,
+       c.source_revision_id,
+       sr.revision,
+       sr.hash,
+       s.uri AS source_uri,
+       s.kind AS source_kind,
+       s.title AS source_title,
+       wp.path AS wiki_path,
+       wp.title AS wiki_title,
+       wp.artifact_uri AS wiki_artifact_uri,
+       wp.content_hash AS wiki_content_hash,
+       wp.status AS wiki_status,
+       wp.metadata_json AS wiki_metadata_json,
+       bm25(chunks_fts) AS rank
+     FROM chunks_fts
+     JOIN chunks c ON c.id = chunks_fts.chunk_id
+     LEFT JOIN source_revisions sr ON sr.id = c.source_revision_id
+     LEFT JOIN sources s ON s.id = sr.source_id
+     LEFT JOIN wiki_pages wp ON wp.id = c.wiki_page_id
+     WHERE chunks_fts MATCH ?
+     ORDER BY rank ASC
+     LIMIT ?`).all(ftsQuery, limit);
+}
+function catalogWhere(fields, terms) {
+  if (terms.length === 0)
+    return "1 = 0";
+  const clauses = terms.map(() => `(${fields.map((field) => `lower(COALESCE(${field}, '')) LIKE ? ESCAPE '\\'`).join(" OR ")})`);
+  return clauses.join(" OR ");
+}
+function selectWikiPages(db, terms, limit) {
+  const fields = ["path", "title", "artifact_uri", "metadata_json"];
+  return db.query(`SELECT id, path, title, artifact_uri, content_hash, status, metadata_json
+     FROM wiki_pages
+     WHERE status = 'active' AND (${catalogWhere(fields, terms)})
+     ORDER BY updated_at DESC
+     LIMIT ?`).all(...likeParams(terms, fields.length), limit);
+}
+function selectKnowledgeIndexes(db, terms, limit) {
+  const fields = ["kind", "name", "shard_key", "artifact_uri", "metadata_json"];
+  return db.query(`SELECT id, kind, name, artifact_uri, shard_key, metadata_json
+     FROM knowledge_indexes
+     WHERE ${catalogWhere(fields, terms)}
+     ORDER BY updated_at DESC
+     LIMIT ?`).all(...likeParams(terms, fields.length), limit);
+}
+function chunkResult(row, keywordScore) {
+  const metadata = parseJsonObject2(row.chunk_metadata_json);
+  const provenance = provenanceForChunk2(row);
+  const sourceRef = metadataString2(metadata, ["source_ref"]);
+  const sourceUri = row.source_uri ?? metadataString2(metadata, ["source_uri"]);
+  const isWiki = Boolean(row.wiki_page_id);
+  const result = {
+    kind: isWiki ? "wiki_chunk" : "source_chunk",
+    id: row.chunk_id,
+    title: isWiki ? row.wiki_title : row.source_title,
+    text: row.text,
+    score: 0,
+    scores: { keyword: keywordScore },
+    source: sourceUri || sourceRef ? {
+      uri: sourceUri,
+      ref: sourceRef,
+      kind: row.source_kind ?? metadataString2(metadata, ["source_kind"]),
+      revision: row.revision ?? metadataString2(metadata, ["revision"]),
+      hash: row.hash ?? metadataString2(metadata, ["hash"])
+    } : null,
+    citation: {
+      chunk_id: row.chunk_id,
+      start_offset: row.start_offset,
+      end_offset: row.end_offset
+    },
+    artifact: isWiki ? {
+      uri: row.wiki_artifact_uri,
+      path: row.wiki_path,
+      hash: row.wiki_content_hash,
+      shard_key: row.wiki_path
+    } : null,
+    provenance,
+    reasons: ["keyword_match"]
+  };
+  result.score = combinedScore(result.scores, result.citation);
+  return result;
+}
+function wikiPageResult(row, terms) {
+  const metadata = parseJsonObject2(row.metadata_json);
+  const score = catalogScore(`${row.path} ${row.title} ${row.artifact_uri ?? ""} ${row.metadata_json}`.toLowerCase(), terms);
+  const result = {
+    kind: "wiki_page",
+    id: row.id,
+    title: row.title,
+    text: null,
+    score: 0,
+    scores: { catalog: score },
+    source: null,
+    citation: null,
+    artifact: {
+      uri: row.artifact_uri,
+      path: row.path,
+      hash: row.content_hash,
+      shard_key: row.path
+    },
+    provenance: existingProvenance(metadata),
+    reasons: ["wiki_catalog_match"]
+  };
+  result.score = combinedScore(result.scores, result.citation);
+  return result;
+}
+function indexResult(row, terms) {
+  const metadata = parseJsonObject2(row.metadata_json);
+  const score = catalogScore(`${row.kind} ${row.name} ${row.shard_key ?? ""} ${row.artifact_uri ?? ""} ${row.metadata_json}`.toLowerCase(), terms);
+  const result = {
+    kind: "knowledge_index",
+    id: row.id,
+    title: row.name,
+    text: null,
+    score: 0,
+    scores: { catalog: score },
+    source: null,
+    citation: null,
+    artifact: {
+      uri: row.artifact_uri,
+      path: metadataString2(metadata, ["artifact_key"]),
+      hash: metadataString2(metadata, ["content_hash"]),
+      shard_key: row.shard_key
+    },
+    provenance: existingProvenance(metadata),
+    reasons: ["index_catalog_match"]
+  };
+  result.score = combinedScore(result.scores, result.citation);
+  return result;
+}
+function mergeResult(results, entry) {
+  const key = `${entry.kind}:${entry.id}`;
+  const existing = results.get(key);
+  if (!existing) {
+    results.set(key, entry);
+    return;
+  }
+  existing.scores = {
+    keyword: Math.max(existing.scores.keyword ?? 0, entry.scores.keyword ?? 0) || undefined,
+    semantic: Math.max(existing.scores.semantic ?? 0, entry.scores.semantic ?? 0) || undefined,
+    catalog: Math.max(existing.scores.catalog ?? 0, entry.scores.catalog ?? 0) || undefined
+  };
+  existing.reasons = unique([...existing.reasons, ...entry.reasons]);
+  existing.text = existing.text ?? entry.text;
+  existing.title = existing.title ?? entry.title;
+  existing.source = existing.source ?? entry.source;
+  existing.citation = existing.citation ?? entry.citation;
+  existing.artifact = existing.artifact ?? entry.artifact;
+  existing.provenance = existing.provenance ?? entry.provenance;
+  existing.score = combinedScore(existing.scores, existing.citation);
+}
+function sortResults(results) {
+  const kindOrder = {
+    source_chunk: 0,
+    wiki_chunk: 1,
+    wiki_page: 2,
+    knowledge_index: 3
+  };
+  return results.sort((a, b) => {
+    if (b.score !== a.score)
+      return b.score - a.score;
+    return kindOrder[a.kind] - kindOrder[b.kind] || a.id.localeCompare(b.id);
+  });
+}
+async function hybridSearch(options) {
+  const query = options.query.trim();
+  if (!query)
+    throw new Error("Search query is required.");
+  const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
+  const terms = queryTerms(query);
+  const ftsQuery = ftsQueryForTerms(terms);
+  const semanticEnabled = options.semantic === true || options.fake === true || Boolean(options.modelRef);
+  const warnings = [];
+  let semanticProvider = null;
+  let semanticModel = null;
+  let semanticDimensions = null;
+  let keywordCount = 0;
+  let catalogCount = 0;
+  let semanticCount = 0;
+  const merged = new Map;
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    const ftsRows = selectFtsChunks(db, ftsQuery, Math.max(limit * 3, 20));
+    keywordCount = ftsRows.length;
+    ftsRows.forEach((row, index) => mergeResult(merged, chunkResult(row, scoreFromRank(row.rank, index))));
+    const wikiRows = selectWikiPages(db, terms, Math.max(limit, 10));
+    const indexRows = selectKnowledgeIndexes(db, terms, Math.max(limit, 10));
+    catalogCount = wikiRows.length + indexRows.length;
+    wikiRows.forEach((row) => mergeResult(merged, wikiPageResult(row, terms)));
+    indexRows.forEach((row) => mergeResult(merged, indexResult(row, terms)));
+  } finally {
+    db.close();
+  }
+  if (semanticEnabled) {
+    try {
+      const semantic = await searchVectorIndex({
+        dbPath: options.dbPath,
+        query,
+        limit: Math.max(limit * 3, 20),
+        config: options.config,
+        env: options.env,
+        modelRef: options.modelRef,
+        dimensions: options.dimensions,
+        fake: options.fake,
+        batchSize: options.batchSize,
+        maxParallelCalls: options.maxParallelCalls
+      });
+      semanticProvider = semantic.provider;
+      semanticModel = semantic.model;
+      semanticDimensions = semantic.dimensions;
+      semanticCount = semantic.results.length;
+      for (const row of semantic.results) {
+        const result = {
+          kind: "source_chunk",
+          id: row.chunk_id,
+          title: null,
+          text: row.text,
+          score: 0,
+          scores: { semantic: semanticScore(row.score) },
+          source: {
+            uri: row.source_uri,
+            ref: row.source_ref,
+            kind: row.provenance?.source_kind ?? null,
+            revision: row.revision,
+            hash: row.hash
+          },
+          citation: {
+            chunk_id: row.chunk_id,
+            start_offset: row.provenance?.start_offset ?? null,
+            end_offset: row.provenance?.end_offset ?? null
+          },
+          artifact: null,
+          provenance: row.provenance,
+          reasons: ["semantic_match"]
+        };
+        result.score = combinedScore(result.scores, result.citation);
+        mergeResult(merged, result);
+      }
+    } catch (error48) {
+      warnings.push(`semantic_search_failed: ${error48 instanceof Error ? error48.message : String(error48)}`);
+    }
+  }
+  const results = sortResults(Array.from(merged.values())).slice(0, limit);
+  return {
+    query,
+    limit,
+    mode: {
+      keyword: true,
+      catalog: true,
+      semantic: semanticEnabled
+    },
+    semantic_provider: semanticProvider,
+    semantic_model: semanticModel,
+    semantic_dimensions: semanticDimensions,
+    counts: {
+      keyword_results: keywordCount,
+      catalog_results: catalogCount,
+      semantic_results: semanticCount,
+      merged_results: results.length
+    },
+    warnings,
+    results
+  };
+}
+
+// src/retrieval.ts
+function stableId2(prefix, value) {
+  return `${prefix}_${createHash2("sha256").update(value).digest("hex").slice(0, 20)}`;
+}
+function normalizeQuery(query) {
+  return query.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+}
+function queryTerms2(query) {
+  return Array.from(new Set(normalizeQuery(query).match(/[\p{L}\p{N}_]+/gu) ?? [])).slice(0, 16);
+}
+function textForResult(result) {
+  return [result.title, result.text].filter(Boolean).join(" ").toLowerCase();
+}
+function exactScore(result, terms) {
+  if (terms.length === 0)
+    return 0;
+  const text = textForResult(result);
+  const matched = terms.filter((term) => text.includes(term)).length;
+  return Number((matched / terms.length).toFixed(6));
+}
+function hasReadOnlyProvenance(provenance) {
+  if (!provenance)
+    return true;
+  if ("read_only" in provenance)
+    return provenance.read_only === true;
+  if ("read_only_sources" in provenance)
+    return provenance.read_only_sources === true;
+  return true;
+}
+function isStale(provenance) {
+  if (!provenance)
+    return false;
+  if ("stale" in provenance && provenance.stale)
+    return true;
+  if ("status" in provenance)
+    return isStaleStatus(provenance.status);
+  return false;
+}
+function freshnessScore(result) {
+  if (isStale(result.provenance))
+    return 0;
+  if (result.source?.hash || result.source?.revision)
+    return 1;
+  if (result.artifact?.hash)
+    return 0.85;
+  if (result.provenance && "source_refs" in result.provenance && result.provenance.source_refs.length > 0)
+    return 0.75;
+  return 0.55;
+}
+function citationScore(result) {
+  if (result.citation?.chunk_id && (result.source?.uri || result.artifact?.uri))
+    return 1;
+  if (result.provenance && "citation_required" in result.provenance && result.provenance.citation_required)
+    return 0.75;
+  if (result.artifact?.uri)
+    return 0.65;
+  return 0.35;
+}
+function authorityScore(result) {
+  if (result.kind === "wiki_chunk")
+    return 0.85;
+  if (result.kind === "source_chunk")
+    return 0.8;
+  if (result.kind === "wiki_page")
+    return 0.65;
+  return 0.55;
+}
+function rerank(result, terms) {
+  const scores = {
+    base_score: result.score,
+    exact_score: exactScore(result, terms),
+    citation_score: citationScore(result),
+    freshness_score: freshnessScore(result),
+    authority_score: authorityScore(result)
+  };
+  const final = Math.min(1, scores.base_score * 0.65 + scores.exact_score * 0.1 + scores.citation_score * 0.1 + scores.freshness_score * 0.1 + scores.authority_score * 0.05);
+  const reasons = new Set(result.reasons);
+  if (scores.exact_score > 0.5)
+    reasons.add("exact_term");
+  if (scores.citation_score >= 0.75)
+    reasons.add("cited_source");
+  if (scores.freshness_score >= 0.85)
+    reasons.add("fresh_source");
+  return {
+    ...result,
+    score: Number(final.toFixed(6)),
+    reasons: Array.from(reasons),
+    rerank: {
+      ...scores,
+      final_score: Number(final.toFixed(6))
+    }
+  };
+}
+function quoteFor(result, maxChars) {
+  const source = result.text ?? result.title;
+  if (!source)
+    return null;
+  const normalized = source.replace(/\s+/g, " ").trim();
+  return normalized.length <= maxChars ? normalized : `${normalized.slice(0, Math.max(0, maxChars - 1)).trim()}...`;
+}
+function citationFor(result) {
+  const id = stableId2("cite", `${result.kind}\x00${result.id}\x00${result.source?.uri ?? ""}\x00${result.artifact?.uri ?? ""}`);
+  return {
+    id,
+    result_id: result.id,
+    kind: result.kind,
+    source_uri: result.source?.uri ?? null,
+    source_ref: result.source?.ref ?? null,
+    artifact_uri: result.artifact?.uri ?? null,
+    artifact_path: result.artifact?.path ?? null,
+    revision: result.source?.revision ?? null,
+    hash: result.source?.hash ?? result.artifact?.hash ?? null,
+    chunk_id: result.citation?.chunk_id ?? null,
+    start_offset: result.citation?.start_offset ?? null,
+    end_offset: result.citation?.end_offset ?? null,
+    quote: quoteFor(result, 500),
+    provenance: result.provenance
+  };
+}
+function excerptFor(result, citation, contextChars) {
+  const text = quoteFor(result, contextChars);
+  if (!text)
+    return null;
+  return {
+    id: stableId2("excerpt", `${result.kind}\x00${result.id}`),
+    result_id: result.id,
+    citation_id: citation.id,
+    kind: result.kind,
+    text,
+    score: result.score
+  };
+}
+function placeholders(values) {
+  return values.map(() => "?").join(", ");
+}
+function loadGraphEvidence(dbPath, results) {
+  const chunkIds = results.map((result) => result.citation?.chunk_id).filter((id) => Boolean(id));
+  const wikiPageIds = results.filter((result) => result.kind === "wiki_page").map((result) => result.id);
+  const citations = [];
+  const backlinks = [];
+  if (chunkIds.length === 0 && wikiPageIds.length === 0)
+    return { citations, backlinks };
+  const db = openKnowledgeDb(dbPath);
+  try {
+    if (chunkIds.length > 0) {
+      citations.push(...db.query(`SELECT id, wiki_page_id, chunk_id, source_uri, quote, start_offset, end_offset
+         FROM citations
+         WHERE chunk_id IN (${placeholders(chunkIds)})
+         ORDER BY created_at DESC
+         LIMIT 50`).all(...chunkIds));
+    }
+    if (wikiPageIds.length > 0) {
+      citations.push(...db.query(`SELECT id, wiki_page_id, chunk_id, source_uri, quote, start_offset, end_offset
+         FROM citations
+         WHERE wiki_page_id IN (${placeholders(wikiPageIds)})
+         ORDER BY created_at DESC
+         LIMIT 50`).all(...wikiPageIds));
+      backlinks.push(...db.query(`SELECT from_page_id, to_page_id, label
+         FROM wiki_backlinks
+         WHERE from_page_id IN (${placeholders(wikiPageIds)}) OR to_page_id IN (${placeholders(wikiPageIds)})
+         LIMIT 50`).all(...wikiPageIds, ...wikiPageIds));
+    }
+  } finally {
+    db.close();
+  }
+  return { citations, backlinks };
+}
+async function retrieveKnowledgeContext(options) {
+  const contextChars = Math.max(200, Math.min(options.contextChars ?? 1200, 4000));
+  const search = await hybridSearch(options);
+  const terms = queryTerms2(search.query);
+  const warnings = [...search.warnings];
+  const permissionNotes = new Set;
+  const freshnessNotes = new Set;
+  const filtered = search.results.filter((result) => {
+    if (!hasReadOnlyProvenance(result.provenance)) {
+      warnings.push(`permission_filtered: ${result.kind}:${result.id}`);
+      permissionNotes.add("Dropped a result because provenance was not read-only.");
+      return false;
+    }
+    if (isStale(result.provenance)) {
+      warnings.push(`stale_filtered: ${result.kind}:${result.id}`);
+      freshnessNotes.add("Dropped a stale result whose source status requires reindexing.");
+      return false;
+    }
+    return true;
+  });
+  const results = filtered.map((result) => rerank(result, terms)).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, search.limit);
+  const citations = results.map(citationFor);
+  const excerpts = results.map((result, index) => excerptFor(result, citations[index], contextChars)).filter((entry) => Boolean(entry));
+  for (const result of results) {
+    if (result.provenance && "read_only" in result.provenance && result.provenance.read_only) {
+      permissionNotes.add("All source-backed excerpts are read-only and citation-required.");
+    }
+    if (result.rerank.freshness_score >= 0.85) {
+      freshnessNotes.add("Fresh source revision/hash or artifact hash is present for top context.");
+    }
+  }
+  return {
+    query: search.query,
+    normalized_query: normalizeQuery(search.query),
+    created_at: new Date().toISOString(),
+    mode: search.mode,
+    warnings,
+    search_counts: search.counts,
+    results,
+    citations,
+    excerpts,
+    graph: loadGraphEvidence(options.dbPath, results),
+    notes: {
+      permissions: Array.from(permissionNotes),
+      freshness: Array.from(freshnessNotes)
+    }
+  };
+}
+
+// src/agent.ts
+function estimateTokens(text) {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.ceil(words * 1.25));
+}
+function citationLabel(index) {
+  return `C${index + 1}`;
+}
+function localAnswer(prompt, context) {
+  if (context.excerpts.length === 0) {
+    return `No indexed knowledge matched the prompt: ${prompt}`;
+  }
+  const lines = [
+    `Found ${context.excerpts.length} relevant knowledge excerpt(s) for: ${prompt}`,
+    "",
+    ...context.excerpts.slice(0, 5).map((excerpt, index) => {
+      const citation = context.citations.find((entry) => entry.id === excerpt.citation_id);
+      const ref = citation?.source_ref ?? citation?.source_uri ?? citation?.artifact_path ?? citation?.artifact_uri ?? "unknown source";
+      return `[${citationLabel(index)}] ${excerpt.text} (${ref})`;
+    })
+  ];
+  return lines.join(`
+`);
+}
+function promptForModel(prompt, context) {
+  const citations = context.citations.map((citation, index) => ({
+    id: citationLabel(index),
+    source_ref: citation.source_ref,
+    source_uri: citation.source_uri,
+    artifact_path: citation.artifact_path,
+    revision: citation.revision,
+    hash: citation.hash,
+    quote: citation.quote
+  }));
+  const excerpts = context.excerpts.map((excerpt, index) => ({
+    id: citationLabel(index),
+    kind: excerpt.kind,
+    text: excerpt.text,
+    score: excerpt.score
+  }));
+  return [
+    `Prompt: ${prompt}`,
+    "",
+    "Use only the provided context. Cite claims with citation ids like [C1]. If context is insufficient, say what is missing.",
+    "",
+    `Context excerpts:
+${JSON.stringify(excerpts, null, 2)}`,
+    "",
+    `Citations:
+${JSON.stringify(citations, null, 2)}`
+  ].join(`
+`);
+}
+function proposedUpdates(prompt, context) {
+  if (context.citations.length === 0)
+    return [];
+  return [{
+    kind: "answer_note",
+    title: prompt.length > 80 ? `${prompt.slice(0, 77)}...` : prompt,
+    citations: context.citations.map((citation) => citation.id),
+    requires_approval: true
+  }];
+}
+function insertRun(dbPath, input) {
+  const db = openKnowledgeDb(dbPath);
+  try {
+    db.run(`INSERT INTO runs (id, type, prompt, status, provider, model, metadata_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      input.runId,
+      "knowledge-prompt",
+      input.prompt,
+      input.status,
+      input.provider,
+      input.model,
+      JSON.stringify(input.metadata),
+      input.now,
+      input.now
+    ]);
+  } finally {
+    db.close();
+  }
+}
+function addRunEvent(dbPath, input) {
+  const db = openKnowledgeDb(dbPath);
+  try {
+    db.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`, [
+      `evt_${randomUUID3()}`,
+      input.runId,
+      input.level,
+      input.event,
+      JSON.stringify(input.metadata),
+      input.now
+    ]);
+  } finally {
+    db.close();
+  }
+}
+function updateRun(dbPath, input) {
+  const db = openKnowledgeDb(dbPath);
+  try {
+    db.run(`UPDATE runs
+       SET status = ?, provider = ?, model = ?, metadata_json = ?, updated_at = ?
+       WHERE id = ?`, [
+      input.status,
+      input.provider,
+      input.model,
+      JSON.stringify(input.metadata),
+      input.now,
+      input.runId
+    ]);
+  } finally {
+    db.close();
+  }
+}
+function recordUsage(dbPath, runId, usage, provider, model, now, metadata = {}) {
+  const db = openKnowledgeDb(dbPath);
+  try {
+    recordProviderUsage(db, {
+      run_id: runId,
+      provider,
+      model,
+      input_tokens: usage.input_tokens,
+      output_tokens: usage.output_tokens,
+      cost_usd: usage.cost_usd,
+      metadata,
+      created_at: now
+    });
+  } finally {
+    db.close();
+  }
+}
+async function runKnowledgePrompt(options) {
+  const prompt = options.prompt.trim();
+  if (!prompt)
+    throw new Error("Knowledge prompt is required.");
+  const now = (options.now ?? new Date).toISOString();
+  const runId = `run_${randomUUID3()}`;
+  const modelRef = resolveModelRef(options.modelRef ?? "default", options.config);
+  const parsed = parseModelRef(modelRef);
+  migrateKnowledgeDb(options.dbPath);
+  insertRun(options.dbPath, {
+    runId,
+    prompt,
+    status: options.generate ? "running" : "dry_run",
+    provider: options.generate ? parsed.provider : "local",
+    model: options.generate ? parsed.model : "context-draft",
+    metadata: {
+      semantic: options.semantic === true || options.fake === true || Boolean(options.modelRef),
+      approve_write: options.approveWrite === true,
+      generated: options.generate === true
+    },
+    now
+  });
+  const { prompt: _prompt, generate: _generate, approveWrite: _approveWrite, now: _now, ...retrievalOptions } = options;
+  const context = await retrieveKnowledgeContext({
+    ...retrievalOptions,
+    query: prompt
+  });
+  addRunEvent(options.dbPath, {
+    runId,
+    level: "info",
+    event: "context_retrieved",
+    metadata: {
+      results: context.results.length,
+      citations: context.citations.length,
+      warnings: context.warnings
+    },
+    now
+  });
+  let answer = localAnswer(prompt, context);
+  let generated = false;
+  let provider = "local";
+  let model = "context-draft";
+  let usage = {
+    input_tokens: estimateTokens(prompt) + context.excerpts.reduce((sum, excerpt) => sum + estimateTokens(excerpt.text), 0),
+    output_tokens: estimateTokens(answer),
+    cost_usd: 0
+  };
+  const warnings = [...context.warnings];
+  if (options.generate) {
+    try {
+      if (options.fake) {
+        generated = true;
+        provider = parsed.provider;
+        model = parsed.model;
+        answer = `Fake generated answer for: ${prompt}
+
+${answer}`;
+      } else {
+        const { generateText } = await import("ai");
+        const languageModel = await languageModelFor(modelRef, {
+          config: options.config,
+          env: options.env
+        });
+        const result = await generateText({
+          model: languageModel,
+          system: "You answer company knowledge-base prompts using only provided context and citation ids.",
+          prompt: promptForModel(prompt, context)
+        });
+        generated = true;
+        provider = parsed.provider;
+        model = parsed.model;
+        answer = result.text;
+        const normalized = normalizeAiSdkUsage({
+          provider,
+          model,
+          usage: result.usage,
+          providerMetadata: result.providerMetadata
+        });
+        usage = {
+          input_tokens: normalized.input_tokens,
+          output_tokens: normalized.output_tokens,
+          cost_usd: normalized.cost_usd
+        };
+      }
+    } catch (error48) {
+      addRunEvent(options.dbPath, {
+        runId,
+        level: "error",
+        event: "answer_generation_failed",
+        metadata: { message: error48 instanceof Error ? error48.message : String(error48) },
+        now
+      });
+      updateRun(options.dbPath, {
+        runId,
+        status: "failed",
+        provider: parsed.provider,
+        model: parsed.model,
+        metadata: {
+          generated: false,
+          error: error48 instanceof Error ? error48.message : String(error48)
+        },
+        now
+      });
+      throw error48;
+    }
+  }
+  const updates = proposedUpdates(prompt, context);
+  const writePolicy = {
+    approved: options.approveWrite === true,
+    durable_writes_performed: false,
+    reason: options.approveWrite ? "Approval flag recorded; durable wiki writing is deferred to the wiki compile task." : "Dry-run mode: proposed wiki updates require approval before durable writes."
+  };
+  addRunEvent(options.dbPath, {
+    runId,
+    level: "info",
+    event: generated ? "answer_generated" : "answer_drafted",
+    metadata: {
+      provider,
+      model,
+      proposed_updates: updates.length,
+      durable_writes_performed: false
+    },
+    now
+  });
+  recordUsage(options.dbPath, runId, usage, provider, model, now, {
+    generated,
+    citations: context.citations.length
+  });
+  updateRun(options.dbPath, {
+    runId,
+    status: generated ? "completed" : "dry_run",
+    provider,
+    model,
+    metadata: {
+      generated,
+      citations: context.citations.length,
+      proposed_updates: updates.length,
+      approve_write: options.approveWrite === true
+    },
+    now
+  });
+  return {
+    run_id: runId,
+    prompt,
+    generated,
+    provider,
+    model,
+    answer,
+    context,
+    citations: context.citations,
+    proposed_wiki_updates: updates,
+    write_policy: writePolicy,
+    usage,
+    warnings
+  };
+}
+
 // src/outbox-consume.ts
-import { createHash as createHash3, randomUUID as randomUUID3 } from "crypto";
+import { createHash as createHash4, randomUUID as randomUUID5 } from "crypto";
 import { existsSync as existsSync4, readFileSync as readFileSync4 } from "fs";
 import { basename } from "path";
 
 // src/safety.ts
-import { createHash as createHash2, randomUUID as randomUUID2 } from "crypto";
+import { createHash as createHash3, randomUUID as randomUUID4 } from "crypto";
 import { relative as relative2, resolve as resolve2, sep as sep2 } from "path";
 function envEnabled(name) {
   const value = process.env[name];
@@ -15049,7 +16004,7 @@ function redactSecrets(text, policy) {
   return { text: output, findings };
 }
 function auditId(input) {
-  return `audit_${createHash2("sha256").update(`${input.event_type}\x00${input.action}\x00${input.target_uri ?? ""}\x00${input.created_at ?? ""}\x00${JSON.stringify(input.metadata ?? {})}\x00${randomUUID2()}`).digest("hex").slice(0, 24)}`;
+  return `audit_${createHash3("sha256").update(`${input.event_type}\x00${input.action}\x00${input.target_uri ?? ""}\x00${input.created_at ?? ""}\x00${JSON.stringify(input.metadata ?? {})}\x00${randomUUID4()}`).digest("hex").slice(0, 24)}`;
 }
 function recordAuditEvent(db, input) {
   const createdAt = input.created_at ?? new Date().toISOString();
@@ -15071,7 +16026,7 @@ function recordRedactionFindings(db, input) {
   for (const finding of input.findings) {
     db.run(`INSERT INTO redaction_findings (id, source_uri, run_id, severity, finding_type, metadata_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`, [
-      `redact_${randomUUID2()}`,
+      `redact_${randomUUID4()}`,
       input.source_uri ?? null,
       input.run_id ?? null,
       finding.severity,
@@ -15084,8 +16039,8 @@ function recordRedactionFindings(db, input) {
 }
 
 // src/outbox-consume.ts
-function stableId2(prefix, value) {
-  return `${prefix}_${createHash3("sha256").update(value).digest("hex").slice(0, 20)}`;
+function stableId3(prefix, value) {
+  return `${prefix}_${createHash4("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
 function asObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
@@ -15239,7 +16194,7 @@ function mergeJson(existing, patch) {
   return JSON.stringify({ ...base, ...patch });
 }
 function ensureSource(db, event, now) {
-  const id = stableId2("src", event.sourceUri);
+  const id = stableId3("src", event.sourceUri);
   db.run(`INSERT INTO sources (id, uri, kind, title, metadata_json, acl_json, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(uri) DO UPDATE SET
@@ -15280,7 +16235,7 @@ function ensureSource(db, event, now) {
 function ensureRevision(db, sourceId, event, now) {
   if (!event.revision)
     return null;
-  const id = stableId2("rev", `${sourceId}\x00${event.revision}`);
+  const id = stableId3("rev", `${sourceId}\x00${event.revision}`);
   const metadata = {
     source_ref: event.sourceRef,
     source_uri: event.sourceUri,
@@ -15340,7 +16295,7 @@ async function consumeOpenFilesOutbox(options) {
   const text = await readOutboxInput(options.input, options.config, options.safetyPolicy);
   const events = parseOutboxText(text);
   const db = openKnowledgeDb(options.dbPath);
-  const runId = `run_${randomUUID3()}`;
+  const runId = `run_${randomUUID5()}`;
   try {
     return db.transaction(() => {
       db.run(`INSERT INTO runs (id, type, prompt, status, provider, model, metadata_json, created_at, updated_at)
@@ -15396,7 +16351,7 @@ async function consumeOpenFilesOutbox(options) {
           permissionUpdates += 1;
         db.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
            VALUES (?, ?, ?, ?, ?, ?)`, [
-          stableId2("evt", `${runId}\x00${index}\x00${event.sourceRef}\x00${event.eventType}`),
+          stableId3("evt", `${runId}\x00${index}\x00${event.sourceRef}\x00${event.eventType}`),
           runId,
           "info",
           event.eventType,
@@ -15413,7 +16368,7 @@ async function consumeOpenFilesOutbox(options) {
       });
       db.run(`INSERT INTO provider_usage (id, run_id, provider, model, input_tokens, output_tokens, cost_usd, metadata_json, created_at)
          VALUES (?, ?, ?, ?, 0, 0, 0, ?, ?)`, [
-        stableId2("usage", runId),
+        stableId3("usage", runId),
         runId,
         "local",
         "open-files-outbox",
@@ -15458,11 +16413,11 @@ async function consumeOpenFilesOutbox(options) {
 }
 
 // src/manifest-ingest.ts
-import { createHash as createHash4 } from "crypto";
+import { createHash as createHash5 } from "crypto";
 import { existsSync as existsSync5, readFileSync as readFileSync5 } from "fs";
 import { basename as basename2 } from "path";
-function stableId3(prefix, value) {
-  return `${prefix}_${createHash4("sha256").update(value).digest("hex").slice(0, 20)}`;
+function stableId4(prefix, value) {
+  return `${prefix}_${createHash5("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
 function asObject2(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
@@ -15682,7 +16637,7 @@ function deleteChunksForRevision(db, sourceRevisionId) {
   return rows.length;
 }
 function upsertSource(db, item, now) {
-  const sourceId = stableId3("src", item.sourceUri);
+  const sourceId = stableId4("src", item.sourceUri);
   db.run(`INSERT INTO sources (id, uri, kind, title, metadata_json, acl_json, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(uri) DO UPDATE SET
@@ -15706,7 +16661,7 @@ function upsertSource(db, item, now) {
   return row.id;
 }
 function upsertRevision(db, sourceId, item, now) {
-  const revisionId = stableId3("rev", `${sourceId}\x00${item.revision}`);
+  const revisionId = stableId4("rev", `${sourceId}\x00${item.revision}`);
   db.run(`INSERT INTO source_revisions (id, source_id, revision, hash, extracted_text_uri, metadata_json, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(source_id, revision) DO UPDATE SET
@@ -15748,7 +16703,7 @@ function insertChunks(db, sourceRevisionId, item, now, maxChars, overlapChars, s
   }
   const chunks = chunkText(redacted.text, maxChars, overlapChars);
   for (const chunk of chunks) {
-    const chunkId = stableId3("chk", `${sourceRevisionId}\x00${chunk.ordinal}\x00${chunk.text}`);
+    const chunkId = stableId4("chk", `${sourceRevisionId}\x00${chunk.ordinal}\x00${chunk.text}`);
     const provenance = sourceProvenance({
       source_ref: item.sourceRef,
       source_uri: item.sourceUri,
@@ -15876,12 +16831,12 @@ async function ingestOpenFilesManifestItems(options) {
 }
 
 // src/source-ingest.ts
-import { createHash as createHash5 } from "crypto";
+import { createHash as createHash6 } from "crypto";
 import { existsSync as existsSync6, readFileSync as readFileSync6 } from "fs";
 import { basename as basename3 } from "path";
 
 // src/source-resolver.ts
-function parseJsonObject2(value) {
+function parseJsonObject3(value) {
   if (!value)
     return {};
   try {
@@ -15891,7 +16846,7 @@ function parseJsonObject2(value) {
     return {};
   }
 }
-function metadataString2(metadata, keys) {
+function metadataString3(metadata, keys) {
   for (const key of keys) {
     const value = metadata[key];
     if (typeof value === "string" && value.length > 0)
@@ -15899,7 +16854,7 @@ function metadataString2(metadata, keys) {
   }
   return null;
 }
-function metadataNumber2(metadata, keys) {
+function metadataNumber3(metadata, keys) {
   for (const key of keys) {
     const value = metadata[key];
     if (typeof value === "number" && Number.isFinite(value))
@@ -16024,8 +16979,8 @@ async function resolveOpenFilesSource(options) {
           citations: []
         };
       }
-      const sourceMetadata = parseJsonObject2(source.metadata_json);
-      const permissions = parseJsonObject2(source.acl_json);
+      const sourceMetadata = parseJsonObject3(source.metadata_json);
+      const permissions = parseJsonObject3(source.acl_json);
       try {
         assertPurposeAllowed(permissions, purpose);
       } catch (error48) {
@@ -16045,22 +17000,22 @@ async function resolveOpenFilesSource(options) {
         throw error48;
       }
       const revision = selectRevision(db, source.id, requestedRevision);
-      const revisionMetadata = parseJsonObject2(revision?.metadata_json);
+      const revisionMetadata = parseJsonObject3(revision?.metadata_json);
       const totalChunks = countChunks(db, revision?.id ?? null);
       const rows = selectChunks(db, revision?.id ?? null, limit);
       const effectiveSourceRef = sourceRevisionRef(source.uri, revision, options.sourceRef);
       const chunks = rows.map((row) => {
-        const metadata = parseJsonObject2(row.metadata_json);
+        const metadata = parseJsonObject3(row.metadata_json);
         const evidence = {
           resolver: "open-files-read-only",
           mode: "local_catalog",
           purpose,
           read_only: true,
-          source_ref: metadataString2(metadata, ["source_ref"]) ?? effectiveSourceRef,
+          source_ref: metadataString3(metadata, ["source_ref"]) ?? effectiveSourceRef,
           source_uri: source.uri,
           source_revision_id: revision?.id ?? null,
           revision: revision?.revision ?? null,
-          hash: revision?.hash ?? metadataString2(metadata, ["hash"]),
+          hash: revision?.hash ?? metadataString3(metadata, ["hash"]),
           chunk_id: row.id,
           start_offset: row.start_offset,
           end_offset: row.end_offset,
@@ -16076,7 +17031,7 @@ async function resolveOpenFilesSource(options) {
           chunk_id: row.id,
           start_offset: row.start_offset,
           end_offset: row.end_offset,
-          status: metadataString2(metadata, ["status"]),
+          status: metadataString3(metadata, ["status"]),
           resolver: evidence.resolver
         });
         return {
@@ -16117,8 +17072,8 @@ async function resolveOpenFilesSource(options) {
         },
         created_at: resolvedAt
       });
-      const mime = metadataString2(sourceMetadata, ["mime", "content_type"]) ?? metadataString2(revisionMetadata, ["mime", "content_type"]);
-      const size = metadataNumber2(sourceMetadata, ["size", "size_bytes"]) ?? metadataNumber2(revisionMetadata, ["size", "size_bytes"]);
+      const mime = metadataString3(sourceMetadata, ["mime", "content_type"]) ?? metadataString3(revisionMetadata, ["mime", "content_type"]);
+      const size = metadataNumber3(sourceMetadata, ["size", "size_bytes"]) ?? metadataNumber3(revisionMetadata, ["size", "size_bytes"]);
       return {
         source_ref: effectiveSourceRef,
         source_uri: source.uri,
@@ -16151,12 +17106,12 @@ async function resolveOpenFilesSource(options) {
         content: {
           mime,
           size,
-          hash: revision?.hash ?? metadataString2(sourceMetadata, ["hash", "checksum", "sha256"]),
+          hash: revision?.hash ?? metadataString3(sourceMetadata, ["hash", "checksum", "sha256"]),
           text_available: totalChunks > 0,
           chunks_total: totalChunks,
           chunks_returned: chunks.length,
           char_count_returned: chunks.reduce((sum, chunk) => sum + chunk.text.length, 0),
-          extracted_text_ref: revision?.extracted_text_uri ?? metadataString2(revisionMetadata, ["extracted_text_ref", "extracted_text_uri"]),
+          extracted_text_ref: revision?.extracted_text_uri ?? metadataString3(revisionMetadata, ["extracted_text_ref", "extracted_text_uri"]),
           bytes_available: false,
           bytes_exposed: false
         },
@@ -16171,7 +17126,7 @@ async function resolveOpenFilesSource(options) {
 
 // src/source-ingest.ts
 function sha256Text(text) {
-  return `sha256:${createHash5("sha256").update(text).digest("hex")}`;
+  return `sha256:${createHash6("sha256").update(text).digest("hex")}`;
 }
 function stripHtml(html) {
   return html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+\n/g, `
@@ -16393,600 +17348,8 @@ async function ingestSourceRef(options) {
   };
 }
 
-// src/retrieval.ts
-import { createHash as createHash6 } from "crypto";
-
-// src/search.ts
-function parseJsonObject3(value) {
-  if (!value)
-    return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-function metadataString3(metadata, keys) {
-  for (const key of keys) {
-    const value = metadata[key];
-    if (typeof value === "string" && value.length > 0)
-      return value;
-  }
-  return null;
-}
-function metadataNumber3(metadata, keys) {
-  for (const key of keys) {
-    const value = metadata[key];
-    if (typeof value === "number" && Number.isFinite(value))
-      return value;
-  }
-  return null;
-}
-function unique(values) {
-  return Array.from(new Set(values));
-}
-function queryTerms(query) {
-  const terms = query.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [];
-  return unique(terms.filter((term) => term.length > 0)).slice(0, 16);
-}
-function ftsQueryForTerms(terms) {
-  if (terms.length === 0)
-    return null;
-  return terms.map((term) => `${term}*`).join(" OR ");
-}
-function escapeLikeTerm(term) {
-  return term.replace(/[\\%_]/g, (char) => `\\${char}`);
-}
-function likeParams(terms, fieldsPerTerm) {
-  return terms.flatMap((term) => Array.from({ length: fieldsPerTerm }, () => `%${escapeLikeTerm(term)}%`));
-}
-function scoreFromRank(rank, index) {
-  const rankScore = Number.isFinite(rank) ? 1 / (1 + Math.abs(rank)) : 0;
-  const orderScore = 1 / (1 + index);
-  return roundScore(Math.max(rankScore, orderScore));
-}
-function catalogScore(haystack, terms) {
-  if (terms.length === 0)
-    return 0;
-  const matched = terms.filter((term) => haystack.includes(term)).length;
-  if (matched === 0)
-    return 0;
-  return roundScore(Math.min(0.85, 0.35 + matched / terms.length * 0.5));
-}
-function semanticScore(score) {
-  return roundScore(Math.max(0, Math.min(1, (score + 1) / 2)));
-}
-function roundScore(score) {
-  return Number(score.toFixed(6));
-}
-function combinedScore(scores, citation) {
-  const keyword = scores.keyword ?? 0;
-  const semantic = scores.semantic ?? 0;
-  const catalog = scores.catalog ?? 0;
-  const citationBoost = citation?.chunk_id ? 0.05 : 0;
-  return roundScore(Math.min(1, keyword * 0.55 + semantic * 0.4 + catalog * 0.35 + citationBoost));
-}
-function existingProvenance(metadata) {
-  const provenance = metadata.provenance;
-  return provenance && typeof provenance === "object" && !Array.isArray(provenance) ? provenance : null;
-}
-function provenanceForChunk2(row) {
-  const metadata = parseJsonObject3(row.chunk_metadata_json);
-  const existing = existingProvenance(metadata);
-  if (existing)
-    return existing;
-  if (!row.source_revision_id && !row.source_uri)
-    return null;
-  return sourceProvenance({
-    source_ref: metadataString3(metadata, ["source_ref"]),
-    source_uri: row.source_uri ?? metadataString3(metadata, ["source_uri"]),
-    source_kind: row.source_kind ?? metadataString3(metadata, ["source_kind"]),
-    source_revision_id: row.source_revision_id,
-    revision: row.revision ?? metadataString3(metadata, ["revision"]),
-    hash: row.hash ?? metadataString3(metadata, ["hash"]),
-    chunk_id: row.chunk_id,
-    start_offset: row.start_offset ?? metadataNumber3(metadata, ["start_offset"]),
-    end_offset: row.end_offset ?? metadataNumber3(metadata, ["end_offset"]),
-    status: metadataString3(metadata, ["status"]),
-    resolver: "open-files-read-only"
-  });
-}
-function selectFtsChunks(db, ftsQuery, limit) {
-  if (!ftsQuery)
-    return [];
-  return db.query(`SELECT
-       chunks_fts.chunk_id,
-       c.kind AS chunk_kind,
-       c.wiki_page_id,
-       c.text,
-       c.token_count,
-       c.start_offset,
-       c.end_offset,
-       c.metadata_json AS chunk_metadata_json,
-       c.source_revision_id,
-       sr.revision,
-       sr.hash,
-       s.uri AS source_uri,
-       s.kind AS source_kind,
-       s.title AS source_title,
-       wp.path AS wiki_path,
-       wp.title AS wiki_title,
-       wp.artifact_uri AS wiki_artifact_uri,
-       wp.content_hash AS wiki_content_hash,
-       wp.status AS wiki_status,
-       wp.metadata_json AS wiki_metadata_json,
-       bm25(chunks_fts) AS rank
-     FROM chunks_fts
-     JOIN chunks c ON c.id = chunks_fts.chunk_id
-     LEFT JOIN source_revisions sr ON sr.id = c.source_revision_id
-     LEFT JOIN sources s ON s.id = sr.source_id
-     LEFT JOIN wiki_pages wp ON wp.id = c.wiki_page_id
-     WHERE chunks_fts MATCH ?
-     ORDER BY rank ASC
-     LIMIT ?`).all(ftsQuery, limit);
-}
-function catalogWhere(fields, terms) {
-  if (terms.length === 0)
-    return "1 = 0";
-  const clauses = terms.map(() => `(${fields.map((field) => `lower(COALESCE(${field}, '')) LIKE ? ESCAPE '\\'`).join(" OR ")})`);
-  return clauses.join(" OR ");
-}
-function selectWikiPages(db, terms, limit) {
-  const fields = ["path", "title", "artifact_uri", "metadata_json"];
-  return db.query(`SELECT id, path, title, artifact_uri, content_hash, status, metadata_json
-     FROM wiki_pages
-     WHERE status = 'active' AND (${catalogWhere(fields, terms)})
-     ORDER BY updated_at DESC
-     LIMIT ?`).all(...likeParams(terms, fields.length), limit);
-}
-function selectKnowledgeIndexes(db, terms, limit) {
-  const fields = ["kind", "name", "shard_key", "artifact_uri", "metadata_json"];
-  return db.query(`SELECT id, kind, name, artifact_uri, shard_key, metadata_json
-     FROM knowledge_indexes
-     WHERE ${catalogWhere(fields, terms)}
-     ORDER BY updated_at DESC
-     LIMIT ?`).all(...likeParams(terms, fields.length), limit);
-}
-function chunkResult(row, keywordScore) {
-  const metadata = parseJsonObject3(row.chunk_metadata_json);
-  const provenance = provenanceForChunk2(row);
-  const sourceRef = metadataString3(metadata, ["source_ref"]);
-  const sourceUri = row.source_uri ?? metadataString3(metadata, ["source_uri"]);
-  const isWiki = Boolean(row.wiki_page_id);
-  const result = {
-    kind: isWiki ? "wiki_chunk" : "source_chunk",
-    id: row.chunk_id,
-    title: isWiki ? row.wiki_title : row.source_title,
-    text: row.text,
-    score: 0,
-    scores: { keyword: keywordScore },
-    source: sourceUri || sourceRef ? {
-      uri: sourceUri,
-      ref: sourceRef,
-      kind: row.source_kind ?? metadataString3(metadata, ["source_kind"]),
-      revision: row.revision ?? metadataString3(metadata, ["revision"]),
-      hash: row.hash ?? metadataString3(metadata, ["hash"])
-    } : null,
-    citation: {
-      chunk_id: row.chunk_id,
-      start_offset: row.start_offset,
-      end_offset: row.end_offset
-    },
-    artifact: isWiki ? {
-      uri: row.wiki_artifact_uri,
-      path: row.wiki_path,
-      hash: row.wiki_content_hash,
-      shard_key: row.wiki_path
-    } : null,
-    provenance,
-    reasons: ["keyword_match"]
-  };
-  result.score = combinedScore(result.scores, result.citation);
-  return result;
-}
-function wikiPageResult(row, terms) {
-  const metadata = parseJsonObject3(row.metadata_json);
-  const score = catalogScore(`${row.path} ${row.title} ${row.artifact_uri ?? ""} ${row.metadata_json}`.toLowerCase(), terms);
-  const result = {
-    kind: "wiki_page",
-    id: row.id,
-    title: row.title,
-    text: null,
-    score: 0,
-    scores: { catalog: score },
-    source: null,
-    citation: null,
-    artifact: {
-      uri: row.artifact_uri,
-      path: row.path,
-      hash: row.content_hash,
-      shard_key: row.path
-    },
-    provenance: existingProvenance(metadata),
-    reasons: ["wiki_catalog_match"]
-  };
-  result.score = combinedScore(result.scores, result.citation);
-  return result;
-}
-function indexResult(row, terms) {
-  const metadata = parseJsonObject3(row.metadata_json);
-  const score = catalogScore(`${row.kind} ${row.name} ${row.shard_key ?? ""} ${row.artifact_uri ?? ""} ${row.metadata_json}`.toLowerCase(), terms);
-  const result = {
-    kind: "knowledge_index",
-    id: row.id,
-    title: row.name,
-    text: null,
-    score: 0,
-    scores: { catalog: score },
-    source: null,
-    citation: null,
-    artifact: {
-      uri: row.artifact_uri,
-      path: metadataString3(metadata, ["artifact_key"]),
-      hash: metadataString3(metadata, ["content_hash"]),
-      shard_key: row.shard_key
-    },
-    provenance: existingProvenance(metadata),
-    reasons: ["index_catalog_match"]
-  };
-  result.score = combinedScore(result.scores, result.citation);
-  return result;
-}
-function mergeResult(results, entry) {
-  const key = `${entry.kind}:${entry.id}`;
-  const existing = results.get(key);
-  if (!existing) {
-    results.set(key, entry);
-    return;
-  }
-  existing.scores = {
-    keyword: Math.max(existing.scores.keyword ?? 0, entry.scores.keyword ?? 0) || undefined,
-    semantic: Math.max(existing.scores.semantic ?? 0, entry.scores.semantic ?? 0) || undefined,
-    catalog: Math.max(existing.scores.catalog ?? 0, entry.scores.catalog ?? 0) || undefined
-  };
-  existing.reasons = unique([...existing.reasons, ...entry.reasons]);
-  existing.text = existing.text ?? entry.text;
-  existing.title = existing.title ?? entry.title;
-  existing.source = existing.source ?? entry.source;
-  existing.citation = existing.citation ?? entry.citation;
-  existing.artifact = existing.artifact ?? entry.artifact;
-  existing.provenance = existing.provenance ?? entry.provenance;
-  existing.score = combinedScore(existing.scores, existing.citation);
-}
-function sortResults(results) {
-  const kindOrder = {
-    source_chunk: 0,
-    wiki_chunk: 1,
-    wiki_page: 2,
-    knowledge_index: 3
-  };
-  return results.sort((a, b) => {
-    if (b.score !== a.score)
-      return b.score - a.score;
-    return kindOrder[a.kind] - kindOrder[b.kind] || a.id.localeCompare(b.id);
-  });
-}
-async function hybridSearch(options) {
-  const query = options.query.trim();
-  if (!query)
-    throw new Error("Search query is required.");
-  const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
-  const terms = queryTerms(query);
-  const ftsQuery = ftsQueryForTerms(terms);
-  const semanticEnabled = options.semantic === true || options.fake === true || Boolean(options.modelRef);
-  const warnings = [];
-  let semanticProvider = null;
-  let semanticModel = null;
-  let semanticDimensions = null;
-  let keywordCount = 0;
-  let catalogCount = 0;
-  let semanticCount = 0;
-  const merged = new Map;
-  migrateKnowledgeDb(options.dbPath);
-  const db = openKnowledgeDb(options.dbPath);
-  try {
-    const ftsRows = selectFtsChunks(db, ftsQuery, Math.max(limit * 3, 20));
-    keywordCount = ftsRows.length;
-    ftsRows.forEach((row, index) => mergeResult(merged, chunkResult(row, scoreFromRank(row.rank, index))));
-    const wikiRows = selectWikiPages(db, terms, Math.max(limit, 10));
-    const indexRows = selectKnowledgeIndexes(db, terms, Math.max(limit, 10));
-    catalogCount = wikiRows.length + indexRows.length;
-    wikiRows.forEach((row) => mergeResult(merged, wikiPageResult(row, terms)));
-    indexRows.forEach((row) => mergeResult(merged, indexResult(row, terms)));
-  } finally {
-    db.close();
-  }
-  if (semanticEnabled) {
-    try {
-      const semantic = await searchVectorIndex({
-        dbPath: options.dbPath,
-        query,
-        limit: Math.max(limit * 3, 20),
-        config: options.config,
-        env: options.env,
-        modelRef: options.modelRef,
-        dimensions: options.dimensions,
-        fake: options.fake,
-        batchSize: options.batchSize,
-        maxParallelCalls: options.maxParallelCalls
-      });
-      semanticProvider = semantic.provider;
-      semanticModel = semantic.model;
-      semanticDimensions = semantic.dimensions;
-      semanticCount = semantic.results.length;
-      for (const row of semantic.results) {
-        const result = {
-          kind: "source_chunk",
-          id: row.chunk_id,
-          title: null,
-          text: row.text,
-          score: 0,
-          scores: { semantic: semanticScore(row.score) },
-          source: {
-            uri: row.source_uri,
-            ref: row.source_ref,
-            kind: row.provenance?.source_kind ?? null,
-            revision: row.revision,
-            hash: row.hash
-          },
-          citation: {
-            chunk_id: row.chunk_id,
-            start_offset: row.provenance?.start_offset ?? null,
-            end_offset: row.provenance?.end_offset ?? null
-          },
-          artifact: null,
-          provenance: row.provenance,
-          reasons: ["semantic_match"]
-        };
-        result.score = combinedScore(result.scores, result.citation);
-        mergeResult(merged, result);
-      }
-    } catch (error48) {
-      warnings.push(`semantic_search_failed: ${error48 instanceof Error ? error48.message : String(error48)}`);
-    }
-  }
-  const results = sortResults(Array.from(merged.values())).slice(0, limit);
-  return {
-    query,
-    limit,
-    mode: {
-      keyword: true,
-      catalog: true,
-      semantic: semanticEnabled
-    },
-    semantic_provider: semanticProvider,
-    semantic_model: semanticModel,
-    semantic_dimensions: semanticDimensions,
-    counts: {
-      keyword_results: keywordCount,
-      catalog_results: catalogCount,
-      semantic_results: semanticCount,
-      merged_results: results.length
-    },
-    warnings,
-    results
-  };
-}
-
-// src/retrieval.ts
-function stableId4(prefix, value) {
-  return `${prefix}_${createHash6("sha256").update(value).digest("hex").slice(0, 20)}`;
-}
-function normalizeQuery(query) {
-  return query.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
-}
-function queryTerms2(query) {
-  return Array.from(new Set(normalizeQuery(query).match(/[\p{L}\p{N}_]+/gu) ?? [])).slice(0, 16);
-}
-function textForResult(result) {
-  return [result.title, result.text].filter(Boolean).join(" ").toLowerCase();
-}
-function exactScore(result, terms) {
-  if (terms.length === 0)
-    return 0;
-  const text = textForResult(result);
-  const matched = terms.filter((term) => text.includes(term)).length;
-  return Number((matched / terms.length).toFixed(6));
-}
-function hasReadOnlyProvenance(provenance) {
-  if (!provenance)
-    return true;
-  if ("read_only" in provenance)
-    return provenance.read_only === true;
-  if ("read_only_sources" in provenance)
-    return provenance.read_only_sources === true;
-  return true;
-}
-function isStale(provenance) {
-  if (!provenance)
-    return false;
-  if ("stale" in provenance && provenance.stale)
-    return true;
-  if ("status" in provenance)
-    return isStaleStatus(provenance.status);
-  return false;
-}
-function freshnessScore(result) {
-  if (isStale(result.provenance))
-    return 0;
-  if (result.source?.hash || result.source?.revision)
-    return 1;
-  if (result.artifact?.hash)
-    return 0.85;
-  if (result.provenance && "source_refs" in result.provenance && result.provenance.source_refs.length > 0)
-    return 0.75;
-  return 0.55;
-}
-function citationScore(result) {
-  if (result.citation?.chunk_id && (result.source?.uri || result.artifact?.uri))
-    return 1;
-  if (result.provenance && "citation_required" in result.provenance && result.provenance.citation_required)
-    return 0.75;
-  if (result.artifact?.uri)
-    return 0.65;
-  return 0.35;
-}
-function authorityScore(result) {
-  if (result.kind === "wiki_chunk")
-    return 0.85;
-  if (result.kind === "source_chunk")
-    return 0.8;
-  if (result.kind === "wiki_page")
-    return 0.65;
-  return 0.55;
-}
-function rerank(result, terms) {
-  const scores = {
-    base_score: result.score,
-    exact_score: exactScore(result, terms),
-    citation_score: citationScore(result),
-    freshness_score: freshnessScore(result),
-    authority_score: authorityScore(result)
-  };
-  const final = Math.min(1, scores.base_score * 0.65 + scores.exact_score * 0.1 + scores.citation_score * 0.1 + scores.freshness_score * 0.1 + scores.authority_score * 0.05);
-  const reasons = new Set(result.reasons);
-  if (scores.exact_score > 0.5)
-    reasons.add("exact_term");
-  if (scores.citation_score >= 0.75)
-    reasons.add("cited_source");
-  if (scores.freshness_score >= 0.85)
-    reasons.add("fresh_source");
-  return {
-    ...result,
-    score: Number(final.toFixed(6)),
-    reasons: Array.from(reasons),
-    rerank: {
-      ...scores,
-      final_score: Number(final.toFixed(6))
-    }
-  };
-}
-function quoteFor(result, maxChars) {
-  const source = result.text ?? result.title;
-  if (!source)
-    return null;
-  const normalized = source.replace(/\s+/g, " ").trim();
-  return normalized.length <= maxChars ? normalized : `${normalized.slice(0, Math.max(0, maxChars - 1)).trim()}...`;
-}
-function citationFor(result) {
-  const id = stableId4("cite", `${result.kind}\x00${result.id}\x00${result.source?.uri ?? ""}\x00${result.artifact?.uri ?? ""}`);
-  return {
-    id,
-    result_id: result.id,
-    kind: result.kind,
-    source_uri: result.source?.uri ?? null,
-    source_ref: result.source?.ref ?? null,
-    artifact_uri: result.artifact?.uri ?? null,
-    artifact_path: result.artifact?.path ?? null,
-    revision: result.source?.revision ?? null,
-    hash: result.source?.hash ?? result.artifact?.hash ?? null,
-    chunk_id: result.citation?.chunk_id ?? null,
-    start_offset: result.citation?.start_offset ?? null,
-    end_offset: result.citation?.end_offset ?? null,
-    quote: quoteFor(result, 500),
-    provenance: result.provenance
-  };
-}
-function excerptFor(result, citation, contextChars) {
-  const text = quoteFor(result, contextChars);
-  if (!text)
-    return null;
-  return {
-    id: stableId4("excerpt", `${result.kind}\x00${result.id}`),
-    result_id: result.id,
-    citation_id: citation.id,
-    kind: result.kind,
-    text,
-    score: result.score
-  };
-}
-function placeholders(values) {
-  return values.map(() => "?").join(", ");
-}
-function loadGraphEvidence(dbPath, results) {
-  const chunkIds = results.map((result) => result.citation?.chunk_id).filter((id) => Boolean(id));
-  const wikiPageIds = results.filter((result) => result.kind === "wiki_page").map((result) => result.id);
-  const citations = [];
-  const backlinks = [];
-  if (chunkIds.length === 0 && wikiPageIds.length === 0)
-    return { citations, backlinks };
-  const db = openKnowledgeDb(dbPath);
-  try {
-    if (chunkIds.length > 0) {
-      citations.push(...db.query(`SELECT id, wiki_page_id, chunk_id, source_uri, quote, start_offset, end_offset
-         FROM citations
-         WHERE chunk_id IN (${placeholders(chunkIds)})
-         ORDER BY created_at DESC
-         LIMIT 50`).all(...chunkIds));
-    }
-    if (wikiPageIds.length > 0) {
-      citations.push(...db.query(`SELECT id, wiki_page_id, chunk_id, source_uri, quote, start_offset, end_offset
-         FROM citations
-         WHERE wiki_page_id IN (${placeholders(wikiPageIds)})
-         ORDER BY created_at DESC
-         LIMIT 50`).all(...wikiPageIds));
-      backlinks.push(...db.query(`SELECT from_page_id, to_page_id, label
-         FROM wiki_backlinks
-         WHERE from_page_id IN (${placeholders(wikiPageIds)}) OR to_page_id IN (${placeholders(wikiPageIds)})
-         LIMIT 50`).all(...wikiPageIds, ...wikiPageIds));
-    }
-  } finally {
-    db.close();
-  }
-  return { citations, backlinks };
-}
-async function retrieveKnowledgeContext(options) {
-  const contextChars = Math.max(200, Math.min(options.contextChars ?? 1200, 4000));
-  const search = await hybridSearch(options);
-  const terms = queryTerms2(search.query);
-  const warnings = [...search.warnings];
-  const permissionNotes = new Set;
-  const freshnessNotes = new Set;
-  const filtered = search.results.filter((result) => {
-    if (!hasReadOnlyProvenance(result.provenance)) {
-      warnings.push(`permission_filtered: ${result.kind}:${result.id}`);
-      permissionNotes.add("Dropped a result because provenance was not read-only.");
-      return false;
-    }
-    if (isStale(result.provenance)) {
-      warnings.push(`stale_filtered: ${result.kind}:${result.id}`);
-      freshnessNotes.add("Dropped a stale result whose source status requires reindexing.");
-      return false;
-    }
-    return true;
-  });
-  const results = filtered.map((result) => rerank(result, terms)).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, search.limit);
-  const citations = results.map(citationFor);
-  const excerpts = results.map((result, index) => excerptFor(result, citations[index], contextChars)).filter((entry) => Boolean(entry));
-  for (const result of results) {
-    if (result.provenance && "read_only" in result.provenance && result.provenance.read_only) {
-      permissionNotes.add("All source-backed excerpts are read-only and citation-required.");
-    }
-    if (result.rerank.freshness_score >= 0.85) {
-      freshnessNotes.add("Fresh source revision/hash or artifact hash is present for top context.");
-    }
-  }
-  return {
-    query: search.query,
-    normalized_query: normalizeQuery(search.query),
-    created_at: new Date().toISOString(),
-    mode: search.mode,
-    warnings,
-    search_counts: search.counts,
-    results,
-    citations,
-    excerpts,
-    graph: loadGraphEvidence(options.dbPath, results),
-    notes: {
-      permissions: Array.from(permissionNotes),
-      freshness: Array.from(freshnessNotes)
-    }
-  };
-}
-
 // src/storage-contract.ts
-import { createHash as createHash7, randomUUID as randomUUID4 } from "crypto";
+import { createHash as createHash7, randomUUID as randomUUID6 } from "crypto";
 var GENERATED_ARTIFACTS = [
   {
     kind: "schema",
@@ -17147,7 +17510,7 @@ function recordStorageObjects(db, objects, now = new Date) {
   `);
   const insert = db.transaction((entries) => {
     for (const entry of entries) {
-      statement.run(randomUUID4(), entry.uri, entry.kind, entry.content_type ?? null, entry.hash ?? null, entry.size_bytes ?? null, JSON.stringify({
+      statement.run(randomUUID6(), entry.uri, entry.kind, entry.content_type ?? null, entry.hash ?? null, entry.size_bytes ?? null, JSON.stringify({
         key: entry.key,
         ...entry.metadata ?? {}
       }), timestamp, timestamp);
@@ -17522,6 +17885,14 @@ class KnowledgeService {
       config: this.config()
     });
   }
+  async runPrompt(options) {
+    const workspace = this.ensureWorkspace();
+    return runKnowledgePrompt({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config()
+    });
+  }
 }
 function createKnowledgeService(options = {}) {
   return new KnowledgeService(options);
@@ -17699,6 +18070,24 @@ function buildServer() {
     const service = createKnowledgeService({ scope });
     try {
       return jsonText({ ok: true, ...await service.retrieveContext({ query, limit, semantic, modelRef: model, dimensions, fake }) });
+    } catch (error48) {
+      return errorText(error48 instanceof Error ? error48.message : String(error48));
+    }
+  });
+  registerTool(server, "knowledge_ask", "Knowledge prompt answer", "Answer a prompt using read-only knowledge context and optional AI SDK generation", {
+    scope: scopeField,
+    prompt: exports_external.string().describe("Prompt to answer with the knowledge base"),
+    limit: exports_external.number().optional().describe("Maximum context results"),
+    semantic: exports_external.boolean().optional().describe("Include vector semantic results"),
+    generate: exports_external.boolean().optional().describe("Call AI SDK text generation; omitted returns a local citation draft"),
+    approve_write: exports_external.boolean().optional().describe("Record approval intent for future durable wiki writes"),
+    model: exports_external.string().optional().describe("Model alias/ref, default configured provider default"),
+    dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
+    fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings/generation for local tests")
+  }, async ({ scope, prompt, limit, semantic, generate, approve_write, model, dimensions, fake }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText({ ok: true, ...await service.runPrompt({ prompt, limit, semantic, generate, approveWrite: approve_write, modelRef: model, dimensions, fake }) });
     } catch (error48) {
       return errorText(error48 instanceof Error ? error48.message : String(error48));
     }
