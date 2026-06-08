@@ -74,6 +74,7 @@ forms:
 
 ```text
 open-files://file/<file_id>
+open-files://file/<file_id>/revision/<revision_id>
 open-files://source/<source_id>/path/<path>
 s3://bucket/key
 file:///absolute/path

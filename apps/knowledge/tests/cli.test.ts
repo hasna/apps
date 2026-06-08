@@ -186,6 +186,12 @@ describe('open-knowledge cli', () => {
       entity: 'file',
       id: 'file_123',
     });
+    expect(parseSourceRef('open-files://file/file_123/revision/rev_456')).toMatchObject({
+      kind: 'open-files',
+      entity: 'file',
+      id: 'file_123',
+      revision_id: 'rev_456',
+    });
     expect(parseSourceRef('open-files://source/src_123/path/docs/readme.md')).toMatchObject({
       kind: 'open-files',
       entity: 'source',

@@ -200,9 +200,10 @@ parsing (`ok_parse_source_ref`).
 ## Source And Artifact Boundary
 
 Raw files should be stored and resolved through `open-files`. `open-knowledge`
-stores source references such as `open-files://file/<id>`, `s3://...`,
-`file://...`, and `https://...`, plus citations, chunks, generated wiki pages,
-indexes, logs, runs, and search metadata.
+stores source references such as `open-files://file/<id>`,
+`open-files://file/<id>/revision/<revision_id>`, `s3://...`, `file://...`,
+and `https://...`, plus citations, chunks, generated wiki pages, indexes,
+logs, runs, and search metadata.
 
 Generated knowledge artifacts can be stored locally under
 `.hasna/apps/knowledge/artifacts` or through the S3 artifact-store adapter.

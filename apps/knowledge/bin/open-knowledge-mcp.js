@@ -13886,9 +13886,17 @@ function parseOpenFilesRef(uri) {
   const parts = withoutScheme.split("/").filter(Boolean);
   const entity = parts[0];
   if (entity !== "file" && entity !== "source") {
-    throw new Error("Invalid open-files ref. Expected open-files://file/<id> or open-files://source/<id>/path/<path>.");
+    throw new Error("Invalid open-files ref. Expected open-files://file/<id>, open-files://file/<id>/revision/<revision_id>, or open-files://source/<id>/path/<path>.");
   }
   const id = assertNonEmpty(parts[1], "Invalid open-files ref. Missing id.");
+  if (entity === "file") {
+    if (parts.length === 2)
+      return { kind: "open-files", uri, entity, id };
+    if (parts[2] === "revision" && parts[3] && parts.length === 4) {
+      return { kind: "open-files", uri, entity, id, revision_id: decodeURIComponent(parts[3]) };
+    }
+    throw new Error("Invalid open-files file ref. Expected open-files://file/<id>/revision/<revision_id>.");
+  }
   const pathIndex = parts.indexOf("path");
   const path = pathIndex >= 0 ? decodeURIComponent(parts.slice(pathIndex + 1).join("/")) : undefined;
   return { kind: "open-files", uri, entity, id, path };

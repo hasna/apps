@@ -8,7 +8,8 @@ different part of the retrieval problem.
 
 `open-files` supplies:
 
-- Stable source refs such as `open-files://file/<id>`.
+- Stable source refs such as `open-files://file/<id>` and
+  `open-files://file/<id>/revision/<revision_id>`.
 - Source ids, file ids, revisions, hashes, MIME metadata, and storage location.
 - Extracted text and extraction status.
 - Read-only content resolution for deeper reads.

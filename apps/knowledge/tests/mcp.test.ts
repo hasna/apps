@@ -67,9 +67,9 @@ describe('open-knowledge MCP', () => {
 
       const source = parseToolJson(await client.callTool({
         name: 'ok_parse_source_ref',
-        arguments: { uri: 'open-files://file/file_123' },
+        arguments: { uri: 'open-files://file/file_123/revision/rev_456' },
       }));
-      expect(source.source_ref).toMatchObject({ kind: 'open-files', entity: 'file', id: 'file_123' });
+      expect(source.source_ref).toMatchObject({ kind: 'open-files', entity: 'file', id: 'file_123', revision_id: 'rev_456' });
 
       const batch = parseToolJson(await client.callTool({
         name: 'ok_batch',
