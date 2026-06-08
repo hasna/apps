@@ -13659,7 +13659,7 @@ import { existsSync as existsSync3, readFileSync as readFileSync3, writeFileSync
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.6",
+  version: "0.2.7",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   bin: {
@@ -13762,6 +13762,19 @@ function defaultKnowledgeConfig() {
     sources: {
       preferred_ref: "open-files",
       allowed_schemes: ["open-files", "s3", "file", "https", "http"]
+    },
+    safety: {
+      network: {
+        web_search_enabled: false,
+        s3_reads_enabled: false,
+        allowed_s3_buckets: []
+      },
+      redaction: {
+        enabled: true
+      },
+      approvals: {
+        generated_writes_require_approval: true
+      }
     }
   };
 }

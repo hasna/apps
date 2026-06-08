@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { getKnowledgeDbStats, migrateKnowledgeDb, openKnowledgeDb } from '../src/knowledge-db';
 import { ingestOpenFilesManifest } from '../src/manifest-ingest';
 import { consumeOpenFilesOutbox } from '../src/outbox-consume';
+import { createApprovalGate, hasApproval, redactSecrets, resolveSafetyPolicy } from '../src/safety';
+import { defaultKnowledgeConfig, workspaceForHome } from '../src/workspace';
 
 describe('knowledge sqlite store', () => {
   test('migrates versioned schema and creates core catalog tables', () => {
@@ -12,7 +14,7 @@ describe('knowledge sqlite store', () => {
     const dbPath = join(dir, 'knowledge.db');
 
     const migration = migrateKnowledgeDb(dbPath);
-    expect(migration.schema_version).toBe(2);
+    expect(migration.schema_version).toBe(3);
 
     const db = openKnowledgeDb(dbPath);
     try {
@@ -30,14 +32,19 @@ describe('knowledge sqlite store', () => {
       expect(tables).toContain('provider_usage');
       expect(tables).toContain('redaction_findings');
       expect(tables).toContain('storage_objects');
+      expect(tables).toContain('audit_events');
+      expect(tables).toContain('approval_gates');
     } finally {
       db.close();
     }
 
     const stats = getKnowledgeDbStats(dbPath);
-    expect(stats.schema_version).toBe(2);
+    expect(stats.schema_version).toBe(3);
     expect(stats.sources).toBe(0);
     expect(stats.runs).toBe(0);
+    expect(stats.redaction_findings).toBe(0);
+    expect(stats.audit_events).toBe(0);
+    expect(stats.approval_gates).toBe(0);
   });
 
   test('ingests open-files manifests into sources, revisions, chunks, and FTS', async () => {
@@ -57,7 +64,7 @@ describe('knowledge sqlite store', () => {
         status: 'active',
         updated_at: '2026-06-08T00:00:00.000Z',
         permissions: { mode: 'read_only', allowed_purposes: ['knowledge_index'] },
-        extracted_text: 'Company handbook\n\nSemantic search should find this source.',
+        extracted_text: 'Company handbook\n\nSemantic search should find this source. token=sk-testsecretkeyvalue1234567890',
       },
       {
         source_ref: 'open-files://file/file_456',
@@ -81,10 +88,12 @@ describe('knowledge sqlite store', () => {
     });
 
     const stats = getKnowledgeDbStats(dbPath);
-    expect(stats.schema_version).toBe(2);
+    expect(stats.schema_version).toBe(3);
     expect(stats.sources).toBe(2);
     expect(stats.source_revisions).toBe(2);
     expect(stats.chunks).toBe(1);
+    expect(stats.redaction_findings).toBeGreaterThanOrEqual(1);
+    expect(stats.audit_events).toBeGreaterThanOrEqual(3);
     migrateKnowledgeDb(dbPath);
 
     const db = openKnowledgeDb(dbPath);
@@ -103,6 +112,13 @@ describe('knowledge sqlite store', () => {
         'SELECT chunk_id FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT 1',
       ).get('semantic');
       expect(fts?.chunk_id).toStartWith('chk_');
+
+      const chunk = db.query<{ text: string }, []>('SELECT text FROM chunks LIMIT 1').get();
+      expect(chunk?.text).toContain('[REDACTED:secret_assignment]');
+      expect(chunk?.text).not.toContain('sk-testsecretkeyvalue');
+
+      const redactions = db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM redaction_findings').get();
+      expect(redactions?.n).toBeGreaterThanOrEqual(1);
     } finally {
       db.close();
     }
@@ -150,6 +166,7 @@ describe('knowledge sqlite store', () => {
     expect(stats.chunks).toBe(0);
     expect(stats.runs).toBe(1);
     expect(stats.run_events).toBe(1);
+    expect(stats.audit_events).toBeGreaterThanOrEqual(2);
 
     const db = openKnowledgeDb(dbPath);
     try {
@@ -167,6 +184,34 @@ describe('knowledge sqlite store', () => {
 
       const usage = db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM provider_usage').get();
       expect(usage?.n).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('supports safety policy defaults and local approval gates', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-safety-'));
+    const dbPath = join(dir, 'knowledge.db');
+    migrateKnowledgeDb(dbPath);
+    const workspace = workspaceForHome(join(dir, '.hasna', 'apps', 'knowledge'));
+    const policy = resolveSafetyPolicy(defaultKnowledgeConfig(), workspace);
+    expect(policy.network.webSearchEnabled).toBe(false);
+    expect(policy.network.s3ReadsEnabled).toBe(false);
+    expect(policy.redaction.enabled).toBe(true);
+
+    const redacted = redactSecrets('token=sk-testsecretkeyvalue1234567890');
+    expect(redacted.text).toBe('[REDACTED:secret_assignment]');
+    expect(redacted.findings).toHaveLength(1);
+
+    const db = openKnowledgeDb(dbPath);
+    try {
+      expect(hasApproval(db, 'generated_write', 'wiki://answer')).toBe(false);
+      createApprovalGate(db, {
+        action: 'generated_write',
+        target_uri: 'wiki://answer',
+        reason: 'test approval',
+      });
+      expect(hasApproval(db, 'generated_write', 'wiki://answer')).toBe(true);
     } finally {
       db.close();
     }

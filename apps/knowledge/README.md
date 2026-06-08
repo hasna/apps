@@ -68,6 +68,9 @@ open-knowledge ingest manifest ./open-files-manifest.jsonl --scope project --jso
 
 # Consume open-files change events and invalidate stale source chunks
 open-knowledge reindex outbox ./open-files-outbox.jsonl --scope project --json
+
+# Inspect local safety policy and approvals
+open-knowledge safety status --scope project --json
 ```
 
 ## Commands
@@ -182,6 +185,18 @@ Consume open-files JSON or JSONL change events. This invalidates matching
 source chunks and embeddings by source ref, revision, or hash, updates
 permission/path/delete metadata, and records a local run ledger.
 
+### safety
+```bash
+open-knowledge safety status [--scope project] [--json]
+open-knowledge safety check generated_write [target] [--scope project] [--json]
+open-knowledge safety approve generated_write [target] [--scope project] [--json]
+open-knowledge safety audit [--scope project] [--json]
+open-knowledge safety redact <text> [--scope project] [--json]
+```
+Inspect and operate the local safety model. Source reads are read-only by
+default, web search and S3 reads are opt-in, generated writes require approval
+by default, and known secret patterns are redacted before chunk storage.
+
 ### help
 ```bash
 open-knowledge help [command]
@@ -229,6 +244,12 @@ logs, runs, and search metadata.
 
 Generated knowledge artifacts can be stored locally under
 `.hasna/apps/knowledge/artifacts` or through the S3 artifact-store adapter.
+
+The default safety policy allows writes only under the resolved
+`.hasna/apps/knowledge` workspace. S3 manifest/outbox reads require
+`safety.network.s3_reads_enabled=true` and an allowed bucket in config, or the
+equivalent `HASNA_KNOWLEDGE_ALLOW_S3_READS=1` and
+`HASNA_KNOWLEDGE_ALLOWED_S3_BUCKETS=bucket-a,bucket-b` environment variables.
 
 ## JSON Output
 

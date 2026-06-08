@@ -5,6 +5,7 @@ import type { Database } from 'bun:sqlite';
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { parseSourceRef, type SourceRef } from './source-ref';
 import type { KnowledgeConfig } from './workspace';
+import { assertS3ReadAllowed, assertWriteAllowed, recordAuditEvent, type SafetyPolicy } from './safety';
 
 type OutboxObject = Record<string, unknown>;
 
@@ -12,6 +13,7 @@ export interface OutboxConsumeOptions {
   dbPath: string;
   input: string;
   config?: KnowledgeConfig;
+  safetyPolicy?: SafetyPolicy;
   now?: Date;
 }
 
@@ -165,11 +167,12 @@ function parseOutboxText(text: string): OutboxObject[] {
   });
 }
 
-async function readS3Text(uri: string, config?: KnowledgeConfig): Promise<string> {
+async function readS3Text(uri: string, config?: KnowledgeConfig, safetyPolicy?: SafetyPolicy): Promise<string> {
   const parsed = new URL(uri);
   const bucket = parsed.hostname;
   const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
   if (!bucket || !key) throw new Error(`Invalid S3 outbox URI: ${uri}`);
+  if (safetyPolicy) assertS3ReadAllowed(uri, safetyPolicy);
   const [{ S3Client, GetObjectCommand }, { fromIni }] = await Promise.all([
     import('@aws-sdk/client-s3'),
     import('@aws-sdk/credential-providers'),
@@ -185,8 +188,8 @@ async function readS3Text(uri: string, config?: KnowledgeConfig): Promise<string
   return await response.Body.transformToString();
 }
 
-async function readOutboxInput(input: string, config?: KnowledgeConfig): Promise<string> {
-  if (input.startsWith('s3://')) return readS3Text(input, config);
+async function readOutboxInput(input: string, config?: KnowledgeConfig, safetyPolicy?: SafetyPolicy): Promise<string> {
+  if (input.startsWith('s3://')) return readS3Text(input, config, safetyPolicy);
   if (!existsSync(input)) throw new Error(`Outbox not found: ${input}`);
   return readFileSync(input, 'utf8');
 }
@@ -318,8 +321,9 @@ function isPermissionEvent(eventType: string): boolean {
 
 export async function consumeOpenFilesOutbox(options: OutboxConsumeOptions): Promise<OutboxConsumeResult> {
   const now = (options.now ?? new Date()).toISOString();
+  if (options.safetyPolicy) assertWriteAllowed(options.dbPath, options.safetyPolicy);
   migrateKnowledgeDb(options.dbPath);
-  const text = await readOutboxInput(options.input, options.config);
+  const text = await readOutboxInput(options.input, options.config, options.safetyPolicy);
   const events = parseOutboxText(text);
   const db = openKnowledgeDb(options.dbPath);
   const runId = `run_${randomUUID()}`;
@@ -349,6 +353,15 @@ export async function consumeOpenFilesOutbox(options: OutboxConsumeOptions): Pro
       let deletedSources = 0;
       let movedSources = 0;
       let permissionUpdates = 0;
+
+      recordAuditEvent(db, {
+        event_type: 'source_read',
+        action: options.input.startsWith('s3://') ? 's3_outbox_read' : 'local_outbox_read',
+        target_uri: options.input,
+        decision: 'allow',
+        metadata: { events: events.length, read_only: true },
+        created_at: now,
+      });
 
       events.forEach((raw, index) => {
         const event = normalizeEvent(raw, now);
@@ -403,6 +416,22 @@ export async function consumeOpenFilesOutbox(options: OutboxConsumeOptions): Pro
           now,
         ],
       );
+
+      recordAuditEvent(db, {
+        event_type: 'write',
+        action: 'knowledge_outbox_invalidation',
+        target_uri: options.dbPath,
+        decision: 'allow',
+        metadata: {
+          run_id: runId,
+          events: events.length,
+          sources: sourcesTouched.size,
+          revisions: revisionsTouched.size,
+          chunks_deleted: chunksDeleted,
+          embeddings_deleted: embeddingsDeleted,
+        },
+        created_at: now,
+      });
 
       return {
         path: options.input,

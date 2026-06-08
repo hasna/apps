@@ -39,6 +39,19 @@ export interface KnowledgeConfig {
     preferred_ref: 'open-files';
     allowed_schemes: string[];
   };
+  safety?: {
+    network?: {
+      web_search_enabled?: boolean;
+      s3_reads_enabled?: boolean;
+      allowed_s3_buckets?: string[];
+    };
+    redaction?: {
+      enabled?: boolean;
+    };
+    approvals?: {
+      generated_writes_require_approval?: boolean;
+    };
+  };
 }
 
 export function legacyGlobalStorePath(): string {
@@ -81,6 +94,19 @@ export function defaultKnowledgeConfig(): KnowledgeConfig {
     sources: {
       preferred_ref: 'open-files',
       allowed_schemes: ['open-files', 's3', 'file', 'https', 'http'],
+    },
+    safety: {
+      network: {
+        web_search_enabled: false,
+        s3_reads_enabled: false,
+        allowed_s3_buckets: [],
+      },
+      redaction: {
+        enabled: true,
+      },
+      approvals: {
+        generated_writes_require_approval: true,
+      },
     },
   };
 }

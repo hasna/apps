@@ -5,11 +5,20 @@ import type { Database } from 'bun:sqlite';
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { parseSourceRef, type SourceRef } from './source-ref';
 import type { KnowledgeConfig } from './workspace';
+import {
+  assertS3ReadAllowed,
+  assertWriteAllowed,
+  recordAuditEvent,
+  recordRedactionFindings,
+  redactSecrets,
+  type SafetyPolicy,
+} from './safety';
 
 export interface ManifestIngestOptions {
   dbPath: string;
   input: string;
   config?: KnowledgeConfig;
+  safetyPolicy?: SafetyPolicy;
   now?: Date;
   maxChunkChars?: number;
   chunkOverlapChars?: number;
@@ -23,6 +32,7 @@ export interface ManifestIngestResult {
   revisions_upserted: number;
   chunks_inserted: number;
   chunks_deleted: number;
+  redactions: number;
   skipped: number;
 }
 
@@ -209,11 +219,12 @@ function parseManifestText(text: string): ManifestObject[] {
   });
 }
 
-async function readS3Text(uri: string, config?: KnowledgeConfig): Promise<string> {
+async function readS3Text(uri: string, config?: KnowledgeConfig, safetyPolicy?: SafetyPolicy): Promise<string> {
   const parsed = new URL(uri);
   const bucket = parsed.hostname;
   const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
   if (!bucket || !key) throw new Error(`Invalid S3 manifest URI: ${uri}`);
+  if (safetyPolicy) assertS3ReadAllowed(uri, safetyPolicy);
   const [{ S3Client, GetObjectCommand }, { fromIni }] = await Promise.all([
     import('@aws-sdk/client-s3'),
     import('@aws-sdk/credential-providers'),
@@ -229,8 +240,8 @@ async function readS3Text(uri: string, config?: KnowledgeConfig): Promise<string
   return await response.Body.transformToString();
 }
 
-async function readManifestInput(input: string, config?: KnowledgeConfig): Promise<string> {
-  if (input.startsWith('s3://')) return readS3Text(input, config);
+async function readManifestInput(input: string, config?: KnowledgeConfig, safetyPolicy?: SafetyPolicy): Promise<string> {
+  if (input.startsWith('s3://')) return readS3Text(input, config, safetyPolicy);
   if (!existsSync(input)) throw new Error(`Manifest not found: ${input}`);
   return readFileSync(input, 'utf8');
 }
@@ -338,9 +349,26 @@ function upsertRevision(db: Database, sourceId: string, item: NormalizedManifest
   return row.id;
 }
 
-function insertChunks(db: Database, sourceRevisionId: string, item: NormalizedManifestItem, now: string, maxChars: number, overlapChars: number): number {
-  if (!item.text || item.status.toLowerCase() === 'deleted') return 0;
-  const chunks = chunkText(item.text, maxChars, overlapChars);
+function insertChunks(db: Database, sourceRevisionId: string, item: NormalizedManifestItem, now: string, maxChars: number, overlapChars: number, safetyPolicy?: SafetyPolicy): { chunksInserted: number; redactions: number } {
+  if (!item.text || item.status.toLowerCase() === 'deleted') return { chunksInserted: 0, redactions: 0 };
+  const redacted = redactSecrets(item.text, safetyPolicy);
+  if (redacted.findings.length > 0) {
+    recordRedactionFindings(db, {
+      source_uri: item.sourceUri,
+      findings: redacted.findings,
+      metadata: { source_ref: item.sourceRef, revision: item.revision },
+      created_at: now,
+    });
+    recordAuditEvent(db, {
+      event_type: 'redaction',
+      action: 'source_text_redact',
+      target_uri: item.sourceUri,
+      decision: 'redacted',
+      metadata: { findings: redacted.findings.length, source_ref: item.sourceRef, revision: item.revision },
+      created_at: now,
+    });
+  }
+  const chunks = chunkText(redacted.text, maxChars, overlapChars);
   for (const chunk of chunks) {
     const chunkId = stableId('chk', `${sourceRevisionId}\u0000${chunk.ordinal}\u0000${chunk.text}`);
     const metadata = {
@@ -373,7 +401,7 @@ function insertChunks(db: Database, sourceRevisionId: string, item: NormalizedMa
       [chunkId, chunk.text, item.title ?? '', item.sourceUri],
     );
   }
-  return chunks.length;
+  return { chunksInserted: chunks.length, redactions: redacted.findings.length };
 }
 
 export async function ingestOpenFilesManifest(options: ManifestIngestOptions): Promise<ManifestIngestResult> {
@@ -383,8 +411,9 @@ export async function ingestOpenFilesManifest(options: ManifestIngestOptions): P
   if (maxChunkChars < 500) throw new Error('maxChunkChars must be at least 500.');
   if (chunkOverlapChars < 0 || chunkOverlapChars >= maxChunkChars) throw new Error('chunkOverlapChars must be less than maxChunkChars.');
 
+  if (options.safetyPolicy) assertWriteAllowed(options.dbPath, options.safetyPolicy);
   migrateKnowledgeDb(options.dbPath);
-  const text = await readManifestInput(options.input, options.config);
+  const text = await readManifestInput(options.input, options.config, options.safetyPolicy);
   const items = parseManifestText(text);
   const db = openKnowledgeDb(options.dbPath);
   try {
@@ -393,7 +422,16 @@ export async function ingestOpenFilesManifest(options: ManifestIngestOptions): P
       const seenRevisions = new Set<string>();
       let chunksInserted = 0;
       let chunksDeleted = 0;
+      let redactions = 0;
       let skipped = 0;
+      recordAuditEvent(db, {
+        event_type: 'source_read',
+        action: options.input.startsWith('s3://') ? 's3_manifest_read' : 'local_manifest_read',
+        target_uri: options.input,
+        decision: 'allow',
+        metadata: { items: items.length, read_only: true },
+        created_at: now,
+      });
       for (const raw of items) {
         const item = normalizeManifestItem(raw, now);
         const sourceId = upsertSource(db, item, now);
@@ -403,8 +441,18 @@ export async function ingestOpenFilesManifest(options: ManifestIngestOptions): P
         if (item.text || item.status.toLowerCase() === 'deleted') {
           chunksDeleted += deleteChunksForRevision(db, revisionId);
         }
-        chunksInserted += insertChunks(db, revisionId, item, now, maxChunkChars, chunkOverlapChars);
+        const inserted = insertChunks(db, revisionId, item, now, maxChunkChars, chunkOverlapChars, options.safetyPolicy);
+        chunksInserted += inserted.chunksInserted;
+        redactions += inserted.redactions;
       }
+      recordAuditEvent(db, {
+        event_type: 'write',
+        action: 'knowledge_manifest_ingest',
+        target_uri: options.dbPath,
+        decision: 'allow',
+        metadata: { items: items.length, sources: seenSources.size, revisions: seenRevisions.size, chunks_inserted: chunksInserted, redactions },
+        created_at: now,
+      });
       return {
         path: options.input,
         db_path: options.dbPath,
@@ -413,6 +461,7 @@ export async function ingestOpenFilesManifest(options: ManifestIngestOptions): P
         revisions_upserted: seenRevisions.size,
         chunks_inserted: chunksInserted,
         chunks_deleted: chunksDeleted,
+        redactions,
         skipped,
       };
     })();

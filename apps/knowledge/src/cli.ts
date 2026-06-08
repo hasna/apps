@@ -6,11 +6,12 @@
  */
 import { defaultStorePath, loadStore, saveStore, withLock, makeId, makeShortId, ensureStore, type KnowledgeItem } from './store';
 import { ensureKnowledgeWorkspace, readKnowledgeConfig, resolveScopedWorkspace } from './workspace';
-import { getKnowledgeDbStats, migrateKnowledgeDb } from './knowledge-db';
+import { getKnowledgeDbStats, migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { createArtifactStore } from './artifact-store';
 import { initializeWikiLayout } from './wiki-layout';
 import { ingestOpenFilesManifest } from './manifest-ingest';
 import { consumeOpenFilesOutbox } from './outbox-consume';
+import { approvalStatus, assertS3ReadAllowed, assertWebSearchAllowed, createApprovalGate, recordAuditEvent, recordRedactionFindings, redactSecrets, resolveSafetyPolicy } from './safety';
 import pkg from '../package.json' with { type: 'json' };
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -61,7 +62,7 @@ interface ParseResult {
   flags: Flags;
 }
 
-const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'export', 'prune', 'dedupe', 'stats', 'paths', 'db', 'wiki', 'ingest', 'reindex', 'help'];
+const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'export', 'prune', 'dedupe', 'stats', 'paths', 'db', 'wiki', 'ingest', 'reindex', 'safety', 'help'];
 const COMMAND_ALIASES: Record<string, string> = {
   ls: 'list',
   rm: 'delete',
@@ -166,6 +167,7 @@ Commands:
   wiki init                    Initialize scalable wiki/schema/index/log artifacts
   ingest manifest <file|s3://> Ingest an open-files manifest into knowledge.db
   reindex outbox <file|s3://>  Consume open-files change events and invalidate chunks
+  safety status|check|approve|audit|redact
   help [command]               Show help
 
 Global Options:
@@ -229,6 +231,7 @@ function printCommandHelp(command: string): void {
   if (command === 'wiki') { console.log('Usage: open-knowledge wiki init [--scope local|global|project] [--json]'); return; }
   if (command === 'ingest') { console.log('Usage: open-knowledge ingest manifest <file|s3://bucket/key> [--scope local|global|project] [--json]'); return; }
   if (command === 'reindex') { console.log('Usage: open-knowledge reindex outbox <file|s3://bucket/key> [--scope local|global|project] [--json]'); return; }
+  if (command === 'safety') { console.log('Usage: open-knowledge safety status|check|approve|audit|redact [args] [--scope local|global|project] [--json]'); return; }
   printGlobalHelp();
 }
 
@@ -273,11 +276,11 @@ async function run(argv: string[]): Promise<void> {
   if (flags.completions) {
     const shell = flags.completions;
     if (shell === 'bash') {
-      console.log(`_open_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats paths db wiki ingest reindex help ls rm edit unarchive --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --no-color --scope --archived --include-archived" -- "$cur")); }; complete -F _open_knowledge open-knowledge`);
+      console.log(`_open_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats paths db wiki ingest reindex safety help ls rm edit unarchive --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --no-color --scope --archived --include-archived" -- "$cur")); }; complete -F _open_knowledge open-knowledge`);
     } else if (shell === 'zsh') {
-      console.log(`#compdef open-knowledge\n_open_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats paths db wiki ingest reindex help ls rm edit unarchive)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" }; _open_knowledge`);
+      console.log(`#compdef open-knowledge\n_open_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats paths db wiki ingest reindex safety help ls rm edit unarchive)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" }; _open_knowledge`);
     } else if (shell === 'fish') {
-      console.log(`complete -c open-knowledge -f; complete -c open-knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats paths db wiki ingest reindex help ls rm edit unarchive"; complete -c open-knowledge -l json; complete -c open-knowledge -l yes -s y; complete -c open-knowledge -l help -s h; complete -c open-knowledge -l version -s v; complete -c open-knowledge -l desc; complete -c open-knowledge -l archived; complete -c open-knowledge -l include-archived; complete -c open-knowledge -s p -l page; complete -c open-knowledge -s l -l limit; complete -c open-knowledge -s s -l search; complete -c open-knowledge -l sort; complete -c open-knowledge -l id; complete -c open-knowledge -l store; complete -c open-knowledge -l title; complete -c open-knowledge -l content; complete -c open-knowledge -l url; complete -c open-knowledge -s t -l tag; complete -c open-knowledge -l format; complete -c open-knowledge -l completions; complete -c open-knowledge -l no-color; complete -c open-knowledge -l scope -a "local global project"`);
+      console.log(`complete -c open-knowledge -f; complete -c open-knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats paths db wiki ingest reindex safety help ls rm edit unarchive"; complete -c open-knowledge -l json; complete -c open-knowledge -l yes -s y; complete -c open-knowledge -l help -s h; complete -c open-knowledge -l version -s v; complete -c open-knowledge -l desc; complete -c open-knowledge -l archived; complete -c open-knowledge -l include-archived; complete -c open-knowledge -s p -l page; complete -c open-knowledge -s l -l limit; complete -c open-knowledge -s s -l search; complete -c open-knowledge -l sort; complete -c open-knowledge -l id; complete -c open-knowledge -l store; complete -c open-knowledge -l title; complete -c open-knowledge -l content; complete -c open-knowledge -l url; complete -c open-knowledge -s t -l tag; complete -c open-knowledge -l format; complete -c open-knowledge -l completions; complete -c open-knowledge -l no-color; complete -c open-knowledge -l scope -a "local global project"`);
     } else {
       throw new Error("Invalid --completions value. Use 'bash', 'zsh', or 'fish'.");
     }
@@ -347,6 +350,132 @@ async function run(argv: string[]): Promise<void> {
     return;
   }
 
+  if (command === 'safety') {
+    const action = positional[1] ?? 'status';
+    const resolvedWorkspace = ensureKnowledgeWorkspace(workspace.home);
+    const config = readKnowledgeConfig(resolvedWorkspace.configPath);
+    const policy = resolveSafetyPolicy(config, resolvedWorkspace);
+    migrateKnowledgeDb(resolvedWorkspace.knowledgeDbPath);
+    const db = openKnowledgeDb(resolvedWorkspace.knowledgeDbPath);
+    try {
+      if (action === 'status') {
+        output({
+          ok: true,
+          mode: policy.mode,
+          workspace: resolvedWorkspace.home,
+          allow_write_roots: policy.allowWriteRoots,
+          read_only_source_access: policy.readOnlySourceAccess,
+          network: policy.network,
+          redaction: policy.redaction,
+          approvals: policy.approvals,
+          message: `Safety policy: ${policy.mode}`,
+        }, flags.json);
+        return;
+      }
+      if (action === 'check') {
+        const checkAction = positional[2] ?? 'generated_write';
+        const target = positional[3] ?? null;
+        let decision: ReturnType<typeof approvalStatus> | { action: string; target_uri: string | null; approval_required: false; approved: boolean; decision: string };
+        try {
+          if (checkAction === 'web_search') {
+            assertWebSearchAllowed(policy);
+            decision = { action: checkAction, target_uri: target, approval_required: false, approved: true, decision: 'allow' };
+          } else if (checkAction === 's3_read') {
+            if (!target) throw new Error('safety check s3_read requires an s3:// target.');
+            assertS3ReadAllowed(target, policy);
+            decision = { action: checkAction, target_uri: target, approval_required: false, approved: true, decision: 'allow' };
+          } else {
+            decision = approvalStatus(db, policy, checkAction, target);
+          }
+          recordAuditEvent(db, {
+            event_type: 'safety_check',
+            action: checkAction,
+            target_uri: target,
+            decision: decision.decision === 'allow' ? 'allow' : 'requires_approval',
+            metadata: decision,
+          });
+          output({ ok: true, ...decision, message: `Safety check ${decision.decision}` }, flags.json);
+          return;
+        } catch (error) {
+          recordAuditEvent(db, {
+            event_type: 'safety_check',
+            action: checkAction,
+            target_uri: target,
+            decision: 'deny',
+            metadata: { error: error instanceof Error ? error.message : String(error) },
+          });
+          throw error;
+        }
+      }
+      if (action === 'approve') {
+        const approveAction = positional[2] ?? 'generated_write';
+        const target = positional[3] ?? null;
+        const approval = createApprovalGate(db, {
+          action: approveAction,
+          target_uri: target,
+          reason: 'local-cli approval',
+          metadata: { scope: flags.scope ?? 'global' },
+        });
+        recordAuditEvent(db, {
+          event_type: 'approval',
+          action: approveAction,
+          target_uri: target,
+          decision: 'allow',
+          metadata: { approval_id: approval.id },
+        });
+        output({ ok: true, ...approval, action: approveAction, target_uri: target, message: `Approved ${approveAction}` }, flags.json);
+        return;
+      }
+      if (action === 'audit') {
+        const rows = db.query<{
+          id: string;
+          event_type: string;
+          action: string;
+          target_uri: string | null;
+          decision: string;
+          metadata_json: string;
+          created_at: string;
+        }, []>(
+          'SELECT id, event_type, action, target_uri, decision, metadata_json, created_at FROM audit_events ORDER BY created_at DESC LIMIT 50',
+        ).all().map((row) => ({
+          id: row.id,
+          event_type: row.event_type,
+          action: row.action,
+          target_uri: row.target_uri,
+          decision: row.decision,
+          metadata: JSON.parse(row.metadata_json),
+          created_at: row.created_at,
+        }));
+        output({ ok: true, events: rows, message: `${rows.length} audit event(s)` }, flags.json);
+        return;
+      }
+      if (action === 'redact') {
+        const text = positional.slice(2).join(' ');
+        if (!text) throw new Error('Usage: open-knowledge safety redact <text>');
+        const result = redactSecrets(text, policy);
+        if (result.findings.length > 0) {
+          recordRedactionFindings(db, {
+            source_uri: 'safety://redact',
+            findings: result.findings,
+            metadata: { command: 'safety redact' },
+          });
+        }
+        recordAuditEvent(db, {
+          event_type: 'redaction',
+          action: 'safety_redact',
+          target_uri: 'safety://redact',
+          decision: result.findings.length > 0 ? 'redacted' : 'allow',
+          metadata: { findings: result.findings.length },
+        });
+        output({ ok: true, text: result.text, findings: result.findings, message: `Redacted ${result.findings.length} finding(s)` }, flags.json);
+        return;
+      }
+      throw new Error("Invalid safety action. Use 'status', 'check', 'approve', 'audit', or 'redact'.");
+    } finally {
+      db.close();
+    }
+  }
+
   if (command === 'ingest') {
     const action = positional[1] ?? '';
     if (action !== 'manifest') throw new Error("Invalid ingest action. Use 'manifest'.");
@@ -354,10 +483,12 @@ async function run(argv: string[]): Promise<void> {
     if (!input) throw new Error('Usage: open-knowledge ingest manifest <file|s3://bucket/key>');
     const resolvedWorkspace = ensureKnowledgeWorkspace(workspace.home);
     const config = readKnowledgeConfig(resolvedWorkspace.configPath);
+    const safetyPolicy = resolveSafetyPolicy(config, resolvedWorkspace);
     const result = await ingestOpenFilesManifest({
       dbPath: resolvedWorkspace.knowledgeDbPath,
       input,
       config,
+      safetyPolicy,
     });
     output({ ok: true, ...result, message: `Ingested ${result.items_seen} manifest item(s)` }, flags.json);
     return;
@@ -370,10 +501,12 @@ async function run(argv: string[]): Promise<void> {
     if (!input) throw new Error('Usage: open-knowledge reindex outbox <file|s3://bucket/key>');
     const resolvedWorkspace = ensureKnowledgeWorkspace(workspace.home);
     const config = readKnowledgeConfig(resolvedWorkspace.configPath);
+    const safetyPolicy = resolveSafetyPolicy(config, resolvedWorkspace);
     const result = await consumeOpenFilesOutbox({
       dbPath: resolvedWorkspace.knowledgeDbPath,
       input,
       config,
+      safetyPolicy,
     });
     output({ ok: true, ...result, message: `Consumed ${result.events_seen} outbox event(s)` }, flags.json);
     return;

@@ -155,13 +155,13 @@ describe('open-knowledge cli', () => {
     const init = runCli(['db', 'init', '--scope', 'project', '--json'], dir);
     expect(init.exitCode).toBe(0);
     const initOut = JSON.parse(new TextDecoder().decode(init.stdout));
-    expect(initOut.schema_version).toBe(2);
+    expect(initOut.schema_version).toBe(3);
     expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'knowledge.db'))).toBe(true);
 
     const stats = runCli(['db', 'stats', '--scope', 'project', '--json'], dir);
     expect(stats.exitCode).toBe(0);
     const statsOut = JSON.parse(new TextDecoder().decode(stats.stdout));
-    expect(statsOut.schema_version).toBe(2);
+    expect(statsOut.schema_version).toBe(3);
     expect(statsOut.sources).toBe(0);
     expect(statsOut.runs).toBe(0);
   });
@@ -192,6 +192,7 @@ describe('open-knowledge cli', () => {
     expect(ingestOut.sources_upserted).toBe(1);
     expect(ingestOut.revisions_upserted).toBe(1);
     expect(ingestOut.chunks_inserted).toBe(1);
+    expect(ingestOut.audit_events).toBeUndefined();
 
     const stats = runCli(['db', 'stats', '--scope', 'project', '--json'], dir);
     expect(stats.exitCode).toBe(0);
@@ -221,6 +222,49 @@ describe('open-knowledge cli', () => {
     expect(statsAfterOut.chunks).toBe(0);
     expect(statsAfterOut.runs).toBe(1);
     expect(statsAfterOut.run_events).toBe(1);
+    expect(statsAfterOut.audit_events).toBeGreaterThanOrEqual(4);
+  });
+
+  test('safety commands expose policy, approvals, redaction, audit, and S3 denial', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-safety-cli-'));
+
+    const status = runCli(['safety', 'status', '--scope', 'project', '--json'], dir);
+    expect(status.exitCode).toBe(0);
+    const statusOut = JSON.parse(new TextDecoder().decode(status.stdout));
+    expect(statusOut.network.webSearchEnabled).toBe(false);
+    expect(statusOut.network.s3ReadsEnabled).toBe(false);
+    expect(statusOut.redaction.enabled).toBe(true);
+
+    const check = runCli(['safety', 'check', 'generated_write', 'wiki://answer', '--scope', 'project', '--json'], dir);
+    expect(check.exitCode).toBe(0);
+    const checkOut = JSON.parse(new TextDecoder().decode(check.stdout));
+    expect(checkOut.approval_required).toBe(true);
+    expect(checkOut.decision).toBe('requires_approval');
+
+    const approve = runCli(['safety', 'approve', 'generated_write', 'wiki://answer', '--scope', 'project', '--json'], dir);
+    expect(approve.exitCode).toBe(0);
+    const approveOut = JSON.parse(new TextDecoder().decode(approve.stdout));
+    expect(approveOut.status).toBe('approved');
+
+    const checkAfter = runCli(['safety', 'check', 'generated_write', 'wiki://answer', '--scope', 'project', '--json'], dir);
+    expect(checkAfter.exitCode).toBe(0);
+    const checkAfterOut = JSON.parse(new TextDecoder().decode(checkAfter.stdout));
+    expect(checkAfterOut.decision).toBe('allow');
+
+    const redact = runCli(['safety', 'redact', 'token=sk-testsecretkeyvalue1234567890', '--scope', 'project', '--json'], dir);
+    expect(redact.exitCode).toBe(0);
+    const redactOut = JSON.parse(new TextDecoder().decode(redact.stdout));
+    expect(redactOut.text).toBe('[REDACTED:secret_assignment]');
+    expect(redactOut.findings).toHaveLength(1);
+
+    const audit = runCli(['safety', 'audit', '--scope', 'project', '--json'], dir);
+    expect(audit.exitCode).toBe(0);
+    const auditOut = JSON.parse(new TextDecoder().decode(audit.stdout));
+    expect(auditOut.events.length).toBeGreaterThanOrEqual(4);
+
+    const denied = runCli(['ingest', 'manifest', 's3://not-allowed/manifest.jsonl', '--scope', 'project', '--json'], dir);
+    expect(denied.exitCode).toBe(1);
+    expect(new TextDecoder().decode(denied.stderr)).toContain('Safety policy denied S3 read');
   });
 
   test('wiki init creates scalable wiki artifacts', () => {

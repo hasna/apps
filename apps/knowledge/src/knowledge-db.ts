@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { ensureParentDir } from './workspace';
 
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 export interface KnowledgeDbStats {
   schema_version: number;
@@ -13,6 +13,9 @@ export interface KnowledgeDbStats {
   indexes: number;
   runs: number;
   run_events: number;
+  redaction_findings: number;
+  audit_events: number;
+  approval_gates: number;
 }
 
 const MIGRATION_1 = `
@@ -199,6 +202,39 @@ INSERT OR IGNORE INTO schema_versions(version, applied_at)
 VALUES (2, datetime('now'));
 `;
 
+const MIGRATION_3 = `
+CREATE TABLE IF NOT EXISTS audit_events (
+  id TEXT PRIMARY KEY,
+  event_type TEXT NOT NULL,
+  action TEXT NOT NULL,
+  target_uri TEXT,
+  decision TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS approval_gates (
+  id TEXT PRIMARY KEY,
+  action TEXT NOT NULL,
+  target_uri TEXT,
+  status TEXT NOT NULL,
+  reason TEXT,
+  approved_by TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action);
+CREATE INDEX IF NOT EXISTS idx_audit_events_target ON audit_events(target_uri);
+CREATE INDEX IF NOT EXISTS idx_audit_events_created ON audit_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_approval_gates_action ON approval_gates(action);
+CREATE INDEX IF NOT EXISTS idx_approval_gates_status ON approval_gates(status);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (3, datetime('now'));
+`;
+
 export function openKnowledgeDb(path: string): Database {
   ensureParentDir(path);
   const db = new Database(path);
@@ -211,6 +247,7 @@ export function migrateKnowledgeDb(path: string): { path: string; schema_version
   try {
     db.exec(MIGRATION_1);
     if (getSchemaVersion(db) < 2) db.exec(MIGRATION_2);
+    if (getSchemaVersion(db) < 3) db.exec(MIGRATION_3);
     return { path, schema_version: getSchemaVersion(db) };
   } finally {
     db.close();
@@ -240,6 +277,9 @@ export function getKnowledgeDbStats(path: string): KnowledgeDbStats {
       indexes: count(db, 'knowledge_indexes'),
       runs: count(db, 'runs'),
       run_events: count(db, 'run_events'),
+      redaction_findings: count(db, 'redaction_findings'),
+      audit_events: count(db, 'audit_events'),
+      approval_gates: count(db, 'approval_gates'),
     };
   } finally {
     db.close();
