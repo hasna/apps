@@ -13,7 +13,7 @@ import {
   type StorageContract,
   type StorageValidationResult,
 } from './storage-contract';
-import { initializeWikiLayout } from './wiki-layout';
+import { initializeWikiLayout, recordWikiLayoutCatalog } from './wiki-layout';
 import {
   ensureKnowledgeWorkspace,
   readKnowledgeConfig,
@@ -128,6 +128,7 @@ export class KnowledgeService {
     const db = openKnowledgeDb(workspace.knowledgeDbPath);
     try {
       recordStorageObjects(db, result.artifacts);
+      recordWikiLayoutCatalog(db, result.artifacts);
     } finally {
       db.close();
     }

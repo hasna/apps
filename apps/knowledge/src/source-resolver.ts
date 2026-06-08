@@ -1,5 +1,6 @@
 import type { Database } from 'bun:sqlite';
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
+import { sourceProvenance, type KnowledgeProvenance } from './provenance';
 import { catalogSourceUriForRef, parseSourceRef, revisionIdForSourceRef } from './source-ref';
 import { assertWriteAllowed, recordAuditEvent, type SafetyPolicy } from './safety';
 
@@ -38,6 +39,7 @@ export interface ResolvedSourceChunk {
   end_offset: number | null;
   metadata: Record<string, unknown>;
   evidence: SourceResolverEvidence;
+  provenance: KnowledgeProvenance;
 }
 
 export interface ResolvedSourceCitation {
@@ -48,6 +50,7 @@ export interface ResolvedSourceCitation {
   start_offset: number | null;
   end_offset: number | null;
   evidence: SourceResolverEvidence;
+  provenance: KnowledgeProvenance;
 }
 
 export interface SourceResolveResult {
@@ -326,6 +329,19 @@ export async function resolveOpenFilesSource(options: SourceResolveOptions): Pro
           end_offset: row.end_offset,
           resolved_at: resolvedAt,
         };
+        const provenance = sourceProvenance({
+          source_ref: evidence.source_ref,
+          source_uri: evidence.source_uri,
+          source_kind: source.kind,
+          source_revision_id: evidence.source_revision_id,
+          revision: evidence.revision,
+          hash: evidence.hash,
+          chunk_id: row.id,
+          start_offset: row.start_offset,
+          end_offset: row.end_offset,
+          status: metadataString(metadata, ['status']),
+          resolver: evidence.resolver,
+        });
         return {
           id: row.id,
           kind: row.kind,
@@ -336,6 +352,7 @@ export async function resolveOpenFilesSource(options: SourceResolveOptions): Pro
           end_offset: row.end_offset,
           metadata,
           evidence,
+          provenance,
         };
       });
 
@@ -347,6 +364,7 @@ export async function resolveOpenFilesSource(options: SourceResolveOptions): Pro
         start_offset: chunk.start_offset,
         end_offset: chunk.end_offset,
         evidence: chunk.evidence,
+        provenance: chunk.provenance,
       }));
 
       recordAuditEvent(db, {

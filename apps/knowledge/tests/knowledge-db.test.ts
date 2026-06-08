@@ -118,7 +118,19 @@ describe('knowledge sqlite store', () => {
       source_uri: 'open-files://file/file_123',
       revision: 'rev_001',
     });
+    expect(resolved.chunks[0].provenance).toMatchObject({
+      source_owner: 'open-files',
+      source_ref: 'open-files://file/file_123/revision/rev_001',
+      source_uri: 'open-files://file/file_123',
+      source_kind: 'open-files',
+      revision: 'rev_001',
+      hash: 'sha256:abc123',
+      read_only: true,
+      citation_required: true,
+      stale: false,
+    });
     expect(resolved.citations[0].evidence.chunk_id).toBe(resolved.chunks[0].id);
+    expect(resolved.citations[0].provenance.chunk_id).toBe(resolved.chunks[0].id);
     const sourceIngest = await ingestSourceRef({
       dbPath,
       sourceRef: 'open-files://file/file_123/revision/rev_001',
@@ -151,9 +163,15 @@ describe('knowledge sqlite store', () => {
       ).get('semantic');
       expect(fts?.chunk_id).toStartWith('chk_');
 
-      const chunk = db.query<{ text: string }, []>('SELECT text FROM chunks LIMIT 1').get();
+      const chunk = db.query<{ text: string; metadata_json: string }, []>('SELECT text, metadata_json FROM chunks LIMIT 1').get();
       expect(chunk?.text).toContain('[REDACTED:secret_assignment]');
       expect(chunk?.text).not.toContain('sk-testsecretkeyvalue');
+      expect(JSON.parse(chunk?.metadata_json ?? '{}').provenance).toMatchObject({
+        source_owner: 'open-files',
+        source_uri: 'open-files://file/file_123',
+        revision: 'rev_001',
+        hash: 'sha256:abc123',
+      });
 
       const redactions = db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM redaction_findings').get();
       expect(redactions?.n).toBeGreaterThanOrEqual(1);
@@ -256,6 +274,13 @@ describe('knowledge sqlite store', () => {
     expect(resolved.chunks[0].text).toContain('[REDACTED:secret_assignment]');
     expect(resolved.chunks[0].text).not.toContain('sk-testsecretkeyvalue');
     expect(resolved.chunks[0].evidence.source_uri).toBe(`file://${sourcePath}`);
+    expect(resolved.chunks[0].provenance).toMatchObject({
+      source_owner: 'open-files',
+      source_uri: `file://${sourcePath}`,
+      source_kind: 'file',
+      read_only: true,
+      citation_required: true,
+    });
   });
 
   test('supports safety policy defaults and local approval gates', () => {

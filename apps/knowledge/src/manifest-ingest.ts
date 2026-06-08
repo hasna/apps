@@ -4,6 +4,7 @@ import { basename } from 'node:path';
 import type { Database } from 'bun:sqlite';
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { parseSourceRef, type SourceRef } from './source-ref';
+import { sourceProvenance, withProvenance } from './provenance';
 import type { KnowledgeConfig } from './workspace';
 import {
   assertS3ReadAllowed,
@@ -382,15 +383,31 @@ function insertChunks(db: Database, sourceRevisionId: string, item: NormalizedMa
   const chunks = chunkText(redacted.text, maxChars, overlapChars);
   for (const chunk of chunks) {
     const chunkId = stableId('chk', `${sourceRevisionId}\u0000${chunk.ordinal}\u0000${chunk.text}`);
-    const metadata = {
+    const provenance = sourceProvenance({
       source_ref: item.sourceRef,
       source_uri: item.sourceUri,
+      source_kind: item.kind,
+      source_revision_id: sourceRevisionId,
+      revision: item.revision,
+      hash: item.hash,
+      chunk_id: chunkId,
+      start_offset: chunk.startOffset,
+      end_offset: chunk.endOffset,
+      status: item.status,
+      resolver: 'open-files-read-only',
+    });
+    const metadata = withProvenance({
+      source_ref: item.sourceRef,
+      source_uri: item.sourceUri,
+      source_kind: item.kind,
+      source_revision_id: sourceRevisionId,
+      revision: item.revision,
       hash: item.hash,
       status: item.status,
       path: asString(item.raw.path) ?? null,
       mime: asString(item.raw.mime) ?? asString(item.raw.content_type) ?? null,
       size: asNumber(item.raw.size) ?? null,
-    };
+    }, provenance);
     db.run(
       `INSERT INTO chunks (id, source_revision_id, kind, ordinal, text, token_count, start_offset, end_offset, metadata_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,

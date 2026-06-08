@@ -240,6 +240,7 @@ export function openKnowledgeDb(path: string): Database {
   ensureParentDir(path);
   const db = new Database(path);
   db.exec('PRAGMA foreign_keys = ON;');
+  db.exec('PRAGMA busy_timeout = 5000;');
   return db;
 }
 

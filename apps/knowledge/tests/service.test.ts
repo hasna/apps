@@ -36,6 +36,9 @@ describe('knowledge service facade', () => {
 
     const wiki = await service.initWiki();
     expect(wiki.artifacts).toHaveLength(4);
-    expect(service.dbStats().storage_objects).toBe(4);
+    const wikiStats = service.dbStats();
+    expect(wikiStats.storage_objects).toBe(4);
+    expect(wikiStats.wiki_pages).toBe(1);
+    expect(wikiStats.indexes).toBe(1);
   });
 });

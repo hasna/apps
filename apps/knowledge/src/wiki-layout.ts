@@ -1,4 +1,7 @@
+import { createHash } from 'node:crypto';
+import type { Database } from 'bun:sqlite';
 import type { ArtifactStore } from './artifact-store';
+import { generatedArtifactProvenance, type GeneratedArtifactProvenance } from './provenance';
 import {
   artifactKindForKey,
   hashArtifactBody,
@@ -14,11 +17,22 @@ export interface WikiLayoutInitResult {
   written: string[];
 }
 
+interface CatalogArtifact {
+  key: string;
+  uri: string;
+  hash?: string;
+  metadata?: Record<string, unknown>;
+}
+
 function todayParts(now: Date): { year: string; month: string; day: string } {
   const year = String(now.getUTCFullYear());
   const month = String(now.getUTCMonth() + 1).padStart(2, '0');
   const day = String(now.getUTCDate()).padStart(2, '0');
   return { year, month, day };
+}
+
+function stableId(prefix: string, value: string): string {
+  return `${prefix}_${createHash('sha256').update(value).digest('hex').slice(0, 20)}`;
 }
 
 export function agentSchemaTemplate(): string {
@@ -106,6 +120,13 @@ export async function initializeWikiLayout(store: ArtifactStore, now = new Date(
       uri: result.uri,
       kind: artifactKindForKey(entry.key),
       content_type: entry.content_type,
+      metadata: {
+        provenance: generatedArtifactProvenance({
+          generated_from: 'wiki_layout_init',
+          artifact_key: entry.key,
+          citation_required: entry.key.startsWith('wiki/') || entry.key.startsWith('indexes/'),
+        }),
+      },
       ...hashArtifactBody(entry.body),
     };
   }));
@@ -117,4 +138,74 @@ export async function initializeWikiLayout(store: ArtifactStore, now = new Date(
     artifacts,
     written: [schemaKey, rootIndexKey, wikiReadmeKey, logKey],
   };
+}
+
+function provenanceFor(artifact: CatalogArtifact): GeneratedArtifactProvenance {
+  const existing = artifact.metadata?.provenance;
+  if (existing && typeof existing === 'object' && !Array.isArray(existing)) {
+    return existing as GeneratedArtifactProvenance;
+  }
+  return generatedArtifactProvenance({
+    generated_from: 'wiki_layout_init',
+    artifact_key: artifact.key,
+  });
+}
+
+export function recordWikiLayoutCatalog(db: Database, artifacts: CatalogArtifact[], now = new Date()): void {
+  const timestamp = now.toISOString();
+  const rootIndex = artifacts.find((artifact) => artifact.key.endsWith('indexes/root.md'));
+  const wikiReadme = artifacts.find((artifact) => artifact.key.endsWith('wiki/README.md'));
+
+  if (rootIndex) {
+    db.run(
+      `INSERT INTO knowledge_indexes (id, kind, name, artifact_uri, shard_key, metadata_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(kind, name, shard_key) DO UPDATE SET
+         artifact_uri = excluded.artifact_uri,
+         metadata_json = excluded.metadata_json,
+         updated_at = excluded.updated_at`,
+      [
+        stableId('idx', 'root:indexes/root.md'),
+        'root',
+        'root',
+        rootIndex.uri,
+        'root',
+        JSON.stringify({
+          artifact_key: rootIndex.key,
+          content_hash: rootIndex.hash ?? null,
+          provenance: provenanceFor(rootIndex),
+        }),
+        timestamp,
+        timestamp,
+      ],
+    );
+  }
+
+  if (wikiReadme) {
+    db.run(
+      `INSERT INTO wiki_pages (id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(path) DO UPDATE SET
+         title = excluded.title,
+         artifact_uri = excluded.artifact_uri,
+         content_hash = excluded.content_hash,
+         status = excluded.status,
+         metadata_json = excluded.metadata_json,
+         updated_at = excluded.updated_at`,
+      [
+        stableId('wiki', 'wiki/README.md'),
+        'wiki/README.md',
+        'Wiki',
+        wikiReadme.uri,
+        wikiReadme.hash ?? null,
+        'active',
+        JSON.stringify({
+          artifact_key: wikiReadme.key,
+          provenance: provenanceFor(wikiReadme),
+        }),
+        timestamp,
+        timestamp,
+      ],
+    );
+  }
 }

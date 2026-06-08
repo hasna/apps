@@ -13660,7 +13660,7 @@ import { existsSync as existsSync7, readFileSync as readFileSync7, writeFileSync
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.12",
+  version: "0.2.13",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   bin: {
@@ -14353,6 +14353,7 @@ function openKnowledgeDb(path) {
   ensureParentDir(path);
   const db = new Database(path);
   db.exec("PRAGMA foreign_keys = ON;");
+  db.exec("PRAGMA busy_timeout = 5000;");
   return db;
 }
 function migrateKnowledgeDb(path) {
@@ -14899,6 +14900,50 @@ async function consumeOpenFilesOutbox(options) {
 import { createHash as createHash3 } from "crypto";
 import { existsSync as existsSync5, readFileSync as readFileSync5 } from "fs";
 import { basename as basename2 } from "path";
+
+// src/provenance.ts
+function isStaleStatus(status) {
+  return ["deleted", "stale", "invalidated", "reindex_required"].includes((status ?? "").toLowerCase());
+}
+function sourceProvenance(input) {
+  const status = input.status ?? null;
+  return {
+    source_owner: "open-files",
+    source_ref: input.source_ref ?? null,
+    source_uri: input.source_uri ?? null,
+    source_kind: input.source_kind ?? null,
+    source_revision_id: input.source_revision_id ?? null,
+    revision: input.revision ?? null,
+    hash: input.hash ?? null,
+    chunk_id: input.chunk_id ?? null,
+    start_offset: input.start_offset ?? null,
+    end_offset: input.end_offset ?? null,
+    status,
+    read_only: true,
+    citation_required: true,
+    resolver: input.resolver ?? null,
+    stale: isStaleStatus(status)
+  };
+}
+function generatedArtifactProvenance(input) {
+  return {
+    source_owner: "open-files",
+    generated_from: input.generated_from,
+    artifact_key: input.artifact_key,
+    source_refs: input.source_refs ?? [],
+    read_only_sources: true,
+    citation_required: input.citation_required ?? true,
+    raw_source_bytes_stored_in_open_knowledge: false
+  };
+}
+function withProvenance(metadata, provenance) {
+  return {
+    ...metadata,
+    provenance
+  };
+}
+
+// src/manifest-ingest.ts
 function stableId2(prefix, value) {
   return `${prefix}_${createHash3("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
@@ -15187,15 +15232,31 @@ function insertChunks(db, sourceRevisionId, item, now, maxChars, overlapChars, s
   const chunks = chunkText(redacted.text, maxChars, overlapChars);
   for (const chunk of chunks) {
     const chunkId = stableId2("chk", `${sourceRevisionId}\x00${chunk.ordinal}\x00${chunk.text}`);
-    const metadata = {
+    const provenance = sourceProvenance({
       source_ref: item.sourceRef,
       source_uri: item.sourceUri,
+      source_kind: item.kind,
+      source_revision_id: sourceRevisionId,
+      revision: item.revision,
+      hash: item.hash,
+      chunk_id: chunkId,
+      start_offset: chunk.startOffset,
+      end_offset: chunk.endOffset,
+      status: item.status,
+      resolver: "open-files-read-only"
+    });
+    const metadata = withProvenance({
+      source_ref: item.sourceRef,
+      source_uri: item.sourceUri,
+      source_kind: item.kind,
+      source_revision_id: sourceRevisionId,
+      revision: item.revision,
       hash: item.hash,
       status: item.status,
       path: asString2(item.raw.path) ?? null,
       mime: asString2(item.raw.mime) ?? asString2(item.raw.content_type) ?? null,
       size: asNumber(item.raw.size) ?? null
-    };
+    }, provenance);
     db.run(`INSERT INTO chunks (id, source_revision_id, kind, ordinal, text, token_count, start_offset, end_offset, metadata_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
       chunkId,
@@ -15488,6 +15549,19 @@ async function resolveOpenFilesSource(options) {
           end_offset: row.end_offset,
           resolved_at: resolvedAt
         };
+        const provenance = sourceProvenance({
+          source_ref: evidence.source_ref,
+          source_uri: evidence.source_uri,
+          source_kind: source.kind,
+          source_revision_id: evidence.source_revision_id,
+          revision: evidence.revision,
+          hash: evidence.hash,
+          chunk_id: row.id,
+          start_offset: row.start_offset,
+          end_offset: row.end_offset,
+          status: metadataString(metadata, ["status"]),
+          resolver: evidence.resolver
+        });
         return {
           id: row.id,
           kind: row.kind,
@@ -15497,7 +15571,8 @@ async function resolveOpenFilesSource(options) {
           start_offset: row.start_offset,
           end_offset: row.end_offset,
           metadata,
-          evidence
+          evidence,
+          provenance
         };
       });
       const citations = chunks.map((chunk) => ({
@@ -15507,7 +15582,8 @@ async function resolveOpenFilesSource(options) {
         quote: chunk.text.slice(0, 500),
         start_offset: chunk.start_offset,
         end_offset: chunk.end_offset,
-        evidence: chunk.evidence
+        evidence: chunk.evidence,
+        provenance: chunk.provenance
       }));
       recordAuditEvent(db, {
         event_type: "source_read",
@@ -16095,11 +16171,15 @@ function recordStorageObjects(db, objects, now = new Date) {
 }
 
 // src/wiki-layout.ts
+import { createHash as createHash6 } from "crypto";
 function todayParts(now) {
   const year = String(now.getUTCFullYear());
   const month = String(now.getUTCMonth() + 1).padStart(2, "0");
   const day = String(now.getUTCDate()).padStart(2, "0");
   return { year, month, day };
+}
+function stableId3(prefix, value) {
+  return `${prefix}_${createHash6("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
 function agentSchemaTemplate() {
   return `# Knowledge Agent Schema v1
@@ -16182,6 +16262,13 @@ async function initializeWikiLayout(store, now = new Date) {
       uri: result.uri,
       kind: artifactKindForKey(entry.key),
       content_type: entry.content_type,
+      metadata: {
+        provenance: generatedArtifactProvenance({
+          generated_from: "wiki_layout_init",
+          artifact_key: entry.key,
+          citation_required: entry.key.startsWith("wiki/") || entry.key.startsWith("indexes/")
+        })
+      },
       ...hashArtifactBody(entry.body)
     };
   }));
@@ -16193,6 +16280,66 @@ async function initializeWikiLayout(store, now = new Date) {
     artifacts,
     written: [schemaKey, rootIndexKey, wikiReadmeKey, logKey]
   };
+}
+function provenanceFor(artifact) {
+  const existing = artifact.metadata?.provenance;
+  if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+    return existing;
+  }
+  return generatedArtifactProvenance({
+    generated_from: "wiki_layout_init",
+    artifact_key: artifact.key
+  });
+}
+function recordWikiLayoutCatalog(db, artifacts, now = new Date) {
+  const timestamp = now.toISOString();
+  const rootIndex = artifacts.find((artifact) => artifact.key.endsWith("indexes/root.md"));
+  const wikiReadme = artifacts.find((artifact) => artifact.key.endsWith("wiki/README.md"));
+  if (rootIndex) {
+    db.run(`INSERT INTO knowledge_indexes (id, kind, name, artifact_uri, shard_key, metadata_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(kind, name, shard_key) DO UPDATE SET
+         artifact_uri = excluded.artifact_uri,
+         metadata_json = excluded.metadata_json,
+         updated_at = excluded.updated_at`, [
+      stableId3("idx", "root:indexes/root.md"),
+      "root",
+      "root",
+      rootIndex.uri,
+      "root",
+      JSON.stringify({
+        artifact_key: rootIndex.key,
+        content_hash: rootIndex.hash ?? null,
+        provenance: provenanceFor(rootIndex)
+      }),
+      timestamp,
+      timestamp
+    ]);
+  }
+  if (wikiReadme) {
+    db.run(`INSERT INTO wiki_pages (id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(path) DO UPDATE SET
+         title = excluded.title,
+         artifact_uri = excluded.artifact_uri,
+         content_hash = excluded.content_hash,
+         status = excluded.status,
+         metadata_json = excluded.metadata_json,
+         updated_at = excluded.updated_at`, [
+      stableId3("wiki", "wiki/README.md"),
+      "wiki/README.md",
+      "Wiki",
+      wikiReadme.uri,
+      wikiReadme.hash ?? null,
+      "active",
+      JSON.stringify({
+        artifact_key: wikiReadme.key,
+        provenance: provenanceFor(wikiReadme)
+      }),
+      timestamp,
+      timestamp
+    ]);
+  }
 }
 
 // src/service.ts
@@ -16270,6 +16417,7 @@ class KnowledgeService {
     const db = openKnowledgeDb(workspace.knowledgeDbPath);
     try {
       recordStorageObjects(db, result.artifacts);
+      recordWikiLayoutCatalog(db, result.artifacts);
     } finally {
       db.close();
     }

@@ -314,6 +314,12 @@ source ref. It does not copy raw files into the knowledge workspace; local file,
 S3, web, and open-files inputs are converted into redacted chunks with offsets,
 hashes, revision metadata, and FTS rows.
 
+Chunks, resolver results, generated wiki pages, and index records carry
+provenance metadata: source owner, source ref/URI, revision/hash, chunk offsets,
+read-only status, citation requirements, and stale-source status. This keeps
+future semantic search and wiki compile flows tied back to `open-files` instead
+of detached Markdown.
+
 AI provider configuration is local/BYOK by default. `open-knowledge` declares
 AI SDK v6 provider support through `ai`, `@ai-sdk/openai`,
 `@ai-sdk/anthropic`, and `@ai-sdk/deepseek`, but does not call providers until a

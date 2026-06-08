@@ -3,7 +3,8 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LocalArtifactStore } from '../src/artifact-store';
-import { initializeWikiLayout } from '../src/wiki-layout';
+import { migrateKnowledgeDb, openKnowledgeDb } from '../src/knowledge-db';
+import { initializeWikiLayout, recordWikiLayoutCatalog } from '../src/wiki-layout';
 
 describe('wiki layout', () => {
   test('initializes schema, root index, wiki readme, and log shard', async () => {
@@ -24,5 +25,41 @@ describe('wiki layout', () => {
     expect(result.artifacts).toHaveLength(4);
     expect(result.artifacts.map((entry) => entry.kind)).toEqual(['schema', 'index', 'wiki_page', 'log']);
     expect(result.artifacts.every((entry) => entry.hash?.startsWith('sha256:'))).toBe(true);
+    expect(result.artifacts.find((entry) => entry.key === 'wiki/README.md')?.metadata?.provenance).toMatchObject({
+      source_owner: 'open-files',
+      generated_from: 'wiki_layout_init',
+      raw_source_bytes_stored_in_open_knowledge: false,
+    });
+  });
+
+  test('records root index and wiki readme provenance in catalog tables', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-wiki-catalog-'));
+    const store = new LocalArtifactStore(join(dir, 'artifacts'));
+    const dbPath = join(dir, 'knowledge.db');
+    migrateKnowledgeDb(dbPath);
+    const result = await initializeWikiLayout(store, new Date('2026-06-08T00:00:00.000Z'));
+    const db = openKnowledgeDb(dbPath);
+    try {
+      recordWikiLayoutCatalog(db, result.artifacts, new Date('2026-06-08T00:00:00.000Z'));
+      const index = db.query<{ artifact_uri: string; metadata_json: string }, [string, string]>(
+        'SELECT artifact_uri, metadata_json FROM knowledge_indexes WHERE kind = ? AND name = ?',
+      ).get('root', 'root');
+      expect(index?.artifact_uri).toStartWith('file://');
+      expect(JSON.parse(index?.metadata_json ?? '{}').provenance).toMatchObject({
+        source_owner: 'open-files',
+        artifact_key: 'indexes/root.md',
+      });
+
+      const page = db.query<{ artifact_uri: string; metadata_json: string }, [string]>(
+        'SELECT artifact_uri, metadata_json FROM wiki_pages WHERE path = ?',
+      ).get('wiki/README.md');
+      expect(page?.artifact_uri).toStartWith('file://');
+      expect(JSON.parse(page?.metadata_json ?? '{}').provenance).toMatchObject({
+        source_owner: 'open-files',
+        artifact_key: 'wiki/README.md',
+      });
+    } finally {
+      db.close();
+    }
   });
 });

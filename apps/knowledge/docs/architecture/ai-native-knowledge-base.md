@@ -89,6 +89,21 @@ file revisions, hashes, extraction state, permissions, and storage metadata.
 Direct `s3://`, `file://`, and `https://` refs are useful for bootstrap and
 interop, but should be normalized into source records when possible.
 
+## Provenance Contract
+
+Every durable search/wiki artifact should carry a provenance object in metadata:
+`source_owner`, `source_ref`, `source_uri`, `source_kind`, `source_revision_id`,
+`revision`, `hash`, optional `chunk_id`, offsets, `read_only`,
+`citation_required`, resolver name, and stale status. For generated artifacts
+that are not source-backed yet, metadata still records that `open-files` owns
+source bytes and that citations are required before durable facts are filed.
+
+`wiki init` now catalogs the starter `wiki/README.md` and `indexes/root.md`
+records with generated-artifact provenance. Source ingestion stores source
+provenance on every chunk, and source resolution returns that provenance with
+chunks and citations so semantic search can pass through trustworthy evidence
+without reconstructing it later.
+
 ## Resolver Boundary
 
 The local resolver is exposed through:

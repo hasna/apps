@@ -361,7 +361,10 @@ describe('open-knowledge cli', () => {
 
     const stats = runCli(['db', 'stats', '--scope', 'project', '--json'], dir);
     expect(stats.exitCode).toBe(0);
-    expect(JSON.parse(new TextDecoder().decode(stats.stdout)).storage_objects).toBe(4);
+    const statsOut = JSON.parse(new TextDecoder().decode(stats.stdout));
+    expect(statsOut.storage_objects).toBe(4);
+    expect(statsOut.wiki_pages).toBe(1);
+    expect(statsOut.indexes).toBe(1);
   });
 
   test('source refs cover open-files, s3, local files, and web URLs', () => {
