@@ -13660,7 +13660,7 @@ import { existsSync as existsSync8, readFileSync as readFileSync8, writeFileSync
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.26",
+  version: "0.2.27",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   bin: {
@@ -13731,6 +13731,42 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, join, resolve } from "path";
 var HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "apps", "knowledge");
+var HASNA_XYZ_KNOWLEDGE_CANONICAL = {
+  division: "xyz",
+  app_type: "opensource",
+  app: "knowledge",
+  env: "prod",
+  local_path: HASNA_KNOWLEDGE_APP_PATH,
+  s3: {
+    bucket: "hasna-xyz-opensource-knowledge-prod",
+    region: "us-east-1",
+    profile: "hasna-xyz-infra",
+    prefix: ".hasna/apps/knowledge",
+    server_side_encryption: "AES256"
+  },
+  secrets: {
+    env: "hasna/xyz/opensource/knowledge/prod/env",
+    aws: "hasna/xyz/opensource/knowledge/prod/aws",
+    s3: "hasna/xyz/opensource/knowledge/prod/s3",
+    rds: null,
+    future_rds: "hasna/xyz/opensource/knowledge/prod/rds"
+  },
+  source_owner: "open-files",
+  evidence_doc: "docs/canonical-secrets-bootstrap-2026-06-08.md"
+};
+function canonicalHasnaXyzKnowledgeStorage() {
+  return {
+    type: "s3",
+    artifacts_root: "artifacts",
+    s3: {
+      bucket: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.bucket,
+      prefix: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.prefix,
+      region: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.region,
+      profile: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.profile,
+      server_side_encryption: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.server_side_encryption
+    }
+  };
+}
 function legacyGlobalStorePath() {
   return join(homedir(), ".open-knowledge", "db.json");
 }
@@ -18115,6 +18151,9 @@ function resolveStorageContract(config2, workspace, scope = "global") {
   const s3 = config2.storage.s3 ?? null;
   const prefix = s3?.prefix?.replace(/^\/+|\/+$/g, "") ?? "";
   const s3UriPrefix = s3 ? `s3://${s3.bucket}/${prefix ? `${prefix}/` : ""}` : "";
+  const canonicalPrefix = HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.prefix.replace(/^\/+|\/+$/g, "");
+  const canonicalS3UriPrefix = `s3://${HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.bucket}/${canonicalPrefix}/`;
+  const canonicalActive = config2.storage.type === "s3" && s3?.bucket === HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.bucket && (s3.region ?? null) === HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.region;
   return {
     scope,
     mode: config2.mode,
@@ -18148,6 +18187,30 @@ function resolveStorageContract(config2, workspace, scope = "global") {
         server_side_encryption: s3.server_side_encryption ?? null,
         kms_key_configured: Boolean(s3.kms_key_id)
       } : null
+    },
+    canonical_hasna_xyz: {
+      division: HASNA_XYZ_KNOWLEDGE_CANONICAL.division,
+      app_type: HASNA_XYZ_KNOWLEDGE_CANONICAL.app_type,
+      app: HASNA_XYZ_KNOWLEDGE_CANONICAL.app,
+      env: HASNA_XYZ_KNOWLEDGE_CANONICAL.env,
+      active: canonicalActive,
+      local_path: HASNA_XYZ_KNOWLEDGE_CANONICAL.local_path,
+      s3: {
+        bucket: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.bucket,
+        region: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.region,
+        profile: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.profile,
+        prefix: canonicalPrefix,
+        uri_prefix: canonicalS3UriPrefix,
+        server_side_encryption: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.server_side_encryption
+      },
+      secrets: {
+        env: HASNA_XYZ_KNOWLEDGE_CANONICAL.secrets.env,
+        aws: HASNA_XYZ_KNOWLEDGE_CANONICAL.secrets.aws,
+        s3: HASNA_XYZ_KNOWLEDGE_CANONICAL.secrets.s3,
+        rds: HASNA_XYZ_KNOWLEDGE_CANONICAL.secrets.rds,
+        future_rds: HASNA_XYZ_KNOWLEDGE_CANONICAL.secrets.future_rds
+      },
+      evidence_doc: HASNA_XYZ_KNOWLEDGE_CANONICAL.evidence_doc
     },
     hosted: {
       enabled: config2.mode === "hosted",
@@ -19058,16 +19121,21 @@ class KnowledgeService {
       hosted: {
         ...current.hosted ?? {},
         ...apiUrl ? { api_url: apiUrl } : {}
-      }
+      },
+      storage: options.canonicalHasnaXyz ? canonicalHasnaXyzKnowledgeStorage() : current.storage
     };
     writeKnowledgeConfig(workspace.configPath, nextConfig);
     this.cachedConfig = nextConfig;
+    const storage = resolveStorageContract(nextConfig, workspace, this.scope);
     return {
       ok: true,
       mode,
       api_url: nextConfig.hosted?.api_url ?? null,
+      storage_type: nextConfig.storage.type,
+      artifact_uri_prefix: storage.artifact_store.uri_prefix,
+      canonical_hasna_xyz: storage.canonical_hasna_xyz,
       config_path: workspace.configPath,
-      next: mode === "hosted" ? ["open-knowledge auth login --api-key <key>", "open-knowledge remote contracts --json"] : ["open-knowledge search <query>", "knowledge <prompt>"],
+      next: mode === "hosted" ? ["open-knowledge auth login --api-key <key>", "open-knowledge storage status --json", "open-knowledge remote contracts --json"] : ["open-knowledge search <query>", "knowledge <prompt>"],
       message: `Set knowledge mode to ${mode}`
     };
   }

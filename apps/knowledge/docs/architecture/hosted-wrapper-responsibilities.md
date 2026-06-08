@@ -86,6 +86,14 @@ The OSS package may know a storage contract, bucket name, prefix, region, and
 profile. It must not contain tenant secret values, connector credentials, RDS
 passwords, hosted KMS key material, or privileged AWS role assumptions.
 
+For Hasna XYZ production, the OSS contract names
+`hasna-xyz-opensource-knowledge-prod` and prefix
+`.hasna/apps/knowledge/`, plus metadata-only secret paths under
+`hasna/xyz/opensource/knowledge/prod/{env,aws,s3}`. Hosted code is responsible
+for resolving those secrets, assuming AWS roles, enforcing tenant prefixes, and
+provisioning `hasna/xyz/opensource/knowledge/prod/rds` only if a hosted runtime
+database is introduced.
+
 Generated artifacts are safe to sync remotely only when they remain derived:
 wiki pages, index shards, schema files, logs, exports, run payloads, embeddings,
 and citation metadata. Raw source bytes stay in `open-files`.

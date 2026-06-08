@@ -36,6 +36,7 @@ import {
 } from './storage-contract';
 import { initializeWikiLayout, recordWikiLayoutCatalog } from './wiki-layout';
 import {
+  canonicalHasnaXyzKnowledgeStorage,
   ensureKnowledgeWorkspace,
   readKnowledgeConfig,
   resolveScopedWorkspace,
@@ -70,6 +71,9 @@ export interface KnowledgeSetupResult {
   ok: true;
   mode: KnowledgeConfig['mode'];
   api_url: string | null;
+  storage_type: KnowledgeConfig['storage']['type'];
+  artifact_uri_prefix: string;
+  canonical_hasna_xyz: StorageContract['canonical_hasna_xyz'];
   config_path: string;
   next: string[];
   message: string;
@@ -130,7 +134,7 @@ export class KnowledgeService {
     return validateStorageConfig(this.config(), this.ensureWorkspace());
   }
 
-  setup(options: { mode?: string; apiUrl?: string } = {}): KnowledgeSetupResult {
+  setup(options: { mode?: string; apiUrl?: string; canonicalHasnaXyz?: boolean } = {}): KnowledgeSetupResult {
     const workspace = this.ensureWorkspace();
     const current = this.config();
     const mode = normalizeMode(options.mode) ?? current.mode;
@@ -146,16 +150,23 @@ export class KnowledgeService {
         ...(current.hosted ?? {}),
         ...(apiUrl ? { api_url: apiUrl } : {}),
       },
+      storage: options.canonicalHasnaXyz
+        ? canonicalHasnaXyzKnowledgeStorage()
+        : current.storage,
     };
     writeKnowledgeConfig(workspace.configPath, nextConfig);
     this.cachedConfig = nextConfig;
+    const storage = resolveStorageContract(nextConfig, workspace, this.scope);
     return {
       ok: true,
       mode,
       api_url: nextConfig.hosted?.api_url ?? null,
+      storage_type: nextConfig.storage.type,
+      artifact_uri_prefix: storage.artifact_store.uri_prefix,
+      canonical_hasna_xyz: storage.canonical_hasna_xyz,
       config_path: workspace.configPath,
       next: mode === 'hosted'
-        ? ['open-knowledge auth login --api-key <key>', 'open-knowledge remote contracts --json']
+        ? ['open-knowledge auth login --api-key <key>', 'open-knowledge storage status --json', 'open-knowledge remote contracts --json']
         : ['open-knowledge search <query>', 'knowledge <prompt>'],
       message: `Set knowledge mode to ${mode}`,
     };

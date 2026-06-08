@@ -3,7 +3,7 @@ import type { Database } from 'bun:sqlite';
 import { DEFAULT_KNOWLEDGE_API_URL, normalizeKnowledgeApiOrigin } from './auth';
 import { REMOTE_KNOWLEDGE_CONTRACT_VERSION } from './remote-client';
 import type { KnowledgeConfig, KnowledgeWorkspace } from './workspace';
-import { HASNA_KNOWLEDGE_APP_PATH } from './workspace';
+import { HASNA_KNOWLEDGE_APP_PATH, HASNA_XYZ_KNOWLEDGE_CANONICAL } from './workspace';
 
 export interface StorageArtifactClass {
   kind: string;
@@ -35,6 +35,30 @@ export interface StorageContract {
       server_side_encryption: string | null;
       kms_key_configured: boolean;
     } | null;
+  };
+  canonical_hasna_xyz: {
+    division: typeof HASNA_XYZ_KNOWLEDGE_CANONICAL.division;
+    app_type: typeof HASNA_XYZ_KNOWLEDGE_CANONICAL.app_type;
+    app: typeof HASNA_XYZ_KNOWLEDGE_CANONICAL.app;
+    env: typeof HASNA_XYZ_KNOWLEDGE_CANONICAL.env;
+    active: boolean;
+    local_path: string;
+    s3: {
+      bucket: string;
+      region: string;
+      profile: string;
+      prefix: string;
+      uri_prefix: string;
+      server_side_encryption: string;
+    };
+    secrets: {
+      env: string;
+      aws: string;
+      s3: string;
+      rds: null;
+      future_rds: string;
+    };
+    evidence_doc: string;
   };
   hosted: {
     enabled: boolean;
@@ -134,6 +158,11 @@ export function resolveStorageContract(
   const s3 = config.storage.s3 ?? null;
   const prefix = s3?.prefix?.replace(/^\/+|\/+$/g, '') ?? '';
   const s3UriPrefix = s3 ? `s3://${s3.bucket}/${prefix ? `${prefix}/` : ''}` : '';
+  const canonicalPrefix = HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.prefix.replace(/^\/+|\/+$/g, '');
+  const canonicalS3UriPrefix = `s3://${HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.bucket}/${canonicalPrefix}/`;
+  const canonicalActive = config.storage.type === 's3'
+    && s3?.bucket === HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.bucket
+    && (s3.region ?? null) === HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.region;
 
   return {
     scope,
@@ -170,6 +199,30 @@ export function resolveStorageContract(
             kms_key_configured: Boolean(s3.kms_key_id),
           }
         : null,
+    },
+    canonical_hasna_xyz: {
+      division: HASNA_XYZ_KNOWLEDGE_CANONICAL.division,
+      app_type: HASNA_XYZ_KNOWLEDGE_CANONICAL.app_type,
+      app: HASNA_XYZ_KNOWLEDGE_CANONICAL.app,
+      env: HASNA_XYZ_KNOWLEDGE_CANONICAL.env,
+      active: canonicalActive,
+      local_path: HASNA_XYZ_KNOWLEDGE_CANONICAL.local_path,
+      s3: {
+        bucket: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.bucket,
+        region: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.region,
+        profile: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.profile,
+        prefix: canonicalPrefix,
+        uri_prefix: canonicalS3UriPrefix,
+        server_side_encryption: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.server_side_encryption,
+      },
+      secrets: {
+        env: HASNA_XYZ_KNOWLEDGE_CANONICAL.secrets.env,
+        aws: HASNA_XYZ_KNOWLEDGE_CANONICAL.secrets.aws,
+        s3: HASNA_XYZ_KNOWLEDGE_CANONICAL.secrets.s3,
+        rds: HASNA_XYZ_KNOWLEDGE_CANONICAL.secrets.rds,
+        future_rds: HASNA_XYZ_KNOWLEDGE_CANONICAL.secrets.future_rds,
+      },
+      evidence_doc: HASNA_XYZ_KNOWLEDGE_CANONICAL.evidence_doc,
     },
     hosted: {
       enabled: config.mode === 'hosted',

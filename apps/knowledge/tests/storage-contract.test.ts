@@ -10,7 +10,7 @@ import {
   resolveStorageContract,
   validateStorageConfig,
 } from '../src/storage-contract';
-import { defaultKnowledgeConfig, workspaceForHome } from '../src/workspace';
+import { canonicalHasnaXyzKnowledgeStorage, defaultKnowledgeConfig, workspaceForHome } from '../src/workspace';
 
 describe('knowledge storage contract', () => {
   test('describes local .hasna/apps/knowledge ownership and generated artifact classes', () => {
@@ -31,6 +31,21 @@ describe('knowledge storage contract', () => {
     expect(contract.source_ownership.raw_source_bytes_stored_in_open_knowledge).toBe(false);
     expect(contract.generated_artifacts.map((entry) => entry.prefix)).toContain('wiki/');
     expect(contract.scalability.indexes).toContain('not one giant index.md');
+    expect(contract.canonical_hasna_xyz.active).toBe(false);
+    expect(contract.canonical_hasna_xyz.local_path).toBe(join('.hasna', 'apps', 'knowledge'));
+    expect(contract.canonical_hasna_xyz.s3).toMatchObject({
+      bucket: 'hasna-xyz-opensource-knowledge-prod',
+      region: 'us-east-1',
+      prefix: '.hasna/apps/knowledge',
+      uri_prefix: 's3://hasna-xyz-opensource-knowledge-prod/.hasna/apps/knowledge/',
+    });
+    expect(contract.canonical_hasna_xyz.secrets).toMatchObject({
+      env: 'hasna/xyz/opensource/knowledge/prod/env',
+      aws: 'hasna/xyz/opensource/knowledge/prod/aws',
+      s3: 'hasna/xyz/opensource/knowledge/prod/s3',
+      rds: null,
+      future_rds: 'hasna/xyz/opensource/knowledge/prod/rds',
+    });
   });
 
   test('describes S3 artifact storage without changing open-files source ownership', () => {
@@ -63,6 +78,29 @@ describe('knowledge storage contract', () => {
       kms_key_configured: true,
     });
     expect(contract.source_ownership.does_not_store).toContain('raw open-files bytes');
+  });
+
+  test('activates canonical Hasna XYZ S3 storage when configured', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-storage-hasna-s3-'));
+    const workspace = workspaceForHome(join(dir, '.hasna', 'apps', 'knowledge'));
+    const config = defaultKnowledgeConfig();
+    config.mode = 'hosted';
+    config.storage = canonicalHasnaXyzKnowledgeStorage();
+
+    const contract = resolveStorageContract(config, workspace, 'project');
+    const validation = validateStorageConfig(config, workspace);
+
+    expect(validation.ok).toBe(true);
+    expect(contract.canonical_hasna_xyz.active).toBe(true);
+    expect(contract.artifact_store.type).toBe('s3');
+    expect(contract.artifact_store.uri_prefix).toBe('s3://hasna-xyz-opensource-knowledge-prod/.hasna/apps/knowledge/');
+    expect(contract.artifact_store.s3).toMatchObject({
+      bucket: 'hasna-xyz-opensource-knowledge-prod',
+      prefix: '.hasna/apps/knowledge',
+      region: 'us-east-1',
+      profile: 'hasna-xyz-infra',
+      server_side_encryption: 'AES256',
+    });
   });
 
   test('hashes and records generated artifacts in storage_objects', () => {

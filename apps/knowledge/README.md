@@ -229,10 +229,26 @@ knowledge bucket/prefix while `open-files` remains the source of truth for raw
 source bytes. The command also reports artifact classes, allowed source ref
 schemes, and warnings for non-scalable or unsafe config.
 
+For Hasna XYZ production, the canonical generated-artifact bucket is
+`hasna-xyz-opensource-knowledge-prod` in `us-east-1` with prefix
+`.hasna/apps/knowledge/`. `storage status --json` exposes this under
+`canonical_hasna_xyz` even when local storage is active. The canonical
+metadata-only secret paths are:
+
+```text
+hasna/xyz/opensource/knowledge/prod/env
+hasna/xyz/opensource/knowledge/prod/aws
+hasna/xyz/opensource/knowledge/prod/s3
+```
+
+The future hosted database path, if provisioned, is
+`hasna/xyz/opensource/knowledge/prod/rds`.
+
 ### setup / auth / remote
 ```bash
 open-knowledge setup --mode local [--scope project] [--json]
 open-knowledge setup --mode hosted [--api-url https://knowledge.hasna.xyz] [--scope project] [--json]
+open-knowledge setup --mode hosted --canonical-hasna-xyz [--scope project] [--json]
 open-knowledge auth login --api-key <key> [--email you@example.com] [--org <slug>] [--scope project] [--json]
 open-knowledge auth whoami [--scope project] [--json]
 open-knowledge auth logout [--scope project] [--json]
@@ -518,6 +534,10 @@ prompt, embedding, or agent command explicitly requests a model.
 
 Generated knowledge artifacts can be stored locally under
 `.hasna/apps/knowledge/artifacts` or through the S3 artifact-store adapter.
+For Hasna XYZ production, `open-knowledge setup --mode hosted
+--canonical-hasna-xyz --scope project --json` configures generated artifacts
+under `s3://hasna-xyz-opensource-knowledge-prod/.hasna/apps/knowledge/` and
+keeps `open-files` as the raw-source owner.
 
 The default safety policy allows writes only under the resolved
 `.hasna/apps/knowledge` workspace. S3 manifest/outbox reads require

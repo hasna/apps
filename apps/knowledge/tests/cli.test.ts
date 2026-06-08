@@ -198,12 +198,14 @@ describe('open-knowledge cli', () => {
     const setupOut = JSON.parse(new TextDecoder().decode(setup.stdout));
     expect(setupOut.mode).toBe('hosted');
     expect(setupOut.api_url).toBe('https://knowledge.example.com');
+    expect(setupOut.storage_type).toBe('local');
 
     const storage = runCli(['storage', 'status', '--scope', 'project', '--json'], dir, env);
     expect(storage.exitCode).toBe(0);
     const storageOut = JSON.parse(new TextDecoder().decode(storage.stdout));
     expect(storageOut.hosted.enabled).toBe(true);
     expect(storageOut.hosted.api_url).toBe('https://knowledge.example.com');
+    expect(storageOut.canonical_hasna_xyz.active).toBe(false);
 
     const before = runCli(['auth', 'whoami', '--scope', 'project', '--json'], dir, env);
     expect(before.exitCode).toBe(0);
@@ -231,6 +233,33 @@ describe('open-knowledge cli', () => {
     const logout = runCli(['auth', 'logout', '--scope', 'project', '--json'], dir, env);
     expect(logout.exitCode).toBe(0);
     expect(JSON.parse(new TextDecoder().decode(logout.stdout)).removed).toBe(true);
+  });
+
+  test('setup can opt into canonical Hasna XYZ S3 artifact storage', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-canonical-storage-cli-'));
+
+    const setup = runCli(['setup', '--mode', 'hosted', '--canonical-hasna-xyz', '--scope', 'project', '--json'], dir);
+    expect(setup.exitCode).toBe(0);
+    const setupOut = JSON.parse(new TextDecoder().decode(setup.stdout));
+    expect(setupOut.storage_type).toBe('s3');
+    expect(setupOut.artifact_uri_prefix).toBe('s3://hasna-xyz-opensource-knowledge-prod/.hasna/apps/knowledge/');
+    expect(setupOut.canonical_hasna_xyz.active).toBe(true);
+
+    const storage = runCli(['storage', 'status', '--scope', 'project', '--json'], dir);
+    expect(storage.exitCode).toBe(0);
+    const storageOut = JSON.parse(new TextDecoder().decode(storage.stdout));
+    expect(storageOut.artifact_store.s3).toMatchObject({
+      bucket: 'hasna-xyz-opensource-knowledge-prod',
+      prefix: '.hasna/apps/knowledge',
+      region: 'us-east-1',
+      profile: 'hasna-xyz-infra',
+    });
+    expect(storageOut.canonical_hasna_xyz.secrets).toMatchObject({
+      env: 'hasna/xyz/opensource/knowledge/prod/env',
+      aws: 'hasna/xyz/opensource/knowledge/prod/aws',
+      s3: 'hasna/xyz/opensource/knowledge/prod/s3',
+      future_rds: 'hasna/xyz/opensource/knowledge/prod/rds',
+    });
   });
 
   test('db init and stats create project knowledge.db', () => {
