@@ -5,15 +5,9 @@
  * Licensed under the Apache License, Version 2.0
  */
 import { defaultStorePath, loadStore, saveStore, withLock, makeId, makeShortId, ensureStore, type KnowledgeItem } from './store';
-import { ensureKnowledgeWorkspace, readKnowledgeConfig, resolveScopedWorkspace } from './workspace';
-import { getKnowledgeDbStats, migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
-import { createArtifactStore } from './artifact-store';
-import { initializeWikiLayout } from './wiki-layout';
-import { ingestOpenFilesManifest } from './manifest-ingest';
-import { ingestSourceRef } from './source-ingest';
-import { consumeOpenFilesOutbox } from './outbox-consume';
-import { resolveOpenFilesSource } from './source-resolver';
-import { approvalStatus, assertS3ReadAllowed, assertWebSearchAllowed, createApprovalGate, recordAuditEvent, recordRedactionFindings, redactSecrets, resolveSafetyPolicy } from './safety';
+import { openKnowledgeDb } from './knowledge-db';
+import { createKnowledgeService } from './service';
+import { approvalStatus, assertS3ReadAllowed, assertWebSearchAllowed, createApprovalGate, recordAuditEvent, recordRedactionFindings, redactSecrets } from './safety';
 import pkg from '../package.json' with { type: 'json' };
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -299,71 +293,49 @@ async function run(argv: string[]): Promise<void> {
 
   if (!command || flags.help || command === 'help') { printCommandHelp(positional[1]); return; }
 
-  const workspace = resolveScopedWorkspace(flags.scope);
+  const service = createKnowledgeService({ scope: flags.scope });
   let storePath = flags.store;
   if (!storePath) {
     if (flags.scope === 'project' || flags.scope === 'local') {
-      storePath = ensureKnowledgeWorkspace(workspace.home).jsonStorePath;
+      storePath = service.jsonStorePath();
     } else {
       storePath = defaultStorePath();
     }
   }
 
   if (command === 'paths') {
-    const resolvedWorkspace = ensureKnowledgeWorkspace(workspace.home);
-    output({
-      ok: true,
-      scope: flags.scope ?? 'global',
-      home: resolvedWorkspace.home,
-      config_path: resolvedWorkspace.configPath,
-      json_store_path: resolvedWorkspace.jsonStorePath,
-      knowledge_db_path: resolvedWorkspace.knowledgeDbPath,
-      artifacts_dir: resolvedWorkspace.artifactsDir,
-      indexes_dir: resolvedWorkspace.indexesDir,
-      logs_dir: resolvedWorkspace.logsDir,
-      runs_dir: resolvedWorkspace.runsDir,
-      schemas_dir: resolvedWorkspace.schemasDir,
-      wiki_dir: resolvedWorkspace.wikiDir,
-      config: readKnowledgeConfig(resolvedWorkspace.configPath),
-      message: resolvedWorkspace.home,
-    }, flags.json);
+    output(service.paths(), flags.json);
     return;
   }
 
   if (command === 'db') {
     const action = positional[1] ?? 'init';
-    const resolvedWorkspace = ensureKnowledgeWorkspace(workspace.home);
     if (action !== 'init' && action !== 'stats') {
       throw new Error("Invalid db action. Use 'init' or 'stats'.");
     }
     if (action === 'init') {
-      const result = migrateKnowledgeDb(resolvedWorkspace.knowledgeDbPath);
+      const result = service.initDb();
       output({ ok: true, ...result, message: `Initialized ${result.path}` }, flags.json);
       return;
     }
-    migrateKnowledgeDb(resolvedWorkspace.knowledgeDbPath);
-    const stats = getKnowledgeDbStats(resolvedWorkspace.knowledgeDbPath);
-    output({ ok: true, path: resolvedWorkspace.knowledgeDbPath, ...stats, message: `knowledge.db schema v${stats.schema_version}` }, flags.json);
+    const stats = service.dbStats();
+    output({ ok: true, path: service.workspace.knowledgeDbPath, ...stats, message: `knowledge.db schema v${stats.schema_version}` }, flags.json);
     return;
   }
 
   if (command === 'wiki') {
     const action = positional[1] ?? 'init';
     if (action !== 'init') throw new Error("Invalid wiki action. Use 'init'.");
-    const resolvedWorkspace = ensureKnowledgeWorkspace(workspace.home);
-    const config = readKnowledgeConfig(resolvedWorkspace.configPath);
-    const artifactStore = createArtifactStore(config, resolvedWorkspace);
-    const result = await initializeWikiLayout(artifactStore);
-    output({ ok: true, ...result, message: `Initialized wiki layout in ${resolvedWorkspace.home}` }, flags.json);
+    const result = await service.initWiki();
+    output({ ok: true, ...result, message: `Initialized wiki layout in ${service.workspace.home}` }, flags.json);
     return;
   }
 
   if (command === 'safety') {
     const action = positional[1] ?? 'status';
-    const resolvedWorkspace = ensureKnowledgeWorkspace(workspace.home);
-    const config = readKnowledgeConfig(resolvedWorkspace.configPath);
-    const policy = resolveSafetyPolicy(config, resolvedWorkspace);
-    migrateKnowledgeDb(resolvedWorkspace.knowledgeDbPath);
+    const resolvedWorkspace = service.ensureWorkspace();
+    const policy = service.safetyPolicy();
+    service.initDb();
     const db = openKnowledgeDb(resolvedWorkspace.knowledgeDbPath);
     try {
       if (action === 'status') {
@@ -489,15 +461,9 @@ async function run(argv: string[]): Promise<void> {
     if (action !== 'resolve') throw new Error("Invalid source action. Use 'resolve'.");
     const sourceRef = positional[2];
     if (!sourceRef) throw new Error('Usage: open-knowledge source resolve <source-ref>');
-    const resolvedWorkspace = ensureKnowledgeWorkspace(workspace.home);
-    const config = readKnowledgeConfig(resolvedWorkspace.configPath);
-    const safetyPolicy = resolveSafetyPolicy(config, resolvedWorkspace);
-    const result = await resolveOpenFilesSource({
-      dbPath: resolvedWorkspace.knowledgeDbPath,
-      sourceRef,
+    const result = await service.resolveSource(sourceRef, {
       purpose: flags.purpose,
       limit: flags.limit,
-      safetyPolicy,
     });
     output({
       ok: true,
@@ -511,31 +477,17 @@ async function run(argv: string[]): Promise<void> {
 
   if (command === 'ingest') {
     const action = positional[1] ?? '';
-    const resolvedWorkspace = ensureKnowledgeWorkspace(workspace.home);
-    const config = readKnowledgeConfig(resolvedWorkspace.configPath);
-    const safetyPolicy = resolveSafetyPolicy(config, resolvedWorkspace);
     if (action === 'manifest') {
       const input = positional[2];
       if (!input) throw new Error('Usage: open-knowledge ingest manifest <file|s3://bucket/key>');
-      const result = await ingestOpenFilesManifest({
-        dbPath: resolvedWorkspace.knowledgeDbPath,
-        input,
-        config,
-        safetyPolicy,
-      });
+      const result = await service.ingestManifest(input);
       output({ ok: true, ...result, message: `Ingested ${result.items_seen} manifest item(s)` }, flags.json);
       return;
     }
     if (action === 'source') {
       const sourceRef = positional[2];
       if (!sourceRef) throw new Error('Usage: open-knowledge ingest source <source-ref>');
-      const result = await ingestSourceRef({
-        dbPath: resolvedWorkspace.knowledgeDbPath,
-        sourceRef,
-        purpose: flags.purpose,
-        config,
-        safetyPolicy,
-      });
+      const result = await service.ingestSource(sourceRef, flags.purpose);
       output({ ok: true, ...result, message: `Ingested source ${result.source_ref} (${result.chunks_inserted} chunks)` }, flags.json);
       return;
     }
@@ -547,15 +499,7 @@ async function run(argv: string[]): Promise<void> {
     if (action !== 'outbox') throw new Error("Invalid reindex action. Use 'outbox'.");
     const input = positional[2];
     if (!input) throw new Error('Usage: open-knowledge reindex outbox <file|s3://bucket/key>');
-    const resolvedWorkspace = ensureKnowledgeWorkspace(workspace.home);
-    const config = readKnowledgeConfig(resolvedWorkspace.configPath);
-    const safetyPolicy = resolveSafetyPolicy(config, resolvedWorkspace);
-    const result = await consumeOpenFilesOutbox({
-      dbPath: resolvedWorkspace.knowledgeDbPath,
-      input,
-      config,
-      safetyPolicy,
-    });
+    const result = await service.consumeOutbox(input);
     output({ ok: true, ...result, message: `Consumed ${result.events_seen} outbox event(s)` }, flags.json);
     return;
   }

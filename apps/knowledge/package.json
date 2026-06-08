@@ -1,6 +1,6 @@
 {
   "name": "@hasna/knowledge",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "description": "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   "type": "module",
   "bin": {
@@ -17,7 +17,7 @@
   "scripts": {
     "test": "bun test",
     "test:cli": "bun test tests/cli.test.ts",
-    "build": "bun build --target=bun --outfile=bin/open-knowledge.js --minify --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers src/cli.ts && bun build --target=bun --outfile=bin/open-knowledge-mcp.js --external @modelcontextprotocol/sdk src/mcp.js",
+    "build": "bun build --target=bun --outfile=bin/open-knowledge.js --minify --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers src/cli.ts && bun build --target=bun --outfile=bin/open-knowledge-mcp.js --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers src/mcp.js",
     "prepublishOnly": "bun run build",
     "postinstall": "bun run build"
   },

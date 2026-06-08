@@ -10,7 +10,10 @@ for agents to reuse. It is not the raw file bucket. Raw source bytes belong to
 The open source package owns:
 
 - Local CLI and MCP interfaces.
-- Shared service modules used by CLI, MCP, tests, and future SDK callers.
+- Shared service modules used by CLI, MCP, tests, and future SDK callers. The
+  current `KnowledgeService` facade centralizes workspace/config/safety,
+  artifact storage, DB/wiki setup, source ingestion, source resolution, and
+  outbox consumption.
 - Local project workspace under `.hasna/apps/knowledge`.
 - Source references, citations, extracted metadata, chunks, generated wiki
   artifacts, schemas, indexes, run ledgers, and search state.

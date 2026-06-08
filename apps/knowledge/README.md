@@ -11,6 +11,11 @@ engine for AI agents. It stores simple knowledge items today, creates a Hasna
 project workspace under `.hasna/apps/knowledge`, initializes a versioned
 `knowledge.db`, writes generated wiki artifacts, and exposes a stdio MCP server.
 
+CLI and MCP workspace operations share a `KnowledgeService` facade for config,
+safety policy, artifact storage, DB/wiki setup, source ingestion, source
+resolution, and outbox consumption. That keeps local project mode and future
+remote/S3-backed wrappers on the same service contracts.
+
 ## Install
 
 ```bash

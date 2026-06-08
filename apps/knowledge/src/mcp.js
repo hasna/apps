@@ -5,10 +5,8 @@ import { z } from 'zod';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import pkg from '../package.json' with { type: 'json' };
 import { defaultStorePath, loadStore, saveStore, makeId, withLock } from './store.ts';
-import { ensureKnowledgeWorkspace, readKnowledgeConfig, resolveScopedWorkspace } from './workspace.ts';
 import { parseSourceRef } from './source-ref.ts';
-import { resolveOpenFilesSource } from './source-resolver.ts';
-import { resolveSafetyPolicy } from './safety.ts';
+import { createKnowledgeService } from './service.ts';
 
 const storePathField = z.string().optional().describe('Path to the JSON store file');
 const scopeField = z.enum(['local', 'global', 'project']).optional().describe('Workspace scope');
@@ -28,7 +26,7 @@ function shortIdFor(id) {
 function resolveStorePath(storePath, scope) {
   if (storePath) return storePath;
   if (scope === 'project' || scope === 'local') {
-    return ensureKnowledgeWorkspace(resolveScopedWorkspace(scope).home).jsonStorePath;
+    return createKnowledgeService({ scope }).jsonStorePath();
   }
   return defaultStorePath();
 }
@@ -76,22 +74,7 @@ export function buildServer() {
   registerTool(server, 'ok_paths', 'Knowledge workspace paths', 'Show resolved workspace and store paths', {
     scope: scopeField,
   }, async ({ scope }) => {
-    const workspace = ensureKnowledgeWorkspace(resolveScopedWorkspace(scope).home);
-    return jsonText({
-      ok: true,
-      scope: scope ?? 'global',
-      home: workspace.home,
-      config_path: workspace.configPath,
-      json_store_path: workspace.jsonStorePath,
-      knowledge_db_path: workspace.knowledgeDbPath,
-      artifacts_dir: workspace.artifactsDir,
-      indexes_dir: workspace.indexesDir,
-      logs_dir: workspace.logsDir,
-      runs_dir: workspace.runsDir,
-      schemas_dir: workspace.schemasDir,
-      wiki_dir: workspace.wikiDir,
-      config: readKnowledgeConfig(workspace.configPath),
-    });
+    return jsonText(createKnowledgeService({ scope }).paths());
   });
 
   registerTool(server, 'ok_parse_source_ref', 'Parse source reference', 'Parse and validate an open-files, S3, file, or web source ref', {
@@ -110,16 +93,11 @@ export function buildServer() {
     limit: z.number().optional().describe('Maximum chunks to return, default 10'),
     scope: scopeField,
   }, async ({ source_ref, purpose, limit, scope }) => {
-    const workspace = ensureKnowledgeWorkspace(resolveScopedWorkspace(scope).home);
-    const config = readKnowledgeConfig(workspace.configPath);
-    const safetyPolicy = resolveSafetyPolicy(config, workspace);
+    const service = createKnowledgeService({ scope });
     try {
-      const result = await resolveOpenFilesSource({
-        dbPath: workspace.knowledgeDbPath,
-        sourceRef: source_ref,
+      const result = await service.resolveSource(source_ref, {
         purpose,
         limit,
-        safetyPolicy,
       });
       return jsonText({ ok: true, ...result });
     } catch (error) {

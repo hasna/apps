@@ -15,6 +15,7 @@ var __export = (target, all) => {
     });
 };
 var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
+var __require = import.meta.require;
 
 // src/mcp-http.js
 var exports_mcp_http = {};
@@ -13655,11 +13656,11 @@ function date4(params) {
 // node_modules/zod/v4/classic/external.js
 config(en_default());
 // src/mcp.js
-import { existsSync as existsSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync3 } from "fs";
+import { existsSync as existsSync7, readFileSync as readFileSync7, writeFileSync as writeFileSync4 } from "fs";
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.9",
+  version: "0.2.10",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   bin: {
@@ -13676,7 +13677,7 @@ var package_default = {
   scripts: {
     test: "bun test",
     "test:cli": "bun test tests/cli.test.ts",
-    build: "bun build --target=bun --outfile=bin/open-knowledge.js --minify --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers src/cli.ts && bun build --target=bun --outfile=bin/open-knowledge-mcp.js --external @modelcontextprotocol/sdk src/mcp.js",
+    build: "bun build --target=bun --outfile=bin/open-knowledge.js --minify --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers src/cli.ts && bun build --target=bun --outfile=bin/open-knowledge-mcp.js --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers src/mcp.js",
     prepublishOnly: "bun run build",
     postinstall: "bun run build"
   },
@@ -13952,6 +13953,160 @@ function revisionIdForSourceRef(uri) {
   return parsed.kind === "open-files" && parsed.entity === "file" ? parsed.revision_id ?? null : null;
 }
 
+// src/artifact-store.ts
+import { existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync3 } from "fs";
+import { dirname as dirname2, join as join2, relative, sep } from "path";
+function normalizeArtifactKey(key) {
+  const raw = key.replace(/\\/g, "/").trim();
+  if (!raw || raw.startsWith("/")) {
+    throw new Error(`Invalid artifact key: ${key}`);
+  }
+  const segments = raw.split("/").filter(Boolean);
+  if (segments.length === 0 || segments.some((segment) => segment === "." || segment === "..")) {
+    throw new Error(`Invalid artifact key: ${key}`);
+  }
+  return segments.join("/");
+}
+function assertInside(root, target) {
+  const rel = relative(root, target);
+  if (rel.startsWith("..") || rel === ".." || rel.startsWith(`..${sep}`)) {
+    throw new Error(`Artifact path escapes root: ${target}`);
+  }
+}
+
+class LocalArtifactStore {
+  root;
+  type = "local";
+  canRead = true;
+  canWrite = true;
+  constructor(root) {
+    this.root = root;
+    mkdirSync2(root, { recursive: true });
+  }
+  async put(entry) {
+    const key = normalizeArtifactKey(entry.key);
+    const path = join2(this.root, key);
+    assertInside(this.root, path);
+    mkdirSync2(dirname2(path), { recursive: true });
+    writeFileSync3(path, entry.body);
+    return { key, uri: `file://${path}` };
+  }
+  async getText(key) {
+    const normalizedKey = normalizeArtifactKey(key);
+    const path = join2(this.root, normalizedKey);
+    assertInside(this.root, path);
+    return readFileSync3(path, "utf8");
+  }
+  async exists(key) {
+    const normalizedKey = normalizeArtifactKey(key);
+    const path = join2(this.root, normalizedKey);
+    assertInside(this.root, path);
+    return existsSync3(path);
+  }
+}
+
+class S3ArtifactStore {
+  options;
+  type = "s3";
+  canRead = true;
+  canWrite = true;
+  client;
+  constructor(options) {
+    this.options = options;
+    this.client = options.client;
+  }
+  async getClient() {
+    if (this.client)
+      return this.client;
+    const [{ S3Client }, { fromIni }] = await Promise.all([
+      import("@aws-sdk/client-s3"),
+      import("@aws-sdk/credential-providers")
+    ]);
+    this.client = new S3Client({
+      region: this.options.region,
+      credentials: this.options.profile ? fromIni({ profile: this.options.profile }) : undefined,
+      maxAttempts: this.options.max_attempts
+    });
+    return this.client;
+  }
+  objectKey(key) {
+    const normalizedKey = normalizeArtifactKey(key);
+    const prefix = this.options.prefix ? normalizeArtifactKey(this.options.prefix) : "";
+    return prefix ? `${prefix}/${normalizedKey}` : normalizedKey;
+  }
+  async put(entry) {
+    const [{ PutObjectCommand }, client] = await Promise.all([
+      import("@aws-sdk/client-s3"),
+      this.getClient()
+    ]);
+    const key = this.objectKey(entry.key);
+    await client.send(new PutObjectCommand({
+      Bucket: this.options.bucket,
+      Key: key,
+      Body: entry.body,
+      ContentType: entry.content_type,
+      Metadata: entry.metadata,
+      ServerSideEncryption: this.options.server_side_encryption,
+      SSEKMSKeyId: this.options.kms_key_id
+    }));
+    return { key, uri: `s3://${this.options.bucket}/${key}` };
+  }
+  async getText(key) {
+    const [{ GetObjectCommand }, client] = await Promise.all([
+      import("@aws-sdk/client-s3"),
+      this.getClient()
+    ]);
+    const objectKey = this.objectKey(key);
+    const response = await client.send(new GetObjectCommand({
+      Bucket: this.options.bucket,
+      Key: objectKey
+    }));
+    if (!response.Body)
+      return "";
+    return await response.Body.transformToString();
+  }
+  async exists(key) {
+    const [{ HeadObjectCommand }, client] = await Promise.all([
+      import("@aws-sdk/client-s3"),
+      this.getClient()
+    ]);
+    const objectKey = this.objectKey(key);
+    try {
+      await client.send(new HeadObjectCommand({
+        Bucket: this.options.bucket,
+        Key: objectKey
+      }));
+      return true;
+    } catch (error48) {
+      const name = error48 instanceof Error ? error48.name : "";
+      if (name === "NotFound" || name === "NoSuchKey" || name === "NotFoundError")
+        return false;
+      throw error48;
+    }
+  }
+}
+function createArtifactStore(config2, workspace) {
+  if (config2.storage.type === "s3") {
+    if (!config2.storage.s3?.bucket)
+      throw new Error("S3 artifact storage requires storage.s3.bucket");
+    return new S3ArtifactStore({
+      bucket: config2.storage.s3.bucket,
+      prefix: config2.storage.s3.prefix,
+      region: config2.storage.s3.region,
+      profile: config2.storage.s3.profile,
+      max_attempts: config2.storage.s3.max_attempts,
+      server_side_encryption: config2.storage.s3.server_side_encryption,
+      kms_key_id: config2.storage.s3.kms_key_id
+    });
+  }
+  return new LocalArtifactStore(workspace.artifactsDir);
+}
+
+// src/outbox-consume.ts
+import { createHash as createHash2, randomUUID as randomUUID3 } from "crypto";
+import { existsSync as existsSync4, readFileSync as readFileSync4 } from "fs";
+import { basename } from "path";
+
 // src/knowledge-db.ts
 import { Database } from "bun:sqlite";
 var MIGRATION_1 = `
@@ -14191,10 +14346,35 @@ function getSchemaVersion(db) {
   const row = db.query("SELECT MAX(version) AS version FROM schema_versions").get();
   return row?.version ?? 0;
 }
+function count(db, table) {
+  const row = db.query(`SELECT COUNT(*) AS n FROM ${table}`).get();
+  return row?.n ?? 0;
+}
+function getKnowledgeDbStats(path) {
+  const db = openKnowledgeDb(path);
+  try {
+    return {
+      schema_version: getSchemaVersion(db),
+      sources: count(db, "sources"),
+      source_revisions: count(db, "source_revisions"),
+      chunks: count(db, "chunks"),
+      wiki_pages: count(db, "wiki_pages"),
+      citations: count(db, "citations"),
+      indexes: count(db, "knowledge_indexes"),
+      runs: count(db, "runs"),
+      run_events: count(db, "run_events"),
+      redaction_findings: count(db, "redaction_findings"),
+      audit_events: count(db, "audit_events"),
+      approval_gates: count(db, "approval_gates")
+    };
+  } finally {
+    db.close();
+  }
+}
 
 // src/safety.ts
 import { createHash, randomUUID as randomUUID2 } from "crypto";
-import { relative, resolve as resolve2, sep } from "path";
+import { relative as relative2, resolve as resolve2, sep as sep2 } from "path";
 function envEnabled(name) {
   const value = process.env[name];
   return value === "1" || value === "true" || value === "yes";
@@ -14237,14 +14417,55 @@ function resolveSafetyPolicy(config2, workspace) {
   };
 }
 function isInside(root, target) {
-  const rel = relative(root, target);
-  return rel === "" || !rel.startsWith("..") && rel !== ".." && !rel.startsWith(`..${sep}`);
+  const rel = relative2(root, target);
+  return rel === "" || !rel.startsWith("..") && rel !== ".." && !rel.startsWith(`..${sep2}`);
 }
 function assertWriteAllowed(targetPath, policy) {
   const resolved = resolve2(targetPath);
   if (!policy.allowWriteRoots.some((root) => isInside(root, resolved))) {
     throw new Error(`Safety policy denied write outside .hasna/apps/knowledge: ${targetPath}`);
   }
+}
+function assertS3ReadAllowed(uri, policy) {
+  const parsed = new URL(uri);
+  const bucket = parsed.hostname;
+  if (!policy.network.s3ReadsEnabled) {
+    throw new Error("Safety policy denied S3 read. Set safety.network.s3_reads_enabled=true or HASNA_KNOWLEDGE_ALLOW_S3_READS=1.");
+  }
+  if (!policy.network.allowedS3Buckets.includes(bucket)) {
+    throw new Error(`Safety policy denied S3 bucket "${bucket}". Add it to safety.network.allowed_s3_buckets or HASNA_KNOWLEDGE_ALLOWED_S3_BUCKETS.`);
+  }
+}
+function assertWebSearchAllowed(policy) {
+  if (!policy.network.webSearchEnabled) {
+    throw new Error("Safety policy denied web search. Set safety.network.web_search_enabled=true or HASNA_KNOWLEDGE_WEB_SEARCH=1.");
+  }
+}
+var REDACTION_PATTERNS = [
+  { type: "private_key_block", severity: "high", regex: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, replacement: "[REDACTED:private_key_block]" },
+  { type: "secret_assignment", severity: "high", regex: /\b(?:api[_-]?key|secret|token|password)\s*[:=]\s*['"]?[^'"\s]{8,}/gi, replacement: "[REDACTED:secret_assignment]" },
+  { type: "openai_api_key", severity: "high", regex: /\bsk-[A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:openai_api_key]" },
+  { type: "anthropic_api_key", severity: "high", regex: /\bsk-ant-[A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:anthropic_api_key]" },
+  { type: "aws_access_key_id", severity: "high", regex: /\bA(?:KIA|SIA)[A-Z0-9]{16}\b/g, replacement: "[REDACTED:aws_access_key_id]" }
+];
+function redactSecrets(text, policy) {
+  if (policy && !policy.redaction.enabled)
+    return { text, findings: [] };
+  let output = text;
+  const findings = [];
+  for (const pattern of REDACTION_PATTERNS) {
+    output = output.replace(pattern.regex, (match, ...args) => {
+      const offset = typeof args.at(-2) === "number" ? args.at(-2) : output.indexOf(match);
+      findings.push({
+        type: pattern.type,
+        severity: pattern.severity,
+        start: Math.max(0, offset),
+        end: Math.max(0, offset + match.length)
+      });
+      return pattern.replacement;
+    });
+  }
+  return { text: output, findings };
 }
 function auditId(input) {
   return `audit_${createHash("sha256").update(`${input.event_type}\x00${input.action}\x00${input.target_uri ?? ""}\x00${input.created_at ?? ""}\x00${JSON.stringify(input.metadata ?? {})}\x00${randomUUID2()}`).digest("hex").slice(0, 24)}`;
@@ -14264,6 +14485,795 @@ function recordAuditEvent(db, input) {
   ]);
   return id;
 }
+function recordRedactionFindings(db, input) {
+  const createdAt = input.created_at ?? new Date().toISOString();
+  for (const finding of input.findings) {
+    db.run(`INSERT INTO redaction_findings (id, source_uri, run_id, severity, finding_type, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`, [
+      `redact_${randomUUID2()}`,
+      input.source_uri ?? null,
+      input.run_id ?? null,
+      finding.severity,
+      finding.type,
+      JSON.stringify({ ...input.metadata ?? {}, start: finding.start, end: finding.end }),
+      createdAt
+    ]);
+  }
+  return input.findings.length;
+}
+
+// src/outbox-consume.ts
+function stableId(prefix, value) {
+  return `${prefix}_${createHash2("sha256").update(value).digest("hex").slice(0, 20)}`;
+}
+function asObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+}
+function asString(value) {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+function buildSourceRef(event) {
+  const explicit = asString(event.source_ref) ?? asString(event.source_uri) ?? asString(event.uri);
+  if (explicit)
+    return explicit;
+  const fileId = asString(event.file_id);
+  if (fileId) {
+    const revision = asString(event.revision_id) ?? asString(event.revision);
+    const fileRef = `open-files://file/${encodeURIComponent(fileId)}`;
+    return revision ? `${fileRef}/revision/${encodeURIComponent(revision)}` : fileRef;
+  }
+  const sourceId = asString(event.source_id);
+  const path = asString(event.path);
+  if (sourceId && path) {
+    return `open-files://source/${encodeURIComponent(sourceId)}/path/${encodeURIComponent(path)}`;
+  }
+  throw new Error("Outbox event is missing source_ref, file_id, or source_id/path.");
+}
+function baseSourceUri(sourceRef, parsed) {
+  if (parsed.kind === "open-files" && parsed.entity === "file" && parsed.revision_id) {
+    return sourceRef.replace(/\/revision\/[^/]+$/, "");
+  }
+  return sourceRef;
+}
+function hashFromEvent(event) {
+  return asString(event.hash) ?? asString(event.checksum) ?? asString(event.sha256) ?? null;
+}
+function revisionFromEvent(event, parsed, hash2) {
+  return asString(event.revision_id) ?? asString(event.revision) ?? asString(event.version_id) ?? (parsed.kind === "open-files" ? parsed.revision_id : undefined) ?? hash2 ?? null;
+}
+function eventType(event) {
+  return (asString(event.event) ?? asString(event.type) ?? asString(event.action) ?? asString(event.change_type) ?? "changed").toLowerCase();
+}
+function titleFromEvent(event) {
+  const path = asString(event.path);
+  return asString(event.title) ?? asString(event.name) ?? (path ? basename(path) : null);
+}
+function normalizeEvent(event, now) {
+  const sourceRef = buildSourceRef(event);
+  const parsed = parseSourceRef(sourceRef);
+  const hash2 = hashFromEvent(event);
+  return {
+    raw: event,
+    eventType: eventType(event),
+    sourceRef,
+    sourceUri: baseSourceUri(sourceRef, parsed),
+    kind: parsed.kind,
+    title: titleFromEvent(event),
+    revision: revisionFromEvent(event, parsed, hash2),
+    hash: hash2,
+    status: asString(event.status)?.toLowerCase() ?? null,
+    updatedAt: asString(event.updated_at) ?? now,
+    acl: event.permissions ?? event.acl ?? undefined
+  };
+}
+function parseOutboxText(text) {
+  const trimmed = text.trim();
+  if (!trimmed)
+    return [];
+  if (trimmed.startsWith("[")) {
+    const parsed = JSON.parse(trimmed);
+    if (!Array.isArray(parsed))
+      throw new Error("Outbox array parse failed.");
+    return parsed.map((entry) => {
+      const event = asObject(entry);
+      if (!event)
+        throw new Error("Outbox array entries must be objects.");
+      return event;
+    });
+  }
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      const object2 = asObject(parsed);
+      if (!object2)
+        throw new Error("Outbox object parse failed.");
+      if (Array.isArray(object2.events)) {
+        return object2.events.map((entry) => {
+          const event = asObject(entry);
+          if (!event)
+            throw new Error("Outbox events entries must be objects.");
+          return event;
+        });
+      }
+      if ("source_ref" in object2 || "source_uri" in object2 || "file_id" in object2)
+        return [object2];
+    } catch (error48) {
+      const lines = trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0);
+      if (lines.length <= 1)
+        throw error48;
+      return lines.map((line) => {
+        const event = asObject(JSON.parse(line));
+        if (!event)
+          throw new Error("Outbox JSONL entries must be objects.");
+        return event;
+      });
+    }
+  }
+  return trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0).map((line) => {
+    const event = asObject(JSON.parse(line));
+    if (!event)
+      throw new Error("Outbox JSONL entries must be objects.");
+    return event;
+  });
+}
+async function readS3Text(uri, config2, safetyPolicy) {
+  const parsed = new URL(uri);
+  const bucket = parsed.hostname;
+  const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
+  if (!bucket || !key)
+    throw new Error(`Invalid S3 outbox URI: ${uri}`);
+  if (safetyPolicy)
+    assertS3ReadAllowed(uri, safetyPolicy);
+  const [{ S3Client, GetObjectCommand }, { fromIni }] = await Promise.all([
+    import("@aws-sdk/client-s3"),
+    import("@aws-sdk/credential-providers")
+  ]);
+  const s3Config = config2?.storage.type === "s3" && config2.storage.s3?.bucket === bucket ? config2.storage.s3 : undefined;
+  const client = new S3Client({
+    region: s3Config?.region,
+    credentials: s3Config?.profile ? fromIni({ profile: s3Config.profile }) : undefined,
+    maxAttempts: s3Config?.max_attempts
+  });
+  const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  if (!response.Body)
+    return "";
+  return await response.Body.transformToString();
+}
+async function readOutboxInput(input, config2, safetyPolicy) {
+  if (input.startsWith("s3://"))
+    return readS3Text(input, config2, safetyPolicy);
+  if (!existsSync4(input))
+    throw new Error(`Outbox not found: ${input}`);
+  return readFileSync4(input, "utf8");
+}
+function mergeJson(existing, patch) {
+  let base = {};
+  if (existing) {
+    try {
+      base = asObject(JSON.parse(existing)) ?? {};
+    } catch {
+      base = {};
+    }
+  }
+  return JSON.stringify({ ...base, ...patch });
+}
+function ensureSource(db, event, now) {
+  const id = stableId("src", event.sourceUri);
+  db.run(`INSERT INTO sources (id, uri, kind, title, metadata_json, acl_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(uri) DO UPDATE SET
+       kind = excluded.kind,
+       title = COALESCE(excluded.title, sources.title),
+       updated_at = excluded.updated_at`, [
+    id,
+    event.sourceUri,
+    event.kind,
+    event.title,
+    JSON.stringify({ source_ref: event.sourceRef, source_uri: event.sourceUri, status: event.status, last_outbox_event: event.eventType }),
+    JSON.stringify(event.acl ?? {}),
+    now,
+    event.updatedAt
+  ]);
+  const row = db.query("SELECT id, metadata_json, acl_json FROM sources WHERE uri = ?").get(event.sourceUri);
+  if (!row)
+    throw new Error(`Failed to upsert source for outbox event: ${event.sourceUri}`);
+  const patch = {
+    source_ref: event.sourceRef,
+    source_uri: event.sourceUri,
+    last_outbox_event: event.eventType,
+    last_outbox_at: event.updatedAt
+  };
+  if (event.status)
+    patch.status = event.status;
+  if (asString(event.raw.path))
+    patch.path = event.raw.path;
+  db.run("UPDATE sources SET metadata_json = ?, acl_json = CASE WHEN ? IS NULL THEN acl_json ELSE ? END, updated_at = ? WHERE id = ?", [
+    mergeJson(row.metadata_json, patch),
+    event.acl === undefined ? null : JSON.stringify(event.acl),
+    event.acl === undefined ? null : JSON.stringify(event.acl),
+    event.updatedAt,
+    row.id
+  ]);
+  return row.id;
+}
+function ensureRevision(db, sourceId, event, now) {
+  if (!event.revision)
+    return null;
+  const id = stableId("rev", `${sourceId}\x00${event.revision}`);
+  const metadata = {
+    source_ref: event.sourceRef,
+    source_uri: event.sourceUri,
+    status: event.status,
+    last_outbox_event: event.eventType,
+    reindex_required: true
+  };
+  db.run(`INSERT INTO source_revisions (id, source_id, revision, hash, extracted_text_uri, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(source_id, revision) DO UPDATE SET
+       hash = COALESCE(excluded.hash, source_revisions.hash),
+       metadata_json = excluded.metadata_json`, [id, sourceId, event.revision, event.hash, asString(event.raw.extracted_text_ref) ?? null, JSON.stringify(metadata), now]);
+  const row = db.query("SELECT id FROM source_revisions WHERE source_id = ? AND revision = ?").get(sourceId, event.revision);
+  return row?.id ?? null;
+}
+function revisionIdsForEvent(db, sourceId, event) {
+  if (event.revision) {
+    return db.query("SELECT id FROM source_revisions WHERE source_id = ? AND revision = ?").all(sourceId, event.revision).map((row) => row.id);
+  }
+  if (event.hash) {
+    return db.query("SELECT id FROM source_revisions WHERE source_id = ? AND hash = ?").all(sourceId, event.hash).map((row) => row.id);
+  }
+  return db.query("SELECT id FROM source_revisions WHERE source_id = ?").all(sourceId).map((row) => row.id);
+}
+function invalidateRevision(db, revisionId) {
+  const chunks = db.query("SELECT id FROM chunks WHERE source_revision_id = ?").all(revisionId);
+  let embeddingsDeleted = 0;
+  for (const chunk of chunks) {
+    const row = db.query("SELECT COUNT(*) AS n FROM chunk_embeddings WHERE chunk_id = ?").get(chunk.id);
+    embeddingsDeleted += row?.n ?? 0;
+    db.run("DELETE FROM chunk_embeddings WHERE chunk_id = ?", [chunk.id]);
+    db.run("DELETE FROM chunks_fts WHERE chunk_id = ?", [chunk.id]);
+  }
+  db.run("DELETE FROM chunks WHERE source_revision_id = ?", [revisionId]);
+  const revision = db.query("SELECT metadata_json FROM source_revisions WHERE id = ?").get(revisionId);
+  db.run("UPDATE source_revisions SET metadata_json = ? WHERE id = ?", [mergeJson(revision?.metadata_json, { reindex_required: true, invalidated_at: new Date().toISOString() }), revisionId]);
+  return { chunksDeleted: chunks.length, embeddingsDeleted };
+}
+function isDeleteEvent(eventType2, status) {
+  return status === "deleted" || ["delete", "deleted", "remove", "removed"].includes(eventType2);
+}
+function isMoveEvent(eventType2) {
+  return ["move", "moved", "rename", "renamed", "path_changed"].includes(eventType2);
+}
+function isPermissionEvent(eventType2) {
+  return ["permission", "permissions", "permission_changed", "acl_changed"].includes(eventType2);
+}
+async function consumeOpenFilesOutbox(options) {
+  const now = (options.now ?? new Date).toISOString();
+  if (options.safetyPolicy)
+    assertWriteAllowed(options.dbPath, options.safetyPolicy);
+  migrateKnowledgeDb(options.dbPath);
+  const text = await readOutboxInput(options.input, options.config, options.safetyPolicy);
+  const events = parseOutboxText(text);
+  const db = openKnowledgeDb(options.dbPath);
+  const runId = `run_${randomUUID3()}`;
+  try {
+    return db.transaction(() => {
+      db.run(`INSERT INTO runs (id, type, prompt, status, provider, model, metadata_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+        runId,
+        "open-files-outbox",
+        options.input,
+        "completed",
+        "local",
+        "open-files-outbox",
+        JSON.stringify({ path: options.input, events: events.length }),
+        now,
+        now
+      ]);
+      const sourcesTouched = new Set;
+      const revisionsTouched = new Set;
+      let chunksDeleted = 0;
+      let embeddingsDeleted = 0;
+      let staleRevisions = 0;
+      let deletedSources = 0;
+      let movedSources = 0;
+      let permissionUpdates = 0;
+      recordAuditEvent(db, {
+        event_type: "source_read",
+        action: options.input.startsWith("s3://") ? "s3_outbox_read" : "local_outbox_read",
+        target_uri: options.input,
+        decision: "allow",
+        metadata: { events: events.length, read_only: true },
+        created_at: now
+      });
+      events.forEach((raw, index) => {
+        const event = normalizeEvent(raw, now);
+        const sourceId = ensureSource(db, event, now);
+        sourcesTouched.add(sourceId);
+        const createdRevisionId = ensureRevision(db, sourceId, event, now);
+        if (createdRevisionId)
+          revisionsTouched.add(createdRevisionId);
+        const affectedRevisionIds = revisionIdsForEvent(db, sourceId, event);
+        for (const revisionId of affectedRevisionIds) {
+          revisionsTouched.add(revisionId);
+          const invalidation = invalidateRevision(db, revisionId);
+          chunksDeleted += invalidation.chunksDeleted;
+          embeddingsDeleted += invalidation.embeddingsDeleted;
+          staleRevisions += 1;
+        }
+        if (isDeleteEvent(event.eventType, event.status))
+          deletedSources += 1;
+        if (isMoveEvent(event.eventType))
+          movedSources += 1;
+        if (isPermissionEvent(event.eventType) || event.acl !== undefined)
+          permissionUpdates += 1;
+        db.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`, [
+          stableId("evt", `${runId}\x00${index}\x00${event.sourceRef}\x00${event.eventType}`),
+          runId,
+          "info",
+          event.eventType,
+          JSON.stringify({
+            source_ref: event.sourceRef,
+            source_uri: event.sourceUri,
+            revision: event.revision,
+            hash: event.hash,
+            status: event.status,
+            affected_revisions: affectedRevisionIds.length
+          }),
+          event.updatedAt
+        ]);
+      });
+      db.run(`INSERT INTO provider_usage (id, run_id, provider, model, input_tokens, output_tokens, cost_usd, metadata_json, created_at)
+         VALUES (?, ?, ?, ?, 0, 0, 0, ?, ?)`, [
+        stableId("usage", runId),
+        runId,
+        "local",
+        "open-files-outbox",
+        JSON.stringify({ note: "No model provider used for outbox invalidation." }),
+        now
+      ]);
+      recordAuditEvent(db, {
+        event_type: "write",
+        action: "knowledge_outbox_invalidation",
+        target_uri: options.dbPath,
+        decision: "allow",
+        metadata: {
+          run_id: runId,
+          events: events.length,
+          sources: sourcesTouched.size,
+          revisions: revisionsTouched.size,
+          chunks_deleted: chunksDeleted,
+          embeddings_deleted: embeddingsDeleted
+        },
+        created_at: now
+      });
+      return {
+        path: options.input,
+        db_path: options.dbPath,
+        run_id: runId,
+        events_seen: events.length,
+        sources_touched: sourcesTouched.size,
+        revisions_touched: revisionsTouched.size,
+        chunks_deleted: chunksDeleted,
+        embeddings_deleted: embeddingsDeleted,
+        stale_revisions: staleRevisions,
+        deleted_sources: deletedSources,
+        moved_sources: movedSources,
+        permission_updates: permissionUpdates
+      };
+    })();
+  } finally {
+    db.close();
+  }
+}
+
+// src/manifest-ingest.ts
+import { createHash as createHash3 } from "crypto";
+import { existsSync as existsSync5, readFileSync as readFileSync5 } from "fs";
+import { basename as basename2 } from "path";
+function stableId2(prefix, value) {
+  return `${prefix}_${createHash3("sha256").update(value).digest("hex").slice(0, 20)}`;
+}
+function asObject2(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+}
+function asString2(value) {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+function asNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+function buildSourceRefFromItem(item) {
+  const explicit = asString2(item.source_ref) ?? asString2(item.source_uri) ?? asString2(item.uri);
+  if (explicit)
+    return explicit;
+  const fileId = asString2(item.file_id);
+  if (fileId) {
+    const revision = asString2(item.revision_id) ?? asString2(item.revision);
+    const fileRef = `open-files://file/${encodeURIComponent(fileId)}`;
+    return revision ? `${fileRef}/revision/${encodeURIComponent(revision)}` : fileRef;
+  }
+  const sourceId = asString2(item.source_id);
+  const path = asString2(item.path);
+  if (sourceId && path) {
+    return `open-files://source/${encodeURIComponent(sourceId)}/path/${encodeURIComponent(path)}`;
+  }
+  throw new Error("Manifest item is missing source_ref, file_id, or source_id/path.");
+}
+function baseSourceUri2(sourceRef, parsed) {
+  if (parsed.kind === "open-files" && parsed.entity === "file" && parsed.revision_id) {
+    return sourceRef.replace(/\/revision\/[^/]+$/, "");
+  }
+  return sourceRef;
+}
+function textFromItem(item) {
+  const direct = asString2(item.extracted_text) ?? asString2(item.text) ?? asString2(item.content_text) ?? asString2(item.markdown);
+  if (direct !== undefined)
+    return direct;
+  const content = item.content;
+  return typeof content === "string" ? content : null;
+}
+function extractedTextUriFromItem(item) {
+  const direct = asString2(item.extracted_text_ref) ?? asString2(item.extracted_text_uri) ?? asString2(item.text_ref);
+  if (direct)
+    return direct;
+  const content = asObject2(item.content);
+  return asString2(content?.extracted_text_ref) ?? asString2(content?.extracted_text_uri) ?? null;
+}
+function titleFromItem(item) {
+  const path = asString2(item.path);
+  return asString2(item.title) ?? asString2(item.name) ?? (path ? basename2(path) : null);
+}
+function hashFromItem(item) {
+  return asString2(item.hash) ?? asString2(item.checksum) ?? asString2(item.sha256) ?? null;
+}
+function revisionFromItem(item, parsed, hash2) {
+  const revision = asString2(item.revision_id) ?? asString2(item.revision) ?? asString2(item.version_id) ?? (parsed.kind === "open-files" ? parsed.revision_id : undefined) ?? hash2 ?? asString2(item.updated_at);
+  return revision ?? "current";
+}
+function metadataFromItem(item, normalized) {
+  const metadata = {};
+  for (const [key, value] of Object.entries(item)) {
+    if (["text", "content", "content_text", "extracted_text", "markdown"].includes(key))
+      continue;
+    metadata[key] = value;
+  }
+  metadata.source_ref = normalized.sourceRef;
+  metadata.source_uri = normalized.sourceUri;
+  metadata.status = normalized.status;
+  return metadata;
+}
+function normalizeManifestItem(item, now) {
+  const sourceRef = buildSourceRefFromItem(item);
+  const parsed = parseSourceRef(sourceRef);
+  const sourceUri = baseSourceUri2(sourceRef, parsed);
+  const hash2 = hashFromItem(item);
+  const status = asString2(item.status) ?? "active";
+  return {
+    raw: item,
+    sourceRef,
+    sourceUri,
+    kind: parsed.kind,
+    title: titleFromItem(item),
+    revision: revisionFromItem(item, parsed, hash2),
+    hash: hash2,
+    extractedTextUri: extractedTextUriFromItem(item),
+    text: textFromItem(item),
+    metadata: metadataFromItem(item, { sourceRef, sourceUri, status }),
+    acl: item.permissions ?? item.acl ?? {},
+    status,
+    updatedAt: asString2(item.updated_at) ?? now
+  };
+}
+function parseManifestText(text) {
+  const trimmed = text.trim();
+  if (!trimmed)
+    return [];
+  if (trimmed.startsWith("[")) {
+    const parsed = JSON.parse(trimmed);
+    if (!Array.isArray(parsed))
+      throw new Error("Manifest array parse failed.");
+    return parsed.map((entry) => {
+      const item = asObject2(entry);
+      if (!item)
+        throw new Error("Manifest array entries must be objects.");
+      return item;
+    });
+  }
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      const object2 = asObject2(parsed);
+      if (!object2)
+        throw new Error("Manifest object parse failed.");
+      if (Array.isArray(object2.items)) {
+        return object2.items.map((entry) => {
+          const item = asObject2(entry);
+          if (!item)
+            throw new Error("Manifest items entries must be objects.");
+          return item;
+        });
+      }
+      if ("source_ref" in object2 || "source_uri" in object2 || "file_id" in object2)
+        return [object2];
+    } catch (error48) {
+      const lines = trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0);
+      if (lines.length <= 1)
+        throw error48;
+      return lines.map((line) => {
+        const item = asObject2(JSON.parse(line));
+        if (!item)
+          throw new Error("Manifest JSONL entries must be objects.");
+        return item;
+      });
+    }
+  }
+  return trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0).map((line) => {
+    const item = asObject2(JSON.parse(line));
+    if (!item)
+      throw new Error("Manifest JSONL entries must be objects.");
+    return item;
+  });
+}
+async function readS3Text2(uri, config2, safetyPolicy) {
+  const parsed = new URL(uri);
+  const bucket = parsed.hostname;
+  const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
+  if (!bucket || !key)
+    throw new Error(`Invalid S3 manifest URI: ${uri}`);
+  if (safetyPolicy)
+    assertS3ReadAllowed(uri, safetyPolicy);
+  const [{ S3Client, GetObjectCommand }, { fromIni }] = await Promise.all([
+    import("@aws-sdk/client-s3"),
+    import("@aws-sdk/credential-providers")
+  ]);
+  const s3Config = config2?.storage.type === "s3" && config2.storage.s3?.bucket === bucket ? config2.storage.s3 : undefined;
+  const client = new S3Client({
+    region: s3Config?.region,
+    credentials: s3Config?.profile ? fromIni({ profile: s3Config.profile }) : undefined,
+    maxAttempts: s3Config?.max_attempts
+  });
+  const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  if (!response.Body)
+    return "";
+  return await response.Body.transformToString();
+}
+async function readManifestInput(input, config2, safetyPolicy) {
+  if (input.startsWith("s3://"))
+    return readS3Text2(input, config2, safetyPolicy);
+  if (!existsSync5(input))
+    throw new Error(`Manifest not found: ${input}`);
+  return readFileSync5(input, "utf8");
+}
+function chunkText(text, maxChars, overlapChars) {
+  const normalized = text.replace(/\r\n/g, `
+`);
+  if (!normalized.trim())
+    return [];
+  const chunks = [];
+  let start = 0;
+  while (start < normalized.length) {
+    const hardEnd = Math.min(normalized.length, start + maxChars);
+    let end = hardEnd;
+    if (hardEnd < normalized.length) {
+      const paragraphBreak = normalized.lastIndexOf(`
+
+`, hardEnd);
+      const sentenceBreak = normalized.lastIndexOf(". ", hardEnd);
+      const candidate = Math.max(paragraphBreak, sentenceBreak);
+      if (candidate > start + Math.floor(maxChars * 0.5))
+        end = candidate + (candidate === paragraphBreak ? 2 : 1);
+    }
+    const chunk = normalized.slice(start, end).trim();
+    if (chunk) {
+      chunks.push({
+        ordinal: chunks.length,
+        text: chunk,
+        startOffset: start,
+        endOffset: end
+      });
+    }
+    if (end >= normalized.length)
+      break;
+    start = Math.max(0, end - overlapChars);
+  }
+  return chunks;
+}
+function estimateTokenCount(text) {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.ceil(words * 1.25));
+}
+function deleteChunksForRevision(db, sourceRevisionId) {
+  const rows = db.query("SELECT id FROM chunks WHERE source_revision_id = ?").all(sourceRevisionId);
+  for (const row of rows) {
+    db.run("DELETE FROM chunks_fts WHERE chunk_id = ?", [row.id]);
+  }
+  db.run("DELETE FROM chunks WHERE source_revision_id = ?", [sourceRevisionId]);
+  return rows.length;
+}
+function upsertSource(db, item, now) {
+  const sourceId = stableId2("src", item.sourceUri);
+  db.run(`INSERT INTO sources (id, uri, kind, title, metadata_json, acl_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(uri) DO UPDATE SET
+       kind = excluded.kind,
+       title = excluded.title,
+       metadata_json = excluded.metadata_json,
+       acl_json = excluded.acl_json,
+       updated_at = excluded.updated_at`, [
+    sourceId,
+    item.sourceUri,
+    item.kind,
+    item.title,
+    JSON.stringify(item.metadata),
+    JSON.stringify(item.acl ?? {}),
+    now,
+    item.updatedAt
+  ]);
+  const row = db.query("SELECT id FROM sources WHERE uri = ?").get(item.sourceUri);
+  if (!row)
+    throw new Error(`Failed to upsert source: ${item.sourceUri}`);
+  return row.id;
+}
+function upsertRevision(db, sourceId, item, now) {
+  const revisionId = stableId2("rev", `${sourceId}\x00${item.revision}`);
+  db.run(`INSERT INTO source_revisions (id, source_id, revision, hash, extracted_text_uri, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(source_id, revision) DO UPDATE SET
+       hash = excluded.hash,
+       extracted_text_uri = excluded.extracted_text_uri,
+       metadata_json = excluded.metadata_json`, [
+    revisionId,
+    sourceId,
+    item.revision,
+    item.hash,
+    item.extractedTextUri,
+    JSON.stringify(item.metadata),
+    now
+  ]);
+  const row = db.query("SELECT id FROM source_revisions WHERE source_id = ? AND revision = ?").get(sourceId, item.revision);
+  if (!row)
+    throw new Error(`Failed to upsert source revision: ${item.sourceRef}`);
+  return row.id;
+}
+function insertChunks(db, sourceRevisionId, item, now, maxChars, overlapChars, safetyPolicy) {
+  if (!item.text || item.status.toLowerCase() === "deleted")
+    return { chunksInserted: 0, redactions: 0 };
+  const redacted = redactSecrets(item.text, safetyPolicy);
+  if (redacted.findings.length > 0) {
+    recordRedactionFindings(db, {
+      source_uri: item.sourceUri,
+      findings: redacted.findings,
+      metadata: { source_ref: item.sourceRef, revision: item.revision },
+      created_at: now
+    });
+    recordAuditEvent(db, {
+      event_type: "redaction",
+      action: "source_text_redact",
+      target_uri: item.sourceUri,
+      decision: "redacted",
+      metadata: { findings: redacted.findings.length, source_ref: item.sourceRef, revision: item.revision },
+      created_at: now
+    });
+  }
+  const chunks = chunkText(redacted.text, maxChars, overlapChars);
+  for (const chunk of chunks) {
+    const chunkId = stableId2("chk", `${sourceRevisionId}\x00${chunk.ordinal}\x00${chunk.text}`);
+    const metadata = {
+      source_ref: item.sourceRef,
+      source_uri: item.sourceUri,
+      hash: item.hash,
+      status: item.status,
+      path: asString2(item.raw.path) ?? null,
+      mime: asString2(item.raw.mime) ?? asString2(item.raw.content_type) ?? null,
+      size: asNumber(item.raw.size) ?? null
+    };
+    db.run(`INSERT INTO chunks (id, source_revision_id, kind, ordinal, text, token_count, start_offset, end_offset, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      chunkId,
+      sourceRevisionId,
+      "source",
+      chunk.ordinal,
+      chunk.text,
+      estimateTokenCount(chunk.text),
+      chunk.startOffset,
+      chunk.endOffset,
+      JSON.stringify(metadata),
+      now
+    ]);
+    db.run("INSERT INTO chunks_fts (chunk_id, text, title, source_uri) VALUES (?, ?, ?, ?)", [chunkId, chunk.text, item.title ?? "", item.sourceUri]);
+  }
+  return { chunksInserted: chunks.length, redactions: redacted.findings.length };
+}
+async function ingestOpenFilesManifest(options) {
+  const now = options.now ?? new Date;
+  if (options.safetyPolicy)
+    assertWriteAllowed(options.dbPath, options.safetyPolicy);
+  migrateKnowledgeDb(options.dbPath);
+  const text = await readManifestInput(options.input, options.config, options.safetyPolicy);
+  const items = parseManifestText(text);
+  return ingestOpenFilesManifestItems({
+    dbPath: options.dbPath,
+    items,
+    sourceLabel: options.input,
+    safetyPolicy: options.safetyPolicy,
+    now,
+    maxChunkChars: options.maxChunkChars,
+    chunkOverlapChars: options.chunkOverlapChars
+  });
+}
+async function ingestOpenFilesManifestItems(options) {
+  const now = (options.now ?? new Date).toISOString();
+  const maxChunkChars = options.maxChunkChars ?? 4000;
+  const chunkOverlapChars = options.chunkOverlapChars ?? 200;
+  if (maxChunkChars < 500)
+    throw new Error("maxChunkChars must be at least 500.");
+  if (chunkOverlapChars < 0 || chunkOverlapChars >= maxChunkChars)
+    throw new Error("chunkOverlapChars must be less than maxChunkChars.");
+  if (options.safetyPolicy)
+    assertWriteAllowed(options.dbPath, options.safetyPolicy);
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    const result = db.transaction(() => {
+      const seenSources = new Set;
+      const seenRevisions = new Set;
+      let chunksInserted = 0;
+      let chunksDeleted = 0;
+      let redactions = 0;
+      let skipped = 0;
+      recordAuditEvent(db, {
+        event_type: "source_read",
+        action: options.readAction ?? (options.sourceLabel.startsWith("s3://") ? "s3_manifest_read" : "local_manifest_read"),
+        target_uri: options.sourceLabel,
+        decision: "allow",
+        metadata: { items: options.items.length, read_only: true },
+        created_at: now
+      });
+      for (const raw of options.items) {
+        const item = normalizeManifestItem(raw, now);
+        const sourceId = upsertSource(db, item, now);
+        const revisionId = upsertRevision(db, sourceId, item, now);
+        seenSources.add(sourceId);
+        seenRevisions.add(revisionId);
+        if (item.text || item.status.toLowerCase() === "deleted") {
+          chunksDeleted += deleteChunksForRevision(db, revisionId);
+        }
+        const inserted = insertChunks(db, revisionId, item, now, maxChunkChars, chunkOverlapChars, options.safetyPolicy);
+        chunksInserted += inserted.chunksInserted;
+        redactions += inserted.redactions;
+      }
+      recordAuditEvent(db, {
+        event_type: "write",
+        action: "knowledge_manifest_ingest",
+        target_uri: options.dbPath,
+        decision: "allow",
+        metadata: { items: options.items.length, sources: seenSources.size, revisions: seenRevisions.size, chunks_inserted: chunksInserted, redactions },
+        created_at: now
+      });
+      return {
+        path: options.sourceLabel,
+        db_path: options.dbPath,
+        items_seen: options.items.length,
+        sources_upserted: seenSources.size,
+        revisions_upserted: seenRevisions.size,
+        chunks_inserted: chunksInserted,
+        chunks_deleted: chunksDeleted,
+        redactions,
+        skipped
+      };
+    })();
+    return result;
+  } finally {
+    db.close();
+  }
+}
+
+// src/source-ingest.ts
+import { createHash as createHash4 } from "crypto";
+import { existsSync as existsSync6, readFileSync as readFileSync6 } from "fs";
+import { basename as basename3 } from "path";
 
 // src/source-resolver.ts
 function parseJsonObject(value) {
@@ -14539,6 +15549,429 @@ async function resolveOpenFilesSource(options) {
   }
 }
 
+// src/source-ingest.ts
+function sha256Text(text) {
+  return `sha256:${createHash4("sha256").update(text).digest("hex")}`;
+}
+function stripHtml(html) {
+  return html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+\n/g, `
+`).replace(/\n\s+/g, `
+`).replace(/[ \t]{2,}/g, " ").trim();
+}
+async function readS3Text3(uri, config2, safetyPolicy) {
+  const parsed = new URL(uri);
+  const bucket = parsed.hostname;
+  const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
+  if (!bucket || !key)
+    throw new Error(`Invalid S3 source URI: ${uri}`);
+  if (safetyPolicy)
+    assertS3ReadAllowed(uri, safetyPolicy);
+  const [{ S3Client, GetObjectCommand }, { fromIni }] = await Promise.all([
+    import("@aws-sdk/client-s3"),
+    import("@aws-sdk/credential-providers")
+  ]);
+  const s3Config = config2?.storage.type === "s3" && config2.storage.s3?.bucket === bucket ? config2.storage.s3 : undefined;
+  const client = new S3Client({
+    region: s3Config?.region,
+    credentials: s3Config?.profile ? fromIni({ profile: s3Config.profile }) : undefined,
+    maxAttempts: s3Config?.max_attempts
+  });
+  const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  if (!response.Body)
+    return "";
+  return await response.Body.transformToString();
+}
+async function readWebText(uri, safetyPolicy) {
+  if (safetyPolicy)
+    assertWebSearchAllowed(safetyPolicy);
+  const response = await fetch(uri, {
+    headers: {
+      accept: "text/markdown,text/plain,text/html,application/json;q=0.8,*/*;q=0.5",
+      "user-agent": "@hasna/knowledge source-ingest"
+    }
+  });
+  if (!response.ok)
+    throw new Error(`Web source read failed ${response.status}: ${uri}`);
+  const mime = response.headers.get("content-type");
+  const body = await response.text();
+  return { text: mime?.includes("html") ? stripHtml(body) : body, mime };
+}
+function titleForRef(parsed) {
+  if (parsed.kind === "file")
+    return basename3(parsed.path);
+  if (parsed.kind === "s3")
+    return basename3(parsed.key);
+  if (parsed.kind === "web")
+    return basename3(new URL(parsed.url).pathname) || parsed.url;
+  return parsed.path ? basename3(parsed.path) : parsed.id;
+}
+async function readDirectSourceText(parsed, config2, safetyPolicy) {
+  if (parsed.kind === "file") {
+    if (!existsSync6(parsed.path))
+      throw new Error(`Source file not found: ${parsed.path}`);
+    const text = readFileSync6(parsed.path, "utf8");
+    return {
+      text,
+      contentSource: "file",
+      title: titleForRef(parsed),
+      mime: "text/plain",
+      size: text.length,
+      hash: sha256Text(text),
+      revision: null,
+      extractedTextRef: null,
+      metadata: { path: parsed.path },
+      permissions: { mode: "read_only" }
+    };
+  }
+  if (parsed.kind === "s3") {
+    const text = await readS3Text3(parsed.uri, config2, safetyPolicy);
+    return {
+      text,
+      contentSource: "s3",
+      title: titleForRef(parsed),
+      mime: "text/plain",
+      size: text.length,
+      hash: sha256Text(text),
+      revision: null,
+      extractedTextRef: null,
+      metadata: { bucket: parsed.bucket, key: parsed.key },
+      permissions: { mode: "read_only" }
+    };
+  }
+  if (parsed.kind === "web") {
+    const web = await readWebText(parsed.url, safetyPolicy);
+    return {
+      text: web.text,
+      contentSource: "web",
+      title: titleForRef(parsed),
+      mime: web.mime,
+      size: web.text.length,
+      hash: sha256Text(web.text),
+      revision: null,
+      extractedTextRef: null,
+      metadata: { url: parsed.url },
+      permissions: { mode: "read_only" }
+    };
+  }
+  throw new Error(`Direct source reading is not available for ${parsed.uri}`);
+}
+async function readTextRef(uri, config2, safetyPolicy) {
+  if (uri.startsWith("open-files://")) {
+    throw new Error("Open-files extracted text refs require an open-files resolver API. Ingest an open-files manifest with extracted_text or an extracted_text_ref using file://, s3://, or https://.");
+  }
+  const parsed = parseSourceRef(uri);
+  const direct = await readDirectSourceText(parsed, config2, safetyPolicy);
+  return { text: direct.text, contentSource: "extracted_text_ref" };
+}
+async function readOpenFilesSourceText(options) {
+  const resolved = await resolveOpenFilesSource({
+    dbPath: options.dbPath,
+    sourceRef: options.sourceRef,
+    purpose: options.purpose ?? "knowledge_index",
+    limit: 100,
+    safetyPolicy: options.safetyPolicy,
+    now: options.now
+  });
+  if (!resolved.resolved) {
+    throw new Error("Open-files source is not in the local knowledge catalog. Ingest an open-files manifest first or use the open-files resolver API.");
+  }
+  if (resolved.revision?.extracted_text_uri && !resolved.content.text_available) {
+    const textRef = await readTextRef(resolved.revision.extracted_text_uri, options.config, options.safetyPolicy);
+    return {
+      text: textRef.text,
+      contentSource: textRef.contentSource,
+      title: resolved.source?.title ?? null,
+      mime: resolved.content.mime,
+      size: textRef.text.length,
+      hash: resolved.revision.hash ?? sha256Text(textRef.text),
+      revision: resolved.revision.revision,
+      extractedTextRef: resolved.revision.extracted_text_uri,
+      metadata: resolved.source?.metadata ?? {},
+      permissions: resolved.source?.permissions ?? { mode: "read_only" }
+    };
+  }
+  if (resolved.chunks.length === 0) {
+    throw new Error("Open-files source has no extracted text chunks yet. Ingest an open-files manifest with extracted_text or extracted_text_ref first.");
+  }
+  const text = resolved.chunks.map((chunk) => chunk.text).join(`
+
+`);
+  return {
+    text,
+    contentSource: "catalog_chunks",
+    title: resolved.source?.title ?? null,
+    mime: resolved.content.mime,
+    size: text.length,
+    hash: resolved.revision?.hash ?? sha256Text(text),
+    revision: resolved.revision?.revision ?? null,
+    extractedTextRef: resolved.revision?.extracted_text_uri ?? null,
+    metadata: resolved.source?.metadata ?? {},
+    permissions: resolved.source?.permissions ?? { mode: "read_only" }
+  };
+}
+function manifestItemForSource(sourceRef, parsed, resolved, purpose) {
+  const hash2 = resolved.hash ?? sha256Text(resolved.text);
+  const metadata = {
+    ...resolved.metadata,
+    source_ref: sourceRef,
+    content_source: resolved.contentSource,
+    read_only: true
+  };
+  const item = {
+    source_ref: sourceRef,
+    name: resolved.title ?? titleForRef(parsed),
+    mime: resolved.mime ?? "text/plain",
+    size: resolved.size ?? resolved.text.length,
+    hash: hash2,
+    revision: resolved.revision ?? hash2,
+    status: "active",
+    updated_at: new Date().toISOString(),
+    permissions: {
+      mode: "read_only",
+      allowed_purposes: [purpose],
+      ...resolved.permissions
+    },
+    metadata,
+    extracted_text_ref: resolved.extractedTextRef,
+    extracted_text: resolved.text
+  };
+  if (parsed.kind === "open-files") {
+    if (parsed.entity === "file")
+      item.file_id = parsed.id;
+    if (parsed.entity === "source") {
+      item.source_id = parsed.id;
+      item.path = parsed.path;
+    }
+  }
+  if (parsed.kind === "file")
+    item.path = parsed.path;
+  if (parsed.kind === "s3")
+    item.path = parsed.key;
+  if (parsed.kind === "web")
+    item.url = parsed.url;
+  return item;
+}
+async function ingestSourceRef(options) {
+  const purpose = options.purpose ?? "knowledge_index";
+  const parsed = parseSourceRef(options.sourceRef);
+  const resolved = parsed.kind === "open-files" ? await readOpenFilesSourceText(options) : await readDirectSourceText(parsed, options.config, options.safetyPolicy);
+  const item = manifestItemForSource(options.sourceRef, parsed, resolved, purpose);
+  const result = await ingestOpenFilesManifestItems({
+    dbPath: options.dbPath,
+    items: [item],
+    sourceLabel: options.sourceRef,
+    readAction: "source_ref_ingest_read",
+    safetyPolicy: options.safetyPolicy,
+    now: options.now
+  });
+  return {
+    ...result,
+    source_ref: options.sourceRef,
+    content_source: resolved.contentSource,
+    read_only: true,
+    hash: String(item.hash)
+  };
+}
+
+// src/wiki-layout.ts
+function todayParts(now) {
+  const year = String(now.getUTCFullYear());
+  const month = String(now.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(now.getUTCDate()).padStart(2, "0");
+  return { year, month, day };
+}
+function agentSchemaTemplate() {
+  return `# Knowledge Agent Schema v1
+
+## Source Rules
+
+- Treat open-files source references as the preferred source of truth.
+- Do not copy raw source files into open-knowledge.
+- Cite every durable fact with a source URI, revision/hash when available, and optional span.
+- Mark uncertainty explicitly when sources disagree or are incomplete.
+
+## Wiki Rules
+
+- Write generated knowledge as Markdown pages under wiki/.
+- Keep root indexes small; use topic, team, project, and machine-readable shards for scale.
+- Preserve backlinks between related pages and decisions.
+- Prefer updating existing pages over creating near-duplicates.
+
+## Query Rules
+
+- Search wiki pages first, then source chunks, then deeper read-only source refs.
+- Use web search only when requested or when current external context is required.
+- File useful answers back into the wiki only after approval or approved auto-write mode.
+
+## Lint Rules
+
+- Flag stale pages, missing citations, contradictions, orphan pages, duplicate pages, and unresolved source refs.
+`;
+}
+function rootIndexTemplate() {
+  return `# Knowledge Index
+
+This is a compact orientation index for agents. It is not the full search index.
+
+## Shards
+
+- wiki/
+- indexes/
+- schemas/
+- logs/
+
+## Source Ownership
+
+Raw source files are resolved through open-files. This app stores source refs,
+citations, chunks, generated wiki artifacts, indexes, and run records.
+`;
+}
+function wikiReadmeTemplate() {
+  return `# Wiki
+
+Generated durable knowledge pages live here.
+
+Pages should be concise, cited, and organized for both humans and agents.
+`;
+}
+async function initializeWikiLayout(store, now = new Date) {
+  const { year, month, day } = todayParts(now);
+  const schemaKey = "schemas/v1.md";
+  const rootIndexKey = "indexes/root.md";
+  const wikiReadmeKey = "wiki/README.md";
+  const logKey = `logs/${year}/${month}/${day}.jsonl`;
+  const event = {
+    ts: now.toISOString(),
+    event: "wiki_layout_initialized",
+    schema_key: schemaKey,
+    root_index_key: rootIndexKey,
+    wiki_readme_key: wikiReadmeKey
+  };
+  const writes = [
+    store.put({ key: schemaKey, body: agentSchemaTemplate(), content_type: "text/markdown" }),
+    store.put({ key: rootIndexKey, body: rootIndexTemplate(), content_type: "text/markdown" }),
+    store.put({ key: wikiReadmeKey, body: wikiReadmeTemplate(), content_type: "text/markdown" }),
+    store.put({ key: logKey, body: `${JSON.stringify(event)}
+`, content_type: "application/x-ndjson" })
+  ];
+  await Promise.all(writes);
+  return {
+    schema_key: schemaKey,
+    root_index_key: rootIndexKey,
+    wiki_readme_key: wikiReadmeKey,
+    log_key: logKey,
+    written: [schemaKey, rootIndexKey, wikiReadmeKey, logKey]
+  };
+}
+
+// src/service.ts
+class KnowledgeService {
+  options;
+  ensuredWorkspace;
+  cachedConfig;
+  constructor(options = {}) {
+    this.options = options;
+  }
+  get scope() {
+    return this.options.scope ?? "global";
+  }
+  get workspace() {
+    return this.ensuredWorkspace ?? resolveScopedWorkspace(this.options.scope, this.options.cwd);
+  }
+  ensureWorkspace() {
+    if (!this.ensuredWorkspace)
+      this.ensuredWorkspace = ensureKnowledgeWorkspace(this.workspace.home);
+    return this.ensuredWorkspace;
+  }
+  jsonStorePath() {
+    return this.ensureWorkspace().jsonStorePath;
+  }
+  config() {
+    if (!this.cachedConfig) {
+      const workspace = this.ensureWorkspace();
+      this.cachedConfig = readKnowledgeConfig(workspace.configPath);
+    }
+    return this.cachedConfig;
+  }
+  safetyPolicy() {
+    return resolveSafetyPolicy(this.config(), this.ensureWorkspace());
+  }
+  artifactStore() {
+    return createArtifactStore(this.config(), this.ensureWorkspace());
+  }
+  paths() {
+    const workspace = this.ensureWorkspace();
+    return {
+      ok: true,
+      scope: this.scope,
+      home: workspace.home,
+      config_path: workspace.configPath,
+      json_store_path: workspace.jsonStorePath,
+      knowledge_db_path: workspace.knowledgeDbPath,
+      artifacts_dir: workspace.artifactsDir,
+      indexes_dir: workspace.indexesDir,
+      logs_dir: workspace.logsDir,
+      runs_dir: workspace.runsDir,
+      schemas_dir: workspace.schemasDir,
+      wiki_dir: workspace.wikiDir,
+      config: this.config(),
+      message: workspace.home
+    };
+  }
+  initDb() {
+    return migrateKnowledgeDb(this.ensureWorkspace().knowledgeDbPath);
+  }
+  dbStats() {
+    const workspace = this.ensureWorkspace();
+    migrateKnowledgeDb(workspace.knowledgeDbPath);
+    return getKnowledgeDbStats(workspace.knowledgeDbPath);
+  }
+  async initWiki() {
+    return initializeWikiLayout(this.artifactStore());
+  }
+  async ingestManifest(input) {
+    const workspace = this.ensureWorkspace();
+    return ingestOpenFilesManifest({
+      dbPath: workspace.knowledgeDbPath,
+      input,
+      config: this.config(),
+      safetyPolicy: this.safetyPolicy()
+    });
+  }
+  async ingestSource(sourceRef, purpose) {
+    const workspace = this.ensureWorkspace();
+    return ingestSourceRef({
+      dbPath: workspace.knowledgeDbPath,
+      sourceRef,
+      purpose,
+      config: this.config(),
+      safetyPolicy: this.safetyPolicy()
+    });
+  }
+  async resolveSource(sourceRef, options = {}) {
+    const workspace = this.ensureWorkspace();
+    return resolveOpenFilesSource({
+      dbPath: workspace.knowledgeDbPath,
+      sourceRef,
+      purpose: options.purpose,
+      limit: options.limit,
+      safetyPolicy: this.safetyPolicy()
+    });
+  }
+  async consumeOutbox(input) {
+    const workspace = this.ensureWorkspace();
+    return consumeOpenFilesOutbox({
+      dbPath: workspace.knowledgeDbPath,
+      input,
+      config: this.config(),
+      safetyPolicy: this.safetyPolicy()
+    });
+  }
+}
+function createKnowledgeService(options = {}) {
+  return new KnowledgeService(options);
+}
+
 // src/mcp.js
 var storePathField = exports_external.string().optional().describe("Path to the JSON store file");
 var scopeField = exports_external.enum(["local", "global", "project"]).optional().describe("Workspace scope");
@@ -14555,7 +15988,7 @@ function resolveStorePath(storePath, scope) {
   if (storePath)
     return storePath;
   if (scope === "project" || scope === "local") {
-    return ensureKnowledgeWorkspace(resolveScopedWorkspace(scope).home).jsonStorePath;
+    return createKnowledgeService({ scope }).jsonStorePath();
   }
   return defaultStorePath();
 }
@@ -14597,22 +16030,7 @@ function buildServer() {
   registerTool(server, "ok_paths", "Knowledge workspace paths", "Show resolved workspace and store paths", {
     scope: scopeField
   }, async ({ scope }) => {
-    const workspace = ensureKnowledgeWorkspace(resolveScopedWorkspace(scope).home);
-    return jsonText({
-      ok: true,
-      scope: scope ?? "global",
-      home: workspace.home,
-      config_path: workspace.configPath,
-      json_store_path: workspace.jsonStorePath,
-      knowledge_db_path: workspace.knowledgeDbPath,
-      artifacts_dir: workspace.artifactsDir,
-      indexes_dir: workspace.indexesDir,
-      logs_dir: workspace.logsDir,
-      runs_dir: workspace.runsDir,
-      schemas_dir: workspace.schemasDir,
-      wiki_dir: workspace.wikiDir,
-      config: readKnowledgeConfig(workspace.configPath)
-    });
+    return jsonText(createKnowledgeService({ scope }).paths());
   });
   registerTool(server, "ok_parse_source_ref", "Parse source reference", "Parse and validate an open-files, S3, file, or web source ref", {
     uri: exports_external.string().describe("Source reference URI")
@@ -14629,16 +16047,11 @@ function buildServer() {
     limit: exports_external.number().optional().describe("Maximum chunks to return, default 10"),
     scope: scopeField
   }, async ({ source_ref, purpose, limit, scope }) => {
-    const workspace = ensureKnowledgeWorkspace(resolveScopedWorkspace(scope).home);
-    const config2 = readKnowledgeConfig(workspace.configPath);
-    const safetyPolicy = resolveSafetyPolicy(config2, workspace);
+    const service = createKnowledgeService({ scope });
     try {
-      const result = await resolveOpenFilesSource({
-        dbPath: workspace.knowledgeDbPath,
-        sourceRef: source_ref,
+      const result = await service.resolveSource(source_ref, {
         purpose,
-        limit,
-        safetyPolicy
+        limit
       });
       return jsonText({ ok: true, ...result });
     } catch (error48) {
@@ -14969,7 +16382,7 @@ function buildServer() {
     const storePath = resolveStorePath(store_path, scope);
     return readStoreLocked(storePath, (db) => {
       const filePath = file2 || "./knowledge-export.json";
-      writeFileSync3(filePath, JSON.stringify(db, null, 2));
+      writeFileSync4(filePath, JSON.stringify(db, null, 2));
       return jsonText({ ok: true, file: filePath, count: db.items.length });
     });
   });
@@ -14978,9 +16391,9 @@ function buildServer() {
     store_path: storePathField,
     scope: scopeField
   }, async ({ file: file2, store_path, scope }) => {
-    if (!existsSync3(file2))
+    if (!existsSync7(file2))
       return errorText(`File not found: ${file2}`);
-    const imported = JSON.parse(readFileSync3(file2, "utf8"));
+    const imported = JSON.parse(readFileSync7(file2, "utf8"));
     if (!imported || !Array.isArray(imported.items))
       return errorText('Invalid import file: expected {"items": [...]}');
     const storePath = resolveStorePath(store_path, scope);
