@@ -215,6 +215,15 @@ Local mode should start with SQLite FTS and a local vector-index option. Hosted
 mode can use Postgres with pgvector or a managed vector index. Permission
 filters must be applied before agent context is assembled.
 
+The first local semantic-search implementation indexes derived chunks with
+`open-knowledge embeddings index` and queries them with
+`open-knowledge embeddings search`. It stores OpenAI embedding vectors as
+generated metadata rows, not raw source bytes, and pins each row to
+`open-files` provenance: source ref/URI, revision/hash, chunk offsets, token
+count, provider, model, dimensions, status, and timestamps. This lets the local
+SQLite index later move to pgvector or a managed hosted vector store without
+changing the CLI/MCP result contract.
+
 ## Agent Workflow
 
 The target user flow is:

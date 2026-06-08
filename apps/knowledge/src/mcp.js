@@ -131,6 +131,44 @@ export function buildServer() {
     return jsonText({ ok: true, models: service.modelRegistry() });
   });
 
+  registerTool(server, 'ok_embeddings_status', 'Embedding index status', 'Inspect local embedding/vector index counts by provider and model', {
+    scope: scopeField,
+  }, async ({ scope }) => {
+    const service = createKnowledgeService({ scope });
+    return jsonText({ ok: true, ...service.embeddingStatus() });
+  });
+
+  registerTool(server, 'ok_embeddings_index', 'Index embeddings', 'Embed unindexed knowledge chunks into the local vector index', {
+    scope: scopeField,
+    limit: z.number().optional().describe('Maximum chunks to embed'),
+    model: z.string().optional().describe('Embedding model ref, default openai:text-embedding-3-small'),
+    dimensions: z.number().optional().describe('Embedding dimensions for deterministic fake mode'),
+    fake: z.boolean().optional().describe('Use deterministic fake embeddings for local tests'),
+  }, async ({ scope, limit, model, dimensions, fake }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText({ ok: true, ...await service.indexEmbeddings({ limit, modelRef: model, dimensions, fake }) });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'ok_semantic_search', 'Semantic search', 'Search the local vector index and return cited chunks with provenance', {
+    scope: scopeField,
+    query: z.string().describe('Semantic query'),
+    limit: z.number().optional().describe('Maximum results'),
+    model: z.string().optional().describe('Embedding model ref, default openai:text-embedding-3-small'),
+    dimensions: z.number().optional().describe('Embedding dimensions for deterministic fake mode'),
+    fake: z.boolean().optional().describe('Use deterministic fake embeddings for local tests'),
+  }, async ({ scope, query, limit, model, dimensions, fake }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText({ ok: true, ...await service.semanticSearch({ query, limit, modelRef: model, dimensions, fake }) });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
   registerTool(server, 'ok_add', 'Add a knowledge item', 'Add a new item to the knowledge store', {
     title: z.string().describe('Item title'),
     content: z.string().describe('Item content/body'),

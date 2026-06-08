@@ -30,6 +30,7 @@ export interface OutboxConsumeResult {
   deleted_sources: number;
   moved_sources: number;
   permission_updates: number;
+  vector_entries_deleted: number;
 }
 
 interface NormalizedOutboxEvent {
@@ -289,12 +290,16 @@ function revisionIdsForEvent(db: Database, sourceId: string, event: NormalizedOu
   ).all(sourceId).map((row) => row.id);
 }
 
-function invalidateRevision(db: Database, revisionId: string): { chunksDeleted: number; embeddingsDeleted: number } {
+function invalidateRevision(db: Database, revisionId: string): { chunksDeleted: number; embeddingsDeleted: number; vectorEntriesDeleted: number } {
   const chunks = db.query<{ id: string }, [string]>('SELECT id FROM chunks WHERE source_revision_id = ?').all(revisionId);
   let embeddingsDeleted = 0;
+  let vectorEntriesDeleted = 0;
   for (const chunk of chunks) {
     const row = db.query<{ n: number }, [string]>('SELECT COUNT(*) AS n FROM chunk_embeddings WHERE chunk_id = ?').get(chunk.id);
     embeddingsDeleted += row?.n ?? 0;
+    const vectorRow = db.query<{ n: number }, [string]>('SELECT COUNT(*) AS n FROM vector_index_entries WHERE chunk_id = ?').get(chunk.id);
+    vectorEntriesDeleted += vectorRow?.n ?? 0;
+    db.run('DELETE FROM vector_index_entries WHERE chunk_id = ?', [chunk.id]);
     db.run('DELETE FROM chunk_embeddings WHERE chunk_id = ?', [chunk.id]);
     db.run('DELETE FROM chunks_fts WHERE chunk_id = ?', [chunk.id]);
   }
@@ -304,7 +309,7 @@ function invalidateRevision(db: Database, revisionId: string): { chunksDeleted: 
     'UPDATE source_revisions SET metadata_json = ? WHERE id = ?',
     [mergeJson(revision?.metadata_json, { reindex_required: true, invalidated_at: new Date().toISOString() }), revisionId],
   );
-  return { chunksDeleted: chunks.length, embeddingsDeleted };
+  return { chunksDeleted: chunks.length, embeddingsDeleted, vectorEntriesDeleted };
 }
 
 function isDeleteEvent(eventType: string, status: string | null): boolean {
@@ -349,6 +354,7 @@ export async function consumeOpenFilesOutbox(options: OutboxConsumeOptions): Pro
       const revisionsTouched = new Set<string>();
       let chunksDeleted = 0;
       let embeddingsDeleted = 0;
+      let vectorEntriesDeleted = 0;
       let staleRevisions = 0;
       let deletedSources = 0;
       let movedSources = 0;
@@ -376,6 +382,7 @@ export async function consumeOpenFilesOutbox(options: OutboxConsumeOptions): Pro
           const invalidation = invalidateRevision(db, revisionId);
           chunksDeleted += invalidation.chunksDeleted;
           embeddingsDeleted += invalidation.embeddingsDeleted;
+          vectorEntriesDeleted += invalidation.vectorEntriesDeleted;
           staleRevisions += 1;
         }
 
@@ -429,6 +436,7 @@ export async function consumeOpenFilesOutbox(options: OutboxConsumeOptions): Pro
           revisions: revisionsTouched.size,
           chunks_deleted: chunksDeleted,
           embeddings_deleted: embeddingsDeleted,
+          vector_entries_deleted: vectorEntriesDeleted,
         },
         created_at: now,
       });
@@ -442,6 +450,7 @@ export async function consumeOpenFilesOutbox(options: OutboxConsumeOptions): Pro
         revisions_touched: revisionsTouched.size,
         chunks_deleted: chunksDeleted,
         embeddings_deleted: embeddingsDeleted,
+        vector_entries_deleted: vectorEntriesDeleted,
         stale_revisions: staleRevisions,
         deleted_sources: deletedSources,
         moved_sources: movedSources,

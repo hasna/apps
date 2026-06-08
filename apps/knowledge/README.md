@@ -89,6 +89,10 @@ open-knowledge safety status --scope project --json
 # Inspect AI SDK provider credentials and model aliases
 open-knowledge providers status --scope project --json
 open-knowledge providers models --scope project --json
+
+# Embed indexed chunks and run semantic search
+open-knowledge embeddings index --scope project --model openai:text-embedding-3-small --json
+open-knowledge embeddings search "company wiki policy" --scope project --json
 ```
 
 ## Commands
@@ -258,6 +262,22 @@ such as `default`, `fast`, `reasoning`, `sonnet`, and `deepseek`, and records
 provider capability metadata for structured output, tool use, tool streaming,
 reasoning, embeddings, and native web-search support.
 
+### embeddings
+```bash
+open-knowledge embeddings status [--scope project] [--json]
+open-knowledge embeddings index [--model openai:text-embedding-3-small] [--limit <n>] [--scope project] [--json]
+open-knowledge embeddings search <query> [--model openai:text-embedding-3-small] [--limit <n>] [--scope project] [--json]
+```
+Build and query the local vector index over derived knowledge chunks. The first
+implementation stores vectors in SQLite as JSON rows in `chunk_embeddings` and
+`vector_index_entries`, with provider/model/dimensions, source revision/hash,
+chunk offsets, token counts, invalidation status, and provenance metadata. Raw
+source bytes remain owned by `open-files`; semantic results return cited chunks
+with source refs and revision metadata.
+
+OpenAI embeddings use AI SDK v6 and `OPENAI_API_KEY`. `--fake` provides
+deterministic local vectors for tests and offline smoke checks.
+
 ### help
 ```bash
 open-knowledge help [command]
@@ -293,8 +313,10 @@ The MCP server exposes item tools (`ok_add`, `ok_list`, `ok_get`, `ok_update`,
 `ok_delete`, `ok_archive`, `ok_restore`, `ok_upsert`, `ok_untag`,
 `ok_bulk_delete`, `ok_prune`, `ok_dedupe`, `ok_stats`, `ok_export`,
 `ok_import`, `ok_batch`), workspace/storage inspection (`ok_paths`,
-`ok_storage_status`), and source-ref parsing/resolution
-(`ok_parse_source_ref`, `ok_resolve_source`).
+`ok_storage_status`), provider/embedding tools (`ok_provider_status`,
+`ok_provider_models`, `ok_embeddings_status`, `ok_embeddings_index`,
+`ok_semantic_search`), and source-ref parsing/resolution (`ok_parse_source_ref`,
+`ok_resolve_source`).
 
 ## Source And Artifact Boundary
 
@@ -320,10 +342,15 @@ read-only status, citation requirements, and stale-source status. This keeps
 future semantic search and wiki compile flows tied back to `open-files` instead
 of detached Markdown.
 
+Semantic indexing stores generated vector rows and provenance only. It does not
+store raw S3 or local-file bytes in the knowledge app, so a future hosted/S3
+wrapper can move generated artifacts to object storage while source ownership
+and immutable object identity stay in `open-files`.
+
 AI provider configuration is local/BYOK by default. `open-knowledge` declares
 AI SDK v6 provider support through `ai`, `@ai-sdk/openai`,
 `@ai-sdk/anthropic`, and `@ai-sdk/deepseek`, but does not call providers until a
-future prompt/agent command explicitly requests a model.
+prompt, embedding, or agent command explicitly requests a model.
 
 Generated knowledge artifacts can be stored locally under
 `.hasna/apps/knowledge/artifacts` or through the S3 artifact-store adapter.

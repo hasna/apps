@@ -1,4 +1,11 @@
 import { createArtifactStore } from './artifact-store';
+import {
+  embeddingIndexStatus,
+  indexKnowledgeEmbeddings,
+  searchVectorIndex,
+  type EmbeddingIndexOptions,
+  type EmbeddingSearchOptions,
+} from './embeddings';
 import { consumeOpenFilesOutbox } from './outbox-consume';
 import { getKnowledgeDbStats, migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { ingestOpenFilesManifest } from './manifest-ingest';
@@ -183,6 +190,29 @@ export class KnowledgeService {
 
   modelRegistry(): ModelRegistryEntry[] {
     return listModelRegistry(this.config());
+  }
+
+  embeddingStatus() {
+    const workspace = this.ensureWorkspace();
+    return embeddingIndexStatus(workspace.knowledgeDbPath);
+  }
+
+  async indexEmbeddings(options: Omit<EmbeddingIndexOptions, 'dbPath' | 'config'> = {}) {
+    const workspace = this.ensureWorkspace();
+    return indexKnowledgeEmbeddings({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config(),
+    });
+  }
+
+  async semanticSearch(options: Omit<EmbeddingSearchOptions, 'dbPath' | 'config'>) {
+    const workspace = this.ensureWorkspace();
+    return searchVectorIndex({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config(),
+    });
   }
 }
 

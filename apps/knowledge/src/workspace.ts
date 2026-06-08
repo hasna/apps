@@ -39,6 +39,12 @@ export interface KnowledgeConfig {
     preferred_ref: 'open-files';
     allowed_schemes: string[];
   };
+  embeddings?: {
+    default_model?: string;
+    dimensions?: number;
+    batch_size?: number;
+    max_parallel_calls?: number;
+  };
   providers?: {
     default_model?: string;
     aliases?: Record<string, string>;
@@ -135,6 +141,12 @@ export function defaultKnowledgeConfig(): KnowledgeConfig {
         api_key_env: 'DEEPSEEK_API_KEY',
         default_model: 'deepseek-chat',
       },
+    },
+    embeddings: {
+      default_model: 'openai:text-embedding-3-small',
+      dimensions: 1536,
+      batch_size: 64,
+      max_parallel_calls: 4,
     },
     safety: {
       network: {

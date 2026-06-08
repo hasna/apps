@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { ensureParentDir } from './workspace';
 
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 export interface KnowledgeDbStats {
   schema_version: number;
@@ -17,6 +17,8 @@ export interface KnowledgeDbStats {
   audit_events: number;
   approval_gates: number;
   storage_objects: number;
+  embeddings: number;
+  vector_entries: number;
 }
 
 const MIGRATION_1 = `
@@ -236,6 +238,39 @@ INSERT OR IGNORE INTO schema_versions(version, applied_at)
 VALUES (3, datetime('now'));
 `;
 
+const MIGRATION_4 = `
+CREATE TABLE IF NOT EXISTS vector_index_entries (
+  id TEXT PRIMARY KEY,
+  chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+  source_revision_id TEXT REFERENCES source_revisions(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  dimensions INTEGER NOT NULL,
+  vector_json TEXT NOT NULL,
+  vector_norm REAL NOT NULL,
+  source_uri TEXT,
+  source_ref TEXT,
+  revision TEXT,
+  hash TEXT,
+  start_offset INTEGER,
+  end_offset INTEGER,
+  token_count INTEGER,
+  status TEXT NOT NULL DEFAULT 'active',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(chunk_id, provider, model)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vector_index_provider_model ON vector_index_entries(provider, model);
+CREATE INDEX IF NOT EXISTS idx_vector_index_source_revision ON vector_index_entries(source_revision_id);
+CREATE INDEX IF NOT EXISTS idx_vector_index_source_uri ON vector_index_entries(source_uri);
+CREATE INDEX IF NOT EXISTS idx_vector_index_status ON vector_index_entries(status);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (4, datetime('now'));
+`;
+
 export function openKnowledgeDb(path: string): Database {
   ensureParentDir(path);
   const db = new Database(path);
@@ -250,6 +285,7 @@ export function migrateKnowledgeDb(path: string): { path: string; schema_version
     db.exec(MIGRATION_1);
     if (getSchemaVersion(db) < 2) db.exec(MIGRATION_2);
     if (getSchemaVersion(db) < 3) db.exec(MIGRATION_3);
+    if (getSchemaVersion(db) < 4) db.exec(MIGRATION_4);
     return { path, schema_version: getSchemaVersion(db) };
   } finally {
     db.close();
@@ -283,6 +319,8 @@ export function getKnowledgeDbStats(path: string): KnowledgeDbStats {
       audit_events: count(db, 'audit_events'),
       approval_gates: count(db, 'approval_gates'),
       storage_objects: count(db, 'storage_objects'),
+      embeddings: count(db, 'chunk_embeddings'),
+      vector_entries: count(db, 'vector_index_entries'),
     };
   } finally {
     db.close();

@@ -13660,7 +13660,7 @@ import { existsSync as existsSync7, readFileSync as readFileSync7, writeFileSync
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.13",
+  version: "0.2.14",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   bin: {
@@ -13789,6 +13789,12 @@ function defaultKnowledgeConfig() {
         api_key_env: "DEEPSEEK_API_KEY",
         default_model: "deepseek-chat"
       }
+    },
+    embeddings: {
+      default_model: "openai:text-embedding-3-small",
+      dimensions: 1536,
+      batch_size: 64,
+      max_parallel_calls: 4
     },
     safety: {
       network: {
@@ -14128,10 +14134,8 @@ function createArtifactStore(config2, workspace) {
   return new LocalArtifactStore(workspace.artifactsDir);
 }
 
-// src/outbox-consume.ts
-import { createHash as createHash2, randomUUID as randomUUID3 } from "crypto";
-import { existsSync as existsSync4, readFileSync as readFileSync4 } from "fs";
-import { basename } from "path";
+// src/embeddings.ts
+import { createHash } from "crypto";
 
 // src/knowledge-db.ts
 import { Database } from "bun:sqlite";
@@ -14349,6 +14353,38 @@ CREATE INDEX IF NOT EXISTS idx_approval_gates_status ON approval_gates(status);
 INSERT OR IGNORE INTO schema_versions(version, applied_at)
 VALUES (3, datetime('now'));
 `;
+var MIGRATION_4 = `
+CREATE TABLE IF NOT EXISTS vector_index_entries (
+  id TEXT PRIMARY KEY,
+  chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+  source_revision_id TEXT REFERENCES source_revisions(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  dimensions INTEGER NOT NULL,
+  vector_json TEXT NOT NULL,
+  vector_norm REAL NOT NULL,
+  source_uri TEXT,
+  source_ref TEXT,
+  revision TEXT,
+  hash TEXT,
+  start_offset INTEGER,
+  end_offset INTEGER,
+  token_count INTEGER,
+  status TEXT NOT NULL DEFAULT 'active',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(chunk_id, provider, model)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vector_index_provider_model ON vector_index_entries(provider, model);
+CREATE INDEX IF NOT EXISTS idx_vector_index_source_revision ON vector_index_entries(source_revision_id);
+CREATE INDEX IF NOT EXISTS idx_vector_index_source_uri ON vector_index_entries(source_uri);
+CREATE INDEX IF NOT EXISTS idx_vector_index_status ON vector_index_entries(status);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (4, datetime('now'));
+`;
 function openKnowledgeDb(path) {
   ensureParentDir(path);
   const db = new Database(path);
@@ -14364,6 +14400,8 @@ function migrateKnowledgeDb(path) {
       db.exec(MIGRATION_2);
     if (getSchemaVersion(db) < 3)
       db.exec(MIGRATION_3);
+    if (getSchemaVersion(db) < 4)
+      db.exec(MIGRATION_4);
     return { path, schema_version: getSchemaVersion(db) };
   } finally {
     db.close();
@@ -14393,15 +14431,530 @@ function getKnowledgeDbStats(path) {
       redaction_findings: count(db, "redaction_findings"),
       audit_events: count(db, "audit_events"),
       approval_gates: count(db, "approval_gates"),
-      storage_objects: count(db, "storage_objects")
+      storage_objects: count(db, "storage_objects"),
+      embeddings: count(db, "chunk_embeddings"),
+      vector_entries: count(db, "vector_index_entries")
     };
   } finally {
     db.close();
   }
 }
 
+// src/providers.ts
+var DEFAULT_PROVIDER_SETTINGS = {
+  openai: {
+    api_key_env: "OPENAI_API_KEY",
+    default_model: "gpt-5.2"
+  },
+  anthropic: {
+    api_key_env: "ANTHROPIC_API_KEY",
+    default_model: "claude-sonnet-4-6"
+  },
+  deepseek: {
+    api_key_env: "DEEPSEEK_API_KEY",
+    default_model: "deepseek-chat"
+  }
+};
+var PROVIDER_CAPABILITIES = {
+  openai: {
+    text_generation: true,
+    structured_output: true,
+    tool_usage: true,
+    tool_streaming: true,
+    image_input: true,
+    native_web_search: true,
+    reasoning: true,
+    embeddings: true
+  },
+  anthropic: {
+    text_generation: true,
+    structured_output: true,
+    tool_usage: true,
+    tool_streaming: true,
+    image_input: true,
+    native_web_search: false,
+    reasoning: true,
+    embeddings: false
+  },
+  deepseek: {
+    text_generation: true,
+    structured_output: true,
+    tool_usage: true,
+    tool_streaming: true,
+    image_input: false,
+    native_web_search: false,
+    reasoning: true,
+    embeddings: false
+  }
+};
+var BUILTIN_ALIASES = {
+  default: "openai:gpt-5.2",
+  fast: "openai:gpt-5-mini",
+  reasoning: "anthropic:claude-opus-4-6",
+  sonnet: "anthropic:claude-sonnet-4-6",
+  deepseek: "deepseek:deepseek-chat",
+  "deepseek-reasoning": "deepseek:deepseek-reasoner"
+};
+function providerConfig(config2) {
+  return config2.providers ?? {};
+}
+function providerSettings(config2, provider) {
+  const configured = providerConfig(config2)[provider] ?? {};
+  return {
+    ...DEFAULT_PROVIDER_SETTINGS[provider],
+    ...configured
+  };
+}
+function modelAliases(config2) {
+  const configured = providerConfig(config2);
+  return {
+    ...BUILTIN_ALIASES,
+    ...configured.default_model ? { default: configured.default_model } : {},
+    ...configured.aliases ?? {}
+  };
+}
+function parseModelRef(modelRef) {
+  const [provider, ...rest] = modelRef.split(":");
+  const model = rest.join(":");
+  if (provider !== "openai" && provider !== "anthropic" && provider !== "deepseek") {
+    throw new Error(`Unsupported AI provider: ${provider}`);
+  }
+  if (!model)
+    throw new Error(`Invalid model ref: ${modelRef}. Expected provider:model.`);
+  return { provider, model };
+}
+function resolveModelRef(aliasOrRef, config2) {
+  const aliases = modelAliases(config2);
+  return aliases[aliasOrRef] ?? aliasOrRef;
+}
+function listModelRegistry(config2) {
+  const aliases = modelAliases(config2);
+  return Object.entries(aliases).map(([alias, modelRef]) => {
+    const parsed = parseModelRef(modelRef);
+    return {
+      alias,
+      model_ref: modelRef,
+      provider: parsed.provider,
+      model: parsed.model,
+      default: alias === "default",
+      capabilities: PROVIDER_CAPABILITIES[parsed.provider]
+    };
+  });
+}
+function providerCredentialStatus(config2, env = process.env) {
+  return Object.keys(DEFAULT_PROVIDER_SETTINGS).map((provider) => {
+    const settings = providerSettings(config2, provider);
+    const configured = Boolean(env[settings.api_key_env]);
+    return {
+      provider,
+      api_key_env: settings.api_key_env,
+      configured,
+      source: configured ? "env" : "missing",
+      base_url: settings.base_url ?? null,
+      default_model: settings.default_model
+    };
+  });
+}
+function providerStatus(config2, env = process.env) {
+  return {
+    default_model: resolveModelRef("default", config2),
+    providers: providerCredentialStatus(config2, env),
+    models: listModelRegistry(config2)
+  };
+}
+function assertProviderCredentials(provider, config2, env = process.env) {
+  const status = providerCredentialStatus(config2, env).find((entry) => entry.provider === provider);
+  if (!status)
+    throw new Error(`Unsupported AI provider: ${provider}`);
+  if (!status.configured)
+    throw new Error(`Missing ${status.api_key_env} for ${provider}. Set the env var to use this provider.`);
+  return status;
+}
+
+// src/provenance.ts
+function isStaleStatus(status) {
+  return ["deleted", "stale", "invalidated", "reindex_required"].includes((status ?? "").toLowerCase());
+}
+function sourceProvenance(input) {
+  const status = input.status ?? null;
+  return {
+    source_owner: "open-files",
+    source_ref: input.source_ref ?? null,
+    source_uri: input.source_uri ?? null,
+    source_kind: input.source_kind ?? null,
+    source_revision_id: input.source_revision_id ?? null,
+    revision: input.revision ?? null,
+    hash: input.hash ?? null,
+    chunk_id: input.chunk_id ?? null,
+    start_offset: input.start_offset ?? null,
+    end_offset: input.end_offset ?? null,
+    status,
+    read_only: true,
+    citation_required: true,
+    resolver: input.resolver ?? null,
+    stale: isStaleStatus(status)
+  };
+}
+function generatedArtifactProvenance(input) {
+  return {
+    source_owner: "open-files",
+    generated_from: input.generated_from,
+    artifact_key: input.artifact_key,
+    source_refs: input.source_refs ?? [],
+    read_only_sources: true,
+    citation_required: input.citation_required ?? true,
+    raw_source_bytes_stored_in_open_knowledge: false
+  };
+}
+function withProvenance(metadata, provenance) {
+  return {
+    ...metadata,
+    provenance
+  };
+}
+
+// src/embeddings.ts
+var DEFAULT_EMBEDDING_MODEL_REF = "openai:text-embedding-3-small";
+var DEFAULT_EMBEDDING_DIMENSIONS = 1536;
+function embeddingConfig(config2) {
+  return config2?.embeddings ?? {};
+}
+function stableId(prefix, value) {
+  return `${prefix}_${createHash("sha256").update(value).digest("hex").slice(0, 20)}`;
+}
+function parseJsonObject(value) {
+  if (!value)
+    return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function metadataString(metadata, keys) {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "string" && value.length > 0)
+      return value;
+  }
+  return null;
+}
+function metadataNumber(metadata, keys) {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "number" && Number.isFinite(value))
+      return value;
+  }
+  return null;
+}
+function vectorNorm(vector) {
+  return Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
+}
+function cosineSimilarity(a, b, bNorm = vectorNorm(b)) {
+  const aNorm = vectorNorm(a);
+  if (aNorm === 0 || bNorm === 0)
+    return 0;
+  const length = Math.min(a.length, b.length);
+  let dot = 0;
+  for (let i = 0;i < length; i += 1)
+    dot += a[i] * b[i];
+  return dot / (aNorm * bNorm);
+}
+function deterministicVector(text, dimensions) {
+  const bytes = createHash("sha256").update(text).digest();
+  return Array.from({ length: dimensions }, (_, index) => {
+    const value = bytes[index % bytes.length] / 255;
+    return Number((value * 2 - 1).toFixed(6));
+  });
+}
+async function openAiEmbeddingModel(model, config2, env = process.env) {
+  assertProviderCredentials("openai", config2, env);
+  const settings = providerSettings(config2, "openai");
+  const { createOpenAI } = await import("@ai-sdk/openai");
+  const openai = createOpenAI({
+    apiKey: env[settings.api_key_env],
+    baseURL: settings.base_url
+  });
+  if (openai.embeddingModel)
+    return openai.embeddingModel(model);
+  if (openai.textEmbedding)
+    return openai.textEmbedding(model);
+  if (openai.textEmbeddingModel)
+    return openai.textEmbeddingModel(model);
+  throw new Error("OpenAI provider does not expose an embedding model factory.");
+}
+function resolveEmbeddingModelRef(modelRef, config2) {
+  if (!modelRef || modelRef === "default" || modelRef === "embedding") {
+    return embeddingConfig(config2).default_model ?? DEFAULT_EMBEDDING_MODEL_REF;
+  }
+  return modelRef;
+}
+async function embedTexts(texts, options = {}) {
+  const modelRef = resolveEmbeddingModelRef(options.modelRef, options.config);
+  const parsed = parseModelRef(modelRef);
+  if (parsed.provider !== "openai") {
+    throw new Error(`Embedding provider ${parsed.provider} is not supported yet. Use openai:text-embedding-3-small.`);
+  }
+  const dimensions = options.dimensions ?? embeddingConfig(options.config).dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS;
+  if (options.fake) {
+    return {
+      provider: parsed.provider,
+      model: parsed.model,
+      dimensions,
+      vectors: texts.map((text) => deterministicVector(text, dimensions)),
+      usage: { input_tokens: texts.reduce((sum, text) => sum + Math.max(1, Math.ceil(text.split(/\s+/).filter(Boolean).length * 1.25)), 0) }
+    };
+  }
+  const { embedMany } = await import("ai");
+  const model = await openAiEmbeddingModel(parsed.model, options.config, options.env);
+  const result = await embedMany({
+    model,
+    values: texts,
+    maxParallelCalls: options.maxParallelCalls ?? embeddingConfig(options.config).max_parallel_calls,
+    providerOptions: {
+      openai: {
+        dimensions
+      }
+    }
+  });
+  const vectors = result.embeddings;
+  return {
+    provider: parsed.provider,
+    model: parsed.model,
+    dimensions: vectors[0]?.length ?? dimensions,
+    vectors,
+    usage: { input_tokens: result.usage?.tokens ?? 0 }
+  };
+}
+function selectCandidateChunks(db, options) {
+  const baseQuery = `SELECT
+       c.id,
+       c.text,
+       c.token_count,
+       c.start_offset,
+       c.end_offset,
+       c.metadata_json,
+       c.source_revision_id,
+       sr.revision,
+       sr.hash,
+       s.uri AS source_uri,
+       s.kind AS source_kind
+     FROM chunks c
+     LEFT JOIN source_revisions sr ON sr.id = c.source_revision_id
+     LEFT JOIN sources s ON s.id = sr.source_id
+     LEFT JOIN vector_index_entries v
+       ON v.chunk_id = c.id AND v.provider = ? AND v.model = ?
+     WHERE v.id IS NULL`;
+  const suffix = `
+     ORDER BY c.created_at ASC, c.ordinal ASC
+     LIMIT ?`;
+  if (options.sourceRevisionId) {
+    return db.query(`${baseQuery} AND c.source_revision_id = ?${suffix}`).all(options.provider, options.model, options.sourceRevisionId, options.limit);
+  }
+  return db.query(`${baseQuery}${suffix}`).all(options.provider, options.model, options.limit);
+}
+function provenanceForChunk(row) {
+  const metadata = parseJsonObject(row.metadata_json);
+  const existing = metadata.provenance;
+  if (existing && typeof existing === "object" && !Array.isArray(existing))
+    return existing;
+  return sourceProvenance({
+    source_ref: metadataString(metadata, ["source_ref"]),
+    source_uri: row.source_uri ?? metadataString(metadata, ["source_uri"]),
+    source_kind: row.source_kind ?? metadataString(metadata, ["source_kind"]),
+    source_revision_id: row.source_revision_id,
+    revision: row.revision ?? metadataString(metadata, ["revision"]),
+    hash: row.hash ?? metadataString(metadata, ["hash"]),
+    chunk_id: row.id,
+    start_offset: row.start_offset ?? metadataNumber(metadata, ["start_offset"]),
+    end_offset: row.end_offset ?? metadataNumber(metadata, ["end_offset"]),
+    status: metadataString(metadata, ["status"]),
+    resolver: "open-files-read-only"
+  });
+}
+function upsertVectors(db, rows, embedding, now) {
+  const insertEmbedding = db.prepare(`
+    INSERT INTO chunk_embeddings (id, chunk_id, provider, model, dimensions, vector_json, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(chunk_id, provider, model) DO UPDATE SET
+      dimensions = excluded.dimensions,
+      vector_json = excluded.vector_json,
+      created_at = excluded.created_at
+  `);
+  const insertVector = db.prepare(`
+    INSERT INTO vector_index_entries (
+      id, chunk_id, source_revision_id, provider, model, dimensions, vector_json, vector_norm,
+      source_uri, source_ref, revision, hash, start_offset, end_offset, token_count, status,
+      metadata_json, created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(chunk_id, provider, model) DO UPDATE SET
+      source_revision_id = excluded.source_revision_id,
+      dimensions = excluded.dimensions,
+      vector_json = excluded.vector_json,
+      vector_norm = excluded.vector_norm,
+      source_uri = excluded.source_uri,
+      source_ref = excluded.source_ref,
+      revision = excluded.revision,
+      hash = excluded.hash,
+      start_offset = excluded.start_offset,
+      end_offset = excluded.end_offset,
+      token_count = excluded.token_count,
+      status = excluded.status,
+      metadata_json = excluded.metadata_json,
+      updated_at = excluded.updated_at
+  `);
+  const write = db.transaction(() => {
+    for (let index = 0;index < rows.length; index += 1) {
+      const row = rows[index];
+      const vector = embedding.vectors[index];
+      if (!vector)
+        continue;
+      const metadata = parseJsonObject(row.metadata_json);
+      const provenance = provenanceForChunk(row);
+      const sourceRef = provenance.source_ref ?? metadataString(metadata, ["source_ref"]);
+      const sourceUri = provenance.source_uri ?? row.source_uri ?? metadataString(metadata, ["source_uri"]);
+      const revision = provenance.revision ?? row.revision ?? metadataString(metadata, ["revision"]);
+      const hash2 = provenance.hash ?? row.hash ?? metadataString(metadata, ["hash"]);
+      const status = provenance.status ?? metadataString(metadata, ["status"]) ?? "active";
+      const vectorJson = JSON.stringify(vector);
+      insertEmbedding.run(stableId("emb", `${row.id}\x00${embedding.provider}\x00${embedding.model}`), row.id, embedding.provider, embedding.model, embedding.dimensions, vectorJson, now);
+      insertVector.run(stableId("vec", `${row.id}\x00${embedding.provider}\x00${embedding.model}`), row.id, row.source_revision_id, embedding.provider, embedding.model, embedding.dimensions, vectorJson, vectorNorm(vector), sourceUri, sourceRef, revision, hash2, provenance.start_offset, provenance.end_offset, row.token_count, status, JSON.stringify({
+        ...metadata,
+        provenance,
+        embedded_at: now
+      }), now, now);
+    }
+  });
+  write();
+  return rows.length;
+}
+async function indexKnowledgeEmbeddings(options) {
+  const modelRef = resolveEmbeddingModelRef(options.modelRef, options.config);
+  const parsed = parseModelRef(modelRef);
+  if (parsed.provider !== "openai")
+    throw new Error(`Embedding provider ${parsed.provider} is not supported yet.`);
+  const now = (options.now ?? new Date).toISOString();
+  const limit = Math.max(1, Math.min(options.limit ?? 100, 1000));
+  migrateKnowledgeDb(options.dbPath);
+  const readDb = openKnowledgeDb(options.dbPath);
+  let rows;
+  try {
+    rows = selectCandidateChunks(readDb, {
+      provider: parsed.provider,
+      model: parsed.model,
+      limit,
+      sourceRevisionId: options.sourceRevisionId
+    });
+  } finally {
+    readDb.close();
+  }
+  if (rows.length === 0) {
+    return {
+      provider: parsed.provider,
+      model: parsed.model,
+      dimensions: options.dimensions ?? embeddingConfig(options.config).dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS,
+      chunks_seen: 0,
+      chunks_embedded: 0,
+      embeddings_upserted: 0,
+      vector_entries_upserted: 0,
+      usage: { input_tokens: 0 }
+    };
+  }
+  const embedding = await embedTexts(rows.map((row) => row.text), options);
+  const writeDb = openKnowledgeDb(options.dbPath);
+  try {
+    const upserted = upsertVectors(writeDb, rows, embedding, now);
+    return {
+      provider: embedding.provider,
+      model: embedding.model,
+      dimensions: embedding.dimensions,
+      chunks_seen: rows.length,
+      chunks_embedded: rows.length,
+      embeddings_upserted: upserted,
+      vector_entries_upserted: upserted,
+      usage: embedding.usage
+    };
+  } finally {
+    writeDb.close();
+  }
+}
+function embeddingIndexStatus(dbPath) {
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const totalEmbeddings = db.query("SELECT COUNT(*) AS n FROM chunk_embeddings").get()?.n ?? 0;
+    const totalVectorEntries = db.query("SELECT COUNT(*) AS n FROM vector_index_entries").get()?.n ?? 0;
+    const indexes = db.query(`SELECT provider, model, dimensions, COUNT(*) AS entries, MAX(updated_at) AS updated_at
+       FROM vector_index_entries
+       GROUP BY provider, model, dimensions
+       ORDER BY provider, model`).all();
+    return {
+      total_embeddings: totalEmbeddings,
+      total_vector_entries: totalVectorEntries,
+      indexes
+    };
+  } finally {
+    db.close();
+  }
+}
+async function searchVectorIndex(options) {
+  const modelRef = resolveEmbeddingModelRef(options.modelRef, options.config);
+  const parsed = parseModelRef(modelRef);
+  const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
+  const embedded = await embedTexts([options.query], options);
+  const queryVector = embedded.vectors[0] ?? [];
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    const rows = db.query(`SELECT
+         v.chunk_id,
+         c.text,
+         v.vector_json,
+         v.vector_norm,
+         v.source_uri,
+         v.source_ref,
+         v.revision,
+         v.hash,
+         v.metadata_json
+       FROM vector_index_entries v
+       JOIN chunks c ON c.id = v.chunk_id
+       WHERE v.provider = ? AND v.model = ? AND v.status = 'active'`).all(parsed.provider, parsed.model);
+    const scored = rows.map((row) => {
+      const vector = JSON.parse(row.vector_json);
+      const metadata = parseJsonObject(row.metadata_json);
+      const provenance = metadata.provenance && typeof metadata.provenance === "object" && !Array.isArray(metadata.provenance) ? metadata.provenance : null;
+      return {
+        chunk_id: row.chunk_id,
+        score: cosineSimilarity(queryVector, vector, row.vector_norm),
+        text: row.text,
+        source_uri: row.source_uri,
+        source_ref: row.source_ref,
+        revision: row.revision,
+        hash: row.hash,
+        provenance
+      };
+    }).sort((a, b) => b.score - a.score).slice(0, limit);
+    return {
+      provider: parsed.provider,
+      model: parsed.model,
+      dimensions: embedded.dimensions,
+      query: options.query,
+      results: scored
+    };
+  } finally {
+    db.close();
+  }
+}
+
+// src/outbox-consume.ts
+import { createHash as createHash3, randomUUID as randomUUID3 } from "crypto";
+import { existsSync as existsSync4, readFileSync as readFileSync4 } from "fs";
+import { basename } from "path";
+
 // src/safety.ts
-import { createHash, randomUUID as randomUUID2 } from "crypto";
+import { createHash as createHash2, randomUUID as randomUUID2 } from "crypto";
 import { relative as relative2, resolve as resolve2, sep as sep2 } from "path";
 function envEnabled(name) {
   const value = process.env[name];
@@ -14496,7 +15049,7 @@ function redactSecrets(text, policy) {
   return { text: output, findings };
 }
 function auditId(input) {
-  return `audit_${createHash("sha256").update(`${input.event_type}\x00${input.action}\x00${input.target_uri ?? ""}\x00${input.created_at ?? ""}\x00${JSON.stringify(input.metadata ?? {})}\x00${randomUUID2()}`).digest("hex").slice(0, 24)}`;
+  return `audit_${createHash2("sha256").update(`${input.event_type}\x00${input.action}\x00${input.target_uri ?? ""}\x00${input.created_at ?? ""}\x00${JSON.stringify(input.metadata ?? {})}\x00${randomUUID2()}`).digest("hex").slice(0, 24)}`;
 }
 function recordAuditEvent(db, input) {
   const createdAt = input.created_at ?? new Date().toISOString();
@@ -14531,8 +15084,8 @@ function recordRedactionFindings(db, input) {
 }
 
 // src/outbox-consume.ts
-function stableId(prefix, value) {
-  return `${prefix}_${createHash2("sha256").update(value).digest("hex").slice(0, 20)}`;
+function stableId2(prefix, value) {
+  return `${prefix}_${createHash3("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
 function asObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
@@ -14686,7 +15239,7 @@ function mergeJson(existing, patch) {
   return JSON.stringify({ ...base, ...patch });
 }
 function ensureSource(db, event, now) {
-  const id = stableId("src", event.sourceUri);
+  const id = stableId2("src", event.sourceUri);
   db.run(`INSERT INTO sources (id, uri, kind, title, metadata_json, acl_json, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(uri) DO UPDATE SET
@@ -14727,7 +15280,7 @@ function ensureSource(db, event, now) {
 function ensureRevision(db, sourceId, event, now) {
   if (!event.revision)
     return null;
-  const id = stableId("rev", `${sourceId}\x00${event.revision}`);
+  const id = stableId2("rev", `${sourceId}\x00${event.revision}`);
   const metadata = {
     source_ref: event.sourceRef,
     source_uri: event.sourceUri,
@@ -14755,16 +15308,20 @@ function revisionIdsForEvent(db, sourceId, event) {
 function invalidateRevision(db, revisionId) {
   const chunks = db.query("SELECT id FROM chunks WHERE source_revision_id = ?").all(revisionId);
   let embeddingsDeleted = 0;
+  let vectorEntriesDeleted = 0;
   for (const chunk of chunks) {
     const row = db.query("SELECT COUNT(*) AS n FROM chunk_embeddings WHERE chunk_id = ?").get(chunk.id);
     embeddingsDeleted += row?.n ?? 0;
+    const vectorRow = db.query("SELECT COUNT(*) AS n FROM vector_index_entries WHERE chunk_id = ?").get(chunk.id);
+    vectorEntriesDeleted += vectorRow?.n ?? 0;
+    db.run("DELETE FROM vector_index_entries WHERE chunk_id = ?", [chunk.id]);
     db.run("DELETE FROM chunk_embeddings WHERE chunk_id = ?", [chunk.id]);
     db.run("DELETE FROM chunks_fts WHERE chunk_id = ?", [chunk.id]);
   }
   db.run("DELETE FROM chunks WHERE source_revision_id = ?", [revisionId]);
   const revision = db.query("SELECT metadata_json FROM source_revisions WHERE id = ?").get(revisionId);
   db.run("UPDATE source_revisions SET metadata_json = ? WHERE id = ?", [mergeJson(revision?.metadata_json, { reindex_required: true, invalidated_at: new Date().toISOString() }), revisionId]);
-  return { chunksDeleted: chunks.length, embeddingsDeleted };
+  return { chunksDeleted: chunks.length, embeddingsDeleted, vectorEntriesDeleted };
 }
 function isDeleteEvent(eventType2, status) {
   return status === "deleted" || ["delete", "deleted", "remove", "removed"].includes(eventType2);
@@ -14802,6 +15359,7 @@ async function consumeOpenFilesOutbox(options) {
       const revisionsTouched = new Set;
       let chunksDeleted = 0;
       let embeddingsDeleted = 0;
+      let vectorEntriesDeleted = 0;
       let staleRevisions = 0;
       let deletedSources = 0;
       let movedSources = 0;
@@ -14827,6 +15385,7 @@ async function consumeOpenFilesOutbox(options) {
           const invalidation = invalidateRevision(db, revisionId);
           chunksDeleted += invalidation.chunksDeleted;
           embeddingsDeleted += invalidation.embeddingsDeleted;
+          vectorEntriesDeleted += invalidation.vectorEntriesDeleted;
           staleRevisions += 1;
         }
         if (isDeleteEvent(event.eventType, event.status))
@@ -14837,7 +15396,7 @@ async function consumeOpenFilesOutbox(options) {
           permissionUpdates += 1;
         db.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
            VALUES (?, ?, ?, ?, ?, ?)`, [
-          stableId("evt", `${runId}\x00${index}\x00${event.sourceRef}\x00${event.eventType}`),
+          stableId2("evt", `${runId}\x00${index}\x00${event.sourceRef}\x00${event.eventType}`),
           runId,
           "info",
           event.eventType,
@@ -14854,7 +15413,7 @@ async function consumeOpenFilesOutbox(options) {
       });
       db.run(`INSERT INTO provider_usage (id, run_id, provider, model, input_tokens, output_tokens, cost_usd, metadata_json, created_at)
          VALUES (?, ?, ?, ?, 0, 0, 0, ?, ?)`, [
-        stableId("usage", runId),
+        stableId2("usage", runId),
         runId,
         "local",
         "open-files-outbox",
@@ -14872,7 +15431,8 @@ async function consumeOpenFilesOutbox(options) {
           sources: sourcesTouched.size,
           revisions: revisionsTouched.size,
           chunks_deleted: chunksDeleted,
-          embeddings_deleted: embeddingsDeleted
+          embeddings_deleted: embeddingsDeleted,
+          vector_entries_deleted: vectorEntriesDeleted
         },
         created_at: now
       });
@@ -14885,6 +15445,7 @@ async function consumeOpenFilesOutbox(options) {
         revisions_touched: revisionsTouched.size,
         chunks_deleted: chunksDeleted,
         embeddings_deleted: embeddingsDeleted,
+        vector_entries_deleted: vectorEntriesDeleted,
         stale_revisions: staleRevisions,
         deleted_sources: deletedSources,
         moved_sources: movedSources,
@@ -14897,55 +15458,11 @@ async function consumeOpenFilesOutbox(options) {
 }
 
 // src/manifest-ingest.ts
-import { createHash as createHash3 } from "crypto";
+import { createHash as createHash4 } from "crypto";
 import { existsSync as existsSync5, readFileSync as readFileSync5 } from "fs";
 import { basename as basename2 } from "path";
-
-// src/provenance.ts
-function isStaleStatus(status) {
-  return ["deleted", "stale", "invalidated", "reindex_required"].includes((status ?? "").toLowerCase());
-}
-function sourceProvenance(input) {
-  const status = input.status ?? null;
-  return {
-    source_owner: "open-files",
-    source_ref: input.source_ref ?? null,
-    source_uri: input.source_uri ?? null,
-    source_kind: input.source_kind ?? null,
-    source_revision_id: input.source_revision_id ?? null,
-    revision: input.revision ?? null,
-    hash: input.hash ?? null,
-    chunk_id: input.chunk_id ?? null,
-    start_offset: input.start_offset ?? null,
-    end_offset: input.end_offset ?? null,
-    status,
-    read_only: true,
-    citation_required: true,
-    resolver: input.resolver ?? null,
-    stale: isStaleStatus(status)
-  };
-}
-function generatedArtifactProvenance(input) {
-  return {
-    source_owner: "open-files",
-    generated_from: input.generated_from,
-    artifact_key: input.artifact_key,
-    source_refs: input.source_refs ?? [],
-    read_only_sources: true,
-    citation_required: input.citation_required ?? true,
-    raw_source_bytes_stored_in_open_knowledge: false
-  };
-}
-function withProvenance(metadata, provenance) {
-  return {
-    ...metadata,
-    provenance
-  };
-}
-
-// src/manifest-ingest.ts
-function stableId2(prefix, value) {
-  return `${prefix}_${createHash3("sha256").update(value).digest("hex").slice(0, 20)}`;
+function stableId3(prefix, value) {
+  return `${prefix}_${createHash4("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
 function asObject2(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
@@ -15165,7 +15682,7 @@ function deleteChunksForRevision(db, sourceRevisionId) {
   return rows.length;
 }
 function upsertSource(db, item, now) {
-  const sourceId = stableId2("src", item.sourceUri);
+  const sourceId = stableId3("src", item.sourceUri);
   db.run(`INSERT INTO sources (id, uri, kind, title, metadata_json, acl_json, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(uri) DO UPDATE SET
@@ -15189,7 +15706,7 @@ function upsertSource(db, item, now) {
   return row.id;
 }
 function upsertRevision(db, sourceId, item, now) {
-  const revisionId = stableId2("rev", `${sourceId}\x00${item.revision}`);
+  const revisionId = stableId3("rev", `${sourceId}\x00${item.revision}`);
   db.run(`INSERT INTO source_revisions (id, source_id, revision, hash, extracted_text_uri, metadata_json, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(source_id, revision) DO UPDATE SET
@@ -15231,7 +15748,7 @@ function insertChunks(db, sourceRevisionId, item, now, maxChars, overlapChars, s
   }
   const chunks = chunkText(redacted.text, maxChars, overlapChars);
   for (const chunk of chunks) {
-    const chunkId = stableId2("chk", `${sourceRevisionId}\x00${chunk.ordinal}\x00${chunk.text}`);
+    const chunkId = stableId3("chk", `${sourceRevisionId}\x00${chunk.ordinal}\x00${chunk.text}`);
     const provenance = sourceProvenance({
       source_ref: item.sourceRef,
       source_uri: item.sourceUri,
@@ -15359,12 +15876,12 @@ async function ingestOpenFilesManifestItems(options) {
 }
 
 // src/source-ingest.ts
-import { createHash as createHash4 } from "crypto";
+import { createHash as createHash5 } from "crypto";
 import { existsSync as existsSync6, readFileSync as readFileSync6 } from "fs";
 import { basename as basename3 } from "path";
 
 // src/source-resolver.ts
-function parseJsonObject(value) {
+function parseJsonObject2(value) {
   if (!value)
     return {};
   try {
@@ -15374,7 +15891,7 @@ function parseJsonObject(value) {
     return {};
   }
 }
-function metadataString(metadata, keys) {
+function metadataString2(metadata, keys) {
   for (const key of keys) {
     const value = metadata[key];
     if (typeof value === "string" && value.length > 0)
@@ -15382,7 +15899,7 @@ function metadataString(metadata, keys) {
   }
   return null;
 }
-function metadataNumber(metadata, keys) {
+function metadataNumber2(metadata, keys) {
   for (const key of keys) {
     const value = metadata[key];
     if (typeof value === "number" && Number.isFinite(value))
@@ -15507,8 +16024,8 @@ async function resolveOpenFilesSource(options) {
           citations: []
         };
       }
-      const sourceMetadata = parseJsonObject(source.metadata_json);
-      const permissions = parseJsonObject(source.acl_json);
+      const sourceMetadata = parseJsonObject2(source.metadata_json);
+      const permissions = parseJsonObject2(source.acl_json);
       try {
         assertPurposeAllowed(permissions, purpose);
       } catch (error48) {
@@ -15528,22 +16045,22 @@ async function resolveOpenFilesSource(options) {
         throw error48;
       }
       const revision = selectRevision(db, source.id, requestedRevision);
-      const revisionMetadata = parseJsonObject(revision?.metadata_json);
+      const revisionMetadata = parseJsonObject2(revision?.metadata_json);
       const totalChunks = countChunks(db, revision?.id ?? null);
       const rows = selectChunks(db, revision?.id ?? null, limit);
       const effectiveSourceRef = sourceRevisionRef(source.uri, revision, options.sourceRef);
       const chunks = rows.map((row) => {
-        const metadata = parseJsonObject(row.metadata_json);
+        const metadata = parseJsonObject2(row.metadata_json);
         const evidence = {
           resolver: "open-files-read-only",
           mode: "local_catalog",
           purpose,
           read_only: true,
-          source_ref: metadataString(metadata, ["source_ref"]) ?? effectiveSourceRef,
+          source_ref: metadataString2(metadata, ["source_ref"]) ?? effectiveSourceRef,
           source_uri: source.uri,
           source_revision_id: revision?.id ?? null,
           revision: revision?.revision ?? null,
-          hash: revision?.hash ?? metadataString(metadata, ["hash"]),
+          hash: revision?.hash ?? metadataString2(metadata, ["hash"]),
           chunk_id: row.id,
           start_offset: row.start_offset,
           end_offset: row.end_offset,
@@ -15559,7 +16076,7 @@ async function resolveOpenFilesSource(options) {
           chunk_id: row.id,
           start_offset: row.start_offset,
           end_offset: row.end_offset,
-          status: metadataString(metadata, ["status"]),
+          status: metadataString2(metadata, ["status"]),
           resolver: evidence.resolver
         });
         return {
@@ -15600,8 +16117,8 @@ async function resolveOpenFilesSource(options) {
         },
         created_at: resolvedAt
       });
-      const mime = metadataString(sourceMetadata, ["mime", "content_type"]) ?? metadataString(revisionMetadata, ["mime", "content_type"]);
-      const size = metadataNumber(sourceMetadata, ["size", "size_bytes"]) ?? metadataNumber(revisionMetadata, ["size", "size_bytes"]);
+      const mime = metadataString2(sourceMetadata, ["mime", "content_type"]) ?? metadataString2(revisionMetadata, ["mime", "content_type"]);
+      const size = metadataNumber2(sourceMetadata, ["size", "size_bytes"]) ?? metadataNumber2(revisionMetadata, ["size", "size_bytes"]);
       return {
         source_ref: effectiveSourceRef,
         source_uri: source.uri,
@@ -15634,12 +16151,12 @@ async function resolveOpenFilesSource(options) {
         content: {
           mime,
           size,
-          hash: revision?.hash ?? metadataString(sourceMetadata, ["hash", "checksum", "sha256"]),
+          hash: revision?.hash ?? metadataString2(sourceMetadata, ["hash", "checksum", "sha256"]),
           text_available: totalChunks > 0,
           chunks_total: totalChunks,
           chunks_returned: chunks.length,
           char_count_returned: chunks.reduce((sum, chunk) => sum + chunk.text.length, 0),
-          extracted_text_ref: revision?.extracted_text_uri ?? metadataString(revisionMetadata, ["extracted_text_ref", "extracted_text_uri"]),
+          extracted_text_ref: revision?.extracted_text_uri ?? metadataString2(revisionMetadata, ["extracted_text_ref", "extracted_text_uri"]),
           bytes_available: false,
           bytes_exposed: false
         },
@@ -15654,7 +16171,7 @@ async function resolveOpenFilesSource(options) {
 
 // src/source-ingest.ts
 function sha256Text(text) {
-  return `sha256:${createHash4("sha256").update(text).digest("hex")}`;
+  return `sha256:${createHash5("sha256").update(text).digest("hex")}`;
 }
 function stripHtml(html) {
   return html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+\n/g, `
@@ -15876,131 +16393,8 @@ async function ingestSourceRef(options) {
   };
 }
 
-// src/providers.ts
-var DEFAULT_PROVIDER_SETTINGS = {
-  openai: {
-    api_key_env: "OPENAI_API_KEY",
-    default_model: "gpt-5.2"
-  },
-  anthropic: {
-    api_key_env: "ANTHROPIC_API_KEY",
-    default_model: "claude-sonnet-4-6"
-  },
-  deepseek: {
-    api_key_env: "DEEPSEEK_API_KEY",
-    default_model: "deepseek-chat"
-  }
-};
-var PROVIDER_CAPABILITIES = {
-  openai: {
-    text_generation: true,
-    structured_output: true,
-    tool_usage: true,
-    tool_streaming: true,
-    image_input: true,
-    native_web_search: true,
-    reasoning: true,
-    embeddings: true
-  },
-  anthropic: {
-    text_generation: true,
-    structured_output: true,
-    tool_usage: true,
-    tool_streaming: true,
-    image_input: true,
-    native_web_search: false,
-    reasoning: true,
-    embeddings: false
-  },
-  deepseek: {
-    text_generation: true,
-    structured_output: true,
-    tool_usage: true,
-    tool_streaming: true,
-    image_input: false,
-    native_web_search: false,
-    reasoning: true,
-    embeddings: false
-  }
-};
-var BUILTIN_ALIASES = {
-  default: "openai:gpt-5.2",
-  fast: "openai:gpt-5-mini",
-  reasoning: "anthropic:claude-opus-4-6",
-  sonnet: "anthropic:claude-sonnet-4-6",
-  deepseek: "deepseek:deepseek-chat",
-  "deepseek-reasoning": "deepseek:deepseek-reasoner"
-};
-function providerConfig(config2) {
-  return config2.providers ?? {};
-}
-function providerSettings(config2, provider) {
-  const configured = providerConfig(config2)[provider] ?? {};
-  return {
-    ...DEFAULT_PROVIDER_SETTINGS[provider],
-    ...configured
-  };
-}
-function modelAliases(config2) {
-  const configured = providerConfig(config2);
-  return {
-    ...BUILTIN_ALIASES,
-    ...configured.default_model ? { default: configured.default_model } : {},
-    ...configured.aliases ?? {}
-  };
-}
-function parseModelRef(modelRef) {
-  const [provider, ...rest] = modelRef.split(":");
-  const model = rest.join(":");
-  if (provider !== "openai" && provider !== "anthropic" && provider !== "deepseek") {
-    throw new Error(`Unsupported AI provider: ${provider}`);
-  }
-  if (!model)
-    throw new Error(`Invalid model ref: ${modelRef}. Expected provider:model.`);
-  return { provider, model };
-}
-function resolveModelRef(aliasOrRef, config2) {
-  const aliases = modelAliases(config2);
-  return aliases[aliasOrRef] ?? aliasOrRef;
-}
-function listModelRegistry(config2) {
-  const aliases = modelAliases(config2);
-  return Object.entries(aliases).map(([alias, modelRef]) => {
-    const parsed = parseModelRef(modelRef);
-    return {
-      alias,
-      model_ref: modelRef,
-      provider: parsed.provider,
-      model: parsed.model,
-      default: alias === "default",
-      capabilities: PROVIDER_CAPABILITIES[parsed.provider]
-    };
-  });
-}
-function providerCredentialStatus(config2, env = process.env) {
-  return Object.keys(DEFAULT_PROVIDER_SETTINGS).map((provider) => {
-    const settings = providerSettings(config2, provider);
-    const configured = Boolean(env[settings.api_key_env]);
-    return {
-      provider,
-      api_key_env: settings.api_key_env,
-      configured,
-      source: configured ? "env" : "missing",
-      base_url: settings.base_url ?? null,
-      default_model: settings.default_model
-    };
-  });
-}
-function providerStatus(config2, env = process.env) {
-  return {
-    default_model: resolveModelRef("default", config2),
-    providers: providerCredentialStatus(config2, env),
-    models: listModelRegistry(config2)
-  };
-}
-
 // src/storage-contract.ts
-import { createHash as createHash5, randomUUID as randomUUID4 } from "crypto";
+import { createHash as createHash6, randomUUID as randomUUID4 } from "crypto";
 var GENERATED_ARTIFACTS = [
   {
     kind: "schema",
@@ -16036,7 +16430,7 @@ var GENERATED_ARTIFACTS = [
 function hashArtifactBody(body) {
   const bytes = typeof body === "string" ? Buffer.from(body) : Buffer.from(body);
   return {
-    hash: `sha256:${createHash5("sha256").update(bytes).digest("hex")}`,
+    hash: `sha256:${createHash6("sha256").update(bytes).digest("hex")}`,
     size_bytes: bytes.byteLength
   };
 }
@@ -16171,15 +16565,15 @@ function recordStorageObjects(db, objects, now = new Date) {
 }
 
 // src/wiki-layout.ts
-import { createHash as createHash6 } from "crypto";
+import { createHash as createHash7 } from "crypto";
 function todayParts(now) {
   const year = String(now.getUTCFullYear());
   const month = String(now.getUTCMonth() + 1).padStart(2, "0");
   const day = String(now.getUTCDate()).padStart(2, "0");
   return { year, month, day };
 }
-function stableId3(prefix, value) {
-  return `${prefix}_${createHash6("sha256").update(value).digest("hex").slice(0, 20)}`;
+function stableId4(prefix, value) {
+  return `${prefix}_${createHash7("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
 function agentSchemaTemplate() {
   return `# Knowledge Agent Schema v1
@@ -16302,7 +16696,7 @@ function recordWikiLayoutCatalog(db, artifacts, now = new Date) {
          artifact_uri = excluded.artifact_uri,
          metadata_json = excluded.metadata_json,
          updated_at = excluded.updated_at`, [
-      stableId3("idx", "root:indexes/root.md"),
+      stableId4("idx", "root:indexes/root.md"),
       "root",
       "root",
       rootIndex.uri,
@@ -16326,7 +16720,7 @@ function recordWikiLayoutCatalog(db, artifacts, now = new Date) {
          status = excluded.status,
          metadata_json = excluded.metadata_json,
          updated_at = excluded.updated_at`, [
-      stableId3("wiki", "wiki/README.md"),
+      stableId4("wiki", "wiki/README.md"),
       "wiki/README.md",
       "Wiki",
       wikiReadme.uri,
@@ -16467,6 +16861,26 @@ class KnowledgeService {
   modelRegistry() {
     return listModelRegistry(this.config());
   }
+  embeddingStatus() {
+    const workspace = this.ensureWorkspace();
+    return embeddingIndexStatus(workspace.knowledgeDbPath);
+  }
+  async indexEmbeddings(options = {}) {
+    const workspace = this.ensureWorkspace();
+    return indexKnowledgeEmbeddings({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config()
+    });
+  }
+  async semanticSearch(options) {
+    const workspace = this.ensureWorkspace();
+    return searchVectorIndex({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config()
+    });
+  }
 }
 function createKnowledgeService(options = {}) {
   return new KnowledgeService(options);
@@ -16580,6 +16994,41 @@ function buildServer() {
   }, async ({ scope }) => {
     const service = createKnowledgeService({ scope });
     return jsonText({ ok: true, models: service.modelRegistry() });
+  });
+  registerTool(server, "ok_embeddings_status", "Embedding index status", "Inspect local embedding/vector index counts by provider and model", {
+    scope: scopeField
+  }, async ({ scope }) => {
+    const service = createKnowledgeService({ scope });
+    return jsonText({ ok: true, ...service.embeddingStatus() });
+  });
+  registerTool(server, "ok_embeddings_index", "Index embeddings", "Embed unindexed knowledge chunks into the local vector index", {
+    scope: scopeField,
+    limit: exports_external.number().optional().describe("Maximum chunks to embed"),
+    model: exports_external.string().optional().describe("Embedding model ref, default openai:text-embedding-3-small"),
+    dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
+    fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings for local tests")
+  }, async ({ scope, limit, model, dimensions, fake }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText({ ok: true, ...await service.indexEmbeddings({ limit, modelRef: model, dimensions, fake }) });
+    } catch (error48) {
+      return errorText(error48 instanceof Error ? error48.message : String(error48));
+    }
+  });
+  registerTool(server, "ok_semantic_search", "Semantic search", "Search the local vector index and return cited chunks with provenance", {
+    scope: scopeField,
+    query: exports_external.string().describe("Semantic query"),
+    limit: exports_external.number().optional().describe("Maximum results"),
+    model: exports_external.string().optional().describe("Embedding model ref, default openai:text-embedding-3-small"),
+    dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
+    fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings for local tests")
+  }, async ({ scope, query, limit, model, dimensions, fake }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText({ ok: true, ...await service.semanticSearch({ query, limit, modelRef: model, dimensions, fake }) });
+    } catch (error48) {
+      return errorText(error48 instanceof Error ? error48.message : String(error48));
+    }
   });
   registerTool(server, "ok_add", "Add a knowledge item", "Add a new item to the knowledge store", {
     title: exports_external.string().describe("Item title"),

@@ -66,6 +66,9 @@ describe('open-knowledge MCP', () => {
       expect(tools.tools.some((tool) => tool.name === 'ok_resolve_source')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_storage_status')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_provider_status')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'ok_embeddings_status')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'ok_embeddings_index')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'ok_semantic_search')).toBe(true);
 
       const add = parseToolJson(await client.callTool({
         name: 'ok_add',
@@ -126,6 +129,25 @@ describe('open-knowledge MCP', () => {
         arguments: { scope: 'project' },
       }));
       expect(providerModels.models.some((entry: any) => entry.alias === 'sonnet')).toBe(true);
+
+      const embeddingStatus = parseToolJson(await client.callTool({
+        name: 'ok_embeddings_status',
+        arguments: { scope: 'project' },
+      }));
+      expect(embeddingStatus.total_vector_entries).toBe(0);
+
+      const embeddingIndex = parseToolJson(await client.callTool({
+        name: 'ok_embeddings_index',
+        arguments: { scope: 'project', fake: true, dimensions: 8 },
+      }));
+      expect(embeddingIndex.vector_entries_upserted).toBe(1);
+
+      const semanticSearch = parseToolJson(await client.callTool({
+        name: 'ok_semantic_search',
+        arguments: { scope: 'project', query: 'resolver source text', fake: true, dimensions: 8 },
+      }));
+      expect(semanticSearch.results).toHaveLength(1);
+      expect(semanticSearch.results[0].text).toContain('MCP resolver source text');
 
       const batch = parseToolJson(await client.callTool({
         name: 'ok_batch',

@@ -168,13 +168,13 @@ describe('open-knowledge cli', () => {
     const init = runCli(['db', 'init', '--scope', 'project', '--json'], dir);
     expect(init.exitCode).toBe(0);
     const initOut = JSON.parse(new TextDecoder().decode(init.stdout));
-    expect(initOut.schema_version).toBe(3);
+    expect(initOut.schema_version).toBe(4);
     expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'knowledge.db'))).toBe(true);
 
     const stats = runCli(['db', 'stats', '--scope', 'project', '--json'], dir);
     expect(stats.exitCode).toBe(0);
     const statsOut = JSON.parse(new TextDecoder().decode(stats.stdout));
-    expect(statsOut.schema_version).toBe(3);
+    expect(statsOut.schema_version).toBe(4);
     expect(statsOut.sources).toBe(0);
     expect(statsOut.runs).toBe(0);
   });
@@ -276,6 +276,33 @@ describe('open-knowledge cli', () => {
     expect(resolveOut.source.kind).toBe('file');
     expect(resolveOut.content.bytes_exposed).toBe(false);
     expect(resolveOut.chunks[0].text).toContain('CLI source ingestion');
+  });
+
+  test('embeddings commands index and search chunks with deterministic vectors', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-embeddings-cli-'));
+    const source = join(dir, 'source.md');
+    writeFileSync(source, 'CLI semantic embeddings should find this company wiki source.');
+    const sourceRef = `file://${source}`;
+
+    const ingest = runCli(['ingest', 'source', sourceRef, '--purpose', 'knowledge_index', '--scope', 'project', '--json'], dir);
+    expect(ingest.exitCode).toBe(0);
+
+    const index = runCli(['embeddings', 'index', '--scope', 'project', '--fake', '--dimensions', '8', '--json'], dir);
+    expect(index.exitCode).toBe(0);
+    const indexOut = JSON.parse(new TextDecoder().decode(index.stdout));
+    expect(indexOut.chunks_embedded).toBe(1);
+    expect(indexOut.vector_entries_upserted).toBe(1);
+
+    const status = runCli(['embeddings', 'status', '--scope', 'project', '--json'], dir);
+    expect(status.exitCode).toBe(0);
+    const statusOut = JSON.parse(new TextDecoder().decode(status.stdout));
+    expect(statusOut.total_vector_entries).toBe(1);
+
+    const search = runCli(['embeddings', 'search', 'company', 'wiki', 'source', '--scope', 'project', '--fake', '--dimensions', '8', '--json'], dir);
+    expect(search.exitCode).toBe(0);
+    const searchOut = JSON.parse(new TextDecoder().decode(search.stdout));
+    expect(searchOut.results).toHaveLength(1);
+    expect(searchOut.results[0].provenance.source_uri).toBe(sourceRef);
   });
 
   test('safety commands expose policy, approvals, redaction, audit, and S3 denial', () => {

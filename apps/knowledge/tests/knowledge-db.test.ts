@@ -16,7 +16,7 @@ describe('knowledge sqlite store', () => {
     const dbPath = join(dir, 'knowledge.db');
 
     const migration = migrateKnowledgeDb(dbPath);
-    expect(migration.schema_version).toBe(3);
+    expect(migration.schema_version).toBe(4);
 
     const db = openKnowledgeDb(dbPath);
     try {
@@ -41,7 +41,7 @@ describe('knowledge sqlite store', () => {
     }
 
     const stats = getKnowledgeDbStats(dbPath);
-    expect(stats.schema_version).toBe(3);
+    expect(stats.schema_version).toBe(4);
     expect(stats.sources).toBe(0);
     expect(stats.runs).toBe(0);
     expect(stats.redaction_findings).toBe(0);
@@ -90,7 +90,7 @@ describe('knowledge sqlite store', () => {
     });
 
     const stats = getKnowledgeDbStats(dbPath);
-    expect(stats.schema_version).toBe(3);
+    expect(stats.schema_version).toBe(4);
     expect(stats.sources).toBe(2);
     expect(stats.source_revisions).toBe(2);
     expect(stats.chunks).toBe(1);
