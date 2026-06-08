@@ -255,6 +255,13 @@ returns a local citation draft by default, optionally calls AI SDK generation vi
 `--generate`, records `runs`, `run_events`, and `provider_usage`, and only
 proposes durable wiki updates until the wiki compile/write task owns writes.
 
+Provider-native web search is exposed separately as
+`open-knowledge web search <query>` and MCP `ok_web_search`. Real network access
+is safety-gated; OpenAI and Anthropic use provider web-search tools through AI
+SDK, while DeepSeek remains a future fallback/external-search path. Returned web
+snippets can optionally be filed as read-only `web` source refs for later local
+search and citation.
+
 ## Provider Registry
 
 AI provider setup is BYOK and AI SDK v6 based. The local provider layer tracks:

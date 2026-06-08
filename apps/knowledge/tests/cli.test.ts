@@ -372,6 +372,21 @@ describe('open-knowledge cli', () => {
     expect(statsOut.runs).toBe(2);
   });
 
+  test('web search command returns and files provider sources in fake mode', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-web-cli-'));
+
+    const web = runCli(['web', 'search', 'company', 'wiki', 'policy', '--scope', 'project', '--provider', 'openai', '--model', 'openai:gpt-5-mini', '--fake', '--file-results', '--limit', '2', '--json'], dir);
+    expect(web.exitCode).toBe(0);
+    const webOut = JSON.parse(new TextDecoder().decode(web.stdout));
+    expect(webOut.sources).toHaveLength(2);
+    expect(webOut.filed_sources).toBe(2);
+
+    const search = runCli(['search', 'provider', 'web', 'search', 'fixture', '--scope', 'project', '--json'], dir);
+    expect(search.exitCode).toBe(0);
+    const searchOut = JSON.parse(new TextDecoder().decode(search.stdout));
+    expect(searchOut.results.some((entry: any) => entry.source?.kind === 'web')).toBe(true);
+  });
+
   test('safety commands expose policy, approvals, redaction, audit, and S3 denial', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-safety-cli-'));
 

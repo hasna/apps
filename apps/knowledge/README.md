@@ -102,6 +102,9 @@ open-knowledge search "company wiki policy" --scope project --context --json
 # Build a citation answer/context draft for a prompt
 open-knowledge ask "How do we cite handbook policy?" --scope project --json
 knowledge "How do we cite handbook policy?" --scope project --json
+
+# Provider-native web search, safety-gated for real network access
+HASNA_KNOWLEDGE_WEB_SEARCH=1 open-knowledge web search "latest AI SDK web search" --provider openai --json
 ```
 
 ## Commands
@@ -276,6 +279,18 @@ pack, returns a local citation draft by default, records a run ledger in
 the flow deterministic for local tests. `--approve-write` records approval
 intent, but durable wiki writes remain deferred to the wiki compile/write task.
 
+### web
+```bash
+open-knowledge web search <query> [--provider openai|anthropic] [--model provider:model] [--domain <domain>] [--file-results] [--scope project] [--json]
+```
+Run provider-native hosted web search and return cited web sources. Real network
+search is disabled unless `safety.network.web_search_enabled=true` or
+`HASNA_KNOWLEDGE_WEB_SEARCH=1` is set. OpenAI uses the AI SDK OpenAI
+`tools.webSearch` path; Anthropic uses its provider web-search tool when
+available. `--file-results` stores returned snippets as read-only `web` source
+refs in `knowledge.db` so later local search can cite them. `--fake` returns
+deterministic offline sources for tests.
+
 ### safety
 ```bash
 open-knowledge safety status [--scope project] [--json]
@@ -358,7 +373,8 @@ The MCP server exposes item tools (`ok_add`, `ok_list`, `ok_get`, `ok_update`,
 parsing/resolution (`ok_parse_source_ref`, `ok_resolve_source`). The
 `knowledge_search` MCP tool returns reranked citation context packs for agent
 prompts, and `knowledge_ask` runs the same prompt flow exposed by
-`open-knowledge ask`.
+`open-knowledge ask`. `ok_web_search` exposes safety-gated provider web search
+to MCP clients.
 
 ## Source And Artifact Boundary
 

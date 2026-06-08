@@ -222,6 +222,24 @@ export function buildServer() {
     }
   });
 
+  registerTool(server, 'ok_web_search', 'Provider web search', 'Run safety-gated provider-native web search and return citations/sources', {
+    scope: scopeField,
+    query: z.string().describe('Web search query'),
+    limit: z.number().optional().describe('Maximum sources'),
+    provider: z.enum(['openai', 'anthropic', 'deepseek']).optional().describe('Provider override'),
+    model: z.string().optional().describe('Model alias/ref'),
+    domains: z.array(z.string()).optional().describe('Allowed domains'),
+    fake: z.boolean().optional().describe('Use deterministic fake web results'),
+    file_results: z.boolean().optional().describe('File web snippets as web source refs'),
+  }, async ({ scope, query, limit, provider, model, domains, fake, file_results }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText({ ok: true, ...await service.webSearch({ query, limit, provider, modelRef: model, domains, fake, fileResults: file_results }) });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
   registerTool(server, 'ok_add', 'Add a knowledge item', 'Add a new item to the knowledge store', {
     title: z.string().describe('Item title'),
     content: z.string().describe('Item content/body'),

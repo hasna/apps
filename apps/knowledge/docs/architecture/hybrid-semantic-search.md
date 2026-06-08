@@ -142,6 +142,11 @@ source refs, artifact URIs, revision/hash metadata, offsets, and provenance.
 and MCP `knowledge_ask` wrap this context pack in a run ledger and return a
 citation draft or explicit AI SDK generated answer.
 
+Provider-native web search lives beside local retrieval. `open-knowledge web
+search` and MCP `ok_web_search` are safety-gated, capture provider sources, and
+can file snippets as read-only `web` source refs so later local retrieval treats
+them like other cited sources.
+
 ## Reindexing
 
 Reindexing is driven by source revisions:

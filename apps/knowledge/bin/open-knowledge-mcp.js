@@ -13660,7 +13660,7 @@ import { existsSync as existsSync7, readFileSync as readFileSync7, writeFileSync
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.17",
+  version: "0.2.18",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   bin: {
@@ -17348,8 +17348,259 @@ async function ingestSourceRef(options) {
   };
 }
 
-// src/storage-contract.ts
+// src/web-search.ts
 import { createHash as createHash7, randomUUID as randomUUID6 } from "crypto";
+function stableHash(value) {
+  return `sha256:${createHash7("sha256").update(value).digest("hex")}`;
+}
+function estimateTokens2(text) {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.ceil(words * 1.25));
+}
+function asRecord(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+function asString3(value) {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+function sourceFromRecord(value) {
+  const record2 = asRecord(value);
+  const url2 = asString3(record2.url) ?? asString3(record2.uri) ?? asString3(record2.sourceUrl);
+  if (!url2)
+    return null;
+  return {
+    url: url2,
+    title: asString3(record2.title) ?? asString3(record2.name),
+    snippet: asString3(record2.snippet) ?? asString3(record2.text) ?? asString3(record2.description),
+    provider_metadata: record2
+  };
+}
+function collectSources(value, output) {
+  if (Array.isArray(value)) {
+    for (const entry of value)
+      collectSources(entry, output);
+    return;
+  }
+  const source = sourceFromRecord(value);
+  if (source)
+    output.set(source.url, source);
+  const record2 = asRecord(value);
+  for (const key of ["sources", "results", "citations", "annotations", "output"]) {
+    if (record2[key])
+      collectSources(record2[key], output);
+  }
+}
+function fakeSources(query, limit) {
+  return Array.from({ length: Math.min(limit, 3) }, (_, index) => ({
+    url: `https://example.com/knowledge-web-${index + 1}`,
+    title: `Fake web source ${index + 1}`,
+    snippet: `Deterministic web-search fixture for "${query}"`,
+    provider_metadata: { fake: true, rank: index + 1 }
+  }));
+}
+async function openAiWebSearch(input) {
+  const { generateText } = await import("ai");
+  const { createOpenAI } = await import("@ai-sdk/openai");
+  const settings = providerSettings(input.config, "openai");
+  const openai = createOpenAI({
+    apiKey: input.env[settings.api_key_env],
+    baseURL: settings.base_url
+  });
+  const webSearch = openai.tools?.webSearch;
+  if (!webSearch)
+    throw new Error("OpenAI provider does not expose tools.webSearch.");
+  return generateText({
+    model: openai(input.model),
+    prompt: input.query,
+    tools: {
+      web_search: webSearch({
+        externalWebAccess: true,
+        searchContextSize: "medium",
+        ...input.domains.length > 0 ? { allowedDomains: input.domains } : {}
+      })
+    },
+    toolChoice: { type: "tool", toolName: "web_search" }
+  });
+}
+async function anthropicWebSearch(input) {
+  const { generateText } = await import("ai");
+  const { createAnthropic } = await import("@ai-sdk/anthropic");
+  const settings = providerSettings(input.config, "anthropic");
+  const anthropic = createAnthropic({
+    apiKey: input.env[settings.api_key_env],
+    baseURL: settings.base_url
+  });
+  const factory = anthropic.tools?.webSearch_20250305 ?? anthropic.tools?.webSearch;
+  if (!factory)
+    throw new Error("Anthropic provider does not expose a web search tool.");
+  return generateText({
+    model: anthropic(input.model),
+    prompt: input.query,
+    tools: {
+      web_search: factory({
+        maxUses: input.maxUses,
+        ...input.domains.length > 0 ? { allowedDomains: input.domains } : {}
+      })
+    }
+  });
+}
+async function fileWebSources(options, sources, now) {
+  if (!options.fileResults || sources.length === 0)
+    return 0;
+  const items = sources.map((source) => {
+    const text = [source.title, source.snippet, source.url].filter(Boolean).join(`
+`);
+    const hash2 = stableHash(text);
+    return {
+      source_ref: source.url,
+      name: source.title ?? source.url,
+      url: source.url,
+      mime: "text/plain",
+      hash: hash2,
+      revision: hash2,
+      status: "active",
+      updated_at: now,
+      permissions: { mode: "read_only", allowed_purposes: ["knowledge_answer", "knowledge_index"] },
+      metadata: {
+        source_ref: source.url,
+        content_source: "provider_web_search",
+        provider_metadata: source.provider_metadata
+      },
+      extracted_text: text
+    };
+  });
+  const result = await ingestOpenFilesManifestItems({
+    dbPath: options.dbPath,
+    items,
+    sourceLabel: `web-search:${options.query}`,
+    readAction: "provider_web_search_file_results",
+    safetyPolicy: options.safetyPolicy,
+    now: new Date(now)
+  });
+  return result.sources_upserted;
+}
+async function runProviderWebSearch(options) {
+  const query = options.query.trim();
+  if (!query)
+    throw new Error("Web search query is required.");
+  const env = options.env ?? process.env;
+  const now = (options.now ?? new Date).toISOString();
+  const limit = Math.max(1, Math.min(options.limit ?? 5, 20));
+  const maxUses = Math.max(1, Math.min(options.maxUses ?? 3, 10));
+  const domains = options.domains ?? [];
+  const modelRef = resolveModelRef(options.modelRef ?? (options.provider ? `${options.provider}:${providerSettings(options.config, options.provider).default_model}` : "default"), options.config);
+  const parsed = parseModelRef(modelRef);
+  const provider = options.provider ?? parsed.provider;
+  const model = parsed.provider === provider ? parsed.model : providerSettings(options.config, provider).default_model;
+  const runId = `run_${randomUUID6()}`;
+  if (!options.fake && options.safetyPolicy)
+    assertWebSearchAllowed(options.safetyPolicy);
+  if (!options.fake && provider !== "openai" && provider !== "anthropic") {
+    throw new Error(`Provider ${provider} does not expose native web search yet.`);
+  }
+  if (!options.fake)
+    assertProviderCredentials(provider, options.config, env);
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    db.run(`INSERT INTO runs (id, type, prompt, status, provider, model, metadata_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      runId,
+      "provider-web-search",
+      query,
+      "running",
+      provider,
+      model,
+      JSON.stringify({ domains, max_uses: maxUses, fake: options.fake === true }),
+      now,
+      now
+    ]);
+    recordAuditEvent(db, {
+      event_type: "source_read",
+      action: options.fake ? "fake_provider_web_search" : "provider_web_search",
+      target_uri: query,
+      decision: "allow",
+      metadata: { provider, model, domains, max_uses: maxUses },
+      created_at: now
+    });
+  } finally {
+    db.close();
+  }
+  let answer = "";
+  let sources = [];
+  let usage = { input_tokens: estimateTokens2(query), output_tokens: 0, cost_usd: 0 };
+  const warnings = [];
+  if (options.fake) {
+    sources = fakeSources(query, limit);
+    answer = `Fake web search answer for: ${query}`;
+    usage.output_tokens = estimateTokens2(answer);
+  } else {
+    const result = provider === "openai" ? await openAiWebSearch({ query, model, config: options.config, env, maxUses, domains }) : await anthropicWebSearch({ query, model, config: options.config, env, maxUses, domains });
+    answer = result.text;
+    const collected = new Map;
+    collectSources(result.sources, collected);
+    collectSources(result.toolResults, collected);
+    sources = Array.from(collected.values()).slice(0, limit);
+    const normalized = normalizeAiSdkUsage({
+      provider,
+      model,
+      usage: result.usage,
+      providerMetadata: result.providerMetadata
+    });
+    usage = {
+      input_tokens: normalized.input_tokens,
+      output_tokens: normalized.output_tokens,
+      cost_usd: normalized.cost_usd
+    };
+  }
+  const filedSources = await fileWebSources(options, sources, now);
+  const writeDb = openKnowledgeDb(options.dbPath);
+  try {
+    writeDb.run(`UPDATE runs SET status = ?, metadata_json = ?, updated_at = ? WHERE id = ?`, [
+      "completed",
+      JSON.stringify({ domains, max_uses: maxUses, sources: sources.length, filed_sources: filedSources, fake: options.fake === true }),
+      now,
+      runId
+    ]);
+    writeDb.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`, [
+      `evt_${randomUUID6()}`,
+      runId,
+      "info",
+      "provider_web_search_completed",
+      JSON.stringify({ sources: sources.length, filed_sources: filedSources }),
+      now
+    ]);
+    recordProviderUsage(writeDb, {
+      run_id: runId,
+      provider,
+      model,
+      input_tokens: usage.input_tokens,
+      output_tokens: usage.output_tokens,
+      cost_usd: usage.cost_usd,
+      metadata: { web_search: true, sources: sources.length, filed_sources: filedSources },
+      created_at: now
+    });
+  } finally {
+    writeDb.close();
+  }
+  if (sources.length === 0)
+    warnings.push("no_web_sources_returned");
+  return {
+    run_id: runId,
+    query,
+    provider,
+    model,
+    answer,
+    sources,
+    filed_sources: filedSources,
+    usage,
+    warnings
+  };
+}
+
+// src/storage-contract.ts
+import { createHash as createHash8, randomUUID as randomUUID7 } from "crypto";
 var GENERATED_ARTIFACTS = [
   {
     kind: "schema",
@@ -17385,7 +17636,7 @@ var GENERATED_ARTIFACTS = [
 function hashArtifactBody(body) {
   const bytes = typeof body === "string" ? Buffer.from(body) : Buffer.from(body);
   return {
-    hash: `sha256:${createHash7("sha256").update(bytes).digest("hex")}`,
+    hash: `sha256:${createHash8("sha256").update(bytes).digest("hex")}`,
     size_bytes: bytes.byteLength
   };
 }
@@ -17510,7 +17761,7 @@ function recordStorageObjects(db, objects, now = new Date) {
   `);
   const insert = db.transaction((entries) => {
     for (const entry of entries) {
-      statement.run(randomUUID6(), entry.uri, entry.kind, entry.content_type ?? null, entry.hash ?? null, entry.size_bytes ?? null, JSON.stringify({
+      statement.run(randomUUID7(), entry.uri, entry.kind, entry.content_type ?? null, entry.hash ?? null, entry.size_bytes ?? null, JSON.stringify({
         key: entry.key,
         ...entry.metadata ?? {}
       }), timestamp, timestamp);
@@ -17520,7 +17771,7 @@ function recordStorageObjects(db, objects, now = new Date) {
 }
 
 // src/wiki-layout.ts
-import { createHash as createHash8 } from "crypto";
+import { createHash as createHash9 } from "crypto";
 function todayParts(now) {
   const year = String(now.getUTCFullYear());
   const month = String(now.getUTCMonth() + 1).padStart(2, "0");
@@ -17528,7 +17779,7 @@ function todayParts(now) {
   return { year, month, day };
 }
 function stableId5(prefix, value) {
-  return `${prefix}_${createHash8("sha256").update(value).digest("hex").slice(0, 20)}`;
+  return `${prefix}_${createHash9("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
 function estimateTokenCount2(text) {
   const words = text.trim().split(/\s+/).filter(Boolean).length;
@@ -17893,6 +18144,15 @@ class KnowledgeService {
       config: this.config()
     });
   }
+  async webSearch(options) {
+    const workspace = this.ensureWorkspace();
+    return runProviderWebSearch({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config(),
+      safetyPolicy: this.safetyPolicy()
+    });
+  }
 }
 function createKnowledgeService(options = {}) {
   return new KnowledgeService(options);
@@ -18088,6 +18348,23 @@ function buildServer() {
     const service = createKnowledgeService({ scope });
     try {
       return jsonText({ ok: true, ...await service.runPrompt({ prompt, limit, semantic, generate, approveWrite: approve_write, modelRef: model, dimensions, fake }) });
+    } catch (error48) {
+      return errorText(error48 instanceof Error ? error48.message : String(error48));
+    }
+  });
+  registerTool(server, "ok_web_search", "Provider web search", "Run safety-gated provider-native web search and return citations/sources", {
+    scope: scopeField,
+    query: exports_external.string().describe("Web search query"),
+    limit: exports_external.number().optional().describe("Maximum sources"),
+    provider: exports_external.enum(["openai", "anthropic", "deepseek"]).optional().describe("Provider override"),
+    model: exports_external.string().optional().describe("Model alias/ref"),
+    domains: exports_external.array(exports_external.string()).optional().describe("Allowed domains"),
+    fake: exports_external.boolean().optional().describe("Use deterministic fake web results"),
+    file_results: exports_external.boolean().optional().describe("File web snippets as web source refs")
+  }, async ({ scope, query, limit, provider, model, domains, fake, file_results }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText({ ok: true, ...await service.webSearch({ query, limit, provider, modelRef: model, domains, fake, fileResults: file_results }) });
     } catch (error48) {
       return errorText(error48 instanceof Error ? error48.message : String(error48));
     }

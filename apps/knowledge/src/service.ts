@@ -16,6 +16,7 @@ import { providerStatus, listModelRegistry, type ProviderStatusResult, type Mode
 import { retrieveKnowledgeContext, type RetrievalOptions } from './retrieval';
 import { hybridSearch, type HybridSearchOptions } from './search';
 import { resolveSafetyPolicy } from './safety';
+import { runProviderWebSearch, type WebSearchOptions } from './web-search';
 import {
   recordStorageObjects,
   resolveStorageContract,
@@ -242,6 +243,16 @@ export class KnowledgeService {
       ...options,
       dbPath: workspace.knowledgeDbPath,
       config: this.config(),
+    });
+  }
+
+  async webSearch(options: Omit<WebSearchOptions, 'dbPath' | 'config' | 'safetyPolicy'>) {
+    const workspace = this.ensureWorkspace();
+    return runProviderWebSearch({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config(),
+      safetyPolicy: this.safetyPolicy(),
     });
   }
 }
