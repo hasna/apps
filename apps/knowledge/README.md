@@ -32,6 +32,47 @@ Or run directly:
 bun x @hasna/knowledge add "My Note" "Some content"
 ```
 
+## SDK
+
+Apps can install the package and use the public SDK without shelling out to the
+CLI or importing internal source files:
+
+```ts
+import { createKnowledgeClient } from '@hasna/knowledge';
+
+const knowledge = createKnowledgeClient({
+  scope: 'project',
+  cwd: process.cwd(),
+});
+
+await knowledge.setup({ mode: 'hosted', canonicalHasnaXyz: true });
+await knowledge.ingest.source('file:///absolute/path/to/handbook.md', 'knowledge_index');
+
+const results = await knowledge.search({
+  query: 'company wiki policy',
+  semantic: true,
+  limit: 5,
+});
+
+const answer = await knowledge.ask('How do we cite handbook policy?', {
+  semantic: true,
+  limit: 5,
+});
+```
+
+The stable package surface is the top-level `@hasna/knowledge` export:
+`createKnowledgeClient`, `createKnowledgeSdk`, service/result types, workspace
+helpers, source-ref helpers, storage contracts, search/retrieval types,
+provider helpers, and remote contract types. CLI and MCP entrypoints remain
+available as package bins.
+
+The SDK uses the same `.hasna/apps/knowledge` project workspace as the CLI. In
+local mode it writes the SQLite catalog and generated artifacts under that path.
+In hosted/canonical mode it can point generated artifacts at S3 while keeping
+raw source ownership outside open-knowledge. Source files remain referenced via
+`open-files://`, `file://`, `s3://`, or web refs; open-knowledge stores derived
+chunks, citations, indexes, run logs, and generated wiki artifacts.
+
 ## Quick Start
 
 ```bash

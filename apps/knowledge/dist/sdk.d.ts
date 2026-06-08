@@ -1,0 +1,72 @@
+import { KnowledgeService, type KnowledgeServiceOptions } from './service.js';
+export type KnowledgeClientOptions = KnowledgeServiceOptions;
+export type KnowledgeSetupOptions = Parameters<KnowledgeService['setup']>[0];
+export type KnowledgeAuthInput = Parameters<KnowledgeService['saveAuth']>[0];
+export type KnowledgeAskOptions = Omit<Parameters<KnowledgeService['runPrompt']>[0], 'prompt'>;
+export type KnowledgeSearchOptions = Parameters<KnowledgeService['search']>[0];
+export type KnowledgeContextOptions = Parameters<KnowledgeService['retrieveContext']>[0];
+export type KnowledgeWebSearchOptions = Parameters<KnowledgeService['webSearch']>[0];
+export interface KnowledgeClient {
+    /**
+     * Escape hatch for advanced integrations. Prefer the grouped SDK methods for
+     * app-facing code; this service may expose lower-level operations over time.
+     */
+    readonly unstable_service: KnowledgeService;
+    readonly paths: () => ReturnType<KnowledgeService['paths']>;
+    readonly setup: (options?: KnowledgeSetupOptions) => ReturnType<KnowledgeService['setup']>;
+    readonly auth: {
+        readonly status: (env?: Record<string, string | undefined>) => ReturnType<KnowledgeService['authStatus']>;
+        readonly login: (input: KnowledgeAuthInput, env?: Record<string, string | undefined>) => ReturnType<KnowledgeService['saveAuth']>;
+        readonly logout: (env?: Record<string, string | undefined>) => ReturnType<KnowledgeService['clearAuth']>;
+    };
+    readonly remote: {
+        readonly contract: () => ReturnType<KnowledgeService['remoteContract']>;
+        readonly client: (env?: Record<string, string | undefined>) => ReturnType<KnowledgeService['remoteClient']>;
+    };
+    readonly storage: {
+        readonly status: () => ReturnType<KnowledgeService['storageContract']>;
+        readonly validate: () => ReturnType<KnowledgeService['validateStorage']>;
+        readonly artifactStore: () => ReturnType<KnowledgeService['artifactStore']>;
+    };
+    readonly db: {
+        readonly init: () => ReturnType<KnowledgeService['initDb']>;
+        readonly stats: () => ReturnType<KnowledgeService['dbStats']>;
+    };
+    readonly wiki: {
+        readonly init: () => ReturnType<KnowledgeService['initWiki']>;
+        readonly compile: (options?: Parameters<KnowledgeService['compileWiki']>[0]) => ReturnType<KnowledgeService['compileWiki']>;
+        readonly fileAnswer: (options: Parameters<KnowledgeService['fileAnswer']>[0]) => ReturnType<KnowledgeService['fileAnswer']>;
+        readonly lint: () => ReturnType<KnowledgeService['lintWiki']>;
+    };
+    readonly ingest: {
+        readonly manifest: (input: string) => ReturnType<KnowledgeService['ingestManifest']>;
+        readonly source: (sourceRef: string, purpose?: string) => ReturnType<KnowledgeService['ingestSource']>;
+    };
+    readonly sources: {
+        readonly resolve: (sourceRef: string, options?: Parameters<KnowledgeService['resolveSource']>[1]) => ReturnType<KnowledgeService['resolveSource']>;
+        readonly consumeOutbox: (input: string) => ReturnType<KnowledgeService['consumeOutbox']>;
+    };
+    readonly reindex: {
+        readonly health: (options?: Parameters<KnowledgeService['reindexHealth']>[0]) => ReturnType<KnowledgeService['reindexHealth']>;
+        readonly enqueue: (options?: Parameters<KnowledgeService['enqueueReindex']>[0]) => ReturnType<KnowledgeService['enqueueReindex']>;
+        readonly refreshEmbeddings: (options?: Parameters<KnowledgeService['refreshEmbeddings']>[0]) => ReturnType<KnowledgeService['refreshEmbeddings']>;
+    };
+    readonly providers: {
+        readonly status: (env?: Record<string, string | undefined>) => ReturnType<KnowledgeService['providerStatus']>;
+        readonly models: () => ReturnType<KnowledgeService['modelRegistry']>;
+    };
+    readonly embeddings: {
+        readonly status: () => ReturnType<KnowledgeService['embeddingStatus']>;
+        readonly index: (options?: Parameters<KnowledgeService['indexEmbeddings']>[0]) => ReturnType<KnowledgeService['indexEmbeddings']>;
+        readonly search: (options: Parameters<KnowledgeService['semanticSearch']>[0]) => ReturnType<KnowledgeService['semanticSearch']>;
+    };
+    readonly search: (options: KnowledgeSearchOptions) => ReturnType<KnowledgeService['search']>;
+    readonly retrieveContext: (options: KnowledgeContextOptions) => ReturnType<KnowledgeService['retrieveContext']>;
+    readonly ask: (prompt: string, options?: KnowledgeAskOptions) => ReturnType<KnowledgeService['runPrompt']>;
+    readonly build: (prompt: string, options?: KnowledgeAskOptions) => ReturnType<KnowledgeService['runPrompt']>;
+    readonly web: {
+        readonly search: (options: KnowledgeWebSearchOptions) => ReturnType<KnowledgeService['webSearch']>;
+    };
+}
+export declare function createKnowledgeClient(options?: KnowledgeClientOptions): KnowledgeClient;
+export declare const createKnowledgeSdk: typeof createKnowledgeClient;

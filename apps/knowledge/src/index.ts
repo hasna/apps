@@ -1,0 +1,205 @@
+export {
+  createKnowledgeClient,
+  createKnowledgeSdk,
+  type KnowledgeAskOptions,
+  type KnowledgeAuthInput,
+  type KnowledgeClient,
+  type KnowledgeClientOptions,
+  type KnowledgeContextOptions,
+  type KnowledgeSearchOptions,
+  type KnowledgeSetupOptions,
+  type KnowledgeWebSearchOptions,
+} from './sdk.js';
+export {
+  createKnowledgeService,
+  KnowledgeService,
+  type KnowledgePathsResult,
+  type KnowledgeServiceOptions,
+  type KnowledgeSetupResult,
+} from './service.js';
+export {
+  HASNA_KNOWLEDGE_APP_PATH,
+  HASNA_XYZ_KNOWLEDGE_CANONICAL,
+  canonicalHasnaXyzKnowledgeStorage,
+  defaultKnowledgeConfig,
+  ensureKnowledgeWorkspace,
+  globalKnowledgeHome,
+  projectKnowledgeHome,
+  readKnowledgeConfig,
+  resolveScopedWorkspace,
+  workspaceForHome,
+  writeKnowledgeConfig,
+  type KnowledgeConfig,
+  type KnowledgeWorkspace,
+} from './workspace.js';
+export {
+  createArtifactStore,
+  LocalArtifactStore,
+  S3ArtifactStore,
+  normalizeArtifactKey,
+  type ArtifactStore,
+  type ArtifactWrite,
+  type S3ArtifactStoreOptions,
+} from './artifact-store.js';
+export {
+  artifactKindForKey,
+  hashArtifactBody,
+  resolveStorageContract,
+  validateStorageConfig,
+  type GeneratedStorageObject,
+  type StorageArtifactClass,
+  type StorageContract,
+  type StorageValidationResult,
+} from './storage-contract.js';
+export {
+  parseSourceRef,
+  catalogSourceUriForRef,
+  revisionIdForSourceRef,
+  isSupportedSourceRef,
+  type BaseSourceRef,
+  type FileSourceRef,
+  type OpenFilesSourceRef,
+  type S3SourceRef,
+  type SourceRef,
+  type SourceRefKind,
+  type WebSourceRef,
+} from './source-ref.js';
+export {
+  hybridSearch,
+  type HybridSearchEntry,
+  type HybridSearchOptions,
+  type HybridSearchResult,
+  type SearchProvenance,
+  type SearchResultKind,
+} from './search.js';
+export {
+  retrieveKnowledgeContext,
+  type KnowledgeContextPack,
+  type RetrievalCitation,
+  type RetrievalExcerpt,
+  type RetrievalGraphEvidence,
+  type RetrievalOptions,
+  type RerankedSearchEntry,
+} from './retrieval.js';
+export {
+  runKnowledgePrompt,
+  type KnowledgePromptOptions,
+  type KnowledgePromptResult,
+} from './agent.js';
+export {
+  DEFAULT_EMBEDDING_DIMENSIONS,
+  DEFAULT_EMBEDDING_MODEL_REF,
+  embedTexts,
+  embeddingIndexStatus,
+  indexKnowledgeEmbeddings,
+  resolveEmbeddingModelRef,
+  searchVectorIndex,
+  type EmbeddingIndexOptions,
+  type EmbeddingIndexResult,
+  type EmbeddingRuntimeOptions,
+  type EmbeddingSearchOptions,
+  type EmbeddingStatusResult,
+  type EmbeddingUsage,
+  type EmbeddingVectorResult,
+  type SemanticSearchResult,
+} from './embeddings.js';
+export {
+  createAiSdkProviderRegistry,
+  languageModelFor,
+  listModelRegistry,
+  modelAliases,
+  parseModelRef,
+  providerCredentialStatus,
+  providerSettings,
+  providerStatus,
+  resolveModelRef,
+  type AiProviderId,
+  type AiProviderRuntimeOptions,
+  type AiProviderSettings,
+  type AiProvidersConfig,
+  type ModelCapabilities,
+  type ModelRegistryEntry,
+  type ProviderCredentialStatus,
+  type ProviderStatusResult,
+} from './providers.js';
+export {
+  runProviderWebSearch,
+  type WebSearchOptions,
+  type WebSearchResult,
+  type WebSearchSource,
+} from './web-search.js';
+export {
+  compileWikiPage,
+  fileAnswerToWiki,
+  lintWiki,
+  type WikiAnswerFileOptions,
+  type WikiAnswerFileResult,
+  type WikiCompileOptions,
+  type WikiCompileResult,
+  type WikiLintIssue,
+  type WikiLintResult,
+} from './wiki-compiler.js';
+export {
+  ingestOpenFilesManifest,
+  ingestOpenFilesManifestItems,
+  type ManifestIngestOptions,
+  type ManifestIngestResult,
+  type ManifestItemsIngestOptions,
+  type ManifestObject,
+} from './manifest-ingest.js';
+export {
+  ingestSourceRef,
+  type SourceIngestOptions,
+  type SourceIngestResult,
+} from './source-ingest.js';
+export {
+  resolveOpenFilesSource,
+  type ResolvedSourceChunk,
+  type ResolvedSourceCitation,
+  type SourceResolveOptions,
+  type SourceResolveResult,
+  type SourceResolverEvidence,
+} from './source-resolver.js';
+export {
+  consumeOpenFilesOutbox,
+  type OutboxConsumeOptions,
+  type OutboxConsumeResult,
+} from './outbox-consume.js';
+export {
+  enqueueMissingEmbeddings,
+  refreshEmbeddingIndex,
+  reindexHealth,
+  type ReindexEmbeddingsResult,
+  type ReindexEnqueueResult,
+  type ReindexHealthResult,
+  type ReindexRuntimeOptions,
+} from './reindex.js';
+export {
+  DEFAULT_KNOWLEDGE_API_URL,
+  clearKnowledgeAuth,
+  getKnowledgeApiKey,
+  getKnowledgeAuth,
+  knowledgeAuthPath,
+  knowledgeAuthStatus,
+  normalizeKnowledgeApiOrigin,
+  resolveKnowledgeApiUrl,
+  saveKnowledgeAuth,
+  type KnowledgeAuthConfig,
+  type KnowledgeAuthStatus,
+} from './auth.js';
+export {
+  REMOTE_KNOWLEDGE_CONTRACT_VERSION,
+  RemoteKnowledgeClient,
+  knowledgeRegistryContract,
+  normalizeRemoteKnowledgeRunContract,
+  type RemoteKnowledgeArtifact,
+  type RemoteKnowledgeArtifactContract,
+  type RemoteKnowledgeLogEntry,
+  type RemoteKnowledgePromptRequest,
+  type RemoteKnowledgeRegistryContract,
+  type RemoteKnowledgeRunContract,
+  type RemoteKnowledgeRunStatus,
+  type RemoteKnowledgeSearchRequest,
+  type RemoteKnowledgeSourceContract,
+  type RemoteKnowledgeSyncRequest,
+} from './remote-client.js';

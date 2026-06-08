@@ -13660,9 +13660,17 @@ import { existsSync as existsSync8, readFileSync as readFileSync8, writeFileSync
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.27",
+  version: "0.2.28",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
+  exports: {
+    ".": {
+      import: "./dist/index.js",
+      types: "./dist/index.d.ts"
+    }
+  },
+  main: "./dist/index.js",
+  types: "./dist/index.d.ts",
   bin: {
     knowledge: "bin/open-knowledge.js",
     "open-knowledge": "bin/open-knowledge.js",
@@ -13670,7 +13678,7 @@ var package_default = {
   },
   files: [
     "bin",
-    "src",
+    "dist",
     "docs",
     "LICENSE",
     "README.md"
@@ -13678,9 +13686,8 @@ var package_default = {
   scripts: {
     test: "bun test",
     "test:cli": "bun test tests/cli.test.ts",
-    build: "bun build --target=bun --outfile=bin/open-knowledge.js --minify --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --target=bun --outfile=bin/open-knowledge-mcp.js --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js",
-    prepublishOnly: "bun run build",
-    postinstall: "bun run build"
+    build: "rm -rf dist && bun build --target=bun --outfile=bin/open-knowledge.js --minify --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --target=bun --outfile=bin/open-knowledge-mcp.js --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js && bun build ./src/index.ts --outdir ./dist --target bun --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek && bunx tsc -p tsconfig.build.json",
+    prepublishOnly: "bun run build"
   },
   keywords: [
     "knowledge",
@@ -13709,12 +13716,13 @@ var package_default = {
     node: ">=18"
   },
   dependencies: {
-    "@aws-sdk/client-s3": "^3.1063.0",
-    "@aws-sdk/credential-providers": "^3.1063.0",
     "@ai-sdk/anthropic": "^3.0.81",
     "@ai-sdk/deepseek": "^2.0.35",
     "@ai-sdk/openai": "^3.0.68",
+    "@aws-sdk/client-s3": "^3.1063.0",
+    "@aws-sdk/credential-providers": "^3.1063.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@types/json-schema": "^7.0.15",
     ai: "^6.0.197",
     zod: "^4.3.6"
   },
