@@ -43,6 +43,13 @@ The future hosted/SaaS wrapper owns:
 The OSS package must stay useful without a hosted account. Hosted mode should be
 an optional remote client over explicit API contracts.
 
+The detailed hosted boundary is specified in
+[`hosted-wrapper-responsibilities.md`](./hosted-wrapper-responsibilities.md).
+That document is the source of truth for responsibilities that must stay out of
+the OSS package, including tenants, ACL enforcement, connector credentials,
+bucket provisioning, secrets, queues, billing, admin controls, observability, and
+the hosted web UI.
+
 The local hosted-aware contract follows the `open-skills` pattern: `mode` is
 `local` by default, `setup --mode hosted` records `hosted.api_url`, env vars
 `KNOWLEDGE_API_URL` and `KNOWLEDGE_API_KEY` can override local config, and
