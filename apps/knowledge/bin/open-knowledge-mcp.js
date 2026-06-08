@@ -100,9 +100,9 @@ async function startMcpHttpServer(buildServer, options = {}) {
       }
     }
   });
-  await new Promise((resolve2, reject) => {
+  await new Promise((resolve3, reject) => {
     httpServer.once("error", reject);
-    httpServer.listen(requestedPort, host, () => resolve2());
+    httpServer.listen(requestedPort, host, () => resolve3());
   });
   const addr = httpServer.address();
   const port = typeof addr === "object" && addr ? addr.port : requestedPort;
@@ -110,8 +110,8 @@ async function startMcpHttpServer(buildServer, options = {}) {
   return {
     port,
     host,
-    close: () => new Promise((resolve2, reject) => {
-      httpServer.close((err) => err ? reject(err) : resolve2());
+    close: () => new Promise((resolve3, reject) => {
+      httpServer.close((err) => err ? reject(err) : resolve3());
     })
   };
 }
@@ -13659,7 +13659,7 @@ import { existsSync as existsSync3, readFileSync as readFileSync3, writeFileSync
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.7",
+  version: "0.2.8",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   bin: {
@@ -13941,6 +13941,603 @@ function parseSourceRef(uri) {
     return parseWebRef(uri);
   throw new Error(`Unsupported source ref scheme: ${uri}`);
 }
+function catalogSourceUriForRef(uri, parsed = parseSourceRef(uri)) {
+  if (parsed.kind === "open-files" && parsed.entity === "file" && parsed.revision_id) {
+    return uri.replace(/\/revision\/[^/]+$/, "");
+  }
+  return uri;
+}
+function revisionIdForSourceRef(uri) {
+  const parsed = parseSourceRef(uri);
+  return parsed.kind === "open-files" && parsed.entity === "file" ? parsed.revision_id ?? null : null;
+}
+
+// src/knowledge-db.ts
+import { Database } from "bun:sqlite";
+var MIGRATION_1 = `
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS schema_versions (
+  version INTEGER PRIMARY KEY,
+  applied_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sources (
+  id TEXT PRIMARY KEY,
+  uri TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  title TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  acl_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS source_revisions (
+  id TEXT PRIMARY KEY,
+  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  revision TEXT NOT NULL,
+  hash TEXT,
+  extracted_text_uri TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  UNIQUE(source_id, revision)
+);
+
+CREATE TABLE IF NOT EXISTS chunks (
+  id TEXT PRIMARY KEY,
+  source_revision_id TEXT REFERENCES source_revisions(id) ON DELETE CASCADE,
+  wiki_page_id TEXT,
+  kind TEXT NOT NULL,
+  ordinal INTEGER NOT NULL,
+  text TEXT NOT NULL,
+  token_count INTEGER,
+  start_offset INTEGER,
+  end_offset INTEGER,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chunk_embeddings (
+  id TEXT PRIMARY KEY,
+  chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  dimensions INTEGER NOT NULL,
+  vector_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(chunk_id, provider, model)
+);
+
+CREATE TABLE IF NOT EXISTS wiki_pages (
+  id TEXT PRIMARY KEY,
+  path TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  artifact_uri TEXT,
+  content_hash TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS wiki_backlinks (
+  from_page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
+  to_page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
+  label TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(from_page_id, to_page_id)
+);
+
+CREATE TABLE IF NOT EXISTS citations (
+  id TEXT PRIMARY KEY,
+  wiki_page_id TEXT REFERENCES wiki_pages(id) ON DELETE CASCADE,
+  chunk_id TEXT REFERENCES chunks(id) ON DELETE SET NULL,
+  source_uri TEXT NOT NULL,
+  quote TEXT,
+  start_offset INTEGER,
+  end_offset INTEGER,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_indexes (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  artifact_uri TEXT,
+  shard_key TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(kind, name, shard_key)
+);
+
+CREATE TABLE IF NOT EXISTS runs (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  prompt TEXT,
+  status TEXT NOT NULL,
+  provider TEXT,
+  model TEXT,
+  cost_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL NOT NULL DEFAULT 0,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS run_events (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  level TEXT NOT NULL,
+  event TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS provider_usage (
+  id TEXT PRIMARY KEY,
+  run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL NOT NULL DEFAULT 0,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS redaction_findings (
+  id TEXT PRIMARY KEY,
+  source_uri TEXT,
+  run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+  severity TEXT NOT NULL,
+  finding_type TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS storage_objects (
+  id TEXT PRIMARY KEY,
+  artifact_uri TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  content_type TEXT,
+  hash TEXT,
+  size_bytes INTEGER,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+  text,
+  title,
+  source_uri,
+  content='',
+  tokenize='porter unicode61'
+);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (1, datetime('now'));
+`;
+var MIGRATION_2 = `
+DROP TABLE IF EXISTS chunks_fts;
+
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+  chunk_id UNINDEXED,
+  text,
+  title,
+  source_uri,
+  tokenize='porter unicode61'
+);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (2, datetime('now'));
+`;
+var MIGRATION_3 = `
+CREATE TABLE IF NOT EXISTS audit_events (
+  id TEXT PRIMARY KEY,
+  event_type TEXT NOT NULL,
+  action TEXT NOT NULL,
+  target_uri TEXT,
+  decision TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS approval_gates (
+  id TEXT PRIMARY KEY,
+  action TEXT NOT NULL,
+  target_uri TEXT,
+  status TEXT NOT NULL,
+  reason TEXT,
+  approved_by TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action);
+CREATE INDEX IF NOT EXISTS idx_audit_events_target ON audit_events(target_uri);
+CREATE INDEX IF NOT EXISTS idx_audit_events_created ON audit_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_approval_gates_action ON approval_gates(action);
+CREATE INDEX IF NOT EXISTS idx_approval_gates_status ON approval_gates(status);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (3, datetime('now'));
+`;
+function openKnowledgeDb(path) {
+  ensureParentDir(path);
+  const db = new Database(path);
+  db.exec("PRAGMA foreign_keys = ON;");
+  return db;
+}
+function migrateKnowledgeDb(path) {
+  const db = openKnowledgeDb(path);
+  try {
+    db.exec(MIGRATION_1);
+    if (getSchemaVersion(db) < 2)
+      db.exec(MIGRATION_2);
+    if (getSchemaVersion(db) < 3)
+      db.exec(MIGRATION_3);
+    return { path, schema_version: getSchemaVersion(db) };
+  } finally {
+    db.close();
+  }
+}
+function getSchemaVersion(db) {
+  const row = db.query("SELECT MAX(version) AS version FROM schema_versions").get();
+  return row?.version ?? 0;
+}
+
+// src/safety.ts
+import { createHash, randomUUID as randomUUID2 } from "crypto";
+import { relative, resolve as resolve2, sep } from "path";
+function envEnabled(name) {
+  const value = process.env[name];
+  return value === "1" || value === "true" || value === "yes";
+}
+function resolveSafetyPolicy(config2, workspace) {
+  const extended = config2;
+  const configuredBuckets = new Set(extended.safety?.network?.allowed_s3_buckets ?? []);
+  if (config2.storage.type === "s3" && config2.storage.s3?.bucket)
+    configuredBuckets.add(config2.storage.s3.bucket);
+  if (process.env.HASNA_KNOWLEDGE_ALLOWED_S3_BUCKETS) {
+    for (const bucket of process.env.HASNA_KNOWLEDGE_ALLOWED_S3_BUCKETS.split(",").map((entry) => entry.trim()).filter(Boolean)) {
+      configuredBuckets.add(bucket);
+    }
+  }
+  return {
+    mode: config2.mode,
+    allowWriteRoots: [
+      workspace.home,
+      workspace.artifactsDir,
+      workspace.cacheDir,
+      workspace.exportsDir,
+      workspace.indexesDir,
+      workspace.logsDir,
+      workspace.runsDir,
+      workspace.schemasDir,
+      workspace.wikiDir
+    ].map((entry) => resolve2(entry)),
+    readOnlySourceAccess: true,
+    network: {
+      webSearchEnabled: extended.safety?.network?.web_search_enabled ?? envEnabled("HASNA_KNOWLEDGE_WEB_SEARCH"),
+      s3ReadsEnabled: extended.safety?.network?.s3_reads_enabled ?? envEnabled("HASNA_KNOWLEDGE_ALLOW_S3_READS"),
+      allowedS3Buckets: [...configuredBuckets].sort()
+    },
+    redaction: {
+      enabled: extended.safety?.redaction?.enabled ?? true
+    },
+    approvals: {
+      generatedWritesRequireApproval: extended.safety?.approvals?.generated_writes_require_approval ?? true
+    }
+  };
+}
+function isInside(root, target) {
+  const rel = relative(root, target);
+  return rel === "" || !rel.startsWith("..") && rel !== ".." && !rel.startsWith(`..${sep}`);
+}
+function assertWriteAllowed(targetPath, policy) {
+  const resolved = resolve2(targetPath);
+  if (!policy.allowWriteRoots.some((root) => isInside(root, resolved))) {
+    throw new Error(`Safety policy denied write outside .hasna/apps/knowledge: ${targetPath}`);
+  }
+}
+function auditId(input) {
+  return `audit_${createHash("sha256").update(`${input.event_type}\x00${input.action}\x00${input.target_uri ?? ""}\x00${input.created_at ?? ""}\x00${JSON.stringify(input.metadata ?? {})}\x00${randomUUID2()}`).digest("hex").slice(0, 24)}`;
+}
+function recordAuditEvent(db, input) {
+  const createdAt = input.created_at ?? new Date().toISOString();
+  const id = auditId({ ...input, created_at: createdAt });
+  db.run(`INSERT INTO audit_events (id, event_type, action, target_uri, decision, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`, [
+    id,
+    input.event_type,
+    input.action,
+    input.target_uri ?? null,
+    input.decision,
+    JSON.stringify(input.metadata ?? {}),
+    createdAt
+  ]);
+  return id;
+}
+
+// src/source-resolver.ts
+function parseJsonObject(value) {
+  if (!value)
+    return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function metadataString(metadata, keys) {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "string" && value.length > 0)
+      return value;
+  }
+  return null;
+}
+function metadataNumber(metadata, keys) {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "number" && Number.isFinite(value))
+      return value;
+  }
+  return null;
+}
+function assertPurposeAllowed(permissions, purpose) {
+  const mode = permissions.mode;
+  if (typeof mode === "string" && mode !== "read_only") {
+    throw new Error(`Source resolver denied ${purpose}. Permission mode is ${mode}, expected read_only.`);
+  }
+  const denied = permissions.denied_purposes;
+  if (Array.isArray(denied) && denied.includes(purpose)) {
+    throw new Error(`Source resolver denied ${purpose}. Purpose is explicitly denied.`);
+  }
+  const allowed = permissions.allowed_purposes;
+  if (Array.isArray(allowed) && allowed.length > 0 && !allowed.includes(purpose)) {
+    throw new Error(`Source resolver denied ${purpose}. Allowed purposes: ${allowed.join(", ")}`);
+  }
+}
+function sourceRevisionRef(sourceUri, revision, fallback) {
+  if (!revision)
+    return fallback;
+  try {
+    const parsed = parseSourceRef(sourceUri);
+    if (parsed.kind === "open-files" && parsed.entity === "file") {
+      return `${sourceUri}/revision/${encodeURIComponent(revision.revision)}`;
+    }
+  } catch {
+    return fallback;
+  }
+  return fallback;
+}
+function selectSource(db, sourceUri, requestedRef) {
+  return db.query(`SELECT id, uri, kind, title, metadata_json, acl_json, updated_at
+     FROM sources
+     WHERE uri = ? OR uri = ?
+     ORDER BY CASE WHEN uri = ? THEN 0 ELSE 1 END
+     LIMIT 1`).get(sourceUri, requestedRef, sourceUri) ?? null;
+}
+function selectRevision(db, sourceId, revisionId) {
+  if (revisionId) {
+    return db.query(`SELECT id, revision, hash, extracted_text_uri, metadata_json, created_at
+       FROM source_revisions
+       WHERE source_id = ? AND revision = ?
+       LIMIT 1`).get(sourceId, revisionId) ?? null;
+  }
+  return db.query(`SELECT id, revision, hash, extracted_text_uri, metadata_json, created_at
+     FROM source_revisions
+     WHERE source_id = ?
+     ORDER BY created_at DESC, revision DESC
+     LIMIT 1`).get(sourceId) ?? null;
+}
+function countChunks(db, revisionId) {
+  if (!revisionId)
+    return 0;
+  const row = db.query("SELECT COUNT(*) AS n FROM chunks WHERE source_revision_id = ?").get(revisionId);
+  return row?.n ?? 0;
+}
+function selectChunks(db, revisionId, limit) {
+  if (!revisionId || limit <= 0)
+    return [];
+  return db.query(`SELECT id, kind, ordinal, text, token_count, start_offset, end_offset, metadata_json
+     FROM chunks
+     WHERE source_revision_id = ?
+     ORDER BY ordinal ASC
+     LIMIT ?`).all(revisionId, limit);
+}
+async function resolveOpenFilesSource(options) {
+  const purpose = options.purpose ?? "knowledge_answer";
+  const limit = Math.max(0, Math.min(options.limit ?? 10, 100));
+  const resolvedAt = (options.now ?? new Date).toISOString();
+  const parsed = parseSourceRef(options.sourceRef);
+  const sourceUri = catalogSourceUriForRef(options.sourceRef, parsed);
+  const requestedRevision = revisionIdForSourceRef(options.sourceRef);
+  if (options.safetyPolicy) {
+    if (!options.safetyPolicy.readOnlySourceAccess)
+      throw new Error("Safety policy denied source resolution.");
+    assertWriteAllowed(options.dbPath, options.safetyPolicy);
+  }
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    return db.transaction(() => {
+      const source = selectSource(db, sourceUri, options.sourceRef);
+      if (!source) {
+        recordAuditEvent(db, {
+          event_type: "source_read",
+          action: "open_files_resolve_missing",
+          target_uri: options.sourceRef,
+          decision: "allow",
+          metadata: { purpose, read_only: true, source_uri: sourceUri },
+          created_at: resolvedAt
+        });
+        return {
+          source_ref: options.sourceRef,
+          source_uri: sourceUri,
+          purpose,
+          read_only: true,
+          resolved: false,
+          resolver: {
+            name: "open-files-read-only",
+            mode: "local_catalog",
+            contract: "open-files-knowledge-source-v1"
+          },
+          source: null,
+          revision: null,
+          content: {
+            mime: null,
+            size: null,
+            hash: null,
+            text_available: false,
+            chunks_total: 0,
+            chunks_returned: 0,
+            char_count_returned: 0,
+            extracted_text_ref: null,
+            bytes_available: false,
+            bytes_exposed: false
+          },
+          chunks: [],
+          citations: []
+        };
+      }
+      const sourceMetadata = parseJsonObject(source.metadata_json);
+      const permissions = parseJsonObject(source.acl_json);
+      try {
+        assertPurposeAllowed(permissions, purpose);
+      } catch (error48) {
+        recordAuditEvent(db, {
+          event_type: "source_read",
+          action: "open_files_resolve",
+          target_uri: options.sourceRef,
+          decision: "deny",
+          metadata: {
+            purpose,
+            read_only: true,
+            source_uri: source.uri,
+            error: error48 instanceof Error ? error48.message : String(error48)
+          },
+          created_at: resolvedAt
+        });
+        throw error48;
+      }
+      const revision = selectRevision(db, source.id, requestedRevision);
+      const revisionMetadata = parseJsonObject(revision?.metadata_json);
+      const totalChunks = countChunks(db, revision?.id ?? null);
+      const rows = selectChunks(db, revision?.id ?? null, limit);
+      const effectiveSourceRef = sourceRevisionRef(source.uri, revision, options.sourceRef);
+      const chunks = rows.map((row) => {
+        const metadata = parseJsonObject(row.metadata_json);
+        const evidence = {
+          resolver: "open-files-read-only",
+          mode: "local_catalog",
+          purpose,
+          read_only: true,
+          source_ref: metadataString(metadata, ["source_ref"]) ?? effectiveSourceRef,
+          source_uri: source.uri,
+          source_revision_id: revision?.id ?? null,
+          revision: revision?.revision ?? null,
+          hash: revision?.hash ?? metadataString(metadata, ["hash"]),
+          chunk_id: row.id,
+          start_offset: row.start_offset,
+          end_offset: row.end_offset,
+          resolved_at: resolvedAt
+        };
+        return {
+          id: row.id,
+          kind: row.kind,
+          ordinal: row.ordinal,
+          text: row.text,
+          token_count: row.token_count,
+          start_offset: row.start_offset,
+          end_offset: row.end_offset,
+          metadata,
+          evidence
+        };
+      });
+      const citations = chunks.map((chunk) => ({
+        source_ref: chunk.evidence.source_ref,
+        source_uri: source.uri,
+        chunk_id: chunk.id,
+        quote: chunk.text.slice(0, 500),
+        start_offset: chunk.start_offset,
+        end_offset: chunk.end_offset,
+        evidence: chunk.evidence
+      }));
+      recordAuditEvent(db, {
+        event_type: "source_read",
+        action: "open_files_resolve",
+        target_uri: options.sourceRef,
+        decision: "allow",
+        metadata: {
+          purpose,
+          read_only: true,
+          source_uri: source.uri,
+          revision: revision?.revision ?? null,
+          chunks_returned: chunks.length,
+          chunks_total: totalChunks
+        },
+        created_at: resolvedAt
+      });
+      const mime = metadataString(sourceMetadata, ["mime", "content_type"]) ?? metadataString(revisionMetadata, ["mime", "content_type"]);
+      const size = metadataNumber(sourceMetadata, ["size", "size_bytes"]) ?? metadataNumber(revisionMetadata, ["size", "size_bytes"]);
+      return {
+        source_ref: effectiveSourceRef,
+        source_uri: source.uri,
+        purpose,
+        read_only: true,
+        resolved: true,
+        resolver: {
+          name: "open-files-read-only",
+          mode: "local_catalog",
+          contract: "open-files-knowledge-source-v1"
+        },
+        source: {
+          id: source.id,
+          uri: source.uri,
+          kind: source.kind,
+          title: source.title,
+          metadata: sourceMetadata,
+          permissions,
+          updated_at: source.updated_at
+        },
+        revision: revision ? {
+          id: revision.id,
+          revision: revision.revision,
+          hash: revision.hash,
+          extracted_text_uri: revision.extracted_text_uri,
+          metadata: revisionMetadata,
+          created_at: revision.created_at,
+          reindex_required: revisionMetadata.reindex_required === true
+        } : null,
+        content: {
+          mime,
+          size,
+          hash: revision?.hash ?? metadataString(sourceMetadata, ["hash", "checksum", "sha256"]),
+          text_available: totalChunks > 0,
+          chunks_total: totalChunks,
+          chunks_returned: chunks.length,
+          char_count_returned: chunks.reduce((sum, chunk) => sum + chunk.text.length, 0),
+          extracted_text_ref: revision?.extracted_text_uri ?? metadataString(revisionMetadata, ["extracted_text_ref", "extracted_text_uri"]),
+          bytes_available: false,
+          bytes_exposed: false
+        },
+        chunks,
+        citations
+      };
+    })();
+  } finally {
+    db.close();
+  }
+}
 
 // src/mcp.js
 var storePathField = exports_external.string().optional().describe("Path to the JSON store file");
@@ -14022,6 +14619,28 @@ function buildServer() {
   }, async ({ uri }) => {
     try {
       return jsonText({ ok: true, source_ref: parseSourceRef(uri) });
+    } catch (error48) {
+      return errorText(error48 instanceof Error ? error48.message : String(error48));
+    }
+  });
+  registerTool(server, "ok_resolve_source", "Resolve source content", "Resolve an indexed source ref through the read-only open-files boundary and return chunk citation evidence", {
+    source_ref: exports_external.string().describe("Source reference URI, preferably open-files://..."),
+    purpose: exports_external.string().optional().describe("Read-only purpose label, default knowledge_answer"),
+    limit: exports_external.number().optional().describe("Maximum chunks to return, default 10"),
+    scope: scopeField
+  }, async ({ source_ref, purpose, limit, scope }) => {
+    const workspace = ensureKnowledgeWorkspace(resolveScopedWorkspace(scope).home);
+    const config2 = readKnowledgeConfig(workspace.configPath);
+    const safetyPolicy = resolveSafetyPolicy(config2, workspace);
+    try {
+      const result = await resolveOpenFilesSource({
+        dbPath: workspace.knowledgeDbPath,
+        sourceRef: source_ref,
+        purpose,
+        limit,
+        safetyPolicy
+      });
+      return jsonText({ ok: true, ...result });
     } catch (error48) {
       return errorText(error48 instanceof Error ? error48.message : String(error48));
     }

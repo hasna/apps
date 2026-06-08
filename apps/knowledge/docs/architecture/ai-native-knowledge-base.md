@@ -86,6 +86,24 @@ file revisions, hashes, extraction state, permissions, and storage metadata.
 Direct `s3://`, `file://`, and `https://` refs are useful for bootstrap and
 interop, but should be normalized into source records when possible.
 
+## Resolver Boundary
+
+The local resolver is exposed through:
+
+```bash
+open-knowledge source resolve <source-ref> --purpose knowledge_answer --json
+```
+
+and the MCP tool `ok_resolve_source`. It reads the knowledge catalog only,
+enforces the read-only purpose labels imported from `open-files`, returns source
+metadata, selected revision metadata, derived chunks, and citation evidence, and
+records an audit event. It never returns raw bytes or storage credentials.
+
+In future hosted mode, the same result shape can be backed by a remote
+open-files resolver API. The local OSS package should keep using the shared
+service boundary so CLI, MCP, and SaaS wrappers do not grow separate permission
+logic.
+
 ## Remote And S3 Mode
 
 Local mode writes artifacts to `.hasna/apps/knowledge`.

@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { ingestOpenFilesManifest } from '../src/manifest-ingest';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MCP = join(__dirname, '..', 'src', 'mcp.js');
@@ -32,10 +33,27 @@ describe('open-knowledge MCP', () => {
   test('registers tools and can add/get through stdio', async () => {
     const dir = makeTempDir('ok-mcp-');
     const store = join(dir, 'db.json');
+    const manifest = join(dir, 'manifest.jsonl');
+    writeFileSync(manifest, `${JSON.stringify({
+      source_ref: 'open-files://file/file_mcp/revision/rev_mcp',
+      file_id: 'file_mcp',
+      path: 'docs/mcp.md',
+      name: 'mcp.md',
+      mime: 'text/markdown',
+      hash: 'sha256:mcp',
+      status: 'active',
+      permissions: { mode: 'read_only', allowed_purposes: ['knowledge_answer'] },
+      extracted_text: 'MCP resolver source text from open-files.',
+    })}\n`);
+    await ingestOpenFilesManifest({
+      dbPath: join(dir, '.hasna', 'apps', 'knowledge', 'knowledge.db'),
+      input: manifest,
+    });
+
     const transport = new StdioClientTransport({
       command: 'bun',
       args: [MCP],
-      cwd: join(__dirname, '..'),
+      cwd: dir,
       stderr: 'pipe',
     });
     const client = new Client({ name: 'open-knowledge-test', version: '0.0.0' });
@@ -45,6 +63,7 @@ describe('open-knowledge MCP', () => {
       const tools = await client.listTools();
       expect(tools.tools.some((tool) => tool.name === 'ok_add')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_parse_source_ref')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'ok_resolve_source')).toBe(true);
 
       const add = parseToolJson(await client.callTool({
         name: 'ok_add',
@@ -70,6 +89,19 @@ describe('open-knowledge MCP', () => {
         arguments: { uri: 'open-files://file/file_123/revision/rev_456' },
       }));
       expect(source.source_ref).toMatchObject({ kind: 'open-files', entity: 'file', id: 'file_123', revision_id: 'rev_456' });
+
+      const resolved = parseToolJson(await client.callTool({
+        name: 'ok_resolve_source',
+        arguments: {
+          source_ref: 'open-files://file/file_mcp/revision/rev_mcp',
+          purpose: 'knowledge_answer',
+          scope: 'project',
+        },
+      }));
+      expect(resolved.resolved).toBe(true);
+      expect(resolved.content.bytes_exposed).toBe(false);
+      expect(resolved.chunks[0].text).toContain('MCP resolver source text');
+      expect(resolved.chunks[0].evidence.read_only).toBe(true);
 
       const batch = parseToolJson(await client.callTool({
         name: 'ok_batch',

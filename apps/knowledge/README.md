@@ -69,6 +69,9 @@ open-knowledge ingest manifest ./open-files-manifest.jsonl --scope project --jso
 # Consume open-files change events and invalidate stale source chunks
 open-knowledge reindex outbox ./open-files-outbox.jsonl --scope project --json
 
+# Resolve indexed source text and citation evidence through the read-only source boundary
+open-knowledge source resolve open-files://file/f_123/revision/rev_456 --scope project --json
+
 # Inspect local safety policy and approvals
 open-knowledge safety status --scope project --json
 ```
@@ -169,6 +172,15 @@ Create starter generated-knowledge artifacts through the artifact store:
 `schemas/v1.md`, `indexes/root.md`, `wiki/README.md`, and a dated JSONL log
 partition.
 
+### source
+```bash
+open-knowledge source resolve <source-ref> [--purpose knowledge_answer|knowledge_index] [--limit <n>] [--scope project] [--json]
+```
+Resolve an indexed source through the read-only open-files boundary. The result
+returns source metadata, permissions, the selected revision, derived chunk text,
+and citation evidence. It does not expose raw file bytes or storage credentials;
+raw source retrieval remains owned by `open-files`.
+
 ### ingest
 ```bash
 open-knowledge ingest manifest <file|s3://bucket/key> [--scope project] [--json]
@@ -232,7 +244,7 @@ The MCP server exposes item tools (`ok_add`, `ok_list`, `ok_get`, `ok_update`,
 `ok_delete`, `ok_archive`, `ok_restore`, `ok_upsert`, `ok_untag`,
 `ok_bulk_delete`, `ok_prune`, `ok_dedupe`, `ok_stats`, `ok_export`,
 `ok_import`, `ok_batch`), workspace inspection (`ok_paths`), and source-ref
-parsing (`ok_parse_source_ref`).
+parsing/resolution (`ok_parse_source_ref`, `ok_resolve_source`).
 
 ## Source And Artifact Boundary
 
@@ -241,6 +253,11 @@ stores source references such as `open-files://file/<id>`,
 `open-files://file/<id>/revision/<revision_id>`, `s3://...`, `file://...`,
 and `https://...`, plus citations, chunks, generated wiki pages, indexes,
 logs, runs, and search metadata.
+
+`open-knowledge source resolve` and the MCP `ok_resolve_source` tool resolve
+only the indexed, derived knowledge catalog. The resolver enforces read-only
+purpose labels from source permissions, returns chunk citation evidence, writes
+an audit event, and keeps bytes/storage credentials inside `open-files`.
 
 Generated knowledge artifacts can be stored locally under
 `.hasna/apps/knowledge/artifacts` or through the S3 artifact-store adapter.

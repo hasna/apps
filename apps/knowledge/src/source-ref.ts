@@ -82,6 +82,18 @@ export function parseSourceRef(uri: string): SourceRef {
   throw new Error(`Unsupported source ref scheme: ${uri}`);
 }
 
+export function catalogSourceUriForRef(uri: string, parsed = parseSourceRef(uri)): string {
+  if (parsed.kind === 'open-files' && parsed.entity === 'file' && parsed.revision_id) {
+    return uri.replace(/\/revision\/[^/]+$/, '');
+  }
+  return uri;
+}
+
+export function revisionIdForSourceRef(uri: string): string | null {
+  const parsed = parseSourceRef(uri);
+  return parsed.kind === 'open-files' && parsed.entity === 'file' ? parsed.revision_id ?? null : null;
+}
+
 export function isSupportedSourceRef(uri: string): boolean {
   try {
     parseSourceRef(uri);

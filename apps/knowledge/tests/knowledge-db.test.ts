@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { getKnowledgeDbStats, migrateKnowledgeDb, openKnowledgeDb } from '../src/knowledge-db';
 import { ingestOpenFilesManifest } from '../src/manifest-ingest';
 import { consumeOpenFilesOutbox } from '../src/outbox-consume';
+import { resolveOpenFilesSource } from '../src/source-resolver';
 import { createApprovalGate, hasApproval, redactSecrets, resolveSafetyPolicy } from '../src/safety';
 import { defaultKnowledgeConfig, workspaceForHome } from '../src/workspace';
 
@@ -94,6 +95,35 @@ describe('knowledge sqlite store', () => {
     expect(stats.chunks).toBe(1);
     expect(stats.redaction_findings).toBeGreaterThanOrEqual(1);
     expect(stats.audit_events).toBeGreaterThanOrEqual(3);
+
+    const resolved = await resolveOpenFilesSource({
+      dbPath,
+      sourceRef: 'open-files://file/file_123/revision/rev_001',
+      purpose: 'knowledge_index',
+      limit: 5,
+    });
+    expect(resolved.resolved).toBe(true);
+    expect(resolved.read_only).toBe(true);
+    expect(resolved.source?.uri).toBe('open-files://file/file_123');
+    expect(resolved.revision?.revision).toBe('rev_001');
+    expect(resolved.content.text_available).toBe(true);
+    expect(resolved.content.bytes_exposed).toBe(false);
+    expect(resolved.chunks).toHaveLength(1);
+    expect(resolved.chunks[0].evidence).toMatchObject({
+      resolver: 'open-files-read-only',
+      mode: 'local_catalog',
+      purpose: 'knowledge_index',
+      read_only: true,
+      source_uri: 'open-files://file/file_123',
+      revision: 'rev_001',
+    });
+    expect(resolved.citations[0].evidence.chunk_id).toBe(resolved.chunks[0].id);
+    await expect(resolveOpenFilesSource({
+      dbPath,
+      sourceRef: 'open-files://file/file_123/revision/rev_001',
+      purpose: 'knowledge_answer',
+    })).rejects.toThrow('Allowed purposes: knowledge_index');
+
     migrateKnowledgeDb(dbPath);
 
     const db = openKnowledgeDb(dbPath);

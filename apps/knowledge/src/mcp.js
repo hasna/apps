@@ -7,6 +7,8 @@ import pkg from '../package.json' with { type: 'json' };
 import { defaultStorePath, loadStore, saveStore, makeId, withLock } from './store.ts';
 import { ensureKnowledgeWorkspace, readKnowledgeConfig, resolveScopedWorkspace } from './workspace.ts';
 import { parseSourceRef } from './source-ref.ts';
+import { resolveOpenFilesSource } from './source-resolver.ts';
+import { resolveSafetyPolicy } from './safety.ts';
 
 const storePathField = z.string().optional().describe('Path to the JSON store file');
 const scopeField = z.enum(['local', 'global', 'project']).optional().describe('Workspace scope');
@@ -97,6 +99,29 @@ export function buildServer() {
   }, async ({ uri }) => {
     try {
       return jsonText({ ok: true, source_ref: parseSourceRef(uri) });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'ok_resolve_source', 'Resolve source content', 'Resolve an indexed source ref through the read-only open-files boundary and return chunk citation evidence', {
+    source_ref: z.string().describe('Source reference URI, preferably open-files://...'),
+    purpose: z.string().optional().describe('Read-only purpose label, default knowledge_answer'),
+    limit: z.number().optional().describe('Maximum chunks to return, default 10'),
+    scope: scopeField,
+  }, async ({ source_ref, purpose, limit, scope }) => {
+    const workspace = ensureKnowledgeWorkspace(resolveScopedWorkspace(scope).home);
+    const config = readKnowledgeConfig(workspace.configPath);
+    const safetyPolicy = resolveSafetyPolicy(config, workspace);
+    try {
+      const result = await resolveOpenFilesSource({
+        dbPath: workspace.knowledgeDbPath,
+        sourceRef: source_ref,
+        purpose,
+        limit,
+        safetyPolicy,
+      });
+      return jsonText({ ok: true, ...result });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }

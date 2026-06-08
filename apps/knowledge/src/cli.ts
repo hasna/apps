@@ -11,6 +11,7 @@ import { createArtifactStore } from './artifact-store';
 import { initializeWikiLayout } from './wiki-layout';
 import { ingestOpenFilesManifest } from './manifest-ingest';
 import { consumeOpenFilesOutbox } from './outbox-consume';
+import { resolveOpenFilesSource } from './source-resolver';
 import { approvalStatus, assertS3ReadAllowed, assertWebSearchAllowed, createApprovalGate, recordAuditEvent, recordRedactionFindings, redactSecrets, resolveSafetyPolicy } from './safety';
 import pkg from '../package.json' with { type: 'json' };
 
@@ -49,6 +50,7 @@ interface Flags {
   tag?: string;
   format?: string;
   completions?: string;
+  purpose?: string;
   noColor?: boolean;
   scope?: string;
   olderThan?: number;
@@ -62,7 +64,7 @@ interface ParseResult {
   flags: Flags;
 }
 
-const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'export', 'prune', 'dedupe', 'stats', 'paths', 'db', 'wiki', 'ingest', 'reindex', 'safety', 'help'];
+const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'export', 'prune', 'dedupe', 'stats', 'paths', 'db', 'wiki', 'source', 'ingest', 'reindex', 'safety', 'help'];
 const COMMAND_ALIASES: Record<string, string> = {
   ls: 'list',
   rm: 'delete',
@@ -97,6 +99,7 @@ function parseArgs(argv: string[]): ParseResult {
       case '--tag': case '-t': flags.tag = argv[i + 1]; i += 1; break;
       case '--format': flags.format = argv[i + 1]; i += 1; break;
       case '--completions': flags.completions = argv[i + 1]; i += 1; break;
+      case '--purpose': flags.purpose = argv[i + 1]; i += 1; break;
       case '--no-color': flags.noColor = true; break;
       case '--scope': flags.scope = argv[i + 1]; i += 1; break;
       case '--older-than': flags.olderThan = Number(argv[i + 1]); i += 1; break;
@@ -165,6 +168,7 @@ Commands:
   paths                        Show resolved workspace/store paths
   db init|stats                Initialize or inspect local knowledge.db
   wiki init                    Initialize scalable wiki/schema/index/log artifacts
+  source resolve <source-ref>  Resolve read-only source content and citation evidence
   ingest manifest <file|s3://> Ingest an open-files manifest into knowledge.db
   reindex outbox <file|s3://>  Consume open-files change events and invalidate chunks
   safety status|check|approve|audit|redact
@@ -173,6 +177,7 @@ Commands:
 Global Options:
   --json                      Output JSON
   --store <path>              Override store path
+  --purpose <name>            Read-only source purpose (default: knowledge_answer)
   --scope local|global|project  Store scope (default: global ~/.hasna/apps/knowledge/)
   --no-color                  Disable color output
   --completions <shell>       Output completions for bash|zsh|fish
@@ -229,6 +234,7 @@ function printCommandHelp(command: string): void {
   if (command === 'paths') { console.log('Usage: open-knowledge paths [--scope local|global|project] [--json]'); return; }
   if (command === 'db') { console.log('Usage: open-knowledge db init|stats [--scope local|global|project] [--json]'); return; }
   if (command === 'wiki') { console.log('Usage: open-knowledge wiki init [--scope local|global|project] [--json]'); return; }
+  if (command === 'source') { console.log('Usage: open-knowledge source resolve <source-ref> [--purpose knowledge_answer|knowledge_index] [--limit <n>] [--scope local|global|project] [--json]'); return; }
   if (command === 'ingest') { console.log('Usage: open-knowledge ingest manifest <file|s3://bucket/key> [--scope local|global|project] [--json]'); return; }
   if (command === 'reindex') { console.log('Usage: open-knowledge reindex outbox <file|s3://bucket/key> [--scope local|global|project] [--json]'); return; }
   if (command === 'safety') { console.log('Usage: open-knowledge safety status|check|approve|audit|redact [args] [--scope local|global|project] [--json]'); return; }
@@ -276,11 +282,11 @@ async function run(argv: string[]): Promise<void> {
   if (flags.completions) {
     const shell = flags.completions;
     if (shell === 'bash') {
-      console.log(`_open_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats paths db wiki ingest reindex safety help ls rm edit unarchive --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --no-color --scope --archived --include-archived" -- "$cur")); }; complete -F _open_knowledge open-knowledge`);
+      console.log(`_open_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats paths db wiki source ingest reindex safety help ls rm edit unarchive --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --purpose --no-color --scope --archived --include-archived" -- "$cur")); }; complete -F _open_knowledge open-knowledge`);
     } else if (shell === 'zsh') {
-      console.log(`#compdef open-knowledge\n_open_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats paths db wiki ingest reindex safety help ls rm edit unarchive)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" }; _open_knowledge`);
+      console.log(`#compdef open-knowledge\n_open_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats paths db wiki source ingest reindex safety help ls rm edit unarchive)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" }; _open_knowledge`);
     } else if (shell === 'fish') {
-      console.log(`complete -c open-knowledge -f; complete -c open-knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats paths db wiki ingest reindex safety help ls rm edit unarchive"; complete -c open-knowledge -l json; complete -c open-knowledge -l yes -s y; complete -c open-knowledge -l help -s h; complete -c open-knowledge -l version -s v; complete -c open-knowledge -l desc; complete -c open-knowledge -l archived; complete -c open-knowledge -l include-archived; complete -c open-knowledge -s p -l page; complete -c open-knowledge -s l -l limit; complete -c open-knowledge -s s -l search; complete -c open-knowledge -l sort; complete -c open-knowledge -l id; complete -c open-knowledge -l store; complete -c open-knowledge -l title; complete -c open-knowledge -l content; complete -c open-knowledge -l url; complete -c open-knowledge -s t -l tag; complete -c open-knowledge -l format; complete -c open-knowledge -l completions; complete -c open-knowledge -l no-color; complete -c open-knowledge -l scope -a "local global project"`);
+      console.log(`complete -c open-knowledge -f; complete -c open-knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats paths db wiki source ingest reindex safety help ls rm edit unarchive"; complete -c open-knowledge -l json; complete -c open-knowledge -l yes -s y; complete -c open-knowledge -l help -s h; complete -c open-knowledge -l version -s v; complete -c open-knowledge -l desc; complete -c open-knowledge -l archived; complete -c open-knowledge -l include-archived; complete -c open-knowledge -s p -l page; complete -c open-knowledge -s l -l limit; complete -c open-knowledge -s s -l search; complete -c open-knowledge -l sort; complete -c open-knowledge -l id; complete -c open-knowledge -l store; complete -c open-knowledge -l title; complete -c open-knowledge -l content; complete -c open-knowledge -l url; complete -c open-knowledge -s t -l tag; complete -c open-knowledge -l format; complete -c open-knowledge -l completions; complete -c open-knowledge -l purpose; complete -c open-knowledge -l no-color; complete -c open-knowledge -l scope -a "local global project"`);
     } else {
       throw new Error("Invalid --completions value. Use 'bash', 'zsh', or 'fish'.");
     }
@@ -474,6 +480,31 @@ async function run(argv: string[]): Promise<void> {
     } finally {
       db.close();
     }
+  }
+
+  if (command === 'source') {
+    const action = positional[1] ?? '';
+    if (action !== 'resolve') throw new Error("Invalid source action. Use 'resolve'.");
+    const sourceRef = positional[2];
+    if (!sourceRef) throw new Error('Usage: open-knowledge source resolve <source-ref>');
+    const resolvedWorkspace = ensureKnowledgeWorkspace(workspace.home);
+    const config = readKnowledgeConfig(resolvedWorkspace.configPath);
+    const safetyPolicy = resolveSafetyPolicy(config, resolvedWorkspace);
+    const result = await resolveOpenFilesSource({
+      dbPath: resolvedWorkspace.knowledgeDbPath,
+      sourceRef,
+      purpose: flags.purpose,
+      limit: flags.limit,
+      safetyPolicy,
+    });
+    output({
+      ok: true,
+      ...result,
+      message: result.resolved
+        ? `Resolved ${result.source_ref} (${result.content.chunks_returned}/${result.content.chunks_total} chunks)`
+        : `Source not indexed: ${sourceRef}`,
+    }, flags.json);
+    return;
   }
 
   if (command === 'ingest') {

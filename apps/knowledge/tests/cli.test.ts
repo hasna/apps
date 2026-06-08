@@ -201,6 +201,23 @@ describe('open-knowledge cli', () => {
     expect(statsOut.source_revisions).toBe(1);
     expect(statsOut.chunks).toBe(1);
 
+    const resolve = runCli(['source', 'resolve', 'open-files://file/file_123/revision/rev_cli', '--scope', 'project', '--json'], dir);
+    expect(resolve.exitCode).toBe(0);
+    const resolveOut = JSON.parse(new TextDecoder().decode(resolve.stdout));
+    expect(resolveOut.resolved).toBe(true);
+    expect(resolveOut.read_only).toBe(true);
+    expect(resolveOut.content.bytes_exposed).toBe(false);
+    expect(resolveOut.content.chunks_returned).toBe(1);
+    expect(resolveOut.chunks[0].text).toContain('open-files');
+    expect(resolveOut.chunks[0].evidence).toMatchObject({
+      resolver: 'open-files-read-only',
+      mode: 'local_catalog',
+      purpose: 'knowledge_answer',
+      read_only: true,
+      source_uri: 'open-files://file/file_123',
+      revision: 'rev_cli',
+    });
+
     writeFileSync(outbox, `${JSON.stringify({
       event: 'deleted',
       source_ref: 'open-files://file/file_123/revision/rev_cli',
