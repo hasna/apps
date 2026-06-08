@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getKnowledgeDbStats, migrateKnowledgeDb, openKnowledgeDb } from '../src/knowledge-db';
 import { ingestOpenFilesManifest } from '../src/manifest-ingest';
+import { ingestSourceRef } from '../src/source-ingest';
 import { consumeOpenFilesOutbox } from '../src/outbox-consume';
 import { resolveOpenFilesSource } from '../src/source-resolver';
 import { createApprovalGate, hasApproval, redactSecrets, resolveSafetyPolicy } from '../src/safety';
@@ -118,6 +119,13 @@ describe('knowledge sqlite store', () => {
       revision: 'rev_001',
     });
     expect(resolved.citations[0].evidence.chunk_id).toBe(resolved.chunks[0].id);
+    const sourceIngest = await ingestSourceRef({
+      dbPath,
+      sourceRef: 'open-files://file/file_123/revision/rev_001',
+      purpose: 'knowledge_index',
+    });
+    expect(sourceIngest.content_source).toBe('catalog_chunks');
+    expect(sourceIngest.chunks_inserted).toBe(1);
     await expect(resolveOpenFilesSource({
       dbPath,
       sourceRef: 'open-files://file/file_123/revision/rev_001',
@@ -217,6 +225,37 @@ describe('knowledge sqlite store', () => {
     } finally {
       db.close();
     }
+  });
+
+  test('ingests direct read-only file source refs with redaction and provenance', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-source-ingest-'));
+    const dbPath = join(dir, 'knowledge.db');
+    const sourcePath = join(dir, 'source.md');
+    writeFileSync(sourcePath, 'Direct file source for knowledge_index. token=sk-testsecretkeyvalue1234567890');
+
+    const result = await ingestSourceRef({
+      dbPath,
+      sourceRef: `file://${sourcePath}`,
+      purpose: 'knowledge_index',
+    });
+    expect(result.items_seen).toBe(1);
+    expect(result.sources_upserted).toBe(1);
+    expect(result.revisions_upserted).toBe(1);
+    expect(result.chunks_inserted).toBe(1);
+    expect(result.redactions).toBe(1);
+    expect(result.content_source).toBe('file');
+    expect(result.hash).toStartWith('sha256:');
+
+    const resolved = await resolveOpenFilesSource({
+      dbPath,
+      sourceRef: `file://${sourcePath}`,
+      purpose: 'knowledge_index',
+    });
+    expect(resolved.resolved).toBe(true);
+    expect(resolved.source?.kind).toBe('file');
+    expect(resolved.chunks[0].text).toContain('[REDACTED:secret_assignment]');
+    expect(resolved.chunks[0].text).not.toContain('sk-testsecretkeyvalue');
+    expect(resolved.chunks[0].evidence.source_uri).toBe(`file://${sourcePath}`);
   });
 
   test('supports safety policy defaults and local approval gates', () => {

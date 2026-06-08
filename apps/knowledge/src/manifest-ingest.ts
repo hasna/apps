@@ -24,6 +24,17 @@ export interface ManifestIngestOptions {
   chunkOverlapChars?: number;
 }
 
+export interface ManifestItemsIngestOptions {
+  dbPath: string;
+  items: ManifestObject[];
+  sourceLabel: string;
+  readAction?: string;
+  safetyPolicy?: SafetyPolicy;
+  now?: Date;
+  maxChunkChars?: number;
+  chunkOverlapChars?: number;
+}
+
 export interface ManifestIngestResult {
   path: string;
   db_path: string;
@@ -36,7 +47,7 @@ export interface ManifestIngestResult {
   skipped: number;
 }
 
-type ManifestObject = Record<string, unknown>;
+export type ManifestObject = Record<string, unknown>;
 
 interface NormalizedManifestItem {
   raw: ManifestObject;
@@ -405,6 +416,23 @@ function insertChunks(db: Database, sourceRevisionId: string, item: NormalizedMa
 }
 
 export async function ingestOpenFilesManifest(options: ManifestIngestOptions): Promise<ManifestIngestResult> {
+  const now = options.now ?? new Date();
+  if (options.safetyPolicy) assertWriteAllowed(options.dbPath, options.safetyPolicy);
+  migrateKnowledgeDb(options.dbPath);
+  const text = await readManifestInput(options.input, options.config, options.safetyPolicy);
+  const items = parseManifestText(text);
+  return ingestOpenFilesManifestItems({
+    dbPath: options.dbPath,
+    items,
+    sourceLabel: options.input,
+    safetyPolicy: options.safetyPolicy,
+    now,
+    maxChunkChars: options.maxChunkChars,
+    chunkOverlapChars: options.chunkOverlapChars,
+  });
+}
+
+export async function ingestOpenFilesManifestItems(options: ManifestItemsIngestOptions): Promise<ManifestIngestResult> {
   const now = (options.now ?? new Date()).toISOString();
   const maxChunkChars = options.maxChunkChars ?? 4000;
   const chunkOverlapChars = options.chunkOverlapChars ?? 200;
@@ -413,8 +441,6 @@ export async function ingestOpenFilesManifest(options: ManifestIngestOptions): P
 
   if (options.safetyPolicy) assertWriteAllowed(options.dbPath, options.safetyPolicy);
   migrateKnowledgeDb(options.dbPath);
-  const text = await readManifestInput(options.input, options.config, options.safetyPolicy);
-  const items = parseManifestText(text);
   const db = openKnowledgeDb(options.dbPath);
   try {
     const result = db.transaction(() => {
@@ -426,13 +452,13 @@ export async function ingestOpenFilesManifest(options: ManifestIngestOptions): P
       let skipped = 0;
       recordAuditEvent(db, {
         event_type: 'source_read',
-        action: options.input.startsWith('s3://') ? 's3_manifest_read' : 'local_manifest_read',
-        target_uri: options.input,
+        action: options.readAction ?? (options.sourceLabel.startsWith('s3://') ? 's3_manifest_read' : 'local_manifest_read'),
+        target_uri: options.sourceLabel,
         decision: 'allow',
-        metadata: { items: items.length, read_only: true },
+        metadata: { items: options.items.length, read_only: true },
         created_at: now,
       });
-      for (const raw of items) {
+      for (const raw of options.items) {
         const item = normalizeManifestItem(raw, now);
         const sourceId = upsertSource(db, item, now);
         const revisionId = upsertRevision(db, sourceId, item, now);
@@ -450,13 +476,13 @@ export async function ingestOpenFilesManifest(options: ManifestIngestOptions): P
         action: 'knowledge_manifest_ingest',
         target_uri: options.dbPath,
         decision: 'allow',
-        metadata: { items: items.length, sources: seenSources.size, revisions: seenRevisions.size, chunks_inserted: chunksInserted, redactions },
+        metadata: { items: options.items.length, sources: seenSources.size, revisions: seenRevisions.size, chunks_inserted: chunksInserted, redactions },
         created_at: now,
       });
       return {
-        path: options.input,
+        path: options.sourceLabel,
         db_path: options.dbPath,
-        items_seen: items.length,
+        items_seen: options.items.length,
         sources_upserted: seenSources.size,
         revisions_upserted: seenRevisions.size,
         chunks_inserted: chunksInserted,

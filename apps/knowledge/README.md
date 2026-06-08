@@ -66,6 +66,9 @@ open-knowledge wiki init --scope project
 # Ingest an open-files source manifest into the project SQLite catalog
 open-knowledge ingest manifest ./open-files-manifest.jsonl --scope project --json
 
+# Ingest one read-only source ref directly
+open-knowledge ingest source file:///absolute/path/to/handbook.md --purpose knowledge_index --scope project --json
+
 # Consume open-files change events and invalidate stale source chunks
 open-knowledge reindex outbox ./open-files-outbox.jsonl --scope project --json
 
@@ -184,10 +187,19 @@ raw source retrieval remains owned by `open-files`.
 ### ingest
 ```bash
 open-knowledge ingest manifest <file|s3://bucket/key> [--scope project] [--json]
+open-knowledge ingest source <source-ref> [--purpose knowledge_index] [--scope project] [--json]
 ```
 Import an open-files JSON or JSONL source manifest into `knowledge.db`. This
 upserts sources and source revisions, stores hash/MIME/status/permission
 metadata, and chunks embedded extracted text when the manifest includes it.
+
+`ingest source` accepts `open-files://`, `file://`, `s3://`, and `https://`
+refs. It reads source content through a read-only boundary, redacts known
+secrets before storage, records hashes/revisions, and stores only derived chunks
+and citation spans. Web and S3 reads remain opt-in through the safety policy.
+For `open-files://` refs, the source must already be present in the local
+knowledge catalog through a manifest or extracted-text ref until the open-files
+resolver API lands.
 
 ### reindex
 ```bash
@@ -258,6 +270,11 @@ logs, runs, and search metadata.
 only the indexed, derived knowledge catalog. The resolver enforces read-only
 purpose labels from source permissions, returns chunk citation evidence, writes
 an audit event, and keeps bytes/storage credentials inside `open-files`.
+
+`open-knowledge ingest source` can also build derived chunks from an allowed
+source ref. It does not copy raw files into the knowledge workspace; local file,
+S3, web, and open-files inputs are converted into redacted chunks with offsets,
+hashes, revision metadata, and FTS rows.
 
 Generated knowledge artifacts can be stored locally under
 `.hasna/apps/knowledge/artifacts` or through the S3 artifact-store adapter.

@@ -92,12 +92,18 @@ The local resolver is exposed through:
 
 ```bash
 open-knowledge source resolve <source-ref> --purpose knowledge_answer --json
+open-knowledge ingest source <source-ref> --purpose knowledge_index --json
 ```
 
 and the MCP tool `ok_resolve_source`. It reads the knowledge catalog only,
 enforces the read-only purpose labels imported from `open-files`, returns source
 metadata, selected revision metadata, derived chunks, and citation evidence, and
 records an audit event. It never returns raw bytes or storage credentials.
+
+`ingest source` uses the same boundary for indexing. It accepts `open-files://`,
+`file://`, `s3://`, and `https://` refs, applies S3/web safety gates, converts
+allowed extracted text into redacted chunks with offsets, records hashes and
+revisions, and stores only derived knowledge records.
 
 In future hosted mode, the same result shape can be backed by a remote
 open-files resolver API. The local OSS package should keep using the shared

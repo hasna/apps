@@ -242,6 +242,29 @@ describe('open-knowledge cli', () => {
     expect(statsAfterOut.audit_events).toBeGreaterThanOrEqual(4);
   });
 
+  test('ingest source imports a read-only file ref into project knowledge.db', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-ingest-source-cli-'));
+    const source = join(dir, 'source.md');
+    writeFileSync(source, 'CLI source ingestion reads file refs without copying raw files.');
+    const sourceRef = `file://${source}`;
+
+    const ingest = runCli(['ingest', 'source', sourceRef, '--purpose', 'knowledge_index', '--scope', 'project', '--json'], dir);
+    expect(ingest.exitCode).toBe(0);
+    const ingestOut = JSON.parse(new TextDecoder().decode(ingest.stdout));
+    expect(ingestOut.content_source).toBe('file');
+    expect(ingestOut.source_ref).toBe(sourceRef);
+    expect(ingestOut.chunks_inserted).toBe(1);
+    expect(ingestOut.read_only).toBe(true);
+
+    const resolve = runCli(['source', 'resolve', sourceRef, '--purpose', 'knowledge_index', '--scope', 'project', '--json'], dir);
+    expect(resolve.exitCode).toBe(0);
+    const resolveOut = JSON.parse(new TextDecoder().decode(resolve.stdout));
+    expect(resolveOut.resolved).toBe(true);
+    expect(resolveOut.source.kind).toBe('file');
+    expect(resolveOut.content.bytes_exposed).toBe(false);
+    expect(resolveOut.chunks[0].text).toContain('CLI source ingestion');
+  });
+
   test('safety commands expose policy, approvals, redaction, audit, and S3 denial', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-safety-cli-'));
 

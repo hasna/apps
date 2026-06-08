@@ -10,6 +10,7 @@ import { getKnowledgeDbStats, migrateKnowledgeDb, openKnowledgeDb } from './know
 import { createArtifactStore } from './artifact-store';
 import { initializeWikiLayout } from './wiki-layout';
 import { ingestOpenFilesManifest } from './manifest-ingest';
+import { ingestSourceRef } from './source-ingest';
 import { consumeOpenFilesOutbox } from './outbox-consume';
 import { resolveOpenFilesSource } from './source-resolver';
 import { approvalStatus, assertS3ReadAllowed, assertWebSearchAllowed, createApprovalGate, recordAuditEvent, recordRedactionFindings, redactSecrets, resolveSafetyPolicy } from './safety';
@@ -170,6 +171,7 @@ Commands:
   wiki init                    Initialize scalable wiki/schema/index/log artifacts
   source resolve <source-ref>  Resolve read-only source content and citation evidence
   ingest manifest <file|s3://> Ingest an open-files manifest into knowledge.db
+  ingest source <source-ref>   Ingest a read-only source ref into knowledge.db
   reindex outbox <file|s3://>  Consume open-files change events and invalidate chunks
   safety status|check|approve|audit|redact
   help [command]               Show help
@@ -235,7 +237,7 @@ function printCommandHelp(command: string): void {
   if (command === 'db') { console.log('Usage: open-knowledge db init|stats [--scope local|global|project] [--json]'); return; }
   if (command === 'wiki') { console.log('Usage: open-knowledge wiki init [--scope local|global|project] [--json]'); return; }
   if (command === 'source') { console.log('Usage: open-knowledge source resolve <source-ref> [--purpose knowledge_answer|knowledge_index] [--limit <n>] [--scope local|global|project] [--json]'); return; }
-  if (command === 'ingest') { console.log('Usage: open-knowledge ingest manifest <file|s3://bucket/key> [--scope local|global|project] [--json]'); return; }
+  if (command === 'ingest') { console.log('Usage: open-knowledge ingest manifest <file|s3://bucket/key> | source <source-ref> [--purpose knowledge_index] [--scope local|global|project] [--json]'); return; }
   if (command === 'reindex') { console.log('Usage: open-knowledge reindex outbox <file|s3://bucket/key> [--scope local|global|project] [--json]'); return; }
   if (command === 'safety') { console.log('Usage: open-knowledge safety status|check|approve|audit|redact [args] [--scope local|global|project] [--json]'); return; }
   printGlobalHelp();
@@ -509,20 +511,35 @@ async function run(argv: string[]): Promise<void> {
 
   if (command === 'ingest') {
     const action = positional[1] ?? '';
-    if (action !== 'manifest') throw new Error("Invalid ingest action. Use 'manifest'.");
-    const input = positional[2];
-    if (!input) throw new Error('Usage: open-knowledge ingest manifest <file|s3://bucket/key>');
     const resolvedWorkspace = ensureKnowledgeWorkspace(workspace.home);
     const config = readKnowledgeConfig(resolvedWorkspace.configPath);
     const safetyPolicy = resolveSafetyPolicy(config, resolvedWorkspace);
-    const result = await ingestOpenFilesManifest({
-      dbPath: resolvedWorkspace.knowledgeDbPath,
-      input,
-      config,
-      safetyPolicy,
-    });
-    output({ ok: true, ...result, message: `Ingested ${result.items_seen} manifest item(s)` }, flags.json);
-    return;
+    if (action === 'manifest') {
+      const input = positional[2];
+      if (!input) throw new Error('Usage: open-knowledge ingest manifest <file|s3://bucket/key>');
+      const result = await ingestOpenFilesManifest({
+        dbPath: resolvedWorkspace.knowledgeDbPath,
+        input,
+        config,
+        safetyPolicy,
+      });
+      output({ ok: true, ...result, message: `Ingested ${result.items_seen} manifest item(s)` }, flags.json);
+      return;
+    }
+    if (action === 'source') {
+      const sourceRef = positional[2];
+      if (!sourceRef) throw new Error('Usage: open-knowledge ingest source <source-ref>');
+      const result = await ingestSourceRef({
+        dbPath: resolvedWorkspace.knowledgeDbPath,
+        sourceRef,
+        purpose: flags.purpose,
+        config,
+        safetyPolicy,
+      });
+      output({ ok: true, ...result, message: `Ingested source ${result.source_ref} (${result.chunks_inserted} chunks)` }, flags.json);
+      return;
+    }
+    throw new Error("Invalid ingest action. Use 'manifest' or 'source'.");
   }
 
   if (command === 'reindex') {
