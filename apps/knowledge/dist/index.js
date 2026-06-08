@@ -5080,7 +5080,7 @@ function agentSchemaTemplate() {
 ## Source Rules
 
 - Treat open-files source references as the preferred source of truth.
-- Do not copy raw source files into open-knowledge.
+- Do not copy raw source files into knowledge.
 - Cite every durable fact with a source URI, revision/hash when available, and optional span.
 - Mark uncertainty explicitly when sources disagree or are incomplete.
 
@@ -5341,7 +5341,7 @@ class KnowledgeService {
       artifact_uri_prefix: storage.artifact_store.uri_prefix,
       canonical_hasna_xyz: storage.canonical_hasna_xyz,
       config_path: workspace.configPath,
-      next: mode === "hosted" ? ["open-knowledge auth login --api-key <key>", "open-knowledge storage status --json", "open-knowledge remote contracts --json"] : ["open-knowledge search <query>", "knowledge <prompt>"],
+      next: mode === "hosted" ? ["knowledge auth login --api-key <key>", "knowledge storage status --json", "knowledge remote contracts --json"] : ["knowledge search <query>", "knowledge <prompt>"],
       message: `Set knowledge mode to ${mode}`
     };
   }

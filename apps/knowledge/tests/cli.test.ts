@@ -7,7 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseSourceRef } from '../src/source-ref';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -15,6 +15,7 @@ const CLI = join(__dirname, '..', 'src', 'cli.ts');
 const packageJson = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')) as {
   name: string;
   version: string;
+  bin: Record<string, string>;
 };
 
 function runCli(args: string[], cwd?: string, env?: Record<string, string>) {
@@ -26,12 +27,32 @@ function runCli(args: string[], cwd?: string, env?: Record<string, string>) {
   });
 }
 
-describe('open-knowledge cli', () => {
+function runKnowledgeBin(args: string[], cwd?: string, env?: Record<string, string>) {
+  const dir = mkdtempSync(join(tmpdir(), 'knowledge-bin-'));
+  const wrapper = join(dir, 'knowledge');
+  writeFileSync(wrapper, [
+    '#!/usr/bin/env bun',
+    `import { run } from ${JSON.stringify(pathToFileURL(CLI).href)};`,
+    'run(process.argv.slice(2)).catch((error) => {',
+    '  console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);',
+    '  process.exitCode = 1;',
+    '});',
+    '',
+  ].join('\n'));
+  return Bun.spawnSync(['bun', wrapper, ...args], {
+    cwd,
+    env: env ? { ...process.env, ...env } : undefined,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+}
+
+describe('knowledge cli', () => {
   test('help and subcommand help work', () => {
     const result = runCli(['--help']);
     expect(result.exitCode).toBe(0);
     const out = new TextDecoder().decode(result.stdout);
-    expect(out).toContain('open-knowledge');
+    expect(out).toContain('knowledge - local agent knowledge store');
     expect(out).toContain('Commands:');
 
     const sub = runCli(['help', 'list']);
@@ -46,6 +67,15 @@ describe('open-knowledge cli', () => {
     const out = new TextDecoder().decode(result.stdout);
     expect(out).toContain(packageJson.name);
     expect(out).toContain(packageJson.version);
+  });
+
+  test('package exposes only knowledge CLI bins', () => {
+    expect(packageJson.bin).toEqual({
+      knowledge: 'bin/knowledge.js',
+      'knowledge-mcp': 'bin/knowledge-mcp.js',
+    });
+    expect(packageJson.bin['open-knowledge']).toBeUndefined();
+    expect(packageJson.bin['open-knowledge-mcp']).toBeUndefined();
   });
 
   test('unknown command includes suggestion', () => {
@@ -484,7 +514,7 @@ describe('open-knowledge cli', () => {
     expect(contextOut.citations[0].provenance.source_owner).toBe('open-files');
   });
 
-  test('ask and knowledge commands build citation drafts with run ledger', () => {
+  test('ask command and direct knowledge prompt build citation drafts with run ledger', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-ask-cli-'));
     const source = join(dir, 'source.md');
     writeFileSync(source, 'CLI ask command should cite company handbook source context.');
@@ -500,7 +530,7 @@ describe('open-knowledge cli', () => {
     expect(askOut.citations[0].source_uri).toBe(sourceRef);
     expect(askOut.write_policy.durable_writes_performed).toBe(false);
 
-    const knowledge = runCli(['knowledge', 'Generate', 'fake', 'answer', '--scope', 'project', '--generate', '--fake', '--model', 'openai:gpt-5-mini', '--json'], dir);
+    const knowledge = runKnowledgeBin(['Generate', 'fake', 'answer', '--scope', 'project', '--generate', '--fake', '--model', 'openai:gpt-5-mini', '--json'], dir);
     expect(knowledge.exitCode).toBe(0);
     const knowledgeOut = JSON.parse(new TextDecoder().decode(knowledge.stdout));
     expect(knowledgeOut.generated).toBe(true);

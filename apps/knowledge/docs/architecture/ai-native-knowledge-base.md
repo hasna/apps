@@ -1,6 +1,6 @@
 # AI-Native Knowledge Base Architecture
 
-`open-knowledge` is the local-first knowledge engine for Hasna projects and
+`knowledge` is the local-first knowledge engine for Hasna projects and
 agents. It should make company knowledge durable, searchable, citable, and safe
 for agents to reuse. It is not the raw file bucket. Raw source bytes belong to
 `open-files`.
@@ -87,7 +87,7 @@ workspace they describe.
 
 ## Source References
 
-`open-knowledge` stores references, not raw source bytes. Supported source ref
+`knowledge` stores references, not raw source bytes. Supported source ref
 forms:
 
 ```text
@@ -124,8 +124,8 @@ without reconstructing it later.
 The local resolver is exposed through:
 
 ```bash
-open-knowledge source resolve <source-ref> --purpose knowledge_answer --json
-open-knowledge ingest source <source-ref> --purpose knowledge_index --json
+knowledge source resolve <source-ref> --purpose knowledge_answer --json
+knowledge ingest source <source-ref> --purpose knowledge_index --json
 ```
 
 and the MCP tool `ok_resolve_source`. It reads the knowledge catalog only,
@@ -169,7 +169,7 @@ s3://hasna-xyz-opensource-knowledge-prod/.hasna/apps/knowledge/
 The app config can be materialized with:
 
 ```bash
-open-knowledge setup --mode hosted --canonical-hasna-xyz --scope project --json
+knowledge setup --mode hosted --canonical-hasna-xyz --scope project --json
 ```
 
 The canonical metadata-only secret paths are:
@@ -190,7 +190,7 @@ run outputs.
 The storage contract is inspectable through:
 
 ```bash
-open-knowledge storage status --scope project --json
+knowledge storage status --scope project --json
 ```
 
 That contract names the local app path, SQLite catalog, generated artifact
@@ -251,7 +251,7 @@ new-article candidates.
 Search is hybrid:
 
 1. `open-files` supplies source manifests, revisions, hashes, and extracted text.
-2. `open-knowledge` chunks extracted text and generated wiki pages.
+2. `knowledge` chunks extracted text and generated wiki pages.
 3. Chunks and pages are indexed with keyword search and embeddings.
 4. Queries run through keyword FTS, vector search, and wiki/citation graph
    expansion.
@@ -263,14 +263,14 @@ mode can use Postgres with pgvector or a managed vector index. Permission
 filters must be applied before agent context is assembled.
 
 The first local semantic-search implementation indexes derived chunks with
-`open-knowledge embeddings index` and queries them with
-`open-knowledge search --semantic` or the lower-level
-`open-knowledge embeddings search`. It stores OpenAI embedding vectors as
+`knowledge embeddings index` and queries them with
+`knowledge search --semantic` or the lower-level
+`knowledge embeddings search`. It stores OpenAI embedding vectors as
 generated metadata rows, not raw source bytes, and pins each row to `open-files`
 provenance: source ref/URI, revision/hash, chunk offsets, token count, provider,
 model, dimensions, status, and timestamps. The structured `search` contract
 merges keyword FTS, wiki/index catalog hits, generated wiki chunks, and optional
-vector results. `open-knowledge search --context` and MCP `knowledge_search`
+vector results. `knowledge search --context` and MCP `knowledge_search`
 turn those rows into reranked citation context packs with selected excerpts,
 freshness and permission notes, graph evidence, and final rerank scores. The
 local SQLite index can later move to pgvector or a managed hosted vector store
@@ -291,7 +291,7 @@ These resources expose derived chunks, generated wiki artifacts, citations, run
 ledgers, and storage/index metadata without exposing raw source bytes.
 
 Index freshness is explicit. `reindex_queue` tracks missing or stale embedding
-work, `open-knowledge reindex status|enqueue|embeddings` operates the local
+work, `knowledge reindex status|enqueue|embeddings` operates the local
 queue, and MCP exposes the same controls through `ok_reindex_status`,
 `ok_reindex_enqueue`, and `ok_reindex_embeddings`. Hosted mode can map the same
 contract to worker queues, S3/object artifact sync, Postgres/pgvector, or a
@@ -317,14 +317,14 @@ The command should:
 7. Record a run ledger with tool calls, sources, costs, outputs, and generated
    records.
 
-The first implementation exposes this as `open-knowledge ask|build <prompt>`
+The first implementation exposes this as `knowledge ask|build <prompt>`
 and the installed `knowledge <prompt>` bin alias. It retrieves read-only context,
 returns a local citation draft by default, optionally calls AI SDK generation via
 `--generate`, records `runs`, `run_events`, and `provider_usage`, and only
 proposes durable wiki updates until the wiki compile/write task owns writes.
 
 Provider-native web search is exposed separately as
-`open-knowledge web search <query>` and MCP `ok_web_search`. Real network access
+`knowledge web search <query>` and MCP `ok_web_search`. Real network access
 is safety-gated; OpenAI and Anthropic use provider web-search tools through AI
 SDK, while DeepSeek remains a future fallback/external-search path. Returned web
 snippets can optionally be filed as read-only `web` source refs for later local
@@ -340,14 +340,14 @@ AI provider setup is BYOK and AI SDK v6 based. The local provider layer tracks:
 - DeepSeek via `@ai-sdk/deepseek`, defaulting to `deepseek:deepseek-chat`.
 
 Model aliases live in config and can be inspected with
-`open-knowledge providers models`. Credentials are resolved from env vars by
+`knowledge providers models`. Credentials are resolved from env vars by
 default, checked without making provider calls, and usage can be normalized into
 the existing `provider_usage` table for future prompt, embedding, and web-search
 runs.
 
 ## Non-Goals
 
-- Do not make `open-knowledge` own raw source files.
+- Do not make `knowledge` own raw source files.
 - Do not make hosted account, billing, worker, or tenant state required for local
   use.
 - Do not let semantic search bypass permissions.

@@ -1,4 +1,4 @@
-# open-knowledge
+# knowledge
 
 > Agent-friendly local knowledge CLI/MCP with JSON output, project workspaces, durable artifacts, and safe destructive actions.
 
@@ -6,7 +6,7 @@
 [![license](https://img.shields.io/npm/l/@hasna/knowledge)](LICENSE)
 [![build](https://img.shields.io/github/actions/workflow/status/hasna/knowledge/ci.yml)](.github/workflows/ci.yml)
 
-`open-knowledge` is evolving from a flat note store into a local-first knowledge
+`knowledge` is evolving from a flat note store into a local-first knowledge
 engine for AI agents. It stores simple knowledge items today, creates a Hasna
 project workspace under `.hasna/apps/knowledge`, initializes a versioned
 `knowledge.db`, writes generated wiki artifacts, and exposes a stdio MCP server.
@@ -69,98 +69,98 @@ available as package bins.
 The SDK uses the same `.hasna/apps/knowledge` project workspace as the CLI. In
 local mode it writes the SQLite catalog and generated artifacts under that path.
 In hosted/canonical mode it can point generated artifacts at S3 while keeping
-raw source ownership outside open-knowledge. Source files remain referenced via
-`open-files://`, `file://`, `s3://`, or web refs; open-knowledge stores derived
+raw source ownership outside knowledge. Source files remain referenced via
+`open-files://`, `file://`, `s3://`, or web refs; knowledge stores derived
 chunks, citations, indexes, run logs, and generated wiki artifacts.
 
 ## Quick Start
 
 ```bash
 # Add a note
-open-knowledge add "Rust ownership" "Every value has exactly one owner"
+knowledge add "Rust ownership" "Every value has exactly one owner"
 
 # List all notes
-open-knowledge list
+knowledge list
 
 # List with search
-open-knowledge list --search ownership
+knowledge list --search ownership
 
 # List notes tagged "rust"
-open-knowledge list --tag rust
+knowledge list --tag rust
 
 # Get a note
-open-knowledge get --id <id>
+knowledge get --id <id>
 
 # Update a note
-open-knowledge update --id <id> --title "Rust ownership model"
+knowledge update --id <id> --title "Rust ownership model"
 
 # Delete a note (requires --yes)
-open-knowledge delete --id <id> --yes
+knowledge delete --id <id> --yes
 
 # Export all notes as JSONL
-open-knowledge export --format jsonl
+knowledge export --format jsonl
 
 # Show resolved workspace paths
-open-knowledge paths --scope project --json
+knowledge paths --scope project --json
 
 # Inspect local/S3 artifact storage and source ownership
-open-knowledge storage status --scope project --json
+knowledge storage status --scope project --json
 
 # Configure optional hosted mode and inspect remote contracts
-open-knowledge setup --mode hosted --api-url https://knowledge.hasna.xyz --scope project --json
-open-knowledge auth whoami --scope project --json
-open-knowledge remote contracts --scope project --json
+knowledge setup --mode hosted --api-url https://knowledge.hasna.xyz --scope project --json
+knowledge auth whoami --scope project --json
+knowledge remote contracts --scope project --json
 
 # Initialize the project SQLite catalog
-open-knowledge db init --scope project
+knowledge db init --scope project
 
 # Initialize scalable wiki/schema/index/log artifacts
-open-knowledge wiki init --scope project
+knowledge wiki init --scope project
 
 # Compile cited wiki pages, file approved answers, and lint wiki health
-open-knowledge wiki compile "handbook policy" --title "Handbook Policy" --scope project --json
-open-knowledge wiki file-answer "How do we cite policy?" --content "Use cited source context." --approve-write --scope project --json
-open-knowledge wiki lint --scope project --json
+knowledge wiki compile "handbook policy" --title "Handbook Policy" --scope project --json
+knowledge wiki file-answer "How do we cite policy?" --content "Use cited source context." --approve-write --scope project --json
+knowledge wiki lint --scope project --json
 
 # Ingest an open-files source manifest into the project SQLite catalog
-open-knowledge ingest manifest ./open-files-manifest.jsonl --scope project --json
+knowledge ingest manifest ./open-files-manifest.jsonl --scope project --json
 
 # Ingest one read-only source ref directly
-open-knowledge ingest source file:///absolute/path/to/handbook.md --purpose knowledge_index --scope project --json
+knowledge ingest source file:///absolute/path/to/handbook.md --purpose knowledge_index --scope project --json
 
 # Consume open-files change events and invalidate stale source chunks
-open-knowledge reindex outbox ./open-files-outbox.jsonl --scope project --json
+knowledge reindex outbox ./open-files-outbox.jsonl --scope project --json
 
 # Inspect and refresh the embedding queue after source changes
-open-knowledge reindex status --scope project --json
-open-knowledge reindex enqueue --scope project --json
-open-knowledge reindex embeddings --scope project --fake --json
+knowledge reindex status --scope project --json
+knowledge reindex enqueue --scope project --json
+knowledge reindex embeddings --scope project --fake --json
 
 # Resolve indexed source text and citation evidence through the read-only source boundary
-open-knowledge source resolve open-files://file/f_123/revision/rev_456 --scope project --json
+knowledge source resolve open-files://file/f_123/revision/rev_456 --scope project --json
 
 # Inspect local safety policy and approvals
-open-knowledge safety status --scope project --json
+knowledge safety status --scope project --json
 
 # Inspect AI SDK provider credentials and model aliases
-open-knowledge providers status --scope project --json
-open-knowledge providers models --scope project --json
+knowledge providers status --scope project --json
+knowledge providers models --scope project --json
 
 # Embed indexed chunks and run semantic search
-open-knowledge embeddings index --scope project --model openai:text-embedding-3-small --json
-open-knowledge embeddings search "company wiki policy" --scope project --json
+knowledge embeddings index --scope project --model openai:text-embedding-3-small --json
+knowledge embeddings search "company wiki policy" --scope project --json
 
 # Hybrid search over source chunks, generated wiki pages, indexes, and optional vectors
-open-knowledge search "company wiki policy" --scope project --json
-open-knowledge search "company wiki policy" --scope project --semantic --json
-open-knowledge search "company wiki policy" --scope project --context --json
+knowledge search "company wiki policy" --scope project --json
+knowledge search "company wiki policy" --scope project --semantic --json
+knowledge search "company wiki policy" --scope project --context --json
 
 # Build a citation answer/context draft for a prompt
-open-knowledge ask "How do we cite handbook policy?" --scope project --json
+knowledge ask "How do we cite handbook policy?" --scope project --json
 knowledge "How do we cite handbook policy?" --scope project --json
 
 # Provider-native web search, safety-gated for real network access
-HASNA_KNOWLEDGE_WEB_SEARCH=1 open-knowledge web search "latest AI SDK web search" --provider openai --json
+HASNA_KNOWLEDGE_WEB_SEARCH=1 knowledge web search "latest AI SDK web search" --provider openai --json
 ```
 
 ## Guides
@@ -182,13 +182,13 @@ HASNA_KNOWLEDGE_WEB_SEARCH=1 open-knowledge web search "latest AI SDK web search
 
 ### add
 ```bash
-open-knowledge add <title> <content> [--url <url>] [-t <tag>]
+knowledge add <title> <content> [--url <url>] [-t <tag>]
 ```
 Add a new knowledge item.
 
 ### list
 ```bash
-open-knowledge list|ls [options]
+knowledge list|ls [options]
 ```
 List items with pagination, search, and tag filtering.
 
@@ -203,13 +203,13 @@ List items with pagination, search, and tag filtering.
 
 ### get
 ```bash
-open-knowledge get --id <id>
+knowledge get --id <id>
 ```
 Retrieve a single item by ID.
 
 ### update
 ```bash
-open-knowledge update|edit --id <id> [options]
+knowledge update|edit --id <id> [options]
 ```
 Update an existing item.
 
@@ -222,46 +222,46 @@ Update an existing item.
 
 ### archive / restore
 ```bash
-open-knowledge archive --id <id>
-open-knowledge restore --id <id>
+knowledge archive --id <id>
+knowledge restore --id <id>
 ```
 Archive hides an item from default `list` output without deleting it.
 
 ### upsert
 ```bash
-open-knowledge upsert [title] [content] [--id <id>] [--title <title>] [--content <content>]
+knowledge upsert [title] [content] [--id <id>] [--title <title>] [--content <content>]
 ```
 Create or update an item by ID.
 
 ### untag
 ```bash
-open-knowledge untag --id <id> -t <tag>
+knowledge untag --id <id> -t <tag>
 ```
 Remove one tag from an item.
 
 ### delete
 ```bash
-open-knowledge delete|rm --id <id> --yes
+knowledge delete|rm --id <id> --yes
 ```
 Delete an item. Requires `--yes` to confirm.
 
 ### export
 ```bash
-open-knowledge export [--format jsonl]
+knowledge export [--format jsonl]
 ```
 Export all items. Use `--format jsonl` for newline-delimited JSON.
 
 ### paths
 ```bash
-open-knowledge paths [--scope global|project|local] [--json]
+knowledge paths [--scope global|project|local] [--json]
 ```
 Show the resolved Hasna app workspace, JSON compatibility store, SQLite path,
 artifact directories, and config.
 
 ### storage
 ```bash
-open-knowledge storage status [--scope project] [--json]
-open-knowledge storage validate [--scope project] [--json]
+knowledge storage status [--scope project] [--json]
+knowledge storage validate [--scope project] [--json]
 ```
 Show the storage contract for local or S3-backed generated artifacts. Local mode
 uses `.hasna/apps/knowledge` for config, SQLite, indexes, wiki artifacts, logs,
@@ -287,14 +287,14 @@ The future hosted database path, if provisioned, is
 
 ### setup / auth / remote
 ```bash
-open-knowledge setup --mode local [--scope project] [--json]
-open-knowledge setup --mode hosted [--api-url https://knowledge.hasna.xyz] [--scope project] [--json]
-open-knowledge setup --mode hosted --canonical-hasna-xyz [--scope project] [--json]
-open-knowledge auth login --api-key <key> [--email you@example.com] [--org <slug>] [--scope project] [--json]
-open-knowledge auth whoami [--scope project] [--json]
-open-knowledge auth logout [--scope project] [--json]
-open-knowledge remote status [--scope project] [--json]
-open-knowledge remote contracts [--scope project] [--json]
+knowledge setup --mode local [--scope project] [--json]
+knowledge setup --mode hosted [--api-url https://knowledge.hasna.xyz] [--scope project] [--json]
+knowledge setup --mode hosted --canonical-hasna-xyz [--scope project] [--json]
+knowledge auth login --api-key <key> [--email you@example.com] [--org <slug>] [--scope project] [--json]
+knowledge auth whoami [--scope project] [--json]
+knowledge auth logout [--scope project] [--json]
+knowledge remote status [--scope project] [--json]
+knowledge remote contracts [--scope project] [--json]
 ```
 Hosted mode mirrors the `open-skills` open-core pattern: the OSS package stays
 local-first, while `hosted.api_url`, `KNOWLEDGE_API_URL`, and
@@ -305,18 +305,18 @@ and artifact API contract that a future SaaS wrapper can implement.
 
 ### db
 ```bash
-open-knowledge db init [--scope project]
-open-knowledge db stats [--scope project]
+knowledge db init [--scope project]
+knowledge db stats [--scope project]
 ```
 Initialize or inspect the versioned SQLite catalog at
 `.hasna/apps/knowledge/knowledge.db`.
 
 ### wiki
 ```bash
-open-knowledge wiki init [--scope project]
-open-knowledge wiki compile [query|source-ref...] [--title <title>] [--limit <n>] [--scope project] [--json]
-open-knowledge wiki file-answer <prompt> --content <answer> [--approve-write] [--scope project] [--json]
-open-knowledge wiki lint [--scope project] [--json]
+knowledge wiki init [--scope project]
+knowledge wiki compile [query|source-ref...] [--title <title>] [--limit <n>] [--scope project] [--json]
+knowledge wiki file-answer <prompt> --content <answer> [--approve-write] [--scope project] [--json]
+knowledge wiki lint [--scope project] [--json]
 ```
 Create starter generated-knowledge artifacts through the artifact store:
 `schemas/v1.md`, `indexes/root.md`, `wiki/README.md`, and a dated JSONL log
@@ -332,7 +332,7 @@ source refs, contradiction markers, and new article candidates.
 
 ### source
 ```bash
-open-knowledge source resolve <source-ref> [--purpose knowledge_answer|knowledge_index] [--limit <n>] [--scope project] [--json]
+knowledge source resolve <source-ref> [--purpose knowledge_answer|knowledge_index] [--limit <n>] [--scope project] [--json]
 ```
 Resolve an indexed source through the read-only open-files boundary. The result
 returns source metadata, permissions, the selected revision, derived chunk text,
@@ -341,8 +341,8 @@ raw source retrieval remains owned by `open-files`.
 
 ### ingest
 ```bash
-open-knowledge ingest manifest <file|s3://bucket/key> [--scope project] [--json]
-open-knowledge ingest source <source-ref> [--purpose knowledge_index] [--scope project] [--json]
+knowledge ingest manifest <file|s3://bucket/key> [--scope project] [--json]
+knowledge ingest source <source-ref> [--purpose knowledge_index] [--scope project] [--json]
 ```
 Import an open-files JSON or JSONL source manifest into `knowledge.db`. This
 upserts sources and source revisions, stores hash/MIME/status/permission
@@ -358,10 +358,10 @@ resolver API lands.
 
 ### reindex
 ```bash
-open-knowledge reindex status [--model openai:text-embedding-3-small] [--scope project] [--json]
-open-knowledge reindex enqueue [--model openai:text-embedding-3-small] [--scope project] [--json]
-open-knowledge reindex embeddings [--full] [--limit <n>] [--model openai:text-embedding-3-small] [--scope project] [--json]
-open-knowledge reindex outbox <file|s3://bucket/key> [--scope project] [--json]
+knowledge reindex status [--model openai:text-embedding-3-small] [--scope project] [--json]
+knowledge reindex enqueue [--model openai:text-embedding-3-small] [--scope project] [--json]
+knowledge reindex embeddings [--full] [--limit <n>] [--model openai:text-embedding-3-small] [--scope project] [--json]
+knowledge reindex outbox <file|s3://bucket/key> [--scope project] [--json]
 ```
 Inspect and operate index refresh work. `reindex status` reports missing
 embedding rows, stale revisions, queued jobs, and vector counts. `reindex
@@ -378,9 +378,9 @@ remain owned by `open-files`.
 
 ### search
 ```bash
-open-knowledge search <query> [--scope project] [--limit <n>] [--json]
-open-knowledge search <query> --semantic [--model openai:text-embedding-3-small] [--scope project] [--json]
-open-knowledge search <query> --context [--semantic] [--scope project] [--json]
+knowledge search <query> [--scope project] [--limit <n>] [--json]
+knowledge search <query> --semantic [--model openai:text-embedding-3-small] [--scope project] [--json]
+knowledge search <query> --context [--semantic] [--scope project] [--json]
 ```
 Run hybrid search over `chunks_fts`, generated wiki chunks, wiki/index catalog
 rows, and optional vector results. The default path is local-only keyword and
@@ -395,8 +395,8 @@ assembled citations, freshness and permission notes, graph evidence from
 
 ### ask / build
 ```bash
-open-knowledge ask <prompt> [--scope project] [--json]
-open-knowledge build <prompt> [--generate] [--model default|provider:model] [--scope project] [--json]
+knowledge ask <prompt> [--scope project] [--json]
+knowledge build <prompt> [--generate] [--model default|provider:model] [--scope project] [--json]
 knowledge <prompt> [--scope project] [--json]
 ```
 Build an agent-native prompt run. The command first creates a read-only context
@@ -408,7 +408,7 @@ intent, but durable wiki writes remain deferred to the wiki compile/write task.
 
 ### web
 ```bash
-open-knowledge web search <query> [--provider openai|anthropic] [--model provider:model] [--domain <domain>] [--file-results] [--scope project] [--json]
+knowledge web search <query> [--provider openai|anthropic] [--model provider:model] [--domain <domain>] [--file-results] [--scope project] [--json]
 ```
 Run provider-native hosted web search and return cited web sources. Real network
 search is disabled unless `safety.network.web_search_enabled=true` or
@@ -420,11 +420,11 @@ deterministic offline sources for tests.
 
 ### safety
 ```bash
-open-knowledge safety status [--scope project] [--json]
-open-knowledge safety check generated_write [target] [--scope project] [--json]
-open-knowledge safety approve generated_write [target] [--scope project] [--json]
-open-knowledge safety audit [--scope project] [--json]
-open-knowledge safety redact <text> [--scope project] [--json]
+knowledge safety status [--scope project] [--json]
+knowledge safety check generated_write [target] [--scope project] [--json]
+knowledge safety approve generated_write [target] [--scope project] [--json]
+knowledge safety audit [--scope project] [--json]
+knowledge safety redact <text> [--scope project] [--json]
 ```
 Inspect and operate the local safety model. Source reads are read-only by
 default, web search and S3 reads are opt-in, generated writes require approval
@@ -432,9 +432,9 @@ by default, and known secret patterns are redacted before chunk storage.
 
 ### providers
 ```bash
-open-knowledge providers status [--scope project] [--json]
-open-knowledge providers models [--scope project] [--json]
-open-knowledge providers check [provider|model-alias] [--scope project] [--json]
+knowledge providers status [--scope project] [--json]
+knowledge providers models [--scope project] [--json]
+knowledge providers check [provider|model-alias] [--scope project] [--json]
 ```
 Inspect AI SDK v6 provider readiness for OpenAI, Anthropic, and DeepSeek. The
 provider layer resolves BYOK credentials from `OPENAI_API_KEY`,
@@ -445,9 +445,9 @@ reasoning, embeddings, and native web-search support.
 
 ### embeddings
 ```bash
-open-knowledge embeddings status [--scope project] [--json]
-open-knowledge embeddings index [--model openai:text-embedding-3-small] [--limit <n>] [--scope project] [--json]
-open-knowledge embeddings search <query> [--model openai:text-embedding-3-small] [--limit <n>] [--scope project] [--json]
+knowledge embeddings status [--scope project] [--json]
+knowledge embeddings index [--model openai:text-embedding-3-small] [--limit <n>] [--scope project] [--json]
+knowledge embeddings search <query> [--model openai:text-embedding-3-small] [--limit <n>] [--scope project] [--json]
 ```
 Build and query the local vector index over derived knowledge chunks. The first
 implementation stores vectors in SQLite as JSON rows in `chunk_embeddings` and
@@ -461,7 +461,7 @@ deterministic local vectors for tests and offline smoke checks.
 
 ### help
 ```bash
-open-knowledge help [command]
+knowledge help [command]
 ```
 
 ## Global Options
@@ -487,7 +487,7 @@ location with `--store <path>`.
 ## MCP Server
 
 ```bash
-open-knowledge-mcp
+knowledge-mcp
 ```
 
 The stable agent-facing MCP tools are:
@@ -541,18 +541,18 @@ run ledgers, and citation evidence. They do not expose raw source bytes from
 
 ## Source And Artifact Boundary
 
-Raw files should be stored and resolved through `open-files`. `open-knowledge`
+Raw files should be stored and resolved through `open-files`. `knowledge`
 stores source references such as `open-files://file/<id>`,
 `open-files://file/<id>/revision/<revision_id>`, `s3://...`, `file://...`,
 and `https://...`, plus citations, chunks, generated wiki pages, indexes,
 logs, runs, and search metadata.
 
-`open-knowledge source resolve` and the MCP `ok_resolve_source` tool resolve
+`knowledge source resolve` and the MCP `ok_resolve_source` tool resolve
 only the indexed, derived knowledge catalog. The resolver enforces read-only
 purpose labels from source permissions, returns chunk citation evidence, writes
 an audit event, and keeps bytes/storage credentials inside `open-files`.
 
-`open-knowledge ingest source` can also build derived chunks from an allowed
+`knowledge ingest source` can also build derived chunks from an allowed
 source ref. It does not copy raw files into the knowledge workspace; local file,
 S3, web, and open-files inputs are converted into redacted chunks with offsets,
 hashes, revision metadata, and FTS rows.
@@ -568,14 +568,14 @@ store raw S3 or local-file bytes in the knowledge app, so a future hosted/S3
 wrapper can move generated artifacts to object storage while source ownership
 and immutable object identity stay in `open-files`.
 
-AI provider configuration is local/BYOK by default. `open-knowledge` declares
+AI provider configuration is local/BYOK by default. `knowledge` declares
 AI SDK v6 provider support through `ai`, `@ai-sdk/openai`,
 `@ai-sdk/anthropic`, and `@ai-sdk/deepseek`, but does not call providers until a
 prompt, embedding, or agent command explicitly requests a model.
 
 Generated knowledge artifacts can be stored locally under
 `.hasna/apps/knowledge/artifacts` or through the S3 artifact-store adapter.
-For Hasna XYZ production, `open-knowledge setup --mode hosted
+For Hasna XYZ production, `knowledge setup --mode hosted
 --canonical-hasna-xyz --scope project --json` configures generated artifacts
 under `s3://hasna-xyz-opensource-knowledge-prod/.hasna/apps/knowledge/` and
 keeps `open-files` as the raw-source owner.
@@ -608,7 +608,7 @@ Every command returns structured JSON when `--json` is passed:
 ## MCP Server
 
 ```bash
-open-knowledge-mcp
+knowledge-mcp
 ```
 
 ## HTTP mode
@@ -616,9 +616,9 @@ open-knowledge-mcp
 Run a shared Streamable HTTP MCP server (127.0.0.1 only):
 
 ```bash
-open-knowledge-mcp --http      # default port 8819
-open-knowledge-mcp --http --port 8819
-MCP_HTTP=1 open-knowledge-mcp
+knowledge-mcp --http      # default port 8819
+knowledge-mcp --http --port 8819
+MCP_HTTP=1 knowledge-mcp
 ```
 
 - Health: `GET http://127.0.0.1:8819/health`

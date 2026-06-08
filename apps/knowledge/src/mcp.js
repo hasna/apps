@@ -701,7 +701,7 @@ function registerKnowledgeResources(server) {
 
 export function buildServer() {
   const server = new McpServer({
-    name: 'open-knowledge',
+    name: 'knowledge',
     version: pkg.version,
   });
 
@@ -1462,7 +1462,7 @@ export function buildServer() {
 }
 
 function printHelp() {
-  console.error(`Usage: open-knowledge-mcp [options]
+  console.error(`Usage: knowledge-mcp [options]
 
 Runs the @hasna/knowledge MCP server (stdio by default).
 
@@ -1492,7 +1492,7 @@ export async function main() {
   const server = buildServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('open-knowledge MCP server running on stdio');
+  console.error('knowledge MCP server running on stdio');
 }
 
 if (import.meta.main) {

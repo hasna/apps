@@ -1,6 +1,6 @@
 {
   "name": "@hasna/knowledge",
-  "version": "0.2.28",
+  "version": "0.2.29",
   "description": "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   "type": "module",
   "exports": {
@@ -12,9 +12,8 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "knowledge": "bin/open-knowledge.js",
-    "open-knowledge": "bin/open-knowledge.js",
-    "open-knowledge-mcp": "bin/open-knowledge-mcp.js"
+    "knowledge": "bin/knowledge.js",
+    "knowledge-mcp": "bin/knowledge-mcp.js"
   },
   "files": [
     "bin",
@@ -26,7 +25,7 @@
   "scripts": {
     "test": "bun test",
     "test:cli": "bun test tests/cli.test.ts",
-    "build": "rm -rf dist && bun build --target=bun --outfile=bin/open-knowledge.js --minify --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --target=bun --outfile=bin/open-knowledge-mcp.js --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js && bun build ./src/index.ts --outdir ./dist --target bun --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek && bunx tsc -p tsconfig.build.json",
+    "build": "rm -rf dist && bun build --target=bun --outfile=bin/knowledge.js --minify --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --target=bun --outfile=bin/knowledge-mcp.js --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js && bun build ./src/index.ts --outdir ./dist --target bun --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek && bunx tsc -p tsconfig.build.json",
     "prepublishOnly": "bun run build"
   },
   "keywords": [

@@ -61,7 +61,7 @@ hasna/xyz/opensource/knowledge/prod/s3
 
 Meaning:
 
-- `env`: open-knowledge production app config metadata.
+- `env`: knowledge production app config metadata.
 - `aws`: AWS account/profile/region and related app config metadata.
 - `s3`: canonical app storage bucket metadata for
   `hasna-xyz-opensource-knowledge-prod`.

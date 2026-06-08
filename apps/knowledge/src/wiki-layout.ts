@@ -46,7 +46,7 @@ export function agentSchemaTemplate(): string {
 ## Source Rules
 
 - Treat open-files source references as the preferred source of truth.
-- Do not copy raw source files into open-knowledge.
+- Do not copy raw source files into knowledge.
 - Cite every durable fact with a source URI, revision/hash when available, and optional span.
 - Mark uncertainty explicitly when sources disagree or are incomplete.
 

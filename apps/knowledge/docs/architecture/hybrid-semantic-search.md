@@ -1,6 +1,6 @@
 # Hybrid Semantic Search Architecture
 
-`open-knowledge` search is hybrid by design. Keyword search, semantic vector
+`knowledge` search is hybrid by design. Keyword search, semantic vector
 search, wiki graph traversal, and citation/provenance signals each solve a
 different part of the retrieval problem.
 
@@ -15,7 +15,7 @@ different part of the retrieval problem.
 - Read-only content resolution for deeper reads.
 - Change events that trigger incremental reindexing.
 
-`open-knowledge` owns:
+`knowledge` owns:
 
 - Chunk boundaries and chunk metadata.
 - Embeddings for source chunks, wiki pages, decisions, and durable answers.
@@ -49,13 +49,13 @@ contracts.
 The current local command surface is:
 
 ```bash
-open-knowledge search "company wiki policy" --scope project --json
-open-knowledge search "company wiki policy" --scope project --semantic --json
-open-knowledge search "company wiki policy" --scope project --context --json
-open-knowledge reindex status --scope project --json
-open-knowledge reindex embeddings --scope project --fake --json
-open-knowledge embeddings index --scope project --model openai:text-embedding-3-small
-open-knowledge embeddings search "company wiki policy" --scope project --json
+knowledge search "company wiki policy" --scope project --json
+knowledge search "company wiki policy" --scope project --semantic --json
+knowledge search "company wiki policy" --scope project --context --json
+knowledge reindex status --scope project --json
+knowledge reindex embeddings --scope project --fake --json
+knowledge embeddings index --scope project --model openai:text-embedding-3-small
+knowledge embeddings search "company wiki policy" --scope project --json
 ```
 
 `search` is the structured hybrid layer for agents. `embeddings search` is the
@@ -139,15 +139,15 @@ They should receive context packs:
 This keeps agent prompts stable while the retrieval internals evolve.
 
 The local context-pack implementation is available through
-`open-knowledge search --context` and MCP `knowledge_search`. It reranks merged
+`knowledge search --context` and MCP `knowledge_search`. It reranks merged
 search rows using exact-term coverage, citation availability, source freshness,
 and source/wiki authority, then emits excerpts and citation objects that preserve
 source refs, artifact URIs, revision/hash metadata, offsets, and provenance.
-`open-knowledge ask|build <prompt>`, the installed `knowledge <prompt>` alias,
+`knowledge ask|build <prompt>`, the installed `knowledge <prompt>` alias,
 and MCP `knowledge_ask|knowledge_build` wrap this context pack in a run ledger
 and return a citation draft or explicit AI SDK generated answer.
 
-Provider-native web search lives beside local retrieval. `open-knowledge web
+Provider-native web search lives beside local retrieval. `knowledge web
 search` and MCP `knowledge_web_search` are safety-gated, capture provider
 sources, and can file snippets as read-only `web` source refs so later local
 retrieval treats them like other cited sources. The lower-level `ok_web_search`

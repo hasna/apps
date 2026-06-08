@@ -19,7 +19,7 @@ describe('hosted-aware config and remote contracts', () => {
     expect(setup.api_url).toBe('https://knowledge.example.com');
     expect(setup.storage_type).toBe('local');
     expect(setup.canonical_hasna_xyz.active).toBe(false);
-    expect(setup.next).toContain('open-knowledge auth login --api-key <key>');
+    expect(setup.next).toContain('knowledge auth login --api-key <key>');
 
     const config = JSON.parse(readFileSync(join(dir, '.hasna', 'apps', 'knowledge', 'config.json'), 'utf8'));
     expect(config.mode).toBe('hosted');

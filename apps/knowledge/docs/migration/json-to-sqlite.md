@@ -1,6 +1,6 @@
 # JSON To SQLite Migration
 
-`open-knowledge` began as a simple JSON note store. Current project mode uses a
+`knowledge` began as a simple JSON note store. Current project mode uses a
 Hasna app workspace and a versioned SQLite catalog:
 
 ```text
@@ -54,20 +54,20 @@ recorded correctly.
 Initialize the project catalog:
 
 ```bash
-open-knowledge db init --scope project --json
-open-knowledge wiki init --scope project --json
+knowledge db init --scope project --json
+knowledge wiki init --scope project --json
 ```
 
 Import open-files manifests:
 
 ```bash
-open-knowledge ingest manifest ./open-files-manifest.jsonl --scope project --json
+knowledge ingest manifest ./open-files-manifest.jsonl --scope project --json
 ```
 
 Import one allowed source ref:
 
 ```bash
-open-knowledge ingest source file:///absolute/path/to/handbook.md \
+knowledge ingest source file:///absolute/path/to/handbook.md \
   --purpose knowledge_index \
   --scope project \
   --json
@@ -76,7 +76,7 @@ open-knowledge ingest source file:///absolute/path/to/handbook.md \
 Resolve indexed source evidence:
 
 ```bash
-open-knowledge source resolve open-files://file/file_123/revision/rev_456 \
+knowledge source resolve open-files://file/file_123/revision/rev_456 \
   --purpose knowledge_answer \
   --scope project \
   --json
@@ -85,16 +85,16 @@ open-knowledge source resolve open-files://file/file_123/revision/rev_456 \
 ## Recommended Migration Path
 
 1. Keep the legacy JSON note store as an exportable compatibility layer.
-2. Run `open-knowledge paths --scope project --json` and confirm the project
+2. Run `knowledge paths --scope project --json` and confirm the project
    workspace is `.hasna/apps/knowledge`.
-3. Initialize `knowledge.db` with `open-knowledge db init --scope project`.
+3. Initialize `knowledge.db` with `knowledge db init --scope project`.
 4. Ingest source manifests from `open-files` rather than copying raw files into
-   `open-knowledge`.
-5. Run `open-knowledge search --scope project --json` to verify source chunks.
-6. Run `open-knowledge wiki compile` for durable cited pages.
-7. Run `open-knowledge wiki lint --scope project --json` before treating pages
+   `knowledge`.
+5. Run `knowledge search --scope project --json` to verify source chunks.
+6. Run `knowledge wiki compile` for durable cited pages.
+7. Run `knowledge wiki lint --scope project --json` before treating pages
    as company knowledge.
-8. Use `open-knowledge export --format jsonl` if legacy notes need to be
+8. Use `knowledge export --format jsonl` if legacy notes need to be
    archived or transformed outside the app.
 
 ## JSON Output Contracts
@@ -122,7 +122,7 @@ when successful and command-specific fields such as:
 ```bash
 HASNA_KNOWLEDGE_ALLOW_S3_READS=1 \
 HASNA_KNOWLEDGE_ALLOWED_S3_BUCKETS=my-bucket \
-open-knowledge ingest manifest s3://my-bucket/path/manifest.jsonl \
+knowledge ingest manifest s3://my-bucket/path/manifest.jsonl \
   --scope project \
   --json
 ```
@@ -131,7 +131,7 @@ open-knowledge ingest manifest s3://my-bucket/path/manifest.jsonl \
 
 ```bash
 HASNA_KNOWLEDGE_WEB_SEARCH=1 \
-open-knowledge web search "current policy source" --provider openai --json
+knowledge web search "current policy source" --provider openai --json
 ```
 
 - Use `--approve-write` only when a generated wiki artifact should be durable.
@@ -142,8 +142,8 @@ Hosted mode should not change local migration semantics. It only records a
 remote API boundary:
 
 ```bash
-open-knowledge setup --mode hosted --api-url https://knowledge.hasna.xyz --scope project --json
-open-knowledge remote contracts --scope project --json
+knowledge setup --mode hosted --api-url https://knowledge.hasna.xyz --scope project --json
+knowledge remote contracts --scope project --json
 ```
 
 A SaaS wrapper can later sync generated artifacts, run jobs, enforce tenant ACLs,

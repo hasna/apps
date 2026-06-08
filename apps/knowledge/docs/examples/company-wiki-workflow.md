@@ -1,14 +1,14 @@
 # Company Wiki Workflow
 
-This workflow shows how to use `open-knowledge` as an AI-native company wiki
+This workflow shows how to use `knowledge` as an AI-native company wiki
 layer over source files owned by `open-files`.
 
 ## 1. Initialize The Project Workspace
 
 ```bash
-open-knowledge paths --scope project --json
-open-knowledge db init --scope project --json
-open-knowledge wiki init --scope project --json
+knowledge paths --scope project --json
+knowledge db init --scope project --json
+knowledge wiki init --scope project --json
 ```
 
 Project state is created under:
@@ -50,7 +50,7 @@ and extracted text:
 Then ingest it:
 
 ```bash
-open-knowledge ingest manifest ./open-files-manifest.jsonl --scope project --json
+knowledge ingest manifest ./open-files-manifest.jsonl --scope project --json
 ```
 
 The knowledge app stores source refs, revisions, redacted chunks, offsets, and
@@ -61,20 +61,20 @@ citations. It does not store raw source bytes or connector credentials.
 Run local keyword/catalog search first:
 
 ```bash
-open-knowledge search "expense policy" --scope project --json
+knowledge search "expense policy" --scope project --json
 ```
 
 Add deterministic local semantic indexing for a smoke test:
 
 ```bash
-open-knowledge embeddings index --scope project --fake --dimensions 8 --json
-open-knowledge search "expense policy" --scope project --semantic --fake --dimensions 8 --json
+knowledge embeddings index --scope project --fake --dimensions 8 --json
+knowledge search "expense policy" --scope project --semantic --fake --dimensions 8 --json
 ```
 
 Ask for an agent-ready context pack:
 
 ```bash
-open-knowledge search "expense policy" --scope project --context --json
+knowledge search "expense policy" --scope project --context --json
 ```
 
 ## 4. Answer With Citations
@@ -104,7 +104,7 @@ citations, and proposed wiki updates.
 Compile a cited page from indexed chunks:
 
 ```bash
-open-knowledge wiki compile "expense policy" \
+knowledge wiki compile "expense policy" \
   --title "Expense Policy" \
   --scope project \
   --json
@@ -113,7 +113,7 @@ open-knowledge wiki compile "expense policy" \
 File an approved answer note:
 
 ```bash
-open-knowledge wiki file-answer "How do we approve expenses?" \
+knowledge wiki file-answer "How do we approve expenses?" \
   --content "Use manager approval and cite the policy source." \
   --approve-write \
   --scope project \
@@ -123,7 +123,7 @@ open-knowledge wiki file-answer "How do we approve expenses?" \
 Lint the generated wiki:
 
 ```bash
-open-knowledge wiki lint --scope project --json
+knowledge wiki lint --scope project --json
 ```
 
 Generated pages are written through the artifact store and cataloged in
@@ -135,9 +135,9 @@ Markdown file.
 Consume open-files outbox events after source changes:
 
 ```bash
-open-knowledge reindex outbox ./open-files-outbox.jsonl --scope project --json
-open-knowledge reindex enqueue --scope project --json
-open-knowledge reindex embeddings --scope project --fake --dimensions 8 --json
+knowledge reindex outbox ./open-files-outbox.jsonl --scope project --json
+knowledge reindex enqueue --scope project --json
+knowledge reindex embeddings --scope project --fake --dimensions 8 --json
 ```
 
 This invalidates stale source chunks and refreshes embeddings without losing the
@@ -148,13 +148,13 @@ source refs and citation provenance.
 Run MCP over stdio:
 
 ```bash
-open-knowledge-mcp
+knowledge-mcp
 ```
 
 Or run local Streamable HTTP:
 
 ```bash
-open-knowledge-mcp --http --port 8819
+knowledge-mcp --http --port 8819
 ```
 
 Agents should prefer stable tools such as `knowledge_search`, `knowledge_ask`,
@@ -168,8 +168,8 @@ Agents should prefer stable tools such as `knowledge_search`, `knowledge_ask`,
 Hosted mode is only a remote client boundary:
 
 ```bash
-open-knowledge setup --mode hosted --api-url https://knowledge.hasna.xyz --scope project --json
-open-knowledge remote contracts --scope project --json
+knowledge setup --mode hosted --api-url https://knowledge.hasna.xyz --scope project --json
+knowledge remote contracts --scope project --json
 ```
 
 Generated artifacts may use S3 when configured, but raw source files still stay

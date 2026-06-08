@@ -13660,7 +13660,7 @@ import { existsSync as existsSync8, readFileSync as readFileSync8, writeFileSync
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.28",
+  version: "0.2.29",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   exports: {
@@ -13672,9 +13672,8 @@ var package_default = {
   main: "./dist/index.js",
   types: "./dist/index.d.ts",
   bin: {
-    knowledge: "bin/open-knowledge.js",
-    "open-knowledge": "bin/open-knowledge.js",
-    "open-knowledge-mcp": "bin/open-knowledge-mcp.js"
+    knowledge: "bin/knowledge.js",
+    "knowledge-mcp": "bin/knowledge-mcp.js"
   },
   files: [
     "bin",
@@ -13686,7 +13685,7 @@ var package_default = {
   scripts: {
     test: "bun test",
     "test:cli": "bun test tests/cli.test.ts",
-    build: "rm -rf dist && bun build --target=bun --outfile=bin/open-knowledge.js --minify --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --target=bun --outfile=bin/open-knowledge-mcp.js --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js && bun build ./src/index.ts --outdir ./dist --target bun --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek && bunx tsc -p tsconfig.build.json",
+    build: "rm -rf dist && bun build --target=bun --outfile=bin/knowledge.js --minify --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --target=bun --outfile=bin/knowledge-mcp.js --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js && bun build ./src/index.ts --outdir ./dist --target bun --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek && bunx tsc -p tsconfig.build.json",
     prepublishOnly: "bun run build"
   },
   keywords: [
@@ -18882,7 +18881,7 @@ function agentSchemaTemplate() {
 ## Source Rules
 
 - Treat open-files source references as the preferred source of truth.
-- Do not copy raw source files into open-knowledge.
+- Do not copy raw source files into knowledge.
 - Cite every durable fact with a source URI, revision/hash when available, and optional span.
 - Mark uncertainty explicitly when sources disagree or are incomplete.
 
@@ -19143,7 +19142,7 @@ class KnowledgeService {
       artifact_uri_prefix: storage.artifact_store.uri_prefix,
       canonical_hasna_xyz: storage.canonical_hasna_xyz,
       config_path: workspace.configPath,
-      next: mode === "hosted" ? ["open-knowledge auth login --api-key <key>", "open-knowledge storage status --json", "open-knowledge remote contracts --json"] : ["open-knowledge search <query>", "knowledge <prompt>"],
+      next: mode === "hosted" ? ["knowledge auth login --api-key <key>", "knowledge storage status --json", "knowledge remote contracts --json"] : ["knowledge search <query>", "knowledge <prompt>"],
       message: `Set knowledge mode to ${mode}`
     };
   }
@@ -19930,7 +19929,7 @@ function registerKnowledgeResources(server) {
 }
 function buildServer() {
   const server = new McpServer({
-    name: "open-knowledge",
+    name: "knowledge",
     version: package_default.version
   });
   registerKnowledgeResources(server);
@@ -20674,7 +20673,7 @@ function buildServer() {
   return server;
 }
 function printHelp() {
-  console.error(`Usage: open-knowledge-mcp [options]
+  console.error(`Usage: knowledge-mcp [options]
 
 Runs the @hasna/knowledge MCP server (stdio by default).
 
@@ -20700,7 +20699,7 @@ async function main() {
   const server = buildServer();
   const transport = new StdioServerTransport;
   await server.connect(transport);
-  console.error("open-knowledge MCP server running on stdio");
+  console.error("knowledge MCP server running on stdio");
 }
 if (import.meta.main) {
   main().catch((err) => {

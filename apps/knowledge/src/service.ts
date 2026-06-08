@@ -166,8 +166,8 @@ export class KnowledgeService {
       canonical_hasna_xyz: storage.canonical_hasna_xyz,
       config_path: workspace.configPath,
       next: mode === 'hosted'
-        ? ['open-knowledge auth login --api-key <key>', 'open-knowledge storage status --json', 'open-knowledge remote contracts --json']
-        : ['open-knowledge search <query>', 'knowledge <prompt>'],
+        ? ['knowledge auth login --api-key <key>', 'knowledge storage status --json', 'knowledge remote contracts --json']
+        : ['knowledge search <query>', 'knowledge <prompt>'],
       message: `Set knowledge mode to ${mode}`,
     };
   }

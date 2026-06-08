@@ -35,7 +35,7 @@ function parseResourceJson(result: any): any {
   return JSON.parse(text);
 }
 
-describe('open-knowledge MCP', () => {
+describe('knowledge MCP', () => {
   test('registers tools and can add/get through stdio', async () => {
     const dir = makeTempDir('ok-mcp-');
     const store = join(dir, 'db.json');
@@ -62,7 +62,7 @@ describe('open-knowledge MCP', () => {
       cwd: dir,
       stderr: 'pipe',
     });
-    const client = new Client({ name: 'open-knowledge-test', version: '0.0.0' });
+    const client = new Client({ name: 'knowledge-test', version: '0.0.0' });
 
     try {
       await client.connect(transport);

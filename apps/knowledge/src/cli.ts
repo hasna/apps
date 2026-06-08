@@ -86,7 +86,6 @@ const COMMAND_ALIASES: Record<string, string> = {
   rm: 'delete',
   edit: 'update',
   unarchive: 'restore',
-  knowledge: 'ask',
 };
 
 function parseArgs(argv: string[]): ParseResult {
@@ -142,7 +141,7 @@ function parseArgs(argv: string[]): ParseResult {
       case '--empty': flags.empty = true; break;
       case '--archived': flags.archived = true; break;
       case '--include-archived': flags.includeArchived = true; break;
-      default: throw new Error(`Unknown flag: ${token}. Run 'open-knowledge --help' for valid options.`);
+      default: throw new Error(`Unknown flag: ${token}. Run 'knowledge --help' for valid options.`);
     }
   }
   return { positional, flags };
@@ -182,14 +181,14 @@ function suggestCommand(input: string): string {
 }
 
 function invokedAsKnowledge(): boolean {
-  return basename(process.argv[1] ?? '') === 'knowledge';
+  return basename(process.argv[1] ?? '').replace(/\.(?:js|ts|mjs|cjs)$/, '') === 'knowledge';
 }
 
 function printGlobalHelp(): void {
-  console.log(`open-knowledge - local agent knowledge store
+  console.log(`knowledge - local agent knowledge store
 
 Usage:
-  open-knowledge <command> [options]
+  knowledge <command> [options]
 
 Commands:
   add <title> <content>       Add an item
@@ -287,35 +286,35 @@ Prune Options:
 }
 
 function printCommandHelp(command: string): void {
-  if (command === 'add') { console.log('Usage: open-knowledge add <title> <content> [--url <url>] [-t <tag>] [--json]'); return; }
-  if (command === 'list' || command === 'ls') { console.log('Usage: open-knowledge list|ls [--format table|json] [-p <page>] [-l <limit>] [-s <search>] [-t <tag>] [--sort created|title] [--desc] [--json]'); return; }
-  if (command === 'get') { console.log('Usage: open-knowledge get --id <id> [--json]'); return; }
-  if (command === 'update' || command === 'edit') { console.log('Usage: open-knowledge update|edit --id <id> [--title <title>] [--content <content>] [--url <url>] [-t <tag>] [--json]'); return; }
-  if (command === 'archive') { console.log('Usage: open-knowledge archive --id <id> [--json]'); return; }
-  if (command === 'restore' || command === 'unarchive') { console.log('Usage: open-knowledge restore|unarchive --id <id> [--json]'); return; }
-  if (command === 'upsert') { console.log('Usage: open-knowledge upsert [title] [content] [--id <id>] [--title <title>] [--content <content>] [--url <url>] [-t <tag>] [--json]'); return; }
-  if (command === 'untag') { console.log('Usage: open-knowledge untag --id <id> -t <tag> [--json]'); return; }
-  if (command === 'delete' || command === 'rm') { console.log('Usage: open-knowledge delete|rm --id <id> -y [--json]'); return; }
-  if (command === 'export') { console.log('Usage: open-knowledge export [--format jsonl] [--json]'); return; }
-  if (command === 'prune') { console.log('Usage: open-knowledge prune --yes [--older-than <days>] [--empty] [--json]'); return; }
-  if (command === 'dedupe') { console.log('Usage: open-knowledge dedupe --yes [--json]'); return; }
-  if (command === 'stats') { console.log('Usage: open-knowledge stats [--json]'); return; }
-  if (command === 'paths') { console.log('Usage: open-knowledge paths [--scope local|global|project] [--json]'); return; }
-  if (command === 'setup') { console.log('Usage: open-knowledge setup --mode local|hosted [--api-url https://...] [--canonical-hasna-xyz] [--scope local|global|project] [--json]'); return; }
-  if (command === 'auth') { console.log('Usage: open-knowledge auth login|whoami|logout [--api-key <key>] [--email <email>] [--org <slug>] [--api-url https://...] [--scope local|global|project] [--json]'); return; }
-  if (command === 'remote') { console.log('Usage: open-knowledge remote contracts|status [--scope local|global|project] [--json]'); return; }
-  if (command === 'storage') { console.log('Usage: open-knowledge storage status|validate [--scope local|global|project] [--json]'); return; }
-  if (command === 'db') { console.log('Usage: open-knowledge db init|stats [--scope local|global|project] [--json]'); return; }
-  if (command === 'wiki') { console.log('Usage: open-knowledge wiki init|compile|file-answer|lint [query|prompt] [--title <title>] [--content <answer>] [--approve-write] [--limit <n>] [--scope local|global|project] [--json]'); return; }
-  if (command === 'source') { console.log('Usage: open-knowledge source resolve <source-ref> [--purpose knowledge_answer|knowledge_index] [--limit <n>] [--scope local|global|project] [--json]'); return; }
-  if (command === 'ingest') { console.log('Usage: open-knowledge ingest manifest <file|s3://bucket/key> | source <source-ref> [--purpose knowledge_index] [--scope local|global|project] [--json]'); return; }
-  if (command === 'reindex') { console.log('Usage: open-knowledge reindex status|enqueue|embeddings|outbox [file|s3://bucket/key] [--full] [--fake] [--scope local|global|project] [--json]'); return; }
-  if (command === 'search') { console.log('Usage: open-knowledge search <query> [--context] [--semantic] [--model openai:text-embedding-3-small] [--limit <n>] [--dimensions <n>] [--fake] [--scope local|global|project] [--json]'); return; }
-  if (command === 'web') { console.log('Usage: open-knowledge web search <query> [--provider openai|anthropic] [--model provider:model] [--domain <domain>] [--file-results] [--fake] [--scope local|global|project] [--json]'); return; }
-  if (command === 'ask' || command === 'build' || command === 'knowledge') { console.log('Usage: open-knowledge ask|build <prompt> [--generate] [--semantic] [--model default|provider:model] [--approve-write] [--scope local|global|project] [--json]'); return; }
-  if (command === 'embeddings') { console.log('Usage: open-knowledge embeddings status|index|search [query] [--model openai:text-embedding-3-small] [--limit <n>] [--dimensions <n>] [--fake] [--scope local|global|project] [--json]'); return; }
-  if (command === 'providers') { console.log('Usage: open-knowledge providers status|models|check [provider|model-alias] [--scope local|global|project] [--json]'); return; }
-  if (command === 'safety') { console.log('Usage: open-knowledge safety status|check|approve|audit|redact [args] [--scope local|global|project] [--json]'); return; }
+  if (command === 'add') { console.log('Usage: knowledge add <title> <content> [--url <url>] [-t <tag>] [--json]'); return; }
+  if (command === 'list' || command === 'ls') { console.log('Usage: knowledge list|ls [--format table|json] [-p <page>] [-l <limit>] [-s <search>] [-t <tag>] [--sort created|title] [--desc] [--json]'); return; }
+  if (command === 'get') { console.log('Usage: knowledge get --id <id> [--json]'); return; }
+  if (command === 'update' || command === 'edit') { console.log('Usage: knowledge update|edit --id <id> [--title <title>] [--content <content>] [--url <url>] [-t <tag>] [--json]'); return; }
+  if (command === 'archive') { console.log('Usage: knowledge archive --id <id> [--json]'); return; }
+  if (command === 'restore' || command === 'unarchive') { console.log('Usage: knowledge restore|unarchive --id <id> [--json]'); return; }
+  if (command === 'upsert') { console.log('Usage: knowledge upsert [title] [content] [--id <id>] [--title <title>] [--content <content>] [--url <url>] [-t <tag>] [--json]'); return; }
+  if (command === 'untag') { console.log('Usage: knowledge untag --id <id> -t <tag> [--json]'); return; }
+  if (command === 'delete' || command === 'rm') { console.log('Usage: knowledge delete|rm --id <id> -y [--json]'); return; }
+  if (command === 'export') { console.log('Usage: knowledge export [--format jsonl] [--json]'); return; }
+  if (command === 'prune') { console.log('Usage: knowledge prune --yes [--older-than <days>] [--empty] [--json]'); return; }
+  if (command === 'dedupe') { console.log('Usage: knowledge dedupe --yes [--json]'); return; }
+  if (command === 'stats') { console.log('Usage: knowledge stats [--json]'); return; }
+  if (command === 'paths') { console.log('Usage: knowledge paths [--scope local|global|project] [--json]'); return; }
+  if (command === 'setup') { console.log('Usage: knowledge setup --mode local|hosted [--api-url https://...] [--canonical-hasna-xyz] [--scope local|global|project] [--json]'); return; }
+  if (command === 'auth') { console.log('Usage: knowledge auth login|whoami|logout [--api-key <key>] [--email <email>] [--org <slug>] [--api-url https://...] [--scope local|global|project] [--json]'); return; }
+  if (command === 'remote') { console.log('Usage: knowledge remote contracts|status [--scope local|global|project] [--json]'); return; }
+  if (command === 'storage') { console.log('Usage: knowledge storage status|validate [--scope local|global|project] [--json]'); return; }
+  if (command === 'db') { console.log('Usage: knowledge db init|stats [--scope local|global|project] [--json]'); return; }
+  if (command === 'wiki') { console.log('Usage: knowledge wiki init|compile|file-answer|lint [query|prompt] [--title <title>] [--content <answer>] [--approve-write] [--limit <n>] [--scope local|global|project] [--json]'); return; }
+  if (command === 'source') { console.log('Usage: knowledge source resolve <source-ref> [--purpose knowledge_answer|knowledge_index] [--limit <n>] [--scope local|global|project] [--json]'); return; }
+  if (command === 'ingest') { console.log('Usage: knowledge ingest manifest <file|s3://bucket/key> | source <source-ref> [--purpose knowledge_index] [--scope local|global|project] [--json]'); return; }
+  if (command === 'reindex') { console.log('Usage: knowledge reindex status|enqueue|embeddings|outbox [file|s3://bucket/key] [--full] [--fake] [--scope local|global|project] [--json]'); return; }
+  if (command === 'search') { console.log('Usage: knowledge search <query> [--context] [--semantic] [--model openai:text-embedding-3-small] [--limit <n>] [--dimensions <n>] [--fake] [--scope local|global|project] [--json]'); return; }
+  if (command === 'web') { console.log('Usage: knowledge web search <query> [--provider openai|anthropic] [--model provider:model] [--domain <domain>] [--file-results] [--fake] [--scope local|global|project] [--json]'); return; }
+  if (command === 'ask' || command === 'build') { console.log('Usage: knowledge ask|build <prompt> [--generate] [--semantic] [--model default|provider:model] [--approve-write] [--scope local|global|project] [--json]'); return; }
+  if (command === 'embeddings') { console.log('Usage: knowledge embeddings status|index|search [query] [--model openai:text-embedding-3-small] [--limit <n>] [--dimensions <n>] [--fake] [--scope local|global|project] [--json]'); return; }
+  if (command === 'providers') { console.log('Usage: knowledge providers status|models|check [provider|model-alias] [--scope local|global|project] [--json]'); return; }
+  if (command === 'safety') { console.log('Usage: knowledge safety status|check|approve|audit|redact [args] [--scope local|global|project] [--json]'); return; }
   printGlobalHelp();
 }
 
@@ -332,7 +331,7 @@ function output(data: unknown, asJson?: boolean, _flags?: Flags): void {
 }
 
 function requireId(flags: Flags): asserts flags is Flags & { id: string } {
-  if (!flags.id) throw new Error('Missing required --id. Example: open-knowledge get --id <id>');
+  if (!flags.id) throw new Error('Missing required --id. Example: knowledge get --id <id>');
 }
 
 function sortItems(items: KnowledgeItem[], flags: Flags): { sorted: KnowledgeItem[]; sort: string; direction: string } {
@@ -360,11 +359,11 @@ async function run(argv: string[]): Promise<void> {
   if (flags.completions) {
     const shell = flags.completions;
     if (shell === 'bash') {
-      console.log(`_open_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats paths setup auth remote storage db wiki source ingest reindex search web ask build embeddings providers safety help ls rm edit unarchive knowledge --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --purpose --model --dimensions --semantic --context --generate --approve-write --provider --mode --api-url --canonical-hasna-xyz --api-key --email --org --org-id --user-id --domain --file-results --full --fake --no-color --scope --archived --include-archived" -- "$cur")); }; complete -F _open_knowledge open-knowledge`);
+      console.log(`_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats paths setup auth remote storage db wiki source ingest reindex search web ask build embeddings providers safety help ls rm edit unarchive --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --purpose --model --dimensions --semantic --context --generate --approve-write --provider --mode --api-url --canonical-hasna-xyz --api-key --email --org --org-id --user-id --domain --file-results --full --fake --no-color --scope --archived --include-archived" -- "$cur")); }; complete -F _knowledge knowledge`);
     } else if (shell === 'zsh') {
-      console.log(`#compdef open-knowledge\n_open_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats paths setup auth remote storage db wiki source ingest reindex search web ask build embeddings providers safety help ls rm edit unarchive knowledge)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--semantic)--semantic" "(--context)--context" "(--generate)--generate" "(--approve-write)--approve-write" "(--canonical-hasna-xyz)--canonical-hasna-xyz" "(--file-results)--file-results" "(--full)--full" "(--fake)--fake" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--provider)--provider[provider]:" "(--mode)--mode"\{local,hosted\}:" "(--api-url)--api-url[hosted API URL]:" "(--api-key)--api-key[hosted API key]:" "(--email)--email[email]:" "(--org)--org[org slug]:" "(--org-id)--org-id[org id]:" "(--user-id)--user-id[user id]:" "(--domain)--domain[domain]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" }; _open_knowledge`);
+      console.log(`#compdef knowledge\n_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats paths setup auth remote storage db wiki source ingest reindex search web ask build embeddings providers safety help ls rm edit unarchive)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--semantic)--semantic" "(--context)--context" "(--generate)--generate" "(--approve-write)--approve-write" "(--canonical-hasna-xyz)--canonical-hasna-xyz" "(--file-results)--file-results" "(--full)--full" "(--fake)--fake" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--provider)--provider[provider]:" "(--mode)--mode"\{local,hosted\}:" "(--api-url)--api-url[hosted API URL]:" "(--api-key)--api-key[hosted API key]:" "(--email)--email[email]:" "(--org)--org[org slug]:" "(--org-id)--org-id[org id]:" "(--user-id)--user-id[user id]:" "(--domain)--domain[domain]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" }; _knowledge`);
     } else if (shell === 'fish') {
-      console.log(`complete -c open-knowledge -f; complete -c open-knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats paths setup auth remote storage db wiki source ingest reindex search web ask build embeddings providers safety help ls rm edit unarchive knowledge"; complete -c open-knowledge -l json; complete -c open-knowledge -l yes -s y; complete -c open-knowledge -l help -s h; complete -c open-knowledge -l version -s v; complete -c open-knowledge -l desc; complete -c open-knowledge -l archived; complete -c open-knowledge -l include-archived; complete -c open-knowledge -l semantic; complete -c open-knowledge -l context; complete -c open-knowledge -l generate; complete -c open-knowledge -l approve-write; complete -c open-knowledge -l canonical-hasna-xyz; complete -c open-knowledge -l provider; complete -c open-knowledge -l mode; complete -c open-knowledge -l api-url; complete -c open-knowledge -l api-key; complete -c open-knowledge -l email; complete -c open-knowledge -l org; complete -c open-knowledge -l org-id; complete -c open-knowledge -l user-id; complete -c open-knowledge -l domain; complete -c open-knowledge -l file-results; complete -c open-knowledge -l full; complete -c open-knowledge -l fake; complete -c open-knowledge -s p -l page; complete -c open-knowledge -s l -l limit; complete -c open-knowledge -s s -l search; complete -c open-knowledge -l sort; complete -c open-knowledge -l id; complete -c open-knowledge -l store; complete -c open-knowledge -l title; complete -c open-knowledge -l content; complete -c open-knowledge -l url; complete -c open-knowledge -s t -l tag; complete -c open-knowledge -l format; complete -c open-knowledge -l completions; complete -c open-knowledge -l purpose; complete -c open-knowledge -l model; complete -c open-knowledge -l dimensions; complete -c open-knowledge -l no-color; complete -c open-knowledge -l scope -a "local global project"`);
+      console.log(`complete -c knowledge -f; complete -c knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats paths setup auth remote storage db wiki source ingest reindex search web ask build embeddings providers safety help ls rm edit unarchive"; complete -c knowledge -l json; complete -c knowledge -l yes -s y; complete -c knowledge -l help -s h; complete -c knowledge -l version -s v; complete -c knowledge -l desc; complete -c knowledge -l archived; complete -c knowledge -l include-archived; complete -c knowledge -l semantic; complete -c knowledge -l context; complete -c knowledge -l generate; complete -c knowledge -l approve-write; complete -c knowledge -l canonical-hasna-xyz; complete -c knowledge -l provider; complete -c knowledge -l mode; complete -c knowledge -l api-url; complete -c knowledge -l api-key; complete -c knowledge -l email; complete -c knowledge -l org; complete -c knowledge -l org-id; complete -c knowledge -l user-id; complete -c knowledge -l domain; complete -c knowledge -l file-results; complete -c knowledge -l full; complete -c knowledge -l fake; complete -c knowledge -s p -l page; complete -c knowledge -s l -l limit; complete -c knowledge -s s -l search; complete -c knowledge -l sort; complete -c knowledge -l id; complete -c knowledge -l store; complete -c knowledge -l title; complete -c knowledge -l content; complete -c knowledge -l url; complete -c knowledge -s t -l tag; complete -c knowledge -l format; complete -c knowledge -l completions; complete -c knowledge -l purpose; complete -c knowledge -l model; complete -c knowledge -l dimensions; complete -c knowledge -l no-color; complete -c knowledge -l scope -a "local global project"`);
     } else {
       throw new Error("Invalid --completions value. Use 'bash', 'zsh', or 'fish'.");
     }
@@ -414,7 +413,7 @@ async function run(argv: string[]): Promise<void> {
     }
     if (action === 'login') {
       const apiKey = flags.apiKey ?? process.env.KNOWLEDGE_API_KEY ?? process.env.HASNA_KNOWLEDGE_API_KEY;
-      if (!apiKey) throw new Error('Usage: open-knowledge auth login --api-key <key> [--email <email>]');
+      if (!apiKey) throw new Error('Usage: knowledge auth login --api-key <key> [--email <email>]');
       const auth = service.saveAuth({
         apiKey,
         email: flags.email,
@@ -536,7 +535,7 @@ async function run(argv: string[]): Promise<void> {
     }
     if (action === 'file-answer' || action === 'answer') {
       const prompt = positional.slice(2).join(' ');
-      if (!prompt) throw new Error('Usage: open-knowledge wiki file-answer <prompt> --content <answer> --approve-write');
+      if (!prompt) throw new Error('Usage: knowledge wiki file-answer <prompt> --content <answer> --approve-write');
       if (!flags.content) throw new Error('Missing --content <answer> for wiki file-answer.');
       const result = await service.fileAnswer({
         prompt,
@@ -659,7 +658,7 @@ async function run(argv: string[]): Promise<void> {
       }
       if (action === 'redact') {
         const text = positional.slice(2).join(' ');
-        if (!text) throw new Error('Usage: open-knowledge safety redact <text>');
+        if (!text) throw new Error('Usage: knowledge safety redact <text>');
         const result = redactSecrets(text, policy);
         if (result.findings.length > 0) {
           recordRedactionFindings(db, {
@@ -688,7 +687,7 @@ async function run(argv: string[]): Promise<void> {
     const action = positional[1] ?? '';
     if (action !== 'resolve') throw new Error("Invalid source action. Use 'resolve'.");
     const sourceRef = positional[2];
-    if (!sourceRef) throw new Error('Usage: open-knowledge source resolve <source-ref>');
+    if (!sourceRef) throw new Error('Usage: knowledge source resolve <source-ref>');
     const result = await service.resolveSource(sourceRef, {
       purpose: flags.purpose,
       limit: flags.limit,
@@ -707,14 +706,14 @@ async function run(argv: string[]): Promise<void> {
     const action = positional[1] ?? '';
     if (action === 'manifest') {
       const input = positional[2];
-      if (!input) throw new Error('Usage: open-knowledge ingest manifest <file|s3://bucket/key>');
+      if (!input) throw new Error('Usage: knowledge ingest manifest <file|s3://bucket/key>');
       const result = await service.ingestManifest(input);
       output({ ok: true, ...result, message: `Ingested ${result.items_seen} manifest item(s)` }, flags.json);
       return;
     }
     if (action === 'source') {
       const sourceRef = positional[2];
-      if (!sourceRef) throw new Error('Usage: open-knowledge ingest source <source-ref>');
+      if (!sourceRef) throw new Error('Usage: knowledge ingest source <source-ref>');
       const result = await service.ingestSource(sourceRef, flags.purpose);
       output({ ok: true, ...result, message: `Ingested source ${result.source_ref} (${result.chunks_inserted} chunks)` }, flags.json);
       return;
@@ -755,7 +754,7 @@ async function run(argv: string[]): Promise<void> {
     }
     if (action === 'outbox') {
       const input = positional[2];
-      if (!input) throw new Error('Usage: open-knowledge reindex outbox <file|s3://bucket/key>');
+      if (!input) throw new Error('Usage: knowledge reindex outbox <file|s3://bucket/key>');
       const result = await service.consumeOutbox(input);
       output({ ok: true, ...result, message: `Consumed ${result.events_seen} outbox event(s)` }, flags.json);
       return;
@@ -782,7 +781,7 @@ async function run(argv: string[]): Promise<void> {
     }
     if (action === 'search') {
       const query = positional.slice(2).join(' ');
-      if (!query) throw new Error('Usage: open-knowledge embeddings search <query>');
+      if (!query) throw new Error('Usage: knowledge embeddings search <query>');
       const result = await service.semanticSearch({
         query,
         limit: flags.limit,
@@ -798,7 +797,7 @@ async function run(argv: string[]): Promise<void> {
 
   if (command === 'search') {
     const query = positional.slice(1).join(' ');
-    if (!query) throw new Error('Usage: open-knowledge search <query>');
+    if (!query) throw new Error('Usage: knowledge search <query>');
     if (flags.context) {
       const context = await service.retrieveContext({
         query,
@@ -827,7 +826,7 @@ async function run(argv: string[]): Promise<void> {
     const action = positional[1] ?? 'search';
     if (action !== 'search') throw new Error("Invalid web action. Use 'search'.");
     const query = positional.slice(2).join(' ');
-    if (!query) throw new Error('Usage: open-knowledge web search <query>');
+    if (!query) throw new Error('Usage: knowledge web search <query>');
     const result = await service.webSearch({
       query,
       limit: flags.limit,
@@ -843,7 +842,7 @@ async function run(argv: string[]): Promise<void> {
 
   if (command === 'ask' || command === 'build') {
     const prompt = positional.slice(commandArgOffset).join(' ');
-    if (!prompt) throw new Error('Usage: open-knowledge ask <prompt>');
+    if (!prompt) throw new Error('Usage: knowledge ask <prompt>');
     const result = await service.runPrompt({
       prompt,
       limit: flags.limit,
@@ -887,7 +886,7 @@ async function run(argv: string[]): Promise<void> {
   if (command === 'add') {
     const title = positional[1];
     const content = positional[2];
-    if (!title || !content) throw new Error('Usage: open-knowledge add <title> <content>');
+    if (!title || !content) throw new Error('Usage: knowledge add <title> <content>');
     withLock(storePath, () => {
       const db = loadStore(storePath);
       const item: KnowledgeItem = {
@@ -1004,7 +1003,7 @@ async function run(argv: string[]): Promise<void> {
 
   if (command === 'untag') {
     requireId(flags);
-    if (!flags.tag) throw new Error('Missing required --tag. Example: open-knowledge untag --id <id> -t <tag>');
+    if (!flags.tag) throw new Error('Missing required --tag. Example: knowledge untag --id <id> -t <tag>');
     withLock(storePath, () => {
       const db = loadStore(storePath);
       const idx = db.items.findIndex((x) => x.id === flags.id || x.short_id === flags.id);
@@ -1028,7 +1027,7 @@ async function run(argv: string[]): Promise<void> {
       const idx = flags.id ? db.items.findIndex((x) => x.id === flags.id || x.short_id === flags.id) : -1;
       const now = new Date().toISOString();
       if (idx === -1) {
-        if (!title || !content) throw new Error('New item requires title and content. Example: open-knowledge upsert <title> <content> [--id <id>]');
+        if (!title || !content) throw new Error('New item requires title and content. Example: knowledge upsert <title> <content> [--id <id>]');
         const id = flags.id ?? makeId();
         const item: KnowledgeItem = {
           id,
@@ -1065,7 +1064,7 @@ async function run(argv: string[]): Promise<void> {
 
   if (command === 'delete') {
     requireId(flags);
-    if (!flags.yes) throw new Error('Refusing delete without --yes. Re-run with: open-knowledge delete --id <id> --yes');
+    if (!flags.yes) throw new Error('Refusing delete without --yes. Re-run with: knowledge delete --id <id> --yes');
     withLock(storePath, () => {
       const db = loadStore(storePath);
       const before = db.items.length;
@@ -1094,7 +1093,7 @@ async function run(argv: string[]): Promise<void> {
   }
 
   if (command === 'prune') {
-    if (!flags.yes) throw new Error('Refusing prune without --yes. Re-run with: open-knowledge prune --yes [--older-than <days>] [--empty]');
+    if (!flags.yes) throw new Error('Refusing prune without --yes. Re-run with: knowledge prune --yes [--older-than <days>] [--empty]');
     withLock(storePath, () => {
       const db = loadStore(storePath);
       const before = db.items.length;
@@ -1115,7 +1114,7 @@ async function run(argv: string[]): Promise<void> {
   }
 
   if (command === 'dedupe') {
-    if (!flags.yes) throw new Error('Refusing dedupe without --yes. Re-run with: open-knowledge dedupe --yes [--json]');
+    if (!flags.yes) throw new Error('Refusing dedupe without --yes. Re-run with: knowledge dedupe --yes [--json]');
     withLock(storePath, () => {
       const db = loadStore(storePath);
       const seen = new Set<string>();
@@ -1169,7 +1168,7 @@ async function run(argv: string[]): Promise<void> {
   const suggestion = suggestCommand(positional[0]);
   const hint = suggestion ? ` Did you mean '${suggestion}'?` : '';
   log('warn', 'Unknown command', { input: positional[0], suggestion });
-  throw new Error(`Unknown command: ${positional[0]}.${hint} Run 'open-knowledge --help' for available commands.`);
+  throw new Error(`Unknown command: ${positional[0]}.${hint} Run 'knowledge --help' for available commands.`);
 }
 
 if (import.meta.main) {

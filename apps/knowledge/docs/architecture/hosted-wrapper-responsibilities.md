@@ -1,6 +1,6 @@
 # Hosted Wrapper Responsibilities
 
-`open-knowledge` stays local-first and open source. A future hosted/SaaS wrapper
+`knowledge` stays local-first and open source. A future hosted/SaaS wrapper
 can implement remote APIs around the same contracts, but tenant state,
 infrastructure ownership, and commercial controls must live outside this
 package.
@@ -30,7 +30,7 @@ The hosted wrapper owns:
 
 Local mode must not require hosted identity, billing, queue workers, or hosted
 object storage. Hosted mode is an explicit remote boundary selected through
-`open-knowledge setup --mode hosted` plus `KNOWLEDGE_API_URL` and
+`knowledge setup --mode hosted` plus `KNOWLEDGE_API_URL` and
 `KNOWLEDGE_API_KEY`.
 
 ## Identity And Access
@@ -66,9 +66,9 @@ should own connector orchestration and source sync:
 - Source snapshots, immutable object ids, revisions, hashes, MIME metadata,
   extracted text refs, ACL metadata, and change outboxes.
 - Read-only resolver APIs that expose derived extracted text or allowed chunks
-  to `open-knowledge` without exposing storage credentials.
+  to `knowledge` without exposing storage credentials.
 
-`open-knowledge` should continue to consume manifests, source refs, and outbox
+`knowledge` should continue to consume manifests, source refs, and outbox
 events. It should not own connector credentials or raw source object lifecycle.
 
 ## Storage And Secrets
@@ -120,7 +120,7 @@ revision, artifact hash, or run id where possible.
 The wrapper should implement the contract printed by:
 
 ```bash
-open-knowledge remote contracts --scope project --json
+knowledge remote contracts --scope project --json
 ```
 
 Required endpoint families:
