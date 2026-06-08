@@ -18,7 +18,9 @@ known mitigations.
 
 `@hasna/knowledge` is local-first. The default workspace is
 `.hasna/apps/knowledge` for project scope and `~/.hasna/apps/knowledge` for
-global scope.
+global scope. Legacy note data may be migrated from `~/.open-knowledge/db.json`
+into `~/.hasna/apps/knowledge/db.json`; source ingestion into `knowledge.db`
+remains explicit.
 
 Default policy:
 
@@ -32,6 +34,8 @@ Default policy:
 - Known secret patterns are redacted before source text is stored as chunks.
 - Safety checks, approvals, redactions, source reads, and knowledge writes are
   recorded in `audit_events`.
+- Prompt, embedding, web-search, reindex, and wiki operations record run ledgers
+  in `runs` and `run_events`.
 
 Inspect the active policy:
 
@@ -79,6 +83,40 @@ For persistent config, set:
 Do not store AWS access keys in knowledge manifests or generated wiki files. Use
 named AWS profiles or the runtime credential chain.
 
+## Source And Artifact Boundary
+
+`open-files` owns raw source bytes, source snapshots, connector credentials,
+file revisions, hashes, MIME metadata, and storage locations. `open-knowledge`
+stores source refs, derived chunks, citations, embeddings, generated wiki pages,
+indexes, logs, and run ledgers.
+
+Security expectations:
+
+- Prefer `open-files://` refs for durable company knowledge.
+- Treat `file://`, `s3://`, and `https://` ingestion as bootstrap paths that
+  still store only redacted derived chunks.
+- Do not put raw source files, connector credentials, or cloud storage secrets
+  under `.hasna/apps/knowledge/artifacts`.
+- Generated wiki pages must cite source refs or explicit citation evidence.
+- Semantic search and MCP resources must preserve provenance and must not expose
+  raw source bytes.
+
+## MCP
+
+The MCP server defaults to stdio. Streamable HTTP mode binds to `127.0.0.1`.
+
+```bash
+open-knowledge-mcp
+open-knowledge-mcp --http --port 8819
+```
+
+MCP clients should prefer stable tools such as `knowledge_search`,
+`knowledge_ask`, `knowledge_build`, `knowledge_get`, `knowledge_lint`, and
+`knowledge_run_status`. MCP resources such as `knowledge://project/sources`,
+`knowledge://project/wiki/pages`, and `knowledge://project/runs` are inspection
+surfaces for derived knowledge state. They must not be treated as raw-file
+download endpoints.
+
 ## Hosted Mode
 
 Hosted/SaaS mode must preserve the same boundaries with stronger enforcement:
@@ -89,6 +127,11 @@ Hosted/SaaS mode must preserve the same boundaries with stronger enforcement:
 - provider and web-search allowlists;
 - no direct raw-file writes from knowledge agents;
 - source content resolved through `open-files` read-only APIs.
+
+The OSS package must not contain hosted tenant secrets, connector OAuth tokens,
+RDS passwords, billing state, or privileged cloud role credentials. Those belong
+to the hosted wrapper described in
+`docs/architecture/hosted-wrapper-responsibilities.md`.
 
 ## Secret Redaction
 

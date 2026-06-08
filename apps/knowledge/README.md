@@ -122,6 +122,21 @@ knowledge "How do we cite handbook policy?" --scope project --json
 HASNA_KNOWLEDGE_WEB_SEARCH=1 open-knowledge web search "latest AI SDK web search" --provider openai --json
 ```
 
+## Guides
+
+- [Company wiki workflow](docs/examples/company-wiki-workflow.md): an end-to-end
+  local workflow for open-files manifests, search, prompt runs, cited wiki
+  pages, linting, reindexing, MCP, and optional hosted/S3 mode.
+- [JSON to SQLite migration](docs/migration/json-to-sqlite.md): how legacy
+  JSON notes coexist with the `.hasna/apps/knowledge` workspace and the
+  versioned SQLite catalog.
+- [AI-native architecture](docs/architecture/ai-native-knowledge-base.md):
+  source boundaries, wiki model, search model, provider registry, and non-goals.
+- [Hybrid semantic search](docs/architecture/hybrid-semantic-search.md):
+  keyword/vector/search-context contracts and hosted index options.
+- [Hosted wrapper responsibilities](docs/architecture/hosted-wrapper-responsibilities.md):
+  what a future SaaS layer owns outside the OSS package.
+
 ## Commands
 
 ### add
