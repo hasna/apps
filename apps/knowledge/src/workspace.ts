@@ -39,6 +39,25 @@ export interface KnowledgeConfig {
     preferred_ref: 'open-files';
     allowed_schemes: string[];
   };
+  providers?: {
+    default_model?: string;
+    aliases?: Record<string, string>;
+    openai?: {
+      api_key_env?: string;
+      base_url?: string;
+      default_model?: string;
+    };
+    anthropic?: {
+      api_key_env?: string;
+      base_url?: string;
+      default_model?: string;
+    };
+    deepseek?: {
+      api_key_env?: string;
+      base_url?: string;
+      default_model?: string;
+    };
+  };
   safety?: {
     network?: {
       web_search_enabled?: boolean;
@@ -94,6 +113,28 @@ export function defaultKnowledgeConfig(): KnowledgeConfig {
     sources: {
       preferred_ref: 'open-files',
       allowed_schemes: ['open-files', 's3', 'file', 'https', 'http'],
+    },
+    providers: {
+      default_model: 'openai:gpt-5.2',
+      aliases: {
+        fast: 'openai:gpt-5-mini',
+        reasoning: 'anthropic:claude-opus-4-6',
+        sonnet: 'anthropic:claude-sonnet-4-6',
+        deepseek: 'deepseek:deepseek-chat',
+        'deepseek-reasoning': 'deepseek:deepseek-reasoner',
+      },
+      openai: {
+        api_key_env: 'OPENAI_API_KEY',
+        default_model: 'gpt-5.2',
+      },
+      anthropic: {
+        api_key_env: 'ANTHROPIC_API_KEY',
+        default_model: 'claude-sonnet-4-6',
+      },
+      deepseek: {
+        api_key_env: 'DEEPSEEK_API_KEY',
+        default_model: 'deepseek-chat',
+      },
     },
     safety: {
       network: {

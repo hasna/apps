@@ -208,6 +208,21 @@ The command should:
 7. Record a run ledger with tool calls, sources, costs, outputs, and generated
    records.
 
+## Provider Registry
+
+AI provider setup is BYOK and AI SDK v6 based. The local provider layer tracks:
+
+- OpenAI via `@ai-sdk/openai`, defaulting to `openai:gpt-5.2`.
+- Anthropic via `@ai-sdk/anthropic`, defaulting to
+  `anthropic:claude-sonnet-4-6`.
+- DeepSeek via `@ai-sdk/deepseek`, defaulting to `deepseek:deepseek-chat`.
+
+Model aliases live in config and can be inspected with
+`open-knowledge providers models`. Credentials are resolved from env vars by
+default, checked without making provider calls, and usage can be normalized into
+the existing `provider_usage` table for future prompt, embedding, and web-search
+runs.
+
 ## Non-Goals
 
 - Do not make `open-knowledge` own raw source files.

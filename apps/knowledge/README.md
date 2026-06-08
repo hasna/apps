@@ -82,6 +82,10 @@ open-knowledge source resolve open-files://file/f_123/revision/rev_456 --scope p
 
 # Inspect local safety policy and approvals
 open-knowledge safety status --scope project --json
+
+# Inspect AI SDK provider credentials and model aliases
+open-knowledge providers status --scope project --json
+open-knowledge providers models --scope project --json
 ```
 
 ## Commands
@@ -226,6 +230,19 @@ Inspect and operate the local safety model. Source reads are read-only by
 default, web search and S3 reads are opt-in, generated writes require approval
 by default, and known secret patterns are redacted before chunk storage.
 
+### providers
+```bash
+open-knowledge providers status [--scope project] [--json]
+open-knowledge providers models [--scope project] [--json]
+open-knowledge providers check [provider|model-alias] [--scope project] [--json]
+```
+Inspect AI SDK v6 provider readiness for OpenAI, Anthropic, and DeepSeek. The
+provider layer resolves BYOK credentials from `OPENAI_API_KEY`,
+`ANTHROPIC_API_KEY`, and `DEEPSEEK_API_KEY` by default, exposes model aliases
+such as `default`, `fast`, `reasoning`, `sonnet`, and `deepseek`, and records
+provider capability metadata for structured output, tool use, tool streaming,
+reasoning, embeddings, and native web-search support.
+
 ### help
 ```bash
 open-knowledge help [command]
@@ -280,6 +297,11 @@ an audit event, and keeps bytes/storage credentials inside `open-files`.
 source ref. It does not copy raw files into the knowledge workspace; local file,
 S3, web, and open-files inputs are converted into redacted chunks with offsets,
 hashes, revision metadata, and FTS rows.
+
+AI provider configuration is local/BYOK by default. `open-knowledge` declares
+AI SDK v6 provider support through `ai`, `@ai-sdk/openai`,
+`@ai-sdk/anthropic`, and `@ai-sdk/deepseek`, but does not call providers until a
+future prompt/agent command explicitly requests a model.
 
 Generated knowledge artifacts can be stored locally under
 `.hasna/apps/knowledge/artifacts` or through the S3 artifact-store adapter.

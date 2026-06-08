@@ -7,6 +7,7 @@
 import { defaultStorePath, loadStore, saveStore, withLock, makeId, makeShortId, ensureStore, type KnowledgeItem } from './store';
 import { openKnowledgeDb } from './knowledge-db';
 import { createKnowledgeService } from './service';
+import { assertProviderCredentials, parseModelRef, resolveModelRef, type AiProviderId } from './providers';
 import { approvalStatus, assertS3ReadAllowed, assertWebSearchAllowed, createApprovalGate, recordAuditEvent, recordRedactionFindings, redactSecrets } from './safety';
 import pkg from '../package.json' with { type: 'json' };
 
@@ -59,7 +60,7 @@ interface ParseResult {
   flags: Flags;
 }
 
-const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'export', 'prune', 'dedupe', 'stats', 'paths', 'db', 'wiki', 'source', 'ingest', 'reindex', 'safety', 'help'];
+const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'export', 'prune', 'dedupe', 'stats', 'paths', 'db', 'wiki', 'source', 'ingest', 'reindex', 'providers', 'safety', 'help'];
 const COMMAND_ALIASES: Record<string, string> = {
   ls: 'list',
   rm: 'delete',
@@ -167,6 +168,7 @@ Commands:
   ingest manifest <file|s3://> Ingest an open-files manifest into knowledge.db
   ingest source <source-ref>   Ingest a read-only source ref into knowledge.db
   reindex outbox <file|s3://>  Consume open-files change events and invalidate chunks
+  providers status|models|check Inspect AI SDK provider config and credentials
   safety status|check|approve|audit|redact
   help [command]               Show help
 
@@ -233,6 +235,7 @@ function printCommandHelp(command: string): void {
   if (command === 'source') { console.log('Usage: open-knowledge source resolve <source-ref> [--purpose knowledge_answer|knowledge_index] [--limit <n>] [--scope local|global|project] [--json]'); return; }
   if (command === 'ingest') { console.log('Usage: open-knowledge ingest manifest <file|s3://bucket/key> | source <source-ref> [--purpose knowledge_index] [--scope local|global|project] [--json]'); return; }
   if (command === 'reindex') { console.log('Usage: open-knowledge reindex outbox <file|s3://bucket/key> [--scope local|global|project] [--json]'); return; }
+  if (command === 'providers') { console.log('Usage: open-knowledge providers status|models|check [provider|model-alias] [--scope local|global|project] [--json]'); return; }
   if (command === 'safety') { console.log('Usage: open-knowledge safety status|check|approve|audit|redact [args] [--scope local|global|project] [--json]'); return; }
   printGlobalHelp();
 }
@@ -278,11 +281,11 @@ async function run(argv: string[]): Promise<void> {
   if (flags.completions) {
     const shell = flags.completions;
     if (shell === 'bash') {
-      console.log(`_open_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats paths db wiki source ingest reindex safety help ls rm edit unarchive --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --purpose --no-color --scope --archived --include-archived" -- "$cur")); }; complete -F _open_knowledge open-knowledge`);
+      console.log(`_open_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats paths db wiki source ingest reindex providers safety help ls rm edit unarchive --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --purpose --no-color --scope --archived --include-archived" -- "$cur")); }; complete -F _open_knowledge open-knowledge`);
     } else if (shell === 'zsh') {
-      console.log(`#compdef open-knowledge\n_open_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats paths db wiki source ingest reindex safety help ls rm edit unarchive)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" }; _open_knowledge`);
+      console.log(`#compdef open-knowledge\n_open_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats paths db wiki source ingest reindex providers safety help ls rm edit unarchive)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" }; _open_knowledge`);
     } else if (shell === 'fish') {
-      console.log(`complete -c open-knowledge -f; complete -c open-knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats paths db wiki source ingest reindex safety help ls rm edit unarchive"; complete -c open-knowledge -l json; complete -c open-knowledge -l yes -s y; complete -c open-knowledge -l help -s h; complete -c open-knowledge -l version -s v; complete -c open-knowledge -l desc; complete -c open-knowledge -l archived; complete -c open-knowledge -l include-archived; complete -c open-knowledge -s p -l page; complete -c open-knowledge -s l -l limit; complete -c open-knowledge -s s -l search; complete -c open-knowledge -l sort; complete -c open-knowledge -l id; complete -c open-knowledge -l store; complete -c open-knowledge -l title; complete -c open-knowledge -l content; complete -c open-knowledge -l url; complete -c open-knowledge -s t -l tag; complete -c open-knowledge -l format; complete -c open-knowledge -l completions; complete -c open-knowledge -l purpose; complete -c open-knowledge -l no-color; complete -c open-knowledge -l scope -a "local global project"`);
+      console.log(`complete -c open-knowledge -f; complete -c open-knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats paths db wiki source ingest reindex providers safety help ls rm edit unarchive"; complete -c open-knowledge -l json; complete -c open-knowledge -l yes -s y; complete -c open-knowledge -l help -s h; complete -c open-knowledge -l version -s v; complete -c open-knowledge -l desc; complete -c open-knowledge -l archived; complete -c open-knowledge -l include-archived; complete -c open-knowledge -s p -l page; complete -c open-knowledge -s l -l limit; complete -c open-knowledge -s s -l search; complete -c open-knowledge -l sort; complete -c open-knowledge -l id; complete -c open-knowledge -l store; complete -c open-knowledge -l title; complete -c open-knowledge -l content; complete -c open-knowledge -l url; complete -c open-knowledge -s t -l tag; complete -c open-knowledge -l format; complete -c open-knowledge -l completions; complete -c open-knowledge -l purpose; complete -c open-knowledge -l no-color; complete -c open-knowledge -l scope -a "local global project"`);
     } else {
       throw new Error("Invalid --completions value. Use 'bash', 'zsh', or 'fish'.");
     }
@@ -502,6 +505,30 @@ async function run(argv: string[]): Promise<void> {
     const result = await service.consumeOutbox(input);
     output({ ok: true, ...result, message: `Consumed ${result.events_seen} outbox event(s)` }, flags.json);
     return;
+  }
+
+  if (command === 'providers') {
+    const action = positional[1] ?? 'status';
+    if (action === 'status') {
+      const status = service.providerStatus();
+      const configured = status.providers.filter((entry) => entry.configured).length;
+      output({ ok: true, ...status, message: `${configured}/${status.providers.length} provider credential(s) configured` }, flags.json);
+      return;
+    }
+    if (action === 'models') {
+      const models = service.modelRegistry();
+      output({ ok: true, models, message: `${models.length} model alias(es)` }, flags.json);
+      return;
+    }
+    if (action === 'check') {
+      const target = positional[2] ?? 'default';
+      const modelRef = resolveModelRef(target, service.config());
+      const parsed = parseModelRef(modelRef);
+      const credential = assertProviderCredentials(parsed.provider as AiProviderId, service.config());
+      output({ ok: true, target, model_ref: modelRef, provider: parsed.provider, model: parsed.model, credential, message: `${parsed.provider} credentials configured` }, flags.json);
+      return;
+    }
+    throw new Error("Invalid providers action. Use 'status', 'models', or 'check'.");
   }
 
   ensureStore(storePath);

@@ -13660,7 +13660,7 @@ import { existsSync as existsSync7, readFileSync as readFileSync7, writeFileSync
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.10",
+  version: "0.2.11",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   bin: {
@@ -13677,7 +13677,7 @@ var package_default = {
   scripts: {
     test: "bun test",
     "test:cli": "bun test tests/cli.test.ts",
-    build: "bun build --target=bun --outfile=bin/open-knowledge.js --minify --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers src/cli.ts && bun build --target=bun --outfile=bin/open-knowledge-mcp.js --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers src/mcp.js",
+    build: "bun build --target=bun --outfile=bin/open-knowledge.js --minify --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --target=bun --outfile=bin/open-knowledge-mcp.js --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js",
     prepublishOnly: "bun run build",
     postinstall: "bun run build"
   },
@@ -13710,7 +13710,11 @@ var package_default = {
   dependencies: {
     "@aws-sdk/client-s3": "^3.1063.0",
     "@aws-sdk/credential-providers": "^3.1063.0",
+    "@ai-sdk/anthropic": "^3.0.81",
+    "@ai-sdk/deepseek": "^2.0.35",
+    "@ai-sdk/openai": "^3.0.68",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    ai: "^6.0.197",
     zod: "^4.3.6"
   },
   devDependencies: {
@@ -13763,6 +13767,28 @@ function defaultKnowledgeConfig() {
     sources: {
       preferred_ref: "open-files",
       allowed_schemes: ["open-files", "s3", "file", "https", "http"]
+    },
+    providers: {
+      default_model: "openai:gpt-5.2",
+      aliases: {
+        fast: "openai:gpt-5-mini",
+        reasoning: "anthropic:claude-opus-4-6",
+        sonnet: "anthropic:claude-sonnet-4-6",
+        deepseek: "deepseek:deepseek-chat",
+        "deepseek-reasoning": "deepseek:deepseek-reasoner"
+      },
+      openai: {
+        api_key_env: "OPENAI_API_KEY",
+        default_model: "gpt-5.2"
+      },
+      anthropic: {
+        api_key_env: "ANTHROPIC_API_KEY",
+        default_model: "claude-sonnet-4-6"
+      },
+      deepseek: {
+        api_key_env: "DEEPSEEK_API_KEY",
+        default_model: "deepseek-chat"
+      }
     },
     safety: {
       network: {
@@ -15773,6 +15799,129 @@ async function ingestSourceRef(options) {
   };
 }
 
+// src/providers.ts
+var DEFAULT_PROVIDER_SETTINGS = {
+  openai: {
+    api_key_env: "OPENAI_API_KEY",
+    default_model: "gpt-5.2"
+  },
+  anthropic: {
+    api_key_env: "ANTHROPIC_API_KEY",
+    default_model: "claude-sonnet-4-6"
+  },
+  deepseek: {
+    api_key_env: "DEEPSEEK_API_KEY",
+    default_model: "deepseek-chat"
+  }
+};
+var PROVIDER_CAPABILITIES = {
+  openai: {
+    text_generation: true,
+    structured_output: true,
+    tool_usage: true,
+    tool_streaming: true,
+    image_input: true,
+    native_web_search: true,
+    reasoning: true,
+    embeddings: true
+  },
+  anthropic: {
+    text_generation: true,
+    structured_output: true,
+    tool_usage: true,
+    tool_streaming: true,
+    image_input: true,
+    native_web_search: false,
+    reasoning: true,
+    embeddings: false
+  },
+  deepseek: {
+    text_generation: true,
+    structured_output: true,
+    tool_usage: true,
+    tool_streaming: true,
+    image_input: false,
+    native_web_search: false,
+    reasoning: true,
+    embeddings: false
+  }
+};
+var BUILTIN_ALIASES = {
+  default: "openai:gpt-5.2",
+  fast: "openai:gpt-5-mini",
+  reasoning: "anthropic:claude-opus-4-6",
+  sonnet: "anthropic:claude-sonnet-4-6",
+  deepseek: "deepseek:deepseek-chat",
+  "deepseek-reasoning": "deepseek:deepseek-reasoner"
+};
+function providerConfig(config2) {
+  return config2.providers ?? {};
+}
+function providerSettings(config2, provider) {
+  const configured = providerConfig(config2)[provider] ?? {};
+  return {
+    ...DEFAULT_PROVIDER_SETTINGS[provider],
+    ...configured
+  };
+}
+function modelAliases(config2) {
+  const configured = providerConfig(config2);
+  return {
+    ...BUILTIN_ALIASES,
+    ...configured.default_model ? { default: configured.default_model } : {},
+    ...configured.aliases ?? {}
+  };
+}
+function parseModelRef(modelRef) {
+  const [provider, ...rest] = modelRef.split(":");
+  const model = rest.join(":");
+  if (provider !== "openai" && provider !== "anthropic" && provider !== "deepseek") {
+    throw new Error(`Unsupported AI provider: ${provider}`);
+  }
+  if (!model)
+    throw new Error(`Invalid model ref: ${modelRef}. Expected provider:model.`);
+  return { provider, model };
+}
+function resolveModelRef(aliasOrRef, config2) {
+  const aliases = modelAliases(config2);
+  return aliases[aliasOrRef] ?? aliasOrRef;
+}
+function listModelRegistry(config2) {
+  const aliases = modelAliases(config2);
+  return Object.entries(aliases).map(([alias, modelRef]) => {
+    const parsed = parseModelRef(modelRef);
+    return {
+      alias,
+      model_ref: modelRef,
+      provider: parsed.provider,
+      model: parsed.model,
+      default: alias === "default",
+      capabilities: PROVIDER_CAPABILITIES[parsed.provider]
+    };
+  });
+}
+function providerCredentialStatus(config2, env = process.env) {
+  return Object.keys(DEFAULT_PROVIDER_SETTINGS).map((provider) => {
+    const settings = providerSettings(config2, provider);
+    const configured = Boolean(env[settings.api_key_env]);
+    return {
+      provider,
+      api_key_env: settings.api_key_env,
+      configured,
+      source: configured ? "env" : "missing",
+      base_url: settings.base_url ?? null,
+      default_model: settings.default_model
+    };
+  });
+}
+function providerStatus(config2, env = process.env) {
+  return {
+    default_model: resolveModelRef("default", config2),
+    providers: providerCredentialStatus(config2, env),
+    models: listModelRegistry(config2)
+  };
+}
+
 // src/wiki-layout.ts
 function todayParts(now) {
   const year = String(now.getUTCFullYear());
@@ -15967,6 +16116,12 @@ class KnowledgeService {
       safetyPolicy: this.safetyPolicy()
     });
   }
+  providerStatus(env = process.env) {
+    return providerStatus(this.config(), env);
+  }
+  modelRegistry() {
+    return listModelRegistry(this.config());
+  }
 }
 function createKnowledgeService(options = {}) {
   return new KnowledgeService(options);
@@ -16057,6 +16212,18 @@ function buildServer() {
     } catch (error48) {
       return errorText(error48 instanceof Error ? error48.message : String(error48));
     }
+  });
+  registerTool(server, "ok_provider_status", "AI provider status", "Inspect configured AI SDK providers, model aliases, and BYOK credential availability", {
+    scope: scopeField
+  }, async ({ scope }) => {
+    const service = createKnowledgeService({ scope });
+    return jsonText({ ok: true, ...service.providerStatus() });
+  });
+  registerTool(server, "ok_provider_models", "AI provider models", "List AI SDK model aliases and capability metadata", {
+    scope: scopeField
+  }, async ({ scope }) => {
+    const service = createKnowledgeService({ scope });
+    return jsonText({ ok: true, models: service.modelRegistry() });
   });
   registerTool(server, "ok_add", "Add a knowledge item", "Add a new item to the knowledge store", {
     title: exports_external.string().describe("Item title"),

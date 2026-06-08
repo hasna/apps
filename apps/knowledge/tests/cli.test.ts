@@ -17,9 +17,10 @@ const packageJson = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'
   version: string;
 };
 
-function runCli(args: string[], cwd?: string) {
+function runCli(args: string[], cwd?: string, env?: Record<string, string>) {
   return Bun.spawnSync(['bun', CLI, ...args], {
     cwd,
+    env: env ? { ...process.env, ...env } : undefined,
     stdout: 'pipe',
     stderr: 'pipe'
   });
@@ -305,6 +306,30 @@ describe('open-knowledge cli', () => {
     const denied = runCli(['ingest', 'manifest', 's3://not-allowed/manifest.jsonl', '--scope', 'project', '--json'], dir);
     expect(denied.exitCode).toBe(1);
     expect(new TextDecoder().decode(denied.stderr)).toContain('Safety policy denied S3 read');
+  });
+
+  test('providers commands expose model aliases and credential checks', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-providers-cli-'));
+    const env = { OPENAI_API_KEY: '', ANTHROPIC_API_KEY: '', DEEPSEEK_API_KEY: '' };
+
+    const status = runCli(['providers', 'status', '--scope', 'project', '--json'], dir, env);
+    expect(status.exitCode).toBe(0);
+    const statusOut = JSON.parse(new TextDecoder().decode(status.stdout));
+    expect(statusOut.default_model).toBe('openai:gpt-5.2');
+    expect(statusOut.providers).toHaveLength(3);
+    expect(statusOut.providers.find((entry: any) => entry.provider === 'openai').configured).toBe(false);
+
+    const models = runCli(['providers', 'models', '--scope', 'project', '--json'], dir, env);
+    expect(models.exitCode).toBe(0);
+    const modelsOut = JSON.parse(new TextDecoder().decode(models.stdout));
+    expect(modelsOut.models.find((entry: any) => entry.alias === 'deepseek-reasoning')).toMatchObject({
+      model_ref: 'deepseek:deepseek-reasoner',
+      provider: 'deepseek',
+    });
+
+    const missing = runCli(['providers', 'check', 'default', '--scope', 'project', '--json'], dir, env);
+    expect(missing.exitCode).toBe(1);
+    expect(new TextDecoder().decode(missing.stderr)).toContain('Missing OPENAI_API_KEY');
   });
 
   test('wiki init creates scalable wiki artifacts', () => {

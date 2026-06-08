@@ -64,6 +64,7 @@ describe('open-knowledge MCP', () => {
       expect(tools.tools.some((tool) => tool.name === 'ok_add')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_parse_source_ref')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_resolve_source')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'ok_provider_status')).toBe(true);
 
       const add = parseToolJson(await client.callTool({
         name: 'ok_add',
@@ -102,6 +103,19 @@ describe('open-knowledge MCP', () => {
       expect(resolved.content.bytes_exposed).toBe(false);
       expect(resolved.chunks[0].text).toContain('MCP resolver source text');
       expect(resolved.chunks[0].evidence.read_only).toBe(true);
+
+      const providerStatus = parseToolJson(await client.callTool({
+        name: 'ok_provider_status',
+        arguments: { scope: 'project' },
+      }));
+      expect(providerStatus.providers).toHaveLength(3);
+      expect(providerStatus.default_model).toBe('openai:gpt-5.2');
+
+      const providerModels = parseToolJson(await client.callTool({
+        name: 'ok_provider_models',
+        arguments: { scope: 'project' },
+      }));
+      expect(providerModels.models.some((entry: any) => entry.alias === 'sonnet')).toBe(true);
 
       const batch = parseToolJson(await client.callTool({
         name: 'ok_batch',

@@ -4,6 +4,7 @@ import { getKnowledgeDbStats, migrateKnowledgeDb } from './knowledge-db';
 import { ingestOpenFilesManifest } from './manifest-ingest';
 import { ingestSourceRef } from './source-ingest';
 import { resolveOpenFilesSource } from './source-resolver';
+import { providerStatus, listModelRegistry, type ProviderStatusResult, type ModelRegistryEntry } from './providers';
 import { resolveSafetyPolicy } from './safety';
 import { initializeWikiLayout } from './wiki-layout';
 import {
@@ -149,6 +150,14 @@ export class KnowledgeService {
       config: this.config(),
       safetyPolicy: this.safetyPolicy(),
     });
+  }
+
+  providerStatus(env: Record<string, string | undefined> = process.env): ProviderStatusResult {
+    return providerStatus(this.config(), env);
+  }
+
+  modelRegistry(): ModelRegistryEntry[] {
+    return listModelRegistry(this.config());
   }
 }
 

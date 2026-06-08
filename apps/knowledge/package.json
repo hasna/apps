@@ -1,6 +1,6 @@
 {
   "name": "@hasna/knowledge",
-  "version": "0.2.10",
+  "version": "0.2.11",
   "description": "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   "type": "module",
   "bin": {
@@ -17,7 +17,7 @@
   "scripts": {
     "test": "bun test",
     "test:cli": "bun test tests/cli.test.ts",
-    "build": "bun build --target=bun --outfile=bin/open-knowledge.js --minify --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers src/cli.ts && bun build --target=bun --outfile=bin/open-knowledge-mcp.js --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers src/mcp.js",
+    "build": "bun build --target=bun --outfile=bin/open-knowledge.js --minify --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --target=bun --outfile=bin/open-knowledge-mcp.js --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js",
     "prepublishOnly": "bun run build",
     "postinstall": "bun run build"
   },
@@ -50,7 +50,11 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1063.0",
     "@aws-sdk/credential-providers": "^3.1063.0",
+    "@ai-sdk/anthropic": "^3.0.81",
+    "@ai-sdk/deepseek": "^2.0.35",
+    "@ai-sdk/openai": "^3.0.68",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "ai": "^6.0.197",
     "zod": "^4.3.6"
   },
   "devDependencies": {

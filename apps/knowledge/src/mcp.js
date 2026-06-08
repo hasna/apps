@@ -105,6 +105,20 @@ export function buildServer() {
     }
   });
 
+  registerTool(server, 'ok_provider_status', 'AI provider status', 'Inspect configured AI SDK providers, model aliases, and BYOK credential availability', {
+    scope: scopeField,
+  }, async ({ scope }) => {
+    const service = createKnowledgeService({ scope });
+    return jsonText({ ok: true, ...service.providerStatus() });
+  });
+
+  registerTool(server, 'ok_provider_models', 'AI provider models', 'List AI SDK model aliases and capability metadata', {
+    scope: scopeField,
+  }, async ({ scope }) => {
+    const service = createKnowledgeService({ scope });
+    return jsonText({ ok: true, models: service.modelRegistry() });
+  });
+
   registerTool(server, 'ok_add', 'Add a knowledge item', 'Add a new item to the knowledge store', {
     title: z.string().describe('Item title'),
     content: z.string().describe('Item content/body'),
