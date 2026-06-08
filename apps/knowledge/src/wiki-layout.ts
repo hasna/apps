@@ -1,10 +1,16 @@
 import type { ArtifactStore } from './artifact-store';
+import {
+  artifactKindForKey,
+  hashArtifactBody,
+  type GeneratedStorageObject,
+} from './storage-contract';
 
 export interface WikiLayoutInitResult {
   schema_key: string;
   root_index_key: string;
   wiki_readme_key: string;
   log_key: string;
+  artifacts: GeneratedStorageObject[];
   written: string[];
 }
 
@@ -86,19 +92,29 @@ export async function initializeWikiLayout(store: ArtifactStore, now = new Date(
     wiki_readme_key: wikiReadmeKey,
   };
 
-  const writes = [
-    store.put({ key: schemaKey, body: agentSchemaTemplate(), content_type: 'text/markdown' }),
-    store.put({ key: rootIndexKey, body: rootIndexTemplate(), content_type: 'text/markdown' }),
-    store.put({ key: wikiReadmeKey, body: wikiReadmeTemplate(), content_type: 'text/markdown' }),
-    store.put({ key: logKey, body: `${JSON.stringify(event)}\n`, content_type: 'application/x-ndjson' }),
+  const entries = [
+    { key: schemaKey, body: agentSchemaTemplate(), content_type: 'text/markdown' },
+    { key: rootIndexKey, body: rootIndexTemplate(), content_type: 'text/markdown' },
+    { key: wikiReadmeKey, body: wikiReadmeTemplate(), content_type: 'text/markdown' },
+    { key: logKey, body: `${JSON.stringify(event)}\n`, content_type: 'application/x-ndjson' },
   ];
 
-  await Promise.all(writes);
+  const artifacts = await Promise.all(entries.map(async (entry) => {
+    const result = await store.put(entry);
+    return {
+      key: result.key,
+      uri: result.uri,
+      kind: artifactKindForKey(entry.key),
+      content_type: entry.content_type,
+      ...hashArtifactBody(entry.body),
+    };
+  }));
   return {
     schema_key: schemaKey,
     root_index_key: rootIndexKey,
     wiki_readme_key: wikiReadmeKey,
     log_key: logKey,
+    artifacts,
     written: [schemaKey, rootIndexKey, wikiReadmeKey, logKey],
   };
 }

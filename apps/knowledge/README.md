@@ -62,6 +62,9 @@ open-knowledge export --format jsonl
 # Show resolved workspace paths
 open-knowledge paths --scope project --json
 
+# Inspect local/S3 artifact storage and source ownership
+open-knowledge storage status --scope project --json
+
 # Initialize the project SQLite catalog
 open-knowledge db init --scope project
 
@@ -167,6 +170,18 @@ open-knowledge paths [--scope global|project|local] [--json]
 ```
 Show the resolved Hasna app workspace, JSON compatibility store, SQLite path,
 artifact directories, and config.
+
+### storage
+```bash
+open-knowledge storage status [--scope project] [--json]
+open-knowledge storage validate [--scope project] [--json]
+```
+Show the storage contract for local or S3-backed generated artifacts. Local mode
+uses `.hasna/apps/knowledge` for config, SQLite, indexes, wiki artifacts, logs,
+runs, and exports. S3 mode stores generated artifacts under the configured
+knowledge bucket/prefix while `open-files` remains the source of truth for raw
+source bytes. The command also reports artifact classes, allowed source ref
+schemes, and warnings for non-scalable or unsafe config.
 
 ### db
 ```bash
@@ -277,8 +292,9 @@ open-knowledge-mcp
 The MCP server exposes item tools (`ok_add`, `ok_list`, `ok_get`, `ok_update`,
 `ok_delete`, `ok_archive`, `ok_restore`, `ok_upsert`, `ok_untag`,
 `ok_bulk_delete`, `ok_prune`, `ok_dedupe`, `ok_stats`, `ok_export`,
-`ok_import`, `ok_batch`), workspace inspection (`ok_paths`), and source-ref
-parsing/resolution (`ok_parse_source_ref`, `ok_resolve_source`).
+`ok_import`, `ok_batch`), workspace/storage inspection (`ok_paths`,
+`ok_storage_status`), and source-ref parsing/resolution
+(`ok_parse_source_ref`, `ok_resolve_source`).
 
 ## Source And Artifact Boundary
 

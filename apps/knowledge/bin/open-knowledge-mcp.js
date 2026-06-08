@@ -13660,7 +13660,7 @@ import { existsSync as existsSync7, readFileSync as readFileSync7, writeFileSync
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.11",
+  version: "0.2.12",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   bin: {
@@ -14391,7 +14391,8 @@ function getKnowledgeDbStats(path) {
       run_events: count(db, "run_events"),
       redaction_findings: count(db, "redaction_findings"),
       audit_events: count(db, "audit_events"),
-      approval_gates: count(db, "approval_gates")
+      approval_gates: count(db, "approval_gates"),
+      storage_objects: count(db, "storage_objects")
     };
   } finally {
     db.close();
@@ -15922,6 +15923,177 @@ function providerStatus(config2, env = process.env) {
   };
 }
 
+// src/storage-contract.ts
+import { createHash as createHash5, randomUUID as randomUUID4 } from "crypto";
+var GENERATED_ARTIFACTS = [
+  {
+    kind: "schema",
+    prefix: "schemas/",
+    description: "Machine-readable agent schemas and source rules."
+  },
+  {
+    kind: "index",
+    prefix: "indexes/",
+    description: "Small orientation indexes and future shard manifests."
+  },
+  {
+    kind: "log",
+    prefix: "logs/",
+    description: "Append-only JSONL run and wiki-maintenance log partitions."
+  },
+  {
+    kind: "run",
+    prefix: "runs/",
+    description: "Prompt/tool/cost ledgers and generated output records."
+  },
+  {
+    kind: "wiki_page",
+    prefix: "wiki/",
+    description: "Generated cited Markdown pages, not raw source files."
+  },
+  {
+    kind: "export",
+    prefix: "exports/",
+    description: "Portable exports and snapshots of derived knowledge state."
+  }
+];
+function hashArtifactBody(body) {
+  const bytes = typeof body === "string" ? Buffer.from(body) : Buffer.from(body);
+  return {
+    hash: `sha256:${createHash5("sha256").update(bytes).digest("hex")}`,
+    size_bytes: bytes.byteLength
+  };
+}
+function artifactKindForKey(key) {
+  const match = GENERATED_ARTIFACTS.find((entry) => key.startsWith(entry.prefix));
+  return match?.kind ?? "artifact";
+}
+function resolveStorageContract(config2, workspace, scope = "global") {
+  const validation = validateStorageConfig(config2, workspace);
+  const s3 = config2.storage.s3 ?? null;
+  const prefix = s3?.prefix?.replace(/^\/+|\/+$/g, "") ?? "";
+  const s3UriPrefix = s3 ? `s3://${s3.bucket}/${prefix ? `${prefix}/` : ""}` : "";
+  return {
+    scope,
+    mode: config2.mode,
+    storage_type: config2.storage.type,
+    workspace_home: workspace.home,
+    local_layout: {
+      app_path: HASNA_KNOWLEDGE_APP_PATH,
+      config_path: workspace.configPath,
+      json_store_path: workspace.jsonStorePath,
+      knowledge_db_path: workspace.knowledgeDbPath,
+      directories: {
+        artifacts: workspace.artifactsDir,
+        cache: workspace.cacheDir,
+        exports: workspace.exportsDir,
+        indexes: workspace.indexesDir,
+        logs: workspace.logsDir,
+        runs: workspace.runsDir,
+        schemas: workspace.schemasDir,
+        wiki: workspace.wikiDir
+      }
+    },
+    artifact_store: {
+      type: config2.storage.type,
+      artifacts_root: config2.storage.artifacts_root,
+      uri_prefix: config2.storage.type === "s3" ? s3UriPrefix : `file://${workspace.artifactsDir}/`,
+      s3: s3 ? {
+        bucket: s3.bucket,
+        prefix,
+        region: s3.region ?? null,
+        profile: s3.profile ?? null,
+        server_side_encryption: s3.server_side_encryption ?? null,
+        kms_key_configured: Boolean(s3.kms_key_id)
+      } : null
+    },
+    source_ownership: {
+      owner: "open-files",
+      preferred_ref: config2.sources.preferred_ref,
+      allowed_schemes: config2.sources.allowed_schemes,
+      raw_source_bytes_stored_in_open_knowledge: false,
+      stores: [
+        "source refs",
+        "source revisions and hashes",
+        "citation spans",
+        "redacted extracted chunks",
+        "embeddings",
+        "generated wiki artifacts",
+        "indexes",
+        "run ledgers"
+      ],
+      does_not_store: [
+        "raw open-files bytes",
+        "S3 object credentials",
+        "connector secrets",
+        "hosted tenant ownership state"
+      ]
+    },
+    generated_artifacts: GENERATED_ARTIFACTS,
+    scalability: {
+      catalog: "knowledge.db tracks sources, revisions, chunks, citations, indexes, runs, and storage_objects.",
+      indexes: "Indexes are cataloged DB rows plus sharded artifacts, not one giant index.md.",
+      logs: "Logs use dated JSONL partitions under logs/yyyy/mm/dd.jsonl.",
+      markdown: "Markdown pages are the readable wiki layer over DB/object-store state."
+    },
+    warnings: validation.warnings
+  };
+}
+function validateStorageConfig(config2, workspace) {
+  const errors3 = [];
+  const warnings = [];
+  if (!workspace.home.endsWith(HASNA_KNOWLEDGE_APP_PATH)) {
+    warnings.push(`Workspace home does not end with ${HASNA_KNOWLEDGE_APP_PATH}: ${workspace.home}`);
+  }
+  if (config2.storage.type === "s3") {
+    if (!config2.storage.s3?.bucket)
+      errors3.push("storage.s3.bucket is required when storage.type is s3.");
+    if (!config2.storage.s3?.prefix)
+      warnings.push("storage.s3.prefix is empty; generated knowledge artifacts will be written at the bucket root.");
+    if (config2.mode === "local")
+      warnings.push("storage.type is s3 while mode is local; this is valid for BYO S3, but hosted wrappers should set mode to hosted.");
+  }
+  if (config2.storage.type === "local" && config2.storage.s3) {
+    warnings.push("storage.s3 is configured but ignored while storage.type is local.");
+  }
+  if (config2.sources.preferred_ref !== "open-files") {
+    warnings.push("sources.preferred_ref should stay open-files for durable company knowledge.");
+  }
+  if (!config2.sources.allowed_schemes.includes("open-files")) {
+    errors3.push("sources.allowed_schemes must include open-files.");
+  }
+  return {
+    ok: errors3.length === 0,
+    errors: errors3,
+    warnings
+  };
+}
+function recordStorageObjects(db, objects, now = new Date) {
+  const timestamp = now.toISOString();
+  const statement = db.prepare(`
+    INSERT INTO storage_objects (
+      id, artifact_uri, kind, content_type, hash, size_bytes, metadata_json, created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(artifact_uri) DO UPDATE SET
+      kind = excluded.kind,
+      content_type = excluded.content_type,
+      hash = excluded.hash,
+      size_bytes = excluded.size_bytes,
+      metadata_json = excluded.metadata_json,
+      updated_at = excluded.updated_at
+  `);
+  const insert = db.transaction((entries) => {
+    for (const entry of entries) {
+      statement.run(randomUUID4(), entry.uri, entry.kind, entry.content_type ?? null, entry.hash ?? null, entry.size_bytes ?? null, JSON.stringify({
+        key: entry.key,
+        ...entry.metadata ?? {}
+      }), timestamp, timestamp);
+    }
+  });
+  insert(objects);
+}
+
 // src/wiki-layout.ts
 function todayParts(now) {
   const year = String(now.getUTCFullYear());
@@ -15996,19 +16168,29 @@ async function initializeWikiLayout(store, now = new Date) {
     root_index_key: rootIndexKey,
     wiki_readme_key: wikiReadmeKey
   };
-  const writes = [
-    store.put({ key: schemaKey, body: agentSchemaTemplate(), content_type: "text/markdown" }),
-    store.put({ key: rootIndexKey, body: rootIndexTemplate(), content_type: "text/markdown" }),
-    store.put({ key: wikiReadmeKey, body: wikiReadmeTemplate(), content_type: "text/markdown" }),
-    store.put({ key: logKey, body: `${JSON.stringify(event)}
-`, content_type: "application/x-ndjson" })
+  const entries = [
+    { key: schemaKey, body: agentSchemaTemplate(), content_type: "text/markdown" },
+    { key: rootIndexKey, body: rootIndexTemplate(), content_type: "text/markdown" },
+    { key: wikiReadmeKey, body: wikiReadmeTemplate(), content_type: "text/markdown" },
+    { key: logKey, body: `${JSON.stringify(event)}
+`, content_type: "application/x-ndjson" }
   ];
-  await Promise.all(writes);
+  const artifacts = await Promise.all(entries.map(async (entry) => {
+    const result = await store.put(entry);
+    return {
+      key: result.key,
+      uri: result.uri,
+      kind: artifactKindForKey(entry.key),
+      content_type: entry.content_type,
+      ...hashArtifactBody(entry.body)
+    };
+  }));
   return {
     schema_key: schemaKey,
     root_index_key: rootIndexKey,
     wiki_readme_key: wikiReadmeKey,
     log_key: logKey,
+    artifacts,
     written: [schemaKey, rootIndexKey, wikiReadmeKey, logKey]
   };
 }
@@ -16048,6 +16230,12 @@ class KnowledgeService {
   artifactStore() {
     return createArtifactStore(this.config(), this.ensureWorkspace());
   }
+  storageContract() {
+    return resolveStorageContract(this.config(), this.ensureWorkspace(), this.scope);
+  }
+  validateStorage() {
+    return validateStorageConfig(this.config(), this.ensureWorkspace());
+  }
   paths() {
     const workspace = this.ensureWorkspace();
     return {
@@ -16076,7 +16264,16 @@ class KnowledgeService {
     return getKnowledgeDbStats(workspace.knowledgeDbPath);
   }
   async initWiki() {
-    return initializeWikiLayout(this.artifactStore());
+    const workspace = this.ensureWorkspace();
+    migrateKnowledgeDb(workspace.knowledgeDbPath);
+    const result = await initializeWikiLayout(this.artifactStore());
+    const db = openKnowledgeDb(workspace.knowledgeDbPath);
+    try {
+      recordStorageObjects(db, result.artifacts);
+    } finally {
+      db.close();
+    }
+    return result;
   }
   async ingestManifest(input) {
     const workspace = this.ensureWorkspace();
@@ -16186,6 +16383,17 @@ function buildServer() {
     scope: scopeField
   }, async ({ scope }) => {
     return jsonText(createKnowledgeService({ scope }).paths());
+  });
+  registerTool(server, "ok_storage_status", "Knowledge storage status", "Inspect local/S3 artifact storage, source ownership, and scalability contract", {
+    scope: scopeField
+  }, async ({ scope }) => {
+    const service = createKnowledgeService({ scope });
+    const validation = service.validateStorage();
+    return jsonText({
+      ok: validation.ok,
+      ...service.storageContract(),
+      validation
+    });
   });
   registerTool(server, "ok_parse_source_ref", "Parse source reference", "Parse and validate an open-files, S3, file, or web source ref", {
     uri: exports_external.string().describe("Source reference URI")

@@ -1,11 +1,18 @@
 import { createArtifactStore } from './artifact-store';
 import { consumeOpenFilesOutbox } from './outbox-consume';
-import { getKnowledgeDbStats, migrateKnowledgeDb } from './knowledge-db';
+import { getKnowledgeDbStats, migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { ingestOpenFilesManifest } from './manifest-ingest';
 import { ingestSourceRef } from './source-ingest';
 import { resolveOpenFilesSource } from './source-resolver';
 import { providerStatus, listModelRegistry, type ProviderStatusResult, type ModelRegistryEntry } from './providers';
 import { resolveSafetyPolicy } from './safety';
+import {
+  recordStorageObjects,
+  resolveStorageContract,
+  validateStorageConfig,
+  type StorageContract,
+  type StorageValidationResult,
+} from './storage-contract';
 import { initializeWikiLayout } from './wiki-layout';
 import {
   ensureKnowledgeWorkspace,
@@ -76,6 +83,14 @@ export class KnowledgeService {
     return createArtifactStore(this.config(), this.ensureWorkspace());
   }
 
+  storageContract(): StorageContract {
+    return resolveStorageContract(this.config(), this.ensureWorkspace(), this.scope);
+  }
+
+  validateStorage(): StorageValidationResult {
+    return validateStorageConfig(this.config(), this.ensureWorkspace());
+  }
+
   paths(): KnowledgePathsResult {
     const workspace = this.ensureWorkspace();
     return {
@@ -107,7 +122,16 @@ export class KnowledgeService {
   }
 
   async initWiki() {
-    return initializeWikiLayout(this.artifactStore());
+    const workspace = this.ensureWorkspace();
+    migrateKnowledgeDb(workspace.knowledgeDbPath);
+    const result = await initializeWikiLayout(this.artifactStore());
+    const db = openKnowledgeDb(workspace.knowledgeDbPath);
+    try {
+      recordStorageObjects(db, result.artifacts);
+    } finally {
+      db.close();
+    }
+    return result;
   }
 
   async ingestManifest(input: string) {

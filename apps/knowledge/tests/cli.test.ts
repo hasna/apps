@@ -144,6 +144,18 @@ describe('open-knowledge cli', () => {
     expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'runs'))).toBe(true);
     expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'wiki'))).toBe(true);
 
+    const storage = runCli(['storage', 'status', '--scope', 'project', '--json'], dir);
+    expect(storage.exitCode).toBe(0);
+    const storageOut = JSON.parse(new TextDecoder().decode(storage.stdout));
+    expect(storageOut.local_layout.app_path).toBe(join('.hasna', 'apps', 'knowledge'));
+    expect(storageOut.artifact_store.type).toBe('local');
+    expect(storageOut.source_ownership.owner).toBe('open-files');
+    expect(storageOut.source_ownership.raw_source_bytes_stored_in_open_knowledge).toBe(false);
+
+    const validate = runCli(['storage', 'validate', '--scope', 'project', '--json'], dir);
+    expect(validate.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(validate.stdout)).ok).toBe(true);
+
     const add = runCli(['add', 'Project scoped', 'Stored in the Hasna app workspace', '--scope', 'project', '--json'], dir);
     expect(add.exitCode).toBe(0);
     expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'db.json'))).toBe(true);
@@ -341,9 +353,15 @@ describe('open-knowledge cli', () => {
     expect(initOut.written).toContain('schemas/v1.md');
     expect(initOut.written).toContain('indexes/root.md');
     expect(initOut.written).toContain('wiki/README.md');
+    expect(initOut.artifacts).toHaveLength(4);
+    expect(initOut.artifacts.every((entry: any) => entry.hash.startsWith('sha256:'))).toBe(true);
     expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'artifacts', 'schemas', 'v1.md'))).toBe(true);
     expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'artifacts', 'indexes', 'root.md'))).toBe(true);
     expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(true);
+
+    const stats = runCli(['db', 'stats', '--scope', 'project', '--json'], dir);
+    expect(stats.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(stats.stdout)).storage_objects).toBe(4);
   });
 
   test('source refs cover open-files, s3, local files, and web URLs', () => {

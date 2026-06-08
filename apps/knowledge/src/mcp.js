@@ -77,6 +77,18 @@ export function buildServer() {
     return jsonText(createKnowledgeService({ scope }).paths());
   });
 
+  registerTool(server, 'ok_storage_status', 'Knowledge storage status', 'Inspect local/S3 artifact storage, source ownership, and scalability contract', {
+    scope: scopeField,
+  }, async ({ scope }) => {
+    const service = createKnowledgeService({ scope });
+    const validation = service.validateStorage();
+    return jsonText({
+      ok: validation.ok,
+      ...service.storageContract(),
+      validation,
+    });
+  });
+
   registerTool(server, 'ok_parse_source_ref', 'Parse source reference', 'Parse and validate an open-files, S3, file, or web source ref', {
     uri: z.string().describe('Source reference URI'),
   }, async ({ uri }) => {

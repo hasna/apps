@@ -15,6 +15,8 @@ describe('knowledge service facade', () => {
     const paths = service.paths();
     expect(paths.home).toBe(join(dir, '.hasna', 'apps', 'knowledge'));
     expect(paths.config.storage.type).toBe('local');
+    expect(service.storageContract().source_ownership.raw_source_bytes_stored_in_open_knowledge).toBe(false);
+    expect(service.validateStorage().ok).toBe(true);
 
     const migration = service.initDb();
     expect(migration.schema_version).toBe(3);
@@ -31,5 +33,9 @@ describe('knowledge service facade', () => {
     const stats = service.dbStats();
     expect(stats.sources).toBe(1);
     expect(stats.chunks).toBe(1);
+
+    const wiki = await service.initWiki();
+    expect(wiki.artifacts).toHaveLength(4);
+    expect(service.dbStats().storage_objects).toBe(4);
   });
 });

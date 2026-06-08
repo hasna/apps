@@ -64,6 +64,7 @@ describe('open-knowledge MCP', () => {
       expect(tools.tools.some((tool) => tool.name === 'ok_add')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_parse_source_ref')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_resolve_source')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'ok_storage_status')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_provider_status')).toBe(true);
 
       const add = parseToolJson(await client.callTool({
@@ -90,6 +91,15 @@ describe('open-knowledge MCP', () => {
         arguments: { uri: 'open-files://file/file_123/revision/rev_456' },
       }));
       expect(source.source_ref).toMatchObject({ kind: 'open-files', entity: 'file', id: 'file_123', revision_id: 'rev_456' });
+
+      const storageStatus = parseToolJson(await client.callTool({
+        name: 'ok_storage_status',
+        arguments: { scope: 'project' },
+      }));
+      expect(storageStatus.ok).toBe(true);
+      expect(storageStatus.artifact_store.type).toBe('local');
+      expect(storageStatus.source_ownership.owner).toBe('open-files');
+      expect(storageStatus.source_ownership.raw_source_bytes_stored_in_open_knowledge).toBe(false);
 
       const resolved = parseToolJson(await client.callTool({
         name: 'ok_resolve_source',

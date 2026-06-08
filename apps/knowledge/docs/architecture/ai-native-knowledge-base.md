@@ -133,6 +133,18 @@ Raw files still route through `open-files`. Knowledge S3 storage is for derived
 artifacts such as wiki pages, index shards, schema versions, logs, exports, and
 run outputs.
 
+The storage contract is inspectable through:
+
+```bash
+open-knowledge storage status --scope project --json
+```
+
+That contract names the local app path, SQLite catalog, generated artifact
+classes, S3 bucket/prefix when configured, and the source ownership rule that
+raw source bytes stay in `open-files`. The `storage_objects` table catalogs
+generated artifacts by URI, kind, hash, size, and metadata so local mode and
+remote/S3 mode share the same DB-facing shape.
+
 ## Wiki Model
 
 The Karpathy-style wiki pattern is implemented as scalable artifacts, not three

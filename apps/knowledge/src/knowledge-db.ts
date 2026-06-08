@@ -16,6 +16,7 @@ export interface KnowledgeDbStats {
   redaction_findings: number;
   audit_events: number;
   approval_gates: number;
+  storage_objects: number;
 }
 
 const MIGRATION_1 = `
@@ -280,6 +281,7 @@ export function getKnowledgeDbStats(path: string): KnowledgeDbStats {
       redaction_findings: count(db, 'redaction_findings'),
       audit_events: count(db, 'audit_events'),
       approval_gates: count(db, 'approval_gates'),
+      storage_objects: count(db, 'storage_objects'),
     };
   } finally {
     db.close();

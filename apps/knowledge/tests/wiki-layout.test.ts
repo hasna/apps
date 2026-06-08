@@ -21,5 +21,8 @@ describe('wiki layout', () => {
     expect(await store.getText('schemas/v1.md')).toContain('Knowledge Agent Schema v1');
     expect(await store.getText('indexes/root.md')).toContain('compact orientation index');
     expect(await store.getText('logs/2026/06/08.jsonl')).toContain('wiki_layout_initialized');
+    expect(result.artifacts).toHaveLength(4);
+    expect(result.artifacts.map((entry) => entry.kind)).toEqual(['schema', 'index', 'wiki_page', 'log']);
+    expect(result.artifacts.every((entry) => entry.hash?.startsWith('sha256:'))).toBe(true);
   });
 });
