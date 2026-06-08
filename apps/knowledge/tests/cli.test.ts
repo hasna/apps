@@ -457,6 +457,34 @@ describe('open-knowledge cli', () => {
     expect(statsOut.runs).toBe(2);
   });
 
+  test('wiki compile, file-answer, and lint commands manage durable cited pages', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-wiki-commands-cli-'));
+    const source = join(dir, 'source.md');
+    writeFileSync(source, 'CLI wiki compile should cite source chunks for durable wiki pages.');
+    const sourceRef = `file://${source}`;
+
+    const ingest = runCli(['ingest', 'source', sourceRef, '--purpose', 'knowledge_index', '--scope', 'project', '--json'], dir);
+    expect(ingest.exitCode).toBe(0);
+
+    const compile = runCli(['wiki', 'compile', 'source', 'chunks', '--title', 'CLI Wiki Compile', '--scope', 'project', '--json'], dir);
+    expect(compile.exitCode).toBe(0);
+    const compileOut = JSON.parse(new TextDecoder().decode(compile.stdout));
+    expect(compileOut.path).toBe('wiki/generated/cli-wiki-compile.md');
+    expect(compileOut.citations_written).toBe(1);
+
+    const filed = runCli(['wiki', 'file-answer', 'How', 'should', 'wiki', 'compile', 'cite?', '--content', 'Use cited source chunks.', '--approve-write', '--scope', 'project', '--json'], dir);
+    expect(filed.exitCode).toBe(0);
+    const filedOut = JSON.parse(new TextDecoder().decode(filed.stdout));
+    expect(filedOut.durable_writes_performed).toBe(true);
+    expect(filedOut.path).toBe('wiki/answers/how-should-wiki-compile-cite.md');
+
+    const lint = runCli(['wiki', 'lint', '--scope', 'project', '--json'], dir);
+    expect(lint.exitCode).toBe(0);
+    const lintOut = JSON.parse(new TextDecoder().decode(lint.stdout));
+    expect(lintOut.ok).toBe(true);
+    expect(lintOut.issues.some((issue: any) => issue.type === 'missing_citation')).toBe(false);
+  });
+
   test('web search command returns and files provider sources in fake mode', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-web-cli-'));
 

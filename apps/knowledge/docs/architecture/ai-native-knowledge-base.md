@@ -207,6 +207,14 @@ The database catalog tracks every schema, index shard, log partition, wiki page,
 source citation, and generated artifact. Markdown remains the readable layer;
 SQLite/Postgres and object storage carry the scalable catalog.
 
+The first compile/write loop is local and approval-gated. `wiki compile`
+generates cited pages from derived source chunks, creates concept backlinks,
+updates index rows, records storage objects, and appends dated JSONL logs.
+`wiki file-answer` writes answer notes only with `--approve-write`; otherwise it
+returns the dry-run proposal. `wiki lint` checks missing/stale citations,
+duplicates, orphan pages, unresolved source refs, contradiction markers, and
+new-article candidates.
+
 ## Search Model
 
 Search is hybrid:

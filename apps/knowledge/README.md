@@ -76,6 +76,11 @@ open-knowledge db init --scope project
 # Initialize scalable wiki/schema/index/log artifacts
 open-knowledge wiki init --scope project
 
+# Compile cited wiki pages, file approved answers, and lint wiki health
+open-knowledge wiki compile "handbook policy" --title "Handbook Policy" --scope project --json
+open-knowledge wiki file-answer "How do we cite policy?" --content "Use cited source context." --approve-write --scope project --json
+open-knowledge wiki lint --scope project --json
+
 # Ingest an open-files source manifest into the project SQLite catalog
 open-knowledge ingest manifest ./open-files-manifest.jsonl --scope project --json
 
@@ -237,10 +242,21 @@ Initialize or inspect the versioned SQLite catalog at
 ### wiki
 ```bash
 open-knowledge wiki init [--scope project]
+open-knowledge wiki compile [query|source-ref...] [--title <title>] [--limit <n>] [--scope project] [--json]
+open-knowledge wiki file-answer <prompt> --content <answer> [--approve-write] [--scope project] [--json]
+open-knowledge wiki lint [--scope project] [--json]
 ```
 Create starter generated-knowledge artifacts through the artifact store:
 `schemas/v1.md`, `indexes/root.md`, `wiki/README.md`, and a dated JSONL log
 partition.
+
+`wiki compile` turns existing source chunks into a cited Markdown page under
+`wiki/generated/`, updates `knowledge_indexes`, records citations and a concept
+backlink, and appends a JSONL log partition. `wiki file-answer` keeps answer
+filing as a dry run unless `--approve-write` is supplied, then writes a cited
+answer note under `wiki/answers/`. `wiki lint` checks generated pages for
+missing citations, stale citations, duplicate titles, orphan pages, unresolved
+source refs, contradiction markers, and new article candidates.
 
 ### source
 ```bash

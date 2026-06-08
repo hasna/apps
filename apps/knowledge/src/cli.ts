@@ -209,7 +209,8 @@ Commands:
   remote contracts|status      Inspect hosted client contracts/readiness
   storage status|validate      Inspect local/S3 artifact storage contract
   db init|stats                Initialize or inspect local knowledge.db
-  wiki init                    Initialize scalable wiki/schema/index/log artifacts
+  wiki init|compile|file-answer|lint
+                               Initialize, compile, file, or lint wiki artifacts
   source resolve <source-ref>  Resolve read-only source content and citation evidence
   ingest manifest <file|s3://> Ingest an open-files manifest into knowledge.db
   ingest source <source-ref>   Ingest a read-only source ref into knowledge.db
@@ -303,7 +304,7 @@ function printCommandHelp(command: string): void {
   if (command === 'remote') { console.log('Usage: open-knowledge remote contracts|status [--scope local|global|project] [--json]'); return; }
   if (command === 'storage') { console.log('Usage: open-knowledge storage status|validate [--scope local|global|project] [--json]'); return; }
   if (command === 'db') { console.log('Usage: open-knowledge db init|stats [--scope local|global|project] [--json]'); return; }
-  if (command === 'wiki') { console.log('Usage: open-knowledge wiki init [--scope local|global|project] [--json]'); return; }
+  if (command === 'wiki') { console.log('Usage: open-knowledge wiki init|compile|file-answer|lint [query|prompt] [--title <title>] [--content <answer>] [--approve-write] [--limit <n>] [--scope local|global|project] [--json]'); return; }
   if (command === 'source') { console.log('Usage: open-knowledge source resolve <source-ref> [--purpose knowledge_answer|knowledge_index] [--limit <n>] [--scope local|global|project] [--json]'); return; }
   if (command === 'ingest') { console.log('Usage: open-knowledge ingest manifest <file|s3://bucket/key> | source <source-ref> [--purpose knowledge_index] [--scope local|global|project] [--json]'); return; }
   if (command === 'reindex') { console.log('Usage: open-knowledge reindex status|enqueue|embeddings|outbox [file|s3://bucket/key] [--full] [--fake] [--scope local|global|project] [--json]'); return; }
@@ -512,10 +513,47 @@ async function run(argv: string[]): Promise<void> {
 
   if (command === 'wiki') {
     const action = positional[1] ?? 'init';
-    if (action !== 'init') throw new Error("Invalid wiki action. Use 'init'.");
-    const result = await service.initWiki();
-    output({ ok: true, ...result, message: `Initialized wiki layout in ${service.workspace.home}` }, flags.json);
-    return;
+    if (action === 'init') {
+      const result = await service.initWiki();
+      output({ ok: true, ...result, message: `Initialized wiki layout in ${service.workspace.home}` }, flags.json);
+      return;
+    }
+    if (action === 'compile') {
+      const args = positional.slice(2);
+      const sourceRefs = args.filter((arg) => /^(open-files|file|s3|https?):\/\//.test(arg));
+      const query = args.filter((arg) => !/^(open-files|file|s3|https?):\/\//.test(arg)).join(' ');
+      const result = await service.compileWiki({
+        title: flags.title,
+        query: query || flags.search,
+        sourceRefs: sourceRefs.length > 0 ? sourceRefs : undefined,
+        limit: flags.limit,
+      });
+      output({ ok: true, ...result, message: `Compiled wiki page ${result.path}` }, flags.json);
+      return;
+    }
+    if (action === 'file-answer' || action === 'answer') {
+      const prompt = positional.slice(2).join(' ');
+      if (!prompt) throw new Error('Usage: open-knowledge wiki file-answer <prompt> --content <answer> --approve-write');
+      if (!flags.content) throw new Error('Missing --content <answer> for wiki file-answer.');
+      const result = await service.fileAnswer({
+        prompt,
+        answer: flags.content,
+        approveWrite: flags.approveWrite,
+        limit: flags.limit,
+        semantic: flags.semantic,
+        modelRef: flags.model,
+        dimensions: flags.dimensions,
+        fake: flags.fake,
+      });
+      output({ ok: true, ...result }, flags.json);
+      return;
+    }
+    if (action === 'lint') {
+      const result = service.lintWiki();
+      output({ ok: result.ok, ...result, message: result.ok ? 'Wiki lint passed' : `Wiki lint found ${result.issue_count} issue(s)` }, flags.json);
+      return;
+    }
+    throw new Error("Invalid wiki action. Use 'init', 'compile', 'file-answer', or 'lint'.");
   }
 
   if (command === 'safety') {

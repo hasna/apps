@@ -26,6 +26,7 @@ import { retrieveKnowledgeContext, type RetrievalOptions } from './retrieval';
 import { hybridSearch, type HybridSearchOptions } from './search';
 import { resolveSafetyPolicy } from './safety';
 import { runProviderWebSearch, type WebSearchOptions } from './web-search';
+import { compileWikiPage, fileAnswerToWiki, lintWiki, type WikiCompileOptions } from './wiki-compiler';
 import {
   recordStorageObjects,
   resolveStorageContract,
@@ -243,6 +244,49 @@ export class KnowledgeService {
       db.close();
     }
     return result;
+  }
+
+  async compileWiki(options: Omit<WikiCompileOptions, 'dbPath' | 'store'> = {}) {
+    const workspace = this.ensureWorkspace();
+    return compileWikiPage({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      store: this.artifactStore(),
+    });
+  }
+
+  async fileAnswer(options: {
+    prompt: string;
+    answer: string;
+    approveWrite?: boolean;
+    limit?: number;
+    semantic?: boolean;
+    modelRef?: string;
+    dimensions?: number;
+    fake?: boolean;
+  }) {
+    const workspace = this.ensureWorkspace();
+    const context = await this.retrieveContext({
+      query: options.prompt,
+      limit: options.limit,
+      semantic: options.semantic,
+      modelRef: options.modelRef,
+      dimensions: options.dimensions,
+      fake: options.fake,
+    });
+    return fileAnswerToWiki({
+      dbPath: workspace.knowledgeDbPath,
+      store: this.artifactStore(),
+      prompt: options.prompt,
+      answer: options.answer,
+      context,
+      approveWrite: options.approveWrite,
+    });
+  }
+
+  lintWiki() {
+    const workspace = this.ensureWorkspace();
+    return lintWiki({ dbPath: workspace.knowledgeDbPath });
   }
 
   async ingestManifest(input: string) {

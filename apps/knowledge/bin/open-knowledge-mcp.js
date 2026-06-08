@@ -13660,7 +13660,7 @@ import { existsSync as existsSync8, readFileSync as readFileSync8, writeFileSync
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.21",
+  version: "0.2.22",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   bin: {
@@ -18062,6 +18062,9 @@ async function runProviderWebSearch(options) {
   };
 }
 
+// src/wiki-compiler.ts
+import { createHash as createHash10, randomUUID as randomUUID9 } from "crypto";
+
 // src/storage-contract.ts
 import { createHash as createHash9, randomUUID as randomUUID8 } from "crypto";
 var GENERATED_ARTIFACTS = [
@@ -18249,18 +18252,556 @@ function recordStorageObjects(db, objects, now = new Date) {
   insert(objects);
 }
 
-// src/wiki-layout.ts
-import { createHash as createHash10 } from "crypto";
+// src/wiki-compiler.ts
+function stableId6(prefix, value) {
+  return `${prefix}_${createHash10("sha256").update(value).digest("hex").slice(0, 20)}`;
+}
+function slugify2(value) {
+  const slug = value.normalize("NFKC").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
+  return slug || "knowledge-page";
+}
 function todayParts(now) {
+  return {
+    year: String(now.getUTCFullYear()),
+    month: String(now.getUTCMonth() + 1).padStart(2, "0"),
+    day: String(now.getUTCDate()).padStart(2, "0")
+  };
+}
+function estimateTokenCount2(text) {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.ceil(words * 1.25));
+}
+function parseJsonObject4(value) {
+  if (!value)
+    return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function queryTerms3(query) {
+  return Array.from(new Set((query ?? "").toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [])).slice(0, 12);
+}
+function escapeLike(value) {
+  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
+}
+function selectSourceChunks(db, options) {
+  const limit = Math.max(1, Math.min(options.limit ?? 10, 50));
+  const sourceRefs = options.sourceRefs ?? [];
+  const terms = queryTerms3(options.query);
+  const where = ["c.kind = 'source'"];
+  const params = [];
+  if (sourceRefs.length > 0) {
+    where.push(`(${sourceRefs.map(() => "(s.uri = ? OR c.metadata_json LIKE ?)").join(" OR ")})`);
+    for (const ref of sourceRefs) {
+      params.push(ref, `%${escapeLike(ref)}%`);
+    }
+  }
+  if (terms.length > 0) {
+    where.push(`(${terms.map(() => "lower(c.text) LIKE ? ESCAPE '\\'").join(" OR ")})`);
+    for (const term of terms)
+      params.push(`%${escapeLike(term)}%`);
+  }
+  params.push(limit);
+  return db.query(`SELECT
+       c.id AS chunk_id,
+       c.text,
+       c.start_offset,
+       c.end_offset,
+       c.metadata_json,
+       c.source_revision_id,
+       sr.revision,
+       sr.hash,
+       s.uri AS source_uri,
+       s.title AS source_title
+     FROM chunks c
+     JOIN source_revisions sr ON sr.id = c.source_revision_id
+     JOIN sources s ON s.id = sr.source_id
+     WHERE ${where.join(" AND ")}
+     ORDER BY c.created_at ASC, c.ordinal ASC
+     LIMIT ?`).all(...params);
+}
+function excerpt(text, max = 420) {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized.length <= max ? normalized : `${normalized.slice(0, max - 1).trim()}...`;
+}
+function titleFor(options, rows) {
+  if (options.title?.trim())
+    return options.title.trim();
+  if (options.query?.trim())
+    return options.query.trim();
+  return rows[0]?.source_title ?? "Compiled Knowledge";
+}
+function compileBody(title, rows, now) {
+  const sourceLines = rows.map((row, index) => {
+    const label = `S${index + 1}`;
+    return `- [${label}] ${row.source_title ?? row.source_uri ?? "Source"} (${row.source_uri ?? "unknown"}, revision ${row.revision ?? "unknown"}, hash ${row.hash ?? "unknown"})`;
+  });
+  const noteLines = rows.map((row, index) => {
+    const label = `S${index + 1}`;
+    return [
+      `## ${row.source_title ?? `Source ${index + 1}`}`,
+      "",
+      excerpt(row.text),
+      "",
+      `Citation: [${label}]`
+    ].join(`
+`);
+  });
+  return [
+    `# ${title}`,
+    "",
+    `Generated at: ${now}`,
+    "",
+    "## Sources",
+    "",
+    ...sourceLines,
+    "",
+    ...noteLines,
+    ""
+  ].join(`
+`);
+}
+async function writeArtifact(store, entry) {
+  const written = await store.put(entry);
+  return {
+    key: written.key,
+    uri: written.uri,
+    kind: entry.key.startsWith("logs/") ? "log" : "wiki_page",
+    content_type: entry.content_type,
+    ...hashArtifactBody(entry.body),
+    metadata: {
+      ...entry.metadata ?? {}
+    }
+  };
+}
+async function appendLog(store, event, now) {
+  const { year, month, day } = todayParts(now);
+  const key = `logs/${year}/${month}/${day}.jsonl`;
+  let existing = "";
+  try {
+    existing = await store.getText(key);
+  } catch {
+    existing = "";
+  }
+  return writeArtifact(store, {
+    key,
+    body: `${existing}${JSON.stringify(event)}
+`,
+    content_type: "application/x-ndjson"
+  });
+}
+function upsertWikiPage(db, input) {
+  db.run(`INSERT INTO wiki_pages (id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(path) DO UPDATE SET
+       title = excluded.title,
+       artifact_uri = excluded.artifact_uri,
+       content_hash = excluded.content_hash,
+       status = excluded.status,
+       metadata_json = excluded.metadata_json,
+       updated_at = excluded.updated_at`, [
+    input.pageId,
+    input.path,
+    input.title,
+    input.artifactUri,
+    input.contentHash,
+    "active",
+    JSON.stringify({
+      artifact_key: input.path,
+      provenance: input.provenance
+    }),
+    input.now,
+    input.now
+  ]);
+  const existing = db.query("SELECT id FROM chunks WHERE wiki_page_id = ?").all(input.pageId);
+  for (const row of existing)
+    db.run("DELETE FROM chunks_fts WHERE chunk_id = ?", [row.id]);
+  db.run("DELETE FROM chunks WHERE wiki_page_id = ?", [input.pageId]);
+  const chunkId = stableId6("chk", `${input.pageId}\x00${input.contentHash}`);
+  db.run(`INSERT INTO chunks (id, wiki_page_id, kind, ordinal, text, token_count, start_offset, end_offset, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+    chunkId,
+    input.pageId,
+    "wiki",
+    0,
+    input.body,
+    estimateTokenCount2(input.body),
+    0,
+    input.body.length,
+    JSON.stringify({
+      artifact_key: input.path,
+      artifact_uri: input.artifactUri,
+      content_hash: input.contentHash,
+      provenance: input.provenance
+    }),
+    input.now
+  ]);
+  db.run("INSERT INTO chunks_fts (chunk_id, text, title, source_uri) VALUES (?, ?, ?, ?)", [
+    chunkId,
+    input.body,
+    input.title,
+    input.artifactUri
+  ]);
+}
+function replacePageCitations(db, pageId, citations, now) {
+  db.run("DELETE FROM citations WHERE wiki_page_id = ?", [pageId]);
+  for (const citation of citations) {
+    db.run(`INSERT INTO citations (id, wiki_page_id, chunk_id, source_uri, quote, start_offset, end_offset, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      stableId6("cit", `${pageId}\x00${citation.source_uri}\x00${citation.chunk_id ?? randomUUID9()}`),
+      pageId,
+      citation.chunk_id,
+      citation.source_uri,
+      citation.quote,
+      citation.start_offset,
+      citation.end_offset,
+      JSON.stringify(citation.metadata),
+      now
+    ]);
+  }
+  return citations.length;
+}
+function upsertIndex(db, input) {
+  db.run(`INSERT INTO knowledge_indexes (id, kind, name, artifact_uri, shard_key, metadata_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(kind, name, shard_key) DO UPDATE SET
+       artifact_uri = excluded.artifact_uri,
+       metadata_json = excluded.metadata_json,
+       updated_at = excluded.updated_at`, [
+    stableId6("idx", `wiki-topic\x00${input.path}`),
+    "wiki_topic",
+    input.title,
+    input.artifactUri,
+    input.path,
+    JSON.stringify({
+      artifact_key: input.path,
+      content_hash: input.contentHash
+    }),
+    input.now,
+    input.now
+  ]);
+  return 1;
+}
+function firstConcept(title) {
+  return title.toLowerCase().match(/[a-z0-9][a-z0-9-]{2,}/)?.[0] ?? "knowledge";
+}
+async function compileWikiPage(options) {
+  const nowDate = options.now ?? new Date;
+  const now = nowDate.toISOString();
+  migrateKnowledgeDb(options.dbPath);
+  const readDb = openKnowledgeDb(options.dbPath);
+  let rows;
+  try {
+    rows = selectSourceChunks(readDb, options);
+  } finally {
+    readDb.close();
+  }
+  if (rows.length === 0)
+    throw new Error("No source chunks matched wiki compile input.");
+  const title = titleFor(options, rows);
+  const slug = slugify2(title);
+  const path = `wiki/generated/${slug}.md`;
+  const body = compileBody(title, rows, now);
+  const sourceRefs = rows.map((row) => {
+    const metadata = parseJsonObject4(row.metadata_json);
+    return typeof metadata.source_ref === "string" ? metadata.source_ref : row.source_uri;
+  }).filter((ref) => Boolean(ref));
+  const provenance = generatedArtifactProvenance({
+    generated_from: "wiki_compile",
+    artifact_key: path,
+    source_refs: sourceRefs
+  });
+  const pageArtifact = await writeArtifact(options.store, {
+    key: path,
+    body,
+    content_type: "text/markdown",
+    metadata: { generated_from: "wiki_compile" }
+  });
+  const pageId = stableId6("wiki", path);
+  const citations = rows.map((row) => ({
+    chunk_id: row.chunk_id,
+    source_uri: row.source_uri ?? "unknown",
+    quote: excerpt(row.text, 240),
+    start_offset: row.start_offset,
+    end_offset: row.end_offset,
+    metadata: {
+      source_revision_id: row.source_revision_id,
+      revision: row.revision,
+      hash: row.hash,
+      source_ref: parseJsonObject4(row.metadata_json).source_ref ?? row.source_uri
+    }
+  }));
+  const concept = firstConcept(title);
+  const conceptPath = `wiki/concepts/${slugify2(concept)}.md`;
+  const conceptBody = [`# ${concept}`, "", `Related page: [[${path}]]`, ""].join(`
+`);
+  const conceptProvenance = generatedArtifactProvenance({
+    generated_from: "wiki_compile_concept",
+    artifact_key: conceptPath,
+    source_refs: sourceRefs
+  });
+  const conceptArtifact = await writeArtifact(options.store, {
+    key: conceptPath,
+    body: conceptBody,
+    content_type: "text/markdown",
+    metadata: { generated_from: "wiki_compile_concept" }
+  });
+  const conceptPageId = stableId6("wiki", conceptPath);
+  const log = await appendLog(options.store, {
+    ts: now,
+    event: "wiki_compile_completed",
+    page_key: path,
+    source_refs: sourceRefs,
+    chunks_seen: rows.length
+  }, nowDate);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    recordStorageObjects(db, [pageArtifact, conceptArtifact, log], nowDate);
+    upsertWikiPage(db, {
+      pageId,
+      path,
+      title,
+      artifactUri: pageArtifact.uri,
+      contentHash: pageArtifact.hash ?? "",
+      body,
+      provenance,
+      now
+    });
+    upsertWikiPage(db, {
+      pageId: conceptPageId,
+      path: conceptPath,
+      title: concept,
+      artifactUri: conceptArtifact.uri,
+      contentHash: conceptArtifact.hash ?? "",
+      body: conceptBody,
+      provenance: conceptProvenance,
+      now
+    });
+    db.run(`INSERT OR REPLACE INTO wiki_backlinks (from_page_id, to_page_id, label, created_at)
+       VALUES (?, ?, ?, ?)`, [pageId, conceptPageId, "concept", now]);
+    const citationsWritten = replacePageCitations(db, pageId, citations, now);
+    const indexesUpdated = upsertIndex(db, {
+      title,
+      path,
+      artifactUri: pageArtifact.uri,
+      contentHash: pageArtifact.hash ?? "",
+      now
+    });
+    return {
+      page_id: pageId,
+      path,
+      artifact_uri: pageArtifact.uri,
+      content_hash: pageArtifact.hash ?? "",
+      chunks_seen: rows.length,
+      citations_written: citationsWritten,
+      concept_page_id: conceptPageId,
+      indexes_updated: indexesUpdated,
+      log_key: log.key,
+      warnings: []
+    };
+  } finally {
+    db.close();
+  }
+}
+async function fileAnswerToWiki(options) {
+  if (!options.approveWrite) {
+    return {
+      approved: false,
+      durable_writes_performed: false,
+      page_id: null,
+      path: null,
+      artifact_uri: null,
+      citations_written: 0,
+      log_key: null,
+      message: "Dry-run: answer filing requires --approve-write."
+    };
+  }
+  const nowDate = options.now ?? new Date;
+  const now = nowDate.toISOString();
+  const title = options.prompt.length > 80 ? `${options.prompt.slice(0, 77)}...` : options.prompt;
+  const slug = slugify2(title);
+  const path = `wiki/answers/${slug}.md`;
+  const citations = options.context.citations;
+  const body = [
+    `# ${title}`,
+    "",
+    options.answer,
+    "",
+    "## Citations",
+    "",
+    ...citations.map((citation, index) => `- [C${index + 1}] ${citation.source_ref ?? citation.source_uri ?? citation.artifact_path ?? citation.artifact_uri ?? "unknown"} ${citation.hash ? `(hash ${citation.hash})` : ""}`),
+    ""
+  ].join(`
+`);
+  const sourceRefs = citations.map((citation) => citation.source_ref ?? citation.source_uri).filter((ref) => Boolean(ref));
+  const provenance = generatedArtifactProvenance({
+    generated_from: "knowledge_answer",
+    artifact_key: path,
+    source_refs: sourceRefs
+  });
+  const artifact = await writeArtifact(options.store, {
+    key: path,
+    body,
+    content_type: "text/markdown",
+    metadata: { generated_from: "knowledge_answer" }
+  });
+  const log = await appendLog(options.store, {
+    ts: now,
+    event: "wiki_answer_filed",
+    page_key: path,
+    prompt: options.prompt,
+    citations: citations.length
+  }, nowDate);
+  const pageId = stableId6("wiki", path);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    recordStorageObjects(db, [artifact, log], nowDate);
+    upsertWikiPage(db, {
+      pageId,
+      path,
+      title,
+      artifactUri: artifact.uri,
+      contentHash: artifact.hash ?? "",
+      body,
+      provenance,
+      now
+    });
+    const written = replacePageCitations(db, pageId, citations.map((citation) => ({
+      chunk_id: citation.chunk_id,
+      source_uri: citation.source_uri ?? citation.artifact_uri ?? "unknown",
+      quote: citation.quote,
+      start_offset: citation.start_offset,
+      end_offset: citation.end_offset,
+      metadata: {
+        source_ref: citation.source_ref,
+        artifact_path: citation.artifact_path,
+        revision: citation.revision,
+        hash: citation.hash
+      }
+    })), now);
+    upsertIndex(db, {
+      title,
+      path,
+      artifactUri: artifact.uri,
+      contentHash: artifact.hash ?? "",
+      now
+    });
+    return {
+      approved: true,
+      durable_writes_performed: true,
+      page_id: pageId,
+      path,
+      artifact_uri: artifact.uri,
+      citations_written: written,
+      log_key: log.key,
+      message: `Filed answer to ${path}`
+    };
+  } finally {
+    db.close();
+  }
+}
+function addIssue(issues, issue2) {
+  issues.push(issue2);
+}
+function lintWiki(options) {
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  const issues = [];
+  try {
+    const activePages = db.query("SELECT COUNT(*) AS n FROM wiki_pages WHERE status = 'active'").get()?.n ?? 0;
+    const citationCount = db.query("SELECT COUNT(*) AS n FROM citations").get()?.n ?? 0;
+    const backlinkCount = db.query("SELECT COUNT(*) AS n FROM wiki_backlinks").get()?.n ?? 0;
+    const missingCitations = db.query(`SELECT wp.id, wp.path
+       FROM wiki_pages wp
+       LEFT JOIN citations c ON c.wiki_page_id = wp.id
+       WHERE wp.status = 'active' AND wp.path LIKE 'wiki/generated/%'
+       GROUP BY wp.id
+       HAVING COUNT(c.id) = 0`).all();
+    for (const page of missingCitations) {
+      addIssue(issues, { type: "missing_citation", severity: "error", page_id: page.id, path: page.path, message: "Generated wiki page has no citations." });
+    }
+    const stale = db.query(`SELECT wp.id AS page_id, wp.path, c.source_uri, c.chunk_id
+       FROM citations c
+       JOIN wiki_pages wp ON wp.id = c.wiki_page_id
+       LEFT JOIN chunks ch ON ch.id = c.chunk_id
+       WHERE ch.metadata_json LIKE '%"stale":true%' OR ch.metadata_json LIKE '%"status":"stale"%' OR ch.metadata_json LIKE '%"status":"deleted"%'`).all();
+    for (const row of stale) {
+      addIssue(issues, { type: "stale_citation", severity: "warn", page_id: row.page_id, path: row.path, source_uri: row.source_uri, chunk_id: row.chunk_id ?? undefined, message: "Page cites a stale or deleted source chunk." });
+    }
+    const duplicates = db.query(`SELECT lower(title) AS title, COUNT(*) AS n
+       FROM wiki_pages
+       WHERE status = 'active'
+       GROUP BY lower(title)
+       HAVING COUNT(*) > 1`).all();
+    for (const row of duplicates) {
+      addIssue(issues, { type: "duplicate_page", severity: "warn", message: `Duplicate active wiki title: ${row.title} (${row.n} pages).` });
+    }
+    const orphans = db.query(`SELECT wp.id, wp.path
+       FROM wiki_pages wp
+       LEFT JOIN wiki_backlinks wb1 ON wb1.from_page_id = wp.id
+       LEFT JOIN wiki_backlinks wb2 ON wb2.to_page_id = wp.id
+       WHERE wp.status = 'active'
+         AND wp.path NOT IN ('wiki/README.md')
+       GROUP BY wp.id
+       HAVING COUNT(wb1.to_page_id) = 0 AND COUNT(wb2.from_page_id) = 0`).all();
+    for (const page of orphans) {
+      addIssue(issues, { type: "orphan_page", severity: "info", page_id: page.id, path: page.path, message: "Wiki page has no backlinks." });
+    }
+    const unresolved = db.query(`SELECT wp.id AS page_id, wp.path, c.source_uri
+       FROM citations c
+       JOIN wiki_pages wp ON wp.id = c.wiki_page_id
+       LEFT JOIN sources s ON s.uri = c.source_uri
+       WHERE s.id IS NULL AND c.source_uri NOT LIKE 'file://%' AND c.source_uri NOT LIKE 's3://%' AND c.source_uri NOT LIKE 'https://%' AND c.source_uri NOT LIKE 'open-files://%'`).all();
+    for (const row of unresolved) {
+      addIssue(issues, { type: "unresolved_source_ref", severity: "error", page_id: row.page_id, path: row.path, source_uri: row.source_uri, message: "Citation source URI cannot be resolved to a known or allowed source ref." });
+    }
+    const contradictions = db.query(`SELECT id, path FROM wiki_pages WHERE lower(metadata_json) LIKE '%contradiction%'`).all();
+    for (const page of contradictions) {
+      addIssue(issues, { type: "contradiction_marker", severity: "warn", page_id: page.id, path: page.path, message: "Page metadata contains a contradiction marker." });
+    }
+    const newArticleCandidates = db.query(`SELECT c.id AS chunk_id, s.uri AS source_uri
+       FROM chunks c
+       JOIN source_revisions sr ON sr.id = c.source_revision_id
+       JOIN sources s ON s.id = sr.source_id
+       LEFT JOIN citations cit ON cit.chunk_id = c.id
+       WHERE c.kind = 'source'
+       GROUP BY c.id
+       HAVING COUNT(cit.id) = 0
+       LIMIT 25`).all();
+    for (const row of newArticleCandidates) {
+      addIssue(issues, { type: "new_article_candidate", severity: "info", chunk_id: row.chunk_id, source_uri: row.source_uri ?? undefined, message: "Source chunk is indexed but not cited by any wiki page yet." });
+    }
+    return {
+      ok: issues.every((issue2) => issue2.severity !== "error"),
+      issue_count: issues.length,
+      issues,
+      counts: {
+        active_pages: activePages,
+        citations: citationCount,
+        backlinks: backlinkCount,
+        new_article_candidates: newArticleCandidates.length
+      }
+    };
+  } finally {
+    db.close();
+  }
+}
+
+// src/wiki-layout.ts
+import { createHash as createHash11 } from "crypto";
+function todayParts2(now) {
   const year = String(now.getUTCFullYear());
   const month = String(now.getUTCMonth() + 1).padStart(2, "0");
   const day = String(now.getUTCDate()).padStart(2, "0");
   return { year, month, day };
 }
-function stableId6(prefix, value) {
-  return `${prefix}_${createHash10("sha256").update(value).digest("hex").slice(0, 20)}`;
+function stableId7(prefix, value) {
+  return `${prefix}_${createHash11("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
-function estimateTokenCount2(text) {
+function estimateTokenCount3(text) {
   const words = text.trim().split(/\s+/).filter(Boolean).length;
   return Math.max(1, Math.ceil(words * 1.25));
 }
@@ -18319,7 +18860,7 @@ Pages should be concise, cited, and organized for both humans and agents.
 `;
 }
 async function initializeWikiLayout(store, now = new Date) {
-  const { year, month, day } = todayParts(now);
+  const { year, month, day } = todayParts2(now);
   const schemaKey = "schemas/v1.md";
   const rootIndexKey = "indexes/root.md";
   const wikiReadmeKey = "wiki/README.md";
@@ -18376,7 +18917,7 @@ function provenanceFor(artifact) {
 }
 function recordWikiChunk(db, pageId, title, artifact, body, now) {
   const provenance = provenanceFor(artifact);
-  const chunkId = stableId6("chk", `${pageId}\x00${artifact.hash ?? artifact.uri}`);
+  const chunkId = stableId7("chk", `${pageId}\x00${artifact.hash ?? artifact.uri}`);
   const existing = db.query("SELECT id FROM chunks WHERE wiki_page_id = ?").all(pageId);
   for (const row of existing)
     db.run("DELETE FROM chunks_fts WHERE chunk_id = ?", [row.id]);
@@ -18388,7 +18929,7 @@ function recordWikiChunk(db, pageId, title, artifact, body, now) {
     "wiki",
     0,
     body,
-    estimateTokenCount2(body),
+    estimateTokenCount3(body),
     0,
     body.length,
     JSON.stringify({
@@ -18412,7 +18953,7 @@ function recordWikiLayoutCatalog(db, artifacts, now = new Date) {
          artifact_uri = excluded.artifact_uri,
          metadata_json = excluded.metadata_json,
          updated_at = excluded.updated_at`, [
-      stableId6("idx", "root:indexes/root.md"),
+      stableId7("idx", "root:indexes/root.md"),
       "root",
       "root",
       rootIndex.uri,
@@ -18427,7 +18968,7 @@ function recordWikiLayoutCatalog(db, artifacts, now = new Date) {
     ]);
   }
   if (wikiReadme) {
-    const wikiPageId = stableId6("wiki", "wiki/README.md");
+    const wikiPageId = stableId7("wiki", "wiki/README.md");
     db.run(`INSERT INTO wiki_pages (id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(path) DO UPDATE SET
@@ -18598,6 +19139,37 @@ class KnowledgeService {
       db.close();
     }
     return result;
+  }
+  async compileWiki(options = {}) {
+    const workspace = this.ensureWorkspace();
+    return compileWikiPage({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      store: this.artifactStore()
+    });
+  }
+  async fileAnswer(options) {
+    const workspace = this.ensureWorkspace();
+    const context = await this.retrieveContext({
+      query: options.prompt,
+      limit: options.limit,
+      semantic: options.semantic,
+      modelRef: options.modelRef,
+      dimensions: options.dimensions,
+      fake: options.fake
+    });
+    return fileAnswerToWiki({
+      dbPath: workspace.knowledgeDbPath,
+      store: this.artifactStore(),
+      prompt: options.prompt,
+      answer: options.answer,
+      context,
+      approveWrite: options.approveWrite
+    });
+  }
+  lintWiki() {
+    const workspace = this.ensureWorkspace();
+    return lintWiki({ dbPath: workspace.knowledgeDbPath });
   }
   async ingestManifest(input) {
     const workspace = this.ensureWorkspace();
