@@ -4,16 +4,22 @@
  * Licensed under the Apache License, Version 2.0
  */
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseSourceRef } from '../src/source-ref';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI = join(__dirname, '..', 'src', 'cli.ts');
+const packageJson = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')) as {
+  name: string;
+  version: string;
+};
 
-function runCli(args: string[]) {
+function runCli(args: string[], cwd?: string) {
   return Bun.spawnSync(['bun', CLI, ...args], {
+    cwd,
     stdout: 'pipe',
     stderr: 'pipe'
   });
@@ -34,11 +40,11 @@ describe('open-knowledge cli', () => {
   });
 
   test('version flag works', () => {
-    const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')) as { version: string };
     const result = runCli(['--version']);
     expect(result.exitCode).toBe(0);
     const out = new TextDecoder().decode(result.stdout);
-    expect(out.trim()).toBe(pkg.version);
+    expect(out).toContain(packageJson.name);
+    expect(out).toContain(packageJson.version);
   });
 
   test('unknown command includes suggestion', () => {
@@ -48,7 +54,7 @@ describe('open-knowledge cli', () => {
     expect(err).toContain("Did you mean 'list'");
   });
 
-  test('add/list/get/delete flow with json and confirmation', () => {
+  test('add/list/get/update/archive/restore/untag/delete flow with json and confirmation', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-cli-'));
     const store = join(dir, 'db.json');
 
@@ -72,6 +78,26 @@ describe('open-knowledge cli', () => {
     const getOut = JSON.parse(new TextDecoder().decode(get.stdout));
     expect(getOut.item.content).toBe('BodyA');
 
+    const update = runCli(['update', '--id', getOut.item.id, '--store', store, '--tag', 'rust', '--json']);
+    expect(update.exitCode).toBe(0);
+    const updateOut = JSON.parse(new TextDecoder().decode(update.stdout));
+    expect(updateOut.item.tags).toContain('rust');
+
+    const untag = runCli(['untag', '--id', getOut.item.id, '--store', store, '--tag', 'rust', '--json']);
+    expect(untag.exitCode).toBe(0);
+    const untagOut = JSON.parse(new TextDecoder().decode(untag.stdout));
+    expect(untagOut.item.tags).not.toContain('rust');
+
+    const archive = runCli(['archive', '--id', getOut.item.id, '--store', store, '--json']);
+    expect(archive.exitCode).toBe(0);
+    const archivedList = runCli(['list', '--store', store, '--json']);
+    expect(JSON.parse(new TextDecoder().decode(archivedList.stdout)).total).toBe(1);
+    const onlyArchived = runCli(['list', '--store', store, '--archived', '--json']);
+    expect(JSON.parse(new TextDecoder().decode(onlyArchived.stdout)).total).toBe(1);
+
+    const restore = runCli(['restore', '--id', getOut.item.id, '--store', store, '--json']);
+    expect(restore.exitCode).toBe(0);
+
     const delNoYes = runCli(['rm', '--id', addAOut.item.id, '--store', store, '--json']);
     expect(delNoYes.exitCode).toBe(1);
     const delErr = new TextDecoder().decode(delNoYes.stderr);
@@ -87,5 +113,91 @@ describe('open-knowledge cli', () => {
 
     const db = JSON.parse(readFileSync(store, 'utf8'));
     expect(db.items.length).toBe(0);
+  });
+
+  test('upsert creates and updates items', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-upsert-'));
+    const store = join(dir, 'db.json');
+
+    const create = runCli(['upsert', 'Stable ID', 'Initial body', '--id', 'k_custom', '--store', store, '--json']);
+    expect(create.exitCode).toBe(0);
+    const createOut = JSON.parse(new TextDecoder().decode(create.stdout));
+    expect(createOut.created).toBe(true);
+    expect(createOut.item.short_id).toBe('custom');
+
+    const update = runCli(['upsert', '--id', 'k_custom', '--content', 'Updated body', '--store', store, '--json']);
+    expect(update.exitCode).toBe(0);
+    const updateOut = JSON.parse(new TextDecoder().decode(update.stdout));
+    expect(updateOut.created).toBe(false);
+    expect(updateOut.item.content).toBe('Updated body');
+  });
+
+  test('project scope uses .hasna/apps/knowledge workspace', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-workspace-'));
+
+    const paths = runCli(['paths', '--scope', 'project', '--json'], dir);
+    expect(paths.exitCode).toBe(0);
+    const pathsOut = JSON.parse(new TextDecoder().decode(paths.stdout));
+    expect(pathsOut.home).toBe(join(dir, '.hasna', 'apps', 'knowledge'));
+    expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'config.json'))).toBe(true);
+    expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'runs'))).toBe(true);
+    expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'wiki'))).toBe(true);
+
+    const add = runCli(['add', 'Project scoped', 'Stored in the Hasna app workspace', '--scope', 'project', '--json'], dir);
+    expect(add.exitCode).toBe(0);
+    expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'db.json'))).toBe(true);
+    expect(existsSync(join(dir, '.open-knowledge', 'db.json'))).toBe(false);
+  });
+
+  test('db init and stats create project knowledge.db', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-db-cli-'));
+
+    const init = runCli(['db', 'init', '--scope', 'project', '--json'], dir);
+    expect(init.exitCode).toBe(0);
+    const initOut = JSON.parse(new TextDecoder().decode(init.stdout));
+    expect(initOut.schema_version).toBe(1);
+    expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'knowledge.db'))).toBe(true);
+
+    const stats = runCli(['db', 'stats', '--scope', 'project', '--json'], dir);
+    expect(stats.exitCode).toBe(0);
+    const statsOut = JSON.parse(new TextDecoder().decode(stats.stdout));
+    expect(statsOut.schema_version).toBe(1);
+    expect(statsOut.sources).toBe(0);
+    expect(statsOut.runs).toBe(0);
+  });
+
+  test('wiki init creates scalable wiki artifacts', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-wiki-cli-'));
+
+    const init = runCli(['wiki', 'init', '--scope', 'project', '--json'], dir);
+    expect(init.exitCode).toBe(0);
+    const initOut = JSON.parse(new TextDecoder().decode(init.stdout));
+    expect(initOut.written).toContain('schemas/v1.md');
+    expect(initOut.written).toContain('indexes/root.md');
+    expect(initOut.written).toContain('wiki/README.md');
+    expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'artifacts', 'schemas', 'v1.md'))).toBe(true);
+    expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'artifacts', 'indexes', 'root.md'))).toBe(true);
+    expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(true);
+  });
+
+  test('source refs cover open-files, s3, local files, and web URLs', () => {
+    expect(parseSourceRef('open-files://file/file_123')).toMatchObject({
+      kind: 'open-files',
+      entity: 'file',
+      id: 'file_123',
+    });
+    expect(parseSourceRef('open-files://source/src_123/path/docs/readme.md')).toMatchObject({
+      kind: 'open-files',
+      entity: 'source',
+      id: 'src_123',
+      path: 'docs/readme.md',
+    });
+    expect(parseSourceRef('s3://company-bucket/docs/handbook.pdf')).toMatchObject({
+      kind: 's3',
+      bucket: 'company-bucket',
+      key: 'docs/handbook.pdf',
+    });
+    expect(parseSourceRef('file:///tmp/readme.md')).toMatchObject({ kind: 'file', path: '/tmp/readme.md' });
+    expect(parseSourceRef('https://example.com/docs')).toMatchObject({ kind: 'web', url: 'https://example.com/docs' });
   });
 });

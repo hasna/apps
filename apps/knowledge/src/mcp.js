@@ -2,116 +2,449 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { defaultStorePath, loadStore, saveStore, makeId } from './store.ts';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import pkg from '../package.json' with { type: 'json' };
+import { defaultStorePath, loadStore, saveStore, makeId, withLock } from './store.ts';
+import { ensureKnowledgeWorkspace, readKnowledgeConfig, resolveScopedWorkspace } from './workspace.ts';
+import { parseSourceRef } from './source-ref.ts';
 
-function createStoreSchema() {
-  return z.object({
-    store_path: z.string().optional().describe('Path to the store file (default: ~/.open-knowledge/db.json)'),
+const storePathField = z.string().optional().describe('Path to the JSON store file');
+const scopeField = z.enum(['local', 'global', 'project']).optional().describe('Workspace scope');
+
+function jsonText(data) {
+  return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+}
+
+function errorText(message) {
+  return { content: [{ type: 'text', text: `Error: ${message}` }], isError: true };
+}
+
+function shortIdFor(id) {
+  return id.replace(/^k_/, '').slice(0, 12);
+}
+
+function resolveStorePath(storePath, scope) {
+  if (storePath) return storePath;
+  if (scope === 'project' || scope === 'local') {
+    return ensureKnowledgeWorkspace(resolveScopedWorkspace(scope).home).jsonStorePath;
+  }
+  return defaultStorePath();
+}
+
+function readStoreLocked(storePath, fn) {
+  return withLock(storePath, () => fn(loadStore(storePath)));
+}
+
+function writeStoreLocked(storePath, fn) {
+  return withLock(storePath, () => {
+    const db = loadStore(storePath);
+    const result = fn(db);
+    saveStore(storePath, db);
+    return result;
   });
 }
 
-function createItemSchema() {
-  return z.object({
-    store_path: z.string().optional().describe('Path to the store file'),
-  });
+function findItem(db, id) {
+  return db.items.find((item) => item.id === id || item.short_id === id);
 }
 
-function createAddSchema() {
-  return z.object({
+function sortItems(items, sort = 'created', desc = false) {
+  const sorted = [...items].sort((a, b) => {
+    if (sort === 'title') return a.title.localeCompare(b.title);
+    return a.created_at.localeCompare(b.created_at);
+  });
+  if (desc) sorted.reverse();
+  return sorted;
+}
+
+function activeItems(items, includeArchived) {
+  return includeArchived ? items : items.filter((item) => !item.archived);
+}
+
+function registerTool(server, name, title, description, inputSchema, handler) {
+  server.registerTool(name, { title, description, inputSchema }, handler);
+}
+
+export function buildServer() {
+  const server = new McpServer({
+    name: 'open-knowledge',
+    version: pkg.version,
+  });
+
+  registerTool(server, 'ok_paths', 'Knowledge workspace paths', 'Show resolved workspace and store paths', {
+    scope: scopeField,
+  }, async ({ scope }) => {
+    const workspace = ensureKnowledgeWorkspace(resolveScopedWorkspace(scope).home);
+    return jsonText({
+      ok: true,
+      scope: scope ?? 'global',
+      home: workspace.home,
+      config_path: workspace.configPath,
+      json_store_path: workspace.jsonStorePath,
+      knowledge_db_path: workspace.knowledgeDbPath,
+      artifacts_dir: workspace.artifactsDir,
+      indexes_dir: workspace.indexesDir,
+      logs_dir: workspace.logsDir,
+      runs_dir: workspace.runsDir,
+      schemas_dir: workspace.schemasDir,
+      wiki_dir: workspace.wikiDir,
+      config: readKnowledgeConfig(workspace.configPath),
+    });
+  });
+
+  registerTool(server, 'ok_parse_source_ref', 'Parse source reference', 'Parse and validate an open-files, S3, file, or web source ref', {
+    uri: z.string().describe('Source reference URI'),
+  }, async ({ uri }) => {
+    try {
+      return jsonText({ ok: true, source_ref: parseSourceRef(uri) });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'ok_add', 'Add a knowledge item', 'Add a new item to the knowledge store', {
     title: z.string().describe('Item title'),
     content: z.string().describe('Item content/body'),
     tags: z.array(z.string()).optional().describe('Tags to attach'),
     metadata: z.record(z.string(), z.unknown()).optional().describe('Metadata key-value pairs'),
-    store_path: z.string().optional().describe('Path to the store file'),
+    url: z.string().optional().describe('Source URL or URI'),
+    store_path: storePathField,
+    scope: scopeField,
+  }, async ({ title, content, tags, metadata, url, store_path, scope }) => {
+    const storePath = resolveStorePath(store_path, scope);
+    const item = writeStoreLocked(storePath, (db) => {
+      const now = new Date().toISOString();
+      const id = makeId();
+      const entry = {
+        id,
+        short_id: shortIdFor(id),
+        title,
+        content,
+        url: url ?? null,
+        tags: tags ?? [],
+        metadata: metadata ?? {},
+        archived: false,
+        created_at: now,
+        updated_at: now,
+      };
+      db.items.push(entry);
+      return entry;
+    });
+    return jsonText({ ok: true, item, message: `Added ${item.id}` });
   });
-}
 
-function createIdSchema() {
-  return z.object({
-    id: z.string().describe('Item ID or short ID'),
-    store_path: z.string().optional().describe('Path to the store file'),
-  });
-}
-
-function createListSchema() {
-  return z.object({
+  registerTool(server, 'ok_list', 'List knowledge items', 'List items with pagination, search, tag filtering, and sorting', {
     search: z.string().optional().describe('Search text for title/content'),
-    fuzzy: z.boolean().optional().describe('Use fuzzy matching for search'),
-    tag: z.array(z.string()).optional().describe('Filter by tags (must match all)'),
-    archived: z.boolean().optional().describe('Show only archived items'),
-    include_archived: z.boolean().optional().describe('Include archived items in results'),
-    page: z.number().optional().describe('Page number (default: 1)'),
-    limit: z.number().optional().describe('Items per page (default: 20)'),
+    tag: z.array(z.string()).optional().describe('Filter by tags; item must match all tags'),
+    include_archived: z.boolean().optional().describe('Include archived items'),
+    page: z.number().optional().describe('Page number'),
+    limit: z.number().optional().describe('Items per page'),
     sort: z.enum(['created', 'title']).optional().describe('Sort field'),
     desc: z.boolean().optional().describe('Sort descending'),
-    after: z.string().optional().describe('Filter items created after ISO date'),
-    before: z.string().optional().describe('Filter items created before ISO date'),
-    store_path: z.string().optional().describe('Path to the store file'),
+    store_path: storePathField,
+    scope: scopeField,
+  }, async ({ search, tag, include_archived, page, limit, sort, desc, store_path, scope }) => {
+    const storePath = resolveStorePath(store_path, scope);
+    return readStoreLocked(storePath, (db) => {
+      const q = search ? search.toLowerCase() : '';
+      const requiredTags = (tag ?? []).map((entry) => entry.toLowerCase());
+      let items = activeItems(db.items, include_archived);
+      if (q) items = items.filter((item) => item.title.toLowerCase().includes(q) || item.content.toLowerCase().includes(q));
+      if (requiredTags.length > 0) {
+        items = items.filter((item) => {
+          const itemTags = (item.tags ?? []).map((entry) => entry.toLowerCase());
+          return requiredTags.every((entry) => itemTags.includes(entry));
+        });
+      }
+      const p = page && page > 0 ? page : 1;
+      const l = limit && limit > 0 ? limit : 20;
+      const sorted = sortItems(items, sort ?? 'created', desc ?? false);
+      const start = (p - 1) * l;
+      const rows = sorted.slice(start, start + l);
+      return jsonText({
+        ok: true,
+        page: p,
+        limit: l,
+        total: sorted.length,
+        total_pages: Math.max(1, Math.ceil(sorted.length / l)),
+        items: rows,
+      });
+    });
   });
-}
 
-function createUpdateSchema() {
-  return z.object({
+  registerTool(server, 'ok_get', 'Get a knowledge item', 'Retrieve a single item by ID or short ID', {
     id: z.string().describe('Item ID or short ID'),
-    title: z.string().optional().describe('New title'),
-    content: z.string().optional().describe('New content'),
-    tags: z.array(z.string()).optional().describe('Tags to add'),
-    metadata: z.record(z.string(), z.unknown()).optional().describe('Metadata to merge'),
-    store_path: z.string().optional().describe('Path to the store file'),
+    store_path: storePathField,
+    scope: scopeField,
+  }, async ({ id, store_path, scope }) => {
+    const storePath = resolveStorePath(store_path, scope);
+    return readStoreLocked(storePath, (db) => {
+      const item = findItem(db, id);
+      return item ? jsonText({ ok: true, item }) : errorText(`Item not found: ${id}`);
+    });
   });
-}
 
-function createDeleteSchema() {
-  return z.object({
+  registerTool(server, 'ok_update', 'Update a knowledge item', 'Update title, content, URL, tags, or metadata', {
+    id: z.string().describe('Item ID or short ID'),
+    title: z.string().optional(),
+    content: z.string().optional(),
+    url: z.string().optional(),
+    tags: z.array(z.string()).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+    store_path: storePathField,
+    scope: scopeField,
+  }, async ({ id, title, content, url, tags, metadata, store_path, scope }) => {
+    const storePath = resolveStorePath(store_path, scope);
+    const result = writeStoreLocked(storePath, (db) => {
+      const item = findItem(db, id);
+      if (!item) return null;
+      if (title !== undefined) item.title = title;
+      if (content !== undefined) item.content = content;
+      if (url !== undefined) item.url = url;
+      if (tags) item.tags = [...new Set([...(item.tags ?? []), ...tags])];
+      if (metadata) item.metadata = { ...(item.metadata ?? {}), ...metadata };
+      item.updated_at = new Date().toISOString();
+      return item;
+    });
+    return result ? jsonText({ ok: true, item: result }) : errorText(`Item not found: ${id}`);
+  });
+
+  registerTool(server, 'ok_delete', 'Delete a knowledge item', 'Permanently delete an item by ID. Requires confirm=true.', {
     id: z.string().describe('Item ID or short ID'),
     confirm: z.boolean().describe('Must be true to confirm deletion'),
-    store_path: z.string().optional().describe('Path to the store file'),
+    store_path: storePathField,
+    scope: scopeField,
+  }, async ({ id, confirm, store_path, scope }) => {
+    if (!confirm) return errorText('Refusing delete without confirm=true.');
+    const storePath = resolveStorePath(store_path, scope);
+    const deleted = writeStoreLocked(storePath, (db) => {
+      const before = db.items.length;
+      db.items = db.items.filter((item) => item.id !== id && item.short_id !== id);
+      return before !== db.items.length;
+    });
+    return deleted ? jsonText({ ok: true, deleted_id: id }) : errorText(`Item not found: ${id}`);
   });
-}
 
-function createUpsertSchema() {
-  return z.object({
-    id: z.string().describe('Item ID (used as id for new items)'),
-    title: z.string().optional().describe('Item title'),
-    content: z.string().optional().describe('Item content'),
-    tags: z.array(z.string()).optional().describe('Tags'),
-    metadata: z.record(z.string(), z.unknown()).optional().describe('Metadata'),
-    store_path: z.string().optional().describe('Path to the store file'),
+  registerTool(server, 'ok_archive', 'Archive a knowledge item', 'Soft-delete an item by setting archived=true', {
+    id: z.string(),
+    store_path: storePathField,
+    scope: scopeField,
+  }, async ({ id, store_path, scope }) => {
+    const storePath = resolveStorePath(store_path, scope);
+    const item = writeStoreLocked(storePath, (db) => {
+      const entry = findItem(db, id);
+      if (!entry) return null;
+      entry.archived = true;
+      entry.updated_at = new Date().toISOString();
+      return entry;
+    });
+    return item ? jsonText({ ok: true, item }) : errorText(`Item not found: ${id}`);
   });
-}
 
-function createBulkDeleteSchema() {
-  return z.object({
-    tag: z.array(z.string()).optional().describe('Delete items with these tags'),
-    search: z.string().optional().describe('Delete items matching search in title/content'),
-    confirm: z.boolean().describe('Must be true to confirm deletion'),
-    store_path: z.string().optional().describe('Path to the store file'),
+  registerTool(server, 'ok_restore', 'Restore a knowledge item', 'Restore an archived item', {
+    id: z.string(),
+    store_path: storePathField,
+    scope: scopeField,
+  }, async ({ id, store_path, scope }) => {
+    const storePath = resolveStorePath(store_path, scope);
+    const item = writeStoreLocked(storePath, (db) => {
+      const entry = findItem(db, id);
+      if (!entry) return null;
+      entry.archived = false;
+      entry.updated_at = new Date().toISOString();
+      return entry;
+    });
+    return item ? jsonText({ ok: true, item }) : errorText(`Item not found: ${id}`);
   });
-}
 
-function createExportSchema() {
-  return z.object({
-    file: z.string().optional().describe('Output file path (default: ./knowledge-export.json)'),
-    store_path: z.string().optional().describe('Path to the store file'),
+  registerTool(server, 'ok_upsert', 'Upsert a knowledge item', 'Create or update an item by ID', {
+    id: z.string(),
+    title: z.string().optional(),
+    content: z.string().optional(),
+    tags: z.array(z.string()).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+    store_path: storePathField,
+    scope: scopeField,
+  }, async ({ id, title, content, tags, metadata, store_path, scope }) => {
+    const storePath = resolveStorePath(store_path, scope);
+    const item = writeStoreLocked(storePath, (db) => {
+      let entry = findItem(db, id);
+      const now = new Date().toISOString();
+      if (!entry) {
+        if (!title || !content) return null;
+        entry = {
+          id,
+          short_id: shortIdFor(id),
+          title,
+          content,
+          tags: tags ?? [],
+          metadata: metadata ?? {},
+          archived: false,
+          created_at: now,
+          updated_at: now,
+        };
+        db.items.push(entry);
+        return entry;
+      }
+      if (title !== undefined) entry.title = title;
+      if (content !== undefined) entry.content = content;
+      if (tags) entry.tags = [...new Set([...(entry.tags ?? []), ...tags])];
+      if (metadata) entry.metadata = { ...(entry.metadata ?? {}), ...metadata };
+      entry.updated_at = now;
+      return entry;
+    });
+    return item ? jsonText({ ok: true, item }) : errorText('New item requires both title and content.');
   });
-}
 
-function createImportSchema() {
-  return z.object({
+  registerTool(server, 'ok_untag', 'Remove tags from a knowledge item', 'Remove specific tags from an item', {
+    id: z.string(),
+    tags: z.array(z.string()),
+    store_path: storePathField,
+    scope: scopeField,
+  }, async ({ id, tags, store_path, scope }) => {
+    const storePath = resolveStorePath(store_path, scope);
+    const result = writeStoreLocked(storePath, (db) => {
+      const item = findItem(db, id);
+      if (!item) return null;
+      const remove = new Set(tags.map((tag) => tag.toLowerCase()));
+      const before = (item.tags ?? []).length;
+      item.tags = (item.tags ?? []).filter((tag) => !remove.has(tag.toLowerCase()));
+      item.updated_at = new Date().toISOString();
+      return { item, removed: before - item.tags.length };
+    });
+    return result ? jsonText({ ok: true, ...result }) : errorText(`Item not found: ${id}`);
+  });
+
+  registerTool(server, 'ok_bulk_delete', 'Bulk delete knowledge items', 'Delete multiple items by tag or search. Requires confirm=true.', {
+    tag: z.array(z.string()).optional(),
+    search: z.string().optional(),
+    confirm: z.boolean(),
+    store_path: storePathField,
+    scope: scopeField,
+  }, async ({ tag, search, confirm, store_path, scope }) => {
+    if (!confirm) return errorText('Refusing bulk delete without confirm=true.');
+    if (!tag && !search) return errorText('Missing filter. Use tag or search.');
+    const storePath = resolveStorePath(store_path, scope);
+    const deleted = writeStoreLocked(storePath, (db) => {
+      const q = search ? search.toLowerCase() : '';
+      const tags = (tag ?? []).map((entry) => entry.toLowerCase());
+      const deleteIds = new Set(db.items.filter((item) => {
+        const matchesSearch = q ? item.title.toLowerCase().includes(q) || item.content.toLowerCase().includes(q) : false;
+        const itemTags = (item.tags ?? []).map((entry) => entry.toLowerCase());
+        const matchesTag = tags.length > 0 ? tags.some((entry) => itemTags.includes(entry)) : false;
+        return matchesSearch || matchesTag;
+      }).map((item) => item.id));
+      db.items = db.items.filter((item) => !deleteIds.has(item.id));
+      return deleteIds.size;
+    });
+    return jsonText({ ok: true, deleted });
+  });
+
+  registerTool(server, 'ok_prune', 'Prune knowledge items', 'Remove old and/or empty knowledge items. Requires confirm=true.', {
+    older_than_days: z.number().optional().describe('Remove items older than N days'),
+    empty: z.boolean().optional().describe('Remove items with empty content'),
+    confirm: z.boolean(),
+    store_path: storePathField,
+    scope: scopeField,
+  }, async ({ older_than_days, empty, confirm, store_path, scope }) => {
+    if (!confirm) return errorText('Refusing prune without confirm=true.');
+    const storePath = resolveStorePath(store_path, scope);
+    const pruned = writeStoreLocked(storePath, (db) => {
+      const before = db.items.length;
+      let cutoff = null;
+      if (older_than_days !== undefined) {
+        cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - older_than_days);
+      }
+      db.items = db.items.filter((item) => {
+        if (cutoff && new Date(item.created_at) < cutoff) return false;
+        if (empty && item.content.trim().length === 0) return false;
+        return true;
+      });
+      return before - db.items.length;
+    });
+    return jsonText({ ok: true, pruned });
+  });
+
+  registerTool(server, 'ok_dedupe', 'Dedupe knowledge items', 'Remove duplicate items by title and content. Requires confirm=true.', {
+    confirm: z.boolean(),
+    store_path: storePathField,
+    scope: scopeField,
+  }, async ({ confirm, store_path, scope }) => {
+    if (!confirm) return errorText('Refusing dedupe without confirm=true.');
+    const storePath = resolveStorePath(store_path, scope);
+    const removed = writeStoreLocked(storePath, (db) => {
+      const seen = new Set();
+      const before = db.items.length;
+      db.items = db.items.filter((item) => {
+        const key = `${item.title}\u0000${item.content}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      return before - db.items.length;
+    });
+    return jsonText({ ok: true, removed });
+  });
+
+  registerTool(server, 'ok_stats', 'Knowledge store statistics', 'Get aggregate stats about the knowledge store', {
+    store_path: storePathField,
+    scope: scopeField,
+  }, async ({ store_path, scope }) => {
+    const storePath = resolveStorePath(store_path, scope);
+    return readStoreLocked(storePath, (db) => {
+      const items = activeItems(db.items, false);
+      const tagCounts = {};
+      for (const item of items) {
+        for (const tag of item.tags ?? []) tagCounts[tag] = (tagCounts[tag] ?? 0) + 1;
+      }
+      return jsonText({
+        ok: true,
+        total: items.length,
+        archived: db.items.length - items.length,
+        tags: Object.fromEntries(Object.entries(tagCounts).sort((a, b) => b[1] - a[1])),
+      });
+    });
+  });
+
+  registerTool(server, 'ok_export', 'Export knowledge items', 'Export all items to a JSON file', {
+    file: z.string().optional().describe('Output file path'),
+    store_path: storePathField,
+    scope: scopeField,
+  }, async ({ file, store_path, scope }) => {
+    const storePath = resolveStorePath(store_path, scope);
+    return readStoreLocked(storePath, (db) => {
+      const filePath = file || './knowledge-export.json';
+      writeFileSync(filePath, JSON.stringify(db, null, 2));
+      return jsonText({ ok: true, file: filePath, count: db.items.length });
+    });
+  });
+
+  registerTool(server, 'ok_import', 'Import knowledge items', 'Import items from an exported JSON file, skipping duplicate IDs', {
     file: z.string().describe('Path to exported JSON file'),
-    store_path: z.string().optional().describe('Path to the store file'),
+    store_path: storePathField,
+    scope: scopeField,
+  }, async ({ file, store_path, scope }) => {
+    if (!existsSync(file)) return errorText(`File not found: ${file}`);
+    const imported = JSON.parse(readFileSync(file, 'utf8'));
+    if (!imported || !Array.isArray(imported.items)) return errorText('Invalid import file: expected {"items": [...]}');
+    const storePath = resolveStorePath(store_path, scope);
+    const result = writeStoreLocked(storePath, (db) => {
+      const existingIds = new Set(db.items.map((item) => item.id));
+      let added = 0;
+      for (const item of imported.items) {
+        if (!existingIds.has(item.id)) {
+          db.items.push(item);
+          existingIds.add(item.id);
+          added += 1;
+        }
+      }
+      return { added, skipped: imported.items.length - added };
+    });
+    return jsonText({ ok: true, ...result });
   });
-}
 
-function createStatsSchema() {
-  return z.object({
-    store_path: z.string().optional().describe('Path to the store file'),
-  });
-}
-
-function createBatchSchema() {
-  return z.object({
+  registerTool(server, 'ok_batch', 'Batch add knowledge items', 'Add multiple items at once', {
     items: z.array(z.object({
       id: z.string().optional(),
       title: z.string(),
@@ -120,413 +453,39 @@ function createBatchSchema() {
       metadata: z.record(z.string(), z.unknown()).optional(),
       created_at: z.string().optional(),
       updated_at: z.string().optional(),
-    })).describe('Array of items to import'),
-    store_path: z.string().optional().describe('Path to the store file'),
-  });
-}
-
-function createUntagSchema() {
-  return z.object({
-    id: z.string().describe('Item ID or short ID'),
-    tags: z.array(z.string()).describe('Tags to remove'),
-    store_path: z.string().optional().describe('Path to the store file'),
-  });
-}
-
-export function buildServer() {
-  const server = new McpServer({
-    name: 'open-knowledge',
-    version: '0.1.0',
-  });
-
-  // Helper to resolve store path
-  function resolveStore(path) {
-    return path || defaultStorePath();
-  }
-
-  server.registerTool('ok_add', {
-    title: 'Add a knowledge item',
-    description: 'Add a new item to the knowledge store with title, content, optional tags and metadata',
-    inputSchema: createAddSchema(),
-    handler: async ({ title, content, tags, metadata, store_path }) => {
-      const db = loadStore(resolveStore(store_path));
-      const now = new Date().toISOString();
-      const { id, shortId } = makeId();
-      const item = {
-        id,
-        short_id: shortId,
-        title,
-        content,
-        tags: tags ?? [],
-        metadata: metadata ?? {},
-        created_at: now,
-        updated_at: now,
-      };
-      db.items.push(item);
-      saveStore(resolveStore(store_path), db);
-      return {
-        content: [{ type: 'text', text: JSON.stringify({ ok: true, item, message: `Added ${item.id}` }, null, 2) }],
-      };
-    },
-  });
-
-  server.registerTool('ok_list', {
-    title: 'List knowledge items',
-    description: 'List items with pagination, search, tag filter, date filter, and sorting',
-    inputSchema: createListSchema(),
-    handler: async ({ search, fuzzy, tag, archived, include_archived, page, limit, sort, desc, after, before, store_path }) => {
-      const db = loadStore(resolveStore(store_path));
-      let items = db.items;
-
-      if (search) {
-        const q = search.toLowerCase();
-        if (fuzzy) {
-          const levenshtein = (a, b) => {
-            const dp = Array.from({ length: a.length + 1 }, () => Array(b.length + 1).fill(0));
-            for (let i = 0; i <= a.length; i += 1) dp[i][0] = i;
-            for (let j = 0; j <= b.length; j += 1) dp[0][j] = j;
-            for (let i = 1; i <= a.length; i += 1) {
-              for (let j = 1; j <= b.length; j += 1) {
-                const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-                dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
-              }
-            }
-            return dp[a.length][b.length];
-          };
-          const scored = items.map((x) => {
-            const titleScore = levenshtein(q, x.title.toLowerCase());
-            const contentScore = Math.min(levenshtein(q, x.content.slice(0, 200).toLowerCase()), 20);
-            return { ...x, _fuzzyScore: Math.min(titleScore, contentScore) };
-          }).filter((x) => x._fuzzyScore <= 5);
-          scored.sort((a, b) => a._fuzzyScore - b._fuzzyScore);
-          items = scored;
-        } else {
-          items = items.filter((x) => x.title.toLowerCase().includes(q) || x.content.toLowerCase().includes(q));
-        }
-      }
-
-      if (tag && tag.length > 0) {
-        items = items.filter((x) => {
-          const itemTags = (x.tags ?? []).map((t) => t.toLowerCase());
-          return tag.every((t) => itemTags.includes(t.toLowerCase()));
-        });
-      }
-
-      if (archived) {
-        items = items.filter((x) => x.archived === true);
-      } else if (!include_archived) {
-        items = items.filter((x) => !x.archived);
-      }
-
-      if (after) {
-        items = items.filter((x) => x.created_at > after);
-      }
-      if (before) {
-        items = items.filter((x) => x.created_at < before);
-      }
-
-      const p = page ?? 1;
-      const l = limit ?? 20;
-      const start = (p - 1) * l;
-      const totalPages = Math.max(1, Math.ceil(items.length / l));
-      const rows = items.slice(start, start + l);
-
-      return {
-        content: [{ type: 'text', text: JSON.stringify({ page: p, limit: l, total: items.length, total_pages: totalPages, items: rows }, null, 2) }],
-      };
-    },
-  });
-
-  server.registerTool('ok_get', {
-    title: 'Get a knowledge item',
-    description: 'Retrieve a single item by its ID or short ID',
-    inputSchema: createIdSchema(),
-    handler: async ({ id, store_path }) => {
-      const db = loadStore(resolveStore(store_path));
-      const item = db.items.find((x) => x.id === id || x.short_id === id);
-      if (!item) {
-        return { content: [{ type: 'text', text: `Error: Item not found: ${id}` }] };
-      }
-      return { content: [{ type: 'text', text: JSON.stringify({ item }, null, 2) }] };
-    },
-  });
-
-  server.registerTool('ok_update', {
-    title: 'Update a knowledge item',
-    description: 'Update title, content, tags, or metadata of an existing item',
-    inputSchema: createUpdateSchema(),
-    handler: async ({ id, title, content, tags, metadata, store_path }) => {
-      const db = loadStore(resolveStore(store_path));
-      const item = db.items.find((x) => x.id === id || x.short_id === id);
-      if (!item) {
-        return { content: [{ type: 'text', text: `Error: Item not found: ${id}` }] };
-      }
-      if (title) item.title = title;
-      if (content) item.content = content;
-      if (tags) {
-        item.tags = [...new Set([...(item.tags ?? []), ...tags])];
-      }
-      if (metadata) {
-        item.metadata = { ...(item.metadata ?? {}), ...metadata };
-      }
-      item.updated_at = new Date().toISOString();
-      saveStore(resolveStore(store_path), db);
-      return { content: [{ type: 'text', text: JSON.stringify({ ok: true, item }, null, 2) }] };
-    },
-  });
-
-  server.registerTool('ok_delete', {
-    title: 'Delete a knowledge item',
-    description: 'Permanently delete an item by ID. Requires confirm=true to prevent accidental deletion.',
-    inputSchema: createDeleteSchema(),
-    handler: async ({ id, confirm, store_path }) => {
-      if (!confirm) {
-        return { content: [{ type: 'text', text: 'Error: Refusing delete without confirm=true. Re-run with confirm: true.' }] };
-      }
-      const db = loadStore(resolveStore(store_path));
-      const before = db.items.length;
-      db.items = db.items.filter((x) => x.id !== id && x.short_id !== id);
-      if (db.items.length === before) {
-        return { content: [{ type: 'text', text: `Error: Item not found: ${id}` }] };
-      }
-      saveStore(resolveStore(store_path), db);
-      return { content: [{ type: 'text', text: JSON.stringify({ ok: true, deleted_id: id }, null, 2) }] };
-    },
-  });
-
-  server.registerTool('ok_archive', {
-    title: 'Archive a knowledge item',
-    description: 'Soft-delete an item by setting its archived flag to true',
-    inputSchema: createIdSchema(),
-    handler: async ({ id, store_path }) => {
-      const db = loadStore(resolveStore(store_path));
-      const item = db.items.find((x) => x.id === id || x.short_id === id);
-      if (!item) {
-        return { content: [{ type: 'text', text: `Error: Item not found: ${id}` }] };
-      }
-      item.archived = true;
-      item.updated_at = new Date().toISOString();
-      saveStore(resolveStore(store_path), db);
-      return { content: [{ type: 'text', text: JSON.stringify({ ok: true, item }, null, 2) }] };
-    },
-  });
-
-  server.registerTool('ok_restore', {
-    title: 'Restore a knowledge item',
-    description: 'Un-archive an item by setting its archived flag back to false',
-    inputSchema: createIdSchema(),
-    handler: async ({ id, store_path }) => {
-      const db = loadStore(resolveStore(store_path));
-      const item = db.items.find((x) => x.id === id || x.short_id === id);
-      if (!item) {
-        return { content: [{ type: 'text', text: `Error: Item not found: ${id}` }] };
-      }
-      item.archived = false;
-      item.updated_at = new Date().toISOString();
-      saveStore(resolveStore(store_path), db);
-      return { content: [{ type: 'text', text: JSON.stringify({ ok: true, item }, null, 2) }] };
-    },
-  });
-
-  server.registerTool('ok_upsert', {
-    title: 'Upsert a knowledge item',
-    description: 'Create or update an item by ID. Creates new if ID does not exist, updates if it does.',
-    inputSchema: createUpsertSchema(),
-    handler: async ({ id, title, content, tags, metadata, store_path }) => {
-      const db = loadStore(resolveStore(store_path));
-      let item = db.items.find((x) => x.id === id || x.short_id === id);
-      const now = new Date().toISOString();
-      if (!item) {
-        if (!title || !content) {
-          return { content: [{ type: 'text', text: 'Error: New item requires both title and content.' }] };
-        }
-        const { shortId } = makeId();
-        item = {
-          id,
-          short_id: shortId,
-          title,
-          content,
-          tags: tags ?? [],
-          metadata: metadata ?? {},
-          created_at: now,
-          updated_at: now,
-        };
-        db.items.push(item);
-      } else {
-        if (title) item.title = title;
-        if (content) item.content = content;
-        if (tags) {
-          item.tags = [...new Set([...(item.tags ?? []), ...tags])];
-        }
-        if (metadata) {
-          item.metadata = { ...(item.metadata ?? {}), ...metadata };
-        }
-        item.updated_at = now;
-      }
-      saveStore(resolveStore(store_path), db);
-      return { content: [{ type: 'text', text: JSON.stringify({ ok: true, item }, null, 2) }] };
-    },
-  });
-
-  server.registerTool('ok_untag', {
-    title: 'Remove tags from a knowledge item',
-    description: 'Remove specific tags from an item',
-    inputSchema: createUntagSchema(),
-    handler: async ({ id, tags, store_path }) => {
-      const db = loadStore(resolveStore(store_path));
-      const item = db.items.find((x) => x.id === id || x.short_id === id);
-      if (!item) {
-        return { content: [{ type: 'text', text: `Error: Item not found: ${id}` }] };
-      }
-      const removeTags = new Set(tags.map((t) => t.toLowerCase()));
-      const before = (item.tags ?? []).length;
-      item.tags = (item.tags ?? []).filter((t) => !removeTags.has(t.toLowerCase()));
-      const removed = before - item.tags.length;
-      item.updated_at = new Date().toISOString();
-      saveStore(resolveStore(store_path), db);
-      return { content: [{ type: 'text', text: JSON.stringify({ ok: true, item, removed }, null, 2) }] };
-    },
-  });
-
-  server.registerTool('ok_bulk_delete', {
-    title: 'Bulk delete knowledge items',
-    description: 'Delete multiple items by tag or search pattern. Requires confirm=true.',
-    inputSchema: createBulkDeleteSchema(),
-    handler: async ({ tag, search, confirm, store_path }) => {
-      if (!confirm) {
-        return { content: [{ type: 'text', text: 'Error: Refusing bulk delete without confirm=true.' }] };
-      }
-      if (!tag && !search) {
-        return { content: [{ type: 'text', text: 'Error: Missing filter. Use tag or search to specify items.' }] };
-      }
-      const db = loadStore(resolveStore(store_path));
-      const before = db.items.length;
-      let items = db.items;
-
-      if (tag && tag.length > 0) {
-        items = items.filter((x) => {
-          const itemTags = (x.tags ?? []).map((t) => t.toLowerCase());
-          return tag.some((t) => itemTags.includes(t.toLowerCase()));
-        });
-      }
-
-      if (search) {
-        const q = search.toLowerCase();
-        items = items.filter((x) => x.title.toLowerCase().includes(q) || x.content.toLowerCase().includes(q));
-      }
-
-      const deleteIds = new Set(items.map((x) => x.id));
-      db.items = db.items.filter((x) => !deleteIds.has(x.id));
-      const deleted = before - db.items.length;
-      saveStore(resolveStore(store_path), db);
-      return { content: [{ type: 'text', text: JSON.stringify({ ok: true, deleted }, null, 2) }] };
-    },
-  });
-
-  server.registerTool('ok_stats', {
-    title: 'Knowledge store statistics',
-    description: 'Get stats about the knowledge store: total items, tags, recent activity',
-    inputSchema: createStatsSchema(),
-    handler: async ({ store_path }) => {
-      const db = loadStore(resolveStore(store_path));
-      const items = db.items.filter((x) => !x.archived);
-      const total = items.length;
-      const tagCounts = {};
-      for (const item of items) {
-        for (const t of (item.tags ?? [])) {
-          tagCounts[t] = (tagCounts[t] ?? 0) + 1;
-        }
-      }
-      const now = new Date();
-      const today = now.toISOString().slice(0, 10);
-      const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
-      return {
-        content: [{ type: 'text', text: JSON.stringify({
-          total,
-          created_today: items.filter((x) => x.created_at.slice(0, 10) === today).length,
-          created_week: items.filter((x) => x.created_at > weekAgo).length,
-          updated_week: items.filter((x) => x.updated_at && x.updated_at > weekAgo).length,
-          tags: Object.fromEntries(Object.entries(tagCounts).sort((a, b) => b[1] - a[1])),
-        }, null, 2) }],
-      };
-    },
-  });
-
-  server.registerTool('ok_export', {
-    title: 'Export knowledge items',
-    description: 'Export all items to a JSON file',
-    inputSchema: createExportSchema(),
-    handler: async ({ file, store_path }) => {
-      const db = loadStore(resolveStore(store_path));
-      const filePath = file || './knowledge-export.json';
-      writeFileSync(filePath, JSON.stringify(db, null, 2));
-      return { content: [{ type: 'text', text: JSON.stringify({ ok: true, file: filePath, count: db.items.length }, null, 2) }] };
-    },
-  });
-
-  server.registerTool('ok_import', {
-    title: 'Import knowledge items',
-    description: 'Import items from an exported JSON file, skipping duplicates',
-    inputSchema: createImportSchema(),
-    handler: async ({ file, store_path }) => {
-      if (!existsSync(file)) {
-        return { content: [{ type: 'text', text: `Error: File not found: ${file}` }] };
-      }
-      const raw = readFileSync(file, 'utf8');
-      const imported = JSON.parse(raw);
-      if (!imported || !Array.isArray(imported.items)) {
-        return { content: [{ type: 'text', text: 'Error: Invalid import file: expected {"items": [...]}' }] };
-      }
-      const db = loadStore(resolveStore(store_path));
-      const existingIds = new Set(db.items.map((x) => x.id));
-      let added = 0;
-      for (const item of imported.items) {
-        if (!existingIds.has(item.id)) {
-          db.items.push(item);
-          added += 1;
-        }
-      }
-      saveStore(resolveStore(store_path), db);
-      return { content: [{ type: 'text', text: JSON.stringify({ ok: true, added, skipped: imported.items.length - added }, null, 2) }] };
-    },
-  });
-
-  server.registerTool('ok_batch', {
-    title: 'Batch add knowledge items',
-    description: 'Add multiple items at once from an array of item objects',
-    inputSchema: createBatchSchema(),
-    handler: async ({ items, store_path }) => {
-      const db = loadStore(resolveStore(store_path));
-      const now = new Date().toISOString();
-      const existingIds = new Set(db.items.map((x) => x.id));
+    })),
+    store_path: storePathField,
+    scope: scopeField,
+  }, async ({ items, store_path, scope }) => {
+    const storePath = resolveStorePath(store_path, scope);
+    const result = writeStoreLocked(storePath, (db) => {
+      const existingIds = new Set(db.items.map((item) => item.id));
       let added = 0;
       let skipped = 0;
+      const now = new Date().toISOString();
       for (const entry of items) {
         if (entry.id && existingIds.has(entry.id)) {
           skipped += 1;
           continue;
         }
-        if (!entry.title || !entry.content) {
-          skipped += 1;
-          continue;
-        }
-        const ids = entry.id ? { id: entry.id, short_id: entry.short_id || null } : makeId();
-        const item = {
-          id: ids.id,
-          short_id: ids.short_id,
+        const id = entry.id ?? makeId();
+        db.items.push({
+          id,
+          short_id: shortIdFor(id),
           title: entry.title,
           content: entry.content,
           tags: entry.tags ?? [],
           metadata: entry.metadata ?? {},
-          created_at: entry.created_at || now,
-          updated_at: entry.updated_at || now,
-        };
-        db.items.push(item);
+          archived: false,
+          created_at: entry.created_at ?? now,
+          updated_at: entry.updated_at ?? now,
+        });
+        existingIds.add(id);
         added += 1;
       }
-      saveStore(resolveStore(store_path), db);
-      return { content: [{ type: 'text', text: JSON.stringify({ ok: true, added, skipped }, null, 2) }] };
-    },
+      return { added, skipped };
+    });
+    return jsonText({ ok: true, ...result });
   });
 
   return server;
@@ -543,7 +502,7 @@ Options:
   -h, --help        Show this help text`);
 }
 
-async function main() {
+export async function main() {
   if (process.argv.includes('-h') || process.argv.includes('--help')) {
     printHelp();
     return;

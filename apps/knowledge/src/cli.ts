@@ -4,7 +4,11 @@
  * Copyright 2026 Hasna Inc.
  * Licensed under the Apache License, Version 2.0
  */
-import { defaultStorePath, loadStore, saveStore, withLock, makeId, ensureStore, type KnowledgeItem } from './store';
+import { defaultStorePath, loadStore, saveStore, withLock, makeId, makeShortId, ensureStore, type KnowledgeItem } from './store';
+import { ensureKnowledgeWorkspace, readKnowledgeConfig, resolveScopedWorkspace } from './workspace';
+import { getKnowledgeDbStats, migrateKnowledgeDb } from './knowledge-db';
+import { createArtifactStore } from './artifact-store';
+import { initializeWikiLayout } from './wiki-layout';
 import pkg from '../package.json' with { type: 'json' };
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -46,6 +50,8 @@ interface Flags {
   scope?: string;
   olderThan?: number;
   empty?: boolean;
+  archived?: boolean;
+  includeArchived?: boolean;
 }
 
 interface ParseResult {
@@ -53,11 +59,12 @@ interface ParseResult {
   flags: Flags;
 }
 
-const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'export', 'prune', 'dedupe', 'stats', 'help'];
+const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'export', 'prune', 'dedupe', 'stats', 'paths', 'db', 'wiki', 'help'];
 const COMMAND_ALIASES: Record<string, string> = {
   ls: 'list',
   rm: 'delete',
   edit: 'update',
+  unarchive: 'restore',
 };
 
 function parseArgs(argv: string[]): ParseResult {
@@ -91,6 +98,8 @@ function parseArgs(argv: string[]): ParseResult {
       case '--scope': flags.scope = argv[i + 1]; i += 1; break;
       case '--older-than': flags.olderThan = Number(argv[i + 1]); i += 1; break;
       case '--empty': flags.empty = true; break;
+      case '--archived': flags.archived = true; break;
+      case '--include-archived': flags.includeArchived = true; break;
       default: throw new Error(`Unknown flag: ${token}. Run 'open-knowledge --help' for valid options.`);
     }
   }
@@ -141,17 +150,24 @@ Commands:
   list (alias: ls)             List items (supports pagination/search/sort/tag)
   get --id <id>               Get one item
   update --id <id>            Update an item (--title, --content, --url, --tag)
+  archive --id <id>           Archive an item
+  restore --id <id>           Restore an archived item
+  upsert [title] [content]    Create or update an item by --id
+  untag --id <id> -t <tag>    Remove a tag from an item
   delete (alias: rm) --id <id> Delete item (requires --yes)
   export                       Export all items (--format jsonl)
   prune                        Remove old/empty items (requires --yes)
   dedupe                       Remove duplicate items by title+content (requires --yes)
   stats                        Show knowledge base statistics
+  paths                        Show resolved workspace/store paths
+  db init|stats                Initialize or inspect local knowledge.db
+  wiki init                    Initialize scalable wiki/schema/index/log artifacts
   help [command]               Show help
 
 Global Options:
   --json                      Output JSON
   --store <path>              Override store path
-  --scope local|global|project  Store scope (default: global ~/.open-knowledge/)
+  --scope local|global|project  Store scope (default: global ~/.hasna/apps/knowledge/)
   --no-color                  Disable color output
   --completions <shell>       Output completions for bash|zsh|fish
   -v, --version               Show version
@@ -165,6 +181,8 @@ List Options:
   -t, --tag <tag>             Filter by tag
   --sort <created|title>       Sort field (default: created)
   --desc                       Sort descending
+  --archived                  Show only archived items
+  --include-archived          Include archived items
 
 Add/Update Options:
   --url <url>                 Attach source URL
@@ -193,11 +211,18 @@ function printCommandHelp(command: string): void {
   if (command === 'list' || command === 'ls') { console.log('Usage: open-knowledge list|ls [--format table|json] [-p <page>] [-l <limit>] [-s <search>] [-t <tag>] [--sort created|title] [--desc] [--json]'); return; }
   if (command === 'get') { console.log('Usage: open-knowledge get --id <id> [--json]'); return; }
   if (command === 'update' || command === 'edit') { console.log('Usage: open-knowledge update|edit --id <id> [--title <title>] [--content <content>] [--url <url>] [-t <tag>] [--json]'); return; }
+  if (command === 'archive') { console.log('Usage: open-knowledge archive --id <id> [--json]'); return; }
+  if (command === 'restore' || command === 'unarchive') { console.log('Usage: open-knowledge restore|unarchive --id <id> [--json]'); return; }
+  if (command === 'upsert') { console.log('Usage: open-knowledge upsert [title] [content] [--id <id>] [--title <title>] [--content <content>] [--url <url>] [-t <tag>] [--json]'); return; }
+  if (command === 'untag') { console.log('Usage: open-knowledge untag --id <id> -t <tag> [--json]'); return; }
   if (command === 'delete' || command === 'rm') { console.log('Usage: open-knowledge delete|rm --id <id> -y [--json]'); return; }
   if (command === 'export') { console.log('Usage: open-knowledge export [--format jsonl] [--json]'); return; }
   if (command === 'prune') { console.log('Usage: open-knowledge prune --yes [--older-than <days>] [--empty] [--json]'); return; }
   if (command === 'dedupe') { console.log('Usage: open-knowledge dedupe --yes [--json]'); return; }
   if (command === 'stats') { console.log('Usage: open-knowledge stats [--json]'); return; }
+  if (command === 'paths') { console.log('Usage: open-knowledge paths [--scope local|global|project] [--json]'); return; }
+  if (command === 'db') { console.log('Usage: open-knowledge db init|stats [--scope local|global|project] [--json]'); return; }
+  if (command === 'wiki') { console.log('Usage: open-knowledge wiki init [--scope local|global|project] [--json]'); return; }
   printGlobalHelp();
 }
 
@@ -230,20 +255,23 @@ function sortItems(items: KnowledgeItem[], flags: Flags): { sorted: KnowledgeIte
   return { sorted, sort, direction: flags.desc ? 'desc' : 'asc' };
 }
 
-function run(argv: string[]): void {
+async function run(argv: string[]): Promise<void> {
   const { positional, flags } = parseArgs(argv);
   log('debug', 'CLI invoked', { command: positional[0], flags: { json: flags.json, store: flags.store } });
 
-  if (flags.version) { console.log(flags.json ? JSON.stringify({ name: pkg.name, version: pkg.version }, null, 2) : pkg.version); return; }
+  if (flags.version) {
+    console.log(flags.json ? JSON.stringify({ name: pkg.name, version: pkg.version }, null, 2) : `${pkg.name} ${pkg.version}`);
+    return;
+  }
 
   if (flags.completions) {
     const shell = flags.completions;
     if (shell === 'bash') {
-      console.log(`_open_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update delete export help ls rm edit --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --no-color --scope" -- "$cur")); }; complete -F _open_knowledge open-knowledge`);
+      console.log(`_open_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats paths db wiki help ls rm edit unarchive --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --no-color --scope --archived --include-archived" -- "$cur")); }; complete -F _open_knowledge open-knowledge`);
     } else if (shell === 'zsh') {
-      console.log(`#compdef open-knowledge\n_open_knowledge() { _arguments -C "1: :(add list get update delete export help ls rm edit)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" }; _open_knowledge`);
+      console.log(`#compdef open-knowledge\n_open_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats paths db wiki help ls rm edit unarchive)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" }; _open_knowledge`);
     } else if (shell === 'fish') {
-      console.log(`complete -c open-knowledge -f; complete -c open-knowledge -a "add list get update delete export help ls rm edit"; complete -c open-knowledge -l json; complete -c open-knowledge -l yes -s y; complete -c open-knowledge -l help -s h; complete -c open-knowledge -l version -s v; complete -c open-knowledge -l desc; complete -c open-knowledge -s p -l page; complete -c open-knowledge -s l -l limit; complete -c open-knowledge -s s -l search; complete -c open-knowledge -l sort; complete -c open-knowledge -l id; complete -c open-knowledge -l store; complete -c open-knowledge -l title; complete -c open-knowledge -l content; complete -c open-knowledge -l url; complete -c open-knowledge -s t -l tag; complete -c open-knowledge -l format; complete -c open-knowledge -l completions; complete -c open-knowledge -l no-color; complete -c open-knowledge -l scope -a "local global project"`);
+      console.log(`complete -c open-knowledge -f; complete -c open-knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats paths db wiki help ls rm edit unarchive"; complete -c open-knowledge -l json; complete -c open-knowledge -l yes -s y; complete -c open-knowledge -l help -s h; complete -c open-knowledge -l version -s v; complete -c open-knowledge -l desc; complete -c open-knowledge -l archived; complete -c open-knowledge -l include-archived; complete -c open-knowledge -s p -l page; complete -c open-knowledge -s l -l limit; complete -c open-knowledge -s s -l search; complete -c open-knowledge -l sort; complete -c open-knowledge -l id; complete -c open-knowledge -l store; complete -c open-knowledge -l title; complete -c open-knowledge -l content; complete -c open-knowledge -l url; complete -c open-knowledge -s t -l tag; complete -c open-knowledge -l format; complete -c open-knowledge -l completions; complete -c open-knowledge -l no-color; complete -c open-knowledge -l scope -a "local global project"`);
     } else {
       throw new Error("Invalid --completions value. Use 'bash', 'zsh', or 'fish'.");
     }
@@ -254,15 +282,63 @@ function run(argv: string[]): void {
 
   if (!command || flags.help || command === 'help') { printCommandHelp(positional[1]); return; }
 
+  const workspace = resolveScopedWorkspace(flags.scope);
   let storePath = flags.store;
   if (!storePath) {
-    if (flags.scope === 'project') {
-      storePath = './.open-knowledge/db.json';
+    if (flags.scope === 'project' || flags.scope === 'local') {
+      storePath = ensureKnowledgeWorkspace(workspace.home).jsonStorePath;
     } else {
-      // local (default) and global both use the global store for now
-      // project scope uses a project-local store
       storePath = defaultStorePath();
     }
+  }
+
+  if (command === 'paths') {
+    const resolvedWorkspace = ensureKnowledgeWorkspace(workspace.home);
+    output({
+      ok: true,
+      scope: flags.scope ?? 'global',
+      home: resolvedWorkspace.home,
+      config_path: resolvedWorkspace.configPath,
+      json_store_path: resolvedWorkspace.jsonStorePath,
+      knowledge_db_path: resolvedWorkspace.knowledgeDbPath,
+      artifacts_dir: resolvedWorkspace.artifactsDir,
+      indexes_dir: resolvedWorkspace.indexesDir,
+      logs_dir: resolvedWorkspace.logsDir,
+      runs_dir: resolvedWorkspace.runsDir,
+      schemas_dir: resolvedWorkspace.schemasDir,
+      wiki_dir: resolvedWorkspace.wikiDir,
+      config: readKnowledgeConfig(resolvedWorkspace.configPath),
+      message: resolvedWorkspace.home,
+    }, flags.json);
+    return;
+  }
+
+  if (command === 'db') {
+    const action = positional[1] ?? 'init';
+    const resolvedWorkspace = ensureKnowledgeWorkspace(workspace.home);
+    if (action !== 'init' && action !== 'stats') {
+      throw new Error("Invalid db action. Use 'init' or 'stats'.");
+    }
+    if (action === 'init') {
+      const result = migrateKnowledgeDb(resolvedWorkspace.knowledgeDbPath);
+      output({ ok: true, ...result, message: `Initialized ${result.path}` }, flags.json);
+      return;
+    }
+    migrateKnowledgeDb(resolvedWorkspace.knowledgeDbPath);
+    const stats = getKnowledgeDbStats(resolvedWorkspace.knowledgeDbPath);
+    output({ ok: true, path: resolvedWorkspace.knowledgeDbPath, ...stats, message: `knowledge.db schema v${stats.schema_version}` }, flags.json);
+    return;
+  }
+
+  if (command === 'wiki') {
+    const action = positional[1] ?? 'init';
+    if (action !== 'init') throw new Error("Invalid wiki action. Use 'init'.");
+    const resolvedWorkspace = ensureKnowledgeWorkspace(workspace.home);
+    const config = readKnowledgeConfig(resolvedWorkspace.configPath);
+    const artifactStore = createArtifactStore(config, resolvedWorkspace);
+    const result = await initializeWikiLayout(artifactStore);
+    output({ ok: true, ...result, message: `Initialized wiki layout in ${resolvedWorkspace.home}` }, flags.json);
+    return;
   }
   ensureStore(storePath);
 
@@ -303,6 +379,8 @@ function run(argv: string[]): void {
       const useJson = flags.json || flags.format === 'json';
 
       let filtered = db.items;
+      if (flags.archived) filtered = filtered.filter((x) => x.archived === true);
+      else if (!flags.includeArchived) filtered = filtered.filter((x) => !x.archived);
       if (search) filtered = filtered.filter((x) => x.title.toLowerCase().includes(search) || x.content.toLowerCase().includes(search));
       if (tag) filtered = filtered.filter((x) => x.tags && x.tags.map((t) => t.toLowerCase()).includes(tag));
 
@@ -335,7 +413,7 @@ function run(argv: string[]): void {
     requireId(flags);
     withLock(storePath, () => {
       const db = loadStore(storePath);
-      const item = db.items.find((x) => x.id === flags.id);
+      const item = db.items.find((x) => x.id === flags.id || x.short_id === flags.id);
       if (!item) throw new Error(`Item not found: ${flags.id}`);
       output({ ok: true, item, message: `${item.id}: ${item.title}` }, flags.json);
     });
@@ -346,7 +424,7 @@ function run(argv: string[]): void {
     requireId(flags);
     withLock(storePath, () => {
       const db = loadStore(storePath);
-      const idx = db.items.findIndex((x) => x.id === flags.id);
+      const idx = db.items.findIndex((x) => x.id === flags.id || x.short_id === flags.id);
       if (idx === -1) throw new Error(`Item not found: ${flags.id}`);
       const item = db.items[idx];
       if (flags.title !== undefined) item.title = flags.title;
@@ -366,13 +444,90 @@ function run(argv: string[]): void {
     return;
   }
 
+  if (command === 'archive' || command === 'restore') {
+    requireId(flags);
+    withLock(storePath, () => {
+      const db = loadStore(storePath);
+      const idx = db.items.findIndex((x) => x.id === flags.id || x.short_id === flags.id);
+      if (idx === -1) throw new Error(`Item not found: ${flags.id}`);
+      const item = db.items[idx];
+      item.archived = command === 'archive';
+      item.updated_at = new Date().toISOString();
+      db.items[idx] = item;
+      saveStore(storePath, db);
+      output({ ok: true, item, message: `${command === 'archive' ? 'Archived' : 'Restored'} ${item.id}` }, flags.json);
+    });
+    return;
+  }
+
+  if (command === 'untag') {
+    requireId(flags);
+    if (!flags.tag) throw new Error('Missing required --tag. Example: open-knowledge untag --id <id> -t <tag>');
+    withLock(storePath, () => {
+      const db = loadStore(storePath);
+      const idx = db.items.findIndex((x) => x.id === flags.id || x.short_id === flags.id);
+      if (idx === -1) throw new Error(`Item not found: ${flags.id}`);
+      const item = db.items[idx];
+      const before = item.tags?.length ?? 0;
+      item.tags = (item.tags ?? []).filter((tag) => tag.toLowerCase() !== flags.tag!.toLowerCase());
+      item.updated_at = new Date().toISOString();
+      db.items[idx] = item;
+      saveStore(storePath, db);
+      output({ ok: true, item, removed: before - item.tags.length, message: `Removed tag from ${item.id}` }, flags.json);
+    });
+    return;
+  }
+
+  if (command === 'upsert') {
+    const title = flags.title ?? positional[1];
+    const content = flags.content ?? positional[2];
+    withLock(storePath, () => {
+      const db = loadStore(storePath);
+      const idx = flags.id ? db.items.findIndex((x) => x.id === flags.id || x.short_id === flags.id) : -1;
+      const now = new Date().toISOString();
+      if (idx === -1) {
+        if (!title || !content) throw new Error('New item requires title and content. Example: open-knowledge upsert <title> <content> [--id <id>]');
+        const id = flags.id ?? makeId();
+        const item: KnowledgeItem = {
+          id,
+          short_id: makeShortId(id),
+          title,
+          content,
+          url: flags.url ?? null,
+          tags: flags.tag ? [flags.tag] : [],
+          metadata: {},
+          archived: false,
+          created_at: now,
+          updated_at: now,
+        };
+        db.items.push(item);
+        saveStore(storePath, db);
+        output({ ok: true, created: true, item, message: `Upserted ${item.id}` }, flags.json);
+        return;
+      }
+      const item = db.items[idx];
+      if (title !== undefined) item.title = title;
+      if (content !== undefined) item.content = content;
+      if (flags.url !== undefined) item.url = flags.url;
+      if (flags.tag !== undefined) {
+        item.tags = item.tags || [];
+        if (!item.tags.map((tag) => tag.toLowerCase()).includes(flags.tag.toLowerCase())) item.tags.push(flags.tag);
+      }
+      item.updated_at = now;
+      db.items[idx] = item;
+      saveStore(storePath, db);
+      output({ ok: true, created: false, item, message: `Upserted ${item.id}` }, flags.json);
+    });
+    return;
+  }
+
   if (command === 'delete') {
     requireId(flags);
     if (!flags.yes) throw new Error('Refusing delete without --yes. Re-run with: open-knowledge delete --id <id> --yes');
     withLock(storePath, () => {
       const db = loadStore(storePath);
       const before = db.items.length;
-      db.items = db.items.filter((x) => x.id !== flags.id);
+      db.items = db.items.filter((x) => x.id !== flags.id && x.short_id !== flags.id);
       const deleted = before !== db.items.length;
       saveStore(storePath, db);
       if (!deleted) throw new Error(`Item not found: ${flags.id}`);
@@ -440,13 +595,15 @@ function run(argv: string[]): void {
   if (command === 'stats') {
     withLock(storePath, () => {
       const db = loadStore(storePath);
-      const total = db.items.length;
-      const withUrl = db.items.filter((x) => x.url).length;
-      const withTags = db.items.filter((x) => x.tags && x.tags.length > 0).length;
-      const oldest = total > 0 ? db.items.map((x) => x.created_at).sort()[0] : null;
-      const newest = total > 0 ? db.items.map((x) => x.created_at).sort()[total - 1] : null;
+      const activeItems = db.items.filter((x) => !x.archived);
+      const total = activeItems.length;
+      const archived = db.items.length - total;
+      const withUrl = activeItems.filter((x) => x.url).length;
+      const withTags = activeItems.filter((x) => x.tags && x.tags.length > 0).length;
+      const oldest = total > 0 ? activeItems.map((x) => x.created_at).sort()[0] : null;
+      const newest = total > 0 ? activeItems.map((x) => x.created_at).sort()[total - 1] : null;
       const tagCounts: Record<string, number> = {};
-      for (const item of db.items) {
+      for (const item of activeItems) {
         for (const tag of item.tags || []) {
           tagCounts[tag] = (tagCounts[tag] || 0) + 1;
         }
@@ -455,6 +612,7 @@ function run(argv: string[]): void {
       output({
         ok: true,
         total,
+        archived,
         with_url: withUrl,
         with_tags: withTags,
         oldest,
@@ -473,14 +631,12 @@ function run(argv: string[]): void {
 }
 
 if (import.meta.main) {
-  try {
-    run(process.argv.slice(2));
-  } catch (error) {
+  run(process.argv.slice(2)).catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
     log('error', 'CLI error', { message, stack: error instanceof Error ? error.stack : undefined });
     console.error(`Error: ${message}`);
     process.exitCode = 1;
-  }
+  });
 }
 
 export { run, parseArgs, suggestCommand, sortItems };

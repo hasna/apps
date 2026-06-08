@@ -3,17 +3,19 @@
  * Copyright 2026 Hasna Inc.
  * Licensed under the Apache License, Version 2.0
  */
-import { mkdirSync, readFileSync, writeFileSync, existsSync, renameSync, unlinkSync } from 'node:fs';
-import { dirname } from 'node:path';
-import { homedir } from 'node:os';
+import { readFileSync, writeFileSync, existsSync, renameSync, unlinkSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { ensureParentDir, globalKnowledgeHome, legacyGlobalStorePath, workspaceForHome } from './workspace';
 
 export interface KnowledgeItem {
   id: string;
+  short_id?: string | null;
   title: string;
   content: string;
   url: string | null;
   tags: string[];
+  metadata?: Record<string, unknown>;
+  archived?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -23,13 +25,17 @@ export interface Store {
 }
 
 export function defaultStorePath(): string {
-  return `${homedir()}/.open-knowledge/db.json`;
+  return workspaceForHome(globalKnowledgeHome()).jsonStorePath;
 }
 
 export function ensureStore(path: string): void {
   if (!existsSync(path)) {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify({ items: [] }, null, 2));
+    ensureParentDir(path);
+    if (path === defaultStorePath() && existsSync(legacyGlobalStorePath())) {
+      writeFileSync(path, readFileSync(legacyGlobalStorePath(), 'utf8'));
+    } else {
+      writeFileSync(path, JSON.stringify({ items: [] }, null, 2));
+    }
   }
 }
 
@@ -100,4 +106,8 @@ export function withLock<T>(path: string, fn: () => T): T {
 
 export function makeId(): string {
   return `k_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function makeShortId(id: string): string {
+  return id.replace(/^k_/, '').slice(0, 12);
 }

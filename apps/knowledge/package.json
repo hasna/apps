@@ -9,15 +9,15 @@
   },
   "files": [
     "bin",
-    "src/mcp-http.js",
-    "src/store.ts",
+    "src",
+    "docs",
     "LICENSE",
     "README.md"
   ],
   "scripts": {
     "test": "bun test",
     "test:cli": "bun test tests/cli.test.ts",
-    "build": "bun build --target=bun --outfile=bin/open-knowledge.js --minify src/cli.ts && bun build --target=bun --outfile=bin/open-knowledge-mcp.js --external @modelcontextprotocol/sdk src/mcp.js",
+    "build": "bun build --target=bun --outfile=bin/open-knowledge.js --minify --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers src/cli.ts && bun build --target=bun --outfile=bin/open-knowledge-mcp.js --external @modelcontextprotocol/sdk src/mcp.js",
     "prepublishOnly": "bun run build",
     "postinstall": "bun run build"
   },
@@ -48,7 +48,12 @@
     "node": ">=18"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1063.0",
+    "@aws-sdk/credential-providers": "^3.1063.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14"
   }
 }
