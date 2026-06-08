@@ -68,6 +68,26 @@ Remote flow:
    manifest/extracted text it is allowed to read, and store knowledge artifacts
    in `.hasna/apps/knowledge` or its own configured S3 bucket.
 
+Canonical Hasna XYZ production paths:
+
+```txt
+open-files source bucket: s3://hasna-xyz-opensource-files-prod/objects/sha256/...
+open-files secrets: hasna/xyz/opensource/files/prod/{env,aws,s3,rds}
+open-knowledge artifact bucket: s3://hasna-xyz-opensource-knowledge-prod/.hasna/apps/knowledge/
+open-knowledge secrets: hasna/xyz/opensource/knowledge/prod/{env,aws,s3}
+```
+
+The knowledge bucket is for generated artifacts only: chunk indexes, wiki
+pages, run ledgers, schemas, exports, citations, and embedding metadata. It
+must not become a second source-file bucket. Raw source bytes, immutable object
+identity, extraction snapshots, S3 version metadata, and access enforcement stay
+in `open-files`.
+
+Semantic search is split by ownership: `open-files` exports stable manifests,
+extracted text snapshots, revision hashes, and outbox events; `open-knowledge`
+stores chunks, embeddings, FTS/vector indexes, reranking metadata, and cited
+wiki artifacts.
+
 Current CLI examples:
 
 ```bash
