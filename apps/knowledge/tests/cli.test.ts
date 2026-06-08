@@ -4,7 +4,7 @@
  * Licensed under the Apache License, Version 2.0
  */
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -155,15 +155,49 @@ describe('open-knowledge cli', () => {
     const init = runCli(['db', 'init', '--scope', 'project', '--json'], dir);
     expect(init.exitCode).toBe(0);
     const initOut = JSON.parse(new TextDecoder().decode(init.stdout));
-    expect(initOut.schema_version).toBe(1);
+    expect(initOut.schema_version).toBe(2);
     expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'knowledge.db'))).toBe(true);
 
     const stats = runCli(['db', 'stats', '--scope', 'project', '--json'], dir);
     expect(stats.exitCode).toBe(0);
     const statsOut = JSON.parse(new TextDecoder().decode(stats.stdout));
-    expect(statsOut.schema_version).toBe(1);
+    expect(statsOut.schema_version).toBe(2);
     expect(statsOut.sources).toBe(0);
     expect(statsOut.runs).toBe(0);
+  });
+
+  test('ingest manifest imports open-files refs into project knowledge.db', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-ingest-cli-'));
+    const manifest = join(dir, 'manifest.jsonl');
+    writeFileSync(manifest, `${JSON.stringify({
+      source_ref: 'open-files://file/file_123/revision/rev_cli',
+      file_id: 'file_123',
+      source_id: 'src_local',
+      path: 'docs/handbook.md',
+      name: 'handbook.md',
+      mime: 'text/markdown',
+      size: 64,
+      hash: 'sha256:cli',
+      status: 'active',
+      updated_at: '2026-06-08T00:00:00.000Z',
+      permissions: { mode: 'read_only' },
+      extracted_text: 'This handbook was ingested from open-files.',
+    })}\n`);
+
+    const ingest = runCli(['ingest', 'manifest', manifest, '--scope', 'project', '--json'], dir);
+    expect(ingest.exitCode).toBe(0);
+    const ingestOut = JSON.parse(new TextDecoder().decode(ingest.stdout));
+    expect(ingestOut.items_seen).toBe(1);
+    expect(ingestOut.sources_upserted).toBe(1);
+    expect(ingestOut.revisions_upserted).toBe(1);
+    expect(ingestOut.chunks_inserted).toBe(1);
+
+    const stats = runCli(['db', 'stats', '--scope', 'project', '--json'], dir);
+    expect(stats.exitCode).toBe(0);
+    const statsOut = JSON.parse(new TextDecoder().decode(stats.stdout));
+    expect(statsOut.sources).toBe(1);
+    expect(statsOut.source_revisions).toBe(1);
+    expect(statsOut.chunks).toBe(1);
   });
 
   test('wiki init creates scalable wiki artifacts', () => {

@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { ensureParentDir } from './workspace';
 
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 export interface KnowledgeDbStats {
   schema_version: number;
@@ -184,6 +184,21 @@ INSERT OR IGNORE INTO schema_versions(version, applied_at)
 VALUES (1, datetime('now'));
 `;
 
+const MIGRATION_2 = `
+DROP TABLE IF EXISTS chunks_fts;
+
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+  chunk_id UNINDEXED,
+  text,
+  title,
+  source_uri,
+  tokenize='porter unicode61'
+);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (2, datetime('now'));
+`;
+
 export function openKnowledgeDb(path: string): Database {
   ensureParentDir(path);
   const db = new Database(path);
@@ -195,6 +210,7 @@ export function migrateKnowledgeDb(path: string): { path: string; schema_version
   const db = openKnowledgeDb(path);
   try {
     db.exec(MIGRATION_1);
+    if (getSchemaVersion(db) < 2) db.exec(MIGRATION_2);
     return { path, schema_version: getSchemaVersion(db) };
   } finally {
     db.close();

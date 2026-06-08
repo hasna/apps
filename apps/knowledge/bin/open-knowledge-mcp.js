@@ -13659,12 +13659,12 @@ import { existsSync as existsSync3, readFileSync as readFileSync3, writeFileSync
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.4",
+  version: "0.2.5",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   bin: {
-    "open-knowledge": "./bin/open-knowledge.js",
-    "open-knowledge-mcp": "./bin/open-knowledge-mcp.js"
+    "open-knowledge": "bin/open-knowledge.js",
+    "open-knowledge-mcp": "bin/open-knowledge-mcp.js"
   },
   files: [
     "bin",
@@ -13696,7 +13696,7 @@ var package_default = {
   },
   repository: {
     type: "git",
-    url: "https://github.com/hasna/knowledge"
+    url: "git+https://github.com/hasna/knowledge.git"
   },
   bugs: {
     url: "https://github.com/hasna/knowledge/issues"

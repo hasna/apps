@@ -62,6 +62,9 @@ open-knowledge db init --scope project
 
 # Initialize scalable wiki/schema/index/log artifacts
 open-knowledge wiki init --scope project
+
+# Ingest an open-files source manifest into the project SQLite catalog
+open-knowledge ingest manifest ./open-files-manifest.jsonl --scope project --json
 ```
 
 ## Commands
@@ -159,6 +162,14 @@ open-knowledge wiki init [--scope project]
 Create starter generated-knowledge artifacts through the artifact store:
 `schemas/v1.md`, `indexes/root.md`, `wiki/README.md`, and a dated JSONL log
 partition.
+
+### ingest
+```bash
+open-knowledge ingest manifest <file|s3://bucket/key> [--scope project] [--json]
+```
+Import an open-files JSON or JSONL source manifest into `knowledge.db`. This
+upserts sources and source revisions, stores hash/MIME/status/permission
+metadata, and chunks embedded extracted text when the manifest includes it.
 
 ### help
 ```bash
