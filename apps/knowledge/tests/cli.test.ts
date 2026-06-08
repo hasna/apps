@@ -169,6 +169,7 @@ describe('open-knowledge cli', () => {
   test('ingest manifest imports open-files refs into project knowledge.db', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-ingest-cli-'));
     const manifest = join(dir, 'manifest.jsonl');
+    const outbox = join(dir, 'outbox.jsonl');
     writeFileSync(manifest, `${JSON.stringify({
       source_ref: 'open-files://file/file_123/revision/rev_cli',
       file_id: 'file_123',
@@ -198,6 +199,28 @@ describe('open-knowledge cli', () => {
     expect(statsOut.sources).toBe(1);
     expect(statsOut.source_revisions).toBe(1);
     expect(statsOut.chunks).toBe(1);
+
+    writeFileSync(outbox, `${JSON.stringify({
+      event: 'deleted',
+      source_ref: 'open-files://file/file_123/revision/rev_cli',
+      status: 'deleted',
+      hash: 'sha256:cli',
+      updated_at: '2026-06-08T00:01:00.000Z',
+    })}\n`);
+
+    const reindex = runCli(['reindex', 'outbox', outbox, '--scope', 'project', '--json'], dir);
+    expect(reindex.exitCode).toBe(0);
+    const reindexOut = JSON.parse(new TextDecoder().decode(reindex.stdout));
+    expect(reindexOut.events_seen).toBe(1);
+    expect(reindexOut.chunks_deleted).toBe(1);
+    expect(reindexOut.deleted_sources).toBe(1);
+
+    const statsAfter = runCli(['db', 'stats', '--scope', 'project', '--json'], dir);
+    expect(statsAfter.exitCode).toBe(0);
+    const statsAfterOut = JSON.parse(new TextDecoder().decode(statsAfter.stdout));
+    expect(statsAfterOut.chunks).toBe(0);
+    expect(statsAfterOut.runs).toBe(1);
+    expect(statsAfterOut.run_events).toBe(1);
   });
 
   test('wiki init creates scalable wiki artifacts', () => {

@@ -65,6 +65,9 @@ open-knowledge wiki init --scope project
 
 # Ingest an open-files source manifest into the project SQLite catalog
 open-knowledge ingest manifest ./open-files-manifest.jsonl --scope project --json
+
+# Consume open-files change events and invalidate stale source chunks
+open-knowledge reindex outbox ./open-files-outbox.jsonl --scope project --json
 ```
 
 ## Commands
@@ -170,6 +173,14 @@ open-knowledge ingest manifest <file|s3://bucket/key> [--scope project] [--json]
 Import an open-files JSON or JSONL source manifest into `knowledge.db`. This
 upserts sources and source revisions, stores hash/MIME/status/permission
 metadata, and chunks embedded extracted text when the manifest includes it.
+
+### reindex
+```bash
+open-knowledge reindex outbox <file|s3://bucket/key> [--scope project] [--json]
+```
+Consume open-files JSON or JSONL change events. This invalidates matching
+source chunks and embeddings by source ref, revision, or hash, updates
+permission/path/delete metadata, and records a local run ledger.
 
 ### help
 ```bash

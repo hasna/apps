@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getKnowledgeDbStats, migrateKnowledgeDb, openKnowledgeDb } from '../src/knowledge-db';
 import { ingestOpenFilesManifest } from '../src/manifest-ingest';
+import { consumeOpenFilesOutbox } from '../src/outbox-consume';
 
 describe('knowledge sqlite store', () => {
   test('migrates versioned schema and creates core catalog tables', () => {
@@ -102,6 +103,70 @@ describe('knowledge sqlite store', () => {
         'SELECT chunk_id FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT 1',
       ).get('semantic');
       expect(fts?.chunk_id).toStartWith('chk_');
+    } finally {
+      db.close();
+    }
+  });
+
+  test('consumes open-files outbox events and invalidates chunks with a run ledger', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-outbox-'));
+    const dbPath = join(dir, 'knowledge.db');
+    const manifestPath = join(dir, 'manifest.jsonl');
+    const outboxPath = join(dir, 'outbox.jsonl');
+    writeFileSync(manifestPath, `${JSON.stringify({
+      source_ref: 'open-files://file/file_789/revision/rev_before',
+      file_id: 'file_789',
+      source_id: 'src_drive',
+      path: 'Team Drive/Knowledge/Policy.md',
+      name: 'Policy.md',
+      mime: 'text/markdown',
+      size: 128,
+      hash: 'sha256:before',
+      status: 'active',
+      permissions: { mode: 'read_only' },
+      extracted_text: 'Policy text that should be invalidated by the outbox.',
+    })}\n`);
+    await ingestOpenFilesManifest({ dbPath, input: manifestPath });
+    expect(getKnowledgeDbStats(dbPath).chunks).toBe(1);
+
+    writeFileSync(outboxPath, `${JSON.stringify({
+      event: 'deleted',
+      source_ref: 'open-files://file/file_789/revision/rev_before',
+      status: 'deleted',
+      hash: 'sha256:before',
+      updated_at: '2026-06-08T01:00:00.000Z',
+      permissions: { mode: 'read_only', allowed_purposes: [] },
+    })}\n`);
+
+    const result = await consumeOpenFilesOutbox({ dbPath, input: outboxPath });
+    expect(result.events_seen).toBe(1);
+    expect(result.sources_touched).toBe(1);
+    expect(result.revisions_touched).toBe(1);
+    expect(result.chunks_deleted).toBe(1);
+    expect(result.deleted_sources).toBe(1);
+    expect(result.permission_updates).toBe(1);
+
+    const stats = getKnowledgeDbStats(dbPath);
+    expect(stats.chunks).toBe(0);
+    expect(stats.runs).toBe(1);
+    expect(stats.run_events).toBe(1);
+
+    const db = openKnowledgeDb(dbPath);
+    try {
+      const fts = db.query<{ chunk_id: string }, [string]>(
+        'SELECT chunk_id FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT 1',
+      ).get('policy');
+      expect(fts).toBeNull();
+
+      const source = db.query<{ metadata_json: string; acl_json: string }, []>('SELECT metadata_json, acl_json FROM sources LIMIT 1').get();
+      expect(JSON.parse(source?.metadata_json ?? '{}')).toMatchObject({
+        status: 'deleted',
+        last_outbox_event: 'deleted',
+      });
+      expect(JSON.parse(source?.acl_json ?? '{}')).toMatchObject({ allowed_purposes: [] });
+
+      const usage = db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM provider_usage').get();
+      expect(usage?.n).toBe(1);
     } finally {
       db.close();
     }
