@@ -93,6 +93,10 @@ open-knowledge providers models --scope project --json
 # Embed indexed chunks and run semantic search
 open-knowledge embeddings index --scope project --model openai:text-embedding-3-small --json
 open-knowledge embeddings search "company wiki policy" --scope project --json
+
+# Hybrid search over source chunks, generated wiki pages, indexes, and optional vectors
+open-knowledge search "company wiki policy" --scope project --json
+open-knowledge search "company wiki policy" --scope project --semantic --json
 ```
 
 ## Commands
@@ -237,6 +241,17 @@ Consume open-files JSON or JSONL change events. This invalidates matching
 source chunks and embeddings by source ref, revision, or hash, updates
 permission/path/delete metadata, and records a local run ledger.
 
+### search
+```bash
+open-knowledge search <query> [--scope project] [--limit <n>] [--json]
+open-knowledge search <query> --semantic [--model openai:text-embedding-3-small] [--scope project] [--json]
+```
+Run hybrid search over `chunks_fts`, generated wiki chunks, wiki/index catalog
+rows, and optional vector results. The default path is local-only keyword and
+catalog search. `--semantic` embeds the query and merges vector results from
+`vector_index_entries`, preserving source refs, artifact URIs, citations,
+revision/hash metadata, and provenance in each structured result.
+
 ### safety
 ```bash
 open-knowledge safety status [--scope project] [--json]
@@ -315,8 +330,8 @@ The MCP server exposes item tools (`ok_add`, `ok_list`, `ok_get`, `ok_update`,
 `ok_import`, `ok_batch`), workspace/storage inspection (`ok_paths`,
 `ok_storage_status`), provider/embedding tools (`ok_provider_status`,
 `ok_provider_models`, `ok_embeddings_status`, `ok_embeddings_index`,
-`ok_semantic_search`), and source-ref parsing/resolution (`ok_parse_source_ref`,
-`ok_resolve_source`).
+`ok_semantic_search`), hybrid retrieval (`ok_search`), and source-ref
+parsing/resolution (`ok_parse_source_ref`, `ok_resolve_source`).
 
 ## Source And Artifact Boundary
 

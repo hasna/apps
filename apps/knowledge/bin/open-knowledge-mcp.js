@@ -13660,7 +13660,7 @@ import { existsSync as existsSync7, readFileSync as readFileSync7, writeFileSync
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.14",
+  version: "0.2.15",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   bin: {
@@ -16393,6 +16393,379 @@ async function ingestSourceRef(options) {
   };
 }
 
+// src/search.ts
+function parseJsonObject3(value) {
+  if (!value)
+    return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function metadataString3(metadata, keys) {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "string" && value.length > 0)
+      return value;
+  }
+  return null;
+}
+function metadataNumber3(metadata, keys) {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "number" && Number.isFinite(value))
+      return value;
+  }
+  return null;
+}
+function unique(values) {
+  return Array.from(new Set(values));
+}
+function queryTerms(query) {
+  const terms = query.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [];
+  return unique(terms.filter((term) => term.length > 0)).slice(0, 16);
+}
+function ftsQueryForTerms(terms) {
+  if (terms.length === 0)
+    return null;
+  return terms.map((term) => `${term}*`).join(" OR ");
+}
+function escapeLikeTerm(term) {
+  return term.replace(/[\\%_]/g, (char) => `\\${char}`);
+}
+function likeParams(terms, fieldsPerTerm) {
+  return terms.flatMap((term) => Array.from({ length: fieldsPerTerm }, () => `%${escapeLikeTerm(term)}%`));
+}
+function scoreFromRank(rank, index) {
+  const rankScore = Number.isFinite(rank) ? 1 / (1 + Math.abs(rank)) : 0;
+  const orderScore = 1 / (1 + index);
+  return roundScore(Math.max(rankScore, orderScore));
+}
+function catalogScore(haystack, terms) {
+  if (terms.length === 0)
+    return 0;
+  const matched = terms.filter((term) => haystack.includes(term)).length;
+  if (matched === 0)
+    return 0;
+  return roundScore(Math.min(0.85, 0.35 + matched / terms.length * 0.5));
+}
+function semanticScore(score) {
+  return roundScore(Math.max(0, Math.min(1, (score + 1) / 2)));
+}
+function roundScore(score) {
+  return Number(score.toFixed(6));
+}
+function combinedScore(scores, citation) {
+  const keyword = scores.keyword ?? 0;
+  const semantic = scores.semantic ?? 0;
+  const catalog = scores.catalog ?? 0;
+  const citationBoost = citation?.chunk_id ? 0.05 : 0;
+  return roundScore(Math.min(1, keyword * 0.55 + semantic * 0.4 + catalog * 0.35 + citationBoost));
+}
+function existingProvenance(metadata) {
+  const provenance = metadata.provenance;
+  return provenance && typeof provenance === "object" && !Array.isArray(provenance) ? provenance : null;
+}
+function provenanceForChunk2(row) {
+  const metadata = parseJsonObject3(row.chunk_metadata_json);
+  const existing = existingProvenance(metadata);
+  if (existing)
+    return existing;
+  if (!row.source_revision_id && !row.source_uri)
+    return null;
+  return sourceProvenance({
+    source_ref: metadataString3(metadata, ["source_ref"]),
+    source_uri: row.source_uri ?? metadataString3(metadata, ["source_uri"]),
+    source_kind: row.source_kind ?? metadataString3(metadata, ["source_kind"]),
+    source_revision_id: row.source_revision_id,
+    revision: row.revision ?? metadataString3(metadata, ["revision"]),
+    hash: row.hash ?? metadataString3(metadata, ["hash"]),
+    chunk_id: row.chunk_id,
+    start_offset: row.start_offset ?? metadataNumber3(metadata, ["start_offset"]),
+    end_offset: row.end_offset ?? metadataNumber3(metadata, ["end_offset"]),
+    status: metadataString3(metadata, ["status"]),
+    resolver: "open-files-read-only"
+  });
+}
+function selectFtsChunks(db, ftsQuery, limit) {
+  if (!ftsQuery)
+    return [];
+  return db.query(`SELECT
+       chunks_fts.chunk_id,
+       c.kind AS chunk_kind,
+       c.wiki_page_id,
+       c.text,
+       c.token_count,
+       c.start_offset,
+       c.end_offset,
+       c.metadata_json AS chunk_metadata_json,
+       c.source_revision_id,
+       sr.revision,
+       sr.hash,
+       s.uri AS source_uri,
+       s.kind AS source_kind,
+       s.title AS source_title,
+       wp.path AS wiki_path,
+       wp.title AS wiki_title,
+       wp.artifact_uri AS wiki_artifact_uri,
+       wp.content_hash AS wiki_content_hash,
+       wp.status AS wiki_status,
+       wp.metadata_json AS wiki_metadata_json,
+       bm25(chunks_fts) AS rank
+     FROM chunks_fts
+     JOIN chunks c ON c.id = chunks_fts.chunk_id
+     LEFT JOIN source_revisions sr ON sr.id = c.source_revision_id
+     LEFT JOIN sources s ON s.id = sr.source_id
+     LEFT JOIN wiki_pages wp ON wp.id = c.wiki_page_id
+     WHERE chunks_fts MATCH ?
+     ORDER BY rank ASC
+     LIMIT ?`).all(ftsQuery, limit);
+}
+function catalogWhere(fields, terms) {
+  if (terms.length === 0)
+    return "1 = 0";
+  const clauses = terms.map(() => `(${fields.map((field) => `lower(COALESCE(${field}, '')) LIKE ? ESCAPE '\\'`).join(" OR ")})`);
+  return clauses.join(" OR ");
+}
+function selectWikiPages(db, terms, limit) {
+  const fields = ["path", "title", "artifact_uri", "metadata_json"];
+  return db.query(`SELECT id, path, title, artifact_uri, content_hash, status, metadata_json
+     FROM wiki_pages
+     WHERE status = 'active' AND (${catalogWhere(fields, terms)})
+     ORDER BY updated_at DESC
+     LIMIT ?`).all(...likeParams(terms, fields.length), limit);
+}
+function selectKnowledgeIndexes(db, terms, limit) {
+  const fields = ["kind", "name", "shard_key", "artifact_uri", "metadata_json"];
+  return db.query(`SELECT id, kind, name, artifact_uri, shard_key, metadata_json
+     FROM knowledge_indexes
+     WHERE ${catalogWhere(fields, terms)}
+     ORDER BY updated_at DESC
+     LIMIT ?`).all(...likeParams(terms, fields.length), limit);
+}
+function chunkResult(row, keywordScore) {
+  const metadata = parseJsonObject3(row.chunk_metadata_json);
+  const provenance = provenanceForChunk2(row);
+  const sourceRef = metadataString3(metadata, ["source_ref"]);
+  const sourceUri = row.source_uri ?? metadataString3(metadata, ["source_uri"]);
+  const isWiki = Boolean(row.wiki_page_id);
+  const result = {
+    kind: isWiki ? "wiki_chunk" : "source_chunk",
+    id: row.chunk_id,
+    title: isWiki ? row.wiki_title : row.source_title,
+    text: row.text,
+    score: 0,
+    scores: { keyword: keywordScore },
+    source: sourceUri || sourceRef ? {
+      uri: sourceUri,
+      ref: sourceRef,
+      kind: row.source_kind ?? metadataString3(metadata, ["source_kind"]),
+      revision: row.revision ?? metadataString3(metadata, ["revision"]),
+      hash: row.hash ?? metadataString3(metadata, ["hash"])
+    } : null,
+    citation: {
+      chunk_id: row.chunk_id,
+      start_offset: row.start_offset,
+      end_offset: row.end_offset
+    },
+    artifact: isWiki ? {
+      uri: row.wiki_artifact_uri,
+      path: row.wiki_path,
+      hash: row.wiki_content_hash,
+      shard_key: row.wiki_path
+    } : null,
+    provenance,
+    reasons: ["keyword_match"]
+  };
+  result.score = combinedScore(result.scores, result.citation);
+  return result;
+}
+function wikiPageResult(row, terms) {
+  const metadata = parseJsonObject3(row.metadata_json);
+  const score = catalogScore(`${row.path} ${row.title} ${row.artifact_uri ?? ""} ${row.metadata_json}`.toLowerCase(), terms);
+  const result = {
+    kind: "wiki_page",
+    id: row.id,
+    title: row.title,
+    text: null,
+    score: 0,
+    scores: { catalog: score },
+    source: null,
+    citation: null,
+    artifact: {
+      uri: row.artifact_uri,
+      path: row.path,
+      hash: row.content_hash,
+      shard_key: row.path
+    },
+    provenance: existingProvenance(metadata),
+    reasons: ["wiki_catalog_match"]
+  };
+  result.score = combinedScore(result.scores, result.citation);
+  return result;
+}
+function indexResult(row, terms) {
+  const metadata = parseJsonObject3(row.metadata_json);
+  const score = catalogScore(`${row.kind} ${row.name} ${row.shard_key ?? ""} ${row.artifact_uri ?? ""} ${row.metadata_json}`.toLowerCase(), terms);
+  const result = {
+    kind: "knowledge_index",
+    id: row.id,
+    title: row.name,
+    text: null,
+    score: 0,
+    scores: { catalog: score },
+    source: null,
+    citation: null,
+    artifact: {
+      uri: row.artifact_uri,
+      path: metadataString3(metadata, ["artifact_key"]),
+      hash: metadataString3(metadata, ["content_hash"]),
+      shard_key: row.shard_key
+    },
+    provenance: existingProvenance(metadata),
+    reasons: ["index_catalog_match"]
+  };
+  result.score = combinedScore(result.scores, result.citation);
+  return result;
+}
+function mergeResult(results, entry) {
+  const key = `${entry.kind}:${entry.id}`;
+  const existing = results.get(key);
+  if (!existing) {
+    results.set(key, entry);
+    return;
+  }
+  existing.scores = {
+    keyword: Math.max(existing.scores.keyword ?? 0, entry.scores.keyword ?? 0) || undefined,
+    semantic: Math.max(existing.scores.semantic ?? 0, entry.scores.semantic ?? 0) || undefined,
+    catalog: Math.max(existing.scores.catalog ?? 0, entry.scores.catalog ?? 0) || undefined
+  };
+  existing.reasons = unique([...existing.reasons, ...entry.reasons]);
+  existing.text = existing.text ?? entry.text;
+  existing.title = existing.title ?? entry.title;
+  existing.source = existing.source ?? entry.source;
+  existing.citation = existing.citation ?? entry.citation;
+  existing.artifact = existing.artifact ?? entry.artifact;
+  existing.provenance = existing.provenance ?? entry.provenance;
+  existing.score = combinedScore(existing.scores, existing.citation);
+}
+function sortResults(results) {
+  const kindOrder = {
+    source_chunk: 0,
+    wiki_chunk: 1,
+    wiki_page: 2,
+    knowledge_index: 3
+  };
+  return results.sort((a, b) => {
+    if (b.score !== a.score)
+      return b.score - a.score;
+    return kindOrder[a.kind] - kindOrder[b.kind] || a.id.localeCompare(b.id);
+  });
+}
+async function hybridSearch(options) {
+  const query = options.query.trim();
+  if (!query)
+    throw new Error("Search query is required.");
+  const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
+  const terms = queryTerms(query);
+  const ftsQuery = ftsQueryForTerms(terms);
+  const semanticEnabled = options.semantic === true || options.fake === true || Boolean(options.modelRef);
+  const warnings = [];
+  let semanticProvider = null;
+  let semanticModel = null;
+  let semanticDimensions = null;
+  let keywordCount = 0;
+  let catalogCount = 0;
+  let semanticCount = 0;
+  const merged = new Map;
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    const ftsRows = selectFtsChunks(db, ftsQuery, Math.max(limit * 3, 20));
+    keywordCount = ftsRows.length;
+    ftsRows.forEach((row, index) => mergeResult(merged, chunkResult(row, scoreFromRank(row.rank, index))));
+    const wikiRows = selectWikiPages(db, terms, Math.max(limit, 10));
+    const indexRows = selectKnowledgeIndexes(db, terms, Math.max(limit, 10));
+    catalogCount = wikiRows.length + indexRows.length;
+    wikiRows.forEach((row) => mergeResult(merged, wikiPageResult(row, terms)));
+    indexRows.forEach((row) => mergeResult(merged, indexResult(row, terms)));
+  } finally {
+    db.close();
+  }
+  if (semanticEnabled) {
+    try {
+      const semantic = await searchVectorIndex({
+        dbPath: options.dbPath,
+        query,
+        limit: Math.max(limit * 3, 20),
+        config: options.config,
+        env: options.env,
+        modelRef: options.modelRef,
+        dimensions: options.dimensions,
+        fake: options.fake,
+        batchSize: options.batchSize,
+        maxParallelCalls: options.maxParallelCalls
+      });
+      semanticProvider = semantic.provider;
+      semanticModel = semantic.model;
+      semanticDimensions = semantic.dimensions;
+      semanticCount = semantic.results.length;
+      for (const row of semantic.results) {
+        const result = {
+          kind: "source_chunk",
+          id: row.chunk_id,
+          title: null,
+          text: row.text,
+          score: 0,
+          scores: { semantic: semanticScore(row.score) },
+          source: {
+            uri: row.source_uri,
+            ref: row.source_ref,
+            kind: row.provenance?.source_kind ?? null,
+            revision: row.revision,
+            hash: row.hash
+          },
+          citation: {
+            chunk_id: row.chunk_id,
+            start_offset: row.provenance?.start_offset ?? null,
+            end_offset: row.provenance?.end_offset ?? null
+          },
+          artifact: null,
+          provenance: row.provenance,
+          reasons: ["semantic_match"]
+        };
+        result.score = combinedScore(result.scores, result.citation);
+        mergeResult(merged, result);
+      }
+    } catch (error48) {
+      warnings.push(`semantic_search_failed: ${error48 instanceof Error ? error48.message : String(error48)}`);
+    }
+  }
+  const results = sortResults(Array.from(merged.values())).slice(0, limit);
+  return {
+    query,
+    limit,
+    mode: {
+      keyword: true,
+      catalog: true,
+      semantic: semanticEnabled
+    },
+    semantic_provider: semanticProvider,
+    semantic_model: semanticModel,
+    semantic_dimensions: semanticDimensions,
+    counts: {
+      keyword_results: keywordCount,
+      catalog_results: catalogCount,
+      semantic_results: semanticCount,
+      merged_results: results.length
+    },
+    warnings,
+    results
+  };
+}
+
 // src/storage-contract.ts
 import { createHash as createHash6, randomUUID as randomUUID4 } from "crypto";
 var GENERATED_ARTIFACTS = [
@@ -16575,6 +16948,10 @@ function todayParts(now) {
 function stableId4(prefix, value) {
   return `${prefix}_${createHash7("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
+function estimateTokenCount2(text) {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.ceil(words * 1.25));
+}
 function agentSchemaTemplate() {
   return `# Knowledge Agent Schema v1
 
@@ -16685,6 +17062,33 @@ function provenanceFor(artifact) {
     artifact_key: artifact.key
   });
 }
+function recordWikiChunk(db, pageId, title, artifact, body, now) {
+  const provenance = provenanceFor(artifact);
+  const chunkId = stableId4("chk", `${pageId}\x00${artifact.hash ?? artifact.uri}`);
+  const existing = db.query("SELECT id FROM chunks WHERE wiki_page_id = ?").all(pageId);
+  for (const row of existing)
+    db.run("DELETE FROM chunks_fts WHERE chunk_id = ?", [row.id]);
+  db.run("DELETE FROM chunks WHERE wiki_page_id = ?", [pageId]);
+  db.run(`INSERT INTO chunks (id, wiki_page_id, kind, ordinal, text, token_count, start_offset, end_offset, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+    chunkId,
+    pageId,
+    "wiki",
+    0,
+    body,
+    estimateTokenCount2(body),
+    0,
+    body.length,
+    JSON.stringify({
+      artifact_key: artifact.key,
+      artifact_uri: artifact.uri,
+      content_hash: artifact.hash ?? null,
+      provenance
+    }),
+    now
+  ]);
+  db.run("INSERT INTO chunks_fts (chunk_id, text, title, source_uri) VALUES (?, ?, ?, ?)", [chunkId, body, title, artifact.uri]);
+}
 function recordWikiLayoutCatalog(db, artifacts, now = new Date) {
   const timestamp = now.toISOString();
   const rootIndex = artifacts.find((artifact) => artifact.key.endsWith("indexes/root.md"));
@@ -16711,6 +17115,7 @@ function recordWikiLayoutCatalog(db, artifacts, now = new Date) {
     ]);
   }
   if (wikiReadme) {
+    const wikiPageId = stableId4("wiki", "wiki/README.md");
     db.run(`INSERT INTO wiki_pages (id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(path) DO UPDATE SET
@@ -16720,7 +17125,7 @@ function recordWikiLayoutCatalog(db, artifacts, now = new Date) {
          status = excluded.status,
          metadata_json = excluded.metadata_json,
          updated_at = excluded.updated_at`, [
-      stableId4("wiki", "wiki/README.md"),
+      wikiPageId,
       "wiki/README.md",
       "Wiki",
       wikiReadme.uri,
@@ -16733,6 +17138,7 @@ function recordWikiLayoutCatalog(db, artifacts, now = new Date) {
       timestamp,
       timestamp
     ]);
+    recordWikiChunk(db, wikiPageId, "Wiki", wikiReadme, wikiReadmeTemplate(), timestamp);
   }
 }
 
@@ -16876,6 +17282,14 @@ class KnowledgeService {
   async semanticSearch(options) {
     const workspace = this.ensureWorkspace();
     return searchVectorIndex({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config()
+    });
+  }
+  async search(options) {
+    const workspace = this.ensureWorkspace();
+    return hybridSearch({
       ...options,
       dbPath: workspace.knowledgeDbPath,
       config: this.config()
@@ -17026,6 +17440,22 @@ function buildServer() {
     const service = createKnowledgeService({ scope });
     try {
       return jsonText({ ok: true, ...await service.semanticSearch({ query, limit, modelRef: model, dimensions, fake }) });
+    } catch (error48) {
+      return errorText(error48 instanceof Error ? error48.message : String(error48));
+    }
+  });
+  registerTool(server, "ok_search", "Hybrid knowledge search", "Search source chunks, generated wiki pages, sharded indexes, and optional semantic vectors", {
+    scope: scopeField,
+    query: exports_external.string().describe("Search query"),
+    limit: exports_external.number().optional().describe("Maximum results"),
+    semantic: exports_external.boolean().optional().describe("Include vector semantic results"),
+    model: exports_external.string().optional().describe("Embedding model ref, default openai:text-embedding-3-small"),
+    dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
+    fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings for local tests")
+  }, async ({ scope, query, limit, semantic, model, dimensions, fake }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText({ ok: true, ...await service.search({ query, limit, semantic, modelRef: model, dimensions, fake }) });
     } catch (error48) {
       return errorText(error48 instanceof Error ? error48.message : String(error48));
     }

@@ -47,13 +47,17 @@ contracts.
 The current local command surface is:
 
 ```bash
+open-knowledge search "company wiki policy" --scope project --json
+open-knowledge search "company wiki policy" --scope project --semantic --json
 open-knowledge embeddings index --scope project --model openai:text-embedding-3-small
 open-knowledge embeddings search "company wiki policy" --scope project --json
 ```
 
-MCP exposes the same capability through `ok_embeddings_status`,
-`ok_embeddings_index`, and `ok_semantic_search`. Deterministic `--fake`
-embeddings exist for tests and offline verification only.
+`search` is the structured hybrid layer for agents. `embeddings search` is the
+lower-level vector-only command. MCP exposes the same capability through
+`ok_search`, `ok_embeddings_status`, `ok_embeddings_index`, and
+`ok_semantic_search`. Deterministic `--fake` embeddings exist for tests and
+offline verification only.
 
 ## Hosted Indexes
 
@@ -72,16 +76,18 @@ unauthorized content.
 
 1. Normalize the query.
 2. Embed the query if a semantic-capable provider is configured.
-3. Run keyword FTS over source chunks and wiki chunks.
-4. Run vector search over source chunks and wiki pages.
-5. Expand candidate pages through backlinks and citations.
-6. Drop stale candidates whose source revision/hash no longer matches
+3. Run keyword FTS over source chunks and generated wiki chunks.
+4. Search wiki page and machine-readable index catalog rows.
+5. Run vector search over source chunks and wiki pages when semantic mode is
+   requested.
+6. Expand candidate pages through backlinks and citations.
+7. Drop stale candidates whose source revision/hash no longer matches
    `open-files`.
-7. Apply permission filters.
-8. Merge and dedupe by source revision, wiki page, citation, and text hash.
-9. Rerank by relevance, exact-match score, semantic score, freshness, citation
+8. Apply permission filters.
+9. Merge and dedupe by source revision, wiki page, citation, and text hash.
+10. Rerank by relevance, exact-match score, semantic score, freshness, citation
    quality, and wiki authority.
-10. Return structured results with source refs, citation spans, page refs,
+11. Return structured results with source refs, citation spans, page refs,
     scores, and reason codes.
 
 ## Result Shape

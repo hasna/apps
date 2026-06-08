@@ -305,6 +305,39 @@ describe('open-knowledge cli', () => {
     expect(searchOut.results[0].provenance.source_uri).toBe(sourceRef);
   });
 
+  test('search command returns hybrid source, wiki, and semantic results', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-search-cli-'));
+    const source = join(dir, 'source.md');
+    writeFileSync(source, 'CLI hybrid search should find source-governed company wiki content.');
+    const sourceRef = `file://${source}`;
+
+    const ingest = runCli(['ingest', 'source', sourceRef, '--purpose', 'knowledge_index', '--scope', 'project', '--json'], dir);
+    expect(ingest.exitCode).toBe(0);
+
+    const wiki = runCli(['wiki', 'init', '--scope', 'project', '--json'], dir);
+    expect(wiki.exitCode).toBe(0);
+
+    const sourceSearch = runCli(['search', 'source', 'company', 'wiki', '--scope', 'project', '--json'], dir);
+    expect(sourceSearch.exitCode).toBe(0);
+    const sourceSearchOut = JSON.parse(new TextDecoder().decode(sourceSearch.stdout));
+    expect(sourceSearchOut.mode.semantic).toBe(false);
+    expect(sourceSearchOut.results.some((entry: any) => entry.kind === 'source_chunk' && entry.source.uri === sourceRef)).toBe(true);
+
+    const wikiSearch = runCli(['search', 'durable', 'knowledge', 'pages', '--scope', 'project', '--json'], dir);
+    expect(wikiSearch.exitCode).toBe(0);
+    const wikiSearchOut = JSON.parse(new TextDecoder().decode(wikiSearch.stdout));
+    expect(wikiSearchOut.results.some((entry: any) => entry.kind === 'wiki_chunk' && entry.artifact.path === 'wiki/README.md')).toBe(true);
+
+    const index = runCli(['embeddings', 'index', '--scope', 'project', '--fake', '--dimensions', '8', '--json'], dir);
+    expect(index.exitCode).toBe(0);
+
+    const semantic = runCli(['search', 'company', 'wiki', 'content', '--scope', 'project', '--semantic', '--fake', '--dimensions', '8', '--json'], dir);
+    expect(semantic.exitCode).toBe(0);
+    const semanticOut = JSON.parse(new TextDecoder().decode(semantic.stdout));
+    expect(semanticOut.mode.semantic).toBe(true);
+    expect(semanticOut.counts.semantic_results).toBeGreaterThan(0);
+  });
+
   test('safety commands expose policy, approvals, redaction, audit, and S3 denial', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-safety-cli-'));
 

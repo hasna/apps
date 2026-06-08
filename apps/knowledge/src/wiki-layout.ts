@@ -35,6 +35,11 @@ function stableId(prefix: string, value: string): string {
   return `${prefix}_${createHash('sha256').update(value).digest('hex').slice(0, 20)}`;
 }
 
+function estimateTokenCount(text: string): number {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.ceil(words * 1.25));
+}
+
 export function agentSchemaTemplate(): string {
   return `# Knowledge Agent Schema v1
 
@@ -151,6 +156,39 @@ function provenanceFor(artifact: CatalogArtifact): GeneratedArtifactProvenance {
   });
 }
 
+function recordWikiChunk(db: Database, pageId: string, title: string, artifact: CatalogArtifact, body: string, now: string): void {
+  const provenance = provenanceFor(artifact);
+  const chunkId = stableId('chk', `${pageId}\u0000${artifact.hash ?? artifact.uri}`);
+  const existing = db.query<{ id: string }, [string]>('SELECT id FROM chunks WHERE wiki_page_id = ?').all(pageId);
+  for (const row of existing) db.run('DELETE FROM chunks_fts WHERE chunk_id = ?', [row.id]);
+  db.run('DELETE FROM chunks WHERE wiki_page_id = ?', [pageId]);
+  db.run(
+    `INSERT INTO chunks (id, wiki_page_id, kind, ordinal, text, token_count, start_offset, end_offset, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      chunkId,
+      pageId,
+      'wiki',
+      0,
+      body,
+      estimateTokenCount(body),
+      0,
+      body.length,
+      JSON.stringify({
+        artifact_key: artifact.key,
+        artifact_uri: artifact.uri,
+        content_hash: artifact.hash ?? null,
+        provenance,
+      }),
+      now,
+    ],
+  );
+  db.run(
+    'INSERT INTO chunks_fts (chunk_id, text, title, source_uri) VALUES (?, ?, ?, ?)',
+    [chunkId, body, title, artifact.uri],
+  );
+}
+
 export function recordWikiLayoutCatalog(db: Database, artifacts: CatalogArtifact[], now = new Date()): void {
   const timestamp = now.toISOString();
   const rootIndex = artifacts.find((artifact) => artifact.key.endsWith('indexes/root.md'));
@@ -182,6 +220,7 @@ export function recordWikiLayoutCatalog(db: Database, artifacts: CatalogArtifact
   }
 
   if (wikiReadme) {
+    const wikiPageId = stableId('wiki', 'wiki/README.md');
     db.run(
       `INSERT INTO wiki_pages (id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -193,7 +232,7 @@ export function recordWikiLayoutCatalog(db: Database, artifacts: CatalogArtifact
          metadata_json = excluded.metadata_json,
          updated_at = excluded.updated_at`,
       [
-        stableId('wiki', 'wiki/README.md'),
+        wikiPageId,
         'wiki/README.md',
         'Wiki',
         wikiReadme.uri,
@@ -207,5 +246,6 @@ export function recordWikiLayoutCatalog(db: Database, artifacts: CatalogArtifact
         timestamp,
       ],
     );
+    recordWikiChunk(db, wikiPageId, 'Wiki', wikiReadme, wikiReadmeTemplate(), timestamp);
   }
 }

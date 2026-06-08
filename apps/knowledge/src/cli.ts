@@ -49,6 +49,7 @@ interface Flags {
   purpose?: string;
   model?: string;
   dimensions?: number;
+  semantic?: boolean;
   noColor?: boolean;
   scope?: string;
   olderThan?: number;
@@ -63,7 +64,7 @@ interface ParseResult {
   flags: Flags;
 }
 
-const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'export', 'prune', 'dedupe', 'stats', 'paths', 'storage', 'db', 'wiki', 'source', 'ingest', 'reindex', 'embeddings', 'providers', 'safety', 'help'];
+const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'export', 'prune', 'dedupe', 'stats', 'paths', 'storage', 'db', 'wiki', 'source', 'ingest', 'reindex', 'search', 'embeddings', 'providers', 'safety', 'help'];
 const COMMAND_ALIASES: Record<string, string> = {
   ls: 'list',
   rm: 'delete',
@@ -101,6 +102,7 @@ function parseArgs(argv: string[]): ParseResult {
       case '--purpose': flags.purpose = argv[i + 1]; i += 1; break;
       case '--model': flags.model = argv[i + 1]; i += 1; break;
       case '--dimensions': flags.dimensions = Number(argv[i + 1]); i += 1; break;
+      case '--semantic': flags.semantic = true; break;
       case '--fake': flags.fake = true; break;
       case '--no-color': flags.noColor = true; break;
       case '--scope': flags.scope = argv[i + 1]; i += 1; break;
@@ -175,6 +177,7 @@ Commands:
   ingest manifest <file|s3://> Ingest an open-files manifest into knowledge.db
   ingest source <source-ref>   Ingest a read-only source ref into knowledge.db
   reindex outbox <file|s3://>  Consume open-files change events and invalidate chunks
+  search <query>               Hybrid search sources, wiki pages, and indexes
   embeddings status|index|search Build/query local vector embeddings
   providers status|models|check Inspect AI SDK provider config and credentials
   safety status|check|approve|audit|redact
@@ -186,6 +189,7 @@ Global Options:
   --purpose <name>            Read-only source purpose (default: knowledge_answer)
   --model <provider:model>     AI/embedding model ref
   --dimensions <n>             Embedding dimensions for local/fake providers
+  --semantic                   Include vector semantic results in search
   --fake                       Use deterministic fake embeddings for local tests
   --scope local|global|project  Store scope (default: global ~/.hasna/apps/knowledge/)
   --no-color                  Disable color output
@@ -247,6 +251,7 @@ function printCommandHelp(command: string): void {
   if (command === 'source') { console.log('Usage: open-knowledge source resolve <source-ref> [--purpose knowledge_answer|knowledge_index] [--limit <n>] [--scope local|global|project] [--json]'); return; }
   if (command === 'ingest') { console.log('Usage: open-knowledge ingest manifest <file|s3://bucket/key> | source <source-ref> [--purpose knowledge_index] [--scope local|global|project] [--json]'); return; }
   if (command === 'reindex') { console.log('Usage: open-knowledge reindex outbox <file|s3://bucket/key> [--scope local|global|project] [--json]'); return; }
+  if (command === 'search') { console.log('Usage: open-knowledge search <query> [--semantic] [--model openai:text-embedding-3-small] [--limit <n>] [--dimensions <n>] [--fake] [--scope local|global|project] [--json]'); return; }
   if (command === 'embeddings') { console.log('Usage: open-knowledge embeddings status|index|search [query] [--model openai:text-embedding-3-small] [--limit <n>] [--dimensions <n>] [--fake] [--scope local|global|project] [--json]'); return; }
   if (command === 'providers') { console.log('Usage: open-knowledge providers status|models|check [provider|model-alias] [--scope local|global|project] [--json]'); return; }
   if (command === 'safety') { console.log('Usage: open-knowledge safety status|check|approve|audit|redact [args] [--scope local|global|project] [--json]'); return; }
@@ -294,11 +299,11 @@ async function run(argv: string[]): Promise<void> {
   if (flags.completions) {
     const shell = flags.completions;
     if (shell === 'bash') {
-      console.log(`_open_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats paths storage db wiki source ingest reindex embeddings providers safety help ls rm edit unarchive --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --purpose --model --dimensions --fake --no-color --scope --archived --include-archived" -- "$cur")); }; complete -F _open_knowledge open-knowledge`);
+      console.log(`_open_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats paths storage db wiki source ingest reindex search embeddings providers safety help ls rm edit unarchive --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --purpose --model --dimensions --semantic --fake --no-color --scope --archived --include-archived" -- "$cur")); }; complete -F _open_knowledge open-knowledge`);
     } else if (shell === 'zsh') {
-      console.log(`#compdef open-knowledge\n_open_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats paths storage db wiki source ingest reindex embeddings providers safety help ls rm edit unarchive)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--fake)--fake" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" }; _open_knowledge`);
+      console.log(`#compdef open-knowledge\n_open_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats paths storage db wiki source ingest reindex search embeddings providers safety help ls rm edit unarchive)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--semantic)--semantic" "(--fake)--fake" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" }; _open_knowledge`);
     } else if (shell === 'fish') {
-      console.log(`complete -c open-knowledge -f; complete -c open-knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats paths storage db wiki source ingest reindex embeddings providers safety help ls rm edit unarchive"; complete -c open-knowledge -l json; complete -c open-knowledge -l yes -s y; complete -c open-knowledge -l help -s h; complete -c open-knowledge -l version -s v; complete -c open-knowledge -l desc; complete -c open-knowledge -l archived; complete -c open-knowledge -l include-archived; complete -c open-knowledge -l fake; complete -c open-knowledge -s p -l page; complete -c open-knowledge -s l -l limit; complete -c open-knowledge -s s -l search; complete -c open-knowledge -l sort; complete -c open-knowledge -l id; complete -c open-knowledge -l store; complete -c open-knowledge -l title; complete -c open-knowledge -l content; complete -c open-knowledge -l url; complete -c open-knowledge -s t -l tag; complete -c open-knowledge -l format; complete -c open-knowledge -l completions; complete -c open-knowledge -l purpose; complete -c open-knowledge -l model; complete -c open-knowledge -l dimensions; complete -c open-knowledge -l no-color; complete -c open-knowledge -l scope -a "local global project"`);
+      console.log(`complete -c open-knowledge -f; complete -c open-knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats paths storage db wiki source ingest reindex search embeddings providers safety help ls rm edit unarchive"; complete -c open-knowledge -l json; complete -c open-knowledge -l yes -s y; complete -c open-knowledge -l help -s h; complete -c open-knowledge -l version -s v; complete -c open-knowledge -l desc; complete -c open-knowledge -l archived; complete -c open-knowledge -l include-archived; complete -c open-knowledge -l semantic; complete -c open-knowledge -l fake; complete -c open-knowledge -s p -l page; complete -c open-knowledge -s l -l limit; complete -c open-knowledge -s s -l search; complete -c open-knowledge -l sort; complete -c open-knowledge -l id; complete -c open-knowledge -l store; complete -c open-knowledge -l title; complete -c open-knowledge -l content; complete -c open-knowledge -l url; complete -c open-knowledge -s t -l tag; complete -c open-knowledge -l format; complete -c open-knowledge -l completions; complete -c open-knowledge -l purpose; complete -c open-knowledge -l model; complete -c open-knowledge -l dimensions; complete -c open-knowledge -l no-color; complete -c open-knowledge -l scope -a "local global project"`);
     } else {
       throw new Error("Invalid --completions value. Use 'bash', 'zsh', or 'fish'.");
     }
@@ -576,6 +581,21 @@ async function run(argv: string[]): Promise<void> {
       return;
     }
     throw new Error("Invalid embeddings action. Use 'status', 'index', or 'search'.");
+  }
+
+  if (command === 'search') {
+    const query = positional.slice(1).join(' ');
+    if (!query) throw new Error('Usage: open-knowledge search <query>');
+    const result = await service.search({
+      query,
+      limit: flags.limit,
+      semantic: flags.semantic,
+      modelRef: flags.model,
+      dimensions: flags.dimensions,
+      fake: flags.fake,
+    });
+    output({ ok: true, ...result, message: `${result.results.length} search result(s)` }, flags.json);
+    return;
   }
 
   if (command === 'providers') {

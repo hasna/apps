@@ -69,6 +69,7 @@ describe('open-knowledge MCP', () => {
       expect(tools.tools.some((tool) => tool.name === 'ok_embeddings_status')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_embeddings_index')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_semantic_search')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'ok_search')).toBe(true);
 
       const add = parseToolJson(await client.callTool({
         name: 'ok_add',
@@ -148,6 +149,13 @@ describe('open-knowledge MCP', () => {
       }));
       expect(semanticSearch.results).toHaveLength(1);
       expect(semanticSearch.results[0].text).toContain('MCP resolver source text');
+
+      const hybridSearch = parseToolJson(await client.callTool({
+        name: 'ok_search',
+        arguments: { scope: 'project', query: 'resolver source text', semantic: true, fake: true, dimensions: 8 },
+      }));
+      expect(hybridSearch.results.some((entry: any) => entry.kind === 'source_chunk')).toBe(true);
+      expect(hybridSearch.counts.semantic_results).toBeGreaterThan(0);
 
       const batch = parseToolJson(await client.callTool({
         name: 'ok_batch',
