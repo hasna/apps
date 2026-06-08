@@ -120,6 +120,17 @@ boundary and object layout.
 
 Files stores metadata locally in SQLite under the Hasna data directory. The repo includes its own S3 integrations and PostgreSQL migration definitions for remote deployments without depending on the shared cloud package.
 
+## Knowledge Source Contract
+
+`@hasna/files` is the source-of-truth file layer for `@hasna/knowledge`.
+Knowledge stores derived chunks, embeddings, wiki pages, citations, and agent
+logs; files owns original bytes, source sync state, file identity, revisions,
+and read-only access. Stable refs use `open-files://file/<id>` and
+`open-files://source/<id>/path/<path>`.
+
+See [docs/knowledge-source-contract.md](docs/knowledge-source-contract.md) for
+the URI, resolver, manifest export, and change outbox plan.
+
 ## Data Directory
 
 Data is stored in `~/.hasna/files/`.

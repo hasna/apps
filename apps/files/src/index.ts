@@ -25,6 +25,8 @@ export { watchSource, unwatchSource, stopAllWatchers } from "./lib/watcher.js";
 export { hashFile, hashBuffer, sha256File, sha256Buffer } from "./lib/hasher.js";
 export { syncWithPeer, syncWithPeers } from "./lib/sync.js";
 export { normalizeFileName, generateCanonicalName } from "./lib/normalize.js";
+export { buildOpenFilesFileRef, buildOpenFilesFileRevisionRef, buildOpenFilesSourcePathRef, parseOpenFilesSourceRef, isOpenFilesSourceRef } from "./lib/source-ref.js";
+export type { OpenFilesFileRef, OpenFilesSourcePathRef, OpenFilesSourceRef } from "./lib/source-ref.js";
 
 // Types
 export type {
