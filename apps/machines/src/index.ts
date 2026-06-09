@@ -23,6 +23,7 @@ export * from "./commands/setup.js";
 export * from "./commands/ssh.js";
 export * from "./commands/sync.js";
 export * from "./commands/status.js";
+export * from "./commands/workspace.js";
 export * from "./mcp/server.js";
 export {
   MACHINES_STORAGE_ENV,

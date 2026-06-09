@@ -113,6 +113,15 @@ workspace inference second; consumers can still pass manual overrides.
 machines workspace resolve --machine spark01 --project open-knowledge --repo open-knowledge --json
 ```
 
+If a resolver result reports inferred project or open-files roots, repair the
+manifest metadata explicitly. The command previews changes by default and only
+writes when `--apply` is passed:
+
+```bash
+machines workspace repair --machine spark01 --project open-knowledge --repo open-knowledge --json
+machines workspace repair --machine spark01 --project open-knowledge --repo open-knowledge --apply --json
+```
+
 ## Compatibility SDK
 
 Open-core consumers can use `@hasna/machines` to preflight a peer before

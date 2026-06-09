@@ -35,6 +35,7 @@ import { listPorts } from "../commands/ports.js";
 import { buildSshCommand, resolveSshTarget } from "../commands/ssh.js";
 import { buildSyncPlan, runSync } from "../commands/sync.js";
 import { getStatus } from "../commands/status.js";
+import { repairWorkspaceManifestMappings, type WorkspaceManifestRepairResult } from "../commands/workspace.js";
 import { discoverMachineTopology, resolveMachineRoute, resolveMachineWorkspace } from "../topology.js";
 import {
   checkMachineCompatibility,
@@ -266,6 +267,25 @@ function renderWorkspaceResolution(result: ReturnType<typeof resolveMachineWorks
     ["open-files root", `${result.paths.open_files_root.path ?? "unresolved"} (${result.paths.open_files_root.source})`],
     ["warnings", result.warnings.join(", ") || "none"],
   ]);
+}
+
+function renderWorkspaceRepairResult(result: WorkspaceManifestRepairResult): string {
+  const patchLines = result.patches.map((patch) => {
+    const path = patch.path ?? "unresolved";
+    const previous = patch.previous_path ? ` previous=${patch.previous_path}` : "";
+    return `${patch.field}.${patch.key}: ${patch.status} ${path}${previous}`;
+  });
+  return [
+    renderKeyValueTable([
+      ["machine", result.machine_id ?? "unresolved"],
+      ["project", result.project_id],
+      ["trusted", String(result.trusted)],
+      ["applied", String(result.applied)],
+      ["manifest", result.manifest_path],
+      ["warnings", result.warnings.join(", ") || "none"],
+    ]),
+    renderList("patches", patchLines),
+  ].join("\n");
 }
 
 function renderFleetStatus(status: FleetStatus): string {
@@ -565,6 +585,49 @@ workspaceCommand
       includeTailscale: options.tailscale !== false,
     });
     printJsonOrText(result, renderWorkspaceResolution(result), options.json);
+    if (!result.ok && !options.json) process.exitCode = 1;
+  });
+
+workspaceCommand
+  .command("repair")
+  .description("Preview or write explicit manifest path mappings for inferred workspace roots")
+  .requiredOption("--machine <id>", "Machine identifier")
+  .requiredOption("--project <id>", "Canonical project id")
+  .option("--repo <name>", "Repository name; defaults to project id")
+  .option("--open-files-repo <name>", "Open-files repository name", "open-files")
+  .option("--workspace-root <path>", "Override the machine workspace root for resolution")
+  .option("--project-root <path>", "Explicit project root to write")
+  .option("--open-files-root <path>", "Explicit open-files root to write")
+  .option("--apply", "Write the mappings into the manifest", false)
+  .option("--allow-untrusted", "Allow writing mappings for machines not marked trusted", false)
+  .option("--no-tailscale", "Skip tailscale status probing")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: {
+    machine: string;
+    project: string;
+    repo?: string;
+    openFilesRepo?: string;
+    workspaceRoot?: string;
+    projectRoot?: string;
+    openFilesRoot?: string;
+    apply?: boolean;
+    allowUntrusted?: boolean;
+    tailscale?: boolean;
+    json?: boolean;
+  }) => {
+    const result = repairWorkspaceManifestMappings({
+      machineId: options.machine,
+      projectId: options.project,
+      repoName: options.repo,
+      openFilesRepoName: options.openFilesRepo,
+      workspaceRoot: options.workspaceRoot,
+      projectRoot: options.projectRoot,
+      openFilesRoot: options.openFilesRoot,
+      apply: options.apply,
+      allowUntrusted: options.allowUntrusted,
+      includeTailscale: options.tailscale !== false,
+    });
+    printJsonOrText(result, renderWorkspaceRepairResult(result), options.json);
     if (!result.ok && !options.json) process.exitCode = 1;
   });
 
