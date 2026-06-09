@@ -100,6 +100,15 @@ function writeFakeMachinesRouteBin(bin: string, target: string): void {
       target,
       command_target: target,
       confidence: 'high',
+      evidence: {
+        topology: true,
+        matched_by: 'machine_id',
+        selected_hint: {
+          kind: 'tailscale',
+          target,
+          reachable: true,
+        },
+      },
       warnings: [],
     })}'`,
     '  exit 0',
@@ -570,6 +579,22 @@ describe('knowledge cli', () => {
     expect(readFileSync(targetPath, 'utf8')).toBe('routed-spark01.tailnet.test');
     const out = JSON.parse(new TextDecoder().decode(result.stdout));
     expect(out.resolved_machine).toBe('routed-spark01.tailnet.test');
+    expect(out.resolved_route).toEqual({
+      source: 'open-machines',
+      target: 'routed-spark01.tailnet.test',
+      route: 'tailscale',
+      target_kind: 'tailscale',
+      confidence: 'high',
+      evidence: {
+        topology: true,
+        matched_by: 'machine_id',
+        selected_hint: {
+          kind: 'tailscale',
+          target: 'routed-spark01.tailnet.test',
+          reachable: true,
+        },
+      },
+    });
   });
 
   test('ssh sync rejects remote import result without protocol handshake before accepting push', () => {

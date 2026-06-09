@@ -386,23 +386,46 @@ function parseJsonObject(value: string): Record<string, unknown> | null {
   }
 }
 
-function resolveSshMachineTarget(machine: string): { target: string; route: string | null; confidence: string | null; source: 'open-machines' | 'raw' } {
+type ResolvedSshMachineTarget = {
+  target: string;
+  route: string | null;
+  targetKind: string | null;
+  confidence: string | null;
+  source: 'open-machines' | 'raw';
+  evidence: Record<string, unknown> | null;
+};
+
+function resolveSshMachineTarget(machine: string): ResolvedSshMachineTarget {
   const result = spawnSync('machines', ['route', '--machine', machine, '--json'], {
     encoding: 'utf8',
     env: process.env,
   });
   if ((result.status ?? 1) !== 0) {
-    return { target: machine, route: null, confidence: null, source: 'raw' };
+    return { target: machine, route: null, targetKind: null, confidence: null, source: 'raw', evidence: null };
   }
   const parsed = parseJsonObject(result.stdout || '');
   const ok = parsed?.ok === true;
   const target = typeof parsed?.target === 'string' && parsed.target ? parsed.target : null;
-  if (!ok || !target) return { target: machine, route: null, confidence: null, source: 'raw' };
+  if (!ok || !target) return { target: machine, route: null, targetKind: null, confidence: null, source: 'raw', evidence: null };
+  const evidence = typeof parsed.evidence === 'object' && parsed.evidence !== null
+    ? parsed.evidence as Record<string, unknown>
+    : null;
+  const selectedHint = typeof evidence?.selected_hint === 'object' && evidence.selected_hint !== null
+    ? evidence.selected_hint as Record<string, unknown>
+    : null;
   return {
     target,
     route: typeof parsed.route === 'string' ? parsed.route : null,
+    targetKind: typeof selectedHint?.kind === 'string'
+      ? selectedHint.kind
+      : typeof parsed.source === 'string'
+        ? parsed.source
+        : typeof parsed.route === 'string'
+          ? parsed.route
+          : null,
     confidence: typeof parsed.confidence === 'string' ? parsed.confidence : null,
     source: 'open-machines',
+    evidence,
   };
 }
 
@@ -410,7 +433,7 @@ function runSsh(
   machine: string,
   command: string,
   input?: string,
-  resolved: { target: string; route: string | null; confidence: string | null; source: 'open-machines' | 'raw' } = resolveSshMachineTarget(machine),
+  resolved: ResolvedSshMachineTarget = resolveSshMachineTarget(machine),
 ): string {
   const result = spawnSync('ssh', [resolved.target, command], {
     encoding: 'utf8',
@@ -494,6 +517,14 @@ async function syncRemotePeer(options: {
     transport: 'ssh';
     machine: string;
     resolved_machine?: string;
+    resolved_route?: {
+      source: 'open-machines' | 'raw';
+      target: string;
+      route: string | null;
+      target_kind: string | null;
+      confidence: string | null;
+      evidence: Record<string, unknown> | null;
+    };
     peer_workspace: string;
     pull?: unknown;
     push?: unknown;
@@ -509,6 +540,14 @@ async function syncRemotePeer(options: {
   };
   const resolvedMachine = resolveSshMachineTarget(options.machine);
   result.resolved_machine = resolvedMachine.target;
+  result.resolved_route = {
+    source: resolvedMachine.source,
+    target: resolvedMachine.target,
+    route: resolvedMachine.route,
+    target_kind: resolvedMachine.targetKind,
+    confidence: resolvedMachine.confidence,
+    evidence: resolvedMachine.evidence,
+  };
 
   if (direction === 'pull' || direction === 'both') {
     const remoteExport = remoteKnowledgeCommand(options.peerWorkspace, [
