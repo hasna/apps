@@ -86,6 +86,19 @@ export interface KnowledgeMachinePreflightOptions {
 export type KnowledgeMachineRouteSource = 'open-machines' | 'registry' | 'raw';
 export type KnowledgeMachineRouteKind = 'local' | 'lan' | 'tailscale' | 'ssh' | 'unknown';
 export type KnowledgeMachineRouteConfidence = 'exact' | 'high' | 'medium' | 'low' | 'none' | string;
+export type KnowledgeMachineResolverSourceAuthority = 'open-machines' | 'registry' | 'knowledge' | 'local' | string;
+
+export interface KnowledgeMachineResolverCacheability {
+  observed_at: string;
+  verified_at: string | null;
+  expires_at: string | null;
+  ttl_ms: number | null;
+  source_authority: KnowledgeMachineResolverSourceAuthority;
+  confidence: KnowledgeMachineRouteConfidence | null;
+  cacheable: boolean;
+  stale: boolean;
+  reasons: string[];
+}
 
 export interface KnowledgeMachineRouteOptions {
   adapterMode?: KnowledgeMachinesAdapterMode;
@@ -163,6 +176,7 @@ export interface KnowledgeMachineWorkspaceResolution {
   diagnostics: KnowledgeMachineWorkspaceDiagnostic[];
   repair_hints: KnowledgeMachineWorkspaceRepairHint[];
   evidence: Record<string, unknown> | null;
+  cacheability: KnowledgeMachineResolverCacheability | null;
   warnings: string[];
 }
 
@@ -174,6 +188,7 @@ export interface KnowledgeMachineRouteResolution {
   source: KnowledgeMachineRouteSource;
   adapter: KnowledgeMachinesAdapterStatus;
   evidence: Record<string, unknown> | null;
+  cacheability: KnowledgeMachineResolverCacheability | null;
   warnings: string[];
 }
 
@@ -290,10 +305,18 @@ export interface KnowledgeMachinesAdapter {
 interface OpenMachinesModule {
   MACHINES_CONSUMER_CONTRACT?: {
     schema_version?: unknown;
+    schema_uri?: unknown;
+    schema_artifact?: unknown;
     entrypoint?: unknown;
     capabilities?: unknown;
+    field_capabilities?: unknown;
+    cacheability?: unknown;
   };
   MACHINES_CONSUMER_CONTRACT_VERSION?: unknown;
+  MACHINES_CONSUMER_SCHEMA_BUNDLE?: unknown;
+  getMachinesConsumerSchemaBundle?: () => unknown;
+  validateMachinesConsumerEnvelope?: (value: unknown) => unknown;
+  createMachineResolverSnapshot?: (value: unknown) => unknown;
   discoverMachineTopology?: (options?: { includeTailscale?: boolean; runner?: unknown; now?: Date }) => unknown;
   resolveMachineRoute?: (machineId: string, options?: { includeTailscale?: boolean; runner?: unknown; now?: Date }) => unknown;
   resolveMachineWorkspace?: (options: {
@@ -361,6 +384,10 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function asBooleanOrNull(value: unknown): boolean | null {
   return typeof value === 'boolean' ? value : null;
+}
+
+function asNumberOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 function normalizePlatform(value: string = platform()): string {
@@ -956,6 +983,24 @@ function normalizeRouteKind(value: unknown): KnowledgeMachineRouteKind | null {
     : null;
 }
 
+function normalizeResolverCacheability(value: unknown): KnowledgeMachineResolverCacheability | null {
+  const raw = asRecord(value);
+  const observedAt = asString(raw.observed_at);
+  const sourceAuthority = asString(raw.source_authority);
+  if (!observedAt || !sourceAuthority) return null;
+  return {
+    observed_at: observedAt,
+    verified_at: asString(raw.verified_at),
+    expires_at: asString(raw.expires_at),
+    ttl_ms: asNumberOrNull(raw.ttl_ms),
+    source_authority: sourceAuthority,
+    confidence: asString(raw.confidence),
+    cacheable: raw.cacheable === true,
+    stale: raw.stale === true,
+    reasons: asStringArray(raw.reasons),
+  };
+}
+
 function normalizeOpenMachinesRoute(value: unknown, adapter: KnowledgeMachinesAdapterStatus): KnowledgeMachineRouteResolution | null {
   const raw = asRecord(value);
   if (unsupportedContractVersion(payloadContractVersion(raw))) return null;
@@ -975,6 +1020,7 @@ function normalizeOpenMachinesRoute(value: unknown, adapter: KnowledgeMachinesAd
     source: 'open-machines',
     adapter,
     evidence,
+    cacheability: normalizeResolverCacheability(raw.cacheability),
     warnings: asStringArray(raw.warnings),
   };
 }
@@ -1129,6 +1175,7 @@ function normalizeOpenMachinesWorkspace(value: unknown, options: KnowledgeMachin
       authStatus,
     }),
     evidence,
+    cacheability: normalizeResolverCacheability(raw.cacheability),
     warnings,
   };
 }
@@ -1226,6 +1273,7 @@ function rawMachineRoute(machineId: string, adapter: KnowledgeMachinesAdapterSta
     source: 'raw',
     adapter,
     evidence: null,
+    cacheability: null,
     warnings: [],
   };
 }
@@ -1316,6 +1364,7 @@ function argumentMachineWorkspace(options: KnowledgeMachineWorkspaceOptions): Kn
     diagnostics: [],
     repair_hints: [],
     evidence: null,
+    cacheability: null,
     warnings: [],
   };
 }
@@ -1342,6 +1391,7 @@ function unresolvedMachineWorkspace(options: KnowledgeMachineWorkspaceOptions, w
     diagnostics: [],
     repair_hints: [],
     evidence: null,
+    cacheability: null,
     warnings,
   };
 }

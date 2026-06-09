@@ -322,6 +322,7 @@ export interface KnowledgePeerSyncResult {
         diagnostics: KnowledgeMachineWorkspaceResolution['diagnostics'];
         repair_hints: KnowledgeMachineWorkspaceResolution['repair_hints'];
         evidence: KnowledgeMachineWorkspaceResolution['evidence'];
+        cacheability: KnowledgeMachineWorkspaceResolution['cacheability'];
         warnings: string[];
     };
     pull?: KnowledgeSyncApplyResult;

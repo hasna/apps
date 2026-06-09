@@ -362,7 +362,7 @@ The spark release smoke turns the manual spark02/spark01 sync runbook into a
 repeatable evidence command:
 
 ```bash
-bun run smoke:spark-sync-release -- --knowledge-version 0.2.60 --machines-version latest --json --keep-temp
+bun run smoke:spark-sync-release -- --knowledge-version 0.2.61 --machines-version latest --json --keep-temp
 ```
 
 It installs the requested package versions on spark02 and spark01, runs the
@@ -406,6 +406,9 @@ Non-dry remote sync also persists route/workspace resolver evidence into
 row when the optional open-machines SDK/CLI is unavailable. Read-only commands
 such as `sync status`, `sync doctor`, and `sync dry-run` do not write registry
 evidence.
+When newer `@hasna/machines` consumers provide resolver cacheability metadata,
+knowledge preserves `observed_at`, `expires_at`, cacheable/stale status,
+source authority, and reasons in sync JSON and registry fallback evidence.
 
 `sync doctor` is the read-only preflight for machine sync. It reports the
 local SQLite schema and table counts, storage contract validation, table

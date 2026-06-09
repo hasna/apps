@@ -55,6 +55,17 @@ function writeFakeMachinesRouteBin(bin: string, target: string, projectRoot = '/
           reachable: true,
         },
       },
+      cacheability: {
+        observed_at: '2026-06-09T00:00:00.000Z',
+        verified_at: '2026-06-09T00:00:00.000Z',
+        expires_at: '2026-06-09T00:05:00.000Z',
+        ttl_ms: 300000,
+        source_authority: 'open-machines',
+        confidence: 'high',
+        cacheable: true,
+        stale: false,
+        reasons: ['route_verified'],
+      },
       warnings: [],
     })}'`,
     '  exit 0',
@@ -82,6 +93,17 @@ function writeFakeMachinesRouteBin(bin: string, target: string, projectRoot = '/
       }],
       repair_hints: [],
       evidence: { topology: true, matched_by: 'machine_id', metadata_keys: [] },
+      cacheability: {
+        observed_at: '2026-06-09T00:00:00.000Z',
+        verified_at: null,
+        expires_at: '2026-06-09T00:05:00.000Z',
+        ttl_ms: 300000,
+        source_authority: 'open-machines',
+        confidence: 'high',
+        cacheable: true,
+        stale: false,
+        reasons: ['workspace_manifest'],
+      },
       warnings: [],
     })}'`,
     '  exit 0',
@@ -342,6 +364,16 @@ describe('public knowledge sdk', () => {
 
       expect(first.ok).toBe(true);
       expect(first.resolved_route.source).toBe('open-machines');
+      expect(first.resolved_route.cacheability).toMatchObject({
+        cacheable: true,
+        stale: false,
+        source_authority: 'open-machines',
+      });
+      expect(first.resolved_workspace.cacheability).toMatchObject({
+        cacheable: true,
+        stale: false,
+        reasons: ['workspace_manifest'],
+      });
       const pushedBundle = JSON.parse(readFileSync(stdinPath, 'utf8'));
       const pushedMachines = pushedBundle.tables.find((table: { table: string }) => table.table === 'knowledge_machines');
       expect(pushedMachines.rows.some((row: { machine_id: string }) => row.machine_id === 'spark01')).toBe(true);
@@ -350,6 +382,10 @@ describe('public knowledge sdk', () => {
       expect(registryRow?.ssh_target).toBe('sdk-spark01.tailnet.test');
       expect(registryRow?.workspace_home).toBe('/remote/open-knowledge');
       expect(JSON.parse(registryRow?.metadata_json ?? '{}').resolver_evidence.route.source).toBe('open-machines');
+      expect(JSON.parse(registryRow?.metadata_json ?? '{}').resolver_evidence.route.cacheability.cacheable).toBe(true);
+      expect(JSON.parse(registryRow?.metadata_json ?? '{}').resolver_evidence.workspace.cacheability.source_authority).toBe('open-machines');
+      expect(JSON.parse(registryRow?.capabilities_json ?? '{}').resolver.route_cacheable).toBe(true);
+      expect(JSON.parse(registryRow?.capabilities_json ?? '{}').resolver.workspace_source_authority).toBe('open-machines');
 
       const repeated = await client.sync.remotePeer({
         machine: 'spark01',
@@ -369,6 +405,8 @@ describe('public knowledge sdk', () => {
       expect(doctor.resolved_route?.source).toBe('registry');
       expect(doctor.resolved_workspace?.source).toBe('registry');
       expect(doctor.resolved_workspace?.trust_status).toBe('trusted');
+      expect(doctor.resolved_route?.cacheability?.cacheable).toBe(true);
+      expect(doctor.resolved_workspace?.cacheability?.reasons).toEqual(['workspace_manifest']);
 
       writeFileSync(targetPath, '');
       const explicit = await client.sync.remotePeer({
@@ -394,6 +432,8 @@ describe('public knowledge sdk', () => {
       expect(second.resolved_machine).toBe('sdk-spark01.tailnet.test');
       expect(second.resolved_route.source).toBe('registry');
       expect(second.resolved_workspace.source).toBe('registry');
+      expect(second.resolved_route.cacheability?.source_authority).toBe('open-machines');
+      expect(second.resolved_workspace.cacheability?.cacheable).toBe(true);
       expect(second.peer_workspace).toBe('/remote/open-knowledge');
       expect(readFileSync(targetPath, 'utf8')).toBe('sdk-spark01.tailnet.test');
     } finally {

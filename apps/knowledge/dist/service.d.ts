@@ -85,6 +85,7 @@ export interface KnowledgeRemotePeerSyncResult extends KnowledgePeerSyncResult {
         target_kind: KnowledgeMachineRouteResolution['targetKind'];
         confidence: KnowledgeMachineRouteResolution['confidence'];
         evidence: KnowledgeMachineRouteResolution['evidence'];
+        cacheability: KnowledgeMachineRouteResolution['cacheability'];
     };
     resolved_workspace: NonNullable<KnowledgePeerSyncResult['resolved_workspace']>;
     peer_workspace: string;

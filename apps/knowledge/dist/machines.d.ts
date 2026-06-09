@@ -71,6 +71,18 @@ export interface KnowledgeMachinePreflightOptions {
 export type KnowledgeMachineRouteSource = 'open-machines' | 'registry' | 'raw';
 export type KnowledgeMachineRouteKind = 'local' | 'lan' | 'tailscale' | 'ssh' | 'unknown';
 export type KnowledgeMachineRouteConfidence = 'exact' | 'high' | 'medium' | 'low' | 'none' | string;
+export type KnowledgeMachineResolverSourceAuthority = 'open-machines' | 'registry' | 'knowledge' | 'local' | string;
+export interface KnowledgeMachineResolverCacheability {
+    observed_at: string;
+    verified_at: string | null;
+    expires_at: string | null;
+    ttl_ms: number | null;
+    source_authority: KnowledgeMachineResolverSourceAuthority;
+    confidence: KnowledgeMachineRouteConfidence | null;
+    cacheable: boolean;
+    stale: boolean;
+    reasons: string[];
+}
 export interface KnowledgeMachineRouteOptions {
     adapterMode?: KnowledgeMachinesAdapterMode;
     machineId: string;
@@ -134,6 +146,7 @@ export interface KnowledgeMachineWorkspaceResolution {
     diagnostics: KnowledgeMachineWorkspaceDiagnostic[];
     repair_hints: KnowledgeMachineWorkspaceRepairHint[];
     evidence: Record<string, unknown> | null;
+    cacheability: KnowledgeMachineResolverCacheability | null;
     warnings: string[];
 }
 export interface KnowledgeMachineRouteResolution {
@@ -144,6 +157,7 @@ export interface KnowledgeMachineRouteResolution {
     source: KnowledgeMachineRouteSource;
     adapter: KnowledgeMachinesAdapterStatus;
     evidence: Record<string, unknown> | null;
+    cacheability: KnowledgeMachineResolverCacheability | null;
     warnings: string[];
 }
 export interface KnowledgeMachineRouteHint {
@@ -252,10 +266,18 @@ export interface KnowledgeMachinesAdapter {
 interface OpenMachinesModule {
     MACHINES_CONSUMER_CONTRACT?: {
         schema_version?: unknown;
+        schema_uri?: unknown;
+        schema_artifact?: unknown;
         entrypoint?: unknown;
         capabilities?: unknown;
+        field_capabilities?: unknown;
+        cacheability?: unknown;
     };
     MACHINES_CONSUMER_CONTRACT_VERSION?: unknown;
+    MACHINES_CONSUMER_SCHEMA_BUNDLE?: unknown;
+    getMachinesConsumerSchemaBundle?: () => unknown;
+    validateMachinesConsumerEnvelope?: (value: unknown) => unknown;
+    createMachineResolverSnapshot?: (value: unknown) => unknown;
     discoverMachineTopology?: (options?: {
         includeTailscale?: boolean;
         runner?: unknown;

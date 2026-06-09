@@ -14236,7 +14236,7 @@ import { existsSync as existsSync10, readFileSync as readFileSync9, writeFileSyn
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.60",
+  version: "0.2.61",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   exports: {
@@ -17774,6 +17774,7 @@ function resolverEvidenceMetadata(input, existing, now) {
     confidence: input.route.confidence,
     adapter: input.route.adapter,
     evidence: input.route.evidence,
+    cacheability: input.route.cacheability,
     warnings: input.route.warnings
   }) : recordFromUnknown(previous.route);
   const workspace = input.workspace ? compactRecord({
@@ -17795,6 +17796,7 @@ function resolverEvidenceMetadata(input, existing, now) {
     diagnostics: input.workspace.diagnostics,
     repair_hints: input.workspace.repair_hints,
     evidence: input.workspace.evidence,
+    cacheability: input.workspace.cacheability,
     warnings: input.workspace.warnings
   }) : recordFromUnknown(previous.workspace);
   return compactRecord({
@@ -17825,12 +17827,22 @@ function recordKnowledgeMachineResolverEvidence(dbPath, input) {
         route_kind: route?.route ?? resolverCapabilities.route_kind,
         route_target_kind: route?.targetKind ?? resolverCapabilities.route_target_kind,
         route_confidence: route?.confidence ?? resolverCapabilities.route_confidence,
+        route_cacheable: route?.cacheability?.cacheable ?? resolverCapabilities.route_cacheable,
+        route_stale: route?.cacheability?.stale ?? resolverCapabilities.route_stale,
+        route_expires_at: route?.cacheability?.expires_at ?? resolverCapabilities.route_expires_at,
+        route_observed_at: route?.cacheability?.observed_at ?? resolverCapabilities.route_observed_at,
+        route_source_authority: route?.cacheability?.source_authority ?? resolverCapabilities.route_source_authority,
         workspace_source: workspace?.source ?? resolverCapabilities.workspace_source,
         project_root_source: workspace?.project_root_source ?? resolverCapabilities.project_root_source,
         workspace_root_source: workspace?.workspace_root_source ?? resolverCapabilities.workspace_root_source,
         open_files_root_source: workspace?.open_files_root_source ?? resolverCapabilities.open_files_root_source,
         trust_status: workspace?.trust_status ?? resolverCapabilities.trust_status,
-        auth_status: workspace?.auth_status ?? resolverCapabilities.auth_status
+        auth_status: workspace?.auth_status ?? resolverCapabilities.auth_status,
+        workspace_cacheable: workspace?.cacheability?.cacheable ?? resolverCapabilities.workspace_cacheable,
+        workspace_stale: workspace?.cacheability?.stale ?? resolverCapabilities.workspace_stale,
+        workspace_expires_at: workspace?.cacheability?.expires_at ?? resolverCapabilities.workspace_expires_at,
+        workspace_observed_at: workspace?.cacheability?.observed_at ?? resolverCapabilities.workspace_observed_at,
+        workspace_source_authority: workspace?.cacheability?.source_authority ?? resolverCapabilities.workspace_source_authority
       }),
       route_fallback: Boolean(route?.target ?? existing?.ssh_target),
       workspace_fallback: Boolean(workspace?.project_root ?? existing?.workspace_home)
@@ -20208,6 +20220,9 @@ function asRecord(value) {
 function asBooleanOrNull(value) {
   return typeof value === "boolean" ? value : null;
 }
+function asNumberOrNull(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
 function normalizePlatform(value = platform()) {
   const normalized = value.toLowerCase();
   if (normalized === "darwin" || normalized === "macos")
@@ -20706,6 +20721,24 @@ function normalizeOpenMachinesTopology(value, options, adapter) {
 function normalizeRouteKind(value) {
   return value === "local" || value === "lan" || value === "tailscale" || value === "ssh" || value === "unknown" ? value : null;
 }
+function normalizeResolverCacheability(value) {
+  const raw = asRecord(value);
+  const observedAt = asString3(raw.observed_at);
+  const sourceAuthority = asString3(raw.source_authority);
+  if (!observedAt || !sourceAuthority)
+    return null;
+  return {
+    observed_at: observedAt,
+    verified_at: asString3(raw.verified_at),
+    expires_at: asString3(raw.expires_at),
+    ttl_ms: asNumberOrNull(raw.ttl_ms),
+    source_authority: sourceAuthority,
+    confidence: asString3(raw.confidence),
+    cacheable: raw.cacheable === true,
+    stale: raw.stale === true,
+    reasons: asStringArray(raw.reasons)
+  };
+}
 function normalizeOpenMachinesRoute(value, adapter) {
   const raw = asRecord(value);
   if (unsupportedContractVersion(payloadContractVersion(raw)))
@@ -20723,6 +20756,7 @@ function normalizeOpenMachinesRoute(value, adapter) {
     source: "open-machines",
     adapter,
     evidence,
+    cacheability: normalizeResolverCacheability(raw.cacheability),
     warnings: asStringArray(raw.warnings)
   };
 }
@@ -20858,6 +20892,7 @@ function normalizeOpenMachinesWorkspace(value, options, adapter) {
       authStatus
     }),
     evidence,
+    cacheability: normalizeResolverCacheability(raw.cacheability),
     warnings
   };
 }
@@ -20956,6 +20991,7 @@ function rawMachineRoute(machineId, adapter) {
     source: "raw",
     adapter,
     evidence: null,
+    cacheability: null,
     warnings: []
   };
 }
@@ -21054,6 +21090,7 @@ function argumentMachineWorkspace(options) {
     diagnostics: [],
     repair_hints: [],
     evidence: null,
+    cacheability: null,
     warnings: []
   };
 }
@@ -21079,6 +21116,7 @@ function unresolvedMachineWorkspace(options, warnings, adapter) {
     diagnostics: [],
     repair_hints: [],
     evidence: null,
+    cacheability: null,
     warnings
   };
 }
@@ -23046,6 +23084,7 @@ function workspaceSummary(resolvedWorkspace, projectRoot) {
     diagnostics: resolvedWorkspace.diagnostics,
     repair_hints: resolvedWorkspace.repair_hints,
     evidence: resolvedWorkspace.evidence,
+    cacheability: resolvedWorkspace.cacheability,
     warnings: resolvedWorkspace.warnings
   };
 }
@@ -23057,7 +23096,8 @@ function routeSummary(resolvedMachine) {
     route: resolvedMachine.route,
     target_kind: resolvedMachine.targetKind,
     confidence: resolvedMachine.confidence,
-    evidence: resolvedMachine.evidence
+    evidence: resolvedMachine.evidence,
+    cacheability: resolvedMachine.cacheability
   };
 }
 function parseJsonStringArray(value) {
@@ -23073,6 +23113,33 @@ function recordValue(value) {
 }
 function stringValue2(value) {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+function numberValue2(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+function booleanValue(value) {
+  return typeof value === "boolean" ? value : null;
+}
+function stringArrayValue(value) {
+  return Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : [];
+}
+function registryCacheability(value, resolver, prefix) {
+  const raw = recordValue(value);
+  const observedAt = stringValue2(raw.observed_at) ?? stringValue2(resolver[`${prefix}_observed_at`]);
+  const sourceAuthority = stringValue2(raw.source_authority) ?? stringValue2(resolver[`${prefix}_source_authority`]);
+  if (!observedAt || !sourceAuthority)
+    return null;
+  return {
+    observed_at: observedAt,
+    verified_at: stringValue2(raw.verified_at),
+    expires_at: stringValue2(raw.expires_at) ?? stringValue2(resolver[`${prefix}_expires_at`]),
+    ttl_ms: numberValue2(raw.ttl_ms),
+    source_authority: sourceAuthority,
+    confidence: stringValue2(raw.confidence) ?? (prefix === "route" ? stringValue2(resolver.route_confidence) : null),
+    cacheable: booleanValue(raw.cacheable) ?? booleanValue(resolver[`${prefix}_cacheable`]) ?? false,
+    stale: booleanValue(raw.stale) ?? booleanValue(resolver[`${prefix}_stale`]) ?? false,
+    reasons: stringArrayValue(raw.reasons)
+  };
 }
 function registryMachineMatches(row, machine) {
   return row.machine_id === machine || row.hostname === machine || row.ssh_target === machine || row.tailscale_dns === machine || parseJsonStringArray(row.tailscale_ips_json).includes(machine);
@@ -23107,6 +23174,8 @@ function registryRouteConfidence(row) {
 }
 function routeFromRegistry(row, machine, fallback) {
   const evidence = registryResolverEvidence(row);
+  const routeEvidence = recordValue(evidence.route);
+  const resolver = registryResolverCapabilities(row);
   return {
     target: row.ssh_target ?? row.tailscale_dns ?? row.hostname ?? row.machine_id,
     route: registryRouteKind(row),
@@ -23119,8 +23188,9 @@ function routeFromRegistry(row, machine, fallback) {
       requested_machine_id: machine,
       machine_id: row.machine_id,
       recorded_at: row.updated_at,
-      route: recordValue(evidence.route)
+      route: routeEvidence
     },
+    cacheability: registryCacheability(routeEvidence.cacheability, resolver, "route") ?? fallback.cacheability,
     warnings: [...new Set([...fallback.warnings, "registry_route_fallback"])]
   };
 }
@@ -23157,6 +23227,7 @@ function workspaceFromRegistry(row, machine, fallback) {
       recorded_at: row.updated_at,
       workspace: workspaceEvidence
     },
+    cacheability: registryCacheability(workspaceEvidence.cacheability, resolver, "workspace") ?? fallback.cacheability,
     warnings: [...new Set([...fallback.warnings, "registry_workspace_fallback"])]
   };
 }
@@ -23899,6 +23970,7 @@ class KnowledgeService {
               source: resolvedRoute.source,
               adapter: resolvedRoute.adapter,
               evidence: resolvedRoute.evidence,
+              cacheability: resolvedRoute.cacheability,
               warnings: []
             }));
           }

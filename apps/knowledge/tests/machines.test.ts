@@ -322,6 +322,17 @@ describe('knowledge machine topology', () => {
               reachable: true,
             },
           },
+          cacheability: {
+            observed_at: '2026-06-09T00:00:00.000Z',
+            verified_at: '2026-06-09T00:00:00.000Z',
+            expires_at: '2026-06-09T00:05:00.000Z',
+            ttl_ms: 300_000,
+            source_authority: 'open-machines',
+            confidence: 'high',
+            cacheable: true,
+            stale: false,
+            reasons: ['route_verified'],
+          },
           warnings: [],
         }),
       }),
@@ -347,6 +358,17 @@ describe('knowledge machine topology', () => {
           target: 'spark01.taild59be2.ts.net',
           reachable: true,
         },
+      },
+      cacheability: {
+        observed_at: '2026-06-09T00:00:00.000Z',
+        verified_at: '2026-06-09T00:00:00.000Z',
+        expires_at: '2026-06-09T00:05:00.000Z',
+        ttl_ms: 300_000,
+        source_authority: 'open-machines',
+        confidence: 'high',
+        cacheable: true,
+        stale: false,
+        reasons: ['route_verified'],
       },
       warnings: [],
     });
@@ -398,6 +420,17 @@ describe('knowledge machine topology', () => {
             matched_by: 'machine_id',
             metadata_keys: ['workspace_paths'],
           },
+          cacheability: {
+            observed_at: '2026-06-09T00:00:00.000Z',
+            verified_at: null,
+            expires_at: '2026-06-09T00:05:00.000Z',
+            ttl_ms: 300_000,
+            source_authority: 'open-machines',
+            confidence: 'high',
+            cacheable: true,
+            stale: false,
+            reasons: ['workspace_manifest'],
+          },
           warnings: ['project_root_inferred:open-knowledge'],
         }),
       }),
@@ -411,6 +444,12 @@ describe('knowledge machine topology', () => {
     expect(result.open_files_root).toBe('/home/hasna/workspace/hasna/opensource/open-files');
     expect(result.trust_status).toBe('trusted');
     expect(result.primary).toBe(true);
+    expect(result.cacheability).toMatchObject({
+      source_authority: 'open-machines',
+      cacheable: true,
+      stale: false,
+      reasons: ['workspace_manifest'],
+    });
     expect(result.diagnostics[0]).toMatchObject({
       id: 'project_root',
       status: 'inferred',

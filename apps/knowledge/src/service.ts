@@ -168,6 +168,7 @@ export interface KnowledgeRemotePeerSyncResult extends KnowledgePeerSyncResult {
     target_kind: KnowledgeMachineRouteResolution['targetKind'];
     confidence: KnowledgeMachineRouteResolution['confidence'];
     evidence: KnowledgeMachineRouteResolution['evidence'];
+    cacheability: KnowledgeMachineRouteResolution['cacheability'];
   };
   resolved_workspace: NonNullable<KnowledgePeerSyncResult['resolved_workspace']>;
   peer_workspace: string;
@@ -384,6 +385,7 @@ function workspaceSummary(resolvedWorkspace: KnowledgeMachineWorkspaceResolution
     diagnostics: resolvedWorkspace.diagnostics,
     repair_hints: resolvedWorkspace.repair_hints,
     evidence: resolvedWorkspace.evidence,
+    cacheability: resolvedWorkspace.cacheability,
     warnings: resolvedWorkspace.warnings,
   };
 }
@@ -397,6 +399,7 @@ function routeSummary(resolvedMachine: KnowledgeMachineRouteResolution): Knowled
     target_kind: resolvedMachine.targetKind,
     confidence: resolvedMachine.confidence,
     evidence: resolvedMachine.evidence,
+    cacheability: resolvedMachine.cacheability,
   };
 }
 
@@ -415,6 +418,40 @@ function recordValue(value: unknown): Record<string, unknown> {
 
 function stringValue(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function numberValue(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function booleanValue(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null;
+}
+
+function stringArrayValue(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
+}
+
+function registryCacheability(
+  value: unknown,
+  resolver: Record<string, unknown>,
+  prefix: 'route' | 'workspace',
+): KnowledgeMachineRouteResolution['cacheability'] {
+  const raw = recordValue(value);
+  const observedAt = stringValue(raw.observed_at) ?? stringValue(resolver[`${prefix}_observed_at`]);
+  const sourceAuthority = stringValue(raw.source_authority) ?? stringValue(resolver[`${prefix}_source_authority`]);
+  if (!observedAt || !sourceAuthority) return null;
+  return {
+    observed_at: observedAt,
+    verified_at: stringValue(raw.verified_at),
+    expires_at: stringValue(raw.expires_at) ?? stringValue(resolver[`${prefix}_expires_at`]),
+    ttl_ms: numberValue(raw.ttl_ms),
+    source_authority: sourceAuthority,
+    confidence: stringValue(raw.confidence) ?? (prefix === 'route' ? stringValue(resolver.route_confidence) : null),
+    cacheable: booleanValue(raw.cacheable) ?? booleanValue(resolver[`${prefix}_cacheable`]) ?? false,
+    stale: booleanValue(raw.stale) ?? booleanValue(resolver[`${prefix}_stale`]) ?? false,
+    reasons: stringArrayValue(raw.reasons),
+  };
 }
 
 function registryMachineMatches(row: KnowledgeSyncMachineRow, machine: string): boolean {
@@ -458,6 +495,8 @@ function registryRouteConfidence(row: KnowledgeSyncMachineRow): KnowledgeMachine
 
 function routeFromRegistry(row: KnowledgeSyncMachineRow, machine: string, fallback: KnowledgeMachineRouteResolution): KnowledgeMachineRouteResolution {
   const evidence = registryResolverEvidence(row);
+  const routeEvidence = recordValue(evidence.route);
+  const resolver = registryResolverCapabilities(row);
   return {
     target: row.ssh_target ?? row.tailscale_dns ?? row.hostname ?? row.machine_id,
     route: registryRouteKind(row),
@@ -470,8 +509,9 @@ function routeFromRegistry(row: KnowledgeSyncMachineRow, machine: string, fallba
       requested_machine_id: machine,
       machine_id: row.machine_id,
       recorded_at: row.updated_at,
-      route: recordValue(evidence.route),
+      route: routeEvidence,
     },
+    cacheability: registryCacheability(routeEvidence.cacheability, resolver, 'route') ?? fallback.cacheability,
     warnings: [...new Set([...fallback.warnings, 'registry_route_fallback'])],
   };
 }
@@ -508,6 +548,7 @@ function workspaceFromRegistry(row: KnowledgeSyncMachineRow, machine: string, fa
       recorded_at: row.updated_at,
       workspace: workspaceEvidence,
     },
+    cacheability: registryCacheability(workspaceEvidence.cacheability, resolver, 'workspace') ?? fallback.cacheability,
     warnings: [...new Set([...fallback.warnings, 'registry_workspace_fallback'])],
   };
 }
@@ -1383,6 +1424,7 @@ export class KnowledgeService {
               source: resolvedRoute.source,
               adapter: resolvedRoute.adapter,
               evidence: resolvedRoute.evidence,
+              cacheability: resolvedRoute.cacheability,
               warnings: [],
             }));
           }

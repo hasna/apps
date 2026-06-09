@@ -401,6 +401,7 @@ export interface KnowledgePeerSyncResult {
     diagnostics: KnowledgeMachineWorkspaceResolution['diagnostics'];
     repair_hints: KnowledgeMachineWorkspaceResolution['repair_hints'];
     evidence: KnowledgeMachineWorkspaceResolution['evidence'];
+    cacheability: KnowledgeMachineWorkspaceResolution['cacheability'];
     warnings: string[];
   };
   pull?: KnowledgeSyncApplyResult;
@@ -987,6 +988,7 @@ function resolverEvidenceMetadata(input: KnowledgeMachineResolverEvidenceInput, 
         confidence: input.route.confidence,
         adapter: input.route.adapter,
         evidence: input.route.evidence,
+        cacheability: input.route.cacheability,
         warnings: input.route.warnings,
       })
     : recordFromUnknown(previous.route);
@@ -1010,6 +1012,7 @@ function resolverEvidenceMetadata(input: KnowledgeMachineResolverEvidenceInput, 
         diagnostics: input.workspace.diagnostics,
         repair_hints: input.workspace.repair_hints,
         evidence: input.workspace.evidence,
+        cacheability: input.workspace.cacheability,
         warnings: input.workspace.warnings,
       })
     : recordFromUnknown(previous.workspace);
@@ -1044,12 +1047,22 @@ export function recordKnowledgeMachineResolverEvidence(dbPath: string, input: Kn
         route_kind: route?.route ?? resolverCapabilities.route_kind,
         route_target_kind: route?.targetKind ?? resolverCapabilities.route_target_kind,
         route_confidence: route?.confidence ?? resolverCapabilities.route_confidence,
+        route_cacheable: route?.cacheability?.cacheable ?? resolverCapabilities.route_cacheable,
+        route_stale: route?.cacheability?.stale ?? resolverCapabilities.route_stale,
+        route_expires_at: route?.cacheability?.expires_at ?? resolverCapabilities.route_expires_at,
+        route_observed_at: route?.cacheability?.observed_at ?? resolverCapabilities.route_observed_at,
+        route_source_authority: route?.cacheability?.source_authority ?? resolverCapabilities.route_source_authority,
         workspace_source: workspace?.source ?? resolverCapabilities.workspace_source,
         project_root_source: workspace?.project_root_source ?? resolverCapabilities.project_root_source,
         workspace_root_source: workspace?.workspace_root_source ?? resolverCapabilities.workspace_root_source,
         open_files_root_source: workspace?.open_files_root_source ?? resolverCapabilities.open_files_root_source,
         trust_status: workspace?.trust_status ?? resolverCapabilities.trust_status,
         auth_status: workspace?.auth_status ?? resolverCapabilities.auth_status,
+        workspace_cacheable: workspace?.cacheability?.cacheable ?? resolverCapabilities.workspace_cacheable,
+        workspace_stale: workspace?.cacheability?.stale ?? resolverCapabilities.workspace_stale,
+        workspace_expires_at: workspace?.cacheability?.expires_at ?? resolverCapabilities.workspace_expires_at,
+        workspace_observed_at: workspace?.cacheability?.observed_at ?? resolverCapabilities.workspace_observed_at,
+        workspace_source_authority: workspace?.cacheability?.source_authority ?? resolverCapabilities.workspace_source_authority,
       }),
       route_fallback: Boolean(route?.target ?? existing?.ssh_target),
       workspace_fallback: Boolean(workspace?.project_root ?? existing?.workspace_home),
