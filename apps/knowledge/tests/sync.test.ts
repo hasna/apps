@@ -521,6 +521,20 @@ describe('knowledge machine sync ledger', () => {
     expect(wikiConflict?.metadata.local_row).toMatchObject({ title: 'Peer edited README' });
     expect(wikiConflict?.metadata.remote_row).toMatchObject({ title: 'Wiki' });
 
+    const resolvedPeerConflict = peerService.resolveSyncConflict({
+      id: wikiConflict!.id,
+      strategy: 'manual-merge',
+      approveWrite: true,
+      approvedBy: 'sync-test',
+      proposedPatchUri: 'file:///tmp/reviewed-peer.patch',
+    });
+    expect(resolvedPeerConflict.ok).toBe(true);
+    const repeatedPushPreview = await sourceService.syncPeer({ peerWorkspace: peerDir, direction: 'push', dryRun: true });
+    expect(repeatedPushPreview.ok).toBe(true);
+    const repeatedPushWiki = repeatedPushPreview.push?.tables.find((table) => table.table === 'wiki_pages');
+    expect(repeatedPushWiki?.conflicts).toBe(0);
+    expect(repeatedPushWiki?.skipped).toBe(1);
+
     const unchanged = openKnowledgeDb(peerService.paths().knowledge_db_path);
     try {
       const row = unchanged.query<{ title: string }, [string]>('SELECT title FROM wiki_pages WHERE path = ?').get('wiki/README.md');
@@ -528,6 +542,25 @@ describe('knowledge machine sync ledger', () => {
     } finally {
       unchanged.close();
     }
+
+    const pull = await sourceService.syncPeer({ peerWorkspace: peerDir, direction: 'pull' });
+    expect(pull.ok).toBe(false);
+    expect(pull.pull?.tables.find((table) => table.table === 'wiki_pages')?.conflicts).toBe(1);
+    const localConflict = sourceService.syncConflicts({ status: 'open' }).find((conflict) => conflict.entity_kind === 'wiki_pages');
+    expect(localConflict).toBeTruthy();
+    const resolvedLocalConflict = sourceService.resolveSyncConflict({
+      id: localConflict!.id,
+      strategy: 'manual-merge',
+      approveWrite: true,
+      approvedBy: 'sync-test',
+      proposedPatchUri: 'file:///tmp/reviewed-local.patch',
+    });
+    expect(resolvedLocalConflict.ok).toBe(true);
+
+    const finalPreview = await sourceService.syncPeer({ peerWorkspace: peerDir, direction: 'both', dryRun: true });
+    expect(finalPreview.ok).toBe(true);
+    expect(finalPreview.pull?.tables.find((table) => table.table === 'wiki_pages')?.conflicts).toBe(0);
+    expect(finalPreview.push?.tables.find((table) => table.table === 'wiki_pages')?.conflicts).toBe(0);
   });
 
   test('guards duplicate, interrupted, and out-of-order bundle imports with table clocks', async () => {

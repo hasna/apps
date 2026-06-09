@@ -1158,8 +1158,7 @@ async function materializeArtifacts(options: {
       continue;
     }
     if (target && artifactFingerprint(target) !== artifactFingerprint(artifact)) {
-      result.conflicts += 1;
-      conflicts.push({
+      const conflict: KnowledgeSyncConflictInput = {
         entityKind: 'storage_object',
         entityId: identity,
         localMachineId: options.localMachineId,
@@ -1173,7 +1172,13 @@ async function materializeArtifacts(options: {
           local_artifact: sanitizeConflictEvidenceValue(target),
           remote_artifact: sanitizeConflictEvidenceValue(artifact),
         },
-      });
+      };
+      if (hasResolvedConflictFingerprint(options.db, conflict)) {
+        result.skipped += 1;
+        continue;
+      }
+      result.conflicts += 1;
+      conflicts.push(conflict);
       continue;
     }
     const hasEmbeddedContent = Boolean(artifact.key && artifact.content_base64);
@@ -1267,6 +1272,66 @@ function insertSyncChange(db: Database, input: {
     JSON.stringify({ source_machine_id: input.sourceMachineId, bundle_id: input.bundleId }),
     now,
   );
+}
+
+function hasResolvedConflictFingerprint(db: Database, input: KnowledgeSyncConflictInput): boolean {
+  const localHash = input.localHash ?? '';
+  const remoteHash = input.remoteHash ?? '';
+  const exact = db.query<{ id: string }, [
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+  ]>(`
+    SELECT id FROM knowledge_sync_conflicts
+    WHERE entity_kind = ?
+      AND entity_id = ?
+      AND local_machine_id = ?
+      AND remote_machine_id = ?
+      AND COALESCE(local_hash, '') = ?
+      AND COALESCE(remote_hash, '') = ?
+      AND status IN ('resolved', 'ignored')
+      AND resolved_at IS NOT NULL
+    LIMIT 1
+  `).get(
+    input.entityKind,
+    input.entityId,
+    input.localMachineId,
+    input.remoteMachineId,
+    localHash,
+    remoteHash,
+  );
+  if (exact) return true;
+
+  const reversed = db.query<{ id: string }, [
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+  ]>(`
+    SELECT id FROM knowledge_sync_conflicts
+    WHERE entity_kind = ?
+      AND entity_id = ?
+      AND local_machine_id = ?
+      AND remote_machine_id = ?
+      AND COALESCE(local_hash, '') = ?
+      AND COALESCE(remote_hash, '') = ?
+      AND status IN ('resolved', 'ignored')
+      AND resolved_at IS NOT NULL
+    LIMIT 1
+  `).get(
+    input.entityKind,
+    input.entityId,
+    input.remoteMachineId,
+    input.localMachineId,
+    remoteHash,
+    localHash,
+  );
+  return Boolean(reversed);
 }
 
 function insertConflict(db: Database, input: KnowledgeSyncConflictInput): boolean {
@@ -1560,28 +1625,31 @@ export async function applyKnowledgeSyncBundle(options: {
           rowsToWrite.push(transformImportedRow(sourceRow, artifactResult.uriMap));
           continue;
         }
-        result.conflicts += 1;
-        if (!dryRun) {
-          if (insertConflict(db, {
-            entityKind: sourceTable.table,
-            entityId: key,
-            localMachineId,
-            remoteMachineId: sourceMachineId,
-            localHash: currentHash,
-            remoteHash: incomingHash,
-            baseHash: existingClock?.high_water_hash ?? null,
-            metadata: {
-              direction: options.direction,
-              bundle_id: bundleId,
-              incoming_logical_clock: incomingClock?.logical_clock ?? null,
-              current_logical_clock: existingClock?.logical_clock ?? null,
-              source_workspace_home: options.bundle.source.workspace_home,
-              target_workspace_home: options.targetWorkspaceHome,
-              local_row: sanitizeConflictEvidenceRow(targetRow),
-              remote_row: sanitizeConflictEvidenceRow(sourceRow),
-            },
-          })) conflictsCreated += 1;
+        const conflict: KnowledgeSyncConflictInput = {
+          entityKind: sourceTable.table,
+          entityId: key,
+          localMachineId,
+          remoteMachineId: sourceMachineId,
+          localHash: currentHash,
+          remoteHash: incomingHash,
+          baseHash: existingClock?.high_water_hash ?? null,
+          metadata: {
+            direction: options.direction,
+            bundle_id: bundleId,
+            incoming_logical_clock: incomingClock?.logical_clock ?? null,
+            current_logical_clock: existingClock?.logical_clock ?? null,
+            source_workspace_home: options.bundle.source.workspace_home,
+            target_workspace_home: options.targetWorkspaceHome,
+            local_row: sanitizeConflictEvidenceRow(targetRow),
+            remote_row: sanitizeConflictEvidenceRow(sourceRow),
+          },
+        };
+        if (hasResolvedConflictFingerprint(db, conflict)) {
+          result.skipped += 1;
+          continue;
         }
+        result.conflicts += 1;
+        if (!dryRun && insertConflict(db, conflict)) conflictsCreated += 1;
       }
 
       if (!dryRun && rowsToWrite.length > 0) {
@@ -1608,27 +1676,30 @@ export async function applyKnowledgeSyncBundle(options: {
         if (!targetRow) continue;
         const currentHash = rowHash(targetRow, targetArtifactUriToKey);
         if (importedHash && currentHash !== importedHash) {
-          result.conflicts += 1;
-          if (!dryRun) {
-            if (insertConflict(db, {
-              entityKind: sourceTable.table,
-              entityId: key,
-              localMachineId,
-              remoteMachineId: sourceMachineId,
-              localHash: currentHash,
-              remoteHash: null,
-              baseHash: importedHash,
-              metadata: {
-                direction: options.direction,
-                bundle_id: bundleId,
-                reason: 'remote_owned_row_missing_from_incoming_bundle',
-                source_workspace_home: options.bundle.source.workspace_home,
-                target_workspace_home: options.targetWorkspaceHome,
-                local_row: sanitizeConflictEvidenceRow(targetRow),
-                remote_row: null,
-              },
-            })) conflictsCreated += 1;
+          const conflict: KnowledgeSyncConflictInput = {
+            entityKind: sourceTable.table,
+            entityId: key,
+            localMachineId,
+            remoteMachineId: sourceMachineId,
+            localHash: currentHash,
+            remoteHash: null,
+            baseHash: importedHash,
+            metadata: {
+              direction: options.direction,
+              bundle_id: bundleId,
+              reason: 'remote_owned_row_missing_from_incoming_bundle',
+              source_workspace_home: options.bundle.source.workspace_home,
+              target_workspace_home: options.targetWorkspaceHome,
+              local_row: sanitizeConflictEvidenceRow(targetRow),
+              remote_row: null,
+            },
+          };
+          if (hasResolvedConflictFingerprint(db, conflict)) {
+            result.skipped += 1;
+            continue;
           }
+          result.conflicts += 1;
+          if (!dryRun && insertConflict(db, conflict)) conflictsCreated += 1;
           continue;
         }
         result.deleted += 1;
