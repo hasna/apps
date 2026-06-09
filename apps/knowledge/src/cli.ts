@@ -236,7 +236,8 @@ Commands:
   setup                        Configure local, hosted, or canonical Hasna XYZ S3 mode
   auth login|whoami|logout     Manage hosted API credentials
   remote contracts|status      Inspect hosted client contracts/readiness
-  storage status|validate      Inspect local/S3 artifact storage contract
+  storage status|validate|repair-artifact-keys
+                               Inspect or repair local/S3 artifact storage metadata
   machines topology|preflight  Inspect optional machine topology/sync readiness
   sync status|doctor|snapshot|conflicts
                                Inspect machine sync readiness, snapshots, conflicts
@@ -344,7 +345,7 @@ function printCommandHelp(command: string): void {
   if (command === 'setup') { console.log('Usage: knowledge setup --mode local|hosted [--api-url https://...] [--canonical-hasna-xyz] [--scope local|global|project] [--json]'); return; }
   if (command === 'auth') { console.log('Usage: knowledge auth login|whoami|logout [--api-key <key>] [--email <email>] [--org <slug>] [--api-url https://...] [--scope local|global|project] [--json]'); return; }
   if (command === 'remote') { console.log('Usage: knowledge remote contracts|status [--scope local|global|project] [--json]'); return; }
-  if (command === 'storage') { console.log('Usage: knowledge storage status|validate [--scope local|global|project] [--json]'); return; }
+  if (command === 'storage') { console.log('Usage: knowledge storage status|validate|repair-artifact-keys [--approve-write --approved-by <name>] [--scope local|global|project] [--json]'); return; }
   if (command === 'machines') { console.log('Usage: knowledge machines topology [--no-tailscale] | preflight [machine] [--workspace <repo>] [--scope local|global|project] [--json]'); return; }
   if (command === 'sync') { console.log('Usage: knowledge sync status|doctor|readiness|snapshot|machines|conflicts [show|propose|resolve] [id] | dry-run|pull|push|sync|export|import [--peer-workspace <path>] [--machine <ssh-alias>] [--tables <names>] [--dry-run] [--limit <n>] [--approve-write] [--approved-by <name>] [--strategy <name>] [--mode deterministic|ai] [--model <alias|provider:model>] [--fake] [--no-tailscale] [--scope local|global|project] [--json]\n\nRemote machine sync resolves peer paths through @hasna/machines when --peer-workspace is omitted.'); return; }
   if (command === 'db') { console.log('Usage: knowledge db init|stats|storage status|push|pull|sync [--tables sources,chunks] [--scope local|global|project] [--json]'); return; }
@@ -553,7 +554,16 @@ async function run(argv: string[]): Promise<void> {
       }, flags.json);
       return;
     }
-    throw new Error("Invalid storage action. Use 'status' or 'validate'.");
+    if (action === 'repair-artifact-keys' || action === 'repair-keys') {
+      const repair = service.repairArtifactManifestKeys({
+        approveWrite: flags.approveWrite,
+        approvedBy: flags.approvedBy,
+        dryRun: flags.dryRun,
+      });
+      output(repair, flags.json);
+      return;
+    }
+    throw new Error("Invalid storage action. Use 'status', 'validate', or 'repair-artifact-keys'.");
   }
 
   if (command === 'machines') {

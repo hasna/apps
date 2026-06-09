@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { LocalArtifactStore, normalizeArtifactKey } from '../src/artifact-store';
+import { LocalArtifactStore, S3ArtifactStore, normalizeArtifactKey } from '../src/artifact-store';
 
 describe('knowledge artifact store', () => {
   test('normalizes safe keys and rejects traversal', () => {
@@ -28,5 +28,34 @@ describe('knowledge artifact store', () => {
     expect(existsSync(join(dir, 'wiki', 'engineering', 'mcp.md'))).toBe(true);
     expect(await store.exists('wiki/engineering/mcp.md')).toBe(true);
     expect(await store.getText('wiki/engineering/mcp.md')).toContain('Agent-facing tools');
+  });
+
+  test('s3 store returns portable artifact keys while writing under configured prefix', async () => {
+    let putInput: any = null;
+    const store = new S3ArtifactStore({
+      bucket: 'knowledge-bucket',
+      prefix: 'org/project/knowledge',
+      region: 'us-east-1',
+      client: {
+        async send(command: any) {
+          putInput = command.input;
+          return {};
+        },
+      },
+    });
+
+    const result = await store.put({
+      key: 'wiki/engineering/mcp.md',
+      body: '# MCP\n',
+      content_type: 'text/markdown',
+    });
+
+    expect(result.key).toBe('wiki/engineering/mcp.md');
+    expect(result.uri).toBe('s3://knowledge-bucket/org/project/knowledge/wiki/engineering/mcp.md');
+    expect(putInput).toMatchObject({
+      Bucket: 'knowledge-bucket',
+      Key: 'org/project/knowledge/wiki/engineering/mcp.md',
+      ContentType: 'text/markdown',
+    });
   });
 });

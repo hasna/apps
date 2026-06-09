@@ -9,9 +9,12 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { openKnowledgeDb } from '../src/knowledge-db';
 import { createKnowledgeService } from '../src/service';
 import { parseSourceRef } from '../src/source-ref';
+import { recordStorageObjects } from '../src/storage-contract';
 import { recordKnowledgeSyncConflict } from '../src/sync';
+import { defaultKnowledgeConfig, writeKnowledgeConfig } from '../src/workspace';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI = join(__dirname, '..', 'src', 'cli.ts');
@@ -386,6 +389,246 @@ describe('knowledge cli', () => {
     expect(out.resolved_workspace.repair_hints[0].shell_command).toContain('machines workspace repair');
     expect(out.recommended_commands.some((command: any) => command.id === 'machines_workspace_repair')).toBe(true);
     expect(out.open_files.raw_source_bytes_owned_by).toBe('open-files');
+  });
+
+  test('sync doctor reports S3 generated artifact manifest readiness without raw source bytes', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-sync-doctor-s3-'));
+    const service = createKnowledgeService({ scope: 'project', cwd: dir });
+    const workspace = service.ensureWorkspace();
+    const config = defaultKnowledgeConfig();
+    config.mode = 'hosted';
+    config.storage = {
+      type: 's3',
+      artifacts_root: 'artifacts',
+      s3: {
+        bucket: 'knowledge-bucket',
+        prefix: 'org/project/knowledge',
+        region: 'us-east-1',
+        server_side_encryption: 'AES256',
+      },
+    };
+    writeKnowledgeConfig(workspace.configPath, config);
+    service.initDb();
+
+    const opened = openKnowledgeDb(workspace.knowledgeDbPath);
+    try {
+      recordStorageObjects(opened, [{
+        uri: 's3://knowledge-bucket/org/project/knowledge/wiki/README.md',
+        key: 'wiki/README.md',
+        kind: 'wiki_page',
+        content_type: 'text/markdown',
+        hash: 'sha256:readme',
+        size_bytes: 128,
+        metadata: { provenance: { generated_from: 'test' } },
+      }], new Date('2026-06-09T00:00:00.000Z'));
+    } finally {
+      opened.close();
+    }
+
+    const result = runCli(['sync', 'doctor', '--scope', 'project', '--json'], dir);
+
+    expect(result.exitCode).toBe(0);
+    const out = JSON.parse(new TextDecoder().decode(result.stdout));
+    expect(out.storage.artifact_manifest).toMatchObject({
+      ok: true,
+      read_only: true,
+      storage_type: 's3',
+      artifact_uri_prefix: 's3://knowledge-bucket/org/project/knowledge/',
+      artifacts: {
+        total: 1,
+        with_hash: 1,
+        missing_hash: 0,
+        with_size: 1,
+        missing_size: 0,
+        total_size_bytes: 128,
+      },
+      uri_prefix: {
+        matching: 1,
+        mismatched: 0,
+      },
+      keys: {
+        with_key: 1,
+        missing_key: 0,
+        prefixed_with_storage_prefix: 0,
+      },
+      sync_manifest: {
+        copied_by_sync: true,
+        generated_artifacts_only: true,
+        includes_raw_source_bytes: false,
+        hash_algorithm: 'sha256',
+        portable_keys: true,
+      },
+      raw_payload_sentinel_hits: 0,
+    });
+    expect(out.storage.artifact_manifest.s3).toMatchObject({
+      bucket: 'knowledge-bucket',
+      prefix: 'org/project/knowledge',
+      region: 'us-east-1',
+      server_side_encryption: 'AES256',
+    });
+    expect(out.warnings).not.toContain('artifact_manifest_raw_payload_sentinels:1');
+  });
+
+  test('sync doctor flags legacy S3 artifact keys and raw payload sentinels', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-sync-doctor-s3-legacy-'));
+    const service = createKnowledgeService({ scope: 'project', cwd: dir });
+    const workspace = service.ensureWorkspace();
+    const config = defaultKnowledgeConfig();
+    config.mode = 'hosted';
+    config.storage = {
+      type: 's3',
+      artifacts_root: 'artifacts',
+      s3: {
+        bucket: 'knowledge-bucket',
+        prefix: 'org/project/knowledge',
+        region: 'us-east-1',
+      },
+    };
+    writeKnowledgeConfig(workspace.configPath, config);
+    service.initDb();
+
+    const opened = openKnowledgeDb(workspace.knowledgeDbPath);
+    try {
+      recordStorageObjects(opened, [{
+        uri: 's3://knowledge-bucket/org/project/knowledge/wiki/legacy.md',
+        key: 'org/project/knowledge/wiki/legacy.md',
+        kind: 'wiki_page',
+        content_type: 'text/markdown',
+        hash: 'sha256:legacy',
+        size_bytes: 256,
+        metadata: {
+          raw_content: 'legacy raw payload should not be in storage object metadata',
+        },
+      }], new Date('2026-06-09T00:00:00.000Z'));
+    } finally {
+      opened.close();
+    }
+
+    const result = runCli(['sync', 'doctor', '--scope', 'project', '--json'], dir);
+
+    expect(result.exitCode).toBe(0);
+    const out = JSON.parse(new TextDecoder().decode(result.stdout));
+    expect(out.ok).toBe(false);
+    expect(out.storage.artifact_manifest).toMatchObject({
+      ok: false,
+      raw_payload_sentinel_hits: 1,
+      keys: {
+        prefixed_with_storage_prefix: 1,
+        prefixed_examples: ['org/project/knowledge/wiki/legacy.md'],
+      },
+      sync_manifest: {
+        includes_raw_source_bytes: false,
+        portable_keys: false,
+      },
+    });
+    expect(out.storage.artifact_manifest.warnings).toContain('artifact_manifest_s3_key_contains_storage_prefix:1');
+    expect(out.storage.artifact_manifest.warnings).toContain('artifact_manifest_raw_payload_sentinels:1');
+    expect(out.warnings).toContain('artifact_manifest_s3_key_contains_storage_prefix:1');
+    expect(out.warnings).toContain('artifact_manifest_raw_payload_sentinels:1');
+  });
+
+  test('storage repair-artifact-keys previews and repairs legacy S3 keys with approval', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-storage-repair-s3-'));
+    const service = createKnowledgeService({ scope: 'project', cwd: dir });
+    const workspace = service.ensureWorkspace();
+    const config = defaultKnowledgeConfig();
+    config.mode = 'hosted';
+    config.storage = {
+      type: 's3',
+      artifacts_root: 'artifacts',
+      s3: {
+        bucket: 'knowledge-bucket',
+        prefix: 'org/project/knowledge',
+        region: 'us-east-1',
+      },
+    };
+    writeKnowledgeConfig(workspace.configPath, config);
+    service.initDb();
+
+    const opened = openKnowledgeDb(workspace.knowledgeDbPath);
+    try {
+      recordStorageObjects(opened, [{
+        uri: 's3://knowledge-bucket/org/project/knowledge/wiki/legacy.md',
+        key: 'org/project/knowledge/wiki/legacy.md',
+        kind: 'wiki_page',
+        content_type: 'text/markdown',
+        hash: 'sha256:legacy',
+        size_bytes: 256,
+        metadata: { provenance: { generated_from: 'legacy-s3' } },
+      }], new Date('2026-06-09T00:00:00.000Z'));
+    } finally {
+      opened.close();
+    }
+
+    const preview = runCli(['storage', 'repair-artifact-keys', '--scope', 'project', '--json'], dir);
+    expect(preview.exitCode).toBe(0);
+    const previewOut = JSON.parse(new TextDecoder().decode(preview.stdout));
+    expect(previewOut).toMatchObject({
+      ok: false,
+      dry_run: true,
+      approval_required: true,
+      repaired: 0,
+      storage_prefix: 'org/project/knowledge/',
+      candidates: [{
+        current_key: 'org/project/knowledge/wiki/legacy.md',
+        repaired_key: 'wiki/legacy.md',
+      }],
+    });
+
+    const explicitDryRun = runCli([
+      'storage',
+      'repair-artifact-keys',
+      '--scope',
+      'project',
+      '--dry-run',
+      '--approve-write',
+      '--approved-by',
+      'test-reviewer',
+      '--json',
+    ], dir);
+    const explicitDryRunOut = JSON.parse(new TextDecoder().decode(explicitDryRun.stdout));
+    expect(explicitDryRunOut).toMatchObject({
+      ok: true,
+      dry_run: true,
+      approval_required: false,
+      repaired: 0,
+    });
+
+    const approved = runCli([
+      'storage',
+      'repair-artifact-keys',
+      '--scope',
+      'project',
+      '--approve-write',
+      '--approved-by',
+      'test-reviewer',
+      '--json',
+    ], dir);
+    expect(approved.exitCode).toBe(0);
+    const approvedOut = JSON.parse(new TextDecoder().decode(approved.stdout));
+    expect(approvedOut).toMatchObject({
+      ok: true,
+      dry_run: false,
+      approval_required: false,
+      repaired: 1,
+    });
+    expect(approvedOut.audit_event_id).toStartWith('audit_');
+
+    const repairedDb = openKnowledgeDb(workspace.knowledgeDbPath);
+    try {
+      const row = repairedDb.query<{ metadata_json: string }, []>('SELECT metadata_json FROM storage_objects').get();
+      expect(JSON.parse(row?.metadata_json ?? '{}').key).toBe('wiki/legacy.md');
+      const audit = repairedDb.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM audit_events WHERE action = 'storage.artifact_manifest.repair_keys'").get();
+      expect(audit?.n).toBe(1);
+    } finally {
+      repairedDb.close();
+    }
+
+    const doctor = runCli(['sync', 'doctor', '--scope', 'project', '--json'], dir);
+    const doctorOut = JSON.parse(new TextDecoder().decode(doctor.stdout));
+    expect(doctorOut.ok).toBe(true);
+    expect(doctorOut.storage.artifact_manifest.keys.prefixed_with_storage_prefix).toBe(0);
+    expect(doctorOut.storage.artifact_manifest.warnings).not.toContain('artifact_manifest_s3_key_contains_storage_prefix:1');
   });
 
   test('global store migrates legacy .open-knowledge data into the Hasna app path', () => {

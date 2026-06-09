@@ -292,6 +292,7 @@ artifact directories, and config.
 ```bash
 knowledge storage status [--scope project] [--json]
 knowledge storage validate [--scope project] [--json]
+knowledge storage repair-artifact-keys [--approve-write --approved-by <name>] [--scope project] [--json]
 ```
 Show the storage contract for local or S3-backed generated artifacts. Local mode
 uses `.hasna/apps/knowledge` for config, SQLite, indexes, wiki artifacts, logs,
@@ -299,6 +300,11 @@ runs, and exports. S3 mode stores generated artifacts under the configured
 knowledge bucket/prefix while `open-files` remains the source of truth for raw
 source bytes. The command also reports artifact classes, allowed source ref
 schemes, and warnings for non-scalable or unsafe config.
+
+`storage repair-artifact-keys` previews legacy `storage_objects` rows where the
+portable artifact key accidentally includes the configured S3 prefix. It only
+updates metadata after `--approve-write --approved-by <name>` and records an
+audit event; it does not move S3 objects or copy raw source bytes.
 
 For Hasna XYZ production, the canonical generated-artifact bucket is
 `hasna-xyz-opensource-knowledge-prod` in `us-east-1` with prefix
@@ -377,11 +383,15 @@ inspectable before any future merge/approval flow writes durable changes.
 
 `sync doctor` is the read-only preflight for machine sync. It reports the
 local SQLite schema and table counts, storage contract validation, table
-clocks, open conflicts, `open-files://` source-ref boundary status, optional
-route confidence, optional workspace path sources, and any open-machines
-workspace diagnostics or repair hints. When open-machines reports inferred or
-untrusted workspace metadata, the JSON includes actionable
-`machines workspace repair ...` commands before sync is attempted.
+generated artifact manifest readiness from `storage_objects`, table clocks,
+open conflicts, `open-files://` source-ref boundary status, optional route
+confidence, optional workspace path sources, and any open-machines workspace
+diagnostics or repair hints. The artifact manifest check is read-only: it
+validates hashes, sizes, portable artifact keys, S3/local URI prefix parity,
+and raw-payload sentinels without downloading artifacts or raw source bytes.
+When open-machines reports inferred or untrusted workspace metadata, the JSON
+includes actionable `machines workspace repair ...` commands before sync is
+attempted.
 
 `sync conflicts propose <id>` is approval-gated. The default deterministic
 mode builds a merge prompt from conflict metadata. `--mode ai` runs the same

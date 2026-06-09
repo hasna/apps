@@ -14,6 +14,9 @@ export {
 export {
   createKnowledgeService,
   KnowledgeService,
+  type KnowledgeArtifactManifestKeyRepairCandidate,
+  type KnowledgeArtifactManifestKeyRepairResult,
+  type KnowledgeArtifactManifestStatus,
   type KnowledgeOpenFilesBoundaryStatus,
   type KnowledgePathsResult,
   type KnowledgePeerSyncOptions,

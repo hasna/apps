@@ -851,6 +851,12 @@ function artifactIdentity(artifact: KnowledgeSyncBundleArtifact): string {
   return artifact.key ?? artifact.artifact_uri;
 }
 
+function canReferenceExistingS3Artifact(artifact: KnowledgeSyncBundleArtifact, targetStorage: StorageContract): boolean {
+  return artifact.artifact_uri.startsWith('s3://')
+    && targetStorage.artifact_store.type === 's3'
+    && artifact.artifact_uri.startsWith(targetStorage.artifact_store.uri_prefix);
+}
+
 function tableCounts(db: Database): Record<string, number> {
   return Object.fromEntries(KNOWLEDGE_SYNC_TABLES.map((table) => [table, tableExists(db, table) ? count(db, table) : 0]));
 }
@@ -1170,7 +1176,9 @@ async function materializeArtifacts(options: {
       });
       continue;
     }
-    if (!artifact.content_base64 && artifact.artifact_uri.startsWith('file://')) {
+    const hasEmbeddedContent = Boolean(artifact.key && artifact.content_base64);
+    const canReferenceExistingS3 = canReferenceExistingS3Artifact(artifact, options.targetStorage);
+    if (!hasEmbeddedContent && !canReferenceExistingS3) {
       result.missing_content += 1;
       options.warnings.push(`artifact_content_missing:${artifact.artifact_uri}`);
       continue;
@@ -1181,7 +1189,7 @@ async function materializeArtifacts(options: {
     }
 
     let nextUri = artifact.artifact_uri;
-    if (artifact.key && artifact.content_base64) {
+    if (hasEmbeddedContent && artifact.key && artifact.content_base64) {
       const write = await options.targetStore.put({
         key: artifact.key,
         body: Buffer.from(artifact.content_base64, 'base64'),
@@ -1189,9 +1197,8 @@ async function materializeArtifacts(options: {
       });
       nextUri = write.uri;
       uriMap.set(artifact.artifact_uri, nextUri);
-    } else if (!artifact.artifact_uri.startsWith('s3://')) {
-      options.warnings.push(`artifact_skipped_unsupported:${artifact.artifact_uri}`);
-      continue;
+    } else if (canReferenceExistingS3) {
+      uriMap.set(artifact.artifact_uri, nextUri);
     }
 
     const metadata = parseJson<Record<string, unknown>>(artifact.metadata_json, {});

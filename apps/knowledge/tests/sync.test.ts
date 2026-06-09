@@ -2,16 +2,112 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { normalizeArtifactKey, type ArtifactStore, type ArtifactWrite } from '../src/artifact-store';
 import { openKnowledgeDb } from '../src/knowledge-db';
 import { createKnowledgeService } from '../src/service';
 import { recordStorageObjects } from '../src/storage-contract';
 import {
+  applyKnowledgeSyncBundle,
+  type KnowledgeSyncBundle,
+  type KnowledgeSyncBundleArtifact,
   createKnowledgeSyncSnapshot,
   recordKnowledgeSyncConflict,
   syncArtifactsFromSnapshot,
   syncTablesFromSnapshot,
 } from '../src/sync';
 import type { KnowledgeMachineTopology } from '../src/machines';
+import { defaultKnowledgeConfig, writeKnowledgeConfig } from '../src/workspace';
+
+class FakeS3ArtifactStore implements ArtifactStore {
+  readonly type = 's3' as const;
+  readonly canRead = true;
+  readonly canWrite = true;
+  readonly writes: Array<{ key: string; object_key: string; uri: string; body: Buffer; content_type?: string }> = [];
+
+  constructor(private readonly bucket: string, private readonly prefix = '') {}
+
+  private objectKey(key: string): string {
+    const logicalKey = normalizeArtifactKey(key);
+    const prefix = this.prefix.replace(/^\/+|\/+$/g, '');
+    return prefix ? `${prefix}/${logicalKey}` : logicalKey;
+  }
+
+  async put(entry: ArtifactWrite): Promise<{ key: string; uri: string }> {
+    const key = normalizeArtifactKey(entry.key);
+    const objectKey = this.objectKey(key);
+    const uri = `s3://${this.bucket}/${objectKey}`;
+    this.writes.push({
+      key,
+      object_key: objectKey,
+      uri,
+      body: Buffer.from(entry.body),
+      content_type: entry.content_type,
+    });
+    return { key, uri };
+  }
+
+  async getText(key: string): Promise<string> {
+    const objectKey = this.objectKey(key);
+    const write = this.writes.find((entry) => entry.object_key === objectKey);
+    return write?.body.toString('utf8') ?? '';
+  }
+
+  async exists(key: string): Promise<boolean> {
+    const objectKey = this.objectKey(key);
+    return this.writes.some((entry) => entry.object_key === objectKey);
+  }
+}
+
+function configureS3Service(service: ReturnType<typeof createKnowledgeService>, input: {
+  bucket?: string;
+  prefix?: string;
+} = {}) {
+  const workspace = service.ensureWorkspace();
+  const config = defaultKnowledgeConfig();
+  config.mode = 'hosted';
+  config.storage = {
+    type: 's3',
+    artifacts_root: 'artifacts',
+    s3: {
+      bucket: input.bucket ?? 'knowledge-bucket',
+      prefix: input.prefix ?? 'org/project/knowledge',
+      region: 'us-east-1',
+    },
+  };
+  writeKnowledgeConfig(workspace.configPath, config);
+  return { workspace, config };
+}
+
+function asS3ManifestOnlyBundle(bundle: KnowledgeSyncBundle, uriPrefix: string): KnowledgeSyncBundle {
+  const artifactUriMap = new Map<string, string>();
+  const artifacts = bundle.artifacts.map((artifact): KnowledgeSyncBundleArtifact => {
+    const nextUri = artifact.key ? `${uriPrefix}${artifact.key}` : artifact.artifact_uri;
+    artifactUriMap.set(artifact.artifact_uri, nextUri);
+    const { content_base64: _content, ...rest } = artifact;
+    return {
+      ...rest,
+      artifact_uri: nextUri,
+    };
+  });
+  return {
+    ...bundle,
+    source: {
+      ...bundle.source,
+      artifact_root_uri: uriPrefix,
+    },
+    tables: bundle.tables.map((table) => ({
+      ...table,
+      rows: table.rows.map((row) => {
+        if (typeof row.artifact_uri === 'string' && artifactUriMap.has(row.artifact_uri)) {
+          return { ...row, artifact_uri: artifactUriMap.get(row.artifact_uri)! };
+        }
+        return row;
+      }),
+    })),
+    artifacts,
+    warnings: [...bundle.warnings, ...artifacts.map((artifact) => `artifact_content_not_embedded:${artifact.artifact_uri}`)],
+  };
+}
 
 function fakeTopology(workspaceHome: string): KnowledgeMachineTopology {
   return {
@@ -265,6 +361,130 @@ describe('knowledge machine sync ledger', () => {
     expect(replay.ok).toBe(true);
     expect(replay.push?.replayed).toBe(true);
     expect(replay.push?.tables.reduce((sum, table) => sum + table.inserted, 0)).toBe(0);
+  });
+
+  test('syncs generated artifact manifests through fake S3 without raw source bytes', async () => {
+    const sourceDir = mkdtempSync(join(tmpdir(), 'ok-sync-fake-s3-source-'));
+    const s3TargetDir = mkdtempSync(join(tmpdir(), 'ok-sync-fake-s3-target-'));
+    const localTargetDir = mkdtempSync(join(tmpdir(), 'ok-sync-fake-s3-local-target-'));
+    const sharedS3TargetDir = mkdtempSync(join(tmpdir(), 'ok-sync-fake-s3-shared-target-'));
+    const sourceService = createKnowledgeService({ scope: 'project', cwd: sourceDir });
+    const s3TargetService = createKnowledgeService({ scope: 'project', cwd: s3TargetDir });
+    const localTargetService = createKnowledgeService({ scope: 'project', cwd: localTargetDir });
+    const sharedS3TargetService = createKnowledgeService({ scope: 'project', cwd: sharedS3TargetDir });
+
+    sourceService.initDb();
+    await sourceService.initWiki();
+    const sourceBundle = sourceService.exportSyncBundle({
+      machineId: 'fake-s3-source',
+      includeArtifactContent: true,
+    });
+
+    const { workspace: s3Workspace } = configureS3Service(s3TargetService);
+    s3TargetService.initDb();
+    const fakeS3Store = new FakeS3ArtifactStore('knowledge-bucket', 'org/project/knowledge');
+    const localToS3 = await applyKnowledgeSyncBundle({
+      targetDbPath: s3Workspace.knowledgeDbPath,
+      targetScope: 'project',
+      targetWorkspaceHome: s3Workspace.home,
+      targetStorage: s3TargetService.storageContract(),
+      targetStore: fakeS3Store,
+      bundle: sourceBundle,
+      direction: 'push',
+      localMachineId: 'fake-s3-target',
+    });
+
+    expect(localToS3.ok).toBe(true);
+    expect(localToS3.artifacts.copied).toBe(sourceBundle.artifacts.length);
+    expect(localToS3.artifacts.missing_content).toBe(0);
+    expect(fakeS3Store.writes).toHaveLength(sourceBundle.artifacts.length);
+    expect(fakeS3Store.writes.some((entry) => entry.key === 'wiki/README.md')).toBe(true);
+    expect(fakeS3Store.writes.every((entry) => entry.object_key.startsWith('org/project/knowledge/'))).toBe(true);
+
+    const s3Rows = openKnowledgeDb(s3Workspace.knowledgeDbPath);
+    try {
+      const rows = s3Rows.query<{
+        artifact_uri: string;
+        hash: string | null;
+        size_bytes: number | null;
+        metadata_json: string;
+      }, []>('SELECT artifact_uri, hash, size_bytes, metadata_json FROM storage_objects ORDER BY artifact_uri ASC').all();
+      expect(rows).toHaveLength(sourceBundle.artifacts.length);
+      for (const row of rows) {
+        const metadata = JSON.parse(row.metadata_json);
+        expect(row.artifact_uri).toStartWith('s3://knowledge-bucket/org/project/knowledge/');
+        expect(row.hash).toStartWith('sha256:');
+        expect(row.size_bytes).toBeGreaterThan(0);
+        expect(metadata.key).toBeString();
+        expect(metadata.key).not.toStartWith('org/project/knowledge/');
+        expect(JSON.stringify(metadata)).not.toContain('content_base64');
+        expect(JSON.stringify(metadata)).not.toContain('raw_content');
+      }
+    } finally {
+      s3Rows.close();
+    }
+    const s3Doctor = await s3TargetService.syncDoctor();
+    expect(s3Doctor.ok).toBe(true);
+    expect(s3Doctor.storage.artifact_manifest).toMatchObject({
+      ok: true,
+      storage_type: 's3',
+      artifacts: { total: sourceBundle.artifacts.length },
+      uri_prefix: { mismatched: 0 },
+      keys: { prefixed_with_storage_prefix: 0 },
+      raw_payload_sentinel_hits: 0,
+      sync_manifest: {
+        generated_artifacts_only: true,
+        includes_raw_source_bytes: false,
+        portable_keys: true,
+      },
+    });
+
+    const s3ManifestOnly = asS3ManifestOnlyBundle(sourceBundle, 's3://knowledge-bucket/org/project/knowledge/');
+    localTargetService.initDb();
+    const s3ToLocal = await applyKnowledgeSyncBundle({
+      targetDbPath: localTargetService.paths().knowledge_db_path,
+      targetScope: 'project',
+      targetWorkspaceHome: localTargetService.paths().home,
+      targetStorage: localTargetService.storageContract(),
+      targetStore: localTargetService.artifactStore(),
+      bundle: s3ManifestOnly,
+      direction: 'pull',
+      localMachineId: 'fake-local-target',
+    });
+    expect(s3ToLocal.artifacts.copied).toBe(0);
+    expect(s3ToLocal.artifacts.missing_content).toBe(sourceBundle.artifacts.length);
+    expect(s3ToLocal.warnings.filter((warning) => warning.startsWith('artifact_content_missing:'))).toHaveLength(sourceBundle.artifacts.length);
+    expect(localTargetService.dbStats().storage_objects).toBe(0);
+
+    const { workspace: sharedS3Workspace } = configureS3Service(sharedS3TargetService);
+    sharedS3TargetService.initDb();
+    const sharedS3Store = new FakeS3ArtifactStore('knowledge-bucket', 'org/project/knowledge');
+    const s3ToSharedS3 = await applyKnowledgeSyncBundle({
+      targetDbPath: sharedS3Workspace.knowledgeDbPath,
+      targetScope: 'project',
+      targetWorkspaceHome: sharedS3Workspace.home,
+      targetStorage: sharedS3TargetService.storageContract(),
+      targetStore: sharedS3Store,
+      bundle: s3ManifestOnly,
+      direction: 'pull',
+      localMachineId: 'fake-shared-s3-target',
+    });
+    expect(s3ToSharedS3.ok).toBe(true);
+    expect(s3ToSharedS3.artifacts.copied).toBe(sourceBundle.artifacts.length);
+    expect(s3ToSharedS3.artifacts.missing_content).toBe(0);
+    expect(sharedS3Store.writes).toHaveLength(0);
+    expect(sharedS3TargetService.dbStats().storage_objects).toBe(sourceBundle.artifacts.length);
+    const sharedDoctor = await sharedS3TargetService.syncDoctor();
+    expect(sharedDoctor.storage.artifact_manifest).toMatchObject({
+      ok: true,
+      storage_type: 's3',
+      artifacts: { total: sourceBundle.artifacts.length },
+      uri_prefix: { mismatched: 0 },
+      sync_manifest: {
+        includes_raw_source_bytes: false,
+        portable_keys: true,
+      },
+    });
   });
 
   test('records conflicts instead of overwriting divergent peer rows', async () => {

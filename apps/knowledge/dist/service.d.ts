@@ -115,6 +115,66 @@ export interface KnowledgeOpenFilesBoundaryStatus {
     raw_payload_sentinel_hits: number;
     message: string;
 }
+export interface KnowledgeArtifactManifestStatus {
+    ok: boolean;
+    read_only: true;
+    storage_type: StorageContract['storage_type'];
+    artifact_uri_prefix: string;
+    s3: StorageContract['artifact_store']['s3'];
+    artifacts: {
+        total: number;
+        by_kind: Array<{
+            kind: string;
+            count: number;
+        }>;
+        with_hash: number;
+        missing_hash: number;
+        with_size: number;
+        missing_size: number;
+        total_size_bytes: number;
+    };
+    uri_prefix: {
+        matching: number;
+        mismatched: number;
+        examples: string[];
+    };
+    keys: {
+        with_key: number;
+        missing_key: number;
+        prefixed_with_storage_prefix: number;
+        prefixed_examples: string[];
+    };
+    sync_manifest: {
+        copied_by_sync: true;
+        generated_artifacts_only: true;
+        includes_raw_source_bytes: false;
+        hash_algorithm: 'sha256';
+        portable_keys: boolean;
+    };
+    raw_payload_sentinel_hits: number;
+    warnings: string[];
+    message: string;
+}
+export interface KnowledgeArtifactManifestKeyRepairCandidate {
+    id: string;
+    artifact_uri: string;
+    kind: string;
+    current_key: string;
+    repaired_key: string;
+    hash: string | null;
+    size_bytes: number | null;
+}
+export interface KnowledgeArtifactManifestKeyRepairResult {
+    ok: boolean;
+    dry_run: boolean;
+    approval_required: boolean;
+    storage_type: StorageContract['storage_type'];
+    storage_prefix: string | null;
+    candidates: KnowledgeArtifactManifestKeyRepairCandidate[];
+    repaired: number;
+    audit_event_id: string | null;
+    message: string;
+}
 export interface KnowledgeSyncDoctorResult {
     ok: boolean;
     read_only: true;
@@ -128,6 +188,7 @@ export interface KnowledgeSyncDoctorResult {
     storage: {
         contract: StorageContract;
         validation: StorageValidationResult;
+        artifact_manifest: KnowledgeArtifactManifestStatus;
     };
     sync: {
         machines: number;
@@ -246,6 +307,11 @@ export declare class KnowledgeService {
     machinePreflight(options?: Omit<KnowledgeMachinePreflightOptions, 'knowledge'>): Promise<import("./machines").KnowledgeMachinePreflightReport>;
     syncStatus(): KnowledgeSyncStatus;
     syncDoctor(options?: KnowledgeSyncDoctorOptions): Promise<KnowledgeSyncDoctorResult>;
+    repairArtifactManifestKeys(options?: {
+        approveWrite?: boolean;
+        approvedBy?: string;
+        dryRun?: boolean;
+    }): KnowledgeArtifactManifestKeyRepairResult;
     createSyncSnapshot(options?: KnowledgeSyncSnapshotOptions): Promise<KnowledgeSyncSnapshotResult>;
     syncConflicts(options?: {
         status?: string;

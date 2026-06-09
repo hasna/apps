@@ -120,7 +120,8 @@ export class S3ArtifactStore implements ArtifactStore {
       import('@aws-sdk/client-s3'),
       this.getClient(),
     ]);
-    const key = this.objectKey(entry.key);
+    const logicalKey = normalizeArtifactKey(entry.key);
+    const key = this.objectKey(logicalKey);
     await client.send(new PutObjectCommand({
       Bucket: this.options.bucket,
       Key: key,
@@ -130,7 +131,7 @@ export class S3ArtifactStore implements ArtifactStore {
       ServerSideEncryption: this.options.server_side_encryption,
       SSEKMSKeyId: this.options.kms_key_id,
     }));
-    return { key, uri: `s3://${this.options.bucket}/${key}` };
+    return { key: logicalKey, uri: `s3://${this.options.bucket}/${key}` };
   }
 
   async getText(key: string): Promise<string> {

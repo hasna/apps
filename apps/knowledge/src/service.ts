@@ -1,4 +1,4 @@
-import { createArtifactStore } from './artifact-store';
+import { createArtifactStore, normalizeArtifactKey } from './artifact-store';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -200,6 +200,66 @@ export interface KnowledgeOpenFilesBoundaryStatus {
   message: string;
 }
 
+export interface KnowledgeArtifactManifestStatus {
+  ok: boolean;
+  read_only: true;
+  storage_type: StorageContract['storage_type'];
+  artifact_uri_prefix: string;
+  s3: StorageContract['artifact_store']['s3'];
+  artifacts: {
+    total: number;
+    by_kind: Array<{ kind: string; count: number }>;
+    with_hash: number;
+    missing_hash: number;
+    with_size: number;
+    missing_size: number;
+    total_size_bytes: number;
+  };
+  uri_prefix: {
+    matching: number;
+    mismatched: number;
+    examples: string[];
+  };
+  keys: {
+    with_key: number;
+    missing_key: number;
+    prefixed_with_storage_prefix: number;
+    prefixed_examples: string[];
+  };
+  sync_manifest: {
+    copied_by_sync: true;
+    generated_artifacts_only: true;
+    includes_raw_source_bytes: false;
+    hash_algorithm: 'sha256';
+    portable_keys: boolean;
+  };
+  raw_payload_sentinel_hits: number;
+  warnings: string[];
+  message: string;
+}
+
+export interface KnowledgeArtifactManifestKeyRepairCandidate {
+  id: string;
+  artifact_uri: string;
+  kind: string;
+  current_key: string;
+  repaired_key: string;
+  hash: string | null;
+  size_bytes: number | null;
+}
+
+export interface KnowledgeArtifactManifestKeyRepairResult {
+  ok: boolean;
+  dry_run: boolean;
+  approval_required: boolean;
+  storage_type: StorageContract['storage_type'];
+  storage_prefix: string | null;
+  candidates: KnowledgeArtifactManifestKeyRepairCandidate[];
+  repaired: number;
+  audit_event_id: string | null;
+  message: string;
+}
+
 export interface KnowledgeSyncDoctorResult {
   ok: boolean;
   read_only: true;
@@ -213,6 +273,7 @@ export interface KnowledgeSyncDoctorResult {
   storage: {
     contract: StorageContract;
     validation: StorageValidationResult;
+    artifact_manifest: KnowledgeArtifactManifestStatus;
   };
   sync: {
     machines: number;
@@ -385,6 +446,193 @@ function openFilesBoundaryStatus(
       ? `${openFilesRefs} open-files source ref(s); raw source bytes remain owned by open-files`
       : `${rawPayloadSentinelHits} raw source payload metadata sentinel(s) found`,
   };
+}
+
+const RAW_ARTIFACT_PAYLOAD_METADATA_KEYS = new Set([
+  'raw',
+  'raw_bytes',
+  'raw_content',
+  'content_base64',
+  'source_bytes',
+  'source_content',
+  'body',
+  'body_bytes',
+]);
+
+function metadataHasRawPayloadSentinel(value: unknown, depth = 0): boolean {
+  if (depth > 8) return false;
+  if (!value || typeof value !== 'object') return false;
+  if (Array.isArray(value)) return value.some((entry) => metadataHasRawPayloadSentinel(entry, depth + 1));
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (RAW_ARTIFACT_PAYLOAD_METADATA_KEYS.has(key.toLowerCase())) return true;
+    if (metadataHasRawPayloadSentinel(entry, depth + 1)) return true;
+  }
+  return false;
+}
+
+function parseMetadataJson(value: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function storagePrefixKey(storage: StorageContract): string | null {
+  const prefix = storage.artifact_store.s3?.prefix?.replace(/^\/+|\/+$/g, '');
+  return prefix ? `${prefix}/` : null;
+}
+
+function artifactManifestStatus(dbPath: string, storage: StorageContract): KnowledgeArtifactManifestStatus {
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const rows = db.query<{
+      artifact_uri: string;
+      kind: string;
+      hash: string | null;
+      size_bytes: number | null;
+      metadata_json: string;
+    }, []>(
+      `SELECT artifact_uri, kind, hash, size_bytes, metadata_json
+       FROM storage_objects
+       ORDER BY artifact_uri ASC`,
+    ).all();
+
+    const byKind = new Map<string, number>();
+    let withHash = 0;
+    let withSize = 0;
+    let totalSizeBytes = 0;
+    let matchingPrefix = 0;
+    let missingKey = 0;
+    let prefixedKey = 0;
+    let rawPayloadSentinelHits = 0;
+    const mismatchedExamples: string[] = [];
+    const prefixedExamples: string[] = [];
+    const expectedPrefix = storage.artifact_store.uri_prefix;
+    const s3StoragePrefix = storagePrefixKey(storage);
+
+    for (const row of rows) {
+      byKind.set(row.kind, (byKind.get(row.kind) ?? 0) + 1);
+      if (row.hash?.startsWith('sha256:')) withHash += 1;
+      if (typeof row.size_bytes === 'number' && row.size_bytes >= 0) {
+        withSize += 1;
+        totalSizeBytes += row.size_bytes;
+      }
+      if (row.artifact_uri.startsWith(expectedPrefix)) {
+        matchingPrefix += 1;
+      } else if (mismatchedExamples.length < 5) {
+        mismatchedExamples.push(row.artifact_uri);
+      }
+
+      const metadata = parseMetadataJson(row.metadata_json);
+      if (metadataHasRawPayloadSentinel(metadata)) rawPayloadSentinelHits += 1;
+      const key = typeof metadata.key === 'string' ? metadata.key : null;
+      if (!key) {
+        missingKey += 1;
+      } else if (s3StoragePrefix && key.startsWith(s3StoragePrefix)) {
+        prefixedKey += 1;
+        if (prefixedExamples.length < 5) prefixedExamples.push(key);
+      }
+    }
+
+    const missingHash = rows.length - withHash;
+    const missingSize = rows.length - withSize;
+    const mismatchedPrefix = rows.length - matchingPrefix;
+    const warnings = [
+      missingHash > 0 ? `artifact_manifest_missing_hash:${missingHash}` : null,
+      missingSize > 0 ? `artifact_manifest_missing_size:${missingSize}` : null,
+      missingKey > 0 ? `artifact_manifest_missing_key:${missingKey}` : null,
+      mismatchedPrefix > 0 ? `artifact_manifest_uri_prefix_mismatch:${mismatchedPrefix}` : null,
+      prefixedKey > 0 ? `artifact_manifest_s3_key_contains_storage_prefix:${prefixedKey}` : null,
+      rawPayloadSentinelHits > 0 ? `artifact_manifest_raw_payload_sentinels:${rawPayloadSentinelHits}` : null,
+    ].filter((entry): entry is string => Boolean(entry));
+    const ok = warnings.length === 0;
+
+    return {
+      ok,
+      read_only: true,
+      storage_type: storage.storage_type,
+      artifact_uri_prefix: expectedPrefix,
+      s3: storage.artifact_store.s3,
+      artifacts: {
+        total: rows.length,
+        by_kind: [...byKind.entries()]
+          .map(([kind, count]) => ({ kind, count }))
+          .sort((a, b) => a.kind.localeCompare(b.kind)),
+        with_hash: withHash,
+        missing_hash: missingHash,
+        with_size: withSize,
+        missing_size: missingSize,
+        total_size_bytes: totalSizeBytes,
+      },
+      uri_prefix: {
+        matching: matchingPrefix,
+        mismatched: mismatchedPrefix,
+        examples: mismatchedExamples,
+      },
+      keys: {
+        with_key: rows.length - missingKey,
+        missing_key: missingKey,
+        prefixed_with_storage_prefix: prefixedKey,
+        prefixed_examples: prefixedExamples,
+      },
+      sync_manifest: {
+        copied_by_sync: true,
+        generated_artifacts_only: true,
+        includes_raw_source_bytes: false,
+        hash_algorithm: 'sha256',
+        portable_keys: prefixedKey === 0 && missingKey === 0,
+      },
+      raw_payload_sentinel_hits: rawPayloadSentinelHits,
+      warnings,
+      message: ok
+        ? `${rows.length} generated artifact manifest row(s) ready for ${storage.storage_type} sync`
+        : `Generated artifact manifest needs attention: ${warnings.join(', ')}`,
+    };
+  } finally {
+    db.close();
+  }
+}
+
+function artifactManifestKeyRepairCandidates(dbPath: string, storage: StorageContract): KnowledgeArtifactManifestKeyRepairCandidate[] {
+  const prefix = storagePrefixKey(storage);
+  if (!prefix) return [];
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const rows = db.query<{
+      id: string;
+      artifact_uri: string;
+      kind: string;
+      hash: string | null;
+      size_bytes: number | null;
+      metadata_json: string;
+    }, []>(
+      `SELECT id, artifact_uri, kind, hash, size_bytes, metadata_json
+       FROM storage_objects
+       ORDER BY artifact_uri ASC`,
+    ).all();
+    const candidates: KnowledgeArtifactManifestKeyRepairCandidate[] = [];
+    for (const row of rows) {
+      const metadata = parseMetadataJson(row.metadata_json);
+      const currentKey = typeof metadata.key === 'string' ? metadata.key : null;
+      if (!currentKey?.startsWith(prefix)) continue;
+      const repaired = currentKey.slice(prefix.length);
+      if (!repaired) continue;
+      candidates.push({
+        id: row.id,
+        artifact_uri: row.artifact_uri,
+        kind: row.kind,
+        current_key: currentKey,
+        repaired_key: normalizeArtifactKey(repaired),
+        hash: row.hash,
+        size_bytes: row.size_bytes,
+      });
+    }
+    return candidates;
+  } finally {
+    db.close();
+  }
 }
 
 function doctorRecommendations(input: {
@@ -906,6 +1154,7 @@ export class KnowledgeService {
     const status = this.syncStatus();
     const storage = this.storageContract();
     const validation = this.validateStorage();
+    const artifactManifest = artifactManifestStatus(workspace.knowledgeDbPath, storage);
     const machine = options.machine?.trim() || null;
     const peerWorkspace = options.peerWorkspace?.trim() || null;
     const warnings: string[] = [];
@@ -939,8 +1188,9 @@ export class KnowledgeService {
     if (!validation.ok) warnings.push(...validation.errors.map((error) => `storage:${error}`));
     const openFiles = openFilesBoundaryStatus(workspace.knowledgeDbPath, resolvedWorkspace);
     if (!openFiles.ok) warnings.push('open_files_boundary_raw_payload_sentinels');
+    if (!artifactManifest.ok) warnings.push(...artifactManifest.warnings);
     const diagnosticFailures = resolvedWorkspace?.diagnostics.filter((entry) => entry.severity === 'fail') ?? [];
-    const ok = validation.ok && openFiles.ok && diagnosticFailures.length === 0 && (resolvedWorkspace?.project_root !== '' || !resolvedWorkspace);
+    const ok = validation.ok && artifactManifest.ok && openFiles.ok && diagnosticFailures.length === 0 && (resolvedWorkspace?.project_root !== '' || !resolvedWorkspace);
     const recommendedCommands = doctorRecommendations({
       scope: this.scope,
       machine,
@@ -963,6 +1213,7 @@ export class KnowledgeService {
       storage: {
         contract: storage,
         validation,
+        artifact_manifest: artifactManifest,
       },
       sync: {
         machines: status.machines.total,
@@ -981,6 +1232,102 @@ export class KnowledgeService {
         ? `Sync readiness ok: ${status.clocks.total} table clock(s), ${status.conflicts.open} open conflict(s)`
         : `Sync readiness needs attention: ${[...new Set(warnings)].join(', ') || 'workspace diagnostics failed'}`,
     };
+  }
+
+  repairArtifactManifestKeys(options: {
+    approveWrite?: boolean;
+    approvedBy?: string;
+    dryRun?: boolean;
+  } = {}): KnowledgeArtifactManifestKeyRepairResult {
+    const workspace = this.ensureWorkspace();
+    migrateKnowledgeDb(workspace.knowledgeDbPath);
+    const storage = this.storageContract();
+    const storagePrefix = storagePrefixKey(storage);
+    const candidates = artifactManifestKeyRepairCandidates(workspace.knowledgeDbPath, storage);
+    const dryRun = options.dryRun === true || options.approveWrite !== true;
+    if (candidates.length === 0) {
+      return {
+        ok: true,
+        dry_run: dryRun,
+        approval_required: false,
+        storage_type: storage.storage_type,
+        storage_prefix: storagePrefix,
+        candidates,
+        repaired: 0,
+        audit_event_id: null,
+        message: 'No legacy S3 artifact manifest keys found',
+      };
+    }
+    if (options.dryRun === true) {
+      return {
+        ok: true,
+        dry_run: true,
+        approval_required: false,
+        storage_type: storage.storage_type,
+        storage_prefix: storagePrefix,
+        candidates,
+        repaired: 0,
+        audit_event_id: null,
+        message: `Would repair ${candidates.length} legacy S3 artifact manifest key(s)`,
+      };
+    }
+    if (options.approveWrite !== true || !options.approvedBy) {
+      return {
+        ok: false,
+        dry_run: true,
+        approval_required: true,
+        storage_type: storage.storage_type,
+        storage_prefix: storagePrefix,
+        candidates,
+        repaired: 0,
+        audit_event_id: null,
+        message: 'Artifact key repair requires --approve-write and --approved-by <name>',
+      };
+    }
+
+    const db = openKnowledgeDb(workspace.knowledgeDbPath);
+    try {
+      const now = new Date().toISOString();
+      const update = db.transaction((entries: KnowledgeArtifactManifestKeyRepairCandidate[]) => {
+        const statement = db.query('UPDATE storage_objects SET metadata_json = ?, updated_at = ? WHERE id = ?');
+        const currentRows = db.query<{ id: string; metadata_json: string }, []>(
+          'SELECT id, metadata_json FROM storage_objects',
+        ).all();
+        const metadataById = new Map(currentRows.map((row) => [row.id, parseMetadataJson(row.metadata_json)]));
+        for (const entry of entries) {
+          const metadata = metadataById.get(entry.id) ?? {};
+          metadata.key = entry.repaired_key;
+          statement.run(JSON.stringify(metadata), now, entry.id);
+        }
+      });
+      update(candidates);
+      const auditEventId = recordAuditEvent(db, {
+        event_type: 'artifact_manifest_key_repair',
+        action: 'storage.artifact_manifest.repair_keys',
+        target_uri: `knowledge-storage://${workspace.home}/storage_objects`,
+        decision: 'allow',
+        metadata: {
+          approved_by: options.approvedBy,
+          repaired: candidates.length,
+          storage_type: storage.storage_type,
+          storage_prefix: storagePrefix,
+          artifact_uris: candidates.map((entry) => entry.artifact_uri),
+        },
+      });
+      return {
+        ok: true,
+        dry_run: false,
+        approval_required: false,
+        storage_type: storage.storage_type,
+        storage_prefix: storagePrefix,
+        candidates,
+        repaired: candidates.length,
+        audit_event_id: auditEventId,
+        message: `Repaired ${candidates.length} legacy S3 artifact manifest key(s)`,
+      };
+    } finally {
+      db.close();
+    }
   }
 
   async createSyncSnapshot(options: KnowledgeSyncSnapshotOptions = {}): Promise<KnowledgeSyncSnapshotResult> {
