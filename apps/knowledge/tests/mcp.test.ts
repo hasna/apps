@@ -88,6 +88,16 @@ describe('knowledge MCP', () => {
       expect(tools.tools.some((tool) => tool.name === 'knowledge_lint')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_run_status')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_storage')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_machines_topology')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_machines_preflight')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_sync_status')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_sync_snapshot')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_sync_conflicts')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_sync_peer')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'storage_status')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'storage_push')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'storage_pull')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'storage_sync')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_resolve_source')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_web_search')).toBe(true);
 
@@ -99,10 +109,20 @@ describe('knowledge MCP', () => {
       expect(resources.resources.some((resource) => resource.uri === 'knowledge://project/config')).toBe(true);
       expect(resources.resources.some((resource) => resource.uri === 'knowledge://project/schema')).toBe(true);
       expect(resources.resources.some((resource) => resource.uri === 'knowledge://project/sources')).toBe(true);
+      expect(resources.resources.some((resource) => resource.uri === 'knowledge://project/machines')).toBe(true);
+      expect(resources.resources.some((resource) => resource.uri === 'knowledge://project/sync')).toBe(true);
 
       const schemaResource = parseResourceJson(await client.readResource({ uri: 'knowledge://project/schema' }));
       expect(schemaResource.stats.sources).toBe(1);
       expect(schemaResource.stats.chunks).toBe(1);
+
+      const machinesResource = parseResourceJson(await client.readResource({ uri: 'knowledge://project/machines' }));
+      expect(machinesResource.ok).toBe(true);
+      expect(machinesResource.knowledge.app_path).toBe('.hasna/apps/knowledge');
+
+      const syncResource = parseResourceJson(await client.readResource({ uri: 'knowledge://project/sync' }));
+      expect(syncResource.ok).toBe(true);
+      expect(syncResource.sqlite_schema_version).toBe(6);
 
       const sourceResource = parseResourceJson(await client.readResource({ uri: 'knowledge://project/sources' }));
       expect(sourceResource.sources[0].uri).toBe('open-files://file/file_mcp');
@@ -132,6 +152,45 @@ describe('knowledge MCP', () => {
       }));
       expect(stableGetItem.item.title).toBe('MCP item');
 
+      const machines = parseToolJson(await client.callTool({
+        name: 'knowledge_machines_topology',
+        arguments: { scope: 'project', include_tailscale: false },
+      }));
+      expect(machines.ok).toBe(true);
+      expect(machines.machines.length).toBeGreaterThanOrEqual(1);
+
+      const syncStatus = parseToolJson(await client.callTool({
+        name: 'knowledge_sync_status',
+        arguments: { scope: 'project' },
+      }));
+      expect(syncStatus.ok).toBe(true);
+      expect(syncStatus.snapshots.total).toBe(0);
+
+      const syncSnapshot = parseToolJson(await client.callTool({
+        name: 'knowledge_sync_snapshot',
+        arguments: { scope: 'project', include_tailscale: false },
+      }));
+      expect(syncSnapshot.ok).toBe(true);
+      expect(syncSnapshot.snapshot.content_hash).toStartWith('sha256:');
+
+      const syncConflicts = parseToolJson(await client.callTool({
+        name: 'knowledge_sync_conflicts',
+        arguments: { scope: 'project', limit: 5 },
+      }));
+      expect(syncConflicts.conflicts).toEqual([]);
+
+      const peerDir = makeTempDir('ok-mcp-peer-sync-');
+      const syncPeer = parseToolJson(await client.callTool({
+        name: 'knowledge_sync_peer',
+        arguments: {
+          scope: 'project',
+          peer_workspace: peerDir,
+          direction: 'dry-run',
+        },
+      }));
+      expect(syncPeer.ok).toBe(true);
+      expect(syncPeer.dry_run).toBe(true);
+
       const source = parseToolJson(await client.callTool({
         name: 'ok_parse_source_ref',
         arguments: { uri: 'open-files://file/file_123/revision/rev_456' },
@@ -153,6 +212,15 @@ describe('knowledge MCP', () => {
       }));
       expect(stableStorage.remote_contract.contract_version).toBe(1);
       expect(stableStorage.remote_contract.endpoints.build).toBe('/api/v1/knowledge/build');
+
+      const databaseStorage = parseToolJson(await client.callTool({
+        name: 'storage_status',
+        arguments: { scope: 'project' },
+      }));
+      expect(databaseStorage.service).toBe('knowledge');
+      expect(databaseStorage.mode).toBe('local');
+      expect(databaseStorage.tables).toContain('sources');
+      expect(databaseStorage.tables).not.toContain('chunks_fts');
 
       const ingest = parseToolJson(await client.callTool({
         name: 'knowledge_ingest',

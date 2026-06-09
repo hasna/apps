@@ -50,6 +50,11 @@ the OSS package, including tenants, ACL enforcement, connector credentials,
 bucket provisioning, secrets, queues, billing, admin controls, observability, and
 the hosted web UI.
 
+Multi-machine sync is specified in
+[`machine-sync-schema.md`](./machine-sync-schema.md). The sync contract keeps
+machine discovery optional through `@hasna/machines`, stores scalable sync state
+in SQLite/Postgres/object storage, and keeps raw source bytes in `open-files`.
+
 The local hosted-aware contract follows the `open-skills` pattern: `mode` is
 `local` by default, `setup --mode hosted` records `hosted.api_url`, env vars
 `KNOWLEDGE_API_URL` and `KNOWLEDGE_API_KEY` can override local config, and

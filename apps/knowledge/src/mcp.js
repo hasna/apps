@@ -8,6 +8,12 @@ import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db.ts';
 import { defaultStorePath, loadStore, saveStore, makeId, withLock } from './store.ts';
 import { parseSourceRef } from './source-ref.ts';
 import { createKnowledgeService } from './service.ts';
+import {
+  getStorageStatus as getDatabaseStorageStatus,
+  storagePull as databaseStoragePull,
+  storagePush as databaseStoragePush,
+  storageSync as databaseStorageSync,
+} from './storage.ts';
 
 const storePathField = z.string().optional().describe('Path to the JSON store file');
 const scopeField = z.enum(['local', 'global', 'project']).optional().describe('Workspace scope');
@@ -513,6 +519,22 @@ function registerKnowledgeResources(server) {
   );
   registerJsonResource(
     server,
+    'knowledge-project-machines',
+    'knowledge://project/machines',
+    'Project machine topology',
+    'Optional machine topology for project knowledge sync planning',
+    async () => await projectService().machineTopology({ includeTailscale: false }),
+  );
+  registerJsonResource(
+    server,
+    'knowledge-project-sync',
+    'knowledge://project/sync',
+    'Project sync status',
+    'Machine registry, sync snapshot, change ledger, and conflict summary',
+    async () => projectService().syncStatus(),
+  );
+  registerJsonResource(
+    server,
     'knowledge-project-schema',
     'knowledge://project/schema',
     'Project knowledge schema',
@@ -723,6 +745,162 @@ export function buildServer() {
       ...service.storageContract(),
       validation,
     });
+  });
+
+  registerTool(server, 'knowledge_machines_topology', 'Knowledge machine topology', 'Inspect optional open-machines topology and local fallback routes for knowledge sync', {
+    scope: scopeField,
+    include_tailscale: z.boolean().optional().describe('Include local Tailscale status probing when available'),
+  }, async ({ scope, include_tailscale }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText(await service.machineTopology({ includeTailscale: include_tailscale !== false }));
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'knowledge_machines_preflight', 'Knowledge machine preflight', 'Check command, package, workspace, and optional open-machines readiness before knowledge sync', {
+    scope: scopeField,
+    machine_id: z.string().optional().describe('Machine id or SSH alias; defaults to local'),
+    workspace: z.string().optional().describe('Repo workspace path to verify; defaults to server cwd'),
+  }, async ({ scope, machine_id, workspace }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText(await service.machinePreflight({
+        machineId: machine_id ?? 'local',
+        commands: [
+          { command: 'bun', required: true },
+          { command: 'knowledge', required: true },
+        ],
+        packages: [
+          { name: pkg.name, command: 'knowledge', expectedVersion: pkg.version, required: true },
+          { name: '@hasna/machines', command: 'machines', required: false },
+        ],
+        workspaces: [
+          {
+            label: 'open-knowledge',
+            path: workspace ?? process.cwd(),
+            expectedPackageName: pkg.name,
+            expectedVersion: pkg.version,
+            required: true,
+          },
+        ],
+      }));
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'knowledge_sync_status', 'Knowledge sync status', 'Inspect machine registry rows, latest snapshot, changes, conflicts, and table counts', {
+    scope: scopeField,
+  }, async ({ scope }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText(service.syncStatus());
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'knowledge_sync_snapshot', 'Record knowledge sync snapshot', 'Record a local sync snapshot and refresh machine registry rows from optional machine topology', {
+    scope: scopeField,
+    include_tailscale: z.boolean().optional().describe('Include local Tailscale status probing when available'),
+    machine_id: z.string().optional().describe('Override machine id for the snapshot'),
+  }, async ({ scope, include_tailscale, machine_id }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText(await service.createSyncSnapshot({
+        includeTailscale: include_tailscale !== false,
+        machineId: machine_id,
+      }));
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'knowledge_sync_conflicts', 'Knowledge sync conflicts', 'List sync conflicts awaiting review or already resolved', {
+    scope: scopeField,
+    status: z.string().optional().describe('Optional conflict status filter such as open or resolved'),
+    limit: z.number().optional().describe('Maximum conflicts to return'),
+  }, async ({ scope, status, limit }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      const conflicts = service.syncConflicts({ status, limit });
+      return jsonText({
+        ok: true,
+        conflicts,
+        message: `${conflicts.length} sync conflict(s)`,
+      });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'knowledge_sync_peer', 'Knowledge peer sync', 'Dry-run, pull, push, or bidirectionally sync with a local peer knowledge workspace', {
+    scope: scopeField,
+    peer_workspace: z.string().describe('Peer repo root or .hasna/apps/knowledge path'),
+    direction: z.enum(['dry-run', 'pull', 'push', 'both']).optional().describe('Sync direction; dry-run previews both directions'),
+    tables: z.array(z.string()).optional().describe('Optional knowledge.db tables to sync'),
+    include_artifact_content: z.boolean().optional().describe('Embed/copy generated artifact content when available'),
+    machine_id: z.string().optional().describe('Local machine id for change/conflict ledgers'),
+  }, async ({ scope, peer_workspace, direction, tables, include_artifact_content, machine_id }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      const syncDirection = direction === 'dry-run' ? 'both' : direction ?? 'both';
+      return jsonText(await service.syncPeer({
+        peerWorkspace: peer_workspace,
+        direction: syncDirection,
+        dryRun: direction === 'dry-run',
+        tables,
+        includeArtifactContent: include_artifact_content !== false,
+        machineId: machine_id ?? null,
+      }));
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'storage_status', 'Knowledge database storage status', 'Show knowledge.db storage sync configuration and local sync history', {
+    scope: scopeField,
+  }, async ({ scope }) => {
+    try {
+      return jsonText(getDatabaseStorageStatus({ scope }));
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'storage_push', 'Push knowledge database storage', 'Push local knowledge.db catalog rows to storage PostgreSQL', {
+    scope: scopeField,
+    tables: z.array(z.string()).optional().describe('Optional knowledge.db tables to push'),
+  }, async ({ scope, tables }) => {
+    try {
+      return jsonText(await databaseStoragePush({ scope, tables }));
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'storage_pull', 'Pull knowledge database storage', 'Pull knowledge.db catalog rows from storage PostgreSQL to local SQLite', {
+    scope: scopeField,
+    tables: z.array(z.string()).optional().describe('Optional knowledge.db tables to pull'),
+  }, async ({ scope, tables }) => {
+    try {
+      return jsonText(await databaseStoragePull({ scope, tables }));
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'storage_sync', 'Sync knowledge database storage', 'Bidirectional knowledge.db sync: pull then push', {
+    scope: scopeField,
+    tables: z.array(z.string()).optional().describe('Optional knowledge.db tables to sync'),
+  }, async ({ scope, tables }) => {
+    try {
+      return jsonText(await databaseStorageSync({ scope, tables }));
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
   });
 
   registerTool(server, 'ok_parse_source_ref', 'Parse source reference', 'Parse and validate an open-files, S3, file, or web source ref', {

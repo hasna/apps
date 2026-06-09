@@ -58,6 +58,8 @@ const answer = await knowledge.ask('How do we cite handbook policy?', {
   semantic: true,
   limit: 5,
 });
+
+const sync = knowledge.sync.status();
 ```
 
 The stable package surface is the top-level `@hasna/knowledge` export:
@@ -65,6 +67,12 @@ The stable package surface is the top-level `@hasna/knowledge` export:
 helpers, source-ref helpers, storage contracts, search/retrieval types,
 provider helpers, and remote contract types. CLI and MCP entrypoints remain
 available as package bins.
+
+Database storage sync helpers are also available from
+`@hasna/knowledge/storage` for SaaS wrappers and deployment tooling.
+The top-level SDK also exposes `knowledge.sync.status()`,
+`knowledge.sync.snapshot()`, `knowledge.sync.conflicts()`, and
+`knowledge.sync.machines()` for app-native sync inspection.
 
 The SDK uses the same `.hasna/apps/knowledge` project workspace as the CLI. In
 local mode it writes the SQLite catalog and generated artifacts under that path.
@@ -106,6 +114,18 @@ knowledge paths --scope project --json
 # Inspect local/S3 artifact storage and source ownership
 knowledge storage status --scope project --json
 
+# Inspect optional machine topology for future sync
+knowledge machines topology --scope project --json
+knowledge machines preflight spark01 --workspace /home/hasna/workspace/hasna/opensource/open-knowledge --scope project --json
+
+# Inspect and record knowledge-aware sync ledger state
+knowledge sync status --scope project --json
+knowledge sync snapshot --scope project --no-tailscale --json
+knowledge sync conflicts --scope project --json
+knowledge sync dry-run --peer-workspace /path/to/peer/repo --scope project --json
+knowledge sync push --peer-workspace /path/to/peer/repo --scope project --json
+knowledge sync dry-run --machine spark01 --peer-workspace /home/hasna/workspace/hasna/opensource/open-knowledge --scope project --json
+
 # Configure optional hosted mode and inspect remote contracts
 knowledge setup --mode hosted --api-url https://knowledge.hasna.xyz --scope project --json
 knowledge auth whoami --scope project --json
@@ -113,6 +133,12 @@ knowledge remote contracts --scope project --json
 
 # Initialize the project SQLite catalog
 knowledge db init --scope project
+
+# Inspect optional PostgreSQL sync for knowledge.db
+knowledge db storage status --scope project --json
+
+# Push selected catalog tables when HASNA_KNOWLEDGE_DATABASE_URL is configured
+HASNA_KNOWLEDGE_DATABASE_URL=postgres://... knowledge db storage push --scope project --tables sources,chunks --json
 
 # Initialize scalable wiki/schema/index/log artifacts
 knowledge wiki init --scope project
@@ -175,6 +201,9 @@ HASNA_KNOWLEDGE_WEB_SEARCH=1 knowledge web search "latest AI SDK web search" --p
   source boundaries, wiki model, search model, provider registry, and non-goals.
 - [Hybrid semantic search](docs/architecture/hybrid-semantic-search.md):
   keyword/vector/search-context contracts and hosted index options.
+- [Machine sync schema](docs/architecture/machine-sync-schema.md):
+  optional open-machines topology, sync ledgers, conflict records, and
+  local/S3/hosted sync boundaries.
 - [Hosted wrapper responsibilities](docs/architecture/hosted-wrapper-responsibilities.md):
   what a future SaaS layer owns outside the OSS package.
 
@@ -285,6 +314,60 @@ hasna/xyz/opensource/knowledge/prod/s3
 The future hosted database path, if provisioned, is
 `hasna/xyz/opensource/knowledge/prod/rds`.
 
+### machines
+```bash
+knowledge machines topology [--no-tailscale] [--scope project] [--json]
+knowledge machines preflight [machine] [--workspace <repo>] [--scope project] [--json]
+```
+Inspect the read-only machine topology that future knowledge sync will use.
+When `@hasna/machines` is installed, `knowledge` uses its topology SDK. Without
+that package, the command falls back to local machine identity and optional
+Tailscale status probing. This command does not sync data; it only exposes
+machine ids, hostnames, route hints, workspace context, and adapter status.
+
+`machines preflight` checks command availability, `@hasna/knowledge` CLI
+version parity, optional `@hasna/machines` availability, and the target repo
+workspace/package metadata before any machine sync is attempted. When
+`@hasna/machines` is installed, `knowledge` delegates to its compatibility SDK;
+otherwise it uses a local/SSH fallback.
+
+### sync
+```bash
+knowledge sync status [--scope project] [--json]
+knowledge sync snapshot [--no-tailscale] [--machine <id>] [--scope project] [--json]
+knowledge sync machines [--scope project] [--json]
+knowledge sync conflicts [status] [--limit <n>] [--scope project] [--json]
+knowledge sync dry-run --peer-workspace <repo-or-knowledge-home> [--tables sources,chunks] [--scope project] [--json]
+knowledge sync pull --peer-workspace <repo-or-knowledge-home> [--tables sources,chunks] [--scope project] [--json]
+knowledge sync push --peer-workspace <repo-or-knowledge-home> [--tables sources,chunks] [--scope project] [--json]
+knowledge sync sync --peer-workspace <repo-or-knowledge-home> [--tables sources,chunks] [--scope project] [--json]
+knowledge sync dry-run --machine <ssh-alias> --peer-workspace <remote-repo> [--scope project] [--json]
+knowledge sync export [--tables sources,chunks] [--no-artifact-content] [--scope project] --json
+knowledge sync import [--dry-run] [--scope project] [--json] < bundle.json
+```
+Inspect and record the knowledge-aware sync ledger in `knowledge.db`.
+`sync status` is read-only and reports registered machines, latest snapshot,
+change counts, conflict counts, and durable table counts. `sync snapshot`
+refreshes the machine registry from optional topology discovery and records a
+content hash over table counts and generated artifact hashes. Conflict rows are
+inspectable before any future merge/approval flow writes durable changes.
+
+`sync dry-run`, `pull`, `push`, and `sync` operate against another local repo
+root or `.hasna/apps/knowledge` path. They compare rows by table primary key,
+copy generated artifacts recorded in `storage_objects`, normalize local
+artifact URIs per machine, and record conflicts instead of overwriting
+divergent rows. They move derived catalog rows and generated artifacts only;
+raw `open-files` bytes are not copied into knowledge.
+
+When `--machine <ssh-alias>` is supplied, peer sync uses `ssh` plus the
+remote `knowledge sync export/import` commands. The remote machine must have a
+compatible published `knowledge` CLI on PATH, and `--peer-workspace` should be
+the remote repo root or remote `.hasna/apps/knowledge` path.
+
+This command is separate from `knowledge db storage sync`: `sync` owns
+knowledge semantics and conflict visibility, while `db storage sync` moves
+SQLite catalog rows to or from PostgreSQL using the open-core storage contract.
+
 ### setup / auth / remote
 ```bash
 knowledge setup --mode local [--scope project] [--json]
@@ -307,9 +390,20 @@ and artifact API contract that a future SaaS wrapper can implement.
 ```bash
 knowledge db init [--scope project]
 knowledge db stats [--scope project]
+knowledge db storage status [--scope project] [--json]
+knowledge db storage push [--tables sources,chunks] [--scope project] [--json]
+knowledge db storage pull [--tables sources,chunks] [--scope project] [--json]
+knowledge db storage sync [--tables sources,chunks] [--scope project] [--json]
 ```
 Initialize or inspect the versioned SQLite catalog at
 `.hasna/apps/knowledge/knowledge.db`.
+
+`db storage` is separate from `knowledge storage`: it syncs durable catalog rows
+between local SQLite and PostgreSQL. Configure it with
+`HASNA_KNOWLEDGE_DATABASE_URL` or fallback `KNOWLEDGE_DATABASE_URL`. Optional
+mode env vars are `HASNA_KNOWLEDGE_STORAGE_MODE` and
+`KNOWLEDGE_STORAGE_MODE`, with `local`, `hybrid`, or `remote` values.
+The sync table list excludes local derived FTS indexes such as `chunks_fts`.
 
 ### wiki
 ```bash
@@ -507,6 +601,21 @@ The stable agent-facing MCP tools are:
 - `knowledge_storage`: inspect the local/S3/hosted storage contract.
 - `knowledge_resolve_source`: resolve indexed source chunks through the
   read-only source boundary.
+- `knowledge_machines_topology`: inspect optional machine topology and route
+  hints for future knowledge sync planning.
+- `knowledge_machines_preflight`: check command, package, workspace, and
+  optional open-machines readiness before knowledge sync.
+- `knowledge_sync_status`: inspect machine registry rows, latest snapshot,
+  changes, conflicts, and table counts.
+- `knowledge_sync_snapshot`: record a local sync snapshot and refresh machine
+  registry rows from optional topology.
+- `knowledge_sync_conflicts`: list sync conflicts awaiting review or already
+  resolved.
+- `knowledge_sync_peer`: dry-run, pull, push, or bidirectionally sync with a
+  local peer workspace.
+- `storage_status`, `storage_push`, `storage_pull`, `storage_sync`: inspect or
+  sync the SQLite catalog with PostgreSQL using the standard open-core storage
+  env contract.
 
 Compatibility and lower-level tools remain available with the `ok_*` prefix:
 item tools (`ok_add`, `ok_list`, `ok_get`, `ok_update`, `ok_delete`,
@@ -520,6 +629,8 @@ MCP also publishes project-scope JSON resources for agent inspection:
 
 - `knowledge://project/config`
 - `knowledge://project/storage`
+- `knowledge://project/machines`
+- `knowledge://project/sync`
 - `knowledge://project/schema`
 - `knowledge://project/sources`
 - `knowledge://project/open-files`

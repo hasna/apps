@@ -4,7 +4,8 @@
  * Licensed under the Apache License, Version 2.0
  */
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -25,6 +26,20 @@ function runCli(args: string[], cwd?: string, env?: Record<string, string>) {
     stdout: 'pipe',
     stderr: 'pipe'
   });
+}
+
+function runCliWithInput(args: string[], input: string, cwd?: string, env?: Record<string, string>) {
+  const result = spawnSync('bun', [CLI, ...args], {
+    cwd,
+    env: env ? { ...process.env, ...env } : undefined,
+    input,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  return {
+    exitCode: result.status ?? 1,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
 }
 
 function runKnowledgeBin(args: string[], cwd?: string, env?: Record<string, string>) {
@@ -192,6 +207,43 @@ describe('knowledge cli', () => {
     expect(existsSync(join(dir, '.open-knowledge', 'db.json'))).toBe(false);
   });
 
+  test('machines topology command exposes local fallback shape', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-machines-cli-'));
+
+    const result = runCli(['machines', 'topology', '--scope', 'project', '--no-tailscale', '--json'], dir);
+    expect(result.exitCode).toBe(0);
+    const out = JSON.parse(new TextDecoder().decode(result.stdout));
+    expect(out.ok).toBe(true);
+    expect(out.source).toBe('local');
+    expect(out.adapter.package).toBe('@hasna/machines');
+    expect(out.adapter.available).toBe(false);
+    expect(out.knowledge.app_path).toBe(join('.hasna', 'apps', 'knowledge'));
+    expect(out.knowledge.workspace_home).toBe(join(dir, '.hasna', 'apps', 'knowledge'));
+    expect(out.machines.length).toBeGreaterThanOrEqual(1);
+    expect(out.machines.some((machine: any) => machine.local)).toBe(true);
+  });
+
+  test('machines preflight checks package and workspace readiness', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-machines-preflight-'));
+    const bin = join(dir, 'bin');
+    mkdirSync(bin, { recursive: true });
+    const wrapper = join(bin, 'knowledge');
+    writeFileSync(wrapper, `#!/bin/sh\necho "@hasna/knowledge ${packageJson.version}"\n`);
+    chmodSync(wrapper, 0o755);
+
+    const result = runCli(
+      ['machines', 'preflight', '--scope', 'project', '--workspace', join(__dirname, '..'), '--json'],
+      dir,
+      { PATH: `${bin}:${process.env.PATH ?? ''}` },
+    );
+    expect(result.exitCode).toBe(0);
+    const out = JSON.parse(new TextDecoder().decode(result.stdout));
+    expect(out.ok).toBe(true);
+    expect(out.machine_id).toBe('local');
+    expect(out.checks.some((check: any) => check.id === 'package:@hasna/knowledge:version' && check.status === 'ok')).toBe(true);
+    expect(out.checks.some((check: any) => check.id === 'workspace:open-knowledge:package-name' && check.status === 'ok')).toBe(true);
+  });
+
   test('global store migrates legacy .open-knowledge data into the Hasna app path', () => {
     const home = mkdtempSync(join(tmpdir(), 'ok-legacy-home-'));
     const legacyDir = join(home, '.open-knowledge');
@@ -298,15 +350,104 @@ describe('knowledge cli', () => {
     const init = runCli(['db', 'init', '--scope', 'project', '--json'], dir);
     expect(init.exitCode).toBe(0);
     const initOut = JSON.parse(new TextDecoder().decode(init.stdout));
-    expect(initOut.schema_version).toBe(5);
+    expect(initOut.schema_version).toBe(6);
     expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'knowledge.db'))).toBe(true);
 
     const stats = runCli(['db', 'stats', '--scope', 'project', '--json'], dir);
     expect(stats.exitCode).toBe(0);
     const statsOut = JSON.parse(new TextDecoder().decode(stats.stdout));
-    expect(statsOut.schema_version).toBe(5);
+    expect(statsOut.schema_version).toBe(6);
     expect(statsOut.sources).toBe(0);
     expect(statsOut.runs).toBe(0);
+
+    const storage = runCli(['db', 'storage', 'status', '--scope', 'project', '--json'], dir);
+    expect(storage.exitCode).toBe(0);
+    const storageOut = JSON.parse(new TextDecoder().decode(storage.stdout));
+    expect(storageOut.service).toBe('knowledge');
+    expect(storageOut.mode).toBe('local');
+    expect(storageOut.tables).toContain('sources');
+    expect(storageOut.tables).not.toContain('chunks_fts');
+  });
+
+  test('sync status, snapshot, machines, and conflicts use the project catalog', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-sync-cli-'));
+
+    const status = runCli(['sync', 'status', '--scope', 'project', '--json'], dir);
+    expect(status.exitCode).toBe(0);
+    const statusOut = JSON.parse(new TextDecoder().decode(status.stdout));
+    expect(statusOut.sqlite_schema_version).toBe(6);
+    expect(statusOut.machines.total).toBe(0);
+    expect(statusOut.conflicts.open).toBe(0);
+
+    const snapshot = runCli(['sync', 'snapshot', '--scope', 'project', '--no-tailscale', '--json'], dir);
+    expect(snapshot.exitCode).toBe(0);
+    const snapshotOut = JSON.parse(new TextDecoder().decode(snapshot.stdout));
+    expect(snapshotOut.ok).toBe(true);
+    expect(snapshotOut.snapshot.content_hash).toStartWith('sha256:');
+    expect(snapshotOut.machines_upserted).toBeGreaterThanOrEqual(1);
+
+    const machines = runCli(['sync', 'machines', '--scope', 'project', '--json'], dir);
+    expect(machines.exitCode).toBe(0);
+    const machinesOut = JSON.parse(new TextDecoder().decode(machines.stdout));
+    expect(machinesOut.machines.length).toBeGreaterThanOrEqual(1);
+
+    const conflicts = runCli(['sync', 'conflicts', '--scope', 'project', '--json'], dir);
+    expect(conflicts.exitCode).toBe(0);
+    const conflictsOut = JSON.parse(new TextDecoder().decode(conflicts.stdout));
+    expect(conflictsOut.conflicts).toEqual([]);
+  });
+
+  test('sync dry-run and push copy a project catalog into a peer workspace', () => {
+    const sourceDir = mkdtempSync(join(tmpdir(), 'ok-sync-cli-source-'));
+    const peerDir = mkdtempSync(join(tmpdir(), 'ok-sync-cli-peer-'));
+    const source = join(sourceDir, 'sync-source.md');
+    writeFileSync(source, 'CLI peer sync should move derived rows and generated artifacts.');
+
+    expect(runCli(['ingest', 'source', `file://${source}`, '--scope', 'project', '--json'], sourceDir).exitCode).toBe(0);
+    expect(runCli(['wiki', 'init', '--scope', 'project', '--json'], sourceDir).exitCode).toBe(0);
+
+    const dryRun = runCli(['sync', 'dry-run', '--peer-workspace', peerDir, '--scope', 'project', '--json'], sourceDir);
+    expect(dryRun.exitCode).toBe(0);
+    const dryRunOut = JSON.parse(new TextDecoder().decode(dryRun.stdout));
+    expect(dryRunOut.dry_run).toBe(true);
+    expect(dryRunOut.push.tables.find((table: any) => table.table === 'sources').inserted).toBe(1);
+    expect(existsSync(join(peerDir, '.hasna', 'apps', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(false);
+
+    const push = runCli(['sync', 'push', '--peer-workspace', peerDir, '--scope', 'project', '--json'], sourceDir);
+    expect(push.exitCode).toBe(0);
+    const pushOut = JSON.parse(new TextDecoder().decode(push.stdout));
+    expect(pushOut.ok).toBe(true);
+    expect(pushOut.push.artifacts.copied).toBeGreaterThanOrEqual(1);
+    expect(existsSync(join(peerDir, '.hasna', 'apps', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(true);
+
+    const peerStats = runCli(['db', 'stats', '--scope', 'project', '--json'], peerDir);
+    expect(peerStats.exitCode).toBe(0);
+    const peerStatsOut = JSON.parse(new TextDecoder().decode(peerStats.stdout));
+    expect(peerStatsOut.sources).toBe(1);
+    expect(peerStatsOut.storage_objects).toBe(4);
+  });
+
+  test('sync export and import move a bundle through stdin/stdout', () => {
+    const sourceDir = mkdtempSync(join(tmpdir(), 'ok-sync-export-source-'));
+    const peerDir = mkdtempSync(join(tmpdir(), 'ok-sync-export-peer-'));
+    const source = join(sourceDir, 'sync-export-source.md');
+    writeFileSync(source, 'CLI export import should support SSH bundle transport.');
+
+    expect(runCli(['ingest', 'source', `file://${source}`, '--scope', 'project', '--json'], sourceDir).exitCode).toBe(0);
+    expect(runCli(['wiki', 'init', '--scope', 'project', '--json'], sourceDir).exitCode).toBe(0);
+
+    const exported = runCli(['sync', 'export', '--scope', 'project', '--json'], sourceDir);
+    expect(exported.exitCode).toBe(0);
+    const bundle = JSON.parse(new TextDecoder().decode(exported.stdout));
+    expect(bundle.format).toBe('knowledge-sync-bundle');
+    expect(bundle.artifacts.length).toBe(4);
+
+    const imported = runCliWithInput(['sync', 'import', '--scope', 'project', '--json'], JSON.stringify(bundle), peerDir);
+    expect(imported.exitCode).toBe(0);
+    const importedOut = JSON.parse(new TextDecoder().decode(imported.stdout));
+    expect(importedOut.ok).toBe(true);
+    expect(importedOut.artifacts.copied).toBe(4);
+    expect(existsSync(join(peerDir, '.hasna', 'apps', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(true);
   });
 
   test('ingest manifest imports open-files refs into project knowledge.db', () => {

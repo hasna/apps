@@ -22,7 +22,7 @@ describe('knowledge reindex queue and refresh jobs', () => {
     expect(ingest.chunks_inserted).toBe(1);
 
     const initial = reindexHealth({ dbPath, fake: true, dimensions: 8 });
-    expect(initial.schema_version).toBe(5);
+    expect(initial.schema_version).toBe(6);
     expect(initial.chunks).toBe(1);
     expect(initial.vector_entries).toBe(0);
     expect(initial.missing_embeddings).toBe(1);

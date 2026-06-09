@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { ensureParentDir } from './workspace';
 
-export const CURRENT_SCHEMA_VERSION = 5;
+export const CURRENT_SCHEMA_VERSION = 6;
 
 export interface KnowledgeDbStats {
   schema_version: number;
@@ -20,6 +20,10 @@ export interface KnowledgeDbStats {
   embeddings: number;
   vector_entries: number;
   reindex_queue: number;
+  knowledge_machines: number;
+  sync_snapshots: number;
+  sync_changes: number;
+  sync_conflicts: number;
 }
 
 const MIGRATION_1 = `
@@ -295,6 +299,83 @@ INSERT OR IGNORE INTO schema_versions(version, applied_at)
 VALUES (5, datetime('now'));
 `;
 
+const MIGRATION_6 = `
+CREATE TABLE IF NOT EXISTS knowledge_machines (
+  machine_id TEXT PRIMARY KEY,
+  hostname TEXT,
+  platform TEXT,
+  user_label TEXT,
+  workspace_home TEXT,
+  tailscale_dns TEXT,
+  tailscale_ips_json TEXT NOT NULL DEFAULT '[]',
+  ssh_target TEXT,
+  last_seen_at TEXT,
+  capabilities_json TEXT NOT NULL DEFAULT '{}',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_sync_snapshots (
+  id TEXT PRIMARY KEY,
+  machine_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  workspace_home TEXT NOT NULL,
+  sqlite_schema_version INTEGER NOT NULL,
+  artifact_root_uri TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  tables_json TEXT NOT NULL,
+  artifact_hashes_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_sync_changes (
+  id TEXT PRIMARY KEY,
+  origin_machine_id TEXT NOT NULL,
+  updated_by_machine_id TEXT NOT NULL,
+  entity_kind TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  base_hash TEXT,
+  next_hash TEXT,
+  source_ref TEXT,
+  source_revision_id TEXT,
+  artifact_uri TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_sync_conflicts (
+  id TEXT PRIMARY KEY,
+  entity_kind TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  local_machine_id TEXT NOT NULL,
+  remote_machine_id TEXT NOT NULL,
+  local_hash TEXT,
+  remote_hash TEXT,
+  base_hash TEXT,
+  status TEXT NOT NULL,
+  resolution_strategy TEXT,
+  proposed_patch_uri TEXT,
+  approved_by TEXT,
+  resolved_at TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_machines_last_seen ON knowledge_machines(last_seen_at);
+CREATE INDEX IF NOT EXISTS idx_sync_snapshots_machine_created ON knowledge_sync_snapshots(machine_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_sync_snapshots_hash ON knowledge_sync_snapshots(content_hash);
+CREATE INDEX IF NOT EXISTS idx_sync_changes_entity ON knowledge_sync_changes(entity_kind, entity_id);
+CREATE INDEX IF NOT EXISTS idx_sync_changes_origin ON knowledge_sync_changes(origin_machine_id);
+CREATE INDEX IF NOT EXISTS idx_sync_changes_created ON knowledge_sync_changes(created_at);
+CREATE INDEX IF NOT EXISTS idx_sync_conflicts_status ON knowledge_sync_conflicts(status);
+CREATE INDEX IF NOT EXISTS idx_sync_conflicts_entity ON knowledge_sync_conflicts(entity_kind, entity_id);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (6, datetime('now'));
+`;
+
 export function openKnowledgeDb(path: string): Database {
   ensureParentDir(path);
   const db = new Database(path);
@@ -311,6 +392,7 @@ export function migrateKnowledgeDb(path: string): { path: string; schema_version
     if (getSchemaVersion(db) < 3) db.exec(MIGRATION_3);
     if (getSchemaVersion(db) < 4) db.exec(MIGRATION_4);
     if (getSchemaVersion(db) < 5) db.exec(MIGRATION_5);
+    if (getSchemaVersion(db) < 6) db.exec(MIGRATION_6);
     return { path, schema_version: getSchemaVersion(db) };
   } finally {
     db.close();
@@ -347,6 +429,10 @@ export function getKnowledgeDbStats(path: string): KnowledgeDbStats {
       embeddings: count(db, 'chunk_embeddings'),
       vector_entries: count(db, 'vector_index_entries'),
       reindex_queue: count(db, 'reindex_queue'),
+      knowledge_machines: count(db, 'knowledge_machines'),
+      sync_snapshots: count(db, 'knowledge_sync_snapshots'),
+      sync_changes: count(db, 'knowledge_sync_changes'),
+      sync_conflicts: count(db, 'knowledge_sync_conflicts'),
     };
   } finally {
     db.close();

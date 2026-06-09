@@ -1,12 +1,14 @@
 import { type KnowledgeAuthStatus } from './auth';
 import { type KnowledgePromptOptions } from './agent';
 import { type EmbeddingIndexOptions, type EmbeddingSearchOptions } from './embeddings';
+import { type KnowledgeMachinePreflightOptions, type KnowledgeMachineTopologyOptions } from './machines';
 import { type ProviderStatusResult, type ModelRegistryEntry } from './providers';
 import { type ReindexRuntimeOptions } from './reindex';
 import { RemoteKnowledgeClient, type RemoteKnowledgeRegistryContract } from './remote-client';
 import { type RetrievalOptions } from './retrieval';
 import { type HybridSearchOptions } from './search';
 import { type WebSearchOptions } from './web-search';
+import { type KnowledgePeerSyncResult, type KnowledgeSyncApplyResult, type KnowledgeSyncBundle, type KnowledgeSyncSnapshotResult } from './sync';
 import { type WikiCompileOptions } from './wiki-compiler';
 import { type StorageContract, type StorageValidationResult } from './storage-contract';
 import { type KnowledgeConfig, type KnowledgeWorkspace } from './workspace';
@@ -40,6 +42,29 @@ export interface KnowledgeSetupResult {
     config_path: string;
     next: string[];
     message: string;
+}
+export interface KnowledgeSyncSnapshotOptions {
+    includeTailscale?: boolean;
+    machineId?: string;
+}
+export interface KnowledgeSyncBundleOptions {
+    machineId?: string | null;
+    tables?: string[];
+    includeArtifactContent?: boolean;
+}
+export interface KnowledgeSyncImportOptions {
+    bundle: KnowledgeSyncBundle;
+    dryRun?: boolean;
+    direction?: 'pull' | 'push' | 'import';
+    machineId?: string | null;
+}
+export interface KnowledgePeerSyncOptions {
+    peerWorkspace: string;
+    direction?: 'pull' | 'push' | 'both';
+    dryRun?: boolean;
+    tables?: string[];
+    includeArtifactContent?: boolean;
+    machineId?: string | null;
 }
 export declare class KnowledgeService {
     private readonly options;
@@ -113,5 +138,34 @@ export declare class KnowledgeService {
     retrieveContext(options: Omit<RetrievalOptions, 'dbPath' | 'config'>): Promise<import("./retrieval").KnowledgeContextPack>;
     runPrompt(options: Omit<KnowledgePromptOptions, 'dbPath' | 'config'>): Promise<import("./agent").KnowledgePromptResult>;
     webSearch(options: Omit<WebSearchOptions, 'dbPath' | 'config' | 'safetyPolicy'>): Promise<import("./web-search").WebSearchResult>;
+    machineTopology(options?: Omit<KnowledgeMachineTopologyOptions, 'knowledge'>): Promise<import("./machines").KnowledgeMachineTopology>;
+    machinePreflight(options?: Omit<KnowledgeMachinePreflightOptions, 'knowledge'>): Promise<import("./machines").KnowledgeMachinePreflightReport>;
+    syncStatus(): import("./sync").KnowledgeSyncStatus;
+    createSyncSnapshot(options?: KnowledgeSyncSnapshotOptions): Promise<KnowledgeSyncSnapshotResult>;
+    syncConflicts(options?: {
+        status?: string;
+        limit?: number;
+    }): {
+        metadata: {};
+        id: string;
+        entity_kind: string;
+        entity_id: string;
+        local_machine_id: string;
+        remote_machine_id: string;
+        local_hash: string | null;
+        remote_hash: string | null;
+        base_hash: string | null;
+        status: string;
+        resolution_strategy: string | null;
+        proposed_patch_uri: string | null;
+        approved_by: string | null;
+        resolved_at: string | null;
+        metadata_json: string;
+        created_at: string;
+    }[];
+    syncMachines(): import("./sync").KnowledgeSyncMachineRow[];
+    exportSyncBundle(options?: KnowledgeSyncBundleOptions): KnowledgeSyncBundle;
+    importSyncBundle(options: KnowledgeSyncImportOptions): Promise<KnowledgeSyncApplyResult>;
+    syncPeer(options: KnowledgePeerSyncOptions): Promise<KnowledgePeerSyncResult>;
 }
 export declare function createKnowledgeService(options?: KnowledgeServiceOptions): KnowledgeService;

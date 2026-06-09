@@ -11,6 +11,10 @@ export type KnowledgeAskOptions = Omit<Parameters<KnowledgeService['runPrompt']>
 export type KnowledgeSearchOptions = Parameters<KnowledgeService['search']>[0];
 export type KnowledgeContextOptions = Parameters<KnowledgeService['retrieveContext']>[0];
 export type KnowledgeWebSearchOptions = Parameters<KnowledgeService['webSearch']>[0];
+export type KnowledgeSyncSnapshotOptions = Parameters<KnowledgeService['createSyncSnapshot']>[0];
+export type KnowledgeSyncBundleOptions = Parameters<KnowledgeService['exportSyncBundle']>[0];
+export type KnowledgeSyncImportOptions = Parameters<KnowledgeService['importSyncBundle']>[0];
+export type KnowledgePeerSyncOptions = Parameters<KnowledgeService['syncPeer']>[0];
 
 export interface KnowledgeClient {
   /**
@@ -36,6 +40,15 @@ export interface KnowledgeClient {
     readonly status: () => ReturnType<KnowledgeService['storageContract']>;
     readonly validate: () => ReturnType<KnowledgeService['validateStorage']>;
     readonly artifactStore: () => ReturnType<KnowledgeService['artifactStore']>;
+  };
+  readonly sync: {
+    readonly status: () => ReturnType<KnowledgeService['syncStatus']>;
+    readonly snapshot: (options?: KnowledgeSyncSnapshotOptions) => ReturnType<KnowledgeService['createSyncSnapshot']>;
+    readonly conflicts: (options?: Parameters<KnowledgeService['syncConflicts']>[0]) => ReturnType<KnowledgeService['syncConflicts']>;
+    readonly machines: () => ReturnType<KnowledgeService['syncMachines']>;
+    readonly exportBundle: (options?: KnowledgeSyncBundleOptions) => ReturnType<KnowledgeService['exportSyncBundle']>;
+    readonly importBundle: (options: KnowledgeSyncImportOptions) => ReturnType<KnowledgeService['importSyncBundle']>;
+    readonly peer: (options: KnowledgePeerSyncOptions) => ReturnType<KnowledgeService['syncPeer']>;
   };
   readonly db: {
     readonly init: () => ReturnType<KnowledgeService['initDb']>;
@@ -103,6 +116,15 @@ export function createKnowledgeClient(options: KnowledgeClientOptions = {}): Kno
       status: () => service.storageContract(),
       validate: () => service.validateStorage(),
       artifactStore: () => service.artifactStore(),
+    },
+    sync: {
+      status: () => service.syncStatus(),
+      snapshot: (input = {}) => service.createSyncSnapshot(input),
+      conflicts: (input = {}) => service.syncConflicts(input),
+      machines: () => service.syncMachines(),
+      exportBundle: (input = {}) => service.exportSyncBundle(input),
+      importBundle: (input) => service.importSyncBundle(input),
+      peer: (input) => service.syncPeer(input),
     },
     db: {
       init: () => service.initDb(),

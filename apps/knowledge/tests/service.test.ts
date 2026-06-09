@@ -19,7 +19,7 @@ describe('knowledge service facade', () => {
     expect(service.validateStorage().ok).toBe(true);
 
     const migration = service.initDb();
-    expect(migration.schema_version).toBe(5);
+    expect(migration.schema_version).toBe(6);
 
     const ingest = await service.ingestSource(sourceRef, 'knowledge_index');
     expect(ingest.chunks_inserted).toBe(1);

@@ -7,9 +7,19 @@
 import { defaultStorePath, loadStore, saveStore, withLock, makeId, makeShortId, ensureStore, type KnowledgeItem } from './store';
 import { openKnowledgeDb } from './knowledge-db';
 import { createKnowledgeService } from './service';
+import {
+  getStorageStatus as getDatabaseStorageStatus,
+  parseStorageTables,
+  storagePull as databaseStoragePull,
+  storagePush as databaseStoragePush,
+  storageSync as databaseStorageSync,
+  type SyncResult,
+} from './storage';
+import type { KnowledgeSyncApplyResult, KnowledgeSyncBundle } from './sync';
 import { assertProviderCredentials, parseModelRef, resolveModelRef, type AiProviderId } from './providers';
 import { approvalStatus, assertS3ReadAllowed, assertWebSearchAllowed, createApprovalGate, recordAuditEvent, recordRedactionFindings, redactSecrets } from './safety';
 import { basename } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import pkg from '../package.json' with { type: 'json' };
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -56,6 +66,8 @@ interface Flags {
   approveWrite?: boolean;
   provider?: string;
   mode?: string;
+  machine?: string;
+  workspace?: string;
   apiUrl?: string;
   canonicalHasnaXyz?: boolean;
   apiKey?: string;
@@ -66,11 +78,16 @@ interface Flags {
   domain?: string[];
   fileResults?: boolean;
   full?: boolean;
+  dryRun?: boolean;
   noColor?: boolean;
   scope?: string;
+  tables?: string;
+  peerWorkspace?: string;
   olderThan?: number;
   empty?: boolean;
   fake?: boolean;
+  tailscale?: boolean;
+  artifactContent?: boolean;
   archived?: boolean;
   includeArchived?: boolean;
 }
@@ -80,7 +97,7 @@ interface ParseResult {
   flags: Flags;
 }
 
-const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'export', 'prune', 'dedupe', 'stats', 'paths', 'setup', 'auth', 'remote', 'storage', 'db', 'wiki', 'source', 'ingest', 'reindex', 'search', 'web', 'ask', 'build', 'embeddings', 'providers', 'safety', 'help'];
+const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'export', 'prune', 'dedupe', 'stats', 'paths', 'setup', 'auth', 'remote', 'storage', 'machines', 'sync', 'db', 'wiki', 'source', 'ingest', 'reindex', 'search', 'web', 'ask', 'build', 'embeddings', 'providers', 'safety', 'help'];
 const COMMAND_ALIASES: Record<string, string> = {
   ls: 'list',
   rm: 'delete',
@@ -124,6 +141,8 @@ function parseArgs(argv: string[]): ParseResult {
       case '--approve-write': flags.approveWrite = true; break;
       case '--provider': flags.provider = argv[i + 1]; i += 1; break;
       case '--mode': flags.mode = argv[i + 1]; i += 1; break;
+      case '--machine': flags.machine = argv[i + 1]; i += 1; break;
+      case '--workspace': flags.workspace = argv[i + 1]; i += 1; break;
       case '--api-url': flags.apiUrl = argv[i + 1]; i += 1; break;
       case '--canonical-hasna-xyz': flags.canonicalHasnaXyz = true; break;
       case '--api-key': flags.apiKey = argv[i + 1]; i += 1; break;
@@ -134,9 +153,14 @@ function parseArgs(argv: string[]): ParseResult {
       case '--domain': flags.domain = [...(flags.domain ?? []), argv[i + 1]]; i += 1; break;
       case '--file-results': flags.fileResults = true; break;
       case '--full': flags.full = true; break;
+      case '--dry-run': flags.dryRun = true; break;
       case '--fake': flags.fake = true; break;
+      case '--no-tailscale': flags.tailscale = false; break;
+      case '--no-artifact-content': flags.artifactContent = false; break;
       case '--no-color': flags.noColor = true; break;
       case '--scope': flags.scope = argv[i + 1]; i += 1; break;
+      case '--tables': flags.tables = argv[i + 1]; i += 1; break;
+      case '--peer-workspace': flags.peerWorkspace = argv[i + 1]; i += 1; break;
       case '--older-than': flags.olderThan = Number(argv[i + 1]); i += 1; break;
       case '--empty': flags.empty = true; break;
       case '--archived': flags.archived = true; break;
@@ -209,7 +233,9 @@ Commands:
   auth login|whoami|logout     Manage hosted API credentials
   remote contracts|status      Inspect hosted client contracts/readiness
   storage status|validate      Inspect local/S3 artifact storage contract
-  db init|stats                Initialize or inspect local knowledge.db
+  machines topology|preflight  Inspect optional machine topology/sync readiness
+  sync status|snapshot|conflicts Inspect machine sync status, snapshots, conflicts
+  db init|stats|storage        Initialize, inspect, or sync local knowledge.db
   wiki init|compile|file-answer|lint
                                Initialize, compile, file, or lint wiki artifacts
   source resolve <source-ref>  Resolve read-only source content and citation evidence
@@ -236,6 +262,8 @@ Global Options:
   --approve-write              Record approval intent for future durable wiki writes
   --provider <name>            Provider override for web search
   --mode local|hosted          Configure OSS local or hosted-aware mode
+  --machine <id>               Machine id/SSH alias for preflight or peer sync
+  --workspace <path>           Repo workspace path for machine preflight
   --api-url <url>              Hosted API origin (or KNOWLEDGE_API_URL)
   --api-key <key>              Hosted API key for auth login
   --email <email>              Hosted account email metadata
@@ -245,8 +273,13 @@ Global Options:
   --domain <domain>            Restrict provider web search to a domain
   --file-results               File web snippets as web source refs
   --full                       Force full embedding index rebuild
+  --dry-run                   Preview sync writes without changing target state
   --fake                       Use deterministic fake embeddings for local tests
+  --no-tailscale               Skip local Tailscale topology probing
+  --no-artifact-content        Export sync bundles without embedded artifact bodies
   --scope local|global|project  Store scope (default: global ~/.hasna/apps/knowledge/)
+  --tables <names>             Comma-separated knowledge.db sync tables
+  --peer-workspace <path>      Peer repo root or .hasna/apps/knowledge path for sync
   --no-color                  Disable color output
   --completions <shell>       Output completions for bash|zsh|fish
   -v, --version               Show version
@@ -304,7 +337,9 @@ function printCommandHelp(command: string): void {
   if (command === 'auth') { console.log('Usage: knowledge auth login|whoami|logout [--api-key <key>] [--email <email>] [--org <slug>] [--api-url https://...] [--scope local|global|project] [--json]'); return; }
   if (command === 'remote') { console.log('Usage: knowledge remote contracts|status [--scope local|global|project] [--json]'); return; }
   if (command === 'storage') { console.log('Usage: knowledge storage status|validate [--scope local|global|project] [--json]'); return; }
-  if (command === 'db') { console.log('Usage: knowledge db init|stats [--scope local|global|project] [--json]'); return; }
+  if (command === 'machines') { console.log('Usage: knowledge machines topology [--no-tailscale] | preflight [machine] [--workspace <repo>] [--scope local|global|project] [--json]'); return; }
+  if (command === 'sync') { console.log('Usage: knowledge sync status|snapshot|machines|conflicts|dry-run|pull|push|sync|export|import [--peer-workspace <path>] [--machine <ssh-alias>] [--tables <names>] [--dry-run] [--limit <n>] [--no-tailscale] [--scope local|global|project] [--json]'); return; }
+  if (command === 'db') { console.log('Usage: knowledge db init|stats|storage status|push|pull|sync [--tables sources,chunks] [--scope local|global|project] [--json]'); return; }
   if (command === 'wiki') { console.log('Usage: knowledge wiki init|compile|file-answer|lint [query|prompt] [--title <title>] [--content <answer>] [--approve-write] [--limit <n>] [--scope local|global|project] [--json]'); return; }
   if (command === 'source') { console.log('Usage: knowledge source resolve <source-ref> [--purpose knowledge_answer|knowledge_index] [--limit <n>] [--scope local|global|project] [--json]'); return; }
   if (command === 'ingest') { console.log('Usage: knowledge ingest manifest <file|s3://bucket/key> | source <source-ref> [--purpose knowledge_index] [--scope local|global|project] [--json]'); return; }
@@ -328,6 +363,156 @@ function output(data: unknown, asJson?: boolean, _flags?: Flags): void {
   if (asJson) { console.log(JSON.stringify(data, null, 2)); return; }
   if (typeof data === 'string') { console.log(data); return; }
   console.log((data as { message?: string }).message ?? JSON.stringify(data, null, 2));
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function machineIsLocal(machine: string | undefined): boolean {
+  return !machine || machine === 'local' || machine === 'localhost';
+}
+
+function remoteKnowledgeCommand(peerWorkspace: string, args: string[]): string {
+  return `cd ${shellQuote(peerWorkspace)} && knowledge ${args.map(shellQuote).join(' ')}`;
+}
+
+function runSsh(machine: string, command: string, input?: string): string {
+  const result = spawnSync('ssh', [machine, command], {
+    encoding: 'utf8',
+    env: process.env,
+    input,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if ((result.status ?? 1) !== 0) {
+    throw new Error(`ssh ${machine} failed: ${(result.stderr || result.stdout || String(result.status)).trim()}`);
+  }
+  return result.stdout || '';
+}
+
+function parseRemoteJson(machine: string, action: string, raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    const preview = raw.trim().slice(0, 240);
+    throw new Error(`Remote knowledge ${action} on ${machine} did not return JSON. Install a compatible @hasna/knowledge CLI on the remote machine. Output: ${preview || String(error)}`);
+  }
+}
+
+function assertRemoteSyncBundle(machine: string, value: unknown): asserts value is KnowledgeSyncBundle {
+  if (
+    typeof value !== 'object'
+    || value === null
+    || !('format' in value)
+    || (value as { format?: unknown }).format !== 'knowledge-sync-bundle'
+  ) {
+    throw new Error(`Remote knowledge sync export on ${machine} did not return a knowledge sync bundle. Install @hasna/knowledge 0.2.30 or newer on the remote machine.`);
+  }
+}
+
+function assertRemoteSyncApplyResult(machine: string, value: unknown): asserts value is KnowledgeSyncApplyResult {
+  if (
+    typeof value !== 'object'
+    || value === null
+    || !('ok' in value)
+    || !('target' in value)
+    || !('tables' in value)
+    || !('artifacts' in value)
+    || !('conflicts' in value)
+  ) {
+    throw new Error(`Remote knowledge sync import on ${machine} did not return a sync import result. Install @hasna/knowledge 0.2.30 or newer on the remote machine.`);
+  }
+}
+
+async function syncRemotePeer(options: {
+  service: ReturnType<typeof createKnowledgeService>;
+  action: 'dry-run' | 'pull' | 'push' | 'sync';
+  machine: string;
+  peerWorkspace: string;
+  scope?: string;
+  tables?: string[];
+  dryRun?: boolean;
+  includeArtifactContent?: boolean;
+  machineId?: string | null;
+}) {
+  const scopeArgs = ['--scope', options.scope ?? 'global', '--json'];
+  const tableArgs = options.tables?.length ? ['--tables', options.tables.join(',')] : [];
+  const artifactArgs = options.includeArtifactContent === false ? ['--no-artifact-content'] : [];
+  const dryRun = options.dryRun === true || options.action === 'dry-run';
+  const direction = options.action === 'dry-run' || options.action === 'sync' ? 'both' : options.action;
+  const result: {
+    ok: boolean;
+    dry_run: boolean;
+    direction: 'pull' | 'push' | 'both';
+    transport: 'ssh';
+    machine: string;
+    peer_workspace: string;
+    pull?: unknown;
+    push?: unknown;
+    message: string;
+  } = {
+    ok: true,
+    dry_run: dryRun,
+    direction,
+    transport: 'ssh',
+    machine: options.machine,
+    peer_workspace: options.peerWorkspace,
+    message: '',
+  };
+
+  if (direction === 'pull' || direction === 'both') {
+    const remoteExport = remoteKnowledgeCommand(options.peerWorkspace, [
+      'sync', 'export',
+      ...scopeArgs,
+      ...tableArgs,
+      ...artifactArgs,
+    ]);
+    const raw = runSsh(options.machine, remoteExport);
+    const bundle = parseRemoteJson(options.machine, 'sync export', raw);
+    assertRemoteSyncBundle(options.machine, bundle);
+    result.pull = await options.service.importSyncBundle({
+      bundle,
+      dryRun,
+      direction: 'pull',
+      machineId: options.machineId ?? null,
+    });
+  }
+
+  if (direction === 'push' || direction === 'both') {
+    const bundle = options.service.exportSyncBundle({
+      machineId: options.machineId ?? null,
+      tables: options.tables,
+      includeArtifactContent: options.includeArtifactContent,
+    });
+    const remoteImport = remoteKnowledgeCommand(options.peerWorkspace, [
+      'sync', 'import',
+      ...scopeArgs,
+      ...(dryRun ? ['--dry-run'] : []),
+    ]);
+    const applyResult = parseRemoteJson(options.machine, 'sync import', runSsh(options.machine, remoteImport, JSON.stringify(bundle)));
+    assertRemoteSyncApplyResult(options.machine, applyResult);
+    result.push = applyResult;
+  }
+
+  const pullOk = typeof result.pull === 'object' && result.pull !== null && 'ok' in result.pull ? Boolean((result.pull as { ok: unknown }).ok) : true;
+  const pushOk = typeof result.push === 'object' && result.push !== null && 'ok' in result.push ? Boolean((result.push as { ok: unknown }).ok) : true;
+  result.ok = pullOk && pushOk;
+  result.message = [
+    result.pull && typeof result.pull === 'object' && 'message' in result.pull ? `pull: ${String((result.pull as { message: unknown }).message)}` : null,
+    result.push && typeof result.push === 'object' && 'message' in result.push ? `push: ${String((result.push as { message: unknown }).message)}` : null,
+  ].filter(Boolean).join('; ');
+  return result;
+}
+
+function syncOk(results: SyncResult[]): boolean {
+  return results.every((result) => result.errors.length === 0);
+}
+
+function syncMessage(results: SyncResult[], label: string): string {
+  const written = results.reduce((sum, result) => sum + result.rowsWritten, 0);
+  const errors = results.flatMap((result) => result.errors.map((error) => `${result.table}: ${error}`));
+  if (errors.length > 0) return `Storage ${label} completed with errors: ${errors.join('; ')}`;
+  return `Storage ${label} completed: ${written} rows across ${results.length} tables`;
 }
 
 function requireId(flags: Flags): asserts flags is Flags & { id: string } {
@@ -359,11 +544,11 @@ async function run(argv: string[]): Promise<void> {
   if (flags.completions) {
     const shell = flags.completions;
     if (shell === 'bash') {
-      console.log(`_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats paths setup auth remote storage db wiki source ingest reindex search web ask build embeddings providers safety help ls rm edit unarchive --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --purpose --model --dimensions --semantic --context --generate --approve-write --provider --mode --api-url --canonical-hasna-xyz --api-key --email --org --org-id --user-id --domain --file-results --full --fake --no-color --scope --archived --include-archived" -- "$cur")); }; complete -F _knowledge knowledge`);
+      console.log(`_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats paths setup auth remote storage machines sync db wiki source ingest reindex search web ask build embeddings providers safety help ls rm edit unarchive --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --purpose --model --dimensions --semantic --context --generate --approve-write --provider --mode --machine --workspace --peer-workspace --api-url --canonical-hasna-xyz --api-key --email --org --org-id --user-id --domain --file-results --full --dry-run --fake --no-tailscale --no-artifact-content --no-color --scope --tables --archived --include-archived" -- "$cur")); }; complete -F _knowledge knowledge`);
     } else if (shell === 'zsh') {
-      console.log(`#compdef knowledge\n_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats paths setup auth remote storage db wiki source ingest reindex search web ask build embeddings providers safety help ls rm edit unarchive)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--semantic)--semantic" "(--context)--context" "(--generate)--generate" "(--approve-write)--approve-write" "(--canonical-hasna-xyz)--canonical-hasna-xyz" "(--file-results)--file-results" "(--full)--full" "(--fake)--fake" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--provider)--provider[provider]:" "(--mode)--mode"\{local,hosted\}:" "(--api-url)--api-url[hosted API URL]:" "(--api-key)--api-key[hosted API key]:" "(--email)--email[email]:" "(--org)--org[org slug]:" "(--org-id)--org-id[org id]:" "(--user-id)--user-id[user id]:" "(--domain)--domain[domain]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" }; _knowledge`);
+      console.log(`#compdef knowledge\n_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats paths setup auth remote storage machines sync db wiki source ingest reindex search web ask build embeddings providers safety help ls rm edit unarchive)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--semantic)--semantic" "(--context)--context" "(--generate)--generate" "(--approve-write)--approve-write" "(--canonical-hasna-xyz)--canonical-hasna-xyz" "(--file-results)--file-results" "(--full)--full" "(--dry-run)--dry-run" "(--fake)--fake" "(--no-tailscale)--no-tailscale" "(--no-artifact-content)--no-artifact-content" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--provider)--provider[provider]:" "(--mode)--mode"\{local,hosted\}:" "(--machine)--machine[machine id or SSH alias]:" "(--workspace)--workspace[repo workspace path]:path:" "(--peer-workspace)--peer-workspace[peer repo or knowledge home path]:path:" "(--api-url)--api-url[hosted API URL]:" "(--api-key)--api-key[hosted API key]:" "(--email)--email[email]:" "(--org)--org[org slug]:" "(--org-id)--org-id[org id]:" "(--user-id)--user-id[user id]:" "(--domain)--domain[domain]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" "(--tables)--tables[comma-separated DB sync tables]:" }; _knowledge`);
     } else if (shell === 'fish') {
-      console.log(`complete -c knowledge -f; complete -c knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats paths setup auth remote storage db wiki source ingest reindex search web ask build embeddings providers safety help ls rm edit unarchive"; complete -c knowledge -l json; complete -c knowledge -l yes -s y; complete -c knowledge -l help -s h; complete -c knowledge -l version -s v; complete -c knowledge -l desc; complete -c knowledge -l archived; complete -c knowledge -l include-archived; complete -c knowledge -l semantic; complete -c knowledge -l context; complete -c knowledge -l generate; complete -c knowledge -l approve-write; complete -c knowledge -l canonical-hasna-xyz; complete -c knowledge -l provider; complete -c knowledge -l mode; complete -c knowledge -l api-url; complete -c knowledge -l api-key; complete -c knowledge -l email; complete -c knowledge -l org; complete -c knowledge -l org-id; complete -c knowledge -l user-id; complete -c knowledge -l domain; complete -c knowledge -l file-results; complete -c knowledge -l full; complete -c knowledge -l fake; complete -c knowledge -s p -l page; complete -c knowledge -s l -l limit; complete -c knowledge -s s -l search; complete -c knowledge -l sort; complete -c knowledge -l id; complete -c knowledge -l store; complete -c knowledge -l title; complete -c knowledge -l content; complete -c knowledge -l url; complete -c knowledge -s t -l tag; complete -c knowledge -l format; complete -c knowledge -l completions; complete -c knowledge -l purpose; complete -c knowledge -l model; complete -c knowledge -l dimensions; complete -c knowledge -l no-color; complete -c knowledge -l scope -a "local global project"`);
+      console.log(`complete -c knowledge -f; complete -c knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats paths setup auth remote storage machines sync db wiki source ingest reindex search web ask build embeddings providers safety help ls rm edit unarchive"; complete -c knowledge -l json; complete -c knowledge -l yes -s y; complete -c knowledge -l help -s h; complete -c knowledge -l version -s v; complete -c knowledge -l desc; complete -c knowledge -l archived; complete -c knowledge -l include-archived; complete -c knowledge -l semantic; complete -c knowledge -l context; complete -c knowledge -l generate; complete -c knowledge -l approve-write; complete -c knowledge -l canonical-hasna-xyz; complete -c knowledge -l provider; complete -c knowledge -l mode; complete -c knowledge -l machine; complete -c knowledge -l workspace; complete -c knowledge -l peer-workspace; complete -c knowledge -l api-url; complete -c knowledge -l api-key; complete -c knowledge -l email; complete -c knowledge -l org; complete -c knowledge -l org-id; complete -c knowledge -l user-id; complete -c knowledge -l domain; complete -c knowledge -l file-results; complete -c knowledge -l full; complete -c knowledge -l dry-run; complete -c knowledge -l fake; complete -c knowledge -l no-tailscale; complete -c knowledge -l no-artifact-content; complete -c knowledge -s p -l page; complete -c knowledge -s l -l limit; complete -c knowledge -s s -l search; complete -c knowledge -l sort; complete -c knowledge -l id; complete -c knowledge -l store; complete -c knowledge -l title; complete -c knowledge -l content; complete -c knowledge -l url; complete -c knowledge -s t -l tag; complete -c knowledge -l format; complete -c knowledge -l completions; complete -c knowledge -l purpose; complete -c knowledge -l model; complete -c knowledge -l dimensions; complete -c knowledge -l no-color; complete -c knowledge -l scope -a "local global project"; complete -c knowledge -l tables`);
     } else {
       throw new Error("Invalid --completions value. Use 'bash', 'zsh', or 'fish'.");
     }
@@ -498,19 +683,183 @@ async function run(argv: string[]): Promise<void> {
     throw new Error("Invalid storage action. Use 'status' or 'validate'.");
   }
 
+  if (command === 'machines') {
+    const action = positional[1] ?? 'topology';
+    if (action === 'topology' || action === 'status') {
+      const topology = await service.machineTopology({
+        includeTailscale: flags.tailscale !== false,
+      });
+      output(topology, flags.json);
+      return;
+    }
+    if (action === 'preflight' || action === 'check') {
+      const machineId = positional[2] ?? flags.machine ?? 'local';
+      const workspacePath = flags.workspace ?? process.cwd();
+      const preflight = await service.machinePreflight({
+        machineId,
+        commands: [
+          { command: 'bun', required: true },
+          { command: 'knowledge', required: true },
+        ],
+        packages: [
+          { name: pkg.name, command: 'knowledge', expectedVersion: pkg.version, required: true },
+          { name: '@hasna/machines', command: 'machines', required: false },
+        ],
+        workspaces: [
+          {
+            label: 'open-knowledge',
+            path: workspacePath,
+            expectedPackageName: pkg.name,
+            expectedVersion: pkg.version,
+            required: true,
+          },
+        ],
+      });
+      output(preflight, flags.json);
+      if (!preflight.ok && !flags.json) process.exitCode = 1;
+      return;
+    }
+    throw new Error("Invalid machines action. Use 'topology' or 'preflight'.");
+  }
+
+  if (command === 'sync') {
+    const action = positional[1] ?? 'status';
+    const tables = flags.tables ? flags.tables.split(',').map((table) => table.trim()).filter(Boolean) : undefined;
+    if (action === 'status') {
+      const status = service.syncStatus();
+      output(status, flags.json);
+      return;
+    }
+    if (action === 'snapshot' || action === 'record') {
+      const snapshot = await service.createSyncSnapshot({
+        includeTailscale: flags.tailscale !== false,
+        machineId: flags.machine,
+      });
+      output(snapshot, flags.json);
+      return;
+    }
+    if (action === 'conflicts' || action === 'conflict') {
+      const conflicts = service.syncConflicts({
+        status: positional[2],
+        limit: flags.limit,
+      });
+      output({
+        ok: true,
+        conflicts,
+        message: `${conflicts.length} sync conflict(s)`,
+      }, flags.json);
+      return;
+    }
+    if (action === 'machines' || action === 'registry') {
+      const machines = service.syncMachines();
+      output({
+        ok: true,
+        machines,
+        message: `${machines.length} registered sync machine(s)`,
+      }, flags.json);
+      return;
+    }
+    if (action === 'export') {
+      const bundle = service.exportSyncBundle({
+        machineId: flags.machine ?? null,
+        tables,
+        includeArtifactContent: flags.artifactContent !== false,
+      });
+      output(bundle, true);
+      return;
+    }
+    if (action === 'import') {
+      const raw = await Bun.stdin.text();
+      if (!raw.trim()) throw new Error('Usage: knowledge sync import < bundle.json');
+      const result = await service.importSyncBundle({
+        bundle: JSON.parse(raw),
+        dryRun: flags.dryRun,
+        direction: 'import',
+        machineId: flags.machine ?? null,
+      });
+      output(result, flags.json);
+      return;
+    }
+    if (action === 'dry-run' || action === 'pull' || action === 'push' || action === 'sync') {
+      if (!flags.peerWorkspace) throw new Error(`Usage: knowledge sync ${action} --peer-workspace <repo-or-knowledge-home> [--scope project]`);
+      const direction = action === 'dry-run'
+        ? 'both'
+        : action === 'sync'
+          ? 'both'
+          : action;
+      const result = !machineIsLocal(flags.machine)
+        ? await syncRemotePeer({
+            service,
+            action,
+            machine: flags.machine!,
+            peerWorkspace: flags.peerWorkspace,
+            scope: flags.scope,
+            tables,
+            dryRun: flags.dryRun,
+            includeArtifactContent: flags.artifactContent !== false,
+            machineId: flags.machine ?? null,
+          })
+        : await service.syncPeer({
+            peerWorkspace: flags.peerWorkspace,
+            direction,
+            dryRun: flags.dryRun === true || action === 'dry-run',
+            tables,
+            includeArtifactContent: flags.artifactContent !== false,
+            machineId: flags.machine ?? null,
+          });
+      output(result, flags.json);
+      if (!result.ok && !flags.json) process.exitCode = 1;
+      return;
+    }
+    throw new Error("Invalid sync action. Use 'status', 'snapshot', 'conflicts', 'machines', 'dry-run', 'pull', 'push', 'sync', 'export', or 'import'.");
+  }
+
   if (command === 'db') {
     const action = positional[1] ?? 'init';
-    if (action !== 'init' && action !== 'stats') {
-      throw new Error("Invalid db action. Use 'init' or 'stats'.");
-    }
     if (action === 'init') {
       const result = service.initDb();
       output({ ok: true, ...result, message: `Initialized ${result.path}` }, flags.json);
       return;
     }
-    const stats = service.dbStats();
-    output({ ok: true, path: service.workspace.knowledgeDbPath, ...stats, message: `knowledge.db schema v${stats.schema_version}` }, flags.json);
-    return;
+    if (action === 'stats') {
+      const stats = service.dbStats();
+      output({ ok: true, path: service.workspace.knowledgeDbPath, ...stats, message: `knowledge.db schema v${stats.schema_version}` }, flags.json);
+      return;
+    }
+    if (action === 'storage') {
+      const storageAction = positional[2] ?? 'status';
+      const tables = parseStorageTables(flags.tables);
+      if (storageAction === 'status') {
+        const status = getDatabaseStorageStatus({ scope: flags.scope });
+        output({
+          ok: true,
+          ...status,
+          message: `knowledge.db storage mode ${status.mode}${status.activeEnv ? ` via ${status.activeEnv}` : ''}`,
+        }, flags.json);
+        return;
+      }
+      if (storageAction === 'push') {
+        const results = await databaseStoragePush({ scope: flags.scope, tables });
+        output({ ok: syncOk(results), results, message: syncMessage(results, 'push') }, flags.json);
+        return;
+      }
+      if (storageAction === 'pull') {
+        const results = await databaseStoragePull({ scope: flags.scope, tables });
+        output({ ok: syncOk(results), results, message: syncMessage(results, 'pull') }, flags.json);
+        return;
+      }
+      if (storageAction === 'sync') {
+        const result = await databaseStorageSync({ scope: flags.scope, tables });
+        output({
+          ok: syncOk(result.pull) && syncOk(result.push),
+          ...result,
+          message: `${syncMessage(result.pull, 'pull')}; ${syncMessage(result.push, 'push')}`,
+        }, flags.json);
+        return;
+      }
+      throw new Error("Invalid db storage action. Use 'status', 'push', 'pull', or 'sync'.");
+    }
+    throw new Error("Invalid db action. Use 'init', 'stats', or 'storage'.");
   }
 
   if (command === 'wiki') {

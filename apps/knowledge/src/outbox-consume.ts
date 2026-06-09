@@ -41,6 +41,7 @@ interface NormalizedOutboxEvent {
   kind: SourceRef['kind'];
   title: string | null;
   revision: string | null;
+  previousRevision: string | null;
   hash: string | null;
   status: string | null;
   updatedAt: string;
@@ -98,8 +99,24 @@ function revisionFromEvent(event: OutboxObject, parsed: SourceRef, hash: string 
   );
 }
 
+function previousRevisionFromEvent(event: OutboxObject): string | null {
+  return (
+    asString(event.previous_revision_id) ??
+    asString(event.previous_revision) ??
+    asString(event.previous_version_id) ??
+    null
+  );
+}
+
 function eventType(event: OutboxObject): string {
-  return (asString(event.event) ?? asString(event.type) ?? asString(event.action) ?? asString(event.change_type) ?? 'changed').toLowerCase();
+  return (
+    asString(event.event_type) ??
+    asString(event.event) ??
+    asString(event.type) ??
+    asString(event.action) ??
+    asString(event.change_type) ??
+    'changed'
+  ).toLowerCase();
 }
 
 function titleFromEvent(event: OutboxObject): string | null {
@@ -119,6 +136,7 @@ function normalizeEvent(event: OutboxObject, now: string): NormalizedOutboxEvent
     kind: parsed.kind,
     title: titleFromEvent(event),
     revision: revisionFromEvent(event, parsed, hash),
+    previousRevision: previousRevisionFromEvent(event),
     hash,
     status: asString(event.status)?.toLowerCase() ?? null,
     updatedAt: asString(event.updated_at) ?? now,
@@ -275,6 +293,12 @@ function ensureRevision(db: Database, sourceId: string, event: NormalizedOutboxE
 }
 
 function revisionIdsForEvent(db: Database, sourceId: string, event: NormalizedOutboxEvent): string[] {
+  if (event.previousRevision) {
+    const previous = db.query<{ id: string }, [string, string]>(
+      'SELECT id FROM source_revisions WHERE source_id = ? AND revision = ?',
+    ).all(sourceId, event.previousRevision).map((row) => row.id);
+    if (previous.length > 0) return previous;
+  }
   if (event.revision) {
     return db.query<{ id: string }, [string, string]>(
       'SELECT id FROM source_revisions WHERE source_id = ? AND revision = ?',
@@ -317,11 +341,11 @@ function isDeleteEvent(eventType: string, status: string | null): boolean {
 }
 
 function isMoveEvent(eventType: string): boolean {
-  return ['move', 'moved', 'rename', 'renamed', 'path_changed'].includes(eventType);
+  return ['move', 'moved', 'rename', 'renamed', 'path_changed', 'canonical_key_changed'].includes(eventType);
 }
 
 function isPermissionEvent(eventType: string): boolean {
-  return ['permission', 'permissions', 'permission_changed', 'acl_changed'].includes(eventType);
+  return ['permission', 'permissions', 'permission_changed', 'acl_changed', 'acl_revoked'].includes(eventType);
 }
 
 export async function consumeOpenFilesOutbox(options: OutboxConsumeOptions): Promise<OutboxConsumeResult> {

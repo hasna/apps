@@ -40,7 +40,7 @@ describe('public knowledge sdk', () => {
     expect(parsed.kind).toBe('file');
 
     const migration = client.db.init();
-    expect(migration.schema_version).toBe(5);
+    expect(migration.schema_version).toBe(6);
 
     const ingest = await client.ingest.source(`file://${source}`, 'knowledge_index');
     expect(ingest.sources_upserted).toBe(1);
@@ -58,5 +58,12 @@ describe('public knowledge sdk', () => {
     expect(stats.sources).toBe(1);
     expect(stats.chunks).toBe(1);
     expect(stats.runs).toBe(1);
+
+    const syncStatus = client.sync.status();
+    expect(syncStatus.machines.total).toBe(0);
+    const syncSnapshot = await client.sync.snapshot({ includeTailscale: false });
+    expect(syncSnapshot.snapshot.content_hash).toStartWith('sha256:');
+    expect(client.sync.machines().length).toBeGreaterThanOrEqual(1);
+    expect(client.sync.conflicts()).toEqual([]);
   });
 });
