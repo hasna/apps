@@ -13660,7 +13660,7 @@ import { existsSync as existsSync10, readFileSync as readFileSync9, writeFileSyn
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.41",
+  version: "0.2.42",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   exports: {
@@ -13682,6 +13682,7 @@ var package_default = {
   files: [
     "bin",
     "dist",
+    "scripts",
     "docs",
     "LICENSE",
     "README.md"
@@ -13689,6 +13690,7 @@ var package_default = {
   scripts: {
     test: "bun test",
     "test:cli": "bun test tests/cli.test.ts",
+    "smoke:machines-adapter": "bun scripts/smoke-machines-adapter.mjs",
     build: "rm -rf dist && bun build --target=bun --outfile=bin/knowledge.js --minify --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --target=bun --outfile=bin/knowledge-mcp.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js && bun build ./src/index.ts ./src/storage.ts --outdir ./dist --target bun --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek && bunx tsc -p tsconfig.build.json",
     prepublishOnly: "bun run build"
   },

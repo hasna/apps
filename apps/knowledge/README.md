@@ -337,6 +337,16 @@ includes adapter diagnostics for route and workspace resolution so CLI, SDK,
 and MCP callers can see whether the result came from SDK, CLI, argument
 override, or disabled fallback.
 
+The installed adapter smoke harness verifies the same boundary outside unit
+test fakes:
+
+```bash
+bun run smoke:machines-adapter -- --json
+```
+
+It builds isolated temp apps for project-local SDK resolution, global
+`machines` CLI-only fallback, and no-SDK/no-CLI fallback.
+
 ### sync
 ```bash
 knowledge sync status [--scope project] [--json]
