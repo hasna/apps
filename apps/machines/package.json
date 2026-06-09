@@ -1,6 +1,6 @@
 {
   "name": "@hasna/machines",
-  "version": "0.0.22",
+  "version": "0.0.23",
   "description": "Machine fleet management CLI + MCP for developers",
   "type": "module",
   "license": "Apache-2.0",
@@ -27,12 +27,14 @@
   },
   "files": [
     "dist",
+    "scripts",
     "README.md"
   ],
   "scripts": {
     "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external pg && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external pg && bun build src/agent/index.ts --outdir dist/agent --target bun && bun build src/index.ts src/storage.ts src/consumer.ts --outdir dist --target bun --external pg && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "smoke:consumer-conformance": "bun scripts/consumer-conformance.mjs",
     "dev": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:agent": "bun run src/agent/index.ts",

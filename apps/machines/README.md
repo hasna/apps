@@ -80,6 +80,18 @@ version is `1`; the exported `MACHINES_CONSUMER_CONTRACT` records the stable
 entrypoint, envelope names, and stable exports used by downstream apps such as
 `@hasna/knowledge`.
 
+The package also ships a downstream conformance fixture for consumers that want
+to verify their optional adapter boundary without copying app-specific smoke
+tests:
+
+```bash
+bun scripts/consumer-conformance.mjs --json
+```
+
+It exercises four shapes: local SDK import, a fake future SDK contract that
+must be rejected before resolver output is trusted, global `machines` CLI-only
+fallback, and no-SDK/no-CLI unavailable diagnostics.
+
 CLI and MCP expose the same topology view:
 
 ```bash
