@@ -644,8 +644,12 @@ describe('knowledge cli', () => {
     expect(readFileSync(targetPath, 'utf8')).toBe('routed-spark01.tailnet.test');
     const out = JSON.parse(new TextDecoder().decode(result.stdout));
     expect(out.resolved_machine).toBe('routed-spark01.tailnet.test');
-    expect(out.resolved_route).toEqual({
+    expect(out.resolved_route).toMatchObject({
       source: 'open-machines',
+      adapter: {
+        implementation: 'cli',
+        available: true,
+      },
       target: 'routed-spark01.tailnet.test',
       route: 'tailscale',
       target_kind: 'tailscale',
@@ -699,6 +703,10 @@ describe('knowledge cli', () => {
     expect(out.peer_workspace).toBe('/mapped/open-knowledge');
     expect(out.resolved_workspace).toMatchObject({
       source: 'open-machines',
+      adapter: {
+        implementation: 'cli',
+        available: true,
+      },
       project_root: '/mapped/open-knowledge',
       project_root_source: 'manifest_metadata',
       open_files_root: '/remote/open-files',

@@ -77,6 +77,7 @@ export interface KnowledgeRemotePeerSyncResult extends KnowledgePeerSyncResult {
     resolved_machine: string;
     resolved_route: {
         source: KnowledgeMachineRouteResolution['source'];
+        adapter: KnowledgeMachineRouteResolution['adapter'];
         target: string;
         route: KnowledgeMachineRouteResolution['route'];
         target_kind: KnowledgeMachineRouteResolution['targetKind'];
@@ -85,6 +86,7 @@ export interface KnowledgeRemotePeerSyncResult extends KnowledgePeerSyncResult {
     };
     resolved_workspace: {
         source: KnowledgeMachineWorkspaceResolution['source'];
+        adapter: KnowledgeMachineWorkspaceResolution['adapter'];
         project_root: string;
         project_root_source: KnowledgeMachineWorkspaceResolution['project_root_source'];
         workspace_root: string | null;

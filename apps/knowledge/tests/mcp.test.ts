@@ -387,6 +387,10 @@ describe('knowledge MCP', () => {
       expect(remoteSyncPeer.resolved_machine).toBe('mcp-spark01.tailnet.test');
       expect(remoteSyncPeer.resolved_route).toMatchObject({
         source: 'open-machines',
+        adapter: {
+          implementation: 'cli',
+          available: true,
+        },
         target: 'mcp-spark01.tailnet.test',
         route: 'tailscale',
         target_kind: 'tailscale',
@@ -395,6 +399,10 @@ describe('knowledge MCP', () => {
       expect(remoteSyncPeer.peer_workspace).toBe('/remote/open-knowledge');
       expect(remoteSyncPeer.resolved_workspace).toMatchObject({
         source: 'open-machines',
+        adapter: {
+          implementation: 'cli',
+          available: true,
+        },
         project_root: '/remote/open-knowledge',
         project_root_source: 'manifest_metadata',
         open_files_root: '/remote/open-files',

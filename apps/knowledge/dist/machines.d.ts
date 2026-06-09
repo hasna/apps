@@ -6,6 +6,20 @@ export interface KnowledgeMachineCommandResult {
 export type KnowledgeMachineCommandRunner = (command: string) => KnowledgeMachineCommandResult | Promise<KnowledgeMachineCommandResult>;
 export type KnowledgeMachinePreflightSource = 'open-machines' | 'local' | 'ssh';
 export type KnowledgeMachinePreflightStatus = 'ok' | 'warn' | 'fail';
+export declare const KNOWLEDGE_MACHINES_ADAPTER_CONTRACT_VERSION = 1;
+export declare const KNOWLEDGE_MACHINES_ADAPTER_PACKAGE = "@hasna/machines";
+export declare const KNOWLEDGE_MACHINES_ADAPTER_ENTRYPOINT = "@hasna/machines/consumer";
+export type KnowledgeMachinesAdapterMode = 'auto' | 'sdk' | 'cli' | 'disabled';
+export type KnowledgeMachinesAdapterImplementation = 'sdk' | 'cli' | 'disabled';
+export interface KnowledgeMachinesAdapterStatus {
+    package: typeof KNOWLEDGE_MACHINES_ADAPTER_PACKAGE;
+    entrypoint: typeof KNOWLEDGE_MACHINES_ADAPTER_ENTRYPOINT;
+    mode: KnowledgeMachinesAdapterMode;
+    implementation: KnowledgeMachinesAdapterImplementation;
+    contract_version: number | null;
+    available: boolean;
+    error: string | null;
+}
 export interface KnowledgeMachinePreflightCommandResult extends KnowledgeMachineCommandResult {
     source?: KnowledgeMachinePreflightSource;
 }
@@ -30,6 +44,7 @@ export interface KnowledgeMachinePreflightWorkspaceSpec {
     required?: boolean;
 }
 export interface KnowledgeMachineTopologyOptions {
+    adapterMode?: KnowledgeMachinesAdapterMode;
     includeTailscale?: boolean;
     runner?: KnowledgeMachineCommandRunner;
     now?: Date;
@@ -40,6 +55,7 @@ export interface KnowledgeMachineTopologyOptions {
     };
 }
 export interface KnowledgeMachinePreflightOptions {
+    adapterMode?: KnowledgeMachinesAdapterMode;
     machineId?: string;
     commands?: KnowledgeMachinePreflightCommandSpec[];
     packages?: KnowledgeMachinePreflightPackageSpec[];
@@ -56,6 +72,7 @@ export type KnowledgeMachineRouteSource = 'open-machines' | 'raw';
 export type KnowledgeMachineRouteKind = 'local' | 'lan' | 'tailscale' | 'ssh' | 'unknown';
 export type KnowledgeMachineRouteConfidence = 'exact' | 'high' | 'medium' | 'low' | 'none' | string;
 export interface KnowledgeMachineRouteOptions {
+    adapterMode?: KnowledgeMachinesAdapterMode;
     machineId: string;
     includeTailscale?: boolean;
     runner?: KnowledgeMachineCommandRunner;
@@ -67,6 +84,7 @@ export type KnowledgeMachineWorkspacePathSource = 'argument' | 'manifest' | 'man
 export type KnowledgeMachineTrustStatus = 'trusted' | 'untrusted' | 'unknown' | string;
 export type KnowledgeMachineAuthStatus = 'authenticated' | 'unauthenticated' | 'unknown' | string;
 export interface KnowledgeMachineWorkspaceOptions {
+    adapterMode?: KnowledgeMachinesAdapterMode;
     machineId: string;
     peerWorkspace?: string | null;
     includeTailscale?: boolean;
@@ -80,6 +98,7 @@ export interface KnowledgeMachineWorkspaceOptions {
 export interface KnowledgeMachineWorkspaceResolution {
     ok: boolean;
     source: KnowledgeMachineWorkspaceSource;
+    adapter: KnowledgeMachinesAdapterStatus;
     requested_machine_id: string;
     machine_id: string | null;
     project_id: string;
@@ -103,6 +122,7 @@ export interface KnowledgeMachineRouteResolution {
     targetKind: KnowledgeMachineRouteKind | null;
     confidence: KnowledgeMachineRouteConfidence | null;
     source: KnowledgeMachineRouteSource;
+    adapter: KnowledgeMachinesAdapterStatus;
     evidence: Record<string, unknown> | null;
     warnings: string[];
 }
@@ -157,7 +177,7 @@ export interface KnowledgeMachineTopology {
         package: '@hasna/machines';
         available: boolean;
         error: string | null;
-    };
+    } & KnowledgeMachinesAdapterStatus;
     message: string;
 }
 export interface KnowledgeMachinePreflightCheck {
@@ -190,10 +210,32 @@ export interface KnowledgeMachinePreflightReport {
         package: '@hasna/machines';
         available: boolean;
         error: string | null;
-    };
+    } & KnowledgeMachinesAdapterStatus;
     message: string;
 }
+export interface KnowledgeMachinesAdapterDefaults {
+    mode?: KnowledgeMachinesAdapterMode;
+    includeTailscale?: boolean;
+    runner?: KnowledgeMachineCommandRunner;
+    preflightRunner?: KnowledgeMachinePreflightRunner;
+    now?: Date;
+    loadOpenMachines?: () => Promise<OpenMachinesModule | null>;
+}
+export interface KnowledgeMachinesAdapter {
+    readonly mode: KnowledgeMachinesAdapterMode;
+    status(): Promise<KnowledgeMachinesAdapterStatus>;
+    topology(options?: Omit<KnowledgeMachineTopologyOptions, 'adapterMode'>): Promise<KnowledgeMachineTopology>;
+    route(options: Omit<KnowledgeMachineRouteOptions, 'adapterMode'>): Promise<KnowledgeMachineRouteResolution>;
+    workspace(options: Omit<KnowledgeMachineWorkspaceOptions, 'adapterMode'>): Promise<KnowledgeMachineWorkspaceResolution>;
+    preflight(options?: Omit<KnowledgeMachinePreflightOptions, 'adapterMode'>): Promise<KnowledgeMachinePreflightReport>;
+}
 interface OpenMachinesModule {
+    MACHINES_CONSUMER_CONTRACT?: {
+        schema_version?: unknown;
+        entrypoint?: unknown;
+        capabilities?: unknown;
+    };
+    MACHINES_CONSUMER_CONTRACT_VERSION?: unknown;
     discoverMachineTopology?: (options?: {
         includeTailscale?: boolean;
         runner?: unknown;
@@ -226,4 +268,5 @@ export declare function discoverKnowledgeMachineTopology(options?: KnowledgeMach
 export declare function resolveKnowledgeMachineRoute(options: KnowledgeMachineRouteOptions): Promise<KnowledgeMachineRouteResolution>;
 export declare function resolveKnowledgeMachineWorkspace(options: KnowledgeMachineWorkspaceOptions): Promise<KnowledgeMachineWorkspaceResolution>;
 export declare function preflightKnowledgeMachine(options?: KnowledgeMachinePreflightOptions): Promise<KnowledgeMachinePreflightReport>;
+export declare function createKnowledgeMachinesAdapter(defaults?: KnowledgeMachinesAdapterDefaults): KnowledgeMachinesAdapter;
 export {};

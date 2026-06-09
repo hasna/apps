@@ -152,6 +152,7 @@ export interface KnowledgeRemotePeerSyncResult extends KnowledgePeerSyncResult {
   resolved_machine: string;
   resolved_route: {
     source: KnowledgeMachineRouteResolution['source'];
+    adapter: KnowledgeMachineRouteResolution['adapter'];
     target: string;
     route: KnowledgeMachineRouteResolution['route'];
     target_kind: KnowledgeMachineRouteResolution['targetKind'];
@@ -160,6 +161,7 @@ export interface KnowledgeRemotePeerSyncResult extends KnowledgePeerSyncResult {
   };
   resolved_workspace: {
     source: KnowledgeMachineWorkspaceResolution['source'];
+    adapter: KnowledgeMachineWorkspaceResolution['adapter'];
     project_root: string;
     project_root_source: KnowledgeMachineWorkspaceResolution['project_root_source'];
     workspace_root: string | null;
@@ -808,6 +810,7 @@ export class KnowledgeService {
       resolved_machine: resolvedMachine.target,
       resolved_route: {
         source: resolvedMachine.source,
+        adapter: resolvedMachine.adapter,
         target: resolvedMachine.target,
         route: resolvedMachine.route,
         target_kind: resolvedMachine.targetKind,
@@ -816,6 +819,7 @@ export class KnowledgeService {
       },
       resolved_workspace: {
         source: resolvedWorkspace.source,
+        adapter: resolvedWorkspace.adapter,
         project_root: resolvedWorkspace.project_root,
         project_root_source: resolvedWorkspace.project_root_source,
         workspace_root: resolvedWorkspace.workspace_root,

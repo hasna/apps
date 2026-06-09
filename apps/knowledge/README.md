@@ -320,16 +320,22 @@ knowledge machines topology [--no-tailscale] [--scope project] [--json]
 knowledge machines preflight [machine] [--workspace <repo>] [--scope project] [--json]
 ```
 Inspect the read-only machine topology that future knowledge sync will use.
-When `@hasna/machines` is installed, `knowledge` uses its topology SDK. Without
-that package, the command falls back to local machine identity and optional
-Tailscale status probing. This command does not sync data; it only exposes
+Machine integration goes through the optional `KnowledgeMachinesAdapter`
+boundary. In default `auto` mode, `knowledge` tries the lightweight
+`@hasna/machines/consumer` SDK, then the installed `machines --json` CLI, then
+local machine identity and optional Tailscale status probing. The explicit
+adapter modes are `sdk`, `cli`, and `disabled`; `@hasna/machines` is never a
+hard runtime dependency. This command does not sync data; it only exposes
 machine ids, hostnames, route hints, workspace context, and adapter status.
 
 `machines preflight` checks command availability, `@hasna/knowledge` CLI
 version parity, optional `@hasna/machines` availability, and the target repo
 workspace/package metadata before any machine sync is attempted. When
-`@hasna/machines` is installed, `knowledge` delegates to its compatibility SDK;
-otherwise it uses a local/SSH fallback.
+`@hasna/machines` is installed, `knowledge` delegates to its compatibility SDK
+or CLI contract; otherwise it uses a local/SSH fallback. Remote sync JSON
+includes adapter diagnostics for route and workspace resolution so CLI, SDK,
+and MCP callers can see whether the result came from SDK, CLI, argument
+override, or disabled fallback.
 
 ### sync
 ```bash

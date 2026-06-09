@@ -12,6 +12,21 @@ export type KnowledgeMachineCommandRunner = (command: string) => KnowledgeMachin
 
 export type KnowledgeMachinePreflightSource = 'open-machines' | 'local' | 'ssh';
 export type KnowledgeMachinePreflightStatus = 'ok' | 'warn' | 'fail';
+export const KNOWLEDGE_MACHINES_ADAPTER_CONTRACT_VERSION = 1;
+export const KNOWLEDGE_MACHINES_ADAPTER_PACKAGE = '@hasna/machines';
+export const KNOWLEDGE_MACHINES_ADAPTER_ENTRYPOINT = '@hasna/machines/consumer';
+export type KnowledgeMachinesAdapterMode = 'auto' | 'sdk' | 'cli' | 'disabled';
+export type KnowledgeMachinesAdapterImplementation = 'sdk' | 'cli' | 'disabled';
+
+export interface KnowledgeMachinesAdapterStatus {
+  package: typeof KNOWLEDGE_MACHINES_ADAPTER_PACKAGE;
+  entrypoint: typeof KNOWLEDGE_MACHINES_ADAPTER_ENTRYPOINT;
+  mode: KnowledgeMachinesAdapterMode;
+  implementation: KnowledgeMachinesAdapterImplementation;
+  contract_version: number | null;
+  available: boolean;
+  error: string | null;
+}
 
 export interface KnowledgeMachinePreflightCommandResult extends KnowledgeMachineCommandResult {
   source?: KnowledgeMachinePreflightSource;
@@ -42,6 +57,7 @@ export interface KnowledgeMachinePreflightWorkspaceSpec {
 }
 
 export interface KnowledgeMachineTopologyOptions {
+  adapterMode?: KnowledgeMachinesAdapterMode;
   includeTailscale?: boolean;
   runner?: KnowledgeMachineCommandRunner;
   now?: Date;
@@ -53,6 +69,7 @@ export interface KnowledgeMachineTopologyOptions {
 }
 
 export interface KnowledgeMachinePreflightOptions {
+  adapterMode?: KnowledgeMachinesAdapterMode;
   machineId?: string;
   commands?: KnowledgeMachinePreflightCommandSpec[];
   packages?: KnowledgeMachinePreflightPackageSpec[];
@@ -71,6 +88,7 @@ export type KnowledgeMachineRouteKind = 'local' | 'lan' | 'tailscale' | 'ssh' | 
 export type KnowledgeMachineRouteConfidence = 'exact' | 'high' | 'medium' | 'low' | 'none' | string;
 
 export interface KnowledgeMachineRouteOptions {
+  adapterMode?: KnowledgeMachinesAdapterMode;
   machineId: string;
   includeTailscale?: boolean;
   runner?: KnowledgeMachineCommandRunner;
@@ -84,6 +102,7 @@ export type KnowledgeMachineTrustStatus = 'trusted' | 'untrusted' | 'unknown' | 
 export type KnowledgeMachineAuthStatus = 'authenticated' | 'unauthenticated' | 'unknown' | string;
 
 export interface KnowledgeMachineWorkspaceOptions {
+  adapterMode?: KnowledgeMachinesAdapterMode;
   machineId: string;
   peerWorkspace?: string | null;
   includeTailscale?: boolean;
@@ -98,6 +117,7 @@ export interface KnowledgeMachineWorkspaceOptions {
 export interface KnowledgeMachineWorkspaceResolution {
   ok: boolean;
   source: KnowledgeMachineWorkspaceSource;
+  adapter: KnowledgeMachinesAdapterStatus;
   requested_machine_id: string;
   machine_id: string | null;
   project_id: string;
@@ -122,6 +142,7 @@ export interface KnowledgeMachineRouteResolution {
   targetKind: KnowledgeMachineRouteKind | null;
   confidence: KnowledgeMachineRouteConfidence | null;
   source: KnowledgeMachineRouteSource;
+  adapter: KnowledgeMachinesAdapterStatus;
   evidence: Record<string, unknown> | null;
   warnings: string[];
 }
@@ -179,7 +200,7 @@ export interface KnowledgeMachineTopology {
     package: '@hasna/machines';
     available: boolean;
     error: string | null;
-  };
+  } & KnowledgeMachinesAdapterStatus;
   message: string;
 }
 
@@ -214,11 +235,35 @@ export interface KnowledgeMachinePreflightReport {
     package: '@hasna/machines';
     available: boolean;
     error: string | null;
-  };
+  } & KnowledgeMachinesAdapterStatus;
   message: string;
 }
 
+export interface KnowledgeMachinesAdapterDefaults {
+  mode?: KnowledgeMachinesAdapterMode;
+  includeTailscale?: boolean;
+  runner?: KnowledgeMachineCommandRunner;
+  preflightRunner?: KnowledgeMachinePreflightRunner;
+  now?: Date;
+  loadOpenMachines?: () => Promise<OpenMachinesModule | null>;
+}
+
+export interface KnowledgeMachinesAdapter {
+  readonly mode: KnowledgeMachinesAdapterMode;
+  status(): Promise<KnowledgeMachinesAdapterStatus>;
+  topology(options?: Omit<KnowledgeMachineTopologyOptions, 'adapterMode'>): Promise<KnowledgeMachineTopology>;
+  route(options: Omit<KnowledgeMachineRouteOptions, 'adapterMode'>): Promise<KnowledgeMachineRouteResolution>;
+  workspace(options: Omit<KnowledgeMachineWorkspaceOptions, 'adapterMode'>): Promise<KnowledgeMachineWorkspaceResolution>;
+  preflight(options?: Omit<KnowledgeMachinePreflightOptions, 'adapterMode'>): Promise<KnowledgeMachinePreflightReport>;
+}
+
 interface OpenMachinesModule {
+  MACHINES_CONSUMER_CONTRACT?: {
+    schema_version?: unknown;
+    entrypoint?: unknown;
+    capabilities?: unknown;
+  };
+  MACHINES_CONSUMER_CONTRACT_VERSION?: unknown;
   discoverMachineTopology?: (options?: { includeTailscale?: boolean; runner?: unknown; now?: Date }) => unknown;
   resolveMachineRoute?: (machineId: string, options?: { includeTailscale?: boolean; runner?: unknown; now?: Date }) => unknown;
   resolveMachineWorkspace?: (options: {
@@ -470,6 +515,61 @@ function optionalModuleError(error: unknown): string {
   return message.includes("Cannot find module '@hasna/machines'") || message.includes("Cannot find module '@hasna/machines/consumer'")
     ? 'module_not_found'
     : message;
+}
+
+function adapterMode(options: { adapterMode?: KnowledgeMachinesAdapterMode }): KnowledgeMachinesAdapterMode {
+  return options.adapterMode ?? 'auto';
+}
+
+function contractVersion(mod: OpenMachinesModule | null): number | null {
+  const fromContract = mod?.MACHINES_CONSUMER_CONTRACT?.schema_version;
+  if (typeof fromContract === 'number') return fromContract;
+  const direct = mod?.MACHINES_CONSUMER_CONTRACT_VERSION;
+  return typeof direct === 'number' ? direct : null;
+}
+
+function adapterStatus(input: {
+  mode: KnowledgeMachinesAdapterMode;
+  implementation: KnowledgeMachinesAdapterImplementation;
+  available: boolean;
+  error?: string | null;
+  contractVersion?: number | null;
+}): KnowledgeMachinesAdapterStatus {
+  return {
+    package: KNOWLEDGE_MACHINES_ADAPTER_PACKAGE,
+    entrypoint: KNOWLEDGE_MACHINES_ADAPTER_ENTRYPOINT,
+    mode: input.mode,
+    implementation: input.implementation,
+    contract_version: input.contractVersion ?? null,
+    available: input.available,
+    error: input.error ?? null,
+  };
+}
+
+function disabledAdapterStatus(mode: KnowledgeMachinesAdapterMode, error = 'adapter_disabled'): KnowledgeMachinesAdapterStatus {
+  return adapterStatus({
+    mode,
+    implementation: 'disabled',
+    available: false,
+    error,
+  });
+}
+
+function cliAdapterStatus(mode: KnowledgeMachinesAdapterMode): KnowledgeMachinesAdapterStatus {
+  return adapterStatus({
+    mode,
+    implementation: 'cli',
+    available: true,
+  });
+}
+
+function sdkAdapterStatus(mode: KnowledgeMachinesAdapterMode, mod: OpenMachinesModule | null): KnowledgeMachinesAdapterStatus {
+  return adapterStatus({
+    mode,
+    implementation: 'sdk',
+    available: true,
+    contractVersion: contractVersion(mod),
+  });
 }
 
 function parseJson(value: string): unknown | null {
@@ -776,7 +876,7 @@ async function loadOpenMachinesModule(): Promise<OpenMachinesModule | null> {
   }
 }
 
-function normalizeOpenMachinesTopology(value: unknown, options: KnowledgeMachineTopologyOptions): KnowledgeMachineTopology | null {
+function normalizeOpenMachinesTopology(value: unknown, options: KnowledgeMachineTopologyOptions, adapter: KnowledgeMachinesAdapterStatus): KnowledgeMachineTopology | null {
   const raw = asRecord(value);
   const machines = Array.isArray(raw.machines) ? raw.machines as OpenMachinesEntry[] : null;
   const localMachine = asString(raw.local_machine_id);
@@ -790,11 +890,7 @@ function normalizeOpenMachinesTopology(value: unknown, options: KnowledgeMachine
     current_platform: asString(raw.current_platform) ?? normalizePlatform(),
     machines: machines.map((machine) => normalizeOpenMachinesEntry(machine, localMachine)),
     warnings: asStringArray(raw.warnings),
-    adapter: {
-      package: '@hasna/machines' as const,
-      available: true,
-      error: null,
-    },
+    adapter,
   };
   return withKnowledgeContext(topology, options);
 }
@@ -809,7 +905,7 @@ function normalizeRouteKind(value: unknown): KnowledgeMachineRouteKind | null {
     : null;
 }
 
-function normalizeOpenMachinesRoute(value: unknown): KnowledgeMachineRouteResolution | null {
+function normalizeOpenMachinesRoute(value: unknown, adapter: KnowledgeMachinesAdapterStatus): KnowledgeMachineRouteResolution | null {
   const raw = asRecord(value);
   const target = asString(raw.target) ?? asString(raw.command_target);
   if (raw.ok !== true || !target) return null;
@@ -825,6 +921,7 @@ function normalizeOpenMachinesRoute(value: unknown): KnowledgeMachineRouteResolu
     targetKind: normalizeRouteKind(selectedHint?.kind) ?? normalizeRouteKind(raw.source) ?? normalizeRouteKind(raw.route),
     confidence: asString(raw.confidence),
     source: 'open-machines',
+    adapter,
     evidence,
     warnings: asStringArray(raw.warnings),
   };
@@ -838,7 +935,7 @@ function pathRecord(value: unknown): { path: string | null; source: KnowledgeMac
   };
 }
 
-function normalizeOpenMachinesWorkspace(value: unknown, options: KnowledgeMachineWorkspaceOptions): KnowledgeMachineWorkspaceResolution | null {
+function normalizeOpenMachinesWorkspace(value: unknown, options: KnowledgeMachineWorkspaceOptions, adapter: KnowledgeMachinesAdapterStatus): KnowledgeMachineWorkspaceResolution | null {
   const raw = asRecord(value);
   const paths = asRecord(raw.paths);
   const project = asRecord(raw.project);
@@ -853,6 +950,7 @@ function normalizeOpenMachinesWorkspace(value: unknown, options: KnowledgeMachin
   return {
     ok: true,
     source: 'open-machines',
+    adapter,
     requested_machine_id: asString(raw.requested_machine_id) ?? options.machineId,
     machine_id: asString(raw.machine_id),
     project_id: asString(project.project_id) ?? options.projectId ?? 'open-knowledge',
@@ -872,19 +970,19 @@ function normalizeOpenMachinesWorkspace(value: unknown, options: KnowledgeMachin
   };
 }
 
-async function discoverOpenMachinesCliTopology(options: KnowledgeMachineTopologyOptions): Promise<KnowledgeMachineTopology | null> {
+async function discoverOpenMachinesCliTopology(options: KnowledgeMachineTopologyOptions, adapter: KnowledgeMachinesAdapterStatus): Promise<KnowledgeMachineTopology | null> {
   const runner = options.runner ?? defaultRunner;
   if (!await hasCommand('machines', runner)) return null;
   const args = ['topology', '--json'];
   if (options.includeTailscale === false) args.push('--no-tailscale');
   const result = await runCommand(runner, machinesCliCommand(args));
   if (result.exitCode !== 0) return null;
-  return normalizeOpenMachinesTopology(parseJson(result.stdout), options);
+  return normalizeOpenMachinesTopology(parseJson(result.stdout), options, adapter);
 }
 
-async function discoverLocalTopology(options: KnowledgeMachineTopologyOptions, adapterError: string | null): Promise<KnowledgeMachineTopology> {
+async function discoverLocalTopology(options: KnowledgeMachineTopologyOptions, adapter: KnowledgeMachinesAdapterStatus): Promise<KnowledgeMachineTopology> {
   const warnings: string[] = [];
-  if (adapterError) warnings.push(`open_machines_unavailable:${adapterError}`);
+  if (adapter.error) warnings.push(`open_machines_unavailable:${adapter.error}`);
   const runner = options.runner ?? defaultRunner;
   const tailscale = options.includeTailscale === false
     ? { peers: new Map<string, TailscalePeer>(), selfKey: null }
@@ -906,79 +1004,108 @@ async function discoverLocalTopology(options: KnowledgeMachineTopologyOptions, a
     current_platform: normalizePlatform(),
     machines,
     warnings,
-    adapter: {
-      package: '@hasna/machines',
-      available: false,
-      error: adapterError,
-    },
+    adapter,
   }, options);
 }
 
 export async function discoverKnowledgeMachineTopology(options: KnowledgeMachineTopologyOptions = {}): Promise<KnowledgeMachineTopology> {
+  const mode = adapterMode(options);
+  if (mode === 'disabled') return await discoverLocalTopology(options, disabledAdapterStatus(mode));
+  const cliStatus = cliAdapterStatus(mode);
   try {
-    const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
-    const mod = await loader();
-    if (mod?.discoverMachineTopology) {
-      const topology = mod.discoverMachineTopology({
-        includeTailscale: options.includeTailscale,
-        runner: options.runner,
-        now: options.now,
-      });
-      const normalized = normalizeOpenMachinesTopology(topology, options);
-      if (normalized) return normalized;
-      return await discoverOpenMachinesCliTopology(options) ?? await discoverLocalTopology(options, 'invalid_topology_shape');
+    if (mode !== 'cli') {
+      const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
+      const mod = await loader();
+      const sdkStatus = sdkAdapterStatus(mode, mod);
+      if (mod?.discoverMachineTopology) {
+        const topology = mod.discoverMachineTopology({
+          includeTailscale: options.includeTailscale,
+          runner: options.runner,
+          now: options.now,
+        });
+        const normalized = normalizeOpenMachinesTopology(topology, options, sdkStatus);
+        if (normalized) return normalized;
+        if (mode === 'sdk') return await discoverLocalTopology(options, disabledAdapterStatus(mode, 'invalid_topology_shape'));
+        return await discoverOpenMachinesCliTopology(options, cliStatus)
+          ?? await discoverLocalTopology(options, disabledAdapterStatus(mode, 'invalid_topology_shape'));
+      }
+      if (mode === 'sdk') return await discoverLocalTopology(options, disabledAdapterStatus(mode, 'missing_discoverMachineTopology'));
+      return await discoverOpenMachinesCliTopology(options, cliStatus)
+        ?? await discoverLocalTopology(options, disabledAdapterStatus(mode, 'missing_discoverMachineTopology'));
     }
-    return await discoverOpenMachinesCliTopology(options) ?? await discoverLocalTopology(options, 'missing_discoverMachineTopology');
+    return await discoverOpenMachinesCliTopology(options, cliStatus)
+      ?? await discoverLocalTopology(options, disabledAdapterStatus(mode, 'machines_cli_unavailable'));
   } catch (error) {
-    return await discoverOpenMachinesCliTopology(options) ?? await discoverLocalTopology(options, optionalModuleError(error));
+    if (mode === 'sdk') return await discoverLocalTopology(options, disabledAdapterStatus(mode, optionalModuleError(error)));
+    return await discoverOpenMachinesCliTopology(options, cliStatus)
+      ?? await discoverLocalTopology(options, disabledAdapterStatus(mode, optionalModuleError(error)));
   }
 }
 
-async function resolveOpenMachinesCliRoute(options: KnowledgeMachineRouteOptions): Promise<KnowledgeMachineRouteResolution | null> {
+async function resolveOpenMachinesCliRoute(options: KnowledgeMachineRouteOptions, adapter: KnowledgeMachinesAdapterStatus): Promise<KnowledgeMachineRouteResolution | null> {
   const runner = options.runner ?? defaultRunner;
   if (!await hasCommand('machines', runner)) return null;
   const args = ['route', '--machine', options.machineId, '--json'];
   if (options.includeTailscale === false) args.push('--no-tailscale');
   const result = await runCommand(runner, machinesCliCommand(args));
   if (result.exitCode !== 0) return null;
-  return normalizeOpenMachinesRoute(parseJson(result.stdout));
+  return normalizeOpenMachinesRoute(parseJson(result.stdout), adapter);
 }
 
-function rawMachineRoute(machineId: string): KnowledgeMachineRouteResolution {
+function rawMachineRoute(machineId: string, adapter: KnowledgeMachinesAdapterStatus): KnowledgeMachineRouteResolution {
   return {
     target: machineId,
     route: null,
     targetKind: null,
     confidence: null,
     source: 'raw',
+    adapter,
     evidence: null,
     warnings: [],
   };
 }
 
 export async function resolveKnowledgeMachineRoute(options: KnowledgeMachineRouteOptions): Promise<KnowledgeMachineRouteResolution> {
+  const mode = adapterMode(options);
+  if (mode === 'disabled') return rawMachineRoute(options.machineId, disabledAdapterStatus(mode));
+  const cliStatus = cliAdapterStatus(mode);
   try {
-    const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
-    const mod = await loader();
-    if (mod?.resolveMachineRoute) {
-      const normalized = normalizeOpenMachinesRoute(mod.resolveMachineRoute(options.machineId, {
-        includeTailscale: options.includeTailscale,
-        runner: options.runner,
-        now: options.now,
-      }));
-      if (normalized) return normalized;
-      return await resolveOpenMachinesCliRoute(options) ?? rawMachineRoute(options.machineId);
+    if (mode !== 'cli') {
+      const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
+      const mod = await loader();
+      const sdkStatus = sdkAdapterStatus(mode, mod);
+      if (mod?.resolveMachineRoute) {
+        const normalized = normalizeOpenMachinesRoute(mod.resolveMachineRoute(options.machineId, {
+          includeTailscale: options.includeTailscale,
+          runner: options.runner,
+          now: options.now,
+        }), sdkStatus);
+        if (normalized) return normalized;
+        if (mode === 'sdk') return rawMachineRoute(options.machineId, disabledAdapterStatus(mode, 'invalid_route_shape'));
+        return await resolveOpenMachinesCliRoute(options, cliStatus)
+          ?? rawMachineRoute(options.machineId, disabledAdapterStatus(mode, 'invalid_route_shape'));
+      }
+      if (mode === 'sdk') return rawMachineRoute(options.machineId, disabledAdapterStatus(mode, 'missing_resolveMachineRoute'));
+      return await resolveOpenMachinesCliRoute(options, cliStatus)
+        ?? rawMachineRoute(options.machineId, disabledAdapterStatus(mode, 'missing_resolveMachineRoute'));
     }
-    return await resolveOpenMachinesCliRoute(options) ?? rawMachineRoute(options.machineId);
+    return await resolveOpenMachinesCliRoute(options, cliStatus)
+      ?? rawMachineRoute(options.machineId, disabledAdapterStatus(mode, 'machines_cli_unavailable'));
   } catch (error) {
-    return await resolveOpenMachinesCliRoute(options) ?? {
-      ...rawMachineRoute(options.machineId),
+    if (mode === 'sdk') {
+      return {
+        ...rawMachineRoute(options.machineId, disabledAdapterStatus(mode, optionalModuleError(error))),
+        warnings: [optionalModuleError(error)],
+      };
+    }
+    return await resolveOpenMachinesCliRoute(options, cliStatus) ?? {
+      ...rawMachineRoute(options.machineId, disabledAdapterStatus(mode, optionalModuleError(error))),
       warnings: [optionalModuleError(error)],
     };
   }
 }
 
-async function resolveOpenMachinesCliWorkspace(options: KnowledgeMachineWorkspaceOptions): Promise<KnowledgeMachineWorkspaceResolution | null> {
+async function resolveOpenMachinesCliWorkspace(options: KnowledgeMachineWorkspaceOptions, adapter: KnowledgeMachinesAdapterStatus): Promise<KnowledgeMachineWorkspaceResolution | null> {
   const runner = options.runner ?? defaultRunner;
   if (!await hasCommand('machines', runner)) return null;
   const projectId = options.projectId ?? 'open-knowledge';
@@ -994,15 +1121,17 @@ async function resolveOpenMachinesCliWorkspace(options: KnowledgeMachineWorkspac
   if (options.includeTailscale === false) args.push('--no-tailscale');
   const result = await runCommand(runner, machinesCliCommand(args));
   if (result.exitCode !== 0) return null;
-  return normalizeOpenMachinesWorkspace(parseJson(result.stdout), options);
+  return normalizeOpenMachinesWorkspace(parseJson(result.stdout), options, adapter);
 }
 
 function argumentMachineWorkspace(options: KnowledgeMachineWorkspaceOptions): KnowledgeMachineWorkspaceResolution | null {
   const peerWorkspace = options.peerWorkspace?.trim();
   if (!peerWorkspace) return null;
+  const adapter = disabledAdapterStatus(adapterMode(options), 'argument_override');
   return {
     ok: true,
     source: 'argument',
+    adapter,
     requested_machine_id: options.machineId,
     machine_id: options.machineId,
     project_id: options.projectId ?? 'open-knowledge',
@@ -1022,10 +1151,11 @@ function argumentMachineWorkspace(options: KnowledgeMachineWorkspaceOptions): Kn
   };
 }
 
-function unresolvedMachineWorkspace(options: KnowledgeMachineWorkspaceOptions, warnings: string[]): KnowledgeMachineWorkspaceResolution {
+function unresolvedMachineWorkspace(options: KnowledgeMachineWorkspaceOptions, warnings: string[], adapter: KnowledgeMachinesAdapterStatus): KnowledgeMachineWorkspaceResolution {
   return {
     ok: false,
     source: 'raw',
+    adapter,
     requested_machine_id: options.machineId,
     machine_id: null,
     project_id: options.projectId ?? 'open-knowledge',
@@ -1048,28 +1178,39 @@ function unresolvedMachineWorkspace(options: KnowledgeMachineWorkspaceOptions, w
 export async function resolveKnowledgeMachineWorkspace(options: KnowledgeMachineWorkspaceOptions): Promise<KnowledgeMachineWorkspaceResolution> {
   const argument = argumentMachineWorkspace(options);
   if (argument) return argument;
+  const mode = adapterMode(options);
+  if (mode === 'disabled') return unresolvedMachineWorkspace(options, ['adapter_disabled'], disabledAdapterStatus(mode));
+  const cliStatus = cliAdapterStatus(mode);
   try {
-    const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
-    const mod = await loader();
-    if (mod?.resolveMachineWorkspace) {
-      const normalized = normalizeOpenMachinesWorkspace(mod.resolveMachineWorkspace({
-        machineId: options.machineId,
-        projectId: options.projectId ?? 'open-knowledge',
-        repoName: options.repoName ?? 'open-knowledge',
-        openFilesRepoName: options.openFilesRepoName ?? 'open-files',
-        includeTailscale: options.includeTailscale,
-        runner: options.runner,
-        now: options.now,
-      }), options);
-      if (normalized) return normalized;
-      return await resolveOpenMachinesCliWorkspace(options)
-        ?? unresolvedMachineWorkspace(options, ['invalid_workspace_shape']);
+    if (mode !== 'cli') {
+      const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
+      const mod = await loader();
+      const sdkStatus = sdkAdapterStatus(mode, mod);
+      if (mod?.resolveMachineWorkspace) {
+        const normalized = normalizeOpenMachinesWorkspace(mod.resolveMachineWorkspace({
+          machineId: options.machineId,
+          projectId: options.projectId ?? 'open-knowledge',
+          repoName: options.repoName ?? 'open-knowledge',
+          openFilesRepoName: options.openFilesRepoName ?? 'open-files',
+          includeTailscale: options.includeTailscale,
+          runner: options.runner,
+          now: options.now,
+        }), options, sdkStatus);
+        if (normalized) return normalized;
+        if (mode === 'sdk') return unresolvedMachineWorkspace(options, ['invalid_workspace_shape'], disabledAdapterStatus(mode, 'invalid_workspace_shape'));
+        return await resolveOpenMachinesCliWorkspace(options, cliStatus)
+          ?? unresolvedMachineWorkspace(options, ['invalid_workspace_shape'], disabledAdapterStatus(mode, 'invalid_workspace_shape'));
+      }
+      if (mode === 'sdk') return unresolvedMachineWorkspace(options, ['missing_resolveMachineWorkspace'], disabledAdapterStatus(mode, 'missing_resolveMachineWorkspace'));
+      return await resolveOpenMachinesCliWorkspace(options, cliStatus)
+        ?? unresolvedMachineWorkspace(options, ['missing_resolveMachineWorkspace'], disabledAdapterStatus(mode, 'missing_resolveMachineWorkspace'));
     }
-    return await resolveOpenMachinesCliWorkspace(options)
-      ?? unresolvedMachineWorkspace(options, ['missing_resolveMachineWorkspace']);
+    return await resolveOpenMachinesCliWorkspace(options, cliStatus)
+      ?? unresolvedMachineWorkspace(options, ['machines_cli_unavailable'], disabledAdapterStatus(mode, 'machines_cli_unavailable'));
   } catch (error) {
-    return await resolveOpenMachinesCliWorkspace(options)
-      ?? unresolvedMachineWorkspace(options, [optionalModuleError(error)]);
+    if (mode === 'sdk') return unresolvedMachineWorkspace(options, [optionalModuleError(error)], disabledAdapterStatus(mode, optionalModuleError(error)));
+    return await resolveOpenMachinesCliWorkspace(options, cliStatus)
+      ?? unresolvedMachineWorkspace(options, [optionalModuleError(error)], disabledAdapterStatus(mode, optionalModuleError(error)));
   }
 }
 
@@ -1090,7 +1231,7 @@ function withPreflightKnowledgeContext(
   };
 }
 
-function normalizeOpenMachinesPreflight(value: unknown, options: KnowledgeMachinePreflightOptions): KnowledgeMachinePreflightReport | null {
+function normalizeOpenMachinesPreflight(value: unknown, options: KnowledgeMachinePreflightOptions, adapter: KnowledgeMachinesAdapterStatus): KnowledgeMachinePreflightReport | null {
   const raw = asRecord(value);
   const checksRaw = Array.isArray(raw.checks) ? raw.checks : null;
   const machineId = asString(raw.machine_id) ?? asString(raw.machineId);
@@ -1123,11 +1264,7 @@ function normalizeOpenMachinesPreflight(value: unknown, options: KnowledgeMachin
     generated_at: asString(raw.generated_at) ?? (options.now ?? new Date()).toISOString(),
     checks,
     summary,
-    adapter: {
-      package: '@hasna/machines',
-      available: true,
-      error: null,
-    },
+    adapter,
   }, options);
 }
 
@@ -1153,7 +1290,7 @@ function machinesCliWorkspaceSpec(spec: KnowledgeMachinePreflightWorkspaceSpec):
   return spec.label ? `${spec.label}=${path}` : path;
 }
 
-async function preflightOpenMachinesCli(options: KnowledgeMachinePreflightOptions): Promise<KnowledgeMachinePreflightReport | null> {
+async function preflightOpenMachinesCli(options: KnowledgeMachinePreflightOptions, adapter: KnowledgeMachinesAdapterStatus): Promise<KnowledgeMachinePreflightReport | null> {
   const runner = machinesCliPreflightRunner(options);
   if (!await hasCommand('machines', runner)) return null;
   const args = [
@@ -1168,10 +1305,10 @@ async function preflightOpenMachinesCli(options: KnowledgeMachinePreflightOption
   for (const spec of options.workspaces ?? []) args.push('--workspace', machinesCliWorkspaceSpec(spec));
   const result = await runCommand(runner, machinesCliCommand(args));
   if (result.exitCode !== 0) return null;
-  return normalizeOpenMachinesPreflight(parseJson(result.stdout), options);
+  return normalizeOpenMachinesPreflight(parseJson(result.stdout), options, adapter);
 }
 
-async function fallbackPreflight(options: KnowledgeMachinePreflightOptions, adapterError: string | null): Promise<KnowledgeMachinePreflightReport> {
+async function fallbackPreflight(options: KnowledgeMachinePreflightOptions, adapter: KnowledgeMachinesAdapterStatus): Promise<KnowledgeMachinePreflightReport> {
   const machineId = options.machineId ?? hostname();
   const runner = options.runner ?? defaultPreflightRunner;
   const commands = options.commands ?? [{ command: 'bun', required: true }, { command: 'knowledge', required: true }];
@@ -1181,14 +1318,14 @@ async function fallbackPreflight(options: KnowledgeMachinePreflightOptions, adap
   for (const spec of commands) checks.push(...await fallbackCommandChecks(machineId, spec, runner));
   for (const spec of packages) checks.push(...await fallbackPackageChecks(machineId, spec, runner));
   for (const spec of workspaces) checks.push(...await fallbackWorkspaceChecks(machineId, spec, runner));
-  if (adapterError) {
+  if (adapter.error) {
     checks.push(makePreflightCheck({
       id: 'adapter:@hasna/machines',
       kind: 'package',
       status: 'warn',
       target: '@hasna/machines',
       expected: 'optional',
-      actual: adapterError,
+      actual: adapter.error,
       detail: 'Using knowledge local/ssh compatibility fallback',
       source: preflightTargetIsLocal(machineId) ? 'local' : 'ssh',
     }));
@@ -1205,33 +1342,121 @@ async function fallbackPreflight(options: KnowledgeMachinePreflightOptions, adap
     generated_at: (options.now ?? new Date()).toISOString(),
     checks,
     summary,
-    adapter: {
-      package: '@hasna/machines',
-      available: false,
-      error: adapterError,
-    },
+    adapter,
   }, options);
 }
 
 export async function preflightKnowledgeMachine(options: KnowledgeMachinePreflightOptions = {}): Promise<KnowledgeMachinePreflightReport> {
+  const mode = adapterMode(options);
+  if (mode === 'disabled') return await fallbackPreflight(options, disabledAdapterStatus(mode));
+  const cliStatus = cliAdapterStatus(mode);
   try {
-    const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
-    const mod = await loader();
-    if (mod?.checkMachineCompatibility) {
-      const report = mod.checkMachineCompatibility({
-        machineId: options.machineId,
-        commands: options.commands,
-        packages: options.packages,
-        workspaces: options.workspaces,
-        runner: options.runner,
-        now: options.now,
-      });
-      const normalized = normalizeOpenMachinesPreflight(report, options);
-      if (normalized) return normalized;
-      return await preflightOpenMachinesCli(options) ?? await fallbackPreflight(options, 'invalid_compatibility_shape');
+    if (mode !== 'cli') {
+      const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
+      const mod = await loader();
+      const sdkStatus = sdkAdapterStatus(mode, mod);
+      if (mod?.checkMachineCompatibility) {
+        const report = mod.checkMachineCompatibility({
+          machineId: options.machineId,
+          commands: options.commands,
+          packages: options.packages,
+          workspaces: options.workspaces,
+          runner: options.runner,
+          now: options.now,
+        });
+        const normalized = normalizeOpenMachinesPreflight(report, options, sdkStatus);
+        if (normalized) return normalized;
+        if (mode === 'sdk') return await fallbackPreflight(options, disabledAdapterStatus(mode, 'invalid_compatibility_shape'));
+        return await preflightOpenMachinesCli(options, cliStatus)
+          ?? await fallbackPreflight(options, disabledAdapterStatus(mode, 'invalid_compatibility_shape'));
+      }
+      if (mode === 'sdk') return await fallbackPreflight(options, disabledAdapterStatus(mode, 'missing_checkMachineCompatibility'));
+      return await preflightOpenMachinesCli(options, cliStatus)
+        ?? await fallbackPreflight(options, disabledAdapterStatus(mode, 'missing_checkMachineCompatibility'));
     }
-    return await preflightOpenMachinesCli(options) ?? await fallbackPreflight(options, 'missing_checkMachineCompatibility');
+    return await preflightOpenMachinesCli(options, cliStatus)
+      ?? await fallbackPreflight(options, disabledAdapterStatus(mode, 'machines_cli_unavailable'));
   } catch (error) {
-    return await preflightOpenMachinesCli(options) ?? await fallbackPreflight(options, optionalModuleError(error));
+    if (mode === 'sdk') return await fallbackPreflight(options, disabledAdapterStatus(mode, optionalModuleError(error)));
+    return await preflightOpenMachinesCli(options, cliStatus)
+      ?? await fallbackPreflight(options, disabledAdapterStatus(mode, optionalModuleError(error)));
   }
+}
+
+function mergeAdapterTopologyOptions(defaults: KnowledgeMachinesAdapterDefaults, options: Omit<KnowledgeMachineTopologyOptions, 'adapterMode'> = {}): KnowledgeMachineTopologyOptions {
+  return {
+    ...options,
+    adapterMode: defaults.mode ?? 'auto',
+    includeTailscale: options.includeTailscale ?? defaults.includeTailscale,
+    runner: options.runner ?? defaults.runner,
+    now: options.now ?? defaults.now,
+    loadOpenMachines: options.loadOpenMachines ?? defaults.loadOpenMachines,
+  };
+}
+
+function mergeAdapterRouteOptions(defaults: KnowledgeMachinesAdapterDefaults, options: Omit<KnowledgeMachineRouteOptions, 'adapterMode'>): KnowledgeMachineRouteOptions {
+  return {
+    ...options,
+    adapterMode: defaults.mode ?? 'auto',
+    includeTailscale: options.includeTailscale ?? defaults.includeTailscale,
+    runner: options.runner ?? defaults.runner,
+    now: options.now ?? defaults.now,
+    loadOpenMachines: options.loadOpenMachines ?? defaults.loadOpenMachines,
+  };
+}
+
+function mergeAdapterWorkspaceOptions(defaults: KnowledgeMachinesAdapterDefaults, options: Omit<KnowledgeMachineWorkspaceOptions, 'adapterMode'>): KnowledgeMachineWorkspaceOptions {
+  return {
+    ...options,
+    adapterMode: defaults.mode ?? 'auto',
+    includeTailscale: options.includeTailscale ?? defaults.includeTailscale,
+    runner: options.runner ?? defaults.runner,
+    now: options.now ?? defaults.now,
+    loadOpenMachines: options.loadOpenMachines ?? defaults.loadOpenMachines,
+  };
+}
+
+function mergeAdapterPreflightOptions(defaults: KnowledgeMachinesAdapterDefaults, options: Omit<KnowledgeMachinePreflightOptions, 'adapterMode'> = {}): KnowledgeMachinePreflightOptions {
+  return {
+    ...options,
+    adapterMode: defaults.mode ?? 'auto',
+    commands: options.commands,
+    packages: options.packages,
+    workspaces: options.workspaces,
+    runner: options.runner ?? defaults.preflightRunner,
+    now: options.now ?? defaults.now,
+    loadOpenMachines: options.loadOpenMachines ?? defaults.loadOpenMachines,
+  };
+}
+
+export function createKnowledgeMachinesAdapter(defaults: KnowledgeMachinesAdapterDefaults = {}): KnowledgeMachinesAdapter {
+  const mode = defaults.mode ?? 'auto';
+  return {
+    mode,
+    async status() {
+      if (mode === 'disabled') return disabledAdapterStatus(mode);
+      if (mode === 'cli') return cliAdapterStatus(mode);
+      try {
+        const loader = defaults.loadOpenMachines ?? loadOpenMachinesModule;
+        const mod = await loader();
+        if (mod) return sdkAdapterStatus(mode, mod);
+        if (mode === 'sdk') return disabledAdapterStatus(mode, 'module_not_found');
+        return cliAdapterStatus(mode);
+      } catch (error) {
+        return disabledAdapterStatus(mode, optionalModuleError(error));
+      }
+    },
+    topology(options = {}) {
+      return discoverKnowledgeMachineTopology(mergeAdapterTopologyOptions(defaults, options));
+    },
+    route(options) {
+      return resolveKnowledgeMachineRoute(mergeAdapterRouteOptions(defaults, options));
+    },
+    workspace(options) {
+      return resolveKnowledgeMachineWorkspace(mergeAdapterWorkspaceOptions(defaults, options));
+    },
+    preflight(options = {}) {
+      return preflightKnowledgeMachine(mergeAdapterPreflightOptions(defaults, options));
+    },
+  };
 }

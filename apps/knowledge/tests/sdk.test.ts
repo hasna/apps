@@ -216,6 +216,10 @@ describe('public knowledge sdk', () => {
       expect(result.resolved_machine).toBe('sdk-spark01.tailnet.test');
       expect(result.resolved_route).toMatchObject({
         source: 'open-machines',
+        adapter: {
+          implementation: 'cli',
+          available: true,
+        },
         target: 'sdk-spark01.tailnet.test',
         route: 'tailscale',
         target_kind: 'tailscale',
@@ -224,6 +228,10 @@ describe('public knowledge sdk', () => {
       expect(result.peer_workspace).toBe('/remote/open-knowledge');
       expect(result.resolved_workspace).toMatchObject({
         source: 'open-machines',
+        adapter: {
+          implementation: 'cli',
+          available: true,
+        },
         project_root: '/remote/open-knowledge',
         project_root_source: 'manifest_metadata',
         open_files_root: '/remote/open-files',

@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  KNOWLEDGE_MACHINES_ADAPTER_CONTRACT_VERSION,
+  createKnowledgeMachinesAdapter,
   discoverKnowledgeMachineTopology,
   preflightKnowledgeMachine,
   resolveKnowledgeMachineRoute,
@@ -79,6 +81,8 @@ describe('knowledge machine topology', () => {
 
     expect(result.source).toBe('open-machines');
     expect(result.adapter.available).toBe(true);
+    expect(result.adapter.implementation).toBe('sdk');
+    expect(result.adapter.mode).toBe('auto');
     expect(result.knowledge.app_path).toBe('.hasna/apps/knowledge');
     expect(result.knowledge.workspace_home).toBe('/repo/.hasna/apps/knowledge');
     expect(result.machines).toHaveLength(1);
@@ -96,6 +100,7 @@ describe('knowledge machine topology', () => {
 
     expect(result.source).toBe('local');
     expect(result.adapter.available).toBe(false);
+    expect(result.adapter.implementation).toBe('disabled');
     expect(result.machines.length).toBeGreaterThanOrEqual(1);
     expect(result.machines.some((machine) => machine.local)).toBe(true);
     expect(result.warnings).toContain('open_machines_unavailable:missing_discoverMachineTopology');
@@ -138,6 +143,7 @@ describe('knowledge machine topology', () => {
 
     expect(result.source).toBe('open-machines');
     expect(result.adapter.available).toBe(true);
+    expect(result.adapter.implementation).toBe('cli');
     expect(result.adapter.error).toBeNull();
     expect(result.machines[0].machine_id).toBe('spark02');
   });
@@ -173,6 +179,7 @@ describe('knowledge machine topology', () => {
     expect(result.ok).toBe(true);
     expect(result.source).toBe('open-machines');
     expect(result.adapter.available).toBe(true);
+    expect(result.adapter.implementation).toBe('sdk');
     expect(result.machine_id).toBe('spark01');
     expect(result.checks[0].id).toBe('package:@hasna/knowledge:version');
   });
@@ -200,6 +207,7 @@ describe('knowledge machine topology', () => {
 
     expect(result.ok).toBe(true);
     expect(result.source).toBe('local');
+    expect(result.adapter.implementation).toBe('disabled');
     expect(result.adapter.error).toBe('missing_checkMachineCompatibility');
     expect(result.summary.fail).toBe(0);
     expect(result.summary.warn).toBe(1);
@@ -237,6 +245,7 @@ describe('knowledge machine topology', () => {
     expect(result.ok).toBe(true);
     expect(result.source).toBe('open-machines');
     expect(result.adapter.available).toBe(true);
+    expect(result.adapter.implementation).toBe('cli');
     expect(result.adapter.error).toBeNull();
     expect(result.machine_id).toBe('spark01');
     expect(result.checks[0].source).toBe('ssh');
@@ -319,8 +328,13 @@ describe('knowledge machine topology', () => {
       runner: fakeCommandRunner({}),
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       source: 'open-machines',
+      adapter: {
+        implementation: 'sdk',
+        mode: 'auto',
+        available: true,
+      },
       target: 'spark01.taild59be2.ts.net',
       route: 'tailscale',
       targetKind: 'tailscale',
@@ -375,6 +389,7 @@ describe('knowledge machine topology', () => {
 
     expect(result.ok).toBe(true);
     expect(result.source).toBe('open-machines');
+    expect(result.adapter.implementation).toBe('sdk');
     expect(result.project_root).toBe('/home/hasna/workspace/hasna/opensource/open-knowledge');
     expect(result.open_files_root).toBe('/home/hasna/workspace/hasna/opensource/open-files');
     expect(result.trust_status).toBe('trusted');
@@ -418,6 +433,7 @@ describe('knowledge machine topology', () => {
 
     expect(result.ok).toBe(true);
     expect(result.source).toBe('open-machines');
+    expect(result.adapter.implementation).toBe('cli');
     expect(result.project_root).toBe('/workspace/open-knowledge');
     expect(commands.some((command) => command.includes("'workspace'") && command.includes("'resolve'") && command.includes("'--no-tailscale'"))).toBe(true);
   });
@@ -434,6 +450,10 @@ describe('knowledge machine topology', () => {
     expect(result).toMatchObject({
       ok: true,
       source: 'argument',
+      adapter: {
+        implementation: 'disabled',
+        error: 'argument_override',
+      },
       project_root: '/manual/open-knowledge',
       project_root_source: 'argument',
     });
@@ -479,6 +499,7 @@ describe('knowledge machine topology', () => {
     });
 
     expect(result.source).toBe('open-machines');
+    expect(result.adapter.implementation).toBe('cli');
     expect(result.target).toBe('cli-spark01.tailnet.test');
     expect(result.route).toBe('tailscale');
     expect(result.targetKind).toBe('tailscale');
@@ -492,14 +513,86 @@ describe('knowledge machine topology', () => {
       runner: fakeCommandRunner({}),
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       source: 'raw',
+      adapter: {
+        implementation: 'disabled',
+        error: 'missing_resolveMachineRoute',
+      },
       target: 'spark01',
       route: null,
       targetKind: null,
       confidence: null,
       evidence: null,
       warnings: [],
+    });
+  });
+
+  test('creates an explicit disabled machines adapter', async () => {
+    const adapter = createKnowledgeMachinesAdapter({
+      mode: 'disabled',
+      now: new Date('2026-06-09T00:00:00.000Z'),
+      runner: fakeCommandRunner({}),
+      preflightRunner: fakePreflightRunner({
+        "cmd='knowledge'": 'path=/home/hasna/.bun/bin/knowledge\nversion=@hasna/knowledge 0.2.40\n',
+      }),
+    });
+
+    expect(adapter.mode).toBe('disabled');
+    expect(await adapter.status()).toMatchObject({
+      contract_version: null,
+      implementation: 'disabled',
+      available: false,
+    });
+    const route = await adapter.route({ machineId: 'spark01' });
+    expect(route.source).toBe('raw');
+    expect(route.adapter.error).toBe('adapter_disabled');
+    const topology = await adapter.topology({ includeTailscale: false });
+    expect(topology.source).toBe('local');
+    expect(topology.adapter.implementation).toBe('disabled');
+  });
+
+  test('creates an explicit CLI-only machines adapter', async () => {
+    const adapter = createKnowledgeMachinesAdapter({
+      mode: 'cli',
+      runner: fakeCommandRunner({
+        'command -v machines': '/home/hasna/.bun/bin/machines\n',
+        'route': JSON.stringify({
+          ok: true,
+          target: 'spark01.taild59be2.ts.net',
+          route: 'tailscale',
+          source: 'tailscale',
+          confidence: 'high',
+          evidence: { selected_hint: { kind: 'tailscale' } },
+          warnings: [],
+        }),
+      }),
+    });
+
+    expect(await adapter.status()).toMatchObject({
+      implementation: 'cli',
+      available: true,
+      contract_version: null,
+    });
+    const route = await adapter.route({ machineId: 'spark01', includeTailscale: false });
+    expect(route.source).toBe('open-machines');
+    expect(route.adapter.mode).toBe('cli');
+    expect(route.adapter.implementation).toBe('cli');
+  });
+
+  test('reports SDK adapter contract version when available', async () => {
+    const adapter = createKnowledgeMachinesAdapter({
+      mode: 'sdk',
+      loadOpenMachines: async () => ({
+        MACHINES_CONSUMER_CONTRACT_VERSION: KNOWLEDGE_MACHINES_ADAPTER_CONTRACT_VERSION,
+      }),
+    });
+
+    expect(await adapter.status()).toMatchObject({
+      mode: 'sdk',
+      implementation: 'sdk',
+      available: true,
+      contract_version: 1,
     });
   });
 });

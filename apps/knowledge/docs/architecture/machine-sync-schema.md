@@ -22,11 +22,16 @@ file bucket.
 
 Machine discovery is an optional integration:
 
-- If `@hasna/machines` is installed, `knowledge` can use its topology SDK.
-- If it is not installed, `knowledge` falls back to local OS identity and
-  optional Tailscale status probing.
+- `knowledge` uses the `KnowledgeMachinesAdapter` boundary in `auto` mode by
+  default: `@hasna/machines/consumer` SDK, then installed `machines --json`
+  CLI, then local OS identity and optional Tailscale status probing.
+- The adapter also supports explicit `sdk`, `cli`, and `disabled` modes for
+  installed-package smoke tests, hosted/SaaS wrappers, and offline operation.
 - `@hasna/knowledge` must not import `@hasna/machines` as a required runtime
   dependency.
+- Topology, preflight, route, and workspace outputs include adapter
+  diagnostics with package, entrypoint, mode, implementation, contract version,
+  availability, and error fields.
 
 The shared shape is exposed through:
 
