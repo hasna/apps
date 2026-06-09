@@ -132,6 +132,9 @@ export const KNOWLEDGE_SYNC_TABLES = [
   'knowledge_sync_conflicts',
 ] as const;
 
+export const KNOWLEDGE_SYNC_PROTOCOL_VERSION = 1;
+export const KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION = 1;
+
 export type KnowledgeSyncTable = (typeof KNOWLEDGE_SYNC_TABLES)[number];
 
 type Row = Record<string, unknown>;
@@ -187,6 +190,8 @@ export interface KnowledgeSyncBundle {
   ok: true;
   format: 'knowledge-sync-bundle';
   version: 1;
+  protocol_version: typeof KNOWLEDGE_SYNC_PROTOCOL_VERSION;
+  min_protocol_version: typeof KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION;
   generated_at: string;
   source: {
     scope: string;
@@ -221,6 +226,8 @@ export interface KnowledgeSyncArtifactApplyResult {
 
 export interface KnowledgeSyncApplyResult {
   ok: boolean;
+  protocol_version: typeof KNOWLEDGE_SYNC_PROTOCOL_VERSION;
+  min_protocol_version: typeof KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION;
   dry_run: boolean;
   direction: 'pull' | 'push' | 'import';
   source: KnowledgeSyncBundle['source'];
@@ -565,6 +572,8 @@ export function createKnowledgeSyncBundle(options: {
       ok: true,
       format: 'knowledge-sync-bundle',
       version: 1,
+      protocol_version: KNOWLEDGE_SYNC_PROTOCOL_VERSION,
+      min_protocol_version: KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION,
       generated_at: nowIso(options.now),
       source: {
         scope: options.scope,
@@ -583,10 +592,17 @@ export function createKnowledgeSyncBundle(options: {
   }
 }
 
+function validateSyncProtocol(input: { protocol_version?: unknown; min_protocol_version?: unknown }, label: string): void {
+  if (input.protocol_version !== KNOWLEDGE_SYNC_PROTOCOL_VERSION || input.min_protocol_version !== KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION) {
+    throw new Error(`Unsupported ${label} protocol. Expected knowledge sync protocol v${KNOWLEDGE_SYNC_PROTOCOL_VERSION} with min v${KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION}.`);
+  }
+}
+
 function validateBundle(bundle: KnowledgeSyncBundle): void {
   if (!bundle || bundle.format !== 'knowledge-sync-bundle' || bundle.version !== 1) {
     throw new Error('Invalid knowledge sync bundle.');
   }
+  validateSyncProtocol(bundle, 'knowledge sync bundle');
 }
 
 function getBundleTable(bundle: KnowledgeSyncBundle, table: KnowledgeSyncTable): KnowledgeSyncBundleTable | null {
@@ -881,6 +897,8 @@ export async function applyKnowledgeSyncBundle(options: {
     const conflicts = tableResults.reduce((sum, table) => sum + table.conflicts, 0) + artifactResult.result.conflicts;
     return {
       ok: conflicts === 0,
+      protocol_version: KNOWLEDGE_SYNC_PROTOCOL_VERSION,
+      min_protocol_version: KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION,
       dry_run: options.dryRun === true,
       direction: options.direction,
       source: options.bundle.source,

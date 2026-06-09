@@ -15,7 +15,7 @@ import {
   storageSync as databaseStorageSync,
   type SyncResult,
 } from './storage';
-import type { KnowledgeSyncApplyResult, KnowledgeSyncBundle } from './sync';
+import { KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION, KNOWLEDGE_SYNC_PROTOCOL_VERSION, type KnowledgeSyncApplyResult, type KnowledgeSyncBundle } from './sync';
 import { assertProviderCredentials, parseModelRef, resolveModelRef, type AiProviderId } from './providers';
 import { approvalStatus, assertS3ReadAllowed, assertWebSearchAllowed, createApprovalGate, recordAuditEvent, recordRedactionFindings, redactSecrets } from './safety';
 import { basename } from 'node:path';
@@ -406,7 +406,13 @@ function assertRemoteSyncBundle(machine: string, value: unknown): asserts value 
     || !('format' in value)
     || (value as { format?: unknown }).format !== 'knowledge-sync-bundle'
   ) {
-    throw new Error(`Remote knowledge sync export on ${machine} did not return a knowledge sync bundle. Install @hasna/knowledge 0.2.31 or newer on the remote machine.`);
+    throw new Error(`Remote knowledge sync export on ${machine} did not return a knowledge sync bundle. Install @hasna/knowledge 0.2.32 or newer on the remote machine.`);
+  }
+  if (
+    (value as { protocol_version?: unknown }).protocol_version !== KNOWLEDGE_SYNC_PROTOCOL_VERSION
+    || (value as { min_protocol_version?: unknown }).min_protocol_version !== KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION
+  ) {
+    throw new Error(`Remote knowledge sync export on ${machine} uses an unsupported sync protocol. Install @hasna/knowledge 0.2.32 or newer on both machines.`);
   }
 }
 
@@ -420,7 +426,13 @@ function assertRemoteSyncApplyResult(machine: string, value: unknown): asserts v
     || !('artifacts' in value)
     || !('conflicts_created' in value)
   ) {
-    throw new Error(`Remote knowledge sync import on ${machine} did not return a sync import result. Install @hasna/knowledge 0.2.31 or newer on the remote machine.`);
+    throw new Error(`Remote knowledge sync import on ${machine} did not return a sync import result. Install @hasna/knowledge 0.2.32 or newer on the remote machine.`);
+  }
+  if (
+    (value as { protocol_version?: unknown }).protocol_version !== KNOWLEDGE_SYNC_PROTOCOL_VERSION
+    || (value as { min_protocol_version?: unknown }).min_protocol_version !== KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION
+  ) {
+    throw new Error(`Remote knowledge sync import on ${machine} uses an unsupported sync protocol. Install @hasna/knowledge 0.2.32 or newer on both machines.`);
   }
 }
 

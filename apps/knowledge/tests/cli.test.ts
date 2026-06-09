@@ -62,6 +62,28 @@ function runKnowledgeBin(args: string[], cwd?: string, env?: Record<string, stri
   });
 }
 
+function writeFakeSshBin(dir: string): string {
+  const bin = join(dir, 'bin');
+  mkdirSync(bin, { recursive: true });
+  const ssh = join(bin, 'ssh');
+  writeFileSync(ssh, [
+    '#!/bin/sh',
+    'command="$2"',
+    'if printf "%s" "$command" | grep -q "sync.*export"; then',
+    '    printf "%s" "$KNOWLEDGE_FAKE_SSH_EXPORT_JSON"',
+    'elif printf "%s" "$command" | grep -q "sync.*import"; then',
+    '    if [ -n "$KNOWLEDGE_FAKE_SSH_STDIN_PATH" ]; then cat > "$KNOWLEDGE_FAKE_SSH_STDIN_PATH"; else cat >/dev/null; fi',
+    '    printf "%s" "$KNOWLEDGE_FAKE_SSH_IMPORT_JSON"',
+    'else',
+    '    echo "unexpected fake ssh command: $*" >&2',
+    '    exit 9',
+    'fi',
+    '',
+  ].join('\n'));
+  chmodSync(ssh, 0o755);
+  return bin;
+}
+
 describe('knowledge cli', () => {
   test('help and subcommand help work', () => {
     const result = runCli(['--help']);
@@ -440,14 +462,89 @@ describe('knowledge cli', () => {
     expect(exported.exitCode).toBe(0);
     const bundle = JSON.parse(new TextDecoder().decode(exported.stdout));
     expect(bundle.format).toBe('knowledge-sync-bundle');
+    expect(bundle.protocol_version).toBe(1);
+    expect(bundle.min_protocol_version).toBe(1);
     expect(bundle.artifacts.length).toBe(4);
 
     const imported = runCliWithInput(['sync', 'import', '--scope', 'project', '--json'], JSON.stringify(bundle), peerDir);
     expect(imported.exitCode).toBe(0);
     const importedOut = JSON.parse(new TextDecoder().decode(imported.stdout));
     expect(importedOut.ok).toBe(true);
+    expect(importedOut.protocol_version).toBe(1);
+    expect(importedOut.min_protocol_version).toBe(1);
     expect(importedOut.artifacts.copied).toBe(4);
     expect(existsSync(join(peerDir, '.hasna', 'apps', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(true);
+  });
+
+  test('ssh sync rejects remote export without protocol handshake', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-sync-ssh-old-export-'));
+    const bin = writeFakeSshBin(dir);
+    const oldBundle = {
+      ok: true,
+      format: 'knowledge-sync-bundle',
+      version: 1,
+      generated_at: '2026-06-09T00:00:00.000Z',
+      source: {
+        scope: 'project',
+        workspace_home: '/remote/.hasna/apps/knowledge',
+        sqlite_schema_version: 6,
+        machine_id: 'spark01',
+        artifact_root_uri: 'file:///remote/.hasna/apps/knowledge/artifacts/',
+      },
+      tables: [],
+      artifacts: [],
+      warnings: [],
+      message: 'old bundle without protocol fields',
+    };
+
+    const result = runCli(['sync', 'pull', '--machine', 'spark01', '--peer-workspace', '/remote/open-knowledge', '--scope', 'project', '--json'], dir, {
+      PATH: `${bin}:${process.env.PATH ?? ''}`,
+      KNOWLEDGE_FAKE_SSH_EXPORT_JSON: JSON.stringify(oldBundle),
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(new TextDecoder().decode(result.stderr)).toContain('unsupported sync protocol');
+  });
+
+  test('ssh sync rejects remote import result without protocol handshake before accepting push', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-sync-ssh-old-import-'));
+    const stdinPath = join(dir, 'remote-import-stdin.json');
+    const bin = writeFakeSshBin(dir);
+    const oldImportResult = {
+      ok: true,
+      dry_run: true,
+      direction: 'import',
+      source: {
+        scope: 'project',
+        workspace_home: `${dir}/.hasna/apps/knowledge`,
+        sqlite_schema_version: 6,
+        machine_id: 'spark02',
+        artifact_root_uri: `file://${dir}/.hasna/apps/knowledge/artifacts/`,
+      },
+      target: {
+        scope: 'project',
+        workspace_home: '/remote/.hasna/apps/knowledge',
+        sqlite_schema_version: 6,
+        artifact_root_uri: 'file:///remote/.hasna/apps/knowledge/artifacts/',
+      },
+      tables: [],
+      artifacts: { source_artifacts: 0, target_artifacts: 0, copied: 0, skipped: 0, conflicts: 0, missing_content: 0 },
+      conflicts_created: 0,
+      warnings: [],
+      message: 'old import result without protocol fields',
+    };
+
+    const result = runCli(['sync', 'push', '--machine', 'spark01', '--peer-workspace', '/remote/open-knowledge', '--scope', 'project', '--json', '--dry-run'], dir, {
+      PATH: `${bin}:${process.env.PATH ?? ''}`,
+      KNOWLEDGE_FAKE_SSH_IMPORT_JSON: JSON.stringify(oldImportResult),
+      KNOWLEDGE_FAKE_SSH_STDIN_PATH: stdinPath,
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(new TextDecoder().decode(result.stderr)).toContain('unsupported sync protocol');
+    const pushedBundle = JSON.parse(readFileSync(stdinPath, 'utf8'));
+    expect(pushedBundle.protocol_version).toBe(1);
+    expect(pushedBundle.min_protocol_version).toBe(1);
   });
 
   test('ingest manifest imports open-files refs into project knowledge.db', () => {

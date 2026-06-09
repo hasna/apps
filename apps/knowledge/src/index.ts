@@ -43,6 +43,8 @@ export {
 } from './machines.js';
 export {
   KNOWLEDGE_SYNC_SCHEMA_VERSION,
+  KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION,
+  KNOWLEDGE_SYNC_PROTOCOL_VERSION,
   KNOWLEDGE_SYNC_TABLES,
   applyKnowledgeSyncBundle,
   createKnowledgeSyncSnapshot,

@@ -5891,6 +5891,8 @@ var KNOWLEDGE_SYNC_TABLES = [
   "knowledge_sync_changes",
   "knowledge_sync_conflicts"
 ];
+var KNOWLEDGE_SYNC_PROTOCOL_VERSION = 1;
+var KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION = 1;
 var PRIMARY_KEYS2 = {
   sources: ["id"],
   wiki_pages: ["id"],
@@ -6183,6 +6185,8 @@ function createKnowledgeSyncBundle(options) {
       ok: true,
       format: "knowledge-sync-bundle",
       version: 1,
+      protocol_version: KNOWLEDGE_SYNC_PROTOCOL_VERSION,
+      min_protocol_version: KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION,
       generated_at: nowIso(options.now),
       source: {
         scope: options.scope,
@@ -6200,10 +6204,16 @@ function createKnowledgeSyncBundle(options) {
     db.close();
   }
 }
+function validateSyncProtocol(input, label) {
+  if (input.protocol_version !== KNOWLEDGE_SYNC_PROTOCOL_VERSION || input.min_protocol_version !== KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION) {
+    throw new Error(`Unsupported ${label} protocol. Expected knowledge sync protocol v${KNOWLEDGE_SYNC_PROTOCOL_VERSION} with min v${KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION}.`);
+  }
+}
 function validateBundle(bundle) {
   if (!bundle || bundle.format !== "knowledge-sync-bundle" || bundle.version !== 1) {
     throw new Error("Invalid knowledge sync bundle.");
   }
+  validateSyncProtocol(bundle, "knowledge sync bundle");
 }
 function getBundleTable(bundle, table) {
   return bundle.tables.find((entry) => entry.table === table) ?? null;
@@ -6425,6 +6435,8 @@ async function applyKnowledgeSyncBundle(options) {
     const conflicts = tableResults.reduce((sum, table) => sum + table.conflicts, 0) + artifactResult.result.conflicts;
     return {
       ok: conflicts === 0,
+      protocol_version: KNOWLEDGE_SYNC_PROTOCOL_VERSION,
+      min_protocol_version: KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION,
       dry_run: options.dryRun === true,
       direction: options.direction,
       source: options.bundle.source,
@@ -7964,6 +7976,8 @@ export {
   KnowledgeService,
   KNOWLEDGE_SYNC_TABLES,
   CURRENT_SCHEMA_VERSION as KNOWLEDGE_SYNC_SCHEMA_VERSION,
+  KNOWLEDGE_SYNC_PROTOCOL_VERSION,
+  KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION,
   KNOWLEDGE_STORAGE_TABLES,
   KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV,
   KNOWLEDGE_STORAGE_MODE_ENV,

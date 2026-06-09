@@ -109,6 +109,8 @@ export interface KnowledgeSyncConflictInput {
     metadata?: Record<string, unknown>;
 }
 export declare const KNOWLEDGE_SYNC_TABLES: readonly ["sources", "wiki_pages", "source_revisions", "chunks", "chunk_embeddings", "wiki_backlinks", "citations", "knowledge_indexes", "runs", "run_events", "provider_usage", "redaction_findings", "storage_objects", "audit_events", "approval_gates", "vector_index_entries", "reindex_queue", "knowledge_machines", "knowledge_sync_snapshots", "knowledge_sync_changes", "knowledge_sync_conflicts"];
+export declare const KNOWLEDGE_SYNC_PROTOCOL_VERSION = 1;
+export declare const KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION = 1;
 export type KnowledgeSyncTable = (typeof KNOWLEDGE_SYNC_TABLES)[number];
 type Row = Record<string, unknown>;
 export interface KnowledgeSyncBundleTable {
@@ -131,6 +133,8 @@ export interface KnowledgeSyncBundle {
     ok: true;
     format: 'knowledge-sync-bundle';
     version: 1;
+    protocol_version: typeof KNOWLEDGE_SYNC_PROTOCOL_VERSION;
+    min_protocol_version: typeof KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION;
     generated_at: string;
     source: {
         scope: string;
@@ -162,6 +166,8 @@ export interface KnowledgeSyncArtifactApplyResult {
 }
 export interface KnowledgeSyncApplyResult {
     ok: boolean;
+    protocol_version: typeof KNOWLEDGE_SYNC_PROTOCOL_VERSION;
+    min_protocol_version: typeof KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION;
     dry_run: boolean;
     direction: 'pull' | 'push' | 'import';
     source: KnowledgeSyncBundle['source'];
