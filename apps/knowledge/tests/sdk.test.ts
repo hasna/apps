@@ -316,6 +316,7 @@ describe('public knowledge sdk', () => {
   test('persists machine resolver evidence for registry fallback', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-sdk-registry-fallback-'));
     const targetPath = join(dir, 'ssh-target.txt');
+    const stdinPath = join(dir, 'ssh-stdin.json');
     const bin = writeFakeSshBin(dir);
     writeFakeMachinesRouteBin(bin, 'sdk-spark01.tailnet.test');
     const oldEnv = {
@@ -323,12 +324,14 @@ describe('public knowledge sdk', () => {
       KNOWLEDGE_FAKE_SSH_EXPORT_JSON: process.env.KNOWLEDGE_FAKE_SSH_EXPORT_JSON,
       KNOWLEDGE_FAKE_SSH_IMPORT_JSON: process.env.KNOWLEDGE_FAKE_SSH_IMPORT_JSON,
       KNOWLEDGE_FAKE_SSH_TARGET_PATH: process.env.KNOWLEDGE_FAKE_SSH_TARGET_PATH,
+      KNOWLEDGE_FAKE_SSH_STDIN_PATH: process.env.KNOWLEDGE_FAKE_SSH_STDIN_PATH,
     };
     try {
       process.env.PATH = `${bin}:${process.env.PATH ?? ''}`;
       process.env.KNOWLEDGE_FAKE_SSH_EXPORT_JSON = JSON.stringify(emptySyncBundle());
       process.env.KNOWLEDGE_FAKE_SSH_IMPORT_JSON = JSON.stringify(emptyImportResult(false));
       process.env.KNOWLEDGE_FAKE_SSH_TARGET_PATH = targetPath;
+      process.env.KNOWLEDGE_FAKE_SSH_STDIN_PATH = stdinPath;
       const client = createKnowledgeClient({ scope: 'project', cwd: dir });
 
       const first = await client.sync.remotePeer({
@@ -339,6 +342,9 @@ describe('public knowledge sdk', () => {
 
       expect(first.ok).toBe(true);
       expect(first.resolved_route.source).toBe('open-machines');
+      const pushedBundle = JSON.parse(readFileSync(stdinPath, 'utf8'));
+      const pushedMachines = pushedBundle.tables.find((table: { table: string }) => table.table === 'knowledge_machines');
+      expect(pushedMachines.rows.some((row: { machine_id: string }) => row.machine_id === 'spark01')).toBe(true);
       const registryRow = client.sync.machines().find((row) => row.machine_id === 'spark01');
       expect(registryRow).toBeDefined();
       expect(registryRow?.ssh_target).toBe('sdk-spark01.tailnet.test');
@@ -375,6 +381,8 @@ describe('public knowledge sdk', () => {
       else process.env.KNOWLEDGE_FAKE_SSH_IMPORT_JSON = oldEnv.KNOWLEDGE_FAKE_SSH_IMPORT_JSON;
       if (oldEnv.KNOWLEDGE_FAKE_SSH_TARGET_PATH === undefined) delete process.env.KNOWLEDGE_FAKE_SSH_TARGET_PATH;
       else process.env.KNOWLEDGE_FAKE_SSH_TARGET_PATH = oldEnv.KNOWLEDGE_FAKE_SSH_TARGET_PATH;
+      if (oldEnv.KNOWLEDGE_FAKE_SSH_STDIN_PATH === undefined) delete process.env.KNOWLEDGE_FAKE_SSH_STDIN_PATH;
+      else process.env.KNOWLEDGE_FAKE_SSH_STDIN_PATH = oldEnv.KNOWLEDGE_FAKE_SSH_STDIN_PATH;
     }
   });
 });

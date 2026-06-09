@@ -1724,6 +1724,16 @@ export class KnowledgeService {
       peer_workspace: peerWorkspace,
       message: '',
     };
+    let resolverEvidenceRecorded = false;
+    const recordResolverEvidence = () => {
+      if (dryRun || resolverEvidenceRecorded) return;
+      recordKnowledgeMachineResolverEvidence(localWorkspace.knowledgeDbPath, {
+        machineId: options.machine,
+        route: resolvedMachine,
+        workspace: resolvedWorkspace,
+      });
+      resolverEvidenceRecorded = true;
+    };
 
     if (direction === 'pull' || direction === 'both') {
       const remoteExport = remoteKnowledgeCommand(peerWorkspace, [
@@ -1744,6 +1754,7 @@ export class KnowledgeService {
     }
 
     if (direction === 'push' || direction === 'both') {
+      recordResolverEvidence();
       const bundle = this.exportSyncBundle({
         machineId: options.machineId ?? null,
         tables: options.tables,
@@ -1761,13 +1772,7 @@ export class KnowledgeService {
     }
 
     result.ok = (result.pull?.ok ?? true) && (result.push?.ok ?? true);
-    if (!dryRun) {
-      recordKnowledgeMachineResolverEvidence(localWorkspace.knowledgeDbPath, {
-        machineId: options.machine,
-        route: resolvedMachine,
-        workspace: resolvedWorkspace,
-      });
-    }
+    recordResolverEvidence();
     result.message = [
       workspaceReadinessMessage(result.resolved_workspace),
       result.pull ? `pull: ${result.pull.message}` : null,
