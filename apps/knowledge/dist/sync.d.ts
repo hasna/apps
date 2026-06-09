@@ -212,6 +212,8 @@ export interface KnowledgeSyncTableApplyResult {
     source_rows: number;
     target_rows: number;
     inserted: number;
+    updated: number;
+    deleted: number;
     skipped: number;
     conflicts: number;
     stale_skipped: number;

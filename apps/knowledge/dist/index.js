@@ -3691,6 +3691,56 @@ function titleFromItem(item) {
 function hashFromItem(item) {
   return asString2(item.hash) ?? asString2(item.checksum) ?? asString2(item.sha256) ?? null;
 }
+var OMIT_MANIFEST_METADATA_KEYS = new Set([
+  "text",
+  "content",
+  "content_text",
+  "extracted_text",
+  "markdown",
+  "raw",
+  "raw_text",
+  "raw_bytes",
+  "raw_content",
+  "raw_body",
+  "raw_file",
+  "source_raw",
+  "source_raw_bytes",
+  "source_bytes",
+  "source_content",
+  "source_body",
+  "file_bytes",
+  "file_content",
+  "content_bytes",
+  "content_base64",
+  "document_bytes",
+  "document_content",
+  "document_base64",
+  "binary",
+  "binary_content",
+  "binary_base64",
+  "bytes",
+  "body",
+  "blob",
+  "data",
+  "payload"
+]);
+function normalizeMetadataKey(key) {
+  return key.toLowerCase().replace(/[\s-]+/g, "_");
+}
+function sanitizeManifestMetadataValue(value) {
+  if (Array.isArray(value))
+    return value.map((entry) => sanitizeManifestMetadataValue(entry));
+  const object = asObject2(value);
+  if (!object)
+    return value;
+  const sanitized = {};
+  for (const [key, nestedValue] of Object.entries(object)) {
+    if (OMIT_MANIFEST_METADATA_KEYS.has(normalizeMetadataKey(key)))
+      continue;
+    sanitized[key] = sanitizeManifestMetadataValue(nestedValue);
+  }
+  return sanitized;
+}
 function revisionFromItem(item, parsed, hash) {
   const revision = asString2(item.revision_id) ?? asString2(item.revision) ?? asString2(item.version_id) ?? (parsed.kind === "open-files" ? parsed.revision_id : undefined) ?? hash ?? asString2(item.updated_at);
   return revision ?? "current";
@@ -3698,9 +3748,9 @@ function revisionFromItem(item, parsed, hash) {
 function metadataFromItem(item, normalized) {
   const metadata = {};
   for (const [key, value] of Object.entries(item)) {
-    if (["text", "content", "content_text", "extracted_text", "markdown"].includes(key))
+    if (OMIT_MANIFEST_METADATA_KEYS.has(normalizeMetadataKey(key)))
       continue;
-    metadata[key] = value;
+    metadata[key] = sanitizeManifestMetadataValue(value);
   }
   metadata.source_ref = normalized.sourceRef;
   metadata.source_uri = normalized.sourceUri;
@@ -6724,6 +6774,99 @@ function upsertSqliteRows(db, table, rows) {
   insert(rows);
   return rows.length;
 }
+function parseRowKeyValues(table, key) {
+  const primaryKeys = PRIMARY_KEYS2[table];
+  const values = [];
+  let rest = key;
+  for (let index = 0;index < primaryKeys.length; index += 1) {
+    const primaryKey = primaryKeys[index];
+    const prefix = `${primaryKey}=`;
+    if (!rest.startsWith(prefix))
+      return null;
+    const remaining = rest.slice(prefix.length);
+    const nextPrimaryKey = primaryKeys[index + 1];
+    const marker = nextPrimaryKey ? `&${nextPrimaryKey}=` : null;
+    const markerIndex = marker ? remaining.indexOf(marker) : -1;
+    const encoded = markerIndex >= 0 ? remaining.slice(0, markerIndex) : remaining;
+    try {
+      values.push(JSON.parse(encoded));
+    } catch {
+      return null;
+    }
+    rest = markerIndex >= 0 && marker ? remaining.slice(markerIndex + 1) : "";
+  }
+  return rest.length === 0 ? values : null;
+}
+function primaryKeyWhereClause(table) {
+  return PRIMARY_KEYS2[table].map((key) => `${quoteIdent2(key)} = ?`).join(" AND ");
+}
+function latestImportedRowHashes(db, table, sourceMachineId) {
+  if (!tableExists3(db, "knowledge_sync_changes"))
+    return new Map;
+  const rows = db.query(`SELECT entity_id, next_hash
+     FROM knowledge_sync_changes
+     WHERE origin_machine_id = ? AND entity_kind = ?
+     ORDER BY created_at ASC, id ASC`).all(sourceMachineId, table);
+  const latest = new Map;
+  for (const row of rows)
+    latest.set(row.entity_id, row.next_hash);
+  return latest;
+}
+function removeChunkDerivedRows(db, chunkId) {
+  if (tableExists3(db, "chunks_fts"))
+    db.query("DELETE FROM chunks_fts WHERE chunk_id = ?").run(chunkId);
+  if (tableExists3(db, "chunk_embeddings"))
+    db.query("DELETE FROM chunk_embeddings WHERE chunk_id = ?").run(chunkId);
+  if (tableExists3(db, "vector_index_entries"))
+    db.query("DELETE FROM vector_index_entries WHERE chunk_id = ?").run(chunkId);
+  if (tableExists3(db, "citations"))
+    db.query("DELETE FROM citations WHERE chunk_id = ?").run(chunkId);
+}
+function deleteSqliteRowByKey(db, table, key) {
+  const values = parseRowKeyValues(table, key);
+  if (!values)
+    return false;
+  const where = primaryKeyWhereClause(table);
+  const existing = db.query(`SELECT * FROM ${quoteIdent2(table)} WHERE ${where} LIMIT 1`).get(...values);
+  if (!existing)
+    return false;
+  if (table === "chunks" && typeof existing.id === "string")
+    removeChunkDerivedRows(db, existing.id);
+  db.query(`DELETE FROM ${quoteIdent2(table)} WHERE ${where}`).run(...values);
+  return true;
+}
+function refreshChunkFtsRows(db, rows) {
+  if (!tableExists3(db, "chunks_fts"))
+    return;
+  for (const row of rows) {
+    const chunkId = typeof row.id === "string" ? row.id : null;
+    const text = typeof row.text === "string" ? row.text : null;
+    if (!chunkId || text === null)
+      continue;
+    let title = "";
+    let sourceUri = "";
+    const sourceRevisionId = typeof row.source_revision_id === "string" ? row.source_revision_id : null;
+    if (sourceRevisionId) {
+      const source = db.query(`SELECT s.title, s.uri
+         FROM source_revisions sr
+         JOIN sources s ON s.id = sr.source_id
+         WHERE sr.id = ?
+         LIMIT 1`).get(sourceRevisionId);
+      title = source?.title ?? "";
+      sourceUri = source?.uri ?? "";
+    }
+    if (!sourceUri && typeof row.metadata_json === "string") {
+      const metadata = parseJson2(row.metadata_json, {});
+      sourceUri = typeof metadata.source_uri === "string" ? metadata.source_uri : "";
+    }
+    db.query("DELETE FROM chunks_fts WHERE chunk_id = ?").run(chunkId);
+    db.query("INSERT INTO chunks_fts (chunk_id, text, title, source_uri) VALUES (?, ?, ?, ?)").run(chunkId, text, title, sourceUri);
+  }
+}
+function refreshDerivedRowsForImport(db, table, rows) {
+  if (table === "chunks")
+    refreshChunkFtsRows(db, rows);
+}
 function assertInside2(root, target) {
   const rel = relative3(root, target);
   return rel !== ".." && !rel.startsWith("..") && !rel.startsWith(`..${sep3}`);
@@ -7142,6 +7285,8 @@ function replayedApplyResult(options) {
       source_rows: table.rows.length,
       target_rows: getBundleTable(options.targetBundle, table.table)?.rows.length ?? 0,
       inserted: 0,
+      updated: 0,
+      deleted: 0,
       skipped: table.rows.length,
       conflicts: 0,
       stale_skipped: 0
@@ -7238,12 +7383,16 @@ async function applyKnowledgeSyncBundle(options) {
       const existingClock = tableClock(db, sourceTable.table, sourceMachineId);
       const targetTable = getBundleTable(targetBundle, sourceTable.table);
       const targetRows = tableRowMap(sourceTable.table, targetTable?.rows ?? []);
+      const incomingRowKeys = new Set(sourceTable.rows.map((row) => rowKey(sourceTable.table, row)));
+      const importedRowHashes = latestImportedRowHashes(db, sourceTable.table, sourceMachineId);
       const rowsToWrite = [];
       const result = {
         table: sourceTable.table,
         source_rows: sourceTable.rows.length,
         target_rows: targetTable?.rows.length ?? 0,
         inserted: 0,
+        updated: 0,
+        deleted: 0,
         skipped: 0,
         conflicts: 0,
         stale_skipped: 0
@@ -7272,6 +7421,12 @@ async function applyKnowledgeSyncBundle(options) {
           result.skipped += 1;
           continue;
         }
+        const importedHash = importedRowHashes.get(key);
+        if (importedRowHashes.has(key) && importedHash === currentHash) {
+          result.updated += 1;
+          rowsToWrite.push(transformImportedRow(sourceRow, artifactResult.uriMap));
+          continue;
+        }
         result.conflicts += 1;
         if (!dryRun) {
           if (insertConflict(db, {
@@ -7297,6 +7452,7 @@ async function applyKnowledgeSyncBundle(options) {
       if (!dryRun && rowsToWrite.length > 0) {
         const writtenRows = rowsToWrite.map((row) => transformImportedRow(row, artifactResult.uriMap));
         upsertSqliteRows(db, sourceTable.table, writtenRows);
+        refreshDerivedRowsForImport(db, sourceTable.table, writtenRows);
         for (const row of writtenRows) {
           insertSyncChange(db, {
             direction: options.direction,
@@ -7310,6 +7466,40 @@ async function applyKnowledgeSyncBundle(options) {
             row
           });
         }
+      }
+      for (const [key, importedHash] of importedRowHashes) {
+        if (incomingRowKeys.has(key))
+          continue;
+        const targetRow = targetRows.get(key);
+        if (!targetRow)
+          continue;
+        const currentHash = rowHash(targetRow, targetArtifactUriToKey);
+        if (importedHash && currentHash !== importedHash) {
+          result.conflicts += 1;
+          if (!dryRun) {
+            if (insertConflict(db, {
+              entityKind: sourceTable.table,
+              entityId: key,
+              localMachineId: localMachineId2,
+              remoteMachineId: sourceMachineId,
+              localHash: currentHash,
+              remoteHash: null,
+              baseHash: importedHash,
+              metadata: {
+                direction: options.direction,
+                bundle_id: bundleId,
+                reason: "remote_owned_row_missing_from_incoming_bundle",
+                source_workspace_home: options.bundle.source.workspace_home,
+                target_workspace_home: options.targetWorkspaceHome
+              }
+            }))
+              conflictsCreated += 1;
+          }
+          continue;
+        }
+        result.deleted += 1;
+        if (!dryRun)
+          deleteSqliteRowByKey(db, sourceTable.table, key);
       }
       if (!dryRun && incomingClock) {
         updateTableClock(db, {
@@ -7326,6 +7516,8 @@ async function applyKnowledgeSyncBundle(options) {
             direction: options.direction,
             row_count: sourceTable.rows.length,
             inserted: result.inserted,
+            updated: result.updated,
+            deleted: result.deleted,
             skipped: result.skipped,
             conflicts: result.conflicts
           }

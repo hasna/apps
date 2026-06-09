@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { relative, resolve, sep } from 'node:path';
-import type { Database } from 'bun:sqlite';
+import type { Database, SQLQueryBindings } from 'bun:sqlite';
 import { CURRENT_SCHEMA_VERSION, getSchemaVersion, migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { recordStorageObjects, type GeneratedStorageObject, type StorageContract } from './storage-contract';
 import { normalizeArtifactKey, type ArtifactStore } from './artifact-store';
@@ -282,6 +282,8 @@ export interface KnowledgeSyncTableApplyResult {
   source_rows: number;
   target_rows: number;
   inserted: number;
+  updated: number;
+  deleted: number;
   skipped: number;
   conflicts: number;
   stale_skipped: number;
@@ -634,6 +636,97 @@ function upsertSqliteRows(db: Database, table: KnowledgeSyncTable, rows: Row[]):
   });
   insert(rows);
   return rows.length;
+}
+
+function parseRowKeyValues(table: KnowledgeSyncTable, key: string): SQLQueryBindings[] | null {
+  const primaryKeys = PRIMARY_KEYS[table];
+  const values: SQLQueryBindings[] = [];
+  let rest = key;
+  for (let index = 0; index < primaryKeys.length; index += 1) {
+    const primaryKey = primaryKeys[index]!;
+    const prefix = `${primaryKey}=`;
+    if (!rest.startsWith(prefix)) return null;
+    const remaining = rest.slice(prefix.length);
+    const nextPrimaryKey = primaryKeys[index + 1];
+    const marker = nextPrimaryKey ? `&${nextPrimaryKey}=` : null;
+    const markerIndex = marker ? remaining.indexOf(marker) : -1;
+    const encoded = markerIndex >= 0 ? remaining.slice(0, markerIndex) : remaining;
+    try {
+      values.push(JSON.parse(encoded) as SQLQueryBindings);
+    } catch {
+      return null;
+    }
+    rest = markerIndex >= 0 && marker ? remaining.slice(markerIndex + 1) : '';
+  }
+  return rest.length === 0 ? values : null;
+}
+
+function primaryKeyWhereClause(table: KnowledgeSyncTable): string {
+  return PRIMARY_KEYS[table].map((key) => `${quoteIdent(key)} = ?`).join(' AND ');
+}
+
+function latestImportedRowHashes(db: Database, table: KnowledgeSyncTable, sourceMachineId: string): Map<string, string | null> {
+  if (!tableExists(db, 'knowledge_sync_changes')) return new Map();
+  const rows = db.query<{ entity_id: string; next_hash: string | null }, [string, string]>(
+    `SELECT entity_id, next_hash
+     FROM knowledge_sync_changes
+     WHERE origin_machine_id = ? AND entity_kind = ?
+     ORDER BY created_at ASC, id ASC`,
+  ).all(sourceMachineId, table);
+  const latest = new Map<string, string | null>();
+  for (const row of rows) latest.set(row.entity_id, row.next_hash);
+  return latest;
+}
+
+function removeChunkDerivedRows(db: Database, chunkId: string): void {
+  if (tableExists(db, 'chunks_fts')) db.query('DELETE FROM chunks_fts WHERE chunk_id = ?').run(chunkId);
+  if (tableExists(db, 'chunk_embeddings')) db.query('DELETE FROM chunk_embeddings WHERE chunk_id = ?').run(chunkId);
+  if (tableExists(db, 'vector_index_entries')) db.query('DELETE FROM vector_index_entries WHERE chunk_id = ?').run(chunkId);
+  if (tableExists(db, 'citations')) db.query('DELETE FROM citations WHERE chunk_id = ?').run(chunkId);
+}
+
+function deleteSqliteRowByKey(db: Database, table: KnowledgeSyncTable, key: string): boolean {
+  const values = parseRowKeyValues(table, key);
+  if (!values) return false;
+  const where = primaryKeyWhereClause(table);
+  const existing = db.query(`SELECT * FROM ${quoteIdent(table)} WHERE ${where} LIMIT 1`).get(...values) as Row | null;
+  if (!existing) return false;
+  if (table === 'chunks' && typeof existing.id === 'string') removeChunkDerivedRows(db, existing.id);
+  db.query(`DELETE FROM ${quoteIdent(table)} WHERE ${where}`).run(...values);
+  return true;
+}
+
+function refreshChunkFtsRows(db: Database, rows: Row[]): void {
+  if (!tableExists(db, 'chunks_fts')) return;
+  for (const row of rows) {
+    const chunkId = typeof row.id === 'string' ? row.id : null;
+    const text = typeof row.text === 'string' ? row.text : null;
+    if (!chunkId || text === null) continue;
+    let title = '';
+    let sourceUri = '';
+    const sourceRevisionId = typeof row.source_revision_id === 'string' ? row.source_revision_id : null;
+    if (sourceRevisionId) {
+      const source = db.query<{ title: string | null; uri: string | null }, [string]>(
+        `SELECT s.title, s.uri
+         FROM source_revisions sr
+         JOIN sources s ON s.id = sr.source_id
+         WHERE sr.id = ?
+         LIMIT 1`,
+      ).get(sourceRevisionId);
+      title = source?.title ?? '';
+      sourceUri = source?.uri ?? '';
+    }
+    if (!sourceUri && typeof row.metadata_json === 'string') {
+      const metadata = parseJson<Record<string, unknown>>(row.metadata_json, {});
+      sourceUri = typeof metadata.source_uri === 'string' ? metadata.source_uri : '';
+    }
+    db.query('DELETE FROM chunks_fts WHERE chunk_id = ?').run(chunkId);
+    db.query('INSERT INTO chunks_fts (chunk_id, text, title, source_uri) VALUES (?, ?, ?, ?)').run(chunkId, text, title, sourceUri);
+  }
+}
+
+function refreshDerivedRowsForImport(db: Database, table: KnowledgeSyncTable, rows: Row[]): void {
+  if (table === 'chunks') refreshChunkFtsRows(db, rows);
 }
 
 function assertInside(root: string, target: string): boolean {
@@ -1221,6 +1314,8 @@ function replayedApplyResult(options: {
         source_rows: table.rows.length,
         target_rows: getBundleTable(options.targetBundle, table.table)?.rows.length ?? 0,
         inserted: 0,
+        updated: 0,
+        deleted: 0,
         skipped: table.rows.length,
         conflicts: 0,
         stale_skipped: 0,
@@ -1328,12 +1423,16 @@ export async function applyKnowledgeSyncBundle(options: {
       const existingClock = tableClock(db, sourceTable.table, sourceMachineId);
       const targetTable = getBundleTable(targetBundle, sourceTable.table);
       const targetRows = tableRowMap(sourceTable.table, targetTable?.rows ?? []);
+      const incomingRowKeys = new Set(sourceTable.rows.map((row) => rowKey(sourceTable.table, row)));
+      const importedRowHashes = latestImportedRowHashes(db, sourceTable.table, sourceMachineId);
       const rowsToWrite: Row[] = [];
       const result: KnowledgeSyncTableApplyResult = {
         table: sourceTable.table,
         source_rows: sourceTable.rows.length,
         target_rows: targetTable?.rows.length ?? 0,
         inserted: 0,
+        updated: 0,
+        deleted: 0,
         skipped: 0,
         conflicts: 0,
         stale_skipped: 0,
@@ -1364,6 +1463,12 @@ export async function applyKnowledgeSyncBundle(options: {
           result.skipped += 1;
           continue;
         }
+        const importedHash = importedRowHashes.get(key);
+        if (importedRowHashes.has(key) && importedHash === currentHash) {
+          result.updated += 1;
+          rowsToWrite.push(transformImportedRow(sourceRow, artifactResult.uriMap));
+          continue;
+        }
         result.conflicts += 1;
         if (!dryRun) {
           if (insertConflict(db, {
@@ -1389,6 +1494,7 @@ export async function applyKnowledgeSyncBundle(options: {
       if (!dryRun && rowsToWrite.length > 0) {
         const writtenRows = rowsToWrite.map((row) => transformImportedRow(row, artifactResult.uriMap));
         upsertSqliteRows(db, sourceTable.table, writtenRows);
+        refreshDerivedRowsForImport(db, sourceTable.table, writtenRows);
         for (const row of writtenRows) {
           insertSyncChange(db, {
             direction: options.direction,
@@ -1402,6 +1508,36 @@ export async function applyKnowledgeSyncBundle(options: {
             row,
           });
         }
+      }
+      for (const [key, importedHash] of importedRowHashes) {
+        if (incomingRowKeys.has(key)) continue;
+        const targetRow = targetRows.get(key);
+        if (!targetRow) continue;
+        const currentHash = rowHash(targetRow, targetArtifactUriToKey);
+        if (importedHash && currentHash !== importedHash) {
+          result.conflicts += 1;
+          if (!dryRun) {
+            if (insertConflict(db, {
+              entityKind: sourceTable.table,
+              entityId: key,
+              localMachineId,
+              remoteMachineId: sourceMachineId,
+              localHash: currentHash,
+              remoteHash: null,
+              baseHash: importedHash,
+              metadata: {
+                direction: options.direction,
+                bundle_id: bundleId,
+                reason: 'remote_owned_row_missing_from_incoming_bundle',
+                source_workspace_home: options.bundle.source.workspace_home,
+                target_workspace_home: options.targetWorkspaceHome,
+              },
+            })) conflictsCreated += 1;
+          }
+          continue;
+        }
+        result.deleted += 1;
+        if (!dryRun) deleteSqliteRowByKey(db, sourceTable.table, key);
       }
       if (!dryRun && incomingClock) {
         updateTableClock(db, {
@@ -1418,6 +1554,8 @@ export async function applyKnowledgeSyncBundle(options: {
             direction: options.direction,
             row_count: sourceTable.rows.length,
             inserted: result.inserted,
+            updated: result.updated,
+            deleted: result.deleted,
             skipped: result.skipped,
             conflicts: result.conflicts,
           },

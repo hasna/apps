@@ -136,6 +136,56 @@ function hashFromItem(item: ManifestObject): string | null {
   return asString(item.hash) ?? asString(item.checksum) ?? asString(item.sha256) ?? null;
 }
 
+const OMIT_MANIFEST_METADATA_KEYS = new Set([
+  'text',
+  'content',
+  'content_text',
+  'extracted_text',
+  'markdown',
+  'raw',
+  'raw_text',
+  'raw_bytes',
+  'raw_content',
+  'raw_body',
+  'raw_file',
+  'source_raw',
+  'source_raw_bytes',
+  'source_bytes',
+  'source_content',
+  'source_body',
+  'file_bytes',
+  'file_content',
+  'content_bytes',
+  'content_base64',
+  'document_bytes',
+  'document_content',
+  'document_base64',
+  'binary',
+  'binary_content',
+  'binary_base64',
+  'bytes',
+  'body',
+  'blob',
+  'data',
+  'payload',
+]);
+
+function normalizeMetadataKey(key: string): string {
+  return key.toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function sanitizeManifestMetadataValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((entry) => sanitizeManifestMetadataValue(entry));
+  const object = asObject(value);
+  if (!object) return value;
+  const sanitized: ManifestObject = {};
+  for (const [key, nestedValue] of Object.entries(object)) {
+    if (OMIT_MANIFEST_METADATA_KEYS.has(normalizeMetadataKey(key))) continue;
+    sanitized[key] = sanitizeManifestMetadataValue(nestedValue);
+  }
+  return sanitized;
+}
+
 function revisionFromItem(item: ManifestObject, parsed: SourceRef, hash: string | null): string {
   const revision =
     asString(item.revision_id) ??
@@ -154,8 +204,8 @@ function metadataFromItem(item: ManifestObject, normalized: {
 }): ManifestObject {
   const metadata: ManifestObject = {};
   for (const [key, value] of Object.entries(item)) {
-    if (['text', 'content', 'content_text', 'extracted_text', 'markdown'].includes(key)) continue;
-    metadata[key] = value;
+    if (OMIT_MANIFEST_METADATA_KEYS.has(normalizeMetadataKey(key))) continue;
+    metadata[key] = sanitizeManifestMetadataValue(value);
   }
   metadata.source_ref = normalized.sourceRef;
   metadata.source_uri = normalized.sourceUri;
