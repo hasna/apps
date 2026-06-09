@@ -14236,7 +14236,7 @@ import { existsSync as existsSync10, readFileSync as readFileSync9, writeFileSyn
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.48",
+  version: "0.2.49",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   exports: {
@@ -19964,6 +19964,7 @@ async function ingestOpenFilesManifestItems(options) {
 // src/machines.ts
 import { spawnSync } from "child_process";
 import { hostname as hostname4, platform, userInfo } from "os";
+var KNOWLEDGE_MACHINES_ADAPTER_CONTRACT_VERSION = 1;
 var KNOWLEDGE_MACHINES_ADAPTER_PACKAGE = "@hasna/machines";
 var KNOWLEDGE_MACHINES_ADAPTER_ENTRYPOINT = "@hasna/machines/consumer";
 function asString3(value) {
@@ -20155,6 +20156,12 @@ function contractVersion(mod) {
   const direct = mod?.MACHINES_CONSUMER_CONTRACT_VERSION;
   return typeof direct === "number" ? direct : null;
 }
+function payloadContractVersion(value) {
+  return typeof value.schema_version === "number" ? value.schema_version : null;
+}
+function unsupportedContractVersion(version2) {
+  return typeof version2 === "number" && version2 > KNOWLEDGE_MACHINES_ADAPTER_CONTRACT_VERSION ? version2 : null;
+}
 function adapterStatus(input) {
   return {
     package: KNOWLEDGE_MACHINES_ADAPTER_PACKAGE,
@@ -20172,6 +20179,18 @@ function disabledAdapterStatus(mode, error48 = "adapter_disabled") {
     implementation: "disabled",
     available: false,
     error: error48
+  });
+}
+function unsupportedContractAdapterStatus(mode, mod) {
+  const version2 = unsupportedContractVersion(contractVersion(mod));
+  if (!version2)
+    return null;
+  return adapterStatus({
+    mode,
+    implementation: "disabled",
+    available: false,
+    error: `unsupported_contract_version:${version2}`,
+    contractVersion: version2
   });
 }
 function cliAdapterStatus(mode) {
@@ -20436,6 +20455,8 @@ async function loadOpenMachinesModule() {
 }
 function normalizeOpenMachinesTopology(value, options, adapter) {
   const raw = asRecord(value);
+  if (unsupportedContractVersion(payloadContractVersion(raw)))
+    return null;
   const machines = Array.isArray(raw.machines) ? raw.machines : null;
   const localMachine = asString3(raw.local_machine_id);
   if (!machines || !localMachine)
@@ -20458,6 +20479,8 @@ function normalizeRouteKind(value) {
 }
 function normalizeOpenMachinesRoute(value, adapter) {
   const raw = asRecord(value);
+  if (unsupportedContractVersion(payloadContractVersion(raw)))
+    return null;
   const target = asString3(raw.target) ?? asString3(raw.command_target);
   if (raw.ok !== true || !target)
     return null;
@@ -20556,6 +20579,8 @@ function fallbackWorkspaceRepairHints(input) {
 }
 function normalizeOpenMachinesWorkspace(value, options, adapter) {
   const raw = asRecord(value);
+  if (unsupportedContractVersion(payloadContractVersion(raw)))
+    return null;
   const paths = asRecord(raw.paths);
   const project = asRecord(raw.project);
   const machine = asRecord(raw.machine);
@@ -20653,6 +20678,9 @@ async function discoverKnowledgeMachineTopology(options = {}) {
     if (mode !== "cli") {
       const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
       const mod = await loader();
+      const unsupportedStatus = unsupportedContractAdapterStatus(mode, mod);
+      if (unsupportedStatus)
+        return await discoverLocalTopology(options, unsupportedStatus);
       const sdkStatus = sdkAdapterStatus(mode, mod);
       if (mod?.discoverMachineTopology) {
         const topology = mod.discoverMachineTopology({
@@ -20711,6 +20739,9 @@ async function resolveKnowledgeMachineRoute(options) {
     if (mode !== "cli") {
       const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
       const mod = await loader();
+      const unsupportedStatus = unsupportedContractAdapterStatus(mode, mod);
+      if (unsupportedStatus)
+        return rawMachineRoute(options.machineId, unsupportedStatus);
       const sdkStatus = sdkAdapterStatus(mode, mod);
       if (mod?.resolveMachineRoute) {
         const normalized = normalizeOpenMachinesRoute(mod.resolveMachineRoute(options.machineId, {
@@ -20834,6 +20865,9 @@ async function resolveKnowledgeMachineWorkspace(options) {
     if (mode !== "cli") {
       const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
       const mod = await loader();
+      const unsupportedStatus = unsupportedContractAdapterStatus(mode, mod);
+      if (unsupportedStatus)
+        return unresolvedMachineWorkspace(options, [`unsupported_contract_version:${unsupportedStatus.contract_version}`], unsupportedStatus);
       const sdkStatus = sdkAdapterStatus(mode, mod);
       if (mod?.resolveMachineWorkspace) {
         const normalized = normalizeOpenMachinesWorkspace(mod.resolveMachineWorkspace({
@@ -20875,6 +20909,8 @@ function withPreflightKnowledgeContext(report, options) {
 }
 function normalizeOpenMachinesPreflight(value, options, adapter) {
   const raw = asRecord(value);
+  if (unsupportedContractVersion(payloadContractVersion(raw)))
+    return null;
   const checksRaw = Array.isArray(raw.checks) ? raw.checks : null;
   const machineId = asString3(raw.machine_id) ?? asString3(raw.machineId);
   if (!checksRaw || !machineId)
@@ -21001,6 +21037,9 @@ async function preflightKnowledgeMachine(options = {}) {
     if (mode !== "cli") {
       const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
       const mod = await loader();
+      const unsupportedStatus = unsupportedContractAdapterStatus(mode, mod);
+      if (unsupportedStatus)
+        return await fallbackPreflight(options, unsupportedStatus);
       const sdkStatus = sdkAdapterStatus(mode, mod);
       if (mod?.checkMachineCompatibility) {
         const report = mod.checkMachineCompatibility({

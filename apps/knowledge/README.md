@@ -328,6 +328,9 @@ local machine identity and optional Tailscale status probing. The explicit
 adapter modes are `sdk`, `cli`, and `disabled`; `@hasna/machines` is never a
 hard runtime dependency. This command does not sync data; it only exposes
 machine ids, hostnames, route hints, workspace context, and adapter status.
+If the optional consumer SDK declares a newer contract than `knowledge`
+understands, `knowledge` refuses the SDK result and reports
+`unsupported_contract_version:<n>` while falling back to raw/local behavior.
 
 `machines preflight` checks command availability, `@hasna/knowledge` CLI
 version parity, optional `@hasna/machines` availability, and the target repo
@@ -346,7 +349,8 @@ bun run smoke:machines-adapter -- --json
 ```
 
 It builds isolated temp apps for project-local SDK resolution, global
-`machines` CLI-only fallback, and no-SDK/no-CLI fallback.
+`machines` CLI-only fallback, unsupported future SDK contracts, and
+no-SDK/no-CLI fallback.
 
 ### sync
 ```bash

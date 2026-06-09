@@ -46,6 +46,7 @@ function parseArgs(argv) {
         '',
         'Verifies installed-package machines adapter modes:',
         '  sdk-local: @hasna/knowledge and @hasna/machines available in temp app node_modules',
+        '  future-contract-sdk: @hasna/machines/consumer declares a future contract and knowledge refuses it',
         '  global-cli-only: @hasna/knowledge local, @hasna/machines absent, global machines CLI on PATH',
         '  no-sdk-no-cli: @hasna/knowledge local, @hasna/machines absent, machines CLI absent from PATH',
       ].join('\n'));
@@ -180,6 +181,50 @@ function writeMachinesWrapper(appDir, machinesBin) {
   return binDir;
 }
 
+function writeFutureContractMachinesPackage(version = 2) {
+  const packageDir = mkdtempSync(join(tmpdir(), 'knowledge-machines-future-contract-'));
+  writeFileSync(join(packageDir, 'package.json'), JSON.stringify({
+    name: '@hasna/machines',
+    version: `999.0.0-contract-v${version}`,
+    type: 'module',
+    exports: {
+      '.': './consumer.mjs',
+      './consumer': './consumer.mjs',
+    },
+  }, null, 2));
+  writeFileSync(join(packageDir, 'consumer.mjs'), `
+    export const MACHINES_CONSUMER_CONTRACT_VERSION = ${version};
+    export const MACHINES_CONSUMER_CONTRACT = {
+      schema_version: ${version},
+      package_name: '@hasna/machines',
+      entrypoint: '@hasna/machines/consumer',
+      capabilities: {
+        topology: true,
+        compatibility: true,
+        route_resolution: true,
+        cli_json_fallback: true,
+        workspace_path_mapping: true,
+        workspace_diagnostics: true,
+      },
+      envelopes: ['topology', 'route', 'workspace', 'compatibility'],
+      stable_exports: ['resolveMachineRoute'],
+    };
+    export function resolveMachineRoute() {
+      return {
+        schema_version: ${version},
+        ok: true,
+        target: 'future-contract.tailnet.test',
+        route: 'tailscale',
+        source: 'tailscale',
+        confidence: 'high',
+        evidence: { selected_hint: { kind: 'tailscale' } },
+        warnings: [],
+      };
+    }
+  `);
+  return packageDir;
+}
+
 function assertCase(name, output, expected) {
   const route = output.route || {};
   const adapter = route.adapter || {};
@@ -194,6 +239,9 @@ function assertCase(name, output, expected) {
   }
   if (expected.contractVersion !== undefined && adapter.contract_version !== expected.contractVersion) {
     throw new Error(`${name}: expected contract_version=${expected.contractVersion}, got ${adapter.contract_version}\n${JSON.stringify(output, null, 2)}`);
+  }
+  if (expected.error !== undefined && adapter.error !== expected.error) {
+    throw new Error(`${name}: expected adapter error=${expected.error}, got ${adapter.error}\n${JSON.stringify(output, null, 2)}`);
   }
 }
 
@@ -239,6 +287,8 @@ function main() {
   const machinesPackageDir = resolve(options.machinesPackageDir || packagePath(globalRoot, '@hasna/machines'));
   const machinesBin = commandPath('machines');
   if (!machinesBin) throw new Error('Global machines CLI is required for the global-cli-only smoke case.');
+  const futureContractVersion = 2;
+  const futureMachinesPackageDir = writeFutureContractMachinesPackage(futureContractVersion);
 
   const cliOnlyApp = mkdtempSync(join(tmpdir(), 'knowledge-machines-cli-path-'));
   const cliOnlyBin = writeMachinesWrapper(cliOnlyApp, machinesBin);
@@ -258,6 +308,20 @@ function main() {
           implementation: 'sdk',
           available: true,
           contractVersion: 1,
+        },
+      },
+      {
+        name: 'future-contract-sdk',
+        adapterMode: 'sdk',
+        includeMachinesPackage: true,
+        machinesPackageDir: futureMachinesPackageDir,
+        path: systemPath,
+        expected: {
+          source: 'raw',
+          implementation: 'disabled',
+          available: false,
+          contractVersion: futureContractVersion,
+          error: `unsupported_contract_version:${futureContractVersion}`,
         },
       },
       {
@@ -288,7 +352,7 @@ function main() {
       keepTemp: options.keepTemp,
       globalRoot,
       knowledgePackageDir,
-      machinesPackageDir,
+      machinesPackageDir: entry.machinesPackageDir ?? machinesPackageDir,
     }));
 
     const results = cases.map(runCase);
@@ -306,6 +370,7 @@ function main() {
   } finally {
     if (!options.keepTemp) rmSync(cliOnlyApp, { recursive: true, force: true });
     if (!options.keepTemp) rmSync(noCliApp, { recursive: true, force: true });
+    if (!options.keepTemp) rmSync(futureMachinesPackageDir, { recursive: true, force: true });
   }
 }
 

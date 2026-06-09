@@ -558,6 +558,14 @@ function contractVersion(mod: OpenMachinesModule | null): number | null {
   return typeof direct === 'number' ? direct : null;
 }
 
+function payloadContractVersion(value: Record<string, unknown>): number | null {
+  return typeof value.schema_version === 'number' ? value.schema_version : null;
+}
+
+function unsupportedContractVersion(version: number | null): number | null {
+  return typeof version === 'number' && version > KNOWLEDGE_MACHINES_ADAPTER_CONTRACT_VERSION ? version : null;
+}
+
 function adapterStatus(input: {
   mode: KnowledgeMachinesAdapterMode;
   implementation: KnowledgeMachinesAdapterImplementation;
@@ -582,6 +590,18 @@ function disabledAdapterStatus(mode: KnowledgeMachinesAdapterMode, error = 'adap
     implementation: 'disabled',
     available: false,
     error,
+  });
+}
+
+function unsupportedContractAdapterStatus(mode: KnowledgeMachinesAdapterMode, mod: OpenMachinesModule | null): KnowledgeMachinesAdapterStatus | null {
+  const version = unsupportedContractVersion(contractVersion(mod));
+  if (!version) return null;
+  return adapterStatus({
+    mode,
+    implementation: 'disabled',
+    available: false,
+    error: `unsupported_contract_version:${version}`,
+    contractVersion: version,
   });
 }
 
@@ -908,6 +928,7 @@ async function loadOpenMachinesModule(): Promise<OpenMachinesModule | null> {
 
 function normalizeOpenMachinesTopology(value: unknown, options: KnowledgeMachineTopologyOptions, adapter: KnowledgeMachinesAdapterStatus): KnowledgeMachineTopology | null {
   const raw = asRecord(value);
+  if (unsupportedContractVersion(payloadContractVersion(raw))) return null;
   const machines = Array.isArray(raw.machines) ? raw.machines as OpenMachinesEntry[] : null;
   const localMachine = asString(raw.local_machine_id);
   if (!machines || !localMachine) return null;
@@ -937,6 +958,7 @@ function normalizeRouteKind(value: unknown): KnowledgeMachineRouteKind | null {
 
 function normalizeOpenMachinesRoute(value: unknown, adapter: KnowledgeMachinesAdapterStatus): KnowledgeMachineRouteResolution | null {
   const raw = asRecord(value);
+  if (unsupportedContractVersion(payloadContractVersion(raw))) return null;
   const target = asString(raw.target) ?? asString(raw.command_target);
   if (raw.ok !== true || !target) return null;
   const evidence = typeof raw.evidence === 'object' && raw.evidence !== null
@@ -1057,6 +1079,7 @@ function fallbackWorkspaceRepairHints(input: {
 
 function normalizeOpenMachinesWorkspace(value: unknown, options: KnowledgeMachineWorkspaceOptions, adapter: KnowledgeMachinesAdapterStatus): KnowledgeMachineWorkspaceResolution | null {
   const raw = asRecord(value);
+  if (unsupportedContractVersion(payloadContractVersion(raw))) return null;
   const paths = asRecord(raw.paths);
   const project = asRecord(raw.project);
   const machine = asRecord(raw.machine);
@@ -1156,6 +1179,8 @@ export async function discoverKnowledgeMachineTopology(options: KnowledgeMachine
     if (mode !== 'cli') {
       const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
       const mod = await loader();
+      const unsupportedStatus = unsupportedContractAdapterStatus(mode, mod);
+      if (unsupportedStatus) return await discoverLocalTopology(options, unsupportedStatus);
       const sdkStatus = sdkAdapterStatus(mode, mod);
       if (mod?.discoverMachineTopology) {
         const topology = mod.discoverMachineTopology({
@@ -1213,6 +1238,8 @@ export async function resolveKnowledgeMachineRoute(options: KnowledgeMachineRout
     if (mode !== 'cli') {
       const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
       const mod = await loader();
+      const unsupportedStatus = unsupportedContractAdapterStatus(mode, mod);
+      if (unsupportedStatus) return rawMachineRoute(options.machineId, unsupportedStatus);
       const sdkStatus = sdkAdapterStatus(mode, mod);
       if (mod?.resolveMachineRoute) {
         const normalized = normalizeOpenMachinesRoute(mod.resolveMachineRoute(options.machineId, {
@@ -1329,6 +1356,8 @@ export async function resolveKnowledgeMachineWorkspace(options: KnowledgeMachine
     if (mode !== 'cli') {
       const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
       const mod = await loader();
+      const unsupportedStatus = unsupportedContractAdapterStatus(mode, mod);
+      if (unsupportedStatus) return unresolvedMachineWorkspace(options, [`unsupported_contract_version:${unsupportedStatus.contract_version}`], unsupportedStatus);
       const sdkStatus = sdkAdapterStatus(mode, mod);
       if (mod?.resolveMachineWorkspace) {
         const normalized = normalizeOpenMachinesWorkspace(mod.resolveMachineWorkspace({
@@ -1377,6 +1406,7 @@ function withPreflightKnowledgeContext(
 
 function normalizeOpenMachinesPreflight(value: unknown, options: KnowledgeMachinePreflightOptions, adapter: KnowledgeMachinesAdapterStatus): KnowledgeMachinePreflightReport | null {
   const raw = asRecord(value);
+  if (unsupportedContractVersion(payloadContractVersion(raw))) return null;
   const checksRaw = Array.isArray(raw.checks) ? raw.checks : null;
   const machineId = asString(raw.machine_id) ?? asString(raw.machineId);
   if (!checksRaw || !machineId) return null;
@@ -1498,6 +1528,8 @@ export async function preflightKnowledgeMachine(options: KnowledgeMachinePreflig
     if (mode !== 'cli') {
       const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
       const mod = await loader();
+      const unsupportedStatus = unsupportedContractAdapterStatus(mode, mod);
+      if (unsupportedStatus) return await fallbackPreflight(options, unsupportedStatus);
       const sdkStatus = sdkAdapterStatus(mode, mod);
       if (mod?.checkMachineCompatibility) {
         const report = mod.checkMachineCompatibility({
@@ -1583,6 +1615,8 @@ export function createKnowledgeMachinesAdapter(defaults: KnowledgeMachinesAdapte
       try {
         const loader = defaults.loadOpenMachines ?? loadOpenMachinesModule;
         const mod = await loader();
+        const unsupportedStatus = unsupportedContractAdapterStatus(mode, mod);
+        if (unsupportedStatus) return unsupportedStatus;
         if (mod) return sdkAdapterStatus(mode, mod);
         if (mode === 'sdk') return disabledAdapterStatus(mode, 'module_not_found');
         return cliAdapterStatus(mode);

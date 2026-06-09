@@ -650,4 +650,74 @@ describe('knowledge machine topology', () => {
       contract_version: 1,
     });
   });
+
+  test('refuses an unsupported future open-machines consumer SDK contract', async () => {
+    const futureVersion = KNOWLEDGE_MACHINES_ADAPTER_CONTRACT_VERSION + 1;
+    const adapter = createKnowledgeMachinesAdapter({
+      mode: 'sdk',
+      now: new Date('2026-06-09T00:00:00.000Z'),
+      runner: fakeCommandRunner({}),
+      preflightRunner: fakePreflightRunner({
+        "cmd='knowledge'": 'path=/home/hasna/.bun/bin/knowledge\nversion=@hasna/knowledge 0.2.48\n',
+      }),
+      loadOpenMachines: async () => ({
+        MACHINES_CONSUMER_CONTRACT_VERSION: futureVersion,
+        discoverMachineTopology: () => ({
+          schema_version: futureVersion,
+          local_machine_id: 'future',
+          machines: [],
+        }),
+        resolveMachineRoute: () => ({
+          schema_version: futureVersion,
+          ok: true,
+          target: 'future.tailnet.test',
+        }),
+        resolveMachineWorkspace: () => ({
+          schema_version: futureVersion,
+          ok: true,
+          paths: { project_root: { path: '/future/open-knowledge', source: 'manifest' } },
+        }),
+        checkMachineCompatibility: () => ({
+          schema_version: futureVersion,
+          machine_id: 'future',
+          checks: [],
+        }),
+      }),
+    });
+
+    await expect(adapter.status()).resolves.toMatchObject({
+      implementation: 'disabled',
+      available: false,
+      contract_version: futureVersion,
+      error: `unsupported_contract_version:${futureVersion}`,
+    });
+
+    const topology = await adapter.topology({ includeTailscale: false });
+    expect(topology.source).toBe('local');
+    expect(topology.adapter).toMatchObject({
+      implementation: 'disabled',
+      contract_version: futureVersion,
+      error: `unsupported_contract_version:${futureVersion}`,
+    });
+    expect(topology.warnings).toContain(`open_machines_unavailable:unsupported_contract_version:${futureVersion}`);
+
+    const route = await adapter.route({ machineId: 'spark01', includeTailscale: false });
+    expect(route.source).toBe('raw');
+    expect(route.adapter.error).toBe(`unsupported_contract_version:${futureVersion}`);
+    expect(route.target).toBe('spark01');
+
+    const workspace = await adapter.workspace({ machineId: 'spark01', includeTailscale: false });
+    expect(workspace.ok).toBe(false);
+    expect(workspace.source).toBe('raw');
+    expect(workspace.adapter.error).toBe(`unsupported_contract_version:${futureVersion}`);
+    expect(workspace.warnings).toContain(`unsupported_contract_version:${futureVersion}`);
+
+    const preflight = await adapter.preflight({ machineId: 'spark01' });
+    expect(preflight.source).toBe('local');
+    expect(preflight.adapter.error).toBe(`unsupported_contract_version:${futureVersion}`);
+    expect(preflight.checks.some((check) => (
+      check.id === 'adapter:@hasna/machines'
+      && check.actual === `unsupported_contract_version:${futureVersion}`
+    ))).toBe(true);
+  });
 });
