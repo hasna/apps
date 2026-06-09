@@ -13660,7 +13660,7 @@ import { existsSync as existsSync10, readFileSync as readFileSync9, writeFileSyn
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.33",
+  version: "0.2.34",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   exports: {
@@ -13689,7 +13689,7 @@ var package_default = {
   scripts: {
     test: "bun test",
     "test:cli": "bun test tests/cli.test.ts",
-    build: "rm -rf dist && bun build --target=bun --outfile=bin/knowledge.js --minify --external pg --external @hasna/machines --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --target=bun --outfile=bin/knowledge-mcp.js --external pg --external @hasna/machines --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js && bun build ./src/index.ts ./src/storage.ts --outdir ./dist --target bun --external pg --external @hasna/machines --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek && bunx tsc -p tsconfig.build.json",
+    build: "rm -rf dist && bun build --target=bun --outfile=bin/knowledge.js --minify --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --target=bun --outfile=bin/knowledge-mcp.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js && bun build ./src/index.ts ./src/storage.ts --outdir ./dist --target bun --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek && bunx tsc -p tsconfig.build.json",
     prepublishOnly: "bun run build"
   },
   keywords: [
@@ -17272,7 +17272,7 @@ function topologyMessage(source, count2) {
 }
 function optionalModuleError(error48) {
   const message = error48 instanceof Error ? error48.message : String(error48);
-  return message.includes("Cannot find module '@hasna/machines'") ? "module_not_found" : message;
+  return message.includes("Cannot find module '@hasna/machines'") || message.includes("Cannot find module '@hasna/machines/consumer'") ? "module_not_found" : message;
 }
 function parseJson(value) {
   try {
@@ -17509,8 +17509,15 @@ function withKnowledgeContext(topology, options) {
   };
 }
 async function loadOpenMachinesModule() {
-  const specifier = "@hasna/machines";
-  return await import(specifier);
+  try {
+    const specifier = "@hasna/machines/consumer";
+    return await import(specifier);
+  } catch (error48) {
+    if (optionalModuleError(error48) !== "module_not_found")
+      throw error48;
+    const specifier = "@hasna/machines";
+    return await import(specifier);
+  }
 }
 function normalizeOpenMachinesTopology(value, options) {
   const raw = asRecord(value);
@@ -17664,7 +17671,9 @@ function machinesCliPackageSpec(spec) {
   return [spec.name, spec.command, spec.expectedVersion].filter((value) => Boolean(value)).join(":");
 }
 function machinesCliWorkspaceSpec(spec) {
-  return spec.label ? `${spec.label}=${spec.path}` : spec.path;
+  const suffix = [spec.expectedPackageName, spec.expectedVersion].filter((value) => Boolean(value)).join(":");
+  const path = suffix ? `${spec.path}:${suffix}` : spec.path;
+  return spec.label ? `${spec.label}=${path}` : path;
 }
 async function preflightOpenMachinesCli(options) {
   const runner = machinesCliPreflightRunner(options);

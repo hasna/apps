@@ -4111,7 +4111,7 @@ function topologyMessage(source, count2) {
 }
 function optionalModuleError(error) {
   const message = error instanceof Error ? error.message : String(error);
-  return message.includes("Cannot find module '@hasna/machines'") ? "module_not_found" : message;
+  return message.includes("Cannot find module '@hasna/machines'") || message.includes("Cannot find module '@hasna/machines/consumer'") ? "module_not_found" : message;
 }
 function parseJson(value) {
   try {
@@ -4348,8 +4348,15 @@ function withKnowledgeContext(topology, options) {
   };
 }
 async function loadOpenMachinesModule() {
-  const specifier = "@hasna/machines";
-  return await import(specifier);
+  try {
+    const specifier = "@hasna/machines/consumer";
+    return await import(specifier);
+  } catch (error) {
+    if (optionalModuleError(error) !== "module_not_found")
+      throw error;
+    const specifier = "@hasna/machines";
+    return await import(specifier);
+  }
 }
 function normalizeOpenMachinesTopology(value, options) {
   const raw = asRecord(value);
@@ -4503,7 +4510,9 @@ function machinesCliPackageSpec(spec) {
   return [spec.name, spec.command, spec.expectedVersion].filter((value) => Boolean(value)).join(":");
 }
 function machinesCliWorkspaceSpec(spec) {
-  return spec.label ? `${spec.label}=${spec.path}` : spec.path;
+  const suffix = [spec.expectedPackageName, spec.expectedVersion].filter((value) => Boolean(value)).join(":");
+  const path = suffix ? `${spec.path}:${suffix}` : spec.path;
+  return spec.label ? `${spec.label}=${path}` : path;
 }
 async function preflightOpenMachinesCli(options) {
   const runner = machinesCliPreflightRunner(options);

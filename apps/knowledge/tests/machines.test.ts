@@ -239,4 +239,55 @@ describe('knowledge machine topology', () => {
     expect(result.machine_id).toBe('spark01');
     expect(result.checks[0].source).toBe('ssh');
   });
+
+  test('passes workspace package expectations through machines CLI compatibility', async () => {
+    const commands: string[] = [];
+    const result = await preflightKnowledgeMachine({
+      machineId: 'spark01',
+      now: new Date('2026-06-09T00:00:00.000Z'),
+      loadOpenMachines: async () => null,
+      runner: (machineId, command) => {
+        commands.push(command);
+        if (command.includes('command -v machines')) {
+          return { stdout: '/home/hasna/.bun/bin/machines\n', stderr: '', exitCode: 0, source: machineId === 'local' ? 'local' : 'ssh' };
+        }
+        if (command.includes('compatibility')) {
+          return {
+            stdout: JSON.stringify({
+              ok: true,
+              machine_id: 'spark01',
+              source: 'ssh',
+              generated_at: '2026-06-09T00:00:00.000Z',
+              checks: [{
+                id: 'workspace:open-knowledge:package-name',
+                kind: 'workspace',
+                status: 'ok',
+                target: 'open-knowledge',
+                expected: '@hasna/knowledge',
+                actual: '@hasna/knowledge',
+                detail: 'package.json inspected',
+                source: 'ssh',
+              }],
+              summary: { ok: 1, warn: 0, fail: 0 },
+            }),
+            stderr: '',
+            exitCode: 0,
+            source: 'ssh',
+          };
+        }
+        return { stdout: '', stderr: `unexpected command: ${command}`, exitCode: 1, source: 'ssh' };
+      },
+      workspaces: [{
+        label: 'open-knowledge',
+        path: '/repo/open-knowledge',
+        expectedPackageName: '@hasna/knowledge',
+        expectedVersion: '0.2.34',
+        required: true,
+      }],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(commands.some((command) => command.includes('open-knowledge=/repo/open-knowledge:@hasna/knowledge:0.2.34'))).toBe(true);
+    expect(result.checks[0].id).toBe('workspace:open-knowledge:package-name');
+  });
 });

@@ -397,7 +397,9 @@ function topologyMessage(source: KnowledgeMachineTopology['source'], count: numb
 
 function optionalModuleError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  return message.includes("Cannot find module '@hasna/machines'") ? 'module_not_found' : message;
+  return message.includes("Cannot find module '@hasna/machines'") || message.includes("Cannot find module '@hasna/machines/consumer'")
+    ? 'module_not_found'
+    : message;
 }
 
 function parseJson(value: string): unknown | null {
@@ -694,8 +696,14 @@ function withKnowledgeContext(
 }
 
 async function loadOpenMachinesModule(): Promise<OpenMachinesModule | null> {
-  const specifier = '@hasna/machines';
-  return await import(specifier) as OpenMachinesModule;
+  try {
+    const specifier = '@hasna/machines/consumer';
+    return await import(specifier) as OpenMachinesModule;
+  } catch (error) {
+    if (optionalModuleError(error) !== 'module_not_found') throw error;
+    const specifier = '@hasna/machines';
+    return await import(specifier) as OpenMachinesModule;
+  }
 }
 
 function normalizeOpenMachinesTopology(value: unknown, options: KnowledgeMachineTopologyOptions): KnowledgeMachineTopology | null {
@@ -858,7 +866,9 @@ function machinesCliPackageSpec(spec: KnowledgeMachinePreflightPackageSpec): str
 }
 
 function machinesCliWorkspaceSpec(spec: KnowledgeMachinePreflightWorkspaceSpec): string {
-  return spec.label ? `${spec.label}=${spec.path}` : spec.path;
+  const suffix = [spec.expectedPackageName, spec.expectedVersion].filter((value): value is string => Boolean(value)).join(':');
+  const path = suffix ? `${spec.path}:${suffix}` : spec.path;
+  return spec.label ? `${spec.label}=${path}` : path;
 }
 
 async function preflightOpenMachinesCli(options: KnowledgeMachinePreflightOptions): Promise<KnowledgeMachinePreflightReport | null> {
