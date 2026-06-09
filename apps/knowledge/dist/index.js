@@ -4113,8 +4113,18 @@ function optionalModuleError(error) {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes("Cannot find module '@hasna/machines'") ? "module_not_found" : message;
 }
+function parseJson(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
 function shellQuote(value) {
   return `'${value.replace(/'/g, "'\\''")}'`;
+}
+function machinesCliCommand(args) {
+  return ["machines", ...args].map(shellQuote).join(" ");
 }
 function preflightTargetIsLocal(machineId) {
   return machineId === "local" || machineId === "localhost" || machineId === hostname() || machineId === process.env.HASNA_MACHINE_ID || machineId === process.env.OPEN_MACHINES_MACHINE_ID || machineId === process.env.MACHINE_ID;
@@ -4364,6 +4374,18 @@ function normalizeOpenMachinesTopology(value, options) {
   };
   return withKnowledgeContext(topology, options);
 }
+async function discoverOpenMachinesCliTopology(options) {
+  const runner = options.runner ?? defaultRunner;
+  if (!await hasCommand("machines", runner))
+    return null;
+  const args = ["topology", "--json"];
+  if (options.includeTailscale === false)
+    args.push("--no-tailscale");
+  const result = await runCommand(runner, machinesCliCommand(args));
+  if (result.exitCode !== 0)
+    return null;
+  return normalizeOpenMachinesTopology(parseJson(result.stdout), options);
+}
 async function discoverLocalTopology(options, adapterError) {
   const warnings = [];
   if (adapterError)
@@ -4406,11 +4428,11 @@ async function discoverKnowledgeMachineTopology(options = {}) {
       const normalized = normalizeOpenMachinesTopology(topology, options);
       if (normalized)
         return normalized;
-      return await discoverLocalTopology(options, "invalid_topology_shape");
+      return await discoverOpenMachinesCliTopology(options) ?? await discoverLocalTopology(options, "invalid_topology_shape");
     }
-    return await discoverLocalTopology(options, "missing_discoverMachineTopology");
+    return await discoverOpenMachinesCliTopology(options) ?? await discoverLocalTopology(options, "missing_discoverMachineTopology");
   } catch (error) {
-    return await discoverLocalTopology(options, optionalModuleError(error));
+    return await discoverOpenMachinesCliTopology(options) ?? await discoverLocalTopology(options, optionalModuleError(error));
   }
 }
 function withPreflightKnowledgeContext(report, options) {
@@ -4464,6 +4486,46 @@ function normalizeOpenMachinesPreflight(value, options) {
       error: null
     }
   }, options);
+}
+function machinesCliPreflightRunner(options) {
+  if (!options.runner)
+    return defaultRunner;
+  return async (command) => {
+    const result = await options.runner?.("local", command);
+    return {
+      stdout: result?.stdout ?? "",
+      stderr: result?.stderr ?? "",
+      exitCode: result?.exitCode ?? 1
+    };
+  };
+}
+function machinesCliPackageSpec(spec) {
+  return [spec.name, spec.command, spec.expectedVersion].filter((value) => Boolean(value)).join(":");
+}
+function machinesCliWorkspaceSpec(spec) {
+  return spec.label ? `${spec.label}=${spec.path}` : spec.path;
+}
+async function preflightOpenMachinesCli(options) {
+  const runner = machinesCliPreflightRunner(options);
+  if (!await hasCommand("machines", runner))
+    return null;
+  const args = [
+    "compatibility",
+    "--json",
+    "--machine",
+    options.machineId ?? "local"
+  ];
+  for (const spec of options.commands ?? []) {
+    args.push("--command", spec.expectedVersion ? `${spec.command}:${spec.expectedVersion}` : spec.command);
+  }
+  for (const spec of options.packages ?? [])
+    args.push("--package", machinesCliPackageSpec(spec));
+  for (const spec of options.workspaces ?? [])
+    args.push("--workspace", machinesCliWorkspaceSpec(spec));
+  const result = await runCommand(runner, machinesCliCommand(args));
+  if (result.exitCode !== 0)
+    return null;
+  return normalizeOpenMachinesPreflight(parseJson(result.stdout), options);
 }
 async function fallbackPreflight(options, adapterError) {
   const machineId = options.machineId ?? hostname();
@@ -4525,11 +4587,11 @@ async function preflightKnowledgeMachine(options = {}) {
       const normalized = normalizeOpenMachinesPreflight(report, options);
       if (normalized)
         return normalized;
-      return await fallbackPreflight(options, "invalid_compatibility_shape");
+      return await preflightOpenMachinesCli(options) ?? await fallbackPreflight(options, "invalid_compatibility_shape");
     }
-    return await fallbackPreflight(options, "missing_checkMachineCompatibility");
+    return await preflightOpenMachinesCli(options) ?? await fallbackPreflight(options, "missing_checkMachineCompatibility");
   } catch (error) {
-    return await fallbackPreflight(options, optionalModuleError(error));
+    return await preflightOpenMachinesCli(options) ?? await fallbackPreflight(options, optionalModuleError(error));
   }
 }
 
@@ -5942,7 +6004,7 @@ function count2(db, table) {
   const row = db.query(`SELECT COUNT(*) AS n FROM ${table}`).get();
   return row?.n ?? 0;
 }
-function parseJson(value, fallback) {
+function parseJson2(value, fallback) {
   try {
     return JSON.parse(value);
   } catch {
@@ -6043,7 +6105,7 @@ function assertInside2(root, target) {
   return rel !== ".." && !rel.startsWith("..") && !rel.startsWith(`..${sep3}`);
 }
 function keyForArtifactRow(row, artifactsDir) {
-  const metadata = parseJson(row.metadata_json, {});
+  const metadata = parseJson2(row.metadata_json, {});
   if (typeof metadata.key === "string")
     return metadata.key;
   if (!row.artifact_uri.startsWith("file://"))
@@ -6284,7 +6346,7 @@ async function materializeArtifacts(options) {
       options.warnings.push(`artifact_skipped_unsupported:${artifact.artifact_uri}`);
       continue;
     }
-    const metadata = parseJson(artifact.metadata_json, {});
+    const metadata = parseJson2(artifact.metadata_json, {});
     const object = {
       uri: nextUri,
       key: artifact.key ?? metadata.key ?? artifact.artifact_uri,
@@ -6589,17 +6651,17 @@ function listKnowledgeSyncConflicts(dbPath, options = {}) {
     const rows = options.status ? db.query("SELECT * FROM knowledge_sync_conflicts WHERE status = ? ORDER BY created_at DESC LIMIT ?").all(options.status, limit) : db.query("SELECT * FROM knowledge_sync_conflicts ORDER BY created_at DESC LIMIT ?").all(limit);
     return rows.map((row) => ({
       ...row,
-      metadata: parseJson(row.metadata_json, {})
+      metadata: parseJson2(row.metadata_json, {})
     }));
   } finally {
     db.close();
   }
 }
 function syncTablesFromSnapshot(snapshot) {
-  return parseJson(snapshot.tables_json, {});
+  return parseJson2(snapshot.tables_json, {});
 }
 function syncArtifactsFromSnapshot(snapshot) {
-  return parseJson(snapshot.artifact_hashes_json, []);
+  return parseJson2(snapshot.artifact_hashes_json, []);
 }
 
 // src/wiki-compiler.ts

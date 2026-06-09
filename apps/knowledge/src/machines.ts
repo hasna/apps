@@ -400,8 +400,20 @@ function optionalModuleError(error: unknown): string {
   return message.includes("Cannot find module '@hasna/machines'") ? 'module_not_found' : message;
 }
 
+function parseJson(value: string): unknown | null {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function machinesCliCommand(args: string[]): string {
+  return ['machines', ...args].map(shellQuote).join(' ');
 }
 
 function preflightTargetIsLocal(machineId: string): boolean {
@@ -709,6 +721,16 @@ function normalizeOpenMachinesTopology(value: unknown, options: KnowledgeMachine
   return withKnowledgeContext(topology, options);
 }
 
+async function discoverOpenMachinesCliTopology(options: KnowledgeMachineTopologyOptions): Promise<KnowledgeMachineTopology | null> {
+  const runner = options.runner ?? defaultRunner;
+  if (!await hasCommand('machines', runner)) return null;
+  const args = ['topology', '--json'];
+  if (options.includeTailscale === false) args.push('--no-tailscale');
+  const result = await runCommand(runner, machinesCliCommand(args));
+  if (result.exitCode !== 0) return null;
+  return normalizeOpenMachinesTopology(parseJson(result.stdout), options);
+}
+
 async function discoverLocalTopology(options: KnowledgeMachineTopologyOptions, adapterError: string | null): Promise<KnowledgeMachineTopology> {
   const warnings: string[] = [];
   if (adapterError) warnings.push(`open_machines_unavailable:${adapterError}`);
@@ -753,11 +775,11 @@ export async function discoverKnowledgeMachineTopology(options: KnowledgeMachine
       });
       const normalized = normalizeOpenMachinesTopology(topology, options);
       if (normalized) return normalized;
-      return await discoverLocalTopology(options, 'invalid_topology_shape');
+      return await discoverOpenMachinesCliTopology(options) ?? await discoverLocalTopology(options, 'invalid_topology_shape');
     }
-    return await discoverLocalTopology(options, 'missing_discoverMachineTopology');
+    return await discoverOpenMachinesCliTopology(options) ?? await discoverLocalTopology(options, 'missing_discoverMachineTopology');
   } catch (error) {
-    return await discoverLocalTopology(options, optionalModuleError(error));
+    return await discoverOpenMachinesCliTopology(options) ?? await discoverLocalTopology(options, optionalModuleError(error));
   }
 }
 
@@ -819,6 +841,44 @@ function normalizeOpenMachinesPreflight(value: unknown, options: KnowledgeMachin
   }, options);
 }
 
+function machinesCliPreflightRunner(options: KnowledgeMachinePreflightOptions): KnowledgeMachineCommandRunner {
+  if (!options.runner) return defaultRunner;
+  return async (command) => {
+    const result = await options.runner?.('local', command);
+    return {
+      stdout: result?.stdout ?? '',
+      stderr: result?.stderr ?? '',
+      exitCode: result?.exitCode ?? 1,
+    };
+  };
+}
+
+function machinesCliPackageSpec(spec: KnowledgeMachinePreflightPackageSpec): string {
+  return [spec.name, spec.command, spec.expectedVersion].filter((value): value is string => Boolean(value)).join(':');
+}
+
+function machinesCliWorkspaceSpec(spec: KnowledgeMachinePreflightWorkspaceSpec): string {
+  return spec.label ? `${spec.label}=${spec.path}` : spec.path;
+}
+
+async function preflightOpenMachinesCli(options: KnowledgeMachinePreflightOptions): Promise<KnowledgeMachinePreflightReport | null> {
+  const runner = machinesCliPreflightRunner(options);
+  if (!await hasCommand('machines', runner)) return null;
+  const args = [
+    'compatibility',
+    '--json',
+    '--machine', options.machineId ?? 'local',
+  ];
+  for (const spec of options.commands ?? []) {
+    args.push('--command', spec.expectedVersion ? `${spec.command}:${spec.expectedVersion}` : spec.command);
+  }
+  for (const spec of options.packages ?? []) args.push('--package', machinesCliPackageSpec(spec));
+  for (const spec of options.workspaces ?? []) args.push('--workspace', machinesCliWorkspaceSpec(spec));
+  const result = await runCommand(runner, machinesCliCommand(args));
+  if (result.exitCode !== 0) return null;
+  return normalizeOpenMachinesPreflight(parseJson(result.stdout), options);
+}
+
 async function fallbackPreflight(options: KnowledgeMachinePreflightOptions, adapterError: string | null): Promise<KnowledgeMachinePreflightReport> {
   const machineId = options.machineId ?? hostname();
   const runner = options.runner ?? defaultPreflightRunner;
@@ -876,10 +936,10 @@ export async function preflightKnowledgeMachine(options: KnowledgeMachinePreflig
       });
       const normalized = normalizeOpenMachinesPreflight(report, options);
       if (normalized) return normalized;
-      return await fallbackPreflight(options, 'invalid_compatibility_shape');
+      return await preflightOpenMachinesCli(options) ?? await fallbackPreflight(options, 'invalid_compatibility_shape');
     }
-    return await fallbackPreflight(options, 'missing_checkMachineCompatibility');
+    return await preflightOpenMachinesCli(options) ?? await fallbackPreflight(options, 'missing_checkMachineCompatibility');
   } catch (error) {
-    return await fallbackPreflight(options, optionalModuleError(error));
+    return await preflightOpenMachinesCli(options) ?? await fallbackPreflight(options, optionalModuleError(error));
   }
 }

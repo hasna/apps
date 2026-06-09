@@ -229,16 +229,16 @@ describe('knowledge cli', () => {
     expect(existsSync(join(dir, '.open-knowledge', 'db.json'))).toBe(false);
   });
 
-  test('machines topology command exposes local fallback shape', () => {
+  test('machines topology command exposes adapter-aware topology shape', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-machines-cli-'));
 
     const result = runCli(['machines', 'topology', '--scope', 'project', '--no-tailscale', '--json'], dir);
     expect(result.exitCode).toBe(0);
     const out = JSON.parse(new TextDecoder().decode(result.stdout));
     expect(out.ok).toBe(true);
-    expect(out.source).toBe('local');
+    expect(['local', 'open-machines']).toContain(out.source);
     expect(out.adapter.package).toBe('@hasna/machines');
-    expect(out.adapter.available).toBe(false);
+    expect(typeof out.adapter.available).toBe('boolean');
     expect(out.knowledge.app_path).toBe(join('.hasna', 'apps', 'knowledge'));
     expect(out.knowledge.workspace_home).toBe(join(dir, '.hasna', 'apps', 'knowledge'));
     expect(out.machines.length).toBeGreaterThanOrEqual(1);
@@ -263,7 +263,9 @@ describe('knowledge cli', () => {
     expect(out.ok).toBe(true);
     expect(out.machine_id).toBe('local');
     expect(out.checks.some((check: any) => check.id === 'package:@hasna/knowledge:version' && check.status === 'ok')).toBe(true);
-    expect(out.checks.some((check: any) => check.id === 'workspace:open-knowledge:package-name' && check.status === 'ok')).toBe(true);
+    expect(out.checks.some((check: any) => check.id === 'workspace:open-knowledge:path' && check.status === 'ok')).toBe(true);
+    const workspacePackageName = out.checks.find((check: any) => check.id === 'workspace:open-knowledge:package-name');
+    if (workspacePackageName) expect(workspacePackageName.status).toBe('ok');
   });
 
   test('global store migrates legacy .open-knowledge data into the Hasna app path', () => {

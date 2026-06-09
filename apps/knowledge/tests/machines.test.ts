@@ -1,5 +1,21 @@
 import { describe, expect, test } from 'bun:test';
-import { discoverKnowledgeMachineTopology, preflightKnowledgeMachine, type KnowledgeMachinePreflightRunner } from '../src/machines';
+import {
+  discoverKnowledgeMachineTopology,
+  preflightKnowledgeMachine,
+  type KnowledgeMachineCommandRunner,
+  type KnowledgeMachinePreflightRunner,
+} from '../src/machines';
+
+function fakeCommandRunner(outputs: Record<string, string>): KnowledgeMachineCommandRunner {
+  return (command) => {
+    const key = Object.keys(outputs).find((entry) => command.includes(entry));
+    return {
+      stdout: key ? outputs[key] : '',
+      stderr: key ? '' : `unexpected command: ${command}`,
+      exitCode: key ? 0 : 1,
+    };
+  };
+}
 
 function fakePreflightRunner(outputs: Record<string, string>): KnowledgeMachinePreflightRunner {
   return (machineId, command) => {
@@ -73,6 +89,7 @@ describe('knowledge machine topology', () => {
       includeTailscale: false,
       now: new Date('2026-06-09T00:00:00.000Z'),
       loadOpenMachines: async () => null,
+      runner: fakeCommandRunner({}),
     });
 
     expect(result.source).toBe('local');
@@ -80,6 +97,47 @@ describe('knowledge machine topology', () => {
     expect(result.machines.length).toBeGreaterThanOrEqual(1);
     expect(result.machines.some((machine) => machine.local)).toBe(true);
     expect(result.warnings).toContain('open_machines_unavailable:missing_discoverMachineTopology');
+  });
+
+  test('uses machines CLI topology when SDK import is unavailable', async () => {
+    const result = await discoverKnowledgeMachineTopology({
+      includeTailscale: false,
+      now: new Date('2026-06-09T00:00:00.000Z'),
+      knowledge: {
+        scope: 'project',
+        workspace_home: '/repo/.hasna/apps/knowledge',
+      },
+      loadOpenMachines: async () => null,
+      runner: fakeCommandRunner({
+        'command -v machines': '/home/hasna/.bun/bin/machines\n',
+        'topology': JSON.stringify({
+          generated_at: '2026-06-09T00:00:00.000Z',
+          local_machine_id: 'spark02',
+          local_hostname: 'spark02',
+          current_platform: 'linux',
+          machines: [{
+            machine_id: 'spark02',
+            hostname: 'spark02',
+            platform: 'linux',
+            os: 'linux',
+            workspace_path: '/repo',
+            manifest_declared: false,
+            heartbeat_status: 'unknown',
+            tailscale: { dns_name: null, ips: [], online: null, active: null, last_seen: null },
+            ssh: { address: null, route: 'local', command_target: 'localhost' },
+            route_hints: [{ kind: 'local', target: 'localhost', reachable: true }],
+            tags: [],
+            metadata: {},
+          }],
+          warnings: [],
+        }),
+      }),
+    });
+
+    expect(result.source).toBe('open-machines');
+    expect(result.adapter.available).toBe(true);
+    expect(result.adapter.error).toBeNull();
+    expect(result.machines[0].machine_id).toBe('spark02');
   });
 
   test('normalizes optional open-machines preflight report', async () => {
@@ -144,5 +202,41 @@ describe('knowledge machine topology', () => {
     expect(result.summary.fail).toBe(0);
     expect(result.summary.warn).toBe(1);
     expect(result.checks.some((check) => check.id === 'adapter:@hasna/machines')).toBe(true);
+  });
+
+  test('uses machines CLI compatibility when SDK import is unavailable', async () => {
+    const result = await preflightKnowledgeMachine({
+      machineId: 'spark01',
+      now: new Date('2026-06-09T00:00:00.000Z'),
+      loadOpenMachines: async () => null,
+      runner: fakePreflightRunner({
+        'command -v machines': '/home/hasna/.bun/bin/machines\n',
+        'compatibility': JSON.stringify({
+          ok: true,
+          machine_id: 'spark01',
+          source: 'ssh',
+          generated_at: '2026-06-09T00:00:00.000Z',
+          checks: [{
+            id: 'package:@hasna/knowledge:version',
+            kind: 'package',
+            status: 'ok',
+            target: '@hasna/knowledge',
+            expected: '0.2.32',
+            actual: '0.2.32',
+            detail: 'version output: @hasna/knowledge 0.2.32',
+            source: 'ssh',
+          }],
+          summary: { ok: 1, warn: 0, fail: 0 },
+        }),
+      }),
+      packages: [{ name: '@hasna/knowledge', command: 'knowledge', expectedVersion: '0.2.32', required: true }],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.source).toBe('open-machines');
+    expect(result.adapter.available).toBe(true);
+    expect(result.adapter.error).toBeNull();
+    expect(result.machine_id).toBe('spark01');
+    expect(result.checks[0].source).toBe('ssh');
   });
 });
