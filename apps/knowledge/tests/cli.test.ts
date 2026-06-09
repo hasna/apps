@@ -419,7 +419,8 @@ describe('knowledge cli', () => {
         content_type: 'text/markdown',
         hash: 'sha256:readme',
         size_bytes: 128,
-        metadata: { provenance: { generated_from: 'test' } },
+        modified_at: '2026-06-09T00:00:00.000Z',
+        metadata: { provenance: { generated_from: 'test', artifact_key: 'wiki/README.md' } },
       }], new Date('2026-06-09T00:00:00.000Z'));
     } finally {
       opened.close();
@@ -442,6 +443,19 @@ describe('knowledge cli', () => {
         missing_size: 0,
         total_size_bytes: 128,
       },
+      modified_time: {
+        with_modified_at: 1,
+        missing_modified_at: 0,
+        invalid_modified_at: 0,
+      },
+      provenance: {
+        with_provenance: 1,
+        missing_provenance: 0,
+        with_artifact_key: 1,
+        missing_artifact_key: 0,
+        artifact_key_mismatches: 0,
+        generated_from: [{ value: 'test', count: 1 }],
+      },
       uri_prefix: {
         matching: 1,
         mismatched: 0,
@@ -457,6 +471,8 @@ describe('knowledge cli', () => {
         includes_raw_source_bytes: false,
         hash_algorithm: 'sha256',
         portable_keys: true,
+        tracks_modified_time: true,
+        preserves_provenance: true,
       },
       raw_payload_sentinel_hits: 0,
     });
@@ -497,6 +513,8 @@ describe('knowledge cli', () => {
         hash: 'sha256:legacy',
         size_bytes: 256,
         metadata: {
+          artifact_modified_at: 'not-a-date',
+          provenance: { generated_from: 'legacy-s3', artifact_key: 'wiki/not-legacy.md' },
           raw_content: 'legacy raw payload should not be in storage object metadata',
         },
       }], new Date('2026-06-09T00:00:00.000Z'));
@@ -512,6 +530,14 @@ describe('knowledge cli', () => {
     expect(out.storage.artifact_manifest).toMatchObject({
       ok: false,
       raw_payload_sentinel_hits: 1,
+      modified_time: {
+        with_modified_at: 0,
+        invalid_modified_at: 1,
+      },
+      provenance: {
+        with_provenance: 1,
+        artifact_key_mismatches: 1,
+      },
       keys: {
         prefixed_with_storage_prefix: 1,
         prefixed_examples: ['org/project/knowledge/wiki/legacy.md'],
@@ -522,6 +548,8 @@ describe('knowledge cli', () => {
       },
     });
     expect(out.storage.artifact_manifest.warnings).toContain('artifact_manifest_s3_key_contains_storage_prefix:1');
+    expect(out.storage.artifact_manifest.warnings).toContain('artifact_manifest_invalid_modified_at:1');
+    expect(out.storage.artifact_manifest.warnings).toContain('artifact_manifest_provenance_key_mismatch:1');
     expect(out.storage.artifact_manifest.warnings).toContain('artifact_manifest_raw_payload_sentinels:1');
     expect(out.warnings).toContain('artifact_manifest_s3_key_contains_storage_prefix:1');
     expect(out.warnings).toContain('artifact_manifest_raw_payload_sentinels:1');
@@ -554,7 +582,8 @@ describe('knowledge cli', () => {
         content_type: 'text/markdown',
         hash: 'sha256:legacy',
         size_bytes: 256,
-        metadata: { provenance: { generated_from: 'legacy-s3' } },
+        modified_at: '2026-06-09T00:00:00.000Z',
+        metadata: { provenance: { generated_from: 'legacy-s3', artifact_key: 'wiki/legacy.md' } },
       }], new Date('2026-06-09T00:00:00.000Z'));
     } finally {
       opened.close();

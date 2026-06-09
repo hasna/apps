@@ -32,7 +32,7 @@ class FakeS3ArtifactStore implements ArtifactStore {
     return prefix ? `${prefix}/${logicalKey}` : logicalKey;
   }
 
-  async put(entry: ArtifactWrite): Promise<{ key: string; uri: string }> {
+  async put(entry: ArtifactWrite): Promise<{ key: string; uri: string; modified_at: string }> {
     const key = normalizeArtifactKey(entry.key);
     const objectKey = this.objectKey(key);
     const uri = `s3://${this.bucket}/${objectKey}`;
@@ -43,7 +43,7 @@ class FakeS3ArtifactStore implements ArtifactStore {
       body: Buffer.from(entry.body),
       content_type: entry.content_type,
     });
-    return { key, uri };
+    return { key, uri, modified_at: '2026-06-09T00:00:00.000Z' };
   }
 
   async getText(key: string): Promise<string> {
@@ -416,6 +416,11 @@ describe('knowledge machine sync ledger', () => {
         expect(row.hash).toStartWith('sha256:');
         expect(row.size_bytes).toBeGreaterThan(0);
         expect(metadata.key).toBeString();
+        expect(Number.isNaN(Date.parse(metadata.artifact_modified_at))).toBe(false);
+        expect(metadata.provenance).toMatchObject({
+          artifact_key: metadata.key,
+          raw_source_bytes_stored_in_open_knowledge: false,
+        });
         expect(metadata.key).not.toStartWith('org/project/knowledge/');
         expect(JSON.stringify(metadata)).not.toContain('content_base64');
         expect(JSON.stringify(metadata)).not.toContain('raw_content');
@@ -436,6 +441,7 @@ describe('knowledge machine sync ledger', () => {
         generated_artifacts_only: true,
         includes_raw_source_bytes: false,
         portable_keys: true,
+        preserves_provenance: true,
       },
     });
 
@@ -483,6 +489,7 @@ describe('knowledge machine sync ledger', () => {
       sync_manifest: {
         includes_raw_source_bytes: false,
         portable_keys: true,
+        preserves_provenance: true,
       },
     });
   });

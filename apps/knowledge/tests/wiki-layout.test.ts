@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LocalArtifactStore } from '../src/artifact-store';
 import { migrateKnowledgeDb, openKnowledgeDb } from '../src/knowledge-db';
+import { recordStorageObjects } from '../src/storage-contract';
 import { initializeWikiLayout, recordWikiLayoutCatalog } from '../src/wiki-layout';
 
 describe('wiki layout', () => {
@@ -25,6 +26,7 @@ describe('wiki layout', () => {
     expect(result.artifacts).toHaveLength(4);
     expect(result.artifacts.map((entry) => entry.kind)).toEqual(['schema', 'index', 'wiki_page', 'log']);
     expect(result.artifacts.every((entry) => entry.hash?.startsWith('sha256:'))).toBe(true);
+    expect(result.artifacts.every((entry) => !Number.isNaN(Date.parse(entry.modified_at ?? '')))).toBe(true);
     expect(result.artifacts.find((entry) => entry.key === 'wiki/README.md')?.metadata?.provenance).toMatchObject({
       source_owner: 'open-files',
       generated_from: 'wiki_layout_init',
@@ -40,7 +42,19 @@ describe('wiki layout', () => {
     const result = await initializeWikiLayout(store, new Date('2026-06-08T00:00:00.000Z'));
     const db = openKnowledgeDb(dbPath);
     try {
+      recordStorageObjects(db, result.artifacts, new Date('2026-06-08T00:00:00.000Z'));
       recordWikiLayoutCatalog(db, result.artifacts, new Date('2026-06-08T00:00:00.000Z'));
+      const storageObject = db.query<{ metadata_json: string }, [string]>(
+        'SELECT metadata_json FROM storage_objects WHERE artifact_uri = ?',
+      ).get(result.artifacts.find((entry) => entry.key === 'wiki/README.md')?.uri ?? '');
+      const storageMetadata = JSON.parse(storageObject?.metadata_json ?? '{}');
+      expect(storageMetadata.key).toBe('wiki/README.md');
+      expect(Number.isNaN(Date.parse(storageMetadata.artifact_modified_at))).toBe(false);
+      expect(storageMetadata.provenance).toMatchObject({
+        generated_from: 'wiki_layout_init',
+        artifact_key: 'wiki/README.md',
+      });
+
       const index = db.query<{ artifact_uri: string; metadata_json: string }, [string, string]>(
         'SELECT artifact_uri, metadata_json FROM knowledge_indexes WHERE kind = ? AND name = ?',
       ).get('root', 'root');

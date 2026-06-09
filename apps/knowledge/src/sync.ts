@@ -1202,6 +1202,7 @@ async function materializeArtifacts(options: {
     }
 
     const metadata = parseJson<Record<string, unknown>>(artifact.metadata_json, {});
+    const modifiedAt = typeof metadata.artifact_modified_at === 'string' ? metadata.artifact_modified_at : undefined;
     const object: GeneratedStorageObject = {
       uri: nextUri,
       key: artifact.key ?? metadata.key as string ?? artifact.artifact_uri,
@@ -1209,6 +1210,7 @@ async function materializeArtifacts(options: {
       content_type: artifact.content_type ?? undefined,
       hash: artifact.hash ?? undefined,
       size_bytes: artifact.size_bytes ?? undefined,
+      modified_at: modifiedAt,
       metadata: {
         ...metadata,
         synced_from_artifact_uri: artifact.artifact_uri,

@@ -100,6 +100,7 @@ export interface GeneratedStorageObject {
   content_type?: string;
   hash?: string;
   size_bytes?: number;
+  modified_at?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -325,6 +326,11 @@ export function recordStorageObjects(db: Database, objects: GeneratedStorageObje
 
   const insert = db.transaction((entries: GeneratedStorageObject[]) => {
     for (const entry of entries) {
+      const metadata = {
+        key: entry.key,
+        ...(entry.modified_at ? { artifact_modified_at: entry.modified_at } : {}),
+        ...(entry.metadata ?? {}),
+      };
       statement.run(
         randomUUID(),
         entry.uri,
@@ -332,10 +338,7 @@ export function recordStorageObjects(db: Database, objects: GeneratedStorageObje
         entry.content_type ?? null,
         entry.hash ?? null,
         entry.size_bytes ?? null,
-        JSON.stringify({
-          key: entry.key,
-          ...(entry.metadata ?? {}),
-        }),
+        JSON.stringify(metadata),
         timestamp,
         timestamp,
       );

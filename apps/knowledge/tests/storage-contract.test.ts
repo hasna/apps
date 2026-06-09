@@ -120,6 +120,13 @@ describe('knowledge storage contract', () => {
         uri: 'file:///tmp/wiki/README.md',
         kind: 'wiki_page',
         content_type: 'text/markdown',
+        modified_at: '2026-06-08T00:00:00.000Z',
+        metadata: {
+          provenance: {
+            generated_from: 'test',
+            artifact_key: 'wiki/README.md',
+          },
+        },
         ...hashed,
       }], new Date('2026-06-08T00:00:00.000Z'));
 
@@ -135,7 +142,13 @@ describe('knowledge storage contract', () => {
       expect(row?.content_type).toBe('text/markdown');
       expect(row?.hash).toBe(hashed.hash);
       expect(row?.size_bytes).toBe(hashed.size_bytes);
-      expect(JSON.parse(row?.metadata_json ?? '{}').key).toBe('wiki/README.md');
+      const metadata = JSON.parse(row?.metadata_json ?? '{}');
+      expect(metadata.key).toBe('wiki/README.md');
+      expect(metadata.artifact_modified_at).toBe('2026-06-08T00:00:00.000Z');
+      expect(metadata.provenance).toMatchObject({
+        generated_from: 'test',
+        artifact_key: 'wiki/README.md',
+      });
     } finally {
       db.close();
     }

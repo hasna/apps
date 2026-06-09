@@ -25,6 +25,7 @@ describe('knowledge artifact store', () => {
 
     expect(result.key).toBe('wiki/engineering/mcp.md');
     expect(result.uri).toStartWith('file://');
+    expect(Number.isNaN(Date.parse(result.modified_at ?? ''))).toBe(false);
     expect(existsSync(join(dir, 'wiki', 'engineering', 'mcp.md'))).toBe(true);
     expect(await store.exists('wiki/engineering/mcp.md')).toBe(true);
     expect(await store.getText('wiki/engineering/mcp.md')).toContain('Agent-facing tools');
@@ -48,14 +49,24 @@ describe('knowledge artifact store', () => {
       key: 'wiki/engineering/mcp.md',
       body: '# MCP\n',
       content_type: 'text/markdown',
+      metadata: {
+        label: 'engineering',
+        ordinal: 1,
+        provenance: { artifact_key: 'wiki/engineering/mcp.md' },
+      },
     });
 
     expect(result.key).toBe('wiki/engineering/mcp.md');
     expect(result.uri).toBe('s3://knowledge-bucket/org/project/knowledge/wiki/engineering/mcp.md');
+    expect(Number.isNaN(Date.parse(result.modified_at ?? ''))).toBe(false);
     expect(putInput).toMatchObject({
       Bucket: 'knowledge-bucket',
       Key: 'org/project/knowledge/wiki/engineering/mcp.md',
       ContentType: 'text/markdown',
+      Metadata: {
+        label: 'engineering',
+        ordinal: '1',
+      },
     });
   });
 });

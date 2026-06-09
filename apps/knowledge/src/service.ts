@@ -215,6 +215,21 @@ export interface KnowledgeArtifactManifestStatus {
     missing_size: number;
     total_size_bytes: number;
   };
+  modified_time: {
+    with_modified_at: number;
+    missing_modified_at: number;
+    invalid_modified_at: number;
+    examples: string[];
+  };
+  provenance: {
+    with_provenance: number;
+    missing_provenance: number;
+    with_artifact_key: number;
+    missing_artifact_key: number;
+    artifact_key_mismatches: number;
+    generated_from: Array<{ value: string; count: number }>;
+    examples: string[];
+  };
   uri_prefix: {
     matching: number;
     mismatched: number;
@@ -232,6 +247,8 @@ export interface KnowledgeArtifactManifestStatus {
     includes_raw_source_bytes: false;
     hash_algorithm: 'sha256';
     portable_keys: boolean;
+    tracks_modified_time: boolean;
+    preserves_provenance: boolean;
   };
   raw_payload_sentinel_hits: number;
   warnings: string[];
@@ -507,8 +524,16 @@ function artifactManifestStatus(dbPath: string, storage: StorageContract): Knowl
     let missingKey = 0;
     let prefixedKey = 0;
     let rawPayloadSentinelHits = 0;
+    let withModifiedAt = 0;
+    let invalidModifiedAt = 0;
+    let withProvenance = 0;
+    let withProvenanceArtifactKey = 0;
+    let provenanceArtifactKeyMismatches = 0;
+    const generatedFrom = new Map<string, number>();
     const mismatchedExamples: string[] = [];
     const prefixedExamples: string[] = [];
+    const invalidModifiedExamples: string[] = [];
+    const provenanceExamples: string[] = [];
     const expectedPrefix = storage.artifact_store.uri_prefix;
     const s3StoragePrefix = storagePrefixKey(storage);
 
@@ -534,10 +559,43 @@ function artifactManifestStatus(dbPath: string, storage: StorageContract): Knowl
         prefixedKey += 1;
         if (prefixedExamples.length < 5) prefixedExamples.push(key);
       }
+      const modifiedAt = typeof metadata.artifact_modified_at === 'string' ? metadata.artifact_modified_at : null;
+      if (modifiedAt) {
+        if (Number.isNaN(Date.parse(modifiedAt))) {
+          invalidModifiedAt += 1;
+          if (invalidModifiedExamples.length < 5) invalidModifiedExamples.push(row.artifact_uri);
+        } else {
+          withModifiedAt += 1;
+        }
+      }
+
+      const provenance = metadata.provenance && typeof metadata.provenance === 'object' && !Array.isArray(metadata.provenance)
+        ? metadata.provenance as Record<string, unknown>
+        : null;
+      if (provenance) {
+        withProvenance += 1;
+        const artifactKey = typeof provenance.artifact_key === 'string' ? provenance.artifact_key : null;
+        const generated = typeof provenance.generated_from === 'string' ? provenance.generated_from : 'unknown';
+        generatedFrom.set(generated, (generatedFrom.get(generated) ?? 0) + 1);
+        if (artifactKey) {
+          withProvenanceArtifactKey += 1;
+          if (key && artifactKey !== key) {
+            provenanceArtifactKeyMismatches += 1;
+            if (provenanceExamples.length < 5) provenanceExamples.push(`${row.artifact_uri}:provenance.artifact_key=${artifactKey}:key=${key}`);
+          }
+        } else if (provenanceExamples.length < 5) {
+          provenanceExamples.push(`${row.artifact_uri}:missing_provenance_artifact_key`);
+        }
+      } else if (provenanceExamples.length < 5) {
+        provenanceExamples.push(`${row.artifact_uri}:missing_provenance`);
+      }
     }
 
     const missingHash = rows.length - withHash;
     const missingSize = rows.length - withSize;
+    const missingModifiedAt = rows.length - withModifiedAt - invalidModifiedAt;
+    const missingProvenance = rows.length - withProvenance;
+    const missingProvenanceArtifactKey = withProvenance - withProvenanceArtifactKey;
     const mismatchedPrefix = rows.length - matchingPrefix;
     const warnings = [
       missingHash > 0 ? `artifact_manifest_missing_hash:${missingHash}` : null,
@@ -545,6 +603,10 @@ function artifactManifestStatus(dbPath: string, storage: StorageContract): Knowl
       missingKey > 0 ? `artifact_manifest_missing_key:${missingKey}` : null,
       mismatchedPrefix > 0 ? `artifact_manifest_uri_prefix_mismatch:${mismatchedPrefix}` : null,
       prefixedKey > 0 ? `artifact_manifest_s3_key_contains_storage_prefix:${prefixedKey}` : null,
+      invalidModifiedAt > 0 ? `artifact_manifest_invalid_modified_at:${invalidModifiedAt}` : null,
+      missingProvenance > 0 ? `artifact_manifest_missing_provenance:${missingProvenance}` : null,
+      missingProvenanceArtifactKey > 0 ? `artifact_manifest_missing_provenance_artifact_key:${missingProvenanceArtifactKey}` : null,
+      provenanceArtifactKeyMismatches > 0 ? `artifact_manifest_provenance_key_mismatch:${provenanceArtifactKeyMismatches}` : null,
       rawPayloadSentinelHits > 0 ? `artifact_manifest_raw_payload_sentinels:${rawPayloadSentinelHits}` : null,
     ].filter((entry): entry is string => Boolean(entry));
     const ok = warnings.length === 0;
@@ -566,6 +628,23 @@ function artifactManifestStatus(dbPath: string, storage: StorageContract): Knowl
         missing_size: missingSize,
         total_size_bytes: totalSizeBytes,
       },
+      modified_time: {
+        with_modified_at: withModifiedAt,
+        missing_modified_at: missingModifiedAt,
+        invalid_modified_at: invalidModifiedAt,
+        examples: invalidModifiedExamples,
+      },
+      provenance: {
+        with_provenance: withProvenance,
+        missing_provenance: missingProvenance,
+        with_artifact_key: withProvenanceArtifactKey,
+        missing_artifact_key: missingProvenanceArtifactKey,
+        artifact_key_mismatches: provenanceArtifactKeyMismatches,
+        generated_from: [...generatedFrom.entries()]
+          .map(([value, count]) => ({ value, count }))
+          .sort((a, b) => a.value.localeCompare(b.value)),
+        examples: provenanceExamples,
+      },
       uri_prefix: {
         matching: matchingPrefix,
         mismatched: mismatchedPrefix,
@@ -583,6 +662,8 @@ function artifactManifestStatus(dbPath: string, storage: StorageContract): Knowl
         includes_raw_source_bytes: false,
         hash_algorithm: 'sha256',
         portable_keys: prefixedKey === 0 && missingKey === 0,
+        tracks_modified_time: withModifiedAt > 0 && invalidModifiedAt === 0,
+        preserves_provenance: missingProvenance === 0 && missingProvenanceArtifactKey === 0 && provenanceArtifactKeyMismatches === 0,
       },
       raw_payload_sentinel_hits: rawPayloadSentinelHits,
       warnings,

@@ -6,16 +6,18 @@ export interface ArtifactWrite {
     key: string;
     body: string | Uint8Array;
     content_type?: string;
-    metadata?: Record<string, string>;
+    metadata?: Record<string, unknown>;
+}
+export interface ArtifactWriteResult {
+    key: string;
+    uri: string;
+    modified_at?: string;
 }
 export interface ArtifactStore {
     readonly type: 'local' | 's3';
     readonly canRead: boolean;
     readonly canWrite: boolean;
-    put(entry: ArtifactWrite): Promise<{
-        key: string;
-        uri: string;
-    }>;
+    put(entry: ArtifactWrite): Promise<ArtifactWriteResult>;
     getText(key: string): Promise<string>;
     exists(key: string): Promise<boolean>;
 }
@@ -26,10 +28,7 @@ export declare class LocalArtifactStore implements ArtifactStore {
     readonly canRead = true;
     readonly canWrite = true;
     constructor(root: string);
-    put(entry: ArtifactWrite): Promise<{
-        key: string;
-        uri: string;
-    }>;
+    put(entry: ArtifactWrite): Promise<ArtifactWriteResult>;
     getText(key: string): Promise<string>;
     exists(key: string): Promise<boolean>;
 }
@@ -52,10 +51,7 @@ export declare class S3ArtifactStore implements ArtifactStore {
     constructor(options: S3ArtifactStoreOptions);
     private getClient;
     private objectKey;
-    put(entry: ArtifactWrite): Promise<{
-        key: string;
-        uri: string;
-    }>;
+    put(entry: ArtifactWrite): Promise<ArtifactWriteResult>;
     getText(key: string): Promise<string>;
     exists(key: string): Promise<boolean>;
 }

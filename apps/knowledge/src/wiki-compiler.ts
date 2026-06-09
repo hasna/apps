@@ -234,6 +234,7 @@ async function writeArtifact(store: ArtifactStore, entry: ArtifactWrite): Promis
     uri: written.uri,
     kind: entry.key.startsWith('logs/') ? 'log' : 'wiki_page',
     content_type: entry.content_type,
+    modified_at: written.modified_at,
     ...hashArtifactBody(entry.body),
     metadata: {
       ...(entry.metadata ?? {}),
@@ -254,6 +255,12 @@ async function appendLog(store: ArtifactStore, event: Record<string, unknown>, n
     key,
     body: `${existing}${JSON.stringify(event)}\n`,
     content_type: 'application/x-ndjson',
+    metadata: {
+      provenance: generatedArtifactProvenance({
+        generated_from: String(event.event ?? 'wiki_log'),
+        artifact_key: key,
+      }),
+    },
   });
 }
 

@@ -388,7 +388,9 @@ open conflicts, `open-files://` source-ref boundary status, optional route
 confidence, optional workspace path sources, and any open-machines workspace
 diagnostics or repair hints. The artifact manifest check is read-only: it
 validates hashes, sizes, portable artifact keys, S3/local URI prefix parity,
-and raw-payload sentinels without downloading artifacts or raw source bytes.
+artifact modified-time metadata where available, provenance artifact-key
+parity, and raw-payload sentinels without downloading artifacts or raw source
+bytes.
 When open-machines reports inferred or untrusted workspace metadata, the JSON
 includes actionable `machines workspace repair ...` commands before sync is
 attempted.

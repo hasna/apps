@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import type { KnowledgeConfig, KnowledgeWorkspace } from './workspace';
 
@@ -10,14 +10,20 @@ export interface ArtifactWrite {
   key: string;
   body: string | Uint8Array;
   content_type?: string;
-  metadata?: Record<string, string>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ArtifactWriteResult {
+  key: string;
+  uri: string;
+  modified_at?: string;
 }
 
 export interface ArtifactStore {
   readonly type: 'local' | 's3';
   readonly canRead: boolean;
   readonly canWrite: boolean;
-  put(entry: ArtifactWrite): Promise<{ key: string; uri: string }>;
+  put(entry: ArtifactWrite): Promise<ArtifactWriteResult>;
   getText(key: string): Promise<string>;
   exists(key: string): Promise<boolean>;
 }
@@ -41,6 +47,16 @@ function assertInside(root: string, target: string): void {
   }
 }
 
+function s3UserMetadata(metadata: Record<string, unknown> | undefined): Record<string, string> | undefined {
+  if (!metadata) return undefined;
+  const output: Record<string, string> = {};
+  for (const [key, value] of Object.entries(metadata)) {
+    if (typeof value === 'string') output[key] = value;
+    else if (typeof value === 'number' || typeof value === 'boolean') output[key] = String(value);
+  }
+  return Object.keys(output).length > 0 ? output : undefined;
+}
+
 export class LocalArtifactStore implements ArtifactStore {
   readonly type = 'local' as const;
   readonly canRead = true;
@@ -50,13 +66,13 @@ export class LocalArtifactStore implements ArtifactStore {
     mkdirSync(root, { recursive: true });
   }
 
-  async put(entry: ArtifactWrite): Promise<{ key: string; uri: string }> {
+  async put(entry: ArtifactWrite): Promise<ArtifactWriteResult> {
     const key = normalizeArtifactKey(entry.key);
     const path = join(this.root, key);
     assertInside(this.root, path);
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, entry.body);
-    return { key, uri: `file://${path}` };
+    return { key, uri: `file://${path}`, modified_at: statSync(path).mtime.toISOString() };
   }
 
   async getText(key: string): Promise<string> {
@@ -115,7 +131,7 @@ export class S3ArtifactStore implements ArtifactStore {
     return prefix ? `${prefix}/${normalizedKey}` : normalizedKey;
   }
 
-  async put(entry: ArtifactWrite): Promise<{ key: string; uri: string }> {
+  async put(entry: ArtifactWrite): Promise<ArtifactWriteResult> {
     const [{ PutObjectCommand }, client] = await Promise.all([
       import('@aws-sdk/client-s3'),
       this.getClient(),
@@ -127,11 +143,11 @@ export class S3ArtifactStore implements ArtifactStore {
       Key: key,
       Body: entry.body,
       ContentType: entry.content_type,
-      Metadata: entry.metadata,
+      Metadata: s3UserMetadata(entry.metadata),
       ServerSideEncryption: this.options.server_side_encryption,
       SSEKMSKeyId: this.options.kms_key_id,
     }));
-    return { key: logicalKey, uri: `s3://${this.options.bucket}/${key}` };
+    return { key: logicalKey, uri: `s3://${this.options.bucket}/${key}`, modified_at: new Date().toISOString() };
   }
 
   async getText(key: string): Promise<string> {

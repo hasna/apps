@@ -94,6 +94,7 @@ export interface GeneratedStorageObject {
     content_type?: string;
     hash?: string;
     size_bytes?: number;
+    modified_at?: string;
     metadata?: Record<string, unknown>;
 }
 export declare function hashArtifactBody(body: string | Uint8Array): {

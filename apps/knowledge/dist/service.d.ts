@@ -133,6 +133,24 @@ export interface KnowledgeArtifactManifestStatus {
         missing_size: number;
         total_size_bytes: number;
     };
+    modified_time: {
+        with_modified_at: number;
+        missing_modified_at: number;
+        invalid_modified_at: number;
+        examples: string[];
+    };
+    provenance: {
+        with_provenance: number;
+        missing_provenance: number;
+        with_artifact_key: number;
+        missing_artifact_key: number;
+        artifact_key_mismatches: number;
+        generated_from: Array<{
+            value: string;
+            count: number;
+        }>;
+        examples: string[];
+    };
     uri_prefix: {
         matching: number;
         mismatched: number;
@@ -150,6 +168,8 @@ export interface KnowledgeArtifactManifestStatus {
         includes_raw_source_bytes: false;
         hash_algorithm: 'sha256';
         portable_keys: boolean;
+        tracks_modified_time: boolean;
+        preserves_provenance: boolean;
     };
     raw_payload_sentinel_hits: number;
     warnings: string[];

@@ -15460,7 +15460,7 @@ function coerceForSqlite(value) {
   return String(value);
 }
 // src/artifact-store.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, statSync, writeFileSync as writeFileSync2 } from "fs";
 import { dirname as dirname2, join as join2, relative, sep } from "path";
 function normalizeArtifactKey(key) {
   const raw = key.replace(/\\/g, "/").trim();
@@ -15479,6 +15479,18 @@ function assertInside(root, target) {
     throw new Error(`Artifact path escapes root: ${target}`);
   }
 }
+function s3UserMetadata(metadata) {
+  if (!metadata)
+    return;
+  const output = {};
+  for (const [key, value] of Object.entries(metadata)) {
+    if (typeof value === "string")
+      output[key] = value;
+    else if (typeof value === "number" || typeof value === "boolean")
+      output[key] = String(value);
+  }
+  return Object.keys(output).length > 0 ? output : undefined;
+}
 
 class LocalArtifactStore {
   root;
@@ -15495,7 +15507,7 @@ class LocalArtifactStore {
     assertInside(this.root, path);
     mkdirSync2(dirname2(path), { recursive: true });
     writeFileSync2(path, entry.body);
-    return { key, uri: `file://${path}` };
+    return { key, uri: `file://${path}`, modified_at: statSync(path).mtime.toISOString() };
   }
   async getText(key) {
     const normalizedKey = normalizeArtifactKey(key);
@@ -15552,11 +15564,11 @@ class S3ArtifactStore {
       Key: key,
       Body: entry.body,
       ContentType: entry.content_type,
-      Metadata: entry.metadata,
+      Metadata: s3UserMetadata(entry.metadata),
       ServerSideEncryption: this.options.server_side_encryption,
       SSEKMSKeyId: this.options.kms_key_id
     }));
-    return { key: logicalKey, uri: `s3://${this.options.bucket}/${key}` };
+    return { key: logicalKey, uri: `s3://${this.options.bucket}/${key}`, modified_at: new Date().toISOString() };
   }
   async getText(key) {
     const [{ GetObjectCommand }, client] = await Promise.all([
@@ -17541,10 +17553,12 @@ function recordStorageObjects(db, objects, now = new Date) {
   `);
   const insert = db.transaction((entries) => {
     for (const entry of entries) {
-      statement.run(randomUUID3(), entry.uri, entry.kind, entry.content_type ?? null, entry.hash ?? null, entry.size_bytes ?? null, JSON.stringify({
+      const metadata = {
         key: entry.key,
+        ...entry.modified_at ? { artifact_modified_at: entry.modified_at } : {},
         ...entry.metadata ?? {}
-      }), timestamp, timestamp);
+      };
+      statement.run(randomUUID3(), entry.uri, entry.kind, entry.content_type ?? null, entry.hash ?? null, entry.size_bytes ?? null, JSON.stringify(metadata), timestamp, timestamp);
     }
   });
   insert(objects);
@@ -18288,6 +18302,7 @@ async function materializeArtifacts(options) {
       uriMap.set(artifact.artifact_uri, nextUri);
     }
     const metadata = parseJson(artifact.metadata_json, {});
+    const modifiedAt = typeof metadata.artifact_modified_at === "string" ? metadata.artifact_modified_at : undefined;
     const object = {
       uri: nextUri,
       key: artifact.key ?? metadata.key ?? artifact.artifact_uri,
@@ -18295,6 +18310,7 @@ async function materializeArtifacts(options) {
       content_type: artifact.content_type ?? undefined,
       hash: artifact.hash ?? undefined,
       size_bytes: artifact.size_bytes ?? undefined,
+      modified_at: modifiedAt,
       metadata: {
         ...metadata,
         synced_from_artifact_uri: artifact.artifact_uri,
@@ -22697,6 +22713,7 @@ async function writeArtifact(store, entry) {
     uri: written.uri,
     kind: entry.key.startsWith("logs/") ? "log" : "wiki_page",
     content_type: entry.content_type,
+    modified_at: written.modified_at,
     ...hashArtifactBody(entry.body),
     metadata: {
       ...entry.metadata ?? {}
@@ -22716,7 +22733,13 @@ async function appendLog(store, event, now) {
     key,
     body: `${existing}${JSON.stringify(event)}
 `,
-    content_type: "application/x-ndjson"
+    content_type: "application/x-ndjson",
+    metadata: {
+      provenance: generatedArtifactProvenance({
+        generated_from: String(event.event ?? "wiki_log"),
+        artifact_key: key
+      })
+    }
   });
 }
 function upsertWikiPage(db, input) {
@@ -23212,6 +23235,7 @@ async function initializeWikiLayout(store, now = new Date) {
       uri: result.uri,
       kind: artifactKindForKey(entry.key),
       content_type: entry.content_type,
+      modified_at: result.modified_at,
       metadata: {
         provenance: generatedArtifactProvenance({
           generated_from: "wiki_layout_init",
@@ -23482,8 +23506,16 @@ function artifactManifestStatus(dbPath, storage) {
     let missingKey = 0;
     let prefixedKey = 0;
     let rawPayloadSentinelHits = 0;
+    let withModifiedAt = 0;
+    let invalidModifiedAt = 0;
+    let withProvenance2 = 0;
+    let withProvenanceArtifactKey = 0;
+    let provenanceArtifactKeyMismatches = 0;
+    const generatedFrom = new Map;
     const mismatchedExamples = [];
     const prefixedExamples = [];
+    const invalidModifiedExamples = [];
+    const provenanceExamples = [];
     const expectedPrefix = storage.artifact_store.uri_prefix;
     const s3StoragePrefix = storagePrefixKey(storage);
     for (const row of rows) {
@@ -23510,9 +23542,41 @@ function artifactManifestStatus(dbPath, storage) {
         if (prefixedExamples.length < 5)
           prefixedExamples.push(key);
       }
+      const modifiedAt = typeof metadata.artifact_modified_at === "string" ? metadata.artifact_modified_at : null;
+      if (modifiedAt) {
+        if (Number.isNaN(Date.parse(modifiedAt))) {
+          invalidModifiedAt += 1;
+          if (invalidModifiedExamples.length < 5)
+            invalidModifiedExamples.push(row.artifact_uri);
+        } else {
+          withModifiedAt += 1;
+        }
+      }
+      const provenance = metadata.provenance && typeof metadata.provenance === "object" && !Array.isArray(metadata.provenance) ? metadata.provenance : null;
+      if (provenance) {
+        withProvenance2 += 1;
+        const artifactKey = typeof provenance.artifact_key === "string" ? provenance.artifact_key : null;
+        const generated = typeof provenance.generated_from === "string" ? provenance.generated_from : "unknown";
+        generatedFrom.set(generated, (generatedFrom.get(generated) ?? 0) + 1);
+        if (artifactKey) {
+          withProvenanceArtifactKey += 1;
+          if (key && artifactKey !== key) {
+            provenanceArtifactKeyMismatches += 1;
+            if (provenanceExamples.length < 5)
+              provenanceExamples.push(`${row.artifact_uri}:provenance.artifact_key=${artifactKey}:key=${key}`);
+          }
+        } else if (provenanceExamples.length < 5) {
+          provenanceExamples.push(`${row.artifact_uri}:missing_provenance_artifact_key`);
+        }
+      } else if (provenanceExamples.length < 5) {
+        provenanceExamples.push(`${row.artifact_uri}:missing_provenance`);
+      }
     }
     const missingHash = rows.length - withHash;
     const missingSize = rows.length - withSize;
+    const missingModifiedAt = rows.length - withModifiedAt - invalidModifiedAt;
+    const missingProvenance = rows.length - withProvenance2;
+    const missingProvenanceArtifactKey = withProvenance2 - withProvenanceArtifactKey;
     const mismatchedPrefix = rows.length - matchingPrefix;
     const warnings = [
       missingHash > 0 ? `artifact_manifest_missing_hash:${missingHash}` : null,
@@ -23520,6 +23584,10 @@ function artifactManifestStatus(dbPath, storage) {
       missingKey > 0 ? `artifact_manifest_missing_key:${missingKey}` : null,
       mismatchedPrefix > 0 ? `artifact_manifest_uri_prefix_mismatch:${mismatchedPrefix}` : null,
       prefixedKey > 0 ? `artifact_manifest_s3_key_contains_storage_prefix:${prefixedKey}` : null,
+      invalidModifiedAt > 0 ? `artifact_manifest_invalid_modified_at:${invalidModifiedAt}` : null,
+      missingProvenance > 0 ? `artifact_manifest_missing_provenance:${missingProvenance}` : null,
+      missingProvenanceArtifactKey > 0 ? `artifact_manifest_missing_provenance_artifact_key:${missingProvenanceArtifactKey}` : null,
+      provenanceArtifactKeyMismatches > 0 ? `artifact_manifest_provenance_key_mismatch:${provenanceArtifactKeyMismatches}` : null,
       rawPayloadSentinelHits > 0 ? `artifact_manifest_raw_payload_sentinels:${rawPayloadSentinelHits}` : null
     ].filter((entry) => Boolean(entry));
     const ok = warnings.length === 0;
@@ -23538,6 +23606,21 @@ function artifactManifestStatus(dbPath, storage) {
         missing_size: missingSize,
         total_size_bytes: totalSizeBytes
       },
+      modified_time: {
+        with_modified_at: withModifiedAt,
+        missing_modified_at: missingModifiedAt,
+        invalid_modified_at: invalidModifiedAt,
+        examples: invalidModifiedExamples
+      },
+      provenance: {
+        with_provenance: withProvenance2,
+        missing_provenance: missingProvenance,
+        with_artifact_key: withProvenanceArtifactKey,
+        missing_artifact_key: missingProvenanceArtifactKey,
+        artifact_key_mismatches: provenanceArtifactKeyMismatches,
+        generated_from: [...generatedFrom.entries()].map(([value, count3]) => ({ value, count: count3 })).sort((a, b) => a.value.localeCompare(b.value)),
+        examples: provenanceExamples
+      },
       uri_prefix: {
         matching: matchingPrefix,
         mismatched: mismatchedPrefix,
@@ -23554,7 +23637,9 @@ function artifactManifestStatus(dbPath, storage) {
         generated_artifacts_only: true,
         includes_raw_source_bytes: false,
         hash_algorithm: "sha256",
-        portable_keys: prefixedKey === 0 && missingKey === 0
+        portable_keys: prefixedKey === 0 && missingKey === 0,
+        tracks_modified_time: withModifiedAt > 0 && invalidModifiedAt === 0,
+        preserves_provenance: missingProvenance === 0 && missingProvenanceArtifactKey === 0 && provenanceArtifactKeyMismatches === 0
       },
       raw_payload_sentinel_hits: rawPayloadSentinelHits,
       warnings,

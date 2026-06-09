@@ -125,6 +125,7 @@ export async function initializeWikiLayout(store: ArtifactStore, now = new Date(
       uri: result.uri,
       kind: artifactKindForKey(entry.key),
       content_type: entry.content_type,
+      modified_at: result.modified_at,
       metadata: {
         provenance: generatedArtifactProvenance({
           generated_from: 'wiki_layout_init',

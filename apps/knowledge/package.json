@@ -1,6 +1,6 @@
 {
   "name": "@hasna/knowledge",
-  "version": "0.2.50",
+  "version": "0.2.51",
   "description": "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   "type": "module",
   "exports": {
