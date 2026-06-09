@@ -35,6 +35,14 @@ import { listPorts } from "../commands/ports.js";
 import { buildSshCommand, resolveSshTarget } from "../commands/ssh.js";
 import { buildSyncPlan, runSync } from "../commands/sync.js";
 import { getStatus } from "../commands/status.js";
+import { discoverMachineTopology } from "../topology.js";
+import {
+  checkMachineCompatibility,
+  type CompatibilityCheck,
+  type CompatibilityCommandSpec,
+  type CompatibilityPackageSpec,
+  type CompatibilityWorkspaceSpec,
+} from "../compatibility.js";
 import { runDoctor } from "../commands/doctor.js";
 import { runSelfTest } from "../commands/self-test.js";
 import { getServeInfo, startDashboardServer } from "../commands/serve.js";
@@ -78,6 +86,32 @@ function printJsonOrText(data: unknown, text: string, json = false): void {
     return;
   }
   console.log(text);
+}
+
+interface PrintableStorageResult {
+  table: string;
+  rowsRead: number;
+  rowsWritten: number;
+  errors: string[];
+}
+
+function printStorageResults(results: PrintableStorageResult[], json?: boolean): void {
+  if (json) {
+    console.log(JSON.stringify(results, null, 2));
+    return;
+  }
+
+  for (const result of results) {
+    const marker = result.errors.length > 0 ? chalk.red("!") : chalk.green("✓");
+    const suffix = result.errors.length > 0 ? `  ${chalk.red(result.errors.join("; "))}` : "";
+    console.log(`${marker} ${result.table}: read ${result.rowsRead}, wrote ${result.rowsWritten}${suffix}`);
+  }
+}
+
+function printStorageError(error: unknown): never {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(chalk.red(message));
+  process.exit(1);
 }
 
 function renderAppsListResult(result: ReturnType<typeof listApps>): string {
@@ -164,6 +198,53 @@ function renderSelfTestResult(result: SelfTestResult): string {
       const status = check.status === "ok" ? chalk.green(check.status) : check.status === "warn" ? chalk.yellow(check.status) : chalk.red(check.status);
       return `${check.id.padEnd(20)} ${status} ${check.detail}`;
     }),
+  ].join("\n");
+}
+
+function parseCommandSpec(value: string): CompatibilityCommandSpec {
+  const [command, expectedVersion] = value.split(":");
+  return {
+    command,
+    expectedVersion: expectedVersion || undefined,
+    required: true,
+  };
+}
+
+function parsePackageSpec(value: string): CompatibilityPackageSpec {
+  const [name, command, expectedVersion] = value.split(":");
+  return {
+    name,
+    command: command || undefined,
+    expectedVersion: expectedVersion || undefined,
+    required: true,
+  };
+}
+
+function parseWorkspaceSpec(value: string): CompatibilityWorkspaceSpec {
+  const [label, path] = value.includes("=") ? value.split(/=(.*)/s).filter(Boolean) : ["workspace", value];
+  return {
+    label,
+    path,
+    required: true,
+  };
+}
+
+function renderCompatibilityCheck(check: CompatibilityCheck): string {
+  const marker = check.status === "ok" ? chalk.green("✓") : check.status === "warn" ? chalk.yellow("!") : chalk.red("✗");
+  const expected = check.expected ? ` expected=${check.expected}` : "";
+  return `${marker} ${check.id} ${check.actual ?? "unknown"}${expected}`;
+}
+
+function renderCompatibilityResult(result: ReturnType<typeof checkMachineCompatibility>): string {
+  return [
+    renderKeyValueTable([
+      ["machine", result.machine_id],
+      ["source", result.source],
+      ["ok", String(result.ok)],
+      ["checks", `${result.summary.ok} ok, ${result.summary.warn} warn, ${result.summary.fail} fail`],
+    ]),
+    "",
+    ...result.checks.map(renderCompatibilityCheck),
   ].join("\n");
 }
 
@@ -380,6 +461,49 @@ program
   .action((options: { machine?: string; apply?: boolean; yes?: boolean; json?: boolean }) => {
     const result = options.apply ? runSync(options.machine, { apply: true, yes: options.yes }) : buildSyncPlan(options.machine);
     console.log(JSON.stringify(result, null, 2));
+  });
+
+program
+  .command("topology")
+  .description("Discover local, manifest, heartbeat, SSH, and Tailscale machine topology")
+  .option("--no-tailscale", "Skip tailscale status probing")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { tailscale?: boolean; json?: boolean }) => {
+    const topology = discoverMachineTopology({ includeTailscale: options.tailscale !== false });
+    if (options.json) {
+      console.log(JSON.stringify(topology, null, 2));
+      return;
+    }
+    console.log(renderKeyValueTable([
+      ["local machine", topology.local_machine_id],
+      ["hostname", topology.local_hostname],
+      ["platform", String(topology.current_platform)],
+      ["machines", String(topology.machines.length)],
+      ["warnings", topology.warnings.join(", ") || "none"],
+    ]));
+    for (const machine of topology.machines) {
+      const route = machine.ssh.command_target ? `${machine.ssh.route}:${machine.ssh.command_target}` : machine.ssh.route;
+      console.log(`${machine.machine_id.padEnd(18)} ${String(machine.platform || "unknown").padEnd(8)} ${machine.heartbeat_status.padEnd(8)} ${route}`);
+    }
+  });
+
+program
+  .command("compatibility")
+  .description("Check remote package, command, and workspace compatibility for open-* consumers")
+  .option("--machine <id>", "Machine identifier")
+  .option("--command <command...>", "Required command or command:expectedVersion")
+  .option("--package <spec...>", "Required package as name[:command[:expectedVersion]]")
+  .option("--workspace <spec...>", "Required workspace as label=/path or /path")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { machine?: string; command?: string[]; package?: string[]; workspace?: string[]; json?: boolean }) => {
+    const result = checkMachineCompatibility({
+      machineId: options.machine,
+      commands: options.command?.map(parseCommandSpec),
+      packages: options.package?.map(parsePackageSpec),
+      workspaces: options.workspace?.map(parseWorkspaceSpec),
+    });
+    printJsonOrText(result, renderCompatibilityResult(result), options.json);
+    if (!result.ok && !options.json) process.exitCode = 1;
   });
 
 program
@@ -698,6 +822,56 @@ program
 program.command("ports").description("List listening ports on a machine").option("--machine <id>", "Machine identifier").option("-j, --json", "Print JSON output", false).action((options: { machine?: string; json?: boolean }) => {
   const result = listPorts(options.machine);
   console.log(JSON.stringify(result, null, 2));
+});
+
+const storageCommand = program.command("storage").description("Sync local machine runtime data with storage PostgreSQL");
+
+storageCommand.command("status").description("Show storage sync status").option("-j, --json", "Print JSON output", false).action(async (options: { json?: boolean }) => {
+  const { getStorageStatus } = await import("../storage.js");
+  const status = getStorageStatus();
+  printJsonOrText(status, renderKeyValueTable([
+    ["mode", status.mode],
+    ["configured", status.configured ? "yes" : "no"],
+    ["active env", status.activeEnv || "none"],
+    ["tables", status.tables.join(", ")],
+  ]), options.json);
+});
+
+storageCommand.command("push").description("Push local machine runtime data to storage PostgreSQL").option("--tables <tables>", "Comma-separated table names").option("-j, --json", "Print JSON output", false).action(async (options: { tables?: string; json?: boolean }) => {
+  try {
+    const { parseStorageTables, storagePush } = await import("../storage.js");
+    const results = await storagePush({ tables: parseStorageTables(options.tables) });
+    printStorageResults(results, options.json);
+  } catch (error) {
+    printStorageError(error);
+  }
+});
+
+storageCommand.command("pull").description("Pull machine runtime data from storage PostgreSQL to local SQLite").option("--tables <tables>", "Comma-separated table names").option("-j, --json", "Print JSON output", false).action(async (options: { tables?: string; json?: boolean }) => {
+  try {
+    const { parseStorageTables, storagePull } = await import("../storage.js");
+    const results = await storagePull({ tables: parseStorageTables(options.tables) });
+    printStorageResults(results, options.json);
+  } catch (error) {
+    printStorageError(error);
+  }
+});
+
+storageCommand.command("sync").description("Bidirectional storage sync: pull then push").option("--tables <tables>", "Comma-separated table names").option("-j, --json", "Print JSON output", false).action(async (options: { tables?: string; json?: boolean }) => {
+  try {
+    const { parseStorageTables, storageSync } = await import("../storage.js");
+    const result = await storageSync({ tables: parseStorageTables(options.tables) });
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    console.log(chalk.bold("Pull"));
+    printStorageResults(result.pull);
+    console.log(chalk.bold("Push"));
+    printStorageResults(result.push);
+  } catch (error) {
+    printStorageError(error);
+  }
 });
 
 program.command("status").description("Print local machine and storage status").option("-j, --json", "Print JSON output", false).action((options: { json?: boolean }) => {

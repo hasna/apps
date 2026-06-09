@@ -15,7 +15,7 @@ export function runMachineCommand(machineId: string, command: string): MachineCo
   const isLocal = machineId === localMachineId;
   const route = isLocal ? "local" : resolveSshTarget(machineId).route;
   const shellCommand = isLocal ? command : buildSshCommand(machineId, command);
-  const result = spawnSync("bash", ["-lc", shellCommand], {
+  const result = spawnSync("bash", ["-c", shellCommand], {
     encoding: "utf8",
     env: process.env,
   });

@@ -25,6 +25,9 @@ import { manifestBootstrapCurrentMachine, manifestGet, manifestList, manifestRem
 import { buildSetupPlan, runSetup } from "../commands/setup.js";
 import { buildSyncPlan, runSync } from "../commands/sync.js";
 import { getAgentStatus } from "../agent/runtime.js";
+import { discoverMachineTopology } from "../topology.js";
+import { checkMachineCompatibility } from "../compatibility.js";
+import { getStorageStatus, storagePull, storagePush, storageSync } from "../storage.js";
 
 export const MACHINE_MCP_TOOL_NAMES = [
   "machines_status",
@@ -45,6 +48,8 @@ export const MACHINE_MCP_TOOL_NAMES = [
   "machines_setup_apply",
   "machines_sync_preview",
   "machines_sync_apply",
+  "machines_topology",
+  "machines_compatibility",
   "machines_diff",
   "machines_install_tailscale_preview",
   "machines_install_tailscale_apply",
@@ -68,6 +73,10 @@ export const MACHINE_MCP_TOOL_NAMES = [
   "machines_notifications_remove",
   "machines_serve_info",
   "machines_serve_dashboard",
+  "storage_status",
+  "storage_push",
+  "storage_pull",
+  "storage_sync",
 ] as const;
 
 export function buildServer(version: string = getPackageVersion()): McpServer {
@@ -179,6 +188,45 @@ export function createMcpServer(version: string): McpServer {
     "Execute sync actions for a machine.",
     { machine_id: z.string().optional().describe("Machine identifier"), yes: z.boolean().describe("Confirmation flag for execution") },
     async ({ machine_id, yes }) => ({ content: [{ type: "text", text: JSON.stringify(runSync(machine_id, { apply: true, yes }), null, 2) }] })
+  );
+
+  server.tool(
+    "machines_topology",
+    "Discover local, manifest, heartbeat, SSH, and Tailscale machine topology.",
+    { include_tailscale: z.boolean().optional().describe("Whether to probe tailscale status --json") },
+    async ({ include_tailscale }) => ({
+      content: [{ type: "text", text: JSON.stringify(discoverMachineTopology({ includeTailscale: include_tailscale !== false }), null, 2) }],
+    })
+  );
+
+  server.tool(
+    "machines_compatibility",
+    "Check remote package, command, and workspace compatibility for open-* consumers.",
+    {
+      machine_id: z.string().optional().describe("Machine identifier"),
+      commands: z.array(z.object({
+        command: z.string(),
+        expectedVersion: z.string().optional(),
+        versionArgs: z.string().optional(),
+        required: z.boolean().optional(),
+      })).optional().describe("Commands to check"),
+      packages: z.array(z.object({
+        name: z.string(),
+        command: z.string().optional(),
+        expectedVersion: z.string().optional(),
+        required: z.boolean().optional(),
+      })).optional().describe("Package-backed CLI checks"),
+      workspaces: z.array(z.object({
+        path: z.string(),
+        label: z.string().optional(),
+        expectedPackageName: z.string().optional(),
+        expectedVersion: z.string().optional(),
+        required: z.boolean().optional(),
+      })).optional().describe("Workspace paths and package metadata to check"),
+    },
+    async ({ machine_id, commands, packages, workspaces }) => ({
+      content: [{ type: "text", text: JSON.stringify(checkMachineCompatibility({ machineId: machine_id, commands, packages, workspaces }), null, 2) }],
+    })
   );
 
   server.tool(
@@ -357,6 +405,31 @@ export function createMcpServer(version: string): McpServer {
   server.tool("machines_serve_dashboard", "Render the current dashboard HTML.", {}, async () => ({
     content: [{ type: "text", text: renderDashboardHtml() }],
   }));
+
+  server.tool("storage_status", "Show machines storage sync configuration and local sync history.", {}, async () => ({
+    content: [{ type: "text", text: JSON.stringify(getStorageStatus(), null, 2) }],
+  }));
+
+  server.tool(
+    "storage_push",
+    "Push local machine runtime data to storage PostgreSQL.",
+    { tables: z.array(z.string()).optional().describe("Optional table list to push") },
+    async ({ tables }) => ({ content: [{ type: "text", text: JSON.stringify(await storagePush(tables ? { tables } : undefined), null, 2) }] })
+  );
+
+  server.tool(
+    "storage_pull",
+    "Pull machine runtime data from storage PostgreSQL to local SQLite.",
+    { tables: z.array(z.string()).optional().describe("Optional table list to pull") },
+    async ({ tables }) => ({ content: [{ type: "text", text: JSON.stringify(await storagePull(tables ? { tables } : undefined), null, 2) }] })
+  );
+
+  server.tool(
+    "storage_sync",
+    "Bidirectional machines storage sync: pull then push.",
+    { tables: z.array(z.string()).optional().describe("Optional table list to sync") },
+    async ({ tables }) => ({ content: [{ type: "text", text: JSON.stringify(await storageSync(tables ? { tables } : undefined), null, 2) }] })
+  );
 
   return server;
 }

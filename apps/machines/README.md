@@ -47,6 +47,78 @@ machines doctor --machine spark01
 machines self-test
 ```
 
+## Topology SDK
+
+`@hasna/machines` exposes a compact topology SDK for other open-core packages
+that need machine identity without importing CLI internals:
+
+```ts
+import { discoverMachineTopology, getLocalMachineTopology } from "@hasna/machines";
+
+const topology = discoverMachineTopology();
+const local = getLocalMachineTopology();
+```
+
+The SDK merges manifest entries, local heartbeats, SSH route hints, and
+`tailscale status --json` peers when Tailscale is available. Consumers such as
+`@hasna/knowledge` should treat this package as optional: dynamically import it
+when present, and fall back to local probes or app-local machine registries when
+it is absent.
+
+CLI and MCP expose the same topology view:
+
+```bash
+machines topology --json
+machines topology --no-tailscale --json
+```
+
+## Compatibility SDK
+
+Open-core consumers can use `@hasna/machines` to preflight a peer before
+attempting app-level sync:
+
+```ts
+import { checkMachineCompatibility } from "@hasna/machines";
+
+const report = checkMachineCompatibility({
+  machineId: "spark01",
+  commands: [{ command: "bun" }],
+  packages: [{ name: "@hasna/knowledge", command: "knowledge", expectedVersion: "0.2.29" }],
+  workspaces: [{ label: "open-knowledge", path: "/home/hasna/workspace/hasna/opensource/open-knowledge" }],
+});
+```
+
+The compatibility report checks command availability, package-backed CLI
+versions, workspace paths, and package metadata without printing secrets.
+`knowledge` uses this as an optional preflight before machine sync, and falls
+back to its own local checks if `@hasna/machines` is not installed.
+
+CLI and MCP expose the same shape:
+
+```bash
+machines compatibility --machine spark01 \
+  --command bun \
+  --package @hasna/knowledge:knowledge:0.2.29 \
+  --workspace open-knowledge=/home/hasna/workspace/hasna/opensource/open-knowledge \
+  --json
+```
+
+## Storage
+
+Machines stores runtime data locally in SQLite under the Hasna data directory and includes repo-owned PostgreSQL migrations for remote storage deployments.
+
+```bash
+machines storage status --json
+HASNA_MACHINES_DATABASE_URL=postgres://... machines storage push --tables agent_heartbeats --json
+machines storage pull --json
+machines storage sync --json
+```
+
+Configure database storage with `HASNA_MACHINES_DATABASE_URL` or fallback
+`MACHINES_DATABASE_URL`. Optional storage mode env vars are
+`HASNA_MACHINES_STORAGE_MODE` or `MACHINES_STORAGE_MODE` with `local`,
+`hybrid`, or `remote`.
+
 ## Applications and tooling
 
 ```bash

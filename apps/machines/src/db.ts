@@ -1,7 +1,18 @@
-import type { Database } from "bun:sqlite";
+import { Database } from "bun:sqlite";
 import { hostname } from "node:os";
-import { SqliteAdapter } from "@hasna/cloud";
 import { ensureParentDir, getDbPath } from "./paths.js";
+
+export class SqliteAdapter {
+  readonly raw: Database;
+
+  constructor(path: string) {
+    this.raw = new Database(path);
+  }
+
+  close(): void {
+    this.raw.close();
+  }
+}
 
 let adapter: SqliteAdapter | null = null;
 
@@ -46,9 +57,16 @@ export function getAdapter(path = getDbPath()): SqliteAdapter {
     return memoryAdapter;
   }
 
+  if (adapter && adapter.raw.filename !== path) {
+    adapter.close();
+    adapter = null;
+  }
+
   if (!adapter) {
     ensureParentDir(path);
     adapter = new SqliteAdapter(path);
+    adapter.raw.exec("PRAGMA journal_mode = WAL");
+    adapter.raw.exec("PRAGMA foreign_keys = ON");
     createTables(adapter.raw);
   }
 
@@ -57,6 +75,13 @@ export function getAdapter(path = getDbPath()): SqliteAdapter {
 
 export function getDb(path = getDbPath()): Database {
   return getAdapter(path).raw;
+}
+
+export function closeDb(): void {
+  if (adapter) {
+    adapter.close();
+    adapter = null;
+  }
 }
 
 export function upsertHeartbeat(machineId: string, pid = process.pid, status: "online" | "offline" = "online"): void {
