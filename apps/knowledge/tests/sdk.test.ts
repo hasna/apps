@@ -370,6 +370,20 @@ describe('public knowledge sdk', () => {
       expect(doctor.resolved_workspace?.source).toBe('registry');
       expect(doctor.resolved_workspace?.trust_status).toBe('trusted');
 
+      writeFileSync(targetPath, '');
+      const explicit = await client.sync.remotePeer({
+        machine: 'spark01',
+        peerWorkspace: '/remote/open-knowledge',
+        direction: 'push',
+        dryRun: true,
+      });
+      expect(explicit.ok).toBe(true);
+      expect(explicit.resolved_machine).toBe('spark01');
+      expect(explicit.resolved_route.source).toBe('raw');
+      expect(explicit.resolved_workspace.source).toBe('argument');
+      expect(readFileSync(targetPath, 'utf8')).toBe('spark01');
+
+      writeFileSync(targetPath, '');
       const second = await client.sync.remotePeer({
         machine: 'spark01',
         direction: 'push',

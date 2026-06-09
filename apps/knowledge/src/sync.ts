@@ -1035,6 +1035,7 @@ export function recordKnowledgeMachineResolverEvidence(dbPath: string, input: Kn
     const resolverCapabilities = recordFromUnknown(capabilities.resolver);
     const route = input.route?.source === 'registry' ? null : input.route ?? null;
     const workspace = input.workspace?.source === 'registry' ? null : input.workspace ?? null;
+    const stableInput = { ...input, route, workspace };
     const nextCapabilities = {
       ...capabilities,
       resolver: compactRecord({
@@ -1053,7 +1054,7 @@ export function recordKnowledgeMachineResolverEvidence(dbPath: string, input: Kn
       route_fallback: Boolean(route?.target ?? existing?.ssh_target),
       workspace_fallback: Boolean(workspace?.project_root ?? existing?.workspace_home),
     };
-    const nextResolverEvidence = resolverEvidenceMetadata(input, metadata, now);
+    const nextResolverEvidence = resolverEvidenceMetadata(stableInput, metadata, now);
     if (existing) {
       const existingResolverEvidence = recordFromUnknown(metadata.resolver_evidence);
       const unchanged = existing.workspace_home === (workspace?.project_root ?? existing.workspace_home ?? null)
@@ -1077,7 +1078,7 @@ export function recordKnowledgeMachineResolverEvidence(dbPath: string, input: Kn
       metadata_json: JSON.stringify({
         ...metadata,
         source: 'knowledge',
-        sources: resolverSources(input, metadata),
+        sources: resolverSources(stableInput, metadata),
         resolver_evidence: nextResolverEvidence,
       }),
       created_at: existing?.created_at ?? now,

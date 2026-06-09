@@ -1692,10 +1692,10 @@ export class KnowledgeService {
       peerWorkspace: options.peerWorkspace,
       includeTailscale: options.includeTailscale,
     });
-    if (resolvedMachine.source === 'raw' || !resolvedWorkspace.ok || !resolvedWorkspace.project_root) {
+    if ((!options.peerWorkspace && resolvedMachine.source === 'raw') || !resolvedWorkspace.ok || !resolvedWorkspace.project_root) {
       const registryRow = findRegistryMachine(localWorkspace.knowledgeDbPath, options.machine);
       if (registryRow) {
-        if (resolvedMachine.source === 'raw' && registryRow.ssh_target) {
+        if (!options.peerWorkspace && resolvedMachine.source === 'raw' && registryRow.ssh_target) {
           resolvedMachine = routeFromRegistry(registryRow, options.machine, resolvedMachine);
         }
         if (!resolvedWorkspace.ok || !resolvedWorkspace.project_root) {

@@ -14236,7 +14236,7 @@ import { existsSync as existsSync10, readFileSync as readFileSync9, writeFileSyn
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.58",
+  version: "0.2.59",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   exports: {
@@ -17816,6 +17816,7 @@ function recordKnowledgeMachineResolverEvidence(dbPath, input) {
     const resolverCapabilities = recordFromUnknown(capabilities.resolver);
     const route = input.route?.source === "registry" ? null : input.route ?? null;
     const workspace = input.workspace?.source === "registry" ? null : input.workspace ?? null;
+    const stableInput = { ...input, route, workspace };
     const nextCapabilities = {
       ...capabilities,
       resolver: compactRecord({
@@ -17834,7 +17835,7 @@ function recordKnowledgeMachineResolverEvidence(dbPath, input) {
       route_fallback: Boolean(route?.target ?? existing?.ssh_target),
       workspace_fallback: Boolean(workspace?.project_root ?? existing?.workspace_home)
     };
-    const nextResolverEvidence = resolverEvidenceMetadata(input, metadata, now);
+    const nextResolverEvidence = resolverEvidenceMetadata(stableInput, metadata, now);
     if (existing) {
       const existingResolverEvidence = recordFromUnknown(metadata.resolver_evidence);
       const unchanged = existing.workspace_home === (workspace?.project_root ?? existing.workspace_home ?? null) && existing.tailscale_dns === resolverTailscaleDns(existing, route) && existing.ssh_target === (route?.target ?? existing.ssh_target ?? null) && canonicalJson(parseJsonRecord(existing.capabilities_json)) === canonicalJson(nextCapabilities) && canonicalJson(stableResolverEvidence(existingResolverEvidence)) === canonicalJson(stableResolverEvidence(nextResolverEvidence));
@@ -17855,7 +17856,7 @@ function recordKnowledgeMachineResolverEvidence(dbPath, input) {
       metadata_json: JSON.stringify({
         ...metadata,
         source: "knowledge",
-        sources: resolverSources(input, metadata),
+        sources: resolverSources(stableInput, metadata),
         resolver_evidence: nextResolverEvidence
       }),
       created_at: existing?.created_at ?? now,
@@ -24187,10 +24188,10 @@ class KnowledgeService {
       peerWorkspace: options.peerWorkspace,
       includeTailscale: options.includeTailscale
     });
-    if (resolvedMachine.source === "raw" || !resolvedWorkspace.ok || !resolvedWorkspace.project_root) {
+    if (!options.peerWorkspace && resolvedMachine.source === "raw" || !resolvedWorkspace.ok || !resolvedWorkspace.project_root) {
       const registryRow = findRegistryMachine(localWorkspace.knowledgeDbPath, options.machine);
       if (registryRow) {
-        if (resolvedMachine.source === "raw" && registryRow.ssh_target) {
+        if (!options.peerWorkspace && resolvedMachine.source === "raw" && registryRow.ssh_target) {
           resolvedMachine = routeFromRegistry(registryRow, options.machine, resolvedMachine);
         }
         if (!resolvedWorkspace.ok || !resolvedWorkspace.project_root) {
