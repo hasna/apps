@@ -4,6 +4,7 @@ export {
   discoverMachineTopology,
   getLocalMachineTopology,
   resolveMachineRoute,
+  resolveMachineWorkspace,
 } from "./topology.js";
 export type {
   MachineRouteConfidence,
@@ -14,6 +15,13 @@ export type {
   MachineTopology,
   MachineTopologyEntry,
   MachineTopologyOptions,
+  MachineWorkspaceAuthStatus,
+  MachineWorkspaceOptions,
+  MachineWorkspacePath,
+  MachineWorkspacePathSource,
+  MachineWorkspaceProject,
+  MachineWorkspaceResolution,
+  MachineWorkspaceTrustStatus,
   MachinesConsumerCapabilities,
   MachinesContractPackage,
   TopologyCommandResult,

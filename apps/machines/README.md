@@ -79,6 +79,31 @@ machines topology --no-tailscale --json
 machines route --machine spark01 --json
 ```
 
+Consumers that need repo paths can resolve trust-aware workspace mappings
+without importing the full machines app:
+
+```ts
+import { resolveMachineWorkspace } from "@hasna/machines/consumer";
+
+const workspace = resolveMachineWorkspace({
+  machineId: "spark01",
+  projectId: "open-knowledge",
+  repoName: "open-knowledge",
+});
+
+console.log(workspace.paths.project_root.path);
+console.log(workspace.paths.open_files_root.path);
+```
+
+The resolver returns the machine workspace root, project repo root,
+open-files root, current/primary flags, trust/auth status, and redacted
+diagnostics. It uses explicit manifest metadata first and deterministic
+workspace inference second; consumers can still pass manual overrides.
+
+```bash
+machines workspace resolve --machine spark01 --project open-knowledge --repo open-knowledge --json
+```
+
 ## Compatibility SDK
 
 Open-core consumers can use `@hasna/machines` to preflight a peer before
@@ -130,6 +155,20 @@ Configure database storage with `HASNA_MACHINES_DATABASE_URL` or fallback
 `MACHINES_DATABASE_URL`. Optional storage mode env vars are
 `HASNA_MACHINES_STORAGE_MODE` or `MACHINES_STORAGE_MODE` with `local`,
 `hybrid`, or `remote`.
+
+Machine backups are preview-only unless `--apply --yes` is passed. The backup
+target can be explicit or environment-backed:
+
+```bash
+machines backup --bucket fleet-backups --prefix machines --json
+HASNA_MACHINES_S3_BUCKET=hasna-xyz-opensource-machines-prod machines backup --json
+```
+
+`--bucket` and `--prefix` always win. Without `--bucket`, the backup command
+uses `HASNA_MACHINES_S3_BUCKET` or fallback `MACHINES_S3_BUCKET`; prefix uses
+`HASNA_MACHINES_S3_PREFIX`, fallback `MACHINES_S3_PREFIX`, or `machines`.
+This keeps the open-source CLI local/self-hosted by default while allowing
+Hasna deployments to route app-owned backups through canonical storage metadata.
 
 ## Applications and tooling
 

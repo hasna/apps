@@ -25,7 +25,7 @@ import { manifestBootstrapCurrentMachine, manifestGet, manifestList, manifestRem
 import { buildSetupPlan, runSetup } from "../commands/setup.js";
 import { buildSyncPlan, runSync } from "../commands/sync.js";
 import { getAgentStatus } from "../agent/runtime.js";
-import { discoverMachineTopology, resolveMachineRoute } from "../topology.js";
+import { discoverMachineTopology, resolveMachineRoute, resolveMachineWorkspace } from "../topology.js";
 import { checkMachineCompatibility } from "../compatibility.js";
 import { getStorageStatus, storagePull, storagePush, storageSync } from "../storage.js";
 
@@ -58,6 +58,7 @@ export const MACHINE_MCP_TOOL_NAMES = [
   "machines_install_claude_preview",
   "machines_install_claude_apply",
   "machines_route_resolve",
+  "machines_workspace_resolve",
   "machines_ssh_resolve",
   "machines_ports",
   "machines_backup_preview",
@@ -309,6 +310,48 @@ export function createMcpServer(version: string): McpServer {
   );
 
   server.tool(
+    "machines_workspace_resolve",
+    "Resolve sync-safe repo and open-files roots for an open-* consumer.",
+    {
+      machine_id: z.string().describe("Machine identifier"),
+      project_id: z.string().describe("Canonical project id"),
+      repo_name: z.string().optional().describe("Repository name; defaults to project id"),
+      open_files_repo_name: z.string().optional().describe("Open-files repository name"),
+      primary_machine_id: z.string().optional().describe("Primary machine id for this project"),
+      workspace_root: z.string().optional().describe("Override the machine workspace root"),
+      project_root: z.string().optional().describe("Override the resolved project root"),
+      open_files_root: z.string().optional().describe("Override the resolved open-files root"),
+      include_tailscale: z.boolean().optional().describe("Whether to probe tailscale status --json"),
+    },
+    async ({
+      machine_id,
+      project_id,
+      repo_name,
+      open_files_repo_name,
+      primary_machine_id,
+      workspace_root,
+      project_root,
+      open_files_root,
+      include_tailscale,
+    }) => ({
+      content: [{
+        type: "text",
+        text: JSON.stringify(resolveMachineWorkspace({
+          machineId: machine_id,
+          projectId: project_id,
+          repoName: repo_name,
+          openFilesRepoName: open_files_repo_name,
+          primaryMachineId: primary_machine_id,
+          workspaceRoot: workspace_root,
+          projectRoot: project_root,
+          openFilesRoot: open_files_root,
+          includeTailscale: include_tailscale !== false,
+        }), null, 2),
+      }],
+    })
+  );
+
+  server.tool(
     "machines_ssh_resolve",
     "Resolve the best SSH route for a machine.",
     { machine_id: z.string().describe("Machine identifier"), remote_command: z.string().optional().describe("Optional remote command") },
@@ -324,14 +367,14 @@ export function createMcpServer(version: string): McpServer {
   server.tool(
     "machines_backup_preview",
     "Preview backup steps for the current machine.",
-    { bucket: z.string().describe("S3 bucket name"), prefix: z.string().optional().describe("S3 key prefix") },
+    { bucket: z.string().optional().describe("S3 bucket name; defaults to HASNA_MACHINES_S3_BUCKET or MACHINES_S3_BUCKET"), prefix: z.string().optional().describe("S3 key prefix; defaults to HASNA_MACHINES_S3_PREFIX, MACHINES_S3_PREFIX, or machines") },
     async ({ bucket, prefix }) => ({ content: [{ type: "text", text: JSON.stringify(buildBackupPlan(bucket, prefix), null, 2) }] })
   );
 
   server.tool(
     "machines_backup_apply",
     "Execute backup steps for the current machine.",
-    { bucket: z.string().describe("S3 bucket name"), prefix: z.string().optional().describe("S3 key prefix"), yes: z.boolean().describe("Confirmation flag for execution") },
+    { bucket: z.string().optional().describe("S3 bucket name; defaults to HASNA_MACHINES_S3_BUCKET or MACHINES_S3_BUCKET"), prefix: z.string().optional().describe("S3 key prefix; defaults to HASNA_MACHINES_S3_PREFIX, MACHINES_S3_PREFIX, or machines"), yes: z.boolean().describe("Confirmation flag for execution") },
     async ({ bucket, prefix, yes }) => ({ content: [{ type: "text", text: JSON.stringify(runBackup(bucket, prefix, { apply: true, yes }), null, 2) }] })
   );
 

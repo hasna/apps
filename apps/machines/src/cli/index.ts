@@ -35,7 +35,7 @@ import { listPorts } from "../commands/ports.js";
 import { buildSshCommand, resolveSshTarget } from "../commands/ssh.js";
 import { buildSyncPlan, runSync } from "../commands/sync.js";
 import { getStatus } from "../commands/status.js";
-import { discoverMachineTopology, resolveMachineRoute } from "../topology.js";
+import { discoverMachineTopology, resolveMachineRoute, resolveMachineWorkspace } from "../topology.js";
 import {
   checkMachineCompatibility,
   type CompatibilityCheck,
@@ -249,6 +249,23 @@ function renderCompatibilityResult(result: ReturnType<typeof checkMachineCompati
     "",
     ...result.checks.map(renderCompatibilityCheck),
   ].join("\n");
+}
+
+function renderWorkspaceResolution(result: ReturnType<typeof resolveMachineWorkspace>): string {
+  return renderKeyValueTable([
+    ["machine", result.machine_id ?? result.requested_machine_id],
+    ["ok", String(result.ok)],
+    ["project", result.project.project_id],
+    ["repo", result.project.repo_name ?? "unknown"],
+    ["current", String(result.machine.current)],
+    ["primary", String(result.machine.primary)],
+    ["trust", result.machine.trust_status],
+    ["auth", result.machine.auth_status],
+    ["workspace root", `${result.paths.workspace_root.path ?? "unresolved"} (${result.paths.workspace_root.source})`],
+    ["project root", `${result.paths.project_root.path ?? "unresolved"} (${result.paths.project_root.source})`],
+    ["open-files root", `${result.paths.open_files_root.path ?? "unresolved"} (${result.paths.open_files_root.source})`],
+    ["warnings", result.warnings.join(", ") || "none"],
+  ]);
 }
 
 function renderFleetStatus(status: FleetStatus): string {
@@ -509,6 +526,48 @@ program
     if (!result.ok && !options.json) process.exitCode = 1;
   });
 
+const workspaceCommand = program.command("workspace").description("Resolve sync-safe workspace paths for open-* consumers");
+
+workspaceCommand
+  .command("resolve")
+  .description("Resolve repo and open-files roots for a machine/project")
+  .requiredOption("--machine <id>", "Machine identifier")
+  .requiredOption("--project <id>", "Canonical project id")
+  .option("--repo <name>", "Repository name; defaults to project id")
+  .option("--open-files-repo <name>", "Open-files repository name", "open-files")
+  .option("--primary-machine <id>", "Primary machine id for the project")
+  .option("--workspace-root <path>", "Override the machine workspace root")
+  .option("--project-root <path>", "Override the resolved project root")
+  .option("--open-files-root <path>", "Override the resolved open-files root")
+  .option("--no-tailscale", "Skip tailscale status probing")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: {
+    machine: string;
+    project: string;
+    repo?: string;
+    openFilesRepo?: string;
+    primaryMachine?: string;
+    workspaceRoot?: string;
+    projectRoot?: string;
+    openFilesRoot?: string;
+    tailscale?: boolean;
+    json?: boolean;
+  }) => {
+    const result = resolveMachineWorkspace({
+      machineId: options.machine,
+      projectId: options.project,
+      repoName: options.repo,
+      openFilesRepoName: options.openFilesRepo,
+      primaryMachineId: options.primaryMachine,
+      workspaceRoot: options.workspaceRoot,
+      projectRoot: options.projectRoot,
+      openFilesRoot: options.openFilesRoot,
+      includeTailscale: options.tailscale !== false,
+    });
+    printJsonOrText(result, renderWorkspaceResolution(result), options.json);
+    if (!result.ok && !options.json) process.exitCode = 1;
+  });
+
 program
   .command("diff")
   .description("Show manifest differences between two machines")
@@ -523,12 +582,12 @@ program
 program
   .command("backup")
   .description("Create and optionally upload a machine backup archive")
-  .requiredOption("--bucket <name>", "S3 bucket name")
-  .option("--prefix <prefix>", "S3 key prefix", "machines")
+  .option("--bucket <name>", "S3 bucket name; defaults to HASNA_MACHINES_S3_BUCKET or MACHINES_S3_BUCKET")
+  .option("--prefix <prefix>", "S3 key prefix; defaults to HASNA_MACHINES_S3_PREFIX, MACHINES_S3_PREFIX, or machines")
   .option("--apply", "Execute backup commands instead of previewing the plan", false)
   .option("--yes", "Confirm execution when using --apply", false)
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { bucket: string; prefix: string; apply?: boolean; yes?: boolean; json?: boolean }) => {
+  .action((options: { bucket?: string; prefix?: string; apply?: boolean; yes?: boolean; json?: boolean }) => {
     const result = options.apply
       ? runBackup(options.bucket, options.prefix, { apply: true, yes: options.yes })
       : buildBackupPlan(options.bucket, options.prefix);

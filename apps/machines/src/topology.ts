@@ -67,6 +67,7 @@ export interface MachinesConsumerCapabilities {
   compatibility: true;
   route_resolution: true;
   cli_json_fallback: true;
+  workspace_path_mapping?: true;
 }
 
 export interface MachineTopology {
@@ -110,6 +111,67 @@ export interface MachineRouteResolution {
 }
 
 export interface MachineRouteOptions extends MachineTopologyOptions {
+  topology?: MachineTopology;
+}
+
+export type MachineWorkspacePathSource =
+  | "argument"
+  | "manifest"
+  | "manifest_metadata"
+  | "inferred"
+  | "unresolved";
+
+export type MachineWorkspaceTrustStatus = "trusted" | "untrusted" | "unknown";
+export type MachineWorkspaceAuthStatus = "authenticated" | "unauthenticated" | "unknown";
+
+export interface MachineWorkspacePath {
+  path: string | null;
+  source: MachineWorkspacePathSource;
+}
+
+export interface MachineWorkspaceProject {
+  project_id: string;
+  repo_name: string | null;
+  canonical: boolean;
+}
+
+export interface MachineWorkspaceResolution {
+  schema_version: typeof MACHINES_CONSUMER_CONTRACT_VERSION;
+  package: MachinesContractPackage;
+  ok: boolean;
+  requested_machine_id: string;
+  machine_id: string | null;
+  generated_at: string;
+  project: MachineWorkspaceProject;
+  machine: {
+    current: boolean;
+    primary: boolean;
+    trust_status: MachineWorkspaceTrustStatus;
+    auth_status: MachineWorkspaceAuthStatus;
+  };
+  paths: {
+    workspace_root: MachineWorkspacePath;
+    project_root: MachineWorkspacePath;
+    open_files_root: MachineWorkspacePath;
+  };
+  evidence: {
+    topology: boolean;
+    matched_by: MachineRouteResolution["evidence"]["matched_by"];
+    manifest_declared: boolean | null;
+    metadata_keys: string[];
+  };
+  warnings: string[];
+}
+
+export interface MachineWorkspaceOptions extends MachineTopologyOptions {
+  machineId: string;
+  projectId: string;
+  repoName?: string;
+  openFilesRepoName?: string;
+  primaryMachineId?: string;
+  workspaceRoot?: string;
+  projectRoot?: string;
+  openFilesRoot?: string;
   topology?: MachineTopology;
 }
 
@@ -340,6 +402,7 @@ export function discoverMachineTopology(options: MachineTopologyOptions = {}): M
       compatibility: true,
       route_resolution: true,
       cli_json_fallback: true,
+      workspace_path_mapping: true,
     },
     generated_at: now.toISOString(),
     local_machine_id: localMachineId,
@@ -469,6 +532,231 @@ export function resolveMachineRoute(machineId: string, options: MachineRouteOpti
       heartbeat_status: machine.heartbeat_status,
       tailscale_online: machine.tailscale.online,
       selected_hint: selectedHint,
+    },
+    warnings,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function metadataString(metadata: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function metadataBoolean(metadata: Record<string, unknown>, keys: string[]): boolean | null {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "boolean") return value;
+  }
+  return null;
+}
+
+function metadataStringArray(metadata: Record<string, unknown>, keys: string[]): string[] {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (Array.isArray(value)) return value.filter((entry): entry is string => typeof entry === "string");
+  }
+  return [];
+}
+
+function readMappedPath(input: {
+  metadata: Record<string, unknown>;
+  containers: string[];
+  keys: string[];
+}): string | null {
+  for (const containerName of input.containers) {
+    const container = input.metadata[containerName];
+    if (!isRecord(container)) continue;
+    for (const key of input.keys) {
+      const value = container[key];
+      if (typeof value === "string" && value.trim()) return value.trim();
+      if (isRecord(value)) {
+        const path = metadataString(value, ["path", "root", "workspacePath", "workspace_path"]);
+        if (path) return path;
+      }
+    }
+  }
+  return null;
+}
+
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, "");
+}
+
+function joinPath(left: string, right: string): string {
+  return `${trimTrailingSlash(left)}/${right.replace(/^\/+/, "")}`;
+}
+
+function inferRepoRoot(workspaceRoot: string | null, repoName: string | null): string | null {
+  if (!workspaceRoot || !repoName) return null;
+  const root = trimTrailingSlash(workspaceRoot);
+  if (root.endsWith(`/${repoName}`) || root === repoName) return root;
+  if (root.endsWith("/workspace") || root.endsWith("/Workspace")) {
+    return joinPath(root, `hasna/opensource/${repoName}`);
+  }
+  return joinPath(root, repoName);
+}
+
+function projectPathFromMetadata(metadata: Record<string, unknown>, projectId: string, repoName: string | null): string | null {
+  const keys = [projectId, repoName].filter((value): value is string => Boolean(value));
+  return readMappedPath({
+    metadata,
+    containers: ["workspace_paths", "workspacePaths", "repo_paths", "repoPaths", "project_paths", "projectPaths", "projects"],
+    keys,
+  });
+}
+
+function openFilesPathFromMetadata(metadata: Record<string, unknown>, projectId: string, repoName: string | null): string | null {
+  const direct = metadataString(metadata, ["open_files_root", "openFilesRoot", "open_files_path", "openFilesPath"]);
+  if (direct) return direct;
+  const keys = [projectId, repoName, "open-files", "open_files", "default"].filter((value): value is string => Boolean(value));
+  return readMappedPath({
+    metadata,
+    containers: ["open_files_roots", "openFilesRoots", "open_files_paths", "openFilesPaths"],
+    keys,
+  });
+}
+
+function trustStatus(machine: MachineTopologyEntry | null): MachineWorkspaceTrustStatus {
+  if (!machine) return "unknown";
+  const explicit = metadataString(machine.metadata, ["trust_status", "trustStatus"]);
+  if (explicit === "trusted" || explicit === "untrusted" || explicit === "unknown") return explicit;
+  const trusted = metadataBoolean(machine.metadata, ["trusted", "syncTrusted", "sync_trusted"]);
+  if (trusted === true) return "trusted";
+  if (trusted === false) return "untrusted";
+  if (machine.route_hints.some((hint) => hint.kind === "local")) return "trusted";
+  if (machine.tags.includes("trusted")) return "trusted";
+  return "unknown";
+}
+
+function authStatus(machine: MachineTopologyEntry | null): MachineWorkspaceAuthStatus {
+  if (!machine) return "unknown";
+  const explicit = metadataString(machine.metadata, ["auth_status", "authStatus"]);
+  if (explicit === "authenticated" || explicit === "unauthenticated" || explicit === "unknown") return explicit;
+  const authenticated = metadataBoolean(machine.metadata, ["authenticated", "sshAuthorized", "ssh_authorized"]);
+  if (authenticated === true) return "authenticated";
+  if (authenticated === false) return "unauthenticated";
+  if (machine.route_hints.some((hint) => hint.kind === "local")) return "authenticated";
+  return "unknown";
+}
+
+function primaryMachine(machine: MachineTopologyEntry | null, projectId: string, primaryMachineId?: string): boolean {
+  if (!machine) return false;
+  if (primaryMachineId) return machine.machine_id === primaryMachineId;
+  if (metadataBoolean(machine.metadata, ["primary", "primary_machine", "primaryMachine"]) === true) return true;
+  const primaryProjects = metadataStringArray(machine.metadata, ["primary_projects", "primaryProjects"]);
+  if (primaryProjects.includes(projectId)) return true;
+  return machine.tags.includes("primary");
+}
+
+function metadataKeysForDiagnostics(metadata: Record<string, unknown>): string[] {
+  return Object.keys(metadata)
+    .filter((key) => !/(secret|token|key|password|credential)/i.test(key))
+    .sort();
+}
+
+export function resolveMachineWorkspace(options: MachineWorkspaceOptions): MachineWorkspaceResolution {
+  const topology = options.topology ?? discoverMachineTopology(options);
+  const warnings = [...topology.warnings];
+  const { machine, matchedBy } = findRouteMachine(topology, options.machineId);
+  const generatedAt = (options.now ?? new Date()).toISOString();
+  const repoName = options.repoName ?? options.projectId;
+  const openFilesRepoName = options.openFilesRepoName ?? "open-files";
+
+  if (!machine) {
+    warnings.push(`machine_not_found:${options.machineId}`);
+    return {
+      schema_version: MACHINES_CONSUMER_CONTRACT_VERSION,
+      package: topology.package,
+      ok: false,
+      requested_machine_id: options.machineId,
+      machine_id: null,
+      generated_at: generatedAt,
+      project: { project_id: options.projectId, repo_name: repoName, canonical: Boolean(options.projectId) },
+      machine: { current: false, primary: false, trust_status: "unknown", auth_status: "unknown" },
+      paths: {
+        workspace_root: { path: null, source: "unresolved" },
+        project_root: { path: null, source: "unresolved" },
+        open_files_root: { path: null, source: "unresolved" },
+      },
+      evidence: {
+        topology: true,
+        matched_by: matchedBy,
+        manifest_declared: null,
+        metadata_keys: [],
+      },
+      warnings,
+    };
+  }
+
+  const metadata = machine.metadata;
+  const workspaceRootPath = options.workspaceRoot ?? machine.workspace_path;
+  const workspaceRootSource: MachineWorkspacePathSource = options.workspaceRoot
+    ? "argument"
+    : machine.workspace_path
+      ? "manifest"
+      : "unresolved";
+
+  const metadataProjectRoot = projectPathFromMetadata(metadata, options.projectId, repoName);
+  const inferredProjectRoot = inferRepoRoot(workspaceRootPath, repoName);
+  const projectRootPath = options.projectRoot ?? metadataProjectRoot ?? inferredProjectRoot;
+  const projectRootSource: MachineWorkspacePathSource = options.projectRoot
+    ? "argument"
+    : metadataProjectRoot
+      ? "manifest_metadata"
+      : inferredProjectRoot
+        ? "inferred"
+        : "unresolved";
+
+  const metadataOpenFilesRoot = openFilesPathFromMetadata(metadata, options.projectId, openFilesRepoName);
+  const inferredOpenFilesRoot = inferRepoRoot(workspaceRootPath, openFilesRepoName);
+  const openFilesRootPath = options.openFilesRoot ?? metadataOpenFilesRoot ?? inferredOpenFilesRoot;
+  const openFilesRootSource: MachineWorkspacePathSource = options.openFilesRoot
+    ? "argument"
+    : metadataOpenFilesRoot
+      ? "manifest_metadata"
+      : inferredOpenFilesRoot
+        ? "inferred"
+        : "unresolved";
+
+  if (projectRootSource === "inferred") warnings.push(`project_root_inferred:${options.projectId}`);
+  if (openFilesRootSource === "inferred") warnings.push(`open_files_root_inferred:${options.projectId}`);
+  if (!projectRootPath) warnings.push(`project_root_unresolved:${options.projectId}`);
+
+  return {
+    schema_version: MACHINES_CONSUMER_CONTRACT_VERSION,
+    package: topology.package,
+    ok: Boolean(projectRootPath),
+    requested_machine_id: options.machineId,
+    machine_id: machine.machine_id,
+    generated_at: generatedAt,
+    project: {
+      project_id: options.projectId,
+      repo_name: repoName,
+      canonical: Boolean(options.projectId && repoName),
+    },
+    machine: {
+      current: machine.machine_id === topology.local_machine_id,
+      primary: primaryMachine(machine, options.projectId, options.primaryMachineId),
+      trust_status: trustStatus(machine),
+      auth_status: authStatus(machine),
+    },
+    paths: {
+      workspace_root: { path: workspaceRootPath, source: workspaceRootSource },
+      project_root: { path: projectRootPath, source: projectRootSource },
+      open_files_root: { path: openFilesRootPath, source: openFilesRootSource },
+    },
+    evidence: {
+      topology: true,
+      matched_by: matchedBy,
+      manifest_declared: machine.manifest_declared,
+      metadata_keys: metadataKeysForDiagnostics(metadata),
     },
     warnings,
   };

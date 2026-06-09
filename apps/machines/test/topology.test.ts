@@ -8,6 +8,7 @@ import {
   discoverMachineTopology,
   getLocalMachineTopology,
   resolveMachineRoute,
+  resolveMachineWorkspace,
   type TopologyCommandRunner,
 } from "../src/topology.js";
 
@@ -104,6 +105,76 @@ describe("machine topology SDK", () => {
 
       const spark02 = topology.machines.find((machine) => machine.machine_id === "spark02");
       expect(spark02?.heartbeat_status).toBe("online");
+
+      const workspace = resolveMachineWorkspace({
+        machineId: "spark01",
+        projectId: "open-knowledge",
+        repoName: "open-knowledge",
+        topology,
+        now: new Date("2026-06-09T00:00:00.000Z"),
+      });
+      expect(workspace.ok).toBe(true);
+      expect(workspace.machine_id).toBe("spark01");
+      expect(workspace.paths.project_root.path).toBe("/home/hasna/workspace/hasna/opensource/open-knowledge");
+      expect(workspace.paths.project_root.source).toBe("inferred");
+      expect(workspace.paths.open_files_root.path).toBe("/home/hasna/workspace/hasna/opensource/open-files");
+      expect(workspace.machine.trust_status).toBe("unknown");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("resolves project paths from manifest metadata without exposing secrets", () => {
+    const dir = setupTemp("machines-workspace-paths-");
+    try {
+      manifestAdd({
+        id: "spark01",
+        hostname: "spark01",
+        platform: "linux",
+        workspacePath: "/home/hasna/workspace",
+        tags: ["trusted"],
+        metadata: {
+          workspace_paths: {
+            "open-knowledge": {
+              path: "/mnt/projects/open-knowledge",
+            },
+          },
+          open_files_roots: {
+            "open-knowledge": "/mnt/files/open-files",
+          },
+          primary_projects: ["open-knowledge"],
+          auth_status: "authenticated",
+          api_token: "should-not-appear",
+        },
+      });
+
+      const topology = discoverMachineTopology({
+        now: new Date("2026-06-09T00:00:00.000Z"),
+        includeTailscale: false,
+      });
+      const resolved = resolveMachineWorkspace({
+        machineId: "spark01",
+        projectId: "open-knowledge",
+        repoName: "open-knowledge",
+        topology,
+        now: new Date("2026-06-09T00:00:00.000Z"),
+      });
+
+      expect(resolved.ok).toBe(true);
+      expect(resolved.project.project_id).toBe("open-knowledge");
+      expect(resolved.machine.primary).toBe(true);
+      expect(resolved.machine.trust_status).toBe("trusted");
+      expect(resolved.machine.auth_status).toBe("authenticated");
+      expect(resolved.paths.project_root).toEqual({
+        path: "/mnt/projects/open-knowledge",
+        source: "manifest_metadata",
+      });
+      expect(resolved.paths.open_files_root).toEqual({
+        path: "/mnt/files/open-files",
+        source: "manifest_metadata",
+      });
+      expect(resolved.evidence.metadata_keys).toContain("workspace_paths");
+      expect(resolved.evidence.metadata_keys).not.toContain("api_token");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

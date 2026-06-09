@@ -4,6 +4,7 @@ import {
   checkMachineCompatibility,
   discoverMachineTopology,
   resolveMachineRoute,
+  resolveMachineWorkspace,
 } from "../src/consumer.js";
 
 describe("machines consumer SDK", () => {
@@ -12,5 +13,6 @@ describe("machines consumer SDK", () => {
     expect(typeof discoverMachineTopology).toBe("function");
     expect(typeof checkMachineCompatibility).toBe("function");
     expect(typeof resolveMachineRoute).toBe("function");
+    expect(typeof resolveMachineWorkspace).toBe("function");
   });
 });

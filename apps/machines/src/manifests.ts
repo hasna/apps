@@ -33,6 +33,7 @@ export const machineSchema = z.object({
   workspacePath: z.string(),
   bunPath: z.string().optional(),
   tags: z.array(z.string()).optional(),
+  metadata: z.record(z.unknown()).optional(),
   packages: z.array(packageSchema).optional(),
   apps: z.array(appSchema).optional(),
   files: z.array(fileSchema).optional(),
