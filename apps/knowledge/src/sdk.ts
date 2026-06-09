@@ -46,6 +46,9 @@ export interface KnowledgeClient {
     readonly status: () => ReturnType<KnowledgeService['syncStatus']>;
     readonly snapshot: (options?: KnowledgeSyncSnapshotOptions) => ReturnType<KnowledgeService['createSyncSnapshot']>;
     readonly conflicts: (options?: Parameters<KnowledgeService['syncConflicts']>[0]) => ReturnType<KnowledgeService['syncConflicts']>;
+    readonly conflict: (id: string) => ReturnType<KnowledgeService['syncConflict']>;
+    readonly proposeConflictResolution: (id: string) => ReturnType<KnowledgeService['proposeSyncConflictResolution']>;
+    readonly resolveConflict: (options: Parameters<KnowledgeService['resolveSyncConflict']>[0]) => ReturnType<KnowledgeService['resolveSyncConflict']>;
     readonly machines: () => ReturnType<KnowledgeService['syncMachines']>;
     readonly exportBundle: (options?: KnowledgeSyncBundleOptions) => ReturnType<KnowledgeService['exportSyncBundle']>;
     readonly importBundle: (options: KnowledgeSyncImportOptions) => ReturnType<KnowledgeService['importSyncBundle']>;
@@ -123,6 +126,9 @@ export function createKnowledgeClient(options: KnowledgeClientOptions = {}): Kno
       status: () => service.syncStatus(),
       snapshot: (input = {}) => service.createSyncSnapshot(input),
       conflicts: (input = {}) => service.syncConflicts(input),
+      conflict: (id) => service.syncConflict(id),
+      proposeConflictResolution: (id) => service.proposeSyncConflictResolution(id),
+      resolveConflict: (input) => service.resolveSyncConflict(input),
       machines: () => service.syncMachines(),
       exportBundle: (input = {}) => service.exportSyncBundle(input),
       importBundle: (input) => service.importSyncBundle(input),

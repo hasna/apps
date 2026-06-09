@@ -9,7 +9,9 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createKnowledgeService } from '../src/service';
 import { parseSourceRef } from '../src/source-ref';
+import { recordKnowledgeSyncConflict } from '../src/sync';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI = join(__dirname, '..', 'src', 'cli.ts');
@@ -455,6 +457,52 @@ describe('knowledge cli', () => {
     expect(conflicts.exitCode).toBe(0);
     const conflictsOut = JSON.parse(new TextDecoder().decode(conflicts.stdout));
     expect(conflictsOut.conflicts).toEqual([]);
+
+    const service = createKnowledgeService({ scope: 'project', cwd: dir });
+    const conflict = recordKnowledgeSyncConflict(service.ensureWorkspace().knowledgeDbPath, {
+      entityKind: 'wiki_pages',
+      entityId: 'wiki/handbook.md',
+      localMachineId: 'spark02',
+      remoteMachineId: 'spark01',
+      localHash: 'sha256:local',
+      remoteHash: 'sha256:remote',
+      baseHash: 'sha256:base',
+      metadata: { reason: 'cli conflict workflow' },
+    });
+
+    const show = runCli(['sync', 'conflicts', 'show', conflict.id, '--scope', 'project', '--json'], dir);
+    expect(show.exitCode).toBe(0);
+    const showOut = JSON.parse(new TextDecoder().decode(show.stdout));
+    expect(showOut.conflict.id).toBe(conflict.id);
+    expect(showOut.conflict.metadata.reason).toBe('cli conflict workflow');
+
+    const propose = runCli(['sync', 'conflicts', 'propose', conflict.id, '--scope', 'project', '--json'], dir);
+    expect(propose.exitCode).toBe(0);
+    const proposeOut = JSON.parse(new TextDecoder().decode(propose.stdout));
+    expect(proposeOut.requires_approval).toBe(true);
+    expect(proposeOut.merge_prompt).toContain('Do not write changes without approval');
+
+    const blockedResolve = runCli(['sync', 'conflicts', 'resolve', conflict.id, '--scope', 'project', '--strategy', 'manual-merge', '--json'], dir);
+    expect(blockedResolve.exitCode).toBe(0);
+    const blockedOut = JSON.parse(new TextDecoder().decode(blockedResolve.stdout));
+    expect(blockedOut.ok).toBe(false);
+    expect(blockedOut.approval_required).toBe(true);
+
+    const resolved = runCli([
+      'sync', 'conflicts', 'resolve', conflict.id,
+      '--scope', 'project',
+      '--strategy', 'manual-merge',
+      '--approve-write',
+      '--approved-by', 'cli-reviewer',
+      '--patch-uri', 'file:///tmp/cli.patch',
+      '--json',
+    ], dir);
+    expect(resolved.exitCode).toBe(0);
+    const resolvedOut = JSON.parse(new TextDecoder().decode(resolved.stdout));
+    expect(resolvedOut.ok).toBe(true);
+    expect(resolvedOut.conflict.status).toBe('resolved');
+    expect(resolvedOut.conflict.approved_by).toBe('cli-reviewer');
+    expect(resolvedOut.audit_event_id).toStartWith('audit_');
   });
 
   test('sync dry-run and push copy a project catalog into a peer workspace', () => {

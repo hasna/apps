@@ -8,7 +8,7 @@ import { RemoteKnowledgeClient, type RemoteKnowledgeRegistryContract } from './r
 import { type RetrievalOptions } from './retrieval';
 import { type HybridSearchOptions } from './search';
 import { type WebSearchOptions } from './web-search';
-import { type KnowledgePeerSyncResult, type KnowledgeSyncApplyResult, type KnowledgeSyncBundle, type KnowledgeSyncSnapshotResult } from './sync';
+import { type KnowledgeSyncConflict, type KnowledgeSyncConflictResolutionProposal, type KnowledgePeerSyncResult, type KnowledgeSyncApplyResult, type KnowledgeSyncBundle, type KnowledgeSyncSnapshotResult } from './sync';
 import { type WikiCompileOptions } from './wiki-compiler';
 import { type StorageContract, type StorageValidationResult } from './storage-contract';
 import { type KnowledgeConfig, type KnowledgeWorkspace } from './workspace';
@@ -84,6 +84,26 @@ export interface KnowledgeRemotePeerSyncResult extends KnowledgePeerSyncResult {
     };
     peer_workspace: string;
 }
+export interface KnowledgeSyncConflictResolveOptions {
+    id: string;
+    strategy?: string;
+    approvedBy?: string;
+    approveWrite?: boolean;
+    proposedPatchUri?: string | null;
+}
+export type KnowledgeSyncConflictResolveResult = {
+    ok: false;
+    approval_required: true;
+    conflict: KnowledgeSyncConflict;
+    proposal: KnowledgeSyncConflictResolutionProposal;
+    message: string;
+} | {
+    ok: true;
+    approval_required: false;
+    conflict: KnowledgeSyncConflict;
+    audit_event_id: string;
+    message: string;
+};
 export declare class KnowledgeService {
     private readonly options;
     private ensuredWorkspace?;
@@ -163,24 +183,10 @@ export declare class KnowledgeService {
     syncConflicts(options?: {
         status?: string;
         limit?: number;
-    }): {
-        metadata: {};
-        id: string;
-        entity_kind: string;
-        entity_id: string;
-        local_machine_id: string;
-        remote_machine_id: string;
-        local_hash: string | null;
-        remote_hash: string | null;
-        base_hash: string | null;
-        status: string;
-        resolution_strategy: string | null;
-        proposed_patch_uri: string | null;
-        approved_by: string | null;
-        resolved_at: string | null;
-        metadata_json: string;
-        created_at: string;
-    }[];
+    }): KnowledgeSyncConflict[];
+    syncConflict(id: string): KnowledgeSyncConflict;
+    proposeSyncConflictResolution(id: string): KnowledgeSyncConflictResolutionProposal;
+    resolveSyncConflict(options: KnowledgeSyncConflictResolveOptions): KnowledgeSyncConflictResolveResult;
     syncMachines(): import("./sync").KnowledgeSyncMachineRow[];
     exportSyncBundle(options?: KnowledgeSyncBundleOptions): KnowledgeSyncBundle;
     importSyncBundle(options: KnowledgeSyncImportOptions): Promise<KnowledgeSyncApplyResult>;

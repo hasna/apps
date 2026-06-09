@@ -57,6 +57,7 @@ interface Flags {
   completions?: string;
   purpose?: string;
   model?: string;
+  strategy?: string;
   dimensions?: number;
   semantic?: boolean;
   context?: boolean;
@@ -73,6 +74,8 @@ interface Flags {
   org?: string;
   orgId?: string;
   userId?: string;
+  approvedBy?: string;
+  patchUri?: string;
   domain?: string[];
   fileResults?: boolean;
   full?: boolean;
@@ -132,6 +135,7 @@ function parseArgs(argv: string[]): ParseResult {
       case '--completions': flags.completions = argv[i + 1]; i += 1; break;
       case '--purpose': flags.purpose = argv[i + 1]; i += 1; break;
       case '--model': flags.model = argv[i + 1]; i += 1; break;
+      case '--strategy': flags.strategy = argv[i + 1]; i += 1; break;
       case '--dimensions': flags.dimensions = Number(argv[i + 1]); i += 1; break;
       case '--semantic': flags.semantic = true; break;
       case '--context': flags.context = true; break;
@@ -148,6 +152,8 @@ function parseArgs(argv: string[]): ParseResult {
       case '--org': flags.org = argv[i + 1]; i += 1; break;
       case '--org-id': flags.orgId = argv[i + 1]; i += 1; break;
       case '--user-id': flags.userId = argv[i + 1]; i += 1; break;
+      case '--approved-by': flags.approvedBy = argv[i + 1]; i += 1; break;
+      case '--patch-uri': flags.patchUri = argv[i + 1]; i += 1; break;
       case '--domain': flags.domain = [...(flags.domain ?? []), argv[i + 1]]; i += 1; break;
       case '--file-results': flags.fileResults = true; break;
       case '--full': flags.full = true; break;
@@ -257,7 +263,10 @@ Global Options:
   --semantic                   Include vector semantic results in search
   --context                    Return a reranked citation context pack for search
   --generate                   Call AI SDK text generation for ask/build
-  --approve-write              Record approval intent for future durable wiki writes
+  --approve-write              Approve durable generated writes or sync conflict resolution
+  --approved-by <name>         Approver label for approval-gated sync conflict resolution
+  --strategy <name>            Resolution strategy for sync conflicts
+  --patch-uri <uri>            Proposed patch artifact URI for sync conflicts
   --provider <name>            Provider override for web search
   --mode local|hosted          Configure OSS local or hosted-aware mode
   --machine <id>               Machine id/SSH alias for preflight or peer sync
@@ -336,7 +345,7 @@ function printCommandHelp(command: string): void {
   if (command === 'remote') { console.log('Usage: knowledge remote contracts|status [--scope local|global|project] [--json]'); return; }
   if (command === 'storage') { console.log('Usage: knowledge storage status|validate [--scope local|global|project] [--json]'); return; }
   if (command === 'machines') { console.log('Usage: knowledge machines topology [--no-tailscale] | preflight [machine] [--workspace <repo>] [--scope local|global|project] [--json]'); return; }
-  if (command === 'sync') { console.log('Usage: knowledge sync status|snapshot|machines|conflicts|dry-run|pull|push|sync|export|import [--peer-workspace <path>] [--machine <ssh-alias>] [--tables <names>] [--dry-run] [--limit <n>] [--no-tailscale] [--scope local|global|project] [--json]'); return; }
+  if (command === 'sync') { console.log('Usage: knowledge sync status|snapshot|machines|conflicts [show|propose|resolve] [id] | dry-run|pull|push|sync|export|import [--peer-workspace <path>] [--machine <ssh-alias>] [--tables <names>] [--dry-run] [--limit <n>] [--approve-write] [--approved-by <name>] [--strategy <name>] [--no-tailscale] [--scope local|global|project] [--json]'); return; }
   if (command === 'db') { console.log('Usage: knowledge db init|stats|storage status|push|pull|sync [--tables sources,chunks] [--scope local|global|project] [--json]'); return; }
   if (command === 'wiki') { console.log('Usage: knowledge wiki init|compile|file-answer|lint [query|prompt] [--title <title>] [--content <answer>] [--approve-write] [--limit <n>] [--scope local|global|project] [--json]'); return; }
   if (command === 'source') { console.log('Usage: knowledge source resolve <source-ref> [--purpose knowledge_answer|knowledge_index] [--limit <n>] [--scope local|global|project] [--json]'); return; }
@@ -602,8 +611,36 @@ async function run(argv: string[]): Promise<void> {
       return;
     }
     if (action === 'conflicts' || action === 'conflict') {
+      const conflictAction = positional[2];
+      if (conflictAction === 'show' || conflictAction === 'get') {
+        const id = positional[3] ?? flags.id;
+        if (!id) throw new Error('Usage: knowledge sync conflicts show <id>');
+        const conflict = service.syncConflict(id);
+        output({ ok: true, conflict, message: `Sync conflict ${id}` }, flags.json);
+        return;
+      }
+      if (conflictAction === 'propose' || conflictAction === 'proposal') {
+        const id = positional[3] ?? flags.id;
+        if (!id) throw new Error('Usage: knowledge sync conflicts propose <id>');
+        output(service.proposeSyncConflictResolution(id), flags.json);
+        return;
+      }
+      if (conflictAction === 'resolve') {
+        const id = positional[3] ?? flags.id;
+        if (!id) throw new Error('Usage: knowledge sync conflicts resolve <id> --approve-write --approved-by <name> [--strategy <name>]');
+        const result = service.resolveSyncConflict({
+          id,
+          strategy: flags.strategy,
+          approvedBy: flags.approvedBy,
+          approveWrite: flags.approveWrite,
+          proposedPatchUri: flags.patchUri,
+        });
+        output(result, flags.json);
+        if (!result.ok && !flags.json) process.exitCode = 1;
+        return;
+      }
       const conflicts = service.syncConflicts({
-        status: positional[2],
+        status: conflictAction,
         limit: flags.limit,
       });
       output({

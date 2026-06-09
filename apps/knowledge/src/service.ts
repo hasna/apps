@@ -35,17 +35,22 @@ import { enqueueMissingEmbeddings, refreshEmbeddingIndex, reindexHealth, type Re
 import { knowledgeRegistryContract, RemoteKnowledgeClient, type RemoteKnowledgeRegistryContract } from './remote-client';
 import { retrieveKnowledgeContext, type RetrievalOptions } from './retrieval';
 import { hybridSearch, type HybridSearchOptions } from './search';
-import { resolveSafetyPolicy } from './safety';
+import { recordAuditEvent, resolveSafetyPolicy } from './safety';
 import { runProviderWebSearch, type WebSearchOptions } from './web-search';
 import {
   applyKnowledgeSyncBundle,
   createKnowledgeSyncSnapshot,
   createKnowledgeSyncBundle,
+  getKnowledgeSyncConflict,
   getKnowledgeSyncStatus,
   KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION,
   KNOWLEDGE_SYNC_PROTOCOL_VERSION,
   listKnowledgeMachines,
   listKnowledgeSyncConflicts,
+  proposeKnowledgeSyncConflictResolution,
+  resolveKnowledgeSyncConflict,
+  type KnowledgeSyncConflict,
+  type KnowledgeSyncConflictResolutionProposal,
   type KnowledgePeerSyncResult,
   type KnowledgeSyncApplyResult,
   type KnowledgeSyncBundle,
@@ -152,6 +157,28 @@ export interface KnowledgeRemotePeerSyncResult extends KnowledgePeerSyncResult {
   };
   peer_workspace: string;
 }
+
+export interface KnowledgeSyncConflictResolveOptions {
+  id: string;
+  strategy?: string;
+  approvedBy?: string;
+  approveWrite?: boolean;
+  proposedPatchUri?: string | null;
+}
+
+export type KnowledgeSyncConflictResolveResult = {
+  ok: false;
+  approval_required: true;
+  conflict: KnowledgeSyncConflict;
+  proposal: KnowledgeSyncConflictResolutionProposal;
+  message: string;
+} | {
+  ok: true;
+  approval_required: false;
+  conflict: KnowledgeSyncConflict;
+  audit_event_id: string;
+  message: string;
+};
 
 function resolvePeerWorkspace(input: string): KnowledgeWorkspace {
   const target = resolve(input);
@@ -636,6 +663,64 @@ export class KnowledgeService {
   syncConflicts(options: { status?: string; limit?: number } = {}) {
     const workspace = this.ensureWorkspace();
     return listKnowledgeSyncConflicts(workspace.knowledgeDbPath, options);
+  }
+
+  syncConflict(id: string) {
+    const workspace = this.ensureWorkspace();
+    const conflict = getKnowledgeSyncConflict(workspace.knowledgeDbPath, id);
+    if (!conflict) throw new Error(`Sync conflict not found: ${id}`);
+    return conflict;
+  }
+
+  proposeSyncConflictResolution(id: string) {
+    const workspace = this.ensureWorkspace();
+    return proposeKnowledgeSyncConflictResolution(workspace.knowledgeDbPath, id);
+  }
+
+  resolveSyncConflict(options: KnowledgeSyncConflictResolveOptions): KnowledgeSyncConflictResolveResult {
+    const workspace = this.ensureWorkspace();
+    const proposal = proposeKnowledgeSyncConflictResolution(workspace.knowledgeDbPath, options.id);
+    if (options.approveWrite !== true || !options.approvedBy) {
+      return {
+        ok: false,
+        approval_required: true,
+        conflict: proposal.conflict,
+        proposal,
+        message: 'Sync conflict resolution requires --approve-write and --approved-by <name>',
+      };
+    }
+    const conflict = resolveKnowledgeSyncConflict(workspace.knowledgeDbPath, {
+      id: options.id,
+      strategy: options.strategy ?? proposal.proposed_strategy,
+      approvedBy: options.approvedBy,
+      proposedPatchUri: options.proposedPatchUri,
+    });
+    const db = openKnowledgeDb(workspace.knowledgeDbPath);
+    try {
+      const auditEventId = recordAuditEvent(db, {
+        event_type: 'sync_conflict_resolution',
+        action: 'sync.conflict.resolve',
+        target_uri: `knowledge-sync-conflict://${options.id}`,
+        decision: 'allow',
+        metadata: {
+          conflict_id: options.id,
+          entity_kind: conflict.entity_kind,
+          entity_id: conflict.entity_id,
+          strategy: conflict.resolution_strategy,
+          approved_by: conflict.approved_by,
+          proposed_patch_uri: conflict.proposed_patch_uri,
+        },
+      });
+      return {
+        ok: true,
+        approval_required: false,
+        conflict,
+        audit_event_id: auditEventId,
+        message: `Resolved sync conflict ${options.id}`,
+      };
+    } finally {
+      db.close();
+    }
   }
 
   syncMachines() {

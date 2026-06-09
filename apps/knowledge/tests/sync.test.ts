@@ -166,6 +166,33 @@ describe('knowledge machine sync ledger', () => {
     const statusAfterConflict = service.syncStatus();
     expect(statusAfterConflict.conflicts.open).toBe(1);
     expect(statusAfterConflict.table_counts.knowledge_sync_conflicts).toBe(1);
+
+    const shown = service.syncConflict(conflict.id);
+    expect(shown.id).toBe(conflict.id);
+    const proposal = service.proposeSyncConflictResolution(conflict.id);
+    expect(proposal.requires_approval).toBe(true);
+    expect(proposal.merge_prompt).toContain('Do not write changes without approval');
+
+    const blockedResolution = service.resolveSyncConflict({
+      id: conflict.id,
+      strategy: 'manual-merge',
+    });
+    expect(blockedResolution.ok).toBe(false);
+    expect(blockedResolution.approval_required).toBe(true);
+    expect(service.syncConflict(conflict.id).status).toBe('open');
+
+    const approvedResolution = service.resolveSyncConflict({
+      id: conflict.id,
+      strategy: 'manual-merge',
+      approveWrite: true,
+      approvedBy: 'test-reviewer',
+      proposedPatchUri: 'file:///tmp/proposed.patch',
+    });
+    expect(approvedResolution.ok).toBe(true);
+    expect(approvedResolution.conflict.status).toBe('resolved');
+    expect(approvedResolution.conflict.approved_by).toBe('test-reviewer');
+    expect(approvedResolution.audit_event_id).toStartWith('audit_');
+    expect(service.syncConflicts({ status: 'resolved' })).toHaveLength(1);
   });
 
   test('dry-runs and pushes rows plus generated artifacts between project workspaces', async () => {

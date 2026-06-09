@@ -108,6 +108,19 @@ export interface KnowledgeSyncConflictInput {
     resolvedAt?: string | null;
     metadata?: Record<string, unknown>;
 }
+export type KnowledgeSyncConflict = KnowledgeSyncConflictRow & {
+    metadata: Record<string, unknown>;
+};
+export interface KnowledgeSyncConflictResolutionProposal {
+    ok: true;
+    conflict: KnowledgeSyncConflict;
+    requires_approval: true;
+    proposed_strategy: string;
+    summary: string;
+    merge_prompt: string;
+    warnings: string[];
+    message: string;
+}
 export declare const KNOWLEDGE_SYNC_TABLES: readonly ["sources", "wiki_pages", "source_revisions", "chunks", "chunk_embeddings", "wiki_backlinks", "citations", "knowledge_indexes", "runs", "run_events", "provider_usage", "redaction_findings", "storage_objects", "audit_events", "approval_gates", "vector_index_entries", "reindex_queue", "knowledge_machines", "knowledge_sync_snapshots", "knowledge_sync_changes", "knowledge_sync_conflicts"];
 export declare const KNOWLEDGE_SYNC_PROTOCOL_VERSION = 1;
 export declare const KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION = 1;
@@ -232,27 +245,18 @@ export declare function getKnowledgeSyncStatus(options: {
     localMachineId?: string | null;
 }): KnowledgeSyncStatus;
 export declare function recordKnowledgeSyncConflict(dbPath: string, input: KnowledgeSyncConflictInput): KnowledgeSyncConflictRow;
+export declare function getKnowledgeSyncConflict(dbPath: string, id: string): KnowledgeSyncConflict | null;
 export declare function listKnowledgeSyncConflicts(dbPath: string, options?: {
     status?: string;
     limit?: number;
-}): {
-    metadata: {};
+}): KnowledgeSyncConflict[];
+export declare function proposeKnowledgeSyncConflictResolution(dbPath: string, id: string): KnowledgeSyncConflictResolutionProposal;
+export declare function resolveKnowledgeSyncConflict(dbPath: string, input: {
     id: string;
-    entity_kind: string;
-    entity_id: string;
-    local_machine_id: string;
-    remote_machine_id: string;
-    local_hash: string | null;
-    remote_hash: string | null;
-    base_hash: string | null;
-    status: string;
-    resolution_strategy: string | null;
-    proposed_patch_uri: string | null;
-    approved_by: string | null;
-    resolved_at: string | null;
-    metadata_json: string;
-    created_at: string;
-}[];
+    strategy: string;
+    approvedBy: string;
+    proposedPatchUri?: string | null;
+}): KnowledgeSyncConflict;
 export declare function syncTablesFromSnapshot(snapshot: KnowledgeSyncSnapshotRow): Record<string, number>;
 export declare function syncArtifactsFromSnapshot(snapshot: KnowledgeSyncSnapshotRow): Array<{
     artifact_uri: string;

@@ -836,6 +836,52 @@ export function buildServer() {
     }
   });
 
+  registerTool(server, 'knowledge_sync_conflict_get', 'Knowledge sync conflict get', 'Show a single sync conflict with parsed metadata', {
+    scope: scopeField,
+    id: z.string().describe('Sync conflict id'),
+  }, async ({ scope, id }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText({ ok: true, conflict: service.syncConflict(id), message: `Sync conflict ${id}` });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'knowledge_sync_conflict_propose', 'Knowledge sync conflict proposal', 'Build an approval-gated merge proposal prompt for a sync conflict', {
+    scope: scopeField,
+    id: z.string().describe('Sync conflict id'),
+  }, async ({ scope, id }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText(service.proposeSyncConflictResolution(id));
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'knowledge_sync_conflict_resolve', 'Knowledge sync conflict resolve', 'Resolve a sync conflict after explicit approval and record an audit event', {
+    scope: scopeField,
+    id: z.string().describe('Sync conflict id'),
+    strategy: z.string().optional().describe('Resolution strategy, for example manual-merge or choose-local'),
+    approve_write: z.boolean().optional().describe('Must be true to write the durable resolution'),
+    approved_by: z.string().optional().describe('Approver label required with approve_write'),
+    proposed_patch_uri: z.string().optional().describe('Optional proposed patch artifact URI'),
+  }, async ({ scope, id, strategy, approve_write, approved_by, proposed_patch_uri }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText(service.resolveSyncConflict({
+        id,
+        strategy,
+        approveWrite: approve_write,
+        approvedBy: approved_by,
+        proposedPatchUri: proposed_patch_uri,
+      }));
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
   registerTool(server, 'knowledge_sync_peer', 'Knowledge peer sync', 'Dry-run, pull, push, or bidirectionally sync with a local or remote peer knowledge workspace', {
     scope: scopeField,
     peer_workspace: z.string().describe('Peer repo root or .hasna/apps/knowledge path'),

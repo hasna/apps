@@ -108,6 +108,21 @@ export interface KnowledgeSyncConflictInput {
   metadata?: Record<string, unknown>;
 }
 
+export type KnowledgeSyncConflict = KnowledgeSyncConflictRow & {
+  metadata: Record<string, unknown>;
+};
+
+export interface KnowledgeSyncConflictResolutionProposal {
+  ok: true;
+  conflict: KnowledgeSyncConflict;
+  requires_approval: true;
+  proposed_strategy: string;
+  summary: string;
+  merge_prompt: string;
+  warnings: string[];
+  message: string;
+}
+
 export const KNOWLEDGE_SYNC_TABLES = [
   'sources',
   'wiki_pages',
@@ -1095,7 +1110,27 @@ export function recordKnowledgeSyncConflict(dbPath: string, input: KnowledgeSync
   }
 }
 
-export function listKnowledgeSyncConflicts(dbPath: string, options: { status?: string; limit?: number } = {}) {
+function hydrateConflict(row: KnowledgeSyncConflictRow): KnowledgeSyncConflict {
+  return {
+    ...row,
+    metadata: parseJson(row.metadata_json, {}),
+  };
+}
+
+export function getKnowledgeSyncConflict(dbPath: string, id: string): KnowledgeSyncConflict | null {
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const row = db.query<KnowledgeSyncConflictRow, [string]>(
+      'SELECT * FROM knowledge_sync_conflicts WHERE id = ?',
+    ).get(id);
+    return row ? hydrateConflict(row) : null;
+  } finally {
+    db.close();
+  }
+}
+
+export function listKnowledgeSyncConflicts(dbPath: string, options: { status?: string; limit?: number } = {}): KnowledgeSyncConflict[] {
   migrateKnowledgeDb(dbPath);
   const db = openKnowledgeDb(dbPath);
   const limit = Math.max(1, Math.min(options.limit ?? 50, 200));
@@ -1107,10 +1142,70 @@ export function listKnowledgeSyncConflicts(dbPath: string, options: { status?: s
       : db.query<KnowledgeSyncConflictRow, [number]>(
         'SELECT * FROM knowledge_sync_conflicts ORDER BY created_at DESC LIMIT ?',
       ).all(limit);
-    return rows.map((row) => ({
-      ...row,
-      metadata: parseJson(row.metadata_json, {}),
-    }));
+    return rows.map(hydrateConflict);
+  } finally {
+    db.close();
+  }
+}
+
+export function proposeKnowledgeSyncConflictResolution(dbPath: string, id: string): KnowledgeSyncConflictResolutionProposal {
+  const conflict = getKnowledgeSyncConflict(dbPath, id);
+  if (!conflict) throw new Error(`Sync conflict not found: ${id}`);
+  const proposedStrategy = conflict.entity_kind === 'wiki_pages' ? 'manual-merge' : 'review-and-select';
+  const summary = [
+    `Conflict ${conflict.id} affects ${conflict.entity_kind}:${conflict.entity_id}.`,
+    `Local machine ${conflict.local_machine_id} has ${conflict.local_hash ?? 'unknown hash'}.`,
+    `Remote machine ${conflict.remote_machine_id} has ${conflict.remote_hash ?? 'unknown hash'}.`,
+  ].join(' ');
+  const mergePrompt = [
+    'Review this knowledge sync conflict before any durable write.',
+    `Entity: ${conflict.entity_kind}:${conflict.entity_id}`,
+    `Local machine/hash: ${conflict.local_machine_id} / ${conflict.local_hash ?? 'unknown'}`,
+    `Remote machine/hash: ${conflict.remote_machine_id} / ${conflict.remote_hash ?? 'unknown'}`,
+    `Base hash: ${conflict.base_hash ?? 'unknown'}`,
+    `Metadata: ${JSON.stringify(conflict.metadata)}`,
+    'Return a concise merge recommendation with citations to the competing records. Do not write changes without approval.',
+  ].join('\n');
+  return {
+    ok: true,
+    conflict,
+    requires_approval: true,
+    proposed_strategy: proposedStrategy,
+    summary,
+    merge_prompt: mergePrompt,
+    warnings: conflict.status === 'resolved' ? ['conflict_already_resolved'] : [],
+    message: `Prepared approval-gated merge proposal for ${conflict.id}`,
+  };
+}
+
+export function resolveKnowledgeSyncConflict(dbPath: string, input: {
+  id: string;
+  strategy: string;
+  approvedBy: string;
+  proposedPatchUri?: string | null;
+}): KnowledgeSyncConflict {
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  const now = nowIso();
+  try {
+    const existing = db.query<KnowledgeSyncConflictRow, [string]>(
+      'SELECT * FROM knowledge_sync_conflicts WHERE id = ?',
+    ).get(input.id);
+    if (!existing) throw new Error(`Sync conflict not found: ${input.id}`);
+    db.query(`
+      UPDATE knowledge_sync_conflicts
+      SET status = 'resolved',
+          resolution_strategy = ?,
+          proposed_patch_uri = ?,
+          approved_by = ?,
+          resolved_at = ?
+      WHERE id = ?
+    `).run(input.strategy, input.proposedPatchUri ?? existing.proposed_patch_uri, input.approvedBy, now, input.id);
+    const row = db.query<KnowledgeSyncConflictRow, [string]>(
+      'SELECT * FROM knowledge_sync_conflicts WHERE id = ?',
+    ).get(input.id);
+    if (!row) throw new Error(`Sync conflict not found after resolve: ${input.id}`);
+    return hydrateConflict(row);
   } finally {
     db.close();
   }

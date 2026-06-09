@@ -13660,7 +13660,7 @@ import { existsSync as existsSync10, readFileSync as readFileSync9, writeFileSyn
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.38",
+  version: "0.2.39",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   exports: {
@@ -19845,16 +19845,85 @@ function getKnowledgeSyncStatus(options) {
     db.close();
   }
 }
+function hydrateConflict(row) {
+  return {
+    ...row,
+    metadata: parseJson2(row.metadata_json, {})
+  };
+}
+function getKnowledgeSyncConflict(dbPath, id) {
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const row = db.query("SELECT * FROM knowledge_sync_conflicts WHERE id = ?").get(id);
+    return row ? hydrateConflict(row) : null;
+  } finally {
+    db.close();
+  }
+}
 function listKnowledgeSyncConflicts(dbPath, options = {}) {
   migrateKnowledgeDb(dbPath);
   const db = openKnowledgeDb(dbPath);
   const limit = Math.max(1, Math.min(options.limit ?? 50, 200));
   try {
     const rows = options.status ? db.query("SELECT * FROM knowledge_sync_conflicts WHERE status = ? ORDER BY created_at DESC LIMIT ?").all(options.status, limit) : db.query("SELECT * FROM knowledge_sync_conflicts ORDER BY created_at DESC LIMIT ?").all(limit);
-    return rows.map((row) => ({
-      ...row,
-      metadata: parseJson2(row.metadata_json, {})
-    }));
+    return rows.map(hydrateConflict);
+  } finally {
+    db.close();
+  }
+}
+function proposeKnowledgeSyncConflictResolution(dbPath, id) {
+  const conflict = getKnowledgeSyncConflict(dbPath, id);
+  if (!conflict)
+    throw new Error(`Sync conflict not found: ${id}`);
+  const proposedStrategy = conflict.entity_kind === "wiki_pages" ? "manual-merge" : "review-and-select";
+  const summary = [
+    `Conflict ${conflict.id} affects ${conflict.entity_kind}:${conflict.entity_id}.`,
+    `Local machine ${conflict.local_machine_id} has ${conflict.local_hash ?? "unknown hash"}.`,
+    `Remote machine ${conflict.remote_machine_id} has ${conflict.remote_hash ?? "unknown hash"}.`
+  ].join(" ");
+  const mergePrompt = [
+    "Review this knowledge sync conflict before any durable write.",
+    `Entity: ${conflict.entity_kind}:${conflict.entity_id}`,
+    `Local machine/hash: ${conflict.local_machine_id} / ${conflict.local_hash ?? "unknown"}`,
+    `Remote machine/hash: ${conflict.remote_machine_id} / ${conflict.remote_hash ?? "unknown"}`,
+    `Base hash: ${conflict.base_hash ?? "unknown"}`,
+    `Metadata: ${JSON.stringify(conflict.metadata)}`,
+    "Return a concise merge recommendation with citations to the competing records. Do not write changes without approval."
+  ].join(`
+`);
+  return {
+    ok: true,
+    conflict,
+    requires_approval: true,
+    proposed_strategy: proposedStrategy,
+    summary,
+    merge_prompt: mergePrompt,
+    warnings: conflict.status === "resolved" ? ["conflict_already_resolved"] : [],
+    message: `Prepared approval-gated merge proposal for ${conflict.id}`
+  };
+}
+function resolveKnowledgeSyncConflict(dbPath, input) {
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  const now = nowIso();
+  try {
+    const existing = db.query("SELECT * FROM knowledge_sync_conflicts WHERE id = ?").get(input.id);
+    if (!existing)
+      throw new Error(`Sync conflict not found: ${input.id}`);
+    db.query(`
+      UPDATE knowledge_sync_conflicts
+      SET status = 'resolved',
+          resolution_strategy = ?,
+          proposed_patch_uri = ?,
+          approved_by = ?,
+          resolved_at = ?
+      WHERE id = ?
+    `).run(input.strategy, input.proposedPatchUri ?? existing.proposed_patch_uri, input.approvedBy, now, input.id);
+    const row = db.query("SELECT * FROM knowledge_sync_conflicts WHERE id = ?").get(input.id);
+    if (!row)
+      throw new Error(`Sync conflict not found after resolve: ${input.id}`);
+    return hydrateConflict(row);
   } finally {
     db.close();
   }
@@ -21001,6 +21070,62 @@ class KnowledgeService {
   syncConflicts(options = {}) {
     const workspace = this.ensureWorkspace();
     return listKnowledgeSyncConflicts(workspace.knowledgeDbPath, options);
+  }
+  syncConflict(id) {
+    const workspace = this.ensureWorkspace();
+    const conflict = getKnowledgeSyncConflict(workspace.knowledgeDbPath, id);
+    if (!conflict)
+      throw new Error(`Sync conflict not found: ${id}`);
+    return conflict;
+  }
+  proposeSyncConflictResolution(id) {
+    const workspace = this.ensureWorkspace();
+    return proposeKnowledgeSyncConflictResolution(workspace.knowledgeDbPath, id);
+  }
+  resolveSyncConflict(options) {
+    const workspace = this.ensureWorkspace();
+    const proposal = proposeKnowledgeSyncConflictResolution(workspace.knowledgeDbPath, options.id);
+    if (options.approveWrite !== true || !options.approvedBy) {
+      return {
+        ok: false,
+        approval_required: true,
+        conflict: proposal.conflict,
+        proposal,
+        message: "Sync conflict resolution requires --approve-write and --approved-by <name>"
+      };
+    }
+    const conflict = resolveKnowledgeSyncConflict(workspace.knowledgeDbPath, {
+      id: options.id,
+      strategy: options.strategy ?? proposal.proposed_strategy,
+      approvedBy: options.approvedBy,
+      proposedPatchUri: options.proposedPatchUri
+    });
+    const db = openKnowledgeDb(workspace.knowledgeDbPath);
+    try {
+      const auditEventId = recordAuditEvent(db, {
+        event_type: "sync_conflict_resolution",
+        action: "sync.conflict.resolve",
+        target_uri: `knowledge-sync-conflict://${options.id}`,
+        decision: "allow",
+        metadata: {
+          conflict_id: options.id,
+          entity_kind: conflict.entity_kind,
+          entity_id: conflict.entity_id,
+          strategy: conflict.resolution_strategy,
+          approved_by: conflict.approved_by,
+          proposed_patch_uri: conflict.proposed_patch_uri
+        }
+      });
+      return {
+        ok: true,
+        approval_required: false,
+        conflict,
+        audit_event_id: auditEventId,
+        message: `Resolved sync conflict ${options.id}`
+      };
+    } finally {
+      db.close();
+    }
   }
   syncMachines() {
     const workspace = this.ensureWorkspace();
@@ -22464,6 +22589,49 @@ function buildServer() {
         conflicts,
         message: `${conflicts.length} sync conflict(s)`
       });
+    } catch (error48) {
+      return errorText(error48 instanceof Error ? error48.message : String(error48));
+    }
+  });
+  registerTool(server, "knowledge_sync_conflict_get", "Knowledge sync conflict get", "Show a single sync conflict with parsed metadata", {
+    scope: scopeField,
+    id: exports_external.string().describe("Sync conflict id")
+  }, async ({ scope, id }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText({ ok: true, conflict: service.syncConflict(id), message: `Sync conflict ${id}` });
+    } catch (error48) {
+      return errorText(error48 instanceof Error ? error48.message : String(error48));
+    }
+  });
+  registerTool(server, "knowledge_sync_conflict_propose", "Knowledge sync conflict proposal", "Build an approval-gated merge proposal prompt for a sync conflict", {
+    scope: scopeField,
+    id: exports_external.string().describe("Sync conflict id")
+  }, async ({ scope, id }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText(service.proposeSyncConflictResolution(id));
+    } catch (error48) {
+      return errorText(error48 instanceof Error ? error48.message : String(error48));
+    }
+  });
+  registerTool(server, "knowledge_sync_conflict_resolve", "Knowledge sync conflict resolve", "Resolve a sync conflict after explicit approval and record an audit event", {
+    scope: scopeField,
+    id: exports_external.string().describe("Sync conflict id"),
+    strategy: exports_external.string().optional().describe("Resolution strategy, for example manual-merge or choose-local"),
+    approve_write: exports_external.boolean().optional().describe("Must be true to write the durable resolution"),
+    approved_by: exports_external.string().optional().describe("Approver label required with approve_write"),
+    proposed_patch_uri: exports_external.string().optional().describe("Optional proposed patch artifact URI")
+  }, async ({ scope, id, strategy, approve_write, approved_by, proposed_patch_uri }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText(service.resolveSyncConflict({
+        id,
+        strategy,
+        approveWrite: approve_write,
+        approvedBy: approved_by,
+        proposedPatchUri: proposed_patch_uri
+      }));
     } catch (error48) {
       return errorText(error48 instanceof Error ? error48.message : String(error48));
     }

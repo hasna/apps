@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { ingestOpenFilesManifest } from '../src/manifest-ingest';
+import { createKnowledgeService } from '../src/service';
+import { recordKnowledgeSyncConflict } from '../src/sync';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MCP = join(__dirname, '..', 'src', 'mcp.js');
@@ -207,6 +209,9 @@ describe('knowledge MCP', () => {
       expect(tools.tools.some((tool) => tool.name === 'knowledge_sync_status')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_sync_snapshot')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_sync_conflicts')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_sync_conflict_get')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_sync_conflict_propose')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_sync_conflict_resolve')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_sync_peer')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'storage_status')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'storage_push')).toBe(true);
@@ -292,6 +297,53 @@ describe('knowledge MCP', () => {
         arguments: { scope: 'project', limit: 5 },
       }));
       expect(syncConflicts.conflicts).toEqual([]);
+
+      const conflictService = createKnowledgeService({ scope: 'project', cwd: dir });
+      const conflict = recordKnowledgeSyncConflict(conflictService.ensureWorkspace().knowledgeDbPath, {
+        entityKind: 'wiki_pages',
+        entityId: 'wiki/mcp.md',
+        localMachineId: 'spark02',
+        remoteMachineId: 'spark01',
+        localHash: 'sha256:mcp-local',
+        remoteHash: 'sha256:mcp-remote',
+        baseHash: 'sha256:mcp-base',
+        metadata: { reason: 'mcp conflict workflow' },
+      });
+
+      const conflictGet = parseToolJson(await client.callTool({
+        name: 'knowledge_sync_conflict_get',
+        arguments: { scope: 'project', id: conflict.id },
+      }));
+      expect(conflictGet.conflict.metadata.reason).toBe('mcp conflict workflow');
+
+      const conflictProposal = parseToolJson(await client.callTool({
+        name: 'knowledge_sync_conflict_propose',
+        arguments: { scope: 'project', id: conflict.id },
+      }));
+      expect(conflictProposal.requires_approval).toBe(true);
+      expect(conflictProposal.merge_prompt).toContain('Do not write changes without approval');
+
+      const blockedConflictResolve = parseToolJson(await client.callTool({
+        name: 'knowledge_sync_conflict_resolve',
+        arguments: { scope: 'project', id: conflict.id, strategy: 'manual-merge' },
+      }));
+      expect(blockedConflictResolve.ok).toBe(false);
+      expect(blockedConflictResolve.approval_required).toBe(true);
+
+      const conflictResolve = parseToolJson(await client.callTool({
+        name: 'knowledge_sync_conflict_resolve',
+        arguments: {
+          scope: 'project',
+          id: conflict.id,
+          strategy: 'manual-merge',
+          approve_write: true,
+          approved_by: 'mcp-reviewer',
+          proposed_patch_uri: 'file:///tmp/mcp.patch',
+        },
+      }));
+      expect(conflictResolve.ok).toBe(true);
+      expect(conflictResolve.conflict.status).toBe('resolved');
+      expect(conflictResolve.audit_event_id).toStartWith('audit_');
 
       const peerDir = makeTempDir('ok-mcp-peer-sync-');
       const syncPeer = parseToolJson(await client.callTool({
