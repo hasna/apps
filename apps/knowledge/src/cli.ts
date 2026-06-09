@@ -377,15 +377,50 @@ function remoteKnowledgeCommand(peerWorkspace: string, args: string[]): string {
   return `cd ${shellQuote(peerWorkspace)} && knowledge ${args.map(shellQuote).join(' ')}`;
 }
 
-function runSsh(machine: string, command: string, input?: string): string {
-  const result = spawnSync('ssh', [machine, command], {
+function parseJsonObject(value: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(value);
+    return typeof parsed === 'object' && parsed !== null ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveSshMachineTarget(machine: string): { target: string; route: string | null; confidence: string | null; source: 'open-machines' | 'raw' } {
+  const result = spawnSync('machines', ['route', '--machine', machine, '--json'], {
+    encoding: 'utf8',
+    env: process.env,
+  });
+  if ((result.status ?? 1) !== 0) {
+    return { target: machine, route: null, confidence: null, source: 'raw' };
+  }
+  const parsed = parseJsonObject(result.stdout || '');
+  const ok = parsed?.ok === true;
+  const target = typeof parsed?.target === 'string' && parsed.target ? parsed.target : null;
+  if (!ok || !target) return { target: machine, route: null, confidence: null, source: 'raw' };
+  return {
+    target,
+    route: typeof parsed.route === 'string' ? parsed.route : null,
+    confidence: typeof parsed.confidence === 'string' ? parsed.confidence : null,
+    source: 'open-machines',
+  };
+}
+
+function runSsh(
+  machine: string,
+  command: string,
+  input?: string,
+  resolved: { target: string; route: string | null; confidence: string | null; source: 'open-machines' | 'raw' } = resolveSshMachineTarget(machine),
+): string {
+  const result = spawnSync('ssh', [resolved.target, command], {
     encoding: 'utf8',
     env: process.env,
     input,
     maxBuffer: 64 * 1024 * 1024,
   });
   if ((result.status ?? 1) !== 0) {
-    throw new Error(`ssh ${machine} failed: ${(result.stderr || result.stdout || String(result.status)).trim()}`);
+    const route = resolved.source === 'open-machines' ? ` via ${resolved.route ?? 'resolved'}:${resolved.target}` : '';
+    throw new Error(`ssh ${machine}${route} failed: ${(result.stderr || result.stdout || String(result.status)).trim()}`);
   }
   return result.stdout || '';
 }
@@ -458,6 +493,7 @@ async function syncRemotePeer(options: {
     direction: 'pull' | 'push' | 'both';
     transport: 'ssh';
     machine: string;
+    resolved_machine?: string;
     peer_workspace: string;
     pull?: unknown;
     push?: unknown;
@@ -471,6 +507,8 @@ async function syncRemotePeer(options: {
     peer_workspace: options.peerWorkspace,
     message: '',
   };
+  const resolvedMachine = resolveSshMachineTarget(options.machine);
+  result.resolved_machine = resolvedMachine.target;
 
   if (direction === 'pull' || direction === 'both') {
     const remoteExport = remoteKnowledgeCommand(options.peerWorkspace, [
@@ -479,7 +517,7 @@ async function syncRemotePeer(options: {
       ...tableArgs,
       ...artifactArgs,
     ]);
-    const raw = runSsh(options.machine, remoteExport);
+    const raw = runSsh(options.machine, remoteExport, undefined, resolvedMachine);
     const bundle = parseRemoteJson(options.machine, 'sync export', raw);
     assertRemoteSyncBundle(options.machine, bundle);
     result.pull = await options.service.importSyncBundle({
@@ -501,7 +539,7 @@ async function syncRemotePeer(options: {
       ...scopeArgs,
       ...(dryRun ? ['--dry-run'] : []),
     ]);
-    const applyResult = parseRemoteJson(options.machine, 'sync import', runSsh(options.machine, remoteImport, JSON.stringify(bundle)));
+    const applyResult = parseRemoteJson(options.machine, 'sync import', runSsh(options.machine, remoteImport, JSON.stringify(bundle), resolvedMachine));
     assertRemoteSyncApplyResult(options.machine, applyResult);
     result.push = applyResult;
   }

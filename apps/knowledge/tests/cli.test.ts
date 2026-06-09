@@ -68,6 +68,7 @@ function writeFakeSshBin(dir: string): string {
   const ssh = join(bin, 'ssh');
   writeFileSync(ssh, [
     '#!/bin/sh',
+    'if [ -n "$KNOWLEDGE_FAKE_SSH_TARGET_PATH" ]; then printf "%s" "$1" > "$KNOWLEDGE_FAKE_SSH_TARGET_PATH"; fi',
     'command="$2"',
     'if printf "%s" "$command" | grep -q "sync.*export"; then',
     '    printf "%s" "$KNOWLEDGE_FAKE_SSH_EXPORT_JSON"',
@@ -82,6 +83,32 @@ function writeFakeSshBin(dir: string): string {
   ].join('\n'));
   chmodSync(ssh, 0o755);
   return bin;
+}
+
+function writeFakeMachinesRouteBin(bin: string, target: string): void {
+  const machines = join(bin, 'machines');
+  writeFileSync(machines, [
+    '#!/bin/sh',
+    'if [ "$1" = "route" ]; then',
+    `  printf '%s\\n' '${JSON.stringify({
+      schema_version: 1,
+      ok: true,
+      machine_id: 'spark01',
+      requested_machine_id: 'spark01',
+      route: 'tailscale',
+      source: 'tailscale',
+      target,
+      command_target: target,
+      confidence: 'high',
+      warnings: [],
+    })}'`,
+    '  exit 0',
+    'fi',
+    'echo "unexpected fake machines command: $*" >&2',
+    'exit 9',
+    '',
+  ].join('\n'));
+  chmodSync(machines, 0o755);
 }
 
 describe('knowledge cli', () => {
@@ -506,6 +533,43 @@ describe('knowledge cli', () => {
 
     expect(result.exitCode).toBe(1);
     expect(new TextDecoder().decode(result.stderr)).toContain('unsupported sync protocol');
+  });
+
+  test('ssh sync resolves machine target through machines route when available', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-sync-ssh-route-'));
+    const targetPath = join(dir, 'ssh-target.txt');
+    const bin = writeFakeSshBin(dir);
+    writeFakeMachinesRouteBin(bin, 'routed-spark01.tailnet.test');
+    const bundle = {
+      ok: true,
+      format: 'knowledge-sync-bundle',
+      version: 1,
+      protocol_version: 1,
+      min_protocol_version: 1,
+      generated_at: '2026-06-09T00:00:00.000Z',
+      source: {
+        scope: 'project',
+        workspace_home: '/remote/.hasna/apps/knowledge',
+        sqlite_schema_version: 6,
+        machine_id: 'spark01',
+        artifact_root_uri: 'file:///remote/.hasna/apps/knowledge/artifacts/',
+      },
+      tables: [],
+      artifacts: [],
+      warnings: [],
+      message: 'valid empty bundle',
+    };
+
+    const result = runCli(['sync', 'pull', '--machine', 'spark01', '--peer-workspace', '/remote/open-knowledge', '--scope', 'project', '--json'], dir, {
+      PATH: `${bin}:${process.env.PATH ?? ''}`,
+      KNOWLEDGE_FAKE_SSH_EXPORT_JSON: JSON.stringify(bundle),
+      KNOWLEDGE_FAKE_SSH_TARGET_PATH: targetPath,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(targetPath, 'utf8')).toBe('routed-spark01.tailnet.test');
+    const out = JSON.parse(new TextDecoder().decode(result.stdout));
+    expect(out.resolved_machine).toBe('routed-spark01.tailnet.test');
   });
 
   test('ssh sync rejects remote import result without protocol handshake before accepting push', () => {
