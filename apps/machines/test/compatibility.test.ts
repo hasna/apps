@@ -38,6 +38,7 @@ describe("machine compatibility checks", () => {
     expect(report.schema_version).toBe(1);
     expect(report.package.name).toBe("@hasna/machines");
     expect(report.capabilities.cli_json_fallback).toBe(true);
+    expect(report.capabilities.workspace_path_mapping).toBe(true);
     expect(report.source).toBe("tailscale");
     expect(report.summary.fail).toBe(0);
     expect(report.checks.map((check) => check.id)).toContain("package:@hasna/knowledge:version");

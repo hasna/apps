@@ -9,6 +9,7 @@ import { getPackageVersion } from "./version.js";
 
 export const MACHINES_CONSUMER_CONTRACT_VERSION = 1;
 export const MACHINES_PACKAGE_NAME = "@hasna/machines";
+export const MACHINES_CONSUMER_ENTRYPOINT = "@hasna/machines/consumer";
 
 export interface TopologyCommandResult {
   stdout: string;
@@ -68,6 +69,53 @@ export interface MachinesConsumerCapabilities {
   route_resolution: true;
   cli_json_fallback: true;
   workspace_path_mapping?: true;
+}
+
+export type MachinesConsumerEnvelope = "topology" | "route" | "workspace" | "compatibility";
+
+export interface MachinesConsumerContract {
+  schema_version: typeof MACHINES_CONSUMER_CONTRACT_VERSION;
+  package_name: typeof MACHINES_PACKAGE_NAME;
+  entrypoint: typeof MACHINES_CONSUMER_ENTRYPOINT;
+  capabilities: MachinesConsumerCapabilities;
+  envelopes: MachinesConsumerEnvelope[];
+  stable_exports: string[];
+}
+
+export const MACHINES_CONSUMER_CAPABILITIES: MachinesConsumerCapabilities = {
+  topology: true,
+  compatibility: true,
+  route_resolution: true,
+  cli_json_fallback: true,
+  workspace_path_mapping: true,
+};
+
+export const MACHINES_CONSUMER_CONTRACT: MachinesConsumerContract = {
+  schema_version: MACHINES_CONSUMER_CONTRACT_VERSION,
+  package_name: MACHINES_PACKAGE_NAME,
+  entrypoint: MACHINES_CONSUMER_ENTRYPOINT,
+  capabilities: MACHINES_CONSUMER_CAPABILITIES,
+  envelopes: ["topology", "route", "workspace", "compatibility"],
+  stable_exports: [
+    "MACHINES_CONSUMER_CONTRACT",
+    "MACHINES_CONSUMER_CONTRACT_VERSION",
+    "MACHINES_CONSUMER_CAPABILITIES",
+    "MACHINES_PACKAGE_NAME",
+    "discoverMachineTopology",
+    "getLocalMachineTopology",
+    "resolveMachineRoute",
+    "resolveMachineWorkspace",
+    "checkMachineCompatibility",
+    "resolveMachineCommand",
+    "runMachineCommand",
+    "buildSshCommand",
+    "resolveSshTarget",
+    "getPackageVersion",
+  ],
+};
+
+export function getMachinesConsumerCapabilities(): MachinesConsumerCapabilities {
+  return { ...MACHINES_CONSUMER_CAPABILITIES };
 }
 
 export interface MachineTopology {
@@ -397,13 +445,7 @@ export function discoverMachineTopology(options: MachineTopologyOptions = {}): M
       name: MACHINES_PACKAGE_NAME,
       version: getPackageVersion(),
     },
-    capabilities: {
-      topology: true,
-      compatibility: true,
-      route_resolution: true,
-      cli_json_fallback: true,
-      workspace_path_mapping: true,
-    },
+    capabilities: getMachinesConsumerCapabilities(),
     generated_at: now.toISOString(),
     local_machine_id: localMachineId,
     local_hostname: hostname(),

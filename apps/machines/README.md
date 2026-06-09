@@ -49,13 +49,20 @@ machines self-test
 
 ## Topology SDK
 
-`@hasna/machines` exposes a compact topology SDK for other open-core packages
-that need machine identity without importing CLI internals. Consumers that only
-need the stable app-to-app contract should import `@hasna/machines/consumer`:
+`@hasna/machines` exposes a compact consumer SDK for other open-core packages
+that need machine identity without importing CLI, MCP, agent, installer, or
+storage-heavy internals. Consumers that only need the stable app-to-app contract
+should import `@hasna/machines/consumer`:
 
 ```ts
-import { discoverMachineTopology, getLocalMachineTopology, resolveMachineRoute } from "@hasna/machines/consumer";
+import {
+  MACHINES_CONSUMER_CONTRACT,
+  discoverMachineTopology,
+  getLocalMachineTopology,
+  resolveMachineRoute,
+} from "@hasna/machines/consumer";
 
+console.log(MACHINES_CONSUMER_CONTRACT.schema_version);
 const topology = discoverMachineTopology();
 const local = getLocalMachineTopology();
 const route = resolveMachineRoute("spark01");
@@ -67,9 +74,11 @@ The SDK merges manifest entries, local heartbeats, SSH route hints, and
 when present, and fall back to local probes or app-local machine registries when
 it is absent.
 
-Topology, route, and compatibility JSON include `schema_version`, package
-version metadata, and capability flags. The current consumer contract version is
-`1`.
+Topology, route, workspace, and compatibility JSON include `schema_version`,
+package version metadata, and capability flags. The current consumer contract
+version is `1`; the exported `MACHINES_CONSUMER_CONTRACT` records the stable
+entrypoint, envelope names, and stable exports used by downstream apps such as
+`@hasna/knowledge`.
 
 CLI and MCP expose the same topology view:
 
