@@ -227,7 +227,7 @@ function normalizePlatform(value: string = platform()): string {
 }
 
 function defaultRunner(command: string): KnowledgeMachineCommandResult {
-  const result = spawnSync('bash', ['-lc', command], {
+  const result = spawnSync('bash', ['-c', command], {
     encoding: 'utf8',
     env: process.env,
   });
@@ -416,7 +416,7 @@ function preflightTargetIsLocal(machineId: string): boolean {
 function defaultPreflightRunner(machineId: string, command: string): KnowledgeMachinePreflightCommandResult {
   const local = preflightTargetIsLocal(machineId);
   const shellCommand = local ? command : `ssh ${shellQuote(machineId)} ${shellQuote(command)}`;
-  const result = spawnSync('bash', ['-lc', shellCommand], {
+  const result = spawnSync('bash', ['-c', shellCommand], {
     encoding: 'utf8',
     env: process.env,
   });

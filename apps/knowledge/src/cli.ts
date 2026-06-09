@@ -406,7 +406,7 @@ function assertRemoteSyncBundle(machine: string, value: unknown): asserts value 
     || !('format' in value)
     || (value as { format?: unknown }).format !== 'knowledge-sync-bundle'
   ) {
-    throw new Error(`Remote knowledge sync export on ${machine} did not return a knowledge sync bundle. Install @hasna/knowledge 0.2.30 or newer on the remote machine.`);
+    throw new Error(`Remote knowledge sync export on ${machine} did not return a knowledge sync bundle. Install @hasna/knowledge 0.2.31 or newer on the remote machine.`);
   }
 }
 
@@ -418,9 +418,9 @@ function assertRemoteSyncApplyResult(machine: string, value: unknown): asserts v
     || !('target' in value)
     || !('tables' in value)
     || !('artifacts' in value)
-    || !('conflicts' in value)
+    || !('conflicts_created' in value)
   ) {
-    throw new Error(`Remote knowledge sync import on ${machine} did not return a sync import result. Install @hasna/knowledge 0.2.30 or newer on the remote machine.`);
+    throw new Error(`Remote knowledge sync import on ${machine} did not return a sync import result. Install @hasna/knowledge 0.2.31 or newer on the remote machine.`);
   }
 }
 

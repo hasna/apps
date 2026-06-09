@@ -3957,7 +3957,7 @@ function normalizePlatform(value = platform()) {
   return value;
 }
 function defaultRunner(command) {
-  const result = spawnSync("bash", ["-lc", command], {
+  const result = spawnSync("bash", ["-c", command], {
     encoding: "utf8",
     env: process.env
   });
@@ -4122,7 +4122,7 @@ function preflightTargetIsLocal(machineId) {
 function defaultPreflightRunner(machineId, command) {
   const local = preflightTargetIsLocal(machineId);
   const shellCommand = local ? command : `ssh ${shellQuote(machineId)} ${shellQuote(command)}`;
-  const result = spawnSync("bash", ["-lc", shellCommand], {
+  const result = spawnSync("bash", ["-c", shellCommand], {
     encoding: "utf8",
     env: process.env
   });
