@@ -286,7 +286,7 @@ Global Options:
   --no-artifact-content        Export sync bundles without embedded artifact bodies
   --scope local|global|project  Store scope (default: global ~/.hasna/apps/knowledge/)
   --tables <names>             Comma-separated knowledge.db sync tables
-  --peer-workspace <path>      Peer repo root or .hasna/apps/knowledge path for sync
+  --peer-workspace <path>      Peer repo root or .hasna/apps/knowledge path for local sync or remote override
   --no-color                  Disable color output
   --completions <shell>       Output completions for bash|zsh|fish
   -v, --version               Show version
@@ -345,7 +345,7 @@ function printCommandHelp(command: string): void {
   if (command === 'remote') { console.log('Usage: knowledge remote contracts|status [--scope local|global|project] [--json]'); return; }
   if (command === 'storage') { console.log('Usage: knowledge storage status|validate [--scope local|global|project] [--json]'); return; }
   if (command === 'machines') { console.log('Usage: knowledge machines topology [--no-tailscale] | preflight [machine] [--workspace <repo>] [--scope local|global|project] [--json]'); return; }
-  if (command === 'sync') { console.log('Usage: knowledge sync status|snapshot|machines|conflicts [show|propose|resolve] [id] | dry-run|pull|push|sync|export|import [--peer-workspace <path>] [--machine <ssh-alias>] [--tables <names>] [--dry-run] [--limit <n>] [--approve-write] [--approved-by <name>] [--strategy <name>] [--no-tailscale] [--scope local|global|project] [--json]'); return; }
+  if (command === 'sync') { console.log('Usage: knowledge sync status|snapshot|machines|conflicts [show|propose|resolve] [id] | dry-run|pull|push|sync|export|import [--peer-workspace <path>] [--machine <ssh-alias>] [--tables <names>] [--dry-run] [--limit <n>] [--approve-write] [--approved-by <name>] [--strategy <name>] [--no-tailscale] [--scope local|global|project] [--json]\n\nRemote machine sync resolves peer paths through @hasna/machines when --peer-workspace is omitted.'); return; }
   if (command === 'db') { console.log('Usage: knowledge db init|stats|storage status|push|pull|sync [--tables sources,chunks] [--scope local|global|project] [--json]'); return; }
   if (command === 'wiki') { console.log('Usage: knowledge wiki init|compile|file-answer|lint [query|prompt] [--title <title>] [--content <answer>] [--approve-write] [--limit <n>] [--scope local|global|project] [--json]'); return; }
   if (command === 'source') { console.log('Usage: knowledge source resolve <source-ref> [--purpose knowledge_answer|knowledge_index] [--limit <n>] [--scope local|global|project] [--json]'); return; }
@@ -681,7 +681,7 @@ async function run(argv: string[]): Promise<void> {
       return;
     }
     if (action === 'dry-run' || action === 'pull' || action === 'push' || action === 'sync') {
-      if (!flags.peerWorkspace) throw new Error(`Usage: knowledge sync ${action} --peer-workspace <repo-or-knowledge-home> [--scope project]`);
+      if (!flags.peerWorkspace && machineIsLocal(flags.machine)) throw new Error(`Usage: knowledge sync ${action} --peer-workspace <repo-or-knowledge-home> [--scope project]\nRemote machine sync can omit --peer-workspace when machines path mapping is configured.`);
       const direction = action === 'dry-run'
         ? 'both'
         : action === 'sync'

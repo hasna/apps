@@ -62,6 +62,41 @@ export interface KnowledgeMachineRouteOptions {
     now?: Date;
     loadOpenMachines?: () => Promise<OpenMachinesModule | null>;
 }
+export type KnowledgeMachineWorkspaceSource = 'open-machines' | 'argument' | 'raw';
+export type KnowledgeMachineWorkspacePathSource = 'argument' | 'manifest' | 'manifest_metadata' | 'inferred' | 'unresolved' | string;
+export type KnowledgeMachineTrustStatus = 'trusted' | 'untrusted' | 'unknown' | string;
+export type KnowledgeMachineAuthStatus = 'authenticated' | 'unauthenticated' | 'unknown' | string;
+export interface KnowledgeMachineWorkspaceOptions {
+    machineId: string;
+    peerWorkspace?: string | null;
+    includeTailscale?: boolean;
+    runner?: KnowledgeMachineCommandRunner;
+    now?: Date;
+    loadOpenMachines?: () => Promise<OpenMachinesModule | null>;
+    projectId?: string;
+    repoName?: string;
+    openFilesRepoName?: string;
+}
+export interface KnowledgeMachineWorkspaceResolution {
+    ok: boolean;
+    source: KnowledgeMachineWorkspaceSource;
+    requested_machine_id: string;
+    machine_id: string | null;
+    project_id: string;
+    repo_name: string;
+    project_root: string | null;
+    project_root_source: KnowledgeMachineWorkspacePathSource;
+    workspace_root: string | null;
+    workspace_root_source: KnowledgeMachineWorkspacePathSource;
+    open_files_root: string | null;
+    open_files_root_source: KnowledgeMachineWorkspacePathSource;
+    trust_status: KnowledgeMachineTrustStatus;
+    auth_status: KnowledgeMachineAuthStatus;
+    current: boolean;
+    primary: boolean;
+    evidence: Record<string, unknown> | null;
+    warnings: string[];
+}
 export interface KnowledgeMachineRouteResolution {
     target: string;
     route: KnowledgeMachineRouteKind | null;
@@ -169,6 +204,15 @@ interface OpenMachinesModule {
         runner?: unknown;
         now?: Date;
     }) => unknown;
+    resolveMachineWorkspace?: (options: {
+        machineId: string;
+        projectId: string;
+        repoName?: string;
+        openFilesRepoName?: string;
+        includeTailscale?: boolean;
+        runner?: unknown;
+        now?: Date;
+    }) => unknown;
     checkMachineCompatibility?: (options?: {
         machineId?: string;
         commands?: KnowledgeMachinePreflightCommandSpec[];
@@ -180,5 +224,6 @@ interface OpenMachinesModule {
 }
 export declare function discoverKnowledgeMachineTopology(options?: KnowledgeMachineTopologyOptions): Promise<KnowledgeMachineTopology>;
 export declare function resolveKnowledgeMachineRoute(options: KnowledgeMachineRouteOptions): Promise<KnowledgeMachineRouteResolution>;
+export declare function resolveKnowledgeMachineWorkspace(options: KnowledgeMachineWorkspaceOptions): Promise<KnowledgeMachineWorkspaceResolution>;
 export declare function preflightKnowledgeMachine(options?: KnowledgeMachinePreflightOptions): Promise<KnowledgeMachinePreflightReport>;
 export {};

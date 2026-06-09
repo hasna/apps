@@ -78,6 +78,44 @@ export interface KnowledgeMachineRouteOptions {
   loadOpenMachines?: () => Promise<OpenMachinesModule | null>;
 }
 
+export type KnowledgeMachineWorkspaceSource = 'open-machines' | 'argument' | 'raw';
+export type KnowledgeMachineWorkspacePathSource = 'argument' | 'manifest' | 'manifest_metadata' | 'inferred' | 'unresolved' | string;
+export type KnowledgeMachineTrustStatus = 'trusted' | 'untrusted' | 'unknown' | string;
+export type KnowledgeMachineAuthStatus = 'authenticated' | 'unauthenticated' | 'unknown' | string;
+
+export interface KnowledgeMachineWorkspaceOptions {
+  machineId: string;
+  peerWorkspace?: string | null;
+  includeTailscale?: boolean;
+  runner?: KnowledgeMachineCommandRunner;
+  now?: Date;
+  loadOpenMachines?: () => Promise<OpenMachinesModule | null>;
+  projectId?: string;
+  repoName?: string;
+  openFilesRepoName?: string;
+}
+
+export interface KnowledgeMachineWorkspaceResolution {
+  ok: boolean;
+  source: KnowledgeMachineWorkspaceSource;
+  requested_machine_id: string;
+  machine_id: string | null;
+  project_id: string;
+  repo_name: string;
+  project_root: string | null;
+  project_root_source: KnowledgeMachineWorkspacePathSource;
+  workspace_root: string | null;
+  workspace_root_source: KnowledgeMachineWorkspacePathSource;
+  open_files_root: string | null;
+  open_files_root_source: KnowledgeMachineWorkspacePathSource;
+  trust_status: KnowledgeMachineTrustStatus;
+  auth_status: KnowledgeMachineAuthStatus;
+  current: boolean;
+  primary: boolean;
+  evidence: Record<string, unknown> | null;
+  warnings: string[];
+}
+
 export interface KnowledgeMachineRouteResolution {
   target: string;
   route: KnowledgeMachineRouteKind | null;
@@ -183,6 +221,15 @@ export interface KnowledgeMachinePreflightReport {
 interface OpenMachinesModule {
   discoverMachineTopology?: (options?: { includeTailscale?: boolean; runner?: unknown; now?: Date }) => unknown;
   resolveMachineRoute?: (machineId: string, options?: { includeTailscale?: boolean; runner?: unknown; now?: Date }) => unknown;
+  resolveMachineWorkspace?: (options: {
+    machineId: string;
+    projectId: string;
+    repoName?: string;
+    openFilesRepoName?: string;
+    includeTailscale?: boolean;
+    runner?: unknown;
+    now?: Date;
+  }) => unknown;
   checkMachineCompatibility?: (options?: {
     machineId?: string;
     commands?: KnowledgeMachinePreflightCommandSpec[];
@@ -783,6 +830,48 @@ function normalizeOpenMachinesRoute(value: unknown): KnowledgeMachineRouteResolu
   };
 }
 
+function pathRecord(value: unknown): { path: string | null; source: KnowledgeMachineWorkspacePathSource } {
+  const raw = asRecord(value);
+  return {
+    path: asString(raw.path),
+    source: asString(raw.source) ?? 'unresolved',
+  };
+}
+
+function normalizeOpenMachinesWorkspace(value: unknown, options: KnowledgeMachineWorkspaceOptions): KnowledgeMachineWorkspaceResolution | null {
+  const raw = asRecord(value);
+  const paths = asRecord(raw.paths);
+  const project = asRecord(raw.project);
+  const machine = asRecord(raw.machine);
+  const projectRoot = pathRecord(paths.project_root);
+  const workspaceRoot = pathRecord(paths.workspace_root);
+  const openFilesRoot = pathRecord(paths.open_files_root);
+  if (raw.ok !== true || !projectRoot.path) return null;
+  const evidence = typeof raw.evidence === 'object' && raw.evidence !== null
+    ? raw.evidence as Record<string, unknown>
+    : null;
+  return {
+    ok: true,
+    source: 'open-machines',
+    requested_machine_id: asString(raw.requested_machine_id) ?? options.machineId,
+    machine_id: asString(raw.machine_id),
+    project_id: asString(project.project_id) ?? options.projectId ?? 'open-knowledge',
+    repo_name: asString(project.repo_name) ?? options.repoName ?? options.projectId ?? 'open-knowledge',
+    project_root: projectRoot.path,
+    project_root_source: projectRoot.source,
+    workspace_root: workspaceRoot.path,
+    workspace_root_source: workspaceRoot.source,
+    open_files_root: openFilesRoot.path,
+    open_files_root_source: openFilesRoot.source,
+    trust_status: asString(machine.trust_status) ?? 'unknown',
+    auth_status: asString(machine.auth_status) ?? 'unknown',
+    current: machine.current === true,
+    primary: machine.primary === true,
+    evidence,
+    warnings: asStringArray(raw.warnings),
+  };
+}
+
 async function discoverOpenMachinesCliTopology(options: KnowledgeMachineTopologyOptions): Promise<KnowledgeMachineTopology | null> {
   const runner = options.runner ?? defaultRunner;
   if (!await hasCommand('machines', runner)) return null;
@@ -886,6 +975,101 @@ export async function resolveKnowledgeMachineRoute(options: KnowledgeMachineRout
       ...rawMachineRoute(options.machineId),
       warnings: [optionalModuleError(error)],
     };
+  }
+}
+
+async function resolveOpenMachinesCliWorkspace(options: KnowledgeMachineWorkspaceOptions): Promise<KnowledgeMachineWorkspaceResolution | null> {
+  const runner = options.runner ?? defaultRunner;
+  if (!await hasCommand('machines', runner)) return null;
+  const projectId = options.projectId ?? 'open-knowledge';
+  const repoName = options.repoName ?? 'open-knowledge';
+  const args = [
+    'workspace', 'resolve',
+    '--machine', options.machineId,
+    '--project', projectId,
+    '--repo', repoName,
+    '--open-files-repo', options.openFilesRepoName ?? 'open-files',
+    '--json',
+  ];
+  if (options.includeTailscale === false) args.push('--no-tailscale');
+  const result = await runCommand(runner, machinesCliCommand(args));
+  if (result.exitCode !== 0) return null;
+  return normalizeOpenMachinesWorkspace(parseJson(result.stdout), options);
+}
+
+function argumentMachineWorkspace(options: KnowledgeMachineWorkspaceOptions): KnowledgeMachineWorkspaceResolution | null {
+  const peerWorkspace = options.peerWorkspace?.trim();
+  if (!peerWorkspace) return null;
+  return {
+    ok: true,
+    source: 'argument',
+    requested_machine_id: options.machineId,
+    machine_id: options.machineId,
+    project_id: options.projectId ?? 'open-knowledge',
+    repo_name: options.repoName ?? 'open-knowledge',
+    project_root: peerWorkspace,
+    project_root_source: 'argument',
+    workspace_root: null,
+    workspace_root_source: 'unresolved',
+    open_files_root: null,
+    open_files_root_source: 'unresolved',
+    trust_status: 'unknown',
+    auth_status: 'unknown',
+    current: false,
+    primary: false,
+    evidence: null,
+    warnings: [],
+  };
+}
+
+function unresolvedMachineWorkspace(options: KnowledgeMachineWorkspaceOptions, warnings: string[]): KnowledgeMachineWorkspaceResolution {
+  return {
+    ok: false,
+    source: 'raw',
+    requested_machine_id: options.machineId,
+    machine_id: null,
+    project_id: options.projectId ?? 'open-knowledge',
+    repo_name: options.repoName ?? 'open-knowledge',
+    project_root: null,
+    project_root_source: 'unresolved',
+    workspace_root: null,
+    workspace_root_source: 'unresolved',
+    open_files_root: null,
+    open_files_root_source: 'unresolved',
+    trust_status: 'unknown',
+    auth_status: 'unknown',
+    current: false,
+    primary: false,
+    evidence: null,
+    warnings,
+  };
+}
+
+export async function resolveKnowledgeMachineWorkspace(options: KnowledgeMachineWorkspaceOptions): Promise<KnowledgeMachineWorkspaceResolution> {
+  const argument = argumentMachineWorkspace(options);
+  if (argument) return argument;
+  try {
+    const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
+    const mod = await loader();
+    if (mod?.resolveMachineWorkspace) {
+      const normalized = normalizeOpenMachinesWorkspace(mod.resolveMachineWorkspace({
+        machineId: options.machineId,
+        projectId: options.projectId ?? 'open-knowledge',
+        repoName: options.repoName ?? 'open-knowledge',
+        openFilesRepoName: options.openFilesRepoName ?? 'open-files',
+        includeTailscale: options.includeTailscale,
+        runner: options.runner,
+        now: options.now,
+      }), options);
+      if (normalized) return normalized;
+      return await resolveOpenMachinesCliWorkspace(options)
+        ?? unresolvedMachineWorkspace(options, ['invalid_workspace_shape']);
+    }
+    return await resolveOpenMachinesCliWorkspace(options)
+      ?? unresolvedMachineWorkspace(options, ['missing_resolveMachineWorkspace']);
+  } catch (error) {
+    return await resolveOpenMachinesCliWorkspace(options)
+      ?? unresolvedMachineWorkspace(options, [optionalModuleError(error)]);
   }
 }
 

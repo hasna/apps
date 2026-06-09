@@ -48,7 +48,7 @@ function writeFakeSshBin(dir: string): string {
   return bin;
 }
 
-function writeFakeMachinesRouteBin(bin: string, target: string): void {
+function writeFakeMachinesRouteBin(bin: string, target: string, projectRoot = '/remote/open-knowledge'): void {
   const machines = join(bin, 'machines');
   writeFileSync(machines, [
     '#!/bin/sh',
@@ -68,6 +68,23 @@ function writeFakeMachinesRouteBin(bin: string, target: string): void {
           reachable: true,
         },
       },
+      warnings: [],
+    })}'`,
+    '  exit 0',
+    'fi',
+    'if [ "$1" = "workspace" ] && [ "$2" = "resolve" ]; then',
+    `  printf '%s\\n' '${JSON.stringify({
+      ok: true,
+      requested_machine_id: 'spark01',
+      machine_id: 'spark01',
+      project: { project_id: 'open-knowledge', repo_name: 'open-knowledge' },
+      machine: { current: false, primary: false, trust_status: 'trusted', auth_status: 'authenticated' },
+      paths: {
+        workspace_root: { path: '/remote', source: 'manifest' },
+        project_root: { path: projectRoot, source: 'manifest_metadata' },
+        open_files_root: { path: '/remote/open-files', source: 'manifest_metadata' },
+      },
+      evidence: { topology: true, matched_by: 'machine_id', metadata_keys: [] },
       warnings: [],
     })}'`,
     '  exit 0',
@@ -361,7 +378,6 @@ describe('knowledge MCP', () => {
         name: 'knowledge_sync_peer',
         arguments: {
           scope: 'project',
-          peer_workspace: '/remote/open-knowledge',
           machine: 'spark01',
           direction: 'dry-run',
         },
@@ -375,6 +391,13 @@ describe('knowledge MCP', () => {
         route: 'tailscale',
         target_kind: 'tailscale',
         confidence: 'high',
+      });
+      expect(remoteSyncPeer.peer_workspace).toBe('/remote/open-knowledge');
+      expect(remoteSyncPeer.resolved_workspace).toMatchObject({
+        source: 'open-machines',
+        project_root: '/remote/open-knowledge',
+        project_root_source: 'manifest_metadata',
+        open_files_root: '/remote/open-files',
       });
       expect(readFileSync(targetPath, 'utf8')).toBe('mcp-spark01.tailnet.test');
 

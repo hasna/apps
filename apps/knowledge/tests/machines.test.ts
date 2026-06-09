@@ -3,6 +3,7 @@ import {
   discoverKnowledgeMachineTopology,
   preflightKnowledgeMachine,
   resolveKnowledgeMachineRoute,
+  resolveKnowledgeMachineWorkspace,
   type KnowledgeMachineCommandRunner,
   type KnowledgeMachinePreflightRunner,
 } from '../src/machines';
@@ -334,6 +335,107 @@ describe('knowledge machine topology', () => {
         },
       },
       warnings: [],
+    });
+  });
+
+  test('uses machines consumer SDK workspace resolver when available', async () => {
+    const result = await resolveKnowledgeMachineWorkspace({
+      machineId: 'spark01',
+      now: new Date('2026-06-09T00:00:00.000Z'),
+      loadOpenMachines: async () => ({
+        resolveMachineWorkspace: () => ({
+          ok: true,
+          requested_machine_id: 'spark01',
+          machine_id: 'spark01',
+          project: {
+            project_id: 'open-knowledge',
+            repo_name: 'open-knowledge',
+          },
+          machine: {
+            current: false,
+            primary: true,
+            trust_status: 'trusted',
+            auth_status: 'authenticated',
+          },
+          paths: {
+            workspace_root: { path: '/home/hasna/workspace', source: 'manifest' },
+            project_root: { path: '/home/hasna/workspace/hasna/opensource/open-knowledge', source: 'inferred' },
+            open_files_root: { path: '/home/hasna/workspace/hasna/opensource/open-files', source: 'inferred' },
+          },
+          evidence: {
+            topology: true,
+            matched_by: 'machine_id',
+            metadata_keys: ['workspace_paths'],
+          },
+          warnings: ['project_root_inferred:open-knowledge'],
+        }),
+      }),
+      runner: fakeCommandRunner({}),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.source).toBe('open-machines');
+    expect(result.project_root).toBe('/home/hasna/workspace/hasna/opensource/open-knowledge');
+    expect(result.open_files_root).toBe('/home/hasna/workspace/hasna/opensource/open-files');
+    expect(result.trust_status).toBe('trusted');
+    expect(result.primary).toBe(true);
+  });
+
+  test('uses machines CLI workspace resolver when SDK import is unavailable', async () => {
+    const commands: string[] = [];
+    const result = await resolveKnowledgeMachineWorkspace({
+      machineId: 'spark01',
+      includeTailscale: false,
+      loadOpenMachines: async () => null,
+      runner: (command) => {
+        commands.push(command);
+        if (command.includes('command -v machines')) {
+          return { stdout: '/home/hasna/.bun/bin/machines\n', stderr: '', exitCode: 0 };
+        }
+        if (command.includes('workspace') && command.includes('resolve')) {
+          return {
+            stdout: JSON.stringify({
+              ok: true,
+              requested_machine_id: 'spark01',
+              machine_id: 'spark01',
+              project: { project_id: 'open-knowledge', repo_name: 'open-knowledge' },
+              machine: { current: false, primary: false, trust_status: 'unknown', auth_status: 'unknown' },
+              paths: {
+                workspace_root: { path: '/workspace', source: 'manifest' },
+                project_root: { path: '/workspace/open-knowledge', source: 'manifest_metadata' },
+                open_files_root: { path: '/workspace/open-files', source: 'manifest_metadata' },
+              },
+              evidence: { topology: true, matched_by: 'machine_id', metadata_keys: [] },
+              warnings: [],
+            }),
+            stderr: '',
+            exitCode: 0,
+          };
+        }
+        return { stdout: '', stderr: `unexpected command: ${command}`, exitCode: 1 };
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.source).toBe('open-machines');
+    expect(result.project_root).toBe('/workspace/open-knowledge');
+    expect(commands.some((command) => command.includes("'workspace'") && command.includes("'resolve'") && command.includes("'--no-tailscale'"))).toBe(true);
+  });
+
+  test('uses explicit peer workspace as an override before machines lookup', async () => {
+    const result = await resolveKnowledgeMachineWorkspace({
+      machineId: 'spark01',
+      peerWorkspace: '/manual/open-knowledge',
+      loadOpenMachines: async () => {
+        throw new Error('should not load machines');
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      source: 'argument',
+      project_root: '/manual/open-knowledge',
+      project_root_source: 'argument',
     });
   });
 

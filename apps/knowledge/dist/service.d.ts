@@ -1,7 +1,7 @@
 import { type KnowledgeAuthStatus } from './auth';
 import { type KnowledgePromptOptions } from './agent';
 import { type EmbeddingIndexOptions, type EmbeddingSearchOptions } from './embeddings';
-import { type KnowledgeMachinePreflightOptions, type KnowledgeMachineRouteResolution, type KnowledgeMachineTopologyOptions } from './machines';
+import { type KnowledgeMachinePreflightOptions, type KnowledgeMachineRouteResolution, type KnowledgeMachineWorkspaceResolution, type KnowledgeMachineTopologyOptions } from './machines';
 import { type ProviderStatusResult, type ModelRegistryEntry } from './providers';
 import { type ReindexRuntimeOptions } from './reindex';
 import { RemoteKnowledgeClient, type RemoteKnowledgeRegistryContract } from './remote-client';
@@ -66,8 +66,9 @@ export interface KnowledgePeerSyncOptions {
     includeArtifactContent?: boolean;
     machineId?: string | null;
 }
-export interface KnowledgeRemotePeerSyncOptions extends KnowledgePeerSyncOptions {
+export interface KnowledgeRemotePeerSyncOptions extends Omit<KnowledgePeerSyncOptions, 'peerWorkspace'> {
     machine: string;
+    peerWorkspace?: string;
     includeTailscale?: boolean;
 }
 export interface KnowledgeRemotePeerSyncResult extends KnowledgePeerSyncResult {
@@ -81,6 +82,21 @@ export interface KnowledgeRemotePeerSyncResult extends KnowledgePeerSyncResult {
         target_kind: KnowledgeMachineRouteResolution['targetKind'];
         confidence: KnowledgeMachineRouteResolution['confidence'];
         evidence: KnowledgeMachineRouteResolution['evidence'];
+    };
+    resolved_workspace: {
+        source: KnowledgeMachineWorkspaceResolution['source'];
+        project_root: string;
+        project_root_source: KnowledgeMachineWorkspaceResolution['project_root_source'];
+        workspace_root: string | null;
+        workspace_root_source: KnowledgeMachineWorkspaceResolution['workspace_root_source'];
+        open_files_root: string | null;
+        open_files_root_source: KnowledgeMachineWorkspaceResolution['open_files_root_source'];
+        trust_status: KnowledgeMachineWorkspaceResolution['trust_status'];
+        auth_status: KnowledgeMachineWorkspaceResolution['auth_status'];
+        current: boolean;
+        primary: boolean;
+        evidence: KnowledgeMachineWorkspaceResolution['evidence'];
+        warnings: string[];
     };
     peer_workspace: string;
 }

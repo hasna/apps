@@ -24,6 +24,7 @@ export {
 export {
   discoverKnowledgeMachineTopology,
   preflightKnowledgeMachine,
+  resolveKnowledgeMachineWorkspace,
   type KnowledgeMachineCommandResult,
   type KnowledgeMachineCommandRunner,
   type KnowledgeMachineEntry,
@@ -38,6 +39,10 @@ export {
   type KnowledgeMachinePreflightStatus,
   type KnowledgeMachinePreflightWorkspaceSpec,
   type KnowledgeMachineRouteHint,
+  type KnowledgeMachineWorkspaceOptions,
+  type KnowledgeMachineWorkspacePathSource,
+  type KnowledgeMachineWorkspaceResolution,
+  type KnowledgeMachineWorkspaceSource,
   type KnowledgeMachineTopology,
   type KnowledgeMachineTopologyOptions,
 } from './machines.js';

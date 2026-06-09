@@ -884,7 +884,7 @@ export function buildServer() {
 
   registerTool(server, 'knowledge_sync_peer', 'Knowledge peer sync', 'Dry-run, pull, push, or bidirectionally sync with a local or remote peer knowledge workspace', {
     scope: scopeField,
-    peer_workspace: z.string().describe('Peer repo root or .hasna/apps/knowledge path'),
+    peer_workspace: z.string().optional().describe('Peer repo root or .hasna/apps/knowledge path; optional for remote machine sync when machines path mapping is configured'),
     machine: z.string().optional().describe('Optional remote machine id or SSH alias; when set, sync uses route-aware SSH transport'),
     direction: z.enum(['dry-run', 'pull', 'push', 'both']).optional().describe('Sync direction; dry-run previews both directions'),
     tables: z.array(z.string()).optional().describe('Optional knowledge.db tables to sync'),

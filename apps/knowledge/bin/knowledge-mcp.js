@@ -13660,7 +13660,7 @@ import { existsSync as existsSync10, readFileSync as readFileSync9, writeFileSyn
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.39",
+  version: "0.2.40",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   exports: {
@@ -17563,6 +17563,45 @@ function normalizeOpenMachinesRoute(value) {
     warnings: asStringArray(raw.warnings)
   };
 }
+function pathRecord(value) {
+  const raw = asRecord(value);
+  return {
+    path: asString3(raw.path),
+    source: asString3(raw.source) ?? "unresolved"
+  };
+}
+function normalizeOpenMachinesWorkspace(value, options) {
+  const raw = asRecord(value);
+  const paths = asRecord(raw.paths);
+  const project = asRecord(raw.project);
+  const machine = asRecord(raw.machine);
+  const projectRoot = pathRecord(paths.project_root);
+  const workspaceRoot = pathRecord(paths.workspace_root);
+  const openFilesRoot = pathRecord(paths.open_files_root);
+  if (raw.ok !== true || !projectRoot.path)
+    return null;
+  const evidence = typeof raw.evidence === "object" && raw.evidence !== null ? raw.evidence : null;
+  return {
+    ok: true,
+    source: "open-machines",
+    requested_machine_id: asString3(raw.requested_machine_id) ?? options.machineId,
+    machine_id: asString3(raw.machine_id),
+    project_id: asString3(project.project_id) ?? options.projectId ?? "open-knowledge",
+    repo_name: asString3(project.repo_name) ?? options.repoName ?? options.projectId ?? "open-knowledge",
+    project_root: projectRoot.path,
+    project_root_source: projectRoot.source,
+    workspace_root: workspaceRoot.path,
+    workspace_root_source: workspaceRoot.source,
+    open_files_root: openFilesRoot.path,
+    open_files_root_source: openFilesRoot.source,
+    trust_status: asString3(machine.trust_status) ?? "unknown",
+    auth_status: asString3(machine.auth_status) ?? "unknown",
+    current: machine.current === true,
+    primary: machine.primary === true,
+    evidence,
+    warnings: asStringArray(raw.warnings)
+  };
+}
 async function discoverOpenMachinesCliTopology(options) {
   const runner = options.runner ?? defaultRunner;
   if (!await hasCommand("machines", runner))
@@ -17667,6 +17706,105 @@ async function resolveKnowledgeMachineRoute(options) {
       ...rawMachineRoute(options.machineId),
       warnings: [optionalModuleError(error48)]
     };
+  }
+}
+async function resolveOpenMachinesCliWorkspace(options) {
+  const runner = options.runner ?? defaultRunner;
+  if (!await hasCommand("machines", runner))
+    return null;
+  const projectId = options.projectId ?? "open-knowledge";
+  const repoName = options.repoName ?? "open-knowledge";
+  const args = [
+    "workspace",
+    "resolve",
+    "--machine",
+    options.machineId,
+    "--project",
+    projectId,
+    "--repo",
+    repoName,
+    "--open-files-repo",
+    options.openFilesRepoName ?? "open-files",
+    "--json"
+  ];
+  if (options.includeTailscale === false)
+    args.push("--no-tailscale");
+  const result = await runCommand(runner, machinesCliCommand(args));
+  if (result.exitCode !== 0)
+    return null;
+  return normalizeOpenMachinesWorkspace(parseJson(result.stdout), options);
+}
+function argumentMachineWorkspace(options) {
+  const peerWorkspace = options.peerWorkspace?.trim();
+  if (!peerWorkspace)
+    return null;
+  return {
+    ok: true,
+    source: "argument",
+    requested_machine_id: options.machineId,
+    machine_id: options.machineId,
+    project_id: options.projectId ?? "open-knowledge",
+    repo_name: options.repoName ?? "open-knowledge",
+    project_root: peerWorkspace,
+    project_root_source: "argument",
+    workspace_root: null,
+    workspace_root_source: "unresolved",
+    open_files_root: null,
+    open_files_root_source: "unresolved",
+    trust_status: "unknown",
+    auth_status: "unknown",
+    current: false,
+    primary: false,
+    evidence: null,
+    warnings: []
+  };
+}
+function unresolvedMachineWorkspace(options, warnings) {
+  return {
+    ok: false,
+    source: "raw",
+    requested_machine_id: options.machineId,
+    machine_id: null,
+    project_id: options.projectId ?? "open-knowledge",
+    repo_name: options.repoName ?? "open-knowledge",
+    project_root: null,
+    project_root_source: "unresolved",
+    workspace_root: null,
+    workspace_root_source: "unresolved",
+    open_files_root: null,
+    open_files_root_source: "unresolved",
+    trust_status: "unknown",
+    auth_status: "unknown",
+    current: false,
+    primary: false,
+    evidence: null,
+    warnings
+  };
+}
+async function resolveKnowledgeMachineWorkspace(options) {
+  const argument = argumentMachineWorkspace(options);
+  if (argument)
+    return argument;
+  try {
+    const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
+    const mod = await loader();
+    if (mod?.resolveMachineWorkspace) {
+      const normalized = normalizeOpenMachinesWorkspace(mod.resolveMachineWorkspace({
+        machineId: options.machineId,
+        projectId: options.projectId ?? "open-knowledge",
+        repoName: options.repoName ?? "open-knowledge",
+        openFilesRepoName: options.openFilesRepoName ?? "open-files",
+        includeTailscale: options.includeTailscale,
+        runner: options.runner,
+        now: options.now
+      }), options);
+      if (normalized)
+        return normalized;
+      return await resolveOpenMachinesCliWorkspace(options) ?? unresolvedMachineWorkspace(options, ["invalid_workspace_shape"]);
+    }
+    return await resolveOpenMachinesCliWorkspace(options) ?? unresolvedMachineWorkspace(options, ["missing_resolveMachineWorkspace"]);
+  } catch (error48) {
+    return await resolveOpenMachinesCliWorkspace(options) ?? unresolvedMachineWorkspace(options, [optionalModuleError(error48)]);
   }
 }
 function withPreflightKnowledgeContext(report, options) {
@@ -21169,6 +21307,19 @@ class KnowledgeService {
       machineId: options.machine,
       includeTailscale: options.includeTailscale
     });
+    const resolvedWorkspace = await resolveKnowledgeMachineWorkspace({
+      machineId: options.machine,
+      peerWorkspace: options.peerWorkspace,
+      includeTailscale: options.includeTailscale
+    });
+    if (!resolvedWorkspace.ok || !resolvedWorkspace.project_root) {
+      throw new Error([
+        `Unable to resolve peer workspace for ${options.machine}.`,
+        `Pass --peer-workspace <repo-or-knowledge-home> or configure workspace path mapping in machines.`,
+        resolvedWorkspace.warnings.length ? `Warnings: ${resolvedWorkspace.warnings.join(", ")}` : null
+      ].filter(Boolean).join(" "));
+    }
+    const peerWorkspace = resolvedWorkspace.project_root;
     const result = {
       ok: true,
       dry_run: dryRun,
@@ -21184,11 +21335,26 @@ class KnowledgeService {
         confidence: resolvedMachine.confidence,
         evidence: resolvedMachine.evidence
       },
-      peer_workspace: options.peerWorkspace,
+      resolved_workspace: {
+        source: resolvedWorkspace.source,
+        project_root: resolvedWorkspace.project_root,
+        project_root_source: resolvedWorkspace.project_root_source,
+        workspace_root: resolvedWorkspace.workspace_root,
+        workspace_root_source: resolvedWorkspace.workspace_root_source,
+        open_files_root: resolvedWorkspace.open_files_root,
+        open_files_root_source: resolvedWorkspace.open_files_root_source,
+        trust_status: resolvedWorkspace.trust_status,
+        auth_status: resolvedWorkspace.auth_status,
+        current: resolvedWorkspace.current,
+        primary: resolvedWorkspace.primary,
+        evidence: resolvedWorkspace.evidence,
+        warnings: resolvedWorkspace.warnings
+      },
+      peer_workspace: peerWorkspace,
       message: ""
     };
     if (direction === "pull" || direction === "both") {
-      const remoteExport = remoteKnowledgeCommand(options.peerWorkspace, [
+      const remoteExport = remoteKnowledgeCommand(peerWorkspace, [
         "sync",
         "export",
         ...scopeArgs,
@@ -21211,7 +21377,7 @@ class KnowledgeService {
         tables: options.tables,
         includeArtifactContent: options.includeArtifactContent
       });
-      const remoteImport = remoteKnowledgeCommand(options.peerWorkspace, [
+      const remoteImport = remoteKnowledgeCommand(peerWorkspace, [
         "sync",
         "import",
         ...scopeArgs,
@@ -22638,7 +22804,7 @@ function buildServer() {
   });
   registerTool(server, "knowledge_sync_peer", "Knowledge peer sync", "Dry-run, pull, push, or bidirectionally sync with a local or remote peer knowledge workspace", {
     scope: scopeField,
-    peer_workspace: exports_external.string().describe("Peer repo root or .hasna/apps/knowledge path"),
+    peer_workspace: exports_external.string().optional().describe("Peer repo root or .hasna/apps/knowledge path; optional for remote machine sync when machines path mapping is configured"),
     machine: exports_external.string().optional().describe("Optional remote machine id or SSH alias; when set, sync uses route-aware SSH transport"),
     direction: exports_external.enum(["dry-run", "pull", "push", "both"]).optional().describe("Sync direction; dry-run previews both directions"),
     tables: exports_external.array(exports_external.string()).optional().describe("Optional knowledge.db tables to sync"),

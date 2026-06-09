@@ -87,7 +87,7 @@ function writeFakeSshBin(dir: string): string {
   return bin;
 }
 
-function writeFakeMachinesRouteBin(bin: string, target: string): void {
+function writeFakeMachinesRouteBin(bin: string, target: string, projectRoot = '/remote/open-knowledge'): void {
   const machines = join(bin, 'machines');
   writeFileSync(machines, [
     '#!/bin/sh',
@@ -111,6 +111,23 @@ function writeFakeMachinesRouteBin(bin: string, target: string): void {
           reachable: true,
         },
       },
+      warnings: [],
+    })}'`,
+    '  exit 0',
+    'fi',
+    'if [ "$1" = "workspace" ] && [ "$2" = "resolve" ]; then',
+    `  printf '%s\\n' '${JSON.stringify({
+      ok: true,
+      requested_machine_id: 'spark01',
+      machine_id: 'spark01',
+      project: { project_id: 'open-knowledge', repo_name: 'open-knowledge' },
+      machine: { current: false, primary: false, trust_status: 'trusted', auth_status: 'authenticated' },
+      paths: {
+        workspace_root: { path: '/remote', source: 'manifest' },
+        project_root: { path: projectRoot, source: 'manifest_metadata' },
+        open_files_root: { path: '/remote/open-files', source: 'manifest_metadata' },
+      },
+      evidence: { topology: true, matched_by: 'machine_id', metadata_keys: [] },
       warnings: [],
     })}'`,
     '  exit 0',
@@ -642,6 +659,50 @@ describe('knowledge cli', () => {
           reachable: true,
         },
       },
+    });
+  });
+
+  test('ssh sync resolves peer workspace through machines path mapping when omitted', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-sync-ssh-workspace-'));
+    const targetPath = join(dir, 'ssh-target.txt');
+    const bin = writeFakeSshBin(dir);
+    writeFakeMachinesRouteBin(bin, 'routed-spark01.tailnet.test', '/mapped/open-knowledge');
+    const bundle = {
+      ok: true,
+      format: 'knowledge-sync-bundle',
+      version: 1,
+      protocol_version: 1,
+      min_protocol_version: 1,
+      generated_at: '2026-06-09T00:00:00.000Z',
+      source: {
+        scope: 'project',
+        workspace_home: '/mapped/open-knowledge/.hasna/apps/knowledge',
+        sqlite_schema_version: 6,
+        machine_id: 'spark01',
+        artifact_root_uri: 'file:///mapped/open-knowledge/.hasna/apps/knowledge/artifacts/',
+      },
+      tables: [],
+      artifacts: [],
+      warnings: [],
+      message: 'valid empty bundle',
+    };
+
+    const result = runCli(['sync', 'pull', '--machine', 'spark01', '--scope', 'project', '--json'], dir, {
+      PATH: `${bin}:${process.env.PATH ?? ''}`,
+      KNOWLEDGE_FAKE_SSH_EXPORT_JSON: JSON.stringify(bundle),
+      KNOWLEDGE_FAKE_SSH_TARGET_PATH: targetPath,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(targetPath, 'utf8')).toBe('routed-spark01.tailnet.test');
+    const out = JSON.parse(new TextDecoder().decode(result.stdout));
+    expect(out.peer_workspace).toBe('/mapped/open-knowledge');
+    expect(out.resolved_workspace).toMatchObject({
+      source: 'open-machines',
+      project_root: '/mapped/open-knowledge',
+      project_root_source: 'manifest_metadata',
+      open_files_root: '/remote/open-files',
+      trust_status: 'trusted',
     });
   });
 

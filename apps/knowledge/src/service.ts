@@ -24,8 +24,10 @@ import {
   discoverKnowledgeMachineTopology,
   preflightKnowledgeMachine,
   resolveKnowledgeMachineRoute,
+  resolveKnowledgeMachineWorkspace,
   type KnowledgeMachinePreflightOptions,
   type KnowledgeMachineRouteResolution,
+  type KnowledgeMachineWorkspaceResolution,
   type KnowledgeMachineTopologyOptions,
 } from './machines';
 import { ingestSourceRef } from './source-ingest';
@@ -138,8 +140,9 @@ export interface KnowledgePeerSyncOptions {
   machineId?: string | null;
 }
 
-export interface KnowledgeRemotePeerSyncOptions extends KnowledgePeerSyncOptions {
+export interface KnowledgeRemotePeerSyncOptions extends Omit<KnowledgePeerSyncOptions, 'peerWorkspace'> {
   machine: string;
+  peerWorkspace?: string;
   includeTailscale?: boolean;
 }
 
@@ -154,6 +157,21 @@ export interface KnowledgeRemotePeerSyncResult extends KnowledgePeerSyncResult {
     target_kind: KnowledgeMachineRouteResolution['targetKind'];
     confidence: KnowledgeMachineRouteResolution['confidence'];
     evidence: KnowledgeMachineRouteResolution['evidence'];
+  };
+  resolved_workspace: {
+    source: KnowledgeMachineWorkspaceResolution['source'];
+    project_root: string;
+    project_root_source: KnowledgeMachineWorkspaceResolution['project_root_source'];
+    workspace_root: string | null;
+    workspace_root_source: KnowledgeMachineWorkspaceResolution['workspace_root_source'];
+    open_files_root: string | null;
+    open_files_root_source: KnowledgeMachineWorkspaceResolution['open_files_root_source'];
+    trust_status: KnowledgeMachineWorkspaceResolution['trust_status'];
+    auth_status: KnowledgeMachineWorkspaceResolution['auth_status'];
+    current: boolean;
+    primary: boolean;
+    evidence: KnowledgeMachineWorkspaceResolution['evidence'];
+    warnings: string[];
   };
   peer_workspace: string;
 }
@@ -768,6 +786,19 @@ export class KnowledgeService {
       machineId: options.machine,
       includeTailscale: options.includeTailscale,
     });
+    const resolvedWorkspace = await resolveKnowledgeMachineWorkspace({
+      machineId: options.machine,
+      peerWorkspace: options.peerWorkspace,
+      includeTailscale: options.includeTailscale,
+    });
+    if (!resolvedWorkspace.ok || !resolvedWorkspace.project_root) {
+      throw new Error([
+        `Unable to resolve peer workspace for ${options.machine}.`,
+        `Pass --peer-workspace <repo-or-knowledge-home> or configure workspace path mapping in machines.`,
+        resolvedWorkspace.warnings.length ? `Warnings: ${resolvedWorkspace.warnings.join(', ')}` : null,
+      ].filter(Boolean).join(' '));
+    }
+    const peerWorkspace = resolvedWorkspace.project_root;
     const result: KnowledgeRemotePeerSyncResult = {
       ok: true,
       dry_run: dryRun,
@@ -783,12 +814,27 @@ export class KnowledgeService {
         confidence: resolvedMachine.confidence,
         evidence: resolvedMachine.evidence,
       },
-      peer_workspace: options.peerWorkspace,
+      resolved_workspace: {
+        source: resolvedWorkspace.source,
+        project_root: resolvedWorkspace.project_root,
+        project_root_source: resolvedWorkspace.project_root_source,
+        workspace_root: resolvedWorkspace.workspace_root,
+        workspace_root_source: resolvedWorkspace.workspace_root_source,
+        open_files_root: resolvedWorkspace.open_files_root,
+        open_files_root_source: resolvedWorkspace.open_files_root_source,
+        trust_status: resolvedWorkspace.trust_status,
+        auth_status: resolvedWorkspace.auth_status,
+        current: resolvedWorkspace.current,
+        primary: resolvedWorkspace.primary,
+        evidence: resolvedWorkspace.evidence,
+        warnings: resolvedWorkspace.warnings,
+      },
+      peer_workspace: peerWorkspace,
       message: '',
     };
 
     if (direction === 'pull' || direction === 'both') {
-      const remoteExport = remoteKnowledgeCommand(options.peerWorkspace, [
+      const remoteExport = remoteKnowledgeCommand(peerWorkspace, [
         'sync', 'export',
         ...scopeArgs,
         ...tableArgs,
@@ -811,7 +857,7 @@ export class KnowledgeService {
         tables: options.tables,
         includeArtifactContent: options.includeArtifactContent,
       });
-      const remoteImport = remoteKnowledgeCommand(options.peerWorkspace, [
+      const remoteImport = remoteKnowledgeCommand(peerWorkspace, [
         'sync', 'import',
         ...scopeArgs,
         ...(dryRun ? ['--dry-run'] : []),
