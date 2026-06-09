@@ -59,6 +59,7 @@ import {
   type KnowledgeSyncApplyResult,
   type KnowledgeSyncBundle,
   type KnowledgeSyncSnapshotResult,
+  type KnowledgeSyncStatus,
 } from './sync';
 import { compileWikiPage, fileAnswerToWiki, lintWiki, type WikiCompileOptions } from './wiki-compiler';
 import {
@@ -162,23 +163,67 @@ export interface KnowledgeRemotePeerSyncResult extends KnowledgePeerSyncResult {
     confidence: KnowledgeMachineRouteResolution['confidence'];
     evidence: KnowledgeMachineRouteResolution['evidence'];
   };
-  resolved_workspace: {
-    source: KnowledgeMachineWorkspaceResolution['source'];
-    adapter: KnowledgeMachineWorkspaceResolution['adapter'];
-    project_root: string;
-    project_root_source: KnowledgeMachineWorkspaceResolution['project_root_source'];
-    workspace_root: string | null;
-    workspace_root_source: KnowledgeMachineWorkspaceResolution['workspace_root_source'];
-    open_files_root: string | null;
-    open_files_root_source: KnowledgeMachineWorkspaceResolution['open_files_root_source'];
-    trust_status: KnowledgeMachineWorkspaceResolution['trust_status'];
-    auth_status: KnowledgeMachineWorkspaceResolution['auth_status'];
-    current: boolean;
-    primary: boolean;
-    evidence: KnowledgeMachineWorkspaceResolution['evidence'];
-    warnings: string[];
-  };
+  resolved_workspace: NonNullable<KnowledgePeerSyncResult['resolved_workspace']>;
   peer_workspace: string;
+}
+
+export interface KnowledgeSyncDoctorOptions {
+  machine?: string | null;
+  peerWorkspace?: string | null;
+  includeTailscale?: boolean;
+  tables?: string[];
+}
+
+export interface KnowledgeSyncRecommendedCommand {
+  id: string;
+  reason: string;
+  command: string[];
+  shell_command: string;
+}
+
+export interface KnowledgeOpenFilesBoundaryStatus {
+  ok: boolean;
+  source_of_truth: 'open-files';
+  configured_root: string | null;
+  configured_root_source: KnowledgeMachineWorkspaceResolution['open_files_root_source'] | null;
+  source_refs: {
+    open_files: number;
+    metadata_mentions: number;
+  };
+  extracted_text_artifacts: number;
+  raw_source_bytes_owned_by: 'open-files';
+  raw_payload_sentinel_hits: number;
+  message: string;
+}
+
+export interface KnowledgeSyncDoctorResult {
+  ok: boolean;
+  read_only: true;
+  generated_at: string;
+  scope: string;
+  workspace_home: string;
+  database: {
+    sqlite_schema_version: number;
+    table_counts: Record<string, number>;
+  };
+  storage: {
+    contract: StorageContract;
+    validation: StorageValidationResult;
+  };
+  sync: {
+    machines: number;
+    snapshots: number;
+    clocks: number;
+    imports: number;
+    open_conflicts: number;
+    table_clocks: KnowledgeSyncStatus['clocks']['rows'];
+  };
+  open_files: KnowledgeOpenFilesBoundaryStatus;
+  resolved_route: KnowledgeRemotePeerSyncResult['resolved_route'] | null;
+  resolved_workspace: KnowledgePeerSyncResult['resolved_workspace'] | null;
+  recommended_commands: KnowledgeSyncRecommendedCommand[];
+  warnings: string[];
+  message: string;
 }
 
 export interface KnowledgeSyncConflictResolveOptions {
@@ -219,8 +264,172 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+function knowledgeCliCommand(args: string[]): KnowledgeSyncRecommendedCommand['shell_command'] {
+  return ['knowledge', ...args].map(shellQuote).join(' ');
+}
+
 function remoteKnowledgeCommand(peerWorkspace: string, args: string[]): string {
   return `cd ${shellQuote(peerWorkspace)} && knowledge ${args.map(shellQuote).join(' ')}`;
+}
+
+function serviceMachineIsLocal(machine: string | null | undefined): boolean {
+  return !machine || machine === 'local' || machine === 'localhost';
+}
+
+function workspaceSummary(resolvedWorkspace: KnowledgeMachineWorkspaceResolution, projectRoot: string): NonNullable<KnowledgePeerSyncResult['resolved_workspace']> {
+  return {
+    source: resolvedWorkspace.source,
+    adapter: resolvedWorkspace.adapter,
+    project_root: projectRoot,
+    project_root_source: resolvedWorkspace.project_root_source,
+    workspace_root: resolvedWorkspace.workspace_root,
+    workspace_root_source: resolvedWorkspace.workspace_root_source,
+    open_files_root: resolvedWorkspace.open_files_root,
+    open_files_root_source: resolvedWorkspace.open_files_root_source,
+    trust_status: resolvedWorkspace.trust_status,
+    auth_status: resolvedWorkspace.auth_status,
+    current: resolvedWorkspace.current,
+    primary: resolvedWorkspace.primary,
+    diagnostics: resolvedWorkspace.diagnostics,
+    repair_hints: resolvedWorkspace.repair_hints,
+    evidence: resolvedWorkspace.evidence,
+    warnings: resolvedWorkspace.warnings,
+  };
+}
+
+function routeSummary(resolvedMachine: KnowledgeMachineRouteResolution): KnowledgeRemotePeerSyncResult['resolved_route'] {
+  return {
+    source: resolvedMachine.source,
+    adapter: resolvedMachine.adapter,
+    target: resolvedMachine.target,
+    route: resolvedMachine.route,
+    target_kind: resolvedMachine.targetKind,
+    confidence: resolvedMachine.confidence,
+    evidence: resolvedMachine.evidence,
+  };
+}
+
+function workspaceReadinessMessage(resolvedWorkspace: KnowledgePeerSyncResult['resolved_workspace']): string | null {
+  if (!resolvedWorkspace) return null;
+  const nonOkDiagnostics = resolvedWorkspace.diagnostics.filter((entry) => entry.severity !== 'ok');
+  const firstRepair = resolvedWorkspace.repair_hints[0];
+  if (!nonOkDiagnostics.length && !resolvedWorkspace.warnings.length && !firstRepair) return null;
+  return [
+    nonOkDiagnostics.length ? `workspace diagnostics: ${nonOkDiagnostics.map((entry) => `${entry.id}=${entry.status}`).join(', ')}` : null,
+    resolvedWorkspace.warnings.length ? `warnings: ${resolvedWorkspace.warnings.join(', ')}` : null,
+    firstRepair ? `repair: ${firstRepair.shell_command}` : null,
+  ].filter(Boolean).join('; ');
+}
+
+function syncCommand(input: {
+  id: string;
+  reason: string;
+  args: string[];
+}): KnowledgeSyncRecommendedCommand {
+  return {
+    id: input.id,
+    reason: input.reason,
+    command: ['knowledge', ...input.args],
+    shell_command: knowledgeCliCommand(input.args),
+  };
+}
+
+function countQuery(dbPath: string, sql: string): number {
+  const db = openKnowledgeDb(dbPath);
+  try {
+    return Number(db.query<{ count: number }, []>(sql).get()?.count ?? 0);
+  } finally {
+    db.close();
+  }
+}
+
+function openFilesBoundaryStatus(
+  dbPath: string,
+  resolvedWorkspace: KnowledgePeerSyncResult['resolved_workspace'] | null,
+): KnowledgeOpenFilesBoundaryStatus {
+  const openFilesRefs = countQuery(dbPath, "SELECT COUNT(*) AS count FROM sources WHERE uri LIKE 'open-files://%'");
+  const metadataMentions = countQuery(dbPath, "SELECT COUNT(*) AS count FROM sources WHERE metadata_json LIKE '%open-files://%' OR metadata_json LIKE '%source_ref%'");
+  const extractedTextArtifacts = countQuery(dbPath, 'SELECT COUNT(*) AS count FROM source_revisions WHERE extracted_text_uri IS NOT NULL');
+  const rawPayloadSentinelHits = countQuery(dbPath, [
+    "SELECT COUNT(*) AS count FROM sources",
+    "WHERE metadata_json LIKE '%raw_bytes%'",
+    "OR metadata_json LIKE '%raw_content%'",
+    "OR metadata_json LIKE '%content_base64%'",
+    "OR metadata_json LIKE '%source_bytes%'",
+  ].join(' '));
+  const ok = rawPayloadSentinelHits === 0;
+  return {
+    ok,
+    source_of_truth: 'open-files',
+    configured_root: resolvedWorkspace?.open_files_root ?? null,
+    configured_root_source: resolvedWorkspace?.open_files_root_source ?? null,
+    source_refs: {
+      open_files: openFilesRefs,
+      metadata_mentions: metadataMentions,
+    },
+    extracted_text_artifacts: extractedTextArtifacts,
+    raw_source_bytes_owned_by: 'open-files',
+    raw_payload_sentinel_hits: rawPayloadSentinelHits,
+    message: ok
+      ? `${openFilesRefs} open-files source ref(s); raw source bytes remain owned by open-files`
+      : `${rawPayloadSentinelHits} raw source payload metadata sentinel(s) found`,
+  };
+}
+
+function doctorRecommendations(input: {
+  scope: string;
+  machine: string | null;
+  peerWorkspace: string | null;
+  tables?: string[];
+  resolvedWorkspace: KnowledgePeerSyncResult['resolved_workspace'] | null;
+  openConflicts: number;
+}): KnowledgeSyncRecommendedCommand[] {
+  const scopeArgs = ['--scope', input.scope, '--json'];
+  const tableArgs = input.tables?.length ? ['--tables', input.tables.join(',')] : [];
+  const commands: KnowledgeSyncRecommendedCommand[] = [
+    syncCommand({
+      id: 'sync_status',
+      reason: 'Inspect local sync registry, clocks, snapshots, and conflicts.',
+      args: ['sync', 'status', ...scopeArgs],
+    }),
+  ];
+  if (input.machine && !serviceMachineIsLocal(input.machine)) {
+    commands.push(syncCommand({
+      id: 'sync_dry_run_remote',
+      reason: 'Preview remote machine sync before changing either workspace.',
+      args: [
+        'sync',
+        'dry-run',
+        '--machine',
+        input.machine,
+        ...(input.peerWorkspace ? ['--peer-workspace', input.peerWorkspace] : []),
+        ...tableArgs,
+        ...scopeArgs,
+      ],
+    }));
+  } else if (input.peerWorkspace) {
+    commands.push(syncCommand({
+      id: 'sync_dry_run_peer',
+      reason: 'Preview local peer sync before changing either workspace.',
+      args: ['sync', 'dry-run', '--peer-workspace', input.peerWorkspace, ...tableArgs, ...scopeArgs],
+    }));
+  }
+  for (const hint of input.resolvedWorkspace?.repair_hints ?? []) {
+    commands.push({
+      id: hint.id,
+      reason: hint.reason,
+      command: hint.command,
+      shell_command: hint.shell_command,
+    });
+  }
+  if (input.openConflicts > 0) {
+    commands.push(syncCommand({
+      id: 'sync_conflicts',
+      reason: 'Review open conflicts before relying on bidirectional sync.',
+      args: ['sync', 'conflicts', ...scopeArgs],
+    }));
+  }
+  return commands;
 }
 
 function runSshCommand(machine: string, command: string, input: string | undefined, resolved: KnowledgeMachineRouteResolution): string {
@@ -680,6 +889,89 @@ export class KnowledgeService {
     });
   }
 
+  async syncDoctor(options: KnowledgeSyncDoctorOptions = {}): Promise<KnowledgeSyncDoctorResult> {
+    const workspace = this.ensureWorkspace();
+    migrateKnowledgeDb(workspace.knowledgeDbPath);
+    const status = this.syncStatus();
+    const storage = this.storageContract();
+    const validation = this.validateStorage();
+    const machine = options.machine?.trim() || null;
+    const peerWorkspace = options.peerWorkspace?.trim() || null;
+    const warnings: string[] = [];
+    let resolvedRoute: KnowledgeSyncDoctorResult['resolved_route'] = null;
+    let resolvedWorkspace: KnowledgeSyncDoctorResult['resolved_workspace'] = null;
+
+    if (machine && !serviceMachineIsLocal(machine)) {
+      const route = await resolveKnowledgeMachineRoute({
+        machineId: machine,
+        includeTailscale: options.includeTailscale,
+      });
+      resolvedRoute = routeSummary(route);
+      warnings.push(...route.warnings);
+    }
+
+    if (machine || peerWorkspace) {
+      const workspaceResolution = await resolveKnowledgeMachineWorkspace({
+        machineId: machine ?? workspaceMachineId(workspace),
+        peerWorkspace,
+        includeTailscale: options.includeTailscale,
+      });
+      resolvedWorkspace = workspaceResolution.ok && workspaceResolution.project_root
+        ? workspaceSummary(workspaceResolution, workspaceResolution.project_root)
+        : {
+            ...workspaceSummary(workspaceResolution, peerWorkspace ?? ''),
+            project_root: workspaceResolution.project_root ?? peerWorkspace ?? '',
+          };
+      warnings.push(...workspaceResolution.warnings);
+    }
+
+    if (!validation.ok) warnings.push(...validation.errors.map((error) => `storage:${error}`));
+    const openFiles = openFilesBoundaryStatus(workspace.knowledgeDbPath, resolvedWorkspace);
+    if (!openFiles.ok) warnings.push('open_files_boundary_raw_payload_sentinels');
+    const diagnosticFailures = resolvedWorkspace?.diagnostics.filter((entry) => entry.severity === 'fail') ?? [];
+    const ok = validation.ok && openFiles.ok && diagnosticFailures.length === 0 && (resolvedWorkspace?.project_root !== '' || !resolvedWorkspace);
+    const recommendedCommands = doctorRecommendations({
+      scope: this.scope,
+      machine,
+      peerWorkspace,
+      tables: options.tables,
+      resolvedWorkspace,
+      openConflicts: status.conflicts.open,
+    });
+
+    return {
+      ok,
+      read_only: true,
+      generated_at: new Date().toISOString(),
+      scope: this.scope,
+      workspace_home: workspace.home,
+      database: {
+        sqlite_schema_version: status.sqlite_schema_version,
+        table_counts: status.table_counts,
+      },
+      storage: {
+        contract: storage,
+        validation,
+      },
+      sync: {
+        machines: status.machines.total,
+        snapshots: status.snapshots.total,
+        clocks: status.clocks.total,
+        imports: status.imports.total,
+        open_conflicts: status.conflicts.open,
+        table_clocks: status.clocks.rows,
+      },
+      open_files: openFiles,
+      resolved_route: resolvedRoute,
+      resolved_workspace: resolvedWorkspace,
+      recommended_commands: recommendedCommands,
+      warnings: [...new Set(warnings)],
+      message: ok
+        ? `Sync readiness ok: ${status.clocks.total} table clock(s), ${status.conflicts.open} open conflict(s)`
+        : `Sync readiness needs attention: ${[...new Set(warnings)].join(', ') || 'workspace diagnostics failed'}`,
+    };
+  }
+
   async createSyncSnapshot(options: KnowledgeSyncSnapshotOptions = {}): Promise<KnowledgeSyncSnapshotResult> {
     const workspace = this.ensureWorkspace();
     const topology = await this.machineTopology({
@@ -824,31 +1116,8 @@ export class KnowledgeService {
       transport: 'ssh',
       machine: options.machine,
       resolved_machine: resolvedMachine.target,
-      resolved_route: {
-        source: resolvedMachine.source,
-        adapter: resolvedMachine.adapter,
-        target: resolvedMachine.target,
-        route: resolvedMachine.route,
-        target_kind: resolvedMachine.targetKind,
-        confidence: resolvedMachine.confidence,
-        evidence: resolvedMachine.evidence,
-      },
-      resolved_workspace: {
-        source: resolvedWorkspace.source,
-        adapter: resolvedWorkspace.adapter,
-        project_root: resolvedWorkspace.project_root,
-        project_root_source: resolvedWorkspace.project_root_source,
-        workspace_root: resolvedWorkspace.workspace_root,
-        workspace_root_source: resolvedWorkspace.workspace_root_source,
-        open_files_root: resolvedWorkspace.open_files_root,
-        open_files_root_source: resolvedWorkspace.open_files_root_source,
-        trust_status: resolvedWorkspace.trust_status,
-        auth_status: resolvedWorkspace.auth_status,
-        current: resolvedWorkspace.current,
-        primary: resolvedWorkspace.primary,
-        evidence: resolvedWorkspace.evidence,
-        warnings: resolvedWorkspace.warnings,
-      },
+      resolved_route: routeSummary(resolvedMachine),
+      resolved_workspace: workspaceSummary(resolvedWorkspace, resolvedWorkspace.project_root),
       peer_workspace: peerWorkspace,
       message: '',
     };
@@ -890,6 +1159,7 @@ export class KnowledgeService {
 
     result.ok = (result.pull?.ok ?? true) && (result.push?.ok ?? true);
     result.message = [
+      workspaceReadinessMessage(result.resolved_workspace),
       result.pull ? `pull: ${result.pull.message}` : null,
       result.push ? `push: ${result.push.message}` : null,
     ].filter(Boolean).join('; ');
@@ -940,22 +1210,7 @@ export class KnowledgeService {
       ok: true,
       dry_run: options.dryRun === true,
       direction,
-      resolved_workspace: {
-        source: resolvedWorkspace.source,
-        adapter: resolvedWorkspace.adapter,
-        project_root: resolvedWorkspace.project_root ?? peerWorkspaceInput,
-        project_root_source: resolvedWorkspace.project_root_source,
-        workspace_root: resolvedWorkspace.workspace_root,
-        workspace_root_source: resolvedWorkspace.workspace_root_source,
-        open_files_root: resolvedWorkspace.open_files_root,
-        open_files_root_source: resolvedWorkspace.open_files_root_source,
-        trust_status: resolvedWorkspace.trust_status,
-        auth_status: resolvedWorkspace.auth_status,
-        current: resolvedWorkspace.current,
-        primary: resolvedWorkspace.primary,
-        evidence: resolvedWorkspace.evidence,
-        warnings: resolvedWorkspace.warnings,
-      },
+      resolved_workspace: workspaceSummary(resolvedWorkspace, resolvedWorkspace.project_root ?? peerWorkspaceInput),
       message: '',
     };
 
@@ -991,6 +1246,7 @@ export class KnowledgeService {
 
     result.ok = (result.pull?.ok ?? true) && (result.push?.ok ?? true);
     result.message = [
+      workspaceReadinessMessage(result.resolved_workspace),
       result.pull ? `pull: ${result.pull.message}` : null,
       result.push ? `push: ${result.push.message}` : null,
     ].filter(Boolean).join('; ');

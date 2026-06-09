@@ -268,6 +268,8 @@ export interface KnowledgePeerSyncResult {
         auth_status: KnowledgeMachineWorkspaceResolution['auth_status'];
         current: boolean;
         primary: boolean;
+        diagnostics: KnowledgeMachineWorkspaceResolution['diagnostics'];
+        repair_hints: KnowledgeMachineWorkspaceResolution['repair_hints'];
         evidence: KnowledgeMachineWorkspaceResolution['evidence'];
         warnings: string[];
     };

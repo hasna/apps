@@ -100,6 +100,34 @@ export type KnowledgeMachineWorkspaceSource = 'open-machines' | 'argument' | 'ra
 export type KnowledgeMachineWorkspacePathSource = 'argument' | 'manifest' | 'manifest_metadata' | 'inferred' | 'unresolved' | string;
 export type KnowledgeMachineTrustStatus = 'trusted' | 'untrusted' | 'unknown' | string;
 export type KnowledgeMachineAuthStatus = 'authenticated' | 'unauthenticated' | 'unknown' | string;
+export type KnowledgeMachineWorkspaceDiagnosticStatus =
+  | 'ok'
+  | 'missing'
+  | 'inferred'
+  | 'stale'
+  | 'untrusted'
+  | 'unknown_auth'
+  | 'missing_manifest'
+  | string;
+
+export interface KnowledgeMachineWorkspaceDiagnostic {
+  id: string;
+  status: KnowledgeMachineWorkspaceDiagnosticStatus;
+  severity: 'ok' | 'warn' | 'fail' | string;
+  message: string;
+  path: string | null;
+  source: KnowledgeMachineWorkspacePathSource | 'trust' | 'auth' | string;
+  path_exists: boolean | null;
+}
+
+export interface KnowledgeMachineWorkspaceRepairHint {
+  id: string;
+  reason: string;
+  command: string[];
+  shell_command: string;
+  apply_command: string[];
+  apply_shell_command: string;
+}
 
 export interface KnowledgeMachineWorkspaceOptions {
   adapterMode?: KnowledgeMachinesAdapterMode;
@@ -132,6 +160,8 @@ export interface KnowledgeMachineWorkspaceResolution {
   auth_status: KnowledgeMachineAuthStatus;
   current: boolean;
   primary: boolean;
+  diagnostics: KnowledgeMachineWorkspaceDiagnostic[];
+  repair_hints: KnowledgeMachineWorkspaceRepairHint[];
   evidence: Record<string, unknown> | null;
   warnings: string[];
 }
@@ -935,6 +965,96 @@ function pathRecord(value: unknown): { path: string | null; source: KnowledgeMac
   };
 }
 
+function normalizeWorkspaceDiagnostics(value: unknown): KnowledgeMachineWorkspaceDiagnostic[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    const raw = asRecord(entry);
+    const id = asString(raw.id);
+    const status = asString(raw.status);
+    const severity = asString(raw.severity);
+    const message = asString(raw.message);
+    if (!id || !status || !severity || !message) return [];
+    return [{
+      id,
+      status,
+      severity,
+      message,
+      path: asString(raw.path),
+      source: asString(raw.source) ?? 'unknown',
+      path_exists: asBooleanOrNull(raw.path_exists),
+    }];
+  });
+}
+
+function normalizeWorkspaceRepairHints(value: unknown): KnowledgeMachineWorkspaceRepairHint[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    const raw = asRecord(entry);
+    const id = asString(raw.id);
+    const reason = asString(raw.reason);
+    const command = asStringArray(raw.command);
+    const shellCommand = asString(raw.shell_command);
+    const applyCommand = asStringArray(raw.apply_command);
+    const applyShellCommand = asString(raw.apply_shell_command);
+    if (!id || !reason || !command.length || !shellCommand || !applyCommand.length || !applyShellCommand) return [];
+    return [{
+      id,
+      reason,
+      command,
+      shell_command: shellCommand,
+      apply_command: applyCommand,
+      apply_shell_command: applyShellCommand,
+    }];
+  });
+}
+
+function fallbackWorkspaceRepairHints(input: {
+  requestedMachineId: string;
+  projectId: string;
+  repoName: string;
+  openFilesRepoName?: string | null;
+  warnings: string[];
+  projectRootSource: KnowledgeMachineWorkspacePathSource;
+  openFilesRootSource: KnowledgeMachineWorkspacePathSource;
+  trustStatus: KnowledgeMachineTrustStatus;
+  authStatus: KnowledgeMachineAuthStatus;
+}): KnowledgeMachineWorkspaceRepairHint[] {
+  const needsRepair = input.projectRootSource === 'inferred'
+    || input.openFilesRootSource === 'inferred'
+    || input.trustStatus === 'untrusted'
+    || input.authStatus === 'unknown'
+    || input.warnings.some((warning) => (
+      warning.includes('inferred')
+      || warning.includes('untrusted')
+      || warning.includes('unknown_auth')
+      || warning.includes('missing')
+    ));
+  if (!needsRepair) return [];
+  const command = [
+    'machines',
+    'workspace',
+    'repair',
+    '--machine',
+    input.requestedMachineId,
+    '--project',
+    input.projectId,
+    '--repo',
+    input.repoName,
+    '--open-files-repo',
+    input.openFilesRepoName ?? 'open-files',
+    '--json',
+  ];
+  const applyCommand = [...command, '--apply'];
+  return [{
+    id: 'machines_workspace_repair',
+    reason: 'Workspace paths or trust metadata need confirmation before remote knowledge sync.',
+    command,
+    shell_command: command.map(shellQuote).join(' '),
+    apply_command: applyCommand,
+    apply_shell_command: applyCommand.map(shellQuote).join(' '),
+  }];
+}
+
 function normalizeOpenMachinesWorkspace(value: unknown, options: KnowledgeMachineWorkspaceOptions, adapter: KnowledgeMachinesAdapterStatus): KnowledgeMachineWorkspaceResolution | null {
   const raw = asRecord(value);
   const paths = asRecord(raw.paths);
@@ -947,26 +1067,46 @@ function normalizeOpenMachinesWorkspace(value: unknown, options: KnowledgeMachin
   const evidence = typeof raw.evidence === 'object' && raw.evidence !== null
     ? raw.evidence as Record<string, unknown>
     : null;
+  const requestedMachineId = asString(raw.requested_machine_id) ?? options.machineId;
+  const projectId = asString(project.project_id) ?? options.projectId ?? 'open-knowledge';
+  const repoName = asString(project.repo_name) ?? options.repoName ?? options.projectId ?? 'open-knowledge';
+  const trustStatus = asString(machine.trust_status) ?? 'unknown';
+  const authStatus = asString(machine.auth_status) ?? 'unknown';
+  const warnings = asStringArray(raw.warnings);
+  const diagnostics = normalizeWorkspaceDiagnostics(raw.diagnostics);
+  const repairHints = normalizeWorkspaceRepairHints(raw.repair_hints);
   return {
     ok: true,
     source: 'open-machines',
     adapter,
-    requested_machine_id: asString(raw.requested_machine_id) ?? options.machineId,
+    requested_machine_id: requestedMachineId,
     machine_id: asString(raw.machine_id),
-    project_id: asString(project.project_id) ?? options.projectId ?? 'open-knowledge',
-    repo_name: asString(project.repo_name) ?? options.repoName ?? options.projectId ?? 'open-knowledge',
+    project_id: projectId,
+    repo_name: repoName,
     project_root: projectRoot.path,
     project_root_source: projectRoot.source,
     workspace_root: workspaceRoot.path,
     workspace_root_source: workspaceRoot.source,
     open_files_root: openFilesRoot.path,
     open_files_root_source: openFilesRoot.source,
-    trust_status: asString(machine.trust_status) ?? 'unknown',
-    auth_status: asString(machine.auth_status) ?? 'unknown',
+    trust_status: trustStatus,
+    auth_status: authStatus,
     current: machine.current === true,
     primary: machine.primary === true,
+    diagnostics,
+    repair_hints: repairHints.length ? repairHints : fallbackWorkspaceRepairHints({
+      requestedMachineId,
+      projectId,
+      repoName,
+      openFilesRepoName: options.openFilesRepoName,
+      warnings,
+      projectRootSource: projectRoot.source,
+      openFilesRootSource: openFilesRoot.source,
+      trustStatus,
+      authStatus,
+    }),
     evidence,
-    warnings: asStringArray(raw.warnings),
+    warnings,
   };
 }
 
@@ -1146,6 +1286,8 @@ function argumentMachineWorkspace(options: KnowledgeMachineWorkspaceOptions): Kn
     auth_status: 'unknown',
     current: false,
     primary: false,
+    diagnostics: [],
+    repair_hints: [],
     evidence: null,
     warnings: [],
   };
@@ -1170,6 +1312,8 @@ function unresolvedMachineWorkspace(options: KnowledgeMachineWorkspaceOptions, w
     auth_status: 'unknown',
     current: false,
     primary: false,
+    diagnostics: [],
+    repair_hints: [],
     evidence: null,
     warnings,
   };

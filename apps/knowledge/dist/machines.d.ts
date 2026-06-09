@@ -83,6 +83,24 @@ export type KnowledgeMachineWorkspaceSource = 'open-machines' | 'argument' | 'ra
 export type KnowledgeMachineWorkspacePathSource = 'argument' | 'manifest' | 'manifest_metadata' | 'inferred' | 'unresolved' | string;
 export type KnowledgeMachineTrustStatus = 'trusted' | 'untrusted' | 'unknown' | string;
 export type KnowledgeMachineAuthStatus = 'authenticated' | 'unauthenticated' | 'unknown' | string;
+export type KnowledgeMachineWorkspaceDiagnosticStatus = 'ok' | 'missing' | 'inferred' | 'stale' | 'untrusted' | 'unknown_auth' | 'missing_manifest' | string;
+export interface KnowledgeMachineWorkspaceDiagnostic {
+    id: string;
+    status: KnowledgeMachineWorkspaceDiagnosticStatus;
+    severity: 'ok' | 'warn' | 'fail' | string;
+    message: string;
+    path: string | null;
+    source: KnowledgeMachineWorkspacePathSource | 'trust' | 'auth' | string;
+    path_exists: boolean | null;
+}
+export interface KnowledgeMachineWorkspaceRepairHint {
+    id: string;
+    reason: string;
+    command: string[];
+    shell_command: string;
+    apply_command: string[];
+    apply_shell_command: string;
+}
 export interface KnowledgeMachineWorkspaceOptions {
     adapterMode?: KnowledgeMachinesAdapterMode;
     machineId: string;
@@ -113,6 +131,8 @@ export interface KnowledgeMachineWorkspaceResolution {
     auth_status: KnowledgeMachineAuthStatus;
     current: boolean;
     primary: boolean;
+    diagnostics: KnowledgeMachineWorkspaceDiagnostic[];
+    repair_hints: KnowledgeMachineWorkspaceRepairHint[];
     evidence: Record<string, unknown> | null;
     warnings: string[];
 }

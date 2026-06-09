@@ -802,6 +802,29 @@ export function buildServer() {
     }
   });
 
+  registerTool(server, 'knowledge_sync_doctor', 'Knowledge sync doctor', 'Read-only readiness report for machine sync, storage, open-files source refs, route/workspace resolution, and next commands', {
+    scope: scopeField,
+    machine: z.string().optional().describe('Optional remote machine id or SSH alias'),
+    peer_workspace: z.string().optional().describe('Optional peer repo root or .hasna/apps/knowledge path'),
+    tables: z.array(z.string()).optional().describe('Optional knowledge.db tables to include in recommended dry-run commands'),
+    include_tailscale: z.boolean().optional().describe('Allow Tailscale route discovery when using a remote machine'),
+  }, async ({ scope, machine, peer_workspace, tables, include_tailscale }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText({
+        package: { name: pkg.name, version: pkg.version },
+        ...await service.syncDoctor({
+          machine,
+          peerWorkspace: peer_workspace,
+          tables,
+          includeTailscale: include_tailscale !== false,
+        }),
+      });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
   registerTool(server, 'knowledge_sync_snapshot', 'Record knowledge sync snapshot', 'Record a local sync snapshot and refresh machine registry rows from optional machine topology', {
     scope: scopeField,
     include_tailscale: z.boolean().optional().describe('Include local Tailscale status probing when available'),

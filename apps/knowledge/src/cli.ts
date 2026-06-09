@@ -238,7 +238,8 @@ Commands:
   remote contracts|status      Inspect hosted client contracts/readiness
   storage status|validate      Inspect local/S3 artifact storage contract
   machines topology|preflight  Inspect optional machine topology/sync readiness
-  sync status|snapshot|conflicts Inspect machine sync status, snapshots, conflicts
+  sync status|doctor|snapshot|conflicts
+                               Inspect machine sync readiness, snapshots, conflicts
   db init|stats|storage        Initialize, inspect, or sync local knowledge.db
   wiki init|compile|file-answer|lint
                                Initialize, compile, file, or lint wiki artifacts
@@ -345,7 +346,7 @@ function printCommandHelp(command: string): void {
   if (command === 'remote') { console.log('Usage: knowledge remote contracts|status [--scope local|global|project] [--json]'); return; }
   if (command === 'storage') { console.log('Usage: knowledge storage status|validate [--scope local|global|project] [--json]'); return; }
   if (command === 'machines') { console.log('Usage: knowledge machines topology [--no-tailscale] | preflight [machine] [--workspace <repo>] [--scope local|global|project] [--json]'); return; }
-  if (command === 'sync') { console.log('Usage: knowledge sync status|snapshot|machines|conflicts [show|propose|resolve] [id] | dry-run|pull|push|sync|export|import [--peer-workspace <path>] [--machine <ssh-alias>] [--tables <names>] [--dry-run] [--limit <n>] [--approve-write] [--approved-by <name>] [--strategy <name>] [--no-tailscale] [--scope local|global|project] [--json]\n\nRemote machine sync resolves peer paths through @hasna/machines when --peer-workspace is omitted.'); return; }
+  if (command === 'sync') { console.log('Usage: knowledge sync status|doctor|readiness|snapshot|machines|conflicts [show|propose|resolve] [id] | dry-run|pull|push|sync|export|import [--peer-workspace <path>] [--machine <ssh-alias>] [--tables <names>] [--dry-run] [--limit <n>] [--approve-write] [--approved-by <name>] [--strategy <name>] [--no-tailscale] [--scope local|global|project] [--json]\n\nRemote machine sync resolves peer paths through @hasna/machines when --peer-workspace is omitted.'); return; }
   if (command === 'db') { console.log('Usage: knowledge db init|stats|storage status|push|pull|sync [--tables sources,chunks] [--scope local|global|project] [--json]'); return; }
   if (command === 'wiki') { console.log('Usage: knowledge wiki init|compile|file-answer|lint [query|prompt] [--title <title>] [--content <answer>] [--approve-write] [--limit <n>] [--scope local|global|project] [--json]'); return; }
   if (command === 'source') { console.log('Usage: knowledge source resolve <source-ref> [--purpose knowledge_answer|knowledge_index] [--limit <n>] [--scope local|global|project] [--json]'); return; }
@@ -602,6 +603,20 @@ async function run(argv: string[]): Promise<void> {
       output(status, flags.json);
       return;
     }
+    if (action === 'doctor' || action === 'readiness' || action === 'preflight') {
+      const doctor = await service.syncDoctor({
+        machine: flags.machine ?? null,
+        peerWorkspace: flags.peerWorkspace ?? null,
+        includeTailscale: flags.tailscale !== false,
+        tables,
+      });
+      output({
+        package: { name: pkg.name, version: pkg.version },
+        ...doctor,
+      }, flags.json);
+      if (!doctor.ok && !flags.json) process.exitCode = 1;
+      return;
+    }
     if (action === 'snapshot' || action === 'record') {
       const snapshot = await service.createSyncSnapshot({
         includeTailscale: flags.tailscale !== false,
@@ -709,7 +724,7 @@ async function run(argv: string[]): Promise<void> {
       if (!result.ok && !flags.json) process.exitCode = 1;
       return;
     }
-    throw new Error("Invalid sync action. Use 'status', 'snapshot', 'conflicts', 'machines', 'dry-run', 'pull', 'push', 'sync', 'export', or 'import'.");
+    throw new Error("Invalid sync action. Use 'status', 'doctor', 'snapshot', 'conflicts', 'machines', 'dry-run', 'pull', 'push', 'sync', 'export', or 'import'.");
   }
 
   if (command === 'db') {

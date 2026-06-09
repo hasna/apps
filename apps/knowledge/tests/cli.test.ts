@@ -87,8 +87,25 @@ function writeFakeSshBin(dir: string): string {
   return bin;
 }
 
-function writeFakeMachinesRouteBin(bin: string, target: string, projectRoot = '/remote/open-knowledge'): void {
+function writeFakeMachinesRouteBin(bin: string, target: string, projectRoot = '/remote/open-knowledge', includeRepairHint = false): void {
   const machines = join(bin, 'machines');
+  const workspaceDiagnostics = [{
+    id: 'project_root',
+    status: includeRepairHint ? 'inferred' : 'ok',
+    severity: includeRepairHint ? 'warn' : 'ok',
+    message: includeRepairHint ? 'project root inferred from workspace path' : 'project root mapped',
+    path: projectRoot,
+    source: 'manifest_metadata',
+    path_exists: null,
+  }];
+  const workspaceRepairHints = includeRepairHint ? [{
+    id: 'machines_workspace_repair',
+    reason: 'Confirm workspace path mapping before sync.',
+    command: ['machines', 'workspace', 'repair', '--machine', 'spark01', '--project', 'open-knowledge', '--repo', 'open-knowledge', '--open-files-repo', 'open-files', '--json'],
+    shell_command: "machines workspace repair --machine spark01 --project open-knowledge --repo open-knowledge --open-files-repo open-files --json",
+    apply_command: ['machines', 'workspace', 'repair', '--machine', 'spark01', '--project', 'open-knowledge', '--repo', 'open-knowledge', '--open-files-repo', 'open-files', '--json', '--apply'],
+    apply_shell_command: "machines workspace repair --machine spark01 --project open-knowledge --repo open-knowledge --open-files-repo open-files --json --apply",
+  }] : [];
   writeFileSync(machines, [
     '#!/bin/sh',
     'if [ "$1" = "route" ]; then',
@@ -127,8 +144,10 @@ function writeFakeMachinesRouteBin(bin: string, target: string, projectRoot = '/
         project_root: { path: projectRoot, source: 'manifest_metadata' },
         open_files_root: { path: '/remote/open-files', source: 'manifest_metadata' },
       },
+      diagnostics: workspaceDiagnostics,
+      repair_hints: workspaceRepairHints,
       evidence: { topology: true, matched_by: 'machine_id', metadata_keys: [] },
-      warnings: [],
+      warnings: includeRepairHint ? ['project_root_inferred:open-knowledge'] : [],
     })}'`,
     '  exit 0',
     'fi',
@@ -334,6 +353,39 @@ describe('knowledge cli', () => {
     expect(out.checks.some((check: any) => check.id === 'workspace:open-knowledge:path' && check.status === 'ok')).toBe(true);
     const workspacePackageName = out.checks.find((check: any) => check.id === 'workspace:open-knowledge:package-name');
     if (workspacePackageName) expect(workspacePackageName.status).toBe('ok');
+  });
+
+  test('sync doctor exposes machine workspace diagnostics and repair hints', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-sync-doctor-'));
+    const bin = join(dir, 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFakeMachinesRouteBin(bin, 'doctor-spark01.tailnet.test', '/remote/open-knowledge', true);
+
+    const result = runCli(['sync', 'doctor', '--machine', 'spark01', '--scope', 'project', '--json'], dir, {
+      PATH: `${bin}:${process.env.PATH ?? ''}`,
+    });
+
+    expect(result.exitCode).toBe(0);
+    const out = JSON.parse(new TextDecoder().decode(result.stdout));
+    expect(out.package.name).toBe('@hasna/knowledge');
+    expect(out.read_only).toBe(true);
+    expect(out.resolved_route).toMatchObject({
+      target: 'doctor-spark01.tailnet.test',
+      route: 'tailscale',
+      confidence: 'high',
+    });
+    expect(out.resolved_workspace).toMatchObject({
+      project_root: '/remote/open-knowledge',
+      open_files_root: '/remote/open-files',
+      diagnostics: [{
+        id: 'project_root',
+        status: 'inferred',
+        severity: 'warn',
+      }],
+    });
+    expect(out.resolved_workspace.repair_hints[0].shell_command).toContain('machines workspace repair');
+    expect(out.recommended_commands.some((command: any) => command.id === 'machines_workspace_repair')).toBe(true);
+    expect(out.open_files.raw_source_bytes_owned_by).toBe('open-files');
   });
 
   test('global store migrates legacy .open-knowledge data into the Hasna app path', () => {

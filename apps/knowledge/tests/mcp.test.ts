@@ -84,6 +84,16 @@ function writeFakeMachinesRouteBin(bin: string, target: string, projectRoot = '/
         project_root: { path: projectRoot, source: 'manifest_metadata' },
         open_files_root: { path: '/remote/open-files', source: 'manifest_metadata' },
       },
+      diagnostics: [{
+        id: 'project_root',
+        status: 'ok',
+        severity: 'ok',
+        message: 'project root mapped',
+        path: projectRoot,
+        source: 'manifest_metadata',
+        path_exists: null,
+      }],
+      repair_hints: [],
       evidence: { topology: true, matched_by: 'machine_id', metadata_keys: [] },
       warnings: [],
     })}'`,
@@ -302,6 +312,21 @@ describe('knowledge MCP', () => {
       expect(syncStatus.ok).toBe(true);
       expect(syncStatus.snapshots.total).toBe(0);
 
+      const syncDoctor = parseToolJson(await client.callTool({
+        name: 'knowledge_sync_doctor',
+        arguments: {
+          scope: 'project',
+          machine: 'spark01',
+        },
+      }));
+      expect(syncDoctor.ok).toBe(true);
+      expect(syncDoctor.package.name).toBe('@hasna/knowledge');
+      expect(syncDoctor.resolved_route.target).toBe('mcp-spark01.tailnet.test');
+      expect(syncDoctor.resolved_workspace.diagnostics[0]).toMatchObject({
+        id: 'project_root',
+        status: 'ok',
+      });
+
       const syncSnapshot = parseToolJson(await client.callTool({
         name: 'knowledge_sync_snapshot',
         arguments: { scope: 'project', include_tailscale: false },
@@ -406,6 +431,10 @@ describe('knowledge MCP', () => {
         project_root: '/remote/open-knowledge',
         project_root_source: 'manifest_metadata',
         open_files_root: '/remote/open-files',
+        diagnostics: [{
+          id: 'project_root',
+          status: 'ok',
+        }],
       });
       expect(readFileSync(targetPath, 'utf8')).toBe('mcp-spark01.tailnet.test');
 

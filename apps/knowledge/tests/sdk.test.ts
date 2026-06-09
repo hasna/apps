@@ -70,6 +70,16 @@ function writeFakeMachinesRouteBin(bin: string, target: string, projectRoot = '/
         project_root: { path: projectRoot, source: 'manifest_metadata' },
         open_files_root: { path: '/remote/open-files', source: 'manifest_metadata' },
       },
+      diagnostics: [{
+        id: 'project_root',
+        status: 'ok',
+        severity: 'ok',
+        message: 'project root mapped',
+        path: projectRoot,
+        source: 'manifest_metadata',
+        path_exists: null,
+      }],
+      repair_hints: [],
       evidence: { topology: true, matched_by: 'machine_id', metadata_keys: [] },
       warnings: [],
     })}'`,
@@ -205,6 +215,13 @@ describe('public knowledge sdk', () => {
       process.env.KNOWLEDGE_FAKE_SSH_IMPORT_JSON = JSON.stringify(emptyImportResult());
       process.env.KNOWLEDGE_FAKE_SSH_TARGET_PATH = targetPath;
       const client = createKnowledgeClient({ scope: 'project', cwd: dir });
+      const doctor = await client.sync.doctor({ machine: 'spark01' });
+      expect(doctor.ok).toBe(true);
+      expect(doctor.resolved_workspace?.diagnostics[0]).toMatchObject({
+        id: 'project_root',
+        status: 'ok',
+      });
+
       const result = await client.sync.remotePeer({
         machine: 'spark01',
         direction: 'both',
@@ -236,6 +253,10 @@ describe('public knowledge sdk', () => {
         project_root_source: 'manifest_metadata',
         open_files_root: '/remote/open-files',
         trust_status: 'trusted',
+        diagnostics: [{
+          id: 'project_root',
+          status: 'ok',
+        }],
       });
       expect(readFileSync(targetPath, 'utf8')).toBe('sdk-spark01.tailnet.test');
     } finally {

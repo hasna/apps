@@ -12,6 +12,7 @@ export type KnowledgeSearchOptions = Parameters<KnowledgeService['search']>[0];
 export type KnowledgeContextOptions = Parameters<KnowledgeService['retrieveContext']>[0];
 export type KnowledgeWebSearchOptions = Parameters<KnowledgeService['webSearch']>[0];
 export type KnowledgeSyncSnapshotOptions = Parameters<KnowledgeService['createSyncSnapshot']>[0];
+export type KnowledgeSyncDoctorOptions = Parameters<KnowledgeService['syncDoctor']>[0];
 export type KnowledgeSyncBundleOptions = Parameters<KnowledgeService['exportSyncBundle']>[0];
 export type KnowledgeSyncImportOptions = Parameters<KnowledgeService['importSyncBundle']>[0];
 export type KnowledgePeerSyncOptions = Parameters<KnowledgeService['syncPeer']>[0];
@@ -44,6 +45,7 @@ export interface KnowledgeClient {
   };
   readonly sync: {
     readonly status: () => ReturnType<KnowledgeService['syncStatus']>;
+    readonly doctor: (options?: KnowledgeSyncDoctorOptions) => ReturnType<KnowledgeService['syncDoctor']>;
     readonly snapshot: (options?: KnowledgeSyncSnapshotOptions) => ReturnType<KnowledgeService['createSyncSnapshot']>;
     readonly conflicts: (options?: Parameters<KnowledgeService['syncConflicts']>[0]) => ReturnType<KnowledgeService['syncConflicts']>;
     readonly conflict: (id: string) => ReturnType<KnowledgeService['syncConflict']>;
@@ -124,6 +126,7 @@ export function createKnowledgeClient(options: KnowledgeClientOptions = {}): Kno
     },
     sync: {
       status: () => service.syncStatus(),
+      doctor: (input = {}) => service.syncDoctor(input),
       snapshot: (input = {}) => service.createSyncSnapshot(input),
       conflicts: (input = {}) => service.syncConflicts(input),
       conflict: (id) => service.syncConflict(id),

@@ -8,7 +8,7 @@ import { RemoteKnowledgeClient, type RemoteKnowledgeRegistryContract } from './r
 import { type RetrievalOptions } from './retrieval';
 import { type HybridSearchOptions } from './search';
 import { type WebSearchOptions } from './web-search';
-import { type KnowledgeSyncConflict, type KnowledgeSyncConflictResolutionProposal, type KnowledgePeerSyncResult, type KnowledgeSyncApplyResult, type KnowledgeSyncBundle, type KnowledgeSyncSnapshotResult } from './sync';
+import { type KnowledgeSyncConflict, type KnowledgeSyncConflictResolutionProposal, type KnowledgePeerSyncResult, type KnowledgeSyncApplyResult, type KnowledgeSyncBundle, type KnowledgeSyncSnapshotResult, type KnowledgeSyncStatus } from './sync';
 import { type WikiCompileOptions } from './wiki-compiler';
 import { type StorageContract, type StorageValidationResult } from './storage-contract';
 import { type KnowledgeConfig, type KnowledgeWorkspace } from './workspace';
@@ -85,23 +85,63 @@ export interface KnowledgeRemotePeerSyncResult extends KnowledgePeerSyncResult {
         confidence: KnowledgeMachineRouteResolution['confidence'];
         evidence: KnowledgeMachineRouteResolution['evidence'];
     };
-    resolved_workspace: {
-        source: KnowledgeMachineWorkspaceResolution['source'];
-        adapter: KnowledgeMachineWorkspaceResolution['adapter'];
-        project_root: string;
-        project_root_source: KnowledgeMachineWorkspaceResolution['project_root_source'];
-        workspace_root: string | null;
-        workspace_root_source: KnowledgeMachineWorkspaceResolution['workspace_root_source'];
-        open_files_root: string | null;
-        open_files_root_source: KnowledgeMachineWorkspaceResolution['open_files_root_source'];
-        trust_status: KnowledgeMachineWorkspaceResolution['trust_status'];
-        auth_status: KnowledgeMachineWorkspaceResolution['auth_status'];
-        current: boolean;
-        primary: boolean;
-        evidence: KnowledgeMachineWorkspaceResolution['evidence'];
-        warnings: string[];
-    };
+    resolved_workspace: NonNullable<KnowledgePeerSyncResult['resolved_workspace']>;
     peer_workspace: string;
+}
+export interface KnowledgeSyncDoctorOptions {
+    machine?: string | null;
+    peerWorkspace?: string | null;
+    includeTailscale?: boolean;
+    tables?: string[];
+}
+export interface KnowledgeSyncRecommendedCommand {
+    id: string;
+    reason: string;
+    command: string[];
+    shell_command: string;
+}
+export interface KnowledgeOpenFilesBoundaryStatus {
+    ok: boolean;
+    source_of_truth: 'open-files';
+    configured_root: string | null;
+    configured_root_source: KnowledgeMachineWorkspaceResolution['open_files_root_source'] | null;
+    source_refs: {
+        open_files: number;
+        metadata_mentions: number;
+    };
+    extracted_text_artifacts: number;
+    raw_source_bytes_owned_by: 'open-files';
+    raw_payload_sentinel_hits: number;
+    message: string;
+}
+export interface KnowledgeSyncDoctorResult {
+    ok: boolean;
+    read_only: true;
+    generated_at: string;
+    scope: string;
+    workspace_home: string;
+    database: {
+        sqlite_schema_version: number;
+        table_counts: Record<string, number>;
+    };
+    storage: {
+        contract: StorageContract;
+        validation: StorageValidationResult;
+    };
+    sync: {
+        machines: number;
+        snapshots: number;
+        clocks: number;
+        imports: number;
+        open_conflicts: number;
+        table_clocks: KnowledgeSyncStatus['clocks']['rows'];
+    };
+    open_files: KnowledgeOpenFilesBoundaryStatus;
+    resolved_route: KnowledgeRemotePeerSyncResult['resolved_route'] | null;
+    resolved_workspace: KnowledgePeerSyncResult['resolved_workspace'] | null;
+    recommended_commands: KnowledgeSyncRecommendedCommand[];
+    warnings: string[];
+    message: string;
 }
 export interface KnowledgeSyncConflictResolveOptions {
     id: string;
@@ -197,7 +237,8 @@ export declare class KnowledgeService {
     webSearch(options: Omit<WebSearchOptions, 'dbPath' | 'config' | 'safetyPolicy'>): Promise<import("./web-search").WebSearchResult>;
     machineTopology(options?: Omit<KnowledgeMachineTopologyOptions, 'knowledge'>): Promise<import("./machines").KnowledgeMachineTopology>;
     machinePreflight(options?: Omit<KnowledgeMachinePreflightOptions, 'knowledge'>): Promise<import("./machines").KnowledgeMachinePreflightReport>;
-    syncStatus(): import("./sync").KnowledgeSyncStatus;
+    syncStatus(): KnowledgeSyncStatus;
+    syncDoctor(options?: KnowledgeSyncDoctorOptions): Promise<KnowledgeSyncDoctorResult>;
     createSyncSnapshot(options?: KnowledgeSyncSnapshotOptions): Promise<KnowledgeSyncSnapshotResult>;
     syncConflicts(options?: {
         status?: string;

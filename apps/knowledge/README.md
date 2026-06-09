@@ -120,6 +120,7 @@ knowledge machines preflight spark01 --workspace /home/hasna/workspace/hasna/ope
 
 # Inspect and record knowledge-aware sync ledger state
 knowledge sync status --scope project --json
+knowledge sync doctor --machine spark01 --scope project --json
 knowledge sync snapshot --scope project --no-tailscale --json
 knowledge sync conflicts --scope project --json
 knowledge sync dry-run --peer-workspace /path/to/peer/repo --scope project --json
@@ -350,6 +351,7 @@ It builds isolated temp apps for project-local SDK resolution, global
 ### sync
 ```bash
 knowledge sync status [--scope project] [--json]
+knowledge sync doctor|readiness [--machine <ssh-alias>] [--peer-workspace <repo-or-knowledge-home>] [--tables sources,chunks] [--scope project] [--json]
 knowledge sync snapshot [--no-tailscale] [--machine <id>] [--scope project] [--json]
 knowledge sync machines [--scope project] [--json]
 knowledge sync conflicts [status] [--limit <n>] [--scope project] [--json]
@@ -367,6 +369,14 @@ change counts, conflict counts, and durable table counts. `sync snapshot`
 refreshes the machine registry from optional topology discovery and records a
 content hash over table counts and generated artifact hashes. Conflict rows are
 inspectable before any future merge/approval flow writes durable changes.
+
+`sync doctor` is the read-only preflight for machine sync. It reports the
+local SQLite schema and table counts, storage contract validation, table
+clocks, open conflicts, `open-files://` source-ref boundary status, optional
+route confidence, optional workspace path sources, and any open-machines
+workspace diagnostics or repair hints. When open-machines reports inferred or
+untrusted workspace metadata, the JSON includes actionable
+`machines workspace repair ...` commands before sync is attempted.
 
 `sync dry-run`, `pull`, `push`, and `sync` operate against another local repo
 root or `.hasna/apps/knowledge` path. They compare rows by table primary key,
@@ -623,6 +633,8 @@ The stable agent-facing MCP tools are:
   optional open-machines readiness before knowledge sync.
 - `knowledge_sync_status`: inspect machine registry rows, latest snapshot,
   changes, conflicts, and table counts.
+- `knowledge_sync_doctor`: read-only sync readiness report with storage,
+  open-files boundary, route/workspace diagnostics, and next commands.
 - `knowledge_sync_snapshot`: record a local sync snapshot and refresh machine
   registry rows from optional topology.
 - `knowledge_sync_conflicts`: list sync conflicts awaiting review or already

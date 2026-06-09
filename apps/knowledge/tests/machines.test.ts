@@ -376,6 +376,23 @@ describe('knowledge machine topology', () => {
             project_root: { path: '/home/hasna/workspace/hasna/opensource/open-knowledge', source: 'inferred' },
             open_files_root: { path: '/home/hasna/workspace/hasna/opensource/open-files', source: 'inferred' },
           },
+          diagnostics: [{
+            id: 'project_root',
+            status: 'inferred',
+            severity: 'warn',
+            message: 'project root inferred from workspace path',
+            path: '/home/hasna/workspace/hasna/opensource/open-knowledge',
+            source: 'inferred',
+            path_exists: null,
+          }],
+          repair_hints: [{
+            id: 'machines_workspace_repair',
+            reason: 'Confirm workspace path mapping before sync.',
+            command: ['machines', 'workspace', 'repair', '--machine', 'spark01', '--project', 'open-knowledge', '--repo', 'open-knowledge', '--open-files-repo', 'open-files', '--json'],
+            shell_command: 'machines workspace repair --machine spark01 --project open-knowledge --repo open-knowledge --open-files-repo open-files --json',
+            apply_command: ['machines', 'workspace', 'repair', '--machine', 'spark01', '--project', 'open-knowledge', '--repo', 'open-knowledge', '--open-files-repo', 'open-files', '--json', '--apply'],
+            apply_shell_command: 'machines workspace repair --machine spark01 --project open-knowledge --repo open-knowledge --open-files-repo open-files --json --apply',
+          }],
           evidence: {
             topology: true,
             matched_by: 'machine_id',
@@ -394,6 +411,12 @@ describe('knowledge machine topology', () => {
     expect(result.open_files_root).toBe('/home/hasna/workspace/hasna/opensource/open-files');
     expect(result.trust_status).toBe('trusted');
     expect(result.primary).toBe(true);
+    expect(result.diagnostics[0]).toMatchObject({
+      id: 'project_root',
+      status: 'inferred',
+      severity: 'warn',
+    });
+    expect(result.repair_hints[0]?.shell_command).toContain('machines workspace repair');
   });
 
   test('uses machines CLI workspace resolver when SDK import is unavailable', async () => {
@@ -436,6 +459,38 @@ describe('knowledge machine topology', () => {
     expect(result.adapter.implementation).toBe('cli');
     expect(result.project_root).toBe('/workspace/open-knowledge');
     expect(commands.some((command) => command.includes("'workspace'") && command.includes("'resolve'") && command.includes("'--no-tailscale'"))).toBe(true);
+  });
+
+  test('adds fallback workspace repair hints for older machines resolver warnings', async () => {
+    const result = await resolveKnowledgeMachineWorkspace({
+      machineId: 'spark01',
+      loadOpenMachines: async () => ({
+        resolveMachineWorkspace: () => ({
+          ok: true,
+          requested_machine_id: 'spark01',
+          machine_id: 'spark01',
+          project: { project_id: 'open-knowledge', repo_name: 'open-knowledge' },
+          machine: { current: false, primary: false, trust_status: 'trusted', auth_status: 'authenticated' },
+          paths: {
+            workspace_root: { path: '/workspace', source: 'manifest' },
+            project_root: { path: '/workspace/open-knowledge', source: 'inferred' },
+            open_files_root: { path: '/workspace/open-files', source: 'inferred' },
+          },
+          evidence: { topology: true, matched_by: 'machine_id', metadata_keys: [] },
+          warnings: ['project_root_inferred:open-knowledge'],
+        }),
+      }),
+      runner: fakeCommandRunner({}),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.repair_hints[0]).toMatchObject({
+      id: 'machines_workspace_repair',
+      reason: expect.stringContaining('Workspace paths'),
+    });
+    expect(result.repair_hints[0]?.command).toContain('--open-files-repo');
+    expect(result.repair_hints[0]?.shell_command).toContain('machines');
   });
 
   test('uses explicit peer workspace as an override before machines lookup', async () => {
