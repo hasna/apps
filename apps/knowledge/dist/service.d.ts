@@ -1,7 +1,7 @@
 import { type KnowledgeAuthStatus } from './auth';
 import { type KnowledgePromptOptions } from './agent';
 import { type EmbeddingIndexOptions, type EmbeddingSearchOptions } from './embeddings';
-import { type KnowledgeMachinePreflightOptions, type KnowledgeMachineTopologyOptions } from './machines';
+import { type KnowledgeMachinePreflightOptions, type KnowledgeMachineRouteResolution, type KnowledgeMachineTopologyOptions } from './machines';
 import { type ProviderStatusResult, type ModelRegistryEntry } from './providers';
 import { type ReindexRuntimeOptions } from './reindex';
 import { RemoteKnowledgeClient, type RemoteKnowledgeRegistryContract } from './remote-client';
@@ -65,6 +65,24 @@ export interface KnowledgePeerSyncOptions {
     tables?: string[];
     includeArtifactContent?: boolean;
     machineId?: string | null;
+}
+export interface KnowledgeRemotePeerSyncOptions extends KnowledgePeerSyncOptions {
+    machine: string;
+    includeTailscale?: boolean;
+}
+export interface KnowledgeRemotePeerSyncResult extends KnowledgePeerSyncResult {
+    transport: 'ssh';
+    machine: string;
+    resolved_machine: string;
+    resolved_route: {
+        source: KnowledgeMachineRouteResolution['source'];
+        target: string;
+        route: KnowledgeMachineRouteResolution['route'];
+        target_kind: KnowledgeMachineRouteResolution['targetKind'];
+        confidence: KnowledgeMachineRouteResolution['confidence'];
+        evidence: KnowledgeMachineRouteResolution['evidence'];
+    };
+    peer_workspace: string;
 }
 export declare class KnowledgeService {
     private readonly options;
@@ -166,6 +184,7 @@ export declare class KnowledgeService {
     syncMachines(): import("./sync").KnowledgeSyncMachineRow[];
     exportSyncBundle(options?: KnowledgeSyncBundleOptions): KnowledgeSyncBundle;
     importSyncBundle(options: KnowledgeSyncImportOptions): Promise<KnowledgeSyncApplyResult>;
+    syncRemotePeer(options: KnowledgeRemotePeerSyncOptions): Promise<KnowledgeRemotePeerSyncResult>;
     syncPeer(options: KnowledgePeerSyncOptions): Promise<KnowledgePeerSyncResult>;
 }
 export declare function createKnowledgeService(options?: KnowledgeServiceOptions): KnowledgeService;

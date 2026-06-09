@@ -1,4 +1,5 @@
 import { createArtifactStore } from './artifact-store';
+import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
@@ -19,7 +20,14 @@ import {
 import { consumeOpenFilesOutbox } from './outbox-consume';
 import { getKnowledgeDbStats, migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { ingestOpenFilesManifest } from './manifest-ingest';
-import { discoverKnowledgeMachineTopology, preflightKnowledgeMachine, type KnowledgeMachinePreflightOptions, type KnowledgeMachineTopologyOptions } from './machines';
+import {
+  discoverKnowledgeMachineTopology,
+  preflightKnowledgeMachine,
+  resolveKnowledgeMachineRoute,
+  type KnowledgeMachinePreflightOptions,
+  type KnowledgeMachineRouteResolution,
+  type KnowledgeMachineTopologyOptions,
+} from './machines';
 import { ingestSourceRef } from './source-ingest';
 import { resolveOpenFilesSource } from './source-resolver';
 import { providerStatus, listModelRegistry, type ProviderStatusResult, type ModelRegistryEntry } from './providers';
@@ -34,6 +42,8 @@ import {
   createKnowledgeSyncSnapshot,
   createKnowledgeSyncBundle,
   getKnowledgeSyncStatus,
+  KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION,
+  KNOWLEDGE_SYNC_PROTOCOL_VERSION,
   listKnowledgeMachines,
   listKnowledgeSyncConflicts,
   type KnowledgePeerSyncResult,
@@ -123,12 +133,100 @@ export interface KnowledgePeerSyncOptions {
   machineId?: string | null;
 }
 
+export interface KnowledgeRemotePeerSyncOptions extends KnowledgePeerSyncOptions {
+  machine: string;
+  includeTailscale?: boolean;
+}
+
+export interface KnowledgeRemotePeerSyncResult extends KnowledgePeerSyncResult {
+  transport: 'ssh';
+  machine: string;
+  resolved_machine: string;
+  resolved_route: {
+    source: KnowledgeMachineRouteResolution['source'];
+    target: string;
+    route: KnowledgeMachineRouteResolution['route'];
+    target_kind: KnowledgeMachineRouteResolution['targetKind'];
+    confidence: KnowledgeMachineRouteResolution['confidence'];
+    evidence: KnowledgeMachineRouteResolution['evidence'];
+  };
+  peer_workspace: string;
+}
+
 function resolvePeerWorkspace(input: string): KnowledgeWorkspace {
   const target = resolve(input);
   if (existsSync(join(target, 'knowledge.db')) || existsSync(join(target, 'config.json'))) {
     return ensureKnowledgeWorkspace(target);
   }
   return ensureKnowledgeWorkspace(workspaceForHome(projectKnowledgeHome(target)).home);
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function remoteKnowledgeCommand(peerWorkspace: string, args: string[]): string {
+  return `cd ${shellQuote(peerWorkspace)} && knowledge ${args.map(shellQuote).join(' ')}`;
+}
+
+function runSshCommand(machine: string, command: string, input: string | undefined, resolved: KnowledgeMachineRouteResolution): string {
+  const result = spawnSync('ssh', [resolved.target, command], {
+    encoding: 'utf8',
+    env: process.env,
+    input,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if ((result.status ?? 1) !== 0) {
+    const route = resolved.source === 'open-machines' ? ` via ${resolved.route ?? 'resolved'}:${resolved.target}` : '';
+    throw new Error(`ssh ${machine}${route} failed: ${(result.stderr || result.stdout || String(result.status)).trim()}`);
+  }
+  return result.stdout || '';
+}
+
+function parseRemoteJson(machine: string, action: string, raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    const preview = raw.trim().slice(0, 240);
+    throw new Error(`Remote knowledge ${action} on ${machine} did not return JSON. Install a compatible @hasna/knowledge CLI on the remote machine. Output: ${preview || String(error)}`);
+  }
+}
+
+function assertRemoteSyncBundle(machine: string, value: unknown): asserts value is KnowledgeSyncBundle {
+  if (
+    typeof value !== 'object'
+    || value === null
+    || !('format' in value)
+    || (value as { format?: unknown }).format !== 'knowledge-sync-bundle'
+  ) {
+    throw new Error(`Remote knowledge sync export on ${machine} did not return a knowledge sync bundle. Install @hasna/knowledge 0.2.32 or newer on the remote machine.`);
+  }
+  if (
+    (value as { protocol_version?: unknown }).protocol_version !== KNOWLEDGE_SYNC_PROTOCOL_VERSION
+    || (value as { min_protocol_version?: unknown }).min_protocol_version !== KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION
+  ) {
+    throw new Error(`Remote knowledge sync export on ${machine} uses an unsupported sync protocol. Install @hasna/knowledge 0.2.32 or newer on both machines.`);
+  }
+}
+
+function assertRemoteSyncApplyResult(machine: string, value: unknown): asserts value is KnowledgeSyncApplyResult {
+  if (
+    typeof value !== 'object'
+    || value === null
+    || !('ok' in value)
+    || !('target' in value)
+    || !('tables' in value)
+    || !('artifacts' in value)
+    || !('conflicts_created' in value)
+  ) {
+    throw new Error(`Remote knowledge sync import on ${machine} did not return a sync import result. Install @hasna/knowledge 0.2.32 or newer on the remote machine.`);
+  }
+  if (
+    (value as { protocol_version?: unknown }).protocol_version !== KNOWLEDGE_SYNC_PROTOCOL_VERSION
+    || (value as { min_protocol_version?: unknown }).min_protocol_version !== KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION
+  ) {
+    throw new Error(`Remote knowledge sync import on ${machine} uses an unsupported sync protocol. Install @hasna/knowledge 0.2.32 or newer on both machines.`);
+  }
 }
 
 function normalizeMode(value: string | undefined): KnowledgeConfig['mode'] | undefined {
@@ -573,6 +671,77 @@ export class KnowledgeService {
       dryRun: options.dryRun,
       localMachineId: options.machineId ?? null,
     });
+  }
+
+  async syncRemotePeer(options: KnowledgeRemotePeerSyncOptions): Promise<KnowledgeRemotePeerSyncResult> {
+    const direction = options.direction ?? 'both';
+    const dryRun = options.dryRun === true;
+    const tableArgs = options.tables?.length ? ['--tables', options.tables.join(',')] : [];
+    const artifactArgs = options.includeArtifactContent === false ? ['--no-artifact-content'] : [];
+    const scopeArgs = ['--scope', this.scope, '--json'];
+    const resolvedMachine = await resolveKnowledgeMachineRoute({
+      machineId: options.machine,
+      includeTailscale: options.includeTailscale,
+    });
+    const result: KnowledgeRemotePeerSyncResult = {
+      ok: true,
+      dry_run: dryRun,
+      direction,
+      transport: 'ssh',
+      machine: options.machine,
+      resolved_machine: resolvedMachine.target,
+      resolved_route: {
+        source: resolvedMachine.source,
+        target: resolvedMachine.target,
+        route: resolvedMachine.route,
+        target_kind: resolvedMachine.targetKind,
+        confidence: resolvedMachine.confidence,
+        evidence: resolvedMachine.evidence,
+      },
+      peer_workspace: options.peerWorkspace,
+      message: '',
+    };
+
+    if (direction === 'pull' || direction === 'both') {
+      const remoteExport = remoteKnowledgeCommand(options.peerWorkspace, [
+        'sync', 'export',
+        ...scopeArgs,
+        ...tableArgs,
+        ...artifactArgs,
+      ]);
+      const raw = runSshCommand(options.machine, remoteExport, undefined, resolvedMachine);
+      const bundle = parseRemoteJson(options.machine, 'sync export', raw);
+      assertRemoteSyncBundle(options.machine, bundle);
+      result.pull = await this.importSyncBundle({
+        bundle,
+        dryRun,
+        direction: 'pull',
+        machineId: options.machineId ?? null,
+      });
+    }
+
+    if (direction === 'push' || direction === 'both') {
+      const bundle = this.exportSyncBundle({
+        machineId: options.machineId ?? null,
+        tables: options.tables,
+        includeArtifactContent: options.includeArtifactContent,
+      });
+      const remoteImport = remoteKnowledgeCommand(options.peerWorkspace, [
+        'sync', 'import',
+        ...scopeArgs,
+        ...(dryRun ? ['--dry-run'] : []),
+      ]);
+      const applyResult = parseRemoteJson(options.machine, 'sync import', runSshCommand(options.machine, remoteImport, JSON.stringify(bundle), resolvedMachine));
+      assertRemoteSyncApplyResult(options.machine, applyResult);
+      result.push = applyResult;
+    }
+
+    result.ok = (result.pull?.ok ?? true) && (result.push?.ok ?? true);
+    result.message = [
+      result.pull ? `pull: ${result.pull.message}` : null,
+      result.push ? `push: ${result.push.message}` : null,
+    ].filter(Boolean).join('; ');
+    return result;
   }
 
   async syncPeer(options: KnowledgePeerSyncOptions): Promise<KnowledgePeerSyncResult> {

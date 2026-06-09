@@ -1370,6 +1370,7 @@ function createArtifactStore(config, workspace) {
 }
 
 // src/service.ts
+import { spawnSync as spawnSync2 } from "child_process";
 import { existsSync as existsSync8 } from "fs";
 import { join as join5, resolve as resolve4 } from "path";
 
@@ -4381,6 +4382,26 @@ function normalizeOpenMachinesTopology(value, options) {
   };
   return withKnowledgeContext(topology, options);
 }
+function normalizeRouteKind(value) {
+  return value === "local" || value === "lan" || value === "tailscale" || value === "ssh" || value === "unknown" ? value : null;
+}
+function normalizeOpenMachinesRoute(value) {
+  const raw = asRecord(value);
+  const target = asString3(raw.target) ?? asString3(raw.command_target);
+  if (raw.ok !== true || !target)
+    return null;
+  const evidence = typeof raw.evidence === "object" && raw.evidence !== null ? raw.evidence : null;
+  const selectedHint = typeof evidence?.selected_hint === "object" && evidence.selected_hint !== null ? evidence.selected_hint : null;
+  return {
+    target,
+    route: normalizeRouteKind(raw.route),
+    targetKind: normalizeRouteKind(selectedHint?.kind) ?? normalizeRouteKind(raw.source) ?? normalizeRouteKind(raw.route),
+    confidence: asString3(raw.confidence),
+    source: "open-machines",
+    evidence,
+    warnings: asStringArray(raw.warnings)
+  };
+}
 async function discoverOpenMachinesCliTopology(options) {
   const runner = options.runner ?? defaultRunner;
   if (!await hasCommand("machines", runner))
@@ -4440,6 +4461,51 @@ async function discoverKnowledgeMachineTopology(options = {}) {
     return await discoverOpenMachinesCliTopology(options) ?? await discoverLocalTopology(options, "missing_discoverMachineTopology");
   } catch (error) {
     return await discoverOpenMachinesCliTopology(options) ?? await discoverLocalTopology(options, optionalModuleError(error));
+  }
+}
+async function resolveOpenMachinesCliRoute(options) {
+  const runner = options.runner ?? defaultRunner;
+  if (!await hasCommand("machines", runner))
+    return null;
+  const args = ["route", "--machine", options.machineId, "--json"];
+  if (options.includeTailscale === false)
+    args.push("--no-tailscale");
+  const result = await runCommand(runner, machinesCliCommand(args));
+  if (result.exitCode !== 0)
+    return null;
+  return normalizeOpenMachinesRoute(parseJson(result.stdout));
+}
+function rawMachineRoute(machineId) {
+  return {
+    target: machineId,
+    route: null,
+    targetKind: null,
+    confidence: null,
+    source: "raw",
+    evidence: null,
+    warnings: []
+  };
+}
+async function resolveKnowledgeMachineRoute(options) {
+  try {
+    const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
+    const mod = await loader();
+    if (mod?.resolveMachineRoute) {
+      const normalized = normalizeOpenMachinesRoute(mod.resolveMachineRoute(options.machineId, {
+        includeTailscale: options.includeTailscale,
+        runner: options.runner,
+        now: options.now
+      }));
+      if (normalized)
+        return normalized;
+      return await resolveOpenMachinesCliRoute(options) ?? rawMachineRoute(options.machineId);
+    }
+    return await resolveOpenMachinesCliRoute(options) ?? rawMachineRoute(options.machineId);
+  } catch (error) {
+    return await resolveOpenMachinesCliRoute(options) ?? {
+      ...rawMachineRoute(options.machineId),
+      warnings: [optionalModuleError(error)]
+    };
   }
 }
 function withPreflightKnowledgeContext(report, options) {
@@ -7425,6 +7491,49 @@ function resolvePeerWorkspace(input) {
   }
   return ensureKnowledgeWorkspace(workspaceForHome(projectKnowledgeHome(target)).home);
 }
+function shellQuote2(value) {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+function remoteKnowledgeCommand(peerWorkspace, args) {
+  return `cd ${shellQuote2(peerWorkspace)} && knowledge ${args.map(shellQuote2).join(" ")}`;
+}
+function runSshCommand(machine, command, input, resolved) {
+  const result = spawnSync2("ssh", [resolved.target, command], {
+    encoding: "utf8",
+    env: process.env,
+    input,
+    maxBuffer: 64 * 1024 * 1024
+  });
+  if ((result.status ?? 1) !== 0) {
+    const route = resolved.source === "open-machines" ? ` via ${resolved.route ?? "resolved"}:${resolved.target}` : "";
+    throw new Error(`ssh ${machine}${route} failed: ${(result.stderr || result.stdout || String(result.status)).trim()}`);
+  }
+  return result.stdout || "";
+}
+function parseRemoteJson(machine, action, raw) {
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    const preview = raw.trim().slice(0, 240);
+    throw new Error(`Remote knowledge ${action} on ${machine} did not return JSON. Install a compatible @hasna/knowledge CLI on the remote machine. Output: ${preview || String(error)}`);
+  }
+}
+function assertRemoteSyncBundle(machine, value) {
+  if (typeof value !== "object" || value === null || !("format" in value) || value.format !== "knowledge-sync-bundle") {
+    throw new Error(`Remote knowledge sync export on ${machine} did not return a knowledge sync bundle. Install @hasna/knowledge 0.2.32 or newer on the remote machine.`);
+  }
+  if (value.protocol_version !== KNOWLEDGE_SYNC_PROTOCOL_VERSION || value.min_protocol_version !== KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION) {
+    throw new Error(`Remote knowledge sync export on ${machine} uses an unsupported sync protocol. Install @hasna/knowledge 0.2.32 or newer on both machines.`);
+  }
+}
+function assertRemoteSyncApplyResult(machine, value) {
+  if (typeof value !== "object" || value === null || !("ok" in value) || !("target" in value) || !("tables" in value) || !("artifacts" in value) || !("conflicts_created" in value)) {
+    throw new Error(`Remote knowledge sync import on ${machine} did not return a sync import result. Install @hasna/knowledge 0.2.32 or newer on the remote machine.`);
+  }
+  if (value.protocol_version !== KNOWLEDGE_SYNC_PROTOCOL_VERSION || value.min_protocol_version !== KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION) {
+    throw new Error(`Remote knowledge sync import on ${machine} uses an unsupported sync protocol. Install @hasna/knowledge 0.2.32 or newer on both machines.`);
+  }
+}
 function normalizeMode(value) {
   if (!value)
     return;
@@ -7804,6 +7913,75 @@ class KnowledgeService {
       localMachineId: options.machineId ?? null
     });
   }
+  async syncRemotePeer(options) {
+    const direction = options.direction ?? "both";
+    const dryRun = options.dryRun === true;
+    const tableArgs = options.tables?.length ? ["--tables", options.tables.join(",")] : [];
+    const artifactArgs = options.includeArtifactContent === false ? ["--no-artifact-content"] : [];
+    const scopeArgs = ["--scope", this.scope, "--json"];
+    const resolvedMachine = await resolveKnowledgeMachineRoute({
+      machineId: options.machine,
+      includeTailscale: options.includeTailscale
+    });
+    const result = {
+      ok: true,
+      dry_run: dryRun,
+      direction,
+      transport: "ssh",
+      machine: options.machine,
+      resolved_machine: resolvedMachine.target,
+      resolved_route: {
+        source: resolvedMachine.source,
+        target: resolvedMachine.target,
+        route: resolvedMachine.route,
+        target_kind: resolvedMachine.targetKind,
+        confidence: resolvedMachine.confidence,
+        evidence: resolvedMachine.evidence
+      },
+      peer_workspace: options.peerWorkspace,
+      message: ""
+    };
+    if (direction === "pull" || direction === "both") {
+      const remoteExport = remoteKnowledgeCommand(options.peerWorkspace, [
+        "sync",
+        "export",
+        ...scopeArgs,
+        ...tableArgs,
+        ...artifactArgs
+      ]);
+      const raw = runSshCommand(options.machine, remoteExport, undefined, resolvedMachine);
+      const bundle = parseRemoteJson(options.machine, "sync export", raw);
+      assertRemoteSyncBundle(options.machine, bundle);
+      result.pull = await this.importSyncBundle({
+        bundle,
+        dryRun,
+        direction: "pull",
+        machineId: options.machineId ?? null
+      });
+    }
+    if (direction === "push" || direction === "both") {
+      const bundle = this.exportSyncBundle({
+        machineId: options.machineId ?? null,
+        tables: options.tables,
+        includeArtifactContent: options.includeArtifactContent
+      });
+      const remoteImport = remoteKnowledgeCommand(options.peerWorkspace, [
+        "sync",
+        "import",
+        ...scopeArgs,
+        ...dryRun ? ["--dry-run"] : []
+      ]);
+      const applyResult = parseRemoteJson(options.machine, "sync import", runSshCommand(options.machine, remoteImport, JSON.stringify(bundle), resolvedMachine));
+      assertRemoteSyncApplyResult(options.machine, applyResult);
+      result.push = applyResult;
+    }
+    result.ok = (result.pull?.ok ?? true) && (result.push?.ok ?? true);
+    result.message = [
+      result.pull ? `pull: ${result.pull.message}` : null,
+      result.push ? `push: ${result.push.message}` : null
+    ].filter(Boolean).join("; ");
+    return result;
+  }
   async syncPeer(options) {
     const direction = options.direction ?? "both";
     const localWorkspace = this.ensureWorkspace();
@@ -7905,7 +8083,8 @@ function createKnowledgeClient(options = {}) {
       machines: () => service.syncMachines(),
       exportBundle: (input = {}) => service.exportSyncBundle(input),
       importBundle: (input) => service.importSyncBundle(input),
-      peer: (input) => service.syncPeer(input)
+      peer: (input) => service.syncPeer(input),
+      remotePeer: (input) => service.syncRemotePeer(input)
     },
     db: {
       init: () => service.initDb(),

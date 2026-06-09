@@ -15,6 +15,7 @@ export type KnowledgeSyncSnapshotOptions = Parameters<KnowledgeService['createSy
 export type KnowledgeSyncBundleOptions = Parameters<KnowledgeService['exportSyncBundle']>[0];
 export type KnowledgeSyncImportOptions = Parameters<KnowledgeService['importSyncBundle']>[0];
 export type KnowledgePeerSyncOptions = Parameters<KnowledgeService['syncPeer']>[0];
+export type KnowledgeRemotePeerSyncOptions = Parameters<KnowledgeService['syncRemotePeer']>[0];
 
 export interface KnowledgeClient {
   /**
@@ -49,6 +50,7 @@ export interface KnowledgeClient {
     readonly exportBundle: (options?: KnowledgeSyncBundleOptions) => ReturnType<KnowledgeService['exportSyncBundle']>;
     readonly importBundle: (options: KnowledgeSyncImportOptions) => ReturnType<KnowledgeService['importSyncBundle']>;
     readonly peer: (options: KnowledgePeerSyncOptions) => ReturnType<KnowledgeService['syncPeer']>;
+    readonly remotePeer: (options: KnowledgeRemotePeerSyncOptions) => ReturnType<KnowledgeService['syncRemotePeer']>;
   };
   readonly db: {
     readonly init: () => ReturnType<KnowledgeService['initDb']>;
@@ -125,6 +127,7 @@ export function createKnowledgeClient(options: KnowledgeClientOptions = {}): Kno
       exportBundle: (input = {}) => service.exportSyncBundle(input),
       importBundle: (input) => service.importSyncBundle(input),
       peer: (input) => service.syncPeer(input),
+      remotePeer: (input) => service.syncRemotePeer(input),
     },
     db: {
       init: () => service.initDb(),

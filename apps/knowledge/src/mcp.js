@@ -836,25 +836,34 @@ export function buildServer() {
     }
   });
 
-  registerTool(server, 'knowledge_sync_peer', 'Knowledge peer sync', 'Dry-run, pull, push, or bidirectionally sync with a local peer knowledge workspace', {
+  registerTool(server, 'knowledge_sync_peer', 'Knowledge peer sync', 'Dry-run, pull, push, or bidirectionally sync with a local or remote peer knowledge workspace', {
     scope: scopeField,
     peer_workspace: z.string().describe('Peer repo root or .hasna/apps/knowledge path'),
+    machine: z.string().optional().describe('Optional remote machine id or SSH alias; when set, sync uses route-aware SSH transport'),
     direction: z.enum(['dry-run', 'pull', 'push', 'both']).optional().describe('Sync direction; dry-run previews both directions'),
     tables: z.array(z.string()).optional().describe('Optional knowledge.db tables to sync'),
     include_artifact_content: z.boolean().optional().describe('Embed/copy generated artifact content when available'),
+    include_tailscale: z.boolean().optional().describe('Allow Tailscale route discovery when using a remote machine'),
     machine_id: z.string().optional().describe('Local machine id for change/conflict ledgers'),
-  }, async ({ scope, peer_workspace, direction, tables, include_artifact_content, machine_id }) => {
+  }, async ({ scope, peer_workspace, machine, direction, tables, include_artifact_content, include_tailscale, machine_id }) => {
     const service = createKnowledgeService({ scope });
     try {
       const syncDirection = direction === 'dry-run' ? 'both' : direction ?? 'both';
-      return jsonText(await service.syncPeer({
+      const options = {
         peerWorkspace: peer_workspace,
         direction: syncDirection,
         dryRun: direction === 'dry-run',
         tables,
         includeArtifactContent: include_artifact_content !== false,
         machineId: machine_id ?? null,
-      }));
+      };
+      return jsonText(machine
+        ? await service.syncRemotePeer({
+            ...options,
+            machine,
+            includeTailscale: include_tailscale !== false,
+          })
+        : await service.syncPeer(options));
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +21,110 @@ function makeTempDir(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   tempDirs.push(dir);
   return dir;
+}
+
+function writeFakeSshBin(dir: string): string {
+  const bin = join(dir, 'bin');
+  mkdirSync(bin, { recursive: true });
+  const ssh = join(bin, 'ssh');
+  writeFileSync(ssh, [
+    '#!/bin/sh',
+    'if [ -n "$KNOWLEDGE_FAKE_SSH_TARGET_PATH" ]; then printf "%s" "$1" > "$KNOWLEDGE_FAKE_SSH_TARGET_PATH"; fi',
+    'command="$2"',
+    'if printf "%s" "$command" | grep -q "sync.*export"; then',
+    '    printf "%s" "$KNOWLEDGE_FAKE_SSH_EXPORT_JSON"',
+    'elif printf "%s" "$command" | grep -q "sync.*import"; then',
+    '    cat >/dev/null',
+    '    printf "%s" "$KNOWLEDGE_FAKE_SSH_IMPORT_JSON"',
+    'else',
+    '    echo "unexpected fake ssh command: $*" >&2',
+    '    exit 9',
+    'fi',
+    '',
+  ].join('\n'));
+  chmodSync(ssh, 0o755);
+  return bin;
+}
+
+function writeFakeMachinesRouteBin(bin: string, target: string): void {
+  const machines = join(bin, 'machines');
+  writeFileSync(machines, [
+    '#!/bin/sh',
+    'if [ "$1" = "route" ]; then',
+    `  printf '%s\\n' '${JSON.stringify({
+      ok: true,
+      target,
+      route: 'tailscale',
+      source: 'tailscale',
+      confidence: 'high',
+      evidence: {
+        topology: true,
+        matched_by: 'machine_id',
+        selected_hint: {
+          kind: 'tailscale',
+          target,
+          reachable: true,
+        },
+      },
+      warnings: [],
+    })}'`,
+    '  exit 0',
+    'fi',
+    'exit 9',
+    '',
+  ].join('\n'));
+  chmodSync(machines, 0o755);
+}
+
+function emptySyncBundle() {
+  return {
+    ok: true,
+    format: 'knowledge-sync-bundle',
+    version: 1,
+    protocol_version: 1,
+    min_protocol_version: 1,
+    generated_at: '2026-06-09T00:00:00.000Z',
+    source: {
+      scope: 'project',
+      workspace_home: '/remote/.hasna/apps/knowledge',
+      sqlite_schema_version: 6,
+      machine_id: 'spark01',
+      artifact_root_uri: 'file:///remote/.hasna/apps/knowledge/artifacts/',
+    },
+    tables: [],
+    artifacts: [],
+    warnings: [],
+    message: 'valid empty bundle',
+  };
+}
+
+function emptyImportResult() {
+  return {
+    ok: true,
+    protocol_version: 1,
+    min_protocol_version: 1,
+    dry_run: true,
+    direction: 'import',
+    source: emptySyncBundle().source,
+    target: {
+      scope: 'project',
+      workspace_home: '/remote/.hasna/apps/knowledge',
+      sqlite_schema_version: 6,
+      artifact_root_uri: 'file:///remote/.hasna/apps/knowledge/artifacts/',
+    },
+    tables: [],
+    artifacts: {
+      source_artifacts: 0,
+      target_artifacts: 0,
+      copied: 0,
+      skipped: 0,
+      conflicts: 0,
+      missing_content: 0,
+    },
+    conflicts_created: 0,
+    warnings: [],
+    message: 'Would import 0 row(s), copied 0 artifact(s), 0 conflict(s)',
+  };
 }
 
 function parseToolJson(result: any): any {
@@ -55,12 +159,22 @@ describe('knowledge MCP', () => {
       dbPath: join(dir, '.hasna', 'apps', 'knowledge', 'knowledge.db'),
       input: manifest,
     });
+    const targetPath = join(dir, 'mcp-ssh-target.txt');
+    const fakeBin = writeFakeSshBin(dir);
+    writeFakeMachinesRouteBin(fakeBin, 'mcp-spark01.tailnet.test');
 
     const transport = new StdioClientTransport({
       command: 'bun',
       args: [MCP],
       cwd: dir,
       stderr: 'pipe',
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}:${process.env.PATH ?? ''}`,
+        KNOWLEDGE_FAKE_SSH_EXPORT_JSON: JSON.stringify(emptySyncBundle()),
+        KNOWLEDGE_FAKE_SSH_IMPORT_JSON: JSON.stringify(emptyImportResult()),
+        KNOWLEDGE_FAKE_SSH_TARGET_PATH: targetPath,
+      },
     });
     const client = new Client({ name: 'knowledge-test', version: '0.0.0' });
 
@@ -190,6 +304,27 @@ describe('knowledge MCP', () => {
       }));
       expect(syncPeer.ok).toBe(true);
       expect(syncPeer.dry_run).toBe(true);
+
+      const remoteSyncPeer = parseToolJson(await client.callTool({
+        name: 'knowledge_sync_peer',
+        arguments: {
+          scope: 'project',
+          peer_workspace: '/remote/open-knowledge',
+          machine: 'spark01',
+          direction: 'dry-run',
+        },
+      }));
+      expect(remoteSyncPeer.ok).toBe(true);
+      expect(remoteSyncPeer.transport).toBe('ssh');
+      expect(remoteSyncPeer.resolved_machine).toBe('mcp-spark01.tailnet.test');
+      expect(remoteSyncPeer.resolved_route).toMatchObject({
+        source: 'open-machines',
+        target: 'mcp-spark01.tailnet.test',
+        route: 'tailscale',
+        target_kind: 'tailscale',
+        confidence: 'high',
+      });
+      expect(readFileSync(targetPath, 'utf8')).toBe('mcp-spark01.tailnet.test');
 
       const source = parseToolJson(await client.callTool({
         name: 'ok_parse_source_ref',

@@ -10,6 +10,7 @@ export type KnowledgeSyncSnapshotOptions = Parameters<KnowledgeService['createSy
 export type KnowledgeSyncBundleOptions = Parameters<KnowledgeService['exportSyncBundle']>[0];
 export type KnowledgeSyncImportOptions = Parameters<KnowledgeService['importSyncBundle']>[0];
 export type KnowledgePeerSyncOptions = Parameters<KnowledgeService['syncPeer']>[0];
+export type KnowledgeRemotePeerSyncOptions = Parameters<KnowledgeService['syncRemotePeer']>[0];
 export interface KnowledgeClient {
     /**
      * Escape hatch for advanced integrations. Prefer the grouped SDK methods for
@@ -40,6 +41,7 @@ export interface KnowledgeClient {
         readonly exportBundle: (options?: KnowledgeSyncBundleOptions) => ReturnType<KnowledgeService['exportSyncBundle']>;
         readonly importBundle: (options: KnowledgeSyncImportOptions) => ReturnType<KnowledgeService['importSyncBundle']>;
         readonly peer: (options: KnowledgePeerSyncOptions) => ReturnType<KnowledgeService['syncPeer']>;
+        readonly remotePeer: (options: KnowledgeRemotePeerSyncOptions) => ReturnType<KnowledgeService['syncRemotePeer']>;
     };
     readonly db: {
         readonly init: () => ReturnType<KnowledgeService['initDb']>;
