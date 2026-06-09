@@ -7,7 +7,7 @@ import type { Database, SQLQueryBindings } from 'bun:sqlite';
 import { CURRENT_SCHEMA_VERSION, getSchemaVersion, migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { recordStorageObjects, type GeneratedStorageObject, type StorageContract } from './storage-contract';
 import { normalizeArtifactKey, type ArtifactStore } from './artifact-store';
-import type { KnowledgeMachineEntry, KnowledgeMachineTopology, KnowledgeMachineWorkspaceResolution } from './machines';
+import type { KnowledgeMachineEntry, KnowledgeMachineRouteResolution, KnowledgeMachineTopology, KnowledgeMachineWorkspaceResolution } from './machines';
 
 export interface KnowledgeSyncMachineRow {
   machine_id: string;
@@ -23,6 +23,13 @@ export interface KnowledgeSyncMachineRow {
   metadata_json: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface KnowledgeMachineResolverEvidenceInput {
+  machineId: string;
+  route?: KnowledgeMachineRouteResolution | null;
+  workspace?: KnowledgeMachineWorkspaceResolution | null;
+  now?: Date;
 }
 
 export interface KnowledgeSyncSnapshotRow {
@@ -895,6 +902,164 @@ function machineFromTopologyEntry(entry: KnowledgeMachineEntry, now: string): Kn
     created_at: now,
     updated_at: now,
   };
+}
+
+function parseJsonRecord(value: string | null | undefined): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function parseJsonArray(value: string | null | undefined): unknown[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function recordFromUnknown(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function compactRecord(input: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
+}
+
+function resolverMachineId(input: KnowledgeMachineResolverEvidenceInput): string {
+  return input.workspace?.machine_id
+    ?? input.workspace?.requested_machine_id
+    ?? input.machineId
+    ?? input.route?.target
+    ?? hostname();
+}
+
+function resolverSources(input: KnowledgeMachineResolverEvidenceInput, existing: Record<string, unknown>): string[] {
+  const sources = new Set<string>();
+  const existingSources = Array.isArray(existing.sources) ? existing.sources : [];
+  for (const source of existingSources) if (typeof source === 'string') sources.add(source);
+  if (typeof existing.source === 'string') sources.add(existing.source);
+  if (input.route?.source) sources.add(input.route.source);
+  if (input.workspace?.source) sources.add(input.workspace.source);
+  sources.add('knowledge');
+  return [...sources].sort();
+}
+
+function resolverTailscaleDns(
+  existing: KnowledgeSyncMachineRow | null,
+  route: KnowledgeMachineRouteResolution | null | undefined,
+): string | null {
+  if (route?.target && (route.route === 'tailscale' || route.targetKind === 'tailscale')) return route.target;
+  return existing?.tailscale_dns ?? null;
+}
+
+function resolverEvidenceMetadata(input: KnowledgeMachineResolverEvidenceInput, existing: Record<string, unknown>, now: string): Record<string, unknown> {
+  const previous = recordFromUnknown(existing.resolver_evidence);
+  const route = input.route
+    ? compactRecord({
+        source: input.route.source,
+        target: input.route.target,
+        route: input.route.route,
+        target_kind: input.route.targetKind,
+        confidence: input.route.confidence,
+        adapter: input.route.adapter,
+        evidence: input.route.evidence,
+        warnings: input.route.warnings,
+      })
+    : recordFromUnknown(previous.route);
+  const workspace = input.workspace
+    ? compactRecord({
+        source: input.workspace.source,
+        requested_machine_id: input.workspace.requested_machine_id,
+        machine_id: input.workspace.machine_id,
+        project_id: input.workspace.project_id,
+        repo_name: input.workspace.repo_name,
+        project_root: input.workspace.project_root,
+        project_root_source: input.workspace.project_root_source,
+        workspace_root: input.workspace.workspace_root,
+        workspace_root_source: input.workspace.workspace_root_source,
+        open_files_root: input.workspace.open_files_root,
+        open_files_root_source: input.workspace.open_files_root_source,
+        trust_status: input.workspace.trust_status,
+        auth_status: input.workspace.auth_status,
+        current: input.workspace.current,
+        primary: input.workspace.primary,
+        diagnostics: input.workspace.diagnostics,
+        repair_hints: input.workspace.repair_hints,
+        evidence: input.workspace.evidence,
+        warnings: input.workspace.warnings,
+      })
+    : recordFromUnknown(previous.workspace);
+  return compactRecord({
+    ...previous,
+    recorded_at: now,
+    route,
+    workspace,
+  });
+}
+
+export function recordKnowledgeMachineResolverEvidence(dbPath: string, input: KnowledgeMachineResolverEvidenceInput): KnowledgeSyncMachineRow {
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const machineId = resolverMachineId(input);
+    const existing = db.query<KnowledgeSyncMachineRow, [string]>(
+      'SELECT * FROM knowledge_machines WHERE machine_id = ?',
+    ).get(machineId) ?? null;
+    const now = nowIso(input.now);
+    const capabilities = parseJsonRecord(existing?.capabilities_json);
+    const metadata = parseJsonRecord(existing?.metadata_json);
+    const resolverCapabilities = recordFromUnknown(capabilities.resolver);
+    const route = input.route ?? null;
+    const workspace = input.workspace ?? null;
+    const row: KnowledgeSyncMachineRow = {
+      machine_id: machineId,
+      hostname: existing?.hostname ?? null,
+      platform: existing?.platform ?? null,
+      user_label: existing?.user_label ?? null,
+      workspace_home: workspace?.project_root ?? existing?.workspace_home ?? null,
+      tailscale_dns: resolverTailscaleDns(existing, route),
+      tailscale_ips_json: JSON.stringify(parseJsonArray(existing?.tailscale_ips_json)),
+      ssh_target: route?.target ?? existing?.ssh_target ?? null,
+      last_seen_at: now,
+      capabilities_json: JSON.stringify({
+        ...capabilities,
+        resolver: compactRecord({
+          ...resolverCapabilities,
+          route_source: route?.source ?? resolverCapabilities.route_source,
+          route_kind: route?.route ?? resolverCapabilities.route_kind,
+          route_target_kind: route?.targetKind ?? resolverCapabilities.route_target_kind,
+          route_confidence: route?.confidence ?? resolverCapabilities.route_confidence,
+          workspace_source: workspace?.source ?? resolverCapabilities.workspace_source,
+          project_root_source: workspace?.project_root_source ?? resolverCapabilities.project_root_source,
+          workspace_root_source: workspace?.workspace_root_source ?? resolverCapabilities.workspace_root_source,
+          open_files_root_source: workspace?.open_files_root_source ?? resolverCapabilities.open_files_root_source,
+          trust_status: workspace?.trust_status ?? resolverCapabilities.trust_status,
+          auth_status: workspace?.auth_status ?? resolverCapabilities.auth_status,
+        }),
+        route_fallback: Boolean(route?.target ?? existing?.ssh_target),
+        workspace_fallback: Boolean(workspace?.project_root ?? existing?.workspace_home),
+      }),
+      metadata_json: JSON.stringify({
+        ...metadata,
+        source: 'knowledge',
+        sources: resolverSources(input, metadata),
+        resolver_evidence: resolverEvidenceMetadata(input, metadata, now),
+      }),
+      created_at: existing?.created_at ?? now,
+      updated_at: now,
+    };
+    upsertKnowledgeMachine(db, row);
+    return row;
+  } finally {
+    db.close();
+  }
 }
 
 export function upsertKnowledgeMachine(db: Database, input: KnowledgeSyncMachineRow): void {

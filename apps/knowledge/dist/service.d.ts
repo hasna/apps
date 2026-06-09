@@ -9,7 +9,7 @@ import { RemoteKnowledgeClient, type RemoteKnowledgeRegistryContract } from './r
 import { type RetrievalOptions } from './retrieval';
 import { type HybridSearchOptions } from './search';
 import { type WebSearchOptions } from './web-search';
-import { type KnowledgeSyncConflict, type KnowledgeSyncConflictResolutionProposal, type KnowledgePeerSyncResult, type KnowledgeSyncApplyResult, type KnowledgeSyncBundle, type KnowledgeSyncSnapshotResult, type KnowledgeSyncStatus } from './sync';
+import { type KnowledgeSyncConflict, type KnowledgeSyncConflictResolutionProposal, type KnowledgePeerSyncResult, type KnowledgeSyncApplyResult, type KnowledgeSyncBundle, type KnowledgeSyncMachineRow, type KnowledgeSyncSnapshotResult, type KnowledgeSyncStatus } from './sync';
 import { type WikiCompileOptions } from './wiki-compiler';
 import { type StorageContract, type StorageValidationResult } from './storage-contract';
 import { type KnowledgeConfig, type KnowledgeWorkspace } from './workspace';
@@ -341,7 +341,7 @@ export declare class KnowledgeService {
     proposeSyncConflictResolution(id: string): KnowledgeSyncConflictResolutionProposal;
     proposeSyncConflictResolutionWithAi(options: KnowledgeSyncConflictAiProposalServiceOptions): Promise<KnowledgeSyncConflictResolutionProposal>;
     resolveSyncConflict(options: KnowledgeSyncConflictResolveOptions): KnowledgeSyncConflictResolveResult;
-    syncMachines(): import("./sync").KnowledgeSyncMachineRow[];
+    syncMachines(): KnowledgeSyncMachineRow[];
     exportSyncBundle(options?: KnowledgeSyncBundleOptions): KnowledgeSyncBundle;
     importSyncBundle(options: KnowledgeSyncImportOptions): Promise<KnowledgeSyncApplyResult>;
     syncRemotePeer(options: KnowledgeRemotePeerSyncOptions): Promise<KnowledgeRemotePeerSyncResult>;

@@ -92,6 +92,17 @@ function writeFakeMachinesRouteBin(bin: string, target: string, projectRoot = '/
   chmodSync(machines, 0o755);
 }
 
+function writeBrokenMachinesBin(bin: string): void {
+  const machines = join(bin, 'machines');
+  writeFileSync(machines, [
+    '#!/bin/sh',
+    'echo "machines unavailable" >&2',
+    'exit 9',
+    '',
+  ].join('\n'));
+  chmodSync(machines, 0o755);
+}
+
 function emptySyncBundle() {
   return {
     ok: true,
@@ -114,12 +125,12 @@ function emptySyncBundle() {
   };
 }
 
-function emptyImportResult() {
+function emptyImportResult(dryRun = true) {
   return {
     ok: true,
     protocol_version: 1,
     min_protocol_version: 1,
-    dry_run: true,
+    dry_run: dryRun,
     direction: 'import',
     source: emptySyncBundle().source,
     target: {
@@ -139,7 +150,9 @@ function emptyImportResult() {
     },
     conflicts_created: 0,
     warnings: [],
-    message: 'Would import 0 row(s), copied 0 artifact(s), 0 conflict(s)',
+    message: dryRun
+      ? 'Would import 0 row(s), copied 0 artifact(s), 0 conflict(s)'
+      : 'Imported 0 row(s), copied 0 artifact(s), 0 conflict(s)',
   };
 }
 
@@ -287,6 +300,71 @@ describe('public knowledge sdk', () => {
           status: 'ok',
         }],
       });
+      expect(readFileSync(targetPath, 'utf8')).toBe('sdk-spark01.tailnet.test');
+    } finally {
+      if (oldEnv.PATH === undefined) delete process.env.PATH;
+      else process.env.PATH = oldEnv.PATH;
+      if (oldEnv.KNOWLEDGE_FAKE_SSH_EXPORT_JSON === undefined) delete process.env.KNOWLEDGE_FAKE_SSH_EXPORT_JSON;
+      else process.env.KNOWLEDGE_FAKE_SSH_EXPORT_JSON = oldEnv.KNOWLEDGE_FAKE_SSH_EXPORT_JSON;
+      if (oldEnv.KNOWLEDGE_FAKE_SSH_IMPORT_JSON === undefined) delete process.env.KNOWLEDGE_FAKE_SSH_IMPORT_JSON;
+      else process.env.KNOWLEDGE_FAKE_SSH_IMPORT_JSON = oldEnv.KNOWLEDGE_FAKE_SSH_IMPORT_JSON;
+      if (oldEnv.KNOWLEDGE_FAKE_SSH_TARGET_PATH === undefined) delete process.env.KNOWLEDGE_FAKE_SSH_TARGET_PATH;
+      else process.env.KNOWLEDGE_FAKE_SSH_TARGET_PATH = oldEnv.KNOWLEDGE_FAKE_SSH_TARGET_PATH;
+    }
+  });
+
+  test('persists machine resolver evidence for registry fallback', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-sdk-registry-fallback-'));
+    const targetPath = join(dir, 'ssh-target.txt');
+    const bin = writeFakeSshBin(dir);
+    writeFakeMachinesRouteBin(bin, 'sdk-spark01.tailnet.test');
+    const oldEnv = {
+      PATH: process.env.PATH,
+      KNOWLEDGE_FAKE_SSH_EXPORT_JSON: process.env.KNOWLEDGE_FAKE_SSH_EXPORT_JSON,
+      KNOWLEDGE_FAKE_SSH_IMPORT_JSON: process.env.KNOWLEDGE_FAKE_SSH_IMPORT_JSON,
+      KNOWLEDGE_FAKE_SSH_TARGET_PATH: process.env.KNOWLEDGE_FAKE_SSH_TARGET_PATH,
+    };
+    try {
+      process.env.PATH = `${bin}:${process.env.PATH ?? ''}`;
+      process.env.KNOWLEDGE_FAKE_SSH_EXPORT_JSON = JSON.stringify(emptySyncBundle());
+      process.env.KNOWLEDGE_FAKE_SSH_IMPORT_JSON = JSON.stringify(emptyImportResult(false));
+      process.env.KNOWLEDGE_FAKE_SSH_TARGET_PATH = targetPath;
+      const client = createKnowledgeClient({ scope: 'project', cwd: dir });
+
+      const first = await client.sync.remotePeer({
+        machine: 'spark01',
+        direction: 'push',
+        dryRun: false,
+      });
+
+      expect(first.ok).toBe(true);
+      expect(first.resolved_route.source).toBe('open-machines');
+      const registryRow = client.sync.machines().find((row) => row.machine_id === 'spark01');
+      expect(registryRow).toBeDefined();
+      expect(registryRow?.ssh_target).toBe('sdk-spark01.tailnet.test');
+      expect(registryRow?.workspace_home).toBe('/remote/open-knowledge');
+      expect(JSON.parse(registryRow?.metadata_json ?? '{}').resolver_evidence.route.source).toBe('open-machines');
+
+      writeBrokenMachinesBin(bin);
+      writeFileSync(targetPath, '');
+      process.env.KNOWLEDGE_FAKE_SSH_IMPORT_JSON = JSON.stringify(emptyImportResult());
+      const doctor = await client.sync.doctor({ machine: 'spark01' });
+      expect(doctor.ok).toBe(true);
+      expect(doctor.resolved_route?.source).toBe('registry');
+      expect(doctor.resolved_workspace?.source).toBe('registry');
+      expect(doctor.resolved_workspace?.trust_status).toBe('trusted');
+
+      const second = await client.sync.remotePeer({
+        machine: 'spark01',
+        direction: 'push',
+        dryRun: true,
+      });
+
+      expect(second.ok).toBe(true);
+      expect(second.resolved_machine).toBe('sdk-spark01.tailnet.test');
+      expect(second.resolved_route.source).toBe('registry');
+      expect(second.resolved_workspace.source).toBe('registry');
+      expect(second.peer_workspace).toBe('/remote/open-knowledge');
       expect(readFileSync(targetPath, 'utf8')).toBe('sdk-spark01.tailnet.test');
     } finally {
       if (oldEnv.PATH === undefined) delete process.env.PATH;

@@ -345,7 +345,7 @@ workspace/package metadata before any machine sync is attempted. When
 or CLI contract; otherwise it uses a local/SSH fallback. Remote sync JSON
 includes adapter diagnostics for route and workspace resolution so CLI, SDK,
 and MCP callers can see whether the result came from SDK, CLI, argument
-override, or disabled fallback.
+override, registry fallback, or disabled fallback.
 
 The installed adapter smoke harness verifies the same boundary outside unit
 test fakes:
@@ -398,6 +398,11 @@ change counts, conflict counts, and durable table counts. `sync snapshot`
 refreshes the machine registry from optional topology discovery and records a
 content hash over table counts and generated artifact hashes. Conflict rows are
 inspectable before any future merge/approval flow writes durable changes.
+Non-dry remote sync also persists route/workspace resolver evidence into
+`knowledge_machines`; later remote sync can use that knowledge-owned registry
+row when the optional open-machines SDK/CLI is unavailable. Read-only commands
+such as `sync status`, `sync doctor`, and `sync dry-run` do not write registry
+evidence.
 
 `sync doctor` is the read-only preflight for machine sync. It reports the
 local SQLite schema and table counts, storage contract validation, table

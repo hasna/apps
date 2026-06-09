@@ -2,7 +2,7 @@ import type { Database } from 'bun:sqlite';
 import { CURRENT_SCHEMA_VERSION } from './knowledge-db';
 import { type StorageContract } from './storage-contract';
 import { type ArtifactStore } from './artifact-store';
-import type { KnowledgeMachineTopology, KnowledgeMachineWorkspaceResolution } from './machines';
+import type { KnowledgeMachineRouteResolution, KnowledgeMachineTopology, KnowledgeMachineWorkspaceResolution } from './machines';
 export interface KnowledgeSyncMachineRow {
     machine_id: string;
     hostname: string | null;
@@ -17,6 +17,12 @@ export interface KnowledgeSyncMachineRow {
     metadata_json: string;
     created_at: string;
     updated_at: string;
+}
+export interface KnowledgeMachineResolverEvidenceInput {
+    machineId: string;
+    route?: KnowledgeMachineRouteResolution | null;
+    workspace?: KnowledgeMachineWorkspaceResolution | null;
+    now?: Date;
 }
 export interface KnowledgeSyncSnapshotRow {
     id: string;
@@ -322,6 +328,7 @@ export interface KnowledgePeerSyncResult {
     push?: KnowledgeSyncApplyResult;
     message: string;
 }
+export declare function recordKnowledgeMachineResolverEvidence(dbPath: string, input: KnowledgeMachineResolverEvidenceInput): KnowledgeSyncMachineRow;
 export declare function upsertKnowledgeMachine(db: Database, input: KnowledgeSyncMachineRow): void;
 export declare function refreshMachineRegistryFromTopology(db: Database, topology: KnowledgeMachineTopology, now?: string): number;
 export declare function listKnowledgeMachines(dbPath: string): KnowledgeSyncMachineRow[];

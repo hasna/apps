@@ -68,7 +68,7 @@ export interface KnowledgeMachinePreflightOptions {
         workspace_home: string;
     };
 }
-export type KnowledgeMachineRouteSource = 'open-machines' | 'raw';
+export type KnowledgeMachineRouteSource = 'open-machines' | 'registry' | 'raw';
 export type KnowledgeMachineRouteKind = 'local' | 'lan' | 'tailscale' | 'ssh' | 'unknown';
 export type KnowledgeMachineRouteConfidence = 'exact' | 'high' | 'medium' | 'low' | 'none' | string;
 export interface KnowledgeMachineRouteOptions {
@@ -79,7 +79,7 @@ export interface KnowledgeMachineRouteOptions {
     now?: Date;
     loadOpenMachines?: () => Promise<OpenMachinesModule | null>;
 }
-export type KnowledgeMachineWorkspaceSource = 'open-machines' | 'argument' | 'raw';
+export type KnowledgeMachineWorkspaceSource = 'open-machines' | 'registry' | 'argument' | 'raw';
 export type KnowledgeMachineWorkspacePathSource = 'argument' | 'manifest' | 'manifest_metadata' | 'inferred' | 'unresolved' | string;
 export type KnowledgeMachineTrustStatus = 'trusted' | 'untrusted' | 'unknown' | string;
 export type KnowledgeMachineAuthStatus = 'authenticated' | 'unauthenticated' | 'unknown' | string;

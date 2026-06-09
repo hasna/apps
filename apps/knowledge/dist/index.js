@@ -18061,6 +18061,150 @@ function machineFromTopologyEntry(entry, now) {
     updated_at: now
   };
 }
+function parseJsonRecord(value) {
+  if (!value)
+    return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function parseJsonArray(value) {
+  if (!value)
+    return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+function recordFromUnknown(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+function compactRecord(input) {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
+}
+function resolverMachineId(input) {
+  return input.workspace?.machine_id ?? input.workspace?.requested_machine_id ?? input.machineId ?? input.route?.target ?? hostname();
+}
+function resolverSources(input, existing) {
+  const sources = new Set;
+  const existingSources = Array.isArray(existing.sources) ? existing.sources : [];
+  for (const source of existingSources)
+    if (typeof source === "string")
+      sources.add(source);
+  if (typeof existing.source === "string")
+    sources.add(existing.source);
+  if (input.route?.source)
+    sources.add(input.route.source);
+  if (input.workspace?.source)
+    sources.add(input.workspace.source);
+  sources.add("knowledge");
+  return [...sources].sort();
+}
+function resolverTailscaleDns(existing, route) {
+  if (route?.target && (route.route === "tailscale" || route.targetKind === "tailscale"))
+    return route.target;
+  return existing?.tailscale_dns ?? null;
+}
+function resolverEvidenceMetadata(input, existing, now) {
+  const previous = recordFromUnknown(existing.resolver_evidence);
+  const route = input.route ? compactRecord({
+    source: input.route.source,
+    target: input.route.target,
+    route: input.route.route,
+    target_kind: input.route.targetKind,
+    confidence: input.route.confidence,
+    adapter: input.route.adapter,
+    evidence: input.route.evidence,
+    warnings: input.route.warnings
+  }) : recordFromUnknown(previous.route);
+  const workspace = input.workspace ? compactRecord({
+    source: input.workspace.source,
+    requested_machine_id: input.workspace.requested_machine_id,
+    machine_id: input.workspace.machine_id,
+    project_id: input.workspace.project_id,
+    repo_name: input.workspace.repo_name,
+    project_root: input.workspace.project_root,
+    project_root_source: input.workspace.project_root_source,
+    workspace_root: input.workspace.workspace_root,
+    workspace_root_source: input.workspace.workspace_root_source,
+    open_files_root: input.workspace.open_files_root,
+    open_files_root_source: input.workspace.open_files_root_source,
+    trust_status: input.workspace.trust_status,
+    auth_status: input.workspace.auth_status,
+    current: input.workspace.current,
+    primary: input.workspace.primary,
+    diagnostics: input.workspace.diagnostics,
+    repair_hints: input.workspace.repair_hints,
+    evidence: input.workspace.evidence,
+    warnings: input.workspace.warnings
+  }) : recordFromUnknown(previous.workspace);
+  return compactRecord({
+    ...previous,
+    recorded_at: now,
+    route,
+    workspace
+  });
+}
+function recordKnowledgeMachineResolverEvidence(dbPath, input) {
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const machineId = resolverMachineId(input);
+    const existing = db.query("SELECT * FROM knowledge_machines WHERE machine_id = ?").get(machineId) ?? null;
+    const now = nowIso(input.now);
+    const capabilities = parseJsonRecord(existing?.capabilities_json);
+    const metadata = parseJsonRecord(existing?.metadata_json);
+    const resolverCapabilities = recordFromUnknown(capabilities.resolver);
+    const route = input.route ?? null;
+    const workspace = input.workspace ?? null;
+    const row = {
+      machine_id: machineId,
+      hostname: existing?.hostname ?? null,
+      platform: existing?.platform ?? null,
+      user_label: existing?.user_label ?? null,
+      workspace_home: workspace?.project_root ?? existing?.workspace_home ?? null,
+      tailscale_dns: resolverTailscaleDns(existing, route),
+      tailscale_ips_json: JSON.stringify(parseJsonArray(existing?.tailscale_ips_json)),
+      ssh_target: route?.target ?? existing?.ssh_target ?? null,
+      last_seen_at: now,
+      capabilities_json: JSON.stringify({
+        ...capabilities,
+        resolver: compactRecord({
+          ...resolverCapabilities,
+          route_source: route?.source ?? resolverCapabilities.route_source,
+          route_kind: route?.route ?? resolverCapabilities.route_kind,
+          route_target_kind: route?.targetKind ?? resolverCapabilities.route_target_kind,
+          route_confidence: route?.confidence ?? resolverCapabilities.route_confidence,
+          workspace_source: workspace?.source ?? resolverCapabilities.workspace_source,
+          project_root_source: workspace?.project_root_source ?? resolverCapabilities.project_root_source,
+          workspace_root_source: workspace?.workspace_root_source ?? resolverCapabilities.workspace_root_source,
+          open_files_root_source: workspace?.open_files_root_source ?? resolverCapabilities.open_files_root_source,
+          trust_status: workspace?.trust_status ?? resolverCapabilities.trust_status,
+          auth_status: workspace?.auth_status ?? resolverCapabilities.auth_status
+        }),
+        route_fallback: Boolean(route?.target ?? existing?.ssh_target),
+        workspace_fallback: Boolean(workspace?.project_root ?? existing?.workspace_home)
+      }),
+      metadata_json: JSON.stringify({
+        ...metadata,
+        source: "knowledge",
+        sources: resolverSources(input, metadata),
+        resolver_evidence: resolverEvidenceMetadata(input, metadata, now)
+      }),
+      created_at: existing?.created_at ?? now,
+      updated_at: now
+    };
+    upsertKnowledgeMachine(db, row);
+    return row;
+  } finally {
+    db.close();
+  }
+}
 function upsertKnowledgeMachine(db, input) {
   db.query(`
     INSERT INTO knowledge_machines (
@@ -23445,6 +23589,106 @@ function routeSummary(resolvedMachine) {
     evidence: resolvedMachine.evidence
   };
 }
+function parseJsonStringArray(value) {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((entry) => typeof entry === "string") : [];
+  } catch {
+    return [];
+  }
+}
+function recordValue(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+function stringValue2(value) {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+function registryMachineMatches(row, machine) {
+  return row.machine_id === machine || row.hostname === machine || row.ssh_target === machine || row.tailscale_dns === machine || parseJsonStringArray(row.tailscale_ips_json).includes(machine);
+}
+function findRegistryMachine(dbPath, machine) {
+  return listKnowledgeMachines(dbPath).find((row) => registryMachineMatches(row, machine)) ?? null;
+}
+function registryResolverEvidence(row) {
+  return recordValue(parseMetadataJson(row.metadata_json).resolver_evidence);
+}
+function registryResolverCapabilities(row) {
+  return recordValue(parseMetadataJson(row.capabilities_json).resolver);
+}
+function registryRouteKind(row) {
+  const resolver = registryResolverCapabilities(row);
+  const kind = stringValue2(resolver.route_kind);
+  if (kind === "local" || kind === "lan" || kind === "tailscale" || kind === "ssh" || kind === "unknown")
+    return kind;
+  if (row.tailscale_dns && row.ssh_target === row.tailscale_dns)
+    return "tailscale";
+  return row.ssh_target ? "ssh" : "unknown";
+}
+function registryRouteTargetKind(row) {
+  const resolver = registryResolverCapabilities(row);
+  const kind = stringValue2(resolver.route_target_kind);
+  if (kind === "local" || kind === "lan" || kind === "tailscale" || kind === "ssh" || kind === "unknown")
+    return kind;
+  return registryRouteKind(row);
+}
+function registryRouteConfidence(row) {
+  return stringValue2(registryResolverCapabilities(row).route_confidence) ?? "medium";
+}
+function routeFromRegistry(row, machine, fallback) {
+  const evidence = registryResolverEvidence(row);
+  return {
+    target: row.ssh_target ?? row.tailscale_dns ?? row.hostname ?? row.machine_id,
+    route: registryRouteKind(row),
+    targetKind: registryRouteTargetKind(row),
+    confidence: registryRouteConfidence(row),
+    source: "registry",
+    adapter: fallback.adapter,
+    evidence: {
+      registry: true,
+      requested_machine_id: machine,
+      machine_id: row.machine_id,
+      recorded_at: row.updated_at,
+      route: recordValue(evidence.route)
+    },
+    warnings: [...new Set([...fallback.warnings, "registry_route_fallback"])]
+  };
+}
+function workspaceFromRegistry(row, machine, fallback) {
+  if (!row.workspace_home)
+    return null;
+  const evidence = registryResolverEvidence(row);
+  const workspaceEvidence = recordValue(evidence.workspace);
+  const resolver = registryResolverCapabilities(row);
+  return {
+    ok: true,
+    source: "registry",
+    adapter: fallback.adapter,
+    requested_machine_id: machine,
+    machine_id: row.machine_id,
+    project_id: stringValue2(workspaceEvidence.project_id) ?? fallback.project_id,
+    repo_name: stringValue2(workspaceEvidence.repo_name) ?? fallback.repo_name,
+    project_root: row.workspace_home,
+    project_root_source: stringValue2(resolver.project_root_source) ?? "registry",
+    workspace_root: stringValue2(workspaceEvidence.workspace_root),
+    workspace_root_source: stringValue2(resolver.workspace_root_source) ?? "registry",
+    open_files_root: stringValue2(workspaceEvidence.open_files_root),
+    open_files_root_source: stringValue2(resolver.open_files_root_source) ?? "registry",
+    trust_status: stringValue2(resolver.trust_status) ?? "unknown",
+    auth_status: stringValue2(resolver.auth_status) ?? "unknown",
+    current: false,
+    primary: false,
+    diagnostics: [],
+    repair_hints: [],
+    evidence: {
+      registry: true,
+      requested_machine_id: machine,
+      machine_id: row.machine_id,
+      recorded_at: row.updated_at,
+      workspace: workspaceEvidence
+    },
+    warnings: [...new Set([...fallback.warnings, "registry_workspace_fallback"])]
+  };
+}
 function workspaceReadinessMessage(resolvedWorkspace) {
   if (!resolvedWorkspace)
     return null;
@@ -24172,7 +24416,31 @@ class KnowledgeService {
         peerWorkspace,
         includeTailscale: options.includeTailscale
       });
-      resolvedWorkspace = workspaceResolution.ok && workspaceResolution.project_root ? workspaceSummary(workspaceResolution, workspaceResolution.project_root) : {
+      if (machine && !peerWorkspace && (resolvedRoute?.source === "raw" || !workspaceResolution.ok || !workspaceResolution.project_root)) {
+        const registryRow = findRegistryMachine(workspace.knowledgeDbPath, machine);
+        if (registryRow) {
+          if (resolvedRoute?.source === "raw" && registryRow.ssh_target) {
+            resolvedRoute = routeSummary(routeFromRegistry(registryRow, machine, {
+              target: resolvedRoute.target,
+              route: resolvedRoute.route,
+              targetKind: resolvedRoute.target_kind,
+              confidence: resolvedRoute.confidence,
+              source: resolvedRoute.source,
+              adapter: resolvedRoute.adapter,
+              evidence: resolvedRoute.evidence,
+              warnings: []
+            }));
+          }
+          if (!workspaceResolution.ok || !workspaceResolution.project_root) {
+            const registryWorkspace = workspaceFromRegistry(registryRow, machine, workspaceResolution);
+            if (registryWorkspace) {
+              resolvedWorkspace = workspaceSummary(registryWorkspace, registryWorkspace.project_root);
+              warnings.push(...registryWorkspace.warnings);
+            }
+          }
+        }
+      }
+      resolvedWorkspace = workspaceResolution.ok && workspaceResolution.project_root ? workspaceSummary(workspaceResolution, workspaceResolution.project_root) : resolvedWorkspace ?? {
         ...workspaceSummary(workspaceResolution, peerWorkspace ?? ""),
         project_root: workspaceResolution.project_root ?? peerWorkspace ?? ""
       };
@@ -24435,18 +24703,33 @@ class KnowledgeService {
   async syncRemotePeer(options) {
     const direction = options.direction ?? "both";
     const dryRun = options.dryRun === true;
+    const localWorkspace = this.ensureWorkspace();
+    migrateKnowledgeDb(localWorkspace.knowledgeDbPath);
     const tableArgs = options.tables?.length ? ["--tables", options.tables.join(",")] : [];
     const artifactArgs = options.includeArtifactContent === false ? ["--no-artifact-content"] : [];
     const scopeArgs = ["--scope", this.scope, "--json"];
-    const resolvedMachine = await resolveKnowledgeMachineRoute({
+    let resolvedMachine = await resolveKnowledgeMachineRoute({
       machineId: options.machine,
       includeTailscale: options.includeTailscale
     });
-    const resolvedWorkspace = await resolveKnowledgeMachineWorkspace({
+    let resolvedWorkspace = await resolveKnowledgeMachineWorkspace({
       machineId: options.machine,
       peerWorkspace: options.peerWorkspace,
       includeTailscale: options.includeTailscale
     });
+    if (resolvedMachine.source === "raw" || !resolvedWorkspace.ok || !resolvedWorkspace.project_root) {
+      const registryRow = findRegistryMachine(localWorkspace.knowledgeDbPath, options.machine);
+      if (registryRow) {
+        if (resolvedMachine.source === "raw" && registryRow.ssh_target) {
+          resolvedMachine = routeFromRegistry(registryRow, options.machine, resolvedMachine);
+        }
+        if (!resolvedWorkspace.ok || !resolvedWorkspace.project_root) {
+          const registryWorkspace = workspaceFromRegistry(registryRow, options.machine, resolvedWorkspace);
+          if (registryWorkspace)
+            resolvedWorkspace = registryWorkspace;
+        }
+      }
+    }
     if (!resolvedWorkspace.ok || !resolvedWorkspace.project_root) {
       throw new Error([
         `Unable to resolve peer workspace for ${options.machine}.`,
@@ -24503,6 +24786,13 @@ class KnowledgeService {
       result.push = applyResult;
     }
     result.ok = (result.pull?.ok ?? true) && (result.push?.ok ?? true);
+    if (!dryRun) {
+      recordKnowledgeMachineResolverEvidence(localWorkspace.knowledgeDbPath, {
+        machineId: options.machine,
+        route: resolvedMachine,
+        workspace: resolvedWorkspace
+      });
+    }
     result.message = [
       workspaceReadinessMessage(result.resolved_workspace),
       result.pull ? `pull: ${result.pull.message}` : null,
