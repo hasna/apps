@@ -146,7 +146,7 @@ export interface InstalledAppStatus {
 
 export interface AppsStatusResult {
   machineId: string;
-  source: "local" | "lan" | "tailscale";
+  source: "local" | "lan" | "tailscale" | "ssh";
   apps: InstalledAppStatus[];
 }
 
@@ -164,7 +164,7 @@ export interface CliToolStatus {
 
 export interface ClaudeCliStatusResult {
   machineId: string;
-  source: "local" | "lan" | "tailscale";
+  source: "local" | "lan" | "tailscale" | "ssh";
   tools: CliToolStatus[];
 }
 
@@ -196,7 +196,7 @@ export interface DoctorCheck {
 
 export interface DoctorReport {
   machineId: string;
-  source: "local" | "lan" | "tailscale";
+  source: "local" | "lan" | "tailscale" | "ssh";
   manifestPath?: string;
   dbPath?: string;
   notificationsPath?: string;
