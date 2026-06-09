@@ -1,14 +1,21 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
+  MACHINES_CONSUMER_SCHEMA_BUNDLE,
   MACHINES_CONSUMER_CAPABILITIES,
   MACHINES_CONSUMER_CONTRACT,
   MACHINES_CONSUMER_ENTRYPOINT,
   MACHINES_CONSUMER_CONTRACT_VERSION,
+  createMachineResolverSnapshot,
   checkMachineCompatibility,
   discoverMachineTopology,
   getMachinesConsumerCapabilities,
+  getMachinesConsumerSchemaBundle,
   resolveMachineRoute,
   resolveMachineWorkspace,
+  validateMachinesConsumerEnvelope,
+  type MachineTopology,
 } from "../src/consumer.js";
 
 describe("machines consumer SDK", () => {
@@ -22,12 +29,117 @@ describe("machines consumer SDK", () => {
       schema_version: 1,
       package_name: "@hasna/machines",
       entrypoint: "@hasna/machines/consumer",
-      envelopes: ["topology", "route", "workspace", "compatibility"],
+      schema_artifact: "schemas/machines-consumer.schema.json",
+      envelopes: ["topology", "route", "workspace", "compatibility", "resolver_snapshot"],
     });
     expect(MACHINES_CONSUMER_CONTRACT.stable_exports).toContain("resolveMachineWorkspace");
+    expect(MACHINES_CONSUMER_CONTRACT.stable_exports).toContain("createMachineResolverSnapshot");
+    expect(MACHINES_CONSUMER_CONTRACT.stable_exports).toContain("validateMachinesConsumerEnvelope");
+    expect(MACHINES_CONSUMER_CONTRACT.field_capabilities.workspace.trust_auth).toBe(true);
     expect(typeof discoverMachineTopology).toBe("function");
     expect(typeof checkMachineCompatibility).toBe("function");
     expect(typeof resolveMachineRoute).toBe("function");
     expect(typeof resolveMachineWorkspace).toBe("function");
+    expect(typeof createMachineResolverSnapshot).toBe("function");
+  });
+
+  test("exports schema artifacts and validates consumer envelopes", () => {
+    const schema = getMachinesConsumerSchemaBundle();
+    expect(schema).toEqual(MACHINES_CONSUMER_SCHEMA_BUNDLE);
+    expect(schema.$id).toBe(MACHINES_CONSUMER_CONTRACT.schema_uri);
+    expect(Object.keys(schema.$defs)).toEqual(expect.arrayContaining([
+      "contract",
+      "topology",
+      "route",
+      "workspace",
+      "compatibility",
+      "resolver_snapshot",
+      "cacheability",
+    ]));
+
+    const artifact = JSON.parse(readFileSync(resolve(import.meta.dir, "..", MACHINES_CONSUMER_CONTRACT.schema_artifact), "utf8"));
+    expect(artifact.$id).toBe(schema.$id);
+    expect(Object.keys(artifact.$defs)).toContain("resolver_snapshot");
+    expect(validateMachinesConsumerEnvelope("contract", MACHINES_CONSUMER_CONTRACT)).toMatchObject({ ok: true, errors: [] });
+  });
+
+  test("builds cacheable route/workspace snapshots for app-owned registries", () => {
+    const now = new Date("2026-06-09T00:00:00.000Z");
+    const topology: MachineTopology = {
+      schema_version: 1,
+      package: { name: "@hasna/machines", version: "0.0.0-test" },
+      capabilities: getMachinesConsumerCapabilities(),
+      generated_at: now.toISOString(),
+      local_machine_id: "spark02",
+      local_hostname: "spark02",
+      current_platform: "linux",
+      manifest_path_known: true,
+      warnings: [],
+      machines: [{
+        machine_id: "spark01",
+        hostname: "spark01",
+        platform: "linux",
+        os: "linux",
+        user: "hasna",
+        workspace_path: "/home/hasna/workspace",
+        manifest_declared: true,
+        heartbeat_status: "unknown",
+        last_heartbeat_at: null,
+        tailscale: {
+          dns_name: "spark01.tailnet.ts.net",
+          ips: ["100.71.123.34"],
+          online: true,
+          active: true,
+          last_seen: null,
+        },
+        ssh: {
+          address: "hasna@spark01",
+          route: "tailscale",
+          command_target: "spark01.tailnet.ts.net",
+        },
+        route_hints: [{ kind: "tailscale", target: "spark01.tailnet.ts.net", reachable: true }],
+        tags: ["trusted"],
+        metadata: {
+          auth_status: "authenticated",
+          workspace_paths: {
+            "open-knowledge": "/srv/open-knowledge",
+          },
+          open_files_roots: {
+            "open-knowledge": "/srv/open-files",
+          },
+        },
+      }],
+    };
+
+    const route = resolveMachineRoute("spark01", { topology, now });
+    const workspace = resolveMachineWorkspace({
+      machineId: "spark01",
+      projectId: "open-knowledge",
+      repoName: "open-knowledge",
+      topology,
+      now,
+    });
+    const snapshot = createMachineResolverSnapshot({ route, workspace, now });
+
+    expect(route.cacheability).toMatchObject({
+      cacheable: true,
+      source_authority: "live_topology",
+      stale: false,
+    });
+    expect(workspace.cacheability).toMatchObject({
+      cacheable: true,
+      source_authority: "manifest_metadata",
+      stale: false,
+    });
+    expect(snapshot.cacheability).toMatchObject({
+      cacheable: true,
+      source_authority: "mixed",
+      stale: false,
+    });
+    expect(snapshot.provenance.route.evidence.selected_hint_kind).toBe("tailscale");
+    expect(snapshot.provenance.workspace?.metadata_keys).not.toContain("api_token");
+    expect(validateMachinesConsumerEnvelope("route", route)).toMatchObject({ ok: true, errors: [] });
+    expect(validateMachinesConsumerEnvelope("workspace", workspace)).toMatchObject({ ok: true, errors: [] });
+    expect(validateMachinesConsumerEnvelope("resolver_snapshot", snapshot)).toMatchObject({ ok: true, errors: [] });
   });
 });

@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hasna.xyz/machines/consumer/v1/machines-consumer.schema.json",
+  "title": "@hasna/machines consumer contract schema bundle",
+  "type": "object",
+  "$defs": {
+    "cacheability": {
+      "type": "object",
+      "required": ["observed_at", "verified_at", "expires_at", "ttl_ms", "source_authority", "confidence", "cacheable", "stale", "reasons"],
+      "properties": {
+        "observed_at": { "type": "string", "format": "date-time" },
+        "verified_at": { "type": ["string", "null"], "format": "date-time" },
+        "expires_at": { "type": ["string", "null"], "format": "date-time" },
+        "ttl_ms": { "type": ["number", "null"] },
+        "source_authority": { "enum": ["open-machines", "manifest", "manifest_metadata", "live_topology", "argument", "inferred", "fallback", "unresolved", "mixed", "unknown"] },
+        "confidence": { "enum": ["exact", "high", "medium", "low", "none"] },
+        "cacheable": { "type": "boolean" },
+        "stale": { "type": "boolean" },
+        "reasons": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "contract": {
+      "type": "object",
+      "required": ["schema_version", "package_name", "entrypoint", "schema_uri", "schema_artifact", "capabilities", "field_capabilities", "cacheability", "envelopes", "stable_exports"]
+    },
+    "topology": {
+      "type": "object",
+      "required": ["schema_version", "package", "capabilities", "generated_at", "local_machine_id", "machines", "warnings"]
+    },
+    "route": {
+      "type": "object",
+      "required": ["schema_version", "package", "ok", "machine_id", "requested_machine_id", "generated_at", "route", "source", "target", "command_target", "confidence", "local", "evidence", "cacheability", "warnings"]
+    },
+    "workspace": {
+      "type": "object",
+      "required": ["schema_version", "package", "ok", "requested_machine_id", "machine_id", "generated_at", "project", "machine", "paths", "diagnostics", "repair_hints", "evidence", "cacheability", "warnings"]
+    },
+    "compatibility": {
+      "type": "object",
+      "required": ["schema_version", "package", "capabilities", "ok", "machine_id", "source", "generated_at", "checks", "summary"]
+    },
+    "resolver_snapshot": {
+      "type": "object",
+      "required": ["schema_version", "package", "generated_at", "requested_machine_id", "machine_id", "route", "workspace", "cacheability", "warnings", "provenance"]
+    }
+  }
+}

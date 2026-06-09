@@ -92,13 +92,18 @@ describe("consumer entrypoint boundary", () => {
         import {
           MACHINES_CONSUMER_CONTRACT,
           MACHINES_CONSUMER_CONTRACT_VERSION,
+          createMachineResolverSnapshot,
           resolveMachineWorkspace,
+          validateMachinesConsumerEnvelope,
         } from "@hasna/machines/consumer";
 
         console.log(JSON.stringify({
           contract_version: MACHINES_CONSUMER_CONTRACT_VERSION,
           entrypoint: MACHINES_CONSUMER_CONTRACT.entrypoint,
           has_workspace_resolver: typeof resolveMachineWorkspace === "function",
+          has_snapshot_helper: typeof createMachineResolverSnapshot === "function",
+          has_validator: typeof validateMachinesConsumerEnvelope === "function",
+          schema_artifact: MACHINES_CONSUMER_CONTRACT.schema_artifact,
           capabilities: MACHINES_CONSUMER_CONTRACT.capabilities,
         }));
       `);
@@ -121,6 +126,9 @@ describe("consumer entrypoint boundary", () => {
         contract_version: 1,
         entrypoint: "@hasna/machines/consumer",
         has_workspace_resolver: true,
+        has_snapshot_helper: true,
+        has_validator: true,
+        schema_artifact: "schemas/machines-consumer.schema.json",
         capabilities: {
           topology: true,
           compatibility: true,
@@ -128,6 +136,10 @@ describe("consumer entrypoint boundary", () => {
           cli_json_fallback: true,
           workspace_path_mapping: true,
           workspace_diagnostics: true,
+          schema_artifacts: true,
+          cacheability_metadata: true,
+          resolver_snapshots: true,
+          field_capability_descriptors: true,
         },
       });
     } finally {

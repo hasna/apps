@@ -10,6 +10,9 @@ import { getPackageVersion } from "./version.js";
 export const MACHINES_CONSUMER_CONTRACT_VERSION = 1;
 export const MACHINES_PACKAGE_NAME = "@hasna/machines";
 export const MACHINES_CONSUMER_ENTRYPOINT = "@hasna/machines/consumer";
+export const MACHINES_CONSUMER_SCHEMA_URI = "https://schemas.hasna.xyz/machines/consumer/v1/machines-consumer.schema.json";
+export const MACHINES_CONSUMER_SCHEMA_ARTIFACT = "schemas/machines-consumer.schema.json";
+export const DEFAULT_MACHINE_RESOLVER_TTL_MS = 24 * 60 * 60 * 1000;
 
 export interface TopologyCommandResult {
   stdout: string;
@@ -23,6 +26,7 @@ export interface MachineTopologyOptions {
   includeTailscale?: boolean;
   runner?: TopologyCommandRunner;
   now?: Date;
+  resolverTtlMs?: number | null;
 }
 
 export interface MachineRouteHint {
@@ -70,15 +74,56 @@ export interface MachinesConsumerCapabilities {
   cli_json_fallback: true;
   workspace_path_mapping?: true;
   workspace_diagnostics?: true;
+  schema_artifacts?: true;
+  cacheability_metadata?: true;
+  resolver_snapshots?: true;
+  field_capability_descriptors?: true;
 }
 
-export type MachinesConsumerEnvelope = "topology" | "route" | "workspace" | "compatibility";
+export type MachinesConsumerEnvelope = "topology" | "route" | "workspace" | "compatibility" | "resolver_snapshot";
+
+export interface MachinesConsumerFieldCapabilities {
+  topology: {
+    machine_identity: true;
+    route_hints: true;
+    tailscale_status: true;
+    manifest_metadata: true;
+  };
+  route: {
+    cacheability: true;
+    confidence: true;
+    resolver_evidence: true;
+  };
+  workspace: {
+    cacheability: true;
+    path_mapping: true;
+    diagnostics: true;
+    repair_hints: true;
+    trust_auth: true;
+  };
+  compatibility: {
+    commands: true;
+    packages: true;
+    workspaces: true;
+  };
+  resolver_snapshot: {
+    cacheability: true;
+    redacted_provenance: true;
+  };
+}
 
 export interface MachinesConsumerContract {
   schema_version: typeof MACHINES_CONSUMER_CONTRACT_VERSION;
   package_name: typeof MACHINES_PACKAGE_NAME;
   entrypoint: typeof MACHINES_CONSUMER_ENTRYPOINT;
+  schema_uri: typeof MACHINES_CONSUMER_SCHEMA_URI;
+  schema_artifact: typeof MACHINES_CONSUMER_SCHEMA_ARTIFACT;
   capabilities: MachinesConsumerCapabilities;
+  field_capabilities: MachinesConsumerFieldCapabilities;
+  cacheability: {
+    default_ttl_ms: typeof DEFAULT_MACHINE_RESOLVER_TTL_MS;
+    stale_requires_refresh: true;
+  };
   envelopes: MachinesConsumerEnvelope[];
   stable_exports: string[];
 }
@@ -90,23 +135,70 @@ export const MACHINES_CONSUMER_CAPABILITIES: MachinesConsumerCapabilities = {
   cli_json_fallback: true,
   workspace_path_mapping: true,
   workspace_diagnostics: true,
+  schema_artifacts: true,
+  cacheability_metadata: true,
+  resolver_snapshots: true,
+  field_capability_descriptors: true,
+};
+
+export const MACHINES_CONSUMER_FIELD_CAPABILITIES: MachinesConsumerFieldCapabilities = {
+  topology: {
+    machine_identity: true,
+    route_hints: true,
+    tailscale_status: true,
+    manifest_metadata: true,
+  },
+  route: {
+    cacheability: true,
+    confidence: true,
+    resolver_evidence: true,
+  },
+  workspace: {
+    cacheability: true,
+    path_mapping: true,
+    diagnostics: true,
+    repair_hints: true,
+    trust_auth: true,
+  },
+  compatibility: {
+    commands: true,
+    packages: true,
+    workspaces: true,
+  },
+  resolver_snapshot: {
+    cacheability: true,
+    redacted_provenance: true,
+  },
 };
 
 export const MACHINES_CONSUMER_CONTRACT: MachinesConsumerContract = {
   schema_version: MACHINES_CONSUMER_CONTRACT_VERSION,
   package_name: MACHINES_PACKAGE_NAME,
   entrypoint: MACHINES_CONSUMER_ENTRYPOINT,
+  schema_uri: MACHINES_CONSUMER_SCHEMA_URI,
+  schema_artifact: MACHINES_CONSUMER_SCHEMA_ARTIFACT,
   capabilities: MACHINES_CONSUMER_CAPABILITIES,
-  envelopes: ["topology", "route", "workspace", "compatibility"],
+  field_capabilities: MACHINES_CONSUMER_FIELD_CAPABILITIES,
+  cacheability: {
+    default_ttl_ms: DEFAULT_MACHINE_RESOLVER_TTL_MS,
+    stale_requires_refresh: true,
+  },
+  envelopes: ["topology", "route", "workspace", "compatibility", "resolver_snapshot"],
   stable_exports: [
     "MACHINES_CONSUMER_CONTRACT",
     "MACHINES_CONSUMER_CONTRACT_VERSION",
     "MACHINES_CONSUMER_CAPABILITIES",
+    "MACHINES_CONSUMER_FIELD_CAPABILITIES",
+    "MACHINES_CONSUMER_SCHEMA_BUNDLE",
+    "MACHINES_CONSUMER_SCHEMA_URI",
     "MACHINES_PACKAGE_NAME",
     "discoverMachineTopology",
     "getLocalMachineTopology",
     "resolveMachineRoute",
     "resolveMachineWorkspace",
+    "createMachineResolverSnapshot",
+    "getMachinesConsumerSchemaBundle",
+    "validateMachinesConsumerEnvelope",
     "checkMachineCompatibility",
     "resolveMachineCommand",
     "runMachineCommand",
@@ -135,6 +227,29 @@ export interface MachineTopology {
 
 export type MachineRouteKind = "local" | "lan" | "tailscale" | "ssh" | "unknown";
 export type MachineRouteConfidence = "exact" | "high" | "medium" | "low" | "none";
+export type MachineResolverAuthority =
+  | "open-machines"
+  | "manifest"
+  | "manifest_metadata"
+  | "live_topology"
+  | "argument"
+  | "inferred"
+  | "fallback"
+  | "unresolved"
+  | "mixed"
+  | "unknown";
+
+export interface MachineResolverCacheability {
+  observed_at: string;
+  verified_at: string | null;
+  expires_at: string | null;
+  ttl_ms: number | null;
+  source_authority: MachineResolverAuthority;
+  confidence: MachineRouteConfidence;
+  cacheable: boolean;
+  stale: boolean;
+  reasons: string[];
+}
 
 export interface MachineRouteResolution {
   schema_version: typeof MACHINES_CONSUMER_CONTRACT_VERSION;
@@ -157,6 +272,7 @@ export interface MachineRouteResolution {
     tailscale_online: boolean | null;
     selected_hint: MachineRouteHint | null;
   };
+  cacheability: MachineResolverCacheability;
   warnings: string[];
 }
 
@@ -240,6 +356,7 @@ export interface MachineWorkspaceResolution {
     manifest_declared: boolean | null;
     metadata_keys: string[];
   };
+  cacheability: MachineResolverCacheability;
   warnings: string[];
 }
 
@@ -550,11 +667,110 @@ function routeConfidence(input: {
   return "none";
 }
 
+function addMilliseconds(date: Date, milliseconds: number): string {
+  return new Date(date.getTime() + milliseconds).toISOString();
+}
+
+function routeAuthority(input: {
+  machine: MachineTopologyEntry | null;
+  selectedHint: MachineRouteHint | null;
+  matchedBy: MachineRouteResolution["evidence"]["matched_by"];
+}): MachineResolverAuthority {
+  if (!input.machine) return "unresolved";
+  if (input.matchedBy === "fallback") return "fallback";
+  if (input.selectedHint?.kind === "local") return "live_topology";
+  if (input.selectedHint?.kind === "tailscale" || input.machine.tailscale.online !== null) return "live_topology";
+  if (input.machine.manifest_declared) return "manifest";
+  return "open-machines";
+}
+
+function workspaceAuthority(paths: MachineWorkspaceResolution["paths"]): MachineResolverAuthority {
+  const sources = [paths.workspace_root.source, paths.project_root.source, paths.open_files_root.source];
+  if (sources.some((source) => source === "argument")) return "argument";
+  if (sources.some((source) => source === "manifest_metadata")) return "manifest_metadata";
+  if (sources.some((source) => source === "manifest")) return "manifest";
+  if (sources.some((source) => source === "inferred")) return "inferred";
+  if (sources.every((source) => source === "unresolved")) return "unresolved";
+  return "open-machines";
+}
+
+function cacheability(input: {
+  ok: boolean;
+  observedAt: Date;
+  now: Date;
+  ttlMs: number | null | undefined;
+  authority: MachineResolverAuthority;
+  confidence: MachineRouteConfidence;
+  reasons: string[];
+}): MachineResolverCacheability {
+  const ttlMs = input.ttlMs === undefined ? DEFAULT_MACHINE_RESOLVER_TTL_MS : input.ttlMs;
+  const expiresAt = typeof ttlMs === "number" && ttlMs > 0 ? addMilliseconds(input.observedAt, ttlMs) : null;
+  const stale = expiresAt ? input.now.getTime() > new Date(expiresAt).getTime() : false;
+  const confidenceCacheable = input.confidence !== "none" && input.confidence !== "low";
+  const cacheable = input.ok && confidenceCacheable && !stale && input.authority !== "unresolved";
+  const reasons = [...input.reasons];
+  if (!input.ok) reasons.push("resolver_not_ok");
+  if (!confidenceCacheable) reasons.push(`low_confidence:${input.confidence}`);
+  if (stale) reasons.push("stale");
+  if (input.authority === "unresolved") reasons.push("unresolved_authority");
+  return {
+    observed_at: input.observedAt.toISOString(),
+    verified_at: input.ok ? input.now.toISOString() : null,
+    expires_at: expiresAt,
+    ttl_ms: typeof ttlMs === "number" && ttlMs > 0 ? ttlMs : null,
+    source_authority: input.authority,
+    confidence: input.confidence,
+    cacheable,
+    stale,
+    reasons: [...new Set(reasons)].sort(),
+  };
+}
+
+function worstConfidence(values: MachineRouteConfidence[]): MachineRouteConfidence {
+  const rank: Record<MachineRouteConfidence, number> = {
+    exact: 0,
+    high: 1,
+    medium: 2,
+    low: 3,
+    none: 4,
+  };
+  return [...values].sort((left, right) => rank[right] - rank[left])[0] ?? "none";
+}
+
+function mergeAuthorities(values: MachineResolverAuthority[]): MachineResolverAuthority {
+  const filtered = values.filter((value) => value !== "unknown");
+  if (filtered.length === 0) return "unknown";
+  const first = filtered[0];
+  return filtered.every((value) => value === first) ? first : "mixed";
+}
+
+function mergeCacheability(input: {
+  observedAt: Date;
+  now: Date;
+  ttlMs: number | null | undefined;
+  authorities: MachineResolverAuthority[];
+  cacheabilities: MachineResolverCacheability[];
+}): MachineResolverCacheability {
+  const confidence = worstConfidence(input.cacheabilities.map((entry) => entry.confidence));
+  const reasons = input.cacheabilities.flatMap((entry) => entry.reasons);
+  const ok = input.cacheabilities.every((entry) => entry.cacheable);
+  return cacheability({
+    ok,
+    observedAt: input.observedAt,
+    now: input.now,
+    ttlMs: input.ttlMs,
+    authority: mergeAuthorities(input.authorities),
+    confidence,
+    reasons,
+  });
+}
+
 export function resolveMachineRoute(machineId: string, options: MachineRouteOptions = {}): MachineRouteResolution {
+  const now = options.now ?? new Date();
   const topology = options.topology ?? discoverMachineTopology(options);
   const warnings = [...topology.warnings];
   const { machine, matchedBy } = findRouteMachine(topology, machineId);
-  const generatedAt = (options.now ?? new Date()).toISOString();
+  const generatedAt = now.toISOString();
 
   if (!machine) {
     warnings.push(`machine_not_found:${machineId}`);
@@ -579,6 +795,15 @@ export function resolveMachineRoute(machineId: string, options: MachineRouteOpti
         tailscale_online: null,
         selected_hint: null,
       },
+      cacheability: cacheability({
+        ok: false,
+        observedAt: now,
+        now,
+        ttlMs: options.resolverTtlMs,
+        authority: "unresolved",
+        confidence: "none",
+        reasons: [`machine_not_found:${machineId}`],
+      }),
       warnings,
     };
   }
@@ -586,10 +811,12 @@ export function resolveMachineRoute(machineId: string, options: MachineRouteOpti
   const selectedHint = selectRouteHint(machine.route_hints);
   const route = selectedHint?.kind ?? machine.ssh.route ?? "unknown";
   const local = route === "local" || machine.machine_id === topology.local_machine_id;
+  const confidence = routeConfidence({ machine, hint: selectedHint, matchedBy });
+  const ok = Boolean(selectedHint?.target);
   return {
     schema_version: MACHINES_CONSUMER_CONTRACT_VERSION,
     package: topology.package,
-    ok: Boolean(selectedHint?.target),
+    ok,
     machine_id: machine.machine_id,
     requested_machine_id: machineId,
     generated_at: generatedAt,
@@ -597,7 +824,7 @@ export function resolveMachineRoute(machineId: string, options: MachineRouteOpti
     source: route,
     target: selectedHint?.target ?? null,
     command_target: selectedHint?.target ?? null,
-    confidence: routeConfidence({ machine, hint: selectedHint, matchedBy }),
+    confidence,
     local,
     evidence: {
       topology: true,
@@ -607,6 +834,15 @@ export function resolveMachineRoute(machineId: string, options: MachineRouteOpti
       tailscale_online: machine.tailscale.online,
       selected_hint: selectedHint,
     },
+    cacheability: cacheability({
+      ok,
+      observedAt: now,
+      now,
+      ttlMs: options.resolverTtlMs,
+      authority: routeAuthority({ machine, selectedHint, matchedBy }),
+      confidence,
+      reasons: selectedHint ? [] : ["route_target_unresolved"],
+    }),
     warnings,
   };
 }
@@ -923,10 +1159,11 @@ function metadataKeysForDiagnostics(metadata: Record<string, unknown>): string[]
 }
 
 export function resolveMachineWorkspace(options: MachineWorkspaceOptions): MachineWorkspaceResolution {
+  const now = options.now ?? new Date();
   const topology = options.topology ?? discoverMachineTopology(options);
   const warnings = [...topology.warnings];
   const { machine, matchedBy } = findRouteMachine(topology, options.machineId);
-  const generatedAt = (options.now ?? new Date()).toISOString();
+  const generatedAt = now.toISOString();
   const repoName = options.repoName ?? options.projectId;
   const openFilesRepoName = options.openFilesRepoName ?? "open-files";
 
@@ -954,6 +1191,15 @@ export function resolveMachineWorkspace(options: MachineWorkspaceOptions): Machi
         manifest_declared: null,
         metadata_keys: [],
       },
+      cacheability: cacheability({
+        ok: false,
+        observedAt: now,
+        now,
+        ttlMs: options.resolverTtlMs,
+        authority: "unresolved",
+        confidence: "none",
+        reasons: [`machine_not_found:${options.machineId}`],
+      }),
       warnings,
     };
     const diagnostics = workspaceDiagnostics({
@@ -1002,11 +1248,17 @@ export function resolveMachineWorkspace(options: MachineWorkspaceOptions): Machi
   if (projectRootSource === "inferred") warnings.push(`project_root_inferred:${options.projectId}`);
   if (openFilesRootSource === "inferred") warnings.push(`open_files_root_inferred:${options.projectId}`);
   if (!projectRootPath) warnings.push(`project_root_unresolved:${options.projectId}`);
+  const workspacePaths = {
+    workspace_root: { path: workspaceRootPath, source: workspaceRootSource },
+    project_root: { path: projectRootPath, source: projectRootSource },
+    open_files_root: { path: openFilesRootPath, source: openFilesRootSource },
+  };
+  const workspaceOk = Boolean(projectRootPath);
 
   const resolution: MachineWorkspaceResolution = {
     schema_version: MACHINES_CONSUMER_CONTRACT_VERSION,
     package: topology.package,
-    ok: Boolean(projectRootPath),
+    ok: workspaceOk,
     requested_machine_id: options.machineId,
     machine_id: machine.machine_id,
     generated_at: generatedAt,
@@ -1021,11 +1273,7 @@ export function resolveMachineWorkspace(options: MachineWorkspaceOptions): Machi
       trust_status: trustStatus(machine),
       auth_status: authStatus(machine),
     },
-    paths: {
-      workspace_root: { path: workspaceRootPath, source: workspaceRootSource },
-      project_root: { path: projectRootPath, source: projectRootSource },
-      open_files_root: { path: openFilesRootPath, source: openFilesRootSource },
-    },
+    paths: workspacePaths,
     diagnostics: [],
     repair_hints: [],
     evidence: {
@@ -1034,6 +1282,15 @@ export function resolveMachineWorkspace(options: MachineWorkspaceOptions): Machi
       manifest_declared: machine.manifest_declared,
       metadata_keys: metadataKeysForDiagnostics(metadata),
     },
+    cacheability: cacheability({
+      ok: workspaceOk,
+      observedAt: now,
+      now,
+      ttlMs: options.resolverTtlMs,
+      authority: workspaceAuthority(workspacePaths),
+      confidence: workspaceOk ? "medium" : "none",
+      reasons: projectRootPath ? [] : [`project_root_unresolved:${options.projectId}`],
+    }),
     warnings,
   };
   const diagnostics = workspaceDiagnostics({
@@ -1046,6 +1303,137 @@ export function resolveMachineWorkspace(options: MachineWorkspaceOptions): Machi
     ...resolution,
     diagnostics: diagnostics.diagnostics,
     repair_hints: diagnostics.repairHints,
+  };
+}
+
+export interface MachineResolverSnapshotRoute {
+  ok: boolean;
+  source: MachineRouteKind;
+  route: MachineRouteKind;
+  target: string | null;
+  command_target: string | null;
+  confidence: MachineRouteConfidence;
+  local: boolean;
+  cacheability: MachineResolverCacheability;
+}
+
+export interface MachineResolverSnapshotWorkspace {
+  ok: boolean;
+  project: MachineWorkspaceProject;
+  machine: MachineWorkspaceResolution["machine"];
+  paths: MachineWorkspaceResolution["paths"];
+  diagnostics: MachineWorkspaceDiagnostic[];
+  repair_hints: MachineWorkspaceRepairHint[];
+  cacheability: MachineResolverCacheability;
+}
+
+export interface MachineResolverSnapshot {
+  schema_version: typeof MACHINES_CONSUMER_CONTRACT_VERSION;
+  package: MachinesContractPackage;
+  generated_at: string;
+  requested_machine_id: string;
+  machine_id: string | null;
+  route: MachineResolverSnapshotRoute;
+  workspace: MachineResolverSnapshotWorkspace | null;
+  cacheability: MachineResolverCacheability;
+  warnings: string[];
+  provenance: {
+    route: {
+      schema_version: number;
+      generated_at: string;
+      evidence: {
+        matched_by: MachineRouteResolution["evidence"]["matched_by"];
+        manifest_declared: boolean | null;
+        heartbeat_status: MachineTopologyEntry["heartbeat_status"] | null;
+        tailscale_online: boolean | null;
+        selected_hint_kind: MachineRouteKind | null;
+      };
+    };
+    workspace: {
+      schema_version: number;
+      generated_at: string;
+      metadata_keys: string[];
+      matched_by: MachineRouteResolution["evidence"]["matched_by"];
+      manifest_declared: boolean | null;
+    } | null;
+  };
+}
+
+export interface CreateMachineResolverSnapshotOptions {
+  route: MachineRouteResolution;
+  workspace?: MachineWorkspaceResolution | null;
+  now?: Date;
+  resolverTtlMs?: number | null;
+}
+
+export function createMachineResolverSnapshot(options: CreateMachineResolverSnapshotOptions): MachineResolverSnapshot {
+  const now = options.now ?? new Date();
+  const routeObservedAt = new Date(options.route.generated_at);
+  const workspaceObservedAt = options.workspace ? new Date(options.workspace.generated_at) : null;
+  const observedAt = new Date(Math.max(
+    Number.isNaN(routeObservedAt.getTime()) ? 0 : routeObservedAt.getTime(),
+    workspaceObservedAt && !Number.isNaN(workspaceObservedAt.getTime()) ? workspaceObservedAt.getTime() : 0,
+  ));
+  const cacheabilities = [options.route.cacheability, options.workspace?.cacheability].filter((entry): entry is MachineResolverCacheability => Boolean(entry));
+  const authorities = cacheabilities.map((entry) => entry.source_authority);
+  const warnings = [...new Set([
+    ...options.route.warnings,
+    ...(options.workspace?.warnings ?? []),
+    ...cacheabilities.flatMap((entry) => entry.reasons),
+  ])].sort();
+  return {
+    schema_version: MACHINES_CONSUMER_CONTRACT_VERSION,
+    package: options.route.package,
+    generated_at: now.toISOString(),
+    requested_machine_id: options.route.requested_machine_id,
+    machine_id: options.route.machine_id ?? options.workspace?.machine_id ?? null,
+    route: {
+      ok: options.route.ok,
+      source: options.route.source,
+      route: options.route.route,
+      target: options.route.target,
+      command_target: options.route.command_target,
+      confidence: options.route.confidence,
+      local: options.route.local,
+      cacheability: options.route.cacheability,
+    },
+    workspace: options.workspace ? {
+      ok: options.workspace.ok,
+      project: options.workspace.project,
+      machine: options.workspace.machine,
+      paths: options.workspace.paths,
+      diagnostics: options.workspace.diagnostics,
+      repair_hints: options.workspace.repair_hints,
+      cacheability: options.workspace.cacheability,
+    } : null,
+    cacheability: mergeCacheability({
+      observedAt: observedAt.getTime() > 0 ? observedAt : now,
+      now,
+      ttlMs: options.resolverTtlMs,
+      authorities,
+      cacheabilities,
+    }),
+    warnings,
+    provenance: {
+      route: {
+        schema_version: options.route.schema_version,
+        generated_at: options.route.generated_at,
+        evidence: {
+          matched_by: options.route.evidence.matched_by,
+          manifest_declared: options.route.evidence.manifest_declared,
+          heartbeat_status: options.route.evidence.heartbeat_status,
+          tailscale_online: options.route.evidence.tailscale_online,
+          selected_hint_kind: options.route.evidence.selected_hint?.kind ?? null,
+        },
+      },
+      workspace: options.workspace ? {
+        schema_version: options.workspace.schema_version,
+        generated_at: options.workspace.generated_at,
+        metadata_keys: options.workspace.evidence.metadata_keys,
+        matched_by: options.workspace.evidence.matched_by,
+        manifest_declared: options.workspace.evidence.manifest_declared,
+      } : null,
+    },
   };
 }
 

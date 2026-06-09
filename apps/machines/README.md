@@ -57,15 +57,25 @@ should import `@hasna/machines/consumer`:
 ```ts
 import {
   MACHINES_CONSUMER_CONTRACT,
+  createMachineResolverSnapshot,
   discoverMachineTopology,
   getLocalMachineTopology,
   resolveMachineRoute,
+  resolveMachineWorkspace,
+  validateMachinesConsumerEnvelope,
 } from "@hasna/machines/consumer";
 
 console.log(MACHINES_CONSUMER_CONTRACT.schema_version);
 const topology = discoverMachineTopology();
 const local = getLocalMachineTopology();
 const route = resolveMachineRoute("spark01");
+const workspace = resolveMachineWorkspace({
+  machineId: "spark01",
+  projectId: "open-knowledge",
+  repoName: "open-knowledge",
+});
+const snapshot = createMachineResolverSnapshot({ route, workspace });
+console.log(validateMachinesConsumerEnvelope("resolver_snapshot", snapshot).ok);
 ```
 
 The SDK merges manifest entries, local heartbeats, SSH route hints, and
@@ -74,11 +84,19 @@ The SDK merges manifest entries, local heartbeats, SSH route hints, and
 when present, and fall back to local probes or app-local machine registries when
 it is absent.
 
-Topology, route, workspace, and compatibility JSON include `schema_version`,
-package version metadata, and capability flags. The current consumer contract
-version is `1`; the exported `MACHINES_CONSUMER_CONTRACT` records the stable
-entrypoint, envelope names, and stable exports used by downstream apps such as
-`@hasna/knowledge`.
+Topology, route, workspace, compatibility, and resolver-snapshot JSON include
+`schema_version`, package version metadata, capability flags, and cacheability
+metadata where downstream apps may persist resolver evidence. The current
+consumer contract version is `1`; the exported `MACHINES_CONSUMER_CONTRACT`
+records the stable entrypoint, envelope names, schema artifact, field
+capabilities, default resolver TTL, and stable exports used by downstream apps
+such as `@hasna/knowledge`.
+
+The package includes `schemas/machines-consumer.schema.json` and also exports
+`MACHINES_CONSUMER_SCHEMA_BUNDLE`, `getMachinesConsumerSchemaBundle()`, and
+`validateMachinesConsumerEnvelope()`. Downstream apps can use these helpers to
+validate route, workspace, compatibility, and resolver-snapshot envelopes
+without importing CLI, MCP, agent, installer, or storage-heavy internals.
 
 The package also ships a downstream conformance fixture for consumers that want
 to verify their optional adapter boundary without copying app-specific smoke

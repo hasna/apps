@@ -42,6 +42,7 @@ function parseArgs(argv) {
         "",
         "Verifies downstream app dependency shapes for @hasna/machines:",
         "  sdk-local: @hasna/machines/consumer is importable and emits v1 envelopes",
+        "  sdk-local also validates schema artifacts and builds resolver snapshots",
         "  future-contract-sdk: fake v2 SDK is detected before route/workspace calls are trusted",
         "  global-cli-only: machines CLI JSON can be used when SDK is absent",
         "  no-sdk-no-cli: consumer can report graceful unavailable diagnostics",
@@ -161,8 +162,11 @@ function writeSdkProbe(appDir) {
     import {
       MACHINES_CONSUMER_CONTRACT,
       MACHINES_CONSUMER_CONTRACT_VERSION,
+      MACHINES_CONSUMER_SCHEMA_BUNDLE,
       checkMachineCompatibility,
+      createMachineResolverSnapshot,
       discoverMachineTopology,
+      validateMachinesConsumerEnvelope,
       resolveMachineRoute,
       resolveMachineWorkspace,
     } from '@hasna/machines/consumer';
@@ -186,18 +190,33 @@ function writeSdkProbe(appDir) {
       workspaces: [],
       now: new Date('2026-06-09T00:00:00.000Z'),
     });
+    const snapshot = createMachineResolverSnapshot({
+      route,
+      workspace,
+      now: new Date('2026-06-09T00:00:00.000Z'),
+    });
 
     console.log(JSON.stringify({
       source: 'sdk',
       supported: MACHINES_CONSUMER_CONTRACT_VERSION <= ${supportedContractVersion},
       contract_version: MACHINES_CONSUMER_CONTRACT_VERSION,
       entrypoint: MACHINES_CONSUMER_CONTRACT.entrypoint,
+      schema_id: MACHINES_CONSUMER_SCHEMA_BUNDLE.$id,
+      schema_artifact: MACHINES_CONSUMER_CONTRACT.schema_artifact,
       envelopes: MACHINES_CONSUMER_CONTRACT.envelopes,
       capabilities: MACHINES_CONSUMER_CONTRACT.capabilities,
+      validation: {
+        contract: validateMachinesConsumerEnvelope('contract', MACHINES_CONSUMER_CONTRACT).ok,
+        route: validateMachinesConsumerEnvelope('route', route).ok,
+        workspace: validateMachinesConsumerEnvelope('workspace', workspace).ok,
+        compatibility: validateMachinesConsumerEnvelope('compatibility', compatibility).ok,
+        resolver_snapshot: validateMachinesConsumerEnvelope('resolver_snapshot', snapshot).ok,
+      },
       topology: { schema_version: topology.schema_version, machines: topology.machines.length },
-      route: { schema_version: route.schema_version, ok: route.ok, route: route.route, target: route.target },
-      workspace: { schema_version: workspace.schema_version, ok: workspace.ok, project_root: workspace.paths.project_root.path },
+      route: { schema_version: route.schema_version, ok: route.ok, route: route.route, target: route.target, cacheable: route.cacheability.cacheable },
+      workspace: { schema_version: workspace.schema_version, ok: workspace.ok, project_root: workspace.paths.project_root.path, cacheable: workspace.cacheability.cacheable },
       compatibility: { schema_version: compatibility.schema_version, ok: compatibility.ok },
+      resolver_snapshot: { schema_version: snapshot.schema_version, cacheable: snapshot.cacheability.cacheable, authority: snapshot.cacheability.source_authority },
     }));
   `);
   return script;
@@ -301,6 +320,12 @@ function assertCase(name, output) {
     for (const envelope of ["topology", "route", "workspace", "compatibility"]) {
       if (!output.envelopes.includes(envelope)) throw new Error(`${name}: missing envelope ${envelope}`);
       if (output[envelope].schema_version !== 1) throw new Error(`${name}: ${envelope} schema mismatch`);
+    }
+    if (!output.envelopes.includes("resolver_snapshot") || output.resolver_snapshot.schema_version !== 1) {
+      throw new Error(`${name}: missing resolver snapshot envelope\n${JSON.stringify(output, null, 2)}`);
+    }
+    if (!output.schema_artifact || !output.schema_id || !Object.values(output.validation).every(Boolean)) {
+      throw new Error(`${name}: schema validation failed\n${JSON.stringify(output, null, 2)}`);
     }
   }
   if (name === "future-contract-sdk") {

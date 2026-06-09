@@ -3,7 +3,12 @@ export {
   MACHINES_CONSUMER_CONTRACT,
   MACHINES_CONSUMER_ENTRYPOINT,
   MACHINES_CONSUMER_CONTRACT_VERSION,
+  MACHINES_CONSUMER_FIELD_CAPABILITIES,
+  MACHINES_CONSUMER_SCHEMA_ARTIFACT,
+  MACHINES_CONSUMER_SCHEMA_URI,
   MACHINES_PACKAGE_NAME,
+  DEFAULT_MACHINE_RESOLVER_TTL_MS,
+  createMachineResolverSnapshot,
   discoverMachineTopology,
   getMachinesConsumerCapabilities,
   getLocalMachineTopology,
@@ -16,6 +21,11 @@ export type {
   MachineRouteKind,
   MachineRouteOptions,
   MachineRouteResolution,
+  MachineResolverAuthority,
+  MachineResolverCacheability,
+  MachineResolverSnapshot,
+  MachineResolverSnapshotRoute,
+  MachineResolverSnapshotWorkspace,
   MachineTopology,
   MachineTopologyEntry,
   MachineTopologyOptions,
@@ -31,11 +41,23 @@ export type {
   MachineWorkspaceTrustStatus,
   MachinesConsumerContract,
   MachinesConsumerEnvelope,
+  MachinesConsumerFieldCapabilities,
   MachinesConsumerCapabilities,
   MachinesContractPackage,
   TopologyCommandResult,
   TopologyCommandRunner,
 } from "./topology.js";
+export {
+  MACHINES_CONSUMER_SCHEMA_BUNDLE,
+  getMachinesConsumerSchemaBundle,
+  validateMachinesConsumerEnvelope,
+} from "./consumer-schema.js";
+export type {
+  MachinesConsumerEnvelopeValue,
+  MachinesConsumerSchemaBundle,
+  MachinesConsumerSchemaEnvelope,
+  MachinesConsumerValidationResult,
+} from "./consumer-schema.js";
 export {
   checkMachineCompatibility,
 } from "./compatibility.js";
