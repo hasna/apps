@@ -416,10 +416,6 @@ function runSyncSmoke(options, runOptions = {}) {
   const learnCommandOptions = runOptions.learnCommandOptions ?? {};
   try {
     knowledgeJson(localDir, ['db', 'init', '--scope', 'project', '--json'], localCommandOptions);
-    knowledgeJson(localDir, ['wiki', 'init', '--scope', 'project', '--json'], localCommandOptions);
-    const sourcePath = join(localDir, 'spark-sync-source.md');
-    writeFileSync(sourcePath, `Spark installed sync convergence fixture from spark02 to ${options.remote}.\n`);
-    knowledgeJson(localDir, ['ingest', 'source', `file://${sourcePath}`, '--scope', 'project', '--json'], localCommandOptions);
     remoteKnowledgeJson(options.remote, remoteDir, ['db', 'init', '--scope', 'project', '--json']);
 
     const registryLearning = runOptions.learnRegistryFallback === true
@@ -435,6 +431,11 @@ function runSyncSmoke(options, runOptions = {}) {
     if (registryLearning && (!registryLearning.ok || registryLearning.push?.conflicts_created !== 0)) {
       throw new Error(`Registry fallback learning sync failed: ${JSON.stringify(registryLearning).slice(0, 1200)}`);
     }
+
+    knowledgeJson(localDir, ['wiki', 'init', '--scope', 'project', '--json'], localCommandOptions);
+    const sourcePath = join(localDir, 'spark-sync-source.md');
+    writeFileSync(sourcePath, `Spark installed sync convergence fixture from spark02 to ${options.remote}.\n`);
+    knowledgeJson(localDir, ['ingest', 'source', `file://${sourcePath}`, '--scope', 'project', '--json'], localCommandOptions);
 
     const peerArgs = syncMachineArgs(options, remoteDir, runOptions);
     const doctorBefore = knowledgeJson(localDir, ['sync', 'doctor', ...peerArgs, '--json'], localCommandOptions);
