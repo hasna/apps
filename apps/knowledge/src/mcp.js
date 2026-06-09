@@ -871,13 +871,18 @@ export function buildServer() {
     }
   });
 
-  registerTool(server, 'knowledge_sync_conflict_propose', 'Knowledge sync conflict proposal', 'Build an approval-gated merge proposal prompt for a sync conflict', {
+  registerTool(server, 'knowledge_sync_conflict_propose', 'Knowledge sync conflict proposal', 'Build an approval-gated deterministic or AI SDK merge proposal for a sync conflict', {
     scope: scopeField,
     id: z.string().describe('Sync conflict id'),
-  }, async ({ scope, id }) => {
+    mode: z.enum(['deterministic', 'ai']).optional().describe('Proposal mode; ai uses configured AI SDK provider and remains read-only'),
+    model: z.string().optional().describe('Model alias/ref for AI mode'),
+    fake: z.boolean().optional().describe('Use deterministic fake AI proposal output for local tests'),
+  }, async ({ scope, id, mode, model, fake }) => {
     const service = createKnowledgeService({ scope });
     try {
-      return jsonText(service.proposeSyncConflictResolution(id));
+      return jsonText(mode === 'ai'
+        ? await service.proposeSyncConflictResolutionWithAi({ id, modelRef: model, fake })
+        : service.proposeSyncConflictResolution(id));
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }

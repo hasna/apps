@@ -17,6 +17,7 @@ export {
   type KnowledgeOpenFilesBoundaryStatus,
   type KnowledgePathsResult,
   type KnowledgePeerSyncOptions,
+  type KnowledgeSyncConflictAiProposalServiceOptions,
   type KnowledgeSyncDoctorResult,
   type KnowledgeSyncRecommendedCommand,
   type KnowledgeServiceOptions,
@@ -25,6 +26,10 @@ export {
   type KnowledgeSyncImportOptions,
   type KnowledgeSyncSnapshotOptions,
 } from './service.js';
+export {
+  proposeKnowledgeSyncConflictResolutionWithAi,
+  type KnowledgeSyncConflictAiProposalOptions,
+} from './conflict-agent.js';
 export {
   KNOWLEDGE_MACHINES_ADAPTER_CONTRACT_VERSION,
   KNOWLEDGE_MACHINES_ADAPTER_ENTRYPOINT,
@@ -82,6 +87,11 @@ export {
   syncTablesFromSnapshot,
   upsertKnowledgeMachine,
   type KnowledgeSyncConflictInput,
+  type KnowledgeSyncConflictEvidence,
+  type KnowledgeSyncConflictProposalAgent,
+  type KnowledgeSyncConflictProposalCitation,
+  type KnowledgeSyncConflictProposedPatch,
+  type KnowledgeSyncConflictResolutionProposal,
   type KnowledgeSyncConflictRow,
   type KnowledgePeerSyncResult,
   type KnowledgeSyncApplyResult,

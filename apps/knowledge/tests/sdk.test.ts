@@ -8,6 +8,7 @@ import {
   createKnowledgeClient,
   createKnowledgeSdk,
   parseSourceRef,
+  recordKnowledgeSyncConflict,
   type KnowledgeClient,
 } from '../src/index';
 
@@ -196,6 +197,34 @@ describe('public knowledge sdk', () => {
     expect(syncSnapshot.snapshot.content_hash).toStartWith('sha256:');
     expect(client.sync.machines().length).toBeGreaterThanOrEqual(1);
     expect(client.sync.conflicts()).toEqual([]);
+
+    const conflict = recordKnowledgeSyncConflict(client.paths().knowledge_db_path, {
+      entityKind: 'sources',
+      entityId: 'id="source_sdk"',
+      localMachineId: 'spark02',
+      remoteMachineId: 'spark01',
+      localHash: 'sha256:sdk-local',
+      remoteHash: 'sha256:sdk-remote',
+      baseHash: 'sha256:sdk-base',
+      metadata: {
+        reason: 'sdk conflict proposal',
+        remote_row: {
+          id: 'source_sdk',
+          uri: 'open-files://file/sdk_conflict',
+          kind: 'document',
+          title: 'Remote SDK source',
+        },
+      },
+    });
+    const aiProposal = await client.sync.proposeConflictResolutionAi({
+      id: conflict.id,
+      modelRef: 'openai:gpt-5-mini',
+      fake: true,
+    });
+    expect(aiProposal.mode).toBe('ai');
+    expect(aiProposal.agent?.provider).toBe('openai');
+    expect(aiProposal.proposed_patch?.summary).toContain('Fake AI proposal');
+    expect(aiProposal.citations.some((citation) => citation.ref === 'open-files://file/sdk_conflict')).toBe(true);
   });
 
   test('exposes route-aware remote sync through the sdk facade', async () => {

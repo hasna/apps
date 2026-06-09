@@ -549,7 +549,15 @@ describe('knowledge cli', () => {
       localHash: 'sha256:local',
       remoteHash: 'sha256:remote',
       baseHash: 'sha256:base',
-      metadata: { reason: 'cli conflict workflow' },
+      metadata: {
+        reason: 'cli conflict workflow',
+        remote_row: {
+          id: 'wiki/handbook.md',
+          path: 'wiki/handbook.md',
+          title: 'Remote handbook draft',
+          source_ref: 'open-files://file/cli_conflict',
+        },
+      },
     });
 
     const show = runCli(['sync', 'conflicts', 'show', conflict.id, '--scope', 'project', '--json'], dir);
@@ -562,7 +570,19 @@ describe('knowledge cli', () => {
     expect(propose.exitCode).toBe(0);
     const proposeOut = JSON.parse(new TextDecoder().decode(propose.stdout));
     expect(proposeOut.requires_approval).toBe(true);
+    expect(proposeOut.mode).toBe('deterministic');
     expect(proposeOut.merge_prompt).toContain('Do not write changes without approval');
+
+    const aiPropose = runCli(['sync', 'conflicts', 'propose', conflict.id, '--mode', 'ai', '--model', 'openai:gpt-5-mini', '--fake', '--scope', 'project', '--json'], dir);
+    expect(aiPropose.exitCode).toBe(0);
+    const aiProposeOut = JSON.parse(new TextDecoder().decode(aiPropose.stdout));
+    expect(aiProposeOut.mode).toBe('ai');
+    expect(aiProposeOut.requires_approval).toBe(true);
+    expect(aiProposeOut.proposed_patch.summary).toContain('Fake AI proposal');
+    expect(aiProposeOut.confidence).toBeGreaterThanOrEqual(0);
+    expect(aiProposeOut.agent.provider).toBe('openai');
+    expect(aiProposeOut.agent.read_only_tools.some((tool: any) => tool.name === 'knowledge_sync_conflict_get')).toBe(true);
+    expect(aiProposeOut.citations.some((citation: any) => citation.ref === 'open-files://file/cli_conflict')).toBe(true);
 
     const blockedResolve = runCli(['sync', 'conflicts', 'resolve', conflict.id, '--scope', 'project', '--strategy', 'manual-merge', '--json'], dir);
     expect(blockedResolve.exitCode).toBe(0);

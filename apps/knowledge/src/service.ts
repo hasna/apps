@@ -13,6 +13,10 @@ import {
 } from './auth';
 import { runKnowledgePrompt, type KnowledgePromptOptions } from './agent';
 import {
+  proposeKnowledgeSyncConflictResolutionWithAi,
+  type KnowledgeSyncConflictAiProposalOptions,
+} from './conflict-agent';
+import {
   embeddingIndexStatus,
   indexKnowledgeEmbeddings,
   searchVectorIndex,
@@ -232,6 +236,13 @@ export interface KnowledgeSyncConflictResolveOptions {
   approvedBy?: string;
   approveWrite?: boolean;
   proposedPatchUri?: string | null;
+}
+
+export interface KnowledgeSyncConflictAiProposalServiceOptions {
+  id: string;
+  modelRef?: string;
+  fake?: boolean;
+  env?: KnowledgeSyncConflictAiProposalOptions['env'];
 }
 
 export type KnowledgeSyncConflictResolveResult = {
@@ -1002,6 +1013,18 @@ export class KnowledgeService {
   proposeSyncConflictResolution(id: string) {
     const workspace = this.ensureWorkspace();
     return proposeKnowledgeSyncConflictResolution(workspace.knowledgeDbPath, id);
+  }
+
+  async proposeSyncConflictResolutionWithAi(options: KnowledgeSyncConflictAiProposalServiceOptions) {
+    const workspace = this.ensureWorkspace();
+    return proposeKnowledgeSyncConflictResolutionWithAi({
+      dbPath: workspace.knowledgeDbPath,
+      id: options.id,
+      config: this.config(),
+      modelRef: options.modelRef,
+      fake: options.fake,
+      env: options.env,
+    });
   }
 
   resolveSyncConflict(options: KnowledgeSyncConflictResolveOptions): KnowledgeSyncConflictResolveResult {

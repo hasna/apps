@@ -355,6 +355,7 @@ knowledge sync doctor|readiness [--machine <ssh-alias>] [--peer-workspace <repo-
 knowledge sync snapshot [--no-tailscale] [--machine <id>] [--scope project] [--json]
 knowledge sync machines [--scope project] [--json]
 knowledge sync conflicts [status] [--limit <n>] [--scope project] [--json]
+knowledge sync conflicts propose <id> [--mode deterministic|ai] [--model <alias|provider:model>] [--fake] [--scope project] [--json]
 knowledge sync dry-run --peer-workspace <repo-or-knowledge-home> [--tables sources,chunks] [--scope project] [--json]
 knowledge sync pull --peer-workspace <repo-or-knowledge-home> [--tables sources,chunks] [--scope project] [--json]
 knowledge sync push --peer-workspace <repo-or-knowledge-home> [--tables sources,chunks] [--scope project] [--json]
@@ -377,6 +378,14 @@ route confidence, optional workspace path sources, and any open-machines
 workspace diagnostics or repair hints. When open-machines reports inferred or
 untrusted workspace metadata, the JSON includes actionable
 `machines workspace repair ...` commands before sync is attempted.
+
+`sync conflicts propose <id>` is approval-gated. The default deterministic
+mode builds a merge prompt from conflict metadata. `--mode ai` runs the same
+read-only evidence gathering path through the AI SDK provider abstraction,
+returning a structured proposed patch, citations, confidence, provider/model,
+usage, and read-only tool trail. `--fake` produces deterministic local output
+without provider credentials. Neither mode resolves or writes durable changes;
+`sync conflicts resolve` still requires `--approve-write --approved-by <name>`.
 
 `sync dry-run`, `pull`, `push`, and `sync` operate against another local repo
 root or `.hasna/apps/knowledge` path. They compare rows by table primary key,
@@ -639,6 +648,8 @@ The stable agent-facing MCP tools are:
   registry rows from optional topology.
 - `knowledge_sync_conflicts`: list sync conflicts awaiting review or already
   resolved.
+- `knowledge_sync_conflict_propose`: build deterministic or AI SDK conflict
+  proposals with citations and explicit approval gating.
 - `knowledge_sync_peer`: dry-run, pull, push, or bidirectionally sync with a
   local peer workspace.
 - `storage_status`, `storage_push`, `storage_pull`, `storage_sync`: inspect or

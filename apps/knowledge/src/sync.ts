@@ -149,15 +149,65 @@ export type KnowledgeSyncConflict = KnowledgeSyncConflictRow & {
   metadata: Record<string, unknown>;
 };
 
+export interface KnowledgeSyncConflictProposalCitation {
+  id: string;
+  kind: 'source_ref' | 'artifact' | 'row' | 'metadata';
+  ref: string;
+  hash: string | null;
+  quote: string | null;
+}
+
+export interface KnowledgeSyncConflictProposedPatch {
+  kind: 'manual_merge' | 'choose_local' | 'choose_remote' | 'no_op' | 'custom';
+  target: string;
+  strategy: string;
+  summary: string;
+  diff: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface KnowledgeSyncConflictReadOnlyToolCall {
+  name: string;
+  input: Record<string, unknown>;
+  output_summary: string;
+}
+
+export interface KnowledgeSyncConflictProposalAgent {
+  generated: boolean;
+  provider: string;
+  model: string;
+  run_id: string | null;
+  read_only_tools: KnowledgeSyncConflictReadOnlyToolCall[];
+  usage: {
+    input_tokens: number;
+    output_tokens: number;
+    cost_usd: number;
+  };
+}
+
 export interface KnowledgeSyncConflictResolutionProposal {
   ok: true;
   conflict: KnowledgeSyncConflict;
   requires_approval: true;
+  mode: 'deterministic' | 'ai';
   proposed_strategy: string;
   summary: string;
   merge_prompt: string;
+  proposed_patch: KnowledgeSyncConflictProposedPatch | null;
+  citations: KnowledgeSyncConflictProposalCitation[];
+  confidence: number | null;
+  agent: KnowledgeSyncConflictProposalAgent | null;
   warnings: string[];
   message: string;
+}
+
+export interface KnowledgeSyncConflictEvidence {
+  conflict: KnowledgeSyncConflict;
+  local_row: Row | null;
+  remote_row: Row | null;
+  source_refs: string[];
+  citations: KnowledgeSyncConflictProposalCitation[];
+  read_only_tools: KnowledgeSyncConflictReadOnlyToolCall[];
 }
 
 export const KNOWLEDGE_SYNC_TABLES = [
@@ -438,6 +488,34 @@ function resolveSyncTables(tables?: string[]): KnowledgeSyncTable[] {
 function rowKey(table: KnowledgeSyncTable, row: Row): string {
   const primaryKeys = PRIMARY_KEYS[table];
   return primaryKeys.map((key) => `${key}=${JSON.stringify(row[key] ?? null)}`).join('&');
+}
+
+const RAW_PAYLOAD_METADATA_KEYS = new Set([
+  'raw',
+  'raw_bytes',
+  'raw_content',
+  'content_base64',
+  'source_bytes',
+  'source_content',
+  'body_bytes',
+]);
+
+function sanitizeConflictEvidenceValue(value: unknown, depth = 0): unknown {
+  if (depth > 8) return '[truncated-depth]';
+  if (typeof value === 'string') return value.length > 4000 ? `${value.slice(0, 4000)}...[truncated]` : value;
+  if (value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.slice(0, 50).map((entry) => sanitizeConflictEvidenceValue(entry, depth + 1));
+  const output: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (RAW_PAYLOAD_METADATA_KEYS.has(key.toLowerCase())) continue;
+    output[key] = sanitizeConflictEvidenceValue(entry, depth + 1);
+  }
+  return output;
+}
+
+function sanitizeConflictEvidenceRow(row: Row | null | undefined): Row | null {
+  if (!row) return null;
+  return sanitizeConflictEvidenceValue(row) as Row;
 }
 
 function hashValue(value: unknown): string {
@@ -1086,6 +1164,8 @@ async function materializeArtifacts(options: {
           direction: options.direction,
           target_artifact_uri: target.artifact_uri,
           source_artifact_uri: artifact.artifact_uri,
+          local_artifact: sanitizeConflictEvidenceValue(target),
+          remote_artifact: sanitizeConflictEvidenceValue(artifact),
         },
       });
       continue;
@@ -1488,6 +1568,8 @@ export async function applyKnowledgeSyncBundle(options: {
               current_logical_clock: existingClock?.logical_clock ?? null,
               source_workspace_home: options.bundle.source.workspace_home,
               target_workspace_home: options.targetWorkspaceHome,
+              local_row: sanitizeConflictEvidenceRow(targetRow),
+              remote_row: sanitizeConflictEvidenceRow(sourceRow),
             },
           })) conflictsCreated += 1;
         }
@@ -1533,6 +1615,8 @@ export async function applyKnowledgeSyncBundle(options: {
                 reason: 'remote_owned_row_missing_from_incoming_bundle',
                 source_workspace_home: options.bundle.source.workspace_home,
                 target_workspace_home: options.targetWorkspaceHome,
+                local_row: sanitizeConflictEvidenceRow(targetRow),
+                remote_row: null,
               },
             })) conflictsCreated += 1;
           }
@@ -1876,6 +1960,150 @@ export function listKnowledgeSyncConflicts(dbPath: string, options: { status?: s
   }
 }
 
+function conflictTable(value: string): KnowledgeSyncTable | null {
+  return (KNOWLEDGE_SYNC_TABLES as readonly string[]).includes(value) ? value as KnowledgeSyncTable : null;
+}
+
+function catalogRowForConflict(db: Database, conflict: KnowledgeSyncConflict): Row | null {
+  const table = conflictTable(conflict.entity_kind);
+  if (!table || !tableExists(db, table)) return null;
+  const values = parseRowKeyValues(table, conflict.entity_id);
+  if (!values) return null;
+  const where = primaryKeyWhereClause(table);
+  return db.query(`SELECT * FROM ${quoteIdent(table)} WHERE ${where} LIMIT 1`).get(...values) as Row | null;
+}
+
+function rowFromMetadata(metadata: Record<string, unknown>, keys: string[]): Row | null {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (value && typeof value === 'object' && !Array.isArray(value)) return sanitizeConflictEvidenceRow(value as Row);
+  }
+  return null;
+}
+
+function addSourceRef(refs: Set<string>, value: unknown): void {
+  if (typeof value !== 'string') return;
+  const trimmed = value.trim();
+  if (!trimmed) return;
+  if (
+    trimmed.startsWith('open-files://')
+    || trimmed.startsWith('s3://')
+    || trimmed.startsWith('file://')
+    || trimmed.startsWith('https://')
+    || trimmed.startsWith('http://')
+  ) refs.add(trimmed);
+}
+
+function collectSourceRefs(value: unknown, refs = new Set<string>(), depth = 0): Set<string> {
+  if (depth > 8 || value === null || value === undefined) return refs;
+  if (typeof value === 'string') {
+    addSourceRef(refs, value);
+    return refs;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) collectSourceRefs(entry, refs, depth + 1);
+    return refs;
+  }
+  if (typeof value === 'object') {
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      if (key === 'source_ref' || key === 'source_uri' || key === 'artifact_uri' || key.endsWith('_uri')) addSourceRef(refs, entry);
+      collectSourceRefs(entry, refs, depth + 1);
+    }
+  }
+  return refs;
+}
+
+function conflictCitations(input: {
+  conflict: KnowledgeSyncConflict;
+  localRow: Row | null;
+  remoteRow: Row | null;
+  sourceRefs: string[];
+}): KnowledgeSyncConflictProposalCitation[] {
+  const citations: KnowledgeSyncConflictProposalCitation[] = [{
+    id: 'conflict',
+    kind: 'metadata',
+    ref: `knowledge-sync-conflict://${input.conflict.id}`,
+    hash: input.conflict.base_hash,
+    quote: `Conflict on ${input.conflict.entity_kind}:${input.conflict.entity_id}`,
+  }];
+  if (input.localRow) {
+    citations.push({
+      id: 'local-row',
+      kind: 'row',
+      ref: `${input.conflict.entity_kind}:${input.conflict.entity_id}:local`,
+      hash: input.conflict.local_hash,
+      quote: JSON.stringify(input.localRow).slice(0, 300),
+    });
+  }
+  if (input.remoteRow) {
+    citations.push({
+      id: 'remote-row',
+      kind: 'row',
+      ref: `${input.conflict.entity_kind}:${input.conflict.entity_id}:remote`,
+      hash: input.conflict.remote_hash,
+      quote: JSON.stringify(input.remoteRow).slice(0, 300),
+    });
+  }
+  input.sourceRefs.slice(0, 10).forEach((ref, index) => {
+    citations.push({
+      id: `source-${index + 1}`,
+      kind: ref.startsWith('file://') || ref.startsWith('s3://') ? 'artifact' : 'source_ref',
+      ref,
+      hash: null,
+      quote: null,
+    });
+  });
+  return citations;
+}
+
+export function getKnowledgeSyncConflictEvidence(dbPath: string, id: string): KnowledgeSyncConflictEvidence {
+  const conflict = getKnowledgeSyncConflict(dbPath, id);
+  if (!conflict) throw new Error(`Sync conflict not found: ${id}`);
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const localRow = sanitizeConflictEvidenceRow(catalogRowForConflict(db, conflict));
+    const remoteRow = rowFromMetadata(conflict.metadata, ['remote_row', 'source_row', 'incoming_row']);
+    const refs = collectSourceRefs({
+      conflict: {
+        entity_kind: conflict.entity_kind,
+        entity_id: conflict.entity_id,
+        metadata: conflict.metadata,
+      },
+      local_row: localRow,
+      remote_row: remoteRow,
+    });
+    const sourceRefs = [...refs].slice(0, 25);
+    const readOnlyTools: KnowledgeSyncConflictReadOnlyToolCall[] = [
+      {
+        name: 'knowledge_sync_conflict_get',
+        input: { id },
+        output_summary: `${conflict.entity_kind}:${conflict.entity_id} status=${conflict.status}`,
+      },
+      {
+        name: 'knowledge_catalog_row_get',
+        input: { table: conflict.entity_kind, key: conflict.entity_id },
+        output_summary: localRow ? 'local row found' : 'local row unavailable',
+      },
+      {
+        name: 'knowledge_source_ref_extract',
+        input: { id },
+        output_summary: `${sourceRefs.length} source/artifact ref(s) found`,
+      },
+    ];
+    return {
+      conflict,
+      local_row: localRow,
+      remote_row: remoteRow,
+      source_refs: sourceRefs,
+      citations: conflictCitations({ conflict, localRow, remoteRow, sourceRefs }),
+      read_only_tools: readOnlyTools,
+    };
+  } finally {
+    db.close();
+  }
+}
+
 export function proposeKnowledgeSyncConflictResolution(dbPath: string, id: string): KnowledgeSyncConflictResolutionProposal {
   const conflict = getKnowledgeSyncConflict(dbPath, id);
   if (!conflict) throw new Error(`Sync conflict not found: ${id}`);
@@ -1898,9 +2126,14 @@ export function proposeKnowledgeSyncConflictResolution(dbPath: string, id: strin
     ok: true,
     conflict,
     requires_approval: true,
+    mode: 'deterministic',
     proposed_strategy: proposedStrategy,
     summary,
     merge_prompt: mergePrompt,
+    proposed_patch: null,
+    citations: conflictCitations({ conflict, localRow: null, remoteRow: null, sourceRefs: [] }),
+    confidence: null,
+    agent: null,
     warnings: conflict.status === 'resolved' ? ['conflict_already_resolved'] : [],
     message: `Prepared approval-gated merge proposal for ${conflict.id}`,
   };

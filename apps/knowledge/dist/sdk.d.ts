@@ -41,6 +41,7 @@ export interface KnowledgeClient {
         readonly conflicts: (options?: Parameters<KnowledgeService['syncConflicts']>[0]) => ReturnType<KnowledgeService['syncConflicts']>;
         readonly conflict: (id: string) => ReturnType<KnowledgeService['syncConflict']>;
         readonly proposeConflictResolution: (id: string) => ReturnType<KnowledgeService['proposeSyncConflictResolution']>;
+        readonly proposeConflictResolutionAi: (options: Parameters<KnowledgeService['proposeSyncConflictResolutionWithAi']>[0]) => ReturnType<KnowledgeService['proposeSyncConflictResolutionWithAi']>;
         readonly resolveConflict: (options: Parameters<KnowledgeService['resolveSyncConflict']>[0]) => ReturnType<KnowledgeService['resolveSyncConflict']>;
         readonly machines: () => ReturnType<KnowledgeService['syncMachines']>;
         readonly exportBundle: (options?: KnowledgeSyncBundleOptions) => ReturnType<KnowledgeService['exportSyncBundle']>;

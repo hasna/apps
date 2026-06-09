@@ -288,7 +288,11 @@ describe('knowledge machine sync ledger', () => {
     const push = await sourceService.syncPeer({ peerWorkspace: peerDir, direction: 'push' });
     expect(push.ok).toBe(false);
     expect(push.push?.tables.find((table) => table.table === 'wiki_pages')?.conflicts).toBe(1);
-    expect(peerService.syncConflicts({ status: 'open' }).some((conflict) => conflict.entity_kind === 'wiki_pages')).toBe(true);
+    const openConflicts = peerService.syncConflicts({ status: 'open' });
+    const wikiConflict = openConflicts.find((conflict) => conflict.entity_kind === 'wiki_pages');
+    expect(wikiConflict).toBeTruthy();
+    expect(wikiConflict?.metadata.local_row).toMatchObject({ title: 'Peer edited README' });
+    expect(wikiConflict?.metadata.remote_row).toMatchObject({ title: 'Wiki' });
 
     const unchanged = openKnowledgeDb(peerService.paths().knowledge_db_path);
     try {

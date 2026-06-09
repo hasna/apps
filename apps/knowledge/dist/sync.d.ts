@@ -145,15 +145,60 @@ export interface KnowledgeSyncConflictInput {
 export type KnowledgeSyncConflict = KnowledgeSyncConflictRow & {
     metadata: Record<string, unknown>;
 };
+export interface KnowledgeSyncConflictProposalCitation {
+    id: string;
+    kind: 'source_ref' | 'artifact' | 'row' | 'metadata';
+    ref: string;
+    hash: string | null;
+    quote: string | null;
+}
+export interface KnowledgeSyncConflictProposedPatch {
+    kind: 'manual_merge' | 'choose_local' | 'choose_remote' | 'no_op' | 'custom';
+    target: string;
+    strategy: string;
+    summary: string;
+    diff: string | null;
+    metadata: Record<string, unknown>;
+}
+export interface KnowledgeSyncConflictReadOnlyToolCall {
+    name: string;
+    input: Record<string, unknown>;
+    output_summary: string;
+}
+export interface KnowledgeSyncConflictProposalAgent {
+    generated: boolean;
+    provider: string;
+    model: string;
+    run_id: string | null;
+    read_only_tools: KnowledgeSyncConflictReadOnlyToolCall[];
+    usage: {
+        input_tokens: number;
+        output_tokens: number;
+        cost_usd: number;
+    };
+}
 export interface KnowledgeSyncConflictResolutionProposal {
     ok: true;
     conflict: KnowledgeSyncConflict;
     requires_approval: true;
+    mode: 'deterministic' | 'ai';
     proposed_strategy: string;
     summary: string;
     merge_prompt: string;
+    proposed_patch: KnowledgeSyncConflictProposedPatch | null;
+    citations: KnowledgeSyncConflictProposalCitation[];
+    confidence: number | null;
+    agent: KnowledgeSyncConflictProposalAgent | null;
     warnings: string[];
     message: string;
+}
+export interface KnowledgeSyncConflictEvidence {
+    conflict: KnowledgeSyncConflict;
+    local_row: Row | null;
+    remote_row: Row | null;
+    source_refs: string[];
+    citations: KnowledgeSyncConflictProposalCitation[];
+    read_only_tools: KnowledgeSyncConflictReadOnlyToolCall[];
 }
 export declare const KNOWLEDGE_SYNC_TABLES: readonly ["sources", "wiki_pages", "source_revisions", "chunks", "chunk_embeddings", "wiki_backlinks", "citations", "knowledge_indexes", "runs", "run_events", "provider_usage", "redaction_findings", "storage_objects", "audit_events", "approval_gates", "vector_index_entries", "reindex_queue", "knowledge_machines", "knowledge_sync_snapshots", "knowledge_sync_changes", "knowledge_sync_conflicts", "knowledge_sync_table_clocks", "knowledge_sync_imports"];
 export declare const KNOWLEDGE_SYNC_PROTOCOL_VERSION = 2;
@@ -324,6 +369,7 @@ export declare function listKnowledgeSyncConflicts(dbPath: string, options?: {
     status?: string;
     limit?: number;
 }): KnowledgeSyncConflict[];
+export declare function getKnowledgeSyncConflictEvidence(dbPath: string, id: string): KnowledgeSyncConflictEvidence;
 export declare function proposeKnowledgeSyncConflictResolution(dbPath: string, id: string): KnowledgeSyncConflictResolutionProposal;
 export declare function resolveKnowledgeSyncConflict(dbPath: string, input: {
     id: string;

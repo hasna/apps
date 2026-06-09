@@ -349,7 +349,15 @@ describe('knowledge MCP', () => {
         localHash: 'sha256:mcp-local',
         remoteHash: 'sha256:mcp-remote',
         baseHash: 'sha256:mcp-base',
-        metadata: { reason: 'mcp conflict workflow' },
+        metadata: {
+          reason: 'mcp conflict workflow',
+          remote_row: {
+            id: 'wiki/mcp.md',
+            path: 'wiki/mcp.md',
+            title: 'Remote MCP draft',
+            source_ref: 'open-files://file/mcp_conflict',
+          },
+        },
       });
 
       const conflictGet = parseToolJson(await client.callTool({
@@ -363,7 +371,24 @@ describe('knowledge MCP', () => {
         arguments: { scope: 'project', id: conflict.id },
       }));
       expect(conflictProposal.requires_approval).toBe(true);
+      expect(conflictProposal.mode).toBe('deterministic');
       expect(conflictProposal.merge_prompt).toContain('Do not write changes without approval');
+
+      const aiConflictProposal = parseToolJson(await client.callTool({
+        name: 'knowledge_sync_conflict_propose',
+        arguments: {
+          scope: 'project',
+          id: conflict.id,
+          mode: 'ai',
+          model: 'openai:gpt-5-mini',
+          fake: true,
+        },
+      }));
+      expect(aiConflictProposal.mode).toBe('ai');
+      expect(aiConflictProposal.requires_approval).toBe(true);
+      expect(aiConflictProposal.proposed_patch.summary).toContain('Fake AI proposal');
+      expect(aiConflictProposal.agent.read_only_tools.some((tool: any) => tool.name === 'knowledge_sync_conflict_get')).toBe(true);
+      expect(aiConflictProposal.citations.some((citation: any) => citation.ref === 'open-files://file/mcp_conflict')).toBe(true);
 
       const blockedConflictResolve = parseToolJson(await client.callTool({
         name: 'knowledge_sync_conflict_resolve',

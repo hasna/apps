@@ -1,5 +1,6 @@
 import { type KnowledgeAuthStatus } from './auth';
 import { type KnowledgePromptOptions } from './agent';
+import { type KnowledgeSyncConflictAiProposalOptions } from './conflict-agent';
 import { type EmbeddingIndexOptions, type EmbeddingSearchOptions } from './embeddings';
 import { type KnowledgeMachinePreflightOptions, type KnowledgeMachineRouteResolution, type KnowledgeMachineWorkspaceResolution, type KnowledgeMachineTopologyOptions } from './machines';
 import { type ProviderStatusResult, type ModelRegistryEntry } from './providers';
@@ -150,6 +151,12 @@ export interface KnowledgeSyncConflictResolveOptions {
     approveWrite?: boolean;
     proposedPatchUri?: string | null;
 }
+export interface KnowledgeSyncConflictAiProposalServiceOptions {
+    id: string;
+    modelRef?: string;
+    fake?: boolean;
+    env?: KnowledgeSyncConflictAiProposalOptions['env'];
+}
 export type KnowledgeSyncConflictResolveResult = {
     ok: false;
     approval_required: true;
@@ -246,6 +253,7 @@ export declare class KnowledgeService {
     }): KnowledgeSyncConflict[];
     syncConflict(id: string): KnowledgeSyncConflict;
     proposeSyncConflictResolution(id: string): KnowledgeSyncConflictResolutionProposal;
+    proposeSyncConflictResolutionWithAi(options: KnowledgeSyncConflictAiProposalServiceOptions): Promise<KnowledgeSyncConflictResolutionProposal>;
     resolveSyncConflict(options: KnowledgeSyncConflictResolveOptions): KnowledgeSyncConflictResolveResult;
     syncMachines(): import("./sync").KnowledgeSyncMachineRow[];
     exportSyncBundle(options?: KnowledgeSyncBundleOptions): KnowledgeSyncBundle;
