@@ -21,7 +21,8 @@ describe("smart ssh", () => {
     });
 
     const resolved = resolveSshTarget("spark01");
-    expect(resolved.route).toBe("lan");
+    expect(resolved.route).toBe("ssh");
+    expect(resolved.confidence).toBe("high");
     expect(buildSshCommand("spark01")).toBe("ssh hasna@spark01");
   });
 
@@ -42,5 +43,50 @@ describe("smart ssh", () => {
     const resolved = resolveSshTarget("apple03");
     expect(resolved.route).toBe("tailscale");
     expect(buildSshCommand("apple03", "uptime")).toBe(`ssh apple03.tailnet.ts.net ${JSON.stringify("uptime")}`);
+  });
+
+  test("resolves tailscale-discovered machines without a manifest entry", () => {
+    const topology = {
+      schema_version: 1 as const,
+      package: { name: "@hasna/machines" as const, version: "0.0.16" },
+      capabilities: { topology: true as const, compatibility: true as const, route_resolution: true as const, cli_json_fallback: true as const },
+      generated_at: "2026-06-09T00:00:00.000Z",
+      local_machine_id: "spark02",
+      local_hostname: "spark02",
+      current_platform: "linux",
+      manifest_path_known: false,
+      machines: [{
+        machine_id: "spark01",
+        hostname: "spark01",
+        platform: "linux",
+        os: "linux",
+        user: null,
+        workspace_path: null,
+        manifest_declared: false,
+        heartbeat_status: "unknown" as const,
+        last_heartbeat_at: null,
+        tailscale: {
+          dns_name: "spark01.tailnet.ts.net",
+          ips: ["100.71.123.34"],
+          online: true,
+          active: true,
+          last_seen: null,
+        },
+        ssh: {
+          address: null,
+          route: "tailscale" as const,
+          command_target: "spark01.tailnet.ts.net",
+        },
+        route_hints: [{ kind: "tailscale" as const, target: "spark01.tailnet.ts.net", reachable: true }],
+        tags: [],
+        metadata: {},
+      }],
+      warnings: [],
+    };
+
+    const resolved = resolveSshTarget("spark01", { topology });
+    expect(resolved.route).toBe("tailscale");
+    expect(resolved.target).toBe("spark01.tailnet.ts.net");
+    expect(buildSshCommand("spark01", "knowledge --version", { topology })).toBe(`ssh spark01.tailnet.ts.net ${JSON.stringify("knowledge --version")}`);
   });
 });

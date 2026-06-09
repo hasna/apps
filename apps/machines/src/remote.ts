@@ -33,7 +33,8 @@ export function resolveMachineCommand(machineId: string, command: string, localM
       shellCommand: buildSshCommand(machineId, command),
     };
   } catch (error) {
-    if (String((error as Error).message ?? error).includes("Machine not found in manifest")) {
+    const message = String((error as Error).message ?? error);
+    if (message.includes("Machine route not found") || message.includes("Machine not found in manifest")) {
       return { source: "ssh", shellCommand: `ssh ${shellQuote(machineId)} ${shellQuote(command)}` };
     }
     throw error;

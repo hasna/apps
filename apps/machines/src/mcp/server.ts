@@ -19,13 +19,13 @@ import {
 import { listPorts } from "../commands/ports.js";
 import { getServeInfo, renderDashboardHtml } from "../commands/serve.js";
 import { runSelfTest } from "../commands/self-test.js";
-import { buildSshCommand, resolveSshTarget } from "../commands/ssh.js";
+import { buildSshCommand } from "../commands/ssh.js";
 import { getStatus } from "../commands/status.js";
 import { manifestBootstrapCurrentMachine, manifestGet, manifestList, manifestRemove, manifestValidate } from "../commands/manifest.js";
 import { buildSetupPlan, runSetup } from "../commands/setup.js";
 import { buildSyncPlan, runSync } from "../commands/sync.js";
 import { getAgentStatus } from "../agent/runtime.js";
-import { discoverMachineTopology } from "../topology.js";
+import { discoverMachineTopology, resolveMachineRoute } from "../topology.js";
 import { checkMachineCompatibility } from "../compatibility.js";
 import { getStorageStatus, storagePull, storagePush, storageSync } from "../storage.js";
 
@@ -57,6 +57,7 @@ export const MACHINE_MCP_TOOL_NAMES = [
   "machines_install_claude_diff",
   "machines_install_claude_preview",
   "machines_install_claude_apply",
+  "machines_route_resolve",
   "machines_ssh_resolve",
   "machines_ports",
   "machines_backup_preview",
@@ -299,11 +300,20 @@ export function createMcpServer(version: string): McpServer {
   );
 
   server.tool(
+    "machines_route_resolve",
+    "Resolve the best route for a machine using manifest, heartbeat, SSH, LAN, and Tailscale topology.",
+    { machine_id: z.string().describe("Machine identifier"), include_tailscale: z.boolean().optional().describe("Whether to probe tailscale status --json") },
+    async ({ machine_id, include_tailscale }) => ({
+      content: [{ type: "text", text: JSON.stringify(resolveMachineRoute(machine_id, { includeTailscale: include_tailscale !== false }), null, 2) }],
+    })
+  );
+
+  server.tool(
     "machines_ssh_resolve",
     "Resolve the best SSH route for a machine.",
     { machine_id: z.string().describe("Machine identifier"), remote_command: z.string().optional().describe("Optional remote command") },
     async ({ machine_id, remote_command }) => ({
-      content: [{ type: "text", text: JSON.stringify({ resolved: resolveSshTarget(machine_id), command: buildSshCommand(machine_id, remote_command) }, null, 2) }],
+      content: [{ type: "text", text: JSON.stringify({ resolved: resolveMachineRoute(machine_id), command: buildSshCommand(machine_id, remote_command) }, null, 2) }],
     })
   );
 

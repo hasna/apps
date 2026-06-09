@@ -1,56 +1,31 @@
-import { spawnSync } from "node:child_process";
-import { detectCurrentMachineManifest, getManifestMachine } from "../manifests.js";
+import { resolveMachineRoute, type MachineRouteOptions } from "../topology.js";
 
 export interface ResolvedSshTarget {
   machineId: string;
   target: string;
-  route: "lan" | "tailscale" | "local";
+  route: "lan" | "tailscale" | "local" | "ssh";
+  confidence: "exact" | "high" | "medium" | "low" | "none";
+  warnings: string[];
 }
 
-function envReachableHosts(): Set<string> {
-  const raw = process.env["HASNA_MACHINES_REACHABLE_HOSTS"];
-  return new Set((raw || "").split(",").map((value) => value.trim()).filter(Boolean));
-}
-
-function isReachable(host: string): boolean {
-  const overrides = envReachableHosts();
-  if (overrides.size > 0) {
-    return overrides.has(host);
+export function resolveSshTarget(machineId: string, options: MachineRouteOptions = {}): ResolvedSshTarget {
+  const resolved = resolveMachineRoute(machineId, options);
+  if (!resolved.ok || !resolved.target) {
+    throw new Error(`Machine route not found: ${machineId}`);
   }
-
-  const probe = spawnSync("bash", ["-lc", `getent hosts ${host} >/dev/null 2>&1 || ping -c 1 -W 1 ${host} >/dev/null 2>&1`], {
-    stdio: "ignore",
-  });
-  return probe.status === 0;
-}
-
-export function resolveSshTarget(machineId: string): ResolvedSshTarget {
-  const machine = getManifestMachine(machineId);
-  if (!machine) {
-    throw new Error(`Machine not found in manifest: ${machineId}`);
+  if (resolved.route !== "local" && resolved.route !== "lan" && resolved.route !== "tailscale" && resolved.route !== "ssh") {
+    throw new Error(`Machine route is not SSH-capable: ${machineId}`);
   }
-
-  const current = detectCurrentMachineManifest();
-  if (machine.id === current.id) {
-    return {
-      machineId,
-      target: "localhost",
-      route: "local",
-    };
-  }
-
-  const lanTarget = machine.sshAddress || machine.hostname || machine.id;
-  const tailscaleTarget = machine.tailscaleName || machine.hostname || machine.id;
-  const route = isReachable(lanTarget) ? "lan" : "tailscale";
-
   return {
-    machineId,
-    target: route === "lan" ? lanTarget : tailscaleTarget,
-    route,
+    machineId: resolved.machine_id ?? machineId,
+    target: resolved.target,
+    route: resolved.route,
+    confidence: resolved.confidence,
+    warnings: resolved.warnings,
   };
 }
 
-export function buildSshCommand(machineId: string, remoteCommand?: string): string {
-  const resolved = resolveSshTarget(machineId);
+export function buildSshCommand(machineId: string, remoteCommand?: string, options: MachineRouteOptions = {}): string {
+  const resolved = resolveSshTarget(machineId, options);
   return remoteCommand ? `ssh ${resolved.target} ${JSON.stringify(remoteCommand)}` : `ssh ${resolved.target}`;
 }

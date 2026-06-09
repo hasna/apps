@@ -35,7 +35,7 @@ import { listPorts } from "../commands/ports.js";
 import { buildSshCommand, resolveSshTarget } from "../commands/ssh.js";
 import { buildSyncPlan, runSync } from "../commands/sync.js";
 import { getStatus } from "../commands/status.js";
-import { discoverMachineTopology } from "../topology.js";
+import { discoverMachineTopology, resolveMachineRoute } from "../topology.js";
 import {
   checkMachineCompatibility,
   type CompatibilityCheck,
@@ -221,10 +221,13 @@ function parsePackageSpec(value: string): CompatibilityPackageSpec {
 }
 
 function parseWorkspaceSpec(value: string): CompatibilityWorkspaceSpec {
-  const [label, path] = value.includes("=") ? value.split(/=(.*)/s).filter(Boolean) : ["workspace", value];
+  const [label, rest] = value.includes("=") ? value.split(/=(.*)/s).filter(Boolean) : ["workspace", value];
+  const [path, expectedPackageName, expectedVersion] = rest.split(":");
   return {
     label,
     path,
+    expectedPackageName: expectedPackageName || undefined,
+    expectedVersion: expectedVersion || undefined,
     required: true,
   };
 }
@@ -493,7 +496,7 @@ program
   .option("--machine <id>", "Machine identifier")
   .option("--command <command...>", "Required command or command:expectedVersion")
   .option("--package <spec...>", "Required package as name[:command[:expectedVersion]]")
-  .option("--workspace <spec...>", "Required workspace as label=/path or /path")
+  .option("--workspace <spec...>", "Required workspace as label=/path[:expectedPackageName[:expectedVersion]] or /path[:expectedPackageName[:expectedVersion]]")
   .option("-j, --json", "Print JSON output", false)
   .action((options: { machine?: string; command?: string[]; package?: string[]; workspace?: string[]; json?: boolean }) => {
     const result = checkMachineCompatibility({
@@ -806,6 +809,34 @@ program
   });
 
 program
+  .command("route")
+  .description("Resolve the best route for a machine")
+  .requiredOption("--machine <id>", "Machine identifier")
+  .option("--no-tailscale", "Skip tailscale status probing")
+  .option("--cmd <command>", "Remote command to run")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { machine: string; tailscale?: boolean; cmd?: string; json?: boolean }) => {
+    const topology = discoverMachineTopology({ includeTailscale: options.tailscale !== false });
+    const resolved = resolveMachineRoute(options.machine, { topology });
+    const command = resolved.ok && resolved.target
+      ? resolved.route === "local"
+        ? options.cmd ?? null
+        : buildSshCommand(options.machine, options.cmd, { topology })
+      : null;
+    const payload = { ...resolved, command };
+    if (options.json) {
+      console.log(JSON.stringify(payload, null, 2));
+      return;
+    }
+    if (!resolved.ok) {
+      console.error(chalk.red(resolved.warnings.join("; ") || `No route found for ${options.machine}`));
+      process.exitCode = 1;
+      return;
+    }
+    console.log(command ?? `${resolved.route}:${resolved.target}`);
+  });
+
+program
   .command("ssh")
   .description("Choose the best SSH route for a machine")
   .requiredOption("--machine <id>", "Machine identifier")
@@ -813,7 +844,8 @@ program
   .option("-j, --json", "Print JSON output", false)
   .action((options: { machine: string; cmd?: string; json?: boolean }) => {
     if (options.json) {
-      console.log(JSON.stringify(resolveSshTarget(options.machine), null, 2));
+      const resolved = resolveMachineRoute(options.machine);
+      console.log(JSON.stringify({ resolved, command: resolved.ok ? buildSshCommand(options.machine, options.cmd) : null }, null, 2));
       return;
     }
     console.log(buildSshCommand(options.machine, options.cmd));

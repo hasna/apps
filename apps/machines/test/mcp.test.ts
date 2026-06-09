@@ -11,6 +11,7 @@ test("exports expected MCP tool surface", () => {
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_serve_info");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_sync_apply");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_compatibility");
+  expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_route_resolve");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("storage_status");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("storage_push");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("storage_pull");

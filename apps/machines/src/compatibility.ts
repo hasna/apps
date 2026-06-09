@@ -1,5 +1,6 @@
 import { getLocalMachineId } from "./db.js";
 import { runMachineCommand, type MachineCommandResult } from "./remote.js";
+import { MACHINES_CONSUMER_CONTRACT_VERSION, MACHINES_PACKAGE_NAME, type MachinesContractPackage, type MachinesConsumerCapabilities } from "./topology.js";
 import { getPackageVersion } from "./version.js";
 
 export type CompatibilityStatus = "ok" | "warn" | "fail";
@@ -39,6 +40,9 @@ export interface CompatibilityCheck {
 }
 
 export interface MachineCompatibilityReport {
+  schema_version: typeof MACHINES_CONSUMER_CONTRACT_VERSION;
+  package: MachinesContractPackage;
+  capabilities: MachinesConsumerCapabilities;
   ok: boolean;
   machine_id: string;
   source: CompatibilitySource;
@@ -336,6 +340,17 @@ export function checkMachineCompatibility(options: MachineCompatibilityOptions =
   };
 
   return {
+    schema_version: MACHINES_CONSUMER_CONTRACT_VERSION,
+    package: {
+      name: MACHINES_PACKAGE_NAME,
+      version: getPackageVersion(),
+    },
+    capabilities: {
+      topology: true,
+      compatibility: true,
+      route_resolution: true,
+      cli_json_fallback: true,
+    },
     ok: summary.fail === 0,
     machine_id: machineId,
     source: checks[0]?.source ?? "local",

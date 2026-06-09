@@ -50,13 +50,15 @@ machines self-test
 ## Topology SDK
 
 `@hasna/machines` exposes a compact topology SDK for other open-core packages
-that need machine identity without importing CLI internals:
+that need machine identity without importing CLI internals. Consumers that only
+need the stable app-to-app contract should import `@hasna/machines/consumer`:
 
 ```ts
-import { discoverMachineTopology, getLocalMachineTopology } from "@hasna/machines";
+import { discoverMachineTopology, getLocalMachineTopology, resolveMachineRoute } from "@hasna/machines/consumer";
 
 const topology = discoverMachineTopology();
 const local = getLocalMachineTopology();
+const route = resolveMachineRoute("spark01");
 ```
 
 The SDK merges manifest entries, local heartbeats, SSH route hints, and
@@ -65,11 +67,16 @@ The SDK merges manifest entries, local heartbeats, SSH route hints, and
 when present, and fall back to local probes or app-local machine registries when
 it is absent.
 
+Topology, route, and compatibility JSON include `schema_version`, package
+version metadata, and capability flags. The current consumer contract version is
+`1`.
+
 CLI and MCP expose the same topology view:
 
 ```bash
 machines topology --json
 machines topology --no-tailscale --json
+machines route --machine spark01 --json
 ```
 
 ## Compatibility SDK
@@ -78,13 +85,18 @@ Open-core consumers can use `@hasna/machines` to preflight a peer before
 attempting app-level sync:
 
 ```ts
-import { checkMachineCompatibility } from "@hasna/machines";
+import { checkMachineCompatibility } from "@hasna/machines/consumer";
 
 const report = checkMachineCompatibility({
   machineId: "spark01",
   commands: [{ command: "bun" }],
   packages: [{ name: "@hasna/knowledge", command: "knowledge", expectedVersion: "0.2.29" }],
-  workspaces: [{ label: "open-knowledge", path: "/home/hasna/workspace/hasna/opensource/open-knowledge" }],
+  workspaces: [{
+    label: "open-knowledge",
+    path: "/home/hasna/workspace/hasna/opensource/open-knowledge",
+    expectedPackageName: "@hasna/knowledge",
+    expectedVersion: "0.2.29",
+  }],
 });
 ```
 
@@ -99,7 +111,7 @@ CLI and MCP expose the same shape:
 machines compatibility --machine spark01 \
   --command bun \
   --package @hasna/knowledge:knowledge:0.2.29 \
-  --workspace open-knowledge=/home/hasna/workspace/hasna/opensource/open-knowledge \
+  --workspace open-knowledge=/home/hasna/workspace/hasna/opensource/open-knowledge:@hasna/knowledge:0.2.29 \
   --json
 ```
 
