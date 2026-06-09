@@ -111,11 +111,19 @@ workspace inference second; consumers can still pass manual overrides.
 
 ```bash
 machines workspace resolve --machine spark01 --project open-knowledge --repo open-knowledge --json
+machines workspace doctor --machine spark01 --project open-knowledge --repo open-knowledge --json
 ```
 
-If a resolver result reports inferred project or open-files roots, repair the
-manifest metadata explicitly. The command previews changes by default and only
-writes when `--apply` is passed:
+`workspace resolve` and `workspace doctor` include JSON-friendly
+`diagnostics` and `repair_hints`. Diagnostics classify missing manifests,
+unresolved roots, inferred roots, local stale paths, untrusted machines, and
+unknown auth. Repair hints include the dry-run command plus the matching
+`--apply` command so downstream apps can surface the next step without
+depending on open-machines internals.
+
+If a resolver result reports inferred or unresolved project/open-files roots,
+repair the manifest metadata explicitly. The command previews changes by
+default and only writes when `--apply` is passed:
 
 ```bash
 machines workspace repair --machine spark01 --project open-knowledge --repo open-knowledge --json

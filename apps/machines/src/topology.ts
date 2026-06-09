@@ -69,6 +69,7 @@ export interface MachinesConsumerCapabilities {
   route_resolution: true;
   cli_json_fallback: true;
   workspace_path_mapping?: true;
+  workspace_diagnostics?: true;
 }
 
 export type MachinesConsumerEnvelope = "topology" | "route" | "workspace" | "compatibility";
@@ -88,6 +89,7 @@ export const MACHINES_CONSUMER_CAPABILITIES: MachinesConsumerCapabilities = {
   route_resolution: true,
   cli_json_fallback: true,
   workspace_path_mapping: true,
+  workspace_diagnostics: true,
 };
 
 export const MACHINES_CONSUMER_CONTRACT: MachinesConsumerContract = {
@@ -177,6 +179,34 @@ export interface MachineWorkspacePath {
   source: MachineWorkspacePathSource;
 }
 
+export type MachineWorkspaceDiagnosticStatus =
+  | "ok"
+  | "missing"
+  | "inferred"
+  | "stale"
+  | "untrusted"
+  | "unknown_auth"
+  | "missing_manifest";
+
+export interface MachineWorkspaceDiagnostic {
+  id: string;
+  status: MachineWorkspaceDiagnosticStatus;
+  severity: "ok" | "warn" | "fail";
+  message: string;
+  path: string | null;
+  source: MachineWorkspacePathSource | "manifest" | "trust" | "auth";
+  path_exists: boolean | null;
+}
+
+export interface MachineWorkspaceRepairHint {
+  id: string;
+  reason: string;
+  command: string[];
+  shell_command: string;
+  apply_command: string[];
+  apply_shell_command: string;
+}
+
 export interface MachineWorkspaceProject {
   project_id: string;
   repo_name: string | null;
@@ -202,6 +232,8 @@ export interface MachineWorkspaceResolution {
     project_root: MachineWorkspacePath;
     open_files_root: MachineWorkspacePath;
   };
+  diagnostics: MachineWorkspaceDiagnostic[];
+  repair_hints: MachineWorkspaceRepairHint[];
   evidence: {
     topology: boolean;
     matched_by: MachineRouteResolution["evidence"]["matched_by"];
@@ -645,6 +677,193 @@ function inferRepoRoot(workspaceRoot: string | null, repoName: string | null): s
   return joinPath(root, repoName);
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function shellCommand(command: string[]): string {
+  return command.map(shellQuote).join(" ");
+}
+
+function canCheckPathForMachine(machine: MachineTopologyEntry | null, localMachineId: string): boolean {
+  if (!machine) return false;
+  if (machine.machine_id === localMachineId) return true;
+  return machine.route_hints.some((hint) => hint.kind === "local");
+}
+
+function checkedPathExists(path: string | null, check: boolean): boolean | null {
+  if (!path || !check) return null;
+  return existsSync(path);
+}
+
+function repairHint(input: {
+  machineId: string;
+  projectId: string;
+  repoName: string | null;
+  openFilesRepoName: string;
+  reason: string;
+}): MachineWorkspaceRepairHint {
+  const command = [
+    "machines",
+    "workspace",
+    "repair",
+    "--machine",
+    input.machineId,
+    "--project",
+    input.projectId,
+  ];
+  if (input.repoName) command.push("--repo", input.repoName);
+  if (input.openFilesRepoName) command.push("--open-files-repo", input.openFilesRepoName);
+  command.push("--json");
+  const applyCommand = [...command.slice(0, -1), "--apply", "--json"];
+  return {
+    id: `repair:${input.machineId}:${input.projectId}`,
+    reason: input.reason,
+    command,
+    shell_command: shellCommand(command),
+    apply_command: applyCommand,
+    apply_shell_command: shellCommand(applyCommand),
+  };
+}
+
+function pathDiagnostic(input: {
+  id: "workspace_root" | "project_root" | "open_files_root";
+  label: string;
+  path: MachineWorkspacePath;
+  pathExists: boolean | null;
+  required: boolean;
+}): MachineWorkspaceDiagnostic {
+  if (!input.path.path) {
+    return {
+      id: input.id,
+      status: "missing",
+      severity: input.required ? "fail" : "warn",
+      message: `${input.label} is unresolved.`,
+      path: null,
+      source: input.path.source,
+      path_exists: null,
+    };
+  }
+  if (input.pathExists === false) {
+    return {
+      id: input.id,
+      status: "stale",
+      severity: "fail",
+      message: `${input.label} points to a path that does not exist on this machine.`,
+      path: input.path.path,
+      source: input.path.source,
+      path_exists: false,
+    };
+  }
+  if (input.path.source === "inferred") {
+    return {
+      id: input.id,
+      status: "inferred",
+      severity: "warn",
+      message: `${input.label} was inferred from the workspace root; write an explicit manifest mapping for repeatable downstream sync.`,
+      path: input.path.path,
+      source: input.path.source,
+      path_exists: input.pathExists,
+    };
+  }
+  return {
+    id: input.id,
+    status: "ok",
+    severity: "ok",
+    message: `${input.label} is explicit enough for downstream sync.`,
+    path: input.path.path,
+    source: input.path.source,
+    path_exists: input.pathExists,
+  };
+}
+
+function workspaceDiagnostics(input: {
+  machine: MachineTopologyEntry | null;
+  localMachineId: string;
+  resolution: Pick<MachineWorkspaceResolution, "machine_id" | "requested_machine_id" | "project" | "machine" | "paths" | "evidence">;
+  openFilesRepoName: string;
+}): { diagnostics: MachineWorkspaceDiagnostic[]; repairHints: MachineWorkspaceRepairHint[] } {
+  const checkPaths = canCheckPathForMachine(input.machine, input.localMachineId);
+  const diagnostics: MachineWorkspaceDiagnostic[] = [];
+  if (!input.machine) {
+    diagnostics.push({
+      id: "manifest",
+      status: "missing_manifest",
+      severity: "fail",
+      message: "Machine is not present in topology or manifest.",
+      path: null,
+      source: "manifest",
+      path_exists: null,
+    });
+  } else if (!input.resolution.evidence.manifest_declared) {
+    diagnostics.push({
+      id: "manifest",
+      status: "missing_manifest",
+      severity: "warn",
+      message: "Machine came from live topology but is not declared in the manifest.",
+      path: null,
+      source: "manifest",
+      path_exists: null,
+    });
+  }
+  diagnostics.push(pathDiagnostic({
+    id: "workspace_root",
+    label: "Workspace root",
+    path: input.resolution.paths.workspace_root,
+    pathExists: checkedPathExists(input.resolution.paths.workspace_root.path, checkPaths),
+    required: false,
+  }));
+  diagnostics.push(pathDiagnostic({
+    id: "project_root",
+    label: "Project root",
+    path: input.resolution.paths.project_root,
+    pathExists: checkedPathExists(input.resolution.paths.project_root.path, checkPaths),
+    required: true,
+  }));
+  diagnostics.push(pathDiagnostic({
+    id: "open_files_root",
+    label: "Open-files root",
+    path: input.resolution.paths.open_files_root,
+    pathExists: checkedPathExists(input.resolution.paths.open_files_root.path, checkPaths),
+    required: false,
+  }));
+  if (input.resolution.machine.trust_status !== "trusted") {
+    diagnostics.push({
+      id: "trust",
+      status: "untrusted",
+      severity: "warn",
+      message: `Machine trust status is ${input.resolution.machine.trust_status}; manifest repair apply requires trust or --allow-untrusted.`,
+      path: null,
+      source: "trust",
+      path_exists: null,
+    });
+  }
+  if (input.resolution.machine.auth_status !== "authenticated") {
+    diagnostics.push({
+      id: "auth",
+      status: "unknown_auth",
+      severity: "warn",
+      message: `Machine auth status is ${input.resolution.machine.auth_status}; remote sync may still fail if SSH is unavailable.`,
+      path: null,
+      source: "auth",
+      path_exists: null,
+    });
+  }
+  const needsRepair = diagnostics.some((entry) => (
+    entry.id === "project_root" || entry.id === "open_files_root"
+  ) && (entry.status === "missing" || entry.status === "inferred" || entry.status === "stale"));
+  const repairHints = needsRepair
+    ? [repairHint({
+        machineId: input.resolution.machine_id ?? input.resolution.requested_machine_id,
+        projectId: input.resolution.project.project_id,
+        repoName: input.resolution.project.repo_name,
+        openFilesRepoName: input.openFilesRepoName,
+        reason: "Write explicit workspace_paths and open_files_roots manifest metadata.",
+      })]
+    : [];
+  return { diagnostics, repairHints };
+}
+
 function projectPathFromMetadata(metadata: Record<string, unknown>, projectId: string, repoName: string | null): string | null {
   const keys = [projectId, repoName].filter((value): value is string => Boolean(value));
   return readMappedPath({
@@ -713,7 +932,7 @@ export function resolveMachineWorkspace(options: MachineWorkspaceOptions): Machi
 
   if (!machine) {
     warnings.push(`machine_not_found:${options.machineId}`);
-    return {
+    const resolution: MachineWorkspaceResolution = {
       schema_version: MACHINES_CONSUMER_CONTRACT_VERSION,
       package: topology.package,
       ok: false,
@@ -727,6 +946,8 @@ export function resolveMachineWorkspace(options: MachineWorkspaceOptions): Machi
         project_root: { path: null, source: "unresolved" },
         open_files_root: { path: null, source: "unresolved" },
       },
+      diagnostics: [],
+      repair_hints: [],
       evidence: {
         topology: true,
         matched_by: matchedBy,
@@ -734,6 +955,17 @@ export function resolveMachineWorkspace(options: MachineWorkspaceOptions): Machi
         metadata_keys: [],
       },
       warnings,
+    };
+    const diagnostics = workspaceDiagnostics({
+      machine,
+      localMachineId: topology.local_machine_id,
+      resolution,
+      openFilesRepoName,
+    });
+    return {
+      ...resolution,
+      diagnostics: diagnostics.diagnostics,
+      repair_hints: diagnostics.repairHints,
     };
   }
 
@@ -771,7 +1003,7 @@ export function resolveMachineWorkspace(options: MachineWorkspaceOptions): Machi
   if (openFilesRootSource === "inferred") warnings.push(`open_files_root_inferred:${options.projectId}`);
   if (!projectRootPath) warnings.push(`project_root_unresolved:${options.projectId}`);
 
-  return {
+  const resolution: MachineWorkspaceResolution = {
     schema_version: MACHINES_CONSUMER_CONTRACT_VERSION,
     package: topology.package,
     ok: Boolean(projectRootPath),
@@ -794,6 +1026,8 @@ export function resolveMachineWorkspace(options: MachineWorkspaceOptions): Machi
       project_root: { path: projectRootPath, source: projectRootSource },
       open_files_root: { path: openFilesRootPath, source: openFilesRootSource },
     },
+    diagnostics: [],
+    repair_hints: [],
     evidence: {
       topology: true,
       matched_by: matchedBy,
@@ -801,6 +1035,17 @@ export function resolveMachineWorkspace(options: MachineWorkspaceOptions): Machi
       metadata_keys: metadataKeysForDiagnostics(metadata),
     },
     warnings,
+  };
+  const diagnostics = workspaceDiagnostics({
+    machine,
+    localMachineId: topology.local_machine_id,
+    resolution,
+    openFilesRepoName,
+  });
+  return {
+    ...resolution,
+    diagnostics: diagnostics.diagnostics,
+    repair_hints: diagnostics.repairHints,
   };
 }
 

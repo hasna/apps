@@ -16,6 +16,7 @@ describe("machines consumer SDK", () => {
     expect(MACHINES_CONSUMER_CONTRACT_VERSION).toBe(1);
     expect(MACHINES_CONSUMER_ENTRYPOINT).toBe("@hasna/machines/consumer");
     expect(MACHINES_CONSUMER_CAPABILITIES.workspace_path_mapping).toBe(true);
+    expect(MACHINES_CONSUMER_CAPABILITIES.workspace_diagnostics).toBe(true);
     expect(getMachinesConsumerCapabilities()).toEqual(MACHINES_CONSUMER_CAPABILITIES);
     expect(MACHINES_CONSUMER_CONTRACT).toMatchObject({
       schema_version: 1,

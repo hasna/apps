@@ -253,6 +253,14 @@ function renderCompatibilityResult(result: ReturnType<typeof checkMachineCompati
 }
 
 function renderWorkspaceResolution(result: ReturnType<typeof resolveMachineWorkspace>): string {
+  const diagnosticSummary = result.diagnostics.reduce((summary, entry) => {
+    summary[entry.severity] += 1;
+    return summary;
+  }, { ok: 0, warn: 0, fail: 0 });
+  const diagnosticLines = result.diagnostics
+    .filter((entry) => entry.severity !== "ok")
+    .map((entry) => `${entry.id}: ${entry.status} ${entry.message}`);
+  const repairLines = result.repair_hints.map((hint) => `${hint.reason}: ${hint.shell_command}`);
   return renderKeyValueTable([
     ["machine", result.machine_id ?? result.requested_machine_id],
     ["ok", String(result.ok)],
@@ -265,8 +273,9 @@ function renderWorkspaceResolution(result: ReturnType<typeof resolveMachineWorks
     ["workspace root", `${result.paths.workspace_root.path ?? "unresolved"} (${result.paths.workspace_root.source})`],
     ["project root", `${result.paths.project_root.path ?? "unresolved"} (${result.paths.project_root.source})`],
     ["open-files root", `${result.paths.open_files_root.path ?? "unresolved"} (${result.paths.open_files_root.source})`],
+    ["diagnostics", `${diagnosticSummary.ok} ok, ${diagnosticSummary.warn} warn, ${diagnosticSummary.fail} fail`],
     ["warnings", result.warnings.join(", ") || "none"],
-  ]);
+  ]) + "\n" + renderList("issues", diagnosticLines) + "\n" + renderList("repair hints", repairLines);
 }
 
 function renderWorkspaceRepairResult(result: WorkspaceManifestRepairResult): string {
@@ -586,6 +595,46 @@ workspaceCommand
     });
     printJsonOrText(result, renderWorkspaceResolution(result), options.json);
     if (!result.ok && !options.json) process.exitCode = 1;
+  });
+
+workspaceCommand
+  .command("doctor")
+  .description("Diagnose repo and open-files workspace mappings and print repair hints")
+  .requiredOption("--machine <id>", "Machine identifier")
+  .requiredOption("--project <id>", "Canonical project id")
+  .option("--repo <name>", "Repository name; defaults to project id")
+  .option("--open-files-repo <name>", "Open-files repository name", "open-files")
+  .option("--primary-machine <id>", "Primary machine id for the project")
+  .option("--workspace-root <path>", "Override the machine workspace root")
+  .option("--project-root <path>", "Override the resolved project root")
+  .option("--open-files-root <path>", "Override the resolved open-files root")
+  .option("--no-tailscale", "Skip tailscale status probing")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: {
+    machine: string;
+    project: string;
+    repo?: string;
+    openFilesRepo?: string;
+    primaryMachine?: string;
+    workspaceRoot?: string;
+    projectRoot?: string;
+    openFilesRoot?: string;
+    tailscale?: boolean;
+    json?: boolean;
+  }) => {
+    const result = resolveMachineWorkspace({
+      machineId: options.machine,
+      projectId: options.project,
+      repoName: options.repo,
+      openFilesRepoName: options.openFilesRepo,
+      primaryMachineId: options.primaryMachine,
+      workspaceRoot: options.workspaceRoot,
+      projectRoot: options.projectRoot,
+      openFilesRoot: options.openFilesRoot,
+      includeTailscale: options.tailscale !== false,
+    });
+    printJsonOrText(result, renderWorkspaceResolution(result), options.json);
+    if (result.diagnostics.some((entry) => entry.severity === "fail") && !options.json) process.exitCode = 1;
   });
 
 workspaceCommand

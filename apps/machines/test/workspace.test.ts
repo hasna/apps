@@ -10,6 +10,7 @@ import { resolveMachineWorkspace } from "../src/topology.js";
 
 const ENV_KEYS = [
   "HASNA_MACHINES_MANIFEST_PATH",
+  "HASNA_MACHINES_MACHINE_ID",
 ] as const;
 
 afterEach(() => {
@@ -21,6 +22,7 @@ describe("workspace resolver CLI", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-workspace-repair-sdk-"));
     try {
       process.env.HASNA_MACHINES_MANIFEST_PATH = join(dir, "machines.json");
+      process.env.HASNA_MACHINES_MACHINE_ID = "spark02";
       manifestInit();
       manifestAdd({
         id: "spark01",
@@ -43,6 +45,13 @@ describe("workspace resolver CLI", () => {
       expect(preview.patches.map((patch) => patch.status)).toEqual(["would_write", "would_write"]);
       expect(preview.warnings).toContain("project_root_inferred:open-knowledge");
       expect(preview.warnings).toContain("open_files_root_inferred:open-knowledge");
+      expect(preview.resolution.diagnostics).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "project_root", status: "inferred", severity: "warn" }),
+        expect.objectContaining({ id: "open_files_root", status: "inferred", severity: "warn" }),
+      ]));
+      expect(preview.resolution.repair_hints[0].shell_command).toContain("machines");
+      expect(preview.resolution.repair_hints[0].shell_command).toContain("workspace");
+      expect(preview.resolution.repair_hints[0].shell_command).toContain("repair");
       expect(readManifest().machines[0].metadata).not.toHaveProperty("workspace_paths");
 
       const applied = repairWorkspaceManifestMappings({
@@ -76,6 +85,88 @@ describe("workspace resolver CLI", () => {
       expect(resolved.paths.open_files_root.source).toBe("manifest_metadata");
       expect(resolved.warnings).not.toContain("project_root_inferred:open-knowledge");
       expect(resolved.warnings).not.toContain("open_files_root_inferred:open-knowledge");
+      expect(resolved.repair_hints).toEqual([]);
+      expect(resolved.diagnostics.filter((entry) => entry.severity !== "ok")).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("diagnoses untrusted inferred workspace mappings", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-workspace-doctor-untrusted-"));
+    try {
+      process.env.HASNA_MACHINES_MANIFEST_PATH = join(dir, "machines.json");
+      manifestInit();
+      manifestAdd({
+        id: "spark01",
+        platform: "linux",
+        workspacePath: "/home/hasna/workspace",
+        metadata: {
+          trusted: false,
+        },
+      });
+
+      const resolved = resolveMachineWorkspace({
+        machineId: "spark01",
+        projectId: "open-knowledge",
+        repoName: "open-knowledge",
+        includeTailscale: false,
+      });
+      expect(resolved.ok).toBe(true);
+      expect(resolved.diagnostics).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "project_root", status: "inferred", severity: "warn" }),
+        expect.objectContaining({ id: "open_files_root", status: "inferred", severity: "warn" }),
+        expect.objectContaining({ id: "trust", status: "untrusted", severity: "warn" }),
+      ]));
+      expect(resolved.repair_hints[0].command).toEqual([
+        "machines",
+        "workspace",
+        "repair",
+        "--machine",
+        "spark01",
+        "--project",
+        "open-knowledge",
+        "--repo",
+        "open-knowledge",
+        "--open-files-repo",
+        "open-files",
+        "--json",
+      ]);
+      expect(resolved.repair_hints[0].apply_command).toContain("--apply");
+
+      const blockedApply = repairWorkspaceManifestMappings({
+        machineId: "spark01",
+        projectId: "open-knowledge",
+        repoName: "open-knowledge",
+        includeTailscale: false,
+        apply: true,
+      });
+      expect(blockedApply.ok).toBe(false);
+      expect(blockedApply.warnings).toContain("manifest_repair_requires_trusted_machine:spark01");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("diagnoses missing machine manifests as failed workspace readiness", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-workspace-doctor-missing-"));
+    try {
+      process.env.HASNA_MACHINES_MANIFEST_PATH = join(dir, "machines.json");
+      manifestInit();
+
+      const resolved = resolveMachineWorkspace({
+        machineId: "missing-machine",
+        projectId: "open-knowledge",
+        repoName: "open-knowledge",
+        includeTailscale: false,
+      });
+      expect(resolved.ok).toBe(false);
+      expect(resolved.diagnostics).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "manifest", status: "missing_manifest", severity: "fail" }),
+        expect.objectContaining({ id: "project_root", status: "missing", severity: "fail" }),
+      ]));
+      expect(resolved.repair_hints[0].shell_command).toContain("--machine");
+      expect(resolved.repair_hints[0].shell_command).toContain("missing-machine");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -85,6 +176,7 @@ describe("workspace resolver CLI", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-workspace-cli-"));
     try {
       process.env.HASNA_MACHINES_MANIFEST_PATH = join(dir, "machines.json");
+      process.env.HASNA_MACHINES_MACHINE_ID = "spark02";
       manifestInit();
       manifestAdd({
         id: "spark01",
@@ -125,6 +217,57 @@ describe("workspace resolver CLI", () => {
       expect(output.paths.project_root.path).toBe("/srv/open-knowledge");
       expect(output.paths.open_files_root.path).toBe("/srv/open-files");
       expect(output.machine.trust_status).toBe("trusted");
+      expect(output.diagnostics).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "auth", status: "unknown_auth", severity: "warn" }),
+      ]));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("prints workspace doctor diagnostics as JSON", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-workspace-doctor-cli-"));
+    try {
+      process.env.HASNA_MACHINES_MANIFEST_PATH = join(dir, "machines.json");
+      manifestInit();
+      manifestAdd({
+        id: "spark01",
+        platform: "linux",
+        workspacePath: "/home/hasna/workspace",
+        metadata: {
+          trusted: false,
+        },
+      });
+
+      const result = spawnSync(process.execPath, [
+        "run",
+        "src/cli/index.ts",
+        "workspace",
+        "doctor",
+        "--machine",
+        "spark01",
+        "--project",
+        "open-knowledge",
+        "--repo",
+        "open-knowledge",
+        "--no-tailscale",
+        "--json",
+      ], {
+        cwd: join(import.meta.dir, ".."),
+        env: process.env,
+        encoding: "utf8",
+      });
+
+      expect(result.status).toBe(0);
+      const output = JSON.parse(result.stdout);
+      expect(output.ok).toBe(true);
+      expect(output.diagnostics).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "project_root", status: "inferred", severity: "warn" }),
+        expect.objectContaining({ id: "trust", status: "untrusted", severity: "warn" }),
+      ]));
+      expect(output.repair_hints[0].shell_command).toContain("machines");
+      expect(output.repair_hints[0].shell_command).toContain("workspace");
+      expect(output.repair_hints[0].shell_command).toContain("repair");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

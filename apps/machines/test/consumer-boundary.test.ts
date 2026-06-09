@@ -127,6 +127,7 @@ describe("consumer entrypoint boundary", () => {
           route_resolution: true,
           cli_json_fallback: true,
           workspace_path_mapping: true,
+          workspace_diagnostics: true,
         },
       });
     } finally {
