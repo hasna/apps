@@ -217,6 +217,13 @@ describe('knowledge machine sync ledger', () => {
       includeArtifactContent: true,
     });
     expect(dryRun.ok).toBe(true);
+    expect(dryRun.resolved_workspace).toMatchObject({
+      source: 'argument',
+      adapter: {
+        implementation: 'disabled',
+        error: 'argument_override',
+      },
+    });
     expect(dryRun.push?.dry_run).toBe(true);
     expect(dryRun.push?.tables.find((table) => table.table === 'sources')?.inserted).toBe(1);
     expect(peerService.dbStats().sources).toBe(0);
@@ -228,6 +235,7 @@ describe('knowledge machine sync ledger', () => {
       includeArtifactContent: true,
     });
     expect(push.ok).toBe(true);
+    expect(push.resolved_workspace?.project_root).toBe(peerDir);
     expect(push.push?.bundle_id).toStartWith('syncbundle_');
     expect(push.push?.replayed).toBe(false);
     expect(push.push?.clocks.advanced).toBeGreaterThan(0);

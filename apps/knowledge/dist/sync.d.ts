@@ -2,7 +2,7 @@ import type { Database } from 'bun:sqlite';
 import { CURRENT_SCHEMA_VERSION } from './knowledge-db';
 import { type StorageContract } from './storage-contract';
 import { type ArtifactStore } from './artifact-store';
-import type { KnowledgeMachineTopology } from './machines';
+import type { KnowledgeMachineTopology, KnowledgeMachineWorkspaceResolution } from './machines';
 export interface KnowledgeSyncMachineRow {
     machine_id: string;
     hostname: string | null;
@@ -253,6 +253,22 @@ export interface KnowledgePeerSyncResult {
     ok: boolean;
     dry_run: boolean;
     direction: 'pull' | 'push' | 'both';
+    resolved_workspace?: {
+        source: KnowledgeMachineWorkspaceResolution['source'];
+        adapter: KnowledgeMachineWorkspaceResolution['adapter'];
+        project_root: string;
+        project_root_source: KnowledgeMachineWorkspaceResolution['project_root_source'];
+        workspace_root: string | null;
+        workspace_root_source: KnowledgeMachineWorkspaceResolution['workspace_root_source'];
+        open_files_root: string | null;
+        open_files_root_source: KnowledgeMachineWorkspaceResolution['open_files_root_source'];
+        trust_status: KnowledgeMachineWorkspaceResolution['trust_status'];
+        auth_status: KnowledgeMachineWorkspaceResolution['auth_status'];
+        current: boolean;
+        primary: boolean;
+        evidence: KnowledgeMachineWorkspaceResolution['evidence'];
+        warnings: string[];
+    };
     pull?: KnowledgeSyncApplyResult;
     push?: KnowledgeSyncApplyResult;
     message: string;

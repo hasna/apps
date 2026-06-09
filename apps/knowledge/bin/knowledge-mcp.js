@@ -13660,7 +13660,7 @@ import { existsSync as existsSync10, readFileSync as readFileSync9, writeFileSyn
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.44",
+  version: "0.2.45",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   exports: {
@@ -21984,13 +21984,19 @@ class KnowledgeService {
     const direction = options.direction ?? "both";
     const localWorkspace = this.ensureWorkspace();
     migrateKnowledgeDb(localWorkspace.knowledgeDbPath);
-    const peerWorkspace = resolvePeerWorkspace(options.peerWorkspace);
+    const peerWorkspaceInput = resolve4(options.peerWorkspace);
+    const peerWorkspace = resolvePeerWorkspace(peerWorkspaceInput);
     migrateKnowledgeDb(peerWorkspace.knowledgeDbPath);
     const peerConfig = readKnowledgeConfig(peerWorkspace.configPath);
     const peerStorage = resolveStorageContract(peerConfig, peerWorkspace, this.scope);
     const peerStore = createArtifactStore(peerConfig, peerWorkspace);
     const localMachineId2 = options.machineId ?? workspaceMachineId(localWorkspace);
     const peerMachineId = workspaceMachineId(peerWorkspace);
+    const resolvedWorkspace = await resolveKnowledgeMachineWorkspace({
+      machineId: options.machineId ?? peerMachineId,
+      peerWorkspace: peerWorkspaceInput,
+      includeTailscale: false
+    });
     const localBundle = () => createKnowledgeSyncBundle({
       dbPath: localWorkspace.knowledgeDbPath,
       scope: this.scope,
@@ -22015,6 +22021,22 @@ class KnowledgeService {
       ok: true,
       dry_run: options.dryRun === true,
       direction,
+      resolved_workspace: {
+        source: resolvedWorkspace.source,
+        adapter: resolvedWorkspace.adapter,
+        project_root: resolvedWorkspace.project_root ?? peerWorkspaceInput,
+        project_root_source: resolvedWorkspace.project_root_source,
+        workspace_root: resolvedWorkspace.workspace_root,
+        workspace_root_source: resolvedWorkspace.workspace_root_source,
+        open_files_root: resolvedWorkspace.open_files_root,
+        open_files_root_source: resolvedWorkspace.open_files_root_source,
+        trust_status: resolvedWorkspace.trust_status,
+        auth_status: resolvedWorkspace.auth_status,
+        current: resolvedWorkspace.current,
+        primary: resolvedWorkspace.primary,
+        evidence: resolvedWorkspace.evidence,
+        warnings: resolvedWorkspace.warnings
+      },
       message: ""
     };
     if (direction === "pull" || direction === "both") {

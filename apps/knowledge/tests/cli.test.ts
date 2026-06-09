@@ -7,7 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createKnowledgeService } from '../src/service';
 import { parseSourceRef } from '../src/source-ref';
@@ -132,6 +132,19 @@ function writeFakeMachinesRouteBin(bin: string, target: string, projectRoot = '/
     })}'`,
     '  exit 0',
     'fi',
+    'echo "unexpected fake machines command: $*" >&2',
+    'exit 9',
+    '',
+  ].join('\n'));
+  chmodSync(machines, 0o755);
+}
+
+function writeFailingMachinesBin(bin: string, marker: string): void {
+  mkdirSync(bin, { recursive: true });
+  const machines = join(bin, 'machines');
+  writeFileSync(machines, [
+    '#!/bin/sh',
+    `printf "%s\\n" "$*" >> ${JSON.stringify(marker)}`,
     'echo "unexpected fake machines command: $*" >&2',
     'exit 9',
     '',
@@ -550,6 +563,44 @@ describe('knowledge cli', () => {
     const peerStatsOut = JSON.parse(new TextDecoder().decode(peerStats.stdout));
     expect(peerStatsOut.sources).toBe(1);
     expect(peerStatsOut.storage_objects).toBe(4);
+  });
+
+  test('sync peer-workspace works without machines adapter calls', () => {
+    const sourceDir = mkdtempSync(join(tmpdir(), 'ok-sync-no-machines-source-'));
+    const peerDir = mkdtempSync(join(tmpdir(), 'ok-sync-no-machines-peer-'));
+    const bin = join(sourceDir, 'bin');
+    const machinesMarker = join(sourceDir, 'machines-called.txt');
+    const source = join(sourceDir, 'sync-source.md');
+    writeFailingMachinesBin(bin, machinesMarker);
+    writeFileSync(source, 'Explicit peer workspace sync must not require open-machines.');
+
+    const env = { PATH: `${bin}:${process.env.PATH ?? ''}` };
+    expect(runCli(['ingest', 'source', `file://${source}`, '--scope', 'project', '--json'], sourceDir, env).exitCode).toBe(0);
+    expect(runCli(['wiki', 'init', '--scope', 'project', '--json'], sourceDir, env).exitCode).toBe(0);
+
+    const dryRun = runCli(['sync', 'dry-run', '--peer-workspace', peerDir, '--scope', 'project', '--json'], sourceDir, env);
+    expect(dryRun.exitCode).toBe(0);
+    const dryRunOut = JSON.parse(new TextDecoder().decode(dryRun.stdout));
+    expect(dryRunOut.dry_run).toBe(true);
+    expect(dryRunOut.resolved_workspace).toMatchObject({
+      source: 'argument',
+      project_root: resolve(peerDir),
+      project_root_source: 'argument',
+      adapter: {
+        implementation: 'disabled',
+        available: false,
+        error: 'argument_override',
+      },
+    });
+    expect(existsSync(machinesMarker)).toBe(false);
+
+    const push = runCli(['sync', 'push', '--peer-workspace', peerDir, '--scope', 'project', '--json'], sourceDir, env);
+    expect(push.exitCode).toBe(0);
+    const pushOut = JSON.parse(new TextDecoder().decode(push.stdout));
+    expect(pushOut.ok).toBe(true);
+    expect(pushOut.push.artifacts.copied).toBeGreaterThanOrEqual(1);
+    expect(pushOut.resolved_workspace.adapter.error).toBe('argument_override');
+    expect(existsSync(machinesMarker)).toBe(false);
   });
 
   test('sync export and import move a bundle through stdin/stdout', () => {
