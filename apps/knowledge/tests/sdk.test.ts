@@ -351,6 +351,16 @@ describe('public knowledge sdk', () => {
       expect(registryRow?.workspace_home).toBe('/remote/open-knowledge');
       expect(JSON.parse(registryRow?.metadata_json ?? '{}').resolver_evidence.route.source).toBe('open-machines');
 
+      const repeated = await client.sync.remotePeer({
+        machine: 'spark01',
+        direction: 'push',
+        dryRun: false,
+      });
+      expect(repeated.ok).toBe(true);
+      const repeatedRegistryRow = client.sync.machines().find((row) => row.machine_id === 'spark01');
+      expect(repeatedRegistryRow?.updated_at).toBe(registryRow?.updated_at);
+      expect(repeatedRegistryRow?.metadata_json).toBe(registryRow?.metadata_json);
+
       writeBrokenMachinesBin(bin);
       writeFileSync(targetPath, '');
       process.env.KNOWLEDGE_FAKE_SSH_IMPORT_JSON = JSON.stringify(emptyImportResult());

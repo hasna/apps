@@ -362,7 +362,7 @@ The spark release smoke turns the manual spark02/spark01 sync runbook into a
 repeatable evidence command:
 
 ```bash
-bun run smoke:spark-sync-release -- --knowledge-version 0.2.57 --machines-version latest --json --keep-temp
+bun run smoke:spark-sync-release -- --knowledge-version 0.2.58 --machines-version latest --json --keep-temp
 ```
 
 It installs the requested package versions on spark02 and spark01, runs the

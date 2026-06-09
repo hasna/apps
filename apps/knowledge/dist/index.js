@@ -18087,6 +18087,18 @@ function recordFromUnknown(value) {
 function compactRecord(input) {
   return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
 }
+function canonicalJson(value) {
+  if (Array.isArray(value))
+    return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value).filter(([, entry]) => entry !== undefined).sort(([left], [right]) => left.localeCompare(right)).map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+function stableResolverEvidence(value) {
+  const { recorded_at: _recordedAt, ...stable } = value;
+  return stable;
+}
 function resolverMachineId(input) {
   return input.workspace?.machine_id ?? input.workspace?.requested_machine_id ?? input.machineId ?? input.route?.target ?? hostname();
 }
@@ -18160,8 +18172,33 @@ function recordKnowledgeMachineResolverEvidence(dbPath, input) {
     const capabilities = parseJsonRecord(existing?.capabilities_json);
     const metadata = parseJsonRecord(existing?.metadata_json);
     const resolverCapabilities = recordFromUnknown(capabilities.resolver);
-    const route = input.route ?? null;
-    const workspace = input.workspace ?? null;
+    const route = input.route?.source === "registry" ? null : input.route ?? null;
+    const workspace = input.workspace?.source === "registry" ? null : input.workspace ?? null;
+    const nextCapabilities = {
+      ...capabilities,
+      resolver: compactRecord({
+        ...resolverCapabilities,
+        route_source: route?.source ?? resolverCapabilities.route_source,
+        route_kind: route?.route ?? resolverCapabilities.route_kind,
+        route_target_kind: route?.targetKind ?? resolverCapabilities.route_target_kind,
+        route_confidence: route?.confidence ?? resolverCapabilities.route_confidence,
+        workspace_source: workspace?.source ?? resolverCapabilities.workspace_source,
+        project_root_source: workspace?.project_root_source ?? resolverCapabilities.project_root_source,
+        workspace_root_source: workspace?.workspace_root_source ?? resolverCapabilities.workspace_root_source,
+        open_files_root_source: workspace?.open_files_root_source ?? resolverCapabilities.open_files_root_source,
+        trust_status: workspace?.trust_status ?? resolverCapabilities.trust_status,
+        auth_status: workspace?.auth_status ?? resolverCapabilities.auth_status
+      }),
+      route_fallback: Boolean(route?.target ?? existing?.ssh_target),
+      workspace_fallback: Boolean(workspace?.project_root ?? existing?.workspace_home)
+    };
+    const nextResolverEvidence = resolverEvidenceMetadata(input, metadata, now);
+    if (existing) {
+      const existingResolverEvidence = recordFromUnknown(metadata.resolver_evidence);
+      const unchanged = existing.workspace_home === (workspace?.project_root ?? existing.workspace_home ?? null) && existing.tailscale_dns === resolverTailscaleDns(existing, route) && existing.ssh_target === (route?.target ?? existing.ssh_target ?? null) && canonicalJson(parseJsonRecord(existing.capabilities_json)) === canonicalJson(nextCapabilities) && canonicalJson(stableResolverEvidence(existingResolverEvidence)) === canonicalJson(stableResolverEvidence(nextResolverEvidence));
+      if (unchanged)
+        return existing;
+    }
     const row = {
       machine_id: machineId,
       hostname: existing?.hostname ?? null,
@@ -18172,29 +18209,12 @@ function recordKnowledgeMachineResolverEvidence(dbPath, input) {
       tailscale_ips_json: JSON.stringify(parseJsonArray(existing?.tailscale_ips_json)),
       ssh_target: route?.target ?? existing?.ssh_target ?? null,
       last_seen_at: now,
-      capabilities_json: JSON.stringify({
-        ...capabilities,
-        resolver: compactRecord({
-          ...resolverCapabilities,
-          route_source: route?.source ?? resolverCapabilities.route_source,
-          route_kind: route?.route ?? resolverCapabilities.route_kind,
-          route_target_kind: route?.targetKind ?? resolverCapabilities.route_target_kind,
-          route_confidence: route?.confidence ?? resolverCapabilities.route_confidence,
-          workspace_source: workspace?.source ?? resolverCapabilities.workspace_source,
-          project_root_source: workspace?.project_root_source ?? resolverCapabilities.project_root_source,
-          workspace_root_source: workspace?.workspace_root_source ?? resolverCapabilities.workspace_root_source,
-          open_files_root_source: workspace?.open_files_root_source ?? resolverCapabilities.open_files_root_source,
-          trust_status: workspace?.trust_status ?? resolverCapabilities.trust_status,
-          auth_status: workspace?.auth_status ?? resolverCapabilities.auth_status
-        }),
-        route_fallback: Boolean(route?.target ?? existing?.ssh_target),
-        workspace_fallback: Boolean(workspace?.project_root ?? existing?.workspace_home)
-      }),
+      capabilities_json: JSON.stringify(nextCapabilities),
       metadata_json: JSON.stringify({
         ...metadata,
         source: "knowledge",
         sources: resolverSources(input, metadata),
-        resolver_evidence: resolverEvidenceMetadata(input, metadata, now)
+        resolver_evidence: nextResolverEvidence
       }),
       created_at: existing?.created_at ?? now,
       updated_at: now
