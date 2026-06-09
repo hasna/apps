@@ -13660,7 +13660,7 @@ import { existsSync as existsSync10, readFileSync as readFileSync9, writeFileSyn
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.43",
+  version: "0.2.44",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   exports: {
@@ -14250,10 +14250,7 @@ CREATE INDEX IF NOT EXISTS idx_sync_conflicts_entity ON knowledge_sync_conflicts
 INSERT OR IGNORE INTO schema_versions(version, applied_at)
 VALUES (6, datetime('now'));
 `;
-var MIGRATION_7 = `
-ALTER TABLE knowledge_sync_changes ADD COLUMN logical_clock INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE knowledge_sync_changes ADD COLUMN bundle_id TEXT;
-
+var MIGRATION_7_TABLES_AND_INDEXES = `
 CREATE TABLE IF NOT EXISTS knowledge_sync_table_clocks (
   table_name TEXT NOT NULL,
   machine_id TEXT NOT NULL,
@@ -14315,8 +14312,8 @@ function migrateKnowledgeDb(path) {
       db.exec(MIGRATION_5);
     if (getSchemaVersion(db) < 6)
       db.exec(MIGRATION_6);
-    if (getSchemaVersion(db) < 7)
-      db.exec(MIGRATION_7);
+    if (needsMigration7(db))
+      applyMigration7(db);
     return { path, schema_version: getSchemaVersion(db) };
   } finally {
     db.close();
@@ -14329,6 +14326,34 @@ function getSchemaVersion(db) {
 function count(db, table) {
   const row = db.query(`SELECT COUNT(*) AS n FROM ${table}`).get();
   return row?.n ?? 0;
+}
+function quoteIdentifier(identifier) {
+  return `"${identifier.replaceAll('"', '""')}"`;
+}
+function tableExists(db, table) {
+  const row = db.query("SELECT name FROM sqlite_master WHERE type IN ('table', 'virtual') AND name = ?").get(table);
+  return Boolean(row);
+}
+function columnExists(db, table, column) {
+  if (!tableExists(db, table))
+    return false;
+  const columns = db.query(`PRAGMA table_info(${quoteIdentifier(table)})`).all();
+  return columns.some((row) => row.name === column);
+}
+function ensureColumn(db, table, column, definition) {
+  if (!columnExists(db, table, column)) {
+    db.exec(`ALTER TABLE ${quoteIdentifier(table)} ADD COLUMN ${quoteIdentifier(column)} ${definition};`);
+  }
+}
+function needsMigration7(db) {
+  return getSchemaVersion(db) < 7 || !columnExists(db, "knowledge_sync_changes", "logical_clock") || !columnExists(db, "knowledge_sync_changes", "bundle_id") || !tableExists(db, "knowledge_sync_table_clocks") || !tableExists(db, "knowledge_sync_imports");
+}
+function applyMigration7(db) {
+  if (!tableExists(db, "knowledge_sync_changes"))
+    db.exec(MIGRATION_6);
+  ensureColumn(db, "knowledge_sync_changes", "logical_clock", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "knowledge_sync_changes", "bundle_id", "TEXT");
+  db.exec(MIGRATION_7_TABLES_AND_INDEXES);
 }
 function getKnowledgeDbStats(path) {
   const db = openKnowledgeDb(path);
@@ -19563,9 +19588,9 @@ function coerceForSqlite(value) {
   return String(value);
 }
 function filterExistingTables(db, tables) {
-  return tables.filter((table) => tableExists(db, table));
+  return tables.filter((table) => tableExists2(db, table));
 }
-function tableExists(db, table) {
+function tableExists2(db, table) {
   const row = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
   return Boolean(row);
 }
@@ -19609,7 +19634,7 @@ function rowHash(row, artifactUriToKey = new Map) {
   return hashValue(normalizeRowForHash(row, artifactUriToKey));
 }
 function tableRows(db, table) {
-  if (!tableExists(db, table))
+  if (!tableExists2(db, table))
     return [];
   return db.query(`SELECT * FROM ${quoteIdent(table)} ORDER BY rowid ASC`).all();
 }
@@ -19623,7 +19648,7 @@ function tableClock(db, table, machineId) {
   return db.query("SELECT * FROM knowledge_sync_table_clocks WHERE table_name = ? AND machine_id = ?").get(table, machineId) ?? null;
 }
 function listTableClocks(db) {
-  if (!tableExists(db, "knowledge_sync_table_clocks"))
+  if (!tableExists2(db, "knowledge_sync_table_clocks"))
     return [];
   return db.query("SELECT * FROM knowledge_sync_table_clocks ORDER BY table_name ASC, machine_id ASC").all();
 }
@@ -19784,7 +19809,7 @@ function artifactIdentity(artifact) {
   return artifact.key ?? artifact.artifact_uri;
 }
 function tableCounts(db) {
-  return Object.fromEntries(KNOWLEDGE_SYNC_TABLES.map((table) => [table, tableExists(db, table) ? count2(db, table) : 0]));
+  return Object.fromEntries(KNOWLEDGE_SYNC_TABLES.map((table) => [table, tableExists2(db, table) ? count2(db, table) : 0]));
 }
 function artifactHashes(db) {
   return db.query(`SELECT artifact_uri, kind, hash, size_bytes
@@ -20250,7 +20275,7 @@ async function applyKnowledgeSyncBundle(options) {
     for (const sourceTable of options.bundle.tables) {
       if (sourceTable.table === "storage_objects" || TABLE_SYNC_EXCLUDES.has(sourceTable.table))
         continue;
-      if (!tableExists(db, sourceTable.table))
+      if (!tableExists2(db, sourceTable.table))
         continue;
       const incomingClock = bundleTableClock(options.bundle, sourceTable.table);
       const existingClock = tableClock(db, sourceTable.table, sourceMachineId);
@@ -22561,7 +22586,7 @@ function resolveTables(tables) {
 async function pushTable(db, remote, table) {
   const result = { table, rowsRead: 0, rowsWritten: 0, errors: [] };
   try {
-    if (!tableExists2(db, table))
+    if (!tableExists3(db, table))
       return result;
     const rows = db.query(`SELECT * FROM ${quoteIdent2(table)}`).all();
     result.rowsRead = rows.length;
@@ -22578,7 +22603,7 @@ async function pushTable(db, remote, table) {
 async function pullTable(remote, db, table) {
   const result = { table, rowsRead: 0, rowsWritten: 0, errors: [] };
   try {
-    if (!tableExists2(db, table))
+    if (!tableExists3(db, table))
       return result;
     const rows = await remote.all(`SELECT * FROM ${quoteIdent2(table)}`);
     result.rowsRead = rows.length;
@@ -22664,7 +22689,7 @@ function ensureSyncMetaTable(db) {
     )
   `);
 }
-function tableExists2(db, table) {
+function tableExists3(db, table) {
   const row = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
   return Boolean(row);
 }

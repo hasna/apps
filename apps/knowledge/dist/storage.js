@@ -511,10 +511,7 @@ CREATE INDEX IF NOT EXISTS idx_sync_conflicts_entity ON knowledge_sync_conflicts
 INSERT OR IGNORE INTO schema_versions(version, applied_at)
 VALUES (6, datetime('now'));
 `;
-var MIGRATION_7 = `
-ALTER TABLE knowledge_sync_changes ADD COLUMN logical_clock INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE knowledge_sync_changes ADD COLUMN bundle_id TEXT;
-
+var MIGRATION_7_TABLES_AND_INDEXES = `
 CREATE TABLE IF NOT EXISTS knowledge_sync_table_clocks (
   table_name TEXT NOT NULL,
   machine_id TEXT NOT NULL,
@@ -576,8 +573,8 @@ function migrateKnowledgeDb(path) {
       db.exec(MIGRATION_5);
     if (getSchemaVersion(db) < 6)
       db.exec(MIGRATION_6);
-    if (getSchemaVersion(db) < 7)
-      db.exec(MIGRATION_7);
+    if (needsMigration7(db))
+      applyMigration7(db);
     return { path, schema_version: getSchemaVersion(db) };
   } finally {
     db.close();
@@ -590,6 +587,34 @@ function getSchemaVersion(db) {
 function count(db, table) {
   const row = db.query(`SELECT COUNT(*) AS n FROM ${table}`).get();
   return row?.n ?? 0;
+}
+function quoteIdentifier(identifier) {
+  return `"${identifier.replaceAll('"', '""')}"`;
+}
+function tableExists(db, table) {
+  const row = db.query("SELECT name FROM sqlite_master WHERE type IN ('table', 'virtual') AND name = ?").get(table);
+  return Boolean(row);
+}
+function columnExists(db, table, column) {
+  if (!tableExists(db, table))
+    return false;
+  const columns = db.query(`PRAGMA table_info(${quoteIdentifier(table)})`).all();
+  return columns.some((row) => row.name === column);
+}
+function ensureColumn(db, table, column, definition) {
+  if (!columnExists(db, table, column)) {
+    db.exec(`ALTER TABLE ${quoteIdentifier(table)} ADD COLUMN ${quoteIdentifier(column)} ${definition};`);
+  }
+}
+function needsMigration7(db) {
+  return getSchemaVersion(db) < 7 || !columnExists(db, "knowledge_sync_changes", "logical_clock") || !columnExists(db, "knowledge_sync_changes", "bundle_id") || !tableExists(db, "knowledge_sync_table_clocks") || !tableExists(db, "knowledge_sync_imports");
+}
+function applyMigration7(db) {
+  if (!tableExists(db, "knowledge_sync_changes"))
+    db.exec(MIGRATION_6);
+  ensureColumn(db, "knowledge_sync_changes", "logical_clock", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "knowledge_sync_changes", "bundle_id", "TEXT");
+  db.exec(MIGRATION_7_TABLES_AND_INDEXES);
 }
 function getKnowledgeDbStats(path) {
   const db = openKnowledgeDb(path);
@@ -1168,7 +1193,7 @@ function parseStorageTables(value) {
 async function pushTable(db, remote, table) {
   const result = { table, rowsRead: 0, rowsWritten: 0, errors: [] };
   try {
-    if (!tableExists(db, table))
+    if (!tableExists2(db, table))
       return result;
     const rows = db.query(`SELECT * FROM ${quoteIdent(table)}`).all();
     result.rowsRead = rows.length;
@@ -1185,7 +1210,7 @@ async function pushTable(db, remote, table) {
 async function pullTable(remote, db, table) {
   const result = { table, rowsRead: 0, rowsWritten: 0, errors: [] };
   try {
-    if (!tableExists(db, table))
+    if (!tableExists2(db, table))
       return result;
     const rows = await remote.all(`SELECT * FROM ${quoteIdent(table)}`);
     result.rowsRead = rows.length;
@@ -1271,7 +1296,7 @@ function ensureSyncMetaTable(db) {
     )
   `);
 }
-function tableExists(db, table) {
+function tableExists2(db, table) {
   const row = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
   return Boolean(row);
 }

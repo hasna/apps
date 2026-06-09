@@ -378,10 +378,7 @@ INSERT OR IGNORE INTO schema_versions(version, applied_at)
 VALUES (6, datetime('now'));
 `;
 
-const MIGRATION_7 = `
-ALTER TABLE knowledge_sync_changes ADD COLUMN logical_clock INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE knowledge_sync_changes ADD COLUMN bundle_id TEXT;
-
+const MIGRATION_7_TABLES_AND_INDEXES = `
 CREATE TABLE IF NOT EXISTS knowledge_sync_table_clocks (
   table_name TEXT NOT NULL,
   machine_id TEXT NOT NULL,
@@ -440,7 +437,7 @@ export function migrateKnowledgeDb(path: string): { path: string; schema_version
     if (getSchemaVersion(db) < 4) db.exec(MIGRATION_4);
     if (getSchemaVersion(db) < 5) db.exec(MIGRATION_5);
     if (getSchemaVersion(db) < 6) db.exec(MIGRATION_6);
-    if (getSchemaVersion(db) < 7) db.exec(MIGRATION_7);
+    if (needsMigration7(db)) applyMigration7(db);
     return { path, schema_version: getSchemaVersion(db) };
   } finally {
     db.close();
@@ -455,6 +452,44 @@ export function getSchemaVersion(db: Database): number {
 function count(db: Database, table: string): number {
   const row = db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM ${table}`).get();
   return row?.n ?? 0;
+}
+
+function quoteIdentifier(identifier: string): string {
+  return `"${identifier.replaceAll('"', '""')}"`;
+}
+
+function tableExists(db: Database, table: string): boolean {
+  const row = db.query<{ name: string }, [string]>(
+    "SELECT name FROM sqlite_master WHERE type IN ('table', 'virtual') AND name = ?",
+  ).get(table);
+  return Boolean(row);
+}
+
+function columnExists(db: Database, table: string, column: string): boolean {
+  if (!tableExists(db, table)) return false;
+  const columns = db.query<{ name: string }, []>(`PRAGMA table_info(${quoteIdentifier(table)})`).all();
+  return columns.some((row) => row.name === column);
+}
+
+function ensureColumn(db: Database, table: string, column: string, definition: string): void {
+  if (!columnExists(db, table, column)) {
+    db.exec(`ALTER TABLE ${quoteIdentifier(table)} ADD COLUMN ${quoteIdentifier(column)} ${definition};`);
+  }
+}
+
+function needsMigration7(db: Database): boolean {
+  return getSchemaVersion(db) < 7
+    || !columnExists(db, 'knowledge_sync_changes', 'logical_clock')
+    || !columnExists(db, 'knowledge_sync_changes', 'bundle_id')
+    || !tableExists(db, 'knowledge_sync_table_clocks')
+    || !tableExists(db, 'knowledge_sync_imports');
+}
+
+function applyMigration7(db: Database): void {
+  if (!tableExists(db, 'knowledge_sync_changes')) db.exec(MIGRATION_6);
+  ensureColumn(db, 'knowledge_sync_changes', 'logical_clock', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'knowledge_sync_changes', 'bundle_id', 'TEXT');
+  db.exec(MIGRATION_7_TABLES_AND_INDEXES);
 }
 
 export function getKnowledgeDbStats(path: string): KnowledgeDbStats {

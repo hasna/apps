@@ -63,6 +63,162 @@ describe('knowledge sqlite store', () => {
     expect(stats.sync_imports).toBe(0);
   });
 
+  test('recovers schema v7 when the migration marker is missing after v7 artifacts exist', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-db-v7-replay-'));
+    const dbPath = join(dir, 'knowledge.db');
+    migrateKnowledgeDb(dbPath);
+
+    const db = openKnowledgeDb(dbPath);
+    try {
+      db.run(`
+        INSERT INTO knowledge_sync_changes (
+          id,
+          origin_machine_id,
+          updated_by_machine_id,
+          entity_kind,
+          entity_id,
+          operation,
+          metadata_json,
+          created_at,
+          logical_clock,
+          bundle_id
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+        'change_partial_v7',
+        'spark02',
+        'spark01',
+        'wiki_pages',
+        'wiki_home',
+        'upsert',
+        '{}',
+        '2026-06-09T00:00:00.000Z',
+        42,
+        'syncbundle_partial',
+      );
+      db.run(`
+        INSERT INTO knowledge_sync_table_clocks (
+          table_name,
+          machine_id,
+          logical_clock,
+          high_water_hash,
+          high_water_bundle_id,
+          origin_machine_id,
+          updated_by_machine_id,
+          last_applied_at,
+          metadata_json,
+          created_at,
+          updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+        'wiki_pages',
+        'spark02',
+        42,
+        'sha256:partial',
+        'syncbundle_partial',
+        'spark02',
+        'spark01',
+        '2026-06-09T00:00:01.000Z',
+        '{}',
+        '2026-06-09T00:00:01.000Z',
+        '2026-06-09T00:00:01.000Z',
+      );
+      db.run(`
+        INSERT INTO knowledge_sync_imports (
+          bundle_id,
+          source_machine_id,
+          target_machine_id,
+          direction,
+          status,
+          content_hash,
+          table_clocks_json,
+          tables_json,
+          generated_at,
+          applied_at,
+          metadata_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+        'syncbundle_partial',
+        'spark02',
+        'spark01',
+        'import',
+        'applied',
+        'sha256:bundle',
+        '[]',
+        '[]',
+        '2026-06-09T00:00:00.000Z',
+        '2026-06-09T00:00:01.000Z',
+        '{}',
+      );
+      db.run('DELETE FROM schema_versions WHERE version = 7');
+    } finally {
+      db.close();
+    }
+
+    const migration = migrateKnowledgeDb(dbPath);
+    expect(migration.schema_version).toBe(7);
+
+    const recovered = openKnowledgeDb(dbPath);
+    try {
+      const change = recovered.query<{ logical_clock: number; bundle_id: string }, [string]>(
+        'SELECT logical_clock, bundle_id FROM knowledge_sync_changes WHERE id = ?',
+      ).get('change_partial_v7');
+      expect(change).toMatchObject({ logical_clock: 42, bundle_id: 'syncbundle_partial' });
+
+      const clock = recovered.query<{ logical_clock: number; high_water_bundle_id: string }, [string, string]>(
+        'SELECT logical_clock, high_water_bundle_id FROM knowledge_sync_table_clocks WHERE table_name = ? AND machine_id = ?',
+      ).get('wiki_pages', 'spark02');
+      expect(clock).toMatchObject({ logical_clock: 42, high_water_bundle_id: 'syncbundle_partial' });
+
+      const importRow = recovered.query<{ status: string }, [string]>(
+        'SELECT status FROM knowledge_sync_imports WHERE bundle_id = ?',
+      ).get('syncbundle_partial');
+      expect(importRow).toMatchObject({ status: 'applied' });
+    } finally {
+      recovered.close();
+    }
+  });
+
+  test('recovers schema v7 when sync columns exist but v7 tables are missing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-db-v7-tables-'));
+    const dbPath = join(dir, 'knowledge.db');
+    migrateKnowledgeDb(dbPath);
+
+    const db = openKnowledgeDb(dbPath);
+    try {
+      db.run('DROP TABLE knowledge_sync_table_clocks');
+      db.run('DROP TABLE knowledge_sync_imports');
+      db.run('DELETE FROM schema_versions WHERE version = 7');
+    } finally {
+      db.close();
+    }
+
+    const migration = migrateKnowledgeDb(dbPath);
+    expect(migration.schema_version).toBe(7);
+
+    const stats = getKnowledgeDbStats(dbPath);
+    expect(stats.sync_table_clocks).toBe(0);
+    expect(stats.sync_imports).toBe(0);
+
+    const recovered = openKnowledgeDb(dbPath);
+    try {
+      const columns = recovered.query<{ name: string }, []>('PRAGMA table_info(knowledge_sync_changes)').all()
+        .map((row) => row.name);
+      expect(columns).toContain('logical_clock');
+      expect(columns).toContain('bundle_id');
+
+      const indexes = recovered.query<{ name: string }, []>(
+        "SELECT name FROM sqlite_master WHERE type = 'index'",
+      ).all().map((row) => row.name);
+      expect(indexes).toContain('idx_sync_changes_bundle');
+      expect(indexes).toContain('idx_sync_imports_status');
+    } finally {
+      recovered.close();
+    }
+  });
+
   test('ingests open-files manifests into sources, revisions, chunks, and FTS', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-manifest-'));
     const dbPath = join(dir, 'knowledge.db');
