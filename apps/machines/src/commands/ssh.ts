@@ -8,6 +8,10 @@ export interface ResolvedSshTarget {
   warnings: string[];
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 export function resolveSshTarget(machineId: string, options: MachineRouteOptions = {}): ResolvedSshTarget {
   const resolved = resolveMachineRoute(machineId, options);
   if (!resolved.ok || !resolved.target) {
@@ -27,5 +31,5 @@ export function resolveSshTarget(machineId: string, options: MachineRouteOptions
 
 export function buildSshCommand(machineId: string, remoteCommand?: string, options: MachineRouteOptions = {}): string {
   const resolved = resolveSshTarget(machineId, options);
-  return remoteCommand ? `ssh ${resolved.target} ${JSON.stringify(remoteCommand)}` : `ssh ${resolved.target}`;
+  return remoteCommand ? `ssh ${resolved.target} ${shellQuote(remoteCommand)}` : `ssh ${resolved.target}`;
 }

@@ -42,7 +42,7 @@ describe("smart ssh", () => {
 
     const resolved = resolveSshTarget("apple03");
     expect(resolved.route).toBe("tailscale");
-    expect(buildSshCommand("apple03", "uptime")).toBe(`ssh apple03.tailnet.ts.net ${JSON.stringify("uptime")}`);
+    expect(buildSshCommand("apple03", "uptime")).toBe("ssh apple03.tailnet.ts.net 'uptime'");
   });
 
   test("resolves tailscale-discovered machines without a manifest entry", () => {
@@ -87,6 +87,6 @@ describe("smart ssh", () => {
     const resolved = resolveSshTarget("spark01", { topology });
     expect(resolved.route).toBe("tailscale");
     expect(resolved.target).toBe("spark01.tailnet.ts.net");
-    expect(buildSshCommand("spark01", "knowledge --version", { topology })).toBe(`ssh spark01.tailnet.ts.net ${JSON.stringify("knowledge --version")}`);
+    expect(buildSshCommand("spark01", "knowledge --version", { topology })).toBe("ssh spark01.tailnet.ts.net 'knowledge --version'");
   });
 });
