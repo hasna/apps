@@ -362,7 +362,7 @@ The spark release smoke turns the manual spark02/spark01 sync runbook into a
 repeatable evidence command:
 
 ```bash
-bun run smoke:spark-sync-release -- --knowledge-version 0.2.55 --machines-version latest --json --keep-temp
+bun run smoke:spark-sync-release -- --knowledge-version 0.2.56 --machines-version latest --json --keep-temp
 ```
 
 It installs the requested package versions on spark02 and spark01, runs the
@@ -373,8 +373,11 @@ fake AI conflict proposals, approval-gated resolutions, and a final
 bidirectional dry-run that must converge with zero conflicts. It also repeats
 the sync/conflict path from an isolated installed-package runner where
 `@hasna/machines` and the `machines` CLI are hidden locally, proving knowledge
-can still operate through raw SSH plus `--peer-workspace`. Use `--evidence-json
-<path>` or `--evidence-md <path>` to save a compact release artifact for todos.
+can still operate through raw SSH plus `--peer-workspace`. A second hidden
+runner scenario first learns a knowledge-owned registry fallback, then omits
+`--peer-workspace` and requires `source=registry` for route and workspace
+resolution. Use `--evidence-json <path>` or `--evidence-md <path>` to save a
+compact release artifact for todos.
 
 ### sync
 ```bash

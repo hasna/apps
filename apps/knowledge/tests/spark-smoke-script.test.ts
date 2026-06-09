@@ -17,6 +17,7 @@ describe('spark sync release smoke script', () => {
     expect(result.stdout).toContain('smoke-spark-sync-release.mjs');
     expect(result.stdout).toContain('sync doctor');
     expect(result.stdout).toContain('@hasna/machines hidden locally');
+    expect(result.stdout).toContain('--peer-workspace omitted');
   });
 
   test('renders dry-run release evidence plan as JSON', () => {
@@ -48,10 +49,12 @@ describe('spark sync release smoke script', () => {
       knowledge_version: '0.0.0-test',
       machines_version: '0.0.0-machines',
       no_machines_sync: true,
+      no_machines_registry_sync: true,
     });
     expect(output.checks).toContain('run knowledge machines adapter smoke locally and remotely');
     expect(output.checks).toContain('assert artifact manifest modified_at/provenance/raw-source boundary');
     expect(output.checks).toContain('assert final bidirectional dry-run has zero conflicts');
     expect(output.checks).toContain('run isolated installed-package sync with @hasna/machines and machines CLI hidden');
+    expect(output.checks).toContain('learn registry fallback then run isolated hidden-machines sync with --peer-workspace omitted');
   });
 });

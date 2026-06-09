@@ -17,6 +17,7 @@ function parseArgs(argv) {
     install: true,
     installMachines: true,
     noMachinesSync: true,
+    noMachinesRegistrySync: true,
     remote: process.env.KNOWLEDGE_SPARK_REMOTE || 'spark01',
     peer: process.env.KNOWLEDGE_SPARK_PEER || 'spark01',
     knowledgeVersion: process.env.KNOWLEDGE_VERSION || packageJson.version,
@@ -34,6 +35,7 @@ function parseArgs(argv) {
     else if (arg === '--no-install') options.install = false;
     else if (arg === '--no-machines-install') options.installMachines = false;
     else if (arg === '--skip-no-machines-sync') options.noMachinesSync = false;
+    else if (arg === '--skip-no-machines-registry-sync') options.noMachinesRegistrySync = false;
     else if (arg === '--remote') {
       options.remote = argv[i + 1];
       i += 1;
@@ -64,7 +66,7 @@ function parseArgs(argv) {
         '       [--knowledge-version <version>] [--machines-version <version|latest>]',
         '       [--remote spark01] [--peer spark01] [--package-dir <path>] [--machines-package-dir <path>]',
         '       [--evidence-json <path>] [--evidence-md <path>] [--no-install] [--no-machines-install]',
-        '       [--skip-no-machines-sync]',
+        '       [--skip-no-machines-sync] [--skip-no-machines-registry-sync]',
         '',
         'Runs the published-package spark02/spark01 release smoke:',
         '  1. install @hasna/knowledge and @hasna/machines on both machines',
@@ -72,7 +74,8 @@ function parseArgs(argv) {
         '  3. run sync doctor, dry-run, push, artifact manifest, and source-boundary checks',
         '  4. force conflicts in both directions, run fake AI proposals, approve resolutions',
         '  5. verify final bidirectional dry-run converges with zero conflicts',
-        '  6. repeat the sync/conflict path with @hasna/machines hidden locally',
+        '  6. repeat the sync/conflict path with @hasna/machines hidden locally and raw --peer-workspace',
+        '  7. learn a registry fallback, hide @hasna/machines again, and repeat with --peer-workspace omitted',
       ].join('\n'));
       process.exit(0);
     } else {
@@ -400,10 +403,17 @@ function assertSyncSmokeExpectations(summary, expectations, label) {
   }
 }
 
+function syncMachineArgs(options, remoteDir, runOptions = {}) {
+  const args = ['--scope', 'project', '--machine', options.peer];
+  if (runOptions.omitPeerWorkspace !== true) args.push('--peer-workspace', remoteDir);
+  return args;
+}
+
 function runSyncSmoke(options, runOptions = {}) {
   const localDir = mkdtempSync(join(tmpdir(), `knowledge-spark02-${options.knowledgeVersion}-`));
   const remoteDir = runRemote(options.remote, `mktemp -d ${shellQuote(`/tmp/knowledge-spark01-${options.knowledgeVersion}-XXXXXX`)}`).trim();
   const localCommandOptions = runOptions.localCommandOptions ?? {};
+  const learnCommandOptions = runOptions.learnCommandOptions ?? {};
   try {
     knowledgeJson(localDir, ['db', 'init', '--scope', 'project', '--json'], localCommandOptions);
     knowledgeJson(localDir, ['wiki', 'init', '--scope', 'project', '--json'], localCommandOptions);
@@ -412,16 +422,31 @@ function runSyncSmoke(options, runOptions = {}) {
     knowledgeJson(localDir, ['ingest', 'source', `file://${sourcePath}`, '--scope', 'project', '--json'], localCommandOptions);
     remoteKnowledgeJson(options.remote, remoteDir, ['db', 'init', '--scope', 'project', '--json']);
 
-    const doctorBefore = knowledgeJson(localDir, ['sync', 'doctor', '--scope', 'project', '--machine', options.peer, '--peer-workspace', remoteDir, '--json'], localCommandOptions);
-    const initialDryRun = knowledgeJson(localDir, ['sync', 'dry-run', '--scope', 'project', '--machine', options.peer, '--peer-workspace', remoteDir, '--json'], localCommandOptions);
-    const push = knowledgeJson(localDir, ['sync', 'push', '--scope', 'project', '--machine', options.peer, '--peer-workspace', remoteDir, '--json'], localCommandOptions);
+    const registryLearning = runOptions.learnRegistryFallback === true
+      ? knowledgeJson(localDir, [
+          'sync', 'push',
+          '--scope', 'project',
+          '--machine', options.peer,
+          '--peer-workspace', remoteDir,
+          '--tables', 'knowledge_machines',
+          '--json',
+        ], learnCommandOptions)
+      : null;
+    if (registryLearning && (!registryLearning.ok || registryLearning.push?.conflicts_created !== 0)) {
+      throw new Error(`Registry fallback learning sync failed: ${JSON.stringify(registryLearning).slice(0, 1200)}`);
+    }
+
+    const peerArgs = syncMachineArgs(options, remoteDir, runOptions);
+    const doctorBefore = knowledgeJson(localDir, ['sync', 'doctor', ...peerArgs, '--json'], localCommandOptions);
+    const initialDryRun = knowledgeJson(localDir, ['sync', 'dry-run', ...peerArgs, '--json'], localCommandOptions);
+    const push = knowledgeJson(localDir, ['sync', 'push', ...peerArgs, '--json'], localCommandOptions);
     const remoteDoctor = remoteKnowledgeJson(options.remote, remoteDir, ['sync', 'doctor', '--scope', 'project', '--json']);
-    const afterPushDryRun = knowledgeJson(localDir, ['sync', 'dry-run', '--scope', 'project', '--machine', options.peer, '--peer-workspace', remoteDir, '--json'], localCommandOptions);
+    const afterPushDryRun = knowledgeJson(localDir, ['sync', 'dry-run', ...peerArgs, '--json'], localCommandOptions);
 
     assertArtifactDoctor(remoteDoctor, 'remote after push');
 
     forceRemoteWikiConflict(options.remote, remoteDir);
-    const conflictPush = knowledgeJson(localDir, ['sync', 'push', '--scope', 'project', '--machine', options.peer, '--peer-workspace', remoteDir, '--json'], localCommandOptions);
+    const conflictPush = knowledgeJson(localDir, ['sync', 'push', ...peerArgs, '--json'], localCommandOptions);
     const remoteConflicts = remoteKnowledgeJson(options.remote, remoteDir, ['sync', 'conflicts', '--scope', 'project', '--json']);
     const remoteConflict = openWikiConflict(remoteConflicts);
     const remoteProposal = remoteKnowledgeJson(options.remote, remoteDir, ['sync', 'conflicts', 'propose', remoteConflict.id, '--mode', 'ai', '--fake', '--scope', 'project', '--json']);
@@ -435,7 +460,7 @@ function runSyncSmoke(options, runOptions = {}) {
       '--json',
     ]);
 
-    const pullConflict = knowledgeJson(localDir, ['sync', 'pull', '--scope', 'project', '--machine', options.peer, '--peer-workspace', remoteDir, '--json'], localCommandOptions);
+    const pullConflict = knowledgeJson(localDir, ['sync', 'pull', ...peerArgs, '--json'], localCommandOptions);
     const localConflicts = knowledgeJson(localDir, ['sync', 'conflicts', '--scope', 'project', '--json'], localCommandOptions);
     const localConflict = openWikiConflict(localConflicts);
     const localProposal = knowledgeJson(localDir, ['sync', 'conflicts', 'propose', localConflict.id, '--mode', 'ai', '--fake', '--scope', 'project', '--json'], localCommandOptions);
@@ -448,12 +473,24 @@ function runSyncSmoke(options, runOptions = {}) {
       '--scope', 'project',
       '--json',
     ], localCommandOptions);
-    const finalDryRun = knowledgeJson(localDir, ['sync', 'dry-run', '--scope', 'project', '--machine', options.peer, '--peer-workspace', remoteDir, '--json'], localCommandOptions);
+    const finalDryRun = knowledgeJson(localDir, ['sync', 'dry-run', ...peerArgs, '--json'], localCommandOptions);
 
     const summary = {
       scenario: runOptions.scenario ?? 'default',
       local_dir: localDir,
       remote_dir: remoteDir,
+      peer_workspace_omitted: runOptions.omitPeerWorkspace === true,
+      registry_learning: registryLearning ? {
+        ok: registryLearning.ok,
+        route: registryLearning.resolved_route,
+        workspace: registryLearning.resolved_workspace,
+        push: {
+          ok: registryLearning.push?.ok,
+          inserted: tableInserted(registryLearning.push),
+          conflicts_created: registryLearning.push?.conflicts_created,
+          tables: changedTables(registryLearning.push),
+        },
+      } : null,
       doctor_before: {
         ok: doctorBefore.ok,
         route: doctorBefore.resolved_route,
@@ -585,6 +622,61 @@ function runNoMachinesSyncSmoke(options, dirs) {
   }
 }
 
+function runNoMachinesRegistrySyncSmoke(options, dirs) {
+  const runner = createNoMachinesKnowledgeRunner(dirs);
+  try {
+    const probeDir = mkdtempSync(join(tmpdir(), `knowledge-no-machines-registry-probe-${options.knowledgeVersion}-`));
+    let probe;
+    try {
+      probe = knowledgeJson(probeDir, ['machines', 'topology', '--no-tailscale', '--json'], { env: runner.env });
+    } finally {
+      if (!options.keepTemp) rmSync(probeDir, { recursive: true, force: true });
+    }
+    if (probe.adapter?.implementation !== 'disabled' || probe.adapter?.available !== false) {
+      throw new Error(`no-machines registry probe did not disable adapter: ${JSON.stringify(probe.adapter)}`);
+    }
+    const sync = runSyncSmoke(options, {
+      scenario: 'no-machines-registry',
+      localCommandOptions: { env: runner.env },
+      learnRegistryFallback: true,
+      omitPeerWorkspace: true,
+      expect: {
+        routeSource: 'registry',
+        routeAdapterImplementation: 'disabled',
+        routeAdapterAvailable: false,
+        workspaceSource: 'registry',
+      },
+    });
+    if (sync.registry_learning?.route?.source !== 'open-machines') {
+      throw new Error(`registry learning did not use open-machines route evidence: ${JSON.stringify(sync.registry_learning?.route)}`);
+    }
+    if (sync.registry_learning?.workspace?.source !== 'argument') {
+      throw new Error(`registry learning did not capture explicit peer workspace evidence: ${JSON.stringify(sync.registry_learning?.workspace)}`);
+    }
+    if (sync.doctor_before.route?.source !== 'registry' || sync.doctor_before.workspace?.source !== 'registry') {
+      throw new Error(`no-machines registry scenario did not use registry fallback: ${JSON.stringify(sync.doctor_before)}`);
+    }
+    if (sync.peer_workspace_omitted !== true) {
+      throw new Error('no-machines registry scenario unexpectedly passed --peer-workspace');
+    }
+    return {
+      runner_app_dir: options.keepTemp ? runner.app_dir : null,
+      shadowed_machines_package: options.keepTemp ? runner.shadowed_machines_package : null,
+      local_path: runner.env.PATH,
+      hidden_sdk: true,
+      hidden_cli: true,
+      adapter_probe: {
+        source: probe.source,
+        adapter: probe.adapter,
+        warnings: probe.warnings,
+      },
+      sync,
+    };
+  } finally {
+    if (!options.keepTemp) rmSync(runner.app_dir, { recursive: true, force: true });
+  }
+}
+
 function dryRunSummary(options) {
   return {
     ok: true,
@@ -594,6 +686,7 @@ function dryRunSummary(options) {
     install: options.install,
     install_machines: options.installMachines,
     no_machines_sync: options.noMachinesSync,
+    no_machines_registry_sync: options.noMachinesRegistrySync,
     knowledge_version: options.knowledgeVersion,
     machines_version: options.installMachines ? options.machinesVersion : null,
     checks: [
@@ -609,6 +702,7 @@ function dryRunSummary(options) {
       'run fake AI conflict proposals and approval-gated resolutions',
       'assert final bidirectional dry-run has zero conflicts',
       'run isolated installed-package sync with @hasna/machines and machines CLI hidden',
+      'learn registry fallback then run isolated hidden-machines sync with --peer-workspace omitted',
     ],
   };
 }
@@ -629,6 +723,7 @@ function markdownEvidence(summary) {
     `- final pull conflicts: ${summary.sync?.final_dry_run?.pull?.conflicts_created ?? 'n/a'}`,
     `- final push conflicts: ${summary.sync?.final_dry_run?.push?.conflicts_created ?? 'n/a'}`,
     `- no-machines sync ok: ${summary.no_machines_sync?.sync?.final_dry_run?.ok ?? summary.no_machines_sync?.skipped ?? 'n/a'}`,
+    `- no-machines registry sync ok: ${summary.no_machines_registry_sync?.sync?.final_dry_run?.ok ?? summary.no_machines_registry_sync?.skipped ?? 'n/a'}`,
     '',
     '```json',
     JSON.stringify(summary, null, 2),
@@ -677,6 +772,9 @@ function main() {
   const no_machines_sync = options.noMachinesSync
     ? runNoMachinesSyncSmoke(options, dirs)
     : { skipped: true, reason: 'skip_no_machines_sync' };
+  const no_machines_registry_sync = options.noMachinesRegistrySync
+    ? runNoMachinesRegistrySyncSmoke(options, dirs)
+    : { skipped: true, reason: 'skip_no_machines_registry_sync' };
   const summary = {
     ok: true,
     generated_at: new Date().toISOString(),
@@ -689,6 +787,7 @@ function main() {
     machines_conformance,
     sync,
     no_machines_sync,
+    no_machines_registry_sync,
   };
   outputSummary(summary, options);
 }
