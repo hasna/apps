@@ -358,6 +358,22 @@ It builds isolated temp apps for project-local SDK resolution, global
 `machines` CLI-only fallback, unsupported future SDK contracts, and
 no-SDK/no-CLI fallback.
 
+The spark release smoke turns the manual spark02/spark01 sync runbook into a
+repeatable evidence command:
+
+```bash
+bun run smoke:spark-sync-release -- --knowledge-version 0.2.54 --machines-version latest --json --keep-temp
+```
+
+It installs the requested package versions on spark02 and spark01, runs the
+adapter smoke and machines consumer conformance on both machines when
+available, creates isolated project workspaces, runs `sync doctor`, dry-run,
+push, generated artifact manifest checks, forced conflicts in both directions,
+fake AI conflict proposals, approval-gated resolutions, and a final
+bidirectional dry-run that must converge with zero conflicts. Use
+`--evidence-json <path>` or `--evidence-md <path>` to save a compact release
+artifact for todos.
+
 ### sync
 ```bash
 knowledge sync status [--scope project] [--json]
