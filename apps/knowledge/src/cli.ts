@@ -16,6 +16,7 @@ import {
   type SyncResult,
 } from './storage';
 import { KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION, KNOWLEDGE_SYNC_PROTOCOL_VERSION, type KnowledgeSyncApplyResult, type KnowledgeSyncBundle } from './sync';
+import { resolveKnowledgeMachineRoute, type KnowledgeMachineRouteResolution } from './machines';
 import { assertProviderCredentials, parseModelRef, resolveModelRef, type AiProviderId } from './providers';
 import { approvalStatus, assertS3ReadAllowed, assertWebSearchAllowed, createApprovalGate, recordAuditEvent, recordRedactionFindings, redactSecrets } from './safety';
 import { basename } from 'node:path';
@@ -377,63 +378,19 @@ function remoteKnowledgeCommand(peerWorkspace: string, args: string[]): string {
   return `cd ${shellQuote(peerWorkspace)} && knowledge ${args.map(shellQuote).join(' ')}`;
 }
 
-function parseJsonObject(value: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(value);
-    return typeof parsed === 'object' && parsed !== null ? parsed as Record<string, unknown> : null;
-  } catch {
-    return null;
-  }
-}
-
-type ResolvedSshMachineTarget = {
-  target: string;
-  route: string | null;
-  targetKind: string | null;
-  confidence: string | null;
-  source: 'open-machines' | 'raw';
-  evidence: Record<string, unknown> | null;
-};
-
-function resolveSshMachineTarget(machine: string): ResolvedSshMachineTarget {
-  const result = spawnSync('machines', ['route', '--machine', machine, '--json'], {
-    encoding: 'utf8',
-    env: process.env,
-  });
-  if ((result.status ?? 1) !== 0) {
-    return { target: machine, route: null, targetKind: null, confidence: null, source: 'raw', evidence: null };
-  }
-  const parsed = parseJsonObject(result.stdout || '');
-  const ok = parsed?.ok === true;
-  const target = typeof parsed?.target === 'string' && parsed.target ? parsed.target : null;
-  if (!ok || !target) return { target: machine, route: null, targetKind: null, confidence: null, source: 'raw', evidence: null };
-  const evidence = typeof parsed.evidence === 'object' && parsed.evidence !== null
-    ? parsed.evidence as Record<string, unknown>
-    : null;
-  const selectedHint = typeof evidence?.selected_hint === 'object' && evidence.selected_hint !== null
-    ? evidence.selected_hint as Record<string, unknown>
-    : null;
-  return {
-    target,
-    route: typeof parsed.route === 'string' ? parsed.route : null,
-    targetKind: typeof selectedHint?.kind === 'string'
-      ? selectedHint.kind
-      : typeof parsed.source === 'string'
-        ? parsed.source
-        : typeof parsed.route === 'string'
-          ? parsed.route
-          : null,
-    confidence: typeof parsed.confidence === 'string' ? parsed.confidence : null,
-    source: 'open-machines',
-    evidence,
-  };
-}
-
 function runSsh(
   machine: string,
   command: string,
   input?: string,
-  resolved: ResolvedSshMachineTarget = resolveSshMachineTarget(machine),
+  resolved: KnowledgeMachineRouteResolution = {
+    target: machine,
+    route: null,
+    targetKind: null,
+    confidence: null,
+    source: 'raw',
+    evidence: null,
+    warnings: [],
+  },
 ): string {
   const result = spawnSync('ssh', [resolved.target, command], {
     encoding: 'utf8',
@@ -503,6 +460,7 @@ async function syncRemotePeer(options: {
   tables?: string[];
   dryRun?: boolean;
   includeArtifactContent?: boolean;
+  includeTailscale?: boolean;
   machineId?: string | null;
 }) {
   const scopeArgs = ['--scope', options.scope ?? 'global', '--json'];
@@ -538,7 +496,10 @@ async function syncRemotePeer(options: {
     peer_workspace: options.peerWorkspace,
     message: '',
   };
-  const resolvedMachine = resolveSshMachineTarget(options.machine);
+  const resolvedMachine = await resolveKnowledgeMachineRoute({
+    machineId: options.machine,
+    includeTailscale: options.includeTailscale,
+  });
   result.resolved_machine = resolvedMachine.target;
   result.resolved_route = {
     source: resolvedMachine.source,
@@ -886,6 +847,7 @@ async function run(argv: string[]): Promise<void> {
             tables,
             dryRun: flags.dryRun,
             includeArtifactContent: flags.artifactContent !== false,
+            includeTailscale: flags.tailscale !== false,
             machineId: flags.machine ?? null,
           })
         : await service.syncPeer({

@@ -52,6 +52,25 @@ export interface KnowledgeMachinePreflightOptions {
         workspace_home: string;
     };
 }
+export type KnowledgeMachineRouteSource = 'open-machines' | 'raw';
+export type KnowledgeMachineRouteKind = 'local' | 'lan' | 'tailscale' | 'ssh' | 'unknown';
+export type KnowledgeMachineRouteConfidence = 'exact' | 'high' | 'medium' | 'low' | 'none' | string;
+export interface KnowledgeMachineRouteOptions {
+    machineId: string;
+    includeTailscale?: boolean;
+    runner?: KnowledgeMachineCommandRunner;
+    now?: Date;
+    loadOpenMachines?: () => Promise<OpenMachinesModule | null>;
+}
+export interface KnowledgeMachineRouteResolution {
+    target: string;
+    route: KnowledgeMachineRouteKind | null;
+    targetKind: KnowledgeMachineRouteKind | null;
+    confidence: KnowledgeMachineRouteConfidence | null;
+    source: KnowledgeMachineRouteSource;
+    evidence: Record<string, unknown> | null;
+    warnings: string[];
+}
 export interface KnowledgeMachineRouteHint {
     kind: 'local' | 'lan' | 'tailscale' | 'ssh' | 'unknown';
     target: string;
@@ -145,6 +164,11 @@ interface OpenMachinesModule {
         runner?: unknown;
         now?: Date;
     }) => unknown;
+    resolveMachineRoute?: (machineId: string, options?: {
+        includeTailscale?: boolean;
+        runner?: unknown;
+        now?: Date;
+    }) => unknown;
     checkMachineCompatibility?: (options?: {
         machineId?: string;
         commands?: KnowledgeMachinePreflightCommandSpec[];
@@ -155,5 +179,6 @@ interface OpenMachinesModule {
     }) => unknown;
 }
 export declare function discoverKnowledgeMachineTopology(options?: KnowledgeMachineTopologyOptions): Promise<KnowledgeMachineTopology>;
+export declare function resolveKnowledgeMachineRoute(options: KnowledgeMachineRouteOptions): Promise<KnowledgeMachineRouteResolution>;
 export declare function preflightKnowledgeMachine(options?: KnowledgeMachinePreflightOptions): Promise<KnowledgeMachinePreflightReport>;
 export {};

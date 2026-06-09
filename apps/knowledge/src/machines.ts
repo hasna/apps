@@ -66,6 +66,28 @@ export interface KnowledgeMachinePreflightOptions {
   };
 }
 
+export type KnowledgeMachineRouteSource = 'open-machines' | 'raw';
+export type KnowledgeMachineRouteKind = 'local' | 'lan' | 'tailscale' | 'ssh' | 'unknown';
+export type KnowledgeMachineRouteConfidence = 'exact' | 'high' | 'medium' | 'low' | 'none' | string;
+
+export interface KnowledgeMachineRouteOptions {
+  machineId: string;
+  includeTailscale?: boolean;
+  runner?: KnowledgeMachineCommandRunner;
+  now?: Date;
+  loadOpenMachines?: () => Promise<OpenMachinesModule | null>;
+}
+
+export interface KnowledgeMachineRouteResolution {
+  target: string;
+  route: KnowledgeMachineRouteKind | null;
+  targetKind: KnowledgeMachineRouteKind | null;
+  confidence: KnowledgeMachineRouteConfidence | null;
+  source: KnowledgeMachineRouteSource;
+  evidence: Record<string, unknown> | null;
+  warnings: string[];
+}
+
 export interface KnowledgeMachineRouteHint {
   kind: 'local' | 'lan' | 'tailscale' | 'ssh' | 'unknown';
   target: string;
@@ -160,6 +182,7 @@ export interface KnowledgeMachinePreflightReport {
 
 interface OpenMachinesModule {
   discoverMachineTopology?: (options?: { includeTailscale?: boolean; runner?: unknown; now?: Date }) => unknown;
+  resolveMachineRoute?: (machineId: string, options?: { includeTailscale?: boolean; runner?: unknown; now?: Date }) => unknown;
   checkMachineCompatibility?: (options?: {
     machineId?: string;
     commands?: KnowledgeMachinePreflightCommandSpec[];
@@ -729,6 +752,37 @@ function normalizeOpenMachinesTopology(value: unknown, options: KnowledgeMachine
   return withKnowledgeContext(topology, options);
 }
 
+function normalizeRouteKind(value: unknown): KnowledgeMachineRouteKind | null {
+  return value === 'local'
+    || value === 'lan'
+    || value === 'tailscale'
+    || value === 'ssh'
+    || value === 'unknown'
+    ? value
+    : null;
+}
+
+function normalizeOpenMachinesRoute(value: unknown): KnowledgeMachineRouteResolution | null {
+  const raw = asRecord(value);
+  const target = asString(raw.target) ?? asString(raw.command_target);
+  if (raw.ok !== true || !target) return null;
+  const evidence = typeof raw.evidence === 'object' && raw.evidence !== null
+    ? raw.evidence as Record<string, unknown>
+    : null;
+  const selectedHint = typeof evidence?.selected_hint === 'object' && evidence.selected_hint !== null
+    ? evidence.selected_hint as Record<string, unknown>
+    : null;
+  return {
+    target,
+    route: normalizeRouteKind(raw.route),
+    targetKind: normalizeRouteKind(selectedHint?.kind) ?? normalizeRouteKind(raw.source) ?? normalizeRouteKind(raw.route),
+    confidence: asString(raw.confidence),
+    source: 'open-machines',
+    evidence,
+    warnings: asStringArray(raw.warnings),
+  };
+}
+
 async function discoverOpenMachinesCliTopology(options: KnowledgeMachineTopologyOptions): Promise<KnowledgeMachineTopology | null> {
   const runner = options.runner ?? defaultRunner;
   if (!await hasCommand('machines', runner)) return null;
@@ -788,6 +842,50 @@ export async function discoverKnowledgeMachineTopology(options: KnowledgeMachine
     return await discoverOpenMachinesCliTopology(options) ?? await discoverLocalTopology(options, 'missing_discoverMachineTopology');
   } catch (error) {
     return await discoverOpenMachinesCliTopology(options) ?? await discoverLocalTopology(options, optionalModuleError(error));
+  }
+}
+
+async function resolveOpenMachinesCliRoute(options: KnowledgeMachineRouteOptions): Promise<KnowledgeMachineRouteResolution | null> {
+  const runner = options.runner ?? defaultRunner;
+  if (!await hasCommand('machines', runner)) return null;
+  const args = ['route', '--machine', options.machineId, '--json'];
+  if (options.includeTailscale === false) args.push('--no-tailscale');
+  const result = await runCommand(runner, machinesCliCommand(args));
+  if (result.exitCode !== 0) return null;
+  return normalizeOpenMachinesRoute(parseJson(result.stdout));
+}
+
+function rawMachineRoute(machineId: string): KnowledgeMachineRouteResolution {
+  return {
+    target: machineId,
+    route: null,
+    targetKind: null,
+    confidence: null,
+    source: 'raw',
+    evidence: null,
+    warnings: [],
+  };
+}
+
+export async function resolveKnowledgeMachineRoute(options: KnowledgeMachineRouteOptions): Promise<KnowledgeMachineRouteResolution> {
+  try {
+    const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
+    const mod = await loader();
+    if (mod?.resolveMachineRoute) {
+      const normalized = normalizeOpenMachinesRoute(mod.resolveMachineRoute(options.machineId, {
+        includeTailscale: options.includeTailscale,
+        runner: options.runner,
+        now: options.now,
+      }));
+      if (normalized) return normalized;
+      return await resolveOpenMachinesCliRoute(options) ?? rawMachineRoute(options.machineId);
+    }
+    return await resolveOpenMachinesCliRoute(options) ?? rawMachineRoute(options.machineId);
+  } catch (error) {
+    return await resolveOpenMachinesCliRoute(options) ?? {
+      ...rawMachineRoute(options.machineId),
+      warnings: [optionalModuleError(error)],
+    };
   }
 }
 

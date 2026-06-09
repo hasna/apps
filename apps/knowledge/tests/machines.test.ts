@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   discoverKnowledgeMachineTopology,
   preflightKnowledgeMachine,
+  resolveKnowledgeMachineRoute,
   type KnowledgeMachineCommandRunner,
   type KnowledgeMachinePreflightRunner,
 } from '../src/machines';
@@ -289,5 +290,114 @@ describe('knowledge machine topology', () => {
     expect(result.ok).toBe(true);
     expect(commands.some((command) => command.includes('open-knowledge=/repo/open-knowledge:@hasna/knowledge:0.2.34'))).toBe(true);
     expect(result.checks[0].id).toBe('workspace:open-knowledge:package-name');
+  });
+
+  test('uses machines consumer SDK route resolver when available', async () => {
+    const result = await resolveKnowledgeMachineRoute({
+      machineId: 'spark01',
+      now: new Date('2026-06-09T00:00:00.000Z'),
+      loadOpenMachines: async () => ({
+        resolveMachineRoute: () => ({
+          ok: true,
+          target: 'spark01.taild59be2.ts.net',
+          route: 'tailscale',
+          source: 'tailscale',
+          confidence: 'high',
+          evidence: {
+            topology: true,
+            matched_by: 'machine_id',
+            selected_hint: {
+              kind: 'tailscale',
+              target: 'spark01.taild59be2.ts.net',
+              reachable: true,
+            },
+          },
+          warnings: [],
+        }),
+      }),
+      runner: fakeCommandRunner({}),
+    });
+
+    expect(result).toEqual({
+      source: 'open-machines',
+      target: 'spark01.taild59be2.ts.net',
+      route: 'tailscale',
+      targetKind: 'tailscale',
+      confidence: 'high',
+      evidence: {
+        topology: true,
+        matched_by: 'machine_id',
+        selected_hint: {
+          kind: 'tailscale',
+          target: 'spark01.taild59be2.ts.net',
+          reachable: true,
+        },
+      },
+      warnings: [],
+    });
+  });
+
+  test('uses machines CLI route resolver when SDK import is unavailable', async () => {
+    const commands: string[] = [];
+    const result = await resolveKnowledgeMachineRoute({
+      machineId: 'spark01',
+      includeTailscale: false,
+      now: new Date('2026-06-09T00:00:00.000Z'),
+      loadOpenMachines: async () => null,
+      runner: (command) => {
+        commands.push(command);
+        if (command.includes('command -v machines')) {
+          return { stdout: '/home/hasna/.bun/bin/machines\n', stderr: '', exitCode: 0 };
+        }
+        if (command.includes('route')) {
+          return {
+            stdout: JSON.stringify({
+              ok: true,
+              target: 'cli-spark01.tailnet.test',
+              route: 'tailscale',
+              source: 'tailscale',
+              confidence: 'high',
+              evidence: {
+                topology: true,
+                matched_by: 'machine_id',
+                selected_hint: {
+                  kind: 'tailscale',
+                  target: 'cli-spark01.tailnet.test',
+                  reachable: true,
+                },
+              },
+              warnings: [],
+            }),
+            stderr: '',
+            exitCode: 0,
+          };
+        }
+        return { stdout: '', stderr: `unexpected command: ${command}`, exitCode: 1 };
+      },
+    });
+
+    expect(result.source).toBe('open-machines');
+    expect(result.target).toBe('cli-spark01.tailnet.test');
+    expect(result.route).toBe('tailscale');
+    expect(result.targetKind).toBe('tailscale');
+    expect(commands.some((command) => command.includes("'route'") && command.includes("'--no-tailscale'"))).toBe(true);
+  });
+
+  test('falls back to raw machine target when SDK and CLI route resolver are unavailable', async () => {
+    const result = await resolveKnowledgeMachineRoute({
+      machineId: 'spark01',
+      loadOpenMachines: async () => null,
+      runner: fakeCommandRunner({}),
+    });
+
+    expect(result).toEqual({
+      source: 'raw',
+      target: 'spark01',
+      route: null,
+      targetKind: null,
+      confidence: null,
+      evidence: null,
+      warnings: [],
+    });
   });
 });
