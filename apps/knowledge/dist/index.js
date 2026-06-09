@@ -18099,6 +18099,69 @@ function stableResolverEvidence(value) {
   const { recorded_at: _recordedAt, ...stable } = value;
   return stable;
 }
+function stringFromUnknown(value) {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+function numberFromUnknown(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+function booleanFromUnknown(value) {
+  return typeof value === "boolean" ? value : null;
+}
+function stringArrayFromUnknown(value) {
+  return Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : [];
+}
+function cacheabilityFromUnknown(value) {
+  const raw = recordFromUnknown(value);
+  const observedAt = stringFromUnknown(raw.observed_at);
+  const sourceAuthority = stringFromUnknown(raw.source_authority);
+  if (!observedAt || !sourceAuthority)
+    return null;
+  return {
+    observed_at: observedAt,
+    verified_at: stringFromUnknown(raw.verified_at),
+    expires_at: stringFromUnknown(raw.expires_at),
+    ttl_ms: numberFromUnknown(raw.ttl_ms),
+    source_authority: sourceAuthority,
+    confidence: stringFromUnknown(raw.confidence),
+    cacheable: raw.cacheable === true,
+    stale: raw.stale === true,
+    reasons: stringArrayFromUnknown(raw.reasons)
+  };
+}
+function cacheabilityIsFresh(cacheability, now) {
+  if (!cacheability || cacheability.stale)
+    return false;
+  if (!cacheability.expires_at)
+    return true;
+  const expires = Date.parse(cacheability.expires_at);
+  const observed = Date.parse(now);
+  return Number.isNaN(expires) || Number.isNaN(observed) || expires > observed;
+}
+function routeMatchesResolverEvidence(route, previous) {
+  return stringFromUnknown(previous.source) === route.source && stringFromUnknown(previous.target) === route.target && stringFromUnknown(previous.route) === route.route && stringFromUnknown(previous.target_kind) === route.targetKind && stringFromUnknown(previous.confidence) === route.confidence;
+}
+function workspaceMatchesResolverEvidence(workspace, previous) {
+  return stringFromUnknown(previous.source) === workspace.source && stringFromUnknown(previous.requested_machine_id) === workspace.requested_machine_id && stringFromUnknown(previous.machine_id) === workspace.machine_id && stringFromUnknown(previous.project_id) === workspace.project_id && stringFromUnknown(previous.repo_name) === workspace.repo_name && stringFromUnknown(previous.project_root) === workspace.project_root && stringFromUnknown(previous.project_root_source) === workspace.project_root_source && stringFromUnknown(previous.workspace_root) === workspace.workspace_root && stringFromUnknown(previous.workspace_root_source) === workspace.workspace_root_source && stringFromUnknown(previous.open_files_root) === workspace.open_files_root && stringFromUnknown(previous.open_files_root_source) === workspace.open_files_root_source && stringFromUnknown(previous.trust_status) === workspace.trust_status && stringFromUnknown(previous.auth_status) === workspace.auth_status && booleanFromUnknown(previous.current) === workspace.current && booleanFromUnknown(previous.primary) === workspace.primary;
+}
+function routeWithStableCacheability(route, previous, now) {
+  if (!route)
+    return null;
+  const previousCacheability = cacheabilityFromUnknown(previous.cacheability);
+  if (previousCacheability && cacheabilityIsFresh(previousCacheability, now) && routeMatchesResolverEvidence(route, previous)) {
+    return { ...route, cacheability: previousCacheability };
+  }
+  return route;
+}
+function workspaceWithStableCacheability(workspace, previous, now) {
+  if (!workspace)
+    return null;
+  const previousCacheability = cacheabilityFromUnknown(previous.cacheability);
+  if (previousCacheability && cacheabilityIsFresh(previousCacheability, now) && workspaceMatchesResolverEvidence(workspace, previous)) {
+    return { ...workspace, cacheability: previousCacheability };
+  }
+  return workspace;
+}
 function resolverMachineId(input) {
   return input.workspace?.machine_id ?? input.workspace?.requested_machine_id ?? input.machineId ?? input.route?.target ?? hostname();
 }
@@ -18174,8 +18237,11 @@ function recordKnowledgeMachineResolverEvidence(dbPath, input) {
     const capabilities = parseJsonRecord(existing?.capabilities_json);
     const metadata = parseJsonRecord(existing?.metadata_json);
     const resolverCapabilities = recordFromUnknown(capabilities.resolver);
-    const route = input.route?.source === "registry" ? null : input.route ?? null;
-    const workspace = input.workspace?.source === "registry" ? null : input.workspace ?? null;
+    const previousResolverEvidence = recordFromUnknown(metadata.resolver_evidence);
+    const previousRouteEvidence = recordFromUnknown(previousResolverEvidence.route);
+    const previousWorkspaceEvidence = recordFromUnknown(previousResolverEvidence.workspace);
+    const route = routeWithStableCacheability(input.route?.source === "registry" ? null : input.route ?? null, previousRouteEvidence, now);
+    const workspace = workspaceWithStableCacheability(input.workspace?.source === "registry" ? null : input.workspace ?? null, previousWorkspaceEvidence, now);
     const stableInput = { ...input, route, workspace };
     const nextCapabilities = {
       ...capabilities,
@@ -18207,7 +18273,7 @@ function recordKnowledgeMachineResolverEvidence(dbPath, input) {
     };
     const nextResolverEvidence = resolverEvidenceMetadata(stableInput, metadata, now);
     if (existing) {
-      const existingResolverEvidence = recordFromUnknown(metadata.resolver_evidence);
+      const existingResolverEvidence = previousResolverEvidence;
       const unchanged = existing.workspace_home === (workspace?.project_root ?? existing.workspace_home ?? null) && existing.tailscale_dns === resolverTailscaleDns(existing, route) && existing.ssh_target === (route?.target ?? existing.ssh_target ?? null) && canonicalJson(parseJsonRecord(existing.capabilities_json)) === canonicalJson(nextCapabilities) && canonicalJson(stableResolverEvidence(existingResolverEvidence)) === canonicalJson(stableResolverEvidence(nextResolverEvidence));
       if (unchanged)
         return existing;

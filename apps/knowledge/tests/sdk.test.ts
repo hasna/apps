@@ -35,7 +35,13 @@ function writeFakeSshBin(dir: string): string {
   return bin;
 }
 
-function writeFakeMachinesRouteBin(bin: string, target: string, projectRoot = '/remote/open-knowledge'): void {
+function writeFakeMachinesRouteBin(
+  bin: string,
+  target: string,
+  projectRoot = '/remote/open-knowledge',
+  observedAt = '2026-06-09T00:00:00.000Z',
+  expiresAt = '2026-06-10T00:05:00.000Z',
+): void {
   const machines = join(bin, 'machines');
   writeFileSync(machines, [
     '#!/bin/sh',
@@ -56,9 +62,9 @@ function writeFakeMachinesRouteBin(bin: string, target: string, projectRoot = '/
         },
       },
       cacheability: {
-        observed_at: '2026-06-09T00:00:00.000Z',
-        verified_at: '2026-06-09T00:00:00.000Z',
-        expires_at: '2026-06-09T00:05:00.000Z',
+        observed_at: observedAt,
+        verified_at: observedAt,
+        expires_at: expiresAt,
         ttl_ms: 300000,
         source_authority: 'open-machines',
         confidence: 'high',
@@ -94,9 +100,9 @@ function writeFakeMachinesRouteBin(bin: string, target: string, projectRoot = '/
       repair_hints: [],
       evidence: { topology: true, matched_by: 'machine_id', metadata_keys: [] },
       cacheability: {
-        observed_at: '2026-06-09T00:00:00.000Z',
+        observed_at: observedAt,
         verified_at: null,
-        expires_at: '2026-06-09T00:05:00.000Z',
+        expires_at: expiresAt,
         ttl_ms: 300000,
         source_authority: 'open-machines',
         confidence: 'high',
@@ -387,6 +393,13 @@ describe('public knowledge sdk', () => {
       expect(JSON.parse(registryRow?.capabilities_json ?? '{}').resolver.route_cacheable).toBe(true);
       expect(JSON.parse(registryRow?.capabilities_json ?? '{}').resolver.workspace_source_authority).toBe('open-machines');
 
+      writeFakeMachinesRouteBin(
+        bin,
+        'sdk-spark01.tailnet.test',
+        '/remote/open-knowledge',
+        '2026-06-09T00:01:00.000Z',
+        '2026-06-10T00:06:00.000Z',
+      );
       const repeated = await client.sync.remotePeer({
         machine: 'spark01',
         direction: 'push',
