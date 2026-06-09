@@ -1124,7 +1124,8 @@ async function runStorageMigrations(remote) {
     await remote.run(sql);
 }
 async function storagePush(options = {}) {
-  const remote = await getStoragePg();
+  const remote = options.remote ?? await getStoragePg();
+  const ownsRemote = !options.remote;
   const local = openScopedDb(options);
   try {
     await runStorageMigrations(remote);
@@ -1136,11 +1137,13 @@ async function storagePush(options = {}) {
     return results;
   } finally {
     local.db.close();
-    await remote.close();
+    if (ownsRemote)
+      await remote.close();
   }
 }
 async function storagePull(options = {}) {
-  const remote = await getStoragePg();
+  const remote = options.remote ?? await getStoragePg();
+  const ownsRemote = !options.remote;
   const local = openScopedDb(options);
   try {
     await runStorageMigrations(remote);
@@ -1152,7 +1155,8 @@ async function storagePull(options = {}) {
     return results;
   } finally {
     local.db.close();
-    await remote.close();
+    if (ownsRemote)
+      await remote.close();
   }
 }
 async function storageSync(options = {}) {

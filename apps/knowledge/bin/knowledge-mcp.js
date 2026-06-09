@@ -14236,7 +14236,7 @@ import { existsSync as existsSync10, readFileSync as readFileSync9, writeFileSyn
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.51",
+  version: "0.2.52",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   exports: {
@@ -24461,7 +24461,8 @@ async function runStorageMigrations(remote) {
     await remote.run(sql);
 }
 async function storagePush(options = {}) {
-  const remote = await getStoragePg();
+  const remote = options.remote ?? await getStoragePg();
+  const ownsRemote = !options.remote;
   const local = openScopedDb(options);
   try {
     await runStorageMigrations(remote);
@@ -24473,11 +24474,13 @@ async function storagePush(options = {}) {
     return results;
   } finally {
     local.db.close();
-    await remote.close();
+    if (ownsRemote)
+      await remote.close();
   }
 }
 async function storagePull(options = {}) {
-  const remote = await getStoragePg();
+  const remote = options.remote ?? await getStoragePg();
+  const ownsRemote = !options.remote;
   const local = openScopedDb(options);
   try {
     await runStorageMigrations(remote);
@@ -24489,7 +24492,8 @@ async function storagePull(options = {}) {
     return results;
   } finally {
     local.db.close();
-    await remote.close();
+    if (ownsRemote)
+      await remote.close();
   }
 }
 async function storageSync(options = {}) {

@@ -45,6 +45,7 @@ export interface StorageSyncOptions {
   tables?: string[];
   scope?: string;
   cwd?: string;
+  remote?: StorageRemoteAdapter;
 }
 
 export interface StorageStatusOptions {
@@ -63,6 +64,12 @@ export interface SyncMeta {
   table_name: string;
   last_synced_at: string | null;
   direction: 'push' | 'pull';
+}
+
+export interface StorageRemoteAdapter {
+  run(sql: string, ...params: unknown[]): Promise<{ changes: number }>;
+  all(sql: string, ...params: unknown[]): Promise<unknown[]>;
+  close(): Promise<void>;
 }
 
 export const KNOWLEDGE_STORAGE_ENV = 'HASNA_KNOWLEDGE_DATABASE_URL';
@@ -155,7 +162,7 @@ export function getStorageMode(): StorageMode {
   return getStorageDatabaseUrl() ? 'hybrid' : 'local';
 }
 
-export async function getStoragePg(): Promise<PgAdapterAsync> {
+export async function getStoragePg(): Promise<StorageRemoteAdapter> {
   const url = getStorageDatabaseUrl();
   if (!url) {
     throw new Error('Missing HASNA_KNOWLEDGE_DATABASE_URL or KNOWLEDGE_DATABASE_URL');
@@ -163,13 +170,14 @@ export async function getStoragePg(): Promise<PgAdapterAsync> {
   return new PgAdapterAsync(url);
 }
 
-export async function runStorageMigrations(remote: PgAdapterAsync): Promise<void> {
+export async function runStorageMigrations(remote: StorageRemoteAdapter): Promise<void> {
   await remote.run('CREATE EXTENSION IF NOT EXISTS pgcrypto');
   for (const sql of PG_MIGRATIONS) await remote.run(sql);
 }
 
 export async function storagePush(options: StorageSyncOptions = {}): Promise<SyncResult[]> {
-  const remote = await getStoragePg();
+  const remote = options.remote ?? await getStoragePg();
+  const ownsRemote = !options.remote;
   const local = openScopedDb(options);
   try {
     await runStorageMigrations(remote);
@@ -181,12 +189,13 @@ export async function storagePush(options: StorageSyncOptions = {}): Promise<Syn
     return results;
   } finally {
     local.db.close();
-    await remote.close();
+    if (ownsRemote) await remote.close();
   }
 }
 
 export async function storagePull(options: StorageSyncOptions = {}): Promise<SyncResult[]> {
-  const remote = await getStoragePg();
+  const remote = options.remote ?? await getStoragePg();
+  const ownsRemote = !options.remote;
   const local = openScopedDb(options);
   try {
     await runStorageMigrations(remote);
@@ -198,7 +207,7 @@ export async function storagePull(options: StorageSyncOptions = {}): Promise<Syn
     return results;
   } finally {
     local.db.close();
-    await remote.close();
+    if (ownsRemote) await remote.close();
   }
 }
 
@@ -254,7 +263,7 @@ export function parseStorageTables(value?: string | string[] | null): StorageTab
   return resolveTables(Array.isArray(value) ? value : value.split(','));
 }
 
-async function pushTable(db: Database, remote: PgAdapterAsync, table: StorageTable): Promise<SyncResult> {
+async function pushTable(db: Database, remote: StorageRemoteAdapter, table: StorageTable): Promise<SyncResult> {
   const result: SyncResult = { table, rowsRead: 0, rowsWritten: 0, errors: [] };
   try {
     if (!tableExists(db, table)) return result;
@@ -270,7 +279,7 @@ async function pushTable(db: Database, remote: PgAdapterAsync, table: StorageTab
   return result;
 }
 
-async function pullTable(remote: PgAdapterAsync, db: Database, table: StorageTable): Promise<SyncResult> {
+async function pullTable(remote: StorageRemoteAdapter, db: Database, table: StorageTable): Promise<SyncResult> {
   const result: SyncResult = { table, rowsRead: 0, rowsWritten: 0, errors: [] };
   try {
     if (!tableExists(db, table)) return result;
@@ -285,7 +294,7 @@ async function pullTable(remote: PgAdapterAsync, db: Database, table: StorageTab
   return result;
 }
 
-async function getRemoteColumns(remote: PgAdapterAsync, table: string): Promise<Map<string, string>> {
+async function getRemoteColumns(remote: StorageRemoteAdapter, table: string): Promise<Map<string, string>> {
   const rows = await remote.all(
     "SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = ?",
     table,
@@ -304,7 +313,7 @@ function filterLocalColumns(db: Database, table: string, columns: string[]): str
   return columns.filter((column) => allowed.has(column));
 }
 
-async function upsertPg(remote: PgAdapterAsync, table: StorageTable, columns: string[], rows: Row[], remoteColumns: Map<string, string>): Promise<number> {
+async function upsertPg(remote: StorageRemoteAdapter, table: StorageTable, columns: string[], rows: Row[], remoteColumns: Map<string, string>): Promise<number> {
   if (columns.length === 0) return 0;
   const primaryKeys = PRIMARY_KEYS[table];
   const columnList = columns.map(quoteIdent).join(', ');

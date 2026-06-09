@@ -1,4 +1,3 @@
-import { PgAdapterAsync } from './remote-storage';
 export declare const STORAGE_TABLES: readonly ["sources", "wiki_pages", "source_revisions", "chunks", "chunk_embeddings", "wiki_backlinks", "citations", "knowledge_indexes", "runs", "run_events", "provider_usage", "redaction_findings", "storage_objects", "audit_events", "approval_gates", "vector_index_entries", "reindex_queue", "knowledge_machines", "knowledge_sync_snapshots", "knowledge_sync_changes", "knowledge_sync_conflicts", "knowledge_sync_table_clocks", "knowledge_sync_imports"];
 export declare const KNOWLEDGE_STORAGE_TABLES: readonly ["sources", "wiki_pages", "source_revisions", "chunks", "chunk_embeddings", "wiki_backlinks", "citations", "knowledge_indexes", "runs", "run_events", "provider_usage", "redaction_findings", "storage_objects", "audit_events", "approval_gates", "vector_index_entries", "reindex_queue", "knowledge_machines", "knowledge_sync_snapshots", "knowledge_sync_changes", "knowledge_sync_conflicts", "knowledge_sync_table_clocks", "knowledge_sync_imports"];
 type StorageTable = (typeof STORAGE_TABLES)[number];
@@ -10,6 +9,7 @@ export interface StorageSyncOptions {
     tables?: string[];
     scope?: string;
     cwd?: string;
+    remote?: StorageRemoteAdapter;
 }
 export interface StorageStatusOptions {
     scope?: string;
@@ -25,6 +25,13 @@ export interface SyncMeta {
     table_name: string;
     last_synced_at: string | null;
     direction: 'push' | 'pull';
+}
+export interface StorageRemoteAdapter {
+    run(sql: string, ...params: unknown[]): Promise<{
+        changes: number;
+    }>;
+    all(sql: string, ...params: unknown[]): Promise<unknown[]>;
+    close(): Promise<void>;
 }
 export declare const KNOWLEDGE_STORAGE_ENV = "HASNA_KNOWLEDGE_DATABASE_URL";
 export declare const KNOWLEDGE_STORAGE_FALLBACK_ENV = "KNOWLEDGE_DATABASE_URL";
@@ -47,8 +54,8 @@ export declare function getStorageDatabaseEnvName(): (typeof STORAGE_DATABASE_EN
 export declare function getStorageDatabaseEnv(): StorageEnv | null;
 export declare function getStorageDatabaseUrl(): string | null;
 export declare function getStorageMode(): StorageMode;
-export declare function getStoragePg(): Promise<PgAdapterAsync>;
-export declare function runStorageMigrations(remote: PgAdapterAsync): Promise<void>;
+export declare function getStoragePg(): Promise<StorageRemoteAdapter>;
+export declare function runStorageMigrations(remote: StorageRemoteAdapter): Promise<void>;
 export declare function storagePush(options?: StorageSyncOptions): Promise<SyncResult[]>;
 export declare function storagePull(options?: StorageSyncOptions): Promise<SyncResult[]>;
 export declare function storageSync(options?: StorageSyncOptions): Promise<{

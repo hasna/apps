@@ -27,6 +27,7 @@ export type {
   StorageStatus,
   StorageStatusOptions,
   StorageSyncOptions,
+  StorageRemoteAdapter,
   SyncMeta,
   SyncResult,
 } from './db/storage-sync.js';
