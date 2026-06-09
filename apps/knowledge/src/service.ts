@@ -1,6 +1,8 @@
 import { createArtifactStore } from './artifact-store';
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
   clearKnowledgeAuth,
@@ -122,6 +124,7 @@ export interface KnowledgeSyncBundleOptions {
   machineId?: string | null;
   tables?: string[];
   includeArtifactContent?: boolean;
+  recordClocks?: boolean;
 }
 
 export interface KnowledgeSyncImportOptions {
@@ -208,6 +211,10 @@ function resolvePeerWorkspace(input: string): KnowledgeWorkspace {
   return ensureKnowledgeWorkspace(workspaceForHome(projectKnowledgeHome(target)).home);
 }
 
+function workspaceMachineId(workspace: KnowledgeWorkspace): string {
+  return `${hostname()}:${createHash('sha256').update(workspace.home).digest('hex').slice(0, 12)}`;
+}
+
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
@@ -248,9 +255,13 @@ function assertRemoteSyncBundle(machine: string, value: unknown): asserts value 
   ) {
     throw new Error(`Remote knowledge sync export on ${machine} did not return a knowledge sync bundle. Install @hasna/knowledge 0.2.32 or newer on the remote machine.`);
   }
+  const protocolVersion = (value as { protocol_version?: unknown }).protocol_version;
+  const minProtocolVersion = (value as { min_protocol_version?: unknown }).min_protocol_version;
   if (
-    (value as { protocol_version?: unknown }).protocol_version !== KNOWLEDGE_SYNC_PROTOCOL_VERSION
-    || (value as { min_protocol_version?: unknown }).min_protocol_version !== KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION
+    typeof protocolVersion !== 'number'
+    || typeof minProtocolVersion !== 'number'
+    || protocolVersion < KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION
+    || minProtocolVersion > KNOWLEDGE_SYNC_PROTOCOL_VERSION
   ) {
     throw new Error(`Remote knowledge sync export on ${machine} uses an unsupported sync protocol. Install @hasna/knowledge 0.2.32 or newer on both machines.`);
   }
@@ -268,9 +279,13 @@ function assertRemoteSyncApplyResult(machine: string, value: unknown): asserts v
   ) {
     throw new Error(`Remote knowledge sync import on ${machine} did not return a sync import result. Install @hasna/knowledge 0.2.32 or newer on the remote machine.`);
   }
+  const protocolVersion = (value as { protocol_version?: unknown }).protocol_version;
+  const minProtocolVersion = (value as { min_protocol_version?: unknown }).min_protocol_version;
   if (
-    (value as { protocol_version?: unknown }).protocol_version !== KNOWLEDGE_SYNC_PROTOCOL_VERSION
-    || (value as { min_protocol_version?: unknown }).min_protocol_version !== KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION
+    typeof protocolVersion !== 'number'
+    || typeof minProtocolVersion !== 'number'
+    || protocolVersion < KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION
+    || minProtocolVersion > KNOWLEDGE_SYNC_PROTOCOL_VERSION
   ) {
     throw new Error(`Remote knowledge sync import on ${machine} uses an unsupported sync protocol. Install @hasna/knowledge 0.2.32 or newer on both machines.`);
   }
@@ -759,6 +774,7 @@ export class KnowledgeService {
       machineId: options.machineId ?? null,
       tables: options.tables,
       includeArtifactContent: options.includeArtifactContent,
+      recordClocks: options.recordClocks !== false,
     });
   }
 
@@ -860,6 +876,7 @@ export class KnowledgeService {
         machineId: options.machineId ?? null,
         tables: options.tables,
         includeArtifactContent: options.includeArtifactContent,
+        recordClocks: !dryRun,
       });
       const remoteImport = remoteKnowledgeCommand(peerWorkspace, [
         'sync', 'import',
@@ -889,24 +906,28 @@ export class KnowledgeService {
     const peerConfig = readKnowledgeConfig(peerWorkspace.configPath);
     const peerStorage = resolveStorageContract(peerConfig, peerWorkspace, this.scope);
     const peerStore = createArtifactStore(peerConfig, peerWorkspace);
+    const localMachineId = options.machineId ?? workspaceMachineId(localWorkspace);
+    const peerMachineId = workspaceMachineId(peerWorkspace);
 
     const localBundle = () => createKnowledgeSyncBundle({
       dbPath: localWorkspace.knowledgeDbPath,
       scope: this.scope,
       workspaceHome: localWorkspace.home,
       storage: this.storageContract(),
-      machineId: options.machineId ?? null,
+      machineId: localMachineId,
       tables: options.tables,
       includeArtifactContent: options.includeArtifactContent,
+      recordClocks: options.dryRun !== true,
     });
     const peerBundle = () => createKnowledgeSyncBundle({
       dbPath: peerWorkspace.knowledgeDbPath,
       scope: this.scope,
       workspaceHome: peerWorkspace.home,
       storage: peerStorage,
-      machineId: null,
+      machineId: peerMachineId,
       tables: options.tables,
       includeArtifactContent: options.includeArtifactContent,
+      recordClocks: options.dryRun !== true,
     });
 
     const result: KnowledgePeerSyncResult = {
@@ -927,7 +948,7 @@ export class KnowledgeService {
         targetBundle: localBundle(),
         direction: 'pull',
         dryRun: options.dryRun,
-        localMachineId: options.machineId ?? null,
+        localMachineId,
       });
     }
 
@@ -942,7 +963,7 @@ export class KnowledgeService {
         targetBundle: peerBundle(),
         direction: 'push',
         dryRun: options.dryRun,
-        localMachineId: options.machineId ?? null,
+        localMachineId: peerMachineId,
       });
     }
 

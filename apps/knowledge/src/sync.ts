@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { join, relative, resolve, sep } from 'node:path';
+import { relative, resolve, sep } from 'node:path';
 import type { Database } from 'bun:sqlite';
 import { CURRENT_SCHEMA_VERSION, getSchemaVersion, migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { recordStorageObjects, type GeneratedStorageObject, type StorageContract } from './storage-contract';
@@ -55,6 +56,34 @@ export interface KnowledgeSyncConflictRow {
   created_at: string;
 }
 
+export interface KnowledgeSyncTableClockRow {
+  table_name: string;
+  machine_id: string;
+  logical_clock: number;
+  high_water_hash: string | null;
+  high_water_bundle_id: string | null;
+  origin_machine_id: string | null;
+  updated_by_machine_id: string | null;
+  last_applied_at: string | null;
+  metadata_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KnowledgeSyncImportRow {
+  bundle_id: string;
+  source_machine_id: string;
+  target_machine_id: string;
+  direction: string;
+  status: string;
+  content_hash: string;
+  table_clocks_json: string;
+  tables_json: string;
+  generated_at: string;
+  applied_at: string;
+  metadata_json: string;
+}
+
 export interface KnowledgeSyncStatus {
   ok: true;
   scope: string;
@@ -72,6 +101,14 @@ export interface KnowledgeSyncStatus {
   changes: {
     total: number;
     by_operation: Array<{ operation: string; count: number }>;
+  };
+  clocks: {
+    total: number;
+    rows: KnowledgeSyncTableClockRow[];
+  };
+  imports: {
+    total: number;
+    latest: KnowledgeSyncImportRow | null;
   };
   conflicts: {
     total: number;
@@ -145,9 +182,11 @@ export const KNOWLEDGE_SYNC_TABLES = [
   'knowledge_sync_snapshots',
   'knowledge_sync_changes',
   'knowledge_sync_conflicts',
+  'knowledge_sync_table_clocks',
+  'knowledge_sync_imports',
 ] as const;
 
-export const KNOWLEDGE_SYNC_PROTOCOL_VERSION = 1;
+export const KNOWLEDGE_SYNC_PROTOCOL_VERSION = 2;
 export const KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION = 1;
 
 export type KnowledgeSyncTable = (typeof KNOWLEDGE_SYNC_TABLES)[number];
@@ -176,17 +215,31 @@ const PRIMARY_KEYS: Record<KnowledgeSyncTable, string[]> = {
   knowledge_sync_snapshots: ['id'],
   knowledge_sync_changes: ['id'],
   knowledge_sync_conflicts: ['id'],
+  knowledge_sync_table_clocks: ['table_name', 'machine_id'],
+  knowledge_sync_imports: ['bundle_id'],
 };
 
 const TABLE_SYNC_EXCLUDES = new Set<KnowledgeSyncTable>([
   'storage_objects',
   'knowledge_sync_changes',
+  'knowledge_sync_table_clocks',
+  'knowledge_sync_imports',
 ]);
 
 export interface KnowledgeSyncBundleTable {
   table: KnowledgeSyncTable;
   primary_keys: string[];
   rows: Row[];
+}
+
+export interface KnowledgeSyncBundleTableClock {
+  table: KnowledgeSyncTable;
+  machine_id: string;
+  logical_clock: number;
+  high_water_hash: string;
+  high_water_bundle_id: string | null;
+  row_count: number;
+  updated_at: string;
 }
 
 export interface KnowledgeSyncBundleArtifact {
@@ -207,6 +260,8 @@ export interface KnowledgeSyncBundle {
   version: 1;
   protocol_version: typeof KNOWLEDGE_SYNC_PROTOCOL_VERSION;
   min_protocol_version: typeof KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION;
+  bundle_id: string;
+  content_hash: string;
   generated_at: string;
   source: {
     scope: string;
@@ -215,6 +270,7 @@ export interface KnowledgeSyncBundle {
     machine_id: string | null;
     artifact_root_uri: string;
   };
+  table_clocks: KnowledgeSyncBundleTableClock[];
   tables: KnowledgeSyncBundleTable[];
   artifacts: KnowledgeSyncBundleArtifact[];
   warnings: string[];
@@ -228,6 +284,7 @@ export interface KnowledgeSyncTableApplyResult {
   inserted: number;
   skipped: number;
   conflicts: number;
+  stale_skipped: number;
 }
 
 export interface KnowledgeSyncArtifactApplyResult {
@@ -255,6 +312,12 @@ export interface KnowledgeSyncApplyResult {
   tables: KnowledgeSyncTableApplyResult[];
   artifacts: KnowledgeSyncArtifactApplyResult;
   conflicts_created: number;
+  bundle_id: string;
+  replayed: boolean;
+  clocks: {
+    advanced: number;
+    stale_tables: number;
+  };
   warnings: string[];
   message: string;
 }
@@ -274,6 +337,15 @@ function nowIso(now = new Date()): string {
 
 function makeSyncId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`;
+}
+
+function defaultSyncMachineId(input?: string | null): string {
+  const explicit = input?.trim();
+  if (explicit) return explicit;
+  return process.env.HASNA_MACHINE_ID
+    ?? process.env.OPEN_MACHINES_MACHINE_ID
+    ?? process.env.MACHINE_ID
+    ?? hostname();
 }
 
 function stableJson(value: unknown): string {
@@ -371,6 +443,157 @@ function rowHash(row: Row, artifactUriToKey: Map<string, string> = new Map()): s
 function tableRows(db: Database, table: KnowledgeSyncTable): Row[] {
   if (!tableExists(db, table)) return [];
   return db.query(`SELECT * FROM ${quoteIdent(table)} ORDER BY rowid ASC`).all() as Row[];
+}
+
+function tableContentHash(table: KnowledgeSyncTable, rows: Row[], artifactUriToKey: Map<string, string> = new Map()): string {
+  return hashValue(rows
+    .map((row) => ({
+      key: rowKey(table, row),
+      hash: rowHash(row, artifactUriToKey),
+    }))
+    .sort((a, b) => a.key.localeCompare(b.key)));
+}
+
+function tableClock(db: Database, table: KnowledgeSyncTable, machineId: string): KnowledgeSyncTableClockRow | null {
+  return db.query<KnowledgeSyncTableClockRow, [string, string]>(
+    'SELECT * FROM knowledge_sync_table_clocks WHERE table_name = ? AND machine_id = ?',
+  ).get(table, machineId) ?? null;
+}
+
+function listTableClocks(db: Database): KnowledgeSyncTableClockRow[] {
+  if (!tableExists(db, 'knowledge_sync_table_clocks')) return [];
+  return db.query<KnowledgeSyncTableClockRow, []>(
+    'SELECT * FROM knowledge_sync_table_clocks ORDER BY table_name ASC, machine_id ASC',
+  ).all();
+}
+
+function updateTableClock(db: Database, input: {
+  table: KnowledgeSyncTable;
+  machineId: string;
+  logicalClock: number;
+  highWaterHash: string | null;
+  highWaterBundleId?: string | null;
+  originMachineId?: string | null;
+  updatedByMachineId?: string | null;
+  lastAppliedAt?: string | null;
+  metadata?: Record<string, unknown>;
+  now?: string;
+}): KnowledgeSyncTableClockRow {
+  const now = input.now ?? nowIso();
+  const existing = tableClock(db, input.table, input.machineId);
+  const createdAt = existing?.created_at ?? now;
+  db.query(`
+    INSERT INTO knowledge_sync_table_clocks (
+      table_name, machine_id, logical_clock, high_water_hash, high_water_bundle_id,
+      origin_machine_id, updated_by_machine_id, last_applied_at, metadata_json,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(table_name, machine_id) DO UPDATE SET
+      logical_clock = excluded.logical_clock,
+      high_water_hash = excluded.high_water_hash,
+      high_water_bundle_id = excluded.high_water_bundle_id,
+      origin_machine_id = excluded.origin_machine_id,
+      updated_by_machine_id = excluded.updated_by_machine_id,
+      last_applied_at = excluded.last_applied_at,
+      metadata_json = excluded.metadata_json,
+      updated_at = excluded.updated_at
+  `).run(
+    input.table,
+    input.machineId,
+    input.logicalClock,
+    input.highWaterHash,
+    input.highWaterBundleId ?? null,
+    input.originMachineId ?? input.machineId,
+    input.updatedByMachineId ?? input.machineId,
+    input.lastAppliedAt ?? now,
+    JSON.stringify(input.metadata ?? {}),
+    createdAt,
+    now,
+  );
+  const row = tableClock(db, input.table, input.machineId);
+  if (!row) throw new Error(`Failed to record sync clock for ${input.table}:${input.machineId}`);
+  return row;
+}
+
+function prepareExportTableClock(db: Database, input: {
+  table: KnowledgeSyncTable;
+  machineId: string;
+  highWaterHash: string;
+  rowCount: number;
+  record: boolean;
+  now: string;
+}): KnowledgeSyncBundleTableClock {
+  const existing = tableClock(db, input.table, input.machineId);
+  const logicalClock = existing?.high_water_hash === input.highWaterHash
+    ? existing.logical_clock
+    : (existing?.logical_clock ?? 0) + 1;
+  const row = input.record
+    ? updateTableClock(db, {
+        table: input.table,
+        machineId: input.machineId,
+        logicalClock,
+        highWaterHash: input.highWaterHash,
+        highWaterBundleId: null,
+        originMachineId: existing?.origin_machine_id ?? input.machineId,
+        updatedByMachineId: input.machineId,
+        lastAppliedAt: input.now,
+        metadata: {
+          source: 'export',
+          row_count: input.rowCount,
+        },
+        now: input.now,
+      })
+    : {
+        table_name: input.table,
+        machine_id: input.machineId,
+        logical_clock: logicalClock,
+        high_water_hash: input.highWaterHash,
+        high_water_bundle_id: existing?.high_water_bundle_id ?? null,
+        origin_machine_id: existing?.origin_machine_id ?? input.machineId,
+        updated_by_machine_id: input.machineId,
+        last_applied_at: input.now,
+        metadata_json: '{}',
+        created_at: existing?.created_at ?? input.now,
+        updated_at: input.now,
+      };
+  return {
+    table: input.table,
+    machine_id: input.machineId,
+    logical_clock: row.logical_clock,
+    high_water_hash: input.highWaterHash,
+    high_water_bundle_id: row.high_water_bundle_id,
+    row_count: input.rowCount,
+    updated_at: row.updated_at,
+  };
+}
+
+function finalizeExportTableClock(db: Database, clock: KnowledgeSyncBundleTableClock, bundleId: string, record: boolean, now: string): void {
+  clock.high_water_bundle_id = bundleId;
+  if (!record) return;
+  updateTableClock(db, {
+    table: clock.table,
+    machineId: clock.machine_id,
+    logicalClock: clock.logical_clock,
+    highWaterHash: clock.high_water_hash,
+    highWaterBundleId: bundleId,
+    originMachineId: clock.machine_id,
+    updatedByMachineId: clock.machine_id,
+    lastAppliedAt: now,
+    metadata: {
+      source: 'export',
+      row_count: clock.row_count,
+    },
+    now,
+  });
+}
+
+function bundleTableClock(bundle: KnowledgeSyncBundle, table: KnowledgeSyncTable): KnowledgeSyncBundleTableClock | null {
+  return bundle.table_clocks?.find((clock) => clock.table === table) ?? null;
+}
+
+function staleIncomingClock(existing: KnowledgeSyncTableClockRow | null, incoming: KnowledgeSyncBundleTableClock | null): boolean {
+  if (!existing || !incoming) return false;
+  return incoming.logical_clock < existing.logical_clock;
 }
 
 function upsertSqliteRows(db: Database, table: KnowledgeSyncTable, rows: Row[]): number {
@@ -540,20 +763,17 @@ export function createKnowledgeSyncBundle(options: {
   machineId?: string | null;
   tables?: string[];
   includeArtifactContent?: boolean;
+  recordClocks?: boolean;
   now?: Date;
 }): KnowledgeSyncBundle {
   migrateKnowledgeDb(options.dbPath);
   const db = openKnowledgeDb(options.dbPath);
   const warnings: string[] = [];
+  const generatedAt = nowIso(options.now);
+  const sourceMachineId = defaultSyncMachineId(options.machineId);
+  const recordClocks = options.recordClocks !== false;
   try {
     const requestedTables = filterExistingTables(db, resolveSyncTables(options.tables));
-    const tables: KnowledgeSyncBundleTable[] = requestedTables
-      .filter((table) => !TABLE_SYNC_EXCLUDES.has(table))
-      .map((table) => ({
-        table,
-        primary_keys: PRIMARY_KEYS[table],
-        rows: tableRows(db, table),
-      }));
     const artifactRows = db.query<{
       id: string;
       artifact_uri: string;
@@ -583,20 +803,69 @@ export function createKnowledgeSyncBundle(options: {
       }
       return artifact;
     });
+    const sourceArtifactUriToKey = artifactUriToKey(artifacts);
+    const tables: KnowledgeSyncBundleTable[] = requestedTables
+      .filter((table) => !TABLE_SYNC_EXCLUDES.has(table))
+      .map((table) => ({
+        table,
+        primary_keys: PRIMARY_KEYS[table],
+        rows: tableRows(db, table),
+      }));
+    const tableClocks = tables.map((table) => prepareExportTableClock(db, {
+      table: table.table,
+      machineId: sourceMachineId,
+      highWaterHash: tableContentHash(table.table, table.rows, sourceArtifactUriToKey),
+      rowCount: table.rows.length,
+      record: recordClocks,
+      now: generatedAt,
+    }));
+    const contentHash = sha256(stableJson({
+      source: {
+        scope: options.scope,
+        workspace_home: options.workspaceHome,
+        sqlite_schema_version: getSchemaVersion(db),
+        machine_id: sourceMachineId,
+        artifact_root_uri: options.storage.artifact_store.uri_prefix,
+      },
+      tables: tables.map((table) => ({
+        table: table.table,
+        primary_keys: table.primary_keys,
+        rows: table.rows.map((row) => ({
+          key: rowKey(table.table, row),
+          hash: rowHash(row, sourceArtifactUriToKey),
+        })).sort((a, b) => a.key.localeCompare(b.key)),
+      })),
+      table_clocks: tableClocks.map((clock) => ({
+        table: clock.table,
+        machine_id: clock.machine_id,
+        logical_clock: clock.logical_clock,
+        high_water_hash: clock.high_water_hash,
+        row_count: clock.row_count,
+      })),
+      artifacts: artifacts.map((artifact) => ({
+        identity: artifactIdentity(artifact),
+        fingerprint: artifactFingerprint(artifact),
+      })).sort((a, b) => a.identity.localeCompare(b.identity)),
+    }));
+    const bundleId = `syncbundle_${contentHash.replace('sha256:', '').slice(0, 32)}`;
+    for (const clock of tableClocks) finalizeExportTableClock(db, clock, bundleId, recordClocks, generatedAt);
     return {
       ok: true,
       format: 'knowledge-sync-bundle',
       version: 1,
       protocol_version: KNOWLEDGE_SYNC_PROTOCOL_VERSION,
       min_protocol_version: KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION,
-      generated_at: nowIso(options.now),
+      bundle_id: bundleId,
+      content_hash: contentHash,
+      generated_at: generatedAt,
       source: {
         scope: options.scope,
         workspace_home: options.workspaceHome,
         sqlite_schema_version: getSchemaVersion(db),
-        machine_id: options.machineId ?? null,
+        machine_id: sourceMachineId,
         artifact_root_uri: options.storage.artifact_store.uri_prefix,
       },
+      table_clocks: tableClocks,
       tables,
       artifacts,
       warnings,
@@ -608,7 +877,14 @@ export function createKnowledgeSyncBundle(options: {
 }
 
 function validateSyncProtocol(input: { protocol_version?: unknown; min_protocol_version?: unknown }, label: string): void {
-  if (input.protocol_version !== KNOWLEDGE_SYNC_PROTOCOL_VERSION || input.min_protocol_version !== KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION) {
+  const protocolVersion = typeof input.protocol_version === 'number' ? input.protocol_version : null;
+  const minProtocolVersion = typeof input.min_protocol_version === 'number' ? input.min_protocol_version : null;
+  if (
+    protocolVersion === null
+    || minProtocolVersion === null
+    || protocolVersion < KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION
+    || minProtocolVersion > KNOWLEDGE_SYNC_PROTOCOL_VERSION
+  ) {
     throw new Error(`Unsupported ${label} protocol. Expected knowledge sync protocol v${KNOWLEDGE_SYNC_PROTOCOL_VERSION} with min v${KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION}.`);
   }
 }
@@ -622,6 +898,29 @@ function validateBundle(bundle: KnowledgeSyncBundle): void {
 
 function getBundleTable(bundle: KnowledgeSyncBundle, table: KnowledgeSyncTable): KnowledgeSyncBundleTable | null {
   return bundle.tables.find((entry) => entry.table === table) ?? null;
+}
+
+function syncBundleContentHash(bundle: KnowledgeSyncBundle): string {
+  if (typeof bundle.content_hash === 'string' && bundle.content_hash.length > 0) return bundle.content_hash;
+  return sha256(stableJson({
+    source: bundle.source,
+    tables: bundle.tables.map((table) => ({
+      table: table.table,
+      rows: table.rows.map((row) => ({
+        key: rowKey(table.table, row),
+        hash: rowHash(row, artifactUriToKey(bundle.artifacts)),
+      })).sort((a, b) => a.key.localeCompare(b.key)),
+    })),
+    artifacts: bundle.artifacts.map((artifact) => ({
+      identity: artifactIdentity(artifact),
+      fingerprint: artifactFingerprint(artifact),
+    })).sort((a, b) => a.identity.localeCompare(b.identity)),
+  }));
+}
+
+function syncBundleId(bundle: KnowledgeSyncBundle): string {
+  if (typeof bundle.bundle_id === 'string' && bundle.bundle_id.length > 0) return bundle.bundle_id;
+  return `syncbundle_${syncBundleContentHash(bundle).replace('sha256:', '').slice(0, 32)}`;
 }
 
 function tableRowMap(table: KnowledgeSyncTable, rows: Row[]): Map<string, Row> {
@@ -740,6 +1039,8 @@ function insertSyncChange(db: Database, input: {
   entityKind: string;
   entityId: string;
   nextHash: string;
+  logicalClock: number;
+  bundleId: string;
   row?: Row;
 }): void {
   const now = nowIso();
@@ -747,8 +1048,8 @@ function insertSyncChange(db: Database, input: {
     INSERT INTO knowledge_sync_changes (
       id, origin_machine_id, updated_by_machine_id, entity_kind, entity_id,
       operation, base_hash, next_hash, source_ref, source_revision_id,
-      artifact_uri, metadata_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      artifact_uri, logical_clock, bundle_id, metadata_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     makeSyncId('syncchg'),
     input.sourceMachineId,
@@ -761,12 +1062,43 @@ function insertSyncChange(db: Database, input: {
     typeof input.row?.source_ref === 'string' ? input.row.source_ref : typeof input.row?.source_uri === 'string' ? input.row.source_uri : null,
     typeof input.row?.source_revision_id === 'string' ? input.row.source_revision_id : null,
     typeof input.row?.artifact_uri === 'string' ? input.row.artifact_uri : null,
-    JSON.stringify({ source_machine_id: input.sourceMachineId }),
+    input.logicalClock,
+    input.bundleId,
+    JSON.stringify({ source_machine_id: input.sourceMachineId, bundle_id: input.bundleId }),
     now,
   );
 }
 
-function insertConflict(db: Database, input: KnowledgeSyncConflictInput): void {
+function insertConflict(db: Database, input: KnowledgeSyncConflictInput): boolean {
+  const duplicate = db.query<{ id: string }, [
+    string,
+    string,
+    string,
+    string,
+    string | null,
+    string | null,
+    string | null,
+  ]>(`
+    SELECT id FROM knowledge_sync_conflicts
+    WHERE entity_kind = ?
+      AND entity_id = ?
+      AND local_machine_id = ?
+      AND remote_machine_id = ?
+      AND COALESCE(local_hash, '') = COALESCE(?, '')
+      AND COALESCE(remote_hash, '') = COALESCE(?, '')
+      AND COALESCE(base_hash, '') = COALESCE(?, '')
+      AND status = 'open'
+    LIMIT 1
+  `).get(
+    input.entityKind,
+    input.entityId,
+    input.localMachineId,
+    input.remoteMachineId,
+    input.localHash ?? null,
+    input.remoteHash ?? null,
+    input.baseHash ?? null,
+  );
+  if (duplicate) return false;
   const now = nowIso();
   db.query(`
     INSERT INTO knowledge_sync_conflicts (
@@ -791,6 +1123,125 @@ function insertConflict(db: Database, input: KnowledgeSyncConflictInput): void {
     JSON.stringify(input.metadata ?? {}),
     now,
   );
+  return true;
+}
+
+function getSyncImport(db: Database, bundleId: string): KnowledgeSyncImportRow | null {
+  return db.query<KnowledgeSyncImportRow, [string]>(
+    'SELECT * FROM knowledge_sync_imports WHERE bundle_id = ?',
+  ).get(bundleId) ?? null;
+}
+
+function recordSyncImport(db: Database, input: {
+  bundle: KnowledgeSyncBundle;
+  bundleId: string;
+  contentHash: string;
+  sourceMachineId: string;
+  targetMachineId: string;
+  direction: KnowledgeSyncApplyResult['direction'];
+  status: string;
+  tableResults: KnowledgeSyncTableApplyResult[];
+  conflicts: number;
+  artifacts: KnowledgeSyncArtifactApplyResult;
+  now?: string;
+}): void {
+  const now = input.now ?? nowIso();
+  db.query(`
+    INSERT INTO knowledge_sync_imports (
+      bundle_id, source_machine_id, target_machine_id, direction, status,
+      content_hash, table_clocks_json, tables_json, generated_at, applied_at,
+      metadata_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(bundle_id) DO UPDATE SET
+      status = excluded.status,
+      applied_at = excluded.applied_at,
+      metadata_json = excluded.metadata_json
+  `).run(
+    input.bundleId,
+    input.sourceMachineId,
+    input.targetMachineId,
+    input.direction,
+    input.status,
+    input.contentHash,
+    JSON.stringify(input.bundle.table_clocks ?? []),
+    JSON.stringify(input.tableResults),
+    input.bundle.generated_at,
+    now,
+    JSON.stringify({
+      conflicts: input.conflicts,
+      artifacts: input.artifacts,
+      source_workspace_home: input.bundle.source.workspace_home,
+    }),
+  );
+}
+
+function replayedApplyResult(options: {
+  bundle: KnowledgeSyncBundle;
+  targetBundle: KnowledgeSyncBundle;
+  targetScope: string;
+  targetWorkspaceHome: string;
+  targetStorage: StorageContract;
+  direction: KnowledgeSyncApplyResult['direction'];
+  warnings: string[];
+  bundleId: string;
+}): KnowledgeSyncApplyResult {
+  return {
+    ok: true,
+    protocol_version: KNOWLEDGE_SYNC_PROTOCOL_VERSION,
+    min_protocol_version: KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION,
+    dry_run: false,
+    direction: options.direction,
+    source: options.bundle.source,
+    target: {
+      scope: options.targetScope,
+      workspace_home: options.targetWorkspaceHome,
+      sqlite_schema_version: options.targetBundle.source.sqlite_schema_version,
+      artifact_root_uri: options.targetStorage.artifact_store.uri_prefix,
+    },
+    tables: options.bundle.tables
+      .filter((table) => !TABLE_SYNC_EXCLUDES.has(table.table))
+      .map((table) => ({
+        table: table.table,
+        source_rows: table.rows.length,
+        target_rows: getBundleTable(options.targetBundle, table.table)?.rows.length ?? 0,
+        inserted: 0,
+        skipped: table.rows.length,
+        conflicts: 0,
+        stale_skipped: 0,
+      })),
+    artifacts: {
+      source_artifacts: options.bundle.artifacts.length,
+      target_artifacts: options.targetBundle.artifacts.length,
+      copied: 0,
+      skipped: options.bundle.artifacts.length,
+      conflicts: 0,
+      missing_content: 0,
+    },
+    conflicts_created: 0,
+    bundle_id: options.bundleId,
+    replayed: true,
+    clocks: {
+      advanced: 0,
+      stale_tables: 0,
+    },
+    warnings: [...options.warnings, `bundle_replay_skipped:${options.bundleId}`],
+    message: `Skipped already-applied bundle ${options.bundleId}`,
+  };
+}
+
+function canSkipBundleReplay(bundle: KnowledgeSyncBundle, targetBundle: KnowledgeSyncBundle): boolean {
+  const sourceArtifactUriToKey = artifactUriToKey(bundle.artifacts);
+  const targetArtifactUriToKey = artifactUriToKey(targetBundle.artifacts);
+  for (const sourceTable of bundle.tables) {
+    if (TABLE_SYNC_EXCLUDES.has(sourceTable.table)) continue;
+    const targetTable = getBundleTable(targetBundle, sourceTable.table);
+    const incomingClock = bundleTableClock(bundle, sourceTable.table);
+    const incomingHash = incomingClock?.high_water_hash
+      ?? tableContentHash(sourceTable.table, sourceTable.rows, sourceArtifactUriToKey);
+    const currentHash = tableContentHash(sourceTable.table, targetTable?.rows ?? [], targetArtifactUriToKey);
+    if (currentHash !== incomingHash) return false;
+  }
+  return true;
 }
 
 export async function applyKnowledgeSyncBundle(options: {
@@ -807,25 +1258,42 @@ export async function applyKnowledgeSyncBundle(options: {
 }): Promise<KnowledgeSyncApplyResult> {
   validateBundle(options.bundle);
   migrateKnowledgeDb(options.targetDbPath);
-  const db = openKnowledgeDb(options.targetDbPath);
   const warnings = [...options.bundle.warnings];
-  const localMachineId = options.localMachineId ?? 'local';
+  const dryRun = options.dryRun === true;
+  const localMachineId = defaultSyncMachineId(options.localMachineId);
+  const sourceMachineId = options.bundle.source.machine_id ?? 'unknown';
+  const bundleId = syncBundleId(options.bundle);
+  const contentHash = syncBundleContentHash(options.bundle);
+  const targetBundle = options.targetBundle ?? createKnowledgeSyncBundle({
+    dbPath: options.targetDbPath,
+    scope: options.targetScope,
+    workspaceHome: options.targetWorkspaceHome,
+    storage: options.targetStorage,
+    machineId: localMachineId,
+    includeArtifactContent: false,
+    recordClocks: !dryRun,
+  });
+  const db = openKnowledgeDb(options.targetDbPath);
   try {
-    const targetBundle = options.targetBundle ?? createKnowledgeSyncBundle({
-      dbPath: options.targetDbPath,
-      scope: options.targetScope,
-      workspaceHome: options.targetWorkspaceHome,
-      storage: options.targetStorage,
-      machineId: localMachineId,
-      includeArtifactContent: false,
-    });
+    if (!dryRun && getSyncImport(db, bundleId) && canSkipBundleReplay(options.bundle, targetBundle)) {
+      return replayedApplyResult({
+        bundle: options.bundle,
+        targetBundle,
+        targetScope: options.targetScope,
+        targetWorkspaceHome: options.targetWorkspaceHome,
+        targetStorage: options.targetStorage,
+        direction: options.direction,
+        warnings,
+        bundleId,
+      });
+    }
     const artifactResult = await materializeArtifacts({
       db,
       bundle: options.bundle,
       targetBundle,
       targetStorage: options.targetStorage,
       targetStore: options.targetStore,
-      dryRun: options.dryRun === true,
+      dryRun,
       direction: options.direction,
       localMachineId,
       warnings,
@@ -834,10 +1302,14 @@ export async function applyKnowledgeSyncBundle(options: {
     const targetArtifactUriToKey = artifactUriToKey(targetBundle.artifacts);
     const tableResults: KnowledgeSyncTableApplyResult[] = [];
     let conflictsCreated = 0;
+    let clocksAdvanced = 0;
+    let staleTables = 0;
 
     for (const sourceTable of options.bundle.tables) {
       if (sourceTable.table === 'storage_objects' || TABLE_SYNC_EXCLUDES.has(sourceTable.table)) continue;
       if (!tableExists(db, sourceTable.table)) continue;
+      const incomingClock = bundleTableClock(options.bundle, sourceTable.table);
+      const existingClock = tableClock(db, sourceTable.table, sourceMachineId);
       const targetTable = getBundleTable(targetBundle, sourceTable.table);
       const targetRows = tableRowMap(sourceTable.table, targetTable?.rows ?? []);
       const rowsToWrite: Row[] = [];
@@ -848,7 +1320,19 @@ export async function applyKnowledgeSyncBundle(options: {
         inserted: 0,
         skipped: 0,
         conflicts: 0,
+        stale_skipped: 0,
       };
+
+      if (!incomingClock) {
+        warnings.push(`legacy_clock_missing:${sourceTable.table}`);
+      } else if (staleIncomingClock(existingClock, incomingClock)) {
+        staleTables += 1;
+        result.skipped += sourceTable.rows.length;
+        result.stale_skipped = sourceTable.rows.length;
+        warnings.push(`stale_table_skipped:${sourceTable.table}:${sourceMachineId}:${incomingClock.logical_clock}`);
+        tableResults.push(result);
+        continue;
+      }
 
       for (const sourceRow of sourceTable.rows) {
         const key = rowKey(sourceTable.table, sourceRow);
@@ -865,25 +1349,28 @@ export async function applyKnowledgeSyncBundle(options: {
           continue;
         }
         result.conflicts += 1;
-        if (!options.dryRun) {
-          insertConflict(db, {
+        if (!dryRun) {
+          if (insertConflict(db, {
             entityKind: sourceTable.table,
             entityId: key,
             localMachineId,
-            remoteMachineId: options.bundle.source.machine_id ?? 'unknown',
+            remoteMachineId: sourceMachineId,
             localHash: currentHash,
             remoteHash: incomingHash,
+            baseHash: existingClock?.high_water_hash ?? null,
             metadata: {
               direction: options.direction,
+              bundle_id: bundleId,
+              incoming_logical_clock: incomingClock?.logical_clock ?? null,
+              current_logical_clock: existingClock?.logical_clock ?? null,
               source_workspace_home: options.bundle.source.workspace_home,
               target_workspace_home: options.targetWorkspaceHome,
             },
-          });
-          conflictsCreated += 1;
+          })) conflictsCreated += 1;
         }
       }
 
-      if (!options.dryRun && rowsToWrite.length > 0) {
+      if (!dryRun && rowsToWrite.length > 0) {
         const writtenRows = rowsToWrite.map((row) => transformImportedRow(row, artifactResult.uriMap));
         upsertSqliteRows(db, sourceTable.table, writtenRows);
         for (const row of writtenRows) {
@@ -894,27 +1381,70 @@ export async function applyKnowledgeSyncBundle(options: {
             entityKind: sourceTable.table,
             entityId: rowKey(sourceTable.table, row),
             nextHash: rowHash(row, artifactUriToKey(options.bundle.artifacts)),
+            logicalClock: incomingClock?.logical_clock ?? 0,
+            bundleId,
             row,
           });
         }
+      }
+      if (!dryRun && incomingClock) {
+        updateTableClock(db, {
+          table: sourceTable.table,
+          machineId: sourceMachineId,
+          logicalClock: incomingClock.logical_clock,
+          highWaterHash: incomingClock.high_water_hash,
+          highWaterBundleId: bundleId,
+          originMachineId: sourceMachineId,
+          updatedByMachineId: localMachineId,
+          lastAppliedAt: nowIso(),
+          metadata: {
+            source: 'import',
+            direction: options.direction,
+            row_count: sourceTable.rows.length,
+            inserted: result.inserted,
+            skipped: result.skipped,
+            conflicts: result.conflicts,
+          },
+        });
+        clocksAdvanced += 1;
       }
       tableResults.push(result);
     }
 
     for (const conflict of artifactResult.conflicts) {
-      if (!options.dryRun) {
-        insertConflict(db, conflict);
-        conflictsCreated += 1;
+      if (!dryRun) {
+        if (insertConflict(db, {
+          ...conflict,
+          baseHash: conflict.baseHash ?? null,
+          metadata: {
+            ...conflict.metadata,
+            bundle_id: bundleId,
+          },
+        })) conflictsCreated += 1;
       }
     }
 
     const inserted = tableResults.reduce((sum, table) => sum + table.inserted, 0);
     const conflicts = tableResults.reduce((sum, table) => sum + table.conflicts, 0) + artifactResult.result.conflicts;
+    if (!dryRun) {
+      recordSyncImport(db, {
+        bundle: options.bundle,
+        bundleId,
+        contentHash,
+        sourceMachineId,
+        targetMachineId: localMachineId,
+        direction: options.direction,
+        status: conflicts === 0 ? 'applied' : 'conflicted',
+        tableResults,
+        conflicts,
+        artifacts: artifactResult.result,
+      });
+    }
     return {
       ok: conflicts === 0,
       protocol_version: KNOWLEDGE_SYNC_PROTOCOL_VERSION,
       min_protocol_version: KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION,
-      dry_run: options.dryRun === true,
+      dry_run: dryRun,
       direction: options.direction,
       source: options.bundle.source,
       target: {
@@ -926,6 +1456,12 @@ export async function applyKnowledgeSyncBundle(options: {
       tables: tableResults,
       artifacts: artifactResult.result,
       conflicts_created: conflictsCreated,
+      bundle_id: bundleId,
+      replayed: false,
+      clocks: {
+        advanced: clocksAdvanced,
+        stale_tables: staleTables,
+      },
       warnings,
       message: `${options.dryRun ? 'Would import' : 'Imported'} ${inserted} row(s), copied ${artifactResult.result.copied} artifact(s), ${conflicts} conflict(s)`,
     };
@@ -990,6 +1526,30 @@ export function createKnowledgeSyncSnapshot(options: {
       row.artifact_hashes_json,
       row.created_at,
     );
+    const artifactUriMap = new Map<string, string>();
+    for (const table of filterExistingTables(db, resolveSyncTables()).filter((entry) => !TABLE_SYNC_EXCLUDES.has(entry))) {
+      const rows = tableRows(db, table);
+      const highWaterHash = tableContentHash(table, rows, artifactUriMap);
+      const existing = tableClock(db, table, machineId);
+      const logicalClock = existing?.high_water_hash === highWaterHash
+        ? existing.logical_clock
+        : (existing?.logical_clock ?? 0) + 1;
+      updateTableClock(db, {
+        table,
+        machineId,
+        logicalClock,
+        highWaterHash,
+        highWaterBundleId: row.id,
+        originMachineId: existing?.origin_machine_id ?? machineId,
+        updatedByMachineId: machineId,
+        lastAppliedAt: createdAt,
+        metadata: {
+          source: 'snapshot',
+          row_count: rows.length,
+        },
+        now: createdAt,
+      });
+    }
     return {
       ok: true,
       snapshot: {
@@ -1024,6 +1584,10 @@ export function getKnowledgeSyncStatus(options: {
     const changeOps = db.query<{ operation: string; count: number }, []>(
       'SELECT operation, COUNT(*) AS count FROM knowledge_sync_changes GROUP BY operation ORDER BY operation',
     ).all();
+    const clocks = listTableClocks(db);
+    const latestImport = db.query<KnowledgeSyncImportRow, []>(
+      'SELECT * FROM knowledge_sync_imports ORDER BY applied_at DESC LIMIT 1',
+    ).get() ?? null;
     const totalConflicts = conflictStatuses.reduce((sum, row) => sum + row.count, 0);
     const openConflicts = conflictStatuses
       .filter((row) => row.status !== 'resolved' && row.status !== 'ignored')
@@ -1045,6 +1609,14 @@ export function getKnowledgeSyncStatus(options: {
       changes: {
         total: count(db, 'knowledge_sync_changes'),
         by_operation: changeOps,
+      },
+      clocks: {
+        total: clocks.length,
+        rows: clocks,
+      },
+      imports: {
+        total: count(db, 'knowledge_sync_imports'),
+        latest: latestImport,
       },
       conflicts: {
         total: totalConflicts,

@@ -429,13 +429,13 @@ describe('knowledge cli', () => {
     const init = runCli(['db', 'init', '--scope', 'project', '--json'], dir);
     expect(init.exitCode).toBe(0);
     const initOut = JSON.parse(new TextDecoder().decode(init.stdout));
-    expect(initOut.schema_version).toBe(6);
+    expect(initOut.schema_version).toBe(7);
     expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'knowledge.db'))).toBe(true);
 
     const stats = runCli(['db', 'stats', '--scope', 'project', '--json'], dir);
     expect(stats.exitCode).toBe(0);
     const statsOut = JSON.parse(new TextDecoder().decode(stats.stdout));
-    expect(statsOut.schema_version).toBe(6);
+    expect(statsOut.schema_version).toBe(7);
     expect(statsOut.sources).toBe(0);
     expect(statsOut.runs).toBe(0);
 
@@ -454,7 +454,7 @@ describe('knowledge cli', () => {
     const status = runCli(['sync', 'status', '--scope', 'project', '--json'], dir);
     expect(status.exitCode).toBe(0);
     const statusOut = JSON.parse(new TextDecoder().decode(status.stdout));
-    expect(statusOut.sqlite_schema_version).toBe(6);
+    expect(statusOut.sqlite_schema_version).toBe(7);
     expect(statusOut.machines.total).toBe(0);
     expect(statusOut.conflicts.open).toBe(0);
 
@@ -565,7 +565,7 @@ describe('knowledge cli', () => {
     expect(exported.exitCode).toBe(0);
     const bundle = JSON.parse(new TextDecoder().decode(exported.stdout));
     expect(bundle.format).toBe('knowledge-sync-bundle');
-    expect(bundle.protocol_version).toBe(1);
+    expect(bundle.protocol_version).toBe(2);
     expect(bundle.min_protocol_version).toBe(1);
     expect(bundle.artifacts.length).toBe(4);
 
@@ -573,7 +573,7 @@ describe('knowledge cli', () => {
     expect(imported.exitCode).toBe(0);
     const importedOut = JSON.parse(new TextDecoder().decode(imported.stdout));
     expect(importedOut.ok).toBe(true);
-    expect(importedOut.protocol_version).toBe(1);
+    expect(importedOut.protocol_version).toBe(2);
     expect(importedOut.min_protocol_version).toBe(1);
     expect(importedOut.artifacts.copied).toBe(4);
     expect(existsSync(join(peerDir, '.hasna', 'apps', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(true);
@@ -751,7 +751,7 @@ describe('knowledge cli', () => {
     expect(result.exitCode).toBe(1);
     expect(new TextDecoder().decode(result.stderr)).toContain('unsupported sync protocol');
     const pushedBundle = JSON.parse(readFileSync(stdinPath, 'utf8'));
-    expect(pushedBundle.protocol_version).toBe(1);
+    expect(pushedBundle.protocol_version).toBe(2);
     expect(pushedBundle.min_protocol_version).toBe(1);
   });
 

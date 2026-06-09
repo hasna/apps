@@ -1,5 +1,5 @@
 import { Database } from 'bun:sqlite';
-export declare const CURRENT_SCHEMA_VERSION = 6;
+export declare const CURRENT_SCHEMA_VERSION = 7;
 export interface KnowledgeDbStats {
     schema_version: number;
     sources: number;
@@ -21,6 +21,8 @@ export interface KnowledgeDbStats {
     sync_snapshots: number;
     sync_changes: number;
     sync_conflicts: number;
+    sync_table_clocks: number;
+    sync_imports: number;
 }
 export declare function openKnowledgeDb(path: string): Database;
 export declare function migrateKnowledgeDb(path: string): {

@@ -247,9 +247,14 @@ export const PG_MIGRATIONS: string[] = [
     source_ref TEXT,
     source_revision_id TEXT,
     artifact_uri TEXT,
+    logical_clock INTEGER NOT NULL DEFAULT 0,
+    bundle_id TEXT,
     metadata_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
+
+  `ALTER TABLE knowledge_sync_changes ADD COLUMN IF NOT EXISTS logical_clock INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE knowledge_sync_changes ADD COLUMN IF NOT EXISTS bundle_id TEXT`,
 
   `CREATE TABLE IF NOT EXISTS knowledge_sync_conflicts (
     id TEXT PRIMARY KEY,
@@ -267,6 +272,35 @@ export const PG_MIGRATIONS: string[] = [
     resolved_at TEXT,
     metadata_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS knowledge_sync_table_clocks (
+    table_name TEXT NOT NULL,
+    machine_id TEXT NOT NULL,
+    logical_clock INTEGER NOT NULL DEFAULT 0,
+    high_water_hash TEXT,
+    high_water_bundle_id TEXT,
+    origin_machine_id TEXT,
+    updated_by_machine_id TEXT,
+    last_applied_at TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    updated_at TEXT NOT NULL DEFAULT NOW()::text,
+    PRIMARY KEY(table_name, machine_id)
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS knowledge_sync_imports (
+    bundle_id TEXT PRIMARY KEY,
+    source_machine_id TEXT NOT NULL,
+    target_machine_id TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    status TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    table_clocks_json TEXT NOT NULL,
+    tables_json TEXT NOT NULL,
+    generated_at TEXT NOT NULL,
+    applied_at TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}'
   )`,
 
   `CREATE INDEX IF NOT EXISTS idx_source_revisions_source ON source_revisions(source_id)`,
@@ -294,6 +328,13 @@ export const PG_MIGRATIONS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_sync_changes_entity ON knowledge_sync_changes(entity_kind, entity_id)`,
   `CREATE INDEX IF NOT EXISTS idx_sync_changes_origin ON knowledge_sync_changes(origin_machine_id)`,
   `CREATE INDEX IF NOT EXISTS idx_sync_changes_created ON knowledge_sync_changes(created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_changes_bundle ON knowledge_sync_changes(bundle_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_changes_clock ON knowledge_sync_changes(entity_kind, logical_clock)`,
   `CREATE INDEX IF NOT EXISTS idx_sync_conflicts_status ON knowledge_sync_conflicts(status)`,
   `CREATE INDEX IF NOT EXISTS idx_sync_conflicts_entity ON knowledge_sync_conflicts(entity_kind, entity_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_machine ON knowledge_sync_table_clocks(machine_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_updated ON knowledge_sync_table_clocks(updated_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_imports_source ON knowledge_sync_imports(source_machine_id, applied_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_imports_target ON knowledge_sync_imports(target_machine_id, applied_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_imports_status ON knowledge_sync_imports(status)`,
 ];

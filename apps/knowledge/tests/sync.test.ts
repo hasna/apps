@@ -139,9 +139,11 @@ describe('knowledge machine sync ledger', () => {
     expect(syncArtifactsFromSnapshot(snapshot.snapshot)).toHaveLength(1);
 
     const status = service.syncStatus();
-    expect(status.sqlite_schema_version).toBe(6);
+    expect(status.sqlite_schema_version).toBe(7);
     expect(status.machines.total).toBe(2);
     expect(status.snapshots.total).toBe(1);
+    expect(status.clocks.total).toBeGreaterThan(0);
+    expect(status.imports.total).toBe(0);
     expect(status.snapshots.latest?.id).toBe(snapshot.snapshot.id);
     expect(status.conflicts.open).toBe(0);
 
@@ -226,6 +228,9 @@ describe('knowledge machine sync ledger', () => {
       includeArtifactContent: true,
     });
     expect(push.ok).toBe(true);
+    expect(push.push?.bundle_id).toStartWith('syncbundle_');
+    expect(push.push?.replayed).toBe(false);
+    expect(push.push?.clocks.advanced).toBeGreaterThan(0);
     expect(push.push?.artifacts.copied).toBeGreaterThanOrEqual(1);
 
     const peerStats = peerService.dbStats();
@@ -243,6 +248,15 @@ describe('knowledge machine sync ledger', () => {
     expect(secondDryRun.ok).toBe(true);
     expect(secondDryRun.push?.tables.reduce((sum, table) => sum + table.inserted, 0)).toBe(0);
     expect(secondDryRun.push?.artifacts.copied).toBe(0);
+
+    const replay = await sourceService.syncPeer({
+      peerWorkspace: peerDir,
+      direction: 'push',
+      includeArtifactContent: true,
+    });
+    expect(replay.ok).toBe(true);
+    expect(replay.push?.replayed).toBe(true);
+    expect(replay.push?.tables.reduce((sum, table) => sum + table.inserted, 0)).toBe(0);
   });
 
   test('records conflicts instead of overwriting divergent peer rows', async () => {
@@ -275,5 +289,75 @@ describe('knowledge machine sync ledger', () => {
     } finally {
       unchanged.close();
     }
+  });
+
+  test('guards duplicate, interrupted, and out-of-order bundle imports with table clocks', async () => {
+    const sourceDir = mkdtempSync(join(tmpdir(), 'ok-sync-clock-source-'));
+    const peerDir = mkdtempSync(join(tmpdir(), 'ok-sync-clock-peer-'));
+    const sourceService = createKnowledgeService({ scope: 'project', cwd: sourceDir });
+    const peerService = createKnowledgeService({ scope: 'project', cwd: peerDir });
+    sourceService.initDb();
+    peerService.initDb();
+    await sourceService.initWiki();
+
+    const v1 = sourceService.exportSyncBundle({
+      machineId: 'source-clock',
+      includeArtifactContent: true,
+    });
+    const first = await peerService.importSyncBundle({
+      bundle: v1,
+      machineId: 'peer-clock',
+    });
+    expect(first.ok).toBe(true);
+    expect(first.replayed).toBe(false);
+    expect(first.clocks.advanced).toBeGreaterThan(0);
+
+    const duplicate = await peerService.importSyncBundle({
+      bundle: v1,
+      machineId: 'peer-clock',
+    });
+    expect(duplicate.ok).toBe(true);
+    expect(duplicate.replayed).toBe(true);
+    expect(duplicate.conflicts_created).toBe(0);
+
+    const peerDb = openKnowledgeDb(peerService.paths().knowledge_db_path);
+    try {
+      peerDb.query('DELETE FROM knowledge_sync_imports WHERE bundle_id = ?').run(v1.bundle_id);
+    } finally {
+      peerDb.close();
+    }
+    const interruptedReplay = await peerService.importSyncBundle({
+      bundle: v1,
+      machineId: 'peer-clock',
+    });
+    expect(interruptedReplay.ok).toBe(true);
+    expect(interruptedReplay.replayed).toBe(false);
+    expect(interruptedReplay.tables.reduce((sum, table) => sum + table.inserted, 0)).toBe(0);
+    expect(interruptedReplay.conflicts_created).toBe(0);
+
+    const sourcePath = join(sourceDir, 'clock-source.md');
+    writeFileSync(sourcePath, 'Clock guards should accept newer inserted rows and reject old table watermarks.');
+    await sourceService.ingestSource(`file://${sourcePath}`, 'knowledge_index');
+    const v2 = sourceService.exportSyncBundle({
+      machineId: 'source-clock',
+      includeArtifactContent: true,
+    });
+    expect(v2.bundle_id).not.toBe(v1.bundle_id);
+    const newer = await peerService.importSyncBundle({
+      bundle: v2,
+      machineId: 'peer-clock',
+    });
+    expect(newer.ok).toBe(true);
+    expect(newer.tables.find((table) => table.table === 'sources')?.inserted).toBe(1);
+
+    const stale = await peerService.importSyncBundle({
+      bundle: v1,
+      machineId: 'peer-clock',
+    });
+    expect(stale.ok).toBe(true);
+    expect(stale.replayed).toBe(false);
+    expect(stale.clocks.stale_tables).toBeGreaterThan(0);
+    expect(stale.warnings.some((warning) => warning.startsWith('stale_table_skipped:'))).toBe(true);
+    expect(peerService.dbStats().sources).toBe(1);
   });
 });

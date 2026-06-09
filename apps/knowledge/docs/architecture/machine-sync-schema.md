@@ -135,6 +135,8 @@ knowledge_sync_changes
   source_ref text
   source_revision_id text
   artifact_uri text
+  logical_clock integer not null default 0
+  bundle_id text
   metadata_json text not null
   created_at text not null
 
@@ -154,10 +156,37 @@ knowledge_sync_conflicts
   resolved_at text
   metadata_json text not null
   created_at text not null
+
+knowledge_sync_table_clocks
+  table_name text not null
+  machine_id text not null
+  logical_clock integer not null default 0
+  high_water_hash text
+  high_water_bundle_id text
+  origin_machine_id text
+  updated_by_machine_id text
+  last_applied_at text
+  metadata_json text not null
+  created_at text not null
+  updated_at text not null
+
+knowledge_sync_imports
+  bundle_id text primary key
+  source_machine_id text not null
+  target_machine_id text not null
+  direction text not null
+  status text not null
+  content_hash text not null
+  table_clocks_json text not null
+  tables_json text not null
+  generated_at text not null
+  applied_at text not null
+  metadata_json text not null
 ```
 
-The ledger should store hashes, refs, and proposed patches. Large generated
-objects live in the artifact store, locally or in S3.
+The ledger stores hashes, refs, proposed patches, per-table logical clocks, and
+bundle replay records. Large generated objects live in the artifact store,
+locally or in S3.
 
 ## Artifact Storage
 
@@ -196,6 +225,12 @@ Sync dedupe should compare:
 Exact duplicate rows can merge automatically. Conflicts must be recorded when
 two machines changed the same durable entity from the same base hash.
 
+Bundle imports are idempotent. A repeated bundle is skipped when the target
+still matches the imported high-water hashes. If the target diverged after the
+last import, replay falls through to normal row comparison so conflicts are
+visible instead of silently ignored. Older incoming table clocks are skipped as
+stale and never overwrite newer local durable records.
+
 ## Merge Rules
 
 Safe automatic merges:
@@ -231,11 +266,16 @@ stores. CLI, SDK, and MCP should keep the same search/context result contracts.
 - CLI, SDK, and MCP expose the same read-only topology and sync-status shapes.
 - Machine registry tables and sync ledgers are idempotent migrations.
 - `knowledge sync snapshot --json` records machine registry rows, a snapshot
-  content hash, durable table counts, and generated artifact hashes.
+  content hash, durable table counts, generated artifact hashes, and table
+  high-water clocks.
 - `knowledge sync dry-run --peer-workspace <repo>` previews row/artifact
   movement without writing to either workspace.
 - `knowledge sync push --peer-workspace <repo>` copies derived rows and
   generated artifacts to the peer and records conflicts instead of overwrites.
+- `knowledge sync import` records bundle ids, content hashes, source/target
+  machine ids, table clocks, and replay status.
+- Duplicate, interrupted, and out-of-order imports do not overwrite newer local
+  durable records and do not duplicate identical open conflict rows.
 - Sync can pull/push SQLite catalog rows and generated artifacts without copying
   raw open-files bytes into knowledge.
 - Conflict records are inspectable before approval.

@@ -26,6 +26,8 @@ export const STORAGE_TABLES = [
   'knowledge_sync_snapshots',
   'knowledge_sync_changes',
   'knowledge_sync_conflicts',
+  'knowledge_sync_table_clocks',
+  'knowledge_sync_imports',
 ] as const;
 
 export const KNOWLEDGE_STORAGE_TABLES = STORAGE_TABLES;
@@ -104,6 +106,8 @@ const PRIMARY_KEYS: Record<StorageTable, string[]> = {
   knowledge_sync_snapshots: ['id'],
   knowledge_sync_changes: ['id'],
   knowledge_sync_conflicts: ['id'],
+  knowledge_sync_table_clocks: ['table_name', 'machine_id'],
+  knowledge_sync_imports: ['bundle_id'],
 };
 
 function readEnv(name: string): string | undefined {

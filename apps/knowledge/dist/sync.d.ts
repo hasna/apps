@@ -47,6 +47,32 @@ export interface KnowledgeSyncConflictRow {
     metadata_json: string;
     created_at: string;
 }
+export interface KnowledgeSyncTableClockRow {
+    table_name: string;
+    machine_id: string;
+    logical_clock: number;
+    high_water_hash: string | null;
+    high_water_bundle_id: string | null;
+    origin_machine_id: string | null;
+    updated_by_machine_id: string | null;
+    last_applied_at: string | null;
+    metadata_json: string;
+    created_at: string;
+    updated_at: string;
+}
+export interface KnowledgeSyncImportRow {
+    bundle_id: string;
+    source_machine_id: string;
+    target_machine_id: string;
+    direction: string;
+    status: string;
+    content_hash: string;
+    table_clocks_json: string;
+    tables_json: string;
+    generated_at: string;
+    applied_at: string;
+    metadata_json: string;
+}
 export interface KnowledgeSyncStatus {
     ok: true;
     scope: string;
@@ -67,6 +93,14 @@ export interface KnowledgeSyncStatus {
             operation: string;
             count: number;
         }>;
+    };
+    clocks: {
+        total: number;
+        rows: KnowledgeSyncTableClockRow[];
+    };
+    imports: {
+        total: number;
+        latest: KnowledgeSyncImportRow | null;
     };
     conflicts: {
         total: number;
@@ -121,8 +155,8 @@ export interface KnowledgeSyncConflictResolutionProposal {
     warnings: string[];
     message: string;
 }
-export declare const KNOWLEDGE_SYNC_TABLES: readonly ["sources", "wiki_pages", "source_revisions", "chunks", "chunk_embeddings", "wiki_backlinks", "citations", "knowledge_indexes", "runs", "run_events", "provider_usage", "redaction_findings", "storage_objects", "audit_events", "approval_gates", "vector_index_entries", "reindex_queue", "knowledge_machines", "knowledge_sync_snapshots", "knowledge_sync_changes", "knowledge_sync_conflicts"];
-export declare const KNOWLEDGE_SYNC_PROTOCOL_VERSION = 1;
+export declare const KNOWLEDGE_SYNC_TABLES: readonly ["sources", "wiki_pages", "source_revisions", "chunks", "chunk_embeddings", "wiki_backlinks", "citations", "knowledge_indexes", "runs", "run_events", "provider_usage", "redaction_findings", "storage_objects", "audit_events", "approval_gates", "vector_index_entries", "reindex_queue", "knowledge_machines", "knowledge_sync_snapshots", "knowledge_sync_changes", "knowledge_sync_conflicts", "knowledge_sync_table_clocks", "knowledge_sync_imports"];
+export declare const KNOWLEDGE_SYNC_PROTOCOL_VERSION = 2;
 export declare const KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION = 1;
 export type KnowledgeSyncTable = (typeof KNOWLEDGE_SYNC_TABLES)[number];
 type Row = Record<string, unknown>;
@@ -130,6 +164,15 @@ export interface KnowledgeSyncBundleTable {
     table: KnowledgeSyncTable;
     primary_keys: string[];
     rows: Row[];
+}
+export interface KnowledgeSyncBundleTableClock {
+    table: KnowledgeSyncTable;
+    machine_id: string;
+    logical_clock: number;
+    high_water_hash: string;
+    high_water_bundle_id: string | null;
+    row_count: number;
+    updated_at: string;
 }
 export interface KnowledgeSyncBundleArtifact {
     id: string;
@@ -148,6 +191,8 @@ export interface KnowledgeSyncBundle {
     version: 1;
     protocol_version: typeof KNOWLEDGE_SYNC_PROTOCOL_VERSION;
     min_protocol_version: typeof KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION;
+    bundle_id: string;
+    content_hash: string;
     generated_at: string;
     source: {
         scope: string;
@@ -156,6 +201,7 @@ export interface KnowledgeSyncBundle {
         machine_id: string | null;
         artifact_root_uri: string;
     };
+    table_clocks: KnowledgeSyncBundleTableClock[];
     tables: KnowledgeSyncBundleTable[];
     artifacts: KnowledgeSyncBundleArtifact[];
     warnings: string[];
@@ -168,6 +214,7 @@ export interface KnowledgeSyncTableApplyResult {
     inserted: number;
     skipped: number;
     conflicts: number;
+    stale_skipped: number;
 }
 export interface KnowledgeSyncArtifactApplyResult {
     source_artifacts: number;
@@ -193,6 +240,12 @@ export interface KnowledgeSyncApplyResult {
     tables: KnowledgeSyncTableApplyResult[];
     artifacts: KnowledgeSyncArtifactApplyResult;
     conflicts_created: number;
+    bundle_id: string;
+    replayed: boolean;
+    clocks: {
+        advanced: number;
+        stale_tables: number;
+    };
     warnings: string[];
     message: string;
 }
@@ -215,6 +268,7 @@ export declare function createKnowledgeSyncBundle(options: {
     machineId?: string | null;
     tables?: string[];
     includeArtifactContent?: boolean;
+    recordClocks?: boolean;
     now?: Date;
 }): KnowledgeSyncBundle;
 export declare function applyKnowledgeSyncBundle(options: {

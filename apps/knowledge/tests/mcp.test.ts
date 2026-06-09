@@ -258,7 +258,7 @@ describe('knowledge MCP', () => {
 
       const syncResource = parseResourceJson(await client.readResource({ uri: 'knowledge://project/sync' }));
       expect(syncResource.ok).toBe(true);
-      expect(syncResource.sqlite_schema_version).toBe(6);
+      expect(syncResource.sqlite_schema_version).toBe(7);
 
       const sourceResource = parseResourceJson(await client.readResource({ uri: 'knowledge://project/sources' }));
       expect(sourceResource.sources[0].uri).toBe('open-files://file/file_mcp');

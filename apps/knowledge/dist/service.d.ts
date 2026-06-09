@@ -51,6 +51,7 @@ export interface KnowledgeSyncBundleOptions {
     machineId?: string | null;
     tables?: string[];
     includeArtifactContent?: boolean;
+    recordClocks?: boolean;
 }
 export interface KnowledgeSyncImportOptions {
     bundle: KnowledgeSyncBundle;

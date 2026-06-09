@@ -59,6 +59,8 @@ describe('knowledge database storage sync config', () => {
     expect(STORAGE_TABLES).toContain('knowledge_sync_snapshots');
     expect(STORAGE_TABLES).toContain('knowledge_sync_changes');
     expect(STORAGE_TABLES).toContain('knowledge_sync_conflicts');
+    expect(STORAGE_TABLES).toContain('knowledge_sync_table_clocks');
+    expect(STORAGE_TABLES).toContain('knowledge_sync_imports');
     expect(STORAGE_TABLES).not.toContain('chunks_fts');
     expect(resolveTables()).toEqual([...STORAGE_TABLES]);
     expect(parseStorageTables('sources,chunks')).toEqual(['sources', 'chunks']);

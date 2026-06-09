@@ -696,7 +696,6 @@ async function run(argv: string[]): Promise<void> {
             dryRun: flags.dryRun === true || action === 'dry-run',
             includeArtifactContent: flags.artifactContent !== false,
             includeTailscale: flags.tailscale !== false,
-            machineId: flags.machine ?? null,
           })
         : await service.syncPeer({
             peerWorkspace: flags.peerWorkspace,

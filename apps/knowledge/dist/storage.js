@@ -166,7 +166,7 @@ function writeKnowledgeConfig(path, config) {
 }
 
 // src/knowledge-db.ts
-var CURRENT_SCHEMA_VERSION = 6;
+var CURRENT_SCHEMA_VERSION = 7;
 var MIGRATION_1 = `
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
@@ -511,6 +511,50 @@ CREATE INDEX IF NOT EXISTS idx_sync_conflicts_entity ON knowledge_sync_conflicts
 INSERT OR IGNORE INTO schema_versions(version, applied_at)
 VALUES (6, datetime('now'));
 `;
+var MIGRATION_7 = `
+ALTER TABLE knowledge_sync_changes ADD COLUMN logical_clock INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE knowledge_sync_changes ADD COLUMN bundle_id TEXT;
+
+CREATE TABLE IF NOT EXISTS knowledge_sync_table_clocks (
+  table_name TEXT NOT NULL,
+  machine_id TEXT NOT NULL,
+  logical_clock INTEGER NOT NULL DEFAULT 0,
+  high_water_hash TEXT,
+  high_water_bundle_id TEXT,
+  origin_machine_id TEXT,
+  updated_by_machine_id TEXT,
+  last_applied_at TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(table_name, machine_id)
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_sync_imports (
+  bundle_id TEXT PRIMARY KEY,
+  source_machine_id TEXT NOT NULL,
+  target_machine_id TEXT NOT NULL,
+  direction TEXT NOT NULL,
+  status TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  table_clocks_json TEXT NOT NULL,
+  tables_json TEXT NOT NULL,
+  generated_at TEXT NOT NULL,
+  applied_at TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_sync_changes_bundle ON knowledge_sync_changes(bundle_id);
+CREATE INDEX IF NOT EXISTS idx_sync_changes_clock ON knowledge_sync_changes(entity_kind, logical_clock);
+CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_machine ON knowledge_sync_table_clocks(machine_id);
+CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_updated ON knowledge_sync_table_clocks(updated_at);
+CREATE INDEX IF NOT EXISTS idx_sync_imports_source ON knowledge_sync_imports(source_machine_id, applied_at);
+CREATE INDEX IF NOT EXISTS idx_sync_imports_target ON knowledge_sync_imports(target_machine_id, applied_at);
+CREATE INDEX IF NOT EXISTS idx_sync_imports_status ON knowledge_sync_imports(status);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (7, datetime('now'));
+`;
 function openKnowledgeDb(path) {
   ensureParentDir(path);
   const db = new Database(path);
@@ -532,6 +576,8 @@ function migrateKnowledgeDb(path) {
       db.exec(MIGRATION_5);
     if (getSchemaVersion(db) < 6)
       db.exec(MIGRATION_6);
+    if (getSchemaVersion(db) < 7)
+      db.exec(MIGRATION_7);
     return { path, schema_version: getSchemaVersion(db) };
   } finally {
     db.close();
@@ -568,7 +614,9 @@ function getKnowledgeDbStats(path) {
       knowledge_machines: count(db, "knowledge_machines"),
       sync_snapshots: count(db, "knowledge_sync_snapshots"),
       sync_changes: count(db, "knowledge_sync_changes"),
-      sync_conflicts: count(db, "knowledge_sync_conflicts")
+      sync_conflicts: count(db, "knowledge_sync_conflicts"),
+      sync_table_clocks: count(db, "knowledge_sync_table_clocks"),
+      sync_imports: count(db, "knowledge_sync_imports")
     };
   } finally {
     db.close();
@@ -806,9 +854,13 @@ var PG_MIGRATIONS = [
     source_ref TEXT,
     source_revision_id TEXT,
     artifact_uri TEXT,
+    logical_clock INTEGER NOT NULL DEFAULT 0,
+    bundle_id TEXT,
     metadata_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
+  `ALTER TABLE knowledge_sync_changes ADD COLUMN IF NOT EXISTS logical_clock INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE knowledge_sync_changes ADD COLUMN IF NOT EXISTS bundle_id TEXT`,
   `CREATE TABLE IF NOT EXISTS knowledge_sync_conflicts (
     id TEXT PRIMARY KEY,
     entity_kind TEXT NOT NULL,
@@ -825,6 +877,33 @@ var PG_MIGRATIONS = [
     resolved_at TEXT,
     metadata_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `CREATE TABLE IF NOT EXISTS knowledge_sync_table_clocks (
+    table_name TEXT NOT NULL,
+    machine_id TEXT NOT NULL,
+    logical_clock INTEGER NOT NULL DEFAULT 0,
+    high_water_hash TEXT,
+    high_water_bundle_id TEXT,
+    origin_machine_id TEXT,
+    updated_by_machine_id TEXT,
+    last_applied_at TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    updated_at TEXT NOT NULL DEFAULT NOW()::text,
+    PRIMARY KEY(table_name, machine_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS knowledge_sync_imports (
+    bundle_id TEXT PRIMARY KEY,
+    source_machine_id TEXT NOT NULL,
+    target_machine_id TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    status TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    table_clocks_json TEXT NOT NULL,
+    tables_json TEXT NOT NULL,
+    generated_at TEXT NOT NULL,
+    applied_at TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}'
   )`,
   `CREATE INDEX IF NOT EXISTS idx_source_revisions_source ON source_revisions(source_id)`,
   `CREATE INDEX IF NOT EXISTS idx_chunks_source_revision ON chunks(source_revision_id)`,
@@ -851,8 +930,15 @@ var PG_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_sync_changes_entity ON knowledge_sync_changes(entity_kind, entity_id)`,
   `CREATE INDEX IF NOT EXISTS idx_sync_changes_origin ON knowledge_sync_changes(origin_machine_id)`,
   `CREATE INDEX IF NOT EXISTS idx_sync_changes_created ON knowledge_sync_changes(created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_changes_bundle ON knowledge_sync_changes(bundle_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_changes_clock ON knowledge_sync_changes(entity_kind, logical_clock)`,
   `CREATE INDEX IF NOT EXISTS idx_sync_conflicts_status ON knowledge_sync_conflicts(status)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_conflicts_entity ON knowledge_sync_conflicts(entity_kind, entity_id)`
+  `CREATE INDEX IF NOT EXISTS idx_sync_conflicts_entity ON knowledge_sync_conflicts(entity_kind, entity_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_machine ON knowledge_sync_table_clocks(machine_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_updated ON knowledge_sync_table_clocks(updated_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_imports_source ON knowledge_sync_imports(source_machine_id, applied_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_imports_target ON knowledge_sync_imports(target_machine_id, applied_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_imports_status ON knowledge_sync_imports(status)`
 ];
 
 // src/db/remote-storage.ts
@@ -909,7 +995,9 @@ var STORAGE_TABLES = [
   "knowledge_machines",
   "knowledge_sync_snapshots",
   "knowledge_sync_changes",
-  "knowledge_sync_conflicts"
+  "knowledge_sync_conflicts",
+  "knowledge_sync_table_clocks",
+  "knowledge_sync_imports"
 ];
 var KNOWLEDGE_STORAGE_TABLES = STORAGE_TABLES;
 var KNOWLEDGE_STORAGE_ENV = "HASNA_KNOWLEDGE_DATABASE_URL";
@@ -939,7 +1027,9 @@ var PRIMARY_KEYS = {
   knowledge_machines: ["machine_id"],
   knowledge_sync_snapshots: ["id"],
   knowledge_sync_changes: ["id"],
-  knowledge_sync_conflicts: ["id"]
+  knowledge_sync_conflicts: ["id"],
+  knowledge_sync_table_clocks: ["table_name", "machine_id"],
+  knowledge_sync_imports: ["bundle_id"]
 };
 function readEnv(name) {
   const value = process.env[name]?.trim();

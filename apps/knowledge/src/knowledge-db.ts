@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { ensureParentDir } from './workspace';
 
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 7;
 
 export interface KnowledgeDbStats {
   schema_version: number;
@@ -24,6 +24,8 @@ export interface KnowledgeDbStats {
   sync_snapshots: number;
   sync_changes: number;
   sync_conflicts: number;
+  sync_table_clocks: number;
+  sync_imports: number;
 }
 
 const MIGRATION_1 = `
@@ -376,6 +378,51 @@ INSERT OR IGNORE INTO schema_versions(version, applied_at)
 VALUES (6, datetime('now'));
 `;
 
+const MIGRATION_7 = `
+ALTER TABLE knowledge_sync_changes ADD COLUMN logical_clock INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE knowledge_sync_changes ADD COLUMN bundle_id TEXT;
+
+CREATE TABLE IF NOT EXISTS knowledge_sync_table_clocks (
+  table_name TEXT NOT NULL,
+  machine_id TEXT NOT NULL,
+  logical_clock INTEGER NOT NULL DEFAULT 0,
+  high_water_hash TEXT,
+  high_water_bundle_id TEXT,
+  origin_machine_id TEXT,
+  updated_by_machine_id TEXT,
+  last_applied_at TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(table_name, machine_id)
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_sync_imports (
+  bundle_id TEXT PRIMARY KEY,
+  source_machine_id TEXT NOT NULL,
+  target_machine_id TEXT NOT NULL,
+  direction TEXT NOT NULL,
+  status TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  table_clocks_json TEXT NOT NULL,
+  tables_json TEXT NOT NULL,
+  generated_at TEXT NOT NULL,
+  applied_at TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_sync_changes_bundle ON knowledge_sync_changes(bundle_id);
+CREATE INDEX IF NOT EXISTS idx_sync_changes_clock ON knowledge_sync_changes(entity_kind, logical_clock);
+CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_machine ON knowledge_sync_table_clocks(machine_id);
+CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_updated ON knowledge_sync_table_clocks(updated_at);
+CREATE INDEX IF NOT EXISTS idx_sync_imports_source ON knowledge_sync_imports(source_machine_id, applied_at);
+CREATE INDEX IF NOT EXISTS idx_sync_imports_target ON knowledge_sync_imports(target_machine_id, applied_at);
+CREATE INDEX IF NOT EXISTS idx_sync_imports_status ON knowledge_sync_imports(status);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (7, datetime('now'));
+`;
+
 export function openKnowledgeDb(path: string): Database {
   ensureParentDir(path);
   const db = new Database(path);
@@ -393,6 +440,7 @@ export function migrateKnowledgeDb(path: string): { path: string; schema_version
     if (getSchemaVersion(db) < 4) db.exec(MIGRATION_4);
     if (getSchemaVersion(db) < 5) db.exec(MIGRATION_5);
     if (getSchemaVersion(db) < 6) db.exec(MIGRATION_6);
+    if (getSchemaVersion(db) < 7) db.exec(MIGRATION_7);
     return { path, schema_version: getSchemaVersion(db) };
   } finally {
     db.close();
@@ -433,6 +481,8 @@ export function getKnowledgeDbStats(path: string): KnowledgeDbStats {
       sync_snapshots: count(db, 'knowledge_sync_snapshots'),
       sync_changes: count(db, 'knowledge_sync_changes'),
       sync_conflicts: count(db, 'knowledge_sync_conflicts'),
+      sync_table_clocks: count(db, 'knowledge_sync_table_clocks'),
+      sync_imports: count(db, 'knowledge_sync_imports'),
     };
   } finally {
     db.close();
