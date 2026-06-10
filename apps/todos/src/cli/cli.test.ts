@@ -3175,4 +3175,27 @@ END:VCALENDAR`);
     });
     try { unlinkSync(dbPath); } catch {}
   });
+
+  it("should expose bridge-bundle machine sync and preserve JSON output with no peers", async () => {
+    const dbPath = "/tmp/test-cli-machines-sync-help.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    const help = await runCli(["machines", "sync", "--help"], dbPath);
+    expect(help.exitCode).toBe(0);
+    expect(help.stdout).toContain("Sync local bridge bundles");
+    expect(help.stdout).toContain("--ssh <address>");
+    expect(help.stdout).toContain("--push");
+
+    const dryRun = await runCli(["machines", "sync", "--dry-run", "--json"], dbPath);
+    expect(dryRun.exitCode).toBe(0);
+    const payload = JSON.parse(dryRun.stdout);
+    expect(payload).toMatchObject({
+      dry_run: true,
+      pushed: false,
+      machines: [],
+    });
+
+    try { unlinkSync(dbPath); } catch {}
+  });
 });

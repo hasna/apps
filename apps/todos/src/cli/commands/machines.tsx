@@ -1,10 +1,17 @@
 import type { Command } from "commander";
+import type { Machine } from "../../types/index.js";
 import chalk from "chalk";
 import { execSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getDatabase, now, uuid } from "../../db/database.js";
+import { getDatabase, uuid } from "../../db/database.js";
+import {
+  createLocalBridgeBundle,
+  importLocalBridgeBundle,
+  type LocalBridgeImportResult,
+  type TodosLocalBridgeBundle,
+} from "../../lib/local-bridge.js";
 import {
   registerMachine,
   listMachines,
@@ -26,52 +33,107 @@ function wantsJson(program: Command, opts: Record<string, unknown>): boolean {
   return Boolean(opts["json"] || program.opts().json);
 }
 
-function findRemoteDbPath(sshAddress: string): string | null {
-  try {
-    const result = execSync(
-      `ssh ${sshAddress} 'if [ -f ~/.hasna/todos/todos.db ]; then printf "%s\\n" "$HOME/.hasna/todos/todos.db"; else find ~ -path "*/.hasna/todos/todos.db" 2>/dev/null | head -1; fi'`,
-      { encoding: "utf-8", timeout: 10000 },
-    ).trim();
-    return result || null;
-  } catch {
-    return null;
-  }
+function metadataString(machine: Machine, key: string): string | null {
+  const value = machine.metadata[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function remoteJsonDump(sshAddress: string, dbPath: string): string {
+function resolveMachineSshAddress(machine: Machine, localName: string): string | null {
+  if (machine.ssh_address?.trim()) return machine.ssh_address.trim();
+  const metadataAddress =
+    metadataString(machine, "tailscale_name") ||
+    metadataString(machine, "tailscale_ip") ||
+    metadataString(machine, "lan_address");
+  if (metadataAddress) return metadataAddress;
+  if (machine.hostname && machine.hostname !== localName) return machine.hostname;
+  return null;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function runSsh(sshAddress: string, command: string, timeout = 30000): string {
   return execSync(
-    `ssh ${sshAddress} 'sqlite3 "${dbPath}" ".mode json SELECT * FROM tasks;" 2>/dev/null'`,
-    { encoding: "utf-8", timeout: 30000 },
+    `ssh ${shellQuote(sshAddress)} ${shellQuote(command)}`,
+    { encoding: "utf-8", timeout },
   );
 }
 
-function upsertTasks(remoteJson: string, sourceMachineId: string, localMachineId: string): number {
-  if (!remoteJson.trim()) return 0;
-  const remoteTasks = JSON.parse(remoteJson);
-  const db = getDatabase();
-  let upserted = 0;
+function scpFromRemote(sshAddress: string, remotePath: string, localPath: string): void {
+  execSync(
+    `scp ${shellQuote(`${sshAddress}:${remotePath}`)} ${shellQuote(localPath)}`,
+    { timeout: 60000 },
+  );
+}
 
-  for (const rt of remoteTasks) {
-    if (rt.machine_id === localMachineId) continue;
-    const existing = db.query("SELECT id FROM tasks WHERE id = ?").get(rt.id) as { id: string } | undefined;
-    if (existing) {
-      db.run(
-        `UPDATE tasks SET title = ?, description = ?, status = ?, priority = ?, updated_at = ? WHERE id = ?`,
-        [rt.title, rt.description, rt.status, rt.priority, rt.updated_at || now(), rt.id],
-      );
-    } else {
-      try {
-        db.run(
-          `INSERT INTO tasks (id, title, description, status, priority, machine_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          [rt.id, rt.title, rt.description || "", rt.status, rt.priority, sourceMachineId, rt.created_at || now(), rt.updated_at || now()],
-        );
-      } catch {
-        // Skip duplicates or FK constraint failures
-      }
-    }
-    upserted++;
+function scpToRemote(localPath: string, sshAddress: string, remotePath: string): void {
+  execSync(
+    `scp ${shellQuote(localPath)} ${shellQuote(`${sshAddress}:${remotePath}`)}`,
+    { timeout: 60000 },
+  );
+}
+
+function remoteTempPath(sshAddress: string): string {
+  return runSsh(
+    sshAddress,
+    'mktemp "${TMPDIR:-/tmp}/todos-bridge-XXXXXX.json"',
+    10000,
+  ).trim();
+}
+
+function readRemoteBridgeBundle(sshAddress: string): TodosLocalBridgeBundle {
+  const remotePath = remoteTempPath(sshAddress);
+  const localPath = join(tmpdir(), `todos-bridge-pull-${uuid()}.json`);
+  try {
+    runSsh(
+      sshAddress,
+      `todos export --format bridge --allow-plaintext-sensitive --output ${shellQuote(remotePath)}`,
+      120000,
+    );
+    scpFromRemote(sshAddress, remotePath, localPath);
+    return JSON.parse(readFileSync(localPath, "utf-8")) as TodosLocalBridgeBundle;
+  } finally {
+    try { runSsh(sshAddress, `rm -f ${shellQuote(remotePath)}`, 10000); } catch {}
+    try { unlinkSync(localPath); } catch {}
   }
-  return upserted;
+}
+
+function writeLocalBridgeBundle(): string {
+  const localPath = join(tmpdir(), `todos-bridge-push-${uuid()}.json`);
+  writeFileSync(localPath, JSON.stringify(createLocalBridgeBundle(), null, 2));
+  return localPath;
+}
+
+function pushLocalBridgeBundle(sshAddress: string, dryRun: boolean): LocalBridgeImportResult {
+  const localPath = writeLocalBridgeBundle();
+  const remotePath = remoteTempPath(sshAddress);
+  try {
+    scpToRemote(localPath, sshAddress, remotePath);
+    const applyFlag = dryRun ? "" : " --apply";
+    const output = runSsh(
+      sshAddress,
+      `todos bridge-import ${shellQuote(remotePath)}${applyFlag} --resolve-conflicts --json`,
+      120000,
+    );
+    return JSON.parse(output) as LocalBridgeImportResult;
+  } finally {
+    try { runSsh(sshAddress, `rm -f ${shellQuote(remotePath)}`, 10000); } catch {}
+    try { unlinkSync(localPath); } catch {}
+  }
+}
+
+function sumCounts(counts: Record<string, number>): number {
+  return Object.values(counts).reduce((total, count) => total + count, 0);
+}
+
+function formatBridgeImportSummary(result: LocalBridgeImportResult): string {
+  const inserted = sumCounts(result.inserted);
+  const merged = sumCounts(result.merged);
+  const skipped = sumCounts(result.skipped);
+  const conflicts = result.conflicts.length;
+  const issues = result.issues.length;
+  return `inserted ${inserted}, merged ${merged}, skipped ${skipped}, conflicts ${conflicts}, issues ${issues}`;
 }
 
 export function registerMachineCommands(program: Command) {
@@ -347,67 +409,88 @@ export function registerMachineCommands(program: Command) {
       }
     });
 
-  // machines sync — pull tasks from remote machine(s) via SSH
+  // machines sync — exchange bridge bundles with remote machine(s) via SSH.
   machinesCmd
     .command("sync")
-    .description("Sync tasks from remote machine(s) via SSH")
+    .description("Sync local bridge bundles with remote machine(s) via SSH")
     .option("--machine <name>", "Specific machine name (default: all with SSH)")
+    .option("--ssh <address>", "Ad-hoc SSH address for bootstrap sync without a registered peer")
     .option("--dry-run", "Show what would be synced without importing")
-    .option("--push", "Also push local tasks to remote machine")
+    .option("--push", "Also push a local bridge bundle to the remote machine")
+    .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
-      const { listTasks } = await import("../../db/tasks.js");
-      const { getMachineId } = await import("../../db/machines.js");
       const db = getDatabase();
       const localName = getOrCreateLocalMachineName();
-      const localMachineId = getMachineId();
-      const machines = listMachines(db).filter((m) => m.ssh_address && m.name !== localName && !m.archived_at);
+      const targets: Array<{ name: string; ssh: string }> = [];
+      if (opts.ssh) {
+        targets.push({ name: opts.machine || opts.ssh, ssh: opts.ssh });
+      } else {
+        const machines = listMachines(db).filter((m) => m.name !== localName && m.hostname !== localName && !m.archived_at);
+        const selected = opts.machine ? machines.filter((m) => m.name === opts.machine) : machines;
+        for (const machine of selected) {
+          const ssh = resolveMachineSshAddress(machine, localName);
+          if (ssh) targets.push({ name: machine.name, ssh });
+        }
+      }
 
-      const target = opts.machine ? machines.find((m) => m.name === opts.machine) : null;
-      const toSync = target ? (machines.includes(target) ? [target] : []) : machines;
-
-      if (toSync.length === 0) {
-        console.log(chalk.dim(opts.machine ? `No SSH-configured machine named '${opts.machine}'.` : "No machines with SSH addresses to sync."));
+      if (targets.length === 0) {
+        if (wantsJson(program, opts)) {
+          console.log(JSON.stringify({
+            dry_run: Boolean(opts.dryRun),
+            pushed: Boolean(opts.push),
+            machines: [],
+          }, null, 2));
+          return;
+        }
+        console.log(chalk.dim(opts.machine ? `No remote SSH target found for machine '${opts.machine}'.` : "No remote machines with SSH addresses to sync."));
         return;
       }
 
-      let totalPulled = 0;
-      for (const m of toSync) {
-        const ssh = m.ssh_address!;
-        const dbPath = findRemoteDbPath(ssh);
-        if (!dbPath) {
-          console.log(chalk.yellow(`  ${m.name}: no todos.db found`));
-          continue;
-        }
-
-        if (opts.dryRun) {
-          const json = remoteJsonDump(ssh, dbPath);
-          const tasks = JSON.parse(json || "[]");
-          console.log(chalk.cyan(`  ${m.name}: ${tasks.length} task(s) found`));
-        } else {
-          const json = remoteJsonDump(ssh, dbPath);
-          const pulled = upsertTasks(json, m.id, localMachineId);
-          totalPulled += pulled;
-          console.log(chalk.green(`  ${m.name}: pulled ${pulled} task(s)`));
-        }
-
-        if (opts.push) {
-          try {
-            const localTasks = listTasks();
-            const tmpFile = join(tmpdir(), `todos-export-${uuid()}.json`);
-            writeFileSync(tmpFile, JSON.stringify(localTasks, null, 2));
-            execSync(`scp ${tmpFile} ${ssh}:/tmp/todos-import.json`, { timeout: 15000 });
-            const importCmd = `ssh ${ssh} 'node -e "const fs=require(\\'fs\\');const tasks=JSON.parse(fs.readFileSync(\\'/tmp/todos-import.json\\',\\'utf-8\\'));console.log(JSON.stringify(tasks.length))"'`;
-            const count = execSync(importCmd, { encoding: "utf-8", timeout: 10000 }).trim();
-            console.log(chalk.dim(`  ${m.name}: pushed ${count} local task(s) (manual import needed)`));
-          } catch (e) {
-            console.log(chalk.yellow(`  ${m.name}: push failed`));
+      const results: Array<{
+        machine: string;
+        pull?: LocalBridgeImportResult;
+        push?: LocalBridgeImportResult;
+        error?: string;
+      }> = [];
+      for (const target of targets) {
+        const ssh = target.ssh;
+        try {
+          const bundle = readRemoteBridgeBundle(ssh);
+          const pull = importLocalBridgeBundle(bundle, {
+            dryRun: Boolean(opts.dryRun),
+            conflictStrategy: "safe_merge",
+          }, db);
+          const record: typeof results[number] = { machine: target.name, pull };
+          if (!wantsJson(program, opts)) {
+            const mode = opts.dryRun ? "would pull" : "pulled";
+            console.log(chalk.green(`  ${target.name}: ${mode} ${formatBridgeImportSummary(pull)}`));
           }
+
+          if (opts.push) {
+            const push = pushLocalBridgeBundle(ssh, Boolean(opts.dryRun));
+            record.push = push;
+            if (!wantsJson(program, opts)) {
+              const mode = opts.dryRun ? "would push" : "pushed";
+              console.log(chalk.green(`  ${target.name}: ${mode} ${formatBridgeImportSummary(push)}`));
+            }
+          }
+          results.push(record);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          results.push({ machine: target.name, error: message });
+          if (!wantsJson(program, opts)) console.log(chalk.yellow(`  ${target.name}: sync failed: ${message}`));
         }
       }
 
-      if (!opts.dryRun) {
-        console.log(chalk.bold(`\nSync complete: ${totalPulled} task(s) pulled.`));
+      if (wantsJson(program, opts)) {
+        console.log(JSON.stringify({
+          dry_run: Boolean(opts.dryRun),
+          pushed: Boolean(opts.push),
+          machines: results,
+        }, null, 2));
+        return;
       }
+      console.log(chalk.bold(`\nSync ${opts.dryRun ? "dry-run" : "complete"}: ${results.length} machine(s) checked.`));
     });
 
   // machines tasks — list tasks from a remote machine
@@ -423,38 +506,32 @@ export function registerMachineCommands(program: Command) {
         console.error(chalk.red(`Machine '${machineName}' not found`));
         process.exit(1);
       }
-      if (!machine.ssh_address) {
+      const sshAddress = resolveMachineSshAddress(machine, getOrCreateLocalMachineName());
+      if (!sshAddress) {
         console.error(chalk.red(`Machine '${machineName}' has no SSH address`));
         process.exit(1);
       }
 
-      const dbPath = findRemoteDbPath(machine.ssh_address);
-      if (!dbPath) {
-        console.error(chalk.red(`No todos.db found on ${machine.ssh_address}`));
-        process.exit(1);
-      }
-
-      let json: string;
       try {
-        json = remoteJsonDump(machine.ssh_address, dbPath);
-      } catch {
-        console.error(chalk.red(`Could not read tasks from ${machine.ssh_address}`));
+        const bundle = readRemoteBridgeBundle(sshAddress);
+        const tasks = bundle.data.tasks;
+        const filtered = opts.status ? tasks.filter((t) => t.status === opts.status) : tasks;
+
+        if (filtered.length === 0) {
+          console.log(chalk.dim(`No tasks on ${machineName}`));
+          return;
+        }
+
+        console.log(chalk.bold(`${filtered.length} task(s) on ${machineName}:\n`));
+        for (const t of filtered) {
+          const check = t.status === "completed" ? "x" : " ";
+          const prio = t.priority ? chalk.yellow(`[${t.priority}]`) : "";
+          console.log(`  [${check}] ${t.short_id || t.id.slice(0, 8)} ${prio} ${t.title}`);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(chalk.red(`Could not read tasks from ${sshAddress}: ${message}`));
         process.exit(1);
-      }
-
-      const tasks = JSON.parse(json || "[]");
-      const filtered = opts.status ? tasks.filter((t: any) => t.status === opts.status) : tasks;
-
-      if (filtered.length === 0) {
-        console.log(chalk.dim(`No tasks on ${machineName}`));
-        return;
-      }
-
-      console.log(chalk.bold(`${filtered.length} task(s) on ${machineName}:\n`));
-      for (const t of filtered) {
-        const check = t.status === "completed" ? "x" : " ";
-        const prio = t.priority ? chalk.yellow(`[${t.priority}]`) : "";
-        console.log(`  [${check}] ${t.short_id || t.id.slice(0, 8)} ${prio} ${t.title}`);
       }
     });
 }

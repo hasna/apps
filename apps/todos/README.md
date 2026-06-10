@@ -75,6 +75,9 @@ or LAN addresses without probing the network:
 todos machines register spark01 --ssh hasna@spark01 --tailscale-name spark01.tailnet --tailscale-ip 100.64.0.10 --lan-address 192.168.8.10 --workspace ~/workspace
 todos machines heartbeat spark01 --workspace ~/workspace
 todos machines topology --json
+todos machines sync --machine spark01 --dry-run --json
+todos machines sync --machine spark01 --push
+todos machines sync --ssh hasna@spark01 --dry-run
 todos projects-path set <project-id> ~/workspace/my-project
 ```
 
@@ -83,6 +86,15 @@ missing local paths, and projects whose machine-local paths differ across
 registered machines. MCP clients can use `machines_register`,
 `machines_heartbeat`, `machines_topology`, and `machines_list` for the same
 offline diagnostics.
+
+`todos machines sync` exchanges the same local bridge bundles used by
+`todos export --format bridge` over SSH. Pulls import remote projects, task
+lists, plans, tasks, comments, run evidence, boards, calendar items, and stored
+artifact contents with dry-run-first reporting and safe conflict recording.
+`--push` sends the local bundle back to the peer and asks the peer's installed
+`todos bridge-import` to apply or preview it. No hosted service is contacted;
+use `--ssh` for a one-off bootstrap peer before it has a registered machine
+address.
 
 ## Local Workspace Trust
 
@@ -1141,7 +1153,8 @@ comments, run ledgers, command evidence, file evidence, artifacts, stored
 artifact contents, commits, refs, verification records, saved views, local board
 definitions, and local calendar items. Imports default to dry-run mode and
 report conflicts before writing. The package does not upload bundles or call
-hosted services; any hosted sync must consume the exported JSON explicitly.
+hosted services; machine sync transports these bundles over SSH, and any hosted
+sync must consume the exported JSON explicitly.
 
 For multi-machine local work, `--resolve-conflicts` performs a safe task merge
 instead of overwriting local edits. It fills blank local fields from the
