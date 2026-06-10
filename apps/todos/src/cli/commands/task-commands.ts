@@ -1,7 +1,8 @@
 import type { Command } from "commander";
 import chalk from "chalk";
+import { basename, resolve } from "node:path";
 import { getDatabase, resolvePartialId } from "../../db/database.js";
-import { getProject } from "../../db/projects.js";
+import { ensureProject, getProject, getProjectByPath } from "../../db/projects.js";
 import {
   createTask,
   getTask,
@@ -35,8 +36,17 @@ function resolveProjectIdOrSlug(input: string): string {
   // Fall back to name substring match
   const row = db.query("SELECT id FROM projects WHERE name LIKE ? LIMIT 1").get(`%${input}%`) as { id: string } | undefined;
   if (row) return row.id;
+  if (isPathLike(input)) {
+    const projectPath = resolve(input);
+    const byPath = getProjectByPath(projectPath, db);
+    return (byPath ?? ensureProject(basename(projectPath), projectPath, db)).id;
+  }
   console.error(chalk.red(`Project not found: ${input}`));
   process.exit(1);
+}
+
+function isPathLike(input: string): boolean {
+  return input.startsWith(".") || input.includes("/") || input.includes("\\");
 }
 
 function resolvePlanId(input: string): string {

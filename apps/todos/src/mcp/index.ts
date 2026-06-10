@@ -43,8 +43,35 @@ function hasVersionFlag(): boolean {
   return process.argv.includes("--version") || process.argv.includes("-V");
 }
 
+function hasHelpFlag(): boolean {
+  return process.argv.includes("--help") || process.argv.includes("-h");
+}
+
+function printHelp(): void {
+  console.log(`Usage: todos-mcp [options]
+
+Start the @hasna/todos MCP server.
+
+Options:
+  --stdio          Use stdio transport
+  --port <port>    Use Streamable HTTP on the given port
+  -V, --version    output the version number
+  -h, --help       display help for command
+
+Environment:
+  TODOS_MCP_STDIO=true       Force stdio transport
+  TODOS_MCP_PORT=<port>      HTTP port when not using stdio
+  TODOS_PROFILE=<profile>    Tool profile filter
+  TODOS_TOOL_GROUPS=<list>   Comma-separated tool group filter`);
+}
+
 if (hasVersionFlag()) {
   console.log(getMcpVersion());
+  process.exit(0);
+}
+
+if (hasHelpFlag()) {
+  printHelp();
   process.exit(0);
 }
 

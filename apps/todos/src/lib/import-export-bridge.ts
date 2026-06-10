@@ -5,7 +5,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { Database } from "bun:sqlite";
+import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { getDatabase, now } from "../db/database.js";
 import { listProjects, getProject } from "../db/projects.js";
 import { listTasks, getTask, createTask } from "../db/tasks.js";
@@ -106,6 +106,13 @@ export interface ImportResult {
   skipped: Record<string, number>;
   conflicts: SyncConflict[];
   errors: string[];
+}
+
+function sqlValue(value: unknown): SQLQueryBindings {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") return value;
+  if (value instanceof Uint8Array) return value;
+  return JSON.stringify(value);
 }
 
 function serializeProject(project: Project): Record<string, unknown> {
@@ -219,10 +226,11 @@ export function exportLocalBundle(options: ExportLocalBundleOptions = {}, db?: D
     artifacts,
   };
 
-  const { data: redacted, warnings: profileWarnings } = applyExportProfile(bundleData, {
+  const { data, warnings: profileWarnings } = applyExportProfile(bundleData, {
     profile,
     acknowledge_plaintext: options.acknowledge_plaintext,
   });
+  const redacted = data as Partial<ImportExportBundle>;
   warnings.push(...profileWarnings);
 
   return {
@@ -325,7 +333,7 @@ export function previewSync(bundle: ImportExportBundle, strategy: MergeStrategy 
   for (const raw of bundle.tasks) {
     const id = raw.id as string;
     const local = getTask(id, d);
-    const result = compareEntity("task", id, raw as Task, local, strategy);
+    const result = compareEntity("task", id, raw as unknown as Task, local, strategy);
     if (result.action === "create") create++;
     else if (result.action === "update") update++;
     else if (result.action === "conflict") conflict++;
@@ -336,7 +344,7 @@ export function previewSync(bundle: ImportExportBundle, strategy: MergeStrategy 
   for (const raw of bundle.projects) {
     const id = raw.id as string;
     const local = getProject(id, d);
-    const result = compareEntity("project", id, raw as Project, local, strategy);
+    const result = compareEntity("project", id, raw as unknown as Project, local, strategy);
     if (result.action === "create") create++;
     else if (result.action === "update") update++;
     else if (result.action === "conflict") conflict++;
@@ -370,7 +378,7 @@ function upsertProject(raw: Record<string, unknown>, d: Database): "created" | "
         raw.task_counter ?? 0,
         raw.created_at ?? ts,
         raw.updated_at ?? ts,
-      ],
+      ].map(sqlValue),
     );
     return "created";
   }
@@ -386,7 +394,7 @@ function upsertProject(raw: Record<string, unknown>, d: Database): "created" | "
       raw.task_counter ?? existing.task_counter,
       raw.updated_at ?? ts,
       id,
-    ],
+    ].map(sqlValue),
   );
   return "updated";
 }
@@ -431,7 +439,7 @@ function upsertTask(raw: Record<string, unknown>, d: Database): "created" | "upd
       raw.version ?? existing.version,
       raw.updated_at ?? now(),
       id,
-    ],
+    ].map(sqlValue),
   );
   return "updated";
 }
@@ -452,7 +460,7 @@ function upsertComment(raw: Record<string, unknown>, d: Database): "created" | "
       raw.type ?? "comment",
       raw.progress_pct ?? null,
       raw.created_at ?? now(),
-    ],
+    ].map(sqlValue),
   );
   return "created";
 }
@@ -484,7 +492,7 @@ export function importBundle(bundle: ImportExportBundle, options: ImportBundleOp
     try {
       const id = raw.id as string;
       const local = getProject(id, d);
-      const action = compareEntity("project", id, raw as Project, local, strategy).action;
+      const action = compareEntity("project", id, raw as unknown as Project, local, strategy).action;
       if (action === "skip" || action === "conflict") {
         bump(result.skipped, "projects");
         continue;
@@ -500,7 +508,7 @@ export function importBundle(bundle: ImportExportBundle, options: ImportBundleOp
     try {
       const id = raw.id as string;
       const local = getTask(id, d);
-      const action = compareEntity("task", id, raw as Task, local, strategy).action;
+      const action = compareEntity("task", id, raw as unknown as Task, local, strategy).action;
       if (action === "skip" || action === "conflict") {
         bump(result.skipped, "tasks");
         continue;
@@ -533,7 +541,7 @@ export function importBundle(bundle: ImportExportBundle, options: ImportBundleOp
   for (const raw of bundle.templates) {
     try {
       const { id: _id, schema_version: _sv, ...templateExport } = raw;
-      importTemplate(templateExport as Parameters<typeof importTemplate>[0], d);
+      importTemplate(templateExport as unknown as Parameters<typeof importTemplate>[0], d);
       bump(result.created, "templates");
     } catch (e) {
       result.errors.push(`template ${raw.name}: ${e instanceof Error ? e.message : String(e)}`);
@@ -558,7 +566,7 @@ export function readBundleFile(path: string): ImportExportBundle {
 export function getBridgeDocs(): string {
   return `# Local Import/Export/Sync Bridge
 
-OSS @hasna/todos produces stable \`${BUNDLE_SCHEMA}\` JSON bundles for platform-todos consumption.
+OSS @hasna/todos produces stable \`${BUNDLE_SCHEMA}\` JSON bundles for hosted wrapper consumption.
 No automatic cloud calls are made from the OSS package.
 
 ## Bundle types

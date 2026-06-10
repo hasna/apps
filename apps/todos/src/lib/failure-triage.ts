@@ -323,7 +323,7 @@ export function applyFailureTriage(input: ApplyFailureTriageInput, db?: Database
 
     if (action === "escalate") {
       const meta = { ...task.metadata, _triage_escalated: { at: now(), reason, classification } };
-      const escalated = updateTask(task.id, { priority: "urgent", metadata: meta, version: task.version }, d);
+      const escalated = updateTask(task.id, { priority: "critical", metadata: meta, version: task.version }, d);
       return { schema_version: FAILURE_TRIAGE_SCHEMA, action, classification, playbook, task: escalated, escalated: true };
     }
   }

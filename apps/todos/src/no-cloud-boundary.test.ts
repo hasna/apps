@@ -101,12 +101,21 @@ function runtimeSourceFiles(dir: string): string[] {
 
 function packageSurfaceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {
-    if ([".git", "node_modules", "dist", "coverage", "dashboard"].includes(entry)) return [];
+    if ([".git", ".claude", ".codewith", ".takumi", ".venv", "node_modules", "dist", "coverage", "dashboard"].includes(entry)) {
+      return [];
+    }
     const path = join(dir, entry);
     const stats = statSync(path);
     if (stats.isDirectory()) return packageSurfaceFiles(path);
     if (!/\.(md|json|ya?ml|sh|ts|tsx)$/.test(path)) return [];
     if (path.endsWith(".test.ts") || path.endsWith(".test.tsx")) return [];
+    if (
+      path.endsWith("src/lib/redaction.ts") ||
+      path.endsWith("src/lib/secret-redaction.ts") ||
+      path.endsWith("src/lib/public-release-gate.ts")
+    ) {
+      return [];
+    }
     return [path];
   });
 }

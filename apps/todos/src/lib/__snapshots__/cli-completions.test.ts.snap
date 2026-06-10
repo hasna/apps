@@ -9,7 +9,7 @@ _todos_completions() {
   cur="\${COMP_WORDS[COMP_CWORD]}"
   prev="\${COMP_WORDS[COMP_CWORD-1]}"
 
-  local top_level="active activity add analytics artifact blocked bootstrap bridge bulk claim comment completion config context count crypto dashboard db delete deps docs done fail goal handoff-packet hook hooks init inspect intake labels list lock mcp md next package plan-exec plans policy projects ready recap release reminders runs schedule schema search serve show stale standup start status stream sync templates trace unlock update verify views"
+  local top_level="active activity add analytics artifact blocked bootstrap branch-plan bridge bulk claim comment completion config context count crypto dashboard db decisions delete deps docs done fail git goal handoff-packet hook hooks init inspect intake labels list lock mcp md next package plan-exec plans policy projects ready recap refs release release-notes reminders runs schedule schema search serve show stale standup start status stream sync templates trace unlock update verify views watch"
   local global_flags="--json -j --help -h --version -V"
 
   case "\${prev}" in
@@ -25,14 +25,22 @@ _todos_completions() {
       scaffolds) opts="list create preview apply export docs" ;;
       report) opts="export docs" ;;
       env) opts="capture list get check" ;;
+      intake) opts="preview create nl" ;;
+      decisions) opts="create list show update status supersede export snapshot" ;;
       views) opts="search save list run" ;;
       reminders) opts="list scan check create dismiss snooze summary prefs docs" ;;
+      watch) opts="once status rules prefs docs list" ;;
       schedule) opts="set summary queue stale-report docs" ;;
       docs) opts="cli adapters env" ;;
       features) opts="list manifest docs" ;;
       completion) opts="bash zsh fish install" ;;
       md) opts="import export sync" ;;
       runs) opts="record list show" ;;
+      refs) opts="parse resolve scan inspect docs" ;;
+      release-notes) opts="generate preview docs" ;;
+      branch-plan) opts="analyze plan docs" ;;
+      git) opts="plan" ;;
+      trace) opts="link show inspect" ;;
       activity) opts="list export" ;;
       schema) opts="list validate compat" ;;
     completion)

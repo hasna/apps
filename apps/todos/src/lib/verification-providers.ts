@@ -12,6 +12,8 @@ import {
 } from "./config.js";
 import { redactEvidenceText, redactValue } from "./redaction.js";
 
+export type { VerificationProviderConfig, VerificationProviderKind, VerificationProviderRetryConfig };
+
 export type VerificationProviderStatus = "passed" | "failed" | "unknown";
 
 export interface UpsertVerificationProviderInput {
@@ -315,9 +317,9 @@ export async function runVerificationProvider(input: RunVerificationProviderInpu
 // Verification records query layer (reads task_verifications written by
 // db/task-commits.ts). Consumers: verification-evidence, import-export-bridge,
 // resource-snapshots, the verification MCP tool.
-interface VerificationRecordResult {
+export interface VerificationRecordResult {
   id: string;
-  task_id: string;
+  task_id: string | null;
   command: string;
   status: VerificationProviderStatus;
   output_summary: string | null;
@@ -328,10 +330,10 @@ interface VerificationRecordResult {
   evidence: Record<string, unknown>;
 }
 
-function verificationRowToRecord(row: Record<string, unknown>): VerificationRecordResult {
+function taskVerificationRowToRecord(row: Record<string, unknown>): VerificationRecordResult {
   return {
     id: String(row["id"]),
-    task_id: String(row["task_id"]),
+    task_id: (row["task_id"] as string | null) ?? null,
     command: String(row["command"] ?? ""),
     status: (row["status"] as VerificationProviderStatus) ?? "unknown",
     output_summary: (row["output_summary"] as string | null) ?? null,
@@ -350,10 +352,46 @@ function verificationRowToRecord(row: Record<string, unknown>): VerificationReco
   };
 }
 
+function portableVerificationRowToRecord(row: Record<string, unknown>): VerificationRecordResult {
+  let evidence: Record<string, unknown> = {};
+  try {
+    evidence = row["evidence"] ? JSON.parse(String(row["evidence"])) as Record<string, unknown> : {};
+  } catch {
+    evidence = {};
+  }
+
+  return {
+    id: String(row["id"]),
+    task_id: (row["task_id"] as string | null) ?? null,
+    command: String(row["provider_name"] ?? "manual"),
+    status: (row["status"] as VerificationProviderStatus) ?? "unknown",
+    output_summary: (row["summary"] as string | null) ?? null,
+    artifact_path: (row["artifact_id"] as string | null) ?? null,
+    agent_id: (evidence["agent_id"] as string | null) ?? null,
+    run_at: String(row["completed_at"] ?? row["started_at"] ?? row["created_at"] ?? ""),
+    created_at: String(row["created_at"] ?? ""),
+    evidence: {
+      ...evidence,
+      provider_name: row["provider_name"] ?? evidence["provider_name"] ?? null,
+      provider_type: row["provider_type"] ?? evidence["provider_type"] ?? "local",
+      status: row["status"] ?? evidence["status"] ?? "unknown",
+      summary: row["summary"] ?? evidence["summary"] ?? null,
+      artifact_id: row["artifact_id"] ?? evidence["artifact_id"] ?? null,
+    },
+  };
+}
+
 export function getVerificationRecord(id: string, db?: Database): VerificationRecordResult | null {
   const d = db || getDatabase();
+  try {
+    const portable = d.query("SELECT * FROM verification_records WHERE id = ?").get(id) as Record<string, unknown> | null;
+    if (portable) return portableVerificationRowToRecord(portable);
+  } catch {
+    // Older databases may only have task_verifications.
+  }
+
   const row = d.query("SELECT * FROM task_verifications WHERE id = ?").get(id) as Record<string, unknown> | null;
-  return row ? verificationRowToRecord(row) : null;
+  return row ? taskVerificationRowToRecord(row) : null;
 }
 
 export function listVerificationRecords(
@@ -361,15 +399,47 @@ export function listVerificationRecords(
   db?: Database,
 ): VerificationRecordResult[] {
   const d = db || getDatabase();
+  const records: VerificationRecordResult[] = [];
+
+  try {
+    const conditions: string[] = [];
+    const params: string[] = [];
+    if (filter.task_id) { conditions.push("task_id = ?"); params.push(filter.task_id); }
+    if (filter.status) { conditions.push("status = ?"); params.push(filter.status); }
+    if (filter.provider) { conditions.push("provider_name = ?"); params.push(filter.provider); }
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const rows = d
+      .query(`SELECT * FROM verification_records ${where} ORDER BY COALESCE(completed_at, started_at, created_at) DESC, created_at DESC`)
+      .all(...params) as Record<string, unknown>[];
+    records.push(...rows.map(portableVerificationRowToRecord));
+  } catch {
+    // Optional table in older databases; ensureSchema creates it for fresh DBs.
+  }
+
   const conditions: string[] = [];
   const params: (string | number)[] = [];
   if (filter.task_id) { conditions.push("task_id = ?"); params.push(filter.task_id); }
   if (filter.agent_id) { conditions.push("agent_id = ?"); params.push(filter.agent_id); }
   if (filter.status) { conditions.push("status = ?"); params.push(filter.status); }
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-  const limitClause = filter.limit && filter.limit > 0 ? ` LIMIT ${Math.floor(filter.limit)}` : "";
   const rows = d
-    .query(`SELECT * FROM task_verifications ${where} ORDER BY run_at DESC, created_at DESC${limitClause}`)
+    .query(`SELECT * FROM task_verifications ${where} ORDER BY run_at DESC, created_at DESC`)
     .all(...params) as Record<string, unknown>[];
-  return rows.map(verificationRowToRecord);
+  records.push(...rows.map(taskVerificationRowToRecord));
+
+  let filtered = records;
+  if (filter.agent_id) {
+    filtered = filtered.filter((record) => record.agent_id === filter.agent_id || record.evidence.agent_id === filter.agent_id);
+  }
+  if (filter.run_record_id) {
+    filtered = filtered.filter((record) => record.evidence.run_record_id === filter.run_record_id);
+  }
+
+  filtered.sort((a, b) => {
+    const at = Date.parse(a.run_at || a.created_at || "");
+    const bt = Date.parse(b.run_at || b.created_at || "");
+    return (Number.isFinite(bt) ? bt : 0) - (Number.isFinite(at) ? at : 0);
+  });
+
+  return filter.limit && filter.limit > 0 ? filtered.slice(0, Math.floor(filter.limit)) : filtered;
 }

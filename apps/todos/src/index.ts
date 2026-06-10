@@ -162,6 +162,19 @@ export type {
   TodosRegistry,
 } from "./registry.js";
 
+// Native local/remote storage status
+export {
+  getNativeStorageStatus,
+  getNativeStorageSyncPlan,
+  redactDatabaseUrl,
+} from "./lib/native-storage-status.js";
+export type {
+  NativeStorageEnvStatus,
+  NativeStorageStatus,
+  NativeStorageSyncPlan,
+  NativeStorageSyncPlanOptions,
+} from "./lib/native-storage-status.js";
+
 // Core database
 export { getDatabase, closeDatabase, resetDatabase, resolvePartialId, now, uuid } from "./db/database.js";
 
@@ -510,25 +523,24 @@ export type {
 
 // Verification providers
 export {
-  loadVerificationProviders,
-  saveVerificationProviders,
-  getVerificationProvider,
-  runVerification,
+  upsertVerificationProvider,
   listVerificationRecords,
   getVerificationRecord,
-  getDefaultProviders,
-  resetVerificationProviderCache,
-  VERIFICATION_SCHEMA_VERSION,
-  VERIFICATION_PROVIDER_TYPES,
-  VERIFICATION_STATUSES,
+  listVerificationProviders,
+  removeVerificationProvider,
+  discoverVerificationProviderCapabilities,
+  runVerificationProvider,
 } from "./lib/verification-providers.js";
 export type {
+  RunVerificationProviderInput,
+  UpsertVerificationProviderInput,
   VerificationProviderConfig,
-  VerificationEvidenceRecord,
-  VerificationProviderType,
-  VerificationStatus,
-  RunVerificationInput,
-  VerificationProvidersFile,
+  VerificationProviderCapabilities,
+  VerificationProviderKind,
+  VerificationProviderResult,
+  VerificationProviderRetryConfig,
+  VerificationProviderStatus,
+  VerificationRecordResult,
 } from "./lib/verification-providers.js";
 
 // Portable verification evidence
@@ -552,44 +564,71 @@ export type {
 
 // Local encryption
 export {
-  encryptValue,
-  decryptValue,
-  encryptSensitiveFields,
-  decryptSensitiveFields,
-  redactObject,
+  DEFAULT_ENCRYPTION_KEY_ENV,
+  DEFAULT_ENCRYPTION_PROFILE,
+  TODOS_ENCRYPTED_BRIDGE_KIND,
+  TODOS_ENCRYPTED_VALUE_KIND,
+  TODOS_ENCRYPTION_SCHEMA_VERSION,
   applyExportProfile,
   assertExportProfileAllowed,
-  initEncryptionKeyFile,
-  loadEncryptionKey,
-  getEncryptionKeySource,
-  isEncryptedPayload,
-  ENCRYPTION_SCHEMA_VERSION,
-  EXPORT_PROFILES,
+  createEncryptedBridgeBundle,
+  decryptBridgeBundle,
+  encryptValue,
+  decryptValue,
+  decryptString,
+  encryptSensitiveFields,
+  encryptString,
+  encryptionProfileStatus,
+  ensureEncryptionProfile,
+  isEncryptedBridgeBundle,
+  isEncryptedValue,
+  listEncryptionProfiles,
+  looksSensitiveKey,
+  removeEncryptionProfile,
+  upsertEncryptionProfile,
 } from "./lib/local-encryption.js";
-export type { EncryptedPayload, ExportProfile, ExportBundleOptions } from "./lib/local-encryption.js";
+export type {
+  EncryptedLocalBridgeBundle,
+  ExportProfile,
+  LocalEncryptionEnvelope,
+  UpsertEncryptionProfileInput,
+} from "./lib/local-encryption.js";
 
 // Context packs
 export {
-  buildContextPack,
-  formatContextPackMarkdown,
-  formatContextPackJson,
-  CONTEXT_PACK_VERSION,
+  createAgentContextPack,
+  renderAgentContextPack,
+  renderAgentContextPackCompactMarkdown,
+  renderAgentContextPackMarkdown,
 } from "./lib/context-packs.js";
-export type { ContextPack, ContextPackInput } from "./lib/context-packs.js";
+export type {
+  AgentContextPack,
+  AgentContextPackFormat,
+  AgentContextPackProfile,
+  AgentContextPackRelatedTask,
+  AgentContextPackSection,
+  AgentContextPackTask,
+  CreateAgentContextPackInput,
+} from "./lib/context-packs.js";
 
 // Policy packs
 export {
-  loadPolicyPacks,
-  savePolicyPacks,
   getPolicyPack,
-  validateTaskAgainstPolicyPack,
-  assertPolicyPackPassed,
-  resolveProjectPolicyPack,
-  getDefaultPolicyPacks,
-  resetPolicyPackCache,
-  POLICY_PACK_VERSION,
+  listPolicyPacks,
+  upsertPolicyPack,
+  removePolicyPack,
+  validatePolicyPack,
+  explainPolicyPack,
 } from "./lib/policy-packs.js";
-export type { PolicyPack, PolicyRule, PolicyRuleType, PolicyValidationResult } from "./lib/policy-packs.js";
+export type {
+  PolicyEvidenceSummary,
+  PolicyFindingSeverity,
+  PolicyFindingStatus,
+  PolicyPackFinding,
+  PolicyPackValidationResult,
+  UpsertPolicyPackInput,
+  ValidatePolicyPackInput,
+} from "./lib/policy-packs.js";
 
 // Resource snapshots
 export {
@@ -666,23 +705,13 @@ export {
 export type { GitCommitInfo, LinkGitTraceInput } from "./lib/git-traceability.js";
 
 // Mention resolver
-export {
-  MENTION_RESOLVER_SCHEMA,
-  MENTION_KINDS,
-  parseMentions,
-  resolveMention,
-  resolveMentionsInText,
-  formatResolvedMention,
-  formatMentionResolutionResult,
-  getMentionResolverDocs,
-} from "./lib/mention-resolver.js";
+export { resolveMentions } from "./lib/mention-resolver.js";
 export type {
-  MentionKind,
-  MentionStatus,
-  ParsedMention,
-  ResolvedMention,
-  MentionResolutionResult,
-  ResolveMentionOptions,
+  MentionBacklink,
+  MentionReferenceKind,
+  MentionResolution,
+  MentionResolutionReport,
+  MentionResolverInput,
 } from "./lib/mention-resolver.js";
 
 // Labels and custom fields
@@ -700,63 +729,59 @@ export type { CustomFieldDefinition, CustomFieldType, TaskCustomFieldValue } fro
 
 // Task dedupe and merge
 export {
+  findDuplicateTasks,
   findDuplicateCandidates,
-  scoreDuplicatePair,
-  mergeTasks,
-  formatDuplicatePreview,
-  DEDUPE_SCHEMA_VERSION,
+  mergeDuplicateTask,
 } from "./lib/task-dedupe.js";
-export type { DuplicateCandidate, DuplicateSignal, FindDuplicatesFilter, MergeTasksInput, MergeTasksResult } from "./lib/task-dedupe.js";
+export type {
+  DuplicateTaskCandidate,
+  FindDuplicateTasksOptions,
+  MergeDuplicateTaskInput,
+  TaskMergeMovedCounts,
+  TaskMergeResult,
+} from "./lib/task-dedupe.js";
 
 // todos.md markdown
 export {
-  parseTodosMd,
-  serializeTodosMd,
-  exportTodosMd,
-  importTodosMd,
-  syncTodosMd,
-  startTodosMdWatch,
-  stopTodosMdWatch,
-  TODOS_MD_VERSION,
-  TODOS_MD_SCHEMA,
+  TODOS_MARKDOWN_BRIDGE_MARKER,
+  TODOS_MARKDOWN_SCHEMA,
+  exportTodosMarkdown,
+  importTodosMarkdown,
 } from "./lib/todos-md.js";
-export type { TodosMdDocument, TodosMdTaskLine, ImportTodosMdResult, ExportTodosMdOptions, SyncTodosMdResult } from "./lib/todos-md.js";
+export type { ImportTodosMarkdownOptions, TodosMarkdownImportResult } from "./lib/todos-md.js";
 
 // Workspace trust
 export {
-  loadWorkspaceTrustConfig,
-  saveWorkspaceTrustConfig,
-  getWorkspaceTrustProfile,
-  getAgentTrustProfile,
-  checkPermission,
-  assertPermission,
-  trustWorkspace,
-  untrustWorkspace,
-  isWorkspaceTrusted,
-  getDefaultWorkspaceTrustProfiles,
-  resetWorkspaceTrustCache,
-  WorkspacePermissionError,
-  WORKSPACE_TRUST_VERSION,
-  PERMISSION_OPERATIONS,
+  checkWorkspacePermission,
+  getWorkspaceTrustStatus,
+  listWorkspaceTrustProfiles,
+  removeWorkspaceTrustProfile,
+  upsertWorkspaceTrustProfile,
 } from "./lib/workspace-trust.js";
-export type { WorkspaceTrustProfile, WorkspaceTrustConfig, PermissionOperation } from "./lib/workspace-trust.js";
+export type {
+  UpsertWorkspaceTrustInput,
+  WorkspacePermissionCheck,
+  WorkspacePermissionCheckInput,
+  WorkspaceTrustStatus,
+} from "./lib/workspace-trust.js";
 
 // Approval gates
 export {
-  requestApproval,
-  approveGate,
-  rejectGate,
-  listPendingApprovals,
-  getTaskGateStatus,
-  createManualCheckpoint,
-  enablePlanApprovalGates,
-  assertTaskGate,
-  approveTaskViaGate,
-  listTasksAwaitingApproval,
-  APPROVAL_GATE_SCHEMA,
-  GATE_TYPES,
+  approveApprovalGate,
+  assertApprovalGate,
+  checkApprovalGate,
+  expireApprovalGate,
+  listApprovalGates,
+  rejectApprovalGate,
+  requestApprovalGate,
 } from "./lib/approval-gates.js";
-export type { ApprovalRequest, GateType, TaskGateStatus, RequestApprovalInput } from "./lib/approval-gates.js";
+export type {
+  ApprovalGate,
+  ApprovalGateStatus,
+  CheckApprovalGateResult,
+  DecideApprovalGateInput,
+  RequestApprovalGateInput,
+} from "./lib/approval-gates.js";
 
 // Agent coordination leases
 export {
@@ -773,16 +798,6 @@ export {
   DEFAULT_LEASE_MINUTES,
 } from "./lib/agent-coordination.js";
 export type { TaskLease, LeaseAcquireResult, LockConflict, StaleRecoveryResult } from "./lib/agent-coordination.js";
-
-// Project bootstrap
-export {
-  discoverWorkspace,
-  bootstrapWorkspace,
-  getBootstrapStatus,
-  formatBootstrapReport,
-  BOOTSTRAP_SCHEMA,
-} from "./lib/project-bootstrap.js";
-export type { WorkspaceDiscovery, BootstrapResult } from "./lib/project-bootstrap.js";
 
 // CLI MCP parity
 export {
@@ -941,28 +956,13 @@ export {
 export type { ReleaseCheckSeverity, ReleaseCheckItem, ReleaseCheckReport, ReleaseCheckOptions } from "./lib/release-checks.js";
 
 // Release notes
-export {
-  RELEASE_NOTES_SCHEMA,
-  CHANGELOG_CATEGORIES,
-  parseConventionalCommit,
-  mapCommitTypeToCategory,
-  getLatestGitTag,
-  resolveSinceRef,
-  getGitLogSince,
-  getCompletedTasksForRelease,
-  buildReleaseNotes,
-  formatReleaseNotesMarkdown,
-  formatChangelogSection,
-  updateChangelog,
-  getReleaseNotesDocs,
-} from "./lib/release-notes.js";
+export { generateReleaseNotes, renderReleaseNotesMarkdown } from "./lib/release-notes.js";
 export type {
-  ChangelogCategory,
-  GitCommitEntry,
-  TaskReleaseEntry,
-  ReleaseNotesReport,
-  BuildReleaseNotesInput,
-  UpdateChangelogInput,
+  GenerateReleaseNotesInput,
+  ReleaseNotesDocument,
+  ReleaseNotesPlan,
+  ReleaseNotesScope,
+  ReleaseNotesTask,
 } from "./lib/release-notes.js";
 
 // Database backup
@@ -1084,35 +1084,21 @@ export type {
 
 // Terminal notifications / watch rules
 export {
-  TERMINAL_NOTIFICATIONS_SCHEMA,
-  WATCH_EVENT_TYPES,
-  ensureDefaultWatchRules,
-  createWatchRule,
-  updateWatchRule,
-  deleteWatchRule,
-  getWatchRule,
-  listWatchRules,
-  ruleMatchesEvent,
-  collectWatchEvents,
-  formatTerminalNotification,
-  pollWatchNotifications,
-  getWatchStatus,
-  getWatchPreferences,
-  setWatchPreferences,
-  syncConfigWatchRules,
-  getWatchDocs,
+  describeTerminalNotificationRule,
+  evaluateTerminalWatchRules,
+  getTerminalNotificationRule,
+  listTerminalNotificationRules,
+  parseQuietHours,
+  removeTerminalNotificationRule,
+  renderTerminalNotification,
+  testTerminalNotificationRule,
+  upsertTerminalNotificationRule,
 } from "./lib/terminal-notifications.js";
 export type {
-  WatchEventType,
-  WatchSeverity,
-  WatchEvent,
-  WatchRule,
-  WatchPreferences,
-  CreateWatchRuleInput,
-  UpdateWatchRuleInput,
-  PollWatchOptions,
-  PollWatchResult,
-  WatchStatus,
+  TerminalNotification,
+  TerminalNotificationEvaluation,
+  TerminalNotificationRuleInput,
+  TerminalWatchEventInput,
 } from "./lib/terminal-notifications.js";
 
 // Import/export bridge
@@ -1201,23 +1187,17 @@ export type {
 
 // TUI dashboard
 export {
-  TUI_DASHBOARD_SCHEMA,
-  initialDashboardState,
-  reduceDashboardState,
-  loadDashboardData,
-  clampSelectedIndex,
-  executeDashboardTaskAction,
-  listDashboardProjects,
-  KEYBOARD_HELP,
-  DASHBOARD_PANELS,
+  TUI_DASHBOARD_VIEWS,
+  createTuiDashboardSnapshot,
+  renderTuiDashboardSnapshot,
 } from "./lib/tui-dashboard.js";
 export type {
-  DashboardState,
-  DashboardData,
-  DashboardPanel,
-  DashboardFilter,
-  DashboardAction,
-  DashboardTaskRow,
+  CreateTuiDashboardSnapshotOptions,
+  TuiDashboardDependency,
+  TuiDashboardPlan,
+  TuiDashboardProject,
+  TuiDashboardSnapshot,
+  TuiDashboardView,
 } from "./lib/tui-dashboard.js";
 
 // CLI reference, completions, manpage
@@ -1297,20 +1277,21 @@ export type {
 
 // Environment snapshots
 export {
-  ENV_SNAPSHOT_SCHEMA,
-  buildEnvSnapshotPayload,
-  captureEnvSnapshot,
-  getEnvSnapshot,
-  listEnvSnapshots,
-  checkEnvSnapshot,
-  computeSnapshotHash,
+  captureEnvironmentSnapshot,
+  compareEnvironmentSnapshotFiles,
+  compareEnvironmentSnapshots,
+  readEnvironmentSnapshot,
+  recordEnvironmentSnapshot,
+  writeEnvironmentSnapshot,
 } from "./lib/environment-snapshots.js";
 export type {
-  EnvCommandVersion,
-  EnvSnapshotPayload,
-  EnvSnapshotRecord,
-  CaptureEnvSnapshotInput,
-  EnvSnapshotCheckResult,
+  CaptureEnvironmentSnapshotInput,
+  EnvironmentSnapshot,
+  EnvironmentSnapshotComparison,
+  EnvironmentSnapshotFile,
+  EnvironmentSnapshotManifest,
+  RecordEnvironmentSnapshotInput,
+  RecordedEnvironmentSnapshot,
 } from "./lib/environment-snapshots.js";
 
 // Decision records and knowledge snapshots
@@ -1414,24 +1395,12 @@ export type {
 } from "./lib/failure-triage.js";
 
 // Branch work plans
-export {
-  BRANCH_WORK_PLAN_SCHEMA,
-  analyzeBranchWork,
-  generateSafeWorkPlan,
-  resolveDefaultBaseBranch,
-  formatSafeWorkPlanMarkdown,
-  formatSafeWorkPlanText,
-  getBranchWorkPlanDocs,
-} from "./lib/branch-work-plans.js";
+export { createBranchWorkPlan } from "./lib/branch-work-plans.js";
 export type {
-  WorkPlanRisk,
-  WorkPlanStrategy,
-  BranchWorkPlanInput,
-  BranchRefInfo,
-  BranchConflictFile,
-  BranchWorkAnalysis,
-  WorkPlanStep,
-  SafeWorkPlan,
+  BranchWorkPlan,
+  BranchWorkPlanConflict,
+  BranchWorkPlanGitStatus,
+  CreateBranchWorkPlanInput,
 } from "./lib/branch-work-plans.js";
 
 // User scaffolds
@@ -1692,19 +1661,6 @@ export type {
   WorkspaceTrustProfile as WorkspaceTrustProfileConfig,
 } from "./lib/config.js";
 export {
-  checkWorkspacePermission,
-  getWorkspaceTrustStatus,
-  listWorkspaceTrustProfiles,
-  removeWorkspaceTrustProfile,
-  upsertWorkspaceTrustProfile,
-} from "./lib/workspace-trust.js";
-export type {
-  UpsertWorkspaceTrustInput,
-  WorkspacePermissionCheck,
-  WorkspacePermissionCheckInput,
-  WorkspaceTrustStatus,
-} from "./lib/workspace-trust.js";
-export {
   checkRunnerSandbox,
   explainRunnerSandbox,
   getRunnerSandboxProfile,
@@ -1737,38 +1693,6 @@ export type {
   UpsertRunnerSandboxInput,
 } from "./lib/runner-sandbox.js";
 export {
-  explainPolicyPack,
-  listPolicyPacks,
-  removePolicyPack,
-  upsertPolicyPack,
-  validatePolicyPack,
-} from "./lib/policy-packs.js";
-export type {
-  PolicyEvidenceSummary,
-  PolicyFindingSeverity,
-  PolicyFindingStatus,
-  PolicyPackFinding,
-  PolicyPackValidationResult,
-  UpsertPolicyPackInput,
-  ValidatePolicyPackInput,
-} from "./lib/policy-packs.js";
-export {
-  approveApprovalGate,
-  assertApprovalGate,
-  checkApprovalGate,
-  expireApprovalGate,
-  listApprovalGates,
-  rejectApprovalGate,
-  requestApprovalGate,
-} from "./lib/approval-gates.js";
-export type {
-  ApprovalGate,
-  ApprovalGateStatus,
-  CheckApprovalGateResult,
-  DecideApprovalGateInput,
-  RequestApprovalGateInput,
-} from "./lib/approval-gates.js";
-export {
   LOCAL_EVENT_TYPES,
   emitLocalEventHooks,
   emitLocalEventHooksQuiet,
@@ -1785,65 +1709,12 @@ export type {
   LocalEventHookInput,
   LocalEventType,
 } from "./lib/event-hooks.js";
-export {
-  describeTerminalNotificationRule,
-  evaluateTerminalWatchRules,
-  getTerminalNotificationRule,
-  listTerminalNotificationRules,
-  removeTerminalNotificationRule,
-  renderTerminalNotification,
-  testTerminalNotificationRule,
-  upsertTerminalNotificationRule,
-} from "./lib/terminal-notifications.js";
-export type {
-  TerminalNotification,
-  TerminalNotificationEvaluation,
-  TerminalNotificationRuleInput,
-  TerminalWatchEventInput,
-} from "./lib/terminal-notifications.js";
-export { createBranchWorkPlan } from "./lib/branch-work-plans.js";
-export type {
-  BranchWorkPlan,
-  BranchWorkPlanConflict,
-  BranchWorkPlanGitStatus,
-  CreateBranchWorkPlanInput,
-} from "./lib/branch-work-plans.js";
 export { previewNaturalLanguageIntake } from "./lib/natural-language-intake.js";
 export type {
   NaturalLanguageIntakeInput,
   NaturalLanguageIntakePreview,
   NaturalLanguageTaskPreview,
 } from "./lib/natural-language-intake.js";
-export { resolveMentions } from "./lib/mention-resolver.js";
-export type {
-  MentionBacklink,
-  MentionReferenceKind,
-  MentionResolution,
-  MentionResolutionReport,
-  MentionResolverInput,
-} from "./lib/mention-resolver.js";
-export {
-  DEFAULT_ENCRYPTION_KEY_ENV,
-  DEFAULT_ENCRYPTION_PROFILE,
-  TODOS_ENCRYPTED_BRIDGE_KIND,
-  TODOS_ENCRYPTED_VALUE_KIND,
-  TODOS_ENCRYPTION_SCHEMA_VERSION,
-  createEncryptedBridgeBundle,
-  decryptBridgeBundle,
-  decryptString,
-  encryptString,
-  encryptionProfileStatus,
-  isEncryptedBridgeBundle,
-  isEncryptedValue,
-  listEncryptionProfiles,
-  removeEncryptionProfile,
-  upsertEncryptionProfile,
-} from "./lib/local-encryption.js";
-export type {
-  EncryptedLocalBridgeBundle,
-  LocalEncryptionEnvelope,
-  UpsertEncryptionProfileInput,
-} from "./lib/local-encryption.js";
 export {
   getTaskLocalFields,
   queryTasksByLocalFields,
@@ -1875,57 +1746,6 @@ export type {
   WorkflowStateQueryResult,
   WorkflowStateResolution,
 } from "./lib/workflow-states.js";
-export {
-  findDuplicateTasks,
-  mergeDuplicateTask,
-} from "./lib/task-dedupe.js";
-export type {
-  DuplicateTaskCandidate,
-  FindDuplicateTasksOptions,
-  MergeDuplicateTaskInput,
-  TaskMergeMovedCounts,
-  TaskMergeResult,
-} from "./lib/task-dedupe.js";
-export {
-  discoverVerificationProviderCapabilities,
-  listVerificationProviders,
-  removeVerificationProvider,
-  runVerificationProvider,
-  upsertVerificationProvider,
-} from "./lib/verification-providers.js";
-export type {
-  RunVerificationProviderInput,
-  UpsertVerificationProviderInput,
-  VerificationProviderCapabilities,
-  VerificationProviderResult,
-  VerificationProviderStatus,
-} from "./lib/verification-providers.js";
-export {
-  createAgentContextPack,
-  renderAgentContextPack,
-  renderAgentContextPackCompactMarkdown,
-  renderAgentContextPackMarkdown,
-} from "./lib/context-packs.js";
-export type {
-  AgentContextPack,
-  AgentContextPackFormat,
-  AgentContextPackProfile,
-  AgentContextPackRelatedTask,
-  AgentContextPackSection,
-  AgentContextPackTask,
-  CreateAgentContextPackInput,
-} from "./lib/context-packs.js";
-export {
-  generateReleaseNotes,
-  renderReleaseNotesMarkdown,
-} from "./lib/release-notes.js";
-export type {
-  GenerateReleaseNotesInput,
-  ReleaseNotesDocument,
-  ReleaseNotesPlan,
-  ReleaseNotesScope,
-  ReleaseNotesTask,
-} from "./lib/release-notes.js";
 export {
   renderAgentReplaySimulationMarkdown,
   simulateAgentReplay,
@@ -2197,13 +2017,6 @@ export type {
   LocalIntegrityReport,
   RestoreLocalBackupOptions,
 } from "./lib/local-backups.js";
-export {
-  TODOS_MARKDOWN_BRIDGE_MARKER,
-  TODOS_MARKDOWN_SCHEMA,
-  exportTodosMarkdown,
-  importTodosMarkdown,
-} from "./lib/todos-md.js";
-export type { ImportTodosMarkdownOptions, TodosMarkdownImportResult } from "./lib/todos-md.js";
 export { getLocalActivityTimeline } from "./lib/activity-timeline.js";
 export type {
   LocalActivityTimelineEntityType,
@@ -2223,23 +2036,6 @@ export type {
   DoctorSummary,
   RunTodosDoctorOptions,
 } from "./lib/doctor.js";
-export {
-  captureEnvironmentSnapshot,
-  compareEnvironmentSnapshotFiles,
-  compareEnvironmentSnapshots,
-  readEnvironmentSnapshot,
-  recordEnvironmentSnapshot,
-  writeEnvironmentSnapshot,
-} from "./lib/environment-snapshots.js";
-export type {
-  CaptureEnvironmentSnapshotInput,
-  EnvironmentSnapshot,
-  EnvironmentSnapshotComparison,
-  EnvironmentSnapshotFile,
-  EnvironmentSnapshotManifest,
-  RecordedEnvironmentSnapshot,
-  RecordEnvironmentSnapshotInput,
-} from "./lib/environment-snapshots.js";
 export {
   checkTaskDoneContract,
   getTaskContract,
@@ -2414,20 +2210,6 @@ export type {
   CliOptionEntry,
   CompletionShell,
 } from "./lib/cli-help.js";
-export {
-  TUI_DASHBOARD_VIEWS,
-  createTuiDashboardSnapshot,
-  renderTuiDashboardSnapshot,
-} from "./lib/tui-dashboard.js";
-export type {
-  CreateTuiDashboardSnapshotOptions,
-  TuiDashboardDependency,
-  TuiDashboardPlan,
-  TuiDashboardProject,
-  TuiDashboardSnapshot,
-  TuiDashboardView,
-} from "./lib/tui-dashboard.js";
-
 // Dispatch formatter
 export { formatDispatchMessage, formatSingleTask } from "./lib/dispatch-formatter.js";
 export type { FormatOpts } from "./lib/dispatch-formatter.js";
@@ -2436,10 +2218,57 @@ export type { FormatOpts } from "./lib/dispatch-formatter.js";
 export { parseTmuxTarget, formatTmuxTarget, validateTmuxTarget, sendToTmux, calculateDelay, DELAY_MIN, DELAY_MAX } from "./lib/tmux.js";
 
 // Storage/service adapter boundary
-export { createLocalSqliteTodosStorageAdapter } from "./storage.js";
+export {
+  STORAGE_TABLES,
+  TODOS_STORAGE_ENV,
+  TODOS_STORAGE_FALLBACK_ENV,
+  TODOS_STORAGE_TABLES,
+  assertTodosRemoteStorageConfig,
+  createLocalSqliteTodosStorageAdapter,
+  createHybridTodosStorageAdapter,
+  createPostgresTodosSyncStore,
+  createPostgresTodosStorageAdapter,
+  createTodosS3ArtifactStore,
+  createTodosStorageAdapter,
+  downloadRunArtifactsFromS3,
+  exportSqliteTodosStorageSnapshot,
+  getStorageDatabaseEnv,
+  getStorageDatabaseUrl,
+  getStorageMode,
+  getTodosStorageDatabaseEnv,
+  getTodosStorageDatabaseUrl,
+  getTodosStorageEnvName,
+  getTodosStorageMode,
+  importSqliteTodosStorageSnapshot,
+  isTodosRemoteStorageEnabled,
+  loadStorageConfig,
+  loadTodosStorageConfig,
+  parseStorageMode,
+  planRunArtifactsS3Sync,
+  postgresTodosSyncSchemaSql,
+  signAwsV4Request,
+  uploadRunArtifactsToS3,
+  buildS3ObjectKey,
+  buildS3ObjectUrl,
+} from "./storage.js";
 export type {
+  CreatePostgresTodosSyncStoreOptions,
+  CreatePostgresTodosStorageAdapterOptions,
+  CreateTodosStorageAdapterOptions,
   CreateLocalSqliteTodosStorageAdapterOptions,
+  CreateHybridTodosStorageAdapterOptions,
+  DownloadRunArtifactsFromS3Options,
+  HybridTodosRemoteSync,
+  HybridTodosStorageAdapter,
+  HybridTodosStorageSyncResult,
+  PlanRunArtifactsS3SyncOptions,
   MaybePromise,
+  PostgresTodosSyncPushResult,
+  PullPostgresTodosSnapshotOptions,
+  PutTodosS3ObjectInput,
+  SignAwsV4RequestInput,
+  SignedAwsV4Request,
+  TodosAwsCredentials,
   TodosActiveWorkFilter,
   TodosAgentUpdateInput,
   TodosAgentStore,
@@ -2448,11 +2277,29 @@ export type {
   TodosProjectStore,
   TodosStorageAdapter,
   TodosStorageCapabilities,
+  TodosStorageConfig,
   TodosStorageContext,
+  TodosStorageEnv,
   TodosStorageImportResult,
   TodosStorageKind,
+  TodosStorageMode,
+  TodosStorageTable,
   TodosStorageSnapshot,
+  TodosPostgresStorageConfig,
+  TodosPostgresQueryClient,
+  TodosPostgresQueryResult,
+  TodosPostgresSyncRecordRow,
+  TodosPostgresSyncRecordType,
+  TodosS3ArtifactStore,
+  TodosS3ArtifactStoreOptions,
+  TodosS3StorageConfig,
+  TodosS3ObjectRef,
+  TodosRunArtifactRemoteRef,
+  TodosRunArtifactSyncFilter,
+  TodosRunArtifactSyncPlan,
+  TodosRunArtifactSyncResult,
   TodosSyncStore,
+  TodosSyncConfig,
   TodosTaskClaimFilter,
   TodosTaskCompletionOptions,
   TodosTaskFailureOptions,
@@ -2460,4 +2307,5 @@ export type {
   TodosTaskListStore,
   TodosTaskStore,
   TodosTemplateStore,
+  UploadRunArtifactsToS3Options,
 } from "./storage.js";

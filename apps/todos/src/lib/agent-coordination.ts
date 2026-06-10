@@ -83,11 +83,10 @@ export function acquireTaskLease(
   const lock = lockTask(taskId, agentId, d);
 
   if (!lock.success) {
-    const task = getTask(taskId, d)!;
     const existing = d.query("SELECT * FROM task_leases WHERE task_id = ?").get(taskId) as LeaseRow | null;
     return {
       success: false,
-      conflict: formatLockConflict(taskId, lock.locked_by, lock.locked_at, existing?.expires_at ?? null),
+      conflict: formatLockConflict(taskId, lock.locked_by ?? "unknown", lock.locked_at ?? null, existing?.expires_at ?? null),
     };
   }
 
@@ -179,7 +178,7 @@ export function stealTaskLease(
   } else {
     const stolen = stealTask(agentId, { stale_minutes: options.stale_minutes ?? DEFAULT_LEASE_MINUTES }, d);
     if (stolen?.id === taskId) acquired = true;
-    else return { success: false, conflict: formatLockConflict(taskId, lock.locked_by, lock.locked_at, lease?.expires_at ?? null) };
+    else return { success: false, conflict: formatLockConflict(taskId, lock.locked_by ?? "unknown", lock.locked_at ?? null, lease?.expires_at ?? null) };
   }
 
   if (!acquired) {

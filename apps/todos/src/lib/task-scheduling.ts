@@ -117,7 +117,7 @@ export function listReadyScheduledTasks(filters: { project_id?: string } = {}, d
 }
 
 export function getAgentSafeQueue(
-  agentId?: string,
+  _agentId?: string,
   filters: { project_id?: string; limit?: number } = {},
   db?: Database,
 ): SchedulingQueueItem[] {

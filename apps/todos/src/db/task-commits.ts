@@ -53,6 +53,16 @@ export interface TaskVerification {
   created_at: string;
 }
 
+export interface TaskTraceabilityReport {
+  task_id: string;
+  commits: TaskCommit[];
+  git_refs: TaskGitRef[];
+  verifications: TaskVerification[];
+  branches: string[];
+  release_tags: string[];
+  pull_requests: Array<{ url: string; state: string | null; number: number | null }>;
+}
+
 interface TaskCommitRow {
   id: string;
   task_id: string;
@@ -311,17 +321,22 @@ export function getTaskVerifications(taskId: string, db?: Database): TaskVerific
     .all(taskId) as TaskVerificationRow[]).map(rowToVerification);
 }
 
-export function getTaskTraceability(taskId: string, db?: Database): {
-  task_id: string;
-  commits: TaskCommit[];
-  git_refs: TaskGitRef[];
-  verifications: TaskVerification[];
-} {
+export function getTaskTraceability(taskId: string, db?: Database): TaskTraceabilityReport {
   const d = db || getDatabase();
+  const commits = getTaskCommits(taskId, d);
+  const gitRefs = getTaskGitRefs(taskId, d);
   return {
     task_id: taskId,
-    commits: getTaskCommits(taskId, d),
-    git_refs: getTaskGitRefs(taskId, d),
+    commits,
+    git_refs: gitRefs,
     verifications: getTaskVerifications(taskId, d),
+    branches: Array.from(new Set([
+      ...commits.map((commit) => commit.branch).filter((branch): branch is string => Boolean(branch)),
+      ...gitRefs.filter((ref) => ref.ref_type === "branch").map((ref) => ref.name),
+    ])).sort(),
+    release_tags: Array.from(new Set(commits.map((commit) => commit.release_tag).filter((tag): tag is string => Boolean(tag)))).sort(),
+    pull_requests: commits
+      .filter((commit) => commit.pr_url)
+      .map((commit) => ({ url: commit.pr_url!, state: commit.pr_state, number: commit.pr_number })),
   };
 }

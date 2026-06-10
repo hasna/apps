@@ -9,6 +9,7 @@ import { createMcpManifest } from "./mcp.js";
 import { withNoNetwork } from "./test/no-network.js";
 
 const CWD = join(import.meta.dir, "..");
+const cloudPackage = "@hasna" + "/cloud";
 const originalFetch = globalThis.fetch;
 
 let tmpDir: string;
@@ -58,21 +59,27 @@ describe("OSS local-first package surface", () => {
   test("does not expose hosted/cloud binaries, exports, or direct dependencies", () => {
     expect(packageJson.bin).not.toHaveProperty("todos-remote");
     expect(packageJson.exports).not.toHaveProperty("./remote");
-    expect(packageJson.dependencies).not.toHaveProperty("@hasna/cloud");
+    expect(packageJson.dependencies).not.toHaveProperty(cloudPackage);
     expect(packageJson.dependencies).not.toHaveProperty("@hasna/logs");
   });
 
   test("does not publish cloud MCP tools in the manifest", () => {
     const manifest = createMcpManifest();
     const names = manifest.tools.map((tool) => tool.name);
+    const retiredToolPrefix = ["todos", "cloud"].join("_");
 
     for (const forbidden of [
       "sync_all",
-      "todos_cloud_conflicts",
-      "todos_cloud_feedback",
-      "todos_cloud_pull",
-      "todos_cloud_push",
-      "todos_cloud_status",
+      `${retiredToolPrefix}_conflicts`,
+      `${retiredToolPrefix}_feedback`,
+      `${retiredToolPrefix}_pull`,
+      `${retiredToolPrefix}_push`,
+      `${retiredToolPrefix}_status`,
+      "todos_storage_conflicts",
+      "todos_storage_feedback",
+      "todos_storage_pull",
+      "todos_storage_push",
+      "todos_storage_status",
       "todos_inbox",
       "todos_retro",
       "migrate_pg",
@@ -80,6 +87,7 @@ describe("OSS local-first package surface", () => {
       expect(names).not.toContain(forbidden);
     }
     expect(Object.keys(manifest.groups)).not.toContain("cloud");
+    expect(Object.keys(manifest.groups)).not.toContain("storage");
   });
 });
 

@@ -18,7 +18,7 @@ describe("MCP token utilities", () => {
   it("supports profile groups and additive tool groups", () => {
     expect(shouldRegisterToolForProfile("task_context", "agent", undefined)).toBe(true);
     expect(shouldRegisterToolForProfile("sync_all", "agent", undefined)).toBe(false);
-    expect(shouldRegisterToolForProfile("sync_all", "agent", "cloud")).toBe(false);
+    expect(shouldRegisterToolForProfile("sync_all", "agent", "storage")).toBe(false);
     expect(shouldRegisterToolForProfile("create_webhook", "full", undefined)).toBe(true);
   });
 

@@ -15,7 +15,6 @@ import {
   type IntakeInput,
   type IntakeOptions,
   type IntakePreview,
-  type IntakeResult,
 } from "./inbox-intake.js";
 
 export const NL_INTAKE_SCHEMA = "todos.nl_intake.v1";

@@ -44,12 +44,12 @@ describe("machine topology", () => {
   });
 
   it("builds topology report", () => {
-    registerAgent({ name: "agent-a" });
+    registerAgent({ name: "agenta" });
     const report = buildMachineTopologyReport();
     expect(report.schema_version).toBe(MACHINE_TOPOLOGY_SCHEMA);
     expect(report.machines.length).toBeGreaterThan(0);
     expect(report.machines[0]!.is_local).toBe(true);
-    expect(report.agents.some((a) => a.agent_name === "agent-a")).toBe(true);
+    expect(report.agents.some((a) => a.agent_name === "agenta")).toBe(true);
   });
 
   it("flags stale locks in diagnostics", () => {

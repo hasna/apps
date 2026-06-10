@@ -76,14 +76,14 @@ export interface BuildHandoffPacketInput {
   include_files?: boolean;
 }
 
-function summarizeTask(t: { id: string; short_id: string | null; title: string; status: string; priority: string; assigned_to: string | null }): HandoffTaskSummary {
+function summarizeTask(t: { id: string; short_id: string | null; title: string; status: string; priority: string; assigned_to?: string | null }): HandoffTaskSummary {
   return {
     id: t.id,
     short_id: t.short_id,
     title: t.title,
     status: t.status,
     priority: t.priority,
-    assigned_to: t.assigned_to,
+    assigned_to: t.assigned_to ?? null,
   };
 }
 

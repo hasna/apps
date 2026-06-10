@@ -15,7 +15,7 @@ export function registerAgentWorkflowDemoTools(
       "run_agent_workflow_demo",
       "Run a scripted local agent workflow demo (agents, projects, tasks, runs) using an ephemeral database.",
       {
-        agent_name: z.string().optional().describe("Demo agent name (default: demo-agent)"),
+        agent_name: z.string().optional().describe("Demo agent name (default: demoagent)"),
         project_name: z.string().optional().describe("Demo project name"),
         persist: z.boolean().optional().describe("Use temp file DB instead of in-memory"),
         format: z.enum(["json", "text"]).optional().describe("Output format (default: text)"),

@@ -42,7 +42,6 @@ function resolveDbPath(dbPath?: string): string {
     return resolve(process.env["TODOS_DB_PATH"]);
   }
   const db = getDatabase();
-  // @ts-expect-error bun sqlite internal filename
   const filename = db.filename as string | undefined;
   if (filename && filename !== ":memory:") return filename;
   throw new Error("No database path — set TODOS_DB_PATH or pass --db");
@@ -56,15 +55,16 @@ export function backupDatabase(outputPath: string, sourcePath?: string): BackupR
 
   closeDatabase();
 
-  const src = new Database(source, { readonly: true });
+  const src = new Database(source);
   try {
-    src.exec("PRAGMA wal_checkpoint(FULL)");
+    src.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   } catch {
     /* best-effort checkpoint */
   }
+  const image = src.serialize();
   src.close();
 
-  copyFileSync(source, outputPath);
+  writeFileSync(outputPath, image);
 
   const method: BackupResult["method"] = "file_copy";
 

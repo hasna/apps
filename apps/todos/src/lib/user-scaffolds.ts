@@ -8,7 +8,6 @@ import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { getDatabase, now, uuid } from "../db/database.js";
 import {
-  createTemplate,
   getTemplate,
   updateTemplate,
   exportTemplate,

@@ -63,7 +63,7 @@ describe("notification reminders", () => {
   });
 
   it("scans SLA warning and breach reminders", () => {
-    const agent = registerAgent({ name: "sla-agent" }, db);
+    const agent = registerAgent({ name: "slaagent" }, db);
     const task = createTask({ title: "SLA task", assigned_to: agent.id }, db);
     db.run("UPDATE tasks SET sla_minutes = 60 WHERE id = ?", [task.id]);
     startTask(task.id, agent.id, db);

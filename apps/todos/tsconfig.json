@@ -20,6 +20,17 @@
     "noUnusedParameters": true,
     "types": ["bun-types"]
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "include": [
+    "src/index.ts",
+    "src/cli/index.tsx",
+    "src/mcp.ts",
+    "src/mcp/index.ts",
+    "src/registry.ts",
+    "src/contracts.ts",
+    "src/storage.ts",
+    "src/server/index.ts",
+    "src/sdk/index.ts",
+    "src/sdk/**/*.ts"
+  ],
   "exclude": ["node_modules", "dist", "**/*.test.ts"]
 }

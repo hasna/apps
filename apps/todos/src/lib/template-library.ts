@@ -12,14 +12,14 @@ import {
   initBuiltinTemplates,
   type BuiltinTemplate,
 } from "../db/builtin-templates.js";
-import { previewTemplate, exportTemplate, importTemplate, getTemplate, listTemplates } from "../db/templates.js";
+import { previewTemplate, exportTemplate, importTemplate, listTemplates } from "../db/templates.js";
 
 export { TEMPLATE_LIBRARY_SCHEMA, BUILTIN_TEMPLATES };
 
 export interface TemplateLibraryEntry {
   schema_version: typeof TEMPLATE_LIBRARY_SCHEMA;
   name: string;
-  version: number;
+  version: string;
   category: BuiltinTemplate["category"];
   description: string;
   task_count: number;
@@ -131,8 +131,14 @@ export function getTemplateLibraryDocs(): string {
 Marketplace-free bundled workflows — no network required.
 
 ## Categories
-- **workflow** — bug-fix, feature, docs-refresh
-- **ops** — release, migration, incident-response, security-audit
+- **bug-fix** — defect reproduction, diagnosis, test, implementation, release
+- **feature** — feature-implementation
+- **security** — security-review
+- **release** — release verification and publishing
+- **migration** — schema and data migration
+- **incident** — incident and incident-response
+- **docs** — docs-refresh
+- **qa** — QA matrix, checks, defects, signoff
 - **project** — open-source-project bootstrap
 
 ## CLI

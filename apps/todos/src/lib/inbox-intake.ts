@@ -10,7 +10,7 @@ import type { Database } from "bun:sqlite";
 import { getDatabase, now } from "../db/database.js";
 import { createTask, getTask, listTasks, type Task } from "../db/tasks.js";
 import type { CreateTaskInput, TaskPriority } from "../types/index.js";
-import { parseGitHubUrl, fetchGitHubIssue, issueToTask, type GitHubIssue } from "./github.js";
+import { parseGitHubUrl, fetchGitHubIssue } from "./github.js";
 import { scanAndRedactText, redactText } from "./secret-redaction.js";
 import { findDuplicateCandidates } from "./task-dedupe.js";
 
@@ -224,7 +224,7 @@ function buildTitleAndDescription(
     default:
       return {
         title: titleOverride ?? raw.split(/\n/)[0]!.slice(0, 200),
-        description: raw.includes("\n") ? raw.slice(0, 8000) : undefined,
+        description: raw.includes("\n") ? raw.slice(0, 8000) : "",
         extra: {},
       };
   }
@@ -250,10 +250,9 @@ function findIntakeDuplicate(
     }
   }
 
-  const candidates = findDuplicateCandidates({ min_score: 0.75, limit: 5 }, db);
+  const candidates = findDuplicateCandidates({ threshold: 0.75, limit: 5 }, db);
   for (const c of candidates) {
-    const otherId = c.task_a_id;
-    const other = getTask(otherId, db);
+    const other = c.primary_task;
     if (!other) continue;
     const normNew = createInput.title.toLowerCase();
     const normOther = other.title.toLowerCase();

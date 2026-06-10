@@ -142,7 +142,6 @@ exports[`feature manifest normalizes manifest for deterministic snapshots 1`] = 
     "tool_group_counts": {
       "agent_runs": 2,
       "agents": 5,
-      "cloud": 7,
       "coordination": 17,
       "graph": 10,
       "import_export": 29,
@@ -150,6 +149,7 @@ exports[`feature manifest normalizes manifest for deterministic snapshots 1`] = 
       "ops": 8,
       "projects": 1,
       "security": 7,
+      "storage": 7,
       "tasks": 162,
       "workflow": 57,
     },
@@ -207,7 +207,7 @@ MCP tool groups:
   - Import and export: 29 tools
   - Operations: 8 tools
   - Security: 7 tools
-  - Cloud bridge: 7 tools
+  - Storage bridge: 7 tools
   - Workflow utilities: 57 tools
 
 Profiles:
@@ -216,7 +216,7 @@ Profiles:
   - minimal: Low-token MCP session bootstrap and task workflow
   - standard: Default MCP/CLI minus admin/webhook/template tools
   - full: All local tools including templates and webhooks
-  - admin: Full access including migrations and cloud bridge tools
+  - admin: Full access including migrations and storage bridge tools
 
 Try:
   todos features list              # capability discovery summary

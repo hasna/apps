@@ -98,6 +98,16 @@ export function ensureSchema(db: Database): void {
       tag TEXT NOT NULL, PRIMARY KEY (task_id, tag)
     )`);
 
+  ensureTable("tags", `
+    CREATE TABLE tags (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      color TEXT,
+      description TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+
   ensureTable("task_dependencies", `
     CREATE TABLE task_dependencies (
       task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -326,6 +336,37 @@ export function ensureSchema(db: Database): void {
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_git_refs_lookup ON task_git_refs(ref_type, name)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_git_refs_url ON task_git_refs(url)");
 
+  ensureTable("task_commits", `
+    CREATE TABLE task_commits (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      sha TEXT NOT NULL,
+      message TEXT,
+      author TEXT,
+      files_changed TEXT,
+      committed_at TEXT,
+      branch TEXT,
+      pr_url TEXT,
+      pr_number INTEGER,
+      pr_state TEXT,
+      ci_snapshot TEXT,
+      release_tag TEXT,
+      repo_path TEXT,
+      traceability TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(task_id, sha)
+    )`);
+  ensureColumn("task_commits", "branch", "TEXT");
+  ensureColumn("task_commits", "pr_url", "TEXT");
+  ensureColumn("task_commits", "pr_number", "INTEGER");
+  ensureColumn("task_commits", "pr_state", "TEXT");
+  ensureColumn("task_commits", "ci_snapshot", "TEXT");
+  ensureColumn("task_commits", "release_tag", "TEXT");
+  ensureColumn("task_commits", "repo_path", "TEXT");
+  ensureColumn("task_commits", "traceability", "TEXT DEFAULT '{}'");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_commits_task ON task_commits(task_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_commits_sha ON task_commits(sha)");
+
   ensureTable("task_verifications", `
     CREATE TABLE task_verifications (
       id TEXT PRIMARY KEY,
@@ -527,6 +568,9 @@ export function ensureSchema(db: Database): void {
   ensureColumn("tasks", "max_retries", "INTEGER DEFAULT 3");
   ensureColumn("tasks", "retry_after", "TEXT");
   ensureColumn("tasks", "sla_minutes", "INTEGER");
+  ensureColumn("tasks", "scheduled_start_at", "TEXT");
+  ensureColumn("tasks", "priority_score", "INTEGER");
+  ensureColumn("tasks", "priority_reason", "TEXT");
   ensureColumn("tasks", "archived_at", "TEXT");
 
   // Agents
@@ -670,6 +714,7 @@ export function ensureSchema(db: Database): void {
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_lists_slug ON task_lists(slug)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_tags_tag ON task_tags(tag)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_tags_task ON task_tags(task_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_plans_project ON plans(project_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_plans_task_list ON plans(task_list_id)");
@@ -827,6 +872,238 @@ export function ensureSchema(db: Database): void {
 
   ensureColumn("tasks", "cycle_id", "TEXT REFERENCES cycles(id) ON DELETE SET NULL");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_cycle ON tasks(cycle_id) WHERE cycle_id IS NOT NULL");
+
+  // Labels and custom fields
+  ensureTable("labels", `
+    CREATE TABLE labels (
+      id TEXT PRIMARY KEY,
+      project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      color TEXT,
+      description TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(project_id, name)
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_labels_project ON labels(project_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_labels_name ON labels(name)");
+
+  ensureTable("task_labels", `
+    CREATE TABLE task_labels (
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      label_id TEXT NOT NULL REFERENCES labels(id) ON DELETE CASCADE,
+      PRIMARY KEY (task_id, label_id)
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_labels_task ON task_labels(task_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_labels_label ON task_labels(label_id)");
+
+  ensureTable("custom_field_definitions", `
+    CREATE TABLE custom_field_definitions (
+      id TEXT PRIMARY KEY,
+      project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      slug TEXT NOT NULL,
+      field_type TEXT NOT NULL CHECK(field_type IN ('text', 'number', 'boolean', 'date', 'enum')),
+      options TEXT DEFAULT '[]',
+      required INTEGER NOT NULL DEFAULT 0,
+      default_value TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(project_id, slug)
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_custom_fields_project ON custom_field_definitions(project_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_custom_fields_slug ON custom_field_definitions(slug)");
+
+  ensureTable("task_custom_field_values", `
+    CREATE TABLE task_custom_field_values (
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      field_id TEXT NOT NULL REFERENCES custom_field_definitions(id) ON DELETE CASCADE,
+      value TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (task_id, field_id)
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_custom_values_task ON task_custom_field_values(task_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_custom_values_field ON task_custom_field_values(field_id)");
+
+  // Legacy/simple saved views distinct from saved_search_views.
+  ensureTable("saved_views", `
+    CREATE TABLE saved_views (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      slug TEXT NOT NULL UNIQUE,
+      entity_type TEXT NOT NULL DEFAULT 'task',
+      filters TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_saved_views_slug ON saved_views(slug)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_saved_views_entity ON saved_views(entity_type)");
+
+  // Decision records and knowledge snapshots
+  ensureTable("decision_records", `
+    CREATE TABLE decision_records (
+      id TEXT PRIMARY KEY,
+      project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+      task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+      plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+      agent_id TEXT,
+      sequence_num INTEGER NOT NULL,
+      short_ref TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed', 'accepted', 'deprecated', 'superseded', 'rejected')),
+      context TEXT,
+      decision TEXT NOT NULL,
+      consequences TEXT,
+      alternatives TEXT DEFAULT '[]',
+      tags TEXT DEFAULT '[]',
+      supersedes_id TEXT REFERENCES decision_records(id) ON DELETE SET NULL,
+      superseded_by_id TEXT REFERENCES decision_records(id) ON DELETE SET NULL,
+      metadata TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_decision_records_project ON decision_records(project_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_decision_records_task ON decision_records(task_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_decision_records_plan ON decision_records(plan_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_decision_records_status ON decision_records(status)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_decision_records_short_ref ON decision_records(short_ref)");
+
+  ensureTable("knowledge_snapshots", `
+    CREATE TABLE knowledge_snapshots (
+      id TEXT PRIMARY KEY,
+      project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+      title TEXT NOT NULL,
+      summary TEXT,
+      content_hash TEXT NOT NULL,
+      snapshot TEXT NOT NULL,
+      decision_ids TEXT DEFAULT '[]',
+      topics TEXT DEFAULT '[]',
+      source TEXT NOT NULL DEFAULT 'auto' CHECK(source IN ('manual', 'auto', 'import')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_knowledge_snapshots_project ON knowledge_snapshots(project_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_knowledge_snapshots_hash ON knowledge_snapshots(content_hash)");
+
+  // Portable verification evidence
+  ensureTable("verification_records", `
+    CREATE TABLE verification_records (
+      id TEXT PRIMARY KEY,
+      task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+      provider_name TEXT NOT NULL,
+      provider_type TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'unknown' CHECK(status IN ('passed', 'failed', 'unknown')),
+      summary TEXT,
+      evidence TEXT DEFAULT '{}',
+      artifact_id TEXT,
+      started_at TEXT,
+      completed_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_verification_records_task ON verification_records(task_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_verification_records_status ON verification_records(status)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_verification_records_created ON verification_records(created_at)");
+
+  // Hardened local leases
+  ensureTable("task_leases", `
+    CREATE TABLE task_leases (
+      task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL,
+      acquired_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      heartbeat_at TEXT,
+      steal_count INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_leases_agent ON task_leases(agent_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_leases_expires ON task_leases(expires_at)");
+
+  // Notification reminders
+  ensureTable("reminder_preferences", `
+    CREATE TABLE reminder_preferences (
+      id TEXT PRIMARY KEY,
+      due_soon_hours INTEGER NOT NULL DEFAULT 24,
+      sla_warning_minutes INTEGER NOT NULL DEFAULT 30,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      desktop_notify INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+
+  ensureTable("notification_reminders", `
+    CREATE TABLE notification_reminders (
+      id TEXT PRIMARY KEY,
+      task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+      reminder_type TEXT NOT NULL CHECK(reminder_type IN ('due_soon', 'due_overdue', 'sla_warning', 'sla_breach', 'custom')),
+      title TEXT NOT NULL,
+      message TEXT,
+      trigger_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'fired', 'dismissed', 'snoozed')),
+      snoozed_until TEXT,
+      project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+      agent_id TEXT,
+      priority TEXT NOT NULL DEFAULT 'medium',
+      metadata TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      fired_at TEXT,
+      dismissed_at TEXT
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_notification_reminders_task ON notification_reminders(task_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_notification_reminders_status ON notification_reminders(status)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_notification_reminders_trigger ON notification_reminders(trigger_at)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_notification_reminders_project ON notification_reminders(project_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_notification_reminders_agent ON notification_reminders(agent_id)");
+
+  // First-class local run records
+  ensureTable("run_records", `
+    CREATE TABLE run_records (
+      id TEXT PRIMARY KEY,
+      agent_run_id TEXT,
+      agent_id TEXT,
+      objective TEXT,
+      plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+      claimed_task_ids TEXT DEFAULT '[]',
+      commands TEXT DEFAULT '[]',
+      stdout_summary TEXT,
+      stderr_summary TEXT,
+      files_touched TEXT DEFAULT '[]',
+      verification_results TEXT DEFAULT '[]',
+      artifact_ids TEXT DEFAULT '[]',
+      status_transitions TEXT DEFAULT '[]',
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'completed', 'failed', 'archived')),
+      replay_bundle TEXT,
+      metadata TEXT DEFAULT '{}',
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      completed_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_run_records_agent_run ON run_records(agent_run_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_run_records_agent ON run_records(agent_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_run_records_plan ON run_records(plan_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_run_records_status ON run_records(status)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_run_records_started ON run_records(started_at)");
+
+  // Append-only local activity log
+  ensureTable("activity_log", `
+    CREATE TABLE activity_log (
+      id TEXT PRIMARY KEY,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      field TEXT,
+      old_value TEXT,
+      new_value TEXT,
+      actor_id TEXT,
+      session_id TEXT,
+      machine_id TEXT,
+      metadata TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_activity_log_entity ON activity_log(entity_type, entity_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_activity_log_actor ON activity_log(actor_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_activity_log_action ON activity_log(action)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_activity_log_created ON activity_log(created_at)");
 
   // API keys — hashed credentials for external app/API access
   ensureTable("api_keys", `

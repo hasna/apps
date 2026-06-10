@@ -778,7 +778,7 @@ describe("tasksFromTemplate with variables validation", () => {
 describe("initBuiltinTemplates", () => {
   it("should create the bundled marketplace-free local template library", () => {
     const result = initBuiltinTemplates(db);
-    expect(result.created).toBe(9);
+    expect(result.created).toBe(BUILTIN_TEMPLATES.length);
     expect(result.skipped).toBe(0);
     expect(result.names).toEqual(expect.arrayContaining([
       "bug-fix",
@@ -797,7 +797,7 @@ describe("initBuiltinTemplates", () => {
     initBuiltinTemplates(db);
     const result2 = initBuiltinTemplates(db);
     expect(result2.created).toBe(0);
-    expect(result2.skipped).toBe(9);
+    expect(result2.skipped).toBe(BUILTIN_TEMPLATES.length);
   });
 
   it("should create templates with variables", () => {
@@ -835,7 +835,7 @@ describe("initBuiltinTemplates", () => {
     // Create one manually first
     createTemplate({ name: "bug-fix", title_pattern: "Custom bug fix" }, db);
     const result = initBuiltinTemplates(db);
-    expect(result.created).toBe(8);
+    expect(result.created).toBe(BUILTIN_TEMPLATES.length - 1);
     expect(result.skipped).toBe(1);
     expect(result.names).not.toContain("bug-fix");
   });

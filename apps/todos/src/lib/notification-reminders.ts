@@ -4,11 +4,12 @@
  */
 
 import { execSync } from "node:child_process";
-import type { Database } from "bun:sqlite";
+import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { getDatabase, now, uuid } from "../db/database.js";
 import { getTask, listTasks, type Task } from "../db/tasks.js";
 import { rowToTask } from "../db/task-crud.js";
 import { getOverdueTasks } from "../db/task-relations.js";
+import type { TaskRow } from "../types/index.js";
 
 export const NOTIFICATION_REMINDERS_SCHEMA = "todos.notification_reminders.v1";
 
@@ -299,7 +300,7 @@ export function listReminders(
 ): NotificationReminder[] {
   const d = db || getDatabase();
   const conditions: string[] = [];
-  const params: unknown[] = [];
+  const params: SQLQueryBindings[] = [];
 
   if (filters.status) {
     const statuses = Array.isArray(filters.status) ? filters.status : [filters.status];
@@ -364,7 +365,7 @@ export function getUpcomingDueTasks(
   let query = `SELECT * FROM tasks
     WHERE due_at IS NOT NULL AND due_at >= ? AND due_at <= ?
     AND status NOT IN ('completed', 'cancelled', 'failed', 'archived')`;
-  const params: unknown[] = [nowStr, horizon];
+  const params: SQLQueryBindings[] = [nowStr, horizon];
 
   if (filters.project_id) {
     query += " AND project_id = ?";
@@ -377,7 +378,7 @@ export function getUpcomingDueTasks(
   query += " ORDER BY due_at ASC";
 
   const rows = d.query(query).all(...params) as Array<Record<string, unknown>>;
-  return rows.map((row) => rowToTask(row as Parameters<typeof rowToTask>[0]));
+  return rows.map((row) => rowToTask(row as unknown as TaskRow));
 }
 
 /** Backward-compatible alias used by notify_upcoming_deadlines MCP tool. */

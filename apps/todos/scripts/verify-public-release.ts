@@ -182,7 +182,7 @@ function scanPackedText(tarball: string): ReleaseGateFailure[] {
 
 function collectPublicTextSurfaces(dir: string): TextFile[] {
   return readdirSync(dir).flatMap((entry) => {
-    if ([".git", "node_modules", "dist", "coverage", ".tmp"].includes(entry)) return [];
+    if ([".git", ".codewith", ".takumi", "node_modules", "dist", "coverage", ".tmp"].includes(entry)) return [];
     const path = join(dir, entry);
     const stats = statSync(path);
     if (stats.isDirectory()) return collectPublicTextSurfaces(path);

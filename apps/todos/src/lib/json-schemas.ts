@@ -239,8 +239,8 @@ export const SCHEMA_CONTRACT_FIXTURES: Record<SchemaEntity, Record<string, unkno
   project: {
     schema_version: "todos.project.v1",
     id: "proj-001",
-    name: "open-todos",
-    path: "/tmp/open-todos",
+    name: "todos-example",
+    path: "/tmp/todos-example",
     task_counter: 0,
     created_at: "2026-01-01T00:00:00.000Z",
     updated_at: "2026-01-01T00:00:00.000Z",

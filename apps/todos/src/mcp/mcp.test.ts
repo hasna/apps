@@ -22,6 +22,7 @@ import { registerEnvironmentSnapshotTools } from "./tools/environment-snapshots.
 import { registerMachineTools } from "./tools/machines.js";
 import { registerWorkflowPrompts } from "./tools/workflow-prompts.js";
 import { registerCodeTools } from "./tools/code-tools.js";
+import { registerTodosMdTools } from "./tools/todos-md.js";
 
 // These tests verify the core operations that the MCP server wraps.
 // The MCP server itself uses stdio transport which is harder to test in unit tests.
@@ -194,6 +195,55 @@ describe("MCP tool operations", () => {
     }
   });
 
+  it("todos.md tools export import and sync through the current library API", async () => {
+    const { mkdtempSync, readFileSync, rmSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const root = mkdtempSync(join(tmpdir(), "todos-mcp-md-"));
+    const markdownPath = join(root, "todos.md");
+    const plainPath = join(root, "plain.todos.md");
+
+    try {
+      const tools = captureTools(registerTodosMdTools);
+      createTask({ title: "MCP markdown export", tags: ["mcp"] }, db);
+
+      const exportResult = await callCapturedTool(tools, "export_todos_md", { path: markdownPath });
+      expect(JSON.parse(exportResult.content[0]!.text).path).toBe(markdownPath);
+      expect(readFileSync(markdownPath, "utf-8")).toContain("MCP markdown export");
+
+      resetDatabase();
+      expect(listTasks({}, getDatabase())).toHaveLength(0);
+
+      const previewResult = await callCapturedTool(tools, "import_todos_md", { path: markdownPath });
+      const preview = JSON.parse(previewResult.content[0]!.text);
+      expect(preview.dry_run).toBe(true);
+      expect(preview.inserted.tasks).toBe(1);
+      expect(listTasks({}, getDatabase())).toHaveLength(0);
+
+      const applyResult = await callCapturedTool(tools, "import_todos_md", { path: markdownPath, apply: true });
+      const applied = JSON.parse(applyResult.content[0]!.text);
+      expect(applied.ok).toBe(true);
+      expect(listTasks({}, getDatabase()).map((task) => task.title)).toContain("MCP markdown export");
+
+      writeFileSync(plainPath, [
+        "# Project: MCP Plain Markdown",
+        "",
+        "- [ ] Sync plain todos #mcp",
+        "  priority: high",
+        "",
+      ].join("\n"));
+
+      const syncResult = await callCapturedTool(tools, "sync_todos_md", { path: plainPath });
+      const synced = JSON.parse(syncResult.content[0]!.text);
+      expect(synced.imported.dry_run).toBe(false);
+      expect(synced.imported.inserted.tasks).toBe(1);
+      expect(readFileSync(plainPath, "utf-8")).toContain("<!-- hasna.todos.bridge");
+      expect(listTasks({}, getDatabase()).map((task) => task.title)).toContain("Sync plain todos");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("workspace trust tools manage local permission profiles", async () => {
     const { mkdtempSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
@@ -233,6 +283,43 @@ describe("MCP tool operations", () => {
     else process.env["HOME"] = previousHome;
     resetConfig();
     rmSync(home, { recursive: true, force: true });
+  });
+
+  it("label MCP tools work on a fresh database", async () => {
+    const tools = captureTools(registerTaskProjectTools);
+    const emptyResult = await callCapturedTool(tools, "list_labels", {});
+    expect(emptyResult.content[0]!.text).toBe("No labels found.");
+
+    await callCapturedTool(tools, "create_label", {
+      name: "bug",
+      color: "#ff0000",
+      description: "Bug reports",
+    });
+    const listResult = await callCapturedTool(tools, "list_labels", {});
+    expect(listResult.content[0]!.text).toContain("[#ff0000] bug");
+  });
+
+  it("tag MCP tools manage metadata and task tag assignments", async () => {
+    const tools = captureTools(registerTaskProjectTools);
+    const task = createTask({ title: "Tagged through MCP", tags: ["bug"] }, db);
+
+    await callCapturedTool(tools, "create_tag", {
+      name: "bug",
+      color: "#ff0000",
+      description: "Bug reports",
+    });
+    const listResult = await callCapturedTool(tools, "list_tags", {});
+    expect(listResult.content[0]!.text).toContain("[#ff0000] bug (1)");
+
+    const getResult = await callCapturedTool(tools, "get_tag", { tag_id: "bug" });
+    expect(getResult.content[0]!.text).toContain("Tagged through MCP");
+
+    await callCapturedTool(tools, "update_tag", { tag_id: "bug", name: "defect" });
+    expect(listTasks({ tags: ["defect"] }, db)[0]?.id).toBe(task.id);
+
+    await callCapturedTool(tools, "delete_tag", { tag_id: "defect" });
+    const emptyResult = await callCapturedTool(tools, "list_tags", {});
+    expect(emptyResult.content[0]!.text).toBe("No tags found.");
   });
 
   it("secret safety tools manage local redaction and scan without exposing values", async () => {
@@ -965,6 +1052,44 @@ describe("MCP tool wrappers", () => {
     expect(task.sla_minutes).toBe(120);
     expect(task.confidence).toBe(0.8);
     expect(task.max_retries).toBe(5);
+  });
+
+  it("create_task and list_tasks accept unregistered assignee names like the CLI", async () => {
+    const tools = captureTools(registerTaskCrudTools);
+    const project = createProject({ name: "MCP assignee project", path: "/tmp/mcp-assignee-project" }, db);
+
+    await callCapturedTool(tools, "create_task", {
+      title: "Assigned without pre-registering agent",
+      description: "MCP should match CLI assignee behavior.",
+      project_id: project.id,
+      assigned_to: "gaius",
+      tags: ["mcp-assignee"],
+    });
+
+    const task = listTasks({ project_id: project.id, assigned_to: "gaius" }, db)[0]!;
+    expect(task.assigned_to).toBe("gaius");
+
+    const listed = await callCapturedTool(tools, "list_tasks", {
+      project_id: project.id,
+      assigned_to: "gaius",
+      tags: ["mcp-assignee"],
+    });
+    expect(listed.content[0]!.text).toContain("Assigned without pre-registering agent");
+  });
+
+  it("update_task accepts unregistered assignee names like the CLI", async () => {
+    const tools = captureTools(registerTaskCrudTools);
+    const task = createTask({ title: "Reassign via MCP" }, db);
+
+    const updatedResult = await callCapturedTool(tools, "update_task", {
+      task_id: task.id,
+      assigned_to: "novus",
+      version: task.version,
+    });
+    const updated = JSON.parse(updatedResult.content[0]!.text);
+
+    expect(updated.assigned_to).toBe("novus");
+    expect(getTask(task.id, db)!.assigned_to).toBe("novus");
   });
 
   it("create_task returns an id accepted by get_task and update_task in one MCP session", async () => {

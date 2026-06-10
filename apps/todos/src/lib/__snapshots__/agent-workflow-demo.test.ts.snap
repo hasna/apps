@@ -4,7 +4,7 @@ exports[`agent workflow demo normalizes result for deterministic snapshots 1`] =
 {
   "agent": {
     "id": "<id-1>",
-    "name": "demo-agent",
+    "name": "demoagent",
   },
   "agent_run": {
     "adapter": "claude",
@@ -37,7 +37,7 @@ exports[`agent workflow demo normalizes result for deterministic snapshots 1`] =
   "steps": [
     {
       "action": "register_agent",
-      "detail": "Registered agent 'demo-agent' (<id>)",
+      "detail": "Registered agent 'demoagent' (<id>)",
       "status": "ok",
       "step": 1,
     },
@@ -91,7 +91,7 @@ exports[`agent workflow demo normalizes result for deterministic snapshots 1`] =
     },
     {
       "action": "enqueue_agent_run",
-      "detail": "Queued agent run on task <id>",
+      "detail": "Queued agent run <id> on task <id>",
       "status": "ok",
       "step": 10,
     },
@@ -166,7 +166,7 @@ Demo complete: 3/3 tasks done, 1 agent run, 1 run record
 Completed: 2026-01-01T00:00:00.000Z
 Database: :memory:
 
-Agent: demo-agent (<id-1>)
+Agent: demoagent (<id-1>)
 Project: Agent Workflow Demo [AWD] @ /tmp/todos-agent-workflow-demo
 Task list: demo-backlog
 
@@ -181,7 +181,7 @@ Run record: <id-6>  completed  Demonstrate local run record with evidence
 Status: 3/3 completed, 0 pending, 0 in progress
 
 Steps:
-   1. [ok] register_agent: Registered agent 'demo-agent' (<id>)
+   1. [ok] register_agent: Registered agent 'demoagent' (<id>)
    2. [ok] create_project: Created project 'Agent Workflow Demo' prefix=AWD
    3. [ok] create_task_list: Created task list 'demo-backlog'
    4. [ok] create_tasks: Created 3 linked demo tasks
@@ -190,7 +190,7 @@ Steps:
    7. [ok] complete_task: Completed <id>
    8. [ok] claim_next_task: Claimed <id> — Claim and start next task
    9. [ok] complete_task: Completed <id>
-  10. [ok] enqueue_agent_run: Queued agent run on task <id>
+  10. [ok] enqueue_agent_run: Queued agent run <id> on task <id>
   11. [ok] claim_next_agent_run: Claimed run <id> (running)
   12. [ok] complete_agent_run: Completed run <id>
   13. [ok] create_run_record: Created run record <id>

@@ -1084,12 +1084,13 @@ export function registerConfigServeCommands(program: Command) {
     .option("--event <event>", "Event type to emit", "task.failed")
     .option("--payload <json>", "JSON payload for the test event")
     .option("--task <id>", "Task ID to include in the payload")
-    .action(async (name: string, opts: { event?: string; payload?: string; task?: string }) => {
+    .option("--timestamp <iso>", "Timestamp to use for quiet-hours evaluation")
+    .action(async (name: string, opts: { event?: string; payload?: string; task?: string; timestamp?: string }) => {
       const globalOpts = program.opts();
       const { getTerminalNotificationRule, renderTerminalNotification, testTerminalNotificationRule } = await import("../../lib/terminal-notifications.js");
       const payload = opts.payload ? JSON.parse(opts.payload) : {};
       if (opts.task) (payload as Record<string, unknown>).id = resolveTaskId(opts.task);
-      const result = testTerminalNotificationRule(name, { type: opts.event || "task.failed", payload });
+      const result = testTerminalNotificationRule(name, { type: opts.event || "task.failed", payload, timestamp: opts.timestamp });
       if (globalOpts.json) { output(result, true); return; }
       if (!result.matched) {
         console.log(chalk.dim(`No notification: ${result.skipped_reasons.join("; ")}`));

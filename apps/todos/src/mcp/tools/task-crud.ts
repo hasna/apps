@@ -40,6 +40,14 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
     return current.version;
   }
 
+  function resolveAssignee(value: string): string {
+    try {
+      return resolveId(value, "agents");
+    } catch {
+      return value;
+    }
+  }
+
   // === CREATE TASK ===
 
   if (shouldRegisterTool("create_task")) {
@@ -67,7 +75,7 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
         try {
           const { depends_on, assigned_to, project_id, task_list_id, tags, estimate, confidence, retry_count, deadline, ...rest } = params;
           const resolved: Record<string, unknown> = { ...rest };
-          if (assigned_to) resolved.assigned_to = resolveId(assigned_to, "agents");
+          if (assigned_to) resolved.assigned_to = resolveAssignee(assigned_to);
           if (project_id) resolved.project_id = resolveId(project_id, "projects");
           if (task_list_id) resolved.task_list_id = resolveId(task_list_id, "task_lists");
           if (depends_on) resolved.depends_on = depends_on.map(resolveId);
@@ -109,7 +117,7 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
           const resolved: Record<string, unknown> = { ...params };
           if (params.project_id) resolved.project_id = resolveId(params.project_id, "projects");
           if (params.task_list_id) resolved.task_list_id = resolveId(params.task_list_id, "task_lists");
-          if (params.assigned_to) resolved.assigned_to = resolveId(params.assigned_to, "agents");
+          if (params.assigned_to) resolved.assigned_to = resolveAssignee(params.assigned_to);
           const tasks = listTasks(resolved as Parameters<typeof listTasks>[0], undefined) as Task[];
           if (tasks.length === 0) return { content: [{ type: "text" as const, text: "No tasks found." }] };
           const lines = tasks.map(formatTask);
@@ -214,7 +222,7 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
           const { task_id, version, ...updates } = params;
           const resolved: Record<string, unknown> = { ...updates };
           if (resolved.assigned_to === "") resolved.assigned_to = null;
-          if (resolved.assigned_to && typeof resolved.assigned_to === "string") resolved.assigned_to = resolveId(resolved.assigned_to, "agents");
+          if (resolved.assigned_to && typeof resolved.assigned_to === "string") resolved.assigned_to = resolveAssignee(resolved.assigned_to);
           if (resolved.project_id && typeof resolved.project_id === "string") resolved.project_id = resolveId(resolved.project_id, "projects");
           if (resolved.task_list_id && typeof resolved.task_list_id === "string") resolved.task_list_id = resolveId(resolved.task_list_id, "task_lists");
           if (resolved.depends_on && Array.isArray(resolved.depends_on)) resolved.depends_on = (resolved.depends_on as string[]).map(resolveId);

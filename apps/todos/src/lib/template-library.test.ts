@@ -67,7 +67,7 @@ describe("template library", () => {
 
   it("includes all required workflow templates", () => {
     const names = BUILTIN_TEMPLATES.map((t) => t.name);
-    for (const required of ["bug-fix", "feature", "release", "security-audit", "docs-refresh", "migration", "incident-response"]) {
+    for (const required of ["bug-fix", "feature-implementation", "release", "security-review", "docs-refresh", "migration", "incident-response"]) {
       expect(names).toContain(required);
     }
   });
@@ -77,6 +77,6 @@ describe("template library", () => {
   });
 
   it("gets builtin by name", () => {
-    expect(getBuiltinTemplate("migration")?.category).toBe("ops");
+    expect(getBuiltinTemplate("migration")?.category).toBe("migration");
   });
 });

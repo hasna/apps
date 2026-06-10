@@ -6,7 +6,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import type { Database } from "bun:sqlite";
 import { getDatabase, now } from "../db/database.js";
-import { createTask, getTask, listTasks, type Task } from "../db/tasks.js";
+import { createTask, listTasks, type Task } from "../db/tasks.js";
 import type { CreateTaskInput, TaskPriority } from "../types/index.js";
 import { findDuplicateCandidates } from "./task-dedupe.js";
 
@@ -93,10 +93,6 @@ const JIRA_PRIORITY: Record<string, TaskPriority> = {
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
-}
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
 }
 
 function labelNames(labels: unknown): string[] {
@@ -356,9 +352,9 @@ function findIssueDuplicate(
     }
   }
 
-  const candidates = findDuplicateCandidates({ min_score: 0.85, limit: 5 }, db);
+  const candidates = findDuplicateCandidates({ threshold: 0.85, limit: 5 }, db);
   for (const candidate of candidates) {
-    const other = getTask(candidate.task_a_id, db);
+    const other = candidate.primary_task;
     if (!other) continue;
     if (other.title.toLowerCase() === createInput.title.toLowerCase()) {
       return { task_id: other.id, short_id: other.short_id, title: other.title, score: candidate.score };

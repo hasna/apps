@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { getDatabase, now, uuid } from "./database.js";
 import {
   buildArtifactExportManifest,
@@ -109,7 +109,7 @@ export function getArtifact(id: string, db?: Database): Artifact | null {
 export function listArtifacts(filter: ListArtifactsFilter = {}, db?: Database): Artifact[] {
   const d = db || getDatabase();
   let query = "SELECT * FROM artifacts WHERE 1=1";
-  const params: unknown[] = [];
+  const params: SQLQueryBindings[] = [];
 
   if (!filter.include_deleted) {
     query += " AND deleted_at IS NULL";

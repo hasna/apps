@@ -11,7 +11,6 @@ export const BUILTIN_TEMPLATE_LIBRARY_SOURCE = "bundled-local-template-library";
 
 export interface BuiltinTemplate {
   name: string;
-  version: number;
   description: string;
   category: string;
   version: string;
@@ -149,8 +148,6 @@ export const BUILTIN_TEMPLATES: BuiltinTemplate[] = [
   },
   {
     name: "open-source-project",
-    version: 1,
-    category: "project",
     description: "Full open-source project bootstrap — scaffold to publish",
     category: "open-source",
     version: BUILTIN_TEMPLATE_LIBRARY_VERSION,
@@ -176,7 +173,7 @@ export const BUILTIN_TEMPLATES: BuiltinTemplate[] = [
   },
   {
     name: "release",
-    version: 1,
+    version: BUILTIN_TEMPLATE_LIBRARY_VERSION,
     category: "ops",
     description: "Version release workflow — test, changelog, publish, verify",
     variables: [
@@ -193,7 +190,7 @@ export const BUILTIN_TEMPLATES: BuiltinTemplate[] = [
   },
   {
     name: "docs-refresh",
-    version: 1,
+    version: BUILTIN_TEMPLATE_LIBRARY_VERSION,
     category: "workflow",
     description: "Documentation refresh — audit, update, verify links",
     variables: [{ name: "scope", required: true, description: "Docs scope (README, API, AGENTS.md)" }],
@@ -206,7 +203,7 @@ export const BUILTIN_TEMPLATES: BuiltinTemplate[] = [
   },
   {
     name: "migration",
-    version: 1,
+    version: BUILTIN_TEMPLATE_LIBRARY_VERSION,
     category: "ops",
     description: "Schema/data migration workflow",
     variables: [
@@ -223,7 +220,7 @@ export const BUILTIN_TEMPLATES: BuiltinTemplate[] = [
   },
   {
     name: "incident-response",
-    version: 1,
+    version: BUILTIN_TEMPLATE_LIBRARY_VERSION,
     category: "ops",
     description: "Incident triage, mitigation, postmortem",
     variables: [{ name: "incident", required: true, description: "Incident summary" }],

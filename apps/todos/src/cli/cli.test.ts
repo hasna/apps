@@ -52,6 +52,33 @@ describe("CLI integration", () => {
     }
   });
 
+  it("should print help for standalone companion binaries without starting services", async () => {
+    for (const entrypoint of ["src/mcp/index.ts", "src/server/index.ts"]) {
+      for (const flag of ["--help", "-h"]) {
+        const proc = Bun.spawn(["bun", "run", entrypoint, flag], {
+          cwd: import.meta.dir + "/../..",
+          env: { ...process.env, TODOS_DB_PATH: ":memory:", TODOS_AUTO_PROJECT: "false", TODOS_NO_OPEN: "true" },
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const exitCode = await Promise.race([
+          proc.exited,
+          Bun.sleep(1000).then(() => {
+            proc.kill();
+            return -1;
+          }),
+        ]);
+        const stdout = await new Response(proc.stdout).text();
+        const stderr = await new Response(proc.stderr).text();
+
+        expect(exitCode).toBe(0);
+        expect(stdout).toContain("Usage:");
+        expect(stderr).not.toContain("Todos Dashboard running");
+        expect(stderr).not.toContain("MCP server error");
+      }
+    }
+  });
+
   it("should run add command", async () => {
     const proc = Bun.spawn(
       ["bun", "run", "src/cli/index.tsx", "add", "CLI test task", "--json"],
@@ -1262,6 +1289,175 @@ describe("CLI integration", () => {
     for (const path of [sourceDb, targetDb, backupPath, `${sourceDb}-shm`, `${sourceDb}-wal`, `${targetDb}-shm`, `${targetDb}-wal`]) {
       try { unlinkSync(path); } catch {}
     }
+  });
+
+  it("should inspect native storage status without network access", async () => {
+    const dbPath = "/tmp/test-cli-storage-status.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    const status = await runCli(["storage", "status", "--json"], dbPath, {
+      HASNA_TODOS_STORAGE_MODE: "",
+      HASNA_TODOS_DATABASE_URL: "",
+      HASNA_TODOS_DATABASE_SSL: "",
+      HASNA_TODOS_DATABASE_SCHEMA: "",
+      HASNA_TODOS_S3_BUCKET: "",
+      HASNA_TODOS_S3_PREFIX: "",
+      HASNA_TODOS_AWS_REGION: "",
+      HASNA_TODOS_S3_ENDPOINT: "",
+      HASNA_TODOS_S3_FORCE_PATH_STYLE: "",
+      HASNA_TODOS_SYNC_BATCH_SIZE: "",
+      HASNA_TODOS_SYNC_DRY_RUN: "",
+      TODOS_STORAGE_MODE: "",
+      TODOS_DATABASE_URL: "",
+      TODOS_DATABASE_SSL: "",
+      TODOS_DATABASE_SCHEMA: "",
+      TODOS_S3_BUCKET: "",
+      TODOS_S3_PREFIX: "",
+      TODOS_AWS_REGION: "",
+      TODOS_S3_ENDPOINT: "",
+      TODOS_S3_FORCE_PATH_STYLE: "",
+      TODOS_SYNC_BATCH_SIZE: "",
+      TODOS_SYNC_DRY_RUN: "",
+      TODOS_MODE: "remote",
+      TODOS_API_URL: "https://legacy.example.invalid",
+    });
+
+    expect(status.exitCode).toBe(0);
+    const payload = JSON.parse(status.stdout);
+    expect(payload.mode).toBe("local");
+    expect(payload.remote_enabled).toBe(false);
+    expect(payload.no_network).toBe(true);
+    expect(payload.database.configured).toBe(false);
+    expect(payload.canonical).toEqual({
+      cluster: "hasna-xyz-infra-apps-prod-postgres",
+      database: "todos",
+      runtimeSecretPath: "hasna/xyz/opensource/todos/prod/rds",
+      primaryEnv: "HASNA_TODOS_DATABASE_URL",
+      fallbackEnv: "TODOS_DATABASE_URL",
+    });
+    expect(payload.issues).toEqual([]);
+
+    try { unlinkSync(dbPath); } catch {}
+  });
+
+  it("should redact remote native storage settings in the CLI", async () => {
+    const dbPath = "/tmp/test-cli-storage-remote.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    const status = await runCli(["storage", "status", "--json"], dbPath, {
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_DATABASE_URL: "postgres://todo_user:super-secret@rds.example.invalid:5432/todos",
+      HASNA_TODOS_DATABASE_SCHEMA: "opensource_todos_prod",
+      HASNA_TODOS_S3_BUCKET: "hasna-opensource-todos-prod",
+      HASNA_TODOS_S3_PREFIX: "todos/prod/",
+      HASNA_TODOS_AWS_REGION: "us-east-1",
+      HASNA_TODOS_SYNC_BATCH_SIZE: "25",
+      TODOS_STORAGE_MODE: "",
+      TODOS_DATABASE_URL: "",
+      TODOS_S3_BUCKET: "",
+    });
+
+    expect(status.exitCode).toBe(0);
+    const payload = JSON.parse(status.stdout);
+    expect(payload.mode).toBe("remote");
+    expect(payload.remote_enabled).toBe(true);
+    expect(payload.database.configured).toBe(true);
+    expect(payload.database.redacted_url).toContain("***:***@rds.example.invalid");
+    expect(payload.database.redacted_url).not.toContain("todo_user");
+    expect(payload.database.redacted_url).not.toContain("super-secret");
+    expect(payload.canonical.runtimeSecretPath).toBe("hasna/xyz/opensource/todos/prod/rds");
+    expect(payload.canonical.primaryEnv).toBe("HASNA_TODOS_DATABASE_URL");
+    expect(payload.object_storage).toMatchObject({
+      configured: true,
+      bucket: "hasna-opensource-todos-prod",
+      prefix: "todos/prod/",
+      region: "us-east-1",
+    });
+    expect(payload.sync.batch_size).toBe(25);
+    expect(payload.no_network).toBe(true);
+
+    try { unlinkSync(dbPath); } catch {}
+  });
+
+  it("should render native storage sync plan SQL as a dry-run", async () => {
+    const dbPath = "/tmp/test-cli-storage-sync-plan.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    const plan = await runCli(["storage", "sync-plan", "--schema-sql", "--json"], dbPath, {
+      HASNA_TODOS_STORAGE_MODE: "hybrid",
+      HASNA_TODOS_DATABASE_URL: "postgres://todo_user:super-secret@rds.example.invalid/todos",
+      HASNA_TODOS_S3_BUCKET: "hasna-opensource-todos-prod",
+      HASNA_TODOS_AWS_REGION: "us-east-1",
+      TODOS_STORAGE_MODE: "",
+      TODOS_DATABASE_URL: "",
+      TODOS_S3_BUCKET: "",
+    });
+
+    expect(plan.exitCode).toBe(0);
+    const payload = JSON.parse(plan.stdout);
+    expect(payload.dry_run).toBe(true);
+    expect(payload.no_network).toBe(true);
+    expect(payload.status.mode).toBe("hybrid");
+    expect(payload.postgres.required).toBe(true);
+    expect(payload.postgres.configured).toBe(true);
+    expect(payload.postgres.schema_sql.join("\n")).toContain("CREATE TABLE IF NOT EXISTS todos_sync_records");
+    expect(payload.steps).toContain("Report planned changes without opening network connections");
+
+    try { unlinkSync(dbPath); } catch {}
+  });
+
+  it("should preview native S3 run artifact sync without network access", async () => {
+    const dbPath = "/tmp/test-cli-storage-artifacts.db";
+    const { mkdtempSync, rmSync, unlinkSync, writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const artifactRoot = mkdtempSync(join(tmpdir(), "todos-cli-storage-artifacts-"));
+    const artifactPath = join(artifactRoot, "evidence.log");
+    writeFileSync(artifactPath, "artifact sync cli\nTOKEN=secret-token-value\n");
+    for (const path of [dbPath, `${dbPath}-shm`, `${dbPath}-wal`]) {
+      try { unlinkSync(path); } catch {}
+    }
+    const env = {
+      HASNA_TODOS_ARTIFACTS_DIR: artifactRoot,
+      HASNA_TODOS_S3_BUCKET: "hasna-opensource-todos-prod",
+      HASNA_TODOS_AWS_REGION: "us-east-1",
+    };
+
+    const task = JSON.parse((await runCli(["add", "Storage artifact sync task", "--json"], dbPath, env)).stdout);
+    const run = JSON.parse((await runCli(["runs", "start", task.id, "--agent", "codex", "--json"], dbPath, env)).stdout);
+    const artifactResult = await runCli(["runs", "artifact", run.id, artifactPath, "--type", "log", "--require-file", "--json"], dbPath, env);
+    expect(artifactResult.exitCode).toBe(0);
+
+    const upload = await runCli(["storage", "artifacts", "upload", "--run-id", run.id, "--json"], dbPath, env);
+    expect(upload.exitCode).toBe(0);
+    const uploadPlan = JSON.parse(upload.stdout);
+    expect(uploadPlan).toMatchObject({
+      direction: "upload",
+      dry_run: true,
+      no_network: true,
+      total: 1,
+      uploadable: 1,
+    });
+
+    const download = await runCli(["storage", "artifacts", "download", "--run-id", run.id, "--json"], dbPath, env);
+    expect(download.exitCode).toBe(0);
+    const downloadPlan = JSON.parse(download.stdout);
+    expect(downloadPlan).toMatchObject({
+      direction: "download",
+      dry_run: true,
+      no_network: true,
+      total: 1,
+      skipped: 1,
+    });
+    expect(downloadPlan.artifacts[0].status).toBe("missing_remote_ref");
+
+    for (const path of [dbPath, `${dbPath}-shm`, `${dbPath}-wal`]) {
+      try { unlinkSync(path); } catch {}
+    }
+    rmSync(artifactRoot, { recursive: true, force: true });
   });
 
   it("should export and import todos.md markdown through the CLI", async () => {
@@ -2602,6 +2798,8 @@ END:VCALENDAR`);
         "task.failed",
         "--payload",
         "{\"id\":\"task-1\",\"title\":\"Deploy failed\",\"agent_id\":\"codex\",\"priority\":\"high\"}",
+        "--timestamp",
+        "2026-01-02T12:00:00.000Z",
         "--json",
       ], dbPath);
       expect(test.exitCode).toBe(0);

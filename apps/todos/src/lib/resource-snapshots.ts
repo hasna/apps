@@ -86,7 +86,9 @@ export function buildResourceSnapshot(uri: ResourceUri, staleMs = DEFAULT_STALE_
 }
 
 export function isSnapshotStale(snapshot: ResourceSnapshot, now = new Date()): boolean {
-  return now.toISOString() > snapshot.stale_after;
+  const staleAt = Date.parse(snapshot.stale_after);
+  if (!Number.isFinite(staleAt)) return true;
+  return now.getTime() >= staleAt;
 }
 
 export function subscribeResource(uri: ResourceUri, agentId?: string): ResourceSubscription {

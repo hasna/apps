@@ -9,6 +9,7 @@ import { createTask, getTask, listTasks, claimNextTask, decomposeTasks } from ".
 import { addComment } from "../db/comments.js";
 import { getDatabase, now } from "../db/database.js";
 import { getReadyTasks } from "./dependency-graph.js";
+import type { Task, TaskPriority } from "../types/index.js";
 
 export const PLAN_EXECUTION_SCHEMA = "todos.plan_execution.v1";
 

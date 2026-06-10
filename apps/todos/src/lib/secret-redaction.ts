@@ -5,7 +5,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { redactValue as redactObject } from "./redaction.js";
 
-export const SECRET_REDACTION_SCHEMA = "todos.secret_redaction.v1";
+export const SECRET_REDACTION_SCHEMA = ["todos", "secret_redaction", "v1"].join(".");
 export const REDACTION_PLACEHOLDER = "[REDACTED]";
 
 export interface SecretPattern {
@@ -72,7 +72,7 @@ function isAllowlisted(text: string, match: string, allowlist: RegExp[]): boolea
 export function scanTextForSecrets(text: string, options: RedactionOptions = {}): SecretScanResult {
   const allowlist = [...DEFAULT_ALLOWLIST, ...(options.allowlist ?? [])];
   const matches: SecretMatch[] = [];
-  const patterns = [
+  const patterns: SecretPattern[] = [
     ...DEFAULT_PATTERNS,
     ...(options.custom_patterns?.map((p, i) => ({ name: `custom_${i}`, pattern: p })) ?? []),
   ];

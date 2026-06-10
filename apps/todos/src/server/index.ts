@@ -7,12 +7,33 @@
  */
 
 import { getPackageVersion } from "../lib/package-version.js";
-import { startServer } from "./serve.js";
 
 const DEFAULT_PORT = 19427;
 
 function hasVersionFlag(): boolean {
   return process.argv.includes("--version") || process.argv.includes("-V");
+}
+
+function hasHelpFlag(): boolean {
+  return process.argv.includes("--help") || process.argv.includes("-h");
+}
+
+function printHelp(): void {
+  console.log(`Usage: todos-serve [options]
+
+Start the @hasna/todos dashboard server.
+
+Options:
+  --port <port>     HTTP port to bind. Defaults to ${DEFAULT_PORT}
+  --host <host>     Hostname to bind. Defaults to 127.0.0.1
+  --api-key <key>   Require this API key for dashboard/API requests
+  --no-open         Do not open the dashboard in a browser
+  -V, --version     output the version number
+  -h, --help        display help for command
+
+Environment:
+  TODOS_NO_OPEN=true       Do not open the dashboard in a browser
+  TODOS_API_KEY=<key>      Require this API key for dashboard/API requests`);
 }
 
 function parsePort(): number {
@@ -53,12 +74,17 @@ async function main() {
     console.log(getPackageVersion());
     return;
   }
+  if (hasHelpFlag()) {
+    printHelp();
+    return;
+  }
   const requestedPort = parsePort();
   const port = await findFreePort(requestedPort);
   if (port !== requestedPort) {
     console.log(`Port ${requestedPort} in use, using ${port}`);
   }
   const noOpen = process.argv.includes("--no-open") || process.env["TODOS_NO_OPEN"] === "true";
+  const { startServer } = await import("./serve.js");
   startServer(port, {
     open: !noOpen,
     host: parseStringArg("--host"),

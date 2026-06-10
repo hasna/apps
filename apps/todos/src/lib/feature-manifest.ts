@@ -406,13 +406,13 @@ export const ALL_MCP_TOOLS = [
   "sync_todos_md",
   "task_context",
   "template_history",
-  "todos_cloud_conflicts",
-  "todos_cloud_feedback",
-  "todos_cloud_pull",
-  "todos_cloud_push",
-  "todos_cloud_status",
   "todos_inbox",
   "todos_retro",
+  "todos_storage_conflicts",
+  "todos_storage_feedback",
+  "todos_storage_pull",
+  "todos_storage_push",
+  "todos_storage_status",
   "trust_workspace",
   "unarchive_agent",
   "unarchive_task",
@@ -564,10 +564,10 @@ const MCP_GROUP_DEFS: Array<{ id: string; name: string; description: string; mat
       /sandbox|trust|secret|crypto|verification|policy_pack|redact|scan_/.test(t),
   },
   {
-    id: "cloud",
-    name: "Cloud bridge",
-    description: "Optional cloud sync tools (admin profile).",
-    match: (t) => t.startsWith("todos_cloud_") || t === "sync_all" || t === "migrate_pg",
+    id: "storage",
+    name: "Storage bridge",
+    description: "Optional storage sync tools (admin profile).",
+    match: (t) => t.startsWith("todos_storage_") || t === "sync_all" || t === "migrate_pg",
   },
   {
     id: "workflow",
@@ -807,7 +807,7 @@ export function normalizeFeatureManifest(
       total_tools: manifest.mcp.total_tools,
       tools_for_profile_count: manifest.mcp.tools_for_profile_count,
       tool_group_counts: Object.fromEntries(
-        manifest.mcp.tool_groups.map((g) => [g.id, g.tools.length]).sort(([a], [b]) => a.localeCompare(b)),
+        manifest.mcp.tool_groups.map((g) => [g.id, g.tools.length] as const).sort(([a], [b]) => String(a).localeCompare(String(b))),
       ),
     },
     profiles: manifest.profiles.map((p) => p.name),
@@ -885,7 +885,7 @@ Set \`TODOS_PROFILE\` to control which MCP tools load:
 | agent_safe | Claim/complete workflow without destructive ops |
 | standard | Default minus admin/template/webhook tools |
 | full | All local tools |
-| admin | Includes migrations and cloud bridge |
+| admin | Includes migrations and storage bridge |
 
 Schema: \`${FEATURE_MANIFEST_SCHEMA}\`
 `;

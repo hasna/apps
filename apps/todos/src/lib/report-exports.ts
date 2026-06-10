@@ -86,7 +86,7 @@ export function buildReportExportData(input: BuildReportExportInput, db?: Databa
 
   switch (input.kind) {
     case "project": {
-      const project = projectId ? getProject(projectId, d) : listProjects(undefined, d)[0];
+      const project = projectId ? getProject(projectId, d) : listProjects(d)[0];
       if (!project) throw new Error("Project not found");
       projectId = project.id;
       title = `Project: ${project.name}`;
@@ -198,7 +198,7 @@ export function buildReportExportData(input: BuildReportExportInput, db?: Databa
       break;
     }
     case "roadmap": {
-      const project = projectId ? getProject(projectId, d) : listProjects(undefined, d)[0];
+      const project = projectId ? getProject(projectId, d) : listProjects(d)[0];
       if (!project) throw new Error("Project not found");
       projectId = project.id;
       title = `Roadmap: ${project.name}`;

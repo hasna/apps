@@ -12,7 +12,7 @@ export function HelpPage() {
         <CardContent className="space-y-2 text-sm text-muted-foreground">
           <p>
             <strong className="text-foreground">CLI and MCP are the primary surfaces.</strong> This dashboard is an optional local admin view
-            that talks only to <code className="font-mono">/api/*</code> on your machine — there is no sign-in, no hosted auth, and no connection to todos.md or platform-todos.
+            that talks only to <code className="font-mono">/api/*</code> on your machine — there is no sign-in, no hosted auth, and no connection to hosted platform services.
           </p>
           <p>
             For agent workflows use <code className="font-mono">todos claim</code>, <code className="font-mono">todos-mcp</code>, or{" "}

@@ -47,7 +47,7 @@ export interface AgentAdapterDoc {
     progress: string;
     complete: string;
     fail: string;
-    evidence_fields: string[];
+    evidence_fields: readonly string[];
   };
   verification: {
     run: string;
@@ -100,7 +100,6 @@ export const AGENT_ADAPTER_DOCS: Record<AgentAdapterHost, AgentAdapterDoc> = {
     display_name: "OpenAI Codex CLI",
     install: {
       bun: "bun install -g @hasna/todos",
-      npm: "npm install -g @hasna/todos",
       verify: "todos --version && which todos-mcp",
     },
     mcp: {

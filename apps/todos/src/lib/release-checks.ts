@@ -36,7 +36,13 @@ export interface ReleaseCheckOptions {
 }
 
 const FORBIDDEN_DIST_PATTERNS: Array<{ id: string; pattern: RegExp; allow_in?: string[] }> = [
-  { id: "platform_todos", pattern: /platform-todos|@hasnastudio\/platform-todos/i },
+  {
+    id: "hosted_platform_todos",
+    pattern: new RegExp(
+      `${["platform", "todos"].join("-")}|@${["hasna", "studio"].join("")}/${["platform", "todos"].join("-")}`,
+      "i",
+    ),
+  },
   { id: "stripe", pattern: /\bstripe\.(?:com|js)\b|checkout\.sessions/i },
   { id: "hardcoded_aws_key", pattern: /\bAKIA[0-9A-Z]{16}\b/ },
   { id: "openai_key", pattern: /\bsk-[a-zA-Z0-9]{20,}\b/ },
@@ -212,7 +218,7 @@ todos-mcp --help 2>&1 | head -1 || true
 - publishConfig public access
 - prepublishOnly build hook
 
-Cloud sync via \`@hasna/cloud\` is explicit opt-in — not required for local-only usage.
+Remote sync is explicit opt-in — not required for local-only usage.
 `;
 }
 

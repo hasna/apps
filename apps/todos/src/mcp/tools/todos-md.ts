@@ -1,4 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { z } from "zod";
 
 type Helpers = {
@@ -18,8 +20,13 @@ export function registerTodosMdTools(server: McpServer, { shouldRegisterTool, fo
       },
       async (params) => {
         try {
-          const { exportTodosMd } = await import("../../lib/todos-md.js");
-          const content = exportTodosMd(params);
+          const { exportTodosMarkdown } = await import("../../lib/todos-md.js");
+          const content = exportTodosMarkdown({ project_id: params.project_id });
+          if (params.path) {
+            const outputPath = resolve(params.path);
+            writeFileSync(outputPath, content);
+            return { content: [{ type: "text" as const, text: JSON.stringify({ path: outputPath, bytes: Buffer.byteLength(content) }, null, 2) }] };
+          }
           return { content: [{ type: "text" as const, text: content }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -32,11 +39,21 @@ export function registerTodosMdTools(server: McpServer, { shouldRegisterTool, fo
     server.tool(
       "import_todos_md",
       "Import tasks from a local todos.md markdown file.",
-      { path: z.string().optional() },
-      async ({ path }) => {
+      {
+        path: z.string().optional(),
+        apply: z.boolean().optional().describe("Apply the import. Defaults to dry-run."),
+        resolve_conflicts: z.boolean().optional().describe("Safely merge embedded bridge conflicts where possible."),
+      },
+      async ({ path, apply, resolve_conflicts }) => {
         try {
-          const { importTodosMd } = await import("../../lib/todos-md.js");
-          return { content: [{ type: "text" as const, text: JSON.stringify(importTodosMd(path), null, 2) }] };
+          const { importTodosMarkdown } = await import("../../lib/todos-md.js");
+          const inputPath = resolve(path ?? "todos.md");
+          const markdown = readFileSync(inputPath, "utf-8");
+          const result = importTodosMarkdown(markdown, {
+            dryRun: apply !== true,
+            conflictStrategy: resolve_conflicts ? "safe_merge" : "skip",
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify({ path: inputPath, ...result }, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }
@@ -48,11 +65,27 @@ export function registerTodosMdTools(server: McpServer, { shouldRegisterTool, fo
     server.tool(
       "sync_todos_md",
       "Import then re-export todos.md to keep markdown and database aligned.",
-      { path: z.string().optional() },
-      async ({ path }) => {
+      {
+        path: z.string().optional(),
+        resolve_conflicts: z.boolean().optional().describe("Safely merge embedded bridge conflicts where possible."),
+      },
+      async ({ path, resolve_conflicts }) => {
         try {
-          const { syncTodosMd } = await import("../../lib/todos-md.js");
-          return { content: [{ type: "text" as const, text: JSON.stringify(syncTodosMd(path), null, 2) }] };
+          const { exportTodosMarkdown, importTodosMarkdown } = await import("../../lib/todos-md.js");
+          const targetPath = resolve(path ?? "todos.md");
+          const markdown = readFileSync(targetPath, "utf-8");
+          const imported = importTodosMarkdown(markdown, {
+            dryRun: false,
+            conflictStrategy: resolve_conflicts ? "safe_merge" : "skip",
+          });
+          const exported = exportTodosMarkdown();
+          writeFileSync(targetPath, exported);
+          return {
+            content: [{
+              type: "text" as const,
+              text: JSON.stringify({ path: targetPath, imported, exported_bytes: Buffer.byteLength(exported) }, null, 2),
+            }],
+          };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }

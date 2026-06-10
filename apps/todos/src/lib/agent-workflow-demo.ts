@@ -28,7 +28,7 @@ import {
 
 export const AGENT_WORKFLOW_DEMO_SCHEMA = "todos.agent_workflow_demo.v1";
 
-export const DEMO_DEFAULT_AGENT = "demo-agent";
+export const DEMO_DEFAULT_AGENT = "demoagent";
 export const DEMO_DEFAULT_PROJECT = "Agent Workflow Demo";
 export const DEMO_PROJECT_PATH = "/tmp/todos-agent-workflow-demo";
 
@@ -192,7 +192,7 @@ export function runAgentWorkflowDemo(options: RunAgentWorkflowDemoOptions = {}):
       agent_id: agent.id,
       evidence: { demo: true, source: "agent_workflow_demo" },
     }, d);
-    pushStep(steps, "enqueue_agent_run", `Queued agent run on task ${third.short_id ?? third.id.slice(0, 8)}`);
+    pushStep(steps, "enqueue_agent_run", `Queued agent run ${queuedRun.id.slice(0, 8)} on task ${third.short_id ?? third.id.slice(0, 8)}`);
 
     const claimedRun = claimNextAgentRun(agent.id, { adapter: demoAdapter }, d);
     if (!claimedRun) throw new Error("Expected queued agent run");
@@ -248,7 +248,7 @@ export function runAgentWorkflowDemo(options: RunAgentWorkflowDemoOptions = {}):
         id: completedRun.id,
         status: completedRun.status,
         task_id: completedRun.task_id,
-        adapter: completedRun.adapter,
+        adapter: completedRun.adapter ?? demoAdapter,
       },
       run_record: {
         id: finishedRecord.id,

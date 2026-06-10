@@ -3,19 +3,14 @@
  * No hosted/cloud calls.
  */
 
-import { hostname, platform } from "node:os";
+import { hostname } from "node:os";
 import type { Database } from "bun:sqlite";
 import { getDatabase } from "../db/database.js";
-import {
-  getOrCreateLocalMachine,
-  listMachines,
-  getMachineId,
-  resetMachineId,
-  type Machine,
-} from "../db/machines.js";
+import { getOrCreateLocalMachine, listMachines, resetMachineId } from "../db/machines.js";
 import { listAgents } from "../db/agents.js";
 import { listProjects } from "../db/projects.js";
 import { getStaleTasks } from "../db/tasks.js";
+import type { Machine } from "../types/index.js";
 
 export const MACHINE_TOPOLOGY_SCHEMA = "todos.machine_topology.v1";
 
@@ -162,8 +157,8 @@ export function buildMachineTopologyReport(db?: Database): MachineTopologyReport
     schema_version: MACHINE_TOPOLOGY_SCHEMA,
     id: m.id,
     name: m.name,
-    hostname: m.hostname,
-    platform: m.platform,
+    hostname: m.hostname ?? m.name,
+    platform: m.platform ?? "unknown",
     last_seen_at: m.last_seen_at,
     is_local: m.id === localId,
     active_agents: agents.filter((a) => !a.stale && a.machine_id === m.id).length,

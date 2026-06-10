@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { getDatabase, closeDatabase, resetDatabase, resolvePartialId, isLockExpired, lockExpiryCutoff, clearExpiredLocks, now, uuid } from "./database.js";
-import { createTask, getTask } from "./tasks.js";
+import { getDatabase, closeDatabase, resetDatabase, resolvePartialId, isLockExpired, lockExpiryCutoff, clearExpiredLocks, now, uuid, getDatabasePath } from "./database.js";
+import { createTask, getTask, listTasks } from "./tasks.js";
 import type { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -155,6 +155,55 @@ describe("global database path", () => {
       process.chdir(originalCwd);
       if (originalHome === undefined) delete process.env["HOME"];
       else process.env["HOME"] = originalHome;
+      delete process.env["TODOS_DB_SCOPE"];
+      rmSync(tmp, { recursive: true, force: true });
+      resetDatabase();
+    }
+  });
+
+  it("reopens the database when project scope resolves to a different path", () => {
+    closeDatabase();
+    resetDatabase();
+    delete process.env["TODOS_DB_PATH"];
+
+    const originalHome = process.env["HOME"];
+    const originalCwd = process.cwd();
+    const tmp = join(tmpdir(), `todos-project-switch-db-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const home = join(tmp, "home");
+    const projectA = join(tmp, "workspace", "project-a");
+    const projectB = join(tmp, "workspace", "project-b");
+    const nestedA = join(projectA, "src");
+    const nestedB = join(projectB, "src");
+    mkdirSync(join(projectA, ".git"), { recursive: true });
+    mkdirSync(join(projectB, ".git"), { recursive: true });
+    mkdirSync(nestedA, { recursive: true });
+    mkdirSync(nestedB, { recursive: true });
+
+    try {
+      process.env["HOME"] = home;
+      process.env["TODOS_DB_SCOPE"] = "project";
+
+      process.chdir(nestedA);
+      const pathA = getDatabasePath();
+      createTask({ title: "Project A task" });
+      expect(listTasks({}).map(task => task.title)).toEqual(["Project A task"]);
+
+      process.chdir(nestedB);
+      const pathB = getDatabasePath();
+      expect(pathB).not.toBe(pathA);
+      createTask({ title: "Project B task" });
+      expect(listTasks({}).map(task => task.title)).toEqual(["Project B task"]);
+
+      closeDatabase();
+      process.env["TODOS_DB_PATH"] = pathA;
+      delete process.env["TODOS_DB_SCOPE"];
+      expect(listTasks({}).map(task => task.title)).toEqual(["Project A task"]);
+    } finally {
+      closeDatabase();
+      process.chdir(originalCwd);
+      if (originalHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = originalHome;
+      delete process.env["TODOS_DB_PATH"];
       delete process.env["TODOS_DB_SCOPE"];
       rmSync(tmp, { recursive: true, force: true });
       resetDatabase();

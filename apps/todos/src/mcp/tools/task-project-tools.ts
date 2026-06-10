@@ -29,7 +29,21 @@ import {
 import { resolveTaskRunId } from "../../db/task-runs.js";
 import { bootstrapProject } from "../../lib/project-bootstrap.js";
 import { getDatabase } from "../../db/database.js";
-import { listLabels } from "../../db/labels.js";
+import {
+  assignLabelToTask,
+  createLabel,
+  deleteLabel,
+  getLabel,
+  listLabels,
+  updateLabel,
+} from "../../db/labels.js";
+import {
+  createTag,
+  deleteTag,
+  getTag,
+  listTags,
+  updateTag,
+} from "../../db/tags.js";
 import {
   getSecretSafetyConfig,
   listSecretFindings,
@@ -2318,11 +2332,9 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       "List all distinct task tags in use, with task counts.",
       async () => {
         try {
-          const rows = getDatabase()
-            .query("SELECT tag, COUNT(*) AS count FROM task_tags GROUP BY tag ORDER BY tag")
-            .all() as { tag: string; count: number }[];
+          const rows = listTags();
           if (rows.length === 0) return { content: [{ type: "text" as const, text: "No tags found." }] };
-          const lines = rows.map((r) => `${r.tag} (${r.count})`);
+          const lines = rows.map((r) => `${r.color ? "[" + r.color + "] " : ""}${r.name} (${r.task_count})`);
           return { content: [{ type: "text" as const, text: lines.join("\n") }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };

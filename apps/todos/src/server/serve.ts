@@ -245,8 +245,6 @@ export async function startServer(port: number, options?: { open?: boolean; host
 
       // ── CORS ──
       if (method === "OPTIONS") {
-        const reqOrigin = req.headers.get("origin") || undefined;
-        const allowed = reqOrigin && (reqOrigin === `http://localhost:${port}` || reqOrigin === "http://localhost:0");
         return new Response(null, {
           headers: corsHeaders || {
             "Vary": "Origin",

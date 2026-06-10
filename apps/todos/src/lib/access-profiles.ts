@@ -53,7 +53,7 @@ const PROFILE_META: Record<AccessProfile, AccessProfileMeta> = {
   },
   admin: {
     name: "admin",
-    description: "Full access including migrations and cloud bridge tools",
+    description: "Full access including migrations and storage bridge tools",
     surfaces: ["cli", "mcp", "sdk", "http"],
     allows_mutations: true,
     allows_admin: true,

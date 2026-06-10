@@ -60,6 +60,10 @@ import {
 import { addComment } from "../db/comments.js";
 import { getDatabase } from "../db/database.js";
 import type { TodosStorageAdapter } from "./interfaces.js";
+import {
+  exportSqliteTodosStorageSnapshot,
+  importSqliteTodosStorageSnapshot,
+} from "./sqlite-snapshot.js";
 
 export interface CreateLocalSqliteTodosStorageAdapterOptions {
   db?: Database;
@@ -142,6 +146,8 @@ export function createLocalSqliteTodosStorageAdapter(
     },
     sync: {
       getTasksChangedSince: (since, filters) => getTasksChangedSince(since, filters, database()),
+      exportSnapshot: () => exportSqliteTodosStorageSnapshot(database()),
+      importSnapshot: (snapshot) => importSqliteTodosStorageSnapshot(snapshot, database()),
     },
     transaction: (fn) => {
       const tx = database().transaction(() => fn(adapter));

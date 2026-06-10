@@ -76,14 +76,21 @@ function ensureDir(filePath: string): void {
 }
 
 let _db: Database | null = null;
+let _dbPath: string | null = null;
 
 export function getDatabase(dbPath?: string): Database {
-  if (_db) return _db;
-
   const path = dbPath || getDbPath();
+  if (_db && _dbPath === path) return _db;
+  if (_db && _dbPath !== path) {
+    _db.close();
+    _db = null;
+    _dbPath = null;
+  }
+
   ensureDir(path);
 
   _db = new Database(path);
+  _dbPath = path;
 
   // Enable WAL mode for concurrent access
   _db.run("PRAGMA journal_mode = WAL");
@@ -102,11 +109,13 @@ export function closeDatabase(): void {
   if (_db) {
     _db.close();
     _db = null;
+    _dbPath = null;
   }
 }
 
 export function resetDatabase(): void {
   _db = null;
+  _dbPath = null;
 }
 
 export function now(): string {

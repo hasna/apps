@@ -277,17 +277,17 @@ export async function runNextAgentDispatch(input: RunNextAgentDispatchInput = {}
 export function listAgentRuns(
   filter: { task_id?: string; status?: string; agent_id?: string; limit?: number } = {},
   db?: Database,
-): QueuedAgentRun[] {
-  let runs = listAgentRunQueue(db);
-  if (filter.task_id) runs = runs.filter((r) => (r as { task_id?: string }).task_id === filter.task_id);
-  if (filter.status) runs = runs.filter((r) => (r as { status?: string }).status === filter.status);
-  if (filter.agent_id) runs = runs.filter((r) => (r as { agent_id?: string }).agent_id === filter.agent_id);
+): AgentRun[] {
+  let runs = listAgentRunQueue(db).map(toAgentRun);
+  if (filter.task_id) runs = runs.filter((r) => r.task_id === filter.task_id);
+  if (filter.status) runs = runs.filter((r) => r.status === filter.status);
+  if (filter.agent_id) runs = runs.filter((r) => r.agent_id === filter.agent_id);
   if (filter.limit && filter.limit > 0) runs = runs.slice(0, filter.limit);
   return runs;
 }
 
-export function retryAgentRun(runId: string, db?: Database): QueuedAgentRun {
-  return retryAgentRunDispatch(runId, db);
+export function retryAgentRun(runId: string, db?: Database): AgentRun {
+  return toAgentRun(retryAgentRunDispatch(runId, db));
 }
 
 // ---------------------------------------------------------------------------
@@ -316,7 +316,10 @@ export interface AgentRun {
   adapter: string | null;
   status: AgentRunStatus;
   command: string | null;
+  error: string | null;
   evidence: Record<string, unknown>;
+  retry_count: number;
+  max_retries: number;
   queued_at: string;
   started_at: string | null;
   completed_at: string | null;
@@ -333,6 +336,7 @@ export interface ListAgentRunsFilter {
 
 function toAgentRun(item: QueuedAgentRun): AgentRun {
   const md = (item.run.metadata || {}) as Record<string, unknown>;
+  const maxRetries = typeof md["agent_run_max_retries"] === "number" ? md["agent_run_max_retries"] : 3;
   return {
     id: item.run.id,
     task_id: item.run.task_id,
@@ -340,7 +344,10 @@ function toAgentRun(item: QueuedAgentRun): AgentRun {
     adapter: item.dispatcher.adapter ?? null,
     status: item.dispatcher.state,
     command: item.dispatcher.command ?? null,
+    error: item.dispatcher.last_error ?? null,
     evidence: (md["agent_run_evidence"] as Record<string, unknown>) ?? {},
+    retry_count: Math.max(0, item.dispatcher.attempt - 1),
+    max_retries: maxRetries,
     queued_at: item.dispatcher.queued_at,
     started_at: item.dispatcher.started_at ?? null,
     completed_at: item.dispatcher.completed_at ?? null,

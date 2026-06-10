@@ -9,9 +9,8 @@ import type { Database } from "bun:sqlite";
 import { getDatabase, now, uuid } from "../db/database.js";
 import { addArtifact } from "../db/artifacts.js";
 import {
-  VERIFICATION_SCHEMA_VERSION,
-  type VerificationEvidenceRecord,
-  type VerificationStatus,
+  type VerificationProviderStatus,
+  type VerificationRecordResult,
   getVerificationRecord,
   listVerificationRecords,
 } from "./verification-providers.js";
@@ -47,7 +46,7 @@ export interface PortableVerificationEvidence {
   agent_id: string | null;
   provider_name: string;
   provider_type: string;
-  status: VerificationStatus;
+  status: VerificationProviderStatus;
   summary: string;
   confidence: number | null;
   commands: VerificationCommandEntry[];
@@ -74,7 +73,7 @@ export interface CreateVerificationEvidenceInput {
   session_id?: string;
   provider_name?: string;
   provider_type?: string;
-  status: VerificationStatus;
+  status: VerificationProviderStatus;
   summary: string;
   confidence?: number;
   commands?: VerificationCommandEntry[];
@@ -116,7 +115,7 @@ function evidencePayload(input: CreateVerificationEvidenceInput): Record<string,
   };
 }
 
-export function toPortableEvidence(record: VerificationEvidenceRecord): PortableVerificationEvidence {
+export function toPortableEvidence(record: VerificationRecordResult): PortableVerificationEvidence {
   const ev = record.evidence as Record<string, unknown>;
   const verifier = (ev.verifier as PortableVerificationEvidence["verifier"]) ?? {
     agent_id: null,
@@ -128,24 +127,24 @@ export function toPortableEvidence(record: VerificationEvidenceRecord): Portable
     id: record.id,
     task_id: record.task_id,
     run_record_id: (ev.run_record_id as string) ?? null,
-    agent_id: (ev.agent_id as string) ?? verifier.agent_id ?? null,
-    provider_name: record.provider_name,
-    provider_type: record.provider_type,
+    agent_id: record.agent_id ?? (ev.agent_id as string) ?? verifier.agent_id ?? null,
+    provider_name: (ev.provider_name as string) ?? (ev.provider as string) ?? record.command,
+    provider_type: (ev.provider_type as string) ?? "local",
     status: record.status,
-    summary: record.summary,
+    summary: (ev.summary as string) ?? record.output_summary ?? record.command,
     confidence: typeof ev.confidence === "number" ? ev.confidence : null,
     commands: (ev.commands as VerificationCommandEntry[]) ?? [],
     test_results: (ev.test_results as VerificationTestResult[]) ?? [],
     links: (ev.links as VerificationLinkRef[]) ?? [],
     artifact_ids: [
       ...(ev.artifact_ids as string[] ?? []),
-      ...(record.artifact_id ? [record.artifact_id] : []),
+      ...(record.artifact_path ? [record.artifact_path] : []),
     ],
     log_excerpt: (ev.log_excerpt as string) ?? (ev.stdout as string)?.slice(-2000) ?? null,
     screenshot_paths: (ev.screenshot_paths as string[]) ?? [],
     verifier,
-    started_at: record.started_at,
-    completed_at: record.completed_at,
+    started_at: record.run_at,
+    completed_at: record.run_at,
     created_at: record.created_at,
     metadata: (ev.metadata as Record<string, unknown>) ?? {},
   };

@@ -163,11 +163,12 @@ export function unifiedSearch(input: UnifiedSearchInput = {}, db?: Database): Un
 
   if (types.includes("run") || types.includes("all")) {
     for (const r of listAgentRuns({ limit: 100 }, d)) {
-      if (query && !r.adapter.toLowerCase().includes(query.toLowerCase()) && !r.id.includes(query)) continue;
+      const adapter = r.adapter ?? "custom";
+      if (query && !adapter.toLowerCase().includes(query.toLowerCase()) && !r.id.includes(query)) continue;
       hits.push({
         entity_type: "run",
         id: r.id,
-        title: `Run ${r.adapter}`,
+        title: `Run ${adapter}`,
         snippet: r.status,
         score: 60,
         data: { status: r.status, task_id: r.task_id },

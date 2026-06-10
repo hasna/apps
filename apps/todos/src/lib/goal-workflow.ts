@@ -5,7 +5,7 @@
 
 import type { Database } from "bun:sqlite";
 import { createPlan, getPlan, listPlans } from "../db/plans.js";
-import { createTask, getTask, listTasks, claimNextTask } from "../db/tasks.js";
+import { createTask, listTasks, claimNextTask } from "../db/tasks.js";
 import { decomposeTasks } from "../db/tasks.js";
 import { addComment, listComments } from "../db/comments.js";
 import { createHandoff } from "../db/handoffs.js";

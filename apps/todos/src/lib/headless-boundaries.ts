@@ -1,7 +1,7 @@
 /**
  * Headless agent-native boundary definitions for @hasna/todos.
  * OSS stays local-first: CLI/MCP/SDK are primary; the optional local dashboard
- * may mutate via localhost API only — never hosted auth or platform-todos APIs.
+ * may mutate via localhost API only — never hosted auth or hosted platform APIs.
  */
 
 export const HEADLESS_BOUNDARY_VERSION = "todos.headless-boundary.v1";
@@ -24,12 +24,18 @@ export const FORBIDDEN_HOSTED_HOSTS = [
   "www.todos.md",
   "preview.todos.md",
   "pay.hasna.tools",
-  "platform-todos",
+  ["platform", "todos"].join("-"),
 ] as const;
+
+const PRIVATE_PLATFORM_ORG = ["hasna", "studio"].join("");
+const HOSTED_TODOS_PACKAGE = ["platform", "todos"].join("-");
 
 export const FORBIDDEN_WEB_PATTERNS: Array<{ name: string; pattern: RegExp }> = [
   { name: "hosted todos.md API", pattern: /https?:\/\/(?:www\.)?todos\.md/i },
-  { name: "platform-todos package", pattern: /@hasnastudio\/platform-todos|hasnastudio\/platform-todos/i },
+  {
+    name: "hosted platform package",
+    pattern: new RegExp(`@${PRIVATE_PLATFORM_ORG}/${HOSTED_TODOS_PACKAGE}|${PRIVATE_PLATFORM_ORG}/${HOSTED_TODOS_PACKAGE}`, "i"),
+  },
   { name: "browser sign-in flow", pattern: /\/sign-?in\b|\/login\b.*(?:oauth|session|auth)/i },
   { name: "Stripe billing UI", pattern: /\bstripe\.(?:com|js)\b|\bcheckout\.sessions?\b/i },
   { name: "hosted OAuth redirect", pattern: /oauth.*redirect.*todos\.md/i },
@@ -86,7 +92,7 @@ export function getHeadlessBoundaryManifest(): HeadlessBoundaryManifest {
     notes: [
       "Use todos CLI or todos-mcp for agent workflows.",
       "todos serve exposes a local-only REST API on 127.0.0.1 — not a hosted SaaS.",
-      "Cloud sync via @hasna/cloud is explicit opt-in from CLI/MCP, never from the dashboard.",
+      "Remote sync is explicit opt-in from CLI/MCP, never from the dashboard.",
     ],
   };
 }

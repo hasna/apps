@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import { createTuiDashboardSnapshot, TUI_DASHBOARD_VIEWS, type TuiDashboardSnapshot, type TuiDashboardView } from "../../lib/tui-dashboard.js";
 
@@ -75,17 +75,17 @@ export function Dashboard({ projectId, refreshMs = 2000 }: DashboardProps) {
     }
   });
 
-  if (!data) {
-    return <Text dimColor>Loading dashboard...</Text>;
-  }
-
   useEffect(() => {
     try {
       setSnapshot(createTuiDashboardSnapshot({ project_id: projectId, active_view: activeView, search: searchQuery }));
     } catch {}
   }, [tick, projectId, activeView, searchQuery]);
 
-  const counts = snapshot?.counts || { pending: 0, in_progress: 0, completed: 0, failed: 0, cancelled: 0, total: 0 };
+  if (!snapshot) {
+    return <Text dimColor>Loading dashboard...</Text>;
+  }
+
+  const counts = snapshot.counts;
 
   return (
     <Box flexDirection="column" padding={1}>
@@ -103,15 +103,15 @@ export function Dashboard({ projectId, refreshMs = 2000 }: DashboardProps) {
       </Box>
 
       <Box marginBottom={1}>
-        <Text color="yellow">{data.counts.pending} pending</Text>
+        <Text color="yellow">{counts.pending} pending</Text>
         <Text dimColor> | </Text>
-        <Text color="blue">{data.counts.in_progress} active</Text>
+        <Text color="blue">{counts.in_progress} active</Text>
         <Text dimColor> | </Text>
-        <Text color="green">{data.counts.completed} done</Text>
+        <Text color="green">{counts.completed} done</Text>
         <Text dimColor> | </Text>
-        <Text color="red">{data.blocked.length} blocked</Text>
+        <Text color="red">{counts.failed} failed</Text>
         <Text dimColor> | </Text>
-        <Text>{data.runs_active} runs</Text>
+        <Text>{snapshot.runs.length} runs</Text>
       </Box>
 
       {typingSearch && (
