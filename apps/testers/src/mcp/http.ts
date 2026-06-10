@@ -2,7 +2,9 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-export const DEFAULT_MCP_HTTP_PORT = 8840;
+// Deployed clients (~/.claude.json fleet config) connect to 8880 — do not
+// change without migrating every configured client. See entry.test.ts.
+export const DEFAULT_MCP_HTTP_PORT = 8880;
 const DEFAULT_HOST = "127.0.0.1";
 
 export interface McpHttpServerOptions {

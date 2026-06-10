@@ -95,7 +95,7 @@ describe("testers-mcp transport mode helpers", () => {
       process.env.MCP_HTTP = "1";
       expect(isHttpMode([])).toBe(true);
       expect(resolveMcpHttpPort()).toBe(DEFAULT_MCP_HTTP_PORT);
-      expect(DEFAULT_MCP_HTTP_PORT).toBe(8840);
+      expect(DEFAULT_MCP_HTTP_PORT).toBe(8880);
     } finally {
       if (previous === undefined) {
         delete process.env.MCP_HTTP;
