@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
+import { execFileSync } from "node:child_process";
 import chalk from "chalk";
 import { getPackageVersion } from "../version.js";
 import {
@@ -33,6 +34,7 @@ import {
 } from "../commands/notifications.js";
 import { listPorts } from "../commands/ports.js";
 import { buildSshCommand, resolveSshTarget } from "../commands/ssh.js";
+import { resolveScreenTarget, buildScreenCommand, buildScreenEnableRemoteCommand } from "../commands/screen.js";
 import { buildSyncPlan, runSync } from "../commands/sync.js";
 import { getStatus } from "../commands/status.js";
 import { repairWorkspaceManifestMappings, type WorkspaceManifestRepairResult } from "../commands/workspace.js";
@@ -1020,6 +1022,87 @@ program
       return;
     }
     console.log(buildSshCommand(options.machine, options.cmd));
+  });
+
+program
+  .command("screen")
+  .description("Open Screen Sharing (VNC) to a machine using its best live route")
+  .argument("[machine]", "Machine identifier")
+  .option("--machine <id>", "Machine identifier (alternative to positional arg)")
+  .option("--all", "Open every reachable machine", false)
+  .option("--print", "Print the vnc:// URL instead of opening it", false)
+  .option("-j, --json", "Print JSON output", false)
+  .action((machineArg: string | undefined, options: { machine?: string; all?: boolean; print?: boolean; json?: boolean }) => {
+    if (options.all) {
+      const topology = discoverMachineTopology();
+      type ScreenAllResult = { machine: string; ok: boolean; url?: string; route?: string; error?: string };
+      const results: ScreenAllResult[] = topology.machines.map((m) => {
+        try {
+          const resolved = resolveScreenTarget(m.machine_id, { topology });
+          return { machine: m.machine_id, ok: true, url: resolved.url, route: resolved.route };
+        } catch (error) {
+          return { machine: m.machine_id, ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      });
+      if (options.json) {
+        console.log(JSON.stringify(results, null, 2));
+        return;
+      }
+      for (const r of results) {
+        if (r.ok && r.url) {
+          if (!options.print) execFileSync("open", [r.url], { stdio: "ignore" });
+          console.log(`${r.ok ? "✓" : "✗"} ${r.machine.padEnd(14)} ${r.url ?? r.error}`);
+        } else {
+          console.log(`✗ ${r.machine.padEnd(14)} ${r.error}`);
+        }
+      }
+      return;
+    }
+
+    const machineId = machineArg ?? options.machine;
+    if (!machineId) {
+      console.error("Provide a machine: machines screen <id>  (or --all)");
+      process.exitCode = 1;
+      return;
+    }
+    const resolved = resolveScreenTarget(machineId);
+    if (options.json) {
+      console.log(JSON.stringify(resolved, null, 2));
+      return;
+    }
+    if (options.print) {
+      console.log(resolved.url);
+      return;
+    }
+    execFileSync("open", [resolved.url], { stdio: "ignore" });
+    console.log(`Opening Screen Sharing → ${resolved.url} (route: ${resolved.route})`);
+  });
+
+program
+  .command("screen-enable")
+  .description("Enable Remote Management / Screen Sharing on a macOS machine over SSH")
+  .requiredOption("--machine <id>", "Machine identifier")
+  .option("--user <user>", "macOS user to grant screen-sharing (overrides manifest)")
+  .option("--vnc-password <pw>", "Legacy VNC password (<=8 chars honored)", "")
+  .option("--print", "Print the remote command instead of running it", false)
+  .action((options: { machine: string; user?: string; vncPassword?: string; print?: boolean }) => {
+    const screen = resolveScreenTarget(options.machine);
+    const user = options.user ?? screen.user;
+    if (!user) {
+      console.error(`No SSH user known for ${options.machine}; pass --user <name> or set metadata.user in the manifest.`);
+      process.exitCode = 1;
+      return;
+    }
+    const vncPw = (options.vncPassword || "").slice(0, 8);
+    const remoteCmd = buildScreenEnableRemoteCommand(user, vncPw);
+    // Run as root on the target via sudo; the SSH route is resolved by buildSshCommand.
+    const sshCmd = buildSshCommand(options.machine, `sudo -p '' bash -c ${JSON.stringify(remoteCmd)}`);
+    if (options.print) {
+      console.log(sshCmd);
+      return;
+    }
+    console.log(`Run this to enable Screen Sharing on ${options.machine} (will prompt for sudo on the target):`);
+    console.log(`  ${sshCmd}`);
   });
 
 program.command("ports").description("List listening ports on a machine").option("--machine <id>", "Machine identifier").option("-j, --json", "Print JSON output", false).action((options: { machine?: string; json?: boolean }) => {
