@@ -15628,7 +15628,7 @@ function createArtifactStore(config, workspace) {
 // src/service.ts
 import { createHash as createHash13 } from "crypto";
 import { spawnSync as spawnSync2 } from "child_process";
-import { existsSync as existsSync8 } from "fs";
+import { existsSync as existsSync8, readFileSync as readFileSync8 } from "fs";
 import { hostname as hostname5 } from "os";
 import { join as join4, resolve as resolve4 } from "path";
 
@@ -23936,6 +23936,63 @@ function parseMetadataJson(value) {
     return {};
   }
 }
+function inventoryLimit(value, fallback = 20, max = 200) {
+  if (!Number.isFinite(value) || value <= 0)
+    return fallback;
+  return Math.min(Math.floor(value), max);
+}
+function previewText(value, max = 220) {
+  const text = value ?? "";
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+function rowsWithJsonFields(rows, fields = ["metadata_json"]) {
+  return rows.map((row) => {
+    const next = { ...row };
+    for (const field of fields) {
+      const raw = next[field];
+      if (typeof raw === "string") {
+        const parsedField = field.endsWith("_json") ? field.slice(0, -5) : field;
+        next[parsedField] = parseMetadataJson(raw);
+        delete next[field];
+      }
+    }
+    return next;
+  });
+}
+function selectInventoryRows(db, sql, params = []) {
+  return db.query(sql).all(...params);
+}
+function readLegacyInventoryStore(path) {
+  if (!existsSync8(path))
+    return { exists: false, read_error: null, items: [] };
+  try {
+    const parsed = JSON.parse(readFileSync8(path, "utf8"));
+    if (!parsed || !Array.isArray(parsed.items)) {
+      return { exists: true, read_error: "invalid_store_shape", items: [] };
+    }
+    return { exists: true, read_error: null, items: parsed.items };
+  } catch (error48) {
+    return {
+      exists: true,
+      read_error: error48 instanceof Error ? error48.message : String(error48),
+      items: []
+    };
+  }
+}
+function legacyInventoryItem(item) {
+  return {
+    id: item.id,
+    short_id: item.short_id ?? null,
+    title: item.title,
+    content_preview: previewText(item.content),
+    url: item.url ?? null,
+    tags: item.tags ?? [],
+    metadata: item.metadata ?? {},
+    archived: item.archived === true,
+    created_at: item.created_at,
+    updated_at: item.updated_at
+  };
+}
 function storagePrefixKey(storage) {
   const prefix = storage.artifact_store.s3?.prefix?.replace(/^\/+|\/+$/g, "");
   return prefix ? `${prefix}/` : null;
@@ -24354,6 +24411,240 @@ class KnowledgeService {
     const workspace = this.ensureWorkspace();
     migrateKnowledgeDb(workspace.knowledgeDbPath);
     return getKnowledgeDbStats(workspace.knowledgeDbPath);
+  }
+  inventory(options = {}) {
+    const workspace = this.ensureWorkspace();
+    migrateKnowledgeDb(workspace.knowledgeDbPath);
+    const limit = inventoryLimit(options.limit);
+    const storePath = options.storePath ?? workspace.jsonStorePath;
+    const legacyStore = readLegacyInventoryStore(storePath);
+    const activeItems = legacyStore.items.filter((item) => item.archived !== true);
+    const visibleItems = options.includeArchived ? legacyStore.items : activeItems;
+    const stats = getKnowledgeDbStats(workspace.knowledgeDbPath);
+    const db = openKnowledgeDb(workspace.knowledgeDbPath);
+    try {
+      const sources = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT
+          s.id,
+          s.uri,
+          s.kind,
+          s.title,
+          s.metadata_json,
+          s.acl_json,
+          s.created_at,
+          s.updated_at,
+          COUNT(DISTINCT sr.id) AS revisions,
+          COUNT(DISTINCT c.id) AS chunks
+        FROM sources s
+        LEFT JOIN source_revisions sr ON sr.source_id = s.id
+        LEFT JOIN chunks c ON c.source_revision_id = sr.id
+        GROUP BY s.id
+        ORDER BY s.updated_at DESC, s.created_at DESC
+        LIMIT ?
+      `, [limit]), ["metadata_json", "acl_json"]);
+      const sourceRevisions = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT
+          sr.id,
+          s.uri AS source_uri,
+          sr.revision,
+          sr.hash,
+          sr.extracted_text_uri,
+          sr.metadata_json,
+          sr.created_at
+        FROM source_revisions sr
+        JOIN sources s ON s.id = sr.source_id
+        ORDER BY sr.created_at DESC
+        LIMIT ?
+      `, [limit]));
+      const chunks = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT
+          c.id,
+          c.kind,
+          c.ordinal,
+          substr(c.text, 1, 220) AS text_preview,
+          c.token_count,
+          c.start_offset,
+          c.end_offset,
+          c.metadata_json,
+          c.created_at,
+          s.uri AS source_uri,
+          sr.revision AS source_revision,
+          wp.path AS wiki_path,
+          wp.title AS wiki_title
+        FROM chunks c
+        LEFT JOIN source_revisions sr ON sr.id = c.source_revision_id
+        LEFT JOIN sources s ON s.id = sr.source_id
+        LEFT JOIN wiki_pages wp ON wp.id = c.wiki_page_id
+        ORDER BY c.created_at DESC, c.ordinal ASC
+        LIMIT ?
+      `, [limit]));
+      const wikiPages = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at
+        FROM wiki_pages
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]));
+      const indexes = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT id, kind, name, artifact_uri, shard_key, metadata_json, created_at, updated_at
+        FROM knowledge_indexes
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]));
+      const storageObjects = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT id, artifact_uri, kind, content_type, hash, size_bytes, metadata_json, created_at, updated_at
+        FROM storage_objects
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]));
+      const runs = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT
+          id,
+          type,
+          substr(prompt, 1, 220) AS prompt_preview,
+          status,
+          provider,
+          model,
+          cost_tokens,
+          cost_usd,
+          metadata_json,
+          created_at,
+          updated_at
+        FROM runs
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]));
+      const vectorIndexes = selectInventoryRows(db, `
+        SELECT provider, model, dimensions, status, COUNT(*) AS entries
+        FROM vector_index_entries
+        GROUP BY provider, model, dimensions, status
+        ORDER BY entries DESC
+        LIMIT ?
+      `, [limit]);
+      const reindexQueue = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT id, kind, target_id, source_uri, reason, status, attempts, metadata_json, created_at, updated_at
+        FROM reindex_queue
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]));
+      const machines = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT
+          machine_id,
+          hostname,
+          platform,
+          user_label,
+          workspace_home,
+          tailscale_dns,
+          tailscale_ips_json,
+          ssh_target,
+          last_seen_at,
+          capabilities_json,
+          metadata_json,
+          created_at,
+          updated_at
+        FROM knowledge_machines
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]), ["tailscale_ips_json", "capabilities_json", "metadata_json"]);
+      const syncConflicts = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT
+          id,
+          entity_kind,
+          entity_id,
+          local_machine_id,
+          remote_machine_id,
+          status,
+          resolution_strategy,
+          proposed_patch_uri,
+          approved_by,
+          resolved_at,
+          metadata_json,
+          created_at
+        FROM knowledge_sync_conflicts
+        ORDER BY created_at DESC
+        LIMIT ?
+      `, [limit]));
+      const approvalGates = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT id, action, target_uri, status, reason, approved_by, metadata_json, created_at, updated_at
+        FROM approval_gates
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]));
+      const auditEvents = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT id, event_type, action, target_uri, decision, metadata_json, created_at
+        FROM audit_events
+        ORDER BY created_at DESC
+        LIMIT ?
+      `, [limit]));
+      const summary = {
+        legacy_items: legacyStore.items.length,
+        active_items: activeItems.length,
+        archived_items: legacyStore.items.length - activeItems.length,
+        schema_version: stats.schema_version,
+        sources: stats.sources,
+        source_revisions: stats.source_revisions,
+        chunks: stats.chunks,
+        wiki_pages: stats.wiki_pages,
+        citations: stats.citations,
+        indexes: stats.indexes,
+        runs: stats.runs,
+        run_events: stats.run_events,
+        storage_objects: stats.storage_objects,
+        embeddings: stats.embeddings,
+        vector_entries: stats.vector_entries,
+        reindex_queue: stats.reindex_queue,
+        redaction_findings: stats.redaction_findings,
+        audit_events: stats.audit_events,
+        approval_gates: stats.approval_gates,
+        knowledge_machines: stats.knowledge_machines,
+        sync_snapshots: stats.sync_snapshots,
+        sync_changes: stats.sync_changes,
+        sync_conflicts: stats.sync_conflicts,
+        sync_table_clocks: stats.sync_table_clocks,
+        sync_imports: stats.sync_imports
+      };
+      return {
+        ok: true,
+        scope: this.scope,
+        home: workspace.home,
+        limit,
+        paths: {
+          json_store_path: storePath,
+          json_store_exists: legacyStore.exists,
+          knowledge_db_path: workspace.knowledgeDbPath,
+          artifacts_dir: workspace.artifactsDir,
+          indexes_dir: workspace.indexesDir,
+          logs_dir: workspace.logsDir,
+          wiki_dir: workspace.wikiDir
+        },
+        summary,
+        legacy_store: {
+          path: storePath,
+          exists: legacyStore.exists,
+          read_error: legacyStore.read_error,
+          total_items: legacyStore.items.length,
+          active_items: activeItems.length,
+          archived_items: legacyStore.items.length - activeItems.length,
+          items_returned: Math.min(visibleItems.length, limit)
+        },
+        items: visibleItems.slice(0, limit).map(legacyInventoryItem),
+        sources,
+        source_revisions: sourceRevisions,
+        chunks,
+        wiki_pages: wikiPages,
+        indexes,
+        storage_objects: storageObjects,
+        runs,
+        vector_indexes: vectorIndexes,
+        reindex_queue: reindexQueue,
+        machines,
+        sync_conflicts: syncConflicts,
+        approval_gates: approvalGates,
+        audit_events: auditEvents,
+        message: `${legacyStore.items.length} item(s), ${stats.sources} source(s), ${stats.chunks} chunk(s), ${stats.wiki_pages} wiki page(s), ${stats.storage_objects} artifact(s)`
+      };
+    } finally {
+      db.close();
+    }
   }
   async initWiki() {
     const workspace = this.ensureWorkspace();
@@ -25086,6 +25377,7 @@ function createKnowledgeClient(options = {}) {
       peer: (input) => service.syncPeer(input),
       remotePeer: (input) => service.syncRemotePeer(input)
     },
+    inventory: (input = {}) => service.inventory(input),
     db: {
       init: () => service.initDb(),
       stats: () => service.dbStats()

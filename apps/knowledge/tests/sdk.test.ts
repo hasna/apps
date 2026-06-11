@@ -40,7 +40,7 @@ function writeFakeMachinesRouteBin(
   target: string,
   projectRoot = '/remote/open-knowledge',
   observedAt = '2026-06-09T00:00:00.000Z',
-  expiresAt = '2026-06-10T00:05:00.000Z',
+  expiresAt = '2099-06-10T00:05:00.000Z',
 ): void {
   const machines = join(bin, 'machines');
   writeFileSync(machines, [
@@ -398,7 +398,7 @@ describe('public knowledge sdk', () => {
         'sdk-spark01.tailnet.test',
         '/remote/open-knowledge',
         '2026-06-09T00:01:00.000Z',
-        '2026-06-10T00:06:00.000Z',
+        '2099-06-10T00:06:00.000Z',
       );
       const repeated = await client.sync.remotePeer({
         machine: 'spark01',

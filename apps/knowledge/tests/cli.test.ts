@@ -181,11 +181,16 @@ describe('knowledge cli', () => {
     const out = new TextDecoder().decode(result.stdout);
     expect(out).toContain('knowledge - local agent knowledge store');
     expect(out).toContain('Commands:');
+    expect(out).toContain('inventory');
 
     const sub = runCli(['help', 'list']);
     expect(sub.exitCode).toBe(0);
     const subOut = new TextDecoder().decode(sub.stdout);
     expect(subOut).toContain('--sort created|title');
+
+    const inventory = runCli(['help', 'inventory']);
+    expect(inventory.exitCode).toBe(0);
+    expect(new TextDecoder().decode(inventory.stdout)).toContain('knowledge inventory');
   });
 
   test('version flag works', () => {
@@ -1565,6 +1570,52 @@ describe('knowledge cli', () => {
     expect(statsOut.storage_objects).toBe(4);
     expect(statsOut.wiki_pages).toBe(1);
     expect(statsOut.indexes).toBe(1);
+  });
+
+  test('inventory retrieves legacy items and SQLite knowledge layers', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-inventory-cli-'));
+    const sourcePath = join(dir, 'inventory-source.md');
+    const sourceRef = pathToFileURL(sourcePath).href;
+    writeFileSync(sourcePath, [
+      '# Inventory Source',
+      '',
+      'The inventory command must retrieve source chunks, wiki pages, artifact rows, and run ledger entries.',
+    ].join('\n'));
+
+    const add = runCli(['add', 'Inventory Note', 'Manual note body for inventory checks', '--scope', 'project', '--json'], dir);
+    expect(add.exitCode).toBe(0);
+
+    const ingest = runCli(['ingest', 'source', sourceRef, '--purpose', 'knowledge_index', '--scope', 'project', '--json'], dir);
+    expect(ingest.exitCode).toBe(0);
+
+    const init = runCli(['wiki', 'init', '--scope', 'project', '--json'], dir);
+    expect(init.exitCode).toBe(0);
+
+    const ask = runCli(['ask', 'What does the inventory source say?', '--scope', 'project', '--json'], dir);
+    expect(ask.exitCode).toBe(0);
+
+    const inventory = runCli(['inventory', '--scope', 'project', '--json', '--limit', '10'], dir);
+    expect(inventory.exitCode).toBe(0);
+    const out = JSON.parse(new TextDecoder().decode(inventory.stdout));
+    expect(out.summary.legacy_items).toBe(1);
+    expect(out.summary.sources).toBe(1);
+    expect(out.summary.chunks).toBeGreaterThanOrEqual(2);
+    expect(out.summary.wiki_pages).toBe(1);
+    expect(out.summary.indexes).toBe(1);
+    expect(out.summary.storage_objects).toBeGreaterThanOrEqual(4);
+    expect(out.summary.runs).toBeGreaterThanOrEqual(1);
+    expect(out.items[0].title).toBe('Inventory Note');
+    expect(out.sources[0].uri).toBe(sourceRef);
+    expect(out.chunks.some((chunk: any) => String(chunk.text_preview).includes('inventory command'))).toBe(true);
+    expect(out.wiki_pages.some((page: any) => page.path === 'wiki/README.md')).toBe(true);
+    expect(out.storage_objects.some((object: any) => object.artifact_uri.includes('wiki/README.md'))).toBe(true);
+    expect(out.runs.some((run: any) => run.type === 'knowledge-prompt')).toBe(true);
+
+    const text = runCli(['inventory', '--scope', 'project', '--limit', '3'], dir);
+    expect(text.exitCode).toBe(0);
+    const textOut = new TextDecoder().decode(text.stdout);
+    expect(textOut).toContain('Knowledge inventory (project)');
+    expect(textOut).toContain('Inventory Note');
   });
 
   test('source refs cover open-files, s3, local files, and web URLs', () => {

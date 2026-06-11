@@ -33,6 +33,63 @@ export interface KnowledgePathsResult {
     config: KnowledgeConfig;
     message: string;
 }
+export interface KnowledgeInventoryOptions {
+    limit?: number;
+    storePath?: string;
+    includeArchived?: boolean;
+}
+export interface KnowledgeInventoryLegacyItem {
+    id: string;
+    short_id: string | null;
+    title: string;
+    content_preview: string;
+    url: string | null;
+    tags: string[];
+    metadata: Record<string, unknown>;
+    archived: boolean;
+    created_at: string;
+    updated_at: string;
+}
+export interface KnowledgeInventoryResult {
+    ok: true;
+    scope: string;
+    home: string;
+    limit: number;
+    paths: {
+        json_store_path: string;
+        json_store_exists: boolean;
+        knowledge_db_path: string;
+        artifacts_dir: string;
+        indexes_dir: string;
+        logs_dir: string;
+        wiki_dir: string;
+    };
+    summary: Record<string, number>;
+    legacy_store: {
+        path: string;
+        exists: boolean;
+        read_error: string | null;
+        total_items: number;
+        active_items: number;
+        archived_items: number;
+        items_returned: number;
+    };
+    items: KnowledgeInventoryLegacyItem[];
+    sources: Array<Record<string, unknown>>;
+    source_revisions: Array<Record<string, unknown>>;
+    chunks: Array<Record<string, unknown>>;
+    wiki_pages: Array<Record<string, unknown>>;
+    indexes: Array<Record<string, unknown>>;
+    storage_objects: Array<Record<string, unknown>>;
+    runs: Array<Record<string, unknown>>;
+    vector_indexes: Array<Record<string, unknown>>;
+    reindex_queue: Array<Record<string, unknown>>;
+    machines: Array<Record<string, unknown>>;
+    sync_conflicts: Array<Record<string, unknown>>;
+    approval_gates: Array<Record<string, unknown>>;
+    audit_events: Array<Record<string, unknown>>;
+    message: string;
+}
 export interface KnowledgeSetupResult {
     ok: true;
     mode: KnowledgeConfig['mode'];
@@ -289,6 +346,7 @@ export declare class KnowledgeService {
         schema_version: number;
     };
     dbStats(): import("./knowledge-db").KnowledgeDbStats;
+    inventory(options?: KnowledgeInventoryOptions): KnowledgeInventoryResult;
     initWiki(): Promise<import("./wiki-layout").WikiLayoutInitResult>;
     compileWiki(options?: Omit<WikiCompileOptions, 'dbPath' | 'store'>): Promise<import("./wiki-compiler").WikiCompileResult>;
     fileAnswer(options: {

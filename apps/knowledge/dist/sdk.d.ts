@@ -6,6 +6,7 @@ export type KnowledgeAskOptions = Omit<Parameters<KnowledgeService['runPrompt']>
 export type KnowledgeSearchOptions = Parameters<KnowledgeService['search']>[0];
 export type KnowledgeContextOptions = Parameters<KnowledgeService['retrieveContext']>[0];
 export type KnowledgeWebSearchOptions = Parameters<KnowledgeService['webSearch']>[0];
+export type KnowledgeInventoryOptions = Parameters<KnowledgeService['inventory']>[0];
 export type KnowledgeSyncSnapshotOptions = Parameters<KnowledgeService['createSyncSnapshot']>[0];
 export type KnowledgeSyncDoctorOptions = Parameters<KnowledgeService['syncDoctor']>[0];
 export type KnowledgeSyncBundleOptions = Parameters<KnowledgeService['exportSyncBundle']>[0];
@@ -49,6 +50,7 @@ export interface KnowledgeClient {
         readonly peer: (options: KnowledgePeerSyncOptions) => ReturnType<KnowledgeService['syncPeer']>;
         readonly remotePeer: (options: KnowledgeRemotePeerSyncOptions) => ReturnType<KnowledgeService['syncRemotePeer']>;
     };
+    readonly inventory: (options?: KnowledgeInventoryOptions) => ReturnType<KnowledgeService['inventory']>;
     readonly db: {
         readonly init: () => ReturnType<KnowledgeService['initDb']>;
         readonly stats: () => ReturnType<KnowledgeService['dbStats']>;

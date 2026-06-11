@@ -96,6 +96,9 @@ knowledge list --search ownership
 # List notes tagged "rust"
 knowledge list --tag rust
 
+# Inspect every local knowledge layer: notes, sources, chunks, wiki, artifacts, runs, sync
+knowledge inventory --scope project --json
+
 # Get a note
 knowledge get --id <id>
 
@@ -220,7 +223,10 @@ Add a new knowledge item.
 ```bash
 knowledge list|ls [options]
 ```
-List items with pagination, search, and tag filtering.
+List compatibility JSON-store items with pagination, search, and tag filtering.
+Use `knowledge inventory` or `knowledge search` when an agent needs the
+SQLite catalog, source chunks, generated wiki pages, artifacts, runs, and sync
+state too.
 
 | Flag | Description |
 |------|-------------|
@@ -230,6 +236,17 @@ List items with pagination, search, and tag filtering.
 | `-t, --tag <tag>` | Filter by tag |
 | `--sort created\|title` | Sort field (default: created) |
 | `--desc` | Sort descending |
+
+### inventory
+```bash
+knowledge inventory [--scope local|global|project] [--limit <n>] [--include-archived] [--json]
+```
+Show a capped, unified local inventory across the compatibility JSON item
+store, the SQLite catalog, indexed source refs, source/wiki chunks, generated
+wiki pages, knowledge indexes, artifact manifest rows, prompt runs, vector
+index status, reindex queue, machine sync rows, conflicts, and safety/audit
+decisions. This is the command to answer "what knowledge exists here?" without
+dumping every raw chunk body.
 
 ### get
 ```bash
@@ -362,7 +379,7 @@ The spark release smoke turns the manual spark02/spark01 sync runbook into a
 repeatable evidence command:
 
 ```bash
-bun run smoke:spark-sync-release -- --knowledge-version 0.2.62 --machines-version latest --json --keep-temp
+bun run smoke:spark-sync-release -- --knowledge-version 0.2.63 --machines-version latest --json --keep-temp
 ```
 
 It installs the requested package versions on spark02 and spark01, runs the
@@ -470,6 +487,7 @@ and artifact API contract that a future SaaS wrapper can implement.
 ```bash
 knowledge db init [--scope project]
 knowledge db stats [--scope project]
+knowledge inventory [--scope project] [--json]
 knowledge db storage status [--scope project] [--json]
 knowledge db storage push [--tables sources,chunks] [--scope project] [--json]
 knowledge db storage pull [--tables sources,chunks] [--scope project] [--json]

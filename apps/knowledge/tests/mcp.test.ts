@@ -223,6 +223,7 @@ describe('knowledge MCP', () => {
       expect(tools.tools.some((tool) => tool.name === 'ok_reindex_embeddings')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_search')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_search')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_inventory')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_ask')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_get')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_ingest')).toBe(true);
@@ -253,6 +254,7 @@ describe('knowledge MCP', () => {
 
       const resources = await client.listResources();
       expect(resources.resources.some((resource) => resource.uri === 'knowledge://project/config')).toBe(true);
+      expect(resources.resources.some((resource) => resource.uri === 'knowledge://project/inventory')).toBe(true);
       expect(resources.resources.some((resource) => resource.uri === 'knowledge://project/schema')).toBe(true);
       expect(resources.resources.some((resource) => resource.uri === 'knowledge://project/sources')).toBe(true);
       expect(resources.resources.some((resource) => resource.uri === 'knowledge://project/machines')).toBe(true);
@@ -261,6 +263,10 @@ describe('knowledge MCP', () => {
       const schemaResource = parseResourceJson(await client.readResource({ uri: 'knowledge://project/schema' }));
       expect(schemaResource.stats.sources).toBe(1);
       expect(schemaResource.stats.chunks).toBe(1);
+
+      const inventoryResource = parseResourceJson(await client.readResource({ uri: 'knowledge://project/inventory' }));
+      expect(inventoryResource.summary.sources).toBe(1);
+      expect(inventoryResource.sources[0].uri).toBe('open-files://file/file_mcp');
 
       const machinesResource = parseResourceJson(await client.readResource({ uri: 'knowledge://project/machines' }));
       expect(machinesResource.ok).toBe(true);

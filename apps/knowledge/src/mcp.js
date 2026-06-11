@@ -519,6 +519,14 @@ function registerKnowledgeResources(server) {
   );
   registerJsonResource(
     server,
+    'knowledge-project-inventory',
+    'knowledge://project/inventory',
+    'Project knowledge inventory',
+    'Unified capped inventory of JSON items, SQLite catalog rows, wiki artifacts, runs, and sync state',
+    async () => projectService().inventory({ limit: 50 }),
+  );
+  registerJsonResource(
+    server,
     'knowledge-project-machines',
     'knowledge://project/machines',
     'Project machine topology',
@@ -733,6 +741,24 @@ export function buildServer() {
     scope: scopeField,
   }, async ({ scope }) => {
     return jsonText(createKnowledgeService({ scope }).paths());
+  });
+
+  registerTool(server, 'knowledge_inventory', 'Knowledge inventory', 'Show the full local knowledge inventory across JSON items, SQLite catalog rows, wiki artifacts, runs, and sync state', {
+    scope: scopeField,
+    limit: z.number().optional().describe('Maximum rows per inventory section'),
+    include_archived: z.boolean().optional().describe('Include archived compatibility JSON-store items'),
+    store_path: storePathField,
+  }, async ({ scope, limit, include_archived, store_path }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText(service.inventory({
+        limit,
+        includeArchived: include_archived,
+        storePath: store_path,
+      }));
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
   });
 
   registerTool(server, 'ok_storage_status', 'Knowledge storage status', 'Inspect local/S3 artifact storage, source ownership, and scalability contract', {
