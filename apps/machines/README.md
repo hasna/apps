@@ -118,6 +118,32 @@ machines topology --no-tailscale --json
 machines route --machine spark01 --json
 ```
 
+## Screen sharing
+
+Open Screen Sharing (VNC) to any machine using its best live route — no stale
+IP bookmarks. The route resolver picks the current LAN address or Tailscale name
+automatically, so it keeps working even when DHCP rotates a machine's IP.
+
+```bash
+machines screen machine005                 # open Screen Sharing.app → vnc://<user>@<live-route>
+machines screen machine005 --print         # print the vnc:// URL instead of opening
+machines screen machine005 --json          # full resolution detail (route, confidence, user)
+machines screen --all                      # open every reachable machine
+machines screen --all --print              # list resolved vnc:// URLs for the whole fleet
+```
+
+Enable Remote Management / Screen Sharing on a fresh macOS machine over SSH
+(kickstart + SRP + legacy VNC password so user-password auth works from
+Screen Sharing.app and Apple Remote Desktop):
+
+```bash
+machines screen-enable --machine machine005 --user jo --vnc-password steaua17
+machines screen-enable --machine machine005 --user jo --print   # show the SSH command, don't run it
+```
+
+`--vnc-password` is truncated to 8 characters by the legacy VNC protocol. The
+user comes from the manifest (`metadata.user`) when present, or `--user`.
+
 Consumers that need repo paths can resolve trust-aware workspace mappings
 without importing the full machines app:
 
