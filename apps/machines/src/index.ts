@@ -21,6 +21,7 @@ export * from "./commands/self-test.js";
 export * from "./commands/serve.js";
 export * from "./commands/setup.js";
 export * from "./commands/ssh.js";
+export * from "./commands/screen.js";
 export * from "./commands/sync.js";
 export * from "./commands/status.js";
 export * from "./commands/workspace.js";
