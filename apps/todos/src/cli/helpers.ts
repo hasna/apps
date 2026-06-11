@@ -3,7 +3,7 @@ import { execSync } from "node:child_process";
 import { resolve } from "node:path";
 import { Command } from "commander";
 import { getDatabase, resolvePartialId } from "../db/database.js";
-import { ensureProject, getProjectByPath } from "../db/projects.js";
+import { ensureProject, getProject, getProjectByPath, slugify } from "../db/projects.js";
 import { getPackageVersion } from "../lib/package-version.js";
 import type { Project, Task } from "../types/index.js";
 
@@ -53,9 +53,48 @@ export function detectGitRoot(): string | null {
   }
 }
 
+/**
+ * Resolve an explicitly provided project reference by registered path, exact or
+ * partial ID, task list ID, slug, or name. An unresolvable reference is a hard
+ * error — it must never silently degrade into "no project filter".
+ */
+export function resolveExplicitProject(input: string): Project {
+  const db = getDatabase();
+
+  const byPath = getProjectByPath(resolve(input), db);
+  if (byPath) return byPath;
+
+  const id = resolvePartialId(db, "projects", input);
+  if (id) {
+    const byId = getProject(id, db);
+    if (byId) return byId;
+  }
+
+  const exact = db.query(
+    "SELECT * FROM projects WHERE lower(name) = lower(?) OR task_list_id = ? ORDER BY name LIMIT 1",
+  ).get(input, input) as Project | null;
+  if (exact) return exact;
+
+  const inputSlug = slugify(input);
+  if (inputSlug) {
+    const all = db.query("SELECT * FROM projects ORDER BY name").all() as Project[];
+    const bySlug = all.find((p) => slugify(p.name) === inputSlug);
+    if (bySlug) return bySlug;
+  }
+
+  const bySubstring = db.query(
+    "SELECT * FROM projects WHERE name LIKE ? ORDER BY name LIMIT 1",
+  ).get(`%${input}%`) as Project | null;
+  if (bySubstring) return bySubstring;
+
+  console.error(chalk.red(`Project not found: ${input}`));
+  console.error(chalk.dim("No registered project matches this path, ID, slug, or name. Run `todos projects` to list projects."));
+  process.exit(1);
+}
+
 export function autoDetectProject(opts: { project?: string }): Project | undefined {
   if (opts.project) {
-    return getProjectByPath(resolve(opts.project)) ?? undefined;
+    return resolveExplicitProject(opts.project);
   }
   if (process.env["TODOS_AUTO_PROJECT"] === "false") return undefined;
   const gitRoot = detectGitRoot();

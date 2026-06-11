@@ -3198,4 +3198,91 @@ END:VCALENDAR`);
 
     try { unlinkSync(dbPath); } catch {}
   });
+
+  it("should hard-error when the global --project filter cannot be resolved instead of listing everything", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const home = mkdtempSync(join(tmpdir(), "todos-cli-project-filter-"));
+    const dbPath = join(home, "todos.db");
+    const projectPath = join(home, "alpha-rocket");
+
+    try {
+      const added = await runCli(["projects", "--add", projectPath, "--name", "Alpha Rocket"], dbPath);
+      expect(added.exitCode).toBe(0);
+      expect((await runCli(["add", "Alpha task", "--project", "Alpha Rocket"], dbPath)).exitCode).toBe(0);
+      expect((await runCli(["add", "Orphan task"], dbPath)).exitCode).toBe(0);
+
+      // Unresolvable --project must error with non-zero exit, never fall back to all tasks.
+      const bogus = await runCli(["--json", "list", "--project", "totally-bogus-nonexistent", "-a"], dbPath);
+      expect(bogus.exitCode).not.toBe(0);
+      expect(bogus.stderr).toContain("totally-bogus-nonexistent");
+      expect(bogus.stdout).not.toContain("Orphan task");
+      expect(bogus.stdout).not.toContain("Alpha task");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  it("should resolve the global --project filter by path, slug, and name", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const home = mkdtempSync(join(tmpdir(), "todos-cli-project-resolve-"));
+    const dbPath = join(home, "todos.db");
+    const projectPath = join(home, "alpha-rocket");
+
+    try {
+      expect((await runCli(["projects", "--add", projectPath, "--name", "Alpha Rocket"], dbPath)).exitCode).toBe(0);
+      expect((await runCli(["add", "Alpha task", "--project", "Alpha Rocket"], dbPath)).exitCode).toBe(0);
+      expect((await runCli(["add", "Orphan task"], dbPath)).exitCode).toBe(0);
+
+      for (const ref of [projectPath, "alpha-rocket", "Alpha Rocket"]) {
+        const listed = await runCli(["--json", "list", "--project", ref, "-a"], dbPath);
+        expect(listed.exitCode).toBe(0);
+        const tasks = JSON.parse(listed.stdout);
+        expect(tasks.map((t: { title: string }) => t.title)).toEqual(["Alpha task"]);
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  it("should hard-error on an unresolvable --project in next instead of picking machine-wide tasks", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const home = mkdtempSync(join(tmpdir(), "todos-cli-next-project-"));
+    const dbPath = join(home, "todos.db");
+
+    try {
+      expect((await runCli(["add", "Machine-wide task"], dbPath)).exitCode).toBe(0);
+
+      const bogus = await runCli(["--json", "next", "--project", "totally-bogus-nonexistent"], dbPath);
+      expect(bogus.exitCode).not.toBe(0);
+      expect(bogus.stderr).toContain("totally-bogus-nonexistent");
+      expect(bogus.stdout).not.toContain("Machine-wide task");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  it("should hard-error on an unresolvable global --project in mine instead of dropping the filter", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const home = mkdtempSync(join(tmpdir(), "todos-cli-mine-project-"));
+    const dbPath = join(home, "todos.db");
+
+    try {
+      expect((await runCli(["add", "Assigned task", "--assign", "codex"], dbPath)).exitCode).toBe(0);
+
+      const bogus = await runCli(["--json", "--project", "totally-bogus-nonexistent", "mine", "codex"], dbPath);
+      expect(bogus.exitCode).not.toBe(0);
+      expect(bogus.stderr).toContain("totally-bogus-nonexistent");
+      expect(bogus.stdout).not.toContain("Assigned task");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 30000);
 });
