@@ -3,6 +3,9 @@ import type { SearchResult } from "../types/index.js";
 export function normalizeUrl(url: string): string {
   try {
     const u = new URL(url);
+    // Local file paths: `#` and `?` are path characters, not fragments/queries.
+    // Only a trailing-slash trim is safe.
+    if (u.protocol === "file:") return url.replace(/\/+$/, "");
     // Lowercase host
     u.hostname = u.hostname.toLowerCase();
     // Remove trailing slash

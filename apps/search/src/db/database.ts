@@ -1,35 +1,47 @@
 import { Database } from "bun:sqlite";
-import { SqliteAdapter, ensureFeedbackTable, migrateDotfile } from "@hasna/cloud";
 import { mkdirSync } from "fs";
 import { runMigrations } from "./migrations";
 
 let instance: Database | null = null;
-let _adapter: SqliteAdapter | null = null;
 
-function resolveDbPath(): string {
+function ensureFeedbackTable(db: Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS feedback (
+      id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+      message TEXT NOT NULL,
+      email TEXT,
+      category TEXT DEFAULT 'general',
+      version TEXT,
+      machine_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+}
+
+export function getDbPath(): string {
   // Support env var overrides
   const envPath = Bun.env.HASNA_SEARCH_DB_PATH ?? Bun.env.SEARCH_DB_PATH;
   if (envPath) return envPath;
 
   const home = Bun.env.HOME ?? "/tmp";
-  migrateDotfile("search");
-  const newDir = `${home}/.hasna/search`;
-  mkdirSync(newDir, { recursive: true });
-  return `${newDir}/data.db`;
+  const dir = `${home}/.hasna/search`;
+  mkdirSync(dir, { recursive: true });
+  return `${dir}/data.db`;
 }
 
 export function getDb(): Database {
   if (instance) return instance;
 
-  const path = resolveDbPath();
-  _adapter = new SqliteAdapter(path);
-  const db = _adapter.raw;
+  const path = getDbPath();
+  const db = new Database(path);
 
-  db.exec("PRAGMA synchronous = NORMAL");
   db.exec("PRAGMA busy_timeout = 5000");
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA foreign_keys = ON");
+  db.exec("PRAGMA synchronous = NORMAL");
 
   runMigrations(db);
-  ensureFeedbackTable(_adapter);
+  ensureFeedbackTable(db);
 
   instance = db;
   return instance;
@@ -39,7 +51,6 @@ export function closeDb(): void {
   if (instance) {
     instance.close();
     instance = null;
-    _adapter = null;
   }
 }
 
@@ -49,5 +60,6 @@ export function getDbForTesting(): Database {
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("PRAGMA synchronous = NORMAL");
   runMigrations(db);
+  ensureFeedbackTable(db);
   return db;
 }

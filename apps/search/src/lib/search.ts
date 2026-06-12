@@ -4,6 +4,7 @@ import {
   type SearchOptions,
   type SearchResult,
   type UnifiedSearchResponse,
+  LOCAL_PROVIDER_NAMES,
   generateId,
 } from "../types/index.js";
 import { getProvider } from "./providers/index.js";
@@ -52,11 +53,22 @@ export async function unifiedSearch(
     }
   }
 
-  // Filter to only configured providers
+  // Filter to only configured providers; report what was dropped so a
+  // request for e.g. ["files"] with no index roots fails visibly.
+  const errors: Array<{ provider: SearchProviderName; error: string }> = [];
+  const explicitRequest = (opts.providers?.length ?? 0) > 0 || Boolean(opts.profile);
   const activeProviders = providerNames.filter((name) => {
     try {
-      const provider = getProvider(name);
-      return provider.isConfigured();
+      if (getProvider(name).isConfigured()) return true;
+      if (explicitRequest) {
+        errors.push({
+          provider: name,
+          error: LOCAL_PROVIDER_NAMES.has(name)
+            ? "no index roots ready — run `search index add <path>` first"
+            : "not configured (missing API key)",
+        });
+      }
+      return false;
     } catch {
       return false;
     }
@@ -79,7 +91,6 @@ export async function unifiedSearch(
 
   // Collect results and errors
   const allResults: SearchResult[] = [];
-  const errors: Array<{ provider: SearchProviderName; error: string }> = [];
   const searchId = generateId();
 
   for (const result of results) {
@@ -128,26 +139,45 @@ export async function unifiedSearch(
 
   const duration = Date.now() - startTime;
 
-  // Store in DB
+  // No provider actually ran: return without polluting history.
+  if (activeProviders.length === 0) {
+    return {
+      search: {
+        id: searchId,
+        query,
+        providers: [],
+        profileId: null,
+        resultCount: 0,
+        duration,
+        createdAt: new Date().toISOString(),
+      },
+      results: finalResults,
+      errors,
+    };
+  }
+
+  // Local results are reproducible from the index and machine-specific —
+  // keep them out of (potentially synced) history unless explicitly enabled.
+  // The stored resultCount matches what is actually persisted so history
+  // stays self-consistent.
+  const persistable = config.recordLocalResults
+    ? finalResults
+    : finalResults.filter((r) => !LOCAL_PROVIDER_NAMES.has(r.source));
+
   const search = createSearch(
     {
       query,
       providers: activeProviders,
-      resultCount: finalResults.length,
+      resultCount: persistable.length,
       duration,
     },
     db,
   );
 
-  // Override the generated ID with our searchId
-  if (finalResults.length > 0) {
-    const resultsToStore = finalResults.map((r) => ({
-      ...r,
-      searchId: search.id,
-    }));
+  if (persistable.length > 0) {
     createResults(
-      resultsToStore.map((r) => ({
-        searchId: r.searchId,
+      persistable.map((r) => ({
+        searchId: search.id,
         title: r.title,
         url: r.url,
         snippet: r.snippet,
@@ -163,7 +193,7 @@ export async function unifiedSearch(
     );
   }
 
-  updateSearchResults(search.id, finalResults.length, duration, db);
+  updateSearchResults(search.id, persistable.length, duration, db);
 
   return {
     search: { ...search, resultCount: finalResults.length, duration },

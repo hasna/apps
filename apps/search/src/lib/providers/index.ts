@@ -12,6 +12,8 @@ import { YouTubeProvider } from "./youtube.js";
 import { HackerNewsProvider } from "./hackernews.js";
 import { GitHubProvider } from "./github.js";
 import { ArxivProvider } from "./arxiv.js";
+import { FilesProvider } from "./files.js";
+import { ContentProvider } from "./content.js";
 
 const providerFactories: Record<SearchProviderName, () => SearchProvider> = {
   google: () => new GoogleProvider(),
@@ -26,6 +28,8 @@ const providerFactories: Record<SearchProviderName, () => SearchProvider> = {
   hackernews: () => new HackerNewsProvider(),
   github: () => new GitHubProvider(),
   arxiv: () => new ArxivProvider(),
+  files: () => new FilesProvider(),
+  content: () => new ContentProvider(),
 };
 
 const instanceCache = new Map<SearchProviderName, SearchProvider>();

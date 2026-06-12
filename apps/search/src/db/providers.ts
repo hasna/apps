@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { getDb } from "./database.js";
-import { type ProviderConfig, type SearchProviderName } from "../types/index.js";
+import { hasReadyRoot } from "../lib/local/indexer.js";
+import { type ProviderConfig, type SearchProviderName, LOCAL_PROVIDER_NAMES } from "../types/index.js";
 
 interface ProviderRow {
   name: string;
@@ -84,6 +85,7 @@ export function updateProviderLastUsed(name: string, db?: Database): void {
 }
 
 export function isProviderConfigured(provider: ProviderConfig): boolean {
+  if (LOCAL_PROVIDER_NAMES.has(provider.name)) return hasReadyRoot();
   if (!provider.apiKeyEnv) return true; // No key needed (e.g., hackernews, arxiv)
   return !!Bun.env[provider.apiKeyEnv];
 }

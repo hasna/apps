@@ -15,11 +15,19 @@ export const PROVIDER_NAMES = [
   "hackernews",
   "github",
   "arxiv",
+  "files",
+  "content",
 ] as const;
 
 export type SearchProviderName = (typeof PROVIDER_NAMES)[number];
 
 export const SearchProviderNameSchema = z.enum(PROVIDER_NAMES);
+
+/** Providers that search the local file index instead of the web. */
+export const LOCAL_PROVIDER_NAMES: ReadonlySet<SearchProviderName> = new Set([
+  "files",
+  "content",
+]);
 
 // --- Export Formats ---
 
@@ -129,6 +137,12 @@ export interface SearchConfig {
   };
   dedup: boolean;
   maxConcurrent: number;
+  /** Re-index roots older than this many minutes before serving local results. */
+  indexStaleMinutes: number;
+  /** Automatically refresh stale index roots on local searches. */
+  indexAutoRefresh: boolean;
+  /** Persist local (files/content) results into search history. */
+  recordLocalResults: boolean;
 }
 
 export const DEFAULT_CONFIG: SearchConfig = {
@@ -141,6 +155,9 @@ export const DEFAULT_CONFIG: SearchConfig = {
   },
   dedup: true,
   maxConcurrent: 5,
+  indexStaleMinutes: 5,
+  indexAutoRefresh: true,
+  recordLocalResults: false,
 };
 
 // --- Unified Search Response ---

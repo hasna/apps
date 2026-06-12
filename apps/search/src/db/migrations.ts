@@ -134,6 +134,41 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 4,
+    description: "Local search providers (files, content) and local profile",
+    up: (db) => {
+      db.exec(`
+        INSERT OR IGNORE INTO providers (name, enabled, api_key_env, rate_limit, metadata) VALUES
+          ('files',   1, '', 0, '{}'),
+          ('content', 1, '', 0, '{}');
+
+        INSERT OR IGNORE INTO search_profiles (id, name, description, providers, options, created_at) VALUES
+          ('prof-local', 'local', 'Local filesystem: file paths + content', '["files","content"]', '{}', datetime('now'));
+      `);
+
+      // Append the local providers to whatever profile is named "all",
+      // preserving any user customization of its provider list.
+      const row = db.query("SELECT id, providers FROM search_profiles WHERE name = 'all'").get() as
+        | { id: string; providers: string }
+        | null;
+      if (row) {
+        let providers: string[];
+        try {
+          providers = JSON.parse(row.providers) as string[];
+        } catch {
+          providers = [];
+        }
+        for (const name of ["files", "content"]) {
+          if (!providers.includes(name)) providers.push(name);
+        }
+        db.prepare("UPDATE search_profiles SET providers = ? WHERE id = ?").run(
+          JSON.stringify(providers),
+          row.id,
+        );
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {
@@ -158,7 +193,7 @@ export function runMigrations(db: Database): void {
     db.exec("BEGIN");
     try {
       migration.up(db);
-      db.prepare("INSERT INTO _migrations (version, description) VALUES (?, ?)").run(
+      db.prepare("INSERT OR IGNORE INTO _migrations (version, description) VALUES (?, ?)").run(
         migration.version,
         migration.description,
       );
