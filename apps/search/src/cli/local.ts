@@ -112,7 +112,7 @@ export function registerLocalCommands(program: Command): void {
           exclude: opts.exclude ? opts.exclude.split(",").map((s: string) => s.trim()) : [],
           maxFileSize: parsePositiveInt(opts.maxFileSize, "--max-file-size"),
         });
-        console.log(chalk.dim(`Indexing ${root.path} ...`));
+        if (!opts.json) console.log(chalk.dim(`Indexing ${root.path} ...`));
         const stats = indexRoot(root.id);
         if (opts.json) {
           printJson({ root: getRoot(root.id), stats });

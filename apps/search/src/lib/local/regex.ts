@@ -10,8 +10,6 @@ interface BranchLiterals {
   literals: string[];
 }
 
-const SPECIAL_ESCAPES = new Set(["w", "W", "d", "D", "s", "S", "b", "B"]);
-
 /**
  * Extract required literals from a regex pattern, as an OR-of-ANDs across
  * top-level alternation branches. Conservative: any construct we don't fully
@@ -86,22 +84,42 @@ function extractSequenceLiterals(seq: string): string[] {
     if (ch === "\\") {
       const next = seq[i + 1];
       if (next === undefined) break;
-      if (SPECIAL_ESCAPES.has(next) || /[0-9]/.test(next)) {
-        // Character class shorthand or backreference: not a literal.
+      if (/[a-zA-Z0-9]/.test(next)) {
+        // Escape token (\w \d \t \n \x41 A \cX \k<name> \p{..}, backrefs):
+        // never literal text. Consume the whole token — over-consuming only
+        // weakens the prefilter (safe); a wrong required literal is not.
         flush();
-      } else {
-        // Escaped literal char (\. \* \\ ...) — quantifier may still follow.
-        const q = quantifierAt(seq, i + 2);
-        if (q.optional) {
-          flush();
-        } else {
-          run += next;
-          if (q.repeats) flush();
+        let len = 2;
+        if (next === "x") {
+          len = 4; // \xHH
+        } else if (next === "u") {
+          if (seq[i + 2] === "{") {
+            const close = seq.indexOf("}", i + 2);
+            len = close === -1 ? 2 : close - i + 1; // \u{...}
+          } else {
+            len = 6; // \uHHHH
+          }
+        } else if (next === "c") {
+          len = 3; // \cX
+        } else if (next === "k" && seq[i + 2] === "<") {
+          const close = seq.indexOf(">", i + 2);
+          len = close === -1 ? 2 : close - i + 1; // \k<name>
+        } else if ((next === "p" || next === "P") && seq[i + 2] === "{") {
+          const close = seq.indexOf("}", i + 2);
+          len = close === -1 ? 2 : close - i + 1; // \p{...}
         }
-        i += 2 + q.length;
+        i += len;
         continue;
       }
-      i += 2;
+      // Escaped metacharacter (\. \* \\ ...) — literal; quantifier may follow.
+      const q = quantifierAt(seq, i + 2);
+      if (q.optional) {
+        flush();
+      } else {
+        run += next;
+        if (q.repeats) flush();
+      }
+      i += 2 + q.length;
       continue;
     }
 

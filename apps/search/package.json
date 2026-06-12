@@ -1,6 +1,6 @@
 {
   "name": "@hasna/search",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "Unified search — local file index (find files by name/path/content/regex in ms, trigram FTS) + 12 web providers (Google, SerpAPI, Exa, Perplexity, Twitter, Reddit, YouTube, Brave, Bing, Hacker News, GitHub, arXiv) + YouTube transcription. CLI + MCP + REST API + Dashboard.",
   "type": "module",
   "main": "dist/index.js",

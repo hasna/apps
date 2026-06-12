@@ -72,6 +72,20 @@ describe("extractRegexLiterals", () => {
     expect(literals("ab{2,3}cdef")).toEqual([["ab", "cdef"]].map((b) => b.filter((l) => l.length >= 3)));
     expect(literals("ab{0,3}cdef")).toEqual([["cdef"]]);
   });
+
+  test("control/hex/unicode escapes are never treated as literal text", () => {
+    // \t is a TAB, not the letter t — requiring "footbar" would silently
+    // drop every real match (regression: round-2 adversarial finding)
+    expect(literals("foo\\tbar")).toEqual([["foo", "bar"]]);
+    expect(literals("foo\\nbar")).toEqual([["foo", "bar"]]);
+    expect(literals("foo\\vbar")).toEqual([["foo", "bar"]]);
+    expect(literals("\\x41bcdef")).toEqual([["bcdef"]]);
+    expect(literals("\\u0041bcdef")).toEqual([["bcdef"]]);
+    expect(literals("\\u{1F600}abcdef")).toEqual([["abcdef"]]);
+    expect(literals("foo\\cMbar")).toEqual([["foo", "bar"]]);
+    expect(literals("(?<g>foo)\\k<g>barbaz")).toEqual([["foo", "barbaz"]]);
+    expect(literals("\\p{L}+abcdef")).toEqual([["abcdef"]]);
+  });
 });
 
 describe("buildFtsQueryFromRegex", () => {

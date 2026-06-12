@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { getIndexDb } from "../../db/index-db.js";
 import { getRoot } from "./indexer.js";
 import { buildFtsQueryFromRegex, compileSearchRegex } from "./regex.js";
@@ -115,16 +115,37 @@ function rowToHit(row: CandidateRow, score: number): FileHit {
   };
 }
 
+/** Treat -, _, . as spaces so "dedup utils" matches dedup-utils.ts and dedup_utils.py. */
+function normalizeForMatch(s: string): string {
+  return s.toLowerCase().replace(/[-_.]+/g, " ").trim();
+}
+
+// Tier floors keep name-match classes strictly ordered above content scores
+// (content tops out at CONTENT_MAX_SCORE) regardless of depth/recency noise.
+const EXACT_NAME_FLOOR = 0.72;
+const PREFIX_NAME_FLOOR = 0.58;
+const CONTENT_MAX_SCORE = 0.65;
+
 function scoreFileName(query: string, tokens: string[], row: CandidateRow): number {
   const q = query.trim().toLowerCase();
+  const qNorm = normalizeForMatch(query);
   const name = row.name.toLowerCase();
   const stem = name.replace(/\.[^.]+$/, "");
+  const nameNorm = normalizeForMatch(row.name);
+  const stemNorm = normalizeForMatch(row.name.replace(/\.[^.]+$/, ""));
   const relPath = row.rel_path.toLowerCase();
 
   let score = 0;
-  if (name === q || stem === q) score += 100;
-  else if (name.startsWith(q) || stem.startsWith(q)) score += 60;
-  else if (name.includes(q)) score += 40;
+  let floor = 0;
+  if (name === q || stem === q || nameNorm === qNorm || stemNorm === qNorm) {
+    score += 100;
+    floor = EXACT_NAME_FLOOR;
+  } else if (name.startsWith(q) || stem.startsWith(q) || stemNorm.startsWith(qNorm)) {
+    score += 60;
+    floor = PREFIX_NAME_FLOOR;
+  } else if (name.includes(q) || nameNorm.includes(qNorm)) {
+    score += 40;
+  }
 
   for (const token of tokens) {
     const t = token.toLowerCase();
@@ -140,7 +161,7 @@ function scoreFileName(query: string, tokens: string[], row: CandidateRow): numb
   else if (age < 30 * 86_400_000) score += 5;
 
   // Normalize to 0..1 so local scores blend with provider scores.
-  return Math.max(0, score) / (Math.max(0, score) + 60);
+  return Math.max(floor, Math.max(0, score) / (Math.max(0, score) + 60));
 }
 
 const CANDIDATE_COLUMNS = `
@@ -165,6 +186,8 @@ export function searchFilePaths(
 
   let rows: CandidateRow[];
   if (ftsQuery) {
+    // Weight the name column heavily in the bm25 pre-rank so token-dense
+    // paths can't crowd real filename matches out of the candidate pool.
     rows = d
       .prepare(
         `SELECT ${CANDIDATE_COLUMNS}
@@ -172,10 +195,28 @@ export function searchFilePaths(
          JOIN files f ON f.id = fts.rowid
          JOIN index_roots r ON r.id = f.root_id
          WHERE files_fts MATCH ?${filters.sql}
-         ORDER BY fts.rank
+         ORDER BY bm25(files_fts, 10.0, 1.0)
          LIMIT ?`,
       )
       .all(ftsQuery, ...filters.params, candidateLimit) as CandidateRow[];
+
+    // Guarantee exact/prefix basename matches are in the pool even when the
+    // bm25 pool is flooded (LIKE is ASCII-case-insensitive in SQLite).
+    const namePattern = `${query.trim().replace(/[\\%_]/g, "\\$&")}%`;
+    const nameRows = d
+      .prepare(
+        `SELECT ${CANDIDATE_COLUMNS}
+         FROM files f
+         JOIN index_roots r ON r.id = f.root_id
+         WHERE f.name LIKE ? ESCAPE '\\'${filters.sql}
+         ORDER BY length(f.name)
+         LIMIT 100`,
+      )
+      .all(namePattern, ...filters.params) as CandidateRow[];
+    const seen = new Set(rows.map((row) => row.id));
+    for (const row of nameRows) {
+      if (!seen.has(row.id)) rows.push(row);
+    }
   } else {
     // All tokens shorter than the trigram minimum: LIKE over the path.
     const likeClauses = tokens.map(() => "f.rel_path LIKE ? ESCAPE '\\'").join(" AND ");
@@ -200,10 +241,17 @@ export function searchFilePaths(
   return filtered
     .map((row) => rowToHit(row, scoreFileName(query, tokens, row)))
     .sort((a, b) => b.score - a.score)
+    .filter((hit) => existsSync(hit.absPath)) // drop ghosts deleted since indexing
     .slice(0, limit);
 }
 
-function findLineMatches(content: string, query: string, tokens: string[]): LineMatch[] {
+type MatchTier = "phrase" | "all" | "any";
+
+function findLineMatches(
+  content: string,
+  query: string,
+  tokens: string[],
+): { matches: LineMatch[]; tier: MatchTier } {
   const lines = content.split("\n");
   const phrase = query.trim().toLowerCase();
   const lowered = tokens.map((t) => t.toLowerCase());
@@ -224,8 +272,9 @@ function findLineMatches(content: string, query: string, tokens: string[]): Line
     if (phraseHits.length >= MAX_MATCHES_PER_FILE) break;
   }
 
+  const tier: MatchTier = phraseHits.length > 0 ? "phrase" : allTokenHits.length > 0 ? "all" : "any";
   const combined = [...phraseHits, ...allTokenHits, ...anyTokenHits];
-  return combined.slice(0, MAX_MATCHES_PER_FILE);
+  return { matches: combined.slice(0, MAX_MATCHES_PER_FILE), tier };
 }
 
 /**
@@ -266,7 +315,9 @@ export function searchFilePathsRegex(
     if (!regex.test(row.rel_path) && !regex.test(row.name)) continue;
     const depth = row.rel_path.split("/").length - 1;
     const score = Math.max(0.05, 0.6 - depth * 0.02);
-    hits.push(rowToHit(row, score));
+    const hit = rowToHit(row, score);
+    if (!existsSync(hit.absPath)) continue; // ghost: deleted since indexing
+    hits.push(hit);
     if (hits.length >= limit) break;
   }
   return hits;
@@ -367,9 +418,10 @@ export function searchFileContent(
     .all(ftsQuery, ...filters.params, Math.max(50, limit * 3)) as CandidateRow[];
 
   const tokens = tokenize(query);
-  const hits: ContentHit[] = [];
+  const shortTokens = tokens.filter((t) => t.length < 3).map((t) => t.toLowerCase());
+  const scored: ContentHit[] = [];
 
-  for (let i = 0; i < rows.length && hits.length < limit; i++) {
+  for (let i = 0; i < rows.length && scored.length < limit * 2; i++) {
     const row = rows[i]!;
     const absPath = `${row.root_path}/${row.rel_path}`;
 
@@ -380,13 +432,21 @@ export function searchFileContent(
       continue; // File vanished since indexing; next refresh will drop it.
     }
 
-    const matches = findLineMatches(content, query, tokens);
+    // Short tokens are invisible to trigram FTS — enforce them on the body.
+    if (shortTokens.length > 0) {
+      const lower = content.toLowerCase();
+      if (!shortTokens.every((t) => lower.includes(t))) continue;
+    }
+
+    const { matches, tier } = findLineMatches(content, query, tokens);
     if (matches.length === 0) continue;
 
-    // bm25 ordering from FTS, decayed by position. Capped below strong
-    // filename matches so "dedup" ranks dedup.ts above files mentioning it.
-    const score = Math.max(0.25, 0.65 - i * 0.05);
-    hits.push({
+    // bm25 ordering decayed by position, boosted by line-match quality.
+    // Stays below EXACT_NAME_FLOOR so "dedup" ranks dedup.ts above mentions.
+    const base = Math.max(0.25, 0.55 - i * 0.04);
+    const tierBoost = tier === "phrase" ? 0.1 : tier === "all" ? 0.05 : 0;
+    const score = Math.min(CONTENT_MAX_SCORE, base + tierBoost);
+    scored.push({
       ...rowToHit(row, score),
       line: matches[0]!.line,
       lineText: matches[0]!.text,
@@ -394,5 +454,5 @@ export function searchFileContent(
     });
   }
 
-  return hits;
+  return scored.sort((a, b) => b.score - a.score).slice(0, limit);
 }

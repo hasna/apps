@@ -182,6 +182,74 @@ describe("regex search", () => {
   });
 });
 
+describe("ranking quality (round-2 regressions)", () => {
+  test("deep, old exact-name file beats a fresh prose mention", () => {
+    write("src/lib/dedup.ts", "export const x = 1;");
+    write("notes.md", "dedup is mentioned here\nand dedup again");
+    const { utimesSync } = require("node:fs");
+    const old = new Date(Date.now() - 90 * 86_400_000);
+    utimesSync(join(root, "src/lib/dedup.ts"), old, old);
+    const r = addRoot(root, {}, db);
+    indexRoot(r.id, {}, db);
+
+    const { findLocal } = require("./find.js");
+    const res = findLocal("dedup", { refresh: false }, db);
+    expect(res.results[0]!.path.endsWith("src/lib/dedup.ts")).toBe(true);
+  });
+
+  test("exact name match survives candidate-pool flooding", () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 250; i++) {
+      files[`gamma/gamma-${i}/gamma-gamma/gamma-gamma-${i}.txt`] = "x";
+    }
+    files["src/util/gamma.ts"] = "y";
+    setup(files);
+
+    const hits = searchFilePaths("gamma", { limit: 10 }, db);
+    expect(hits[0]!.relPath).toBe("src/util/gamma.ts");
+  });
+
+  test("multi-word query matches separator-joined filename", () => {
+    setup({
+      "src/dedup-utils.ts": "export {}",
+      "notes.md": "dedup utils mentioned in prose",
+    });
+    const { findLocal } = require("./find.js");
+    const res = findLocal("dedup utils", { refresh: false }, db);
+    expect(res.results[0]!.path.endsWith("src/dedup-utils.ts")).toBe(true);
+  });
+
+  test("phrase line beats scattered tokens in content ranking", () => {
+    const scattered =
+      Array.from({ length: 10 }, () => "memory leak mentioned alone here").join("\n") +
+      "\n" +
+      Array.from({ length: 10 }, () => "detector mentioned alone here").join("\n");
+    setup({
+      "scattered.txt": scattered,
+      "phrase.txt": "the memory leak detector lives here",
+    });
+    const hits = searchFileContent("memory leak detector", {}, db);
+    expect(hits[0]!.relPath).toBe("phrase.txt");
+  });
+
+  test("short tokens are enforced in content search", () => {
+    setup({
+      "no-db.txt": "configuration settings only",
+      "with-db.txt": "db config here",
+    });
+    const hits = searchFileContent("db config", {}, db);
+    expect(hits.length).toBe(1);
+    expect(hits[0]!.relPath).toBe("with-db.txt");
+  });
+
+  test("deleted files do not ghost in file results", () => {
+    setup({ "main.ts": "x", "other-main.ts": "y" });
+    rmSync(join(root, "main.ts"));
+    const hits = searchFilePaths("main", {}, db);
+    expect(hits.map((h) => h.name)).toEqual(["other-main.ts"]);
+  });
+});
+
 describe("query robustness", () => {
   test("NUL bytes in query do not crash FTS", () => {
     setup({ "a.ts": "abcdef here" });
