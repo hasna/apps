@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   total_tokens_in INTEGER NOT NULL DEFAULT 0,
   total_tokens_out INTEGER NOT NULL DEFAULT 0,
   total_duration_ms INTEGER NOT NULL DEFAULT 0,
+  tags TEXT,
   error TEXT,
   created_at TEXT NOT NULL,
   completed_at TEXT
@@ -45,7 +46,7 @@ ALTER TABLE action_logs ADD COLUMN IF NOT EXISTS reasoning_tsv TSVECTOR
   GENERATED ALWAYS AS (to_tsvector('english', COALESCE(reasoning, ''))) STORED;
 CREATE INDEX IF NOT EXISTS idx_action_logs_fts ON action_logs USING GIN(reasoning_tsv);
 
--- Feedback table (for @hasna/cloud feedback system)
+-- Feedback table
 CREATE TABLE IF NOT EXISTS feedback (
   id TEXT PRIMARY KEY,
   service TEXT NOT NULL DEFAULT 'computer',

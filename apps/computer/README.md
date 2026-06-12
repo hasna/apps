@@ -159,6 +159,22 @@ const result = await driver.execute({
 
 Sessions and action logs are stored in `~/.hasna/computer/computer.db` (SQLite).
 
+## Storage Sync
+
+Optional Postgres sync is available through package-local commands:
+
+```bash
+export HASNA_COMPUTER_DATABASE_URL=postgres://...
+computer storage status
+computer storage push
+computer storage pull
+computer storage sync
+```
+
+The MCP server also exposes `storage_status`, `storage_push`, `storage_pull`, and `storage_sync`.
+
+`COMPUTER_DATABASE_URL` is accepted as the non-Hasna fallback database URL.
+
 ## License
 
 Apache-2.0

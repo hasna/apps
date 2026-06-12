@@ -7,7 +7,16 @@ import { executeAction } from "../drivers/mac/input.js";
 import { listSessions, getSession, getActionLogs, deleteSession, getStats, searchSessions, searchActionLogs } from "../db/index.js";
 import { registerAgent, heartbeat as agentHeartbeat, setFocus, listAgents } from "../db/agents.js";
 import { queryAccessibilityTree, summarizeAccessibilityTree } from "../drivers/mac/accessibility.js";
-import { registerCloudTools } from "@hasna/cloud";
+import {
+  getStorageStatus,
+  storagePull,
+  storagePush,
+  storageSync,
+} from "../db/storage-sync.js";
+
+function storageResult(value: unknown) {
+  return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
+}
 import type { Provider, DriverAction, MouseButton } from "../types/index.js";
 
 export function buildServer(): McpServer {
@@ -385,8 +394,29 @@ server.tool(
   }
 );
 
-  // ── Cloud tools (sync, feedback) ─────────────────────────────────────
-  registerCloudTools(server, "computer");
+  // ── Storage tools ───────────────────────────────────────────────────
+  server.tool("storage_status", "Show computer storage sync configuration and local sync history", {}, async () => storageResult(getStorageStatus()));
+
+  server.tool(
+    "storage_push",
+    "Push local computer data to storage PostgreSQL",
+    { tables: z.array(z.string()).optional() },
+    async ({ tables }) => storageResult(await storagePush(tables ? { tables } : undefined)),
+  );
+
+  server.tool(
+    "storage_pull",
+    "Pull computer data from storage PostgreSQL to local SQLite",
+    { tables: z.array(z.string()).optional() },
+    async ({ tables }) => storageResult(await storagePull(tables ? { tables } : undefined)),
+  );
+
+  server.tool(
+    "storage_sync",
+    "Bidirectional computer sync: pull then push",
+    { tables: z.array(z.string()).optional() },
+    async ({ tables }) => storageResult(await storageSync(tables ? { tables } : undefined)),
+  );
 
   return server;
 }

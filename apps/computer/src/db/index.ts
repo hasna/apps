@@ -1,12 +1,43 @@
-import { SqliteAdapter, type DbAdapter } from "@hasna/cloud";
-import { getDbPath, getDataDir } from "@hasna/cloud";
+import { Database } from "bun:sqlite";
+import { join } from "node:path";
+import { mkdirSync } from "node:fs";
+import { homedir } from "node:os";
 import type { Session, ActionLog, DriverAction, SessionStatus } from "../types/index.js";
 
 const SERVICE_NAME = "computer";
 
+export interface DbAdapter {
+  exec(sql: string): void;
+  prepare(sql: string): {
+    run(...params: unknown[]): { changes: number; lastInsertRowid?: number | bigint };
+    get(...params: unknown[]): unknown;
+    all(...params: unknown[]): unknown[];
+  };
+  close(): void;
+}
+
+export function getDataDir(service = SERVICE_NAME): string {
+  if (service === SERVICE_NAME && process.env["COMPUTER_DATA_DIR"]) {
+    mkdirSync(process.env["COMPUTER_DATA_DIR"], { recursive: true });
+    return process.env["COMPUTER_DATA_DIR"];
+  }
+  const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
+  const dir = join(home, ".hasna", service);
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+export function getDbPath(service = SERVICE_NAME): string {
+  if (service === SERVICE_NAME && process.env["COMPUTER_DB_PATH"]) {
+    mkdirSync(join(process.env["COMPUTER_DB_PATH"], ".."), { recursive: true });
+    return process.env["COMPUTER_DB_PATH"];
+  }
+  return join(getDataDir(service), `${service}.db`);
+}
+
 let db: DbAdapter | null = null;
 
-/** Get or create the database via @hasna/cloud adapter */
+/** Get or create the local SQLite database. */
 export function getDb(): DbAdapter {
   if (db) return db;
 
@@ -14,7 +45,7 @@ export function getDb(): DbAdapter {
   getDataDir(SERVICE_NAME);
 
   const dbPath = getDbPath(SERVICE_NAME);
-  const adapter = new SqliteAdapter(dbPath);
+  const adapter = new Database(dbPath) as unknown as DbAdapter;
 
   adapter.exec("PRAGMA journal_mode = WAL");
   adapter.exec("PRAGMA foreign_keys = ON");

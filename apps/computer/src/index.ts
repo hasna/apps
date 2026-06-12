@@ -70,6 +70,8 @@ export type { TerminalProtocol } from "./lib/terminal-image.js";
 // Database
 export {
   getDb,
+  getDbPath,
+  getDataDir,
   createSession,
   updateSession,
   logAction,
@@ -81,3 +83,5 @@ export {
   searchSessions,
   searchActionLogs,
 } from "./db/index.js";
+export * from "./db/storage-sync.js";
+export * from "./db/remote-storage.js";

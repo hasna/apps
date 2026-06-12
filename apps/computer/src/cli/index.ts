@@ -2,11 +2,11 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import { runTask } from "../agent/loop.js";
-import { listSessions, getSession, getActionLogs, deleteSession, getStats, searchSessions } from "../db/index.js";
+import { listSessions, getSession, getActionLogs, deleteSession, getStats, searchSessions, getDataDir } from "../db/index.js";
 import { captureScreenshot, saveScreenshotToFile } from "../drivers/mac/screenshot.js";
 import { loadConfig, getConfigValue, setConfigValue, getConfigPath } from "../lib/config.js";
 import { calculateCost, formatCost, stepCost } from "../lib/pricing.js";
-import { registerCloudCommands } from "@hasna/cloud";
+import { registerStorageCommands } from "./storage.js";
 import { renderInlineImage, supportsInlineImages } from "../lib/terminal-image.js";
 import type { Provider } from "../types/index.js";
 
@@ -546,7 +546,6 @@ program
         console.log(chalk.green(`Recording saved to ${opts.output}`));
       } else {
         // Save to default location
-        const { getDataDir } = await import("@hasna/cloud");
         const dir = getDataDir("computer");
         const filename = `recording-${Date.now()}.json`;
         const path = join(dir, "recordings", filename);
@@ -574,8 +573,8 @@ program
     }
   });
 
-// ── Cloud commands (sync, feedback) ──────────────────────────────────
-registerCloudCommands(program, "computer");
+// ── Storage commands (sync, feedback) ────────────────────────────────
+registerStorageCommands(program);
 
 program.parse();
 
@@ -597,7 +596,7 @@ _computer() {
     'search:Search sessions'
     'config:View or modify configuration'
     'completions:Generate shell completions'
-    'cloud:Cloud sync and feedback'
+    'storage:Storage sync and feedback'
   )
 
   _arguments -C \\
@@ -653,7 +652,7 @@ _computer_completions() {
   COMPREPLY=()
   cur="\${COMP_WORDS[COMP_CWORD]}"
   prev="\${COMP_WORDS[COMP_CWORD-1]}"
-  commands="run screenshot sessions session delete stats watch search config completions cloud"
+  commands="run screenshot sessions session delete stats watch search config completions storage"
 
   if [ "$COMP_CWORD" -eq 1 ]; then
     COMPREPLY=( $(compgen -W "$commands" -- "$cur") )

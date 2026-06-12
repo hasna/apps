@@ -1,6 +1,6 @@
 {
   "name": "@hasna/computer",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Open-source computer use for AI agents — control your Mac with Anthropic or OpenAI. CLI + MCP server + REST API + Dashboard.",
   "type": "module",
   "main": "dist/index.js",
@@ -14,6 +14,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./storage": {
+      "types": "./dist/storage.d.ts",
+      "import": "./dist/storage.js"
     }
   },
   "files": [
@@ -30,7 +34,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk --external ink --external react --external chalk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk --external ink --external react --external chalk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/index.ts src/storage.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.ts",
@@ -70,15 +74,16 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
-    "@hasna/cloud": "0.1.6",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
     "openai": "^4.85.0",
+    "pg": "^8.13.3",
     "zod": "^3.24.2"
   },
   "devDependencies": {
     "@types/bun": "^1.2.4",
+    "@types/pg": "^8.11.11",
     "typescript": "^5.7.3"
   }
 }
