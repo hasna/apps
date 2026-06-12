@@ -47,11 +47,62 @@ bun install -g @hasna/computer
 computer run <task>              # Run a computer use task
 computer run <task> -p openai    # Use OpenAI instead of Anthropic
 computer run <task> -s 30        # Limit to 30 steps
+computer open <app> [options]    # Open an app deterministically via its driver
+computer apps                    # List app drivers + availability
 computer screenshot              # Capture current screen
 computer sessions                # List past sessions
 computer session <id>            # Show session details + action log
 computer stats                   # Usage statistics
 ```
+
+## Apps
+
+Beyond AI-driven tasks (`computer run`), `computer` ships deterministic **app
+drivers** that open and arrange desktop apps with zero AI in the loop — windows,
+tabs, pane grids, and a command per pane.
+
+```bash
+computer apps                    # List registered drivers and availability
+computer open <app> [options]    # Open/orchestrate an app via its driver
+```
+
+Options for `computer open`:
+
+| Option | Description |
+|--------|-------------|
+| `--grid RxC` | Split the window into R rows x C cols (panes fill row-major: left-to-right, top-to-bottom) |
+| `--tabs "spec1,spec2,..."` | Multiple tabs in one window, each with its own grid (e.g. `"2x2,1x2,1x2"`) |
+| `--run <cmd>` | Command for the next pane in order (repeatable); with `--tabs`, commands flow across tabs |
+| `--all` | Run the single `--run` command in every pane |
+| `--dir <path>` | Working directory — every pane `cd`s there first |
+| `--max` | Maximize the new window (not native fullscreen) |
+
+Examples:
+
+```bash
+# 2x2 grid, run codewith in all four panes, maximized
+computer open ghostty --grid 2x2 --run "codewith" --all --max
+
+# 2x2 grid with a different command per pane
+computer open ghostty --grid 2x2 --run "htop" --run "btop" --run "vim" --run "bun dev"
+
+# Three tabs (2x2, then two 1x2), every pane cd'd into the project
+computer open ghostty --tabs "2x2,1x2,1x2" --dir ~/Workspace/myproject
+```
+
+**Drivers:**
+
+- **ghostty** — Ghostty terminal (macOS, Ghostty 1.3+). Uses Ghostty's native
+  AppleScript dictionary for windows, tabs, and splits. Requires
+  `/Applications/Ghostty.app` (or `ghostty` on PATH).
+
+Drivers are app-generic: each implements `available()` (with a reason when
+unavailable, e.g. on Linux) and `open(spec)`. New drivers register in
+`src/apps/registry.ts`.
+
+The same surface is exposed over MCP via `computer_open_app`
+(params: `app`, `grid`, `tabs`, `run[]`, `all`, `dir`, `max` — falls back to a
+plain macOS app launch for apps without a driver) and `computer_list_apps`.
 
 ## MCP Server
 

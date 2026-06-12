@@ -69,6 +69,18 @@ describe("computer MCP HTTP transport", () => {
       await client.connect(transport, { timeout: 10_000 });
       const tools = await client.listTools(undefined, { timeout: 10_000 });
       expect(tools.tools.some((t) => t.name === "computer_stats")).toBe(true);
+      expect(tools.tools.some((t) => t.name === "computer_open_app")).toBe(true);
+      expect(tools.tools.some((t) => t.name === "computer_list_apps")).toBe(true);
+
+      const apps = await client.callTool(
+        { name: "computer_list_apps", arguments: {} },
+        undefined,
+        { timeout: 10_000 }
+      );
+      const appsContent = apps.content as Array<{ type?: string; text?: string }>;
+      expect(appsContent[0]?.type).toBe("text");
+      const parsed = JSON.parse(appsContent[0]?.text ?? "[]") as Array<{ name: string; available: boolean }>;
+      expect(parsed.some((a) => a.name === "ghostty")).toBe(true);
 
       const result = await client.callTool(
         { name: "computer_stats", arguments: {} },

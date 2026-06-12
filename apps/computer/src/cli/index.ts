@@ -8,7 +8,10 @@ import { loadConfig, getConfigValue, setConfigValue, getConfigPath } from "../li
 import { calculateCost, formatCost, stepCost } from "../lib/pricing.js";
 import { registerStorageCommands } from "./storage.js";
 import { renderInlineImage, supportsInlineImages } from "../lib/terminal-image.js";
+import { getAppDriver, listAppDrivers } from "../apps/registry.js";
+import { parseGrid, parseTabsSpec } from "../apps/ghostty/applescript.js";
 import type { Provider } from "../types/index.js";
+import type { AppOpenSpec } from "../apps/types.js";
 
 const program = new Command();
 
@@ -115,6 +118,79 @@ program
     } else {
       console.log(chalk.green(`Screenshot captured: ${ss.size.width}x${ss.size.height}`));
       console.log(chalk.dim(`Base64 length: ${ss.base64.length} chars`));
+    }
+  });
+
+// ── open (app drivers) ───────────────────────────────────────────────
+const collectRun = (value: string, previous: string[]) => [...previous, value];
+
+program
+  .command("open")
+  .description("Open an app deterministically via its driver (no AI; see `computer apps`)")
+  .argument("<app>", "App to open (registered driver name, e.g. ghostty)")
+  .option("--grid <RxC>", 'Split the window into R rows x C cols (e.g. "2x2")')
+  .option("--tabs <specs>", 'Multiple tabs in one window, one grid spec each (e.g. "2x2,1x2,1x2")')
+  .option("--run <command>", "Command for the next pane in order (repeatable)", collectRun, [])
+  .option("--all", "Run the single --run command in every pane", false)
+  .option("--dir <path>", "Working directory — every pane cds here first")
+  .option("--max", "Maximize the new window (not native fullscreen)", false)
+  .action(async (app: string, opts: any) => {
+    const driver = getAppDriver(app);
+    if (!driver) {
+      console.error(chalk.red(`No app driver registered for "${app}".`));
+      console.error(chalk.dim("List available drivers with `computer apps`."));
+      process.exit(1);
+    }
+
+    const availability = driver.available();
+    if (!availability.available) {
+      console.error(chalk.red(`${driver.name} is not available on this machine.`));
+      if (availability.reason) console.error(chalk.dim(`Reason: ${availability.reason}`));
+      process.exit(1);
+    }
+
+    let spec: AppOpenSpec;
+    try {
+      spec = {
+        grid: opts.grid ? parseGrid(opts.grid) : undefined,
+        tabs: opts.tabs ? parseTabsSpec(opts.tabs) : undefined,
+        run: opts.run,
+        all: opts.all,
+        dir: opts.dir,
+        max: opts.max,
+      };
+    } catch (err) {
+      console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+      process.exit(1);
+    }
+
+    const result = await driver.open(spec!);
+    if (result.ok) {
+      console.log(chalk.green(result.message));
+    } else {
+      console.error(chalk.red(result.message));
+      process.exit(1);
+    }
+  });
+
+// ── apps ─────────────────────────────────────────────────────────────
+program
+  .command("apps")
+  .description("List registered app drivers and their availability on this machine")
+  .action(async () => {
+    const drivers = listAppDrivers();
+    if (drivers.length === 0) {
+      console.log(chalk.dim("No app drivers registered."));
+      return;
+    }
+    console.log(chalk.bold("App drivers\n"));
+    for (const driver of drivers) {
+      const availability = driver.available();
+      const status = availability.available ? chalk.green("available") : chalk.red("unavailable");
+      console.log(`  ${chalk.cyan(driver.name.padEnd(12))} ${status}  ${chalk.dim(driver.description)}`);
+      if (!availability.available && availability.reason) {
+        console.log(chalk.dim(`  ${" ".repeat(12)} ${availability.reason}`));
+      }
     }
   });
 
@@ -587,6 +663,8 @@ _computer() {
   local -a commands
   commands=(
     'run:Run a computer use task'
+    'open:Open an app via its driver'
+    'apps:List app drivers'
     'screenshot:Take a screenshot'
     'sessions:List sessions'
     'session:Show session details'
@@ -621,6 +699,16 @@ _computer() {
             '--no-preview[Disable inline preview]' \\
             '1:task:'
           ;;
+        open)
+          _arguments \\
+            '--grid[Pane grid RxC]:grid:' \\
+            '--tabs[Tab grid specs]:tabs:' \\
+            '*--run[Command per pane]:command:' \\
+            '--all[Same command in every pane]' \\
+            '--dir[Working directory]:dir:_files -/' \\
+            '--max[Maximize window]' \\
+            '1:app:(ghostty)'
+          ;;
         sessions)
           _arguments \\
             '-n[Limit]:limit:' \\
@@ -652,7 +740,7 @@ _computer_completions() {
   COMPREPLY=()
   cur="\${COMP_WORDS[COMP_CWORD]}"
   prev="\${COMP_WORDS[COMP_CWORD-1]}"
-  commands="run screenshot sessions session delete stats watch search config completions storage"
+  commands="run open apps screenshot sessions session delete stats watch search config completions storage"
 
   if [ "$COMP_CWORD" -eq 1 ]; then
     COMPREPLY=( $(compgen -W "$commands" -- "$cur") )
@@ -662,6 +750,9 @@ _computer_completions() {
   case "\${COMP_WORDS[1]}" in
     run)
       COMPREPLY=( $(compgen -W "-p --provider -m --model -s --max-steps --save-screenshots --dry-run --tag --max-width --no-preview" -- "$cur") )
+      ;;
+    open)
+      COMPREPLY=( $(compgen -W "ghostty --grid --tabs --run --all --dir --max" -- "$cur") )
       ;;
     sessions)
       COMPREPLY=( $(compgen -W "-n --limit --status --tag" -- "$cur") )

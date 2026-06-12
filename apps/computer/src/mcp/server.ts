@@ -7,6 +7,8 @@ import { executeAction } from "../drivers/mac/input.js";
 import { listSessions, getSession, getActionLogs, deleteSession, getStats, searchSessions, searchActionLogs } from "../db/index.js";
 import { registerAgent, heartbeat as agentHeartbeat, setFocus, listAgents } from "../db/agents.js";
 import { queryAccessibilityTree, summarizeAccessibilityTree } from "../drivers/mac/accessibility.js";
+import { getAppDriver, listAppDrivers } from "../apps/registry.js";
+import { parseGrid, parseTabsSpec } from "../apps/ghostty/applescript.js";
 import {
   getStorageStatus,
   storagePull,
@@ -210,17 +212,73 @@ server.tool(
 // ── computer_open_app ────────────────────────────────────────────────
 server.tool(
   "computer_open_app",
-  "Open a macOS application by name",
+  "Open a macOS application. Apps with a registered driver (see computer_list_apps) support deterministic orchestration: pane grids, multiple tabs, a command per pane, working directory, and maximize. Other apps open normally.",
   {
-    name: z.string().describe("Application name (e.g. 'Safari', 'Terminal', 'Slack')"),
+    app: z.string().optional().describe("Application or driver name (e.g. 'ghostty', 'Safari', 'Slack')"),
+    name: z.string().optional().describe("Deprecated alias for `app`"),
+    grid: z.string().optional().describe('Pane grid RxC, e.g. "2x2" (driver apps only)'),
+    tabs: z.string().optional().describe('Comma-separated grid specs, one per tab, e.g. "2x2,1x2,1x2" (driver apps only)'),
+    run: z.array(z.string()).optional().describe("Commands per pane in row-major order across tabs (driver apps only)"),
+    all: z.boolean().default(false).describe("Run the single `run` command in every pane"),
+    dir: z.string().optional().describe("Working directory — every pane cds here first"),
+    max: z.boolean().default(false).describe("Maximize the new window (not native fullscreen)"),
   },
   async (params) => {
-    const result = await executeAction({ type: "open_app", name: params.name });
-    const content: any[] = [{ type: "text", text: result.success ? `Opened ${params.name}` : `Open failed: ${result.error}` }];
+    const appName = params.app ?? params.name;
+    if (!appName) {
+      return { content: [{ type: "text", text: "Missing required parameter: app" }] };
+    }
+
+    const driver = getAppDriver(appName);
+    if (driver) {
+      try {
+        const result = await driver.open({
+          grid: params.grid ? parseGrid(params.grid) : undefined,
+          tabs: params.tabs ? parseTabsSpec(params.tabs) : undefined,
+          run: params.run,
+          all: params.all,
+          dir: params.dir,
+          max: params.max,
+        });
+        return { content: [{ type: "text", text: result.message }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `Open failed: ${err instanceof Error ? err.message : err}` }] };
+      }
+    }
+
+    if (params.grid || params.tabs || params.run?.length || params.dir) {
+      return {
+        content: [
+          { type: "text", text: `No app driver registered for "${appName}" — grid/tabs/run/dir need a driver (see computer_list_apps). Opening normally requires dropping those params.` },
+        ],
+      };
+    }
+
+    const result = await executeAction({ type: "open_app", name: appName });
+    const content: any[] = [{ type: "text", text: result.success ? `Opened ${appName}` : `Open failed: ${result.error}` }];
     if (result.screenshot) {
       content.push({ type: "image", data: result.screenshot.base64, mimeType: "image/png" });
     }
     return { content };
+  }
+);
+
+// ── computer_list_apps ───────────────────────────────────────────────
+server.tool(
+  "computer_list_apps",
+  "List registered app drivers (deterministic orchestration) and their availability on this machine",
+  {},
+  async () => {
+    const apps = listAppDrivers().map((driver) => {
+      const availability = driver.available();
+      return {
+        name: driver.name,
+        description: driver.description,
+        available: availability.available,
+        ...(availability.reason ? { reason: availability.reason } : {}),
+      };
+    });
+    return { content: [{ type: "text", text: JSON.stringify(apps, null, 2) }] };
   }
 );
 
