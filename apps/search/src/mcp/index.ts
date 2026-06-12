@@ -2,6 +2,7 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { buildServer, VERSION } from "./server.js";
 import { isHttpMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
+import { startBackgroundRefresh } from "../lib/local/indexer.js";
 
 function handleCliFlags(argv: string[]): boolean {
   if (argv.includes("--help") || argv.includes("-h")) {
@@ -35,6 +36,10 @@ if (handleCliFlags(argv)) {
 }
 
 async function main() {
+  // Agents query through this long-lived process — keep the local file
+  // index warm so find calls rarely pay the stale-refresh cost inline.
+  startBackgroundRefresh();
+
   if (isHttpMode(argv)) {
     startMcpHttpServer({ port: resolveMcpHttpPort(argv) });
     return;

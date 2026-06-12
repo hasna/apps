@@ -28,7 +28,7 @@ import {
   indexAllRoots,
   listRoots,
   removeRoot,
-  autoRefreshStaleRoots,
+  startBackgroundRefresh,
 } from "../lib/local/indexer.js";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
@@ -389,14 +389,7 @@ export function startServer(port: number): void {
   });
 
   // Keep the local file index fresh while the server runs.
-  const refreshMinutes = Math.max(1, getConfig().indexStaleMinutes);
-  setInterval(() => {
-    try {
-      autoRefreshStaleRoots();
-    } catch (err) {
-      console.error("Index refresh failed:", err);
-    }
-  }, refreshMinutes * 60_000).unref?.();
+  startBackgroundRefresh();
 
   console.log(`open-search server running at http://localhost:${port}`);
 }

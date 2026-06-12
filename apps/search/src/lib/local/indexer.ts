@@ -348,3 +348,20 @@ export function autoRefreshStaleRoots(db?: Database): IndexStats[] {
   if (!config.indexAutoRefresh) return [];
   return refreshStaleRoots(config.indexStaleMinutes, db);
 }
+
+/**
+ * Keep the index warm from long-running processes (search-serve, search-mcp)
+ * so interactive `find` calls rarely pay the stale-refresh cost themselves.
+ */
+export function startBackgroundRefresh(): ReturnType<typeof setInterval> {
+  const minutes = Math.max(1, getConfig().indexStaleMinutes);
+  const timer = setInterval(() => {
+    try {
+      autoRefreshStaleRoots();
+    } catch (err) {
+      console.error("Index refresh failed:", err);
+    }
+  }, minutes * 60_000);
+  timer.unref?.();
+  return timer;
+}
