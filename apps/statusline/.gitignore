@@ -3,3 +3,5 @@ bun.lock
 *.log
 .DS_Store
 .secrets/
+AGENTS.md
+CLAUDE.md
