@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
 import chalk from "chalk";
+import { registerStorageCommands } from "./storage.js";
+import { registerLocalCommands } from "./local.js";
 import { PROVIDER_NAMES, type SearchProviderName, type ExportFormat } from "../types/index.js";
 import { unifiedSearch, searchSingleProvider } from "../lib/search.js";
 import { youtubeDeepSearch } from "../lib/youtube-deep.js";
@@ -29,12 +31,17 @@ import {
   getProfileByName,
 } from "../db/profiles.js";
 
+const pkg = require("../../package.json") as { version: string };
+
 const program = new Command();
 
 program
   .name("search")
-  .version("0.0.1")
-  .description("Unified search aggregator — 12 providers, one interface");
+  .version(pkg.version)
+  .description("Unified search — local file index + 12 web providers, one interface");
+
+registerStorageCommands(program);
+registerLocalCommands(program);
 
 // --- Main search command ---
 program
@@ -397,6 +404,9 @@ function printResults(
 ): void {
   if (results.length === 0) {
     console.log(chalk.yellow("No results found"));
+    for (const e of errors) {
+      console.error(`  ${chalk.red(e.provider)}: ${e.error}`);
+    }
     return;
   }
 

@@ -147,6 +147,86 @@ export async function deleteSavedSearch(id: string): Promise<void> {
   await fetchJson(`/saved-searches/${id}`, { method: "DELETE" });
 }
 
+// --- Local find + index ---
+export interface FindMatchItem {
+  path: string;
+  root: string;
+  kind: "file" | "content" | "both";
+  score: number;
+  line?: number;
+  snippet?: string;
+  matches?: Array<{ line: number; text: string }>;
+}
+
+export interface FindResponseData {
+  query: string;
+  kind: string;
+  indexed: boolean;
+  roots: number;
+  total: number;
+  results: FindMatchItem[];
+}
+
+export interface IndexRootItem {
+  id: string;
+  path: string;
+  name: string;
+  status: "pending" | "indexing" | "ready" | "error";
+  error: string | null;
+  fileCount: number;
+  contentIndexing: boolean;
+  lastIndexedAt: string | null;
+  lastDurationMs: number | null;
+  staleMinutes: number | null;
+}
+
+export interface IndexStatsItem {
+  rootId: string;
+  added: number;
+  updated: number;
+  deleted: number;
+  contentIndexed: number;
+  fileCount: number;
+  durationMs: number;
+}
+
+export async function findFiles(
+  query: string,
+  opts: { kind?: string; root?: string; ext?: string; dir?: string; limit?: number } = {},
+): Promise<FindResponseData> {
+  const params = new URLSearchParams({ q: query });
+  if (opts.kind) params.set("kind", opts.kind);
+  if (opts.root) params.set("root", opts.root);
+  if (opts.ext) params.set("ext", opts.ext);
+  if (opts.dir) params.set("dir", opts.dir);
+  if (opts.limit) params.set("limit", String(opts.limit));
+  return fetchJson(`/find?${params}`);
+}
+
+export async function listIndexRoots(): Promise<IndexRootItem[]> {
+  return fetchJson("/index");
+}
+
+export async function addIndexRoot(data: {
+  path: string;
+  name?: string;
+  content?: boolean;
+}): Promise<{ root: IndexRootItem; stats: IndexStatsItem }> {
+  return fetchJson("/index", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateIndexRoot(ref: string): Promise<IndexStatsItem> {
+  return fetchJson(`/index/${encodeURIComponent(ref)}`, { method: "PUT" });
+}
+
+export async function removeIndexRoot(ref: string): Promise<void> {
+  await fetchJson(`/index/${encodeURIComponent(ref)}`, { method: "DELETE" });
+}
+
 // --- Stats ---
 export interface StatsResponse {
   totalSearches: number;

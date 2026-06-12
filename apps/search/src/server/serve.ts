@@ -20,6 +20,16 @@ import {
 } from "../db/providers.js";
 import { listProfiles, createProfile, deleteProfile } from "../db/profiles.js";
 import { transcribeVideo } from "../lib/providers/transcriber.js";
+import { findLocal, type FindKind } from "../lib/local/find.js";
+import {
+  addRoot,
+  getRoot,
+  indexRoot,
+  indexAllRoots,
+  listRoots,
+  removeRoot,
+  autoRefreshStaleRoots,
+} from "../lib/local/indexer.js";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { handleMcpHttpRoutes } from "../mcp/http.js";
@@ -284,6 +294,83 @@ export function startServer(port: number): void {
           return json(config);
         }
 
+        // Local find
+        if (path === "/api/find" && req.method === "GET") {
+          const q = url.searchParams.get("q");
+          if (!q) return json({ error: "Missing query parameter 'q'" }, 400);
+          const kind = url.searchParams.get("kind") ?? "both";
+          if (kind !== "file" && kind !== "content" && kind !== "both") {
+            return json({ error: `Invalid kind "${kind}" — use file, content, or both` }, 400);
+          }
+          const rawLimit = url.searchParams.get("limit");
+          const limit = rawLimit ? parseInt(rawLimit) : undefined;
+          if (rawLimit && (!Number.isFinite(limit) || limit! < 1)) {
+            return json({ error: `Invalid limit "${rawLimit}"` }, 400);
+          }
+          try {
+            const response = findLocal(q, {
+              kind: kind as FindKind,
+              root: url.searchParams.get("root") ?? undefined,
+              ext: url.searchParams.get("ext") ?? undefined,
+              dir: url.searchParams.get("dir") ?? undefined,
+              limit,
+              regex: url.searchParams.get("regex") === "1" || url.searchParams.get("regex") === "true",
+              caseSensitive: url.searchParams.get("case") === "1",
+            });
+            return json(response);
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : "Find failed" }, 400);
+          }
+        }
+
+        // Local index roots. Root refs in the path must be URL-encoded
+        // (slashes included); `?ref=` is accepted as an alternative.
+        if (path === "/api/index" && req.method === "GET") {
+          const roots = listRoots().map((r) => ({
+            ...r,
+            staleMinutes: r.lastIndexedAt
+              ? Math.round((Date.now() - Date.parse(r.lastIndexedAt)) / 60_000)
+              : null,
+          }));
+          return json(roots);
+        }
+        if (path === "/api/index" && req.method === "POST") {
+          let body: { path?: string; name?: string; content?: boolean; exclude?: string[] };
+          try {
+            body = (await req.json()) as typeof body;
+          } catch {
+            return json({ error: "Invalid JSON body" }, 400);
+          }
+          if (!body.path) return json({ error: "Missing 'path'" }, 400);
+          try {
+            const root = addRoot(body.path, {
+              name: body.name,
+              contentIndexing: body.content,
+              exclude: body.exclude,
+            });
+            const stats = indexRoot(root.id);
+            return json({ root: getRoot(root.id), stats }, 201);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : "Failed to add root";
+            return json({ error: message }, message.includes("already") ? 409 : 400);
+          }
+        }
+
+        const indexRootMatch = path.match(/^\/api\/index\/([^/]+)$/);
+        const indexRef =
+          (indexRootMatch ? decodeURIComponent(indexRootMatch[1]!) : null) ??
+          (path === "/api/index" ? url.searchParams.get("ref") : null);
+        if (indexRef && req.method === "PUT") {
+          if (indexRef === "all") return json(indexAllRoots());
+          const root = getRoot(indexRef);
+          if (!root) return notFound("Index root not found");
+          return json(indexRoot(root.id));
+        }
+        if (indexRef && req.method === "DELETE") {
+          const ok = removeRoot(indexRef);
+          return ok ? json({ ok: true }) : notFound("Index root not found");
+        }
+
         // --- Dashboard static files ---
         if (!path.startsWith("/api/")) {
           const dashboard = serveDashboard(path);
@@ -300,6 +387,16 @@ export function startServer(port: number): void {
       }
     },
   });
+
+  // Keep the local file index fresh while the server runs.
+  const refreshMinutes = Math.max(1, getConfig().indexStaleMinutes);
+  setInterval(() => {
+    try {
+      autoRefreshStaleRoots();
+    } catch (err) {
+      console.error("Index refresh failed:", err);
+    }
+  }, refreshMinutes * 60_000).unref?.();
 
   console.log(`open-search server running at http://localhost:${port}`);
 }

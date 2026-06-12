@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { Search, History, Bookmark, Settings, BarChart3, Sun, Moon } from "lucide-react";
+import { Search, History, Bookmark, Settings, BarChart3, Sun, Moon, FolderSearch, RefreshCw, Trash2 } from "lucide-react";
 import {
   search as apiSearch,
   listSearches,
@@ -11,6 +11,11 @@ import {
   runSavedSearch,
   deleteSearchItem,
   deleteSavedSearch,
+  findFiles,
+  listIndexRoots,
+  addIndexRoot,
+  updateIndexRoot,
+  removeIndexRoot,
   type SearchResponse,
   type SearchResultItem,
   type ProviderItem,
@@ -18,9 +23,11 @@ import {
   type SavedSearchItem,
   type SearchHistoryResponse,
   type StatsResponse,
+  type FindMatchItem,
+  type IndexRootItem,
 } from "./lib/api.js";
 
-type Tab = "search" | "history" | "saved" | "providers" | "stats";
+type Tab = "search" | "local" | "history" | "saved" | "providers" | "stats";
 
 export function App() {
   const [tab, setTab] = useState<Tab>("search");
@@ -32,6 +39,7 @@ export function App() {
 
   const tabs: Array<{ id: Tab; label: string; icon: React.ReactNode }> = [
     { id: "search", label: "Search", icon: <Search size={16} /> },
+    { id: "local", label: "Local", icon: <FolderSearch size={16} /> },
     { id: "history", label: "History", icon: <History size={16} /> },
     { id: "saved", label: "Saved", icon: <Bookmark size={16} /> },
     { id: "providers", label: "Providers", icon: <Settings size={16} /> },
@@ -69,6 +77,7 @@ export function App() {
       {/* Content */}
       <main className="max-w-6xl mx-auto px-6 py-6">
         {tab === "search" && <SearchPage />}
+        {tab === "local" && <LocalPage />}
         {tab === "history" && <HistoryPage />}
         {tab === "saved" && <SavedPage />}
         {tab === "providers" && <ProvidersPage />}
@@ -134,6 +143,8 @@ function SearchPage() {
     github: "#333333",
     arxiv: "#b31b1b",
     serpapi: "#22c55e",
+    files: "#0d9488",
+    content: "#7c3aed",
   };
 
   return (
@@ -223,6 +234,229 @@ function SearchPage() {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// --- Local Page (find + index management) ---
+function LocalPage() {
+  const [query, setQuery] = useState("");
+  const [kind, setKind] = useState<"both" | "file" | "content">("both");
+  const [results, setResults] = useState<FindMatchItem[]>([]);
+  const [indexed, setIndexed] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [roots, setRoots] = useState<IndexRootItem[]>([]);
+  const [newPath, setNewPath] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadRoots = useCallback(() => {
+    listIndexRoots().then(setRoots).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    loadRoots();
+  }, [loadRoots]);
+
+  const handleFind = useCallback(async () => {
+    if (!query.trim()) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await findFiles(query, { kind, limit: 50 });
+      setResults(res.results);
+      setIndexed(res.indexed);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Find failed");
+    } finally {
+      setLoading(false);
+    }
+  }, [query, kind]);
+
+  const handleAddRoot = async () => {
+    if (!newPath.trim()) return;
+    setBusy("add");
+    setError(null);
+    try {
+      await addIndexRoot({ path: newPath.trim() });
+      setNewPath("");
+      loadRoots();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add root");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleReindex = async (ref: string) => {
+    setBusy(ref);
+    setError(null);
+    try {
+      await updateIndexRoot(ref);
+      loadRoots();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Reindex failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleRemove = async (ref: string) => {
+    setBusy(ref);
+    setError(null);
+    try {
+      await removeIndexRoot(ref);
+      loadRoots();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Remove failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const KIND_COLORS: Record<string, string> = {
+    file: "#0d9488",
+    content: "#7c3aed",
+    both: "#0369a1",
+  };
+
+  return (
+    <div>
+      {/* Find bar */}
+      <div className="flex gap-2 mb-4">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleFind()}
+          placeholder="Find files by name, path, or content..."
+          className="flex-1 px-4 py-2 rounded border text-sm outline-none"
+          style={{ borderColor: "var(--border)", backgroundColor: "var(--card)" }}
+        />
+        <select
+          value={kind}
+          onChange={(e) => setKind(e.target.value as typeof kind)}
+          className="text-xs px-2 py-1 rounded border"
+          style={{ borderColor: "var(--border)", backgroundColor: "var(--card)" }}
+        >
+          <option value="both">name + content</option>
+          <option value="file">name only</option>
+          <option value="content">content only</option>
+        </select>
+        <button
+          onClick={handleFind}
+          disabled={loading}
+          className="px-4 py-2 rounded text-sm font-medium"
+          style={{ backgroundColor: "var(--primary)", color: "var(--primary-foreground)" }}
+        >
+          {loading ? "Finding..." : "Find"}
+        </button>
+      </div>
+
+      {error && (
+        <div className="mb-4 p-2 rounded text-xs" style={{ backgroundColor: "#fef2f2", color: "#991b1b" }}>
+          {error}
+        </div>
+      )}
+
+      {!indexed && (
+        <p className="text-xs mb-4" style={{ color: "var(--muted-foreground)" }}>
+          No index roots ready yet — add a directory below to start finding files.
+        </p>
+      )}
+
+      {/* Find results */}
+      <div className="space-y-2 mb-8">
+        {results.map((r) => (
+          <div key={r.path} className="p-3 rounded border" style={{ borderColor: "var(--border)", backgroundColor: "var(--card)" }}>
+            <div className="flex items-center gap-2">
+              <span
+                className="text-[10px] px-1.5 py-0.5 rounded font-medium text-white"
+                style={{ backgroundColor: KIND_COLORS[r.kind] ?? "#666" }}
+              >
+                {r.kind}
+              </span>
+              <span className="text-sm font-medium font-mono">
+                {r.path}
+                {r.line ? <span style={{ color: "var(--muted-foreground)" }}>:{r.line}</span> : null}
+              </span>
+            </div>
+            {r.kind !== "file" && r.snippet && (
+              <p className="text-xs mt-1 font-mono" style={{ color: "var(--muted-foreground)" }}>{r.snippet}</p>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Index roots */}
+      <h3 className="text-sm font-bold mb-3">Index Roots</h3>
+      <div className="flex gap-2 mb-3">
+        <input
+          value={newPath}
+          onChange={(e) => setNewPath(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleAddRoot()}
+          placeholder="/absolute/path/to/index"
+          className="flex-1 px-3 py-1.5 rounded border text-xs outline-none font-mono"
+          style={{ borderColor: "var(--border)", backgroundColor: "var(--card)" }}
+        />
+        <button
+          onClick={handleAddRoot}
+          disabled={busy === "add"}
+          className="px-3 py-1.5 rounded text-xs font-medium"
+          style={{ backgroundColor: "var(--primary)", color: "var(--primary-foreground)" }}
+        >
+          {busy === "add" ? "Indexing..." : "Add + Index"}
+        </button>
+      </div>
+
+      {roots.length === 0 ? (
+        <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>No roots indexed yet</p>
+      ) : (
+        <div className="space-y-2">
+          {roots.map((r) => (
+            <div key={r.id} className="flex items-center justify-between p-3 rounded border" style={{ borderColor: "var(--border)", backgroundColor: "var(--card)" }}>
+              <div>
+                <p className="text-sm font-medium">
+                  {r.name}{" "}
+                  <span
+                    className="text-[10px] px-1.5 py-0.5 rounded"
+                    style={{
+                      backgroundColor: r.status === "ready" ? "#dcfce7" : r.status === "error" ? "#fef2f2" : "#fef9c3",
+                      color: r.status === "ready" ? "#166534" : r.status === "error" ? "#991b1b" : "#854d0e",
+                    }}
+                  >
+                    {r.status}
+                  </span>
+                </p>
+                <p className="text-xs font-mono" style={{ color: "var(--muted-foreground)" }}>
+                  {r.path} &middot; {r.fileCount} files &middot;{" "}
+                  {r.staleMinutes === null ? "never indexed" : `indexed ${r.staleMinutes}m ago`}
+                </p>
+                {r.error && <p className="text-xs" style={{ color: "#991b1b" }}>{r.error}</p>}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => handleReindex(r.id)}
+                  disabled={busy === r.id}
+                  title="Reindex"
+                  className="p-1.5 rounded"
+                  style={{ color: "var(--primary)" }}
+                >
+                  <RefreshCw size={14} className={busy === r.id ? "animate-spin" : undefined} />
+                </button>
+                <button
+                  onClick={() => handleRemove(r.id)}
+                  disabled={busy === r.id}
+                  title="Remove from index"
+                  className="p-1.5 rounded"
+                  style={{ color: "var(--destructive)" }}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -26,15 +26,133 @@ import {
   searchTranscripts,
   isTranscriberAvailable,
 } from "../lib/providers/transcriber.js";
+import { findLocal, type FindKind } from "../lib/local/find.js";
+import {
+  addRoot,
+  getRoot,
+  indexRoot,
+  indexAllRoots,
+  listRoots,
+  removeRoot,
+} from "../lib/local/indexer.js";
+import { registerSearchStorageTools } from "./storage-tools.js";
+
+const pkg = require("../../package.json") as { version: string };
 
 export const MCP_NAME = "search";
-export const VERSION = "0.0.7";
+export const VERSION = pkg.version;
 
 export function buildServer(): McpServer {
   const server = new McpServer({
     name: "search-mcp",
     version: VERSION,
   });
+
+  registerSearchStorageTools(server);
+
+// --- Local find (one-call file lookup for agents) ---
+server.tool(
+  "find",
+  "Find files on this machine by name, path, or content in one call — across all indexed workspace roots. Returns ranked absolute paths with line numbers and snippets. Use instead of repeated glob/grep/ls when locating files.",
+  {
+    query: z.string().describe("File name, path fragment, content to look for — or a regex with regex:true"),
+    kind: z.enum(["file", "content", "both"]).optional().describe("Match on file names, file content, or both (default: both)"),
+    root: z.string().optional().describe("Limit to one index root (name, path, or id)"),
+    ext: z.string().optional().describe("Filter by file extension, e.g. 'ts'"),
+    dir: z.string().optional().describe("Filter by directory substring, e.g. 'src/db'"),
+    limit: z.number().int().min(1).max(100).optional().describe("Max results (default 20)"),
+    regex: z.boolean().optional().describe("Treat query as a regular expression (grep-style, line-based; needs one 3+ char literal)"),
+    case_sensitive: z.boolean().optional().describe("Case-sensitive matching (regex mode only)"),
+  },
+  async ({ query, kind, root, ext, dir, limit, regex, case_sensitive }) => {
+    const response = findLocal(query, {
+      kind: kind as FindKind,
+      root,
+      ext,
+      dir,
+      limit,
+      regex,
+      caseSensitive: case_sensitive,
+    });
+    if (!response.indexed) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "No index roots ready. Add one with the index_add tool (e.g. {\"path\": \"~/workspace\"}) or `search index add <path>`.",
+          },
+        ],
+      };
+    }
+    return { content: [{ type: "text" as const, text: JSON.stringify(response) }] };
+  },
+);
+
+// --- Local index management ---
+server.tool(
+  "index_add",
+  "Register a directory in the local file index and index it (file paths + content)",
+  {
+    path: z.string().describe("Absolute directory path to index"),
+    name: z.string().optional().describe("Friendly root name (default: basename)"),
+    content: z.boolean().optional().describe("Index file content too (default: true)"),
+    exclude: z.array(z.string()).optional().describe("Extra exclude patterns (gitignore syntax)"),
+  },
+  async ({ path, name, content, exclude }) => {
+    const root = addRoot(path, { name, contentIndexing: content, exclude });
+    const stats = indexRoot(root.id);
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify({ root: getRoot(root.id), stats }) }],
+    };
+  },
+);
+
+server.tool(
+  "index_update",
+  "Incrementally re-index one root (or all roots) — only changed files are re-read",
+  {
+    root: z.string().optional().describe("Root name, path, or id (default: all roots)"),
+    force: z.boolean().optional().describe("Re-read content for every file"),
+  },
+  async ({ root, force }) => {
+    if (root) {
+      const r = getRoot(root);
+      if (!r) return { content: [{ type: "text" as const, text: `Index root not found: ${root}` }], isError: true };
+      const stats = indexRoot(r.id, { force });
+      return { content: [{ type: "text" as const, text: JSON.stringify(stats) }] };
+    }
+    const all = indexAllRoots({ force });
+    return { content: [{ type: "text" as const, text: JSON.stringify(all) }] };
+  },
+);
+
+server.tool(
+  "index_status",
+  "List local index roots with file counts, status, and staleness",
+  {},
+  async () => {
+    const roots = listRoots().map((r) => ({
+      ...r,
+      staleMinutes: r.lastIndexedAt
+        ? Math.round((Date.now() - Date.parse(r.lastIndexedAt)) / 60_000)
+        : null,
+    }));
+    return { content: [{ type: "text" as const, text: JSON.stringify(roots, null, 2) }] };
+  },
+);
+
+server.tool(
+  "index_remove",
+  "Remove a root and all its indexed data from the local file index",
+  { root: z.string().describe("Root name, path, or id") },
+  async ({ root }) => {
+    const ok = removeRoot(root);
+    if (!ok) {
+      return { content: [{ type: "text" as const, text: `Not found: ${root}` }], isError: true };
+    }
+    return { content: [{ type: "text" as const, text: "Removed" }] };
+  },
+);
 
 // --- Unified search ---
 server.tool(
