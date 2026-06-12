@@ -15,9 +15,9 @@ afterEach(() => {
 });
 
 describe("provider registry", () => {
-  it("should return all 12 providers", () => {
+  it("should return all 14 providers", () => {
     const all = getAllProviders();
-    expect(all.length).toBe(12);
+    expect(all.length).toBe(14);
     const names = all.map((p) => p.name);
     expect(names).toContain("google");
     expect(names).toContain("arxiv");

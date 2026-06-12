@@ -143,7 +143,7 @@ describe("saved searches CRUD", () => {
 describe("providers CRUD", () => {
   it("should list seeded providers", () => {
     const providers = listProviders(db);
-    expect(providers.length).toBe(12);
+    expect(providers.length).toBe(14);
     const names = providers.map((p) => p.name);
     expect(names).toContain("google");
     expect(names).toContain("arxiv");
@@ -173,7 +173,7 @@ describe("providers CRUD", () => {
 describe("profiles CRUD", () => {
   it("should list seeded profiles", () => {
     const profiles = listProfiles(db);
-    expect(profiles.length).toBe(6);
+    expect(profiles.length).toBe(7);
     const names = profiles.map((p) => p.name);
     expect(names).toContain("research");
     expect(names).toContain("social");
@@ -191,9 +191,9 @@ describe("profiles CRUD", () => {
   it("should create and delete a profile", () => {
     const p = createProfile({ name: "custom", providers: ["brave", "bing"], description: "Custom profile" }, db);
     expect(p.name).toBe("custom");
-    expect(listProfiles(db).length).toBe(7);
+    expect(listProfiles(db).length).toBe(8);
 
     deleteProfile(p.id, db);
-    expect(listProfiles(db).length).toBe(6);
+    expect(listProfiles(db).length).toBe(7);
   });
 });

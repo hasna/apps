@@ -1,33 +1,44 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 let port: number;
 let baseUrl: string;
+let indexedDir: string;
 
 beforeAll(() => {
-  // Set up test DB
+  // Set up test DBs (history + local file index)
   process.env.SEARCH_DB_PATH = ":memory:";
+  process.env.SEARCH_INDEX_DB_PATH = ":memory:";
   port = 19899;
   baseUrl = `http://localhost:${port}`;
+  indexedDir = mkdtempSync(join(tmpdir(), "search-serve-"));
+  writeFileSync(join(indexedDir, "serve-needle.ts"), "export const serveNeedleSymbol = 1;");
 
   // Import and start server
   const { startServer } = require("./serve");
   startServer(port);
 });
 
+afterAll(() => {
+  rmSync(indexedDir, { recursive: true, force: true });
+});
+
 describe("REST API", () => {
-  it("GET /api/providers should return 12 providers", async () => {
+  it("GET /api/providers should return 14 providers", async () => {
     const res = await fetch(`${baseUrl}/api/providers`);
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(Array.isArray(data)).toBe(true);
-    expect(data.length).toBe(12);
+    expect(data.length).toBe(14);
   });
 
-  it("GET /api/profiles should return 6 profiles", async () => {
+  it("GET /api/profiles should return 7 profiles", async () => {
     const res = await fetch(`${baseUrl}/api/profiles`);
     expect(res.status).toBe(200);
     const data = await res.json();
-    expect(data.length).toBe(6);
+    expect(data.length).toBe(7);
   });
 
   it("GET /api/stats should return stats", async () => {
@@ -101,5 +112,58 @@ describe("REST API", () => {
   it("OPTIONS should return CORS headers", async () => {
     const res = await fetch(`${baseUrl}/api/search`, { method: "OPTIONS" });
     expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
+  });
+
+  it("GET /api/find without q should return 400", async () => {
+    const res = await fetch(`${baseUrl}/api/find`);
+    expect(res.status).toBe(400);
+  });
+
+  it("GET /api/find with empty index reports indexed:false", async () => {
+    const res = await fetch(`${baseUrl}/api/find?q=anything`);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.indexed).toBe(false);
+  });
+
+  it("local index lifecycle: add, find, update, remove", async () => {
+    // Add
+    const addRes = await fetch(`${baseUrl}/api/index`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: indexedDir, name: "serve-test" }),
+    });
+    expect(addRes.status).toBe(201);
+    const added = await addRes.json();
+    expect(added.root.status).toBe("ready");
+    expect(added.stats.added).toBe(1);
+
+    // List
+    const listRes = await fetch(`${baseUrl}/api/index`);
+    const roots = await listRes.json();
+    expect(roots.length).toBe(1);
+    expect(roots[0].name).toBe("serve-test");
+
+    // Find by name and by content
+    const byName = await (await fetch(`${baseUrl}/api/find?q=serve-needle`)).json();
+    expect(byName.indexed).toBe(true);
+    expect(byName.results.length).toBe(1);
+    expect(byName.results[0].path).toBe(join(indexedDir, "serve-needle.ts"));
+
+    const byContent = await (await fetch(`${baseUrl}/api/find?q=serveNeedleSymbol&kind=content`)).json();
+    expect(byContent.results.length).toBe(1);
+    expect(byContent.results[0].line).toBe(1);
+
+    // Update
+    const updateRes = await fetch(`${baseUrl}/api/index/serve-test`, { method: "PUT" });
+    expect(updateRes.status).toBe(200);
+    const stats = await updateRes.json();
+    expect(stats.fileCount).toBe(1);
+
+    // Remove
+    const rmRes = await fetch(`${baseUrl}/api/index/serve-test`, { method: "DELETE" });
+    expect(rmRes.status).toBe(200);
+    const after = await (await fetch(`${baseUrl}/api/index`)).json();
+    expect(after.length).toBe(0);
   });
 });

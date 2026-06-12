@@ -17,24 +17,24 @@ describe("database", () => {
       .prepare("SELECT version, description FROM _migrations ORDER BY version")
       .all() as Array<{ version: number; description: string }>;
 
-    expect(migrations.length).toBe(3);
+    expect(migrations.length).toBe(4);
     expect(migrations[0]!.description).toBe("Core tables");
     expect(migrations[1]!.description).toBe("FTS5 on search results");
     expect(migrations[2]!.description).toBe("Seed default providers and profiles");
     db.close();
   });
 
-  it("should seed 12 providers", () => {
+  it("should seed 14 providers", () => {
     const db = createTestDb();
     const providers = db.prepare("SELECT COUNT(*) as count FROM providers").get() as { count: number };
-    expect(providers.count).toBe(12);
+    expect(providers.count).toBe(14);
     db.close();
   });
 
   it("should seed 6 profiles", () => {
     const db = createTestDb();
     const profiles = db.prepare("SELECT COUNT(*) as count FROM search_profiles").get() as { count: number };
-    expect(profiles.count).toBe(6);
+    expect(profiles.count).toBe(7);
     db.close();
   });
 
@@ -52,7 +52,7 @@ describe("database", () => {
     // Run again — should be idempotent
     runMigrations(db);
     const count = (db.prepare("SELECT COUNT(*) as count FROM _migrations").get() as { count: number }).count;
-    expect(count).toBe(3);
+    expect(count).toBe(4);
     db.close();
   });
 });

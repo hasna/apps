@@ -1,4 +1,5 @@
 import { describe, it, expect } from "bun:test";
+import pkg from "../../package.json";
 
 describe("CLI", () => {
   it("should show help with --help", async () => {
@@ -9,8 +10,10 @@ describe("CLI", () => {
     });
     const output = await new Response(proc.stdout).text();
     await proc.exited;
-    expect(output).toContain("Unified search aggregator");
+    expect(output).toContain("Unified search");
     expect(output).toContain("query");
+    expect(output).toContain("find");
+    expect(output).toContain("index");
     expect(output).toContain("history");
     expect(output).toContain("providers");
     expect(output).toContain("profiles");
@@ -24,7 +27,7 @@ describe("CLI", () => {
     });
     const output = await new Response(proc.stdout).text();
     await proc.exited;
-    expect(output.trim()).toBe("0.0.1");
+    expect(output.trim()).toBe(pkg.version);
   });
 
   it("should list providers", async () => {

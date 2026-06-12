@@ -1,23 +1,11 @@
-import { mkdirSync, readFileSync, writeFileSync, existsSync, cpSync } from "fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from "fs";
 import { type SearchConfig, DEFAULT_CONFIG } from "../types/index.js";
 
 function getConfigDir(): string {
   const home = Bun.env.HOME ?? "/tmp";
-  const newDir = `${home}/.hasna/search`;
-  const oldDir = `${home}/.open-search`;
-
-  // Auto-migrate from old location if new dir doesn't exist yet
-  if (!existsSync(newDir) && existsSync(oldDir)) {
-    try {
-      mkdirSync(`${home}/.hasna`, { recursive: true });
-      cpSync(oldDir, newDir, { recursive: true });
-    } catch {
-      // Fall through
-    }
-  }
-
-  mkdirSync(newDir, { recursive: true });
-  return newDir;
+  const dir = `${home}/.hasna/search`;
+  mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
 function getConfigPath(): string {
