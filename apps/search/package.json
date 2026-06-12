@@ -1,7 +1,7 @@
 {
   "name": "@hasna/search",
-  "version": "0.0.7",
-  "description": "Unified search aggregator — 12 providers (Google, SerpAPI, Exa, Perplexity, Twitter, Reddit, YouTube, Brave, Bing, Hacker News, GitHub, arXiv) + YouTube transcription. CLI + MCP + REST API + Dashboard.",
+  "version": "0.0.8",
+  "description": "Unified search — local file index (find files by name/path/content/regex in ms, trigram FTS) + 12 web providers (Google, SerpAPI, Exa, Perplexity, Twitter, Reddit, YouTube, Brave, Bing, Hacker News, GitHub, arXiv) + YouTube transcription. CLI + MCP + REST API + Dashboard.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -14,6 +14,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./storage": {
+      "types": "./dist/storage.d.ts",
+      "import": "./dist/storage.js"
     }
   },
   "files": [
@@ -22,8 +26,9 @@
     "README.md"
   ],
   "scripts": {
-    "build": "cd dashboard && bun run build && cd .. && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk && bun build src/mcp/index.ts --outdir dist/mcp --target bun && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
-    "build:no-dashboard": "bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk && bun build src/mcp/index.ts --outdir dist/mcp --target bun && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "clean": "rm -rf dist",
+    "build": "bun run clean && cd dashboard && bun run build && cd .. && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk && bun build src/mcp/index.ts --outdir dist/mcp --target bun && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/index.ts src/storage.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "build:no-dashboard": "bun run clean && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk && bun build src/mcp/index.ts --outdir dist/mcp --target bun && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/index.ts src/storage.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.tsx",
@@ -34,6 +39,13 @@
   },
   "keywords": [
     "search",
+    "local-search",
+    "file-search",
+    "code-search",
+    "grep",
+    "trigram",
+    "fts5",
+    "indexing",
     "meta-search",
     "aggregator",
     "google",
@@ -71,16 +83,17 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/cloud": "^0.1.24",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
     "ink": "^5.2.0",
+    "pg": "^8.13.3",
     "react": "^18.3.1",
     "zod": "^3.24.2"
   },
   "devDependencies": {
     "@types/bun": "^1.2.4",
+    "@types/pg": "^8.11.11",
     "@types/react": "^18.3.18",
     "typescript": "^5.7.3"
   }
