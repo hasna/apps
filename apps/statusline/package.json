@@ -1,0 +1,40 @@
+{
+  "name": "@hasna/statusline",
+  "version": "0.0.1",
+  "description": "Tiny composable statusline CLI for AI coding agents — pre-built toggleable segments for Claude Code, with a provider model for others",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "statusline": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "bun test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/statusline.git"
+  },
+  "homepage": "https://github.com/hasna/statusline#readme",
+  "bugs": {
+    "url": "https://github.com/hasna/statusline/issues"
+  },
+  "keywords": [
+    "statusline",
+    "status-bar",
+    "claude-code",
+    "cli",
+    "bun"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  }
+}
