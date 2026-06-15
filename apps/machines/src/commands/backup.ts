@@ -1,4 +1,4 @@
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import type { SetupResult, SetupStep } from "../types.js";
 
@@ -85,7 +85,7 @@ export function buildBackupPlan(bucket?: string, prefix?: string): SetupResult {
     {
       id: "backup-upload",
       title: "Upload archive to S3",
-      command: `aws s3 cp ${quote(archivePath)} s3://${target.bucket}/${target.prefix}/$(hostname)-backup.tgz`,
+      command: `aws s3 cp ${quote(archivePath)} ${quote(`s3://${target.bucket}/${target.prefix}/${hostname()}-backup.tgz`)}`,
       manager: "custom",
     },
   ];

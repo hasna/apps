@@ -57,5 +57,6 @@ describe("backup planning", () => {
     process.env[MACHINES_BACKUP_BUCKET_FALLBACK_ENV] = "fleet-backups";
     const plan = buildBackupPlan();
     expect(plan.steps[1]?.command).toContain("s3://fleet-backups/machines/");
+    expect(plan.steps[1]?.command).toContain("'s3://fleet-backups/machines/");
   });
 });

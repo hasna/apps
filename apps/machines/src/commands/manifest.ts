@@ -5,6 +5,7 @@ import {
   getManifestMachine,
   detectCurrentMachineManifest,
   validateManifest,
+  machineSchema,
 } from "../manifests.js";
 import { getManifestPath } from "../paths.js";
 import type { FleetManifest, MachineManifest } from "../types.js";
@@ -18,9 +19,10 @@ export function manifestList(): FleetManifest {
 }
 
 export function manifestAdd(machine: MachineManifest): FleetManifest {
+  const validatedMachine = machineSchema.parse(machine);
   const manifest = readManifest();
-  const nextMachines = manifest.machines.filter((entry) => entry.id !== machine.id);
-  nextMachines.push(machine);
+  const nextMachines = manifest.machines.filter((entry) => entry.id !== validatedMachine.id);
+  nextMachines.push(validatedMachine);
   const nextManifest: FleetManifest = { ...manifest, machines: nextMachines };
   writeManifest(nextManifest);
   return nextManifest;

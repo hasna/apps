@@ -401,6 +401,12 @@ manifestCommand
       return;
     }
 
+    for (const key of ["id", "platform", "workspacePath"] as const) {
+      if (typeof options[key] !== "string" || !options[key].trim()) {
+        throw new Error(`manifest add requires --${key === "workspacePath" ? "workspace-path" : key} unless --from-stdin is used`);
+      }
+    }
+
     const packages = Array.isArray(options["package"])
       ? options["package"].map((name) => ({ name: String(name) }))
       : undefined;
@@ -1332,4 +1338,10 @@ healCommand
     console.log(renderList("uninstall", uninstallHealService()));
   });
 
-await program.parseAsync(process.argv);
+try {
+  await program.parseAsync(process.argv);
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(chalk.red(message));
+  process.exit(1);
+}

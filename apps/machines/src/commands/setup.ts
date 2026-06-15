@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { readManifest } from "../manifests.js";
 import { getLocalMachineId, recordSetupRun } from "../db.js";
 import type { MachineManifest, SetupResult, SetupStep } from "../types.js";
@@ -53,11 +54,11 @@ function buildPackageSteps(machine: MachineManifest): SetupStep[] {
     const manager = pkg.manager || (machine.platform === "macos" ? "brew" : "apt");
     let command = pkg.name;
     if (manager === "bun") {
-      command = `bun install -g ${pkg.name}`;
+      command = `bun install -g ${quote(pkg.name)}`;
     } else if (manager === "brew") {
-      command = `brew install ${pkg.name}`;
+      command = `brew install ${quote(pkg.name)}`;
     } else if (manager === "apt") {
-      command = `sudo apt-get install -y ${pkg.name}`;
+      command = `sudo apt-get install -y ${quote(pkg.name)}`;
     }
 
     return {
@@ -80,7 +81,7 @@ export function buildSetupPlan(machineId?: string): SetupResult {
   const target: MachineManifest = selected || {
     id: currentMachineId,
     platform: "linux",
-    workspacePath: "~/workspace",
+    workspacePath: `${homedir()}/workspace`,
   };
 
   const steps = [...buildBaseSteps(target), ...buildPackageSteps(target)];

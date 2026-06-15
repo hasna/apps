@@ -91,6 +91,7 @@ export function writeManifest(manifest: FleetManifest, path = getManifestPath())
     generatedAt: new Date().toISOString(),
     machines: normalizeMachines(manifest.machines),
   };
+  fleetSchema.parse(payload);
   writeFileSync(path, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   return path;
 }

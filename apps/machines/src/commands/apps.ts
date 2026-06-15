@@ -27,6 +27,7 @@ function shellQuote(value: string): string {
 
 function buildAppCommand(machine: MachineManifest, app: ManifestAppSpec): string {
   const packageName = getPackageName(app);
+  const quotedPackageName = shellQuote(packageName);
   const manager = getAppManager(machine, app);
   if (manager === "custom") {
     return packageName;
@@ -34,16 +35,16 @@ function buildAppCommand(machine: MachineManifest, app: ManifestAppSpec): string
 
   if (machine.platform === "macos") {
     if (manager === "cask") {
-      return `brew install --cask ${packageName}`;
+      return `brew install --cask ${quotedPackageName}`;
     }
-    return `brew install ${packageName}`;
+    return `brew install ${quotedPackageName}`;
   }
 
   if (machine.platform === "windows") {
-    return `winget install ${packageName}`;
+    return `winget install ${quotedPackageName}`;
   }
 
-  return `sudo apt-get install -y ${packageName}`;
+  return `sudo apt-get install -y ${quotedPackageName}`;
 }
 
 function buildAppProbeCommand(machine: MachineManifest, app: ManifestAppSpec): string {

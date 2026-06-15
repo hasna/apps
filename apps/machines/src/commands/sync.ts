@@ -1,4 +1,5 @@
 import { existsSync, lstatSync, readFileSync, symlinkSync, copyFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname } from "node:path";
 import { readManifest } from "../manifests.js";
 import { ensureParentDir } from "../paths.js";
@@ -24,13 +25,13 @@ function packageCheckCommand(machine: MachineManifest, packageName: string, mana
 
 function packageInstallCommand(machine: MachineManifest, packageName: string, manager = machine.platform === "macos" ? "brew" : "apt"): string {
   if (manager === "bun") {
-    return `bun install -g ${packageName}`;
+    return `bun install -g ${quote(packageName)}`;
   }
   if (manager === "brew") {
-    return `brew install ${packageName}`;
+    return `brew install ${quote(packageName)}`;
   }
   if (manager === "apt") {
-    return `sudo apt-get install -y ${packageName}`;
+    return `sudo apt-get install -y ${quote(packageName)}`;
   }
   return packageName;
 }
@@ -94,7 +95,7 @@ export function buildSyncPlan(machineId?: string): SyncResult {
   const target: MachineManifest = selected || {
     id: currentMachineId,
     platform: "linux",
-    workspacePath: "~/workspace",
+    workspacePath: `${homedir()}/workspace`,
   };
 
   const actions = [

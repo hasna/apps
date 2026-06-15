@@ -40,9 +40,10 @@ describe("smart ssh", () => {
       tailscaleName: "apple03.tailnet.ts.net",
     });
 
-    const resolved = resolveSshTarget("apple03");
+    const routeOptions = { includeTailscale: false };
+    const resolved = resolveSshTarget("apple03", routeOptions);
     expect(resolved.route).toBe("tailscale");
-    expect(buildSshCommand("apple03", "uptime")).toBe("ssh apple03.tailnet.ts.net 'uptime'");
+    expect(buildSshCommand("apple03", "uptime", routeOptions)).toBe("ssh apple03.tailnet.ts.net 'uptime'");
   });
 
   test("resolves tailscale-discovered machines without a manifest entry", () => {

@@ -21,8 +21,8 @@ describe("setup planning", () => {
     const plan = buildSetupPlan("spark01");
     expect(plan.mode).toBe("plan");
     expect(plan.steps.length).toBeGreaterThanOrEqual(4);
-    expect(plan.steps.some((step) => step.command.includes("apt-get install -y ripgrep"))).toBe(true);
-    expect(plan.steps.some((step) => step.command.includes("bun install -g @hasna/takumi"))).toBe(true);
+    expect(plan.steps.some((step) => step.command.includes("apt-get install -y 'ripgrep'"))).toBe(true);
+    expect(plan.steps.some((step) => step.command.includes("bun install -g '@hasna/takumi'"))).toBe(true);
   });
 
   test("requires explicit confirmation to execute", () => {

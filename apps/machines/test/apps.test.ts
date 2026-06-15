@@ -42,7 +42,7 @@ describe("apps", () => {
 
     const plan = buildAppsPlan("apple03");
     expect(plan.steps).toHaveLength(1);
-    expect(plan.steps[0]?.command).toContain("brew install --cask ghostty");
+    expect(plan.steps[0]?.command).toContain("brew install --cask 'ghostty'");
   });
 
   test("computes app status and diff", () => {
