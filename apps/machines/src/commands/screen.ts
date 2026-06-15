@@ -1,4 +1,13 @@
-import { discoverMachineTopology, resolveMachineRoute, type MachineRouteOptions, type MachineRouteKind, type MachineRouteConfidence } from "../topology.js";
+import { buildSshCommand } from "./ssh.js";
+import {
+  discoverMachineTopology,
+  resolveMachineRoute,
+  type MachineRouteOptions,
+  type MachineRouteKind,
+  type MachineRouteConfidence,
+} from "../topology.js";
+
+export const DEFAULT_SCREEN_SECRET_NAMESPACE = "hasna/xyz/opensource/machines/prod";
 
 export interface ResolvedScreenTarget {
   machineId: string;
@@ -10,8 +19,46 @@ export interface ResolvedScreenTarget {
   warnings: string[];
 }
 
+export interface ScreenCredentialResolution {
+  machineId: string;
+  user: string | null;
+  userSource: "option" | "route" | "metadata" | "missing";
+  passwordSecretKey: string;
+  passwordSecretSource: "option" | "metadata" | "default";
+}
+
+export interface ScreenEnableCommandPlan {
+  machineId: string;
+  user: string;
+  passwordSecretKey: string;
+  remoteCommand: string;
+  command: string;
+}
+
+export interface ScreenCredentialOptions extends MachineRouteOptions {
+  user?: string;
+  passwordSecretKey?: string;
+}
+
+export interface ScreenEnableCommandOptions extends ScreenCredentialOptions {
+  secretsCommand?: string;
+}
+
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function shellCommand(command: string[]): string {
+  return command.map(shellQuote).join(" ");
+}
+
+function metadataString(metadata: Record<string, unknown> | undefined, keys: string[]): string | null {
+  if (!metadata) return null;
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
 }
 
 /**
@@ -22,6 +69,10 @@ function splitTarget(target: string): [string | null, string] {
   const at = target.indexOf("@");
   if (at === -1) return [null, target];
   return [target.slice(0, at), target.slice(at + 1)];
+}
+
+export function defaultScreenPasswordSecretKey(machineId: string): string {
+  return `${DEFAULT_SCREEN_SECRET_NAMESPACE}/screen-${machineId}-vnc-password`;
 }
 
 /**
@@ -62,6 +113,32 @@ export function resolveScreenTarget(machineId: string, options: MachineRouteOpti
   };
 }
 
+export function resolveScreenCredentials(machineId: string, options: ScreenCredentialOptions = {}): ScreenCredentialResolution {
+  const topology = options.topology ?? discoverMachineTopology(options);
+  const screen = resolveScreenTarget(machineId, { ...options, topology });
+  const entry = topology.machines.find((machine) => machine.machine_id === screen.machineId);
+  const metadata = entry?.metadata;
+  const metadataUser = metadataString(metadata, ["screenUser", "screen_user", "user", "username"]);
+  const metadataPasswordSecret = metadataString(metadata, [
+    "screenPasswordSecret",
+    "screen_password_secret",
+    "screenVncPasswordSecret",
+    "screen_vnc_password_secret",
+    "vncPasswordSecret",
+    "vnc_password_secret",
+  ]);
+  const user = options.user ?? screen.user ?? metadataUser;
+  const passwordSecretKey = options.passwordSecretKey ?? metadataPasswordSecret ?? defaultScreenPasswordSecretKey(screen.machineId);
+
+  return {
+    machineId: screen.machineId,
+    user: user ?? null,
+    userSource: options.user ? "option" : screen.user ? "route" : metadataUser ? "metadata" : "missing",
+    passwordSecretKey,
+    passwordSecretSource: options.passwordSecretKey ? "option" : metadataPasswordSecret ? "metadata" : "default",
+  };
+}
+
 /**
  * Build the macOS command that opens Screen Sharing to a machine.
  * `open vnc://user@host` launches Screen Sharing.app pointed at the resolved route.
@@ -97,4 +174,42 @@ export function buildScreenEnableRemoteCommand(user: string, vncPassword: string
     `${kickstart} -activate -configure -access -on -users ${shellQuote(user)} -privs -all -restart -agent -menu`,
   ];
   return lines.join(" && ");
+}
+
+/**
+ * Build the remote root command used by secure screen-enable plans.
+ * The VNC password is read from stdin so it is not embedded in shell history,
+ * generated command text, or the SSH remote command arguments.
+ */
+export function buildScreenEnableRemoteCommandFromStdin(user: string): string {
+  const kickstart =
+    "/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart";
+  const script = [
+    "set -euo pipefail",
+    'user="$1"',
+    "IFS= read -r vnc_pw",
+    'if [ -z "$vnc_pw" ]; then echo "missing VNC password on stdin" >&2; exit 1; fi',
+    `kickstart=${shellQuote(kickstart)}`,
+    'dseditgroup -o edit -a "$user" -t user com.apple.access_screensharing 2>/dev/null || true',
+    "defaults write /Library/Preferences/com.apple.RemoteManagement AllowSRPForNetworkNodes -bool true",
+    '"$kickstart" -configure -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$vnc_pw"',
+    '"$kickstart" -activate -configure -access -on -users "$user" -privs -all -restart -agent -menu',
+  ].join("\n");
+  return `sudo -n -p '' /bin/bash -c ${shellQuote(script)} -- ${shellQuote(user)}`;
+}
+
+export function buildScreenEnableCommand(machineId: string, options: ScreenEnableCommandOptions = {}): ScreenEnableCommandPlan {
+  const credentials = resolveScreenCredentials(machineId, options);
+  if (!credentials.user) {
+    throw new Error(`No screen-sharing user known for ${machineId}; pass --user <name> or set metadata.user in the manifest.`);
+  }
+  const secretsCommand = options.secretsCommand || "secrets";
+  const remoteCommand = buildScreenEnableRemoteCommandFromStdin(credentials.user);
+  return {
+    machineId: credentials.machineId,
+    user: credentials.user,
+    passwordSecretKey: credentials.passwordSecretKey,
+    remoteCommand,
+    command: `${shellCommand([secretsCommand, "get", credentials.passwordSecretKey])} | ${buildSshCommand(machineId, remoteCommand, options)}`,
+  };
 }

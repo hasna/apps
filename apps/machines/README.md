@@ -130,6 +130,7 @@ machines screen machine005 --print         # print the vnc:// URL instead of ope
 machines screen machine005 --json          # full resolution detail (route, confidence, user)
 machines screen --all                      # open every reachable machine
 machines screen --all --print              # list resolved vnc:// URLs for the whole fleet
+machines screen-credentials --all --check-secret
 ```
 
 Enable Remote Management / Screen Sharing on a fresh macOS machine over SSH
@@ -137,12 +138,20 @@ Enable Remote Management / Screen Sharing on a fresh macOS machine over SSH
 Screen Sharing.app and Apple Remote Desktop):
 
 ```bash
-machines screen-enable --machine machine005 --user jo --vnc-password steaua17
+secrets set hasna/xyz/opensource/machines/prod/screen-machine005-vnc-password "$VNC_PASSWORD" --type password
+machines screen-enable --machine machine005 --user jo \
+  --vnc-password-secret hasna/xyz/opensource/machines/prod/screen-machine005-vnc-password
 machines screen-enable --machine machine005 --user jo --print   # show the SSH command, don't run it
 ```
 
-`--vnc-password` is truncated to 8 characters by the legacy VNC protocol. The
-user comes from the manifest (`metadata.user`) when present, or `--user`.
+The legacy VNC protocol honors only the first 8 password characters. The
+password is read through the `secrets` CLI and piped over SSH stdin; it is not
+embedded in generated command text. If `--vnc-password-secret` is omitted,
+machines defaults to
+`hasna/xyz/opensource/machines/prod/screen-<machine>-vnc-password`. The user
+comes from the manifest (`metadata.user`) when present, or `--user`.
+`screen-credentials` verifies the resolved user and secret key for a machine or
+the full fleet without printing secret values.
 
 Consumers that need repo paths can resolve trust-aware workspace mappings
 without importing the full machines app:

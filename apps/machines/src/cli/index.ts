@@ -34,7 +34,7 @@ import {
 } from "../commands/notifications.js";
 import { listPorts } from "../commands/ports.js";
 import { buildSshCommand, resolveSshTarget } from "../commands/ssh.js";
-import { resolveScreenTarget, buildScreenCommand, buildScreenEnableRemoteCommand } from "../commands/screen.js";
+import { resolveScreenTarget, buildScreenCommand, buildScreenEnableCommand, resolveScreenCredentials } from "../commands/screen.js";
 import { buildSyncPlan, runSync } from "../commands/sync.js";
 import { getStatus } from "../commands/status.js";
 import { repairWorkspaceManifestMappings, type WorkspaceManifestRepairResult } from "../commands/workspace.js";
@@ -202,6 +202,20 @@ function renderSelfTestResult(result: SelfTestResult): string {
       return `${check.id.padEnd(20)} ${status} ${check.detail}`;
     }),
   ].join("\n");
+}
+
+function checkSecretPresence(secretsCommand: string, key: string): { checked: true; present: boolean; error?: string } {
+  const result = Bun.spawnSync([secretsCommand, "get", key], {
+    stdout: "pipe",
+    stderr: "pipe",
+    env: process.env,
+  });
+  const stdout = result.stdout.toString().trim();
+  return {
+    checked: true,
+    present: result.exitCode === 0 && stdout.length > 0,
+    error: result.exitCode === 0 ? undefined : result.stderr.toString().trim() || `secrets get exited ${result.exitCode}`,
+  };
 }
 
 function parseCommandSpec(value: string): CompatibilityCommandSpec {
@@ -1086,30 +1100,82 @@ program
   });
 
 program
+  .command("screen-credentials")
+  .description("Inspect screen-sharing user and password secret references without printing secrets")
+  .option("--machine <id>", "Machine identifier")
+  .option("--all", "Inspect every discovered machine", false)
+  .option("--check-secret", "Check whether the password secret exists in the local secrets vault", false)
+  .option("--secrets-command <command>", "Secrets CLI command to inspect", "secrets")
+  .option("--no-tailscale", "Skip tailscale status probing")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { machine?: string; all?: boolean; checkSecret?: boolean; secretsCommand: string; tailscale?: boolean; json?: boolean }) => {
+    const topology = discoverMachineTopology({ includeTailscale: options.tailscale !== false });
+    const machineIds = options.all
+      ? topology.machines.map((machine) => machine.machine_id)
+      : [options.machine].filter((machine): machine is string => Boolean(machine));
+    if (machineIds.length === 0) {
+      console.error("Provide --machine <id> or --all");
+      process.exitCode = 1;
+      return;
+    }
+    const results = machineIds.map((machineId) => {
+      try {
+        const credentials = resolveScreenCredentials(machineId, { topology });
+        const secret = options.checkSecret
+          ? checkSecretPresence(options.secretsCommand, credentials.passwordSecretKey)
+          : { checked: false as const, present: null };
+        return { ok: true as const, ...credentials, passwordSecret: secret };
+      } catch (error) {
+        return { ok: false as const, machineId, error: error instanceof Error ? error.message : String(error) };
+      }
+    });
+    const hasFailures = results.some((result) => !result.ok || (result.ok && result.passwordSecret.checked && !result.passwordSecret.present));
+    if (options.json) {
+      console.log(JSON.stringify(results, null, 2));
+      if (hasFailures) process.exitCode = 1;
+      return;
+    }
+    for (const result of results) {
+      if (!result.ok) {
+        console.log(`✗ ${result.machineId.padEnd(14)} ${result.error}`);
+        continue;
+      }
+      const secret = result.passwordSecret.checked
+        ? result.passwordSecret.present
+          ? chalk.green("present")
+          : chalk.red("missing")
+        : chalk.yellow("unchecked");
+      console.log(`${result.machineId.padEnd(14)} user=${result.user ?? "(missing)"} passwordSecret=${result.passwordSecretKey} (${secret})`);
+    }
+    if (hasFailures) process.exitCode = 1;
+  });
+
+program
   .command("screen-enable")
   .description("Enable Remote Management / Screen Sharing on a macOS machine over SSH")
   .requiredOption("--machine <id>", "Machine identifier")
   .option("--user <user>", "macOS user to grant screen-sharing (overrides manifest)")
-  .option("--vnc-password <pw>", "Legacy VNC password (<=8 chars honored)", "")
+  .option("--vnc-password-secret <key>", "Secret key containing the legacy VNC password")
+  .option("--secrets-command <command>", "Secrets CLI command to read the password", "secrets")
+  .option("--vnc-password <pw>", "Deprecated: use --vnc-password-secret instead", "")
   .option("--print", "Print the remote command instead of running it", false)
-  .action((options: { machine: string; user?: string; vncPassword?: string; print?: boolean }) => {
-    const screen = resolveScreenTarget(options.machine);
-    const user = options.user ?? screen.user;
-    if (!user) {
-      console.error(`No SSH user known for ${options.machine}; pass --user <name> or set metadata.user in the manifest.`);
+  .action((options: { machine: string; user?: string; vncPasswordSecret?: string; secretsCommand?: string; vncPassword?: string; print?: boolean }) => {
+    if (options.vncPassword) {
+      console.error("Direct --vnc-password values are not accepted. Store the password with `secrets set` and pass --vnc-password-secret.");
       process.exitCode = 1;
       return;
     }
-    const vncPw = (options.vncPassword || "").slice(0, 8);
-    const remoteCmd = buildScreenEnableRemoteCommand(user, vncPw);
-    // Run as root on the target via sudo; the SSH route is resolved by buildSshCommand.
-    const sshCmd = buildSshCommand(options.machine, `sudo -p '' bash -c ${JSON.stringify(remoteCmd)}`);
+    const plan = buildScreenEnableCommand(options.machine, {
+      user: options.user,
+      passwordSecretKey: options.vncPasswordSecret,
+      secretsCommand: options.secretsCommand,
+    });
     if (options.print) {
-      console.log(sshCmd);
+      console.log(plan.command);
       return;
     }
-    console.log(`Run this to enable Screen Sharing on ${options.machine} (will prompt for sudo on the target):`);
-    console.log(`  ${sshCmd}`);
+    console.log(`Run this to enable Screen Sharing on ${options.machine} (password comes from ${plan.passwordSecretKey}):`);
+    console.log(`  ${plan.command}`);
   });
 
 program.command("ports").description("List listening ports on a machine").option("--machine <id>", "Machine identifier").option("-j, --json", "Print JSON output", false).action((options: { machine?: string; json?: boolean }) => {
