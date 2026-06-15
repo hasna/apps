@@ -390,7 +390,8 @@ manifestCommand
   .option("--metadata <json>", "Machine metadata as JSON")
   .option("--from-stdin", "Read the full MachineManifest JSON from stdin")
   .action((options: Record<string, string | string[] | boolean | undefined>) => {
-    if (options["from-stdin"]) {
+    const fromStdin = Boolean(options["fromStdin"] || options["from-stdin"]);
+    if (fromStdin) {
       if (process.stdin.isTTY) {
         console.error("error: --from-stdin requires piped input");
         process.exit(1);
