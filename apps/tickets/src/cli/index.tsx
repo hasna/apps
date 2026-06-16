@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander";
 import { getDatabase } from "../db/database.ts";
 import { registerBrainsCommand } from "./brains.ts";
@@ -597,5 +598,6 @@ domainCmd.command("list").action(async (_opts, cmd) => {
 // ── brains ────────────────────────────────────────────────────────────────────
 
 registerBrainsCommand(program);
+registerEventsCommands(program, { source: "tickets" });
 
 program.parse();
