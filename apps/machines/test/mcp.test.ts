@@ -8,6 +8,8 @@ test("exports expected MCP tool surface", () => {
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_apps_status");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_install_claude_diff");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_notifications_dispatch");
+  expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_webhooks_add");
+  expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_events_emit");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_serve_info");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_sync_apply");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_compatibility");

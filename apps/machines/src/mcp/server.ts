@@ -1,3 +1,4 @@
+import { EventsClient, sanitizeChannelForOutput, sanitizeChannelsForOutput } from "@hasna/events";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getPackageVersion } from "../version.js";
@@ -73,6 +74,13 @@ export const MACHINE_MCP_TOOL_NAMES = [
   "machines_notifications_test",
   "machines_notifications_dispatch",
   "machines_notifications_remove",
+  "machines_webhooks_add",
+  "machines_webhooks_list",
+  "machines_webhooks_test",
+  "machines_webhooks_remove",
+  "machines_events_emit",
+  "machines_events_list",
+  "machines_events_replay",
   "machines_serve_info",
   "machines_serve_dashboard",
   "storage_status",
@@ -87,6 +95,7 @@ export function buildServer(version: string = getPackageVersion()): McpServer {
 
 export function createMcpServer(version: string): McpServer {
   const server = new McpServer({ name: "machines", version });
+  const events = new EventsClient();
 
   server.tool("machines_status", "Return local machine fleet status paths and machine identity.", {}, async () => ({
     content: [{ type: "text", text: JSON.stringify(getStatus(), null, 2) }],
@@ -446,6 +455,92 @@ export function createMcpServer(version: string): McpServer {
     "Remove a notification channel.",
     { channel_id: z.string().describe("Channel identifier") },
     async ({ channel_id }) => ({ content: [{ type: "text", text: JSON.stringify(removeNotificationChannel(channel_id), null, 2) }] })
+  );
+
+  server.tool(
+    "machines_webhooks_add",
+    "Add or replace a shared Hasna event webhook channel.",
+    {
+      channel_id: z.string().describe("Channel identifier"),
+      url: z.string().url().describe("Webhook URL"),
+      event_type: z.string().optional().describe("Optional event type filter, e.g. machines.*"),
+      source: z.string().optional().describe("Optional source filter"),
+      secret: z.string().optional().describe("Optional HMAC secret"),
+      enabled: z.boolean().optional().describe("Whether the channel is enabled"),
+    },
+    async ({ channel_id, url, event_type, source, secret, enabled }) => {
+      const now = new Date().toISOString();
+      const channel = await events.addChannel({
+        id: channel_id,
+        enabled: enabled ?? true,
+        transport: "webhook",
+        filters: event_type || source ? [{ type: event_type, source }] : undefined,
+        webhook: { url, secret },
+        createdAt: now,
+        updatedAt: now,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(sanitizeChannelForOutput(channel), null, 2) }] };
+    }
+  );
+
+  server.tool("machines_webhooks_list", "List shared Hasna event webhook channels.", {}, async () => ({
+    content: [{ type: "text", text: JSON.stringify(sanitizeChannelsForOutput(await events.listChannels()), null, 2) }],
+  }));
+
+  server.tool(
+    "machines_webhooks_test",
+    "Send a test event to one shared Hasna event channel.",
+    { channel_id: z.string().describe("Channel identifier"), event_type: z.string().optional().describe("Event type"), message: z.string().optional().describe("Message body") },
+    async ({ channel_id, event_type, message }) => ({
+      content: [{ type: "text", text: JSON.stringify(await events.testChannel(channel_id, { source: "machines", type: event_type ?? "events.test", message }), null, 2) }],
+    })
+  );
+
+  server.tool(
+    "machines_webhooks_remove",
+    "Remove a shared Hasna event channel.",
+    { channel_id: z.string().describe("Channel identifier") },
+    async ({ channel_id }) => ({ content: [{ type: "text", text: JSON.stringify({ removed: await events.removeChannel(channel_id) }, null, 2) }] })
+  );
+
+  server.tool(
+    "machines_events_emit",
+    "Emit a shared Hasna event from machines.",
+    {
+      event_type: z.string().describe("Event type"),
+      subject: z.string().optional().describe("Event subject"),
+      severity: z.enum(["debug", "info", "notice", "warning", "error", "critical"]).optional().describe("Event severity"),
+      message: z.string().optional().describe("Message body"),
+      data: z.record(z.unknown()).optional().describe("Event data"),
+      metadata: z.record(z.unknown()).optional().describe("Event metadata"),
+      dedupe_key: z.string().optional().describe("Dedupe key"),
+      deliver: z.boolean().optional().describe("Deliver to matching channels"),
+    },
+    async ({ event_type, subject, severity, message, data, metadata, dedupe_key, deliver }) => ({
+      content: [{ type: "text", text: JSON.stringify(await events.emit({
+        source: "machines",
+        type: event_type,
+        subject,
+        severity,
+        message,
+        data: data ?? {},
+        metadata: metadata ?? {},
+        dedupeKey: dedupe_key,
+      }, { deliver: deliver !== false }), null, 2) }],
+    })
+  );
+
+  server.tool("machines_events_list", "List shared Hasna events.", {}, async () => ({
+    content: [{ type: "text", text: JSON.stringify(await events.listEvents(), null, 2) }],
+  }));
+
+  server.tool(
+    "machines_events_replay",
+    "Replay shared Hasna events.",
+    { event_id: z.string().optional().describe("Event id"), source: z.string().optional().describe("Source filter"), event_type: z.string().optional().describe("Event type filter"), dry_run: z.boolean().optional().describe("Preview without delivery") },
+    async ({ event_id, source, event_type, dry_run }) => ({
+      content: [{ type: "text", text: JSON.stringify(await events.replay({ eventId: event_id, source, type: event_type, dryRun: dry_run }), null, 2) }],
+    })
   );
 
   server.tool(

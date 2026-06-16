@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { EventsClient } from "@hasna/events";
 import { manifestAdd, manifestInit } from "../src/commands/manifest.js";
 import { addNotificationChannel } from "../src/commands/notifications.js";
 import { getServeInfo, renderDashboardHtml, startDashboardServer } from "../src/commands/serve.js";
@@ -12,6 +13,7 @@ describe("serve", () => {
     delete process.env["HASNA_MACHINES_NOTIFICATIONS_PATH"];
     delete process.env["HASNA_MACHINES_DB_PATH"];
     delete process.env["HASNA_MACHINES_MACHINE_ID"];
+    delete process.env["HASNA_EVENTS_DIR"];
   });
 
   test("returns default serve info", () => {
@@ -38,6 +40,7 @@ describe("serve", () => {
     process.env["HASNA_MACHINES_DB_PATH"] = join(dir, "machines.db");
     process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
     process.env["HASNA_MACHINES_NOTIFICATIONS_PATH"] = join(dir, "notifications.json");
+    process.env["HASNA_EVENTS_DIR"] = join(dir, "events");
     manifestInit();
     manifestAdd({
       id: "spark01",
@@ -52,6 +55,15 @@ describe("serve", () => {
       events: ["manual.test"],
       enabled: true,
     });
+    await new EventsClient().addChannel({
+      id: "events-local",
+      enabled: true,
+      transport: "command",
+      command: { command: "printf", args: ["ok"] },
+      filters: [{ source: "machines" }],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
 
     const server = startDashboardServer({ host: "127.0.0.1", port: 0 });
     const base = `http://127.0.0.1:${server.port}`;
@@ -59,6 +71,13 @@ describe("serve", () => {
     const doctor = await fetch(`${base}/api/doctor`).then((response) => response.json());
     const selfTest = await fetch(`${base}/api/self-test`).then((response) => response.json());
     const apps = await fetch(`${base}/api/apps/status`).then((response) => response.json());
+    const webhooks = await fetch(`${base}/api/webhooks`).then((response) => response.json());
+    const emitted = await fetch(`${base}/api/events`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ type: "machines.test", data: { ok: true } }),
+    }).then((response) => response.json());
+    const listedEvents = await fetch(`${base}/api/events`).then((response) => response.json());
     const dispatch = await fetch(`${base}/api/notifications/test`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -70,6 +89,9 @@ describe("serve", () => {
     expect(Array.isArray(doctor.checks)).toBe(true);
     expect(Array.isArray(selfTest.checks)).toBe(true);
     expect(Array.isArray(apps.apps)).toBe(true);
+    expect(webhooks[0].id).toBe("events-local");
+    expect(emitted.event.type).toBe("machines.test");
+    expect(Array.isArray(listedEvents)).toBe(true);
     expect(dispatch.channelId).toBe("local");
   });
 });

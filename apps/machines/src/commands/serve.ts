@@ -1,3 +1,4 @@
+import { EventsClient, sanitizeChannelsForOutput } from "@hasna/events";
 import { diffApps, getAppsStatus } from "./apps.js";
 import { runDoctor } from "./doctor.js";
 import { diffClaudeCli, getClaudeCliStatus } from "./install-claude.js";
@@ -40,6 +41,8 @@ export function getServeInfo(options: ServeOptions = {}): ServeInfo {
       "/api/status",
       "/api/manifest",
       "/api/notifications",
+      "/api/webhooks",
+      "/api/events",
       "/api/doctor",
       "/api/self-test",
       "/api/apps/status",
@@ -47,6 +50,7 @@ export function getServeInfo(options: ServeOptions = {}): ServeInfo {
       "/api/install-claude/status",
       "/api/install-claude/diff",
       "/api/notifications/test",
+      "/api/webhooks/test",
     ],
   };
 }
@@ -226,6 +230,7 @@ function jsonError(message: string, status = 400): Response {
 
 export function startDashboardServer(options: ServeOptions = {}): ReturnType<typeof Bun.serve> {
   const info = getServeInfo(options);
+  const events = new EventsClient();
   return Bun.serve({
     hostname: info.host,
     port: info.port,
@@ -245,6 +250,42 @@ export function startDashboardServer(options: ServeOptions = {}): ReturnType<typ
       }
       if (url.pathname === "/api/notifications") {
         return Response.json(listNotificationChannels());
+      }
+      if (url.pathname === "/api/webhooks") {
+        if (request.method !== "GET") {
+          return jsonError("Use GET for webhook channel listing.", 405);
+        }
+        return Response.json(sanitizeChannelsForOutput(await events.listChannels()));
+      }
+      if (url.pathname === "/api/events") {
+        if (request.method === "GET") {
+          return Response.json(await events.listEvents());
+        }
+        if (request.method !== "POST") {
+          return jsonError("Use GET or POST for events.", 405);
+        }
+        const body = await parseJsonBody(request);
+        const type = typeof body["type"] === "string" ? body["type"] : undefined;
+        if (!type) {
+          return jsonError("type is required.");
+        }
+        const source = typeof body["source"] === "string" ? body["source"] : "machines";
+        const subject = typeof body["subject"] === "string" ? body["subject"] : undefined;
+        const severity = typeof body["severity"] === "string" ? body["severity"] : undefined;
+        const message = typeof body["message"] === "string" ? body["message"] : undefined;
+        const dedupeKey = typeof body["dedupeKey"] === "string" ? body["dedupeKey"] : undefined;
+        const data = body["data"] && typeof body["data"] === "object" && !Array.isArray(body["data"]) ? body["data"] as Record<string, unknown> : {};
+        const metadata = body["metadata"] && typeof body["metadata"] === "object" && !Array.isArray(body["metadata"]) ? body["metadata"] as Record<string, unknown> : {};
+        return Response.json(await events.emit({
+          source,
+          type,
+          subject,
+          severity: severity as never,
+          message,
+          dedupeKey,
+          data,
+          metadata,
+        }));
       }
       if (url.pathname === "/api/doctor") {
         return Response.json(runDoctor(machineId));
@@ -279,6 +320,28 @@ export function startDashboardServer(options: ServeOptions = {}): ReturnType<typ
         const yes = body["yes"] === true;
         try {
           return Response.json(await testNotificationChannel(channelId, event, message, { apply, yes }));
+        } catch (error) {
+          return jsonError(error instanceof Error ? error.message : String(error));
+        }
+      }
+      if (url.pathname === "/api/webhooks/test") {
+        if (request.method !== "POST") {
+          return jsonError("Use POST for webhook tests.", 405);
+        }
+        const body = await parseJsonBody(request);
+        const channelId = typeof body["channelId"] === "string" ? body["channelId"] : undefined;
+        if (!channelId) {
+          return jsonError("channelId is required.");
+        }
+        const type = typeof body["type"] === "string" ? body["type"] : "events.test";
+        const message = typeof body["message"] === "string" ? body["message"] : undefined;
+        try {
+          return Response.json(await events.testChannel(channelId, {
+            source: "machines",
+            type,
+            subject: channelId,
+            message,
+          }));
         } catch (error) {
           return jsonError(error instanceof Error ? error.message : String(error));
         }

@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
+import { registerEventsCommands } from "@hasna/events/commander";
 import { execFileSync } from "node:child_process";
 import chalk from "chalk";
 import { getPackageVersion } from "../version.js";
@@ -341,6 +342,7 @@ program
 const manifestCommand = program.command("manifest").description("Manage the fleet manifest");
 const appsCommand = program.command("apps").description("Manage installed applications per machine");
 const notificationsCommand = program.command("notifications").description("Manage fleet alert delivery channels");
+registerEventsCommands(program, { source: "machines" });
 const clipboardCommand = program.command("clipboard").description("Real-time clipboard sync across fleet machines");
 const installClaudeCommand = program.command("install-claude").description("Install or inspect Claude, Codex, and Gemini CLIs");
 
