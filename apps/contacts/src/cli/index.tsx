@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { registerEventsCommands } from "@hasna/events/commander";
 import { program } from "commander";
 import { registerCloudCommands } from "@hasna/cloud";
 import { registerCoreCommands } from "./commands/core.js";
@@ -18,5 +19,6 @@ registerCoreCommands(program);
 registerCrmCommands(program);
 registerAdvancedCommands(program);
 registerCloudCommands(program, "contacts");
+registerEventsCommands(program, { source: "contacts", eventsCommandName: "event-bus" });
 
 program.parse(process.argv);
