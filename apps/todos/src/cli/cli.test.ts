@@ -79,6 +79,21 @@ describe("CLI integration", () => {
     }
   });
 
+  it("should show events and webhooks commands in help", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const eventsDir = mkdtempSync(join(tmpdir(), "todos-events-cli-"));
+    try {
+      const result = await runCli(["--help"], ":memory:", { HASNA_EVENTS_DIR: eventsDir });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("events");
+      expect(result.stdout).toContain("webhooks");
+    } finally {
+      rmSync(eventsDir, { recursive: true, force: true });
+    }
+  });
+
   it("should run add command", async () => {
     const proc = Bun.spawn(
       ["bun", "run", "src/cli/index.tsx", "add", "CLI test task", "--json"],

@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
+import { registerEventsCommands } from "@hasna/events/commander";
 import { getPackageVersion } from "../lib/package-version.js";
 
 const program = new Command();
@@ -101,6 +102,7 @@ registerUsageLedgerCommands(program);
 registerLocalBackupCommands(program);
 registerStorageCommands(program);
 registerScaleHardeningCommands(program);
+registerEventsCommands(program, { source: "todos" });
 registerHelpCommands(program);
 
 program.parse();
