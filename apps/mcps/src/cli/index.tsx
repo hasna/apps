@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander";
 import React from "react";
 import { render } from "ink";
@@ -75,7 +76,6 @@ import {
   redactEnv,
 } from "../lib/credentials.js";
 import * as readline from "readline";
-import { startMcpServer } from "../mcp/index.js";
 import { startServer } from "../server/serve.js";
 import { App } from "./components/App.js";
 import { readPackageVersion } from "../lib/version.js";
@@ -1961,6 +1961,7 @@ program
   .command("mcp")
   .description("Start meta-MCP server (stdio)")
   .action(async () => {
+    const { startMcpServer } = await import("../mcp/index.js");
     await startMcpServer();
   });
 
@@ -1980,8 +1981,11 @@ program
     closeDb();
   });
 
+registerEventsCommands(program, { source: "mcps" });
+
 // --- default: TUI ---
 program.action(() => {
+  if (process.argv.length > 2) return;
   render(React.createElement(App));
 });
 
