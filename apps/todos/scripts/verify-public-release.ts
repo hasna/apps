@@ -125,9 +125,17 @@ function installSmoke(tarball: string): void {
       expectServeStartup();
       continue;
     }
-    if (step.required === false) run(step.command, step.args);
-    else runOrExit(step.command, step.args);
+    const args = withInternalPackageInstallOverride(step.command, step.args);
+    if (step.required === false) run(step.command, args);
+    else runOrExit(step.command, args);
   }
+}
+
+function withInternalPackageInstallOverride(command: string, args: string[]): string[] {
+  if (command !== "bun") return args;
+  if (args[0] !== "install" || !args.includes("-g")) return args;
+  if (args.some((arg) => arg.startsWith("--minimum-release-age"))) return args;
+  return [...args, "--minimum-release-age=0"];
 }
 
 function expectServeStartup(): void {
