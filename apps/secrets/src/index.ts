@@ -190,6 +190,20 @@ function formatEntry(entry: SecretEntry, showValue = false): string {
 }
 
 const args = process.argv.slice(2);
+
+async function runSharedEventCli(args: string[]): Promise<boolean> {
+  if (args[0] !== "events" && args[0] !== "webhooks") return false;
+  const [{ Command }, { registerEventsCommands }] = await Promise.all([
+    import("commander"),
+    import("@hasna/events/commander"),
+  ]);
+  const program = new Command().name("secrets");
+  registerEventsCommands(program, { source: "secrets" });
+  await program.parseAsync(["node", "secrets", ...args]);
+  return true;
+}
+
+if (await runSharedEventCli(args)) process.exit(0);
 const [command, ...rest] = args;
 
 if (!command || command === "--help" || command === "-h") {
