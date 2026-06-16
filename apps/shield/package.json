@@ -1,6 +1,6 @@
 {
   "name": "@hasna/shield",
-  "version": "0.1.15",
+  "version": "0.1.17",
   "description": "AI-powered security scanner for git repos — CLI, MCP, API, Web Dashboard, SDK with Cerebras LLM",
   "type": "module",
   "main": "dist/index.js",
@@ -38,7 +38,8 @@
     "postinstall": "mkdir -p $HOME/.hasna/shield 2>/dev/null || true"
   },
   "dependencies": {
-    "@hasna/cloud": "^0.1.24",
+    "@hasna/cloud": "0.1.24",
+    "@hasna/events": "^0.1.6",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^11.8.1",
     "chalk": "^5.4.1",

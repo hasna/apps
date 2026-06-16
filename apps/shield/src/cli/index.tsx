@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander";
 import { getVersion } from "./helpers.js";
 import { registerScanCommand } from "./commands/scan.js";
@@ -29,5 +30,6 @@ registerServeCommand(program);
 registerSupplyChainCommands(program);
 registerAlertsCommand(program);
 registerSecretsCommand(program);
+registerEventsCommands(program, { source: "shield" });
 
 program.parse();
