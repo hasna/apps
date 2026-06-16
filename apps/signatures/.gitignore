@@ -8,3 +8,5 @@ dist/
 dashboard/node_modules/
 dashboard/dist/
 .signatures/
+.hasna/
+.claude/

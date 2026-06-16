@@ -19,17 +19,21 @@ import {
   listFieldsForDocument,
   deleteFieldsForDocument,
 } from "../db/signature-fields.js";
-import { createPlacement, listPlacementsForDocument } from "../db/signature-placements.js";
+import { listPlacementsForDocument } from "../db/signature-placements.js";
 import { createSigningSession, updateSessionAttachment, updateSessionStatus, getSessionById } from "../db/signing-sessions.js";
+import { createPerson, getPersonByIdOrEmail, listPeople } from "../db/people.js";
+import { getSigningCertificateBySession, listSigningCertificates } from "../db/certificates.js";
 import { getStats } from "../db/stats.js";
 import { search } from "../lib/search.js";
-import { signPdf } from "../lib/pdf-signer.js";
 import { detectSignatureFields } from "../lib/pdf-detector.js";
 import { generateTextSignature, generateDrawingSignature } from "../lib/signature-gen.js";
 import { storeDocument } from "../lib/files.js";
 import { signWithBrowseruse, registerSigningSession } from "../lib/connector-integration.js";
 import { shareDocument, receiveDocument } from "../lib/attachments-integration.js";
 import { getSetting, setSetting, getAllSettings } from "../db/settings.js";
+import { createDocumentFromMarkdown, sendDocumentForSignature, signDocumentLocally } from "../lib/workflow.js";
+import { setupSigningDomain } from "../lib/domain-integration.js";
+import { sendWithProvider } from "../lib/provider-integration.js";
 
 const PORT = parseInt(process.env["PORT"] ?? "19440", 10);
 
@@ -91,6 +95,30 @@ Bun.serve({
         return json(search(q));
       }
 
+      // People
+      if (path === "/api/people") {
+        if (method === "GET") {
+          return json(listPeople({ query: url.searchParams.get("q") ?? undefined }));
+        }
+        if (method === "POST") {
+          const body = await parseBody(req) as Record<string, unknown>;
+          if (!body["name"]) return error("name is required");
+          return json(createPerson({
+            name: body["name"] as string,
+            email: body["email"] as string | undefined,
+            phone: body["phone"] as string | undefined,
+            company: body["company"] as string | undefined,
+            role: body["role"] as string | undefined,
+            metadata: body["metadata"] as Record<string, unknown> | undefined,
+          }), 201);
+        }
+      }
+
+      const personMatch = path.match(/^\/api\/people\/([^/]+)$/);
+      if (personMatch && method === "GET") {
+        return json(getPersonByIdOrEmail(decodeURIComponent(personMatch[1]!)));
+      }
+
       // Documents
       if (path === "/api/documents") {
         if (method === "GET") {
@@ -122,6 +150,20 @@ Bun.serve({
         }
       }
 
+      if (path === "/api/documents/from-markdown" && method === "POST") {
+        const body = await parseBody(req) as Record<string, unknown>;
+        const filePath = body["file_path"] as string;
+        if (!filePath) return error("file_path is required");
+        const result = await createDocumentFromMarkdown({
+          filePath,
+          name: body["name"] as string | undefined,
+          variables: body["variables"] as Record<string, unknown> | undefined,
+          signerName: body["signer_name"] as string | undefined,
+          signerEmail: body["signer_email"] as string | undefined,
+        });
+        return json(result, 201);
+      }
+
       const docMatch = path.match(/^\/api\/documents\/([^/]+)$/);
       if (docMatch) {
         const id = docMatch[1]!;
@@ -143,48 +185,67 @@ Bun.serve({
       if (docSignMatch && method === "POST") {
         const id = docSignMatch[1]!;
         const body = await parseBody(req) as Record<string, unknown>;
-        const doc = getDocumentByIdOrSlug(id);
         const sigId = body["signature_id"] as string;
         if (!sigId) return error("signature_id is required");
-        const sig = getSignatureById(sigId);
-
-        const page = (body["page"] as number) ?? 1;
-        const x = (body["x"] as number) ?? 10;
-        const y = (body["y"] as number) ?? 80;
-
-        const session = createSigningSession({
-          document_id: doc.id,
-          signer_name: body["signer_name"] as string | undefined,
-          signer_email: body["signer_email"] as string | undefined,
-          source: "local",
-        });
-
-        const placement = createPlacement({
-          document_id: doc.id,
-          signature_id: sig.id,
-          field_id: body["field_id"] as string | undefined,
-          page,
-          x,
-          y,
+        const result = await signDocumentLocally({
+          documentId: id,
+          signatureId: sigId,
+          sessionId: body["session_id"] as string | undefined,
+          personIdOrEmail: body["person"] as string | undefined,
+          signerName: body["signer_name"] as string | undefined,
+          signerEmail: body["signer_email"] as string | undefined,
+          fieldId: body["field_id"] as string | undefined,
+          page: body["page"] as number | undefined,
+          x: body["x"] as number | undefined,
+          y: body["y"] as number | undefined,
           width: body["width"] as number | undefined,
           height: body["height"] as number | undefined,
+          certificate: body["certificate"] as boolean | undefined,
         });
+        return json({ success: true, ...result });
+      }
 
-        const result = await signPdf({
-          document_path: doc.file_path,
-          document_name: doc.file_name,
-          placements: [{ placement, signature: sig }],
+      const docSendMatch = path.match(/^\/api\/documents\/([^/]+)\/send$/);
+      if (docSendMatch && method === "POST") {
+        const id = docSendMatch[1]!;
+        const body = await parseBody(req) as Record<string, unknown>;
+        const result = await sendDocumentForSignature({
+          documentId: id,
+          personIdOrEmail: body["person"] as string | undefined,
+          signerName: body["signer_name"] as string | undefined,
+          signerEmail: body["signer_email"] as string | undefined,
+          fromEmail: body["from"] as string | undefined,
+          baseUrl: body["base_url"] as string | undefined,
+          expiry: body["expiry"] as string | undefined,
+          dryRunEmail: body["dry_run_email"] as boolean | undefined,
         });
+        return json(result, 201);
+      }
 
-        updateDocument(doc.id, { status: "completed" });
-
-        return json({
-          success: true,
-          output_path: result.output_path,
-          pages_signed: result.pages_signed,
-          placement_id: placement.id,
-          session_id: session.id,
+      const providerSendMatch = path.match(/^\/api\/documents\/([^/]+)\/provider-send$/);
+      if (providerSendMatch && method === "POST") {
+        const id = providerSendMatch[1]!;
+        const body = await parseBody(req) as Record<string, unknown>;
+        const doc = getDocumentByIdOrSlug(id);
+        const recipient = body["recipient"] as Record<string, unknown> | undefined;
+        if (!recipient?.["email"]) return error("recipient.email is required");
+        const result = await sendWithProvider({
+          provider: (body["provider"] as string | undefined) ?? "pandadoc",
+          apiKey: (body["api_key"] as string | undefined) ?? getSetting("pandoc_api_key") ?? getSetting("pandadoc_api_key") ?? undefined,
+          documentName: doc.name,
+          documentPath: body["document_url"] ? undefined : doc.file_path,
+          documentUrl: body["document_url"] as string | undefined,
+          recipients: [{
+            email: recipient["email"] as string,
+            name: (recipient["name"] as string | undefined) ?? recipient["email"] as string,
+            role: (recipient["role"] as string | undefined) ?? "Signer",
+          }],
+          subject: body["subject"] as string | undefined,
+          message: body["message"] as string | undefined,
+          silent: body["silent"] as boolean | undefined,
+          dryRun: body["dry_run"] as boolean | undefined,
         });
+        return json(result, result.status === "failed" ? 502 : 201);
       }
 
       const docConnectorSignMatch = path.match(/^\/api\/documents\/([^/]+)\/connector-sign$/);
@@ -226,6 +287,27 @@ Bun.serve({
           fields.push(createSignatureField({ ...f, document_id: doc.id }));
         }
         return json(fields);
+      }
+
+      const certificateMatch = path.match(/^\/api\/sessions\/([^/]+)\/certificate$/);
+      if (certificateMatch && method === "GET") {
+        return json(getSigningCertificateBySession(certificateMatch[1]!));
+      }
+
+      if (path === "/api/certificates" && method === "GET") {
+        return json(listSigningCertificates(url.searchParams.get("document_id") ?? undefined));
+      }
+
+      if (path === "/api/domains/setup" && method === "POST") {
+        const body = await parseBody(req) as Record<string, unknown>;
+        if (!body["domain"]) return error("domain is required");
+        return json(setupSigningDomain({
+          domain: body["domain"] as string,
+          subdomain: body["subdomain"] as string | undefined,
+          target: body["target"] as string | undefined,
+          buy: body["buy"] as boolean | undefined,
+          dryRun: body["dry_run"] as boolean | undefined,
+        }));
       }
 
       // Signatures

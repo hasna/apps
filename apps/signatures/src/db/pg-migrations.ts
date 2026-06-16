@@ -86,6 +86,8 @@ export const PG_MIGRATIONS: string[] = [
     y REAL NOT NULL,
     width REAL,
     height REAL,
+    unit TEXT NOT NULL DEFAULT 'percent',
+    anchor TEXT,
     field_type TEXT NOT NULL DEFAULT 'signature',
     label TEXT,
     required BOOLEAN NOT NULL DEFAULT TRUE,
@@ -113,6 +115,7 @@ export const PG_MIGRATIONS: string[] = [
   `CREATE TABLE IF NOT EXISTS signing_sessions (
     id TEXT PRIMARY KEY,
     document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    person_id TEXT,
     signer_name TEXT,
     signer_email TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
@@ -120,9 +123,13 @@ export const PG_MIGRATIONS: string[] = [
     source TEXT NOT NULL DEFAULT 'local',
     connector_name TEXT,
     metadata TEXT,
+    signing_url TEXT,
     attachment_id TEXT,
     share_link TEXT,
     share_expires_at TEXT,
+    signed_document_path TEXT,
+    certificate_path TEXT,
+    completed_at TEXT,
     created_at TEXT NOT NULL DEFAULT NOW()::text,
     updated_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
@@ -143,5 +150,41 @@ export const PG_MIGRATIONS: string[] = [
     version TEXT,
     machine_id TEXT,
     created_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS people (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    email TEXT UNIQUE,
+    phone TEXT,
+    company TEXT,
+    role TEXT,
+    metadata TEXT,
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    updated_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS audit_events (
+    id TEXT PRIMARY KEY,
+    document_id TEXT REFERENCES documents(id) ON DELETE CASCADE,
+    session_id TEXT REFERENCES signing_sessions(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL,
+    message TEXT,
+    actor_name TEXT,
+    actor_email TEXT,
+    metadata TEXT,
+    created_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS signing_certificates (
+    id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL REFERENCES signing_sessions(id) ON DELETE CASCADE,
+    certificate_path TEXT NOT NULL,
+    original_document_hash TEXT,
+    signed_document_hash TEXT,
+    verification_code TEXT NOT NULL UNIQUE,
+    metadata TEXT,
+    issued_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
 ];

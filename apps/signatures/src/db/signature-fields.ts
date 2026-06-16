@@ -12,6 +12,8 @@ function rowToField(row: Record<string, unknown>): SignatureField {
     y: row["y"] as number,
     width: row["width"] as number | undefined,
     height: row["height"] as number | undefined,
+    unit: (row["unit"] as "percent" | "pdf_points" | undefined) ?? "percent",
+    anchor: row["anchor"] as string | undefined,
     field_type: row["field_type"] as FieldType,
     label: row["label"] as string | undefined,
     required: row["required"] as number,
@@ -28,6 +30,8 @@ export function createSignatureField(data: {
   y: number;
   width?: number;
   height?: number;
+  unit?: "percent" | "pdf_points";
+  anchor?: string;
   field_type?: FieldType;
   label?: string;
   required?: number;
@@ -38,8 +42,8 @@ export function createSignatureField(data: {
   const id = `fld-${nanoid(8)}`;
 
   db.query(
-    `INSERT INTO signature_fields (id, document_id, page, x, y, width, height, field_type, label, required, detected, assigned_to)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO signature_fields (id, document_id, page, x, y, width, height, unit, anchor, field_type, label, required, detected, assigned_to)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     data.document_id,
@@ -48,6 +52,8 @@ export function createSignatureField(data: {
     data.y,
     data.width ?? null,
     data.height ?? null,
+    data.unit ?? "percent",
+    data.anchor ?? null,
     data.field_type ?? "signature",
     data.label ?? null,
     data.required ?? 1,

@@ -72,6 +72,8 @@ export interface SignatureField {
   y: number;
   width?: number;
   height?: number;
+  unit?: "percent" | "pdf_points";
+  anchor?: string;
   field_type: FieldType;
   label?: string;
   required: number;
@@ -95,11 +97,24 @@ export interface SignaturePlacement {
 }
 
 export type SessionStatus = "pending" | "completed" | "expired";
-export type SessionSource = "local" | "connector" | "browseruse";
+export type SessionSource = "local" | "connector" | "browseruse" | "email" | "provider";
+
+export interface Person {
+  id: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  company?: string;
+  role?: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
 
 export interface SigningSession {
   id: string;
   document_id: string;
+  person_id?: string;
   signer_name?: string;
   signer_email?: string;
   status: SessionStatus;
@@ -107,11 +122,51 @@ export interface SigningSession {
   source: SessionSource;
   connector_name?: string;
   metadata?: Record<string, unknown>;
+  signing_url?: string;
   attachment_id?: string;
   share_link?: string;
   share_expires_at?: string;
+  signed_document_path?: string;
+  certificate_path?: string;
+  completed_at?: string;
   created_at: string;
   updated_at: string;
+}
+
+export type AuditEventType =
+  | "document_created"
+  | "document_rendered"
+  | "session_created"
+  | "email_prepared"
+  | "email_sent"
+  | "provider_created"
+  | "provider_sent"
+  | "signed"
+  | "certificate_created"
+  | "domain_configured";
+
+export interface AuditEvent {
+  id: string;
+  document_id?: string;
+  session_id?: string;
+  event_type: AuditEventType;
+  message?: string;
+  actor_name?: string;
+  actor_email?: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface SigningCertificate {
+  id: string;
+  document_id: string;
+  session_id: string;
+  certificate_path: string;
+  original_document_hash?: string;
+  signed_document_hash?: string;
+  verification_code: string;
+  metadata?: Record<string, unknown>;
+  issued_at: string;
 }
 
 export interface Stats {
@@ -123,6 +178,7 @@ export interface Stats {
   total_tags: number;
   total_placements: number;
   total_sessions: number;
+  total_people?: number;
 }
 
 // Error types

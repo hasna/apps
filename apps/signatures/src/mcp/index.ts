@@ -37,11 +37,12 @@ import {
   listFieldsForDocument,
   deleteFieldsForDocument,
 } from "../db/signature-fields.js";
-import { createPlacement, listPlacementsForDocument } from "../db/signature-placements.js";
+import { listPlacementsForDocument } from "../db/signature-placements.js";
 import { createSigningSession, updateSessionAttachment, updateSessionStatus, getSessionById } from "../db/signing-sessions.js";
+import { createPerson, listPeople } from "../db/people.js";
+import { getSigningCertificateBySession } from "../db/certificates.js";
 import { getStats } from "../db/stats.js";
 import { searchDocuments } from "../lib/search.js";
-import { signPdf } from "../lib/pdf-signer.js";
 import { detectSignatureFields } from "../lib/pdf-detector.js";
 import { generateTextSignature, generateDrawingSignature } from "../lib/signature-gen.js";
 import { storeDocument } from "../lib/files.js";
@@ -51,6 +52,7 @@ import { shareDocument, receiveDocument } from "../lib/attachments-integration.j
 import { getSetting, setSetting } from "../db/settings.js";
 import { getDatabase } from "../db/database.js";
 import { isCerebrasConfigured } from "../lib/pdf-detector.js";
+import { createDocumentFromMarkdown, sendDocumentForSignature, signDocumentLocally } from "../lib/workflow.js";
 
 import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 
@@ -58,6 +60,13 @@ function registerCompatibleCloudTools(server: Server): void {
   if (typeof (server as unknown as { tool?: unknown }).tool === "function") {
     registerCloudTools(server as never, "signatures");
   }
+}
+
+function maskSetting(key: string, value: unknown): unknown {
+  const lower = key.toLowerCase();
+  return lower.includes("key") || lower.includes("secret") || lower.includes("token")
+    ? "***"
+    : value;
 }
 
 export function buildServer(): Server {
@@ -83,6 +92,21 @@ export function buildServer(): Server {
             status: { type: "string", enum: ["draft", "pending", "completed", "cancelled"] },
             tags: { type: "array", items: { type: "string" } },
           },
+        },
+      },
+      {
+        name: "signatures_document_from_markdown",
+        description: "Render a Markdown template to PDF, add it as a document, and create signature fields from {{signature}} anchors",
+        inputSchema: {
+          type: "object",
+          properties: {
+            file_path: { type: "string" },
+            name: { type: "string" },
+            variables: { type: "object" },
+            signer_name: { type: "string" },
+            signer_email: { type: "string" },
+          },
+          required: ["file_path"],
         },
       },
       {
@@ -128,7 +152,7 @@ export function buildServer(): Server {
       },
       {
         name: "signatures_sign",
-        description: "Sign a document at a position",
+        description: "Sign a document at a position or detected/Markdown field and generate a completion certificate",
         inputSchema: {
           type: "object",
           properties: {
@@ -142,8 +166,61 @@ export function buildServer(): Server {
             field_id: { type: "string" },
             signer_name: { type: "string" },
             signer_email: { type: "string" },
+            person: { type: "string" },
+            session_id: { type: "string" },
+            certificate: { type: "boolean" },
           },
           required: ["document_id", "signature_id"],
+        },
+      },
+      {
+        name: "signatures_send_for_signature",
+        description: "Create a signing session and optional open-emails delivery",
+        inputSchema: {
+          type: "object",
+          properties: {
+            document_id: { type: "string" },
+            signer_name: { type: "string" },
+            signer_email: { type: "string" },
+            person: { type: "string" },
+            from: { type: "string" },
+            base_url: { type: "string" },
+            expiry: { type: "string" },
+            dry_run_email: { type: "boolean" },
+          },
+          required: ["document_id"],
+        },
+      },
+      {
+        name: "signatures_person_create",
+        description: "Create a reusable signer/contact",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+            email: { type: "string" },
+            phone: { type: "string" },
+            company: { type: "string" },
+            role: { type: "string" },
+          },
+          required: ["name"],
+        },
+      },
+      {
+        name: "signatures_person_list",
+        description: "List reusable people/contacts",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+        },
+      },
+      {
+        name: "signatures_certificate_get",
+        description: "Get the completion certificate for a signing session",
+        inputSchema: {
+          type: "object",
+          properties: { session_id: { type: "string" } },
+          required: ["session_id"],
         },
       },
       {
@@ -448,6 +525,18 @@ export function buildServer(): Server {
           return { content: [{ type: "text", text: JSON.stringify(doc, null, 2) }] };
         }
 
+        case "signatures_document_from_markdown": {
+          const a = args as Record<string, unknown>;
+          const result = await createDocumentFromMarkdown({
+            filePath: a["file_path"] as string,
+            name: a["name"] as string | undefined,
+            variables: a["variables"] as Record<string, unknown> | undefined,
+            signerName: a["signer_name"] as string | undefined,
+            signerEmail: a["signer_email"] as string | undefined,
+          });
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        }
+
         case "signatures_document_list": {
           const a = args as Record<string, unknown>;
           const docs = listDocuments({
@@ -476,61 +565,69 @@ export function buildServer(): Server {
 
         case "signatures_sign": {
           const a = args as Record<string, unknown>;
-          const doc = getDocumentByIdOrSlug(a["document_id"] as string);
-          const sig = getSignatureById(a["signature_id"] as string);
-
-          const page = (a["page"] as number) ?? 1;
-          const x = (a["x"] as number) ?? 10;
-          const y = (a["y"] as number) ?? 80;
-
-          // Create session
-          const session = createSigningSession({
-            document_id: doc.id,
-            signer_name: a["signer_name"] as string | undefined,
-            signer_email: a["signer_email"] as string | undefined,
-            source: "local",
-          });
-
-          // Create placement
-          const placement = createPlacement({
-            document_id: doc.id,
-            signature_id: sig.id,
-            field_id: a["field_id"] as string | undefined,
-            page,
-            x,
-            y,
+          const result = await signDocumentLocally({
+            documentId: a["document_id"] as string,
+            signatureId: a["signature_id"] as string,
+            sessionId: a["session_id"] as string | undefined,
+            personIdOrEmail: a["person"] as string | undefined,
+            signerName: a["signer_name"] as string | undefined,
+            signerEmail: a["signer_email"] as string | undefined,
+            fieldId: a["field_id"] as string | undefined,
+            page: a["page"] as number | undefined,
+            x: a["x"] as number | undefined,
+            y: a["y"] as number | undefined,
             width: a["width"] as number | undefined,
             height: a["height"] as number | undefined,
+            certificate: a["certificate"] as boolean | undefined,
           });
-
-          // Sign the PDF
-          const result = await signPdf({
-            document_path: doc.file_path,
-            document_name: doc.file_name,
-            placements: [{ placement, signature: sig }],
-          });
-
-          // Update document status
-          updateDoc(doc.id, { status: "completed" });
 
           return {
             content: [
               {
                 type: "text",
-                text: JSON.stringify(
-                  {
-                    success: true,
-                    output_path: result.output_path,
-                    pages_signed: result.pages_signed,
-                    placement_id: placement.id,
-                    session_id: session.id,
-                  },
-                  null,
-                  2
-                ),
+                text: JSON.stringify({ success: true, ...result }, null, 2),
               },
             ],
           };
+        }
+
+        case "signatures_send_for_signature": {
+          const a = args as Record<string, unknown>;
+          const result = await sendDocumentForSignature({
+            documentId: a["document_id"] as string,
+            personIdOrEmail: a["person"] as string | undefined,
+            signerName: a["signer_name"] as string | undefined,
+            signerEmail: a["signer_email"] as string | undefined,
+            fromEmail: a["from"] as string | undefined,
+            baseUrl: a["base_url"] as string | undefined,
+            expiry: a["expiry"] as string | undefined,
+            dryRunEmail: a["dry_run_email"] as boolean | undefined,
+          });
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        }
+
+        case "signatures_person_create": {
+          const a = args as Record<string, unknown>;
+          const person = createPerson({
+            name: a["name"] as string,
+            email: a["email"] as string | undefined,
+            phone: a["phone"] as string | undefined,
+            company: a["company"] as string | undefined,
+            role: a["role"] as string | undefined,
+          });
+          return { content: [{ type: "text", text: JSON.stringify(person, null, 2) }] };
+        }
+
+        case "signatures_person_list": {
+          const a = args as Record<string, unknown>;
+          const people = listPeople({ query: a["query"] as string | undefined });
+          return { content: [{ type: "text", text: JSON.stringify(people, null, 2) }] };
+        }
+
+        case "signatures_certificate_get": {
+          const a = args as Record<string, unknown>;
+          const certificate = getSigningCertificateBySession(a["session_id"] as string);
+          return { content: [{ type: "text", text: JSON.stringify(certificate, null, 2) }] };
         }
 
         case "signatures_signature_create": {
@@ -772,7 +869,7 @@ export function buildServer(): Server {
           return {
             content: [{
               type: "text",
-              text: JSON.stringify({ success: true, key: a["key"], value: a["value"] }, null, 2),
+              text: JSON.stringify({ success: true, key: a["key"], value: maskSetting(a["key"] as string, a["value"]) }, null, 2),
             }],
           };
         }
@@ -783,7 +880,7 @@ export function buildServer(): Server {
           return {
             content: [{
               type: "text",
-              text: JSON.stringify({ key: a["key"], value }, null, 2),
+              text: JSON.stringify({ key: a["key"], value: maskSetting(a["key"] as string, value) }, null, 2),
             }],
           };
         }

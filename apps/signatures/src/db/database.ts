@@ -1,9 +1,23 @@
-import { SqliteAdapter as Database } from "@hasna/cloud";
+import { SqliteAdapter } from "@hasna/cloud";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 
-let db: Database | null = null;
+type QueryResult<T> = {
+  get(...params: unknown[]): T | undefined;
+  all(...params: unknown[]): T[];
+  run(...params: unknown[]): unknown;
+};
+
+type SignaturesDatabase = Omit<SqliteAdapter, "query"> & {
+  query<T = unknown, P extends unknown[] = unknown[]>(sql: string): {
+    get(...params: P): T | undefined;
+    all(...params: P): T[];
+    run(...params: P): unknown;
+  };
+};
+
+let db: SignaturesDatabase | null = null;
 
 function getDbPath(): string {
   if (process.env["HASNA_SIGNATURES_DB_PATH"]) {
@@ -40,13 +54,13 @@ function getDbPath(): string {
   return newPath;
 }
 
-export function getDatabase(): Database {
+export function getDatabase(): SignaturesDatabase {
   if (db) return db;
 
   const path = getDbPath();
   const isMemory = path === ":memory:";
 
-  db = new Database(path, { create: true });
+  db = new SqliteAdapter(path) as unknown as SignaturesDatabase;
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("PRAGMA busy_timeout = 5000");
@@ -62,7 +76,7 @@ export function closeDatabase(): void {
   }
 }
 
-function runMigrations(database: Database): void {
+function runMigrations(database: SignaturesDatabase): void {
   database.exec(`
     CREATE TABLE IF NOT EXISTS migrations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -279,5 +293,85 @@ const MIGRATIONS: [string, string][] = [
   [
     "005_feedback",
     `CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))), message TEXT NOT NULL, email TEXT, category TEXT DEFAULT 'general', version TEXT, machine_id TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')));`,
+  ],
+  [
+    "006a_people",
+    `
+    CREATE TABLE IF NOT EXISTS people (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      email TEXT,
+      phone TEXT,
+      company TEXT,
+      role TEXT,
+      metadata TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS people_email_unique
+      ON people(email)
+      WHERE email IS NOT NULL AND email != '';
+    `,
+  ],
+  [
+    "006b_signature_field_geometry",
+    `ALTER TABLE signature_fields ADD COLUMN unit TEXT NOT NULL DEFAULT 'percent'`,
+  ],
+  [
+    "006c_signature_field_anchor",
+    `ALTER TABLE signature_fields ADD COLUMN anchor TEXT`,
+  ],
+  [
+    "006d_signing_session_person_id",
+    `ALTER TABLE signing_sessions ADD COLUMN person_id TEXT`,
+  ],
+  [
+    "006e_signing_session_signing_url",
+    `ALTER TABLE signing_sessions ADD COLUMN signing_url TEXT`,
+  ],
+  [
+    "006f_signing_session_signed_document_path",
+    `ALTER TABLE signing_sessions ADD COLUMN signed_document_path TEXT`,
+  ],
+  [
+    "006g_signing_session_certificate_path",
+    `ALTER TABLE signing_sessions ADD COLUMN certificate_path TEXT`,
+  ],
+  [
+    "006h_signing_session_completed_at",
+    `ALTER TABLE signing_sessions ADD COLUMN completed_at TEXT`,
+  ],
+  [
+    "007_audit_events",
+    `
+    CREATE TABLE IF NOT EXISTS audit_events (
+      id TEXT PRIMARY KEY,
+      document_id TEXT REFERENCES documents(id) ON DELETE CASCADE,
+      session_id TEXT REFERENCES signing_sessions(id) ON DELETE CASCADE,
+      event_type TEXT NOT NULL,
+      message TEXT,
+      actor_name TEXT,
+      actor_email TEXT,
+      metadata TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    `,
+  ],
+  [
+    "008_signing_certificates",
+    `
+    CREATE TABLE IF NOT EXISTS signing_certificates (
+      id TEXT PRIMARY KEY,
+      document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+      session_id TEXT NOT NULL REFERENCES signing_sessions(id) ON DELETE CASCADE,
+      certificate_path TEXT NOT NULL,
+      original_document_hash TEXT,
+      signed_document_hash TEXT,
+      verification_code TEXT NOT NULL UNIQUE,
+      metadata TEXT,
+      issued_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    `,
   ],
 ];

@@ -7,6 +7,7 @@ function rowToSession(row: Record<string, unknown>): SigningSession {
   return {
     id: row["id"] as string,
     document_id: row["document_id"] as string,
+    person_id: row["person_id"] as string | undefined,
     signer_name: row["signer_name"] as string | undefined,
     signer_email: row["signer_email"] as string | undefined,
     status: row["status"] as SessionStatus,
@@ -16,9 +17,13 @@ function rowToSession(row: Record<string, unknown>): SigningSession {
     metadata: row["metadata"]
       ? (JSON.parse(row["metadata"] as string) as Record<string, unknown>)
       : undefined,
+    signing_url: row["signing_url"] as string | undefined,
     attachment_id: row["attachment_id"] as string | undefined,
     share_link: row["share_link"] as string | undefined,
     share_expires_at: row["share_expires_at"] as string | undefined,
+    signed_document_path: row["signed_document_path"] as string | undefined,
+    certificate_path: row["certificate_path"] as string | undefined,
+    completed_at: row["completed_at"] as string | undefined,
     created_at: row["created_at"] as string,
     updated_at: row["updated_at"] as string,
   };
@@ -26,11 +31,13 @@ function rowToSession(row: Record<string, unknown>): SigningSession {
 
 export function createSigningSession(data: {
   document_id: string;
+  person_id?: string;
   signer_name?: string;
   signer_email?: string;
   status?: SessionStatus;
   source?: SessionSource;
   connector_name?: string;
+  signing_url?: string;
   metadata?: Record<string, unknown>;
 }): SigningSession {
   const db = getDatabase();
@@ -38,17 +45,19 @@ export function createSigningSession(data: {
   const token = nanoid(32);
 
   db.query(
-    `INSERT INTO signing_sessions (id, document_id, signer_name, signer_email, status, token, source, connector_name, metadata)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO signing_sessions (id, document_id, person_id, signer_name, signer_email, status, token, source, connector_name, signing_url, metadata)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     data.document_id,
+    data.person_id ?? null,
     data.signer_name ?? null,
     data.signer_email ?? null,
     data.status ?? "pending",
     token,
     data.source ?? "local",
     data.connector_name ?? null,
+    data.signing_url ?? null,
     data.metadata ? JSON.stringify(data.metadata) : null
   );
 
@@ -118,8 +127,53 @@ export function updateSessionStatus(id: string, status: SessionStatus): SigningS
   if (!existing) throw new NotFoundError("SigningSession", id);
 
   db.query(
-    "UPDATE signing_sessions SET status = ?, updated_at = datetime('now') WHERE id = ?"
-  ).run(status, id);
+    "UPDATE signing_sessions SET status = ?, completed_at = CASE WHEN ? = 'completed' THEN COALESCE(completed_at, datetime('now')) ELSE completed_at END, updated_at = datetime('now') WHERE id = ?"
+  ).run(status, status, id);
+
+  return getSessionById(id);
+}
+
+export function updateSessionSigningUrl(id: string, signingUrl: string): SigningSession {
+  const db = getDatabase();
+  const existing = db
+    .query<{ id: string }, [string]>(
+      "SELECT id FROM signing_sessions WHERE id = ?"
+    )
+    .get(id);
+  if (!existing) throw new NotFoundError("SigningSession", id);
+
+  db.query(
+    "UPDATE signing_sessions SET signing_url = ?, updated_at = datetime('now') WHERE id = ?"
+  ).run(signingUrl, id);
+
+  return getSessionById(id);
+}
+
+export function updateSessionCompletion(
+  id: string,
+  data: { signed_document_path?: string; certificate_path?: string; metadata?: Record<string, unknown> }
+): SigningSession {
+  const db = getDatabase();
+  const existing = getSessionById(id);
+  const metadata = data.metadata
+    ? { ...(existing.metadata ?? {}), ...data.metadata }
+    : existing.metadata;
+
+  db.query(
+    `UPDATE signing_sessions
+     SET status = 'completed',
+         signed_document_path = COALESCE(?, signed_document_path),
+         certificate_path = COALESCE(?, certificate_path),
+         metadata = ?,
+         completed_at = COALESCE(completed_at, datetime('now')),
+         updated_at = datetime('now')
+     WHERE id = ?`
+  ).run(
+    data.signed_document_path ?? null,
+    data.certificate_path ?? null,
+    metadata ? JSON.stringify(metadata) : null,
+    id
+  );
 
   return getSessionById(id);
 }

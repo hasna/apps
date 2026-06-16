@@ -1,7 +1,7 @@
 {
   "name": "@hasna/signatures",
-  "version": "0.1.7",
-  "description": "Open source e-signature platform — sign PDFs locally, manage documents, MCP + CLI + API",
+  "version": "0.1.8",
+  "description": "Open-source agreement and e-signature workflows for Markdown, PDFs, local signing, providers, CLI, API, and MCP",
   "type": "module",
   "bin": {
     "open-signatures": "dist/cli/index.js",
@@ -25,12 +25,13 @@
     "postinstall": "mkdir -p $HOME/.hasna/signatures/{documents,signed,signatures,cache} 2>/dev/null || true"
   },
   "dependencies": {
-    "@hasna/attachments": "latest",
-    "@hasna/cloud": "^0.1.24",
+    "@hasna/attachments": "^1.0.16",
+    "@hasna/cloud": "^0.1.27",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "chalk": "^5.3.0",
     "commander": "^12.0.0",
     "ink": "^5.0.0",
+    "marked": "^18.0.5",
     "nanoid": "^5.0.7",
     "pdf-lib": "^1.17.1",
     "react": "^18.2.0",
@@ -52,19 +53,30 @@
   "files": [
     "dist",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "NOTICE"
   ],
   "keywords": [
+    "agreements",
+    "contracts",
     "signatures",
     "esignature",
     "pdf",
+    "markdown",
     "mcp",
     "cli",
     "open-source"
   ],
   "license": "Apache-2.0",
+  "author": "Andrei Hasna <andrei@hasna.com>",
+  "homepage": "https://github.com/hasna/signatures#readme",
+  "bugs": {
+    "url": "https://github.com/hasna/signatures/issues"
+  },
   "repository": {
     "type": "git",
-    "url": "https://github.com/hasna/open-signatures"
+    "url": "git+https://github.com/hasna/signatures.git"
   }
 }
