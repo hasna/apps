@@ -19,7 +19,7 @@ const program = new Command();
 program
   .name("computer")
   .description("Open-source computer use for AI agents — control your Mac with AI")
-  .version("0.1.0");
+  .version("0.1.10");
 
 // ── run ──────────────────────────────────────────────────────────────
 program

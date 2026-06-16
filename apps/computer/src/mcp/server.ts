@@ -24,7 +24,7 @@ import type { Provider, DriverAction, MouseButton } from "../types/index.js";
 export function buildServer(): McpServer {
   const server = new McpServer({
     name: "computer",
-    version: "0.1.0",
+    version: "0.1.10",
   });
 
 // ── computer_run_task ────────────────────────────────────────────────

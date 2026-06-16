@@ -111,7 +111,7 @@ const server = Bun.serve({
       // GET /health
       if (method === "GET" && (path === "/health" || path === "/")) {
         return Response.json(
-          { status: "ok", name: "computer", version: "0.1.0", port: PORT },
+          { status: "ok", name: "computer", version: "0.1.10", port: PORT },
           { headers: corsHeaders }
         );
       }
