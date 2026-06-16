@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { registerEventsCommands } from "@hasna/events/commander";
 // OMP CLI — omp validate|run|compile|lint|init|inspect
 import { Command } from "commander";
 import chalk from "chalk";
@@ -385,5 +386,6 @@ function parseLLMOption(opt: string): LLMClientOptions {
     model: normalized,
   };
 }
+registerEventsCommands(program, { source: "markdown" });
 
 program.parse();
