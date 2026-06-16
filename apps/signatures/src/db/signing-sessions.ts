@@ -96,6 +96,33 @@ export function listSessionsForDocument(documentId: string): SigningSession[] {
   return rows.map(rowToSession);
 }
 
+export function listSigningSessions(filters?: {
+  document_id?: string;
+  status?: SessionStatus;
+  limit?: number;
+  offset?: number;
+}): SigningSession[] {
+  const db = getDatabase();
+  const where: string[] = [];
+  const values: unknown[] = [];
+
+  if (filters?.document_id) {
+    where.push("document_id = ?");
+    values.push(filters.document_id);
+  }
+  if (filters?.status) {
+    where.push("status = ?");
+    values.push(filters.status);
+  }
+
+  values.push(filters?.limit ?? 100, filters?.offset ?? 0);
+  const sql = `SELECT * FROM signing_sessions${where.length > 0 ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+  const rows = db
+    .query<Record<string, unknown>>(sql)
+    .all(...values);
+  return rows.map(rowToSession);
+}
+
 export function updateSessionAttachment(
   id: string,
   data: { attachment_id: string; share_link: string; share_expires_at?: string | null }

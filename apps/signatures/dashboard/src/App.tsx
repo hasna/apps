@@ -1,202 +1,557 @@
-import React, { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import React, { useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import "./App.css";
 
 const API = "/api";
 
-async function fetchJson(path: string) {
-  const res = await fetch(`${API}${path}`);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return res.json();
+type Tab = "overview" | "agreements" | "signing" | "people" | "signatures" | "certificates" | "setup";
+
+interface DocumentItem {
+  id: string;
+  name: string;
+  file_name: string;
+  status: "draft" | "pending" | "completed" | "cancelled";
+  description?: string;
+  metadata?: Record<string, unknown>;
+  updated_at: string;
 }
 
-type Tab = "documents" | "signatures" | "projects" | "collections" | "stats";
+interface Person {
+  id: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  company?: string;
+  role?: string;
+}
 
-const styles: Record<string, React.CSSProperties> = {
-  app: { maxWidth: 1200, margin: "0 auto", padding: "24px 16px" },
-  header: { display: "flex", alignItems: "center", gap: 12, marginBottom: 32 },
-  logo: { fontSize: 28, fontWeight: 800, color: "#3b82f6" },
-  nav: { display: "flex", gap: 8, marginBottom: 24 },
-  tab: { padding: "8px 16px", border: "1px solid #e2e8f0", borderRadius: 8, cursor: "pointer", background: "white", fontSize: 14, fontWeight: 500 },
-  tabActive: { background: "#3b82f6", color: "white", border: "1px solid #3b82f6" },
-  card: { background: "white", borderRadius: 12, padding: 20, marginBottom: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.1)" },
-  badge: { display: "inline-block", padding: "2px 8px", borderRadius: 4, fontSize: 12, fontWeight: 600 },
-  grid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 16 },
-  statCard: { background: "white", borderRadius: 12, padding: 24, textAlign: "center", boxShadow: "0 1px 3px rgba(0,0,0,0.1)" },
-  statNum: { fontSize: 48, fontWeight: 800, color: "#3b82f6", display: "block" },
-  statLabel: { fontSize: 14, color: "#64748b", marginTop: 4 },
-};
+interface Signature {
+  id: string;
+  name: string;
+  type: string;
+  text_value?: string;
+  color?: string;
+}
 
-const statusColors: Record<string, string> = {
-  draft: "#94a3b8",
-  pending: "#f59e0b",
-  completed: "#10b981",
-  cancelled: "#ef4444",
-};
+interface SigningSession {
+  id: string;
+  document_id: string;
+  signer_name?: string;
+  signer_email?: string;
+  status: "pending" | "completed" | "expired";
+  source: string;
+  signing_url?: string;
+  certificate_path?: string;
+  signed_document_path?: string;
+  updated_at: string;
+}
 
-function DocumentsTab() {
-  const { data, isLoading, error } = useQuery({ queryKey: ["documents"], queryFn: () => fetchJson("/documents") });
-  if (isLoading) return <div>Loading documents...</div>;
-  if (error) return <div style={{ color: "red" }}>Failed to load documents</div>;
-  const docs = (data as Array<Record<string, unknown>>) ?? [];
+interface Certificate {
+  id: string;
+  document_id: string;
+  session_id: string;
+  certificate_path: string;
+  verification_code: string;
+  issued_at: string;
+}
+
+interface Stats {
+  total_documents: number;
+  total_signatures: number;
+  total_projects: number;
+  total_collections: number;
+  total_tags: number;
+  total_placements: number;
+  total_sessions: number;
+  total_people?: number;
+  by_status?: Record<string, number>;
+}
+
+async function fetchJson<T>(path: string): Promise<T> {
+  const response = await fetch(`${API}${path}`);
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+  return response.json() as Promise<T>;
+}
+
+async function postJson<T>(path: string, body: Record<string, unknown>): Promise<T> {
+  const response = await fetch(`${API}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json() as T & { error?: string };
+  if (!response.ok) throw new Error(payload.error ?? `${response.status} ${response.statusText}`);
+  return payload;
+}
+
+function cleanForm(form: HTMLFormElement): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const [key, value] of new FormData(form).entries()) {
+    const text = String(value).trim();
+    if (text) values[key] = text;
+  }
+  return values;
+}
+
+function shortId(value: string): string {
+  return value.length > 14 ? `${value.slice(0, 6)}...${value.slice(-4)}` : value;
+}
+
+function formatDate(value?: string): string {
+  if (!value) return "";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function statusClass(status: string): string {
+  return `badge badge-${status}`;
+}
+
+function Empty({ label }: { label: string }) {
+  return <div className="empty">{label}</div>;
+}
+
+function StatCard({ label, value, tone }: { label: string; value: number; tone: string }) {
   return (
-    <div>
-      <h2 style={{ marginBottom: 16 }}>Documents ({docs.length})</h2>
-      {docs.length === 0 && <p style={{ color: "#94a3b8" }}>No documents yet. Add one via CLI: <code>open-signatures document add &lt;file.pdf&gt;</code></p>}
-      {docs.map((doc) => (
-        <div key={doc["id"] as string} style={styles["card"]}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-            <div>
-              <strong>{doc["name"] as string}</strong>
-              <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>{doc["id"] as string}</div>
-              {doc["description"] && <div style={{ fontSize: 14, color: "#475569", marginTop: 4 }}>{doc["description"] as string}</div>}
-            </div>
-            <span style={{ ...styles["badge"], background: statusColors[doc["status"] as string] ?? "#94a3b8", color: "white" }}>
-              {doc["status"] as string}
-            </span>
-          </div>
-          <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 8 }}>{doc["file_name"] as string}</div>
-        </div>
-      ))}
+    <div className={`stat ${tone}`}>
+      <span className="stat-value">{value}</span>
+      <span className="stat-label">{label}</span>
     </div>
   );
 }
 
-function SignaturesTab() {
-  const { data, isLoading, error } = useQuery({ queryKey: ["signatures"], queryFn: () => fetchJson("/signatures") });
-  if (isLoading) return <div>Loading signatures...</div>;
-  if (error) return <div style={{ color: "red" }}>Failed to load signatures</div>;
-  const sigs = (data as Array<Record<string, unknown>>) ?? [];
+function Overview({ stats, documents, sessions }: {
+  stats?: Stats;
+  documents: DocumentItem[];
+  sessions: SigningSession[];
+}) {
+  const pending = sessions.filter((session) => session.status === "pending");
+  const recent = documents.slice(0, 5);
+
   return (
-    <div>
-      <h2 style={{ marginBottom: 16 }}>Signatures ({sigs.length})</h2>
-      {sigs.length === 0 && <p style={{ color: "#94a3b8" }}>No signatures yet. Create one: <code>open-signatures signature create --name "Your Name" --type text</code></p>}
-      <div style={styles["grid"]}>
-        {sigs.map((sig) => (
-          <div key={sig["id"] as string} style={styles["card"]}>
-            <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <strong>{sig["name"] as string}</strong>
-              <span style={{ ...styles["badge"], background: "#e2e8f0", color: "#475569" }}>{sig["type"] as string}</span>
-            </div>
-            {sig["text_value"] && (
-              <div style={{ marginTop: 8, fontFamily: "cursive", fontSize: 20, color: sig["color"] as string ?? "#000" }}>
-                {sig["text_value"] as string}
-              </div>
+    <div className="stack">
+      <section className="stats-grid">
+        <StatCard label="Agreements" value={stats?.total_documents ?? 0} tone="tone-blue" />
+        <StatCard label="People" value={stats?.total_people ?? 0} tone="tone-green" />
+        <StatCard label="Sessions" value={stats?.total_sessions ?? 0} tone="tone-amber" />
+        <StatCard label="Certificates" value={sessions.filter((session) => session.status === "completed").length} tone="tone-slate" />
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Status</h2>
+        </div>
+        <div className="status-strip">
+          {Object.entries(stats?.by_status ?? {}).map(([status, count]) => (
+            <span key={status} className={statusClass(status)}>{status}: {count}</span>
+          ))}
+          {Object.keys(stats?.by_status ?? {}).length === 0 && <span className="muted">No status counts</span>}
+        </div>
+      </section>
+
+      <section className="split">
+        <div className="panel">
+          <div className="panel-head">
+            <h2>Recent Agreements</h2>
+          </div>
+          <EntityList
+            items={recent}
+            empty="No agreements"
+            render={(doc) => (
+              <Row key={doc.id}
+                title={doc.name}
+                meta={`${shortId(doc.id)} - ${doc.file_name}`}
+                aside={<span className={statusClass(doc.status)}>{doc.status}</span>}
+              />
             )}
-            <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 8 }}>{sig["id"] as string}</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function ProjectsTab() {
-  const { data, isLoading } = useQuery({ queryKey: ["projects"], queryFn: () => fetchJson("/projects") });
-  if (isLoading) return <div>Loading...</div>;
-  const items = (data as Array<Record<string, unknown>>) ?? [];
-  return (
-    <div>
-      <h2 style={{ marginBottom: 16 }}>Projects ({items.length})</h2>
-      <div style={styles["grid"]}>
-        {items.map((item) => (
-          <div key={item["id"] as string} style={{ ...styles["card"], borderLeft: `4px solid ${item["color"] ?? "#3b82f6"}` }}>
-            <strong>{item["name"] as string}</strong>
-            {item["description"] && <div style={{ fontSize: 14, color: "#64748b", marginTop: 4 }}>{item["description"] as string}</div>}
-            <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 8 }}>{item["id"] as string}</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function CollectionsTab() {
-  const { data, isLoading } = useQuery({ queryKey: ["collections"], queryFn: () => fetchJson("/collections") });
-  if (isLoading) return <div>Loading...</div>;
-  const items = (data as Array<Record<string, unknown>>) ?? [];
-  return (
-    <div>
-      <h2 style={{ marginBottom: 16 }}>Collections ({items.length})</h2>
-      <div style={styles["grid"]}>
-        {items.map((item) => (
-          <div key={item["id"] as string} style={styles["card"]}>
-            <strong>{item["name"] as string}</strong>
-            {item["description"] && <div style={{ fontSize: 14, color: "#64748b", marginTop: 4 }}>{item["description"] as string}</div>}
-            <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 8 }}>{item["id"] as string}</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function StatsTab() {
-  const { data, isLoading } = useQuery({ queryKey: ["stats"], queryFn: () => fetchJson("/stats") });
-  if (isLoading) return <div>Loading...</div>;
-  const stats = (data as Record<string, unknown>) ?? {};
-  return (
-    <div>
-      <h2 style={{ marginBottom: 16 }}>Statistics</h2>
-      <div style={styles["grid"]}>
-        {[
-          { label: "Documents", key: "total_documents" },
-          { label: "Signatures", key: "total_signatures" },
-          { label: "Projects", key: "total_projects" },
-          { label: "Collections", key: "total_collections" },
-          { label: "Tags", key: "total_tags" },
-          { label: "Placements", key: "total_placements" },
-          { label: "Sessions", key: "total_sessions" },
-        ].map(({ label, key }) => (
-          <div key={key} style={styles["statCard"]}>
-            <span style={styles["statNum"]}>{(stats[key] as number) ?? 0}</span>
-            <span style={styles["statLabel"]}>{label}</span>
-          </div>
-        ))}
-      </div>
-      {stats["by_status"] && (
-        <div style={{ marginTop: 24 }}>
-          <h3 style={{ marginBottom: 12 }}>Documents by Status</h3>
-          <div style={styles["grid"]}>
-            {Object.entries(stats["by_status"] as Record<string, number>).map(([status, count]) => (
-              <div key={status} style={{ ...styles["statCard"], borderTop: `4px solid ${statusColors[status] ?? "#94a3b8"}` }}>
-                <span style={{ ...styles["statNum"], color: statusColors[status] ?? "#94a3b8" }}>{count}</span>
-                <span style={styles["statLabel"]}>{status}</span>
-              </div>
-            ))}
-          </div>
+          />
         </div>
-      )}
+        <div className="panel">
+          <div className="panel-head">
+            <h2>Pending Signatures</h2>
+          </div>
+          <EntityList
+            items={pending.slice(0, 5)}
+            empty="No pending sessions"
+            render={(session) => (
+              <Row key={session.id}
+                title={session.signer_name ?? session.signer_email ?? "Unassigned signer"}
+                meta={`${shortId(session.id)} - ${formatDate(session.updated_at)}`}
+                aside={session.signing_url ? <a href={session.signing_url}>Open</a> : undefined}
+              />
+            )}
+          />
+        </div>
+      </section>
     </div>
   );
+}
+
+function Agreements({ documents }: { documents: DocumentItem[] }) {
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>Agreements</h2>
+        <span className="count">{documents.length}</span>
+      </div>
+      <EntityList
+        items={documents}
+        empty="No agreements"
+        render={(doc) => {
+          const source = doc.metadata?.["source_markdown_path"];
+          return (
+            <Row key={doc.id}
+              title={doc.name}
+              meta={`${doc.file_name} - updated ${formatDate(doc.updated_at)}`}
+              detail={typeof source === "string" ? source : doc.description}
+              aside={<span className={statusClass(doc.status)}>{doc.status}</span>}
+            />
+          );
+        }}
+      />
+    </section>
+  );
+}
+
+function Signing({ documents, sessions }: {
+  documents: DocumentItem[];
+  sessions: SigningSession[];
+}) {
+  const queryClient = useQueryClient();
+  const [message, setMessage] = useState("");
+  const createSession = useMutation({
+    mutationFn: (payload: Record<string, unknown>) => postJson<{ signing_url: string }>(`/documents/${payload["document_id"]}/send`, payload),
+    onSuccess: async (result) => {
+      setMessage(result.signing_url);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["sessions"] }),
+        queryClient.invalidateQueries({ queryKey: ["documents"] }),
+        queryClient.invalidateQueries({ queryKey: ["stats"] }),
+      ]);
+    },
+  });
+
+  return (
+    <div className="split split-wide">
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Send For Signature</h2>
+        </div>
+        <form className="form" onSubmit={(event) => {
+          event.preventDefault();
+          const payload = cleanForm(event.currentTarget);
+          createSession.mutate(payload);
+        }}>
+          <label>Agreement
+            <select name="document_id" required>
+              {documents.map((doc) => <option key={doc.id} value={doc.id}>{doc.name}</option>)}
+            </select>
+          </label>
+          <label>Signer Name <input name="signer_name" autoComplete="name" /></label>
+          <label>Signer Email <input name="signer_email" type="email" autoComplete="email" /></label>
+          <label>From Email <input name="from" type="email" autoComplete="email" /></label>
+          <label>Base URL <input name="base_url" defaultValue="http://localhost:19440" /></label>
+          <label>Expiry <input name="expiry" defaultValue="7d" /></label>
+          <button type="submit" disabled={createSession.isPending || documents.length === 0}>Create Session</button>
+          <Result mutation={createSession} message={message} />
+        </form>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Sessions</h2>
+          <span className="count">{sessions.length}</span>
+        </div>
+        <EntityList
+          items={sessions}
+          empty="No sessions"
+          render={(session) => (
+            <Row key={session.id}
+              title={session.signer_name ?? session.signer_email ?? "Unassigned signer"}
+              meta={`${shortId(session.id)} - ${session.source} - ${formatDate(session.updated_at)}`}
+              detail={session.signing_url}
+              aside={<span className={statusClass(session.status)}>{session.status}</span>}
+            />
+          )}
+        />
+      </section>
+    </div>
+  );
+}
+
+function People({ people }: { people: Person[] }) {
+  const queryClient = useQueryClient();
+  const createPerson = useMutation({
+    mutationFn: (payload: Record<string, unknown>) => postJson<Person>("/people", payload),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["people"] }),
+        queryClient.invalidateQueries({ queryKey: ["stats"] }),
+      ]);
+    },
+  });
+
+  return (
+    <div className="split split-wide">
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Add Person</h2>
+        </div>
+        <form className="form" onSubmit={(event) => {
+          event.preventDefault();
+          createPerson.mutate(cleanForm(event.currentTarget));
+          if (!createPerson.isError) event.currentTarget.reset();
+        }}>
+          <label>Name <input name="name" required autoComplete="name" /></label>
+          <label>Email <input name="email" type="email" autoComplete="email" /></label>
+          <label>Phone <input name="phone" autoComplete="tel" /></label>
+          <label>Company <input name="company" autoComplete="organization" /></label>
+          <label>Role <input name="role" autoComplete="organization-title" /></label>
+          <button type="submit" disabled={createPerson.isPending}>Save Person</button>
+          <Result mutation={createPerson} />
+        </form>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>People</h2>
+          <span className="count">{people.length}</span>
+        </div>
+        <EntityList
+          items={people}
+          empty="No people"
+          render={(person) => (
+            <Row key={person.id}
+              title={person.name}
+              meta={[person.email, person.phone].filter(Boolean).join(" - ")}
+              detail={[person.company, person.role].filter(Boolean).join(" - ")}
+            />
+          )}
+        />
+      </section>
+    </div>
+  );
+}
+
+function Signatures({ signatures }: { signatures: Signature[] }) {
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>Signatures</h2>
+        <span className="count">{signatures.length}</span>
+      </div>
+      <div className="card-grid">
+        {signatures.map((signature) => (
+          <article key={signature.id} className="tile">
+            <div className="tile-head">
+              <strong>{signature.name}</strong>
+              <span className="badge badge-neutral">{signature.type}</span>
+            </div>
+            {signature.text_value && <div className="signature-preview" style={{ color: signature.color ?? "#111827" }}>{signature.text_value}</div>}
+            <span className="muted">{shortId(signature.id)}</span>
+          </article>
+        ))}
+        {signatures.length === 0 && <Empty label="No signatures" />}
+      </div>
+    </section>
+  );
+}
+
+function Certificates({ certificates }: { certificates: Certificate[] }) {
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>Certificates</h2>
+        <span className="count">{certificates.length}</span>
+      </div>
+      <EntityList
+        items={certificates}
+        empty="No certificates"
+        render={(certificate) => (
+          <Row key={certificate.id}
+            title={certificate.id}
+            meta={`${shortId(certificate.session_id)} - ${formatDate(certificate.issued_at)}`}
+            detail={certificate.certificate_path}
+            aside={<span className="badge badge-neutral">{certificate.verification_code}</span>}
+          />
+        )}
+      />
+    </section>
+  );
+}
+
+function Setup({ documents }: { documents: DocumentItem[] }) {
+  const [domainResult, setDomainResult] = useState("");
+  const [providerResult, setProviderResult] = useState("");
+  const domainSetup = useMutation({
+    mutationFn: (payload: Record<string, unknown>) => postJson<{ output?: string; error?: string }>("/domains/setup", payload),
+    onSuccess: (result) => setDomainResult(result.error ?? result.output ?? "Domain setup completed"),
+  });
+  const providerSend = useMutation({
+    mutationFn: (payload: Record<string, unknown>) => postJson<Record<string, unknown>>(`/documents/${payload["document_id"]}/provider-send`, payload),
+    onSuccess: (result) => setProviderResult(JSON.stringify(result, null, 2)),
+  });
+
+  return (
+    <div className="split split-wide">
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Signing Domain</h2>
+        </div>
+        <form className="form" onSubmit={(event) => {
+          event.preventDefault();
+          const form = event.currentTarget;
+          const payload = cleanForm(form);
+          payload["dry_run"] = String((form.elements.namedItem("dry_run") as HTMLInputElement).checked);
+          if (payload["dry_run"] === "true") {
+            domainSetup.mutate({ ...payload, dry_run: true });
+          } else {
+            domainSetup.mutate({ ...payload, dry_run: false });
+          }
+        }}>
+          <label>Domain <input name="domain" required placeholder="example.com" /></label>
+          <label>Subdomain <input name="subdomain" defaultValue="sign" /></label>
+          <label>Target <input name="target" defaultValue="localhost" /></label>
+          <label className="check"><input type="checkbox" name="dry_run" defaultChecked /> Dry run</label>
+          <button type="submit" disabled={domainSetup.isPending}>Run Domain Setup</button>
+          <Result mutation={domainSetup} message={domainResult} />
+        </form>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Provider Send</h2>
+        </div>
+        <form className="form" onSubmit={(event) => {
+          event.preventDefault();
+          const form = event.currentTarget;
+          const payload = cleanForm(form);
+          const dryRun = (form.elements.namedItem("dry_run") as HTMLInputElement).checked;
+          providerSend.mutate({
+            ...payload,
+            dry_run: dryRun,
+            recipient: { email: payload["recipient_email"], name: payload["recipient_name"] },
+          });
+        }}>
+          <label>Agreement
+            <select name="document_id" required>
+              {documents.map((doc) => <option key={doc.id} value={doc.id}>{doc.name}</option>)}
+            </select>
+          </label>
+          <label>Provider <input name="provider" defaultValue="pandadoc" /></label>
+          <label>Recipient Email <input name="recipient_email" type="email" required /></label>
+          <label>Recipient Name <input name="recipient_name" /></label>
+          <label>Subject <input name="subject" /></label>
+          <label className="check"><input type="checkbox" name="dry_run" defaultChecked /> Dry run</label>
+          <button type="submit" disabled={providerSend.isPending || documents.length === 0}>Send To Provider</button>
+          <Result mutation={providerSend} message={providerResult} />
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function Row({ title, meta, detail, aside }: {
+  title: string;
+  meta?: string;
+  detail?: string;
+  aside?: React.ReactNode;
+}) {
+  return (
+    <article className="row">
+      <div className="row-main">
+        <strong>{title}</strong>
+        {meta && <span className="muted">{meta}</span>}
+        {detail && <span className="detail">{detail}</span>}
+      </div>
+      {aside && <div className="row-aside">{aside}</div>}
+    </article>
+  );
+}
+
+function EntityList<T>({ items, empty, render }: {
+  items: T[];
+  empty: string;
+  render: (item: T) => React.ReactNode;
+}) {
+  if (items.length === 0) return <Empty label={empty} />;
+  return <div className="list">{items.map(render)}</div>;
+}
+
+function Result({ mutation, message }: {
+  mutation: { isError: boolean; isSuccess: boolean; error: unknown };
+  message?: string;
+}) {
+  if (mutation.isError) return <div className="result error">{mutation.error instanceof Error ? mutation.error.message : "Request failed"}</div>;
+  if (message) return <pre className="result">{message}</pre>;
+  if (mutation.isSuccess) return <div className="result">Saved</div>;
+  return null;
 }
 
 export function App() {
-  const [tab, setTab] = useState<Tab>("documents");
+  const [tab, setTab] = useState<Tab>("overview");
+  const stats = useQuery({ queryKey: ["stats"], queryFn: () => fetchJson<Stats>("/stats") });
+  const documents = useQuery({ queryKey: ["documents"], queryFn: () => fetchJson<DocumentItem[]>("/documents") });
+  const people = useQuery({ queryKey: ["people"], queryFn: () => fetchJson<Person[]>("/people") });
+  const sessions = useQuery({ queryKey: ["sessions"], queryFn: () => fetchJson<SigningSession[]>("/sessions") });
+  const signatures = useQuery({ queryKey: ["signatures"], queryFn: () => fetchJson<Signature[]>("/signatures") });
+  const certificates = useQuery({ queryKey: ["certificates"], queryFn: () => fetchJson<Certificate[]>("/certificates") });
+
+  const loading = [stats, documents, people, sessions, signatures, certificates].some((query) => query.isLoading);
+  const error = [stats, documents, people, sessions, signatures, certificates].find((query) => query.isError)?.error;
+  const docs = documents.data ?? [];
+  const sessionItems = sessions.data ?? [];
+
+  const tabs = useMemo<Array<{ id: Tab; label: string }>>(() => [
+    { id: "overview", label: "Overview" },
+    { id: "agreements", label: "Agreements" },
+    { id: "signing", label: "Signing" },
+    { id: "people", label: "People" },
+    { id: "signatures", label: "Signatures" },
+    { id: "certificates", label: "Certificates" },
+    { id: "setup", label: "Setup" },
+  ], []);
 
   return (
-    <div style={styles["app"]}>
-      <div style={styles["header"]}>
-        <span style={styles["logo"]}>✍ Open Signatures</span>
-        <span style={{ color: "#94a3b8", fontSize: 14 }}>Open source e-signature platform</span>
-      </div>
+    <main className="app">
+      <header className="topbar">
+        <div>
+          <h1>Open Signatures</h1>
+          <p>Agreement operations and e-signature workflows</p>
+        </div>
+        <span className="badge badge-neutral">{stats.data?.total_sessions ?? 0} sessions</span>
+      </header>
 
-      <nav style={styles["nav"]}>
-        {(["documents", "signatures", "projects", "collections", "stats"] as Tab[]).map((t) => (
+      <nav className="tabs" aria-label="Dashboard sections">
+        {tabs.map((item) => (
           <button
-            key={t}
-            style={{ ...styles["tab"], ...(tab === t ? styles["tabActive"] : {}) }}
-            onClick={() => setTab(t)}
+            key={item.id}
+            className={tab === item.id ? "active" : ""}
+            onClick={() => setTab(item.id)}
+            type="button"
           >
-            {t.charAt(0).toUpperCase() + t.slice(1)}
+            {item.label}
           </button>
         ))}
       </nav>
 
-      {tab === "documents" && <DocumentsTab />}
-      {tab === "signatures" && <SignaturesTab />}
-      {tab === "projects" && <ProjectsTab />}
-      {tab === "collections" && <CollectionsTab />}
-      {tab === "stats" && <StatsTab />}
-    </div>
+      {loading && <div className="panel"><Empty label="Loading" /></div>}
+      {error instanceof Error && <div className="panel"><div className="result error">{error.message}</div></div>}
+      {!loading && !error && (
+        <>
+          {tab === "overview" && <Overview stats={stats.data} documents={docs} sessions={sessionItems} />}
+          {tab === "agreements" && <Agreements documents={docs} />}
+          {tab === "signing" && <Signing documents={docs} sessions={sessionItems} />}
+          {tab === "people" && <People people={people.data ?? []} />}
+          {tab === "signatures" && <Signatures signatures={signatures.data ?? []} />}
+          {tab === "certificates" && <Certificates certificates={certificates.data ?? []} />}
+          {tab === "setup" && <Setup documents={docs} />}
+        </>
+      )}
+    </main>
   );
 }

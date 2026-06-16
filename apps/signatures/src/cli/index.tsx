@@ -50,7 +50,7 @@ function collect(value: string, previous: string[]): string[] {
 
 program
   .name("open-signatures")
-  .description("Open source e-signature platform")
+  .description("Open-source agreement and e-signature workflows")
   .version("0.1.0");
 
 // ── document ─────────────────────────────────────────────────────────────────

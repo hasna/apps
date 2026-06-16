@@ -20,7 +20,14 @@ import {
   deleteFieldsForDocument,
 } from "../db/signature-fields.js";
 import { listPlacementsForDocument } from "../db/signature-placements.js";
-import { createSigningSession, updateSessionAttachment, updateSessionStatus, getSessionById } from "../db/signing-sessions.js";
+import {
+  createSigningSession,
+  getSessionById,
+  getSessionByToken,
+  listSigningSessions,
+  updateSessionAttachment,
+  updateSessionStatus,
+} from "../db/signing-sessions.js";
 import { createPerson, getPersonByIdOrEmail, listPeople } from "../db/people.js";
 import { getSigningCertificateBySession, listSigningCertificates } from "../db/certificates.js";
 import { getStats } from "../db/stats.js";
@@ -57,12 +64,131 @@ function error(message: string, status = 400): Response {
   return json({ error: message }, status);
 }
 
+function html(body: string, status = 200): Response {
+  return new Response(body, {
+    status,
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      ...CORS_HEADERS,
+    },
+  });
+}
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 async function parseBody(req: Request): Promise<unknown> {
   try {
     return await req.json() as unknown;
   } catch {
     return {};
   }
+}
+
+function renderSigningPage(input: {
+  token: string;
+  documentName: string;
+  sessionId: string;
+  status: string;
+  signerName?: string;
+  signerEmail?: string;
+  fieldCount: number;
+  certificatePath?: string;
+  signedDocumentPath?: string;
+}): string {
+  const completed = input.status === "completed";
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(input.documentName)} - Sign</title>
+  <style>
+    :root { color-scheme: light; --ink: #172033; --muted: #657184; --line: #d8dee8; --blue: #2563eb; --green: #0f8f61; --amber: #b26a00; --bg: #f6f8fb; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); letter-spacing: 0; }
+    main { width: min(760px, calc(100vw - 32px)); margin: 40px auto; }
+    .panel { background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 12px 32px rgba(23, 32, 51, 0.08); overflow: hidden; }
+    header { padding: 24px; border-bottom: 1px solid var(--line); }
+    h1 { font-size: 24px; line-height: 1.2; margin: 0 0 8px; }
+    .meta { color: var(--muted); font-size: 14px; display: flex; flex-wrap: wrap; gap: 10px 18px; }
+    form, .done { padding: 24px; display: grid; gap: 16px; }
+    label { display: grid; gap: 6px; color: var(--muted); font-size: 13px; font-weight: 600; }
+    input { min-height: 42px; border: 1px solid var(--line); border-radius: 6px; padding: 9px 11px; font: inherit; color: var(--ink); background: #fff; }
+    button { min-height: 42px; border: 0; border-radius: 6px; background: var(--blue); color: #fff; font: inherit; font-weight: 700; cursor: pointer; padding: 10px 14px; }
+    button:disabled { opacity: 0.58; cursor: progress; }
+    .status { border-radius: 999px; padding: 3px 9px; font-size: 12px; font-weight: 700; color: #fff; background: var(--amber); }
+    .status.completed { background: var(--green); }
+    .result { min-height: 20px; color: var(--muted); font-size: 14px; }
+    .error { color: #b42318; }
+    .paths { display: grid; gap: 8px; color: var(--muted); font-size: 13px; word-break: break-all; }
+    @media (max-width: 520px) { main { margin: 16px auto; width: calc(100vw - 24px); } header, form, .done { padding: 18px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="panel">
+      <header>
+        <h1>${escapeHtml(input.documentName)}</h1>
+        <div class="meta">
+          <span>${escapeHtml(input.sessionId)}</span>
+          <span>${input.fieldCount} field${input.fieldCount === 1 ? "" : "s"}</span>
+          <span class="status ${completed ? "completed" : ""}">${escapeHtml(input.status)}</span>
+        </div>
+      </header>
+      ${completed ? `
+        <div class="done">
+          <strong>Completed</strong>
+          <div class="paths">
+            ${input.signedDocumentPath ? `<span>Signed PDF: ${escapeHtml(input.signedDocumentPath)}</span>` : ""}
+            ${input.certificatePath ? `<span>Certificate: ${escapeHtml(input.certificatePath)}</span>` : ""}
+          </div>
+        </div>
+      ` : `
+        <form id="sign-form">
+          <label>Name <input name="signer_name" autocomplete="name" value="${escapeHtml(input.signerName)}" required></label>
+          <label>Email <input name="signer_email" autocomplete="email" type="email" value="${escapeHtml(input.signerEmail)}"></label>
+          <label>Signature <input name="signature_text" autocomplete="off" value="${escapeHtml(input.signerName)}" required></label>
+          <button type="submit">Sign Document</button>
+          <div class="result" id="result"></div>
+        </form>
+      `}
+    </section>
+  </main>
+  <script>
+    const form = document.getElementById("sign-form");
+    const result = document.getElementById("result");
+    form?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const button = form.querySelector("button");
+      button.disabled = true;
+      result.className = "result";
+      result.textContent = "Signing...";
+      const body = Object.fromEntries(new FormData(form).entries());
+      const response = await fetch("/api/sign/${escapeHtml(input.token)}", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        result.className = "result error";
+        result.textContent = payload.error || "Signing failed";
+        button.disabled = false;
+        return;
+      }
+      result.textContent = "Completed. Certificate: " + (payload.certificate_path || "created");
+      window.setTimeout(() => window.location.reload(), 900);
+    });
+  </script>
+</body>
+</html>`;
 }
 
 Bun.serve({
@@ -86,6 +212,67 @@ Bun.serve({
       // Stats
       if (path === "/api/stats" && method === "GET") {
         return json(getStats());
+      }
+
+      const signPageMatch = path.match(/^\/sign\/([^/]+)$/);
+      if (signPageMatch && method === "GET") {
+        const token = signPageMatch[1]!;
+        const session = getSessionByToken(token);
+        const doc = getDocumentByIdOrSlug(session.document_id);
+        const fields = listFieldsForDocument(doc.id);
+        return html(renderSigningPage({
+          token,
+          documentName: doc.name,
+          sessionId: session.id,
+          status: session.status,
+          signerName: session.signer_name,
+          signerEmail: session.signer_email,
+          fieldCount: fields.length,
+          certificatePath: session.certificate_path,
+          signedDocumentPath: session.signed_document_path,
+        }));
+      }
+
+      const signApiMatch = path.match(/^\/api\/sign\/([^/]+)$/);
+      if (signApiMatch && method === "POST") {
+        const token = signApiMatch[1]!;
+        const body = await parseBody(req) as Record<string, unknown>;
+        const session = getSessionByToken(token);
+        if (session.status === "completed") return error("Signing session is already completed", 409);
+
+        const doc = getDocumentByIdOrSlug(session.document_id);
+        const signerName = (body["signer_name"] as string | undefined) ?? session.signer_name ?? "Signer";
+        const signerEmail = (body["signer_email"] as string | undefined) ?? session.signer_email;
+        const signatureText = (body["signature_text"] as string | undefined) ?? signerName;
+        const existingSignatureId = body["signature_id"] as string | undefined;
+        let signatureId = existingSignatureId;
+
+        if (!signatureId) {
+          const generated = await generateTextSignature(signatureText);
+          const signature = createSignature({
+            name: signerName,
+            type: "text",
+            font_family: "Dancing Script",
+            font_size: 48,
+            color: "#111827",
+            text_value: signatureText,
+            image_path: generated.svg_path,
+            width: generated.width,
+            height: generated.height,
+          });
+          signatureId = signature.id;
+        }
+
+        const fields = listFieldsForDocument(doc.id);
+        const result = await signDocumentLocally({
+          documentId: doc.id,
+          sessionId: session.id,
+          signatureId,
+          signerName,
+          signerEmail,
+          fieldId: fields[0]?.id,
+        });
+        return json({ success: true, ...result });
       }
 
       // Search
@@ -112,6 +299,17 @@ Bun.serve({
             metadata: body["metadata"] as Record<string, unknown> | undefined,
           }), 201);
         }
+      }
+
+      // Signing sessions
+      if (path === "/api/sessions" && method === "GET") {
+        const status = url.searchParams.get("status") as "pending" | "completed" | "expired" | null;
+        return json(listSigningSessions({
+          document_id: url.searchParams.get("document_id") ?? undefined,
+          status: status ?? undefined,
+          limit: parseInt(url.searchParams.get("limit") ?? "100"),
+          offset: parseInt(url.searchParams.get("offset") ?? "0"),
+        }));
       }
 
       const personMatch = path.match(/^\/api\/people\/([^/]+)$/);

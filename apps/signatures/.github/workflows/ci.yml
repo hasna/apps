@@ -17,3 +17,7 @@ jobs:
       - run: bun run typecheck
       - run: bun test
       - run: bun run build
+      - run: bun install
+        working-directory: dashboard
+      - run: bun run build
+        working-directory: dashboard

@@ -94,6 +94,10 @@ open-signatures document send <document-id> \
   --base-url https://sign.example.com
 ```
 
+The generated signing URL resolves to `/sign/<token>`, where the signer can type
+their name/signature and complete the local signing session. Open Signatures creates a
+text signature when the signer does not already have one.
+
 Send with open-emails if the `emails` CLI is configured:
 
 ```bash
@@ -104,6 +108,10 @@ open-signatures document send <document-id> \
 ```
 
 Use `--dry-run-email` to preview the open-emails command without sending.
+
+Attachment sharing is optional. If `@hasna/attachments` is installed and configured,
+send/share flows attach a document share link. If it is not installed, local signing
+URLs still work and the session records the share-link fallback.
 
 ## People
 
@@ -159,11 +167,28 @@ Selected endpoints:
 - `POST /api/documents/:id/sign`
 - `POST /api/documents/:id/send`
 - `POST /api/documents/:id/provider-send`
+- `GET /api/sessions`
 - `GET /api/sessions/:id/certificate`
+- `GET /sign/:token`
+- `POST /api/sign/:token`
 - `GET /api/people`
 
 The server is designed for trusted local or private deployments by default. If you expose
 it publicly, put it behind authentication, TLS, request logging, and a file access policy.
+
+## Dashboard
+
+The dashboard is a separate Vite app for local operations:
+
+```bash
+signatures-serve
+cd dashboard
+bun install
+bun run dev
+```
+
+It includes overview, agreement, signing session, people, signature, certificate,
+provider, and domain setup views.
 
 ## MCP Server
 
