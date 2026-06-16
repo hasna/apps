@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { registerEventsCommands } from "@hasna/events/commander";
 // brains CLI entry point
 
 import { Command } from "commander";
@@ -208,5 +209,6 @@ feedbackCmd
 // ── cloud ─────────────────────────────────────────────────────────────────────
 
 registerCloudCommands(program);
+registerEventsCommands(program, { source: "brains" });
 
 program.parse();

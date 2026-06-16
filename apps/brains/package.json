@@ -1,6 +1,6 @@
 {
   "name": "@hasna/brains",
-  "version": "0.0.26",
+  "version": "0.0.28",
   "description": "Fine-tuned model tracker and trainer — wraps OpenAI + Thinker Labs, gathers training data from todos/mementos/conversations/sessions",
   "type": "module",
   "main": "./dist/index.js",
@@ -64,7 +64,8 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/cloud": "^0.1.24",
+    "@hasna/cloud": "0.1.24",
+    "@hasna/events": "^0.1.6",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
