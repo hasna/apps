@@ -2,6 +2,7 @@
 import React from "react";
 import { render } from "ink";
 import { Command } from "commander";
+import { registerEventsCommands } from "@hasna/events/commander";
 import _pkg from "../../package.json" with { type: "json" };
 import { loadConnectorVersions } from "../lib/registry.js";
 import { App } from "./components/App.js";
@@ -57,5 +58,6 @@ registerMiscCommands(program);
 registerOpsCommands(program);
 registerSystemCommands(program);
 registerSyncCommands(program);
+registerEventsCommands(program, { source: "connectors" });
 
 program.parse();

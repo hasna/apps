@@ -78,7 +78,7 @@ async function callMcp(
     }),
   ].join("\n") + "\n";
 
-  const proc = Bun.spawn(["bun", MCP], {
+  const proc = Bun.spawn(["bun", MCP, "--stdio"], {
     cwd: TEST_DIR,
     stdin: "pipe",
     stdout: "pipe",
@@ -151,7 +151,7 @@ describe("MCP Server", () => {
   });
 
   test("direct shebang launch responds to initialize", async () => {
-    const proc = Bun.spawn([MCP], {
+    const proc = Bun.spawn([MCP, "--stdio"], {
       cwd: TEST_DIR,
       stdin: "pipe",
       stdout: "pipe",

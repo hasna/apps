@@ -18,7 +18,7 @@ async function run(args: string | string[], cwd?: string): Promise<{ stdout: str
     cwd: cwd || TEST_DIR,
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, NO_COLOR: "1" },
+    env: { ...process.env, NO_COLOR: "1", HASNA_EVENTS_DIR: join(TEST_DIR, "events") },
   });
 
   const stdout = await new Response(proc.stdout).text();
@@ -47,6 +47,18 @@ describe("CLI", () => {
       expect(stdout).toContain("remove");
       expect(stdout).toContain("info");
       expect(stdout).toContain("categories");
+    });
+  });
+
+  describe("events", () => {
+    test("lists shared events and webhooks from an isolated store", async () => {
+      const { stdout: eventsOut, exitCode: eventsCode } = await run(["events", "list", "--json"]);
+      expect(eventsCode).toBe(0);
+      expect(JSON.parse(eventsOut)).toEqual([]);
+
+      const { stdout: webhooksOut, exitCode: webhooksCode } = await run(["webhooks", "list", "--json"]);
+      expect(webhooksCode).toBe(0);
+      expect(JSON.parse(webhooksOut)).toEqual([]);
     });
   });
 
