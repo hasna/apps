@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander";
 import chalk from "chalk";
 import { execSync } from "child_process";
@@ -1515,6 +1516,7 @@ const firstArg = args[0];
 if (firstArg && (firstArg.startsWith("http://") || firstArg.startsWith("https://"))) {
   process.argv.splice(2, 0, "crawl");
 }
+registerEventsCommands(program, { source: "crawl" });
 
 program.parseAsync(process.argv).catch((err) => {
   process.stderr.write(chalk.red(`Fatal: ${(err as Error).message}\n`));
