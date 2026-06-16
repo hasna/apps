@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
+import { registerEventsCommands } from "@hasna/events/commander";
 import chalk from "chalk";
 import { registerStorageCommands } from "./storage.js";
 import { registerLocalCommands } from "./local.js";
@@ -41,6 +42,8 @@ program
   .description("Unified search — local file index + 12 web providers, one interface");
 
 registerStorageCommands(program);
+registerEventsCommands(program, { source: "search" });
+
 registerLocalCommands(program);
 
 // --- Main search command ---
