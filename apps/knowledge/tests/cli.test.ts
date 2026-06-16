@@ -181,6 +181,8 @@ describe('knowledge cli', () => {
     const out = new TextDecoder().decode(result.stdout);
     expect(out).toContain('knowledge - local agent knowledge store');
     expect(out).toContain('Commands:');
+    expect(out).toContain('events emit|list|replay');
+    expect(out).toContain('webhooks add|list|remove|test');
     expect(out).toContain('inventory');
 
     const sub = runCli(['help', 'list']);
@@ -191,6 +193,13 @@ describe('knowledge cli', () => {
     const inventory = runCli(['help', 'inventory']);
     expect(inventory.exitCode).toBe(0);
     expect(new TextDecoder().decode(inventory.stdout)).toContain('knowledge inventory');
+  });
+
+  test('events command uses shared help surface', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'knowledge-events-cli-'));
+    const result = runCli(['events', '--help'], undefined, { HASNA_EVENTS_DIR: dir });
+    expect(result.exitCode).toBe(0);
+    expect(new TextDecoder().decode(result.stdout)).toContain('Emit, list, and replay Hasna events');
   });
 
   test('version flag works', () => {
