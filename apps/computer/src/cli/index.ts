@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
+import { registerEventsCommands } from "@hasna/events/commander";
 import chalk from "chalk";
 import { runTask } from "../agent/loop.js";
 import { listSessions, getSession, getActionLogs, deleteSession, getStats, searchSessions, getDataDir } from "../db/index.js";
@@ -651,6 +652,7 @@ program
 
 // ── Storage commands (sync, feedback) ────────────────────────────────
 registerStorageCommands(program);
+registerEventsCommands(program, { source: "computer" });
 
 program.parse();
 
