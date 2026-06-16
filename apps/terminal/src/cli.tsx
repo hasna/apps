@@ -1,8 +1,14 @@
 #!/usr/bin/env bun
 import React from "react";
 import { render } from "ink";
+import { runEventsCli } from "@hasna/events/cli";
 
 const args = process.argv.slice(2);
+
+if (args[0] === "events" || args[0] === "webhooks") {
+  await runEventsCli(args, { source: "terminal", programName: "terminal" });
+  process.exit(0);
+}
 
 async function runSharedEventCli(args: string[]): Promise<boolean> {
   if (args[0] !== "events" && args[0] !== "webhooks") return false;
@@ -53,6 +59,8 @@ SUBCOMMANDS:
   mcp serve                    Start MCP server (called by agents, not you)
   discover [--days=N] [--json]  Scan Claude sessions, show token savings potential
   snapshot                     Terminal state as JSON
+  events                       Emit, list, and replay Hasna events
+  webhooks                     Manage Hasna event webhook subscriptions
   --help                       Show this help
   --version                    Show version
 
