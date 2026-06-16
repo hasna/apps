@@ -39,6 +39,7 @@ async function runCliWithTimeout(
         ...process.env,
         BROWSER_DB_PATH: process.env["BROWSER_DB_PATH"],
         BROWSER_DATA_DIR: process.env["BROWSER_DATA_DIR"],
+        HASNA_EVENTS_DIR: join(tmpDir, "events"),
       },
     }
   );
@@ -124,6 +125,16 @@ describe("CLI — help flags", () => {
     expect(stdout).toContain("start");
     expect(stdout).toContain("stop");
     expect(stdout).toContain("replay");
+  });
+
+  it("browser events commands use the shared event store", async () => {
+    const { stdout: eventsOut, code: eventsCode } = await runCli("events", "list", "--json");
+    expect(eventsCode).toBe(0);
+    expect(JSON.parse(eventsOut)).toEqual([]);
+
+    const { stdout: webhooksOut, code: webhooksCode } = await runCli("webhooks", "list", "--json");
+    expect(webhooksCode).toBe(0);
+    expect(JSON.parse(webhooksOut)).toEqual([]);
   });
 });
 

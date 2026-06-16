@@ -4,6 +4,7 @@ import { Command } from "commander";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { registerCloudCommands } from "@hasna/cloud";
+import { registerEventsCommands } from "@hasna/events/commander";
 
 const pkg = JSON.parse(readFileSync(join(import.meta.dir, "../../package.json"), "utf8"));
 const program = new Command();
@@ -20,6 +21,7 @@ registerSession(program);
 registerScript(program);
 registerTools(program);
 registerCloudCommands(program, "browser");
+registerEventsCommands(program, { source: "browser" });
 
 try {
   await program.parseAsync(process.argv);
