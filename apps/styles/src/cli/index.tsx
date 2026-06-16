@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander";
 import { App } from "./components/App.js";
 import { registerBrainsCommand } from "./brains.js";
@@ -28,5 +29,6 @@ registerTemplateCommands(program);
 registerKitsCommands(program);
 registerExtractCommand(program);
 registerBrainsCommand(program);
+registerEventsCommands(program, { source: "styles" });
 
 program.parse(process.argv);
