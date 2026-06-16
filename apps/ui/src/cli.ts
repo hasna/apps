@@ -10,6 +10,7 @@
 
 import { join } from "node:path";
 import { fetchResource } from "./fetch.ts";
+import { handleEventsCli } from "./events-cli.ts";
 
 const CONTENT_DIR = join(import.meta.dir, "..", "content");
 
@@ -46,8 +47,13 @@ async function main() {
       await import("./server.ts");
       break;
     }
+    case "events":
+    case "webhooks": {
+      await handleEventsCli(cmd, rest);
+      break;
+    }
     default:
-      console.error("ui (@hasna/ui) — offline ui.sh\n  commands: fetch <uri...>, list, serve [port]");
+      console.error("ui (@hasna/ui) — offline ui.sh\n  commands: fetch <uri...>, list, serve [port], webhooks, events");
       process.exit(cmd ? 1 : 0);
   }
 }
