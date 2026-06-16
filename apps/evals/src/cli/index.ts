@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander";
 import { runCommand } from "./commands/run.js";
 import { ciCommand } from "./commands/ci.js";
@@ -34,5 +35,6 @@ program.addCommand(mcpCommand());
 program.addCommand(captureCommand());
 program.addCommand(completionCommand());
 program.addCommand(syncCommand());
+registerEventsCommands(program, { source: "evals" });
 
 program.parse(process.argv);
