@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
+import { registerEventsCommands } from "@hasna/events/commander";
 import chalk from "chalk";
 import { getCurrentMachine, listMachines } from "../db/machines.js";
 import { createSource, listSources, deleteSource, getSource, updateSource } from "../db/sources.js";
@@ -30,6 +31,8 @@ program
   .name("files")
   .description("Agent-first file management — index, sync, search, and retrieve files across local, S3, and Google Drive sources")
   .version(_pkg.version);
+
+registerEventsCommands(program, { source: "files" });
 
 registerEvidenceCommands(program);
 
