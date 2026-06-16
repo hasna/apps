@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
+import { registerEventsCommands } from "@hasna/events/commander";
 import chalk from "chalk";
 import pkg from "../../package.json";
 import { render, Box, Text, useInput, useApp } from "ink";
@@ -402,6 +403,8 @@ program
   .description("AI-powered browser testing CLI")
   .option("-q, --quiet", "Suppress all output", false)
   .option("--no-color", "Disable color output");
+
+registerEventsCommands(program, { source: "testers" });
 
 program
   .command("prod-debug <target>")
