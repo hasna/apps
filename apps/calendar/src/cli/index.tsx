@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander";
 import chalk from "chalk";
