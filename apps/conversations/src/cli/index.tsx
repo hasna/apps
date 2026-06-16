@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander";
 import chalk from "chalk";
 import { render } from "ink";
@@ -113,5 +114,6 @@ program
     const agent = resolveIdentity();
     render(React.createElement(App, { agent }));
   });
+registerEventsCommands(program, { source: "conversations" });
 
 program.parse();
