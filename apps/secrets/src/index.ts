@@ -18,6 +18,7 @@ import {
 import { getDb } from "./db.js";
 import { encrypt, decrypt, isEncrypted, getMasterKey, initKms, getKeyStatus } from "./crypto.js";
 import type { SecretEntry } from "./types.js";
+import { runEventsCli } from "@hasna/events/cli";
 
 const SECRET_TYPES: SecretEntry["type"][] = ["api_key", "password", "token", "credential", "other"];
 
@@ -39,6 +40,8 @@ Commands:
   gc                          prune expired secrets
   audit [key]                 show audit log
   path                        show vault db path
+  events                      emit, list, and replay Hasna events
+  webhooks                    manage Hasna event webhook subscriptions
 
   users list [--type human|agent]
   users register <id> <name> [--type human|agent]
@@ -205,6 +208,11 @@ async function runSharedEventCli(args: string[]): Promise<boolean> {
 
 if (await runSharedEventCli(args)) process.exit(0);
 const [command, ...rest] = args;
+
+if (command === "events" || command === "webhooks") {
+  await runEventsCli(args, { source: "secrets", programName: "secrets" });
+  process.exit(0);
+}
 
 if (!command || command === "--help" || command === "-h") {
   usage();
