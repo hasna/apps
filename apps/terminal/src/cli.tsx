@@ -4,6 +4,20 @@ import { render } from "ink";
 
 const args = process.argv.slice(2);
 
+async function runSharedEventCli(args: string[]): Promise<boolean> {
+  if (args[0] !== "events" && args[0] !== "webhooks") return false;
+  const [{ Command }, { registerEventsCommands }] = await Promise.all([
+    import("commander"),
+    import("@hasna/events/commander"),
+  ]);
+  const program = new Command().name("terminal");
+  registerEventsCommands(program, { source: "terminal" });
+  await program.parseAsync(["node", "terminal", ...args]);
+  return true;
+}
+
+if (await runSharedEventCli(args)) process.exit(0);
+
 // ── Help / Version ───────────────────────────────────────────────────────────
 
 if (args[0] === "--help" || args[0] === "-h" || args[0] === "help") {
