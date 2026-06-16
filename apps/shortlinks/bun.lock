@@ -5,7 +5,8 @@
     "": {
       "name": "@hasna/shortlinks",
       "dependencies": {
-        "@hasna/cloud": "^0.1.30",
+        "@hasna/cloud": "0.1.30",
+        "@hasna/events": "^0.1.6",
         "chalk": "^5.4.1",
         "commander": "^13.1.0",
       },
@@ -17,6 +18,8 @@
   },
   "packages": {
     "@hasna/cloud": ["@hasna/cloud@0.1.30", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.12.1", "commander": "^13.1.0", "pg": "^8.13.3", "zod": "^3.24.2" }, "bin": { "cloud": "dist/cli/index.js", "cloud-mcp": "dist/mcp/index.js" } }, "sha512-qpDiJNsU/K1cFDk1l+xUA1xEEq8+Q37OdAz/ec0LwrQiA1HyWukzR8Lh7igkOqBT2foa46cxhB7yGnfiT2cWrA=="],
+
+    "@hasna/events": ["@hasna/events@0.1.6", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-rKLxjBIat45UxciUwh9hKM63l/mcurJXAhgVkYHvrsGnOK9HwExrwgOlylNzDBDb+huiQw9DWdLb31q5oWDfIw=="],
 
     "@hono/node-server": ["@hono/node-server@1.19.14", "", { "peerDependencies": { "hono": "^4" } }, "sha512-GwtvgtXxnWsucXvbQXkRgqksiH2Qed37H9xHZocE5sA3N8O8O8/8FA3uclQXxXVzc9XBZuEOMK7+r02FmSpHtw=="],
 
