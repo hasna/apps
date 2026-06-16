@@ -2,8 +2,7 @@ import { randomUUID } from 'crypto'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { registerCloudTools } from '@hasna/cloud'
 import { z } from 'zod'
-import { openDatabase, getDbPath, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryAgentBreakdown, queryAccountBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertGoal, deleteGoal, getGoalStatuses, listSubscriptions, upsertSubscription, deleteSubscription, listMachines, getMachineId, queryBillingSummary, listModelPricing, upsertModelPricing, deleteModelPricing } from '../db/database.js'
-import { PG_MIGRATIONS } from '../db/pg-migrations.js'
+import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryAgentBreakdown, queryAccountBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertGoal, deleteGoal, getGoalStatuses, listSubscriptions, upsertSubscription, deleteSubscription, listMachines, getMachineId, queryBillingSummary, listModelPricing, upsertModelPricing, deleteModelPricing } from '../db/database.js'
 import { syncAll } from '../lib/sync-all.js'
 import { AGENTS } from '../lib/agents.js'
 import { querySavingsSummary } from '../lib/savings.js'
@@ -723,9 +722,6 @@ server.tool(
   },
 )
 
-registerCloudTools(server, MCP_NAME, {
-  dbPath: getDbPath(),
-  migrations: PG_MIGRATIONS,
-})
+registerCloudTools(server, MCP_NAME)
 return server
 }

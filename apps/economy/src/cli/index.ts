@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { Command } from 'commander'
+import { registerEventsCommands } from '@hasna/events/commander'
 import chalk from 'chalk'
 import { registerBrainsCommand } from './brains.js'
 import { registerTodosCommand } from './commands/todos.js'
@@ -1692,5 +1693,7 @@ registerBrainsCommand(program)
 registerTodosCommand(program)
 registerExtendedCommands(program)
 registerFleetCommands(program)
+
+registerEventsCommands(program, { source: 'economy' })
 
 program.parse()
