@@ -1,3 +1,4 @@
+import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander";
 import chalk from "chalk";
 import { createOrg, getOrg, getOrgBySlug, listOrgs, updateOrg, deleteOrg } from "../db/orgs.js";
@@ -418,5 +419,6 @@ program
 function output(text: string) {
   console.log(text);
 }
+registerEventsCommands(program, { source: "calendar" });
 
 program.parse();
