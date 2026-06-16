@@ -1,6 +1,6 @@
 {
   "name": "@hasna/economy",
-  "version": "0.2.32",
+  "version": "0.2.33",
   "description": "AI coding cost tracker — CLI + MCP server + REST API + web dashboard for Claude Code, Codex, Gemini, OpenCode, Cursor, Pi, and Hermes",
   "type": "module",
   "main": "dist/index.js",
@@ -63,7 +63,7 @@
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
     "zod": "^3.24.2",
-    "@hasna/events": "^0.1.6"
+    "@hasna/events": "^0.1.7"
   },
   "devDependencies": {
     "@types/bun": "latest",

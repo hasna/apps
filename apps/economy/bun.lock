@@ -7,7 +7,7 @@
       "dependencies": {
         "@hasna/accounts": "0.1.6",
         "@hasna/cloud": "0.1.24",
-        "@hasna/events": "^0.1.6",
+        "@hasna/events": "^0.1.7",
         "@hasna/projects": "0.1.51",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "chalk": "^5.4.1",
@@ -110,7 +110,7 @@
 
     "@hasna/cloud": ["@hasna/cloud@0.1.24", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.12.1", "commander": "^13.1.0", "pg": "^8.13.3", "zod": "^3.24.2" }, "bin": { "cloud": "dist/cli/index.js", "cloud-mcp": "dist/mcp/index.js" } }, "sha512-s8Vv+VdvOxN0UzlYgonMaT/V7X4YTuejvT45NQB7LIeLLp0IS/gF7DnNiRoQCl0P+pPrJVjCl61F34jmczzFTA=="],
 
-    "@hasna/events": ["@hasna/events@0.1.6", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-rKLxjBIat45UxciUwh9hKM63l/mcurJXAhgVkYHvrsGnOK9HwExrwgOlylNzDBDb+huiQw9DWdLb31q5oWDfIw=="],
+    "@hasna/events": ["@hasna/events@0.1.7", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-o6Qn/HTb5hGDDEd7E71GNVn2XvJ2Uy/dHzsZLQzczy9O9oXyOvm9I5y+zU0x8lA1TJLxcFERqS+QO7oiXsR/vA=="],
 
     "@hasna/projects": ["@hasna/projects@0.1.51", "", { "dependencies": { "@aws-sdk/client-s3": "^3.1018.0", "@hasna/cloud": "^0.1.28", "@modelcontextprotocol/sdk": "^1.12.1", "chalk": "^5.4.1", "commander": "^13.1.0", "nanoid": "^5.0.9", "zod": "^3.24.2" }, "bin": { "projects": "dist/cli/index.js", "projects-mcp": "dist/mcp/index.js" } }, "sha512-jnJHccI2isdiKam6trxBXPUxz5U4SG1iXWxpeFacR0+xXir9rf9ysTS09HuRfsjEzpIGfcKY4RRqCB7GC0b2zQ=="],
 
