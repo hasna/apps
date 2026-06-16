@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander"
 import chalk from "chalk"
 import { createRequire } from "module"
@@ -723,5 +724,6 @@ scheduleCmd
       for (const r of runs) console.log(`  ${r}`)
     } catch (e) { handleError(program, e) }
   })
+registerEventsCommands(program, { source: "prompts" });
 
 program.parse()
