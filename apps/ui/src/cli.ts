@@ -14,6 +14,19 @@ import { handleEventsCli } from "./events-cli.ts";
 
 const CONTENT_DIR = join(import.meta.dir, "..", "content");
 
+async function runSharedEventCli(args: string[]): Promise<boolean> {
+  if (args[0] !== "events" && args[0] !== "webhooks") return false;
+  const [{ Command }, { registerEventsCommands }] = await Promise.all([
+    import("commander"),
+    import("@hasna/events/commander"),
+  ]);
+  const program = new Command().name("ui");
+  registerEventsCommands(program, { source: "ui" });
+  await program.parseAsync(["node", "ui", ...args]);
+  return true;
+}
+
+
 async function listUris(): Promise<string[]> {
   const idxFile = Bun.file(join(CONTENT_DIR, "index.json"));
   if (await idxFile.exists()) {
@@ -25,6 +38,7 @@ async function listUris(): Promise<string[]> {
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
+  if (await runSharedEventCli([cmd, ...rest].filter((arg): arg is string => typeof arg === "string"))) return;
   switch (cmd) {
     case "fetch": {
       if (!rest.length) {
