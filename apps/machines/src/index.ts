@@ -17,6 +17,7 @@ export * from "./commands/install-claude.js";
 export * from "./commands/install-tailscale.js";
 export * from "./commands/notifications.js";
 export * from "./commands/ports.js";
+export * from "./commands/runtime.js";
 export * from "./commands/self-test.js";
 export * from "./commands/serve.js";
 export * from "./commands/setup.js";

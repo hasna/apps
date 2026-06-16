@@ -34,6 +34,7 @@ import {
   testNotificationChannel,
 } from "../commands/notifications.js";
 import { listPorts } from "../commands/ports.js";
+import { watchTmuxPane } from "../commands/runtime.js";
 import { buildSshCommand, resolveSshTarget } from "../commands/ssh.js";
 import { resolveScreenTarget, buildScreenCommand, buildScreenEnableCommand, resolveScreenCredentials } from "../commands/screen.js";
 import { buildSyncPlan, runSync } from "../commands/sync.js";
@@ -343,6 +344,7 @@ const manifestCommand = program.command("manifest").description("Manage the flee
 const appsCommand = program.command("apps").description("Manage installed applications per machine");
 const notificationsCommand = program.command("notifications").description("Manage fleet alert delivery channels");
 registerEventsCommands(program, { source: "machines" });
+const runtimeCommand = program.command("runtime").description("Watch runtime conditions and emit Hasna events");
 const clipboardCommand = program.command("clipboard").description("Real-time clipboard sync across fleet machines");
 const installClaudeCommand = program.command("install-claude").description("Install or inspect Claude, Codex, and Gemini CLIs");
 
@@ -834,6 +836,40 @@ notificationsCommand
   .action((id: string, options: { json?: boolean }) => {
     const result = removeNotificationChannel(id);
     printJsonOrText(result, renderNotificationConfigResult(result), options.json);
+  });
+
+runtimeCommand
+  .command("tmux-watch")
+  .description("Watch a tmux pane and emit machines.tmux.pane_died if it disappears")
+  .argument("<target>", "tmux pane target, for example %1 or session:window.pane")
+  .option("--interval-ms <ms>", "Polling interval in milliseconds", "5000")
+  .option("--max-checks <n>", "Stop after N checks instead of watching forever")
+  .option("--once", "Probe once and emit machines.tmux.pane_missing when absent", false)
+  .option("--no-deliver", "Record the event without webhook delivery")
+  .option("-j, --json", "Print JSON output", false)
+  .action(async (target: string, options: { intervalMs?: string; maxChecks?: string; once?: boolean; deliver?: boolean; json?: boolean }) => {
+    const maxChecks = options.once
+      ? 1
+      : options.maxChecks
+        ? parseIntegerOption(options.maxChecks, "max-checks", { min: 1 })
+        : undefined;
+    const result = await watchTmuxPane({
+      target,
+      intervalMs: parseIntegerOption(options.intervalMs ?? "5000", "interval-ms", { min: 0 }),
+      maxChecks,
+      emitInitialMissing: Boolean(options.once),
+      deliver: options.deliver !== false,
+      onProbe: options.json ? undefined : (probe) => {
+        const status = probe.exists ? chalk.green("present") : chalk.yellow("missing");
+        console.error(`tmux ${probe.target}: ${status}${probe.paneId ? ` ${probe.paneId}` : ""}`);
+      },
+    });
+    printJsonOrText(result, renderKeyValueTable([
+      ["target", result.target],
+      ["status", result.status],
+      ["checks", String(result.checks)],
+      ["event", result.emitted?.event.type ?? "none"],
+    ]), options.json);
   });
 
 clipboardCommand

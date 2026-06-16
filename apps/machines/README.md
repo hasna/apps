@@ -292,6 +292,22 @@ machines notifications dispatch --event manual.test --message "hello fleet"
 - `webhook` channels deliver JSON via HTTP POST
 - `command` channels execute the configured command with `HASNA_MACHINES_NOTIFICATION_*` env vars
 
+## Runtime Events
+
+`machines runtime tmux-watch` probes tmux with `display-message` and emits shared
+Hasna events without sending keys, killing panes, or changing tmux state.
+
+```bash
+machines runtime tmux-watch %11 --once --json
+machines runtime tmux-watch session:0.1 --interval-ms 5000
+machines webhooks add https://example.com/hook --id tmux-alerts --type machines.tmux.pane_died
+```
+
+When a pane was present and later disappears, the command records
+`machines.tmux.pane_died`. With `--once`, a missing pane records
+`machines.tmux.pane_missing`; add `--no-deliver` to record without webhook
+delivery.
+
 ## Dashboard
 
 ```bash
