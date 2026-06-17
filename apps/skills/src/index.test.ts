@@ -122,6 +122,28 @@ describe("public API exports", () => {
     expect(typeof publicAPI.getMcpResourceContracts).toBe("function");
   });
 
+  test("native storage helpers are exported for wrappers", () => {
+    expect(publicAPI.STORAGE_TABLES).toEqual(["skills_sync_records", "skills_sync_cursors"]);
+    expect(publicAPI.SKILLS_STORAGE_ENV.databaseUrl).toBe("HASNA_SKILLS_DATABASE_URL");
+    expect(publicAPI.SKILLS_STORAGE_FALLBACK_ENV.databaseUrl).toBe("SKILLS_DATABASE_URL");
+    expect(typeof publicAPI.resolveStorageConfig).toBe("function");
+    expect(typeof publicAPI.getStorageStatus).toBe("function");
+    expect(typeof publicAPI.getStorageDatabaseUrl).toBe("function");
+    expect(typeof publicAPI.getSkillsStorageStatus).toBe("function");
+  });
+
+  test("native storage helpers are available from the storage subpath source", async () => {
+    const storage = await import("./storage.js");
+
+    expect(storage.STORAGE_TABLES).toEqual(["skills_sync_records", "skills_sync_cursors"]);
+    expect(storage.SKILLS_STORAGE_ENV.databaseUrl).toBe("HASNA_SKILLS_DATABASE_URL");
+    expect(storage.SKILLS_STORAGE_FALLBACK_ENV.databaseUrl).toBe("SKILLS_DATABASE_URL");
+    expect(typeof storage.resolveStorageConfig).toBe("function");
+    expect(typeof storage.getStorageStatus).toBe("function");
+    expect(typeof storage.createSkillsPostgresSyncStore).toBe("function");
+    expect(typeof storage.createSkillsS3ObjectStore).toBe("function");
+  });
+
   test("key functions return expected results", () => {
     // Verify getSkill works through the public API
     const skill = publicAPI.getSkill("image");

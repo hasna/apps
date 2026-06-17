@@ -5,6 +5,30 @@ import { BASIC_SKILL_NAMES, SKILLS } from "../lib/registry.js";
 const MCP_PATH = join(import.meta.dir, "index.ts");
 const EXPECTED_ALL_SKILL_COUNT = SKILLS.length;
 const EXPECTED_BASIC_SKILL_COUNT = BASIC_SKILL_NAMES.length;
+const CLEAN_STORAGE_ENV = {
+  HASNA_SKILLS_STORAGE_MODE: "",
+  HASNA_SKILLS_DATABASE_URL: "",
+  HASNA_SKILLS_DATABASE_SSL: "",
+  HASNA_SKILLS_DATABASE_SCHEMA: "",
+  HASNA_SKILLS_S3_BUCKET: "",
+  HASNA_SKILLS_S3_PREFIX: "",
+  HASNA_SKILLS_AWS_REGION: "",
+  HASNA_SKILLS_SYNC_DRY_RUN: "",
+  SKILLS_STORAGE_MODE: "",
+  SKILLS_DATABASE_URL: "",
+  SKILLS_DATABASE_SSL: "",
+  SKILLS_DATABASE_SCHEMA: "",
+  SKILLS_S3_BUCKET: "",
+  SKILLS_S3_PREFIX: "",
+  SKILLS_AWS_REGION: "",
+  SKILLS_S3_ENDPOINT: "",
+  SKILLS_S3_FORCE_PATH_STYLE: "",
+  SKILLS_S3_ACCESS_KEY_ID: "",
+  SKILLS_S3_SECRET_ACCESS_KEY: "",
+  SKILLS_S3_SESSION_TOKEN: "",
+  SKILLS_SYNC_BATCH_SIZE: "",
+  SKILLS_SYNC_DRY_RUN: "",
+};
 
 /**
  * Helper class to communicate with the MCP server over stdio.
@@ -20,7 +44,7 @@ class McpClient {
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, ...env, MCP_STDIO: "1", NO_COLOR: "1" },
+      env: { ...process.env, ...CLEAN_STORAGE_ENV, ...env, MCP_STDIO: "1", NO_COLOR: "1" },
     });
     this.reader = (this.proc.stdout as ReadableStream<Uint8Array>).getReader();
     this._readLoop();
@@ -122,11 +146,12 @@ describe("MCP Server", () => {
       expect(toolNames).toContain("get_mcp_contracts");
       expect(toolNames).toContain("scaffold_skill");
       expect(toolNames).toContain("port_skill");
+      expect(toolNames).toContain("storage_status");
+      expect(toolNames).toContain("storage_sync_plan");
     } finally {
       await client.close();
     }
   }, 15000);
-
 
   test("portable skill tools scaffold, validate, inspect, run, and port local skills", async () => {
     const { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } = require("fs");
@@ -1040,6 +1065,48 @@ version: 0.3.0
     }
   }, 15000);
 
+  test("storage tools return local-first status and no-network sync plan", async () => {
+    const client = new McpClient();
+    try {
+      await client.initialize();
+      const statusResponse = await client.request("tools/call", {
+        name: "storage_status",
+        arguments: {},
+      }, 85);
+      expect(statusResponse).not.toBeNull();
+      const status = JSON.parse(statusResponse.result.content[0].text);
+      expect(status).toMatchObject({
+        package: "open-skills",
+        mode: "local",
+        tables: ["skills_sync_records", "skills_sync_cursors"],
+        remote: {
+          databaseConfigured: false,
+          s3Configured: false,
+          databaseEnv: "HASNA_SKILLS_DATABASE_URL",
+          activeDatabaseEnv: "HASNA_SKILLS_DATABASE_URL",
+          s3BucketEnv: "HASNA_SKILLS_S3_BUCKET",
+        },
+      });
+      expect(status.local.projectStateDir).toContain(".skills");
+
+      const planResponse = await client.request("tools/call", {
+        name: "storage_sync_plan",
+        arguments: { includeSchemaSql: true },
+      }, 86);
+      expect(planResponse).not.toBeNull();
+      const plan = JSON.parse(planResponse.result.content[0].text);
+      expect(plan).toMatchObject({
+        package: "open-skills",
+        noNetwork: true,
+        mode: "local",
+      });
+      expect(plan.env.databaseUrl).toBe("HASNA_SKILLS_DATABASE_URL");
+      expect(plan.schemaSql).toContain("CREATE TABLE IF NOT EXISTS skills_sync_records");
+    } finally {
+      await client.close();
+    }
+  }, 15000);
+
   test("meta tools return structured tool contracts", async () => {
     const client = new McpClient();
     try {
@@ -1055,6 +1122,14 @@ version: 0.3.0
       expect(searchResult.tools).toContain("quote_skill");
       expect(searchResult.tools).toContain("run_skill");
 
+      const storageSearchResponse = await client.request("tools/call", {
+        name: "search_tools",
+        arguments: { query: "storage" },
+      }, 87);
+      expect(storageSearchResponse).not.toBeNull();
+      const storageSearch = JSON.parse(storageSearchResponse.result.content[0].text);
+      expect(storageSearch.tools).toEqual(["storage_status", "storage_sync_plan"]);
+
       const detailedSearchResponse = await client.request("tools/call", {
         name: "search_tools",
         arguments: { query: "run", detail: true },
@@ -1069,7 +1144,7 @@ version: 0.3.0
 
       const describeResponse = await client.request("tools/call", {
         name: "describe_tools",
-        arguments: { names: ["validate_skill", "send_feedback", "get_run_status"] },
+        arguments: { names: ["validate_skill", "send_feedback", "get_run_status", "storage_sync_plan"] },
       }, 47);
       expect(describeResponse).not.toBeNull();
       const describeResult = JSON.parse(describeResponse.result.content[0].text);
@@ -1091,15 +1166,21 @@ version: 0.3.0
         description: "Fetch remote run status and next actions.",
         params: ["run_id"],
       });
+      expect(describeResult.tools[3]).toMatchObject({
+        name: "storage_sync_plan",
+        known: true,
+        category: "storage",
+        sideEffects: "none",
+      });
 
       const contractsResponse = await client.request("tools/call", {
         name: "get_mcp_contracts",
-        arguments: { names: ["pin_skill", "run_skill"], includeResources: true },
+        arguments: { names: ["pin_skill", "run_skill", "storage_status"], includeResources: true },
       }, 84);
       expect(contractsResponse).not.toBeNull();
       const contractsResult = JSON.parse(contractsResponse.result.content[0].text);
       expect(contractsResult.schemaVersion).toBe(1);
-      expect(contractsResult.tools.map((tool: any) => tool.name)).toEqual(["pin_skill", "run_skill"]);
+      expect(contractsResult.tools.map((tool: any) => tool.name)).toEqual(["pin_skill", "run_skill", "storage_status"]);
       expect(contractsResult.resources.map((resource: any) => resource.uri)).toContain("skills://mcp/contracts");
     } finally {
       await client.close();

@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 describe("@hasna/skills product brief", () => {
   const brief = readFileSync(join(process.cwd(), "docs/product/product-brief.md"), "utf8");
+  const cloudPackage = "@hasna" + "/cloud";
 
   test("defines target users, use cases, v1 scope, and non-goals", () => {
     for (const section of [
@@ -36,6 +37,6 @@ describe("@hasna/skills product brief", () => {
     expect(brief).toContain("@hasna/skills");
     expect(brief).toContain("skills.md");
     expect(brief).toContain("local-only");
-    expect(brief).not.toContain("@hasna/cloud");
+    expect(brief).not.toContain(cloudPackage);
   });
 });

@@ -32,6 +32,8 @@ describe("CLI discovery", () => {
     test("shows help with --help", async () => {
       const { stdout } = await runCli(["--help"]);
       expect(stdout).toContain("Discover and run AI agent skills");
+      expect(stdout).toContain("events");
+      expect(stdout).toContain("webhooks");
     });
 
     test("shows version with --version", async () => {
@@ -448,8 +450,9 @@ describe("CLI discovery", () => {
           SKILLS_API_URL: `http://localhost:${server.port}/api/v1`,
           SKILLS_API_KEY: "fixture-info",
         });
-        const data = JSON.parse(stdout);
         expect(exitCode).toBe(0);
+        expect(stdout.trim().length).toBeGreaterThan(0);
+        const data = JSON.parse(stdout);
         expect(data).toMatchObject({
           name: "remote-demo",
           displayName: "Remote Demo",

@@ -30,7 +30,7 @@ export function registerIntrospect(parent: Command) {
     .option("--remote", "Use remote registry from SKILLS_API_URL or config apiUrl", false)
     .description("Show details about a specific skill")
     .action((name: string, options: { json: boolean; brief: boolean; remote: boolean }) => {
-      void handleInfo(name, options).catch(async (error) => {
+      return handleInfo(name, options).catch(async (error) => {
         const notFound = await resolveRemoteNotFound(name, options.remote, (error as Error).message);
         if (options.json) console.log(JSON.stringify(notFound));
         else skillNotFound(name, notFound.similar);
@@ -46,7 +46,7 @@ export function registerIntrospect(parent: Command) {
     .option("--remote", "Use remote registry from SKILLS_API_URL or config apiUrl", false)
     .description("Show details about a specific skill")
     .action((name: string, options: { json: boolean; brief: boolean; remote: boolean }) => {
-      void handleInfo(name, options).catch(async (error) => {
+      return handleInfo(name, options).catch(async (error) => {
         const notFound = await resolveRemoteNotFound(name, options.remote, (error as Error).message);
         if (options.json) console.log(JSON.stringify(notFound));
         else skillNotFound(name, notFound.similar);

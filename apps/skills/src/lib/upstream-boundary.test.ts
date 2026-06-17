@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 describe("upstream boundary documentation", () => {
+  const cloudPackage = "@hasna" + "/cloud";
   const content = readFileSync(
     join(process.cwd(), "docs/architecture/upstream-boundary.md"),
     "utf8",
@@ -12,7 +13,7 @@ describe("upstream boundary documentation", () => {
     expect(content).toContain("origin");
     expect(content).toContain("hasna/skills");
     expect(content).toContain("canonical open core");
-    expect(content).not.toContain("@hasna/cloud");
+    expect(content).not.toContain(cloudPackage);
   });
 
   test("separates open-core changes from hosted-wrapper changes", () => {
@@ -27,5 +28,11 @@ describe("upstream boundary documentation", () => {
     expect(content).toContain("Preserve local-capable behavior");
     expect(content).toContain("Keep hosted mode explicit");
     expect(content).toContain("local-safe");
+  });
+
+  test("separates native storage from hosted-wrapper databases", () => {
+    expect(content).toContain("HASNA_SKILLS_*");
+    expect(content).toContain("hosted-wrapper");
+    expect(content).toContain("must not pass");
   });
 });

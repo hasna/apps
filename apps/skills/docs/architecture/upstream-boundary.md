@@ -24,6 +24,8 @@ service:
 - Skill packaging, metadata, validation, and registry improvements.
 - Project `.skills` state for local preferences, pins, schedules, runs,
   exports, logs, and metadata.
+- Repo-native optional storage helpers for syncing `.skills` state through
+  explicit `HASNA_SKILLS_*` database and object-storage envs.
 - Public remote-run, pricing, discovery, and registry contracts.
 
 ## Hosted-Wrapper Changes
@@ -39,6 +41,8 @@ These belong in a hosted wrapper, not the open core:
   customer-specific workflows.
 - Deployment infrastructure, secret stores, observability, alerting, and
   rollback automation.
+- Production SaaS databases and artifact buckets, unless passed explicitly into
+  open-core storage envs for a documented sync operation.
 
 ## Sync Rules
 
@@ -51,3 +55,6 @@ These belong in a hosted wrapper, not the open core:
    infrastructure in the public package.
 5. Use `docs/architecture/upstream-sync.md` and the public-boundary preflight
    before moving wrapper work into the open repo.
+6. Keep open-core storage envs (`HASNA_SKILLS_*`) separate from hosted-wrapper
+   `DATABASE_URL`; wrappers may map explicit storage envs, but must not pass
+   their private SaaS database implicitly.

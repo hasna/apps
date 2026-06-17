@@ -114,6 +114,8 @@ requirements explicitly document local provider use.
 | `skills validate <name>` | | Check a skill's directory structure |
 | `skills schedule add <skill> <cron>` | | Set up recurring skill execution |
 | `skills schedule list` | | List all schedules (enabled/disabled/last run) |
+| `skills storage status` | | Show local state paths and optional repo-native storage readiness |
+| `skills storage sync-plan` | | Plan `.skills` Postgres/S3 snapshot sync without network access |
 | `skills mcp` | | Start MCP server on stdio |
 | `skills mcp --register claude` | | Register the Skills MCP server in an agent config (also `codex`, `gemini`, `opencode`, `all`) |
 | `skills self-update` | | Update this package to the latest version |
@@ -152,6 +154,9 @@ Stable command shapes:
   `skills exports download <run-id>`.
 - Config and schedules: `config * --json` and `schedule * --json` return
   machine-readable status objects.
+- Storage: `storage status --json` returns local `.skills` paths and optional
+  repo-native remote readiness; `storage sync-plan --json` returns a no-network
+  snapshot plan.
 - MCP registration: `mcp --register <agent> --json` returns
   `{ "registered": number, "results": [...] }`.
 
@@ -248,6 +253,37 @@ skills billing status
 Hosted account, billing, and credit management use the configured hosted API.
 The public package only stores local configuration and CLI credentials; Stripe,
 customer records, and hosted execution remain platform concerns.
+
+## Storage Boundary
+
+Open Skills is local-first. Project runtime state stays in `.skills/`; global
+config and auth stay under `~/.hasna/skills/`.
+
+Optional repo-native sync can be configured without a hosted SaaS account:
+
+```bash
+HASNA_SKILLS_STORAGE_MODE=hybrid # local | remote | hybrid
+HASNA_SKILLS_DATABASE_URL=postgres://...
+HASNA_SKILLS_S3_BUCKET=skills-artifacts
+HASNA_SKILLS_S3_PREFIX=opensource/prod/skills
+
+skills storage status
+skills storage sync-plan --schema-sql
+```
+
+Wrappers and deployment tooling can import the storage-only surface without
+pulling in CLI/runtime helpers:
+
+```ts
+import { getStorageStatus, resolveStorageConfig } from "@hasna/skills/storage";
+```
+
+Plain `SKILLS_DATABASE_URL`, `SKILLS_STORAGE_MODE`, and `SKILLS_S3_BUCKET`
+fallbacks are accepted for local development. Hosted wrappers must keep their
+private SaaS `DATABASE_URL`, tenant tables, billing state, workers, and artifact
+buckets separate; if they expose open-core storage, they should map explicit
+wrapper envs into `HASNA_SKILLS_*` rather than passing the private SaaS database
+implicitly.
 
 ## Project Structure
 

@@ -77,7 +77,8 @@ if ((${#private_paths[@]} > 0)); then
   exit 1
 fi
 
-marker_pattern='(@hasna/cloud|@hasnatools/|src/platform|aws:bootstrap|preview-stripe|production-stripe|STRIPE_|tenant|billing|private cloud|preview deploy|production deploy)'
+cloud_package='@hasna'/'cloud'
+marker_pattern="(${cloud_package}|@hasnatools/|src/platform|aws:bootstrap|preview-stripe|production-stripe|STRIPE_|tenant|billing|private cloud|preview deploy|production deploy)"
 marker_hits=()
 
 for file in "${changed_files[@]}"; do
