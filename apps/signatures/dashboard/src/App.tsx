@@ -69,6 +69,11 @@ interface Certificate {
   session_id: string;
   certificate_path: string;
   verification_code: string;
+  metadata?: {
+    certificate_kind?: "signer_evidence" | "document_completion";
+    document_complete?: boolean;
+    signer_type?: SignerType;
+  } & Record<string, unknown>;
   issued_at: string;
 }
 
@@ -428,14 +433,19 @@ function Certificates({ certificates }: { certificates: Certificate[] }) {
       <EntityList
         items={certificates}
         empty="No certificates"
-        render={(certificate) => (
-          <Row key={certificate.id}
-            title={certificate.id}
-            meta={`${shortId(certificate.session_id)} - ${formatDate(certificate.issued_at)}`}
-            detail={certificate.certificate_path}
-            aside={<span className="badge badge-neutral">{certificate.verification_code}</span>}
-          />
-        )}
+        render={(certificate) => {
+          const kind = certificate.metadata?.certificate_kind ?? "signer_evidence";
+          const complete = certificate.metadata?.document_complete === true;
+          const signerType = certificate.metadata?.signer_type;
+          return (
+            <Row key={certificate.id}
+              title={certificate.id}
+              meta={[shortId(certificate.session_id), kind, signerType, formatDate(certificate.issued_at)].filter(Boolean).join(" - ")}
+              detail={certificate.certificate_path}
+              aside={<span className={complete ? "badge badge-completed" : "badge badge-neutral"}>{complete ? "complete" : "evidence"}</span>}
+            />
+          );
+        }}
       />
     </section>
   );

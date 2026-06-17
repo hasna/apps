@@ -155,7 +155,7 @@ export function buildServer(): Server {
       },
       {
         name: "signatures_sign",
-        description: "Sign a document at a position or detected/Markdown field and generate a completion certificate",
+        description: "Sign a document at a position or detected/Markdown field and generate a local signer-evidence or document-completion certificate",
         inputSchema: {
           type: "object",
           properties: {
@@ -262,7 +262,7 @@ export function buildServer(): Server {
       },
       {
         name: "signatures_certificate_get",
-        description: "Get the completion certificate for a signing session",
+        description: "Get the local evidence/completion certificate for a signing session",
         inputSchema: {
           type: "object",
           properties: { session_id: { type: "string" } },

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.11
+
+- Hardened routed signing so token/session completion signs the assigned field or next matching pending field instead of the first document field.
+- Added signing-order enforcement for fielded and fieldless session workflows, including CLI smoke coverage for out-of-order rejection.
+- Split local signer evidence certificates from full document completion certificates and recorded completion metadata.
+- Bound agent input hashes to the PDF actually reviewed and signed, including already partially signed PDFs.
+
 ## 0.1.10
 
 - Added first-class human and agent signers with `signer_type`, agent identity, run, thread, policy, reason, and hash metadata.

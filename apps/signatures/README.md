@@ -51,7 +51,7 @@ open-signatures document from-markdown ./agreement.md \
   --signer-email ada@example.com
 ```
 
-Sign at the generated field and create a certificate:
+Sign at the generated field and create a local evidence certificate:
 
 ```bash
 open-signatures document sign <document-id> \
@@ -64,7 +64,7 @@ open-signatures document sign <document-id> \
 The command writes:
 
 - a signed PDF in `~/.hasna/signatures/signed/`
-- a completion certificate in `~/.hasna/signatures/certificates/`
+- a signer-evidence or document-completion certificate in `~/.hasna/signatures/certificates/`
 - audit events in the local SQLite database
 
 ## Markdown Variables
@@ -143,6 +143,9 @@ Signer records can be humans or agents. Agent signatures are recorded as local
 agent attestations with agent id, provider/runtime, run id, policy id, reason, hashes,
 audit events, and certificate metadata. They are useful for internal approvals between
 agents or systems, but they are not human identity proof and are not QES/eIDAS signatures.
+For ordered or multi-signer documents, Open Signatures writes signer-evidence certificates
+for partial completion and reserves document-completion metadata for the final required
+field/session.
 
 Sign as an agent:
 
@@ -327,10 +330,11 @@ Set `SIGNATURES_DB_PATH` or `HASNA_SIGNATURES_DB_PATH` to override the SQLite da
 
 ## Security Model
 
-Open Signatures stores signing evidence locally. A completion certificate includes signer
-metadata, document hashes, session id, and audit summary. This provides useful evidence for
-ordinary electronic signature workflows, but does not provide regulated digital signature,
-qualified electronic signature, or eIDAS/QTSP guarantees.
+Open Signatures stores signing evidence locally. A certificate includes signer metadata,
+document hashes, session id, audit summary, and metadata that distinguishes `signer_evidence`
+from `document_completion`. This provides useful evidence for ordinary electronic signature
+workflows, but does not provide regulated digital signature, qualified electronic signature,
+or eIDAS/QTSP guarantees.
 
 Provider evidence records are not validation reports by themselves. A QES/eSeal workflow is
 only considered externally validated after a provider/QTSP signed output, proof/audit file,

@@ -207,7 +207,7 @@ Bun.serve({
     try {
       // Health
       if (path === "/health" && method === "GET") {
-        return json({ status: "ok", version: "0.1.10", port: PORT });
+        return json({ status: "ok", version: "0.1.11", port: PORT });
       }
 
       // Stats
@@ -264,7 +264,6 @@ Bun.serve({
           signatureId = signature.id;
         }
 
-        const fields = listFieldsForDocument(doc.id);
         const result = await signDocumentLocally({
           documentId: doc.id,
           sessionId: session.id,
@@ -279,7 +278,6 @@ Bun.serve({
           agentPolicyId: session.agent_policy_id,
           agentReason: session.agent_reason,
           role: session.role,
-          fieldId: fields[0]?.id,
         });
         return json({ success: true, ...result });
       }

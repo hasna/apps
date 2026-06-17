@@ -87,7 +87,7 @@ function createAgentAttestationSignature(opts: Record<string, unknown>): string 
 program
   .name("open-signatures")
   .description("Open-source agreement and e-signature workflows")
-  .version("0.1.10");
+  .version("0.1.11");
 
 // ── document ─────────────────────────────────────────────────────────────────
 
@@ -227,7 +227,7 @@ documentCmd
   .option("--agent-input-hash <sha256>", "Hash of the input the agent reviewed")
   .option("--agent-output-hash <sha256>", "Hash of the agent decision/output")
   .option("--role <role>", "Signer role for routing")
-  .option("--signing-order <n>", "Signing order group", "1")
+  .option("--signing-order <n>", "Signing order group")
   .option("--parallel-group <n>", "Parallel signing group")
   .option("--session <id>", "Existing signing session to complete")
   .option("--no-certificate", "Do not generate completion certificate")
@@ -313,7 +313,7 @@ documentCmd
   .option("--agent-policy-id <id>", "Policy that allowed this agent session")
   .option("--agent-reason <text>", "Reason/attestation text for an agent session")
   .option("--role <role>", "Signer role for routing")
-  .option("--signing-order <n>", "Signing order group", "1")
+  .option("--signing-order <n>", "Signing order group")
   .option("--parallel-group <n>", "Parallel signing group")
   .option("--from <email>", "Sender email for open-emails delivery")
   .option("--base-url <url>", "Public signing base URL", "http://localhost:19440")
@@ -646,11 +646,11 @@ personCmd
 
 // ── certificate ──────────────────────────────────────────────────────────────
 
-const certificateCmd = program.command("certificate").description("Completion certificate commands");
+const certificateCmd = program.command("certificate").description("Local signer-evidence and document-completion certificate commands");
 
 certificateCmd
   .command("get <session-id>")
-  .description("Get the completion certificate for a session")
+  .description("Get the local evidence/completion certificate for a session")
   .option("--json", "Output as JSON")
   .action((sessionId: string, opts: Record<string, unknown>) => {
     try {
@@ -662,6 +662,8 @@ certificateCmd
         console.log(`  ID:    ${chalk.cyan(certificate.id)}`);
         console.log(`  Path:  ${certificate.certificate_path}`);
         console.log(`  Code:  ${certificate.verification_code}`);
+        if (certificate.metadata?.["certificate_kind"]) console.log(`  Kind:  ${certificate.metadata["certificate_kind"]}`);
+        if (certificate.metadata?.["document_complete"] !== undefined) console.log(`  Done:  ${certificate.metadata["document_complete"] ? "document complete" : "session evidence"}`);
       }
     } catch (err) {
       console.error(chalk.red("Error:"), err instanceof Error ? err.message : err);

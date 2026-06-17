@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { createDocument, getDocumentByIdOrSlug, updateDocument } from "../db/documents.js";
 import { createProviderEvidence } from "../db/provider-evidence.js";
@@ -181,16 +180,18 @@ export async function signDocumentLocally(input: {
 }> {
   const doc = getDocumentByIdOrSlug(input.documentId);
   const signature = getSignatureById(input.signatureId);
-  const person = input.personIdOrEmail ? resolvePerson(input.personIdOrEmail) : undefined;
-  const field = input.fieldId ? getFieldById(input.fieldId) : undefined;
-  if (field && field.document_id !== doc.id) {
-    throw new Error(`Field ${field.id} does not belong to document ${doc.id}`);
-  }
   const existingSession = input.sessionId ? getSessionById(input.sessionId) : undefined;
+  const field = resolveSigningField(doc.id, input.fieldId, existingSession);
+  if (field?.recipient_status === "signed") {
+    throw new Error(`Field ${field.id} is already signed`);
+  }
+  const person = input.personIdOrEmail ? resolvePerson(input.personIdOrEmail) : undefined;
   const signerType = assertSignerType(input.signerType ?? person?.signer_type ?? existingSession?.signer_type ?? field?.signer_type ?? "human");
   const role = input.role ?? existingSession?.role ?? field?.role ?? field?.anchor;
-  const signingOrder = input.signingOrder ?? existingSession?.signing_order ?? field?.signing_order;
-  const parallelGroup = input.parallelGroup ?? existingSession?.parallel_group ?? field?.parallel_group ?? signingOrder;
+  const signingOrder = field?.signing_order ?? input.signingOrder ?? existingSession?.signing_order;
+  const parallelGroup = field?.parallel_group ?? input.parallelGroup ?? existingSession?.parallel_group ?? signingOrder;
+  assertSigningOrderAvailable(doc.id, field?.id, signingOrder ?? 1, existingSession?.id);
+  const explicitAgentInputHash = input.agentInputHash;
   const agentMetadata = signerType === "agent" ? {
     agent_id: input.agentId ?? person?.agent_id ?? existingSession?.agent_id ?? person?.id,
     agent_provider: input.agentProvider ?? person?.agent_provider ?? existingSession?.agent_provider,
@@ -198,7 +199,7 @@ export async function signDocumentLocally(input: {
     agent_thread_id: input.agentThreadId ?? existingSession?.agent_thread_id,
     agent_policy_id: input.agentPolicyId ?? existingSession?.agent_policy_id,
     agent_reason: input.agentReason ?? existingSession?.agent_reason,
-    input_hash: input.agentInputHash ?? existingSession?.agent_input_hash ?? sha256File(doc.file_path),
+    input_hash: input.agentInputHash ?? existingSession?.agent_input_hash,
   } : undefined;
   const session = existingSession
     ? updateSessionRouting(existingSession.id, {
@@ -253,7 +254,7 @@ export async function signDocumentLocally(input: {
   const placementInput = resolvePlacement({
     document_id: doc.id,
     signature_id: signature.id,
-    fieldId: input.fieldId,
+    fieldId: field?.id,
     page: input.page,
     x: input.x,
     y: input.y,
@@ -265,12 +266,16 @@ export async function signDocumentLocally(input: {
     ? buildAgentAttestationSignature(signature, session)
     : signature;
   const baseDocumentPath = latestSignedDocumentPath(doc.id, session.id) ?? doc.file_path;
+  const agentInputHash = effectiveSignerType === "agent"
+    ? explicitAgentInputHash ?? sha256File(baseDocumentPath)
+    : undefined;
   const signed = await signPdf({
     document_path: baseDocumentPath,
     document_name: doc.file_name,
     placements: [{ placement, signature: visualSignature }],
   });
   if (field) updateFieldRecipientStatus(field.id, "signed");
+  const documentCompleteAfterSigning = isDocumentCompleteAfterFieldSigning(doc.id, session.id);
   createAuditEvent({
     document_id: doc.id,
     session_id: session.id,
@@ -284,7 +289,7 @@ export async function signDocumentLocally(input: {
       output_path: signed.output_path,
       pages_signed: signed.pages_signed,
       signer_type: effectiveSignerType,
-      agent: effectiveSignerType === "agent" ? sessionAgentMetadata(session) : undefined,
+      agent: effectiveSignerType === "agent" ? { ...sessionAgentMetadata(session), input_hash: agentInputHash } : undefined,
     },
   });
 
@@ -292,11 +297,12 @@ export async function signDocumentLocally(input: {
   const signedHash = sha256File(signed.output_path);
   const sessionForCompletion = effectiveSignerType === "agent"
     ? updateSessionRouting(session.id, {
+      agent_input_hash: agentInputHash,
       agent_output_hash: input.agentOutputHash ?? signedHash,
       metadata: {
         agent: {
           ...sessionAgentMetadata(session),
-          input_hash: session.agent_input_hash,
+          input_hash: agentInputHash,
           output_hash: input.agentOutputHash ?? signedHash,
         },
       },
@@ -310,6 +316,7 @@ export async function signDocumentLocally(input: {
       document: doc,
       session: completed,
       signedDocumentPath: signed.output_path,
+      documentComplete: documentCompleteAfterSigning,
     });
     certificatePath = certificate.output_path;
     createAuditEvent({
@@ -344,7 +351,7 @@ export async function signDocumentLocally(input: {
       signed_document_hash: signedHash,
     },
   });
-  updateDocumentAfterSessionChange(doc.id, field?.id);
+  updateDocumentAfterSessionChange(doc.id);
 
   return {
     session: completedSession,
@@ -497,6 +504,7 @@ export async function sendDocumentForSignature(input: {
   const signerName = input.signerName ?? person?.name;
   const signerEmail = input.signerEmail ?? person?.email;
   const signerType = assertSignerType(input.signerType ?? person?.signer_type ?? "human");
+  const agentInputHash = signerType === "agent" ? sha256File(doc.file_path) : undefined;
   const session = createSigningSession({
     document_id: doc.id,
     person_id: person?.id,
@@ -509,7 +517,7 @@ export async function sendDocumentForSignature(input: {
     agent_thread_id: input.agentThreadId,
     agent_policy_id: input.agentPolicyId,
     agent_reason: input.agentReason,
-    agent_input_hash: input.agentReason ? sha256String(input.agentReason) : undefined,
+    agent_input_hash: agentInputHash,
     role: input.role,
     signing_order: input.signingOrder,
     parallel_group: input.parallelGroup,
@@ -524,6 +532,7 @@ export async function sendDocumentForSignature(input: {
         agent_thread_id: input.agentThreadId,
         agent_policy_id: input.agentPolicyId,
         agent_reason: input.agentReason,
+        agent_input_hash: agentInputHash,
       } : undefined,
     },
   });
@@ -594,16 +603,79 @@ function resolvePerson(idOrEmail: string): Person | undefined {
   }
 }
 
-function updateDocumentAfterSessionChange(documentId: string, signedFieldId?: string): void {
+function updateDocumentAfterSessionChange(documentId: string): void {
   const fields = listFieldsForDocument(documentId).filter((field) => field.required);
   if (fields.length > 0) {
-    const allSigned = fields.every((field) => field.id === signedFieldId || field.recipient_status === "signed");
+    const allSigned = fields.every((field) => field.recipient_status === "signed");
     updateDocument(documentId, { status: allSigned ? "completed" : "signed" });
     return;
   }
   const sessions = listSessionsForDocument(documentId);
   const open = sessions.some((session) => !["completed", "signed", "skipped"].includes(session.status));
   updateDocument(documentId, { status: open ? "pending" : "completed" });
+}
+
+function isDocumentCompleteAfterFieldSigning(documentId: string, currentSessionId: string): boolean {
+  const fields = listFieldsForDocument(documentId).filter((field) => field.required);
+  if (fields.length === 0) {
+    return listSessionsForDocument(documentId)
+      .every((session) => session.id === currentSessionId || ["completed", "signed", "skipped"].includes(session.status));
+  }
+  return fields.every((field) => field.recipient_status === "signed");
+}
+
+function resolveSigningField(documentId: string, explicitFieldId?: string, session?: SigningSession): ReturnType<typeof getFieldById> | undefined {
+  const selectedId = explicitFieldId ?? session?.field_id;
+  if (selectedId) {
+    const field = getFieldById(selectedId);
+    if (field.document_id !== documentId) {
+      throw new Error(`Field ${field.id} does not belong to document ${documentId}`);
+    }
+    return field;
+  }
+
+  const fields = listFieldsForDocument(documentId);
+  const pending = fields
+    .filter((field) => field.recipient_status !== "signed")
+    .sort((a, b) => (a.signing_order ?? 1) - (b.signing_order ?? 1) || a.page - b.page || a.y - b.y);
+  if (fields.length > 0 && pending.length === 0) {
+    throw new Error(`No pending signature fields for document ${documentId}`);
+  }
+  if (!session) return pending[0];
+
+  return pending.find((field) =>
+    (session.role && (field.role === session.role || field.assigned_to === session.role)) ||
+    (session.signer_name && field.assigned_to === session.signer_name) ||
+    (session.signer_email && field.assigned_to === session.signer_email) ||
+    (field.signer_type && field.signer_type === session.signer_type)
+  ) ?? pending[0];
+}
+
+function assertSigningOrderAvailable(documentId: string, fieldId: string | undefined, signingOrder: number, currentSessionId?: string): void {
+  const blockingField = listFieldsForDocument(documentId)
+    .filter((field) =>
+      !!fieldId &&
+      field.required &&
+      field.id !== fieldId &&
+      field.recipient_status !== "signed" &&
+      (field.signing_order ?? 1) < signingOrder
+    )
+    .sort((a, b) => (a.signing_order ?? 1) - (b.signing_order ?? 1) || a.page - b.page || a.y - b.y);
+  if (blockingField.length > 0) {
+    const first = blockingField[0]!;
+    throw new Error(`Field ${fieldId} cannot be signed before required field ${first.id} in signing order ${first.signing_order ?? 1}`);
+  }
+
+  const blockingSession = listSessionsForDocument(documentId)
+    .filter((session) =>
+      session.id !== currentSessionId &&
+      !["completed", "signed", "skipped"].includes(session.status) &&
+      (session.signing_order ?? 1) < signingOrder
+    )
+    .sort((a, b) => (a.signing_order ?? 1) - (b.signing_order ?? 1));
+  if (blockingSession.length === 0) return;
+  const first = blockingSession[0]!;
+  throw new Error(`Signing order ${signingOrder} cannot proceed before session ${first.id} in signing order ${first.signing_order ?? 1}`);
 }
 
 function latestSignedDocumentPath(documentId: string, currentSessionId: string): string | undefined {
@@ -624,10 +696,6 @@ function sessionAgentMetadata(session: SigningSession): Record<string, unknown> 
     input_hash: session.agent_input_hash,
     output_hash: session.agent_output_hash,
   };
-}
-
-function sha256String(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 function parseAnchorRouting(anchor: string | undefined, defaultSignerType: SignerType): {

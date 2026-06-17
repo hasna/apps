@@ -15,6 +15,7 @@ export async function createCompletionCertificate(input: {
   document: Document;
   session: SigningSession;
   signedDocumentPath: string;
+  documentComplete?: boolean;
   verificationCode?: string;
 }): Promise<CertificateResult> {
   const pdfDoc = await PDFDocument.create();
@@ -46,11 +47,16 @@ export async function createCompletionCertificate(input: {
   const issuedAt = new Date().toISOString();
   const originalHash = sha256File(input.document.file_path);
   const signedHash = sha256File(input.signedDocumentPath);
+  const documentComplete = input.documentComplete ?? true;
+  const certificateKind = documentComplete ? "document_completion" : "signer_evidence";
 
-  centerText(page, "Certificate of Completion", 500, 34, serifBold, rgb(0.12, 0.12, 0.14));
+  centerText(page, documentComplete ? "Certificate of Completion" : "Signer Evidence Certificate", 500, 34, serifBold, rgb(0.12, 0.12, 0.14));
   centerText(page, "Open Signatures", 462, 14, sansBold, rgb(0.33, 0.33, 0.36));
-  centerText(page, "This certifies that the document below was signed and completed.", 420, 15, sans, rgb(0.24, 0.27, 0.32));
-  centerText(page, "Local completion evidence only. Not a qualified electronic signature or QTSP validation report.", 397, 10, sans, rgb(0.43, 0.28, 0.12));
+  centerText(page, documentComplete
+    ? "This certifies that all required local signature fields for the document are completed."
+    : "This records one completed local signing session; the document may require additional signers.",
+  420, 15, sans, rgb(0.24, 0.27, 0.32));
+  centerText(page, "Local signing evidence only. Not a qualified electronic signature or QTSP validation report.", 397, 10, sans, rgb(0.43, 0.28, 0.12));
   centerText(page, signer, 365, 30, serifBold, rgb(0.08, 0.11, 0.18));
   centerText(page, signerType === "agent" ? "Agent attestation" : "Human signer", 343, 12, sansBold, rgb(0.33, 0.33, 0.36));
   centerText(page, input.document.name, 326, 18, serif, rgb(0.14, 0.16, 0.2));
@@ -58,16 +64,18 @@ export async function createCompletionCertificate(input: {
   const details: Array<[string, string]> = [
     ["Document ID", input.document.id],
     ["Session ID", input.session.id],
+    ["Certificate kind", certificateKind],
+    ["Document complete", documentComplete ? "yes" : "no"],
     ["Signer type", signerType],
     ["Signer email", input.session.signer_email ?? "not provided"],
     ...(signerType === "agent" ? [
       ["Agent ID", input.session.agent_id ?? "not provided"] as [string, string],
       ["Agent run", input.session.agent_run_id ?? "not provided"] as [string, string],
       ["Policy", input.session.agent_policy_id ?? "not provided"] as [string, string],
-      ["Agent input SHA-256", input.session.agent_input_hash ?? "not recorded"] as [string, string],
+      ["Agent input/document SHA-256", input.session.agent_input_hash ?? "not recorded"] as [string, string],
       ["Agent output SHA-256", input.session.agent_output_hash ?? "not recorded"] as [string, string],
     ] : []),
-    ["Completed at", input.session.completed_at ?? issuedAt],
+    [documentComplete ? "Completed at" : "Session completed at", input.session.completed_at ?? issuedAt],
     ["Original SHA-256", originalHash],
     ["Signed SHA-256", signedHash],
   ];
@@ -108,6 +116,8 @@ export async function createCompletionCertificate(input: {
       issued_at: issuedAt,
       source: input.session.source,
       connector_name: input.session.connector_name,
+      certificate_kind: certificateKind,
+      document_complete: documentComplete,
       signer_type: signerType,
       agent: signerType === "agent" ? {
         agent_id: input.session.agent_id,
