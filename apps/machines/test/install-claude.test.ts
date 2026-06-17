@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { buildClaudeInstallPlan, diffClaudeCli, getClaudeCliStatus } from "../src/commands/install-claude.js";
+import { buildClaudeInstallPlan, diffClaudeCli, getClaudeCliStatus, runClaudeInstall } from "../src/commands/install-claude.js";
+import type { MachineCommandRunner } from "../src/remote.js";
 
 describe("install-claude", () => {
   afterEach(() => {
@@ -37,5 +38,49 @@ describe("install-claude", () => {
     expect(diff.installed).toContain("claude");
     expect(diff.missing).toContain("codex");
     expect(diff.missing).toContain("gemini");
+  });
+
+  test("surfaces remote command failures instead of reporting tools missing", () => {
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "remote-fixture";
+    const runner: MachineCommandRunner = (machineId) => ({
+      machineId,
+      source: "ssh",
+      stdout: "",
+      stderr: "Permission denied (publickey,password,keyboard-interactive).",
+      exitCode: 255,
+    });
+
+    expect(() => getClaudeCliStatus("remote-fixture", undefined, runner)).toThrow("AI CLI status readiness check failed");
+  });
+
+  test("probes an explicit unmanaged machine id instead of falling back to local", () => {
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "local-fixture";
+    const calls: string[] = [];
+    const runner: MachineCommandRunner = (machineId, command) => {
+      calls.push(`${machineId}:${command}`);
+      if (command === "true") {
+        return { machineId, source: "tailscale", stdout: "", stderr: "", exitCode: 0 };
+      }
+      return { machineId, source: "tailscale", stdout: "installed=1\nversion=2.1.179\n", stderr: "", exitCode: 0 };
+    };
+
+    const status = getClaudeCliStatus("unmanaged-fixture", ["claude"], runner);
+    expect(status.machineId).toBe("unmanaged-fixture");
+    expect(status.source).toBe("tailscale");
+    expect(status.tools[0]?.installed).toBe(true);
+    expect(calls.every((call) => call.startsWith("unmanaged-fixture:"))).toBe(true);
+  });
+
+  test("runs AI CLI install steps on the selected machine", () => {
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "remote-fixture";
+    const calls: string[] = [];
+    const runner: MachineCommandRunner = (machineId, command) => {
+      calls.push(`${machineId}:${command}`);
+      return { machineId, source: "ssh", stdout: "", stderr: "", exitCode: 0 };
+    };
+
+    const result = runClaudeInstall("remote-fixture", ["claude"], { apply: true, yes: true }, runner);
+    expect(result.executed).toBe(1);
+    expect(calls).toEqual(["remote-fixture:bun install -g @anthropic-ai/claude-code"]);
   });
 });

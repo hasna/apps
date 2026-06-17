@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { readManifest } from "../manifests.js";
 import { getLocalMachineId, recordSetupRun } from "../db.js";
+import { describeMachineCommandFailure, runMachineCommand, type MachineCommandRunner } from "../remote.js";
 import type { MachineManifest, SetupResult, SetupStep } from "../types.js";
 
 function quote(value: string): string {
@@ -78,6 +79,10 @@ export function buildSetupPlan(machineId?: string): SetupResult {
     ? manifest.machines.find((machine) => machine.id === machineId)
     : manifest.machines.find((machine) => machine.id === currentMachineId);
 
+  if (machineId && !selected) {
+    throw new Error(`Machine not found in manifest: ${machineId}`);
+  }
+
   const target: MachineManifest = selected || {
     id: currentMachineId,
     platform: "linux",
@@ -94,7 +99,11 @@ export function buildSetupPlan(machineId?: string): SetupResult {
   };
 }
 
-export function runSetup(machineId?: string, options: { apply?: boolean; yes?: boolean } = {}): SetupResult {
+export function runSetup(
+  machineId?: string,
+  options: { apply?: boolean; yes?: boolean } = {},
+  runner: MachineCommandRunner = runMachineCommand
+): SetupResult {
   const plan = buildSetupPlan(machineId);
   if (!options.apply) {
     return plan;
@@ -106,18 +115,17 @@ export function runSetup(machineId?: string, options: { apply?: boolean; yes?: b
 
   let executed = 0;
   for (const step of plan.steps) {
-    const result = Bun.spawnSync(["bash", "-lc", step.command], {
-      stdout: "pipe",
-      stderr: "pipe",
-      env: process.env,
-    });
+    const result = runner(plan.machineId, step.command);
     if (result.exitCode !== 0) {
       recordSetupRun(plan.machineId, "failed", {
         executed,
         failedStep: step,
-        stderr: result.stderr.toString(),
+        stderr: result.stderr,
+        stdout: result.stdout,
+        exitCode: result.exitCode,
+        source: result.source,
       });
-      throw new Error(`Setup step failed (${step.id}): ${result.stderr.toString().trim()}`);
+      throw new Error(describeMachineCommandFailure(`Setup step ${step.id}`, result));
     }
     executed += 1;
   }

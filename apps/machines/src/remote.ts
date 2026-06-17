@@ -11,6 +11,8 @@ export interface MachineCommandResult {
   exitCode: number;
 }
 
+export type MachineCommandRunner = (machineId: string, command: string) => MachineCommandResult;
+
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
@@ -55,4 +57,17 @@ export function runMachineCommand(machineId: string, command: string): MachineCo
     stderr: result.stderr || "",
     exitCode: result.status ?? 1,
   };
+}
+
+export function describeMachineCommandFailure(operation: string, result: MachineCommandResult): string {
+  const detail = (result.stderr || result.stdout || "").trim();
+  const suffix = detail ? `: ${detail}` : "";
+  return `${operation} failed on ${result.machineId} via ${result.source} (exit ${result.exitCode})${suffix}`;
+}
+
+export function requireMachineCommandSuccess(operation: string, result: MachineCommandResult): MachineCommandResult {
+  if (result.exitCode !== 0) {
+    throw new Error(describeMachineCommandFailure(operation, result));
+  }
+  return result;
 }

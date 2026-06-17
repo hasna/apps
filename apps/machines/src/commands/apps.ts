@@ -1,5 +1,5 @@
 import { detectCurrentMachineManifest, getManifestMachine } from "../manifests.js";
-import { runMachineCommand } from "../remote.js";
+import { requireMachineCommandSuccess, runMachineCommand, type MachineCommandRunner } from "../remote.js";
 import type {
   AppsDiffResult,
   AppsStatusResult,
@@ -87,7 +87,13 @@ function buildAppSteps(machine: MachineManifest): SetupStep[] {
 }
 
 function resolveMachine(machineId?: string): MachineManifest {
-  return (machineId ? getManifestMachine(machineId) : null) || detectCurrentMachineManifest();
+  if (!machineId) return detectCurrentMachineManifest();
+  return getManifestMachine(machineId) || {
+    id: machineId,
+    platform: "linux",
+    workspacePath: "",
+    apps: [],
+  };
 }
 
 function parseProbeOutput(app: ManifestAppSpec, machine: MachineManifest, stdout: string): InstalledAppStatus {
@@ -121,21 +127,22 @@ export function buildAppsPlan(machineId?: string): SetupResult {
   };
 }
 
-export function getAppsStatus(machineId?: string): AppsStatusResult {
+export function getAppsStatus(machineId?: string, runner: MachineCommandRunner = runMachineCommand): AppsStatusResult {
   const machine = resolveMachine(machineId);
+  const readiness = requireMachineCommandSuccess("Apps status readiness check", runner(machine.id, "true"));
   const apps = (machine.apps || []).map((app) => {
-    const probe = runMachineCommand(machine.id, buildAppProbeCommand(machine, app));
+    const probe = requireMachineCommandSuccess(`App probe ${app.name}`, runner(machine.id, buildAppProbeCommand(machine, app)));
     return parseProbeOutput(app, machine, probe.stdout);
   });
   return {
     machineId: machine.id,
-    source: apps.length > 0 ? runMachineCommand(machine.id, "true").source : machine.id === detectCurrentMachineManifest().id ? "local" : runMachineCommand(machine.id, "true").source,
+    source: readiness.source,
     apps,
   };
 }
 
-export function diffApps(machineId?: string): AppsDiffResult {
-  const status = getAppsStatus(machineId);
+export function diffApps(machineId?: string, runner: MachineCommandRunner = runMachineCommand): AppsDiffResult {
+  const status = getAppsStatus(machineId, runner);
   return {
     ...status,
     missing: status.apps.filter((app) => !app.installed).map((app) => app.name),
@@ -143,7 +150,11 @@ export function diffApps(machineId?: string): AppsDiffResult {
   };
 }
 
-export function runAppsInstall(machineId?: string, options: { apply?: boolean; yes?: boolean } = {}): SetupResult {
+export function runAppsInstall(
+  machineId?: string,
+  options: { apply?: boolean; yes?: boolean } = {},
+  runner: MachineCommandRunner = runMachineCommand
+): SetupResult {
   const plan = buildAppsPlan(machineId);
   if (!options.apply) return plan;
   if (!options.yes) {
@@ -152,14 +163,7 @@ export function runAppsInstall(machineId?: string, options: { apply?: boolean; y
 
   let executed = 0;
   for (const step of plan.steps) {
-    const result = Bun.spawnSync(["bash", "-lc", step.command], {
-      stdout: "pipe",
-      stderr: "pipe",
-      env: process.env,
-    });
-    if (result.exitCode !== 0) {
-      throw new Error(`App install failed (${step.id}): ${result.stderr.toString().trim()}`);
-    }
+    requireMachineCommandSuccess(`App install ${step.id}`, runner(plan.machineId, step.command));
     executed += 1;
   }
 

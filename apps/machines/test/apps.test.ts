@@ -2,8 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { buildAppsPlan, diffApps, getAppsStatus, listApps } from "../src/commands/apps.js";
+import { buildAppsPlan, diffApps, getAppsStatus, listApps, runAppsInstall } from "../src/commands/apps.js";
 import { manifestAdd, manifestInit } from "../src/commands/manifest.js";
+import type { MachineCommandRunner } from "../src/remote.js";
 
 describe("apps", () => {
   afterEach(() => {
@@ -66,5 +67,70 @@ describe("apps", () => {
     const diff = diffApps("spark01");
     expect(diff.installed).toContain("shell");
     expect(diff.missing).toContain("missing");
+  });
+
+  test("surfaces remote readiness failures for app status", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-apps-remote-fail-"));
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "remote-mac";
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
+    manifestInit();
+    manifestAdd({
+      id: "remote-mac",
+      platform: "macos",
+      workspacePath: "/Users/hasna/Workspace",
+      apps: [],
+    });
+
+    const runner: MachineCommandRunner = (machineId) => ({
+      machineId,
+      source: "ssh",
+      stdout: "",
+      stderr: "Permission denied",
+      exitCode: 255,
+    });
+
+    expect(() => getAppsStatus("remote-mac", runner)).toThrow("Apps status readiness check failed");
+  });
+
+  test("checks readiness for an explicit unmanaged machine id instead of falling back to local", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-apps-unmanaged-"));
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "local-fixture";
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
+    manifestInit();
+
+    const calls: string[] = [];
+    const runner: MachineCommandRunner = (machineId, command) => {
+      calls.push(`${machineId}:${command}`);
+      return { machineId, source: "tailscale", stdout: "", stderr: "", exitCode: 0 };
+    };
+
+    const status = getAppsStatus("unmanaged-fixture", runner);
+    expect(status.machineId).toBe("unmanaged-fixture");
+    expect(status.source).toBe("tailscale");
+    expect(status.apps).toEqual([]);
+    expect(calls).toEqual(["unmanaged-fixture:true"]);
+  });
+
+  test("runs app install steps on the selected machine", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-apps-runner-"));
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "local-fixture";
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
+    manifestInit();
+    manifestAdd({
+      id: "remote-mac",
+      platform: "macos",
+      workspacePath: "/Users/hasna/Workspace",
+      apps: [{ name: "ghostty", manager: "cask" }],
+    });
+
+    const calls: string[] = [];
+    const runner: MachineCommandRunner = (machineId, command) => {
+      calls.push(`${machineId}:${command}`);
+      return { machineId, source: "ssh", stdout: "", stderr: "", exitCode: 0 };
+    };
+
+    const result = runAppsInstall("remote-mac", { apply: true, yes: true }, runner);
+    expect(result.executed).toBe(1);
+    expect(calls).toEqual(["remote-mac:brew install --cask 'ghostty'"]);
   });
 });

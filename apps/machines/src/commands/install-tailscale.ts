@@ -1,4 +1,5 @@
 import { getManifestMachine, detectCurrentMachineManifest } from "../manifests.js";
+import { requireMachineCommandSuccess, runMachineCommand, type MachineCommandRunner } from "../remote.js";
 import type { MachineManifest, SetupResult, SetupStep } from "../types.js";
 
 function buildInstallSteps(machine: MachineManifest): SetupStep[] {
@@ -36,7 +37,10 @@ function buildInstallSteps(machine: MachineManifest): SetupStep[] {
 }
 
 export function buildTailscaleInstallPlan(machineId?: string): SetupResult {
-  const machine = (machineId ? getManifestMachine(machineId) : null) || detectCurrentMachineManifest();
+  const machine = machineId ? getManifestMachine(machineId) : detectCurrentMachineManifest();
+  if (!machine) {
+    throw new Error(`Machine not found in manifest: ${machineId}`);
+  }
   return {
     machineId: machine.id,
     mode: "plan",
@@ -45,7 +49,11 @@ export function buildTailscaleInstallPlan(machineId?: string): SetupResult {
   };
 }
 
-export function runTailscaleInstall(machineId?: string, options: { apply?: boolean; yes?: boolean } = {}): SetupResult {
+export function runTailscaleInstall(
+  machineId?: string,
+  options: { apply?: boolean; yes?: boolean } = {},
+  runner: MachineCommandRunner = runMachineCommand
+): SetupResult {
   const plan = buildTailscaleInstallPlan(machineId);
   if (!options.apply) return plan;
   if (!options.yes) {
@@ -54,14 +62,7 @@ export function runTailscaleInstall(machineId?: string, options: { apply?: boole
 
   let executed = 0;
   for (const step of plan.steps) {
-    const result = Bun.spawnSync(["bash", "-lc", step.command], {
-      stdout: "pipe",
-      stderr: "pipe",
-      env: process.env,
-    });
-    if (result.exitCode !== 0) {
-      throw new Error(`Tailscale install failed (${step.id}): ${result.stderr.toString().trim()}`);
-    }
+    requireMachineCommandSuccess(`Tailscale install ${step.id}`, runner(plan.machineId, step.command));
     executed += 1;
   }
 

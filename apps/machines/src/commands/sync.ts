@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { readManifest } from "../manifests.js";
 import { ensureParentDir } from "../paths.js";
 import { getLocalMachineId, recordSyncRun } from "../db.js";
+import { describeMachineCommandFailure, resolveMachineCommand, runMachineCommand, type MachineCommandRunner } from "../remote.js";
 import type { MachineManifest, SyncAction, SyncResult } from "../types.js";
 
 function quote(value: string): string {
@@ -11,16 +12,17 @@ function quote(value: string): string {
 }
 
 function packageCheckCommand(machine: MachineManifest, packageName: string, manager = machine.platform === "macos" ? "brew" : "apt"): string {
+  const quotedPackageName = quote(packageName);
   if (manager === "bun") {
-    return `bun pm ls -g --all | grep -F ${quote(packageName)}`;
+    return `if bun pm ls -g --all 2>/dev/null | grep -F ${quotedPackageName} >/dev/null 2>&1; then printf 'installed=1\\n'; else printf 'installed=0\\n'; fi`;
   }
   if (manager === "brew") {
-    return `brew list --versions ${quote(packageName)}`;
+    return `if brew list --versions ${quotedPackageName} >/dev/null 2>&1; then printf 'installed=1\\n'; else printf 'installed=0\\n'; fi`;
   }
   if (manager === "apt") {
-    return `dpkg -s ${quote(packageName)} >/dev/null 2>&1`;
+    return `if dpkg -s ${quotedPackageName} >/dev/null 2>&1; then printf 'installed=1\\n'; else printf 'installed=0\\n'; fi`;
   }
-  return `command -v ${quote(packageName)} >/dev/null 2>&1`;
+  return `if command -v ${quotedPackageName} >/dev/null 2>&1; then printf 'installed=1\\n'; else printf 'installed=0\\n'; fi`;
 }
 
 function packageInstallCommand(machine: MachineManifest, packageName: string, manager = machine.platform === "macos" ? "brew" : "apt"): string {
@@ -36,15 +38,14 @@ function packageInstallCommand(machine: MachineManifest, packageName: string, ma
   return packageName;
 }
 
-function detectPackageActions(machine: MachineManifest): SyncAction[] {
+function detectPackageActions(machine: MachineManifest, runner: MachineCommandRunner): SyncAction[] {
   return (machine.packages || []).map((pkg, index) => {
     const manager = pkg.manager || (machine.platform === "macos" ? "brew" : "apt");
-    const check = Bun.spawnSync(["bash", "-lc", packageCheckCommand(machine, pkg.name, manager)], {
-      stdout: "ignore",
-      stderr: "ignore",
-      env: process.env,
-    });
-    const installed = check.exitCode === 0;
+    const check = runner(machine.id, packageCheckCommand(machine, pkg.name, manager));
+    if (check.exitCode !== 0) {
+      throw new Error(describeMachineCommandFailure(`Sync package probe ${pkg.name}`, check));
+    }
+    const installed = check.stdout.split("\n").some((line) => line.trim() === "installed=1");
     return {
       id: `package-${index + 1}`,
       title: `${installed ? "Package present" : "Install package"} ${pkg.name}`,
@@ -56,6 +57,10 @@ function detectPackageActions(machine: MachineManifest): SyncAction[] {
 }
 
 function detectFileActions(machine: MachineManifest): SyncAction[] {
+  if ((machine.files || []).length > 0 && resolveMachineCommand(machine.id, "true").source !== "local") {
+    throw new Error(`Remote file sync planning is not supported for ${machine.id}; refusing to inspect or apply local paths as remote state.`);
+  }
+
   return (machine.files || []).map((file, index) => {
     const sourceExists = existsSync(file.source);
     const targetExists = existsSync(file.target);
@@ -85,12 +90,16 @@ function detectFileActions(machine: MachineManifest): SyncAction[] {
   });
 }
 
-export function buildSyncPlan(machineId?: string): SyncResult {
+export function buildSyncPlan(machineId?: string, runner: MachineCommandRunner = runMachineCommand): SyncResult {
   const manifest = readManifest();
   const currentMachineId = getLocalMachineId();
   const selected = machineId
     ? manifest.machines.find((machine) => machine.id === machineId)
     : manifest.machines.find((machine) => machine.id === currentMachineId);
+
+  if (machineId && !selected) {
+    throw new Error(`Machine not found in manifest: ${machineId}`);
+  }
 
   const target: MachineManifest = selected || {
     id: currentMachineId,
@@ -99,7 +108,7 @@ export function buildSyncPlan(machineId?: string): SyncResult {
   };
 
   const actions = [
-    ...detectPackageActions(target),
+    ...detectPackageActions(target, runner),
     ...detectFileActions(target),
   ];
 
@@ -133,8 +142,12 @@ function applyFileAction(command: string): void {
   }
 }
 
-export function runSync(machineId?: string, options: { apply?: boolean; yes?: boolean } = {}): SyncResult {
-  const plan = buildSyncPlan(machineId);
+export function runSync(
+  machineId?: string,
+  options: { apply?: boolean; yes?: boolean } = {},
+  runner: MachineCommandRunner = runMachineCommand
+): SyncResult {
+  const plan = buildSyncPlan(machineId, runner);
   if (!options.apply) {
     return plan;
   }
@@ -149,18 +162,17 @@ export function runSync(machineId?: string, options: { apply?: boolean; yes?: bo
     if (action.kind === "file") {
       applyFileAction(action.command);
     } else {
-      const result = Bun.spawnSync(["bash", "-lc", action.command], {
-        stdout: "pipe",
-        stderr: "pipe",
-        env: process.env,
-      });
+      const result = runner(plan.machineId, action.command);
       if (result.exitCode !== 0) {
         recordSyncRun(plan.machineId, "failed", {
           executed,
           failedAction: action,
-          stderr: result.stderr.toString(),
+          stderr: result.stderr,
+          stdout: result.stdout,
+          exitCode: result.exitCode,
+          source: result.source,
         });
-        throw new Error(`Sync action failed (${action.id}): ${result.stderr.toString().trim()}`);
+        throw new Error(describeMachineCommandFailure(`Sync action ${action.id}`, result));
       }
     }
     executed += 1;

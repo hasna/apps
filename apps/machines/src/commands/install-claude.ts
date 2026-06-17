@@ -1,5 +1,5 @@
 import { detectCurrentMachineManifest, getManifestMachine } from "../manifests.js";
-import { runMachineCommand } from "../remote.js";
+import { requireMachineCommandSuccess, runMachineCommand, type MachineCommandRunner } from "../remote.js";
 import type { ClaudeCliDiffResult, ClaudeCliStatusResult, CliToolStatus, MachineManifest, SetupResult, SetupStep } from "../types.js";
 
 const AI_CLI_PACKAGES = {
@@ -39,7 +39,12 @@ function buildInstallSteps(machine: MachineManifest, tools?: string[]): SetupSte
 }
 
 function resolveMachine(machineId?: string): MachineManifest {
-  return (machineId ? getManifestMachine(machineId) : null) || detectCurrentMachineManifest();
+  if (!machineId) return detectCurrentMachineManifest();
+  return getManifestMachine(machineId) || {
+    id: machineId,
+    platform: "linux",
+    workspacePath: "",
+  };
 }
 
 function buildProbeCommand(tool: AiCliTool): string {
@@ -69,19 +74,30 @@ export function buildClaudeInstallPlan(machineId?: string, tools?: string[]): Se
   };
 }
 
-export function getClaudeCliStatus(machineId?: string, tools?: string[]): ClaudeCliStatusResult {
+export function getClaudeCliStatus(
+  machineId?: string,
+  tools?: string[],
+  runner: MachineCommandRunner = runMachineCommand
+): ClaudeCliStatusResult {
   const machine = resolveMachine(machineId);
   const normalizedTools = normalizeTools(tools);
-  const route = runMachineCommand(machine.id, "true").source;
+  const route = requireMachineCommandSuccess("AI CLI status readiness check", runner(machine.id, "true")).source;
   return {
     machineId: machine.id,
     source: route,
-    tools: normalizedTools.map((tool) => parseProbe(tool, runMachineCommand(machine.id, buildProbeCommand(tool)).stdout)),
+    tools: normalizedTools.map((tool) => {
+      const result = requireMachineCommandSuccess(`AI CLI probe ${tool}`, runner(machine.id, buildProbeCommand(tool)));
+      return parseProbe(tool, result.stdout);
+    }),
   };
 }
 
-export function diffClaudeCli(machineId?: string, tools?: string[]): ClaudeCliDiffResult {
-  const status = getClaudeCliStatus(machineId, tools);
+export function diffClaudeCli(
+  machineId?: string,
+  tools?: string[],
+  runner: MachineCommandRunner = runMachineCommand
+): ClaudeCliDiffResult {
+  const status = getClaudeCliStatus(machineId, tools, runner);
   return {
     ...status,
     missing: status.tools.filter((tool) => !tool.installed).map((tool) => tool.tool),
@@ -92,7 +108,8 @@ export function diffClaudeCli(machineId?: string, tools?: string[]): ClaudeCliDi
 export function runClaudeInstall(
   machineId?: string,
   tools?: string[],
-  options: { apply?: boolean; yes?: boolean } = {}
+  options: { apply?: boolean; yes?: boolean } = {},
+  runner: MachineCommandRunner = runMachineCommand
 ): SetupResult {
   const plan = buildClaudeInstallPlan(machineId, tools);
   if (!options.apply) return plan;
@@ -102,14 +119,7 @@ export function runClaudeInstall(
 
   let executed = 0;
   for (const step of plan.steps) {
-    const result = Bun.spawnSync(["bash", "-lc", step.command], {
-      stdout: "pipe",
-      stderr: "pipe",
-      env: process.env,
-    });
-    if (result.exitCode !== 0) {
-      throw new Error(`AI CLI install failed (${step.id}): ${result.stderr.toString().trim()}`);
-    }
+    requireMachineCommandSuccess(`AI CLI install ${step.id}`, runner(plan.machineId, step.command));
     executed += 1;
   }
 
