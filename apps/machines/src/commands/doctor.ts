@@ -77,6 +77,11 @@ function buildDoctorCommand(): string {
     "printf 'machines=%s\\n' \"$(command -v machines 2>/dev/null || printf missing)\"",
     "printf 'machines_agent=%s\\n' \"$(command -v machines-agent 2>/dev/null || printf missing)\"",
     "printf 'machines_mcp=%s\\n' \"$(command -v machines-mcp 2>/dev/null || printf missing)\"",
+    "printf 'sudo_noninteractive=%s\\n' \"$(sudo -n true >/dev/null 2>&1 && printf ok || printf unavailable)\"",
+    "printf 'ssh_cert_support=%s\\n' \"$(ssh -Q key-cert 2>/dev/null | grep -q 'ssh-ed25519-cert-v01@openssh.com' && printf ok || printf unavailable)\"",
+    "printf 'gh_cli=%s\\n' \"$(command -v gh 2>/dev/null || printf missing)\"",
+    "printf 'gh_auth=%s\\n' \"$(gh auth status >/dev/null 2>&1 && printf ok || printf unavailable)\"",
+    "printf 'github_app_ref=%s\\n' \"$(test -n \\\"${HASNA_GITHUB_APP_ID:-}\\\" -a -n \\\"${HASNA_GITHUB_APP_PRIVATE_KEY_REF:-}\\\" && printf configured || printf missing)\"",
   ].join("; ");
 }
 
@@ -265,6 +270,52 @@ export function runDoctor(machineId = getLocalMachineId(), options: DoctorOption
       details["ssh"] === "ok" ? "ok" : "warn",
       "SSH availability",
       details["ssh"] || "missing"
+    ),
+    makeCheck(
+      "sudo-noninteractive",
+      details["sudo_noninteractive"] === "ok" ? "ok" : "warn",
+      "Noninteractive sudo availability",
+      details["sudo_noninteractive"] === "ok"
+        ? "sudo -n is available"
+        : "sudo -n unavailable; setup may require user-provided approval or password handling.",
+      {
+        data: { available: details["sudo_noninteractive"] === "ok" },
+        remediation: details["sudo_noninteractive"] === "ok"
+          ? undefined
+          : ["Configure explicit sudo policy or run setup commands manually; do not store sudo passwords in public manifests."],
+      },
+    ),
+    makeCheck(
+      "ssh-cert-support",
+      details["ssh_cert_support"] === "ok" ? "ok" : "warn",
+      "SSH certificate support",
+      details["ssh_cert_support"] === "ok"
+        ? "OpenSSH reports ed25519 certificate support"
+        : "OpenSSH certificate support not detected.",
+      {
+        data: { supported: details["ssh_cert_support"] === "ok" },
+        remediation: details["ssh_cert_support"] === "ok"
+          ? undefined
+          : ["Install or update OpenSSH before adopting SSH certificate auth for this machine."],
+      },
+    ),
+    makeCheck(
+      "github-app-auth",
+      details["github_app_ref"] === "configured" ? "ok" : "warn",
+      "GitHub App auth references",
+      details["github_app_ref"] === "configured"
+        ? "GitHub App id and private-key reference are configured"
+        : "GitHub App id/private-key reference missing; use secret references, not user tokens or raw private keys.",
+      {
+        data: {
+          gh_cli: details["gh_cli"] && details["gh_cli"] !== "missing",
+          gh_auth: details["gh_auth"] === "ok",
+          app_ref_configured: details["github_app_ref"] === "configured",
+        },
+        remediation: details["github_app_ref"] === "configured"
+          ? undefined
+          : ["Set HASNA_GITHUB_APP_ID plus HASNA_GITHUB_APP_PRIVATE_KEY_REF or provide an equivalent open-secrets adapter."],
+      },
     ),
     ...optionalAdapterChecks,
   ];

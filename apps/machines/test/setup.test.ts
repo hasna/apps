@@ -24,6 +24,14 @@ describe("setup planning", () => {
     expect(plan.steps.length).toBeGreaterThanOrEqual(4);
     expect(plan.steps.some((step) => step.command.includes("apt-get install -y 'ripgrep'"))).toBe(true);
     expect(plan.steps.some((step) => step.command.includes("bun install -g '@hasna/takumi'"))).toBe(true);
+    expect(plan.steps).toContainEqual(expect.objectContaining({
+      id: "linux-update-downloads",
+      privileged: true,
+    }));
+    expect(plan.steps).toContainEqual(expect.objectContaining({
+      id: "github-app-auth-readiness",
+      manager: "custom",
+    }));
   });
 
   test("requires explicit confirmation to execute", () => {
@@ -64,5 +72,7 @@ describe("setup planning", () => {
     expect(result.executed).toBe(result.steps.length);
     expect(calls.every((call) => call.startsWith("remote-mac:"))).toBe(true);
     expect(calls.some((call) => call.includes("mkdir -p '/Users/operator/Workspace'"))).toBe(true);
+    expect(calls.some((call) => call.includes("AutomaticallyInstallMacOSUpdates -int 0"))).toBe(true);
+    expect(calls.some((call) => call.includes("profiles status -type enrollment"))).toBe(true);
   });
 });

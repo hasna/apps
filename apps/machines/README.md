@@ -59,10 +59,21 @@ machines self-test
 `machines setup` is a dry-run plan by default. The generated playbook favors
 idempotent operations (`mkdir -p`, command-existence guards, package-manager
 installs) and only executes when both `--apply` and `--yes` are provided.
+The default plan also adds update-check/download settings without enabling
+automatic OS installation: Linux uses apt periodic download-only settings, and
+macOS uses `softwareupdate`/`defaults` with `AutomaticallyInstallMacOSUpdates`
+left disabled.
 `doctor --json` includes public-safe source/ref diagnostics plus optional
 adapter hook results for secrets, configs, monitors, repos, MCPs, and shield
 checks. When no adapter is configured, those checks report a skipped fallback
 instead of importing private dependencies.
+It also reports noninteractive sudo readiness, SSH certificate support, and
+GitHub App secret-reference readiness without printing credentials or private
+keys.
+
+Apple device management belongs in the private deployment layer. The public
+setup plan can report enrollment status with `profiles status -type enrollment`,
+but it does not enroll devices, install profiles, or publish team identifiers.
 
 ## Topology SDK
 
@@ -168,6 +179,11 @@ machines defaults to
 `machines/screen-sharing/screen-<machine>-vnc-password`, or the namespace set in
 `HASNA_MACHINES_SCREEN_SECRET_NAMESPACE`. The user comes from the manifest
 (`metadata.user`) when present, or `--user`.
+
+For GitHub automation, prefer GitHub App installation tokens over personal user
+tokens. Public manifests and docs should store only opaque secret references
+for the app id/private key material; private adapters or `open-secrets` should
+resolve those references at runtime.
 `screen-credentials` verifies the resolved user and secret key for a machine or
 the full fleet without printing secret values.
 

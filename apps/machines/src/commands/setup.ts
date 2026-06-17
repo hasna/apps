@@ -32,6 +32,13 @@ function buildBaseSteps(machine: MachineManifest): SetupStep[] {
       manager: "apt",
       privileged: true,
     });
+    steps.push({
+      id: "linux-update-downloads",
+      title: "Enable Linux package list refresh and download-only upgrades",
+      command: "printf '%s\\n' 'APT::Periodic::Update-Package-Lists \"1\";' 'APT::Periodic::Download-Upgradeable-Packages \"1\";' 'APT::Periodic::Unattended-Upgrade \"0\";' | sudo tee /etc/apt/apt.conf.d/20auto-upgrades >/dev/null",
+      manager: "apt",
+      privileged: true,
+    });
   } else if (machine.platform === "macos") {
     steps.push({
       id: "brew-base",
@@ -45,7 +52,27 @@ function buildBaseSteps(machine: MachineManifest): SetupStep[] {
       command: "brew install git coreutils",
       manager: "brew",
     });
+    steps.push({
+      id: "macos-update-downloads",
+      title: "Enable macOS update checks and downloads without automatic install",
+      command: "sudo softwareupdate --schedule on && sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool true && sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -int 1 && sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -int 0",
+      manager: "custom",
+      privileged: true,
+    });
+    steps.push({
+      id: "macos-management-readiness",
+      title: "Report Apple management readiness without enrolling devices",
+      command: "profiles status -type enrollment 2>/dev/null || true",
+      manager: "custom",
+    });
   }
+
+  steps.push({
+    id: "github-app-auth-readiness",
+    title: "Check GitHub CLI/App auth readiness without printing credentials",
+    command: "command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1 || true",
+    manager: "custom",
+  });
 
   return steps;
 }
