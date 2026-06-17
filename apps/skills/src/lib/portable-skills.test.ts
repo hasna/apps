@@ -77,7 +77,6 @@ Use this skill when porting an existing folder.
       writeFileSync(join(source, "package.json"), JSON.stringify({
         name: "legacy-skill",
         version: "1.2.3",
-        bin: { "legacy-skill": "src/index.ts" },
       }, null, 2));
       writeFileSync(join(source, "src", "index.ts"), "#!/usr/bin/env bun\nconsole.log('ported legacy skill');\n");
 
@@ -98,6 +97,8 @@ Use this skill when porting an existing folder.
       const validation = validatePortableSkillDirectory("legacy-skill", result.path);
       expect(validation.valid).toBe(true);
       expect(validation.metadata.portableManifest?.commands[0]?.entry).toBe("src/index.ts");
+      const pkg = JSON.parse(readFileSync(join(result.path, "package.json"), "utf8"));
+      expect(pkg.bin).toEqual({ "legacy-skill": "src/index.ts" });
     } finally {
       rmSync(home, { recursive: true, force: true });
       rmSync(sourceRoot, { recursive: true, force: true });

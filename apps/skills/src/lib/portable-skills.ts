@@ -102,6 +102,7 @@ interface PackageJson {
   name?: unknown;
   version?: unknown;
   description?: unknown;
+  type?: unknown;
   bin?: unknown;
   scripts?: unknown;
   dependencies?: unknown;
@@ -494,9 +495,46 @@ function ensurePortableSkillFiles(skillPath: string, manifest: PortableSkillMani
   else writeFileSync(join(skillPath, "SKILL.md"), ensureSkillMdFrontmatter(readFileSync(join(skillPath, "SKILL.md"), "utf-8"), next));
   if (!existsSync(join(skillPath, "skill.json"))) writeFileSync(join(skillPath, "skill.json"), renderSkillJson(next));
   if (!existsSync(join(skillPath, "AGENTS.md"))) writeFileSync(join(skillPath, "AGENTS.md"), renderAgentsMd(next));
-  if (!existsSync(join(skillPath, "package.json"))) writeFileSync(join(skillPath, "package.json"), renderPackageJson(next));
+  ensurePackageJson(skillPath, next);
   if (!existsSync(join(skillPath, "tsconfig.json"))) writeFileSync(join(skillPath, "tsconfig.json"), renderTsconfig());
   return readPortableSkillManifest(skillPath, next.name);
+}
+
+function ensurePackageJson(skillPath: string, manifest: PortableSkillManifest): void {
+  const pkgPath = join(skillPath, "package.json");
+  const first = manifest.commands[0] ?? { name: manifest.name, entry: "src/index.ts" };
+  const commandName = normalizePortableSkillName(first.name || manifest.name);
+  const entry = (first.entry ?? "src/index.ts").replace(/^\.\//, "");
+
+  if (!existsSync(pkgPath)) {
+    writeFileSync(pkgPath, renderPackageJson(manifest));
+    return;
+  }
+
+  const existing = readJsonObject(pkgPath) as PackageJson;
+  const bin: Record<string, string> = {};
+  if (isRecord(existing.bin)) {
+    for (const [name, value] of Object.entries(existing.bin)) {
+      if (typeof value === "string" && value.trim()) bin[normalizePortableSkillName(name)] = value.replace(/^\.\//, "");
+    }
+  } else {
+    const binEntry = stringValue(existing.bin);
+    if (binEntry) bin[manifest.name] = binEntry.replace(/^\.\//, "");
+  }
+  bin[commandName] = entry;
+
+  const scripts = isRecord(existing.scripts) ? { ...existing.scripts } : {};
+  if (!stringValue(scripts.dev)) scripts.dev = `bun run ${entry}`;
+
+  writeFileSync(pkgPath, `${JSON.stringify({
+    ...existing,
+    name: manifest.name,
+    version: manifest.version,
+    description: manifest.description,
+    type: stringValue(existing.type) ?? "module",
+    bin,
+    scripts,
+  }, null, 2)}\n`);
 }
 
 function copySkillDirectory(source: string, destination: string): void {

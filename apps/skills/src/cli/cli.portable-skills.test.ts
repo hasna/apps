@@ -96,7 +96,6 @@ version: 0.2.0
       writeFileSync(join(source, "package.json"), JSON.stringify({
         name: "source-skill",
         version: "0.2.0",
-        bin: { "source-skill": "src/index.ts" },
       }, null, 2));
       writeFileSync(join(source, "src", "index.ts"), "#!/usr/bin/env bun\nconsole.log('from source skill');\n");
 
@@ -106,6 +105,9 @@ version: 0.2.0
       expect(addedData).toMatchObject({ name: "source-skill", created: true });
       expect(existsSync(join(addedData.path, "skill.json"))).toBe(true);
       expect(existsSync(join(addedData.path, "AGENTS.md"))).toBe(true);
+      const validation = await runCliInCwd(["validate", "source-skill", "--json"], cwd, env);
+      expect(validation.exitCode).toBe(0);
+      expect(JSON.parse(validation.stdout).valid).toBe(true);
 
       const portedAgain = await runCliInCwd(["port", source, "--json", "--overwrite"], cwd, env);
       expect(portedAgain.exitCode).toBe(0);
