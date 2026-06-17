@@ -26,38 +26,38 @@ describe("machines", () => {
   });
 
   it("adds a machine with defaults", () => {
-    const machine = addMachine({ host: "spark01" });
+    const machine = addMachine({ host: "linux-node-a" });
 
-    expect(machine.id).toBe("spark01");
-    expect(machine.name).toBe("spark01");
-    expect(machine.host).toBe("spark01");
+    expect(machine.id).toBe("linux-node-a");
+    expect(machine.name).toBe("linux-node-a");
+    expect(machine.host).toBe("linux-node-a");
     expect(machine.port).toBe(22);
     expect(machine.enabled).toBe(true);
     expect(machine.username.length).toBeGreaterThan(0);
   });
 
   it("upserts an existing machine by id", () => {
-    addMachine({ id: "spark01", host: "spark01", name: "spark01" });
+    addMachine({ id: "linux-node-a", host: "linux-node-a", name: "linux-node-a" });
 
     const updated = upsertMachine({
-      id: "spark01",
-      host: "spark01.internal",
+      id: "linux-node-a",
+      host: "linux-node-a.internal",
       name: "Spark 01",
       port: 2222,
       installer: "bun",
     });
 
-    expect(updated.id).toBe("spark01");
+    expect(updated.id).toBe("linux-node-a");
     expect(updated.name).toBe("Spark 01");
-    expect(updated.host).toBe("spark01.internal");
+    expect(updated.host).toBe("linux-node-a.internal");
     expect(updated.port).toBe(2222);
     expect(updated.installer).toBe("bun");
   });
 
   it("updates machine state and metadata", () => {
-    addMachine({ id: "spark01", host: "spark01" });
+    addMachine({ id: "linux-node-a", host: "linux-node-a" });
 
-    const updated = updateMachine("spark01", {
+    const updated = updateMachine("linux-node-a", {
       enabled: false,
       last_seen_at: "2026-04-08T10:00:00.000Z",
       last_error: "ssh timeout",
@@ -69,23 +69,23 @@ describe("machines", () => {
   });
 
   it("lists machines ordered by name", () => {
-    addMachine({ id: "spark02", name: "spark02", host: "spark02" });
-    addMachine({ id: "apple01", name: "apple01", host: "apple01" });
+    addMachine({ id: "linux-node-b", name: "linux-node-b", host: "linux-node-b" });
+    addMachine({ id: "macos-node-a", name: "macos-node-a", host: "macos-node-a" });
 
-    expect(listMachines().map((machine) => machine.id)).toEqual(["apple01", "spark02"]);
+    expect(listMachines().map((machine) => machine.id)).toEqual(["linux-node-b", "macos-node-a"]);
   });
 
   it("seeds the default machine inventory", () => {
     const machines = seedDefaultMachines();
 
-    expect(machines.map((machine) => machine.id)).toEqual(["spark01", "spark02", "apple01", "apple03"]);
-    expect(getMachine("spark01")?.platform).toBe("linux");
-    expect(getMachine("apple01")?.platform).toBe("darwin");
+    expect(machines.map((machine) => machine.id)).toEqual(["linux-node-a", "linux-node-b", "macos-node-a", "macos-node-b"]);
+    expect(getMachine("linux-node-a")?.platform).toBe("linux");
+    expect(getMachine("macos-node-a")?.platform).toBe("darwin");
   });
 
   it("removes machines", () => {
-    addMachine({ id: "spark01", host: "spark01" });
-    removeMachine("spark01");
-    expect(getMachine("spark01")).toBeNull();
+    addMachine({ id: "linux-node-a", host: "linux-node-a" });
+    removeMachine("linux-node-a");
+    expect(getMachine("linux-node-a")).toBeNull();
   });
 });

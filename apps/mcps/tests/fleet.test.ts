@@ -113,7 +113,7 @@ describe("fleet", () => {
   });
 
   it("reports package drift and updates machine runtime metadata", async () => {
-    addMachine({ id: "spark01", name: "spark01", host: "spark01" });
+    addMachine({ id: "linux-node-a", name: "linux-node-a", host: "linux-node-a" });
 
     const reports = await runFleetHealthCheck(
       { refreshCatalog: true },
@@ -124,7 +124,7 @@ describe("fleet", () => {
           exitCode: 0,
           stderr: "",
           stdout: JSON.stringify({
-            hostname: "spark01",
+            hostname: "linux-node-a",
             platform: "linux",
             arch: "arm64",
             nodePath: "/usr/bin/node",
@@ -159,14 +159,14 @@ describe("fleet", () => {
       ["@hasna/monitor-mcp", "missing"],
     ]);
 
-    const machine = getMachine("spark01");
+    const machine = getMachine("linux-node-a");
     expect(machine?.last_seen_at).toBe("2026-04-08T12:00:00.000Z");
     expect(machine?.npm_path).toBe("/usr/bin/npm");
     expect(machine?.bun_path).toBe("/usr/bin/bun");
   });
 
   it("installs missing or outdated packages across machines", async () => {
-    addMachine({ id: "spark01", name: "spark01", host: "spark01" });
+    addMachine({ id: "linux-node-a", name: "linux-node-a", host: "linux-node-a" });
 
     const scripts: string[] = [];
     const reports = await runFleetInstall(
@@ -181,7 +181,7 @@ describe("fleet", () => {
               exitCode: 0,
               stderr: "",
               stdout: JSON.stringify({
-                hostname: "spark01",
+                hostname: "linux-node-a",
                 platform: "linux",
                 arch: "arm64",
                 nodePath: "/usr/bin/node",
@@ -240,11 +240,11 @@ describe("fleet", () => {
     expect(reports[0]?.installer).toBe("bun");
     expect(reports[0]?.attempted).toBe(2);
     expect(reports[0]?.results.every((result) => result.success)).toBe(true);
-    expect(getMachine("spark01")?.last_seen_at).toBe("2026-04-08T13:00:00.000Z");
+    expect(getMachine("linux-node-a")?.last_seen_at).toBe("2026-04-08T13:00:00.000Z");
   });
 
   it("fails early when the requested packages are not in the catalog", async () => {
-    addMachine({ id: "spark01", name: "spark01", host: "spark01" });
+    addMachine({ id: "linux-node-a", name: "linux-node-a", host: "linux-node-a" });
 
     await expect(
       runFleetHealthCheck(

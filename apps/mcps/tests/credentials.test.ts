@@ -103,12 +103,12 @@ describe("credential references", () => {
     const server = addServer({ command: "npx", name: "legacy", env: { DEBUG: "1" } });
     getDb()
       .prepare("UPDATE servers SET env = ? WHERE id = ?")
-      .run(JSON.stringify({ DEBUG: "1", API_TOKEN: "ghp_should_not_be_exported" }), server.id);
+      .run(JSON.stringify({ DEBUG: "1", API_TOKEN: "github-token-should-not-be-exported" }), server.id);
 
     const redacted = redactServerCredentials(getServer("legacy")!);
 
     expect(redacted.env).toEqual({ DEBUG: "1", API_TOKEN: "<redacted>" });
-    expect(JSON.stringify(redacted)).not.toContain("ghp_should_not_be_exported");
+    expect(JSON.stringify(redacted)).not.toContain("github-token-should-not-be-exported");
   });
 
   it("manages credential refs through registry helpers", () => {

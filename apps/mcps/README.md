@@ -33,7 +33,7 @@ mcps --help
 - `mcps env list <server-id>`
 - `mcps env ref <server-id> API_KEY=UPSTREAM_API_KEY --source env`
 - `mcps machines list`
-- `mcps machines add --host spark01 --platform linux --arch arm64`
+- `mcps machines add --host linux-node-a --platform linux --arch arm64`
 - `mcps machines seed-defaults`
 - `mcps fleet catalog`
 - `mcps fleet health --refresh`
@@ -45,8 +45,8 @@ Use machine registration plus fleet health/install commands to manage `@hasna/*`
 MCP packages across multiple hosts over SSH.
 
 ```bash
-mcps machines add --host spark01 --username hasna --platform linux --arch arm64
-mcps machines add --host apple01 --platform darwin --arch arm64
+mcps machines add --host linux-node-a --username hasna --platform linux --arch arm64
+mcps machines add --host macos-node-a --platform darwin --arch arm64
 mcps fleet health --refresh
 mcps fleet install --yes --mode missing-or-outdated
 ```
