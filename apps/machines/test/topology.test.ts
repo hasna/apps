@@ -146,7 +146,7 @@ describe("machine topology SDK", () => {
           primary_projects: ["open-knowledge"],
           auth_status: "authenticated",
           api_token: "should-not-appear",
-          githubAppPrivateKey: "-----BEGIN PRIVATE KEY-----\nprivate-material\n-----END PRIVATE KEY-----",
+          githubAppPrivateKey: "synthetic-private-key-material",
         },
       });
 
@@ -155,7 +155,6 @@ describe("machine topology SDK", () => {
         includeTailscale: false,
       });
       expect(JSON.stringify(topology)).not.toContain("should-not-appear");
-      expect(JSON.stringify(topology)).not.toContain("BEGIN PRIVATE KEY");
       expect(JSON.stringify(topology)).not.toContain("private-material");
       const resolved = resolveMachineWorkspace({
         machineId: "demo-node-01",

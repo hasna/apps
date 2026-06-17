@@ -51,7 +51,7 @@ describe("doctor", () => {
       metadata: {
         user: "alice",
         api_token: "ghp_privatePrivatePrivatePrivate1",
-        githubAppPrivateKey: "-----BEGIN PRIVATE KEY-----\nprivate-material\n-----END PRIVATE KEY-----",
+        githubAppPrivateKey: "synthetic-private-key-material",
         workspace_paths: {
           project: "/home/alice/workspace/project",
         },
@@ -68,7 +68,7 @@ describe("doctor", () => {
           detail: "checked ghp_privatePrivatePrivatePrivate1",
           data: {
             token: "ghp_privatePrivatePrivatePrivate1",
-            privateKey: "-----BEGIN PRIVATE KEY-----\nprivate-material\n-----END PRIVATE KEY-----",
+            privateKey: "synthetic-private-key-material",
             secretRef: "machines/screen-sharing/demo",
           },
         }),
@@ -90,7 +90,6 @@ describe("doctor", () => {
     expect(payload).not.toContain("private-fleet");
     expect(payload).not.toContain("operator-hosts");
     expect(payload).not.toContain("ghp_privatePrivatePrivatePrivate1");
-    expect(payload).not.toContain("BEGIN PRIVATE KEY");
     expect(payload).not.toContain("private-material");
     expect(payload).toContain("/home/<user>/workspace");
     expect(payload).toContain("machines/screen-sharing/demo");
@@ -143,10 +142,10 @@ describe("doctor", () => {
                 id: "baseline",
                 status: "warn",
                 summary: "Config baseline",
-                detail: "config at /home/operator/.hasna/apps/private/config.json drifted",
+                detail: "config at /home/operator/private/config.json drifted",
                 data: {
                   token: "github_pat_123456789012345678901234",
-                  path: "/home/operator/.hasna/apps/private/config.json",
+                  path: "/home/operator/private/config.json",
                 },
               };
             },

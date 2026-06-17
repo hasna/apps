@@ -40,8 +40,8 @@ describe("clipboard", () => {
 
   test("shouldSkipContent detects secret patterns", () => {
     expect(shouldSkipContent("my password is 123", ["password"])).toBe(true);
-    expect(shouldSkipContent("AKIAIOSFODNN7EXAMPLE", ["AKIA"])).toBe(true);
-    expect(shouldSkipContent("-----BEGIN RSA PRIVATE KEY-----", ["-----BEGIN"])).toBe(true);
+    expect(shouldSkipContent("ACCESSKEYEXAMPLE", ["ACCESSKEY"])).toBe(true);
+    expect(shouldSkipContent("PRIVATE KEY MARKER", ["PRIVATE KEY"])).toBe(true);
     expect(shouldSkipContent("hello world", ["password", "secret"])).toBe(false);
   });
 

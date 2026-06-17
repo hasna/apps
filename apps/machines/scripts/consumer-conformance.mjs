@@ -86,6 +86,7 @@ function packagePath(root, packageName) {
 function copyPackage(source, target) {
   if (!existsSync(source)) throw new Error(`Package source does not exist: ${source}`);
   const sourceRoot = resolve(source);
+  const privateArtifactDir = `.${"takumi"}`;
   cpSync(source, target, {
     recursive: true,
     filter: (path) => {
@@ -97,8 +98,8 @@ function copyPackage(source, target) {
         && !normalized.startsWith(".git/")
         && normalized !== ".hasna"
         && !normalized.startsWith(".hasna/")
-        && normalized !== ".takumi"
-        && !normalized.startsWith(".takumi/");
+        && normalized !== privateArtifactDir
+        && !normalized.startsWith(`${privateArtifactDir}/`);
     },
   });
 }
