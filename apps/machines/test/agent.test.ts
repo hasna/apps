@@ -8,12 +8,12 @@ describe("agent runtime", () => {
   test("writes and reads heartbeat state", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-agent-"));
     process.env["HASNA_MACHINES_DB_PATH"] = join(dir, "machines.db");
-    process.env["HASNA_MACHINES_MACHINE_ID"] = "spark01";
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "demo-node-01";
 
     const heartbeat = writeHeartbeat("online");
-    expect(heartbeat.machineId).toBe("spark01");
+    expect(heartbeat.machineId).toBe("demo-node-01");
 
-    const statuses = getAgentStatus("spark01");
+    const statuses = getAgentStatus("demo-node-01");
     expect(statuses.length).toBeGreaterThan(0);
     expect(statuses[0]?.status).toBe("online");
   });

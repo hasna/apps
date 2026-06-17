@@ -23,7 +23,7 @@ function probe(overrides: Partial<HealthProbe> = {}): HealthProbe {
   return {
     associatedSsid: "X81ND",
     gatewayReachable: true,
-    anchorsReachable: { spark02: true, apple03: true },
+    anchorsReachable: { "demo-node-02": true, "demo-controller-03": true },
     internetReachable: true,
     ...overrides,
   };
@@ -49,7 +49,7 @@ describe("evaluateHealth", () => {
   test("CONFIRMED INCIDENT: locally fine but isolated from peers is unhealthy", () => {
     // On preferred SSID, gateway + internet OK, but no peer reachable (quorum 1/2).
     const r = evaluateHealth(
-      probe({ anchorsReachable: { spark02: false, apple03: false }, internetReachable: true }),
+      probe({ anchorsReachable: { "demo-node-02": false, "demo-controller-03": false }, internetReachable: true }),
       cfg(),
       state(),
     );

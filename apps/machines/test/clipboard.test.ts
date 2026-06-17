@@ -105,7 +105,7 @@ describe("clipboard", () => {
       hash: "abc123",
       content: "hello world",
       contentType: "text",
-      sourceMachine: "spark01",
+      sourceMachine: "demo-node-01",
       timestamp: new Date().toISOString(),
     };
     addClipboardEntry(entry, paths.historyPath);
@@ -113,7 +113,7 @@ describe("clipboard", () => {
     const history = readClipboardHistory(paths.historyPath);
     expect(history.length).toBe(1);
     expect(history[0].hash).toBe("abc123");
-    expect(history[0].sourceMachine).toBe("spark01");
+    expect(history[0].sourceMachine).toBe("demo-node-01");
   });
 
   test("clearClipboardHistory removes the file", () => {

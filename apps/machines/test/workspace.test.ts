@@ -22,12 +22,12 @@ describe("workspace resolver CLI", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-workspace-repair-sdk-"));
     try {
       process.env.HASNA_MACHINES_MANIFEST_PATH = join(dir, "machines.json");
-      process.env.HASNA_MACHINES_MACHINE_ID = "spark02";
+      process.env.HASNA_MACHINES_MACHINE_ID = "demo-node-02";
       manifestInit();
       manifestAdd({
-        id: "spark01",
+        id: "demo-node-01",
         platform: "linux",
-        workspacePath: "/home/hasna/workspace",
+        workspacePath: "/home/operator/workspace",
         metadata: {
           trusted: true,
           auth_status: "authenticated",
@@ -35,7 +35,7 @@ describe("workspace resolver CLI", () => {
       });
 
       const preview = repairWorkspaceManifestMappings({
-        machineId: "spark01",
+        machineId: "demo-node-01",
         projectId: "open-knowledge",
         repoName: "open-knowledge",
         includeTailscale: false,
@@ -55,7 +55,7 @@ describe("workspace resolver CLI", () => {
       expect(readManifest().machines[0].metadata).not.toHaveProperty("workspace_paths");
 
       const applied = repairWorkspaceManifestMappings({
-        machineId: "spark01",
+        machineId: "demo-node-01",
         projectId: "open-knowledge",
         repoName: "open-knowledge",
         includeTailscale: false,
@@ -68,15 +68,15 @@ describe("workspace resolver CLI", () => {
       const machine = readManifest().machines[0];
       expect(machine.metadata).toMatchObject({
         workspace_paths: {
-          "open-knowledge": "/home/hasna/workspace/hasna/opensource/open-knowledge",
+          "open-knowledge": "/home/operator/workspace/hasna/opensource/open-knowledge",
         },
         open_files_roots: {
-          "open-knowledge": "/home/hasna/workspace/hasna/opensource/open-files",
+          "open-knowledge": "/home/operator/workspace/hasna/opensource/open-files",
         },
       });
 
       const resolved = resolveMachineWorkspace({
-        machineId: "spark01",
+        machineId: "demo-node-01",
         projectId: "open-knowledge",
         repoName: "open-knowledge",
         includeTailscale: false,
@@ -98,16 +98,16 @@ describe("workspace resolver CLI", () => {
       process.env.HASNA_MACHINES_MANIFEST_PATH = join(dir, "machines.json");
       manifestInit();
       manifestAdd({
-        id: "spark01",
+        id: "demo-node-01",
         platform: "linux",
-        workspacePath: "/home/hasna/workspace",
+        workspacePath: "/home/operator/workspace",
         metadata: {
           trusted: false,
         },
       });
 
       const resolved = resolveMachineWorkspace({
-        machineId: "spark01",
+        machineId: "demo-node-01",
         projectId: "open-knowledge",
         repoName: "open-knowledge",
         includeTailscale: false,
@@ -123,7 +123,7 @@ describe("workspace resolver CLI", () => {
         "workspace",
         "repair",
         "--machine",
-        "spark01",
+        "demo-node-01",
         "--project",
         "open-knowledge",
         "--repo",
@@ -135,14 +135,14 @@ describe("workspace resolver CLI", () => {
       expect(resolved.repair_hints[0].apply_command).toContain("--apply");
 
       const blockedApply = repairWorkspaceManifestMappings({
-        machineId: "spark01",
+        machineId: "demo-node-01",
         projectId: "open-knowledge",
         repoName: "open-knowledge",
         includeTailscale: false,
         apply: true,
       });
       expect(blockedApply.ok).toBe(false);
-      expect(blockedApply.warnings).toContain("manifest_repair_requires_trusted_machine:spark01");
+      expect(blockedApply.warnings).toContain("manifest_repair_requires_trusted_machine:demo-node-01");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -176,12 +176,12 @@ describe("workspace resolver CLI", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-workspace-cli-"));
     try {
       process.env.HASNA_MACHINES_MANIFEST_PATH = join(dir, "machines.json");
-      process.env.HASNA_MACHINES_MACHINE_ID = "spark02";
+      process.env.HASNA_MACHINES_MACHINE_ID = "demo-node-02";
       manifestInit();
       manifestAdd({
-        id: "spark01",
+        id: "demo-node-01",
         platform: "linux",
-        workspacePath: "/home/hasna/workspace",
+        workspacePath: "/home/operator/workspace",
         metadata: {
           workspace_paths: {
             "open-knowledge": "/srv/open-knowledge",
@@ -197,7 +197,7 @@ describe("workspace resolver CLI", () => {
         "workspace",
         "resolve",
         "--machine",
-        "spark01",
+        "demo-node-01",
         "--project",
         "open-knowledge",
         "--repo",
@@ -213,7 +213,7 @@ describe("workspace resolver CLI", () => {
       expect(result.status).toBe(0);
       const output = JSON.parse(result.stdout);
       expect(output.ok).toBe(true);
-      expect(output.machine_id).toBe("spark01");
+      expect(output.machine_id).toBe("demo-node-01");
       expect(output.paths.project_root.path).toBe("/srv/open-knowledge");
       expect(output.paths.open_files_root.path).toBe("/srv/open-files");
       expect(output.machine.trust_status).toBe("trusted");
@@ -231,9 +231,9 @@ describe("workspace resolver CLI", () => {
       process.env.HASNA_MACHINES_MANIFEST_PATH = join(dir, "machines.json");
       manifestInit();
       manifestAdd({
-        id: "spark01",
+        id: "demo-node-01",
         platform: "linux",
-        workspacePath: "/home/hasna/workspace",
+        workspacePath: "/home/operator/workspace",
         metadata: {
           trusted: false,
         },
@@ -245,7 +245,7 @@ describe("workspace resolver CLI", () => {
         "workspace",
         "doctor",
         "--machine",
-        "spark01",
+        "demo-node-01",
         "--project",
         "open-knowledge",
         "--repo",
@@ -279,9 +279,9 @@ describe("workspace resolver CLI", () => {
       process.env.HASNA_MACHINES_MANIFEST_PATH = join(dir, "machines.json");
       manifestInit();
       manifestAdd({
-        id: "spark01",
+        id: "demo-node-01",
         platform: "linux",
-        workspacePath: "/home/hasna/workspace",
+        workspacePath: "/home/operator/workspace",
         metadata: {
           trusted: true,
           auth_status: "authenticated",
@@ -294,7 +294,7 @@ describe("workspace resolver CLI", () => {
         "workspace",
         "repair",
         "--machine",
-        "spark01",
+        "demo-node-01",
         "--project",
         "open-knowledge",
         "--repo",
@@ -319,7 +319,7 @@ describe("workspace resolver CLI", () => {
         "workspace",
         "resolve",
         "--machine",
-        "spark01",
+        "demo-node-01",
         "--project",
         "open-knowledge",
         "--repo",

@@ -12,12 +12,12 @@ describe("tailscale install", () => {
     process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
     manifestInit();
     manifestAdd({
-      id: "apple03",
+      id: "demo-controller-03",
       platform: "macos",
-      workspacePath: "/Users/hasna/Workspace",
+      workspacePath: "/Users/operator/Workspace",
     });
 
-    const plan = buildTailscaleInstallPlan("apple03");
+    const plan = buildTailscaleInstallPlan("demo-controller-03");
     expect(plan.steps[0]?.command).toContain("brew install --cask tailscale");
   });
 
@@ -42,7 +42,7 @@ describe("tailscale install", () => {
     manifestAdd({
       id: "remote-mac",
       platform: "macos",
-      workspacePath: "/Users/hasna/Workspace",
+      workspacePath: "/Users/operator/Workspace",
     });
 
     const calls: string[] = [];

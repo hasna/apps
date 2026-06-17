@@ -6,7 +6,7 @@ function fakeRunner(overrides: Record<string, string>): CompatibilityCommandRunn
     const key = Object.keys(overrides).find((entry) => command.includes(entry));
     return {
       machineId,
-      source: machineId === "spark02" ? "local" : "tailscale",
+      source: machineId === "demo-node-02" ? "local" : "tailscale",
       stdout: key ? overrides[key] : "",
       stderr: key ? "" : `unexpected command: ${command}`,
       exitCode: key ? 0 : 1,
@@ -17,11 +17,11 @@ function fakeRunner(overrides: Record<string, string>): CompatibilityCommandRunn
 describe("machine compatibility checks", () => {
   test("checks command, package, and workspace compatibility", () => {
     const report = checkMachineCompatibility({
-      machineId: "spark01",
+      machineId: "demo-node-01",
       now: new Date("2026-06-09T00:00:00.000Z"),
       runner: fakeRunner({
         "cmd='bun'": "path=/usr/bin/bun\nversion=1.3.13\n",
-        "cmd='knowledge'": "path=/home/hasna/.bun/bin/knowledge\nversion=@hasna/knowledge 0.2.29\n",
+        "cmd='knowledge'": "path=/home/operator/.bun/bin/knowledge\nversion=@hasna/knowledge 0.2.29\n",
         "path='/repo/open-knowledge'": "exists=yes\npackage_json=yes\npackage_name=@hasna/knowledge\nversion=0.2.29\n",
       }),
       commands: [{ command: "bun", expectedVersion: "1.3.13" }],
@@ -47,9 +47,9 @@ describe("machine compatibility checks", () => {
 
   test("fails required version mismatches and missing workspaces", () => {
     const report = checkMachineCompatibility({
-      machineId: "spark01",
+      machineId: "demo-node-01",
       runner: fakeRunner({
-        "cmd='knowledge'": "path=/home/hasna/.bun/bin/knowledge\nversion=@hasna/knowledge 0.2.28\n",
+        "cmd='knowledge'": "path=/home/operator/.bun/bin/knowledge\nversion=@hasna/knowledge 0.2.28\n",
         "path='/repo/open-knowledge'": "exists=no\npackage_json=no\n",
       }),
       commands: [],

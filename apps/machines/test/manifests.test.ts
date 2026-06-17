@@ -21,26 +21,26 @@ describe("manifest commands", () => {
     expect(readManifest().machines).toHaveLength(0);
 
     const updated = manifestAdd({
-      id: "spark01",
+      id: "demo-node-01",
       platform: "linux",
       workspacePath: "~/workspace",
     });
 
     expect(updated.machines).toHaveLength(1);
-    expect(updated.machines[0]?.id).toBe("spark01");
+    expect(updated.machines[0]?.id).toBe("demo-node-01");
   });
 
   test("bootstraps and removes the current machine", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-bootstrap-"));
     process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
-    process.env["HASNA_MACHINES_MACHINE_ID"] = "apple03";
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "demo-controller-03";
 
     manifestInit();
     const bootstrapped = manifestBootstrapCurrentMachine();
     expect(bootstrapped.machines).toHaveLength(1);
-    expect(bootstrapped.machines[0]?.id).toBe("apple03");
+    expect(bootstrapped.machines[0]?.id).toBe("demo-controller-03");
 
-    const trimmed = manifestRemove("apple03");
+    const trimmed = manifestRemove("demo-controller-03");
     expect(trimmed.machines).toHaveLength(0);
   });
 

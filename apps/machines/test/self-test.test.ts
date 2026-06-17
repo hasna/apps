@@ -15,15 +15,15 @@ describe("self-test", () => {
 
   test("returns a suite of smoke checks", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-self-test-"));
-    process.env["HASNA_MACHINES_MACHINE_ID"] = "spark01";
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "demo-node-01";
     process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
     process.env["HASNA_MACHINES_DB_PATH"] = join(dir, "machines.db");
     process.env["HASNA_MACHINES_NOTIFICATIONS_PATH"] = join(dir, "notifications.json");
     manifestInit();
-    manifestAdd({ id: "spark01", platform: "linux", workspacePath: "/home/hasna/workspace" });
+    manifestAdd({ id: "demo-node-01", platform: "linux", workspacePath: "/home/operator/workspace" });
 
     const result = runSelfTest();
-    expect(result.machineId).toBe("spark01");
+    expect(result.machineId).toBe("demo-node-01");
     expect(result.checks.length).toBeGreaterThanOrEqual(8);
     expect(result.checks.some((check) => check.id === "doctor")).toBe(true);
   });

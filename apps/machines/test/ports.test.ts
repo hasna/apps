@@ -9,7 +9,7 @@ describe("ports parsing", () => {
   });
 
   test("parses lsof output", () => {
-    const listeners = parsePortOutput("node 1234 hasna 21u IPv4 0x01 0t0 TCP *:3000 (LISTEN)", "lsof");
+    const listeners = parsePortOutput("node 1234 operator 21u IPv4 0x01 0t0 TCP *:3000 (LISTEN)", "lsof");
     expect(listeners[0]?.port).toBe(3000);
     expect(listeners[0]?.process).toBe("node");
   });

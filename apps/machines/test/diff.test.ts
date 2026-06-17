@@ -12,21 +12,21 @@ describe("machine diff", () => {
     manifestInit();
 
     manifestAdd({
-      id: "spark01",
+      id: "demo-node-01",
       platform: "linux",
-      workspacePath: "/home/hasna/workspace",
+      workspacePath: "/home/operator/workspace",
       packages: [{ name: "ripgrep", manager: "apt" }],
       files: [{ source: "~/.zshrc", target: "~/.config/zsh/.zshrc", mode: "copy" }],
     });
     manifestAdd({
-      id: "apple03",
+      id: "demo-controller-03",
       platform: "macos",
-      workspacePath: "/Users/hasna/Workspace",
+      workspacePath: "/Users/operator/Workspace",
       packages: [{ name: "fd", manager: "brew" }],
       files: [{ source: "~/.gitconfig", target: "~/.config/git/config", mode: "copy" }],
     });
 
-    const diff = diffMachines("spark01", "apple03");
+    const diff = diffMachines("demo-node-01", "demo-controller-03");
     expect(diff.changedFields).toContain("platform");
     expect(diff.missingPackages.leftOnly).toContain("ripgrep");
     expect(diff.missingPackages.rightOnly).toContain("fd");

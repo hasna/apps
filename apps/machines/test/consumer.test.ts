@@ -70,34 +70,34 @@ describe("machines consumer SDK", () => {
       package: { name: "@hasna/machines", version: "0.0.0-test" },
       capabilities: getMachinesConsumerCapabilities(),
       generated_at: now.toISOString(),
-      local_machine_id: "spark02",
-      local_hostname: "spark02",
+      local_machine_id: "demo-node-02",
+      local_hostname: "demo-node-02",
       current_platform: "linux",
       manifest_path_known: true,
       warnings: [],
       machines: [{
-        machine_id: "spark01",
-        hostname: "spark01",
+        machine_id: "demo-node-01",
+        hostname: "demo-node-01",
         platform: "linux",
         os: "linux",
-        user: "hasna",
-        workspace_path: "/home/hasna/workspace",
+        user: "operator",
+        workspace_path: "/home/operator/workspace",
         manifest_declared: true,
         heartbeat_status: "unknown",
         last_heartbeat_at: null,
         tailscale: {
-          dns_name: "spark01.tailnet.ts.net",
+          dns_name: "demo-node-01.tailnet.ts.net",
           ips: ["100.71.123.34"],
           online: true,
           active: true,
           last_seen: null,
         },
         ssh: {
-          address: "hasna@spark01",
+          address: "operator@demo-node-01",
           route: "tailscale",
-          command_target: "hasna@spark01.tailnet.ts.net",
+          command_target: "operator@demo-node-01.tailnet.ts.net",
         },
-        route_hints: [{ kind: "tailscale", target: "spark01.tailnet.ts.net", reachable: true }],
+        route_hints: [{ kind: "tailscale", target: "demo-node-01.tailnet.ts.net", reachable: true }],
         tags: ["trusted"],
         metadata: {
           auth_status: "authenticated",
@@ -111,9 +111,9 @@ describe("machines consumer SDK", () => {
       }],
     };
 
-    const route = resolveMachineRoute("spark01", { topology, now });
+    const route = resolveMachineRoute("demo-node-01", { topology, now });
     const workspace = resolveMachineWorkspace({
-      machineId: "spark01",
+      machineId: "demo-node-01",
       projectId: "open-knowledge",
       repoName: "open-knowledge",
       topology,

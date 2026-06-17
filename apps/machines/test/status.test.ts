@@ -11,18 +11,18 @@ describe("fleet status", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-status-"));
     process.env["HASNA_MACHINES_DB_PATH"] = join(dir, "machines.db");
     process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
-    process.env["HASNA_MACHINES_MACHINE_ID"] = "spark01";
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "demo-node-01";
     manifestInit();
     manifestAdd({
-      id: "spark01",
+      id: "demo-node-01",
       platform: "linux",
-      workspacePath: "/home/hasna/workspace",
+      workspacePath: "/home/operator/workspace",
     });
 
     writeHeartbeat("online");
     const status = getStatus();
     expect(status.manifestMachineCount).toBe(1);
     expect(status.heartbeatCount).toBeGreaterThan(0);
-    expect(status.machines.some((machine) => machine.machineId === "spark01")).toBe(true);
+    expect(status.machines.some((machine) => machine.machineId === "demo-node-01")).toBe(true);
   });
 });

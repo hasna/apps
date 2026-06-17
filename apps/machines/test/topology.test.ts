@@ -27,7 +27,7 @@ function setupTemp(name: string): string {
   const dir = mkdtempSync(join(tmpdir(), name));
   process.env.HASNA_MACHINES_DB_PATH = join(dir, "machines.db");
   process.env.HASNA_MACHINES_MANIFEST_PATH = join(dir, "machines.json");
-  process.env.HASNA_MACHINES_MACHINE_ID = "spark02";
+  process.env.HASNA_MACHINES_MACHINE_ID = "demo-node-02";
   manifestInit();
   return dir;
 }
@@ -49,22 +49,22 @@ describe("machine topology SDK", () => {
     const dir = setupTemp("machines-topology-");
     try {
       manifestAdd({
-        id: "spark01",
-        hostname: "spark01.local",
-        sshAddress: "hasna@spark01.local",
-        tailscaleName: "spark01.tailnet.ts.net",
+        id: "demo-node-01",
+        hostname: "demo-node-01.local",
+        sshAddress: "operator@demo-node-01.local",
+        tailscaleName: "demo-node-01.tailnet.ts.net",
         platform: "linux",
-        workspacePath: "/home/hasna/workspace",
+        workspacePath: "/home/operator/workspace",
         tags: ["server"],
       });
-      upsertHeartbeat("spark02", 123, "online");
+      upsertHeartbeat("demo-node-02", 123, "online");
 
       const topology = discoverMachineTopology({
         now: new Date("2026-06-09T00:00:00.000Z"),
         runner: fakeRunner({
           Self: {
-            HostName: "spark02",
-            DNSName: "spark02.tailnet.ts.net.",
+            HostName: "demo-node-02",
+            DNSName: "demo-node-02.tailnet.ts.net.",
             OS: "linux",
             TailscaleIPs: ["100.85.234.92"],
             Online: true,
@@ -72,8 +72,8 @@ describe("machine topology SDK", () => {
           },
           Peer: {
             "nodekey:abc": {
-              HostName: "spark01",
-              DNSName: "spark01.tailnet.ts.net.",
+              HostName: "demo-node-01",
+              DNSName: "demo-node-01.tailnet.ts.net.",
               OS: "linux",
               TailscaleIPs: ["100.71.123.34"],
               Online: true,
@@ -86,39 +86,39 @@ describe("machine topology SDK", () => {
       expect(topology.schema_version).toBe(1);
       expect(topology.package.name).toBe("@hasna/machines");
       expect(topology.capabilities.route_resolution).toBe(true);
-      expect(topology.local_machine_id).toBe("spark02");
-      expect(topology.machines.map((machine) => machine.machine_id)).toContain("spark01");
-      expect(topology.machines.map((machine) => machine.machine_id)).toContain("spark02");
+      expect(topology.local_machine_id).toBe("demo-node-02");
+      expect(topology.machines.map((machine) => machine.machine_id)).toContain("demo-node-01");
+      expect(topology.machines.map((machine) => machine.machine_id)).toContain("demo-node-02");
 
-      const spark01 = topology.machines.find((machine) => machine.machine_id === "spark01");
-      expect(spark01?.manifest_declared).toBe(true);
-      expect(spark01?.tailscale.ips).toEqual(["100.71.123.34"]);
-      expect(spark01?.ssh.route).toBe("tailscale");
-      expect(spark01?.ssh.command_target).toBe("hasna@spark01.tailnet.ts.net");
-      expect(spark01?.route_hints.some((hint) => hint.kind === "tailscale")).toBe(true);
+      const demoNode01 = topology.machines.find((machine) => machine.machine_id === "demo-node-01");
+      expect(demoNode01?.manifest_declared).toBe(true);
+      expect(demoNode01?.tailscale.ips).toEqual(["100.71.123.34"]);
+      expect(demoNode01?.ssh.route).toBe("tailscale");
+      expect(demoNode01?.ssh.command_target).toBe("operator@demo-node-01.tailnet.ts.net");
+      expect(demoNode01?.route_hints.some((hint) => hint.kind === "tailscale")).toBe(true);
 
-      const route = resolveMachineRoute("spark01", { topology, now: new Date("2026-06-09T00:00:00.000Z") });
+      const route = resolveMachineRoute("demo-node-01", { topology, now: new Date("2026-06-09T00:00:00.000Z") });
       expect(route.ok).toBe(true);
       expect(route.route).toBe("tailscale");
-      expect(route.target).toBe("spark01.tailnet.ts.net");
-      expect(route.command_target).toBe("hasna@spark01.tailnet.ts.net");
+      expect(route.target).toBe("demo-node-01.tailnet.ts.net");
+      expect(route.command_target).toBe("operator@demo-node-01.tailnet.ts.net");
       expect(route.confidence).toBe("high");
 
-      const spark02 = topology.machines.find((machine) => machine.machine_id === "spark02");
-      expect(spark02?.heartbeat_status).toBe("online");
+      const demoNode02 = topology.machines.find((machine) => machine.machine_id === "demo-node-02");
+      expect(demoNode02?.heartbeat_status).toBe("online");
 
       const workspace = resolveMachineWorkspace({
-        machineId: "spark01",
+        machineId: "demo-node-01",
         projectId: "open-knowledge",
         repoName: "open-knowledge",
         topology,
         now: new Date("2026-06-09T00:00:00.000Z"),
       });
       expect(workspace.ok).toBe(true);
-      expect(workspace.machine_id).toBe("spark01");
-      expect(workspace.paths.project_root.path).toBe("/home/hasna/workspace/hasna/opensource/open-knowledge");
+      expect(workspace.machine_id).toBe("demo-node-01");
+      expect(workspace.paths.project_root.path).toBe("/home/operator/workspace/hasna/opensource/open-knowledge");
       expect(workspace.paths.project_root.source).toBe("inferred");
-      expect(workspace.paths.open_files_root.path).toBe("/home/hasna/workspace/hasna/opensource/open-files");
+      expect(workspace.paths.open_files_root.path).toBe("/home/operator/workspace/hasna/opensource/open-files");
       expect(workspace.machine.trust_status).toBe("unknown");
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -129,10 +129,10 @@ describe("machine topology SDK", () => {
     const dir = setupTemp("machines-workspace-paths-");
     try {
       manifestAdd({
-        id: "spark01",
-        hostname: "spark01",
+        id: "demo-node-01",
+        hostname: "demo-node-01",
         platform: "linux",
-        workspacePath: "/home/hasna/workspace",
+        workspacePath: "/home/operator/workspace",
         tags: ["trusted"],
         metadata: {
           workspace_paths: {
@@ -154,7 +154,7 @@ describe("machine topology SDK", () => {
         includeTailscale: false,
       });
       const resolved = resolveMachineWorkspace({
-        machineId: "spark01",
+        machineId: "demo-node-01",
         projectId: "open-knowledge",
         repoName: "open-knowledge",
         topology,
@@ -185,7 +185,7 @@ describe("machine topology SDK", () => {
     const dir = setupTemp("machines-topology-local-");
     try {
       const local = getLocalMachineTopology({ includeTailscale: false });
-      expect(local.machine_id).toBe("spark02");
+      expect(local.machine_id).toBe("demo-node-02");
       expect(local.route_hints.some((hint) => hint.kind === "local")).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -198,11 +198,11 @@ describe("machine topology SDK", () => {
       const topology = discoverMachineTopology({
         now: new Date("2026-06-09T00:00:00.000Z"),
         runner: fakeRunner({
-          Self: { HostName: "spark02", DNSName: "spark02.tailnet.ts.net.", OS: "linux", Online: true },
+          Self: { HostName: "demo-node-02", DNSName: "demo-node-02.tailnet.ts.net.", OS: "linux", Online: true },
           Peer: {
             "nodekey:abc": {
-              HostName: "spark01",
-              DNSName: "spark01.tailnet.ts.net.",
+              HostName: "demo-node-01",
+              DNSName: "demo-node-01.tailnet.ts.net.",
               OS: "linux",
               TailscaleIPs: ["100.71.123.34"],
               Online: true,
@@ -212,13 +212,13 @@ describe("machine topology SDK", () => {
         }),
       });
 
-      const route = resolveMachineRoute("spark01", { topology, now: new Date("2026-06-09T00:00:00.000Z") });
+      const route = resolveMachineRoute("demo-node-01", { topology, now: new Date("2026-06-09T00:00:00.000Z") });
       expect(route.ok).toBe(true);
-      expect(route.machine_id).toBe("spark01");
+      expect(route.machine_id).toBe("demo-node-01");
       expect(route.evidence.manifest_declared).toBe(false);
       expect(route.evidence.matched_by).toBe("machine_id");
       expect(route.route).toBe("tailscale");
-      expect(route.target).toBe("spark01.tailnet.ts.net");
+      expect(route.target).toBe("demo-node-01.tailnet.ts.net");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

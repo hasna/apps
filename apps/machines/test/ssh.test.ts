@@ -9,21 +9,21 @@ describe("smart ssh", () => {
   test("prefers LAN when reachable", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-ssh-"));
     process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
-    process.env["HASNA_MACHINES_REACHABLE_HOSTS"] = "operator@spark01";
+    process.env["HASNA_MACHINES_REACHABLE_HOSTS"] = "operator@demo-node-01";
     process.env["HASNA_MACHINES_MACHINE_ID"] = "control";
     manifestInit();
     manifestAdd({
-      id: "spark01",
+      id: "demo-node-01",
       platform: "linux",
       workspacePath: "/home/operator/workspace",
-      sshAddress: "operator@spark01",
-      tailscaleName: "spark01.tailnet.ts.net",
+      sshAddress: "operator@demo-node-01",
+      tailscaleName: "demo-node-01.tailnet.ts.net",
     });
 
-    const resolved = resolveSshTarget("spark01");
+    const resolved = resolveSshTarget("demo-node-01");
     expect(resolved.route).toBe("ssh");
     expect(resolved.confidence).toBe("high");
-    expect(buildSshCommand("spark01")).toBe("ssh operator@spark01");
+    expect(buildSshCommand("demo-node-01")).toBe("ssh operator@demo-node-01");
   });
 
   test("falls back to tailscale when LAN is unavailable", () => {
@@ -74,13 +74,13 @@ describe("smart ssh", () => {
       package: { name: "@hasna/machines" as const, version: "0.0.16" },
       capabilities: { topology: true as const, compatibility: true as const, route_resolution: true as const, cli_json_fallback: true as const },
       generated_at: "2026-06-09T00:00:00.000Z",
-      local_machine_id: "spark02",
-      local_hostname: "spark02",
+      local_machine_id: "demo-node-02",
+      local_hostname: "demo-node-02",
       current_platform: "linux",
       manifest_path_known: false,
       machines: [{
-        machine_id: "spark01",
-        hostname: "spark01",
+        machine_id: "demo-node-01",
+        hostname: "demo-node-01",
         platform: "linux",
         os: "linux",
         user: null,
@@ -89,7 +89,7 @@ describe("smart ssh", () => {
         heartbeat_status: "unknown" as const,
         last_heartbeat_at: null,
         tailscale: {
-          dns_name: "spark01.tailnet.ts.net",
+          dns_name: "demo-node-01.tailnet.ts.net",
           ips: ["100.71.123.34"],
           online: true,
           active: true,
@@ -98,18 +98,18 @@ describe("smart ssh", () => {
         ssh: {
           address: null,
           route: "tailscale" as const,
-          command_target: "spark01.tailnet.ts.net",
+          command_target: "demo-node-01.tailnet.ts.net",
         },
-        route_hints: [{ kind: "tailscale" as const, target: "spark01.tailnet.ts.net", reachable: true }],
+        route_hints: [{ kind: "tailscale" as const, target: "demo-node-01.tailnet.ts.net", reachable: true }],
         tags: [],
         metadata: {},
       }],
       warnings: [],
     };
 
-    const resolved = resolveSshTarget("spark01", { topology });
+    const resolved = resolveSshTarget("demo-node-01", { topology });
     expect(resolved.route).toBe("tailscale");
-    expect(resolved.target).toBe("spark01.tailnet.ts.net");
-    expect(buildSshCommand("spark01", "knowledge --version", { topology })).toBe("ssh spark01.tailnet.ts.net 'knowledge --version'");
+    expect(resolved.target).toBe("demo-node-01.tailnet.ts.net");
+    expect(buildSshCommand("demo-node-01", "knowledge --version", { topology })).toBe("ssh demo-node-01.tailnet.ts.net 'knowledge --version'");
   });
 });

@@ -15,17 +15,17 @@ describe("sync planning", () => {
     writeFileSync(target, "target", "utf8");
 
     process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
-    process.env["HASNA_MACHINES_MACHINE_ID"] = "spark01";
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "demo-node-01";
     manifestInit();
     manifestAdd({
-      id: "spark01",
+      id: "demo-node-01",
       platform: "linux",
-      workspacePath: "/home/hasna/workspace",
+      workspacePath: "/home/operator/workspace",
       packages: [{ name: "__missing_pkg__", manager: "custom" }],
       files: [{ source, target, mode: "copy" }],
     });
 
-    const plan = buildSyncPlan("spark01");
+    const plan = buildSyncPlan("demo-node-01");
     expect(plan.actions.some((action) => action.kind === "package" && action.status === "missing")).toBe(true);
     expect(plan.actions.some((action) => action.kind === "file" && action.status === "drifted")).toBe(true);
   });
@@ -40,18 +40,18 @@ describe("sync planning", () => {
     writeFileSync(target, "drifted", "utf8");
 
     process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
-    process.env["HASNA_MACHINES_MACHINE_ID"] = "spark01";
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "demo-node-01";
     manifestInit();
     manifestAdd({
-      id: "spark01",
+      id: "demo-node-01",
       platform: "linux",
-      workspacePath: "/home/hasna/workspace",
+      workspacePath: "/home/operator/workspace",
       files: [{ source, target, mode: "copy" }],
     });
 
-    expect(() => runSync("spark01", { apply: true, yes: false })).toThrow("Sync execution requires --yes.");
+    expect(() => runSync("demo-node-01", { apply: true, yes: false })).toThrow("Sync execution requires --yes.");
 
-    const result = runSync("spark01", { apply: true, yes: true });
+    const result = runSync("demo-node-01", { apply: true, yes: true });
     expect(result.executed).toBe(1);
     expect(readFileSync(target, "utf8")).toBe("aligned");
   });
@@ -73,7 +73,7 @@ describe("sync planning", () => {
     manifestAdd({
       id: "remote-mac",
       platform: "macos",
-      workspacePath: "/Users/hasna/Workspace",
+      workspacePath: "/Users/operator/Workspace",
       packages: [{ name: "ripgrep", manager: "brew" }],
     });
 

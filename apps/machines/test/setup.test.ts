@@ -10,16 +10,16 @@ describe("setup planning", () => {
   test("builds a provisioning plan from manifest packages", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-setup-"));
     process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
-    process.env["HASNA_MACHINES_MACHINE_ID"] = "spark01";
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "demo-node-01";
     manifestInit();
     manifestAdd({
-      id: "spark01",
+      id: "demo-node-01",
       platform: "linux",
-      workspacePath: "/home/hasna/workspace",
+      workspacePath: "/home/operator/workspace",
       packages: [{ name: "ripgrep", manager: "apt" }, { name: "@hasna/takumi", manager: "bun" }],
     });
 
-    const plan = buildSetupPlan("spark01");
+    const plan = buildSetupPlan("demo-node-01");
     expect(plan.mode).toBe("plan");
     expect(plan.steps.length).toBeGreaterThanOrEqual(4);
     expect(plan.steps.some((step) => step.command.includes("apt-get install -y 'ripgrep'"))).toBe(true);
@@ -51,7 +51,7 @@ describe("setup planning", () => {
     manifestAdd({
       id: "remote-mac",
       platform: "macos",
-      workspacePath: "/Users/hasna/Workspace",
+      workspacePath: "/Users/operator/Workspace",
     });
 
     const calls: string[] = [];
@@ -63,6 +63,6 @@ describe("setup planning", () => {
     const result = runSetup("remote-mac", { apply: true, yes: true }, runner);
     expect(result.executed).toBe(result.steps.length);
     expect(calls.every((call) => call.startsWith("remote-mac:"))).toBe(true);
-    expect(calls.some((call) => call.includes("mkdir -p '/Users/hasna/Workspace'"))).toBe(true);
+    expect(calls.some((call) => call.includes("mkdir -p '/Users/operator/Workspace'"))).toBe(true);
   });
 });
