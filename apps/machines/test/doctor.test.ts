@@ -55,6 +55,26 @@ describe("doctor", () => {
     expect(JSON.stringify(report)).not.toContain("secrets://github-app/private-key");
   });
 
+  test("does not expose inferred local machine id in default JSON report", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-doctor-implicit-local-"));
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "private-host-real";
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
+    manifestInit();
+
+    const missingReport = runDoctor();
+    expect(missingReport.machineId).toBe("local");
+    expect(JSON.stringify(missingReport)).not.toContain("private-host-real");
+    expect(missingReport.checks.find((check) => check.id === "manifest-entry")?.detail).toBe("No manifest entry for local");
+
+    manifestAdd({ id: "private-host-real", platform: "linux", workspacePath: "/home/operator/workspace" });
+    const declaredReport = runDoctor();
+    const payload = JSON.stringify(declaredReport);
+
+    expect(declaredReport.machineId).toBe("local");
+    expect(payload).not.toContain("private-host-real");
+    expect(declaredReport.checks.find((check) => check.id === "manifest-entry")?.status).toBe("ok");
+  });
+
   test("redacts manifest and adapter details in JSON output", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-doctor-redact-"));
     const secretToken = `ghp_${"PRIVATE".repeat(5)}`;

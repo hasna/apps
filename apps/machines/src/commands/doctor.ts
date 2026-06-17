@@ -147,16 +147,21 @@ function runOptionalAdapterChecks(context: DoctorAdapterContext, adapters: Docto
   return checks;
 }
 
-export function runDoctor(machineId = getLocalMachineId(), options: DoctorOptions = {}): DoctorReport {
+export function runDoctor(machineId?: string, options: DoctorOptions = {}): DoctorReport {
+  const implicitLocalMachine = !machineId;
+  const requestedMachineId = machineId ?? getLocalMachineId();
+  const reportedMachineId = implicitLocalMachine ? "local" : requestedMachineId;
   const now = options.now ?? new Date();
   const { manifest, info: manifestSource } = readManifestWithSource({ adapter: options.manifestAdapter ?? null });
-  const commandChecks = runMachineCommand(machineId, buildDoctorCommand());
+  const commandChecks = runMachineCommand(requestedMachineId, buildDoctorCommand());
   const details = parseKeyValueOutput(commandChecks.stdout);
-  const machineInManifest = manifest.machines.find((machine) => machine.id === machineId);
+  const machineInManifest = manifest.machines.find((machine) => machine.id === requestedMachineId);
+  const diagnosticMachine = machineInManifest ? redactManifestForDiagnostics(machineInManifest) : null;
+  if (implicitLocalMachine && diagnosticMachine) diagnosticMachine.id = reportedMachineId;
   const optionalAdapterChecks = options.includeOptionalAdapters === false
     ? []
     : runOptionalAdapterChecks({
-        machineId,
+        machineId: requestedMachineId,
         manifest,
         manifestSource,
         commandDetails: details,
@@ -185,11 +190,11 @@ export function runDoctor(machineId = getLocalMachineId(), options: DoctorOption
       "manifest-entry",
       machineInManifest ? "ok" : "warn",
       machineInManifest ? "Machine exists in manifest" : "Machine missing from manifest",
-      machineInManifest ? JSON.stringify(redactManifestForDiagnostics(machineInManifest)) : `No manifest entry for ${machineId}`,
+      diagnosticMachine ? JSON.stringify(diagnosticMachine) : `No manifest entry for ${reportedMachineId}`,
       {
         data: {
           declared: Boolean(machineInManifest),
-          machine: machineInManifest ? redactManifestForDiagnostics(machineInManifest) : null,
+          machine: diagnosticMachine,
         },
       },
     ),
@@ -321,7 +326,7 @@ export function runDoctor(machineId = getLocalMachineId(), options: DoctorOption
   ];
 
   return {
-    machineId,
+    machineId: reportedMachineId,
     source: commandChecks.source,
     schemaVersion: 1,
     generatedAt: now.toISOString(),
