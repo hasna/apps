@@ -50,6 +50,23 @@ Inspect audit history:
 secrets audit hasnaxyz/anthropic/live/api_key
 ```
 
+Inspect metadata-only secret reference health:
+
+```bash
+secrets status --json
+```
+
+The status contract reports package version, redacted local data paths, env
+override names, and aggregate counts only. It does not include secret values,
+secret key names, raw env values, provider inventory, or private key material.
+
+```ts
+import { getSecretReferenceStatus } from "@hasna/secrets/status";
+
+const status = getSecretReferenceStatus();
+console.log(status.counts.byType.api_key);
+```
+
 Export redacted JSON for review:
 
 ```bash

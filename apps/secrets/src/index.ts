@@ -18,6 +18,7 @@ import {
 import { getDb } from "./db.js";
 import { encrypt, decrypt, isEncrypted, getMasterKey, initKms, getKeyStatus } from "./crypto.js";
 import type { SecretEntry } from "./types.js";
+import { getSecretReferenceStatus } from "./status.js";
 import { runEventsCli } from "@hasna/events/cli";
 
 const SECRET_TYPES: SecretEntry["type"][] = ["api_key", "password", "token", "credential", "other"];
@@ -37,6 +38,7 @@ Commands:
   search <query>
   export [--redact]
   import <json-file>
+  status                      show metadata-only secret reference health
   gc                          prune expired secrets
   audit [key]                 show audit log
   path                        show vault db path
@@ -152,7 +154,7 @@ Safety
 `);
 }
 
-const BOOLEAN_FLAGS = new Set(["redact", "push", "dry-run", "force", "overwrite"]);
+const BOOLEAN_FLAGS = new Set(["redact", "push", "dry-run", "force", "overwrite", "json"]);
 
 function parseArgs(args: string[]): { flags: Record<string, string>; positional: string[] } {
   const flags: Record<string, string> = {};
@@ -313,6 +315,20 @@ switch (command) {
     } catch (e: any) {
       console.error(`Import failed: ${e.message}`);
       process.exit(1);
+    }
+    break;
+  }
+
+  case "status": {
+    const status = getSecretReferenceStatus();
+    if ("json" in flags) {
+      console.log(JSON.stringify(status, null, 2));
+    } else {
+      console.log(`secrets ${status.package.version}`);
+      console.log(`dataDir: ${status.dataDir}`);
+      console.log(`secrets: ${status.counts.secrets}`);
+      console.log(`users: ${status.counts.users}`);
+      console.log("values: not included");
     }
     break;
   }
