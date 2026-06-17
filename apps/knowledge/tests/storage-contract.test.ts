@@ -10,7 +10,7 @@ import {
   resolveStorageContract,
   validateStorageConfig,
 } from '../src/storage-contract';
-import { canonicalHasnaXyzKnowledgeStorage, defaultKnowledgeConfig, workspaceForHome } from '../src/workspace';
+import { canonicalExampleKnowledgeStorage, defaultKnowledgeConfig, workspaceForHome } from '../src/workspace';
 
 describe('knowledge storage contract', () => {
   test('describes local .hasna/apps/knowledge ownership and generated artifact classes', () => {
@@ -29,22 +29,32 @@ describe('knowledge storage contract', () => {
     expect(contract.artifact_store.uri_prefix).toBe(`file://${workspace.artifactsDir}/`);
     expect(contract.source_ownership.owner).toBe('open-files');
     expect(contract.source_ownership.raw_source_bytes_stored_in_open_knowledge).toBe(false);
+    expect(contract.private_fleet_boundary).toMatchObject({
+      manifest_authority: 'open-machines',
+      source_ref_authority: 'open-files',
+      secret_ref_authority: 'open-secrets',
+      raw_private_manifest_bytes_stored_in_open_knowledge: false,
+      example_manifest_ref: 'open-files://source/private-fleet-manifest/path/machines.json',
+    });
+    expect(contract.private_fleet_boundary.accepted_source_ref_schemes).toContain('open-files');
+    expect(contract.private_fleet_boundary.does_not_store).toContain('machine serial numbers');
+    expect(contract.private_fleet_boundary.does_not_store).toContain('secret values');
     expect(contract.generated_artifacts.map((entry) => entry.prefix)).toContain('wiki/');
     expect(contract.scalability.indexes).toContain('not one giant index.md');
-    expect(contract.canonical_hasna_xyz.active).toBe(false);
-    expect(contract.canonical_hasna_xyz.local_path).toBe(join('.hasna', 'apps', 'knowledge'));
-    expect(contract.canonical_hasna_xyz.s3).toMatchObject({
-      bucket: 'hasna-xyz-opensource-knowledge-prod',
+    expect(contract.canonical_example.active).toBe(false);
+    expect(contract.canonical_example.local_path).toBe(join('.hasna', 'apps', 'knowledge'));
+    expect(contract.canonical_example.s3).toMatchObject({
+      bucket: 'example-knowledge-prod',
       region: 'us-east-1',
       prefix: '.hasna/apps/knowledge',
-      uri_prefix: 's3://hasna-xyz-opensource-knowledge-prod/.hasna/apps/knowledge/',
+      uri_prefix: 's3://example-knowledge-prod/.hasna/apps/knowledge/',
     });
-    expect(contract.canonical_hasna_xyz.secrets).toMatchObject({
-      env: 'hasna/xyz/opensource/knowledge/prod/env',
-      aws: 'hasna/xyz/opensource/knowledge/prod/aws',
-      s3: 'hasna/xyz/opensource/knowledge/prod/s3',
+    expect(contract.canonical_example.secrets).toMatchObject({
+      env: 'example/knowledge/prod/env',
+      aws: 'example/knowledge/prod/aws',
+      s3: 'example/knowledge/prod/s3',
       rds: null,
-      future_rds: 'hasna/xyz/opensource/knowledge/prod/rds',
+      future_rds: 'example/knowledge/prod/rds',
     });
   });
 
@@ -80,25 +90,25 @@ describe('knowledge storage contract', () => {
     expect(contract.source_ownership.does_not_store).toContain('raw open-files bytes');
   });
 
-  test('activates canonical Hasna XYZ S3 storage when configured', () => {
+  test('activates canonical example S3 storage when configured', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-storage-hasna-s3-'));
     const workspace = workspaceForHome(join(dir, '.hasna', 'apps', 'knowledge'));
     const config = defaultKnowledgeConfig();
     config.mode = 'hosted';
-    config.storage = canonicalHasnaXyzKnowledgeStorage();
+    config.storage = canonicalExampleKnowledgeStorage();
 
     const contract = resolveStorageContract(config, workspace, 'project');
     const validation = validateStorageConfig(config, workspace);
 
     expect(validation.ok).toBe(true);
-    expect(contract.canonical_hasna_xyz.active).toBe(true);
+    expect(contract.canonical_example.active).toBe(true);
     expect(contract.artifact_store.type).toBe('s3');
-    expect(contract.artifact_store.uri_prefix).toBe('s3://hasna-xyz-opensource-knowledge-prod/.hasna/apps/knowledge/');
+    expect(contract.artifact_store.uri_prefix).toBe('s3://example-knowledge-prod/.hasna/apps/knowledge/');
     expect(contract.artifact_store.s3).toMatchObject({
-      bucket: 'hasna-xyz-opensource-knowledge-prod',
+      bucket: 'example-knowledge-prod',
       prefix: '.hasna/apps/knowledge',
       region: 'us-east-1',
-      profile: 'hasna-xyz-infra',
+      profile: 'example-infra',
       server_side_encryption: 'AES256',
     });
   });

@@ -14894,39 +14894,39 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, join, resolve } from "path";
 var HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "apps", "knowledge");
-var HASNA_XYZ_KNOWLEDGE_CANONICAL = {
+var EXAMPLE_KNOWLEDGE_CANONICAL = {
   division: "xyz",
   app_type: "opensource",
   app: "knowledge",
   env: "prod",
   local_path: HASNA_KNOWLEDGE_APP_PATH,
   s3: {
-    bucket: "hasna-xyz-opensource-knowledge-prod",
+    bucket: "example-knowledge-prod",
     region: "us-east-1",
-    profile: "hasna-xyz-infra",
+    profile: "example-infra",
     prefix: ".hasna/apps/knowledge",
     server_side_encryption: "AES256"
   },
   secrets: {
-    env: "hasna/xyz/opensource/knowledge/prod/env",
-    aws: "hasna/xyz/opensource/knowledge/prod/aws",
-    s3: "hasna/xyz/opensource/knowledge/prod/s3",
+    env: "example/knowledge/prod/env",
+    aws: "example/knowledge/prod/aws",
+    s3: "example/knowledge/prod/s3",
     rds: null,
-    future_rds: "hasna/xyz/opensource/knowledge/prod/rds"
+    future_rds: "example/knowledge/prod/rds"
   },
   source_owner: "open-files",
   evidence_doc: "docs/canonical-secrets-bootstrap-2026-06-08.md"
 };
-function canonicalHasnaXyzKnowledgeStorage() {
+function canonicalExampleKnowledgeStorage() {
   return {
     type: "s3",
     artifacts_root: "artifacts",
     s3: {
-      bucket: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.bucket,
-      prefix: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.prefix,
-      region: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.region,
-      profile: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.profile,
-      server_side_encryption: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.server_side_encryption
+      bucket: EXAMPLE_KNOWLEDGE_CANONICAL.s3.bucket,
+      prefix: EXAMPLE_KNOWLEDGE_CANONICAL.s3.prefix,
+      region: EXAMPLE_KNOWLEDGE_CANONICAL.s3.region,
+      profile: EXAMPLE_KNOWLEDGE_CANONICAL.s3.profile,
+      server_side_encryption: EXAMPLE_KNOWLEDGE_CANONICAL.s3.server_side_encryption
     }
   };
 }
@@ -18163,9 +18163,9 @@ function resolveStorageContract(config, workspace, scope = "global") {
   const s3 = config.storage.s3 ?? null;
   const prefix = s3?.prefix?.replace(/^\/+|\/+$/g, "") ?? "";
   const s3UriPrefix = s3 ? `s3://${s3.bucket}/${prefix ? `${prefix}/` : ""}` : "";
-  const canonicalPrefix = HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.prefix.replace(/^\/+|\/+$/g, "");
-  const canonicalS3UriPrefix = `s3://${HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.bucket}/${canonicalPrefix}/`;
-  const canonicalActive = config.storage.type === "s3" && s3?.bucket === HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.bucket && (s3.region ?? null) === HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.region;
+  const canonicalPrefix = EXAMPLE_KNOWLEDGE_CANONICAL.s3.prefix.replace(/^\/+|\/+$/g, "");
+  const canonicalS3UriPrefix = `s3://${EXAMPLE_KNOWLEDGE_CANONICAL.s3.bucket}/${canonicalPrefix}/`;
+  const canonicalActive = config.storage.type === "s3" && s3?.bucket === EXAMPLE_KNOWLEDGE_CANONICAL.s3.bucket && (s3.region ?? null) === EXAMPLE_KNOWLEDGE_CANONICAL.s3.region;
   return {
     scope,
     mode: config.mode,
@@ -18200,29 +18200,29 @@ function resolveStorageContract(config, workspace, scope = "global") {
         kms_key_configured: Boolean(s3.kms_key_id)
       } : null
     },
-    canonical_hasna_xyz: {
-      division: HASNA_XYZ_KNOWLEDGE_CANONICAL.division,
-      app_type: HASNA_XYZ_KNOWLEDGE_CANONICAL.app_type,
-      app: HASNA_XYZ_KNOWLEDGE_CANONICAL.app,
-      env: HASNA_XYZ_KNOWLEDGE_CANONICAL.env,
+    canonical_example: {
+      division: EXAMPLE_KNOWLEDGE_CANONICAL.division,
+      app_type: EXAMPLE_KNOWLEDGE_CANONICAL.app_type,
+      app: EXAMPLE_KNOWLEDGE_CANONICAL.app,
+      env: EXAMPLE_KNOWLEDGE_CANONICAL.env,
       active: canonicalActive,
-      local_path: HASNA_XYZ_KNOWLEDGE_CANONICAL.local_path,
+      local_path: EXAMPLE_KNOWLEDGE_CANONICAL.local_path,
       s3: {
-        bucket: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.bucket,
-        region: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.region,
-        profile: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.profile,
+        bucket: EXAMPLE_KNOWLEDGE_CANONICAL.s3.bucket,
+        region: EXAMPLE_KNOWLEDGE_CANONICAL.s3.region,
+        profile: EXAMPLE_KNOWLEDGE_CANONICAL.s3.profile,
         prefix: canonicalPrefix,
         uri_prefix: canonicalS3UriPrefix,
-        server_side_encryption: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.server_side_encryption
+        server_side_encryption: EXAMPLE_KNOWLEDGE_CANONICAL.s3.server_side_encryption
       },
       secrets: {
-        env: HASNA_XYZ_KNOWLEDGE_CANONICAL.secrets.env,
-        aws: HASNA_XYZ_KNOWLEDGE_CANONICAL.secrets.aws,
-        s3: HASNA_XYZ_KNOWLEDGE_CANONICAL.secrets.s3,
-        rds: HASNA_XYZ_KNOWLEDGE_CANONICAL.secrets.rds,
-        future_rds: HASNA_XYZ_KNOWLEDGE_CANONICAL.secrets.future_rds
+        env: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.env,
+        aws: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.aws,
+        s3: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.s3,
+        rds: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.rds,
+        future_rds: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.future_rds
       },
-      evidence_doc: HASNA_XYZ_KNOWLEDGE_CANONICAL.evidence_doc
+      evidence_doc: EXAMPLE_KNOWLEDGE_CANONICAL.evidence_doc
     },
     hosted: {
       enabled: config.mode === "hosted",
@@ -18254,6 +18254,31 @@ function resolveStorageContract(config, workspace, scope = "global") {
         "connector secrets",
         "hosted tenant ownership state"
       ]
+    },
+    private_fleet_boundary: {
+      manifest_authority: "open-machines",
+      source_ref_authority: "open-files",
+      secret_ref_authority: "open-secrets",
+      raw_private_manifest_bytes_stored_in_open_knowledge: false,
+      accepted_source_ref_schemes: config.sources.allowed_schemes.filter((scheme) => ["open-files", "s3", "file"].includes(scheme)),
+      stores: [
+        "source refs for private manifests",
+        "redacted setup decisions",
+        "runbook summaries",
+        "citation spans into approved knowledge sources",
+        "machine setup evidence hashes"
+      ],
+      does_not_store: [
+        "private fleet manifests",
+        "machine hostnames",
+        "machine serial numbers",
+        "sudo passwords",
+        "VNC passwords",
+        "SSH private keys",
+        "GitHub App private keys",
+        "secret values"
+      ],
+      example_manifest_ref: "open-files://source/private-fleet-manifest/path/machines.json"
     },
     generated_artifacts: GENERATED_ARTIFACTS,
     scalability: {
@@ -25100,7 +25125,7 @@ class KnowledgeService {
         ...current.hosted ?? {},
         ...apiUrl ? { api_url: apiUrl } : {}
       },
-      storage: options.canonicalHasnaXyz ? canonicalHasnaXyzKnowledgeStorage() : current.storage
+      storage: options.canonicalExample ? canonicalExampleKnowledgeStorage() : current.storage
     };
     writeKnowledgeConfig(workspace.configPath, nextConfig);
     this.cachedConfig = nextConfig;
@@ -25111,7 +25136,7 @@ class KnowledgeService {
       api_url: nextConfig.hosted?.api_url ?? null,
       storage_type: nextConfig.storage.type,
       artifact_uri_prefix: storage.artifact_store.uri_prefix,
-      canonical_hasna_xyz: storage.canonical_hasna_xyz,
+      canonical_example: storage.canonical_example,
       config_path: workspace.configPath,
       next: mode === "hosted" ? ["knowledge auth login --api-key <key>", "knowledge storage status --json", "knowledge remote contracts --json"] : ["knowledge search <query>", "knowledge <prompt>"],
       message: `Set knowledge mode to ${mode}`
@@ -26270,7 +26295,7 @@ export {
   compileWikiPage,
   clearKnowledgeAuth,
   catalogSourceUriForRef,
-  canonicalHasnaXyzKnowledgeStorage,
+  canonicalExampleKnowledgeStorage,
   artifactKindForKey,
   applyKnowledgeSyncBundle,
   STORAGE_TABLES,
@@ -26293,8 +26318,8 @@ export {
   KNOWLEDGE_MACHINES_ADAPTER_PACKAGE,
   KNOWLEDGE_MACHINES_ADAPTER_ENTRYPOINT,
   KNOWLEDGE_MACHINES_ADAPTER_CONTRACT_VERSION,
-  HASNA_XYZ_KNOWLEDGE_CANONICAL,
   HASNA_KNOWLEDGE_APP_PATH,
+  EXAMPLE_KNOWLEDGE_CANONICAL,
   DEFAULT_KNOWLEDGE_API_URL,
   DEFAULT_EMBEDDING_MODEL_REF,
   DEFAULT_EMBEDDING_DIMENSIONS

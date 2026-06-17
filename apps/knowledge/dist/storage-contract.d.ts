@@ -1,7 +1,7 @@
 import type { Database } from 'bun:sqlite';
 import { REMOTE_KNOWLEDGE_CONTRACT_VERSION } from './remote-client';
 import type { KnowledgeConfig, KnowledgeWorkspace } from './workspace';
-import { HASNA_XYZ_KNOWLEDGE_CANONICAL } from './workspace';
+import { EXAMPLE_KNOWLEDGE_CANONICAL } from './workspace';
 export interface StorageArtifactClass {
     kind: string;
     prefix: string;
@@ -32,11 +32,11 @@ export interface StorageContract {
             kms_key_configured: boolean;
         } | null;
     };
-    canonical_hasna_xyz: {
-        division: typeof HASNA_XYZ_KNOWLEDGE_CANONICAL.division;
-        app_type: typeof HASNA_XYZ_KNOWLEDGE_CANONICAL.app_type;
-        app: typeof HASNA_XYZ_KNOWLEDGE_CANONICAL.app;
-        env: typeof HASNA_XYZ_KNOWLEDGE_CANONICAL.env;
+    canonical_example: {
+        division: typeof EXAMPLE_KNOWLEDGE_CANONICAL.division;
+        app_type: typeof EXAMPLE_KNOWLEDGE_CANONICAL.app_type;
+        app: typeof EXAMPLE_KNOWLEDGE_CANONICAL.app;
+        env: typeof EXAMPLE_KNOWLEDGE_CANONICAL.env;
         active: boolean;
         local_path: string;
         s3: {
@@ -72,6 +72,16 @@ export interface StorageContract {
         raw_source_bytes_stored_in_open_knowledge: false;
         stores: string[];
         does_not_store: string[];
+    };
+    private_fleet_boundary: {
+        manifest_authority: 'open-machines';
+        source_ref_authority: 'open-files';
+        secret_ref_authority: 'open-secrets';
+        raw_private_manifest_bytes_stored_in_open_knowledge: false;
+        accepted_source_ref_schemes: string[];
+        stores: string[];
+        does_not_store: string[];
+        example_manifest_ref: string;
     };
     generated_artifacts: StorageArtifactClass[];
     scalability: {

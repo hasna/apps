@@ -96,7 +96,7 @@ export interface KnowledgeSetupResult {
     api_url: string | null;
     storage_type: KnowledgeConfig['storage']['type'];
     artifact_uri_prefix: string;
-    canonical_hasna_xyz: StorageContract['canonical_hasna_xyz'];
+    canonical_example: StorageContract['canonical_example'];
     config_path: string;
     next: string[];
     message: string;
@@ -326,7 +326,7 @@ export declare class KnowledgeService {
     setup(options?: {
         mode?: string;
         apiUrl?: string;
-        canonicalHasnaXyz?: boolean;
+        canonicalExample?: boolean;
     }): KnowledgeSetupResult;
     authStatus(env?: Record<string, string | undefined>): KnowledgeAuthStatus;
     saveAuth(input: {

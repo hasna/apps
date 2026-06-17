@@ -3,7 +3,7 @@ import type { Database } from 'bun:sqlite';
 import { DEFAULT_KNOWLEDGE_API_URL, normalizeKnowledgeApiOrigin } from './auth';
 import { REMOTE_KNOWLEDGE_CONTRACT_VERSION } from './remote-client';
 import type { KnowledgeConfig, KnowledgeWorkspace } from './workspace';
-import { HASNA_KNOWLEDGE_APP_PATH, HASNA_XYZ_KNOWLEDGE_CANONICAL } from './workspace';
+import { HASNA_KNOWLEDGE_APP_PATH, EXAMPLE_KNOWLEDGE_CANONICAL } from './workspace';
 
 export interface StorageArtifactClass {
   kind: string;
@@ -36,11 +36,11 @@ export interface StorageContract {
       kms_key_configured: boolean;
     } | null;
   };
-  canonical_hasna_xyz: {
-    division: typeof HASNA_XYZ_KNOWLEDGE_CANONICAL.division;
-    app_type: typeof HASNA_XYZ_KNOWLEDGE_CANONICAL.app_type;
-    app: typeof HASNA_XYZ_KNOWLEDGE_CANONICAL.app;
-    env: typeof HASNA_XYZ_KNOWLEDGE_CANONICAL.env;
+  canonical_example: {
+    division: typeof EXAMPLE_KNOWLEDGE_CANONICAL.division;
+    app_type: typeof EXAMPLE_KNOWLEDGE_CANONICAL.app_type;
+    app: typeof EXAMPLE_KNOWLEDGE_CANONICAL.app;
+    env: typeof EXAMPLE_KNOWLEDGE_CANONICAL.env;
     active: boolean;
     local_path: string;
     s3: {
@@ -76,6 +76,16 @@ export interface StorageContract {
     raw_source_bytes_stored_in_open_knowledge: false;
     stores: string[];
     does_not_store: string[];
+  };
+  private_fleet_boundary: {
+    manifest_authority: 'open-machines';
+    source_ref_authority: 'open-files';
+    secret_ref_authority: 'open-secrets';
+    raw_private_manifest_bytes_stored_in_open_knowledge: false;
+    accepted_source_ref_schemes: string[];
+    stores: string[];
+    does_not_store: string[];
+    example_manifest_ref: string;
   };
   generated_artifacts: StorageArtifactClass[];
   scalability: {
@@ -159,11 +169,11 @@ export function resolveStorageContract(
   const s3 = config.storage.s3 ?? null;
   const prefix = s3?.prefix?.replace(/^\/+|\/+$/g, '') ?? '';
   const s3UriPrefix = s3 ? `s3://${s3.bucket}/${prefix ? `${prefix}/` : ''}` : '';
-  const canonicalPrefix = HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.prefix.replace(/^\/+|\/+$/g, '');
-  const canonicalS3UriPrefix = `s3://${HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.bucket}/${canonicalPrefix}/`;
+  const canonicalPrefix = EXAMPLE_KNOWLEDGE_CANONICAL.s3.prefix.replace(/^\/+|\/+$/g, '');
+  const canonicalS3UriPrefix = `s3://${EXAMPLE_KNOWLEDGE_CANONICAL.s3.bucket}/${canonicalPrefix}/`;
   const canonicalActive = config.storage.type === 's3'
-    && s3?.bucket === HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.bucket
-    && (s3.region ?? null) === HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.region;
+    && s3?.bucket === EXAMPLE_KNOWLEDGE_CANONICAL.s3.bucket
+    && (s3.region ?? null) === EXAMPLE_KNOWLEDGE_CANONICAL.s3.region;
 
   return {
     scope,
@@ -201,29 +211,29 @@ export function resolveStorageContract(
           }
         : null,
     },
-    canonical_hasna_xyz: {
-      division: HASNA_XYZ_KNOWLEDGE_CANONICAL.division,
-      app_type: HASNA_XYZ_KNOWLEDGE_CANONICAL.app_type,
-      app: HASNA_XYZ_KNOWLEDGE_CANONICAL.app,
-      env: HASNA_XYZ_KNOWLEDGE_CANONICAL.env,
+    canonical_example: {
+      division: EXAMPLE_KNOWLEDGE_CANONICAL.division,
+      app_type: EXAMPLE_KNOWLEDGE_CANONICAL.app_type,
+      app: EXAMPLE_KNOWLEDGE_CANONICAL.app,
+      env: EXAMPLE_KNOWLEDGE_CANONICAL.env,
       active: canonicalActive,
-      local_path: HASNA_XYZ_KNOWLEDGE_CANONICAL.local_path,
+      local_path: EXAMPLE_KNOWLEDGE_CANONICAL.local_path,
       s3: {
-        bucket: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.bucket,
-        region: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.region,
-        profile: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.profile,
+        bucket: EXAMPLE_KNOWLEDGE_CANONICAL.s3.bucket,
+        region: EXAMPLE_KNOWLEDGE_CANONICAL.s3.region,
+        profile: EXAMPLE_KNOWLEDGE_CANONICAL.s3.profile,
         prefix: canonicalPrefix,
         uri_prefix: canonicalS3UriPrefix,
-        server_side_encryption: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.server_side_encryption,
+        server_side_encryption: EXAMPLE_KNOWLEDGE_CANONICAL.s3.server_side_encryption,
       },
       secrets: {
-        env: HASNA_XYZ_KNOWLEDGE_CANONICAL.secrets.env,
-        aws: HASNA_XYZ_KNOWLEDGE_CANONICAL.secrets.aws,
-        s3: HASNA_XYZ_KNOWLEDGE_CANONICAL.secrets.s3,
-        rds: HASNA_XYZ_KNOWLEDGE_CANONICAL.secrets.rds,
-        future_rds: HASNA_XYZ_KNOWLEDGE_CANONICAL.secrets.future_rds,
+        env: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.env,
+        aws: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.aws,
+        s3: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.s3,
+        rds: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.rds,
+        future_rds: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.future_rds,
       },
-      evidence_doc: HASNA_XYZ_KNOWLEDGE_CANONICAL.evidence_doc,
+      evidence_doc: EXAMPLE_KNOWLEDGE_CANONICAL.evidence_doc,
     },
     hosted: {
       enabled: config.mode === 'hosted',
@@ -255,6 +265,31 @@ export function resolveStorageContract(
         'connector secrets',
         'hosted tenant ownership state',
       ],
+    },
+    private_fleet_boundary: {
+      manifest_authority: 'open-machines',
+      source_ref_authority: 'open-files',
+      secret_ref_authority: 'open-secrets',
+      raw_private_manifest_bytes_stored_in_open_knowledge: false,
+      accepted_source_ref_schemes: config.sources.allowed_schemes.filter((scheme) => ['open-files', 's3', 'file'].includes(scheme)),
+      stores: [
+        'source refs for private manifests',
+        'redacted setup decisions',
+        'runbook summaries',
+        'citation spans into approved knowledge sources',
+        'machine setup evidence hashes',
+      ],
+      does_not_store: [
+        'private fleet manifests',
+        'machine hostnames',
+        'machine serial numbers',
+        'sudo passwords',
+        'VNC passwords',
+        'SSH private keys',
+        'GitHub App private keys',
+        'secret values',
+      ],
+      example_manifest_ref: 'open-files://source/private-fleet-manifest/path/machines.json',
     },
     generated_artifacts: GENERATED_ARTIFACTS,
     scalability: {

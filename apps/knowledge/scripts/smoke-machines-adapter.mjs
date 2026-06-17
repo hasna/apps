@@ -106,8 +106,8 @@ function copyPackage(source, target) {
         && !normalized.startsWith('.git/')
         && normalized !== '.hasna'
         && !normalized.startsWith('.hasna/')
-        && normalized !== '.takumi'
-        && !normalized.startsWith('.takumi/');
+        && normalized !== '.agent-cache'
+        && !normalized.startsWith('.agent-cache/');
     },
   });
 }

@@ -200,7 +200,7 @@ describe('open-files knowledge sync fixtures', () => {
       file_id: 'f_fixture_raw_guard',
       source_id: 'src_fixture_drive',
       revision_id: 'rev_fixture_raw_guard',
-      path: 'google-drive/hasna-xyz/shared-drive/security/raw-guard.md',
+      path: 'google-drive/example/shared-drive/security/raw-guard.md',
       name: 'raw-guard.md',
       mime: 'text/markdown',
       size: rawSentinel.length,
@@ -213,7 +213,7 @@ describe('open-files knowledge sync fixtures', () => {
       },
       storage: {
         provider: 's3',
-        bucket: 'hasna-xyz-opensource-files-prod',
+        bucket: 'example-files-prod',
         key: 'fixtures/knowledge-sync/raw-guard/rev_fixture_raw_guard',
       },
       metadata: {
@@ -236,7 +236,7 @@ describe('open-files knowledge sync fixtures', () => {
     const baselinePush = await sourceService.syncPeer({
       peerWorkspace: peerDir,
       direction: 'push',
-      machineId: 'spark02-fixture',
+      machineId: 'linux-node-b-fixture',
     });
     expect(baselinePush.ok).toBe(true);
     expect(countRows(peerPaths.knowledge_db_path, 'chunks')).toBe(pack.baseline_manifest.items.length);
@@ -253,7 +253,7 @@ describe('open-files knowledge sync fixtures', () => {
     const currentPush = await sourceService.syncPeer({
       peerWorkspace: peerDir,
       direction: 'push',
-      machineId: 'spark02-fixture',
+      machineId: 'linux-node-b-fixture',
     });
     expect(currentPush.ok).toBe(true);
     const chunkSync = currentPush.push?.tables.find((table) => table.table === 'chunks');

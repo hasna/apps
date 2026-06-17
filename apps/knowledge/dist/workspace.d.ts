@@ -75,30 +75,30 @@ export interface KnowledgeConfig {
         };
     };
 }
-export declare const HASNA_XYZ_KNOWLEDGE_CANONICAL: {
+export declare const EXAMPLE_KNOWLEDGE_CANONICAL: {
     readonly division: "xyz";
     readonly app_type: "opensource";
     readonly app: "knowledge";
     readonly env: "prod";
     readonly local_path: string;
     readonly s3: {
-        readonly bucket: "hasna-xyz-opensource-knowledge-prod";
+        readonly bucket: "example-knowledge-prod";
         readonly region: "us-east-1";
-        readonly profile: "hasna-xyz-infra";
+        readonly profile: "example-infra";
         readonly prefix: ".hasna/apps/knowledge";
         readonly server_side_encryption: "AES256";
     };
     readonly secrets: {
-        readonly env: "hasna/xyz/opensource/knowledge/prod/env";
-        readonly aws: "hasna/xyz/opensource/knowledge/prod/aws";
-        readonly s3: "hasna/xyz/opensource/knowledge/prod/s3";
+        readonly env: "example/knowledge/prod/env";
+        readonly aws: "example/knowledge/prod/aws";
+        readonly s3: "example/knowledge/prod/s3";
         readonly rds: any;
-        readonly future_rds: "hasna/xyz/opensource/knowledge/prod/rds";
+        readonly future_rds: "example/knowledge/prod/rds";
     };
     readonly source_owner: "open-files";
     readonly evidence_doc: "docs/canonical-secrets-bootstrap-2026-06-08.md";
 };
-export declare function canonicalHasnaXyzKnowledgeStorage(): KnowledgeConfig['storage'];
+export declare function canonicalExampleKnowledgeStorage(): KnowledgeConfig['storage'];
 export declare function legacyGlobalStorePath(): string;
 export declare function globalKnowledgeHome(): string;
 export declare function projectKnowledgeHome(cwd?: string): string;

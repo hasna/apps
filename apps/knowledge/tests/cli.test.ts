@@ -104,10 +104,10 @@ function writeFakeMachinesRouteBin(bin: string, target: string, projectRoot = '/
   const workspaceRepairHints = includeRepairHint ? [{
     id: 'machines_workspace_repair',
     reason: 'Confirm workspace path mapping before sync.',
-    command: ['machines', 'workspace', 'repair', '--machine', 'spark01', '--project', 'open-knowledge', '--repo', 'open-knowledge', '--open-files-repo', 'open-files', '--json'],
-    shell_command: "machines workspace repair --machine spark01 --project open-knowledge --repo open-knowledge --open-files-repo open-files --json",
-    apply_command: ['machines', 'workspace', 'repair', '--machine', 'spark01', '--project', 'open-knowledge', '--repo', 'open-knowledge', '--open-files-repo', 'open-files', '--json', '--apply'],
-    apply_shell_command: "machines workspace repair --machine spark01 --project open-knowledge --repo open-knowledge --open-files-repo open-files --json --apply",
+    command: ['machines', 'workspace', 'repair', '--machine', 'linux-node-a', '--project', 'open-knowledge', '--repo', 'open-knowledge', '--open-files-repo', 'open-files', '--json'],
+    shell_command: "machines workspace repair --machine linux-node-a --project open-knowledge --repo open-knowledge --open-files-repo open-files --json",
+    apply_command: ['machines', 'workspace', 'repair', '--machine', 'linux-node-a', '--project', 'open-knowledge', '--repo', 'open-knowledge', '--open-files-repo', 'open-files', '--json', '--apply'],
+    apply_shell_command: "machines workspace repair --machine linux-node-a --project open-knowledge --repo open-knowledge --open-files-repo open-files --json --apply",
   }] : [];
   writeFileSync(machines, [
     '#!/bin/sh',
@@ -115,8 +115,8 @@ function writeFakeMachinesRouteBin(bin: string, target: string, projectRoot = '/
     `  printf '%s\\n' '${JSON.stringify({
       schema_version: 1,
       ok: true,
-      machine_id: 'spark01',
-      requested_machine_id: 'spark01',
+      machine_id: 'linux-node-a',
+      requested_machine_id: 'linux-node-a',
       route: 'tailscale',
       source: 'tailscale',
       target,
@@ -138,8 +138,8 @@ function writeFakeMachinesRouteBin(bin: string, target: string, projectRoot = '/
     'if [ "$1" = "workspace" ] && [ "$2" = "resolve" ]; then',
     `  printf '%s\\n' '${JSON.stringify({
       ok: true,
-      requested_machine_id: 'spark01',
-      machine_id: 'spark01',
+      requested_machine_id: 'linux-node-a',
+      machine_id: 'linux-node-a',
       project: { project_id: 'open-knowledge', repo_name: 'open-knowledge' },
       machine: { current: false, primary: false, trust_status: 'trusted', auth_status: 'authenticated' },
       paths: {
@@ -322,12 +322,19 @@ describe('knowledge cli', () => {
     expect(storageOut.artifact_store.type).toBe('local');
     expect(storageOut.source_ownership.owner).toBe('open-files');
     expect(storageOut.source_ownership.raw_source_bytes_stored_in_open_knowledge).toBe(false);
+    expect(storageOut.private_fleet_boundary).toMatchObject({
+      manifest_authority: 'open-machines',
+      source_ref_authority: 'open-files',
+      secret_ref_authority: 'open-secrets',
+      raw_private_manifest_bytes_stored_in_open_knowledge: false,
+    });
+    expect(storageOut.private_fleet_boundary.does_not_store).toContain('sudo passwords');
 
     const validate = runCli(['storage', 'validate', '--scope', 'project', '--json'], dir);
     expect(validate.exitCode).toBe(0);
     expect(JSON.parse(new TextDecoder().decode(validate.stdout)).ok).toBe(true);
 
-    const add = runCli(['add', 'Project scoped', 'Stored in the Hasna app workspace', '--scope', 'project', '--json'], dir);
+    const add = runCli(['add', 'Project scoped', 'Stored in the app workspace', '--scope', 'project', '--json'], dir);
     expect(add.exitCode).toBe(0);
     expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'db.json'))).toBe(true);
     expect(existsSync(join(dir, '.open-knowledge', 'db.json'))).toBe(false);
@@ -376,9 +383,9 @@ describe('knowledge cli', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-sync-doctor-'));
     const bin = join(dir, 'bin');
     mkdirSync(bin, { recursive: true });
-    writeFakeMachinesRouteBin(bin, 'doctor-spark01.tailnet.test', '/remote/open-knowledge', true);
+    writeFakeMachinesRouteBin(bin, 'doctor-linux-node-a.tailnet.test', '/remote/open-knowledge', true);
 
-    const result = runCli(['sync', 'doctor', '--machine', 'spark01', '--scope', 'project', '--json'], dir, {
+    const result = runCli(['sync', 'doctor', '--machine', 'linux-node-a', '--scope', 'project', '--json'], dir, {
       PATH: `${bin}:${process.env.PATH ?? ''}`,
     });
 
@@ -387,7 +394,7 @@ describe('knowledge cli', () => {
     expect(out.package.name).toBe('@hasna/knowledge');
     expect(out.read_only).toBe(true);
     expect(out.resolved_route).toMatchObject({
-      target: 'doctor-spark01.tailnet.test',
+      target: 'doctor-linux-node-a.tailnet.test',
       route: 'tailscale',
       confidence: 'high',
     });
@@ -674,7 +681,7 @@ describe('knowledge cli', () => {
     expect(doctorOut.storage.artifact_manifest.warnings).not.toContain('artifact_manifest_s3_key_contains_storage_prefix:1');
   });
 
-  test('global store migrates legacy .open-knowledge data into the Hasna app path', () => {
+  test('global store migrates legacy .open-knowledge data into the app path', () => {
     const home = mkdtempSync(join(tmpdir(), 'ok-legacy-home-'));
     const legacyDir = join(home, '.open-knowledge');
     mkdirSync(legacyDir, { recursive: true });
@@ -683,7 +690,7 @@ describe('knowledge cli', () => {
         id: 'k_legacy_contract',
         short_id: 'legacy_contr',
         title: 'Legacy global item',
-        content: 'Migrated into the Hasna app workspace.',
+        content: 'Migrated into the app workspace.',
         tags: ['legacy'],
         metadata: {},
         archived: false,
@@ -717,7 +724,7 @@ describe('knowledge cli', () => {
     const storageOut = JSON.parse(new TextDecoder().decode(storage.stdout));
     expect(storageOut.hosted.enabled).toBe(true);
     expect(storageOut.hosted.api_url).toBe('https://knowledge.example.com');
-    expect(storageOut.canonical_hasna_xyz.active).toBe(false);
+    expect(storageOut.canonical_example.active).toBe(false);
 
     const before = runCli(['auth', 'whoami', '--scope', 'project', '--json'], dir, env);
     expect(before.exitCode).toBe(0);
@@ -747,30 +754,30 @@ describe('knowledge cli', () => {
     expect(JSON.parse(new TextDecoder().decode(logout.stdout)).removed).toBe(true);
   });
 
-  test('setup can opt into canonical Hasna XYZ S3 artifact storage', () => {
+  test('setup can opt into canonical example S3 artifact storage', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-canonical-storage-cli-'));
 
-    const setup = runCli(['setup', '--mode', 'hosted', '--canonical-hasna-xyz', '--scope', 'project', '--json'], dir);
+    const setup = runCli(['setup', '--mode', 'hosted', '--canonical-example', '--scope', 'project', '--json'], dir);
     expect(setup.exitCode).toBe(0);
     const setupOut = JSON.parse(new TextDecoder().decode(setup.stdout));
     expect(setupOut.storage_type).toBe('s3');
-    expect(setupOut.artifact_uri_prefix).toBe('s3://hasna-xyz-opensource-knowledge-prod/.hasna/apps/knowledge/');
-    expect(setupOut.canonical_hasna_xyz.active).toBe(true);
+    expect(setupOut.artifact_uri_prefix).toBe('s3://example-knowledge-prod/.hasna/apps/knowledge/');
+    expect(setupOut.canonical_example.active).toBe(true);
 
     const storage = runCli(['storage', 'status', '--scope', 'project', '--json'], dir);
     expect(storage.exitCode).toBe(0);
     const storageOut = JSON.parse(new TextDecoder().decode(storage.stdout));
     expect(storageOut.artifact_store.s3).toMatchObject({
-      bucket: 'hasna-xyz-opensource-knowledge-prod',
+      bucket: 'example-knowledge-prod',
       prefix: '.hasna/apps/knowledge',
       region: 'us-east-1',
-      profile: 'hasna-xyz-infra',
+      profile: 'example-infra',
     });
-    expect(storageOut.canonical_hasna_xyz.secrets).toMatchObject({
-      env: 'hasna/xyz/opensource/knowledge/prod/env',
-      aws: 'hasna/xyz/opensource/knowledge/prod/aws',
-      s3: 'hasna/xyz/opensource/knowledge/prod/s3',
-      future_rds: 'hasna/xyz/opensource/knowledge/prod/rds',
+    expect(storageOut.canonical_example.secrets).toMatchObject({
+      env: 'example/knowledge/prod/env',
+      aws: 'example/knowledge/prod/aws',
+      s3: 'example/knowledge/prod/s3',
+      future_rds: 'example/knowledge/prod/rds',
     });
   });
 
@@ -830,8 +837,8 @@ describe('knowledge cli', () => {
     const conflict = recordKnowledgeSyncConflict(service.ensureWorkspace().knowledgeDbPath, {
       entityKind: 'wiki_pages',
       entityId: 'wiki/handbook.md',
-      localMachineId: 'spark02',
-      remoteMachineId: 'spark01',
+      localMachineId: 'linux-node-b',
+      remoteMachineId: 'linux-node-a',
       localHash: 'sha256:local',
       remoteHash: 'sha256:remote',
       baseHash: 'sha256:base',
@@ -1000,7 +1007,7 @@ describe('knowledge cli', () => {
         scope: 'project',
         workspace_home: '/remote/.hasna/apps/knowledge',
         sqlite_schema_version: 6,
-        machine_id: 'spark01',
+        machine_id: 'linux-node-a',
         artifact_root_uri: 'file:///remote/.hasna/apps/knowledge/artifacts/',
       },
       tables: [],
@@ -1009,7 +1016,7 @@ describe('knowledge cli', () => {
       message: 'old bundle without protocol fields',
     };
 
-    const result = runCli(['sync', 'pull', '--machine', 'spark01', '--peer-workspace', '/remote/open-knowledge', '--scope', 'project', '--json'], dir, {
+    const result = runCli(['sync', 'pull', '--machine', 'linux-node-a', '--peer-workspace', '/remote/open-knowledge', '--scope', 'project', '--json'], dir, {
       PATH: `${bin}:${process.env.PATH ?? ''}`,
       KNOWLEDGE_FAKE_SSH_EXPORT_JSON: JSON.stringify(oldBundle),
     });
@@ -1022,7 +1029,7 @@ describe('knowledge cli', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-sync-ssh-route-'));
     const targetPath = join(dir, 'ssh-target.txt');
     const bin = writeFakeSshBin(dir);
-    writeFakeMachinesRouteBin(bin, 'routed-spark01.tailnet.test');
+    writeFakeMachinesRouteBin(bin, 'routed-linux-node-a.tailnet.test');
     const bundle = {
       ok: true,
       format: 'knowledge-sync-bundle',
@@ -1034,7 +1041,7 @@ describe('knowledge cli', () => {
         scope: 'project',
         workspace_home: '/remote/.hasna/apps/knowledge',
         sqlite_schema_version: 6,
-        machine_id: 'spark01',
+        machine_id: 'linux-node-a',
         artifact_root_uri: 'file:///remote/.hasna/apps/knowledge/artifacts/',
       },
       tables: [],
@@ -1043,23 +1050,23 @@ describe('knowledge cli', () => {
       message: 'valid empty bundle',
     };
 
-    const result = runCli(['sync', 'pull', '--machine', 'spark01', '--peer-workspace', '/remote/open-knowledge', '--scope', 'project', '--json'], dir, {
+    const result = runCli(['sync', 'pull', '--machine', 'linux-node-a', '--peer-workspace', '/remote/open-knowledge', '--scope', 'project', '--json'], dir, {
       PATH: `${bin}:${process.env.PATH ?? ''}`,
       KNOWLEDGE_FAKE_SSH_EXPORT_JSON: JSON.stringify(bundle),
       KNOWLEDGE_FAKE_SSH_TARGET_PATH: targetPath,
     });
 
     expect(result.exitCode).toBe(0);
-    expect(readFileSync(targetPath, 'utf8')).toBe('routed-spark01.tailnet.test');
+    expect(readFileSync(targetPath, 'utf8')).toBe('routed-linux-node-a.tailnet.test');
     const out = JSON.parse(new TextDecoder().decode(result.stdout));
-    expect(out.resolved_machine).toBe('routed-spark01.tailnet.test');
+    expect(out.resolved_machine).toBe('routed-linux-node-a.tailnet.test');
     expect(out.resolved_route).toMatchObject({
       source: 'open-machines',
       adapter: {
         implementation: 'cli',
         available: true,
       },
-      target: 'routed-spark01.tailnet.test',
+      target: 'routed-linux-node-a.tailnet.test',
       route: 'tailscale',
       target_kind: 'tailscale',
       confidence: 'high',
@@ -1068,7 +1075,7 @@ describe('knowledge cli', () => {
         matched_by: 'machine_id',
         selected_hint: {
           kind: 'tailscale',
-          target: 'routed-spark01.tailnet.test',
+          target: 'routed-linux-node-a.tailnet.test',
           reachable: true,
         },
       },
@@ -1079,7 +1086,7 @@ describe('knowledge cli', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-sync-ssh-workspace-'));
     const targetPath = join(dir, 'ssh-target.txt');
     const bin = writeFakeSshBin(dir);
-    writeFakeMachinesRouteBin(bin, 'routed-spark01.tailnet.test', '/mapped/open-knowledge');
+    writeFakeMachinesRouteBin(bin, 'routed-linux-node-a.tailnet.test', '/mapped/open-knowledge');
     const bundle = {
       ok: true,
       format: 'knowledge-sync-bundle',
@@ -1091,7 +1098,7 @@ describe('knowledge cli', () => {
         scope: 'project',
         workspace_home: '/mapped/open-knowledge/.hasna/apps/knowledge',
         sqlite_schema_version: 6,
-        machine_id: 'spark01',
+        machine_id: 'linux-node-a',
         artifact_root_uri: 'file:///mapped/open-knowledge/.hasna/apps/knowledge/artifacts/',
       },
       tables: [],
@@ -1100,14 +1107,14 @@ describe('knowledge cli', () => {
       message: 'valid empty bundle',
     };
 
-    const result = runCli(['sync', 'pull', '--machine', 'spark01', '--scope', 'project', '--json'], dir, {
+    const result = runCli(['sync', 'pull', '--machine', 'linux-node-a', '--scope', 'project', '--json'], dir, {
       PATH: `${bin}:${process.env.PATH ?? ''}`,
       KNOWLEDGE_FAKE_SSH_EXPORT_JSON: JSON.stringify(bundle),
       KNOWLEDGE_FAKE_SSH_TARGET_PATH: targetPath,
     });
 
     expect(result.exitCode).toBe(0);
-    expect(readFileSync(targetPath, 'utf8')).toBe('routed-spark01.tailnet.test');
+    expect(readFileSync(targetPath, 'utf8')).toBe('routed-linux-node-a.tailnet.test');
     const out = JSON.parse(new TextDecoder().decode(result.stdout));
     expect(out.peer_workspace).toBe('/mapped/open-knowledge');
     expect(out.resolved_workspace).toMatchObject({
@@ -1135,7 +1142,7 @@ describe('knowledge cli', () => {
         scope: 'project',
         workspace_home: `${dir}/.hasna/apps/knowledge`,
         sqlite_schema_version: 6,
-        machine_id: 'spark02',
+        machine_id: 'linux-node-b',
         artifact_root_uri: `file://${dir}/.hasna/apps/knowledge/artifacts/`,
       },
       target: {
@@ -1151,7 +1158,7 @@ describe('knowledge cli', () => {
       message: 'old import result without protocol fields',
     };
 
-    const result = runCli(['sync', 'push', '--machine', 'spark01', '--peer-workspace', '/remote/open-knowledge', '--scope', 'project', '--json', '--dry-run'], dir, {
+    const result = runCli(['sync', 'push', '--machine', 'linux-node-a', '--peer-workspace', '/remote/open-knowledge', '--scope', 'project', '--json', '--dry-run'], dir, {
       PATH: `${bin}:${process.env.PATH ?? ''}`,
       KNOWLEDGE_FAKE_SSH_IMPORT_JSON: JSON.stringify(oldImportResult),
       KNOWLEDGE_FAKE_SSH_STDIN_PATH: stdinPath,

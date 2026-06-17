@@ -86,8 +86,8 @@ describe('knowledge sqlite store', () => {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
         'change_partial_v7',
-        'spark02',
-        'spark01',
+        'linux-node-b',
+        'linux-node-a',
         'wiki_pages',
         'wiki_home',
         'upsert',
@@ -113,12 +113,12 @@ describe('knowledge sqlite store', () => {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
         'wiki_pages',
-        'spark02',
+        'linux-node-b',
         42,
         'sha256:partial',
         'syncbundle_partial',
-        'spark02',
-        'spark01',
+        'linux-node-b',
+        'linux-node-a',
         '2026-06-09T00:00:01.000Z',
         '{}',
         '2026-06-09T00:00:01.000Z',
@@ -141,8 +141,8 @@ describe('knowledge sqlite store', () => {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
         'syncbundle_partial',
-        'spark02',
-        'spark01',
+        'linux-node-b',
+        'linux-node-a',
         'import',
         'applied',
         'sha256:bundle',
@@ -169,7 +169,7 @@ describe('knowledge sqlite store', () => {
 
       const clock = recovered.query<{ logical_clock: number; high_water_bundle_id: string }, [string, string]>(
         'SELECT logical_clock, high_water_bundle_id FROM knowledge_sync_table_clocks WHERE table_name = ? AND machine_id = ?',
-      ).get('wiki_pages', 'spark02');
+      ).get('wiki_pages', 'linux-node-b');
       expect(clock).toMatchObject({ logical_clock: 42, high_water_bundle_id: 'syncbundle_partial' });
 
       const importRow = recovered.query<{ status: string }, [string]>(

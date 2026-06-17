@@ -18,8 +18,8 @@ function parseArgs(argv) {
     installMachines: true,
     noMachinesSync: true,
     noMachinesRegistrySync: true,
-    remote: process.env.KNOWLEDGE_SPARK_REMOTE || 'spark01',
-    peer: process.env.KNOWLEDGE_SPARK_PEER || 'spark01',
+    remote: process.env.KNOWLEDGE_MACHINE_REMOTE || 'linux-node-a',
+    peer: process.env.KNOWLEDGE_MACHINE_PEER || 'linux-node-a',
     knowledgeVersion: process.env.KNOWLEDGE_VERSION || packageJson.version,
     machinesVersion: process.env.MACHINES_VERSION || 'latest',
     packageDir: process.env.KNOWLEDGE_PACKAGE_DIR || null,
@@ -62,13 +62,13 @@ function parseArgs(argv) {
       i += 1;
     } else if (arg === '--help' || arg === '-h') {
       console.log([
-        'Usage: bun scripts/smoke-spark-sync-release.mjs [--json] [--dry-run] [--keep-temp]',
+        'Usage: bun scripts/smoke-machine-sync-release.mjs [--json] [--dry-run] [--keep-temp]',
         '       [--knowledge-version <version>] [--machines-version <version|latest>]',
-        '       [--remote spark01] [--peer spark01] [--package-dir <path>] [--machines-package-dir <path>]',
+        '       [--remote linux-node-a] [--peer linux-node-a] [--package-dir <path>] [--machines-package-dir <path>]',
         '       [--evidence-json <path>] [--evidence-md <path>] [--no-install] [--no-machines-install]',
         '       [--skip-no-machines-sync] [--skip-no-machines-registry-sync]',
         '',
-        'Runs the published-package spark02/spark01 release smoke:',
+        'Runs the published-package linux-node-b/linux-node-a release smoke:',
         '  1. install @hasna/knowledge and @hasna/machines on both machines',
         '  2. verify knowledge/machines adapter and machines consumer contracts',
         '  3. run sync doctor, dry-run, push, artifact manifest, and source-boundary checks',
@@ -156,8 +156,8 @@ function copyPackage(source, target) {
         && !normalized.startsWith('.git/')
         && normalized !== '.hasna'
         && !normalized.startsWith('.hasna/')
-        && normalized !== '.takumi'
-        && !normalized.startsWith('.takumi/');
+        && normalized !== '.agent-cache'
+        && !normalized.startsWith('.agent-cache/');
     },
   });
 }
@@ -373,7 +373,7 @@ function forceRemoteWikiConflict(remote, cwd) {
   const code = [
     'import { Database } from "bun:sqlite";',
     'const db = new Database(".hasna/apps/knowledge/knowledge.db");',
-    'db.run("UPDATE wiki_pages SET title = ?, updated_at = ? WHERE path = ?", ["Spark01 edited Wiki", "2026-06-09T16:00:00.000Z", "wiki/README.md"]);',
+    'db.run("UPDATE wiki_pages SET title = ?, updated_at = ? WHERE path = ?", ["Machine01 edited Wiki", "2026-06-09T16:00:00.000Z", "wiki/README.md"]);',
     'db.close();',
   ].join(' ');
   runRemote(remote, `cd ${shellQuote(cwd)} && bun -e ${shellQuote(code)}`);
@@ -410,8 +410,8 @@ function syncMachineArgs(options, remoteDir, runOptions = {}) {
 }
 
 function runSyncSmoke(options, runOptions = {}) {
-  const localDir = mkdtempSync(join(tmpdir(), `knowledge-spark02-${options.knowledgeVersion}-`));
-  const remoteDir = runRemote(options.remote, `mktemp -d ${shellQuote(`/tmp/knowledge-spark01-${options.knowledgeVersion}-XXXXXX`)}`).trim();
+  const localDir = mkdtempSync(join(tmpdir(), `knowledge-linux-node-b-${options.knowledgeVersion}-`));
+  const remoteDir = runRemote(options.remote, `mktemp -d ${shellQuote(`/tmp/knowledge-linux-node-a-${options.knowledgeVersion}-XXXXXX`)}`).trim();
   const localCommandOptions = runOptions.localCommandOptions ?? {};
   const learnCommandOptions = runOptions.learnCommandOptions ?? {};
   try {
@@ -433,8 +433,8 @@ function runSyncSmoke(options, runOptions = {}) {
     }
 
     knowledgeJson(localDir, ['wiki', 'init', '--scope', 'project', '--json'], localCommandOptions);
-    const sourcePath = join(localDir, 'spark-sync-source.md');
-    writeFileSync(sourcePath, `Spark installed sync convergence fixture from spark02 to ${options.remote}.\n`);
+    const sourcePath = join(localDir, 'machine-sync-source.md');
+    writeFileSync(sourcePath, `Machine installed sync convergence fixture from linux-node-b to ${options.remote}.\n`);
     knowledgeJson(localDir, ['ingest', 'source', `file://${sourcePath}`, '--scope', 'project', '--json'], localCommandOptions);
 
     const peerArgs = syncMachineArgs(options, remoteDir, runOptions);
@@ -454,9 +454,9 @@ function runSyncSmoke(options, runOptions = {}) {
     const remoteResolution = remoteKnowledgeJson(options.remote, remoteDir, [
       'sync', 'conflicts', 'resolve', remoteConflict.id,
       '--approve-write',
-      '--approved-by', 'spark-smoke',
+      '--approved-by', 'machine-smoke',
       '--strategy', 'manual-merge',
-      '--patch-uri', 'file:///tmp/spark-smoke.patch',
+      '--patch-uri', 'file:///tmp/machine-smoke.patch',
       '--scope', 'project',
       '--json',
     ]);
@@ -468,9 +468,9 @@ function runSyncSmoke(options, runOptions = {}) {
     const localResolution = knowledgeJson(localDir, [
       'sync', 'conflicts', 'resolve', localConflict.id,
       '--approve-write',
-      '--approved-by', 'spark-smoke',
+      '--approved-by', 'machine-smoke',
       '--strategy', 'manual-merge',
-      '--patch-uri', 'file:///tmp/spark-smoke-local.patch',
+      '--patch-uri', 'file:///tmp/machine-smoke-local.patch',
       '--scope', 'project',
       '--json',
     ], localCommandOptions);
@@ -710,7 +710,7 @@ function dryRunSummary(options) {
 
 function markdownEvidence(summary) {
   return [
-    '# Spark Knowledge Sync Release Smoke',
+    '# Machine Knowledge Sync Release Smoke',
     '',
     `- ok: ${summary.ok}`,
     `- knowledge version: ${summary.versions?.local ?? summary.knowledge_version}`,
@@ -739,7 +739,7 @@ function outputSummary(summary, options) {
   if (options.json) console.log(JSON.stringify(summary, null, 2));
   else {
     console.log([
-      `spark sync release smoke: ${summary.ok ? 'ok' : 'failed'}`,
+      `machine sync release smoke: ${summary.ok ? 'ok' : 'failed'}`,
       `knowledge: ${summary.versions?.local ?? summary.knowledge_version}`,
       `remote: ${summary.remote}`,
       `final dry-run: ${summary.sync?.final_dry_run?.ok ?? summary.dry_run}`,

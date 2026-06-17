@@ -164,28 +164,28 @@ s3://<knowledge-bucket>/<org>/<project>/knowledge/
   wiki/
 ```
 
-Hasna XYZ production uses the canonical open-source knowledge bucket and app
+example production uses the canonical open-source knowledge bucket and app
 path-compatible prefix:
 
 ```text
-s3://hasna-xyz-opensource-knowledge-prod/.hasna/apps/knowledge/
+s3://example-knowledge-prod/.hasna/apps/knowledge/
 ```
 
 The app config can be materialized with:
 
 ```bash
-knowledge setup --mode hosted --canonical-hasna-xyz --scope project --json
+knowledge setup --mode hosted --canonical-example --scope project --json
 ```
 
 The canonical metadata-only secret paths are:
 
 ```text
-hasna/xyz/opensource/knowledge/prod/env
-hasna/xyz/opensource/knowledge/prod/aws
-hasna/xyz/opensource/knowledge/prod/s3
+example/knowledge/prod/env
+example/knowledge/prod/aws
+example/knowledge/prod/s3
 ```
 
-`hasna/xyz/opensource/knowledge/prod/rds` is reserved for a future hosted
+`example/knowledge/prod/rds` is reserved for a future hosted
 runtime database if the wrapper provisions one.
 
 Raw files still route through `open-files`. Knowledge S3 storage is for derived

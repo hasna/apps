@@ -78,7 +78,7 @@ import {
 import type { KnowledgeItem } from './store';
 import { initializeWikiLayout, recordWikiLayoutCatalog } from './wiki-layout';
 import {
-  canonicalHasnaXyzKnowledgeStorage,
+  canonicalExampleKnowledgeStorage,
   ensureKnowledgeWorkspace,
   projectKnowledgeHome,
   readKnowledgeConfig,
@@ -177,7 +177,7 @@ export interface KnowledgeSetupResult {
   api_url: string | null;
   storage_type: KnowledgeConfig['storage']['type'];
   artifact_uri_prefix: string;
-  canonical_hasna_xyz: StorageContract['canonical_hasna_xyz'];
+  canonical_example: StorageContract['canonical_example'];
   config_path: string;
   next: string[];
   message: string;
@@ -1183,7 +1183,7 @@ export class KnowledgeService {
     return validateStorageConfig(this.config(), this.ensureWorkspace());
   }
 
-  setup(options: { mode?: string; apiUrl?: string; canonicalHasnaXyz?: boolean } = {}): KnowledgeSetupResult {
+  setup(options: { mode?: string; apiUrl?: string; canonicalExample?: boolean } = {}): KnowledgeSetupResult {
     const workspace = this.ensureWorkspace();
     const current = this.config();
     const mode = normalizeMode(options.mode) ?? current.mode;
@@ -1199,8 +1199,8 @@ export class KnowledgeService {
         ...(current.hosted ?? {}),
         ...(apiUrl ? { api_url: apiUrl } : {}),
       },
-      storage: options.canonicalHasnaXyz
-        ? canonicalHasnaXyzKnowledgeStorage()
+      storage: options.canonicalExample
+        ? canonicalExampleKnowledgeStorage()
         : current.storage,
     };
     writeKnowledgeConfig(workspace.configPath, nextConfig);
@@ -1212,7 +1212,7 @@ export class KnowledgeService {
       api_url: nextConfig.hosted?.api_url ?? null,
       storage_type: nextConfig.storage.type,
       artifact_uri_prefix: storage.artifact_store.uri_prefix,
-      canonical_hasna_xyz: storage.canonical_hasna_xyz,
+      canonical_example: storage.canonical_example,
       config_path: workspace.configPath,
       next: mode === 'hosted'
         ? ['knowledge auth login --api-key <key>', 'knowledge storage status --json', 'knowledge remote contracts --json']

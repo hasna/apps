@@ -45,12 +45,12 @@ describe('knowledge machine topology', () => {
       loadOpenMachines: async () => ({
         discoverMachineTopology: () => ({
           generated_at: '2026-06-09T00:00:00.000Z',
-          local_machine_id: 'spark02',
-          local_hostname: 'spark02',
+          local_machine_id: 'linux-node-b',
+          local_hostname: 'linux-node-b',
           current_platform: 'linux',
           machines: [{
-            machine_id: 'spark02',
-            hostname: 'spark02',
+            machine_id: 'linux-node-b',
+            hostname: 'linux-node-b',
             platform: 'linux',
             os: 'linux',
             user: 'hasna',
@@ -59,14 +59,14 @@ describe('knowledge machine topology', () => {
             heartbeat_status: 'online',
             last_heartbeat_at: '2026-06-09T00:00:00.000Z',
             tailscale: {
-              dns_name: 'spark02.example.ts.net',
+              dns_name: 'linux-node-b.example.ts.net',
               ips: ['100.64.0.2'],
               online: true,
               active: true,
               last_seen: null,
             },
             ssh: {
-              address: 'spark02',
+              address: 'linux-node-b',
               route: 'local',
               command_target: 'localhost',
             },
@@ -116,15 +116,15 @@ describe('knowledge machine topology', () => {
       },
       loadOpenMachines: async () => null,
       runner: fakeCommandRunner({
-        'command -v machines': '/home/hasna/.bun/bin/machines\n',
+        'command -v machines': '/home/example/.bun/bin/machines\n',
         'topology': JSON.stringify({
           generated_at: '2026-06-09T00:00:00.000Z',
-          local_machine_id: 'spark02',
-          local_hostname: 'spark02',
+          local_machine_id: 'linux-node-b',
+          local_hostname: 'linux-node-b',
           current_platform: 'linux',
           machines: [{
-            machine_id: 'spark02',
-            hostname: 'spark02',
+            machine_id: 'linux-node-b',
+            hostname: 'linux-node-b',
             platform: 'linux',
             os: 'linux',
             workspace_path: '/repo',
@@ -145,12 +145,12 @@ describe('knowledge machine topology', () => {
     expect(result.adapter.available).toBe(true);
     expect(result.adapter.implementation).toBe('cli');
     expect(result.adapter.error).toBeNull();
-    expect(result.machines[0].machine_id).toBe('spark02');
+    expect(result.machines[0].machine_id).toBe('linux-node-b');
   });
 
   test('normalizes optional open-machines preflight report', async () => {
     const result = await preflightKnowledgeMachine({
-      machineId: 'spark01',
+      machineId: 'linux-node-a',
       now: new Date('2026-06-09T00:00:00.000Z'),
       knowledge: {
         scope: 'project',
@@ -159,7 +159,7 @@ describe('knowledge machine topology', () => {
       loadOpenMachines: async () => ({
         checkMachineCompatibility: () => ({
           ok: true,
-          machine_id: 'spark01',
+          machine_id: 'linux-node-a',
           generated_at: '2026-06-09T00:00:00.000Z',
           checks: [{
             id: 'package:@hasna/knowledge:version',
@@ -180,18 +180,18 @@ describe('knowledge machine topology', () => {
     expect(result.source).toBe('open-machines');
     expect(result.adapter.available).toBe(true);
     expect(result.adapter.implementation).toBe('sdk');
-    expect(result.machine_id).toBe('spark01');
+    expect(result.machine_id).toBe('linux-node-a');
     expect(result.checks[0].id).toBe('package:@hasna/knowledge:version');
   });
 
   test('falls back to local or ssh preflight when open-machines is unavailable', async () => {
     const result = await preflightKnowledgeMachine({
-      machineId: 'spark01',
+      machineId: 'linux-node-a',
       now: new Date('2026-06-09T00:00:00.000Z'),
       loadOpenMachines: async () => null,
       runner: fakePreflightRunner({
         "cmd='bun'": 'path=/usr/bin/bun\nversion=1.3.13\n',
-        "cmd='knowledge'": 'path=/home/hasna/.bun/bin/knowledge\nversion=@hasna/knowledge 0.2.29\n',
+        "cmd='knowledge'": 'path=/home/example/.bun/bin/knowledge\nversion=@hasna/knowledge 0.2.29\n',
         "path='/repo/open-knowledge'": 'exists=yes\npackage_json=yes\npackage_name=@hasna/knowledge\nversion=0.2.29\n',
       }),
       commands: [{ command: 'bun', required: true }],
@@ -216,14 +216,14 @@ describe('knowledge machine topology', () => {
 
   test('uses machines CLI compatibility when SDK import is unavailable', async () => {
     const result = await preflightKnowledgeMachine({
-      machineId: 'spark01',
+      machineId: 'linux-node-a',
       now: new Date('2026-06-09T00:00:00.000Z'),
       loadOpenMachines: async () => null,
       runner: fakePreflightRunner({
-        'command -v machines': '/home/hasna/.bun/bin/machines\n',
+        'command -v machines': '/home/example/.bun/bin/machines\n',
         'compatibility': JSON.stringify({
           ok: true,
-          machine_id: 'spark01',
+          machine_id: 'linux-node-a',
           source: 'ssh',
           generated_at: '2026-06-09T00:00:00.000Z',
           checks: [{
@@ -247,26 +247,26 @@ describe('knowledge machine topology', () => {
     expect(result.adapter.available).toBe(true);
     expect(result.adapter.implementation).toBe('cli');
     expect(result.adapter.error).toBeNull();
-    expect(result.machine_id).toBe('spark01');
+    expect(result.machine_id).toBe('linux-node-a');
     expect(result.checks[0].source).toBe('ssh');
   });
 
   test('passes workspace package expectations through machines CLI compatibility', async () => {
     const commands: string[] = [];
     const result = await preflightKnowledgeMachine({
-      machineId: 'spark01',
+      machineId: 'linux-node-a',
       now: new Date('2026-06-09T00:00:00.000Z'),
       loadOpenMachines: async () => null,
       runner: (machineId, command) => {
         commands.push(command);
         if (command.includes('command -v machines')) {
-          return { stdout: '/home/hasna/.bun/bin/machines\n', stderr: '', exitCode: 0, source: machineId === 'local' ? 'local' : 'ssh' };
+          return { stdout: '/home/example/.bun/bin/machines\n', stderr: '', exitCode: 0, source: machineId === 'local' ? 'local' : 'ssh' };
         }
         if (command.includes('compatibility')) {
           return {
             stdout: JSON.stringify({
               ok: true,
-              machine_id: 'spark01',
+              machine_id: 'linux-node-a',
               source: 'ssh',
               generated_at: '2026-06-09T00:00:00.000Z',
               checks: [{
@@ -304,12 +304,12 @@ describe('knowledge machine topology', () => {
 
   test('uses machines consumer SDK route resolver when available', async () => {
     const result = await resolveKnowledgeMachineRoute({
-      machineId: 'spark01',
+      machineId: 'linux-node-a',
       now: new Date('2026-06-09T00:00:00.000Z'),
       loadOpenMachines: async () => ({
         resolveMachineRoute: () => ({
           ok: true,
-          target: 'spark01.taild59be2.ts.net',
+          target: 'linux-node-a.taild59be2.ts.net',
           route: 'tailscale',
           source: 'tailscale',
           confidence: 'high',
@@ -318,7 +318,7 @@ describe('knowledge machine topology', () => {
             matched_by: 'machine_id',
             selected_hint: {
               kind: 'tailscale',
-              target: 'spark01.taild59be2.ts.net',
+              target: 'linux-node-a.taild59be2.ts.net',
               reachable: true,
             },
           },
@@ -346,7 +346,7 @@ describe('knowledge machine topology', () => {
         mode: 'auto',
         available: true,
       },
-      target: 'spark01.taild59be2.ts.net',
+      target: 'linux-node-a.taild59be2.ts.net',
       route: 'tailscale',
       targetKind: 'tailscale',
       confidence: 'high',
@@ -355,7 +355,7 @@ describe('knowledge machine topology', () => {
         matched_by: 'machine_id',
         selected_hint: {
           kind: 'tailscale',
-          target: 'spark01.taild59be2.ts.net',
+          target: 'linux-node-a.taild59be2.ts.net',
           reachable: true,
         },
       },
@@ -376,13 +376,13 @@ describe('knowledge machine topology', () => {
 
   test('uses machines consumer SDK workspace resolver when available', async () => {
     const result = await resolveKnowledgeMachineWorkspace({
-      machineId: 'spark01',
+      machineId: 'linux-node-a',
       now: new Date('2026-06-09T00:00:00.000Z'),
       loadOpenMachines: async () => ({
         resolveMachineWorkspace: () => ({
           ok: true,
-          requested_machine_id: 'spark01',
-          machine_id: 'spark01',
+          requested_machine_id: 'linux-node-a',
+          machine_id: 'linux-node-a',
           project: {
             project_id: 'open-knowledge',
             repo_name: 'open-knowledge',
@@ -394,26 +394,26 @@ describe('knowledge machine topology', () => {
             auth_status: 'authenticated',
           },
           paths: {
-            workspace_root: { path: '/home/hasna/workspace', source: 'manifest' },
-            project_root: { path: '/home/hasna/workspace/hasna/opensource/open-knowledge', source: 'inferred' },
-            open_files_root: { path: '/home/hasna/workspace/hasna/opensource/open-files', source: 'inferred' },
+            workspace_root: { path: '/home/example/workspace', source: 'manifest' },
+            project_root: { path: '/workspace/open-knowledge', source: 'inferred' },
+            open_files_root: { path: '/home/example/workspace/hasna/opensource/open-files', source: 'inferred' },
           },
           diagnostics: [{
             id: 'project_root',
             status: 'inferred',
             severity: 'warn',
             message: 'project root inferred from workspace path',
-            path: '/home/hasna/workspace/hasna/opensource/open-knowledge',
+            path: '/workspace/open-knowledge',
             source: 'inferred',
             path_exists: null,
           }],
           repair_hints: [{
             id: 'machines_workspace_repair',
             reason: 'Confirm workspace path mapping before sync.',
-            command: ['machines', 'workspace', 'repair', '--machine', 'spark01', '--project', 'open-knowledge', '--repo', 'open-knowledge', '--open-files-repo', 'open-files', '--json'],
-            shell_command: 'machines workspace repair --machine spark01 --project open-knowledge --repo open-knowledge --open-files-repo open-files --json',
-            apply_command: ['machines', 'workspace', 'repair', '--machine', 'spark01', '--project', 'open-knowledge', '--repo', 'open-knowledge', '--open-files-repo', 'open-files', '--json', '--apply'],
-            apply_shell_command: 'machines workspace repair --machine spark01 --project open-knowledge --repo open-knowledge --open-files-repo open-files --json --apply',
+            command: ['machines', 'workspace', 'repair', '--machine', 'linux-node-a', '--project', 'open-knowledge', '--repo', 'open-knowledge', '--open-files-repo', 'open-files', '--json'],
+            shell_command: 'machines workspace repair --machine linux-node-a --project open-knowledge --repo open-knowledge --open-files-repo open-files --json',
+            apply_command: ['machines', 'workspace', 'repair', '--machine', 'linux-node-a', '--project', 'open-knowledge', '--repo', 'open-knowledge', '--open-files-repo', 'open-files', '--json', '--apply'],
+            apply_shell_command: 'machines workspace repair --machine linux-node-a --project open-knowledge --repo open-knowledge --open-files-repo open-files --json --apply',
           }],
           evidence: {
             topology: true,
@@ -440,8 +440,8 @@ describe('knowledge machine topology', () => {
     expect(result.ok).toBe(true);
     expect(result.source).toBe('open-machines');
     expect(result.adapter.implementation).toBe('sdk');
-    expect(result.project_root).toBe('/home/hasna/workspace/hasna/opensource/open-knowledge');
-    expect(result.open_files_root).toBe('/home/hasna/workspace/hasna/opensource/open-files');
+    expect(result.project_root).toBe('/workspace/open-knowledge');
+    expect(result.open_files_root).toBe('/home/example/workspace/hasna/opensource/open-files');
     expect(result.trust_status).toBe('trusted');
     expect(result.primary).toBe(true);
     expect(result.cacheability).toMatchObject({
@@ -461,20 +461,20 @@ describe('knowledge machine topology', () => {
   test('uses machines CLI workspace resolver when SDK import is unavailable', async () => {
     const commands: string[] = [];
     const result = await resolveKnowledgeMachineWorkspace({
-      machineId: 'spark01',
+      machineId: 'linux-node-a',
       includeTailscale: false,
       loadOpenMachines: async () => null,
       runner: (command) => {
         commands.push(command);
         if (command.includes('command -v machines')) {
-          return { stdout: '/home/hasna/.bun/bin/machines\n', stderr: '', exitCode: 0 };
+          return { stdout: '/home/example/.bun/bin/machines\n', stderr: '', exitCode: 0 };
         }
         if (command.includes('workspace') && command.includes('resolve')) {
           return {
             stdout: JSON.stringify({
               ok: true,
-              requested_machine_id: 'spark01',
-              machine_id: 'spark01',
+              requested_machine_id: 'linux-node-a',
+              machine_id: 'linux-node-a',
               project: { project_id: 'open-knowledge', repo_name: 'open-knowledge' },
               machine: { current: false, primary: false, trust_status: 'unknown', auth_status: 'unknown' },
               paths: {
@@ -502,12 +502,12 @@ describe('knowledge machine topology', () => {
 
   test('adds fallback workspace repair hints for older machines resolver warnings', async () => {
     const result = await resolveKnowledgeMachineWorkspace({
-      machineId: 'spark01',
+      machineId: 'linux-node-a',
       loadOpenMachines: async () => ({
         resolveMachineWorkspace: () => ({
           ok: true,
-          requested_machine_id: 'spark01',
-          machine_id: 'spark01',
+          requested_machine_id: 'linux-node-a',
+          machine_id: 'linux-node-a',
           project: { project_id: 'open-knowledge', repo_name: 'open-knowledge' },
           machine: { current: false, primary: false, trust_status: 'trusted', auth_status: 'authenticated' },
           paths: {
@@ -534,7 +534,7 @@ describe('knowledge machine topology', () => {
 
   test('uses explicit peer workspace as an override before machines lookup', async () => {
     const result = await resolveKnowledgeMachineWorkspace({
-      machineId: 'spark01',
+      machineId: 'linux-node-a',
       peerWorkspace: '/manual/open-knowledge',
       loadOpenMachines: async () => {
         throw new Error('should not load machines');
@@ -556,20 +556,20 @@ describe('knowledge machine topology', () => {
   test('uses machines CLI route resolver when SDK import is unavailable', async () => {
     const commands: string[] = [];
     const result = await resolveKnowledgeMachineRoute({
-      machineId: 'spark01',
+      machineId: 'linux-node-a',
       includeTailscale: false,
       now: new Date('2026-06-09T00:00:00.000Z'),
       loadOpenMachines: async () => null,
       runner: (command) => {
         commands.push(command);
         if (command.includes('command -v machines')) {
-          return { stdout: '/home/hasna/.bun/bin/machines\n', stderr: '', exitCode: 0 };
+          return { stdout: '/home/example/.bun/bin/machines\n', stderr: '', exitCode: 0 };
         }
         if (command.includes('route')) {
           return {
             stdout: JSON.stringify({
               ok: true,
-              target: 'cli-spark01.tailnet.test',
+              target: 'cli-linux-node-a.tailnet.test',
               route: 'tailscale',
               source: 'tailscale',
               confidence: 'high',
@@ -578,7 +578,7 @@ describe('knowledge machine topology', () => {
                 matched_by: 'machine_id',
                 selected_hint: {
                   kind: 'tailscale',
-                  target: 'cli-spark01.tailnet.test',
+                  target: 'cli-linux-node-a.tailnet.test',
                   reachable: true,
                 },
               },
@@ -594,7 +594,7 @@ describe('knowledge machine topology', () => {
 
     expect(result.source).toBe('open-machines');
     expect(result.adapter.implementation).toBe('cli');
-    expect(result.target).toBe('cli-spark01.tailnet.test');
+    expect(result.target).toBe('cli-linux-node-a.tailnet.test');
     expect(result.route).toBe('tailscale');
     expect(result.targetKind).toBe('tailscale');
     expect(commands.some((command) => command.includes("'route'") && command.includes("'--no-tailscale'"))).toBe(true);
@@ -602,7 +602,7 @@ describe('knowledge machine topology', () => {
 
   test('falls back to raw machine target when SDK and CLI route resolver are unavailable', async () => {
     const result = await resolveKnowledgeMachineRoute({
-      machineId: 'spark01',
+      machineId: 'linux-node-a',
       loadOpenMachines: async () => null,
       runner: fakeCommandRunner({}),
     });
@@ -613,7 +613,7 @@ describe('knowledge machine topology', () => {
         implementation: 'disabled',
         error: 'missing_resolveMachineRoute',
       },
-      target: 'spark01',
+      target: 'linux-node-a',
       route: null,
       targetKind: null,
       confidence: null,
@@ -628,7 +628,7 @@ describe('knowledge machine topology', () => {
       now: new Date('2026-06-09T00:00:00.000Z'),
       runner: fakeCommandRunner({}),
       preflightRunner: fakePreflightRunner({
-        "cmd='knowledge'": 'path=/home/hasna/.bun/bin/knowledge\nversion=@hasna/knowledge 0.2.40\n',
+        "cmd='knowledge'": 'path=/home/example/.bun/bin/knowledge\nversion=@hasna/knowledge 0.2.40\n',
       }),
     });
 
@@ -638,7 +638,7 @@ describe('knowledge machine topology', () => {
       implementation: 'disabled',
       available: false,
     });
-    const route = await adapter.route({ machineId: 'spark01' });
+    const route = await adapter.route({ machineId: 'linux-node-a' });
     expect(route.source).toBe('raw');
     expect(route.adapter.error).toBe('adapter_disabled');
     const topology = await adapter.topology({ includeTailscale: false });
@@ -650,10 +650,10 @@ describe('knowledge machine topology', () => {
     const adapter = createKnowledgeMachinesAdapter({
       mode: 'cli',
       runner: fakeCommandRunner({
-        'command -v machines': '/home/hasna/.bun/bin/machines\n',
+        'command -v machines': '/home/example/.bun/bin/machines\n',
         'route': JSON.stringify({
           ok: true,
-          target: 'spark01.taild59be2.ts.net',
+          target: 'linux-node-a.taild59be2.ts.net',
           route: 'tailscale',
           source: 'tailscale',
           confidence: 'high',
@@ -668,7 +668,7 @@ describe('knowledge machine topology', () => {
       available: true,
       contract_version: null,
     });
-    const route = await adapter.route({ machineId: 'spark01', includeTailscale: false });
+    const route = await adapter.route({ machineId: 'linux-node-a', includeTailscale: false });
     expect(route.source).toBe('open-machines');
     expect(route.adapter.mode).toBe('cli');
     expect(route.adapter.implementation).toBe('cli');
@@ -697,7 +697,7 @@ describe('knowledge machine topology', () => {
       now: new Date('2026-06-09T00:00:00.000Z'),
       runner: fakeCommandRunner({}),
       preflightRunner: fakePreflightRunner({
-        "cmd='knowledge'": 'path=/home/hasna/.bun/bin/knowledge\nversion=@hasna/knowledge 0.2.48\n',
+        "cmd='knowledge'": 'path=/home/example/.bun/bin/knowledge\nversion=@hasna/knowledge 0.2.48\n',
       }),
       loadOpenMachines: async () => ({
         MACHINES_CONSUMER_CONTRACT_VERSION: futureVersion,
@@ -740,18 +740,18 @@ describe('knowledge machine topology', () => {
     });
     expect(topology.warnings).toContain(`open_machines_unavailable:unsupported_contract_version:${futureVersion}`);
 
-    const route = await adapter.route({ machineId: 'spark01', includeTailscale: false });
+    const route = await adapter.route({ machineId: 'linux-node-a', includeTailscale: false });
     expect(route.source).toBe('raw');
     expect(route.adapter.error).toBe(`unsupported_contract_version:${futureVersion}`);
-    expect(route.target).toBe('spark01');
+    expect(route.target).toBe('linux-node-a');
 
-    const workspace = await adapter.workspace({ machineId: 'spark01', includeTailscale: false });
+    const workspace = await adapter.workspace({ machineId: 'linux-node-a', includeTailscale: false });
     expect(workspace.ok).toBe(false);
     expect(workspace.source).toBe('raw');
     expect(workspace.adapter.error).toBe(`unsupported_contract_version:${futureVersion}`);
     expect(workspace.warnings).toContain(`unsupported_contract_version:${futureVersion}`);
 
-    const preflight = await adapter.preflight({ machineId: 'spark01' });
+    const preflight = await adapter.preflight({ machineId: 'linux-node-a' });
     expect(preflight.source).toBe('local');
     expect(preflight.adapter.error).toBe(`unsupported_contract_version:${futureVersion}`);
     expect(preflight.checks.some((check) => (

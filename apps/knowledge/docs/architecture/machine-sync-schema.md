@@ -1,7 +1,7 @@
 # Knowledge Machine Sync Schema
 
 This spec defines the local-first sync shape for `knowledge` across personal
-machines such as `spark02` and `spark01`, plus future hosted/SaaS operation.
+machines such as `linux-node-b` and `linux-node-a`, plus future hosted/SaaS operation.
 
 ## Scope
 
@@ -58,7 +58,7 @@ knowledge sync conflicts --scope project --json
 knowledge sync dry-run --peer-workspace <repo-or-knowledge-home> --scope project --json
 knowledge sync pull --peer-workspace <repo-or-knowledge-home> --scope project --json
 knowledge sync push --peer-workspace <repo-or-knowledge-home> --scope project --json
-knowledge sync dry-run --machine spark01 --peer-workspace <remote-repo> --scope project --json
+knowledge sync dry-run --machine linux-node-a --peer-workspace <remote-repo> --scope project --json
 ```
 
 and MCP:
@@ -202,15 +202,23 @@ Cloud mode may store generated artifacts under an S3-compatible prefix:
 s3://<bucket>/<prefix>/.hasna/apps/knowledge/
 ```
 
-For Hasna XYZ open-source knowledge, the canonical generated-artifact location
+For example open-source knowledge, the canonical generated-artifact location
 is:
 
 ```text
-s3://hasna-xyz-opensource-knowledge-prod/.hasna/apps/knowledge/
+s3://example-knowledge-prod/.hasna/apps/knowledge/
 ```
 
 Artifacts include wiki pages, index shards, schema docs, logs, run outputs, and
 conflict proposals. Raw source bytes remain in `open-files`.
+
+Private fleet setup uses the same ownership split. `open-machines` owns the
+manifest semantics, `open-files` owns source refs to private manifests, and
+`open-secrets` owns secret refs and secret values. `knowledge` can record
+redacted decisions, citations, runbook summaries, and evidence hashes, but it
+must not store private manifests, machine hostnames, serial numbers, sudo
+passwords, VNC passwords, SSH private keys, GitHub App private keys, or secret
+values.
 
 ## Dedupe Rules
 

@@ -3,10 +3,10 @@ import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 
 const repoRoot = resolve(import.meta.dir, '..');
-const script = join(repoRoot, 'scripts', 'smoke-spark-sync-release.mjs');
+const script = join(repoRoot, 'scripts', 'smoke-machine-sync-release.mjs');
 const openFilesBoundaryScript = join(repoRoot, 'scripts', 'smoke-open-files-installed-boundary.mjs');
 
-describe('spark sync release smoke script', () => {
+describe('machine sync release smoke script', () => {
   test('prints help without requiring ssh or installed packages', () => {
     const result = spawnSync(process.execPath, [script, '--help'], {
       cwd: repoRoot,
@@ -15,7 +15,7 @@ describe('spark sync release smoke script', () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe('');
-    expect(result.stdout).toContain('smoke-spark-sync-release.mjs');
+    expect(result.stdout).toContain('smoke-machine-sync-release.mjs');
     expect(result.stdout).toContain('sync doctor');
     expect(result.stdout).toContain('@hasna/machines hidden locally');
     expect(result.stdout).toContain('--peer-workspace omitted');
@@ -27,9 +27,9 @@ describe('spark sync release smoke script', () => {
       '--dry-run',
       '--json',
       '--remote',
-      'spark01',
+      'linux-node-a',
       '--peer',
-      'spark01',
+      'linux-node-a',
       '--knowledge-version',
       '0.0.0-test',
       '--machines-version',
@@ -45,8 +45,8 @@ describe('spark sync release smoke script', () => {
     expect(output).toMatchObject({
       ok: true,
       dry_run: true,
-      remote: 'spark01',
-      peer: 'spark01',
+      remote: 'linux-node-a',
+      peer: 'linux-node-a',
       knowledge_version: '0.0.0-test',
       machines_version: '0.0.0-machines',
       no_machines_sync: true,

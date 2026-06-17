@@ -45,7 +45,7 @@ const knowledge = createKnowledgeClient({
   cwd: process.cwd(),
 });
 
-await knowledge.setup({ mode: 'hosted', canonicalHasnaXyz: true });
+await knowledge.setup({ mode: 'hosted', canonicalExample: true });
 await knowledge.ingest.source('file:///absolute/path/to/handbook.md', 'knowledge_index');
 
 const results = await knowledge.search({
@@ -119,16 +119,16 @@ knowledge storage status --scope project --json
 
 # Inspect optional machine topology for future sync
 knowledge machines topology --scope project --json
-knowledge machines preflight spark01 --workspace /home/hasna/workspace/hasna/opensource/open-knowledge --scope project --json
+knowledge machines preflight linux-node-a --workspace /workspace/open-knowledge --scope project --json
 
 # Inspect and record knowledge-aware sync ledger state
 knowledge sync status --scope project --json
-knowledge sync doctor --machine spark01 --scope project --json
+knowledge sync doctor --machine linux-node-a --scope project --json
 knowledge sync snapshot --scope project --no-tailscale --json
 knowledge sync conflicts --scope project --json
 knowledge sync dry-run --peer-workspace /path/to/peer/repo --scope project --json
 knowledge sync push --peer-workspace /path/to/peer/repo --scope project --json
-knowledge sync dry-run --machine spark01 --peer-workspace /home/hasna/workspace/hasna/opensource/open-knowledge --scope project --json
+knowledge sync dry-run --machine linux-node-a --peer-workspace /workspace/open-knowledge --scope project --json
 
 # Configure optional hosted mode and inspect remote contracts
 knowledge setup --mode hosted --api-url https://knowledge.hasna.xyz --scope project --json
@@ -302,7 +302,7 @@ Export all items. Use `--format jsonl` for newline-delimited JSON.
 ```bash
 knowledge paths [--scope global|project|local] [--json]
 ```
-Show the resolved Hasna app workspace, JSON compatibility store, SQLite path,
+Show the resolved app workspace, JSON compatibility store, SQLite path,
 artifact directories, and config.
 
 ### storage
@@ -318,25 +318,33 @@ knowledge bucket/prefix while `open-files` remains the source of truth for raw
 source bytes. The command also reports artifact classes, allowed source ref
 schemes, and warnings for non-scalable or unsafe config.
 
+Fleet setup evidence follows the same boundary. `storage status --json`
+includes `private_fleet_boundary`, which names `open-machines` as the manifest
+authority, `open-files` as the source-ref authority, and `open-secrets` as the
+secret-ref authority. `knowledge` may store source refs, redacted setup
+decisions, runbook summaries, citations, and evidence hashes; it must not store
+private manifests, hostnames, serial numbers, sudo passwords, VNC passwords,
+SSH private keys, GitHub App private keys, or secret values.
+
 `storage repair-artifact-keys` previews legacy `storage_objects` rows where the
 portable artifact key accidentally includes the configured S3 prefix. It only
 updates metadata after `--approve-write --approved-by <name>` and records an
 audit event; it does not move S3 objects or copy raw source bytes.
 
-For Hasna XYZ production, the canonical generated-artifact bucket is
-`hasna-xyz-opensource-knowledge-prod` in `us-east-1` with prefix
+For example production, the canonical generated-artifact bucket is
+`example-knowledge-prod` in `us-east-1` with prefix
 `.hasna/apps/knowledge/`. `storage status --json` exposes this under
-`canonical_hasna_xyz` even when local storage is active. The canonical
+`canonical_example` even when local storage is active. The canonical
 metadata-only secret paths are:
 
 ```text
-hasna/xyz/opensource/knowledge/prod/env
-hasna/xyz/opensource/knowledge/prod/aws
-hasna/xyz/opensource/knowledge/prod/s3
+example/knowledge/prod/env
+example/knowledge/prod/aws
+example/knowledge/prod/s3
 ```
 
 The future hosted database path, if provisioned, is
-`hasna/xyz/opensource/knowledge/prod/rds`.
+`example/knowledge/prod/rds`.
 
 ### machines
 ```bash
@@ -375,14 +383,14 @@ It builds isolated temp apps for project-local SDK resolution, global
 `machines` CLI-only fallback, unsupported future SDK contracts, and
 no-SDK/no-CLI fallback.
 
-The spark release smoke turns the manual spark02/spark01 sync runbook into a
+The machine release smoke turns the manual linux-node-b/linux-node-a sync runbook into a
 repeatable evidence command:
 
 ```bash
-bun run smoke:spark-sync-release -- --knowledge-version 0.2.63 --machines-version latest --json --keep-temp
+bun run smoke:machine-sync-release -- --knowledge-version 0.2.63 --machines-version latest --json --keep-temp
 ```
 
-It installs the requested package versions on spark02 and spark01, runs the
+It installs the requested package versions on linux-node-b and linux-node-a, runs the
 adapter smoke and machines consumer conformance on both machines when
 available, creates isolated project workspaces, runs `sync doctor`, dry-run,
 push, generated artifact manifest checks, forced conflicts in both directions,
@@ -469,7 +477,7 @@ SQLite catalog rows to or from PostgreSQL using the open-core storage contract.
 ```bash
 knowledge setup --mode local [--scope project] [--json]
 knowledge setup --mode hosted [--api-url https://knowledge.hasna.xyz] [--scope project] [--json]
-knowledge setup --mode hosted --canonical-hasna-xyz [--scope project] [--json]
+knowledge setup --mode hosted --canonical-example [--scope project] [--json]
 knowledge auth login --api-key <key> [--email you@example.com] [--org <slug>] [--scope project] [--json]
 knowledge auth whoami [--scope project] [--json]
 knowledge auth logout [--scope project] [--json]
@@ -662,7 +670,7 @@ knowledge help [command]
 |------|-------------|
 | `--json` | Output raw JSON |
 | `--store <path>` | Override store path |
-| `--scope global\|project\|local` | Select global Hasna app workspace or project workspace |
+| `--scope global\|project\|local` | Select global app workspace or project workspace |
 | `--version, -v` | Show version |
 | `--help, -h` | Show help |
 
@@ -788,9 +796,9 @@ prompt, embedding, or agent command explicitly requests a model.
 
 Generated knowledge artifacts can be stored locally under
 `.hasna/apps/knowledge/artifacts` or through the S3 artifact-store adapter.
-For Hasna XYZ production, `knowledge setup --mode hosted
---canonical-hasna-xyz --scope project --json` configures generated artifacts
-under `s3://hasna-xyz-opensource-knowledge-prod/.hasna/apps/knowledge/` and
+For example production, `knowledge setup --mode hosted
+--canonical-example --scope project --json` configures generated artifacts
+under `s3://example-knowledge-prod/.hasna/apps/knowledge/` and
 keeps `open-files` as the raw-source owner.
 
 The default safety policy allows writes only under the resolved

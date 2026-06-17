@@ -114,8 +114,8 @@ function fakeTopology(workspaceHome: string): KnowledgeMachineTopology {
     ok: true,
     source: 'open-machines',
     generated_at: '2026-06-09T00:00:00.000Z',
-    local_machine_id: 'spark02',
-    local_hostname: 'spark02',
+    local_machine_id: 'linux-node-b',
+    local_hostname: 'linux-node-b',
     current_platform: 'linux',
     knowledge: {
       scope: 'project',
@@ -124,8 +124,8 @@ function fakeTopology(workspaceHome: string): KnowledgeMachineTopology {
     },
     machines: [
       {
-        machine_id: 'spark02',
-        hostname: 'spark02',
+        machine_id: 'linux-node-b',
+        hostname: 'linux-node-b',
         local: true,
         platform: 'linux',
         os: 'linux',
@@ -135,14 +135,14 @@ function fakeTopology(workspaceHome: string): KnowledgeMachineTopology {
         heartbeat_status: 'online',
         last_heartbeat_at: '2026-06-09T00:00:00.000Z',
         tailscale: {
-          dns_name: 'spark02.example.ts.net',
+          dns_name: 'linux-node-b.example.ts.net',
           ips: ['100.64.0.2'],
           online: true,
           active: true,
           last_seen: null,
         },
         ssh: {
-          address: 'spark02',
+          address: 'linux-node-b',
           route: 'local',
           command_target: 'localhost',
         },
@@ -152,29 +152,29 @@ function fakeTopology(workspaceHome: string): KnowledgeMachineTopology {
         source: 'open-machines',
       },
       {
-        machine_id: 'spark01',
-        hostname: 'spark01',
+        machine_id: 'linux-node-a',
+        hostname: 'linux-node-a',
         local: false,
         platform: 'linux',
         os: 'linux',
         user: 'hasna',
-        workspace_path: '/home/hasna/workspace/hasna/opensource/open-knowledge',
+        workspace_path: '/workspace/open-knowledge',
         manifest_declared: true,
         heartbeat_status: 'online',
         last_heartbeat_at: '2026-06-09T00:00:00.000Z',
         tailscale: {
-          dns_name: 'spark01.example.ts.net',
+          dns_name: 'linux-node-a.example.ts.net',
           ips: ['100.64.0.1'],
           online: true,
           active: true,
           last_seen: null,
         },
         ssh: {
-          address: 'spark01',
+          address: 'linux-node-a',
           route: 'tailscale',
-          command_target: 'spark01.example.ts.net',
+          command_target: 'linux-node-a.example.ts.net',
         },
-        route_hints: [{ kind: 'tailscale', target: 'spark01.example.ts.net', reachable: true }],
+        route_hints: [{ kind: 'tailscale', target: 'linux-node-a.example.ts.net', reachable: true }],
         tags: ['sync'],
         metadata: { role: 'remote' },
         source: 'open-machines',
@@ -221,7 +221,7 @@ describe('knowledge machine sync ledger', () => {
     });
 
     expect(snapshot.machines_upserted).toBe(2);
-    expect(snapshot.snapshot.machine_id).toBe('spark02');
+    expect(snapshot.snapshot.machine_id).toBe('linux-node-b');
     expect(snapshot.snapshot.content_hash).toStartWith('sha256:');
     expect(snapshot.snapshot.tables.storage_objects).toBe(1);
     expect(snapshot.snapshot.tables.knowledge_machines).toBe(2);
@@ -246,8 +246,8 @@ describe('knowledge machine sync ledger', () => {
     const conflict = recordKnowledgeSyncConflict(workspace.knowledge_db_path, {
       entityKind: 'wiki_page',
       entityId: 'wiki/generated/handbook.md',
-      localMachineId: 'spark02',
-      remoteMachineId: 'spark01',
+      localMachineId: 'linux-node-b',
+      remoteMachineId: 'linux-node-a',
       localHash: 'sha256:local',
       remoteHash: 'sha256:remote',
       baseHash: 'sha256:base',

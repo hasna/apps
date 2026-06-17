@@ -75,8 +75,8 @@ function writeFakeMachinesRouteBin(bin: string, target: string, projectRoot = '/
     'if [ "$1" = "workspace" ] && [ "$2" = "resolve" ]; then',
     `  printf '%s\\n' '${JSON.stringify({
       ok: true,
-      requested_machine_id: 'spark01',
-      machine_id: 'spark01',
+      requested_machine_id: 'linux-node-a',
+      machine_id: 'linux-node-a',
       project: { project_id: 'open-knowledge', repo_name: 'open-knowledge' },
       machine: { current: false, primary: false, trust_status: 'trusted', auth_status: 'authenticated' },
       paths: {
@@ -117,7 +117,7 @@ function emptySyncBundle() {
       scope: 'project',
       workspace_home: '/remote/.hasna/apps/knowledge',
       sqlite_schema_version: 6,
-      machine_id: 'spark01',
+      machine_id: 'linux-node-a',
       artifact_root_uri: 'file:///remote/.hasna/apps/knowledge/artifacts/',
     },
     tables: [],
@@ -190,7 +190,7 @@ describe('knowledge MCP', () => {
     });
     const targetPath = join(dir, 'mcp-ssh-target.txt');
     const fakeBin = writeFakeSshBin(dir);
-    writeFakeMachinesRouteBin(fakeBin, 'mcp-spark01.tailnet.test');
+    writeFakeMachinesRouteBin(fakeBin, 'mcp-linux-node-a.tailnet.test');
 
     const transport = new StdioClientTransport({
       command: 'bun',
@@ -322,12 +322,12 @@ describe('knowledge MCP', () => {
         name: 'knowledge_sync_doctor',
         arguments: {
           scope: 'project',
-          machine: 'spark01',
+          machine: 'linux-node-a',
         },
       }));
       expect(syncDoctor.ok).toBe(true);
       expect(syncDoctor.package.name).toBe('@hasna/knowledge');
-      expect(syncDoctor.resolved_route.target).toBe('mcp-spark01.tailnet.test');
+      expect(syncDoctor.resolved_route.target).toBe('mcp-linux-node-a.tailnet.test');
       expect(syncDoctor.resolved_workspace.diagnostics[0]).toMatchObject({
         id: 'project_root',
         status: 'ok',
@@ -350,8 +350,8 @@ describe('knowledge MCP', () => {
       const conflict = recordKnowledgeSyncConflict(conflictService.ensureWorkspace().knowledgeDbPath, {
         entityKind: 'wiki_pages',
         entityId: 'wiki/mcp.md',
-        localMachineId: 'spark02',
-        remoteMachineId: 'spark01',
+        localMachineId: 'linux-node-b',
+        remoteMachineId: 'linux-node-a',
         localHash: 'sha256:mcp-local',
         remoteHash: 'sha256:mcp-remote',
         baseHash: 'sha256:mcp-base',
@@ -434,20 +434,20 @@ describe('knowledge MCP', () => {
         name: 'knowledge_sync_peer',
         arguments: {
           scope: 'project',
-          machine: 'spark01',
+          machine: 'linux-node-a',
           direction: 'dry-run',
         },
       }));
       expect(remoteSyncPeer.ok).toBe(true);
       expect(remoteSyncPeer.transport).toBe('ssh');
-      expect(remoteSyncPeer.resolved_machine).toBe('mcp-spark01.tailnet.test');
+      expect(remoteSyncPeer.resolved_machine).toBe('mcp-linux-node-a.tailnet.test');
       expect(remoteSyncPeer.resolved_route).toMatchObject({
         source: 'open-machines',
         adapter: {
           implementation: 'cli',
           available: true,
         },
-        target: 'mcp-spark01.tailnet.test',
+        target: 'mcp-linux-node-a.tailnet.test',
         route: 'tailscale',
         target_kind: 'tailscale',
         confidence: 'high',
@@ -467,7 +467,7 @@ describe('knowledge MCP', () => {
           status: 'ok',
         }],
       });
-      expect(readFileSync(targetPath, 'utf8')).toBe('mcp-spark01.tailnet.test');
+      expect(readFileSync(targetPath, 'utf8')).toBe('mcp-linux-node-a.tailnet.test');
 
       const source = parseToolJson(await client.callTool({
         name: 'ok_parse_source_ref',

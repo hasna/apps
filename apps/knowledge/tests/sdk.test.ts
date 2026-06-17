@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   HASNA_KNOWLEDGE_APP_PATH,
-  HASNA_XYZ_KNOWLEDGE_CANONICAL,
+  EXAMPLE_KNOWLEDGE_CANONICAL,
   createKnowledgeClient,
   createKnowledgeSdk,
   parseSourceRef,
@@ -79,8 +79,8 @@ function writeFakeMachinesRouteBin(
     'if [ "$1" = "workspace" ] && [ "$2" = "resolve" ]; then',
     `  printf '%s\\n' '${JSON.stringify({
       ok: true,
-      requested_machine_id: 'spark01',
-      machine_id: 'spark01',
+      requested_machine_id: 'linux-node-a',
+      machine_id: 'linux-node-a',
       project: { project_id: 'open-knowledge', repo_name: 'open-knowledge' },
       machine: { current: false, primary: false, trust_status: 'trusted', auth_status: 'authenticated' },
       paths: {
@@ -143,7 +143,7 @@ function emptySyncBundle() {
       scope: 'project',
       workspace_home: '/remote/.hasna/apps/knowledge',
       sqlite_schema_version: 6,
-      machine_id: 'spark01',
+      machine_id: 'linux-node-a',
       artifact_root_uri: 'file:///remote/.hasna/apps/knowledge/artifacts/',
     },
     tables: [],
@@ -193,20 +193,23 @@ describe('public knowledge sdk', () => {
 
     expect(createKnowledgeSdk).toBe(createKnowledgeClient);
     expect(HASNA_KNOWLEDGE_APP_PATH).toBe(join('.hasna', 'apps', 'knowledge'));
-    expect(HASNA_XYZ_KNOWLEDGE_CANONICAL.source_owner).toBe('open-files');
+    expect(EXAMPLE_KNOWLEDGE_CANONICAL.source_owner).toBe('open-files');
 
     const paths = client.paths();
     expect(paths.home).toBe(join(dir, '.hasna', 'apps', 'knowledge'));
     expect(paths.config.storage.type).toBe('local');
 
-    const setup = client.setup({ mode: 'hosted', canonicalHasnaXyz: true });
+    const setup = client.setup({ mode: 'hosted', canonicalExample: true });
     expect(setup.mode).toBe('hosted');
     expect(setup.storage_type).toBe('s3');
-    expect(setup.canonical_hasna_xyz.active).toBe(true);
+    expect(setup.canonical_example.active).toBe(true);
 
     const storage = client.storage.status();
     expect(storage.source_ownership.owner).toBe('open-files');
     expect(storage.source_ownership.raw_source_bytes_stored_in_open_knowledge).toBe(false);
+    expect(storage.private_fleet_boundary.manifest_authority).toBe('open-machines');
+    expect(storage.private_fleet_boundary.raw_private_manifest_bytes_stored_in_open_knowledge).toBe(false);
+    expect(storage.private_fleet_boundary.does_not_store).toContain('GitHub App private keys');
     expect(client.storage.validate().ok).toBe(true);
 
     const parsed = parseSourceRef(`file://${source}`);
@@ -242,8 +245,8 @@ describe('public knowledge sdk', () => {
     const conflict = recordKnowledgeSyncConflict(client.paths().knowledge_db_path, {
       entityKind: 'sources',
       entityId: 'id="source_sdk"',
-      localMachineId: 'spark02',
-      remoteMachineId: 'spark01',
+      localMachineId: 'linux-node-b',
+      remoteMachineId: 'linux-node-a',
       localHash: 'sha256:sdk-local',
       remoteHash: 'sha256:sdk-remote',
       baseHash: 'sha256:sdk-base',
@@ -272,7 +275,7 @@ describe('public knowledge sdk', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-sdk-remote-sync-'));
     const targetPath = join(dir, 'ssh-target.txt');
     const bin = writeFakeSshBin(dir);
-    writeFakeMachinesRouteBin(bin, 'sdk-spark01.tailnet.test');
+    writeFakeMachinesRouteBin(bin, 'sdk-linux-node-a.tailnet.test');
     const oldEnv = {
       PATH: process.env.PATH,
       KNOWLEDGE_FAKE_SSH_EXPORT_JSON: process.env.KNOWLEDGE_FAKE_SSH_EXPORT_JSON,
@@ -285,7 +288,7 @@ describe('public knowledge sdk', () => {
       process.env.KNOWLEDGE_FAKE_SSH_IMPORT_JSON = JSON.stringify(emptyImportResult());
       process.env.KNOWLEDGE_FAKE_SSH_TARGET_PATH = targetPath;
       const client = createKnowledgeClient({ scope: 'project', cwd: dir });
-      const doctor = await client.sync.doctor({ machine: 'spark01' });
+      const doctor = await client.sync.doctor({ machine: 'linux-node-a' });
       expect(doctor.ok).toBe(true);
       expect(doctor.resolved_workspace?.diagnostics[0]).toMatchObject({
         id: 'project_root',
@@ -293,21 +296,21 @@ describe('public knowledge sdk', () => {
       });
 
       const result = await client.sync.remotePeer({
-        machine: 'spark01',
+        machine: 'linux-node-a',
         direction: 'both',
         dryRun: true,
       });
 
       expect(result.ok).toBe(true);
       expect(result.transport).toBe('ssh');
-      expect(result.resolved_machine).toBe('sdk-spark01.tailnet.test');
+      expect(result.resolved_machine).toBe('sdk-linux-node-a.tailnet.test');
       expect(result.resolved_route).toMatchObject({
         source: 'open-machines',
         adapter: {
           implementation: 'cli',
           available: true,
         },
-        target: 'sdk-spark01.tailnet.test',
+        target: 'sdk-linux-node-a.tailnet.test',
         route: 'tailscale',
         target_kind: 'tailscale',
         confidence: 'high',
@@ -328,7 +331,7 @@ describe('public knowledge sdk', () => {
           status: 'ok',
         }],
       });
-      expect(readFileSync(targetPath, 'utf8')).toBe('sdk-spark01.tailnet.test');
+      expect(readFileSync(targetPath, 'utf8')).toBe('sdk-linux-node-a.tailnet.test');
     } finally {
       if (oldEnv.PATH === undefined) delete process.env.PATH;
       else process.env.PATH = oldEnv.PATH;
@@ -346,7 +349,7 @@ describe('public knowledge sdk', () => {
     const targetPath = join(dir, 'ssh-target.txt');
     const stdinPath = join(dir, 'ssh-stdin.json');
     const bin = writeFakeSshBin(dir);
-    writeFakeMachinesRouteBin(bin, 'sdk-spark01.tailnet.test');
+    writeFakeMachinesRouteBin(bin, 'sdk-linux-node-a.tailnet.test');
     const oldEnv = {
       PATH: process.env.PATH,
       KNOWLEDGE_FAKE_SSH_EXPORT_JSON: process.env.KNOWLEDGE_FAKE_SSH_EXPORT_JSON,
@@ -363,7 +366,7 @@ describe('public knowledge sdk', () => {
       const client = createKnowledgeClient({ scope: 'project', cwd: dir });
 
       const first = await client.sync.remotePeer({
-        machine: 'spark01',
+        machine: 'linux-node-a',
         direction: 'push',
         dryRun: false,
       });
@@ -382,10 +385,10 @@ describe('public knowledge sdk', () => {
       });
       const pushedBundle = JSON.parse(readFileSync(stdinPath, 'utf8'));
       const pushedMachines = pushedBundle.tables.find((table: { table: string }) => table.table === 'knowledge_machines');
-      expect(pushedMachines.rows.some((row: { machine_id: string }) => row.machine_id === 'spark01')).toBe(true);
-      const registryRow = client.sync.machines().find((row) => row.machine_id === 'spark01');
+      expect(pushedMachines.rows.some((row: { machine_id: string }) => row.machine_id === 'linux-node-a')).toBe(true);
+      const registryRow = client.sync.machines().find((row) => row.machine_id === 'linux-node-a');
       expect(registryRow).toBeDefined();
-      expect(registryRow?.ssh_target).toBe('sdk-spark01.tailnet.test');
+      expect(registryRow?.ssh_target).toBe('sdk-linux-node-a.tailnet.test');
       expect(registryRow?.workspace_home).toBe('/remote/open-knowledge');
       expect(JSON.parse(registryRow?.metadata_json ?? '{}').resolver_evidence.route.source).toBe('open-machines');
       expect(JSON.parse(registryRow?.metadata_json ?? '{}').resolver_evidence.route.cacheability.cacheable).toBe(true);
@@ -395,25 +398,25 @@ describe('public knowledge sdk', () => {
 
       writeFakeMachinesRouteBin(
         bin,
-        'sdk-spark01.tailnet.test',
+        'sdk-linux-node-a.tailnet.test',
         '/remote/open-knowledge',
         '2026-06-09T00:01:00.000Z',
         '2099-06-10T00:06:00.000Z',
       );
       const repeated = await client.sync.remotePeer({
-        machine: 'spark01',
+        machine: 'linux-node-a',
         direction: 'push',
         dryRun: false,
       });
       expect(repeated.ok).toBe(true);
-      const repeatedRegistryRow = client.sync.machines().find((row) => row.machine_id === 'spark01');
+      const repeatedRegistryRow = client.sync.machines().find((row) => row.machine_id === 'linux-node-a');
       expect(repeatedRegistryRow?.updated_at).toBe(registryRow?.updated_at);
       expect(repeatedRegistryRow?.metadata_json).toBe(registryRow?.metadata_json);
 
       writeBrokenMachinesBin(bin);
       writeFileSync(targetPath, '');
       process.env.KNOWLEDGE_FAKE_SSH_IMPORT_JSON = JSON.stringify(emptyImportResult());
-      const doctor = await client.sync.doctor({ machine: 'spark01' });
+      const doctor = await client.sync.doctor({ machine: 'linux-node-a' });
       expect(doctor.ok).toBe(true);
       expect(doctor.resolved_route?.source).toBe('registry');
       expect(doctor.resolved_workspace?.source).toBe('registry');
@@ -423,32 +426,32 @@ describe('public knowledge sdk', () => {
 
       writeFileSync(targetPath, '');
       const explicit = await client.sync.remotePeer({
-        machine: 'spark01',
+        machine: 'linux-node-a',
         peerWorkspace: '/remote/open-knowledge',
         direction: 'push',
         dryRun: true,
       });
       expect(explicit.ok).toBe(true);
-      expect(explicit.resolved_machine).toBe('spark01');
+      expect(explicit.resolved_machine).toBe('linux-node-a');
       expect(explicit.resolved_route.source).toBe('raw');
       expect(explicit.resolved_workspace.source).toBe('argument');
-      expect(readFileSync(targetPath, 'utf8')).toBe('spark01');
+      expect(readFileSync(targetPath, 'utf8')).toBe('linux-node-a');
 
       writeFileSync(targetPath, '');
       const second = await client.sync.remotePeer({
-        machine: 'spark01',
+        machine: 'linux-node-a',
         direction: 'push',
         dryRun: true,
       });
 
       expect(second.ok).toBe(true);
-      expect(second.resolved_machine).toBe('sdk-spark01.tailnet.test');
+      expect(second.resolved_machine).toBe('sdk-linux-node-a.tailnet.test');
       expect(second.resolved_route.source).toBe('registry');
       expect(second.resolved_workspace.source).toBe('registry');
       expect(second.resolved_route.cacheability?.source_authority).toBe('open-machines');
       expect(second.resolved_workspace.cacheability?.cacheable).toBe(true);
       expect(second.peer_workspace).toBe('/remote/open-knowledge');
-      expect(readFileSync(targetPath, 'utf8')).toBe('sdk-spark01.tailnet.test');
+      expect(readFileSync(targetPath, 'utf8')).toBe('sdk-linux-node-a.tailnet.test');
     } finally {
       if (oldEnv.PATH === undefined) delete process.env.PATH;
       else process.env.PATH = oldEnv.PATH;

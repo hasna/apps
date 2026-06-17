@@ -82,40 +82,40 @@ export interface KnowledgeConfig {
   };
 }
 
-export const HASNA_XYZ_KNOWLEDGE_CANONICAL = {
+export const EXAMPLE_KNOWLEDGE_CANONICAL = {
   division: 'xyz',
   app_type: 'opensource',
   app: 'knowledge',
   env: 'prod',
   local_path: HASNA_KNOWLEDGE_APP_PATH,
   s3: {
-    bucket: 'hasna-xyz-opensource-knowledge-prod',
+    bucket: 'example-knowledge-prod',
     region: 'us-east-1',
-    profile: 'hasna-xyz-infra',
+    profile: 'example-infra',
     prefix: '.hasna/apps/knowledge',
     server_side_encryption: 'AES256',
   },
   secrets: {
-    env: 'hasna/xyz/opensource/knowledge/prod/env',
-    aws: 'hasna/xyz/opensource/knowledge/prod/aws',
-    s3: 'hasna/xyz/opensource/knowledge/prod/s3',
+    env: 'example/knowledge/prod/env',
+    aws: 'example/knowledge/prod/aws',
+    s3: 'example/knowledge/prod/s3',
     rds: null,
-    future_rds: 'hasna/xyz/opensource/knowledge/prod/rds',
+    future_rds: 'example/knowledge/prod/rds',
   },
   source_owner: 'open-files',
   evidence_doc: 'docs/canonical-secrets-bootstrap-2026-06-08.md',
 } as const;
 
-export function canonicalHasnaXyzKnowledgeStorage(): KnowledgeConfig['storage'] {
+export function canonicalExampleKnowledgeStorage(): KnowledgeConfig['storage'] {
   return {
     type: 's3',
     artifacts_root: 'artifacts',
     s3: {
-      bucket: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.bucket,
-      prefix: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.prefix,
-      region: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.region,
-      profile: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.profile,
-      server_side_encryption: HASNA_XYZ_KNOWLEDGE_CANONICAL.s3.server_side_encryption,
+      bucket: EXAMPLE_KNOWLEDGE_CANONICAL.s3.bucket,
+      prefix: EXAMPLE_KNOWLEDGE_CANONICAL.s3.prefix,
+      region: EXAMPLE_KNOWLEDGE_CANONICAL.s3.region,
+      profile: EXAMPLE_KNOWLEDGE_CANONICAL.s3.profile,
+      server_side_encryption: EXAMPLE_KNOWLEDGE_CANONICAL.s3.server_side_encryption,
     },
   };
 }

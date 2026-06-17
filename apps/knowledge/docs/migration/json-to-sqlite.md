@@ -1,7 +1,7 @@
 # JSON To SQLite Migration
 
 `knowledge` began as a simple JSON note store. Current project mode uses a
-Hasna app workspace and a versioned SQLite catalog:
+app workspace and a versioned SQLite catalog:
 
 ```text
 .hasna/apps/knowledge/
@@ -34,7 +34,7 @@ to:
 ~/.hasna/apps/knowledge/db.json
 ```
 
-This happens only when the new Hasna JSON store does not already exist. The
+This happens only when the new app JSON store does not already exist. The
 legacy file is not deleted.
 
 Project mode writes directly to:

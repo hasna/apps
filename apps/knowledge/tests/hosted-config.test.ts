@@ -18,7 +18,7 @@ describe('hosted-aware config and remote contracts', () => {
     expect(setup.mode).toBe('hosted');
     expect(setup.api_url).toBe('https://knowledge.example.com');
     expect(setup.storage_type).toBe('local');
-    expect(setup.canonical_hasna_xyz.active).toBe(false);
+    expect(setup.canonical_example.active).toBe(false);
     expect(setup.next).toContain('knowledge auth login --api-key <key>');
 
     const config = JSON.parse(readFileSync(join(dir, '.hasna', 'apps', 'knowledge', 'config.json'), 'utf8'));
@@ -39,35 +39,35 @@ describe('hosted-aware config and remote contracts', () => {
     expect(service.config().mode).toBe('local');
   });
 
-  test('can opt into canonical Hasna XYZ S3 artifact storage', () => {
+  test('can opt into canonical example S3 artifact storage', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-hosted-canonical-storage-'));
     const service = createKnowledgeService({ scope: 'project', cwd: dir });
 
     const setup = service.setup({
       mode: 'hosted',
-      canonicalHasnaXyz: true,
+      canonicalExample: true,
     });
 
     expect(setup.mode).toBe('hosted');
     expect(setup.storage_type).toBe('s3');
-    expect(setup.artifact_uri_prefix).toBe('s3://hasna-xyz-opensource-knowledge-prod/.hasna/apps/knowledge/');
-    expect(setup.canonical_hasna_xyz.active).toBe(true);
+    expect(setup.artifact_uri_prefix).toBe('s3://example-knowledge-prod/.hasna/apps/knowledge/');
+    expect(setup.canonical_example.active).toBe(true);
 
     const config = JSON.parse(readFileSync(join(dir, '.hasna', 'apps', 'knowledge', 'config.json'), 'utf8'));
     expect(config.storage).toMatchObject({
       type: 's3',
       artifacts_root: 'artifacts',
       s3: {
-        bucket: 'hasna-xyz-opensource-knowledge-prod',
+        bucket: 'example-knowledge-prod',
         prefix: '.hasna/apps/knowledge',
         region: 'us-east-1',
-        profile: 'hasna-xyz-infra',
+        profile: 'example-infra',
         server_side_encryption: 'AES256',
       },
     });
 
     const storage = service.storageContract();
-    expect(storage.canonical_hasna_xyz.secrets.s3).toBe('hasna/xyz/opensource/knowledge/prod/s3');
+    expect(storage.canonical_example.secrets.s3).toBe('example/knowledge/prod/s3');
     expect(storage.source_ownership.owner).toBe('open-files');
   });
 

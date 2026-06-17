@@ -115,8 +115,8 @@ export {
 } from './sync.js';
 export {
   HASNA_KNOWLEDGE_APP_PATH,
-  HASNA_XYZ_KNOWLEDGE_CANONICAL,
-  canonicalHasnaXyzKnowledgeStorage,
+  EXAMPLE_KNOWLEDGE_CANONICAL,
+  canonicalExampleKnowledgeStorage,
   defaultKnowledgeConfig,
   ensureKnowledgeWorkspace,
   globalKnowledgeHome,
