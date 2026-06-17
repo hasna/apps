@@ -7,6 +7,7 @@ import { DiscordChannel } from "./channels/discord.js";
 import { WebhookChannel } from "./channels/webhook.js";
 import type { AlertPayload, AlertConfig } from "./types.js";
 import { tmpdir } from "os";
+import { AttackType, Ecosystem, Severity } from "../types/index.js";
 
 // Mock fetch for all channel tests
 const mockFetch = mock(async (url: string, init?: RequestInit) => {
@@ -24,11 +25,11 @@ const mockFetch = mock(async (url: string, init?: RequestInit) => {
 const MOCK_ADVISORY = {
   id: "test-advisory-id",
   package_name: "axios",
-  ecosystem: "npm" as const,
+  ecosystem: Ecosystem.Npm,
   affected_versions: ["1.14.1"],
   safe_versions: ["1.13.6"],
-  attack_type: "maintainer-hijack" as const,
-  severity: "critical" as const,
+  attack_type: AttackType.MaintainerHijack,
+  severity: Severity.Critical,
   title: "axios supply chain attack",
   description: "Test description",
   source: "https://example.com",

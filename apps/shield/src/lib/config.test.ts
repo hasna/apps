@@ -43,7 +43,7 @@ describe("config", () => {
       );
 
       const config = loadConfig(tempDir);
-      expect(config.severity_threshold).toBe("high");
+      expect(config.severity_threshold).toBe(Severity.High);
       expect(config.auto_fix).toBe(true);
       // Other fields should still be defaults
       expect(config.output_format).toBe(DEFAULT_CONFIG.output_format);

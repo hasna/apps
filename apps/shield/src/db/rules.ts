@@ -87,7 +87,7 @@ export function listRules(scanner_type?: ScannerType, enabled?: boolean): Rule[]
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   const stmt = db.prepare(`SELECT * FROM rules ${where} ORDER BY scanner_type, severity`);
-  return (stmt.all(...params) as RuleRow[]).map(rowToRule);
+  return (stmt.all(...(params as any[])) as RuleRow[]).map(rowToRule);
 }
 
 export function updateRule(id: string, updates: Partial<Omit<Rule, "id" | "created_at" | "updated_at">>): void {
@@ -135,7 +135,7 @@ export function updateRule(id: string, updates: Partial<Omit<Rule, "id" | "creat
   params.push(id);
 
   const stmt = db.prepare(`UPDATE rules SET ${sets.join(", ")} WHERE id = ?`);
-  stmt.run(...params);
+  stmt.run(...(params as any[]));
 }
 
 export function toggleRule(id: string, enabled: boolean): void {

@@ -144,7 +144,7 @@ describe("advisory IOCs", () => {
 
   test("getAllIOCs returns all IOCs", () => {
     const advisory = createAdvisory({ package_name: "ioc-all-test", ecosystem: Ecosystem.Npm, affected_versions: ["1.0.0"], safe_versions: [], attack_type: AttackType.MaliciousPackage, severity: Severity.Critical, title: "t", description: "", source: "" });
-    createAdvisoryIOC({ advisory_id: advisory.id, type: IOCType.Domain, value: "c2.example.com", context: null });
+    createAdvisoryIOC({ advisory_id: advisory.id, type: IOCType.Domain, value: "c2.example.com" });
     const all = getAllIOCs();
     expect(all.length).toBeGreaterThan(0);
   });
@@ -182,7 +182,7 @@ describe("registry events", () => {
 
     const events = listRegistryEvents({ package_name: "event-test-pkg" });
     expect(events.length).toBeGreaterThanOrEqual(1);
-    expect(events[0].suspicious).toBe(1);
+    expect(Boolean(events[0].suspicious)).toBe(true);
 
     const suspicious = listRegistryEvents({ suspicious_only: true });
     expect(suspicious.length).toBeGreaterThanOrEqual(1);

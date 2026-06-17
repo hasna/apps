@@ -141,7 +141,7 @@ export function listFindings(options: ListFindingsOptions = {}): Finding[] {
   );
   params.push(limit, offset);
 
-  return (stmt.all(...params) as FindingRow[]).map(rowToFinding);
+  return (stmt.all(...(params as any[])) as FindingRow[]).map(rowToFinding);
 }
 
 export function updateFinding(
@@ -177,7 +177,7 @@ export function updateFinding(
 
   params.push(id);
   const stmt = db.prepare(`UPDATE findings SET ${sets.join(", ")} WHERE id = ?`);
-  stmt.run(...params);
+  stmt.run(...(params as any[]));
 }
 
 export function suppressFinding(id: string, reason: string): void {
@@ -200,7 +200,7 @@ export function countFindings(scan_id?: string, severity?: Severity): number {
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   const stmt = db.prepare(`SELECT COUNT(*) as count FROM findings ${where}`);
-  const row = stmt.get(...params) as { count: number };
+  const row = stmt.get(...(params as any[])) as { count: number };
   return row.count;
 }
 

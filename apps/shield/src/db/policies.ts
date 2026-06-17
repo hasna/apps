@@ -109,7 +109,7 @@ export function updatePolicy(
   params.push(id);
 
   const stmt = db.prepare(`UPDATE policies SET ${sets.join(", ")} WHERE id = ?`);
-  stmt.run(...params);
+  stmt.run(...(params as any[]));
 }
 
 export function getActivePolicy(): Policy | null {
