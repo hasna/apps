@@ -92,6 +92,8 @@ export {
 } from "./lib/machines.js";
 export { listHasnaMcpCatalog, runFleetHealthCheck, runFleetInstall } from "./lib/fleet.js";
 export { readPackageVersion } from "./lib/version.js";
+export { buildMcpsStatus, getMcpsStatus } from "./lib/status.js";
+export type { McpsStatusContract } from "./lib/status.js";
 export {
   assertLocalCommandConsent,
   formatLocalCommandReview,

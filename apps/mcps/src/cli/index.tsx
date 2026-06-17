@@ -79,6 +79,7 @@ import * as readline from "readline";
 import { startServer } from "../server/serve.js";
 import { App } from "./components/App.js";
 import { readPackageVersion } from "../lib/version.js";
+import { getMcpsStatus } from "../lib/status.js";
 import type {
   FleetHealthReport,
   FleetInstallReport,
@@ -958,22 +959,19 @@ program
   .description("Show registry stats")
   .option("--json", "Output as JSON")
   .action((opts) => {
-    const servers = listServers();
-    const enabled = servers.filter((s) => s.enabled).length;
-    const disabled = servers.length - enabled;
-    const toolCounts = getToolCounts();
-    let totalTools = 0;
-    for (const s of servers) totalTools += toolCounts.get(s.id) ?? 0;
+    const status = getMcpsStatus();
 
     if (opts.json) {
-      console.log(JSON.stringify({ total: servers.length, enabled, disabled, totalTools }, null, 2));
+      console.log(JSON.stringify(status, null, 2));
       closeDb();
       return;
     }
 
     console.log(chalk.bold("Registry Status"));
-    console.log(`  Servers:  ${servers.length} (${chalk.green(`${enabled} enabled`)}, ${chalk.red(`${disabled} disabled`)})`);
-    console.log(`  Tools:    ${totalTools} (cached)`);
+    console.log(`  Package:  ${status.package.version}`);
+    console.log(`  Servers:  ${status.counts.servers.total} (${chalk.green(`${status.counts.servers.enabled} enabled`)}, ${chalk.red(`${status.counts.servers.disabled} disabled`)})`);
+    console.log(`  Sources:  ${status.registry.sources.total} (${chalk.green(`${status.registry.sources.enabled} enabled`)}, ${chalk.red(`${status.registry.sources.disabled} disabled`)})`);
+    console.log(`  Tools:    ${status.cache.cachedTools} (cached)`);
     closeDb();
   });
 
