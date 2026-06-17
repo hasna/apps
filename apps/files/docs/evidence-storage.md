@@ -1,16 +1,16 @@
 # Evidence Storage Contract
 
-`@hasna/files` is the shared durable file and evidence layer for Hasna internal apps.
+`@hasna/files` is a shared durable file and evidence layer for apps.
 
 ## Boundary
 
 Apps own domain meaning. `@hasna/files` owns bytes.
 
-Internal apps should store `file_asset_id` plus domain metadata such as `company_id`, `source_type`, `source_id`, and `kind`. They should not own production bucket names, object keys, signed URL generation, retention behavior, or file access audit.
+Apps should store `file_asset_id` plus domain metadata such as `company_id`, `source_type`, `source_id`, and `kind`. They should not own production bucket names, object keys, signed URL generation, retention behavior, or file access audit.
 
 ## Production Bucket
 
-Use `hasna-files-prod` as the production evidence bucket for now.
+Use an app-owned S3 bucket for hosted deployments, for example `example-files-prod`.
 
 Default object layout:
 
@@ -32,7 +32,7 @@ Files enter the bucket under `quarantine/` and move to the final key only after 
 
 ## Local Mode
 
-Local filesystem storage is allowed for development, tests, offline, and self-hosted deployments. Production internal apps should use the shared bucket through this package.
+Local filesystem storage is allowed for development, tests, offline, and self-hosted deployments. Hosted apps should use their configured bucket through this package.
 
 ## Security Defaults
 

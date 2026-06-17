@@ -25,23 +25,20 @@ Google Drive sync uses profiles configured through the connectors CLI:
 connectors auth googledrive
 ```
 
-Add or repair the production S3 destination once. This stores the AWS named
-profile on the source and sets it as the default Google Drive destination:
+Add or repair an S3 destination once. This stores an AWS named profile on the
+source and sets it as the default Google Drive destination:
 
 ```bash
-files sources bootstrap-prod-emails
+files sources add s3://example-files-bucket/google-drive --region us-east-1 --aws-profile files-sync
 files sources add-google-drive --all-profiles --all
 files sources sync-google-drive --dry-run
 files sources sync-google-drive
 ```
 
-The production default is `s3://hasna-xyz-prod-emails/drive/<profile>/...`
-using the `hasna-xyz-infra` AWS profile.
-
-For a custom S3 destination, pass the shared AWS profile explicitly:
+For a custom S3 destination, pass your AWS profile explicitly:
 
 ```bash
-files sources add s3://my-files-bucket/google-drive --region us-east-1 --aws-profile hasna-xyz-infra
+files sources add s3://my-files-bucket/google-drive --region us-east-1 --aws-profile files-sync
 ```
 
 To sync into local storage instead, add a local source and pass it as the
@@ -91,7 +88,7 @@ store `file_asset_id` plus domain metadata; this package owns durable storage,
 upload intents, checksum verification, quarantine promotion, signed downloads,
 retention metadata, and access audit.
 
-Production evidence storage defaults to the shared `hasna-files-prod` S3 bucket:
+Evidence storage can be configured to use your own S3 bucket:
 
 ```bash
 files evidence configure-prod
@@ -130,6 +127,11 @@ and read-only access. Stable refs use `open-files://file/<id>` and
 
 See [docs/knowledge-source-contract.md](docs/knowledge-source-contract.md) for
 the URI, resolver, manifest export, and change outbox plan.
+
+Private fleet manifests should be passed by source ref, not copied into public
+packages or logs. Use `buildOpenFilesFleetManifestRef(sourceId, path)` and
+`describeOpenFilesSourceRef(ref, { private: true })` when a caller needs a
+public-safe descriptor.
 
 ## Data Directory
 

@@ -75,7 +75,7 @@ export function getEvidenceStorageOptions(overrides: EvidenceStorageOptions = {}
   const provider = overrides.provider ?? (process.env.HASNA_FILES_EVIDENCE_STORAGE as FileStorageProvider | undefined) ?? "s3";
   return {
     provider,
-    bucket: overrides.bucket ?? process.env.HASNA_FILES_EVIDENCE_BUCKET ?? "hasna-files-prod",
+    bucket: overrides.bucket ?? process.env.HASNA_FILES_EVIDENCE_BUCKET ?? "example-files-prod",
     region: overrides.region ?? process.env.HASNA_FILES_EVIDENCE_REGION ?? "us-east-1",
     profile: overrides.profile ?? process.env.HASNA_FILES_EVIDENCE_AWS_PROFILE ?? process.env.AWS_PROFILE ?? "",
     endpoint: overrides.endpoint ?? process.env.HASNA_FILES_EVIDENCE_S3_ENDPOINT ?? "",

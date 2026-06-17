@@ -21,11 +21,11 @@ describe("sources CLI", () => {
         cliPath,
         "sources",
         "add",
-        "s3://hasna-xyz-prod-files/google-drive",
+        "s3://example-prod-files/google-drive",
         "--region",
         "us-east-1",
         "--aws-profile",
-        "hasna-xyz-infra",
+        "files-sync",
       ],
       env,
       stdout: "pipe",
@@ -49,10 +49,10 @@ describe("sources CLI", () => {
 
     expect(sources).toHaveLength(1);
     expect(sources[0]).toMatchObject({
-      bucket: "hasna-xyz-prod-files",
+      bucket: "example-prod-files",
       prefix: "google-drive",
       region: "us-east-1",
-      config: { profile: "hasna-xyz-infra" },
+      config: { profile: "files-sync" },
     });
   });
 
@@ -64,9 +64,9 @@ describe("sources CLI", () => {
         cliPath,
         "sources",
         "add",
-        "s3://hasna-xyz-prod-files",
+        "s3://example-prod-files",
         "--aws-profile",
-        "hasna-xyz-infra",
+        "files-sync",
         "--access-key",
         "static-access",
         "--secret-key",
@@ -97,10 +97,10 @@ describe("sources CLI", () => {
 
     expect(bootstrapped.source).toMatchObject({
       name: "prod-emails-drive",
-      bucket: "hasna-xyz-prod-emails",
+      bucket: "example-prod-emails",
       prefix: "drive",
       region: "us-west-2",
-      config: { profile: "hasna-xyz-infra" },
+      config: { profile: "files-sync" },
     });
     expect(bootstrapped.google_drive_default_destination_source_id).toBeDefined();
   });
@@ -108,7 +108,7 @@ describe("sources CLI", () => {
   test("bootstraps the production Drive archive by updating a stale bucket source and setting Drive default", () => {
     const env = cliEnv();
     const stale = Bun.spawnSync({
-      cmd: ["bun", "run", cliPath, "sources", "add", "s3://hasna-prod-files", "--name", "prod-files"],
+      cmd: ["bun", "run", cliPath, "sources", "add", "s3://example-prod-files-legacy", "--name", "prod-files"],
       env,
       stdout: "pipe",
       stderr: "pipe",
@@ -129,10 +129,10 @@ describe("sources CLI", () => {
 
     expect(bootstrapped.source).toMatchObject({
       name: "prod-emails-drive",
-      bucket: "hasna-xyz-prod-emails",
+      bucket: "example-prod-emails",
       prefix: "drive",
       region: "us-west-2",
-      config: { profile: "hasna-xyz-infra" },
+      config: { profile: "files-sync" },
     });
     expect(bootstrapped.google_drive_default_destination_source_id).toBe(bootstrapped.source.id);
 
@@ -144,7 +144,7 @@ describe("sources CLI", () => {
     });
     const sources = JSON.parse(new TextDecoder().decode(list.stdout)) as Array<{ type: string; bucket?: string; prefix?: string }>;
     expect(sources.filter((source) => source.type === "s3")).toEqual([
-      expect.objectContaining({ bucket: "hasna-xyz-prod-emails", prefix: "drive" }),
+      expect.objectContaining({ bucket: "example-prod-emails", prefix: "drive" }),
     ]);
 
     const config = Bun.spawnSync({
@@ -159,7 +159,7 @@ describe("sources CLI", () => {
   test("bootstraps the S3 source used by enabled Drive sources before disabled legacy duplicates", () => {
     const env = cliEnv();
     const disabledLegacy = Bun.spawnSync({
-      cmd: ["bun", "run", cliPath, "sources", "add", "s3://hasna-prod-files", "--name", "prod-files"],
+      cmd: ["bun", "run", cliPath, "sources", "add", "s3://example-prod-files-legacy", "--name", "prod-files"],
       env,
       stdout: "pipe",
       stderr: "pipe",
@@ -181,7 +181,7 @@ describe("sources CLI", () => {
     }).exitCode).toBe(0);
 
     const activeLegacy = Bun.spawnSync({
-      cmd: ["bun", "run", cliPath, "sources", "add", "s3://hasna-xyz-prod-files", "--name", "prod-files"],
+      cmd: ["bun", "run", cliPath, "sources", "add", "s3://example-prod-files", "--name", "prod-files"],
       env,
       stdout: "pipe",
       stderr: "pipe",
@@ -235,7 +235,7 @@ describe("sources CLI", () => {
 
     expect(bootstrapped.source.id).toBe(activeId);
     expect(bootstrapped.source).toMatchObject({
-      bucket: "hasna-xyz-prod-emails",
+      bucket: "example-prod-emails",
       prefix: "drive",
     });
     expect(bootstrapped.google_drive_default_destination_source_id).toBe(activeId);
@@ -255,11 +255,11 @@ describe("sources CLI", () => {
       enabled: boolean;
     }>;
     expect(sources.find((source) => source.id === activeId)).toMatchObject({
-      bucket: "hasna-xyz-prod-emails",
+      bucket: "example-prod-emails",
       enabled: true,
     });
     expect(sources.find((source) => source.id === disabledId)).toMatchObject({
-      bucket: "hasna-prod-files",
+      bucket: "example-prod-files-legacy",
       enabled: false,
     });
   });
@@ -267,7 +267,7 @@ describe("sources CLI", () => {
   test("repairs Drive source destinations that point at disabled legacy S3 sources", () => {
     const env = cliEnv();
     const legacy = Bun.spawnSync({
-      cmd: ["bun", "run", cliPath, "sources", "add", "s3://hasna-xyz-prod-files/google-drive", "--name", "prod-files"],
+      cmd: ["bun", "run", cliPath, "sources", "add", "s3://example-prod-files/google-drive", "--name", "prod-files"],
       env,
       stdout: "pipe",
       stderr: "pipe",
@@ -321,7 +321,7 @@ describe("sources CLI", () => {
     };
     expect(bootstrapped.source.id).toBe(legacyId);
     expect(bootstrapped.source).toMatchObject({
-      bucket: "hasna-xyz-prod-emails",
+      bucket: "example-prod-emails",
       prefix: "drive",
     });
     expect(bootstrapped.updated_google_drive_source_ids).toEqual([]);

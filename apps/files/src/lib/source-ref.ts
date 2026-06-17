@@ -16,6 +16,17 @@ export interface OpenFilesSourcePathRef {
 
 export type OpenFilesSourceRef = OpenFilesFileRef | OpenFilesSourcePathRef;
 
+export interface OpenFilesSourceRefDescriptor {
+  uri: string;
+  kind: OpenFilesSourceRef["kind"];
+  source_id?: string;
+  file_id?: string;
+  revision_id?: string;
+  path_hint?: string;
+  private: boolean;
+  public_safe: true;
+}
+
 function assertSegment(value: string, label: string): string {
   if (!value || value.includes("/")) {
     throw new Error(`Invalid ${label}. Expected a non-empty URI segment.`);
@@ -81,4 +92,40 @@ export function isOpenFilesSourceRef(uri: string): boolean {
   } catch {
     return false;
   }
+}
+
+function basename(path: string): string {
+  const parts = path.split(/[\\/]+/).filter(Boolean);
+  return parts[parts.length - 1] ?? "<redacted>";
+}
+
+export function describeOpenFilesSourceRef(
+  uri: string,
+  options: { private?: boolean } = {},
+): OpenFilesSourceRefDescriptor {
+  const parsed = parseOpenFilesSourceRef(uri);
+
+  if (parsed.kind === "source_path") {
+    return {
+      uri: parsed.uri,
+      kind: parsed.kind,
+      source_id: parsed.source_id,
+      path_hint: options.private ? `<redacted>/${basename(parsed.path)}` : parsed.path,
+      private: options.private ?? false,
+      public_safe: true,
+    };
+  }
+
+  return {
+    uri: parsed.uri,
+    kind: parsed.kind,
+    file_id: parsed.file_id,
+    revision_id: parsed.revision_id,
+    private: options.private ?? false,
+    public_safe: true,
+  };
+}
+
+export function buildOpenFilesFleetManifestRef(sourceId: string, path: string): string {
+  return buildOpenFilesSourcePathRef(sourceId, path);
 }

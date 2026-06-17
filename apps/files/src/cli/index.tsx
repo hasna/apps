@@ -225,9 +225,9 @@ sources
   .command("bootstrap-prod-files")
   .alias("bootstrap-prod-emails")
   .description("Create or update the production S3 source for Google Drive archive sync")
-  .option("--bucket <bucket>", "Production archive bucket", "hasna-xyz-prod-emails")
+  .option("--bucket <bucket>", "Production archive bucket", "example-prod-emails")
   .option("--region <region>", "AWS region", "us-west-2")
-  .option("--aws-profile <profile>", "AWS shared config profile", "hasna-xyz-infra")
+  .option("--aws-profile <profile>", "AWS shared config profile", "files-sync")
   .option("--prefix <prefix>", "S3 key prefix for Drive objects", "drive")
   .option("-n, --name <name>", "Source name", "prod-emails-drive")
   .option("--no-google-drive-default", "Do not set this source as the default Google Drive destination")
@@ -244,7 +244,7 @@ sources
     const machine = getCurrentMachine();
     const config: S3Config = { profile: opts.awsProfile };
     const legacyProductionNames = new Set([opts.name, "prod-files", "prod-emails-drive"]);
-    const legacyProductionBuckets = new Set([opts.bucket, "hasna-xyz-prod-files", "hasna-xyz-prod-emails", "hasna-prod-files"]);
+    const legacyProductionBuckets = new Set([opts.bucket, "example-prod-files", "example-prod-emails", "example-prod-files-legacy"]);
     const allSources = listSources();
     const activeDriveDestinationIds = new Set(
       allSources
