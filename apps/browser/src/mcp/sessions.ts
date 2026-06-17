@@ -47,6 +47,7 @@ ENGINES:
 - "lightpanda": fast headless for static pages
 - "bun": native Bun.WebView — fastest for screenshots and scraping
 - "tui": terminal UI testing — launches a CLI/TUI app (Ink, Blessed, Bubbletea, etc.) via ttyd and connects Playwright to it. Pass the shell command as start_url (e.g. "htop", "bun run app.tsx"). All browser tools (screenshot, click, type, wait) work on the terminal. Use tui_theme to control dark/light appearance and tui_method to choose between buffer-based reads and DOM-row reads.
+- "extension": explicit-only real Chrome session automation through a paired MV3 extension connected to browser-serve
 
 TIPS:
 - If agent_id is set and already has an active session, returns the existing one (use force_new to override)
@@ -54,7 +55,7 @@ TIPS:
 - Use cdp_url to attach to an already-running Chrome instance
 - For TUI sessions: start_url is the shell command to run, NOT a URL`,
   {
-    engine: z.enum(["playwright", "cdp", "lightpanda", "bun", "tui", "auto"]).optional().default("auto")
+    engine: z.enum(["playwright", "cdp", "lightpanda", "bun", "tui", "extension", "auto"]).optional().default("auto")
       .describe("Browser engine. Use 'tui' for terminal/CLI app testing — pass the command as start_url"),
     use_case: z.string().optional()
       .describe("Hint for auto engine selection: scrape, screenshot, form, auth, network, har, perf, terminal, tui"),

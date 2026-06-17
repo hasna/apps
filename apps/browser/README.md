@@ -44,6 +44,35 @@ Stdio remains the default when no `--http` / `MCP_HTTP=1` is set.
 browser-serve
 ```
 
+## Chrome Extension Engine
+
+The `extension` engine is explicit-only: it is never auto-selected. It runs
+jobs inside a paired, user-loaded Chrome MV3 extension, so actions execute in
+the user's real logged-in browser session.
+
+```bash
+bun run build:extension
+browser-serve
+browser extension pair
+browser extension status
+browser navigate https://example.com --engine extension
+```
+
+Load `extension/dist` in Chrome via `chrome://extensions` -> Developer mode ->
+Load unpacked, then enter the six-digit pairing code in the toolbar popup. The
+service worker dials out to `browser-serve` over loopback WebSocket and keeps
+the MV3 worker alive with 20s pings plus `chrome.alarms`.
+
+Security defaults:
+
+- No server-side website credentials are stored; the user's Chrome session is
+  the auth.
+- The bridge accepts only explicit, token-authenticated jobs.
+- Arbitrary JavaScript `evaluate` jobs are disabled unless
+  `BROWSER_EXTENSION_ALLOW_EVAL=1`.
+- Pairing codes are short-lived and single-use; tokens can be revoked with
+  `browser extension unpair`.
+
 ## Cloud Sync
 
 This package supports cloud sync via `@hasna/cloud`:

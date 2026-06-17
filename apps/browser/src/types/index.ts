@@ -1,6 +1,75 @@
 // ─── Engine Types ────────────────────────────────────────────────────────────
 
-export type BrowserEngine = "playwright" | "cdp" | "lightpanda" | "bun" | "tui" | "auto";
+export type BrowserEngine = "playwright" | "cdp" | "lightpanda" | "bun" | "tui" | "extension" | "auto";
+
+// ─── Chrome Extension Engine Protocol ────────────────────────────────────────
+
+export type ExtExtractFormat = "text" | "html" | "links" | "snapshot";
+
+export type ExtJob =
+  | { id: string; type: "ping"; session_id?: string; tab_id?: number; payload?: Record<string, never>; timeout_ms?: number }
+  | { id: string; type: "navigate"; session_id?: string; tab_id?: number; payload: { url: string }; timeout_ms?: number }
+  | { id: string; type: "click"; session_id?: string; tab_id?: number; payload: { selector: string; button?: "left" | "right" | "middle"; clickCount?: number }; timeout_ms?: number }
+  | { id: string; type: "type"; session_id?: string; tab_id?: number; payload: { selector: string; text: string; delay?: number; clear?: boolean }; timeout_ms?: number }
+  | { id: string; type: "fill"; session_id?: string; tab_id?: number; payload: { selector: string; value: string }; timeout_ms?: number }
+  | { id: string; type: "press"; session_id?: string; tab_id?: number; payload: { key: string }; timeout_ms?: number }
+  | { id: string; type: "wait"; session_id?: string; tab_id?: number; payload: { selector: string; state?: "attached" | "detached" | "visible" | "hidden" }; timeout_ms?: number }
+  | { id: string; type: "scroll"; session_id?: string; tab_id?: number; payload: { x: number; y: number }; timeout_ms?: number }
+  | { id: string; type: "extract"; session_id?: string; tab_id?: number; payload: { format: ExtExtractFormat; selector?: string; baseUrl?: string }; timeout_ms?: number }
+  | { id: string; type: "screenshot"; session_id?: string; tab_id?: number; payload: { fullPage?: boolean }; timeout_ms?: number }
+  | { id: string; type: "evaluate"; session_id?: string; tab_id?: number; payload: { expression: string; args?: unknown[] }; timeout_ms?: number };
+
+export type ExtResult =
+  | {
+      id: string;
+      ok: true;
+      data?: unknown;
+      screenshot?: string;
+      url?: string;
+      title?: string;
+      tab_id?: number;
+      logs?: string[];
+    }
+  | {
+      id: string;
+      ok: false;
+      error: string;
+      url?: string;
+      title?: string;
+      tab_id?: number;
+      logs?: string[];
+    };
+
+export type ExtBridgeMessage =
+  | { type: "paired"; token: string; token_id: string }
+  | { type: "connected"; token_id: string }
+  | { type: "job"; job: ExtJob }
+  | { type: "result"; result: ExtResult }
+  | { type: "ping"; at: number }
+  | { type: "pong"; at: number }
+  | { type: "error"; error: string };
+
+export interface ExtensionPairing {
+  code: string;
+  expires_at: string;
+}
+
+export interface ConnectedExtensionStatus {
+  token_id: string;
+  name?: string;
+  connected: boolean;
+  paired_at: string;
+  connected_at?: string;
+  last_seen_at?: string;
+  user_agent?: string;
+}
+
+export interface ExtensionBridgeStatus {
+  paired: boolean;
+  connected: boolean;
+  extensions: ConnectedExtensionStatus[];
+  pending_pairings: Array<{ code: string; expires_at: string }>;
+}
 
 export enum UseCase {
   SCRAPE = "scrape",
@@ -83,6 +152,7 @@ export interface SessionOptions {
   tuiTheme?: "dark" | "light" | "system";  // TUI engine only: terminal color theme (default: "system")
   tuiFontSize?: number;                    // TUI engine only: terminal font size in px (default: 14)
   tuiMethod?: "buffer" | "dom";          // TUI engine only: how terminal state is read (default: "buffer")
+  extensionServerUrl?: string;             // Extension engine only: browser-serve URL for out-of-process SDK/CLI dispatch
 }
 
 // ─── Snapshot ────────────────────────────────────────────────────────────────

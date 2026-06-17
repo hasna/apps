@@ -3,6 +3,7 @@ import { UseCase } from "../types/index.js";
 import { isLightpandaAvailable } from "./lightpanda.js";
 import { isBunWebViewAvailable } from "./bun-webview.js";
 import { isTuiAvailable } from "./tui.js";
+import { hasConnectedExtension } from "../lib/extension-bridge.js";
 
 // ─── Engine Decision Table ────────────────────────────────────────────────────
 //
@@ -10,6 +11,7 @@ import { isTuiAvailable } from "./tui.js";
 // lightpanda → fast static tasks (no/minimal JS needed), fallback when no bun
 // cdp        → low-level DevTools tasks (network, perf, coverage, injection)
 // playwright → full automation (forms, SPAs, auth, multi-tab, file upload)
+// extension  → explicit-only real Chrome session automation; never auto-selected
 
 const ENGINE_MAP: Record<UseCase, BrowserEngine> = {
   // Tasks where Bun.WebView is ideal (fast, zero-dep, built-in stealth)
@@ -74,7 +76,16 @@ export function isEngineAvailable(engine: BrowserEngine): boolean {
   if (engine === "cdp") return true;
   if (engine === "lightpanda") return isLightpandaAvailable();
   if (engine === "tui") return isTuiAvailable();
+  if (engine === "extension") return isExtensionAvailable();
   return false;
+}
+
+/**
+ * Extension engine is available only when a paired extension is connected.
+ * It is deliberately explicit-only and never returned by selectEngine().
+ */
+export function isExtensionAvailable(): boolean {
+  return hasConnectedExtension();
 }
 
 /**

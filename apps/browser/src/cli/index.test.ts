@@ -92,6 +92,7 @@ describe("CLI — help flags", () => {
     expect(code).toBe(0);
     expect(stdout).toContain("navigate");
     expect(stdout).toContain("session");
+    expect(stdout).toContain("extension");
     expect(stdout).toContain("agent");
     expect(stdout).toContain("project");
   });
@@ -102,6 +103,15 @@ describe("CLI — help flags", () => {
     expect(stdout).toContain("create");
     expect(stdout).toContain("list");
     expect(stdout).toContain("close");
+  });
+
+  it("browser extension --help shows subcommands", async () => {
+    const { stdout, code } = await runCli("extension", "--help");
+    expect(code).toBe(0);
+    expect(stdout).toContain("pair");
+    expect(stdout).toContain("status");
+    expect(stdout).toContain("path");
+    expect(stdout).toContain("unpair");
   });
 
   it("browser agent --help shows subcommands", async () => {

@@ -1,17 +1,27 @@
 import type { Page, ElementHandle } from "playwright";
 import type { ExtractOptions, ExtractResult, PageInfo } from "../types/index.js";
 import { BrowserError } from "../types/index.js";
+import { isExtensionPage } from "../engines/extension.js";
 
 export async function getText(page: Page, selector?: string): Promise<string> {
+  if (isExtensionPage(page)) {
+    return (await page.extractText(selector)) ?? "";
+  }
   if (selector) {
     const el = await page.$(selector);
     if (!el) return "";
     return (await el.textContent()) ?? "";
   }
+  if (typeof (page as any).textContent === "function") {
+    return (await (page as any).textContent("body")) ?? "";
+  }
   return page.evaluate(() => document.body.innerText ?? "");
 }
 
 export async function getHTML(page: Page, selector?: string): Promise<string> {
+  if (isExtensionPage(page)) {
+    return (await page.extractHtml(selector)) ?? "";
+  }
   if (selector) {
     const el = await page.$(selector);
     if (!el) return "";
@@ -21,6 +31,9 @@ export async function getHTML(page: Page, selector?: string): Promise<string> {
 }
 
 export async function getLinks(page: Page, baseUrl?: string): Promise<string[]> {
+  if (isExtensionPage(page)) {
+    return page.extractLinks(baseUrl ?? page.url());
+  }
   return page.evaluate((base) => {
     return Array.from(document.querySelectorAll("a[href]"))
       .map((a) => {
@@ -55,6 +68,13 @@ export async function getUrl(page: Page): Promise<string> {
 }
 
 export async function getMetaTags(page: Page): Promise<Record<string, string>> {
+  if (isExtensionPage(page)) {
+    const info = await page.pageInfo();
+    return {
+      ...(info.meta_description ? { description: info.meta_description } : {}),
+      ...(info.meta_keywords ? { keywords: info.meta_keywords } : {}),
+    };
+  }
   return page.evaluate(() => {
     const meta: Record<string, string> = {};
     document.querySelectorAll("meta[name], meta[property]").forEach((el) => {
@@ -102,6 +122,10 @@ export async function extractTable(page: Page, selector: string): Promise<string
 }
 
 export async function getAriaSnapshot(page: Page): Promise<string> {
+  if (isExtensionPage(page)) {
+    const snapshot = await page.extractSnapshot();
+    return JSON.stringify(snapshot, null, 2);
+  }
   try {
     // Use Playwright's built-in aria snapshot
     return await (page as Page & { ariaSnapshot?: () => Promise<string> }).ariaSnapshot?.() ??
@@ -168,6 +192,22 @@ export async function elementExists(
 // ─── QoL: one-shot page info ──────────────────────────────────────────────────
 
 export async function getPageInfo(page: Page): Promise<PageInfo> {
+  if (isExtensionPage(page)) {
+    const info = await page.pageInfo();
+    return {
+      url: info.url,
+      title: info.title,
+      meta_description: info.meta_description,
+      meta_keywords: info.meta_keywords,
+      links_count: info.links_count,
+      images_count: info.images_count,
+      forms_count: info.forms_count,
+      text_length: info.text_length,
+      has_console_errors: false,
+      viewport: page.viewportSize() ?? { width: 1280, height: 720 },
+    };
+  }
+
   const url = page.url();
   const title = await page.title();
 

@@ -21,6 +21,7 @@ export { recordHeartbeat, getLastHeartbeat, listHeartbeats, cleanOldHeartbeats }
 export * from "./engines/playwright.js";
 export * from "./engines/cdp.js";
 export * from "./engines/lightpanda.js";
+export * from "./engines/extension.js";
 export { selectEngine, isEngineAvailable, inferUseCase } from "./engines/selector.js";
 
 // Lib
@@ -33,5 +34,6 @@ export * from "./lib/console.js";
 export * from "./lib/screenshot.js";
 export * from "./lib/storage.js";
 export * from "./lib/recorder.js";
+export * from "./lib/extension-bridge.js";
 export * from "./lib/crawler.js";
 export * from "./lib/agents.js";

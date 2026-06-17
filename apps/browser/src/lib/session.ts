@@ -8,6 +8,7 @@ import { connectLightpanda } from "../engines/lightpanda.js";
 import { BunWebViewSession, isBunWebViewAvailable } from "../engines/bun-webview.js";
 import { selectEngine } from "../engines/selector.js";
 import { launchTui, closeTui, type TuiSession } from "../engines/tui.js";
+import { createExtensionPage, isExtensionPage } from "../engines/extension.js";
 import { stopTuiRecording } from "./tui-recording.js";
 import { enableNetworkLogging } from "./network.js";
 import { enableConsoleCapture } from "./console.js";
@@ -20,7 +21,7 @@ interface SessionHandle {
   browser: Browser | null;          // null for Bun.WebView sessions
   bunView: BunWebViewSession | null; // non-null for Bun.WebView sessions
   tuiSession: TuiSession | null;    // non-null for TUI sessions
-  page: Page;                        // Playwright Page or BunWebViewSession proxy
+  page: Page;                        // Playwright Page, BunWebViewSession proxy, or extension proxy
   engine: BrowserEngine;
   cleanups: Array<() => void | Promise<void>>;
   tokenBudget: { total: number; used: number };
@@ -222,6 +223,28 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
     handles.set(session.id, { browser, bunView: null, tuiSession: tuiSess, page, engine: "tui", cleanups, tokenBudget: { total: 0, used: 0 }, lastActivity: Date.now(), autoGallery: opts.autoGallery ?? false, startUrl: opts.startUrl ?? "bash" });
 
     return { session, page };
+  } else if (resolvedEngine === "extension") {
+    const session = dbCreateSession({
+      engine: "extension",
+      projectId: opts.projectId,
+      agentId: opts.agentId,
+      startUrl: opts.startUrl,
+      name: opts.name ?? "extension",
+    });
+
+    page = createExtensionPage({
+      sessionId: session.id,
+      viewport: opts.viewport,
+      serverUrl: opts.extensionServerUrl,
+    });
+
+    handles.set(session.id, { browser: null, bunView: null, tuiSession: null, page, engine: "extension", cleanups: [], tokenBudget: { total: 0, used: 0 }, lastActivity: Date.now(), autoGallery: opts.autoGallery ?? false, startUrl: opts.startUrl ?? "" });
+
+    if (opts.startUrl) {
+      try { await page.goto(opts.startUrl, { waitUntil: "domcontentloaded" }); } catch {}
+    }
+
+    return { session, page };
   } else {
     // playwright or cdp both use Playwright under the hood — use shared pool
     browser = await pool.acquire(opts.headless ?? true);
@@ -295,6 +318,8 @@ export function getSessionPage(sessionId: string): Page {
     if (handle.bunView) {
       // Bun.WebView: check it's still open by accessing url
       void handle.bunView.url();
+    } else if (isExtensionPage(handle.page)) {
+      handle.page.url();
     } else {
       handle.page.url(); // throws if browser/context is closed
     }
@@ -315,10 +340,15 @@ export function isBunSession(sessionId: string): boolean {
   return handle?.engine === "bun" && handle.bunView !== null;
 }
 
+export function isExtensionSession(sessionId: string): boolean {
+  const handle = handles.get(sessionId);
+  return handle?.engine === "extension" && isExtensionPage(handle.page);
+}
+
 export function getSessionBrowser(sessionId: string): Browser {
   const handle = handles.get(sessionId);
   if (!handle) throw new SessionNotFoundError(sessionId);
-  if (!handle.browser) throw new BrowserError("This session uses Bun.WebView (no Playwright browser)", "NO_PLAYWRIGHT_BROWSER");
+  if (!handle.browser) throw new BrowserError(`This session uses ${handle.engine} (no Playwright browser)`, "NO_PLAYWRIGHT_BROWSER");
   return handle.browser;
 }
 
@@ -374,6 +404,9 @@ export async function closeSession(sessionId: string): Promise<Session> {
       }
       if (handle.bunView) {
         try { await handle.bunView.close(); } catch {}
+      } else if (isExtensionPage(handle.page)) {
+        // Extension sessions are backed by the user's own Chrome tab. Closing
+        // the SDK session must not close that real browser context.
       } else if (handle.tuiSession) {
         // TUI cleanup is handled via cleanups array (closeTui)
       } else {
@@ -437,6 +470,7 @@ export function getActiveSessionForAgent(agentId: string): CreateSessionResult |
   // Verify page is still alive
   try {
     if (handle.bunView) void handle.bunView.url();
+    else if (isExtensionPage(handle.page)) handle.page.url();
     else handle.page.url();
   } catch {
     handles.delete(session.id);
@@ -454,6 +488,7 @@ export function getDefaultSession(): CreateSessionResult | null {
   if (!handle) return null;
   try {
     if (handle.bunView) void handle.bunView.url();
+    else if (isExtensionPage(handle.page)) handle.page.url();
     else handle.page.url();
   } catch {
     handles.delete(session.id);

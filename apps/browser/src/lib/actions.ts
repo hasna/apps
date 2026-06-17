@@ -95,6 +95,10 @@ export async function scroll(
   direction: "up" | "down" | "left" | "right" = "down",
   amount = 300
 ): Promise<void> {
+  if (typeof (page as any).scroll === "function") {
+    await (page as any).scroll(direction, amount);
+    return;
+  }
   const x = direction === "left" ? -amount : direction === "right" ? amount : 0;
   const y = direction === "up" ? -amount : direction === "down" ? amount : 0;
   await page.evaluate(({ x, y }) => window.scrollBy(x, y), { x, y });

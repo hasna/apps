@@ -9,6 +9,7 @@ import { getPerformanceMetrics } from "../lib/performance.js";
 import { enableConsoleCapture } from "../lib/console.js";
 import { crawl } from "../lib/crawler.js";
 import { startRecording, stopRecording, replayRecording } from "../lib/recorder.js";
+import { attachExtensionSocket, createExtensionPairing, detachExtensionSocket, dispatchExtensionJob, getExtensionBridgeStatus, handleExtensionSocketMessage, prepareExtensionSocketUpgrade, revokeExtensionToken, type ExtensionSocketData } from "../lib/extension-bridge.js";
 import { registerAgent, heartbeat, listAgents, getAgent } from "../lib/agents.js";
 import { ensureProject, listProjects, getProject } from "../db/projects.js";
 import { getNetworkLog, clearNetworkLog } from "../db/network-log.js";
@@ -106,9 +107,9 @@ function serverError(e: unknown, extraHeaders?: Record<string, string>): Respons
 
 // ─── Router ───────────────────────────────────────────────────────────────────
 
-const server = Bun.serve({
+const server = Bun.serve<ExtensionSocketData>({
   port: PORT,
-  async fetch(req) {
+  async fetch(req, server) {
     const url = new URL(req.url);
     const path = url.pathname;
     const method = req.method;
@@ -120,12 +121,22 @@ const server = Bun.serve({
     }
 
     // Authenticate all non-health, non-dashboard requests
-    if (!path.startsWith("/dashboard") && path !== "/health") {
+    if (!path.startsWith("/dashboard") && path !== "/health" && path !== "/extension/ws") {
       const authError = authenticate(req);
       if (authError) return authError;
     }
 
     try {
+      // ── Chrome extension bridge WebSocket ───────────────────────────────
+      if (path === "/extension/ws" && method === "GET") {
+        const prepared = prepareExtensionSocketUpgrade(req);
+        if (!prepared.ok) return prepared.response;
+        if (server.upgrade(req, { data: prepared.data })) {
+          return undefined as unknown as Response;
+        }
+        return new Response("WebSocket upgrade failed", { status: 426 });
+      }
+
       // ── Health ──────────────────────────────────────────────────────────
       if (path === "/health" && method === "GET") {
         const activeSessions = listSessions({ status: "active" });
@@ -134,6 +145,48 @@ const server = Bun.serve({
           active_sessions: activeSessions.length,
           uptime_ms: Date.now() - startTime,
         });
+      }
+
+      // ── Chrome extension pairing/status ─────────────────────────────────
+      if (path === "/api/extension/pair" && method === "POST") {
+        let ttlMs: number | undefined;
+        if ((req.headers.get("content-type") ?? "").includes("application/json")) {
+          const parsed = await safeJson(req);
+          if ("error" in parsed) return parsed.error;
+          ttlMs = typeof parsed.body.ttl_ms === "number" ? parsed.body.ttl_ms : undefined;
+        }
+        const pairing = createExtensionPairing(ttlMs);
+        return ok({
+          ...pairing,
+          extension_path: join(import.meta.dir, "../../extension/dist"),
+          websocket_url: `ws://127.0.0.1:${PORT}/extension/ws?code=${pairing.code}`,
+        });
+      }
+
+      if (path === "/api/extension/status" && method === "GET") {
+        return ok(getExtensionBridgeStatus());
+      }
+
+      if (path === "/api/extension/unpair" && method === "POST") {
+        let tokenId: string | undefined;
+        if ((req.headers.get("content-type") ?? "").includes("application/json")) {
+          const parsed = await safeJson(req);
+          if ("error" in parsed) return parsed.error;
+          tokenId = parsed.body.token_id as string | undefined;
+        }
+        return ok(revokeExtensionToken(tokenId));
+      }
+
+      if (path === "/api/extension/dispatch" && method === "POST") {
+        const parsed = await safeJson(req);
+        if ("error" in parsed) return parsed.error;
+        const body = parsed.body;
+        if (!body.job || typeof body.job !== "object") return badRequest("job required", headers);
+        const result = await dispatchExtensionJob(body.job as any, {
+          tokenId: body.token_id as string | undefined,
+          timeoutMs: body.timeout_ms as number | undefined,
+        });
+        return ok({ result });
       }
 
       // ── Sessions ─────────────────────────────────────────────────────────
@@ -449,6 +502,20 @@ const server = Bun.serve({
     } catch (e) {
       return serverError(e);
     }
+  },
+  websocket: {
+    open(ws) {
+      const data = ws.data as ExtensionSocketData;
+      attachExtensionSocket(ws, data);
+    },
+    message(ws, message) {
+      const data = ws.data as ExtensionSocketData;
+      handleExtensionSocketMessage(data.token_id, typeof message === "string" ? message : Buffer.from(message));
+    },
+    close(ws) {
+      const data = ws.data as ExtensionSocketData;
+      detachExtensionSocket(data.token_id);
+    },
   },
 });
 

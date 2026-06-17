@@ -4,6 +4,10 @@
 
 open-browser is a unified browser automation MCP server with three swappable backends: Chrome DevTools, Playwright, and Lightpanda.
 
+The current engine set also includes Bun.WebView, TUI, and the explicit-only
+Chrome extension engine. The extension engine is not part of auto-routing: it
+is selected only when the caller asks for `engine: "extension"`.
+
 ## Backend Comparison
 
 | Feature | Chrome DevTools | Playwright | Lightpanda |
@@ -17,6 +21,30 @@ open-browser is a unified browser automation MCP server with three swappable bac
 | CDP protocol | ✅ | Via adapter | ✅ (22 domains) |
 | Lighthouse | ✅ | ❌ | ❌ |
 | Best for | Complex apps, auth | Cross-browser, PDF | Scraping, extraction |
+
+## Chrome Extension Engine
+
+The Chrome extension engine is a bridge for real-session automation. Instead
+of launching a headless browser, `extension/dist` is loaded into the user's own
+Chrome profile and the service worker opens an outbound loopback WebSocket to
+`browser-serve`.
+
+Core files:
+
+- `extension/`: MV3 extension Vite build.
+- `src/lib/extension-bridge.ts`: pairing codes, token store, connected socket
+  registry, and job/result correlation.
+- `src/engines/extension.ts`: Playwright-Page-compatible proxy that maps
+  `goto`, `click`, `fill`, `type`, `screenshot`, and extraction calls to
+  closed extension jobs.
+- `src/server/index.ts`: `/extension/ws`, `/api/extension/pair`,
+  `/api/extension/status`, `/api/extension/unpair`, and dispatch endpoints.
+
+Pairing is explicit. `browser extension pair` mints a short-lived six-digit
+code; the user enters it in the extension popup; the server upgrades the
+WebSocket and returns a persistent token saved only in `chrome.storage.local`.
+Website credentials are never copied into the server. Arbitrary JavaScript
+jobs are disabled unless `BROWSER_EXTENSION_ALLOW_EVAL=1`.
 
 ## Backend Selection
 

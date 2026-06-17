@@ -12,6 +12,7 @@ import { register as registerCapture } from "./capture.js";
 import { register as registerNetwork } from "./network.js";
 import { register as registerData } from "./data.js";
 import { register as registerTui } from "./tui.js";
+import { register as registerExtension } from "./extension.js";
 import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 
 const _pkg = JSON.parse(readFileSync(join(import.meta.dir, "../../package.json"), "utf8")) as { version: string };
@@ -28,6 +29,7 @@ export function buildServer(): McpServer {
   registerNetwork(server);
   registerData(server);
   registerTui(server);
+  registerExtension(server);
   registerCloudTools(server, "browser");
 
   return server;
