@@ -100,13 +100,13 @@ Key format
     <division>/<service>/<env>/<name>
 
   Examples:
-    hasnaxyz/anthropic/live/api_key
-    hasna/local/apple03/tool/exa/api-key
+    exampleco/anthropic/live/api_key
+    example/local/dev-workstation/tool/exa/api-key
     alumia-production/oauth/youtube_client_secret
 
 Common CLI workflows
   Store a secret:
-    secrets set hasnaxyz/anthropic/live/api_key "$ANTHROPIC_API_KEY" --type api_key --label "Anthropic API Key (live)"
+    secrets set exampleco/anthropic/live/api_key "$ANTHROPIC_API_KEY" --type api_key --label "Anthropic API Key (live)"
 
   Read a secret value:
     secrets get hasnaxyz/anthropic/live/api_key
@@ -647,7 +647,7 @@ switch (command) {
           console.log(`Data key:   ${status.keyPath} (encrypted with KMS)`);
         } else {
           console.log(`KMS not configured.`);
-          console.log(`\nSetup: secrets key kms setup --key-id <KMS key ID or alias> [--region us-east-1] [--profile hasna-xyz-hq]`);
+          console.log(`\nSetup: secrets key kms setup --key-id <KMS key ID or alias> [--region us-east-1] [--profile example-aws-profile]`);
         }
       }
     } else if (sub === "path") {

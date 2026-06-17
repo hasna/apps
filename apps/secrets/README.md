@@ -90,8 +90,8 @@ Use slash-delimited keys:
 Examples:
 
 ```text
-hasnaxyz/anthropic/live/api_key
-hasna/local/apple03/tool/exa/api-key
+exampleco/anthropic/live/api_key
+example/local/dev-workstation/tool/exa/api-key
 alumia-production/oauth/youtube_client_secret
 ```
 
