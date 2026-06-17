@@ -30,8 +30,8 @@ Endpoints on `127.0.0.1` only:
 ```bash
 machines manifest init
 machines manifest bootstrap
-machines manifest add --id spark01 --platform linux --workspace-path ~/workspace
-machines manifest add --id apple03 --platform macos --workspace-path ~/Workspace --app ghostty:cask
+machines manifest add --id linux-dev-01 --platform linux --workspace-path ~/workspace
+machines manifest add --id mac-lab-01 --platform macos --workspace-path ~/Workspace --app ghostty:cask
 machines manifest validate
 machines manifest list
 ```
@@ -39,11 +39,11 @@ machines manifest list
 ## Provision and reconcile
 
 ```bash
-machines setup --machine spark01 --json
-machines setup --machine spark01 --apply --yes
-machines sync --machine spark01 --json
-machines sync --machine spark01 --apply --yes
-machines doctor --machine spark01
+machines setup --machine linux-dev-01 --json
+machines setup --machine linux-dev-01 --apply --yes
+machines sync --machine linux-dev-01 --json
+machines sync --machine linux-dev-01 --apply --yes
+machines doctor --machine linux-dev-01
 machines self-test
 ```
 
@@ -68,9 +68,9 @@ import {
 console.log(MACHINES_CONSUMER_CONTRACT.schema_version);
 const topology = discoverMachineTopology();
 const local = getLocalMachineTopology();
-const route = resolveMachineRoute("spark01");
+const route = resolveMachineRoute("linux-dev-01");
 const workspace = resolveMachineWorkspace({
-  machineId: "spark01",
+  machineId: "linux-dev-01",
   projectId: "open-knowledge",
   repoName: "open-knowledge",
 });
@@ -115,7 +115,7 @@ CLI and MCP expose the same topology view:
 ```bash
 machines topology --json
 machines topology --no-tailscale --json
-machines route --machine spark01 --json
+machines route --machine linux-dev-01 --json
 ```
 
 ## Screen sharing
@@ -125,9 +125,9 @@ IP bookmarks. The route resolver picks the current LAN address or Tailscale name
 automatically, so it keeps working even when DHCP rotates a machine's IP.
 
 ```bash
-machines screen machine005                 # open Screen Sharing.app → vnc://<user>@<live-route>
-machines screen machine005 --print         # print the vnc:// URL instead of opening
-machines screen machine005 --json          # full resolution detail (route, confidence, user)
+machines screen demo-mac-01                # open Screen Sharing.app → vnc://<user>@<live-route>
+machines screen demo-mac-01 --print        # print the vnc:// URL instead of opening
+machines screen demo-mac-01 --json         # full resolution detail (route, confidence, user)
 machines screen --all                      # open every reachable machine
 machines screen --all --print              # list resolved vnc:// URLs for the whole fleet
 machines screen-credentials --all --check-secret
@@ -138,10 +138,10 @@ Enable Remote Management / Screen Sharing on a fresh macOS machine over SSH
 Screen Sharing.app and Apple Remote Desktop):
 
 ```bash
-secrets set machines/screen-sharing/screen-machine005-vnc-password "$VNC_PASSWORD" --type password
-machines screen-enable --machine machine005 --user jo \
-  --vnc-password-secret machines/screen-sharing/screen-machine005-vnc-password
-machines screen-enable --machine machine005 --user jo --print   # show the SSH command, don't run it
+secrets set machines/screen-sharing/screen-demo-mac-01-vnc-password "$VNC_PASSWORD" --type password
+machines screen-enable --machine demo-mac-01 --user operator \
+  --vnc-password-secret machines/screen-sharing/screen-demo-mac-01-vnc-password
+machines screen-enable --machine demo-mac-01 --user operator --print   # show the SSH command, don't run it
 ```
 
 The legacy VNC protocol honors only the first 8 password characters. The
@@ -161,7 +161,7 @@ without importing the full machines app:
 import { resolveMachineWorkspace } from "@hasna/machines/consumer";
 
 const workspace = resolveMachineWorkspace({
-  machineId: "spark01",
+  machineId: "linux-dev-01",
   projectId: "open-knowledge",
   repoName: "open-knowledge",
 });
@@ -176,8 +176,8 @@ diagnostics. It uses explicit manifest metadata first and deterministic
 workspace inference second; consumers can still pass manual overrides.
 
 ```bash
-machines workspace resolve --machine spark01 --project open-knowledge --repo open-knowledge --json
-machines workspace doctor --machine spark01 --project open-knowledge --repo open-knowledge --json
+machines workspace resolve --machine linux-dev-01 --project open-knowledge --repo open-knowledge --json
+machines workspace doctor --machine linux-dev-01 --project open-knowledge --repo open-knowledge --json
 ```
 
 `workspace resolve` and `workspace doctor` include JSON-friendly
@@ -192,8 +192,8 @@ repair the manifest metadata explicitly. The command previews changes by
 default and only writes when `--apply` is passed:
 
 ```bash
-machines workspace repair --machine spark01 --project open-knowledge --repo open-knowledge --json
-machines workspace repair --machine spark01 --project open-knowledge --repo open-knowledge --apply --json
+machines workspace repair --machine linux-dev-01 --project open-knowledge --repo open-knowledge --json
+machines workspace repair --machine linux-dev-01 --project open-knowledge --repo open-knowledge --apply --json
 ```
 
 ## Compatibility SDK
@@ -205,7 +205,7 @@ attempting app-level sync:
 import { checkMachineCompatibility } from "@hasna/machines/consumer";
 
 const report = checkMachineCompatibility({
-  machineId: "spark01",
+  machineId: "linux-dev-01",
   commands: [{ command: "bun" }],
   packages: [{ name: "@example/knowledge", command: "knowledge", expectedVersion: "0.2.29" }],
   workspaces: [{
@@ -225,7 +225,7 @@ back to its own local checks if `@hasna/machines` is not installed.
 CLI and MCP expose the same shape:
 
 ```bash
-machines compatibility --machine spark01 \
+machines compatibility --machine linux-dev-01 \
   --command bun \
   --package @example/knowledge:knowledge:0.2.29 \
   --workspace open-knowledge=/srv/workspaces/open-knowledge:@example/knowledge:0.2.29 \
@@ -265,18 +265,18 @@ deployments to route app-owned backups through explicit storage metadata.
 ## Applications and tooling
 
 ```bash
-machines apps list --machine apple03
-machines apps status --machine apple03
-machines apps diff --machine apple03
-machines apps plan --machine apple03 --json
-machines apps apply --machine apple03 --yes
+machines apps list --machine mac-lab-01
+machines apps status --machine mac-lab-01
+machines apps diff --machine mac-lab-01
+machines apps plan --machine mac-lab-01 --json
+machines apps apply --machine mac-lab-01 --yes
 
-machines install-claude status --machine spark01
-machines install-claude diff --machine spark01
-machines install-claude plan --machine spark01 --tool claude codex --json
-machines install-claude apply --machine spark01 --tool claude codex --yes
+machines install-claude status --machine linux-dev-01
+machines install-claude diff --machine linux-dev-01
+machines install-claude plan --machine linux-dev-01 --tool claude codex --json
+machines install-claude apply --machine linux-dev-01 --tool claude codex --yes
 
-machines install-tailscale --machine apple03 --json
+machines install-tailscale --machine mac-lab-01 --json
 ```
 
 ## Notifications

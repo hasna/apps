@@ -9,21 +9,21 @@ describe("smart ssh", () => {
   test("prefers LAN when reachable", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-ssh-"));
     process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
-    process.env["HASNA_MACHINES_REACHABLE_HOSTS"] = "hasna@spark01";
+    process.env["HASNA_MACHINES_REACHABLE_HOSTS"] = "operator@spark01";
     process.env["HASNA_MACHINES_MACHINE_ID"] = "control";
     manifestInit();
     manifestAdd({
       id: "spark01",
       platform: "linux",
-      workspacePath: "/home/hasna/workspace",
-      sshAddress: "hasna@spark01",
+      workspacePath: "/home/operator/workspace",
+      sshAddress: "operator@spark01",
       tailscaleName: "spark01.tailnet.ts.net",
     });
 
     const resolved = resolveSshTarget("spark01");
     expect(resolved.route).toBe("ssh");
     expect(resolved.confidence).toBe("high");
-    expect(buildSshCommand("spark01")).toBe("ssh hasna@spark01");
+    expect(buildSshCommand("spark01")).toBe("ssh operator@spark01");
   });
 
   test("falls back to tailscale when LAN is unavailable", () => {
@@ -33,17 +33,39 @@ describe("smart ssh", () => {
     process.env["HASNA_MACHINES_MACHINE_ID"] = "control";
     manifestInit();
     manifestAdd({
-      id: "apple03",
+      id: "mac-lab-01",
       platform: "macos",
-      workspacePath: "/Users/hasna/Workspace",
-      sshAddress: "hasna@apple03",
-      tailscaleName: "apple03.tailnet.ts.net",
+      workspacePath: "/Users/operator/Workspace",
+      sshAddress: "operator@mac-lab-01",
+      tailscaleName: "mac-lab-01.tailnet.example",
     });
 
     const routeOptions = { includeTailscale: false };
-    const resolved = resolveSshTarget("apple03", routeOptions);
+    const resolved = resolveSshTarget("mac-lab-01", routeOptions);
     expect(resolved.route).toBe("tailscale");
-    expect(buildSshCommand("apple03", "uptime", routeOptions)).toBe("ssh apple03.tailnet.ts.net 'uptime'");
+    expect(resolved.target).toBe("operator@mac-lab-01.tailnet.example");
+    expect(buildSshCommand("mac-lab-01", "uptime", routeOptions)).toBe("ssh operator@mac-lab-01.tailnet.example 'uptime'");
+  });
+
+  test("keeps the manifest SSH user when Tailscale is the selected route", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-ssh-ts-user-"));
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
+    process.env["HASNA_MACHINES_REACHABLE_HOSTS"] = "other-host";
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "control";
+    manifestInit();
+    manifestAdd({
+      id: "demo-mac-01",
+      hostname: "demo-mac-01",
+      platform: "macos",
+      workspacePath: "/Users/operator/Workspace",
+      sshAddress: "operator@demo-mac-01",
+      tailscaleName: "demo-mac-01.tailnet.example",
+    });
+
+    const resolved = resolveSshTarget("demo-mac-01", { includeTailscale: false });
+    expect(resolved.route).toBe("tailscale");
+    expect(resolved.target).toBe("operator@demo-mac-01.tailnet.example");
+    expect(buildSshCommand("demo-mac-01", "whoami", { includeTailscale: false })).toBe("ssh operator@demo-mac-01.tailnet.example 'whoami'");
   });
 
   test("resolves tailscale-discovered machines without a manifest entry", () => {

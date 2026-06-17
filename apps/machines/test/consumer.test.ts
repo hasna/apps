@@ -95,7 +95,7 @@ describe("machines consumer SDK", () => {
         ssh: {
           address: "hasna@spark01",
           route: "tailscale",
-          command_target: "spark01.tailnet.ts.net",
+          command_target: "hasna@spark01.tailnet.ts.net",
         },
         route_hints: [{ kind: "tailscale", target: "spark01.tailnet.ts.net", reachable: true }],
         tags: ["trusted"],

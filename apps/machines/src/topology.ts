@@ -478,6 +478,18 @@ function manifestHostReachable(target: string): boolean | null {
   return overrides.has(target);
 }
 
+function userFromSshAddress(address?: string | null): string | null {
+  if (!address) return null;
+  const at = address.indexOf("@");
+  if (at <= 0) return null;
+  return address.slice(0, at);
+}
+
+function commandTargetForRoute(target: MachineRouteHint, user?: string | null): string {
+  if (target.kind === "local" || target.target.includes("@") || !user) return target.target;
+  return `${user}@${target.target}`;
+}
+
 function routeHints(input: {
   machineId: string;
   localMachineId: string;
@@ -534,6 +546,8 @@ function buildEntry(input: {
   });
   const selectedRoute = selectRouteHint(hints);
   const route = selectedRoute?.kind === "ssh" ? "ssh" : selectedRoute?.kind ?? "unknown";
+  const routeUser = userFromSshAddress(manifest?.sshAddress)
+    ?? (typeof manifest?.metadata?.user === "string" ? manifest.metadata.user : null);
   return {
     machine_id: input.machineId,
     hostname: manifest?.hostname ?? peer?.HostName ?? null,
@@ -554,7 +568,7 @@ function buildEntry(input: {
     ssh: {
       address: manifest?.sshAddress ?? null,
       route,
-      command_target: selectedRoute?.target ?? null,
+      command_target: selectedRoute ? commandTargetForRoute(selectedRoute, routeUser) : null,
     },
     route_hints: hints,
     tags: manifest?.tags ?? [],
@@ -813,6 +827,9 @@ export function resolveMachineRoute(machineId: string, options: MachineRouteOpti
   const local = route === "local" || machine.machine_id === topology.local_machine_id;
   const confidence = routeConfidence({ machine, hint: selectedHint, matchedBy });
   const ok = Boolean(selectedHint?.target);
+  const commandTarget = selectedHint
+    ? commandTargetForRoute(selectedHint, userFromSshAddress(machine.ssh.address) ?? machine.user)
+    : null;
   return {
     schema_version: MACHINES_CONSUMER_CONTRACT_VERSION,
     package: topology.package,
@@ -823,7 +840,7 @@ export function resolveMachineRoute(machineId: string, options: MachineRouteOpti
     route,
     source: route,
     target: selectedHint?.target ?? null,
-    command_target: selectedHint?.target ?? null,
+    command_target: commandTarget,
     confidence,
     local,
     evidence: {

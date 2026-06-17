@@ -22,7 +22,7 @@ export function resolveSshTarget(machineId: string, options: MachineRouteOptions
   }
   return {
     machineId: resolved.machine_id ?? machineId,
-    target: resolved.target,
+    target: resolved.command_target ?? resolved.target,
     route: resolved.route,
     confidence: resolved.confidence,
     warnings: resolved.warnings,

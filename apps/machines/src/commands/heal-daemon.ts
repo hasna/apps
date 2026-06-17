@@ -193,8 +193,9 @@ function binPath(): string {
   const which = sh("command -v machines").out.split("\n")[0]?.trim();
   if (which) candidates.push(which);
   if (process.argv[1]) candidates.push(process.argv[1]);
-  const home = process.env["HOME"] || "/home/hasna";
-  candidates.push(`${home}/.bun/bin/machines`, "/home/hasna/.bun/bin/machines", "/root/.bun/bin/machines", "/usr/local/bin/machines");
+  const home = process.env["HOME"];
+  if (home) candidates.push(`${home}/.bun/bin/machines`);
+  candidates.push("/root/.bun/bin/machines", "/usr/local/bin/machines");
   for (const c of candidates) {
     if (c && existsSync(c)) return c;
   }
