@@ -41,6 +41,23 @@ export interface FleetManifest {
   machines: MachineManifest[];
 }
 
+export type ManifestSourceKind = "file" | "private-ref";
+
+export interface ManifestSourceRef {
+  kind: ManifestSourceKind;
+  ref: string;
+  backend: string | null;
+  private: boolean;
+  publicSafe: true;
+}
+
+export interface ManifestLoadInfo {
+  source: ManifestSourceRef;
+  loadedFrom: ManifestSourceKind | "default" | "fallback";
+  fallbackSource?: ManifestSourceRef;
+  warnings: string[];
+}
+
 export interface AgentHeartbeat {
   machineId: string;
   pid: number;
@@ -192,11 +209,18 @@ export interface DoctorCheck {
   status: "ok" | "warn" | "fail";
   summary: string;
   detail: string;
+  optional?: boolean;
+  source?: string;
+  data?: Record<string, unknown>;
+  remediation?: string[];
 }
 
 export interface DoctorReport {
   machineId: string;
   source: "local" | "lan" | "tailscale" | "ssh";
+  schemaVersion?: 1;
+  generatedAt?: string;
+  manifestSource?: ManifestLoadInfo;
   manifestPath?: string;
   dbPath?: string;
   notificationsPath?: string;

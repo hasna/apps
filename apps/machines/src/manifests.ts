@@ -3,7 +3,24 @@ import { arch, homedir, hostname, platform, userInfo } from "node:os";
 import { dirname } from "node:path";
 import { z } from "zod";
 import { getManifestPath, ensureParentDir } from "./paths.js";
-import type { FleetManifest, MachineManifest } from "./types.js";
+import { redactIdentifier, redactPath, redactPrivateRef } from "./redaction.js";
+import type { FleetManifest, MachineManifest, ManifestLoadInfo, ManifestSourceRef } from "./types.js";
+
+export const PRIVATE_MANIFEST_REF_ENV = "HASNA_MACHINES_PRIVATE_MANIFEST_REF";
+export const PRIVATE_MANIFEST_BACKEND_ENV = "HASNA_MACHINES_PRIVATE_MANIFEST_BACKEND";
+
+export interface ManifestSourceAdapter {
+  id: string;
+  readManifest(input: { source: ManifestSourceRef; rawRef: string }): FleetManifest | null | undefined;
+}
+
+export interface ReadManifestWithSourceOptions {
+  path?: string;
+  env?: NodeJS.ProcessEnv;
+  privateRef?: string;
+  privateBackend?: string;
+  adapter?: ManifestSourceAdapter | null;
+}
 
 const packageSchema = z.object({
   name: z.string(),
@@ -63,6 +80,49 @@ function normalizeMachines(machines: MachineManifest[]): MachineManifest[] {
   return [...machines].sort((left, right) => left.id.localeCompare(right.id));
 }
 
+function inferPrivateBackend(rawRef: string, explicitBackend?: string): string | null {
+  if (explicitBackend?.trim()) return explicitBackend.trim();
+  const scheme = rawRef.trim().match(/^([a-z][a-z0-9+.-]*)(?::\/\/|:)/i);
+  return scheme?.[1] ?? null;
+}
+
+function fileSourceRef(path: string): ManifestSourceRef {
+  return {
+    kind: "file",
+    ref: redactPath(path),
+    backend: "file",
+    private: false,
+    publicSafe: true,
+  };
+}
+
+function privateSourceRef(rawRef: string, backend?: string): ManifestSourceRef {
+  return {
+    kind: "private-ref",
+    ref: redactPrivateRef(rawRef),
+    backend: inferPrivateBackend(rawRef, backend),
+    private: true,
+    publicSafe: true,
+  };
+}
+
+function privateRefFromOptions(options: ReadManifestWithSourceOptions): string | null {
+  const env = options.env ?? process.env;
+  return options.privateRef?.trim()
+    || env[PRIVATE_MANIFEST_REF_ENV]?.trim()
+    || env["MACHINES_PRIVATE_MANIFEST_REF"]?.trim()
+    || null;
+}
+
+export function getManifestSourceRef(options: ReadManifestWithSourceOptions = {}): ManifestSourceRef {
+  const rawPrivateRef = privateRefFromOptions(options);
+  if (rawPrivateRef) {
+    const env = options.env ?? process.env;
+    return privateSourceRef(rawPrivateRef, options.privateBackend ?? env[PRIVATE_MANIFEST_BACKEND_ENV]);
+  }
+  return fileSourceRef(options.path ?? getManifestPath());
+}
+
 export function getDefaultManifest(): FleetManifest {
   return {
     version: 1,
@@ -77,6 +137,57 @@ export function readManifest(path = getManifestPath()): FleetManifest {
   }
   const raw = JSON.parse(readFileSync(path, "utf8"));
   return fleetSchema.parse(raw);
+}
+
+export function readManifestWithSource(options: ReadManifestWithSourceOptions = {}): { manifest: FleetManifest; info: ManifestLoadInfo } {
+  const path = options.path ?? getManifestPath();
+  const source = getManifestSourceRef(options);
+  const warnings: string[] = [];
+
+  if (source.kind === "private-ref") {
+    const rawRef = privateRefFromOptions(options);
+    if (rawRef && options.adapter) {
+      try {
+        const manifest = options.adapter.readManifest({ source, rawRef });
+        if (manifest) {
+          return {
+            manifest: fleetSchema.parse(manifest),
+            info: {
+              source,
+              loadedFrom: "private-ref",
+              warnings,
+            },
+          };
+        }
+        warnings.push(`private_manifest_adapter_empty:${redactIdentifier(options.adapter.id)}`);
+      } catch (error) {
+        warnings.push(`private_manifest_adapter_failed:${redactIdentifier(options.adapter.id)}`);
+      }
+    } else {
+      warnings.push("private_manifest_ref_without_adapter");
+    }
+
+    const fallbackSource = fileSourceRef(path);
+    const manifest = readManifest(path);
+    return {
+      manifest,
+      info: {
+        source,
+        loadedFrom: existsSync(path) ? "fallback" : "default",
+        fallbackSource,
+        warnings,
+      },
+    };
+  }
+
+  return {
+    manifest: readManifest(path),
+    info: {
+      source,
+      loadedFrom: existsSync(path) ? "file" : "default",
+      warnings,
+    },
+  };
 }
 
 export function validateManifest(path = getManifestPath()): FleetManifest {

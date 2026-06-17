@@ -36,9 +36,18 @@ machines manifest validate
 machines manifest list
 ```
 
+Public packages should keep private fleet state behind an opaque source/ref
+boundary. `HASNA_MACHINES_PRIVATE_MANIFEST_REF` (or
+`MACHINES_PRIVATE_MANIFEST_REF`) may point at a private backend, but
+open-machines only reports the redacted ref and falls back to the local
+`machines.json` unless a caller supplies a manifest adapter. The adapter
+contract is backend-agnostic and lives in the package root exports; it does not
+pull in secrets managers, storage SDKs, or org-specific fleet internals.
+
 ## Provision and reconcile
 
 ```bash
+machines setup --machine linux-dev-01
 machines setup --machine linux-dev-01 --json
 machines setup --machine linux-dev-01 --apply --yes
 machines sync --machine linux-dev-01 --json
@@ -46,6 +55,14 @@ machines sync --machine linux-dev-01 --apply --yes
 machines doctor --machine linux-dev-01
 machines self-test
 ```
+
+`machines setup` is a dry-run plan by default. The generated playbook favors
+idempotent operations (`mkdir -p`, command-existence guards, package-manager
+installs) and only executes when both `--apply` and `--yes` are provided.
+`doctor --json` includes public-safe source/ref diagnostics plus optional
+adapter hook results for secrets, configs, monitors, repos, MCPs, and shield
+checks. When no adapter is configured, those checks report a skipped fallback
+instead of importing private dependencies.
 
 ## Topology SDK
 

@@ -1,21 +1,61 @@
 import { getLocalMachineId } from "../db.js";
-import { readManifest } from "../manifests.js";
+import { readManifestWithSource, type ManifestSourceAdapter } from "../manifests.js";
+import { redactIdentifier, redactManifestForDiagnostics, redactPath, redactSensitiveValue } from "../redaction.js";
 import { runMachineCommand } from "../remote.js";
-import type { DoctorCheck, DoctorReport } from "../types.js";
+import type { DoctorCheck, DoctorReport, FleetManifest, ManifestLoadInfo } from "../types.js";
 
-function makeCheck(id: string, status: DoctorCheck["status"], summary: string, detail: string): DoctorCheck {
-  return { id, status, summary, detail };
+export const DOCTOR_OPTIONAL_ADAPTER_DOMAINS = ["secrets", "configs", "monitor", "repos", "mcps", "shield"] as const;
+
+export type DoctorOptionalAdapterDomain = typeof DOCTOR_OPTIONAL_ADAPTER_DOMAINS[number];
+
+export interface DoctorAdapterContext {
+  machineId: string;
+  manifest: FleetManifest;
+  manifestSource: ManifestLoadInfo;
+  commandDetails: Record<string, string>;
+  now: Date;
+}
+
+export type DoctorAdapterHook = (context: DoctorAdapterContext) => DoctorCheck | DoctorCheck[] | null | undefined;
+
+export interface DoctorAdapter {
+  id: string;
+  checks?: Partial<Record<DoctorOptionalAdapterDomain, DoctorAdapterHook>>;
+}
+
+export interface DoctorOptions {
+  now?: Date;
+  manifestAdapter?: ManifestSourceAdapter | null;
+  adapters?: DoctorAdapter[];
+  includeOptionalAdapters?: boolean;
+}
+
+function makeCheck(
+  id: string,
+  status: DoctorCheck["status"],
+  summary: string,
+  detail: string,
+  extra: Partial<DoctorCheck> = {},
+): DoctorCheck {
+  const { data, ...rest } = extra;
+  return {
+    ...rest,
+    id,
+    status,
+    summary,
+    detail,
+    data: data ? (redactSensitiveValue(data) as Record<string, unknown>) : undefined,
+  };
 }
 
 function parseKeyValueOutput(stdout: string): Record<string, string> {
-  return Object.fromEntries(
-    stdout
-      .trim()
-      .split("\n")
-      .map((line) => line.split("="))
-      .filter((parts) => parts.length === 2)
-      .map(([key, value]) => [key, value])
-  ) as Record<string, string>;
+  const result: Record<string, string> = {};
+  for (const line of stdout.trim().split("\n")) {
+    const index = line.indexOf("=");
+    if (index <= 0) continue;
+    result[line.slice(0, index)] = line.slice(index + 1);
+  }
+  return result;
 }
 
 function buildDoctorCommand(): string {
@@ -24,9 +64,11 @@ function buildDoctorCommand(): string {
     'manifest_path="${HASNA_MACHINES_MANIFEST_PATH:-$data_dir/machines.json}"',
     'db_path="${HASNA_MACHINES_DB_PATH:-$data_dir/machines.db}"',
     'notifications_path="${HASNA_MACHINES_NOTIFICATIONS_PATH:-$data_dir/notifications.json}"',
+    "printf 'data_dir=%s\\n' \"$data_dir\"",
     "printf 'manifest_path=%s\\n' \"$manifest_path\"",
     "printf 'db_path=%s\\n' \"$db_path\"",
     "printf 'notifications_path=%s\\n' \"$notifications_path\"",
+    "printf 'data_dir_exists=%s\\n' \"$(test -d \"$data_dir\" && printf yes || printf no)\"",
     "printf 'manifest_exists=%s\\n' \"$(test -e \"$manifest_path\" && printf yes || printf no)\"",
     "printf 'db_exists=%s\\n' \"$(test -e \"$db_path\" && printf yes || printf no)\"",
     "printf 'notifications_exists=%s\\n' \"$(test -e \"$notifications_path\" && printf yes || printf no)\"",
@@ -38,36 +80,161 @@ function buildDoctorCommand(): string {
   ].join("; ");
 }
 
-export function runDoctor(machineId = getLocalMachineId()): DoctorReport {
-  const manifest = readManifest();
+function fallbackAdapterCheck(domain: DoctorOptionalAdapterDomain): DoctorCheck {
+  return makeCheck(
+    `${domain}-adapter`,
+    "ok",
+    `Optional ${domain} adapter`,
+    `No ${domain} adapter configured; skipped optional private integration check.`,
+    {
+      optional: true,
+      source: "open-machines",
+      data: { configured: false, fallback: true },
+    },
+  );
+}
+
+function sanitizeAdapterCheck(check: DoctorCheck, domain: DoctorOptionalAdapterDomain, adapterId: string): DoctorCheck {
+  const safeAdapterId = redactIdentifier(adapterId);
+  return makeCheck(
+    check.id.startsWith(`${domain}-`) || check.id.startsWith(`${domain}:`) ? check.id : `${domain}:${check.id}`,
+    check.status,
+    check.summary,
+    String(redactSensitiveValue(check.detail)),
+    {
+      ...check,
+      optional: check.optional ?? true,
+      source: check.source ? String(redactSensitiveValue(check.source)) : `adapter:${safeAdapterId}`,
+      data: check.data ? (redactSensitiveValue(check.data) as Record<string, unknown>) : undefined,
+    },
+  );
+}
+
+function runOptionalAdapterChecks(context: DoctorAdapterContext, adapters: DoctorAdapter[]): DoctorCheck[] {
+  const checks: DoctorCheck[] = [];
+  for (const domain of DOCTOR_OPTIONAL_ADAPTER_DOMAINS) {
+    const adapter = adapters.find((candidate) => candidate.checks?.[domain]);
+    const hook = adapter?.checks?.[domain];
+    if (!adapter || !hook) {
+      checks.push(fallbackAdapterCheck(domain));
+      continue;
+    }
+
+    try {
+      const result = hook(context);
+      const domainChecks = Array.isArray(result) ? result : result ? [result] : [fallbackAdapterCheck(domain)];
+      checks.push(...domainChecks.map((check) => sanitizeAdapterCheck(check, domain, adapter.id)));
+    } catch {
+      const safeAdapterId = redactIdentifier(adapter.id);
+      checks.push(makeCheck(
+        `${domain}-adapter`,
+        "warn",
+        `Optional ${domain} adapter failed`,
+        "Adapter failed; details are intentionally hidden to avoid leaking private refs or credentials.",
+        {
+          optional: true,
+          source: `adapter:${safeAdapterId}`,
+          data: { adapter: safeAdapterId, fallback: true },
+        },
+      ));
+    }
+  }
+  return checks;
+}
+
+export function runDoctor(machineId = getLocalMachineId(), options: DoctorOptions = {}): DoctorReport {
+  const now = options.now ?? new Date();
+  const { manifest, info: manifestSource } = readManifestWithSource({ adapter: options.manifestAdapter ?? null });
   const commandChecks = runMachineCommand(machineId, buildDoctorCommand());
   const details = parseKeyValueOutput(commandChecks.stdout);
   const machineInManifest = manifest.machines.find((machine) => machine.id === machineId);
+  const optionalAdapterChecks = options.includeOptionalAdapters === false
+    ? []
+    : runOptionalAdapterChecks({
+        machineId,
+        manifest,
+        manifestSource,
+        commandDetails: details,
+        now,
+      }, options.adapters ?? []);
 
   const checks: DoctorCheck[] = [
+    makeCheck(
+      "manifest-source",
+      manifestSource.warnings.length > 0 ? "warn" : "ok",
+      "Manifest source boundary",
+      `${manifestSource.source.kind}:${manifestSource.source.ref} loaded from ${manifestSource.loadedFrom}`,
+      {
+        data: {
+          source: manifestSource.source,
+          loadedFrom: manifestSource.loadedFrom,
+          fallbackSource: manifestSource.fallbackSource,
+          warnings: manifestSource.warnings,
+        },
+        remediation: manifestSource.warnings.length > 0
+          ? ["Provide a private manifest adapter or unset the private manifest ref to use the local manifest only."]
+          : undefined,
+      },
+    ),
     makeCheck(
       "manifest-entry",
       machineInManifest ? "ok" : "warn",
       machineInManifest ? "Machine exists in manifest" : "Machine missing from manifest",
-      machineInManifest ? JSON.stringify(machineInManifest) : `No manifest entry for ${machineId}`
+      machineInManifest ? JSON.stringify(redactManifestForDiagnostics(machineInManifest)) : `No manifest entry for ${machineId}`,
+      {
+        data: {
+          declared: Boolean(machineInManifest),
+          machine: machineInManifest ? redactManifestForDiagnostics(machineInManifest) : null,
+        },
+      },
+    ),
+    makeCheck(
+      "data-dir",
+      details["data_dir_exists"] === "yes" ? "ok" : "warn",
+      "Data directory check",
+      `${redactPath(details["data_dir"] || "unknown")} ${details["data_dir_exists"] === "yes" ? "exists" : "missing"}`,
+      {
+        data: {
+          path: redactPath(details["data_dir"] || "unknown"),
+          exists: details["data_dir_exists"] === "yes",
+        },
+      },
     ),
     makeCheck(
       "manifest-path",
       details["manifest_exists"] === "yes" ? "ok" : "warn",
       "Manifest path check",
-      `${details["manifest_path"] || "unknown"} ${details["manifest_exists"] === "yes" ? "exists" : "missing"}`
+      `${redactPath(details["manifest_path"] || "unknown")} ${details["manifest_exists"] === "yes" ? "exists" : "missing"}`,
+      {
+        data: {
+          path: redactPath(details["manifest_path"] || "unknown"),
+          exists: details["manifest_exists"] === "yes",
+        },
+      },
     ),
     makeCheck(
       "db-path",
       details["db_exists"] === "yes" ? "ok" : "warn",
       "DB path check",
-      `${details["db_path"] || "unknown"} ${details["db_exists"] === "yes" ? "exists" : "missing"}`
+      `${redactPath(details["db_path"] || "unknown")} ${details["db_exists"] === "yes" ? "exists" : "missing"}`,
+      {
+        data: {
+          path: redactPath(details["db_path"] || "unknown"),
+          exists: details["db_exists"] === "yes",
+        },
+      },
     ),
     makeCheck(
       "notifications-path",
       details["notifications_exists"] === "yes" ? "ok" : "warn",
       "Notifications path check",
-      `${details["notifications_path"] || "unknown"} ${details["notifications_exists"] === "yes" ? "exists" : "missing"}`
+      `${redactPath(details["notifications_path"] || "unknown")} ${details["notifications_exists"] === "yes" ? "exists" : "missing"}`,
+      {
+        data: {
+          path: redactPath(details["notifications_path"] || "unknown"),
+          exists: details["notifications_exists"] === "yes",
+        },
+      },
     ),
     makeCheck(
       "bun",
@@ -99,14 +266,18 @@ export function runDoctor(machineId = getLocalMachineId()): DoctorReport {
       "SSH availability",
       details["ssh"] || "missing"
     ),
+    ...optionalAdapterChecks,
   ];
 
   return {
     machineId,
     source: commandChecks.source,
-    manifestPath: details["manifest_path"],
-    dbPath: details["db_path"],
-    notificationsPath: details["notifications_path"],
+    schemaVersion: 1,
+    generatedAt: now.toISOString(),
+    manifestSource,
+    manifestPath: details["manifest_path"] ? redactPath(details["manifest_path"]) : undefined,
+    dbPath: details["db_path"] ? redactPath(details["db_path"]) : undefined,
+    notificationsPath: details["notifications_path"] ? redactPath(details["notifications_path"]) : undefined,
     checks,
   };
 }

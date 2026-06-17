@@ -3,6 +3,7 @@ export * from "./cross-project-types.js";
 export * from "./paths.js";
 export * from "./db.js";
 export * from "./manifests.js";
+export * from "./redaction.js";
 export * from "./topology.js";
 export * from "./compatibility.js";
 export * from "./agent/runtime.js";

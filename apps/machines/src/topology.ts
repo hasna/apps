@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { getLocalMachineId, listHeartbeats } from "./db.js";
 import { readManifest } from "./manifests.js";
 import { getManifestPath } from "./paths.js";
+import { publicMetadataKeys, redactMetadata } from "./redaction.js";
 import type { MachineManifest, MachinePlatform } from "./types.js";
 import { getPackageVersion } from "./version.js";
 
@@ -572,7 +573,7 @@ function buildEntry(input: {
     },
     route_hints: hints,
     tags: manifest?.tags ?? [],
-    metadata: manifest?.metadata ?? {},
+    metadata: redactMetadata(manifest?.metadata),
   };
 }
 
@@ -1170,9 +1171,7 @@ function primaryMachine(machine: MachineTopologyEntry | null, projectId: string,
 }
 
 function metadataKeysForDiagnostics(metadata: Record<string, unknown>): string[] {
-  return Object.keys(metadata)
-    .filter((key) => !/(secret|token|key|password|credential)/i.test(key))
-    .sort();
+  return publicMetadataKeys(metadata);
 }
 
 export function resolveMachineWorkspace(options: MachineWorkspaceOptions): MachineWorkspaceResolution {
