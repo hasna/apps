@@ -42,6 +42,7 @@ export async function createCompletionCertificate(input: {
   });
 
   const signer = input.session.signer_name ?? input.session.signer_email ?? "Unknown signer";
+  const signerType = input.session.signer_type ?? "human";
   const issuedAt = new Date().toISOString();
   const originalHash = sha256File(input.document.file_path);
   const signedHash = sha256File(input.signedDocumentPath);
@@ -51,12 +52,21 @@ export async function createCompletionCertificate(input: {
   centerText(page, "This certifies that the document below was signed and completed.", 420, 15, sans, rgb(0.24, 0.27, 0.32));
   centerText(page, "Local completion evidence only. Not a qualified electronic signature or QTSP validation report.", 397, 10, sans, rgb(0.43, 0.28, 0.12));
   centerText(page, signer, 365, 30, serifBold, rgb(0.08, 0.11, 0.18));
+  centerText(page, signerType === "agent" ? "Agent attestation" : "Human signer", 343, 12, sansBold, rgb(0.33, 0.33, 0.36));
   centerText(page, input.document.name, 326, 18, serif, rgb(0.14, 0.16, 0.2));
 
   const details: Array<[string, string]> = [
     ["Document ID", input.document.id],
     ["Session ID", input.session.id],
+    ["Signer type", signerType],
     ["Signer email", input.session.signer_email ?? "not provided"],
+    ...(signerType === "agent" ? [
+      ["Agent ID", input.session.agent_id ?? "not provided"] as [string, string],
+      ["Agent run", input.session.agent_run_id ?? "not provided"] as [string, string],
+      ["Policy", input.session.agent_policy_id ?? "not provided"] as [string, string],
+      ["Agent input SHA-256", input.session.agent_input_hash ?? "not recorded"] as [string, string],
+      ["Agent output SHA-256", input.session.agent_output_hash ?? "not recorded"] as [string, string],
+    ] : []),
     ["Completed at", input.session.completed_at ?? issuedAt],
     ["Original SHA-256", originalHash],
     ["Signed SHA-256", signedHash],
@@ -70,8 +80,9 @@ export async function createCompletionCertificate(input: {
   }
 
   const events = listAuditEvents({ session_id: input.session.id, limit: 5 });
-  page.drawText("Audit trail", { x: 130, y: 128, size: 12, font: sansBold, color: rgb(0.12, 0.12, 0.14) });
-  let auditY = 107;
+  const auditTitleY = Math.min(128, y - 2);
+  page.drawText("Audit trail", { x: 130, y: auditTitleY, size: 12, font: sansBold, color: rgb(0.12, 0.12, 0.14) });
+  let auditY = auditTitleY - 21;
   for (const event of events.slice(-4)) {
     page.drawText(`${event.created_at} - ${event.event_type}`, {
       x: 130,
@@ -97,6 +108,17 @@ export async function createCompletionCertificate(input: {
       issued_at: issuedAt,
       source: input.session.source,
       connector_name: input.session.connector_name,
+      signer_type: signerType,
+      agent: signerType === "agent" ? {
+        agent_id: input.session.agent_id,
+        agent_provider: input.session.agent_provider,
+        agent_run_id: input.session.agent_run_id,
+        agent_thread_id: input.session.agent_thread_id,
+        agent_policy_id: input.session.agent_policy_id,
+        agent_reason: input.session.agent_reason,
+        agent_input_hash: input.session.agent_input_hash,
+        agent_output_hash: input.session.agent_output_hash,
+      } : undefined,
     },
   });
 

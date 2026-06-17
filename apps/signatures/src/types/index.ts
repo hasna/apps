@@ -25,7 +25,8 @@ export interface Tag {
   created_at: string;
 }
 
-export type DocumentStatus = "draft" | "pending" | "completed" | "cancelled";
+export type WorkflowStatus = "draft" | "prepared" | "sent" | "viewed" | "pending" | "signed" | "completed" | "declined" | "expired" | "failed" | "cancelled";
+export type DocumentStatus = WorkflowStatus;
 
 export interface Document {
   id: string;
@@ -62,7 +63,7 @@ export interface Signature {
   updated_at: string;
 }
 
-export type FieldType = "signature" | "initial" | "date" | "text" | "checkbox";
+export type FieldType = "signature" | "initial" | "date" | "text" | "checkbox" | "approval";
 
 export interface SignatureField {
   id: string;
@@ -79,6 +80,11 @@ export interface SignatureField {
   required: number;
   detected: number;
   assigned_to?: string;
+  signer_type?: SignerType;
+  role?: string;
+  signing_order?: number;
+  parallel_group?: number;
+  recipient_status?: RecipientStatus;
   created_at: string;
 }
 
@@ -96,8 +102,21 @@ export interface SignaturePlacement {
   created_at: string;
 }
 
-export type SessionStatus = "pending" | "completed" | "expired";
+export type SessionStatus = "draft" | "prepared" | "pending" | "available" | "sent" | "viewed" | "signed" | "completed" | "declined" | "expired" | "failed" | "skipped" | "cancelled";
 export type SessionSource = "local" | "connector" | "browseruse" | "email" | "provider";
+export type SignerType = "human" | "agent";
+export type RecipientStatus = "pending" | "available" | "viewed" | "signed" | "declined" | "expired" | "failed" | "skipped";
+export interface AgentAttestation {
+  agent_id?: string;
+  agent_name?: string;
+  agent_provider?: string;
+  run_id?: string;
+  thread_id?: string;
+  policy_id?: string;
+  approval_reason?: string;
+  input_hash?: string;
+  output_hash?: string;
+}
 export type SignatureLevel = "ses" | "aes" | "qes" | "eseal" | "qeseal";
 export type EvidenceStatus = "prepared" | "sent" | "completed" | "failed" | "validated";
 export type ValidationStatus = "not_applicable" | "pending" | "valid" | "invalid" | "unknown";
@@ -109,6 +128,9 @@ export interface Person {
   phone?: string;
   company?: string;
   role?: string;
+  signer_type: SignerType;
+  agent_id?: string;
+  agent_provider?: string;
   metadata?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
@@ -120,6 +142,20 @@ export interface SigningSession {
   person_id?: string;
   signer_name?: string;
   signer_email?: string;
+  signer_type: SignerType;
+  agent_id?: string;
+  agent_provider?: string;
+  agent_run_id?: string;
+  agent_thread_id?: string;
+  agent_policy_id?: string;
+  agent_reason?: string;
+  agent_input_hash?: string;
+  agent_output_hash?: string;
+  field_id?: string;
+  role?: string;
+  signing_order: number;
+  parallel_group: number;
+  recipient_status: RecipientStatus;
   status: SessionStatus;
   token: string;
   source: SessionSource;
@@ -144,6 +180,8 @@ export type AuditEventType =
   | "document_created"
   | "document_rendered"
   | "session_created"
+  | "session_viewed"
+  | "session_declined"
   | "email_prepared"
   | "email_sent"
   | "provider_created"
@@ -163,6 +201,8 @@ export interface AuditEvent {
   message?: string;
   actor_name?: string;
   actor_email?: string;
+  actor_signer_type?: SignerType;
+  actor_agent_id?: string;
   metadata?: Record<string, unknown>;
   created_at: string;
 }
@@ -187,6 +227,8 @@ export interface ProviderEvidence {
   connector_slug?: string;
   operation?: string;
   signature_level: SignatureLevel;
+  signer_type?: SignerType;
+  recipient_role?: string;
   status: EvidenceStatus;
   validation_status: ValidationStatus;
   remote_document_id?: string;
@@ -210,6 +252,7 @@ export interface Stats {
   total_placements: number;
   total_sessions: number;
   total_people?: number;
+  total_agents?: number;
 }
 
 // Error types

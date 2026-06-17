@@ -38,7 +38,7 @@ import {
   deleteFieldsForDocument,
 } from "../db/signature-fields.js";
 import { listPlacementsForDocument } from "../db/signature-placements.js";
-import { createSigningSession, updateSessionAttachment, updateSessionStatus, getSessionById } from "../db/signing-sessions.js";
+import { createSigningSession, updateSessionAttachment, updateSessionStatus, getSessionById, listSigningSessions } from "../db/signing-sessions.js";
 import { createPerson, listPeople } from "../db/people.js";
 import { getSigningCertificateBySession } from "../db/certificates.js";
 import { listProviderEvidence } from "../db/provider-evidence.js";
@@ -54,6 +54,7 @@ import { getSetting, setSetting } from "../db/settings.js";
 import { getDatabase } from "../db/database.js";
 import { isCerebrasConfigured } from "../lib/pdf-detector.js";
 import { createDocumentFromMarkdown, sendDocumentForSignature, sendDocumentWithProvider, signDocumentLocally } from "../lib/workflow.js";
+import type { RecipientStatus, SessionStatus, SignerType } from "../types/index.js";
 
 import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 
@@ -106,6 +107,7 @@ export function buildServer(): Server {
             variables: { type: "object" },
             signer_name: { type: "string" },
             signer_email: { type: "string" },
+            signer_type: { type: "string", enum: ["human", "agent"] },
           },
           required: ["file_path"],
         },
@@ -167,6 +169,18 @@ export function buildServer(): Server {
             field_id: { type: "string" },
             signer_name: { type: "string" },
             signer_email: { type: "string" },
+            signer_type: { type: "string", enum: ["human", "agent"] },
+            agent_id: { type: "string" },
+            agent_provider: { type: "string" },
+            agent_run_id: { type: "string" },
+            agent_thread_id: { type: "string" },
+            agent_policy_id: { type: "string" },
+            agent_reason: { type: "string" },
+            agent_input_hash: { type: "string" },
+            agent_output_hash: { type: "string" },
+            role: { type: "string" },
+            signing_order: { type: "number" },
+            parallel_group: { type: "number" },
             person: { type: "string" },
             session_id: { type: "string" },
             certificate: { type: "boolean" },
@@ -183,6 +197,16 @@ export function buildServer(): Server {
             document_id: { type: "string" },
             signer_name: { type: "string" },
             signer_email: { type: "string" },
+            signer_type: { type: "string", enum: ["human", "agent"] },
+            agent_id: { type: "string" },
+            agent_provider: { type: "string" },
+            agent_run_id: { type: "string" },
+            agent_thread_id: { type: "string" },
+            agent_policy_id: { type: "string" },
+            agent_reason: { type: "string" },
+            role: { type: "string" },
+            signing_order: { type: "number" },
+            parallel_group: { type: "number" },
             person: { type: "string" },
             from: { type: "string" },
             base_url: { type: "string" },
@@ -203,6 +227,9 @@ export function buildServer(): Server {
             phone: { type: "string" },
             company: { type: "string" },
             role: { type: "string" },
+            signer_type: { type: "string", enum: ["human", "agent"] },
+            agent_id: { type: "string" },
+            agent_provider: { type: "string" },
           },
           required: ["name"],
         },
@@ -212,7 +239,25 @@ export function buildServer(): Server {
         description: "List reusable people/contacts",
         inputSchema: {
           type: "object",
-          properties: { query: { type: "string" } },
+          properties: {
+            query: { type: "string" },
+            signer_type: { type: "string", enum: ["human", "agent"] },
+          },
+        },
+      },
+      {
+        name: "signatures_session_list",
+        description: "List signing sessions with human/agent routing and lifecycle state filters",
+        inputSchema: {
+          type: "object",
+          properties: {
+            document_id: { type: "string" },
+            status: { type: "string" },
+            signer_type: { type: "string", enum: ["human", "agent"] },
+            recipient_status: { type: "string" },
+            limit: { type: "number" },
+            offset: { type: "number" },
+          },
         },
       },
       {
@@ -573,6 +618,7 @@ export function buildServer(): Server {
             variables: a["variables"] as Record<string, unknown> | undefined,
             signerName: a["signer_name"] as string | undefined,
             signerEmail: a["signer_email"] as string | undefined,
+            signerType: a["signer_type"] as Parameters<typeof createDocumentFromMarkdown>[0]["signerType"],
           });
           return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
         }
@@ -612,6 +658,18 @@ export function buildServer(): Server {
             personIdOrEmail: a["person"] as string | undefined,
             signerName: a["signer_name"] as string | undefined,
             signerEmail: a["signer_email"] as string | undefined,
+            signerType: a["signer_type"] as Parameters<typeof signDocumentLocally>[0]["signerType"],
+            agentId: a["agent_id"] as string | undefined,
+            agentProvider: a["agent_provider"] as string | undefined,
+            agentRunId: a["agent_run_id"] as string | undefined,
+            agentThreadId: a["agent_thread_id"] as string | undefined,
+            agentPolicyId: a["agent_policy_id"] as string | undefined,
+            agentReason: a["agent_reason"] as string | undefined,
+            agentInputHash: a["agent_input_hash"] as string | undefined,
+            agentOutputHash: a["agent_output_hash"] as string | undefined,
+            role: a["role"] as string | undefined,
+            signingOrder: a["signing_order"] as number | undefined,
+            parallelGroup: a["parallel_group"] as number | undefined,
             fieldId: a["field_id"] as string | undefined,
             page: a["page"] as number | undefined,
             x: a["x"] as number | undefined,
@@ -638,6 +696,16 @@ export function buildServer(): Server {
             personIdOrEmail: a["person"] as string | undefined,
             signerName: a["signer_name"] as string | undefined,
             signerEmail: a["signer_email"] as string | undefined,
+            signerType: a["signer_type"] as Parameters<typeof sendDocumentForSignature>[0]["signerType"],
+            agentId: a["agent_id"] as string | undefined,
+            agentProvider: a["agent_provider"] as string | undefined,
+            agentRunId: a["agent_run_id"] as string | undefined,
+            agentThreadId: a["agent_thread_id"] as string | undefined,
+            agentPolicyId: a["agent_policy_id"] as string | undefined,
+            agentReason: a["agent_reason"] as string | undefined,
+            role: a["role"] as string | undefined,
+            signingOrder: a["signing_order"] as number | undefined,
+            parallelGroup: a["parallel_group"] as number | undefined,
             fromEmail: a["from"] as string | undefined,
             baseUrl: a["base_url"] as string | undefined,
             expiry: a["expiry"] as string | undefined,
@@ -654,14 +722,33 @@ export function buildServer(): Server {
             phone: a["phone"] as string | undefined,
             company: a["company"] as string | undefined,
             role: a["role"] as string | undefined,
+            signer_type: a["signer_type"] as Parameters<typeof createPerson>[0]["signer_type"],
+            agent_id: a["agent_id"] as string | undefined,
+            agent_provider: a["agent_provider"] as string | undefined,
           });
           return { content: [{ type: "text", text: JSON.stringify(person, null, 2) }] };
         }
 
         case "signatures_person_list": {
           const a = args as Record<string, unknown>;
-          const people = listPeople({ query: a["query"] as string | undefined });
+          const people = listPeople({
+            query: a["query"] as string | undefined,
+            signer_type: a["signer_type"] as SignerType | undefined,
+          });
           return { content: [{ type: "text", text: JSON.stringify(people, null, 2) }] };
+        }
+
+        case "signatures_session_list": {
+          const a = args as Record<string, unknown>;
+          const sessions = listSigningSessions({
+            document_id: a["document_id"] as string | undefined,
+            status: a["status"] as SessionStatus | undefined,
+            signer_type: a["signer_type"] as SignerType | undefined,
+            recipient_status: a["recipient_status"] as RecipientStatus | undefined,
+            limit: a["limit"] as number | undefined,
+            offset: a["offset"] as number | undefined,
+          });
+          return { content: [{ type: "text", text: JSON.stringify(sessions, null, 2) }] };
         }
 
         case "signatures_certificate_get": {

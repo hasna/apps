@@ -93,6 +93,11 @@ export const PG_MIGRATIONS: string[] = [
     required BOOLEAN NOT NULL DEFAULT TRUE,
     detected BOOLEAN NOT NULL DEFAULT FALSE,
     assigned_to TEXT,
+    signer_type TEXT NOT NULL DEFAULT 'human',
+    role TEXT,
+    signing_order INTEGER NOT NULL DEFAULT 1,
+    parallel_group INTEGER NOT NULL DEFAULT 1,
+    recipient_status TEXT NOT NULL DEFAULT 'pending',
     created_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
 
@@ -134,6 +139,20 @@ export const PG_MIGRATIONS: string[] = [
     assurance_level TEXT,
     provider_status TEXT,
     validation_status TEXT,
+    signer_type TEXT NOT NULL DEFAULT 'human',
+    agent_id TEXT,
+    agent_provider TEXT,
+    agent_run_id TEXT,
+    agent_thread_id TEXT,
+    agent_policy_id TEXT,
+    agent_reason TEXT,
+    agent_input_hash TEXT,
+    agent_output_hash TEXT,
+    field_id TEXT,
+    role TEXT,
+    signing_order INTEGER NOT NULL DEFAULT 1,
+    parallel_group INTEGER NOT NULL DEFAULT 1,
+    recipient_status TEXT NOT NULL DEFAULT 'pending',
     created_at TEXT NOT NULL DEFAULT NOW()::text,
     updated_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
@@ -142,6 +161,26 @@ export const PG_MIGRATIONS: string[] = [
   `ALTER TABLE signing_sessions ADD COLUMN IF NOT EXISTS assurance_level TEXT`,
   `ALTER TABLE signing_sessions ADD COLUMN IF NOT EXISTS provider_status TEXT`,
   `ALTER TABLE signing_sessions ADD COLUMN IF NOT EXISTS validation_status TEXT`,
+  `ALTER TABLE signing_sessions ADD COLUMN IF NOT EXISTS signer_type TEXT NOT NULL DEFAULT 'human'`,
+  `ALTER TABLE signing_sessions ADD COLUMN IF NOT EXISTS agent_id TEXT`,
+  `ALTER TABLE signing_sessions ADD COLUMN IF NOT EXISTS agent_provider TEXT`,
+  `ALTER TABLE signing_sessions ADD COLUMN IF NOT EXISTS agent_run_id TEXT`,
+  `ALTER TABLE signing_sessions ADD COLUMN IF NOT EXISTS agent_thread_id TEXT`,
+  `ALTER TABLE signing_sessions ADD COLUMN IF NOT EXISTS agent_policy_id TEXT`,
+  `ALTER TABLE signing_sessions ADD COLUMN IF NOT EXISTS agent_reason TEXT`,
+  `ALTER TABLE signing_sessions ADD COLUMN IF NOT EXISTS agent_input_hash TEXT`,
+  `ALTER TABLE signing_sessions ADD COLUMN IF NOT EXISTS agent_output_hash TEXT`,
+  `ALTER TABLE signing_sessions ADD COLUMN IF NOT EXISTS field_id TEXT`,
+  `ALTER TABLE signing_sessions ADD COLUMN IF NOT EXISTS role TEXT`,
+  `ALTER TABLE signing_sessions ADD COLUMN IF NOT EXISTS signing_order INTEGER NOT NULL DEFAULT 1`,
+  `ALTER TABLE signing_sessions ADD COLUMN IF NOT EXISTS parallel_group INTEGER NOT NULL DEFAULT 1`,
+  `ALTER TABLE signing_sessions ADD COLUMN IF NOT EXISTS recipient_status TEXT NOT NULL DEFAULT 'pending'`,
+
+  `ALTER TABLE signature_fields ADD COLUMN IF NOT EXISTS signer_type TEXT NOT NULL DEFAULT 'human'`,
+  `ALTER TABLE signature_fields ADD COLUMN IF NOT EXISTS role TEXT`,
+  `ALTER TABLE signature_fields ADD COLUMN IF NOT EXISTS signing_order INTEGER NOT NULL DEFAULT 1`,
+  `ALTER TABLE signature_fields ADD COLUMN IF NOT EXISTS parallel_group INTEGER NOT NULL DEFAULT 1`,
+  `ALTER TABLE signature_fields ADD COLUMN IF NOT EXISTS recipient_status TEXT NOT NULL DEFAULT 'pending'`,
 
   // Migration 10: settings table
   `CREATE TABLE IF NOT EXISTS settings (
@@ -168,10 +207,18 @@ export const PG_MIGRATIONS: string[] = [
     phone TEXT,
     company TEXT,
     role TEXT,
+    signer_type TEXT NOT NULL DEFAULT 'human',
+    agent_id TEXT,
+    agent_provider TEXT,
     metadata TEXT,
     created_at TEXT NOT NULL DEFAULT NOW()::text,
     updated_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
+
+  `ALTER TABLE people ADD COLUMN IF NOT EXISTS signer_type TEXT NOT NULL DEFAULT 'human'`,
+  `ALTER TABLE people ADD COLUMN IF NOT EXISTS agent_id TEXT`,
+  `ALTER TABLE people ADD COLUMN IF NOT EXISTS agent_provider TEXT`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS people_agent_id_unique ON people(agent_id) WHERE agent_id IS NOT NULL AND agent_id <> ''`,
 
   `CREATE TABLE IF NOT EXISTS audit_events (
     id TEXT PRIMARY KEY,
@@ -181,9 +228,14 @@ export const PG_MIGRATIONS: string[] = [
     message TEXT,
     actor_name TEXT,
     actor_email TEXT,
+    actor_signer_type TEXT,
+    actor_agent_id TEXT,
     metadata TEXT,
     created_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
+
+  `ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS actor_signer_type TEXT`,
+  `ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS actor_agent_id TEXT`,
 
   `CREATE TABLE IF NOT EXISTS signing_certificates (
     id TEXT PRIMARY KEY,
@@ -205,6 +257,8 @@ export const PG_MIGRATIONS: string[] = [
     connector_slug TEXT,
     operation TEXT,
     signature_level TEXT NOT NULL DEFAULT 'ses',
+    signer_type TEXT,
+    recipient_role TEXT,
     status TEXT NOT NULL DEFAULT 'prepared',
     validation_status TEXT NOT NULL DEFAULT 'pending',
     remote_document_id TEXT,
@@ -220,6 +274,8 @@ export const PG_MIGRATIONS: string[] = [
 
   `CREATE INDEX IF NOT EXISTS provider_evidence_document_idx ON provider_evidence(document_id)`,
   `CREATE INDEX IF NOT EXISTS provider_evidence_session_idx ON provider_evidence(session_id)`,
+  `ALTER TABLE provider_evidence ADD COLUMN IF NOT EXISTS signer_type TEXT`,
+  `ALTER TABLE provider_evidence ADD COLUMN IF NOT EXISTS recipient_role TEXT`,
   `ALTER TABLE provider_evidence ALTER COLUMN signature_level SET DEFAULT 'ses'`,
   `UPDATE provider_evidence SET signature_level = 'ses' WHERE signature_level = 'provider' OR signature_level IS NULL`,
 ];

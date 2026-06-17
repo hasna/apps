@@ -271,6 +271,14 @@ a {
   background: var(--blue);
 }
 
+.badge-human {
+  background: var(--blue);
+}
+
+.badge-agent {
+  background: #6d28d9;
+}
+
 .form {
   padding: 18px;
   display: grid;

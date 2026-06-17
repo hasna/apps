@@ -1,7 +1,8 @@
 import { nanoid } from "nanoid";
 import { getDatabase } from "./database.js";
-import type { SignatureField, FieldType } from "../types/index.js";
+import type { SignatureField, FieldType, RecipientStatus, SignerType } from "../types/index.js";
 import { NotFoundError } from "../types/index.js";
+import { assertSignerType } from "./people.js";
 
 function rowToField(row: Record<string, unknown>): SignatureField {
   return {
@@ -19,6 +20,11 @@ function rowToField(row: Record<string, unknown>): SignatureField {
     required: row["required"] as number,
     detected: row["detected"] as number,
     assigned_to: row["assigned_to"] as string | undefined,
+    signer_type: (row["signer_type"] as SignerType | undefined) ?? "human",
+    role: row["role"] as string | undefined,
+    signing_order: (row["signing_order"] as number | undefined) ?? 1,
+    parallel_group: (row["parallel_group"] as number | undefined) ?? 1,
+    recipient_status: (row["recipient_status"] as RecipientStatus | undefined) ?? "pending",
     created_at: row["created_at"] as string,
   };
 }
@@ -37,13 +43,19 @@ export function createSignatureField(data: {
   required?: number;
   detected?: number;
   assigned_to?: string;
+  signer_type?: SignerType;
+  role?: string;
+  signing_order?: number;
+  parallel_group?: number;
+  recipient_status?: RecipientStatus;
 }): SignatureField {
   const db = getDatabase();
   const id = `fld-${nanoid(8)}`;
+  const signerType = assertSignerType(data.signer_type ?? "human");
 
   db.query(
-    `INSERT INTO signature_fields (id, document_id, page, x, y, width, height, unit, anchor, field_type, label, required, detected, assigned_to)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO signature_fields (id, document_id, page, x, y, width, height, unit, anchor, field_type, label, required, detected, assigned_to, signer_type, role, signing_order, parallel_group, recipient_status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     data.document_id,
@@ -58,9 +70,21 @@ export function createSignatureField(data: {
     data.label ?? null,
     data.required ?? 1,
     data.detected ?? 0,
-    data.assigned_to ?? null
+    data.assigned_to ?? null,
+    signerType,
+    data.role ?? null,
+    data.signing_order ?? 1,
+    data.parallel_group ?? data.signing_order ?? 1,
+    data.recipient_status ?? "pending"
   );
 
+  return getFieldById(id);
+}
+
+export function updateFieldRecipientStatus(id: string, recipientStatus: RecipientStatus): SignatureField {
+  const db = getDatabase();
+  getFieldById(id);
+  db.query("UPDATE signature_fields SET recipient_status = ? WHERE id = ?").run(recipientStatus, id);
   return getFieldById(id);
 }
 

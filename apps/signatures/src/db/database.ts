@@ -359,6 +359,100 @@ const MIGRATIONS: [string, string][] = [
     `ALTER TABLE signing_sessions ADD COLUMN validation_status TEXT`,
   ],
   [
+    "006m_signing_session_signer_type",
+    `ALTER TABLE signing_sessions ADD COLUMN signer_type TEXT NOT NULL DEFAULT 'human'`,
+  ],
+  [
+    "006n_signing_session_agent_id",
+    `ALTER TABLE signing_sessions ADD COLUMN agent_id TEXT`,
+  ],
+  [
+    "006o_signing_session_agent_provider",
+    `ALTER TABLE signing_sessions ADD COLUMN agent_provider TEXT`,
+  ],
+  [
+    "006p_signing_session_agent_run_id",
+    `ALTER TABLE signing_sessions ADD COLUMN agent_run_id TEXT`,
+  ],
+  [
+    "006q_signing_session_agent_thread_id",
+    `ALTER TABLE signing_sessions ADD COLUMN agent_thread_id TEXT`,
+  ],
+  [
+    "006r_signing_session_agent_policy_id",
+    `ALTER TABLE signing_sessions ADD COLUMN agent_policy_id TEXT`,
+  ],
+  [
+    "006s_signing_session_agent_reason",
+    `ALTER TABLE signing_sessions ADD COLUMN agent_reason TEXT`,
+  ],
+  [
+    "006t_signing_session_signing_order",
+    `ALTER TABLE signing_sessions ADD COLUMN signing_order INTEGER NOT NULL DEFAULT 1`,
+  ],
+  [
+    "006u_signing_session_parallel_group",
+    `ALTER TABLE signing_sessions ADD COLUMN parallel_group INTEGER NOT NULL DEFAULT 1`,
+  ],
+  [
+    "006v_signing_session_recipient_status",
+    `ALTER TABLE signing_sessions ADD COLUMN recipient_status TEXT NOT NULL DEFAULT 'pending'`,
+  ],
+  [
+    "006w_people_signer_type",
+    `ALTER TABLE people ADD COLUMN signer_type TEXT NOT NULL DEFAULT 'human'`,
+  ],
+  [
+    "006x_people_agent_id",
+    `ALTER TABLE people ADD COLUMN agent_id TEXT`,
+  ],
+  [
+    "006y_people_agent_provider",
+    `ALTER TABLE people ADD COLUMN agent_provider TEXT`,
+  ],
+  [
+    "006y1_people_agent_id_unique",
+    `CREATE UNIQUE INDEX IF NOT EXISTS people_agent_id_unique
+      ON people(agent_id)
+      WHERE agent_id IS NOT NULL AND agent_id != ''`,
+  ],
+  [
+    "006z01_signature_field_signer_type",
+    `ALTER TABLE signature_fields ADD COLUMN signer_type TEXT NOT NULL DEFAULT 'human'`,
+  ],
+  [
+    "006z02_signature_field_role",
+    `ALTER TABLE signature_fields ADD COLUMN role TEXT`,
+  ],
+  [
+    "006z03_signature_field_signing_order",
+    `ALTER TABLE signature_fields ADD COLUMN signing_order INTEGER NOT NULL DEFAULT 1`,
+  ],
+  [
+    "006z04_signature_field_parallel_group",
+    `ALTER TABLE signature_fields ADD COLUMN parallel_group INTEGER NOT NULL DEFAULT 1`,
+  ],
+  [
+    "006z05_signature_field_recipient_status",
+    `ALTER TABLE signature_fields ADD COLUMN recipient_status TEXT NOT NULL DEFAULT 'pending'`,
+  ],
+  [
+    "006z06_signing_session_agent_input_hash",
+    `ALTER TABLE signing_sessions ADD COLUMN agent_input_hash TEXT`,
+  ],
+  [
+    "006z07_signing_session_agent_output_hash",
+    `ALTER TABLE signing_sessions ADD COLUMN agent_output_hash TEXT`,
+  ],
+  [
+    "006z08_signing_session_field_id",
+    `ALTER TABLE signing_sessions ADD COLUMN field_id TEXT`,
+  ],
+  [
+    "006z09_signing_session_role",
+    `ALTER TABLE signing_sessions ADD COLUMN role TEXT`,
+  ],
+  [
     "007_audit_events",
     `
     CREATE TABLE IF NOT EXISTS audit_events (
@@ -373,6 +467,14 @@ const MIGRATIONS: [string, string][] = [
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     `,
+  ],
+  [
+    "007a_audit_event_actor_signer_type",
+    `ALTER TABLE audit_events ADD COLUMN actor_signer_type TEXT`,
+  ],
+  [
+    "007b_audit_event_actor_agent_id",
+    `ALTER TABLE audit_events ADD COLUMN actor_agent_id TEXT`,
   ],
   [
     "008_signing_certificates",
@@ -421,5 +523,13 @@ const MIGRATIONS: [string, string][] = [
   [
     "010_provider_evidence_signature_level_cleanup",
     `UPDATE provider_evidence SET signature_level = 'ses' WHERE signature_level = 'provider' OR signature_level IS NULL`,
+  ],
+  [
+    "011a_provider_evidence_signer_type",
+    `ALTER TABLE provider_evidence ADD COLUMN signer_type TEXT`,
+  ],
+  [
+    "011b_provider_evidence_recipient_role",
+    `ALTER TABLE provider_evidence ADD COLUMN recipient_role TEXT`,
   ],
 ];

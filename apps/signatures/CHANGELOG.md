@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.10
+
+- Added first-class human and agent signers with `signer_type`, agent identity, run, thread, policy, reason, and hash metadata.
+- Added signer routing metadata for Markdown signature anchors, sessions, fields, audit events, certificates, CLI, REST, MCP, and dashboard views.
+- Added agent attestation rendering for local signatures and session listing/filtering by signer type and recipient status.
+
 ## 0.1.9
 
 - Fixed CLI Markdown variable injection so dotted `--var client.name=value` arguments render as nested `{{ client.name }}` values.

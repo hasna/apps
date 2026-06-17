@@ -33,4 +33,20 @@ describe("markdown-template", () => {
     expect(rendered).toContain('data-signature-anchor="client"');
     expect(parseSignatureAnchors("{{signature}}\n{{ signature:witness }}").map((a) => a.anchor)).toEqual(["signature", "witness"]);
   });
+
+  test("parses signature routing metadata", () => {
+    const markdown = "{{signature:agent-review|type=agent|role=Reviewer|order=2|group=1|required=false}}";
+    const [anchor] = parseSignatureAnchors(markdown);
+    expect(anchor).toMatchObject({
+      anchor: "agent-review",
+      signer_type: "agent",
+      role: "Reviewer",
+      signing_order: 2,
+      parallel_group: 1,
+      required: 0,
+    });
+    const rendered = renderTemplateVariables(markdown, {});
+    expect(rendered).toContain('data-signer-type="agent"');
+    expect(rendered).toContain('data-signature-role="Reviewer"');
+  });
 });

@@ -19,4 +19,18 @@ describe("people", () => {
     createPerson({ name: "Katherine Johnson", email: "kj@example.com", company: "NASA" });
     expect(listPeople({ query: "NASA" }).map((p) => p.name)).toEqual(["Katherine Johnson"]);
   });
+
+  test("creates and filters agent signers", () => {
+    const agent = createPerson({
+      name: "Sagan",
+      signer_type: "agent",
+      agent_id: "agent-sagan",
+      agent_provider: "codewith",
+      role: "Reviewer",
+    });
+
+    expect(agent.signer_type).toBe("agent");
+    expect(agent.agent_id).toBe("agent-sagan");
+    expect(listPeople({ signer_type: "agent" }).map((p) => p.agent_id)).toEqual(["agent-sagan"]);
+  });
 });

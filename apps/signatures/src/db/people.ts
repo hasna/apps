@@ -1,6 +1,6 @@
 import { nanoid } from "nanoid";
 import { getDatabase } from "./database.js";
-import type { Person } from "../types/index.js";
+import type { Person, SignerType } from "../types/index.js";
 import { DuplicateError, NotFoundError } from "../types/index.js";
 
 function rowToPerson(row: Record<string, unknown>): Person {
@@ -11,6 +11,9 @@ function rowToPerson(row: Record<string, unknown>): Person {
     phone: row["phone"] as string | undefined,
     company: row["company"] as string | undefined,
     role: row["role"] as string | undefined,
+    signer_type: (row["signer_type"] as SignerType | undefined) ?? "human",
+    agent_id: row["agent_id"] as string | undefined,
+    agent_provider: row["agent_provider"] as string | undefined,
     metadata: row["metadata"]
       ? (JSON.parse(row["metadata"] as string) as Record<string, unknown>)
       : undefined,
@@ -25,10 +28,14 @@ export function createPerson(data: {
   phone?: string;
   company?: string;
   role?: string;
+  signer_type?: SignerType;
+  agent_id?: string;
+  agent_provider?: string;
   metadata?: Record<string, unknown>;
 }): Person {
   const db = getDatabase();
   const email = data.email?.trim() || undefined;
+  const signerType = assertSignerType(data.signer_type ?? "human");
 
   if (email) {
     const existing = db
@@ -36,11 +43,17 @@ export function createPerson(data: {
       .get(email);
     if (existing) throw new DuplicateError("Person", "email", email);
   }
+  if (signerType === "agent" && data.agent_id) {
+    const existing = db
+      .query<{ id: string }, [string]>("SELECT id FROM people WHERE agent_id = ?")
+      .get(data.agent_id);
+    if (existing) throw new DuplicateError("Person", "agent_id", data.agent_id);
+  }
 
   const id = `per-${nanoid(8)}`;
   db.query(
-    `INSERT INTO people (id, name, email, phone, company, role, metadata)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO people (id, name, email, phone, company, role, signer_type, agent_id, agent_provider, metadata)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     data.name,
@@ -48,6 +61,9 @@ export function createPerson(data: {
     data.phone ?? null,
     data.company ?? null,
     data.role ?? null,
+    signerType,
+    data.agent_id ?? null,
+    data.agent_provider ?? null,
     data.metadata ? JSON.stringify(data.metadata) : null
   );
 
@@ -75,37 +91,37 @@ export function getPersonByEmail(email: string): Person {
 export function getPersonByIdOrEmail(idOrEmail: string): Person {
   const db = getDatabase();
   const row = db
-    .query<Record<string, unknown>, [string, string]>(
-      "SELECT * FROM people WHERE id = ? OR email = ?"
+    .query<Record<string, unknown>, [string, string, string]>(
+      "SELECT * FROM people WHERE id = ? OR email = ? OR agent_id = ?"
     )
-    .get(idOrEmail, idOrEmail);
+    .get(idOrEmail, idOrEmail, idOrEmail);
   if (!row) throw new NotFoundError("Person", idOrEmail);
   return rowToPerson(row);
 }
 
-export function listPeople(filters?: { query?: string; limit?: number; offset?: number }): Person[] {
+export function listPeople(filters?: { query?: string; signer_type?: SignerType; limit?: number; offset?: number }): Person[] {
   const db = getDatabase();
   const limit = filters?.limit ?? 100;
   const offset = filters?.offset ?? 0;
+  const where: string[] = [];
+  const values: unknown[] = [];
 
   if (filters?.query) {
     const q = `%${filters.query}%`;
-    const rows = db
-      .query<Record<string, unknown>, [string, string, string, number, number]>(
-        `SELECT * FROM people
-         WHERE name LIKE ? OR email LIKE ? OR company LIKE ?
-         ORDER BY updated_at DESC
-         LIMIT ? OFFSET ?`
-      )
-      .all(q, q, q, limit, offset);
-    return rows.map(rowToPerson);
+    where.push("(name LIKE ? OR email LIKE ? OR company LIKE ? OR agent_id LIKE ?)");
+    values.push(q, q, q, q);
+  }
+  if (filters?.signer_type) {
+    where.push("signer_type = ?");
+    values.push(assertSignerType(filters.signer_type));
   }
 
+  values.push(limit, offset);
   const rows = db
-    .query<Record<string, unknown>, [number, number]>(
-      "SELECT * FROM people ORDER BY updated_at DESC LIMIT ? OFFSET ?"
+    .query<Record<string, unknown>>(
+      `SELECT * FROM people${where.length > 0 ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY updated_at DESC LIMIT ? OFFSET ?`
     )
-    .all(limit, offset);
+    .all(...values);
   return rows.map(rowToPerson);
 }
 
@@ -121,11 +137,15 @@ export function updatePerson(
 
   const fields: string[] = ["updated_at = datetime('now')"];
   const values: unknown[] = [];
-  for (const field of ["name", "email", "phone", "company", "role"] as const) {
+  for (const field of ["name", "email", "phone", "company", "role", "agent_id", "agent_provider"] as const) {
     if (field in data) {
       fields.push(`${field} = ?`);
       values.push(data[field] ?? null);
     }
+  }
+  if (data.signer_type !== undefined) {
+    fields.push("signer_type = ?");
+    values.push(assertSignerType(data.signer_type));
   }
   if (data.metadata !== undefined) {
     fields.push("metadata = ?");
@@ -135,6 +155,11 @@ export function updatePerson(
 
   db.query(`UPDATE people SET ${fields.join(", ")} WHERE id = ?`).run(...(values as [string]));
   return getPersonById(id);
+}
+
+export function assertSignerType(value: unknown): SignerType {
+  if (value === "human" || value === "agent") return value;
+  throw new Error("signer_type must be one of: human, agent");
 }
 
 export function deletePerson(id: string): void {

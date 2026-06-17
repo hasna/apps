@@ -3,6 +3,7 @@ import { basename } from "node:path";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { renderMarkdown } from "./markdown-template.js";
 import { getRenderedOutputPath } from "./files.js";
+import type { RecipientStatus, SignerType } from "../types/index.js";
 
 export interface RenderedSignatureField {
   page: number;
@@ -11,6 +12,13 @@ export interface RenderedSignatureField {
   width: number;
   height: number;
   anchor: string;
+  signer_type?: SignerType;
+  role?: string;
+  assigned_to?: string;
+  signing_order?: number;
+  parallel_group?: number;
+  required?: number;
+  recipient_status?: RecipientStatus;
 }
 
 export interface MarkdownPdfResult {
@@ -74,8 +82,9 @@ export async function renderMarkdownToPdf(input: {
 
   const lines = rendered.markdown.split(/\r?\n/);
   for (const rawLine of lines) {
-    const anchorMatch = rawLine.match(/<span data-signature-anchor="([^"]+)"><\/span>/);
-    const withoutAnchor = rawLine.replace(/<span data-signature-anchor="[^"]+"><\/span>/g, "____________________________");
+    const anchorMatch = rawLine.match(/<span\b([^>]*\bdata-signature-anchor="[^"]+"[^>]*)><\/span>/);
+    const anchorAttrs = anchorMatch ? parseSignatureAnchorAttributes(anchorMatch[1] ?? "") : undefined;
+    const withoutAnchor = rawLine.replace(/<span\b[^>]*\bdata-signature-anchor="[^"]+"[^>]*><\/span>/g, "____________________________");
     const line = stripMarkdownInline(withoutAnchor).trimEnd();
 
     if (!line.trim()) {
@@ -104,8 +113,7 @@ export async function renderMarkdownToPdf(input: {
       drawLine(line);
     }
 
-    if (anchorMatch) {
-      const anchor = anchorMatch[1] || "signature";
+    if (anchorAttrs) {
       const fieldY = Math.max(5, ((PAGE_HEIGHT - (cursor.y + 30)) / PAGE_HEIGHT) * 100);
       fields.push({
         page: cursor.pageIndex + 1,
@@ -113,7 +121,7 @@ export async function renderMarkdownToPdf(input: {
         y: fieldY,
         width: 36,
         height: 7,
-        anchor,
+        ...anchorAttrs,
       });
     }
   }
@@ -121,6 +129,49 @@ export async function renderMarkdownToPdf(input: {
   const pdfPath = getRenderedOutputPath(input.outputName ?? "document.md", ".pdf");
   writeFileSync(pdfPath, await pdfDoc.save());
   return { pdf_path: pdfPath, html_path: rendered.html_path, fields };
+}
+
+function parseSignatureAnchorAttributes(attrs: string): Pick<RenderedSignatureField, "anchor" | "signer_type" | "role" | "assigned_to" | "signing_order" | "parallel_group" | "required" | "recipient_status"> {
+  const values: Record<string, string> = {};
+  for (const match of attrs.matchAll(/\b(data-[a-z-]+)="([^"]*)"/g)) {
+    values[match[1]!] = unescapeAttribute(match[2] ?? "");
+  }
+  return {
+    anchor: values["data-signature-anchor"] || "signature",
+    signer_type: parseSignerType(values["data-signer-type"]),
+    role: values["data-signature-role"] || undefined,
+    assigned_to: values["data-assigned-to"] || undefined,
+    signing_order: parseOptionalInt(values["data-signing-order"]),
+    parallel_group: parseOptionalInt(values["data-parallel-group"]),
+    required: parseOptionalInt(values["data-required"]),
+    recipient_status: parseRecipientStatus(values["data-recipient-status"]),
+  };
+}
+
+function parseSignerType(value: string | undefined): SignerType | undefined {
+  if (!value) return undefined;
+  if (value === "human" || value === "agent") return value;
+  return undefined;
+}
+
+function parseRecipientStatus(value: string | undefined): RecipientStatus | undefined {
+  if (!value) return undefined;
+  if (value === "pending" || value === "available" || value === "viewed" || value === "signed" || value === "declined" || value === "expired" || value === "failed" || value === "skipped") return value;
+  return undefined;
+}
+
+function parseOptionalInt(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function unescapeAttribute(value: string): string {
+  return value
+    .replace(/&quot;/g, "\"")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
 }
 
 export async function renderMarkdownFileToPdf(input: {

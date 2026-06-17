@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 process.env["SIGNATURES_DB_PATH"] = ":memory:";
 
 import { closeDatabase } from "../db/database.js";
+import { getDocumentByIdOrSlug } from "../db/documents.js";
 import { listProviderEvidence } from "../db/provider-evidence.js";
 import { createSignature } from "../db/signatures.js";
 import { listFieldsForDocument } from "../db/signature-fields.js";
@@ -48,6 +49,65 @@ describe("workflow", () => {
     expect(signed.output_path).toEndWith(".pdf");
     expect(signed.certificate_path).toEndWith(".pdf");
     expect(signed.session.status).toBe("completed");
+  });
+
+  test("signs an agent-routed markdown field with agent evidence metadata", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "open-signatures-"));
+    const md = join(dir, "agent-review.md");
+    writeFileSync(md, "# Agent Review\n\nApproval: {{signature:review|type=agent|role=Reviewer|order=2}}\n");
+    const doc = await createDocumentFromMarkdown({ filePath: md });
+    const sig = createSignature({ name: "Sagan", type: "text", text_value: "Sagan" });
+
+    const field = listFieldsForDocument(doc.document_id)[0]!;
+    expect(field.signer_type).toBe("agent");
+    expect(field.role).toBe("Reviewer");
+    expect(field.signing_order).toBe(2);
+
+    const signed = await signDocumentLocally({
+      documentId: doc.document_id,
+      signatureId: sig.id,
+      fieldId: field.id,
+      signerName: "Sagan",
+      signerType: "agent",
+      agentId: "agent-sagan",
+      agentRunId: "run-123",
+      agentPolicyId: "internal-agent-approval-v1",
+      agentReason: "Policy check passed",
+    });
+
+    expect(signed.session.signer_type).toBe("agent");
+    expect(signed.session.agent_id).toBe("agent-sagan");
+    expect(signed.session.role).toBe("Reviewer");
+    expect(signed.session.agent_output_hash).toBeTruthy();
+  });
+
+  test("keeps multi-signer documents open until all required fields are signed", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "open-signatures-"));
+    const md = join(dir, "multi.md");
+    writeFileSync(md, "# Multi\n\nClient: {{signature:client|type=human|role=Client|order=1}}\n\nReview: {{signature:review|type=agent|role=Reviewer|order=2}}\n");
+    const doc = await createDocumentFromMarkdown({ filePath: md });
+    const sig = createSignature({ name: "Signer", type: "text", text_value: "Signer" });
+    const fields = listFieldsForDocument(doc.document_id);
+
+    const first = await signDocumentLocally({
+      documentId: doc.document_id,
+      signatureId: sig.id,
+      fieldId: fields[0]?.id,
+      signerName: "Ada Lovelace",
+    });
+    expect(first.session.status).toBe("completed");
+    expect(getDocumentByIdOrSlug(doc.document_id).status).toBe("signed");
+
+    const second = await signDocumentLocally({
+      documentId: doc.document_id,
+      signatureId: sig.id,
+      fieldId: fields[1]?.id,
+      signerName: "Sagan",
+      signerType: "agent",
+      agentId: "agent-sagan",
+    });
+    expect(second.session.signer_type).toBe("agent");
+    expect(getDocumentByIdOrSlug(doc.document_id).status).toBe("completed");
   });
 
   test("creates PandaDoc provider dry-run evidence", async () => {

@@ -77,11 +77,27 @@ Variables use double braces:
 {{ company.name }}
 {{ signature }}
 {{ signature:client }}
+{{ signature:review|type=agent|role=Reviewer|order=2|group=1 }}
 ```
 
 `{{signature}}` and `{{signature:name}}` become signature fields when Markdown is
 rendered to PDF. Other variables are replaced from CLI `--var key=value` values or
 signer options.
+
+Signature anchors can carry routing metadata:
+
+- `type=human|agent` sets the signer type.
+- `role=Reviewer` stores the signer role.
+- `order=2` controls signing order.
+- `group=1` groups parallel signers.
+- `required=false` makes the field optional.
+
+Example:
+
+```markdown
+Human approval: {{signature:client|type=human|role=Client|order=1}}
+Agent review: {{signature:review|type=agent|role=Reviewer|order=2}}
+```
 
 ## Sending For Signature
 
@@ -117,8 +133,38 @@ URLs still work and the session records the share-link fallback.
 
 ```bash
 open-signatures person add "Ada Lovelace" --email ada@example.com --phone "+1..."
+open-signatures signer add "Sagan" --type agent --agent-id agent-sagan --agent-provider codewith --role Reviewer
 open-signatures person list
+open-signatures person list --type agent
 open-signatures document send <document-id> --person ada@example.com
+```
+
+Signer records can be humans or agents. Agent signatures are recorded as local
+agent attestations with agent id, provider/runtime, run id, policy id, reason, hashes,
+audit events, and certificate metadata. They are useful for internal approvals between
+agents or systems, but they are not human identity proof and are not QES/eIDAS signatures.
+
+Sign as an agent:
+
+```bash
+open-signatures document sign <document-id> \
+  --field <field-id> \
+  --signer-type agent \
+  --signer-name "Sagan" \
+  --agent-id agent-sagan \
+  --agent-provider codewith \
+  --agent-run-id run-123 \
+  --agent-policy-id internal-agent-approval-v1 \
+  --agent-reason "Policy check passed"
+```
+
+When `--signer-type agent` is used without `--signature`, the CLI creates a minimal
+local attestation signature automatically.
+
+List signing sessions:
+
+```bash
+open-signatures sessions list --signer-type agent
 ```
 
 ## Domains
@@ -163,6 +209,7 @@ open-signatures provider send <document-id> \
   --signature-level qes \
   --recipient ada@example.com \
   --recipient-name "Ada Lovelace" \
+  --signer-type human \
   --dry-run
 ```
 
@@ -174,6 +221,7 @@ open-signatures provider send <document-id> \
   --signature-level qes \
   --recipient ada@example.com \
   --recipient-name "Ada Lovelace" \
+  --signer-type human \
   --dry-run
 ```
 

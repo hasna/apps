@@ -1,6 +1,6 @@
 import { nanoid } from "nanoid";
 import { getDatabase } from "./database.js";
-import type { EvidenceStatus, ProviderEvidence, SignatureLevel, ValidationStatus } from "../types/index.js";
+import type { EvidenceStatus, ProviderEvidence, SignerType, SignatureLevel, ValidationStatus } from "../types/index.js";
 import { NotFoundError } from "../types/index.js";
 
 function parseJson<T>(value: unknown): T | undefined {
@@ -17,6 +17,8 @@ function rowToProviderEvidence(row: Record<string, unknown>): ProviderEvidence {
     connector_slug: row["connector_slug"] as string | undefined,
     operation: row["operation"] as string | undefined,
     signature_level: row["signature_level"] as SignatureLevel,
+    signer_type: row["signer_type"] as SignerType | undefined,
+    recipient_role: row["recipient_role"] as string | undefined,
     status: row["status"] as EvidenceStatus,
     validation_status: row["validation_status"] as ValidationStatus,
     remote_document_id: row["remote_document_id"] as string | undefined,
@@ -38,6 +40,8 @@ export function createProviderEvidence(data: {
   connector_slug?: string;
   operation?: string;
   signature_level: SignatureLevel;
+  signer_type?: SignerType;
+  recipient_role?: string;
   status?: EvidenceStatus;
   validation_status?: ValidationStatus;
   remote_document_id?: string;
@@ -52,8 +56,8 @@ export function createProviderEvidence(data: {
   const id = `evd-${nanoid(10)}`;
   db.query(
     `INSERT INTO provider_evidence
-     (id, document_id, session_id, provider, connector_slug, operation, signature_level, status, validation_status, remote_document_id, remote_status, request, response, evidence, original_document_hash, signed_document_hash)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     (id, document_id, session_id, provider, connector_slug, operation, signature_level, signer_type, recipient_role, status, validation_status, remote_document_id, remote_status, request, response, evidence, original_document_hash, signed_document_hash)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     data.document_id,
@@ -62,6 +66,8 @@ export function createProviderEvidence(data: {
     data.connector_slug ?? null,
     data.operation ?? null,
     data.signature_level,
+    data.signer_type ?? null,
+    data.recipient_role ?? null,
     data.status ?? "prepared",
     data.validation_status ?? "pending",
     data.remote_document_id ?? null,
@@ -121,6 +127,8 @@ export function updateProviderEvidence(
     ProviderEvidence,
     | "status"
     | "validation_status"
+    | "signer_type"
+    | "recipient_role"
     | "remote_document_id"
     | "remote_status"
     | "request"
@@ -134,7 +142,7 @@ export function updateProviderEvidence(
   getProviderEvidenceById(id);
   const fields = ["updated_at = datetime('now')"];
   const values: unknown[] = [];
-  for (const field of ["status", "validation_status", "remote_document_id", "remote_status", "original_document_hash", "signed_document_hash"] as const) {
+  for (const field of ["status", "validation_status", "signer_type", "recipient_role", "remote_document_id", "remote_status", "original_document_hash", "signed_document_hash"] as const) {
     if (field in data) {
       fields.push(`${field} = ?`);
       values.push(data[field] ?? null);

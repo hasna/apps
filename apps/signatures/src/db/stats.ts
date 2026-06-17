@@ -46,6 +46,10 @@ export function getStats(): Stats {
     .query<{ count: number }, []>("SELECT COUNT(*) as count FROM people")
     .get()?.count ?? 0;
 
+  const totalAgents = db
+    .query<{ count: number }, []>("SELECT COUNT(*) as count FROM people WHERE signer_type = 'agent'")
+    .get()?.count ?? 0;
+
   return {
     total_documents: totalDocs,
     by_status: byStatus,
@@ -56,5 +60,6 @@ export function getStats(): Stats {
     total_placements: totalPlacements,
     total_sessions: totalSessions,
     total_people: totalPeople,
+    total_agents: totalAgents,
   };
 }

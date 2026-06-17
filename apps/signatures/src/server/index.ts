@@ -41,6 +41,7 @@ import { shareDocument, receiveDocument } from "../lib/attachments-integration.j
 import { getSetting, setSetting, getAllSettings } from "../db/settings.js";
 import { createDocumentFromMarkdown, sendDocumentForSignature, sendDocumentWithProvider, signDocumentLocally } from "../lib/workflow.js";
 import { setupSigningDomain } from "../lib/domain-integration.js";
+import type { RecipientStatus, SessionStatus, SignerType } from "../types/index.js";
 
 const PORT = parseInt(process.env["PORT"] ?? "19440", 10);
 
@@ -206,7 +207,7 @@ Bun.serve({
     try {
       // Health
       if (path === "/health" && method === "GET") {
-        return json({ status: "ok", version: "0.1.0", port: PORT });
+        return json({ status: "ok", version: "0.1.10", port: PORT });
       }
 
       // Stats
@@ -270,6 +271,14 @@ Bun.serve({
           signatureId,
           signerName,
           signerEmail,
+          signerType: session.signer_type,
+          agentId: session.agent_id,
+          agentProvider: session.agent_provider,
+          agentRunId: session.agent_run_id,
+          agentThreadId: session.agent_thread_id,
+          agentPolicyId: session.agent_policy_id,
+          agentReason: session.agent_reason,
+          role: session.role,
           fieldId: fields[0]?.id,
         });
         return json({ success: true, ...result });
@@ -285,7 +294,10 @@ Bun.serve({
       // People
       if (path === "/api/people") {
         if (method === "GET") {
-          return json(listPeople({ query: url.searchParams.get("q") ?? undefined }));
+          return json(listPeople({
+            query: url.searchParams.get("q") ?? undefined,
+            signer_type: url.searchParams.get("signer_type") as SignerType | undefined,
+          }));
         }
         if (method === "POST") {
           const body = await parseBody(req) as Record<string, unknown>;
@@ -296,6 +308,9 @@ Bun.serve({
             phone: body["phone"] as string | undefined,
             company: body["company"] as string | undefined,
             role: body["role"] as string | undefined,
+            signer_type: body["signer_type"] as Parameters<typeof createPerson>[0]["signer_type"],
+            agent_id: body["agent_id"] as string | undefined,
+            agent_provider: body["agent_provider"] as string | undefined,
             metadata: body["metadata"] as Record<string, unknown> | undefined,
           }), 201);
         }
@@ -303,10 +318,12 @@ Bun.serve({
 
       // Signing sessions
       if (path === "/api/sessions" && method === "GET") {
-        const status = url.searchParams.get("status") as "pending" | "completed" | "expired" | null;
+        const status = url.searchParams.get("status") as SessionStatus | null;
         return json(listSigningSessions({
           document_id: url.searchParams.get("document_id") ?? undefined,
           status: status ?? undefined,
+          signer_type: url.searchParams.get("signer_type") as SignerType | undefined,
+          recipient_status: url.searchParams.get("recipient_status") as RecipientStatus | undefined,
           limit: parseInt(url.searchParams.get("limit") ?? "100"),
           offset: parseInt(url.searchParams.get("offset") ?? "0"),
         }));
@@ -358,6 +375,7 @@ Bun.serve({
           variables: body["variables"] as Record<string, unknown> | undefined,
           signerName: body["signer_name"] as string | undefined,
           signerEmail: body["signer_email"] as string | undefined,
+          signerType: body["signer_type"] as Parameters<typeof createDocumentFromMarkdown>[0]["signerType"],
         });
         return json(result, 201);
       }
@@ -392,6 +410,18 @@ Bun.serve({
           personIdOrEmail: body["person"] as string | undefined,
           signerName: body["signer_name"] as string | undefined,
           signerEmail: body["signer_email"] as string | undefined,
+          signerType: body["signer_type"] as Parameters<typeof signDocumentLocally>[0]["signerType"],
+          agentId: body["agent_id"] as string | undefined,
+          agentProvider: body["agent_provider"] as string | undefined,
+          agentRunId: body["agent_run_id"] as string | undefined,
+          agentThreadId: body["agent_thread_id"] as string | undefined,
+          agentPolicyId: body["agent_policy_id"] as string | undefined,
+          agentReason: body["agent_reason"] as string | undefined,
+          agentInputHash: body["agent_input_hash"] as string | undefined,
+          agentOutputHash: body["agent_output_hash"] as string | undefined,
+          role: body["role"] as string | undefined,
+          signingOrder: body["signing_order"] as number | undefined,
+          parallelGroup: body["parallel_group"] as number | undefined,
           fieldId: body["field_id"] as string | undefined,
           page: body["page"] as number | undefined,
           x: body["x"] as number | undefined,
@@ -412,6 +442,16 @@ Bun.serve({
           personIdOrEmail: body["person"] as string | undefined,
           signerName: body["signer_name"] as string | undefined,
           signerEmail: body["signer_email"] as string | undefined,
+          signerType: body["signer_type"] as Parameters<typeof sendDocumentForSignature>[0]["signerType"],
+          agentId: body["agent_id"] as string | undefined,
+          agentProvider: body["agent_provider"] as string | undefined,
+          agentRunId: body["agent_run_id"] as string | undefined,
+          agentThreadId: body["agent_thread_id"] as string | undefined,
+          agentPolicyId: body["agent_policy_id"] as string | undefined,
+          agentReason: body["agent_reason"] as string | undefined,
+          role: body["role"] as string | undefined,
+          signingOrder: body["signing_order"] as number | undefined,
+          parallelGroup: body["parallel_group"] as number | undefined,
           fromEmail: body["from"] as string | undefined,
           baseUrl: body["base_url"] as string | undefined,
           expiry: body["expiry"] as string | undefined,
@@ -438,6 +478,7 @@ Bun.serve({
             name: (recipient["name"] as string | undefined) ?? recipient["email"] as string,
             role: (recipient["role"] as string | undefined) ?? "Signer",
           },
+          signerType: body["signer_type"] as Parameters<typeof sendDocumentWithProvider>[0]["signerType"],
           signatureLevel: body["signature_level"] as Parameters<typeof sendDocumentWithProvider>[0]["signatureLevel"],
           subject: body["subject"] as string | undefined,
           message: body["message"] as string | undefined,
@@ -626,6 +667,17 @@ Bun.serve({
           document_id: doc.id,
           signer_name: body["signer_name"] as string | undefined,
           signer_email: body["signer_email"] as string | undefined,
+          signer_type: body["signer_type"] as Parameters<typeof createSigningSession>[0]["signer_type"],
+          agent_id: body["agent_id"] as string | undefined,
+          agent_provider: body["agent_provider"] as string | undefined,
+          agent_run_id: body["agent_run_id"] as string | undefined,
+          agent_thread_id: body["agent_thread_id"] as string | undefined,
+          agent_policy_id: body["agent_policy_id"] as string | undefined,
+          agent_reason: body["agent_reason"] as string | undefined,
+          role: body["role"] as string | undefined,
+          signing_order: body["signing_order"] as number | undefined,
+          parallel_group: body["parallel_group"] as number | undefined,
+          recipient_status: "available",
           source: "local",
         });
 

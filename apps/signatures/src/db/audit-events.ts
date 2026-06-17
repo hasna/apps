@@ -1,6 +1,6 @@
 import { nanoid } from "nanoid";
 import { getDatabase } from "./database.js";
-import type { AuditEvent, AuditEventType } from "../types/index.js";
+import type { AuditEvent, AuditEventType, SignerType } from "../types/index.js";
 
 function rowToAuditEvent(row: Record<string, unknown>): AuditEvent {
   return {
@@ -11,6 +11,8 @@ function rowToAuditEvent(row: Record<string, unknown>): AuditEvent {
     message: row["message"] as string | undefined,
     actor_name: row["actor_name"] as string | undefined,
     actor_email: row["actor_email"] as string | undefined,
+    actor_signer_type: row["actor_signer_type"] as SignerType | undefined,
+    actor_agent_id: row["actor_agent_id"] as string | undefined,
     metadata: row["metadata"]
       ? (JSON.parse(row["metadata"] as string) as Record<string, unknown>)
       : undefined,
@@ -25,13 +27,15 @@ export function createAuditEvent(data: {
   message?: string;
   actor_name?: string;
   actor_email?: string;
+  actor_signer_type?: SignerType;
+  actor_agent_id?: string;
   metadata?: Record<string, unknown>;
 }): AuditEvent {
   const db = getDatabase();
   const id = `evt-${nanoid(10)}`;
   db.query(
-    `INSERT INTO audit_events (id, document_id, session_id, event_type, message, actor_name, actor_email, metadata)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO audit_events (id, document_id, session_id, event_type, message, actor_name, actor_email, actor_signer_type, actor_agent_id, metadata)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     data.document_id ?? null,
@@ -40,6 +44,8 @@ export function createAuditEvent(data: {
     data.message ?? null,
     data.actor_name ?? null,
     data.actor_email ?? null,
+    data.actor_signer_type ?? null,
+    data.actor_agent_id ?? null,
     data.metadata ? JSON.stringify(data.metadata) : null
   );
   return getAuditEvent(id);

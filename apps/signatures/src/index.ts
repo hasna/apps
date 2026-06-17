@@ -61,6 +61,7 @@ export {
   createSignatureField,
   getFieldById,
   listFieldsForDocument,
+  updateFieldRecipientStatus,
   deleteFieldsForDocument,
   deleteField,
 } from "./db/signature-fields.js";
@@ -80,6 +81,8 @@ export {
   getSessionByToken,
   listSessionsForDocument,
   updateSessionStatus,
+  updateSessionRecipientStatus,
+  updateSessionRouting,
   updateSessionAttachment,
   updateSessionSigningUrl,
   updateSessionCompletion,
@@ -94,6 +97,7 @@ export {
   listPeople,
   updatePerson,
   deletePerson,
+  assertSignerType,
 } from "./db/people.js";
 
 export {

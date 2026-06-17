@@ -20,7 +20,7 @@ import {
   listCollections,
 } from "../db/collections.js";
 import { listFieldsForDocument, deleteFieldsForDocument, createSignatureField } from "../db/signature-fields.js";
-import { createSigningSession, updateSessionAttachment, getSessionById } from "../db/signing-sessions.js";
+import { createSigningSession, updateSessionAttachment, getSessionById, listSigningSessions } from "../db/signing-sessions.js";
 import { getStats } from "../db/stats.js";
 import { storeDocument } from "../lib/files.js";
 import { detectSignatureFields, detectSignatureFieldsOnPage, isCerebrasConfigured } from "../lib/pdf-detector.js";
@@ -33,6 +33,7 @@ import {
   generateDrawingSignature,
 } from "../lib/signature-gen.js";
 import { parseCliVariables } from "../lib/markdown-template.js";
+import type { RecipientStatus, SessionStatus, SignerType } from "../types/index.js";
 import {
   createDocumentFromMarkdown,
   sendDocumentForSignature,
@@ -48,10 +49,45 @@ function collect(value: string, previous: string[]): string[] {
   return previous;
 }
 
+function parseIntOption(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number.parseInt(String(value), 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function inferSignerType(opts: Record<string, unknown>): "human" | "agent" | undefined {
+  const explicit = opts["signerType"] as string | undefined;
+  if (explicit === "human" || explicit === "agent") return explicit;
+  const personRef = opts["person"] as string | undefined;
+  if (!personRef) return undefined;
+  try {
+    return getPersonByIdOrEmail(personRef).signer_type;
+  } catch {
+    return undefined;
+  }
+}
+
+function createAgentAttestationSignature(opts: Record<string, unknown>): string {
+  const label =
+    (opts["signerName"] as string | undefined)
+    ?? (opts["agentId"] as string | undefined)
+    ?? (opts["person"] as string | undefined)
+    ?? "Agent";
+  const sig = createSignature({
+    name: `${label} attestation`,
+    type: "text",
+    font_family: "Helvetica",
+    font_size: 14,
+    color: "#1f2937",
+    text_value: `Agent attestation: ${label}`,
+  });
+  return sig.id;
+}
+
 program
   .name("open-signatures")
   .description("Open-source agreement and e-signature workflows")
-  .version("0.1.0");
+  .version("0.1.10");
 
 // ── document ─────────────────────────────────────────────────────────────────
 
@@ -98,6 +134,7 @@ documentCmd
   .option("--var <key=value...>", "Template variable; repeatable", collect, [])
   .option("--signer-name <name>", "Signer name for signer.* variables")
   .option("--signer-email <email>", "Signer email for signer.* variables")
+  .option("--signer-type <type>", "Default signer type for signature anchors: human|agent", "human")
   .option("--json", "Output as JSON")
   .action(async (file: string, opts: Record<string, unknown>) => {
     try {
@@ -107,6 +144,7 @@ documentCmd
         variables: parseCliVariables(opts["var"] as string[] | undefined),
         signerName: opts["signerName"] as string | undefined,
         signerEmail: opts["signerEmail"] as string | undefined,
+        signerType: opts["signerType"] as Parameters<typeof createDocumentFromMarkdown>[0]["signerType"],
       });
       if (opts["json"]) {
         console.log(JSON.stringify(result, null, 2));
@@ -116,7 +154,10 @@ documentCmd
         console.log(`  PDF:      ${result.document_path}`);
         console.log(`  HTML:     ${result.html_path}`);
         if (result.fields.length > 0) {
-          console.log(`  Fields:   ${result.fields.map((f) => `${f.id}${f.anchor ? `:${f.anchor}` : ""}`).join(", ")}`);
+          console.log("  Fields:");
+          for (const field of result.fields) {
+            console.log(`    ${chalk.cyan(field.id)}${field.anchor ? `:${field.anchor}` : ""}  ${field.signer_type ?? "human"}  order:${field.signing_order ?? 1}${field.role ? `  role:${field.role}` : ""}`);
+          }
         }
       }
     } catch (err) {
@@ -176,13 +217,30 @@ documentCmd
   .option("--signer-name <name>", "Signer name")
   .option("--signer-email <email>", "Signer email")
   .option("--person <id-or-email>", "Saved person to use as signer")
+  .option("--signer-type <type>", "Signer type: human|agent")
+  .option("--agent-id <id>", "Agent identifier for agent signer")
+  .option("--agent-provider <provider>", "Agent runtime/provider name")
+  .option("--agent-run-id <id>", "Agent run identifier")
+  .option("--agent-thread-id <id>", "Agent thread/session identifier")
+  .option("--agent-policy-id <id>", "Policy that allowed this agent signature")
+  .option("--agent-reason <text>", "Reason/attestation text for an agent signature")
+  .option("--agent-input-hash <sha256>", "Hash of the input the agent reviewed")
+  .option("--agent-output-hash <sha256>", "Hash of the agent decision/output")
+  .option("--role <role>", "Signer role for routing")
+  .option("--signing-order <n>", "Signing order group", "1")
+  .option("--parallel-group <n>", "Parallel signing group")
   .option("--session <id>", "Existing signing session to complete")
   .option("--no-certificate", "Do not generate completion certificate")
   .option("--json", "Output as JSON")
   .action(async (idOrSlug: string, opts: Record<string, unknown>) => {
     try {
       const doc = getDocumentByIdOrSlug(idOrSlug);
-      const sigId = opts["signature"] as string;
+      let sigId = opts["signature"] as string | undefined;
+      if (!sigId) {
+        if (inferSignerType(opts) === "agent") {
+          sigId = createAgentAttestationSignature(opts);
+        }
+      }
       if (!sigId) {
         const sigs = listSignatures();
         if (sigs.length === 0) {
@@ -203,6 +261,18 @@ documentCmd
         personIdOrEmail: opts["person"] as string | undefined,
         signerName: opts["signerName"] as string | undefined,
         signerEmail: opts["signerEmail"] as string | undefined,
+        signerType: opts["signerType"] as Parameters<typeof signDocumentLocally>[0]["signerType"],
+        agentId: opts["agentId"] as string | undefined,
+        agentProvider: opts["agentProvider"] as string | undefined,
+        agentRunId: opts["agentRunId"] as string | undefined,
+        agentThreadId: opts["agentThreadId"] as string | undefined,
+        agentPolicyId: opts["agentPolicyId"] as string | undefined,
+        agentReason: opts["agentReason"] as string | undefined,
+        agentInputHash: opts["agentInputHash"] as string | undefined,
+        agentOutputHash: opts["agentOutputHash"] as string | undefined,
+        role: opts["role"] as string | undefined,
+        signingOrder: parseIntOption(opts["signingOrder"]),
+        parallelGroup: parseIntOption(opts["parallelGroup"]),
         fieldId: opts["field"] as string | undefined,
         page: opts["page"] ? parseInt(opts["page"] as string, 10) : undefined,
         x: opts["x"] ? parseFloat(opts["x"] as string) : undefined,
@@ -220,6 +290,7 @@ documentCmd
         if (result.certificate_path) {
           console.log(`  Certificate: ${chalk.cyan(result.certificate_path)}`);
         }
+        console.log(`  Signer: ${result.session.signer_type}${result.session.agent_id ? ` (${result.session.agent_id})` : ""}`);
         console.log(`  Pages: ${result.pages_signed.join(", ")}`);
       }
     } catch (err) {
@@ -234,6 +305,16 @@ documentCmd
   .option("--person <id-or-email>", "Saved person to send to")
   .option("--signer-name <name>", "Signer name")
   .option("--signer-email <email>", "Signer email")
+  .option("--signer-type <type>", "Signer type: human|agent")
+  .option("--agent-id <id>", "Agent identifier for agent signer")
+  .option("--agent-provider <provider>", "Agent runtime/provider name")
+  .option("--agent-run-id <id>", "Agent run identifier")
+  .option("--agent-thread-id <id>", "Agent thread/session identifier")
+  .option("--agent-policy-id <id>", "Policy that allowed this agent session")
+  .option("--agent-reason <text>", "Reason/attestation text for an agent session")
+  .option("--role <role>", "Signer role for routing")
+  .option("--signing-order <n>", "Signing order group", "1")
+  .option("--parallel-group <n>", "Parallel signing group")
   .option("--from <email>", "Sender email for open-emails delivery")
   .option("--base-url <url>", "Public signing base URL", "http://localhost:19440")
   .option("--expiry <expiry>", "Attachment share expiry", "7d")
@@ -246,6 +327,16 @@ documentCmd
         personIdOrEmail: opts["person"] as string | undefined,
         signerName: opts["signerName"] as string | undefined,
         signerEmail: opts["signerEmail"] as string | undefined,
+        signerType: opts["signerType"] as Parameters<typeof sendDocumentForSignature>[0]["signerType"],
+        agentId: opts["agentId"] as string | undefined,
+        agentProvider: opts["agentProvider"] as string | undefined,
+        agentRunId: opts["agentRunId"] as string | undefined,
+        agentThreadId: opts["agentThreadId"] as string | undefined,
+        agentPolicyId: opts["agentPolicyId"] as string | undefined,
+        agentReason: opts["agentReason"] as string | undefined,
+        role: opts["role"] as string | undefined,
+        signingOrder: parseIntOption(opts["signingOrder"]),
+        parallelGroup: parseIntOption(opts["parallelGroup"]),
         fromEmail: opts["from"] as string | undefined,
         baseUrl: opts["baseUrl"] as string | undefined,
         expiry: opts["expiry"] as string | undefined,
@@ -256,6 +347,7 @@ documentCmd
       } else {
         console.log(chalk.green("✓ Signing session created"));
         console.log(`  Session: ${chalk.cyan(result.session.id)}`);
+        console.log(`  Signer:  ${result.session.signer_type}${result.session.agent_id ? ` (${result.session.agent_id})` : ""}`);
         console.log(`  URL:     ${chalk.cyan(result.signing_url)}`);
         if (result.share_link) console.log(`  Share:   ${chalk.cyan(result.share_link)}`);
         if (result.email?.error) console.log(chalk.yellow(`  Email:   ${result.email.error}`));
@@ -455,7 +547,7 @@ signatureCmd
 
 // ── people ───────────────────────────────────────────────────────────────────
 
-const personCmd = program.command("person").alias("people").description("People and signer contacts");
+const personCmd = program.command("person").aliases(["people", "signer", "signers"]).description("People, agents, and signer contacts");
 
 personCmd
   .command("add <name>")
@@ -464,6 +556,10 @@ personCmd
   .option("--phone <phone>", "Phone number")
   .option("--company <company>", "Company")
   .option("--role <role>", "Role/title")
+  .option("--type <type>", "Signer type: human|agent", "human")
+  .option("--signer-type <type>", "Signer type: human|agent")
+  .option("--agent-id <id>", "Stable agent identifier")
+  .option("--agent-provider <provider>", "Agent runtime/provider name")
   .option("--json", "Output as JSON")
   .action((name: string, opts: Record<string, unknown>) => {
     try {
@@ -473,6 +569,9 @@ personCmd
         phone: opts["phone"] as string | undefined,
         company: opts["company"] as string | undefined,
         role: opts["role"] as string | undefined,
+        signer_type: ((opts["signerType"] as string | undefined) ?? opts["type"]) as Parameters<typeof createPerson>[0]["signer_type"],
+        agent_id: opts["agentId"] as string | undefined,
+        agent_provider: opts["agentProvider"] as string | undefined,
       });
       if (opts["json"]) {
         console.log(JSON.stringify(person, null, 2));
@@ -480,7 +579,9 @@ personCmd
         console.log(chalk.green("✓ Person added"));
         console.log(`  ID:    ${chalk.cyan(person.id)}`);
         console.log(`  Name:  ${person.name}`);
+        console.log(`  Type:  ${person.signer_type}`);
         if (person.email) console.log(`  Email: ${person.email}`);
+        if (person.agent_id) console.log(`  Agent: ${person.agent_id}`);
       }
     } catch (err) {
       console.error(chalk.red("Error:"), err instanceof Error ? err.message : err);
@@ -492,10 +593,14 @@ personCmd
   .command("list")
   .description("List people")
   .option("--query <query>", "Search query")
+  .option("--type <type>", "Filter signer type: human|agent")
   .option("--json", "Output as JSON")
   .action((opts: Record<string, unknown>) => {
     try {
-      const people = listPeople({ query: opts["query"] as string | undefined });
+      const people = listPeople({
+        query: opts["query"] as string | undefined,
+        signer_type: opts["type"] as SignerType | undefined,
+      });
       if (opts["json"]) {
         console.log(JSON.stringify(people, null, 2));
         return;
@@ -506,7 +611,7 @@ personCmd
       }
       console.log(chalk.bold(`\nPeople (${people.length})\n`));
       for (const person of people) {
-        console.log(`${chalk.cyan(person.id)}  ${person.name}${person.email ? `  <${person.email}>` : ""}`);
+        console.log(`${chalk.cyan(person.id)}  [${person.signer_type}]  ${person.name}${person.email ? `  <${person.email}>` : ""}${person.agent_id ? `  agent:${person.agent_id}` : ""}`);
       }
     } catch (err) {
       console.error(chalk.red("Error:"), err instanceof Error ? err.message : err);
@@ -529,6 +634,9 @@ personCmd
         if (person.phone) console.log(`  Phone:   ${person.phone}`);
         if (person.company) console.log(`  Company: ${person.company}`);
         if (person.role) console.log(`  Role:    ${person.role}`);
+        console.log(`  Type:    ${person.signer_type}`);
+        if (person.agent_id) console.log(`  Agent:   ${person.agent_id}`);
+        if (person.agent_provider) console.log(`  Runtime: ${person.agent_provider}`);
       }
     } catch (err) {
       console.error(chalk.red("Error:"), err instanceof Error ? err.message : err);
@@ -554,6 +662,44 @@ certificateCmd
         console.log(`  ID:    ${chalk.cyan(certificate.id)}`);
         console.log(`  Path:  ${certificate.certificate_path}`);
         console.log(`  Code:  ${certificate.verification_code}`);
+      }
+    } catch (err) {
+      console.error(chalk.red("Error:"), err instanceof Error ? err.message : err);
+      process.exit(1);
+    }
+  });
+
+// ── sessions ────────────────────────────────────────────────────────────────
+
+const sessionCmd = program.command("session").alias("sessions").description("Signing session workflow commands");
+
+sessionCmd
+  .command("list")
+  .description("List signing sessions")
+  .option("--document <id>", "Filter by document")
+  .option("--status <status>", "Filter by session status")
+  .option("--signer-type <type>", "Filter signer type: human|agent")
+  .option("--recipient-status <status>", "Filter recipient status")
+  .option("--json", "Output as JSON")
+  .action((opts: Record<string, unknown>) => {
+    try {
+      const sessions = listSigningSessions({
+        document_id: opts["document"] as string | undefined,
+        status: opts["status"] as SessionStatus | undefined,
+        signer_type: opts["signerType"] as SignerType | undefined,
+        recipient_status: opts["recipientStatus"] as RecipientStatus | undefined,
+      });
+      if (opts["json"]) {
+        console.log(JSON.stringify(sessions, null, 2));
+        return;
+      }
+      if (sessions.length === 0) {
+        console.log(chalk.yellow("No sessions found"));
+        return;
+      }
+      console.log(chalk.bold(`\nSessions (${sessions.length})\n`));
+      for (const session of sessions) {
+        console.log(`${chalk.cyan(session.id)}  [${session.status}/${session.recipient_status}]  ${session.signer_type}  order:${session.signing_order}  ${session.signer_name ?? session.signer_email ?? session.agent_id ?? "unassigned"}`);
       }
     } catch (err) {
       console.error(chalk.red("Error:"), err instanceof Error ? err.message : err);
@@ -606,6 +752,7 @@ providerCmd
   .option("--api-key <key>", "Provider API key; defaults to config pandadoc_api_key")
   .requiredOption("--recipient <email>", "Recipient email")
   .option("--recipient-name <name>", "Recipient name")
+  .option("--signer-type <type>", "Signer type recorded for provider evidence: human|agent")
   .requiredOption("--signature-level <level>", "Signature level: ses|aes|qes|eseal|qeseal")
   .option("--document-url <url>", "Public document URL instead of local file upload")
   .option("--subject <subject>", "Provider email subject")
@@ -631,6 +778,7 @@ providerCmd
           name: (opts["recipientName"] as string | undefined) ?? recipientEmail,
           role: "Signer",
         },
+        signerType: opts["signerType"] as Parameters<typeof sendDocumentWithProvider>[0]["signerType"],
         signatureLevel: opts["signatureLevel"] as Parameters<typeof sendDocumentWithProvider>[0]["signatureLevel"],
         documentUrl: opts["documentUrl"] as string | undefined,
         subject: opts["subject"] as string | undefined,

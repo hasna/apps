@@ -6,12 +6,13 @@ const API = "/api";
 
 type Tab = "overview" | "agreements" | "signing" | "people" | "signatures" | "certificates" | "setup";
 type SignatureLevel = "ses" | "aes" | "qes" | "eseal" | "qeseal";
+type SignerType = "human" | "agent";
 
 interface DocumentItem {
   id: string;
   name: string;
   file_name: string;
-  status: "draft" | "pending" | "completed" | "cancelled";
+  status: "draft" | "prepared" | "pending" | "sent" | "viewed" | "signed" | "completed" | "declined" | "expired" | "failed" | "cancelled";
   description?: string;
   metadata?: Record<string, unknown>;
   updated_at: string;
@@ -24,6 +25,9 @@ interface Person {
   phone?: string;
   company?: string;
   role?: string;
+  signer_type: SignerType;
+  agent_id?: string;
+  agent_provider?: string;
 }
 
 interface Signature {
@@ -39,7 +43,16 @@ interface SigningSession {
   document_id: string;
   signer_name?: string;
   signer_email?: string;
-  status: "pending" | "completed" | "expired";
+  signer_type: SignerType;
+  agent_id?: string;
+  agent_provider?: string;
+  agent_run_id?: string;
+  agent_policy_id?: string;
+  role?: string;
+  signing_order: number;
+  parallel_group: number;
+  recipient_status: string;
+  status: string;
   source: string;
   signing_url?: string;
   certificate_path?: string;
@@ -67,6 +80,8 @@ interface ProviderEvidence {
   connector_slug?: string;
   operation?: string;
   signature_level: SignatureLevel;
+  signer_type?: SignerType;
+  recipient_role?: string;
   status: string;
   validation_status: string;
   remote_document_id?: string;
@@ -82,6 +97,7 @@ interface Stats {
   total_placements: number;
   total_sessions: number;
   total_people?: number;
+  total_agents?: number;
   by_status?: Record<string, number>;
 }
 
@@ -148,7 +164,7 @@ function Overview({ stats, documents, sessions, evidence }: {
   sessions: SigningSession[];
   evidence: ProviderEvidence[];
 }) {
-  const pending = sessions.filter((session) => session.status === "pending");
+  const pending = sessions.filter((session) => !["completed", "signed", "skipped"].includes(session.status));
   const recent = documents.slice(0, 5);
 
   return (
@@ -156,7 +172,8 @@ function Overview({ stats, documents, sessions, evidence }: {
       <section className="stats-grid">
         <StatCard label="Agreements" value={stats?.total_documents ?? 0} tone="tone-blue" />
         <StatCard label="People" value={stats?.total_people ?? 0} tone="tone-green" />
-        <StatCard label="Sessions" value={stats?.total_sessions ?? 0} tone="tone-amber" />
+        <StatCard label="Agents" value={stats?.total_agents ?? 0} tone="tone-amber" />
+        <StatCard label="Sessions" value={stats?.total_sessions ?? 0} tone="tone-slate" />
         <StatCard label="Evidence" value={evidence.length} tone="tone-slate" />
       </section>
 
@@ -199,7 +216,7 @@ function Overview({ stats, documents, sessions, evidence }: {
             render={(session) => (
               <Row key={session.id}
               title={session.signer_name ?? session.signer_email ?? "Unassigned signer"}
-                meta={`${shortId(session.id)} - ${session.signature_level ?? "ses"} - ${formatDate(session.updated_at)}`}
+                meta={`${shortId(session.id)} - ${session.signer_type} - order ${session.signing_order} - ${formatDate(session.updated_at)}`}
                 aside={session.signing_url ? <a href={session.signing_url}>Open</a> : undefined}
               />
             )}
@@ -272,6 +289,18 @@ function Signing({ documents, sessions }: {
           </label>
           <label>Signer Name <input name="signer_name" autoComplete="name" /></label>
           <label>Signer Email <input name="signer_email" type="email" autoComplete="email" /></label>
+          <label>Signer Type
+            <select name="signer_type" defaultValue="human">
+              <option value="human">Human</option>
+              <option value="agent">Agent</option>
+            </select>
+          </label>
+          <label>Agent ID <input name="agent_id" /></label>
+          <label>Agent Provider <input name="agent_provider" /></label>
+          <label>Agent Run ID <input name="agent_run_id" /></label>
+          <label>Agent Policy <input name="agent_policy_id" /></label>
+          <label>Role <input name="role" /></label>
+          <label>Signing Order <input name="signing_order" type="number" min="1" defaultValue="1" /></label>
           <label>From Email <input name="from" type="email" autoComplete="email" /></label>
           <label>Base URL <input name="base_url" defaultValue="http://localhost:19440" /></label>
           <label>Expiry <input name="expiry" defaultValue="7d" /></label>
@@ -291,7 +320,7 @@ function Signing({ documents, sessions }: {
           render={(session) => (
             <Row key={session.id}
               title={session.signer_name ?? session.signer_email ?? "Unassigned signer"}
-              meta={`${shortId(session.id)} - ${session.source} - ${formatDate(session.updated_at)}`}
+              meta={`${shortId(session.id)} - ${session.source} - ${session.signer_type} - ${session.recipient_status} - order ${session.signing_order}`}
               detail={session.signing_url}
               aside={<span className={statusClass(session.status)}>{session.status}</span>}
             />
@@ -326,10 +355,18 @@ function People({ people }: { people: Person[] }) {
           if (!createPerson.isError) event.currentTarget.reset();
         }}>
           <label>Name <input name="name" required autoComplete="name" /></label>
+          <label>Signer Type
+            <select name="signer_type" defaultValue="human">
+              <option value="human">Human</option>
+              <option value="agent">Agent</option>
+            </select>
+          </label>
           <label>Email <input name="email" type="email" autoComplete="email" /></label>
           <label>Phone <input name="phone" autoComplete="tel" /></label>
           <label>Company <input name="company" autoComplete="organization" /></label>
           <label>Role <input name="role" autoComplete="organization-title" /></label>
+          <label>Agent ID <input name="agent_id" /></label>
+          <label>Agent Provider <input name="agent_provider" /></label>
           <button type="submit" disabled={createPerson.isPending}>Save Person</button>
           <Result mutation={createPerson} />
         </form>
@@ -346,8 +383,9 @@ function People({ people }: { people: Person[] }) {
           render={(person) => (
             <Row key={person.id}
               title={person.name}
-              meta={[person.email, person.phone].filter(Boolean).join(" - ")}
-              detail={[person.company, person.role].filter(Boolean).join(" - ")}
+              meta={[person.signer_type, person.email, person.phone].filter(Boolean).join(" - ")}
+              detail={[person.agent_id ? `agent:${person.agent_id}` : undefined, person.agent_provider, person.company, person.role].filter(Boolean).join(" - ")}
+              aside={<span className={statusClass(person.signer_type)}>{person.signer_type}</span>}
             />
           )}
         />
@@ -481,6 +519,12 @@ function Setup({ documents, evidence }: { documents: DocumentItem[]; evidence: P
           </label>
           <label>Recipient Email <input name="recipient_email" type="email" required /></label>
           <label>Recipient Name <input name="recipient_name" /></label>
+          <label>Signer Type
+            <select name="signer_type" defaultValue="human">
+              <option value="human">Human</option>
+              <option value="agent">Agent</option>
+            </select>
+          </label>
           <label>Subject <input name="subject" /></label>
           <label className="check"><input type="checkbox" name="dry_run" defaultChecked /> Dry run</label>
           <button type="submit" disabled={providerSend.isPending || documents.length === 0}>Send To Provider</button>
@@ -499,8 +543,8 @@ function Setup({ documents, evidence }: { documents: DocumentItem[]; evidence: P
           render={(item) => (
             <Row key={item.id}
               title={`${item.provider} ${item.signature_level}`}
-              meta={`${shortId(item.id)} - ${item.status}/${item.validation_status}`}
-              detail={[item.connector_slug, item.operation, item.remote_document_id].filter(Boolean).join(" - ")}
+              meta={`${shortId(item.id)} - ${item.signer_type ?? "human"} - ${item.status}/${item.validation_status}`}
+              detail={[item.recipient_role, item.connector_slug, item.operation, item.remote_document_id].filter(Boolean).join(" - ")}
               aside={<span className={statusClass(item.status)}>{item.status}</span>}
             />
           )}
