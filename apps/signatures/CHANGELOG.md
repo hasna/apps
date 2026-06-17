@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.9
+
+- Fixed CLI Markdown variable injection so dotted `--var client.name=value` arguments render as nested `{{ client.name }}` values.
+- Preserved nested `signer.*` template data while allowing `--signer-name` and `--signer-email` to override those fields.
+
 ## 0.1.8
 
 - Moved repository target to `hasna/signatures`.

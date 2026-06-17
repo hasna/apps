@@ -38,11 +38,14 @@ export async function createDocumentFromMarkdown(input: {
   signerName?: string;
   signerEmail?: string;
 }): Promise<MarkdownDocumentResult> {
+  const inputVariables = input.variables ?? {};
+  const signerVariables = getObjectPathValue(inputVariables, "signer");
   const variables = {
-    ...(input.variables ?? {}),
+    ...inputVariables,
     signer: {
-      name: input.signerName ?? input.variables?.["signer.name"],
-      email: input.signerEmail ?? input.variables?.["signer.email"],
+      ...signerVariables,
+      name: input.signerName ?? getPathValue(inputVariables, "signer.name"),
+      email: input.signerEmail ?? getPathValue(inputVariables, "signer.email"),
     },
   };
   const rendered = await renderMarkdownFileToPdf({ path: input.filePath, variables });
@@ -89,6 +92,21 @@ export async function createDocumentFromMarkdown(input: {
       height: field.height,
     })),
   };
+}
+
+function getPathValue(source: Record<string, unknown>, path: string): unknown {
+  let current: unknown = source;
+  for (const part of path.split(".")) {
+    if (!current || typeof current !== "object" || !(part in current)) return undefined;
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current;
+}
+
+function getObjectPathValue(source: Record<string, unknown>, path: string): Record<string, unknown> {
+  const value = getPathValue(source, path);
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
 }
 
 export async function signDocumentLocally(input: {

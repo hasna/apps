@@ -118,9 +118,25 @@ export function parseCliVariables(values: string[] | undefined): Record<string, 
     const key = value.slice(0, eq).trim();
     const raw = value.slice(eq + 1);
     if (!key) throw new Error(`Variable key is empty: ${value}`);
-    out[key] = raw;
+    setPathValue(out, key, raw);
   }
   return out;
+}
+
+function setPathValue(target: Record<string, unknown>, path: string, value: string): void {
+  const parts = path.split(".").map((part) => part.trim());
+  if (parts.some((part) => !part)) throw new Error(`Variable path is invalid: ${path}`);
+  let current = target;
+  for (const part of parts.slice(0, -1)) {
+    const existing = current[part];
+    if (existing === undefined) {
+      current[part] = {};
+    } else if (!existing || typeof existing !== "object" || Array.isArray(existing)) {
+      throw new Error(`Variable path conflicts with previous value: ${path}`);
+    }
+    current = current[part] as Record<string, unknown>;
+  }
+  current[parts[parts.length - 1]!] = value;
 }
 
 export function buildDocumentHtml(body: string): string {

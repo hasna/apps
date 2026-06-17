@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseSignatureAnchors, parseVariables, renderTemplateVariables } from "./markdown-template.js";
+import { parseCliVariables, parseSignatureAnchors, parseVariables, renderTemplateVariables } from "./markdown-template.js";
 
 describe("markdown-template", () => {
   test("extracts variables but not signature anchors", () => {
@@ -12,6 +12,15 @@ describe("markdown-template", () => {
       signer: { name: "Ada Lovelace" },
     });
     expect(rendered).toContain("Ada Lovelace");
+  });
+
+  test("parses CLI dotted variables as nested values", () => {
+    const vars = parseCliVariables(["client.name=Ada Lovelace", "client.company=Hasna", "title=Agreement"]);
+    expect(vars).toEqual({
+      client: { name: "Ada Lovelace", company: "Hasna" },
+      title: "Agreement",
+    });
+    expect(renderTemplateVariables("Client: {{ client.name }}", vars)).toBe("Client: Ada Lovelace");
   });
 
   test("keeps missing variables visible", () => {
