@@ -459,7 +459,7 @@ export function createMcpServer(version: string): McpServer {
 
   server.tool(
     "machines_webhooks_add",
-    "Add or replace a shared Hasna event webhook channel.",
+    "Add or replace a shared event webhook channel.",
     {
       channel_id: z.string().describe("Channel identifier"),
       url: z.string().url().describe("Webhook URL"),
@@ -483,13 +483,13 @@ export function createMcpServer(version: string): McpServer {
     }
   );
 
-  server.tool("machines_webhooks_list", "List shared Hasna event webhook channels.", {}, async () => ({
+  server.tool("machines_webhooks_list", "List shared event webhook channels.", {}, async () => ({
     content: [{ type: "text", text: JSON.stringify(sanitizeChannelsForOutput(await events.listChannels()), null, 2) }],
   }));
 
   server.tool(
     "machines_webhooks_test",
-    "Send a test event to one shared Hasna event channel.",
+    "Send a test event to one shared event channel.",
     { channel_id: z.string().describe("Channel identifier"), event_type: z.string().optional().describe("Event type"), message: z.string().optional().describe("Message body") },
     async ({ channel_id, event_type, message }) => ({
       content: [{ type: "text", text: JSON.stringify(await events.testChannel(channel_id, { source: "machines", type: event_type ?? "events.test", message }), null, 2) }],
@@ -498,14 +498,14 @@ export function createMcpServer(version: string): McpServer {
 
   server.tool(
     "machines_webhooks_remove",
-    "Remove a shared Hasna event channel.",
+    "Remove a shared event channel.",
     { channel_id: z.string().describe("Channel identifier") },
     async ({ channel_id }) => ({ content: [{ type: "text", text: JSON.stringify({ removed: await events.removeChannel(channel_id) }, null, 2) }] })
   );
 
   server.tool(
     "machines_events_emit",
-    "Emit a shared Hasna event from machines.",
+    "Emit a shared event from machines.",
     {
       event_type: z.string().describe("Event type"),
       subject: z.string().optional().describe("Event subject"),
@@ -530,13 +530,13 @@ export function createMcpServer(version: string): McpServer {
     })
   );
 
-  server.tool("machines_events_list", "List shared Hasna events.", {}, async () => ({
+  server.tool("machines_events_list", "List shared events.", {}, async () => ({
     content: [{ type: "text", text: JSON.stringify(await events.listEvents(), null, 2) }],
   }));
 
   server.tool(
     "machines_events_replay",
-    "Replay shared Hasna events.",
+    "Replay shared events.",
     { event_id: z.string().optional().describe("Event id"), source: z.string().optional().describe("Source filter"), event_type: z.string().optional().describe("Event type filter"), dry_run: z.boolean().optional().describe("Preview without delivery") },
     async ({ event_id, source, event_type, dry_run }) => ({
       content: [{ type: "text", text: JSON.stringify(await events.replay({ eventId: event_id, source, type: event_type, dryRun: dry_run }), null, 2) }],

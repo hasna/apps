@@ -59,7 +59,7 @@ describe("cli command handling", () => {
         HASNA_MACHINES_REACHABLE_HOSTS: "hasna@machine001",
       };
       const fakeSecrets = join(dir, "fake-secrets");
-      writeFileSync(fakeSecrets, "#!/bin/sh\n[ \"$1\" = get ] && [ \"$2\" = hasna/xyz/opensource/machines/prod/screen-machine001-vnc-password ] && { printf '%s\\n' super-secret-value; exit 0; }\nexit 1\n", { mode: 0o700 });
+      writeFileSync(fakeSecrets, "#!/bin/sh\n[ \"$1\" = get ] && [ \"$2\" = machines/screen-sharing/screen-machine001-vnc-password ] && { printf '%s\\n' super-secret-value; exit 0; }\nexit 1\n", { mode: 0o700 });
       expect(runCli(["manifest", "init"], env).status).toBe(0);
       const machine = {
         id: "machine001",
@@ -70,7 +70,7 @@ describe("cli command handling", () => {
         workspacePath: "/Users/hasna/Workspace",
         metadata: {
           user: "hasna",
-          screenPasswordSecret: "hasna/xyz/opensource/machines/prod/screen-machine001-vnc-password",
+          screenPasswordSecret: "machines/screen-sharing/screen-machine001-vnc-password",
         },
       };
       expect(runCli(["manifest", "add", "--from-stdin"], env, JSON.stringify(machine)).status).toBe(0);
@@ -90,7 +90,7 @@ describe("cli command handling", () => {
         ok: true,
         machineId: "machine001",
         user: "hasna",
-        passwordSecretKey: "hasna/xyz/opensource/machines/prod/screen-machine001-vnc-password",
+        passwordSecretKey: "machines/screen-sharing/screen-machine001-vnc-password",
         passwordSecret: { checked: true, present: true },
       });
     } finally {

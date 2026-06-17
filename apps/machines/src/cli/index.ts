@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
-import { registerEventsCommands } from "@hasna/events/commander";
+import { registerEventCommands, registerWebhookCommands } from "@hasna/events/commander";
 import { execFileSync } from "node:child_process";
 import chalk from "chalk";
 import { getPackageVersion } from "../version.js";
@@ -343,8 +343,17 @@ program
 const manifestCommand = program.command("manifest").description("Manage the fleet manifest");
 const appsCommand = program.command("apps").description("Manage installed applications per machine");
 const notificationsCommand = program.command("notifications").description("Manage fleet alert delivery channels");
-registerEventsCommands(program, { source: "machines" });
-const runtimeCommand = program.command("runtime").description("Watch runtime conditions and emit Hasna events");
+const eventWebhooksCommand = registerWebhookCommands(program, { source: "machines" });
+eventWebhooksCommand.description("Manage shared event webhook subscriptions");
+const webhookTestCommand = eventWebhooksCommand.commands.find((command: Command) => command.name() === "test");
+const webhookOptions = (webhookTestCommand?.options ?? []) as Array<{ long?: string; defaultValue?: string }>;
+const webhookMessageOption = webhookOptions.find((option) => option.long === "--message");
+if (webhookMessageOption) {
+  webhookMessageOption.defaultValue = "Shared events test delivery";
+}
+const eventsCommand = registerEventCommands(program, { source: "machines" });
+eventsCommand.description("Emit, list, and replay shared events");
+const runtimeCommand = program.command("runtime").description("Watch runtime conditions and emit shared events");
 const clipboardCommand = program.command("clipboard").description("Real-time clipboard sync across fleet machines");
 const installClaudeCommand = program.command("install-claude").description("Install or inspect Claude, Codex, and Gemini CLIs");
 

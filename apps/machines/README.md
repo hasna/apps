@@ -138,9 +138,9 @@ Enable Remote Management / Screen Sharing on a fresh macOS machine over SSH
 Screen Sharing.app and Apple Remote Desktop):
 
 ```bash
-secrets set hasna/xyz/opensource/machines/prod/screen-machine005-vnc-password "$VNC_PASSWORD" --type password
+secrets set machines/screen-sharing/screen-machine005-vnc-password "$VNC_PASSWORD" --type password
 machines screen-enable --machine machine005 --user jo \
-  --vnc-password-secret hasna/xyz/opensource/machines/prod/screen-machine005-vnc-password
+  --vnc-password-secret machines/screen-sharing/screen-machine005-vnc-password
 machines screen-enable --machine machine005 --user jo --print   # show the SSH command, don't run it
 ```
 
@@ -148,8 +148,9 @@ The legacy VNC protocol honors only the first 8 password characters. The
 password is read through the `secrets` CLI and piped over SSH stdin; it is not
 embedded in generated command text. If `--vnc-password-secret` is omitted,
 machines defaults to
-`hasna/xyz/opensource/machines/prod/screen-<machine>-vnc-password`. The user
-comes from the manifest (`metadata.user`) when present, or `--user`.
+`machines/screen-sharing/screen-<machine>-vnc-password`, or the namespace set in
+`HASNA_MACHINES_SCREEN_SECRET_NAMESPACE`. The user comes from the manifest
+(`metadata.user`) when present, or `--user`.
 `screen-credentials` verifies the resolved user and secret key for a machine or
 the full fleet without printing secret values.
 
@@ -206,11 +207,11 @@ import { checkMachineCompatibility } from "@hasna/machines/consumer";
 const report = checkMachineCompatibility({
   machineId: "spark01",
   commands: [{ command: "bun" }],
-  packages: [{ name: "@hasna/knowledge", command: "knowledge", expectedVersion: "0.2.29" }],
+  packages: [{ name: "@example/knowledge", command: "knowledge", expectedVersion: "0.2.29" }],
   workspaces: [{
     label: "open-knowledge",
-    path: "/home/hasna/workspace/hasna/opensource/open-knowledge",
-    expectedPackageName: "@hasna/knowledge",
+    path: "/srv/workspaces/open-knowledge",
+    expectedPackageName: "@example/knowledge",
     expectedVersion: "0.2.29",
   }],
 });
@@ -226,14 +227,14 @@ CLI and MCP expose the same shape:
 ```bash
 machines compatibility --machine spark01 \
   --command bun \
-  --package @hasna/knowledge:knowledge:0.2.29 \
-  --workspace open-knowledge=/home/hasna/workspace/hasna/opensource/open-knowledge:@hasna/knowledge:0.2.29 \
+  --package @example/knowledge:knowledge:0.2.29 \
+  --workspace open-knowledge=/srv/workspaces/open-knowledge:@example/knowledge:0.2.29 \
   --json
 ```
 
 ## Storage
 
-Machines stores runtime data locally in SQLite under the Hasna data directory and includes repo-owned PostgreSQL migrations for remote storage deployments.
+Machines stores runtime data locally in SQLite under its data directory and includes repo-owned PostgreSQL migrations for remote storage deployments.
 
 ```bash
 machines storage status --json
@@ -252,14 +253,14 @@ target can be explicit or environment-backed:
 
 ```bash
 machines backup --bucket fleet-backups --prefix machines --json
-HASNA_MACHINES_S3_BUCKET=hasna-xyz-opensource-machines-prod machines backup --json
+MACHINES_S3_BUCKET=fleet-backups machines backup --json
 ```
 
 `--bucket` and `--prefix` always win. Without `--bucket`, the backup command
 uses `HASNA_MACHINES_S3_BUCKET` or fallback `MACHINES_S3_BUCKET`; prefix uses
 `HASNA_MACHINES_S3_PREFIX`, fallback `MACHINES_S3_PREFIX`, or `machines`.
 This keeps the open-source CLI local/self-hosted by default while allowing
-Hasna deployments to route app-owned backups through canonical storage metadata.
+deployments to route app-owned backups through explicit storage metadata.
 
 ## Applications and tooling
 
@@ -295,7 +296,7 @@ machines notifications dispatch --event manual.test --message "hello fleet"
 ## Runtime Events
 
 `machines runtime tmux-watch` probes tmux with `display-message` and emits shared
-Hasna events without sending keys, killing panes, or changing tmux state.
+events without sending keys, killing panes, or changing tmux state.
 
 ```bash
 machines runtime tmux-watch %11 --once --json

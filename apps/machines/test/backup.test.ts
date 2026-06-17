@@ -33,12 +33,12 @@ describe("backup planning", () => {
   });
 
   test("resolves backup bucket from canonical env while preserving explicit override", () => {
-    process.env[MACHINES_BACKUP_BUCKET_ENV] = "hasna-xyz-opensource-machines-prod";
-    process.env[MACHINES_BACKUP_PREFIX_ENV] = "orgs/hasna-xyz/machines";
+    process.env[MACHINES_BACKUP_BUCKET_ENV] = "primary-machine-backups";
+    process.env[MACHINES_BACKUP_PREFIX_ENV] = "orgs/example/machines";
 
     expect(resolveBackupTarget()).toMatchObject({
-      bucket: "hasna-xyz-opensource-machines-prod",
-      prefix: "orgs/hasna-xyz/machines",
+      bucket: "primary-machine-backups",
+      prefix: "orgs/example/machines",
       bucketSource: MACHINES_BACKUP_BUCKET_ENV,
       prefixSource: MACHINES_BACKUP_PREFIX_ENV,
     });

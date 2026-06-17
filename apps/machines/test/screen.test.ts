@@ -123,11 +123,11 @@ describe("machines screen", () => {
     const topology = topologyWith({
       user: "hasna",
       metadata: {
-        screenPasswordSecret: "hasna/xyz/opensource/machines/prod/screen-machine005-vnc-password",
+        screenPasswordSecret: "machines/screen-sharing/screen-machine005-vnc-password",
       },
     });
     const credentials = resolveScreenCredentials("machine005", { topology });
-    expect(credentials.passwordSecretKey).toBe("hasna/xyz/opensource/machines/prod/screen-machine005-vnc-password");
+    expect(credentials.passwordSecretKey).toBe("machines/screen-sharing/screen-machine005-vnc-password");
     expect(credentials.passwordSecretSource).toBe("metadata");
   });
 
@@ -146,11 +146,11 @@ describe("machines screen", () => {
       route_hints: [{ kind: "ssh" as const, target: "hasna@machine005", reachable: true }],
       tailscale: { dns_name: null, ips: [], online: null, active: null, last_seen: null },
       metadata: {
-        screenPasswordSecret: "hasna/xyz/opensource/machines/prod/screen-machine005-vnc-password",
+        screenPasswordSecret: "machines/screen-sharing/screen-machine005-vnc-password",
       },
     });
     const plan = buildScreenEnableCommand("machine005", { topology, secretsCommand: "secrets" });
-    expect(plan.command).toContain("secrets' 'get' 'hasna/xyz/opensource/machines/prod/screen-machine005-vnc-password'");
+    expect(plan.command).toContain("secrets' 'get' 'machines/screen-sharing/screen-machine005-vnc-password'");
     expect(plan.command).toContain("| ssh hasna@machine005 ");
     expect(plan.command).not.toContain("steaua17");
   });

@@ -7,7 +7,8 @@ import {
   type MachineRouteConfidence,
 } from "../topology.js";
 
-export const DEFAULT_SCREEN_SECRET_NAMESPACE = "hasna/xyz/opensource/machines/prod";
+export const SCREEN_SECRET_NAMESPACE_ENV = "HASNA_MACHINES_SCREEN_SECRET_NAMESPACE";
+export const DEFAULT_SCREEN_SECRET_NAMESPACE = "machines/screen-sharing";
 
 export interface ResolvedScreenTarget {
   machineId: string;
@@ -72,7 +73,8 @@ function splitTarget(target: string): [string | null, string] {
 }
 
 export function defaultScreenPasswordSecretKey(machineId: string): string {
-  return `${DEFAULT_SCREEN_SECRET_NAMESPACE}/screen-${machineId}-vnc-password`;
+  const namespace = process.env[SCREEN_SECRET_NAMESPACE_ENV]?.trim() || DEFAULT_SCREEN_SECRET_NAMESPACE;
+  return `${namespace}/screen-${machineId}-vnc-password`;
 }
 
 /**
