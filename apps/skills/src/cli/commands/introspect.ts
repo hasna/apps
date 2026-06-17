@@ -12,6 +12,7 @@ import { loadRemoteRegistry, loadRemoteSkill } from "../../lib/remote-registry.j
 import { getSkillDocs, getSkillRequirements } from "../../lib/skillinfo.js";
 import { getInstallMeta, getInstalledSkills, getSkillPath } from "../../lib/installer.js";
 import { validateSkillDirectory } from "../../lib/skill-validation.js";
+import { findPortableSkill, validatePortableSkillDirectory } from "../../lib/portable-skills.js";
 import {
   getPublicSkillDiscovery,
   publicDiscoveryDependencies,
@@ -26,6 +27,22 @@ export function registerIntrospect(parent: Command) {
     .argument("<skill>", "Skill name")
     .option("--json", "Output as JSON", false)
     .option("--brief", "Single line: name \u2014 description [category] (tags: ...)", false)
+    .option("--remote", "Use remote registry from SKILLS_API_URL or config apiUrl", false)
+    .description("Show details about a specific skill")
+    .action((name: string, options: { json: boolean; brief: boolean; remote: boolean }) => {
+      void handleInfo(name, options).catch(async (error) => {
+        const notFound = await resolveRemoteNotFound(name, options.remote, (error as Error).message);
+        if (options.json) console.log(JSON.stringify(notFound));
+        else skillNotFound(name, notFound.similar);
+        process.exitCode = 1;
+      });
+    });
+
+  parent
+    .command("show")
+    .argument("<skill>", "Skill name")
+    .option("--json", "Output as JSON", false)
+    .option("--brief", "Single line: name — description [category] (tags: ...)", false)
     .option("--remote", "Use remote registry from SKILLS_API_URL or config apiUrl", false)
     .description("Show details about a specific skill")
     .action((name: string, options: { json: boolean; brief: boolean; remote: boolean }) => {
@@ -191,8 +208,11 @@ function handleRequires(name: string, options: { json: boolean }) {
 }
 
 function handleValidate(name: string, options: { json: boolean }) {
-  const sp = getSkillPath(name);
-  const result = validateSkillDirectory(name, sp, getSkill(name));
+  const portable = findPortableSkill(name);
+  const sp = portable?.path ?? getSkillPath(name);
+  const result = portable
+    ? validatePortableSkillDirectory(portable.name, portable.path)
+    : validateSkillDirectory(name, sp, getSkill(name));
 
   if (options.json) {
     console.log(JSON.stringify(result, null, 2));

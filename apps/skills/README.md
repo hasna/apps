@@ -83,6 +83,7 @@ requirements explicitly document local provider use.
 | `skills list` | `ls` | List available skills (filter with `-c`, `--pinned`, `-t`, `--brief`) |
 | `skills search <query>` | `s` | Search by name, description, or tags |
 | `skills info <name>` | | Show metadata, env vars, and system dependencies |
+| `skills show <name>` | | Show bundled or portable skill details |
 | `skills docs <name>` | | Show documentation (SKILL.md > README.md > CLAUDE.md) |
 | `skills requires <name>` | | Show env vars, system deps, and npm dependencies |
 | `skills run <name> [args]` | | Execute a skill directly |
@@ -105,6 +106,8 @@ requirements explicitly document local provider use.
 | `skills export` | | Export pinned skills as JSON |
 | `skills import <file>` | | Pin skills from a JSON export |
 | `skills config set <key> <value>` | | Set default agent, scope, or output format |
+| `skills new <name>` | `scaffold` | Scaffold a portable skill under `~/.hasna/skills/<name>` |
+| `skills port <path>` | `add` | Import an existing skill folder into the portable standard |
 | `skills create <name>` | | Scaffold a new custom skill directory |
 | `skills sync --to claude` | | Disabled by design; use `skills mcp --register <agent|all>` |
 | `skills sync --from claude` | | Disabled by design; agent skill folders are not used |
@@ -138,8 +141,8 @@ Stable command shapes:
 - Skill details: `info`, `docs`, `requires`, `validate`, `diff`, `test`,
   `doctor`, `auth`, `whoami`, and `outdated` return command-specific objects or
   arrays documented by their field names.
-- Project state: `pin`, `unpin`, `update`, `init`, `import`, `create`, and
-  `sync` return result objects/arrays; `--dry-run --json` returns
+- Project state: `pin`, `unpin`, `update`, `init`, `import`, `create`, `new`,
+  `scaffold`, `port`, `add`, and `sync` return result objects/arrays; `--dry-run --json` returns
   `{ "dryRun": true, "actions": [...] }` where applicable.
 - Runtime: `run --json <skill> ...` returns
   `{ "skill", "args", "exitCode", "stdout", "stderr", "error", "run" }`.
@@ -178,6 +181,25 @@ or the credential saved by `skills auth login`.
 For the reusable upstream contract, see
 `docs/architecture/reusable-skills-engine.md`.
 
+## Portable Skills
+
+Portable skills live directly under `~/.hasna/skills/<name>/` and follow the
+standard documented in `docs/skill-standard.md`.
+
+```bash
+skills new my-skill
+skills validate my-skill
+skills run my-skill --help
+skills show my-skill
+
+skills port ./existing-skill
+```
+
+The scaffold includes `SKILL.md`, `skill.json`, `AGENTS.md`, `package.json`,
+`tsconfig.json`, and `src/index.ts`. `AGENTS.md` is written for coding agents:
+after `skills new my-skill`, an agent can open that file, implement the skill,
+update the manifest, run tests, and verify with `skills validate`.
+
 ## MCP Server
 
 ```bash
@@ -202,7 +224,11 @@ Endpoints: `GET /health` → `{"status":"ok","name":"skills"}`, MCP at `/mcp`.
 Uses stateless `StreamableHTTPServerTransport` (shared process, many clients).
 `skills-mcp` without flags still uses stdio (unchanged).
 
-The MCP server exposes 20+ tools including `list_skills`, `search_skills`, `pin_skill`, `unpin_skill`, `pin_category`, `list_pinned_skills`, `get_skill_info`, `get_skill_docs`, `get_requirements`, `run_skill`, `get_run_status`, `schedule_skill`, `detect_project_skills`, `validate_skill`, and more.
+The MCP server exposes 20+ tools including `list_skills`, `search_skills`,
+`scaffold_skill`, `port_skill`, `pin_skill`, `unpin_skill`, `pin_category`,
+`list_pinned_skills`, `get_skill_info`, `get_skill_docs`, `get_requirements`,
+`run_skill`, `get_run_status`, `schedule_skill`, `detect_project_skills`,
+`validate_skill`, and more.
 
 ### Register with an Agent
 
@@ -278,15 +304,17 @@ bun run typecheck          # TypeScript type checking
 
 1. Create `skills/{name}/` with `src/index.ts`, `package.json`, `tsconfig.json`, `SKILL.md`
 2. Add an entry to the `SKILLS` array in `src/lib/registry.ts`
-3. Run `skills validate <name> --json` to check package metadata, bin entries,
-   docs, and SKILL.md frontmatter
+3. Run `skills validate <name> --json` to check package metadata, portable
+   manifests, bin entries, docs, and SKILL.md frontmatter
 4. Run `bun test` to verify registry-wide validation passes
 
 Premium hosted skills should add public contracts, pricing, docs, and tests
 without adding private provider routing, hosted worker code, or secrets to the
 OSS package.
 
-Custom skill directories are auto-discovered from `~/.hasna/skills/custom/`.
+Portable skill directories are auto-discovered from `~/.hasna/skills/<name>/`.
+Legacy custom skill directories are still discovered from
+`~/.hasna/skills/custom/`.
 Project `.skills/` is reserved for runtime state and outputs.
 
 ## Data Directory

@@ -4,6 +4,7 @@ import { z } from "zod";
 import { getSkill } from "../lib/registry.js";
 import { getSkillPath } from "../lib/installer.js";
 import { detectProjectSkills } from "../lib/skillinfo.js";
+import { findPortableSkill, validatePortableSkillDirectory } from "../lib/portable-skills.js";
 import {
   addSchedule,
   listSchedules,
@@ -77,8 +78,11 @@ export function registerScheduleTools(server: McpServer): void {
       name: z.string(),
     },
   }, async ({ name }) => {
-    const skillPath = getSkillPath(name);
-    const result = validateSkillDirectory(name, skillPath, getSkill(name));
+    const portable = findPortableSkill(name);
+    const skillPath = portable?.path ?? getSkillPath(name);
+    const result = portable
+      ? validatePortableSkillDirectory(portable.name, portable.path)
+      : validateSkillDirectory(name, skillPath, getSkill(name));
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       isError: !result.valid,

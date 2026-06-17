@@ -120,8 +120,94 @@ describe("MCP Server", () => {
       expect(toolNames).toContain("run_skill");
       expect(toolNames).toContain("get_run_status");
       expect(toolNames).toContain("get_mcp_contracts");
+      expect(toolNames).toContain("scaffold_skill");
+      expect(toolNames).toContain("port_skill");
     } finally {
       await client.close();
+    }
+  }, 15000);
+
+
+  test("portable skill tools scaffold, validate, inspect, run, and port local skills", async () => {
+    const { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } = require("fs");
+    const { tmpdir } = require("os");
+    const sourceRoot = mkdtempSync(join(tmpdir(), "mcp-portable-source-"));
+    const home = mkdtempSync(join(tmpdir(), "mcp-portable-home-"));
+    const client = new McpClient({ HOME: home });
+    try {
+      await client.initialize();
+      const scaffoldResponse = await client.request("tools/call", {
+        name: "scaffold_skill",
+        arguments: {
+          name: "mcp-skill",
+          description: "MCP-created portable skill.",
+        },
+      }, 20);
+      expect(scaffoldResponse).not.toBeNull();
+      const scaffolded = JSON.parse(scaffoldResponse.result.content[0].text);
+      expect(scaffolded).toMatchObject({ name: "mcp-skill", created: true });
+      expect(existsSync(join(home, ".hasna", "skills", "mcp-skill", "AGENTS.md"))).toBe(true);
+
+      const infoResponse = await client.request("tools/call", {
+        name: "get_skill_info",
+        arguments: { name: "mcp-skill" },
+      }, 21);
+      expect(infoResponse).not.toBeNull();
+      expect(JSON.parse(infoResponse.result.content[0].text)).toMatchObject({
+        name: "mcp-skill",
+        source: "custom",
+        cliCommand: "skills run mcp-skill",
+      });
+
+      const validationResponse = await client.request("tools/call", {
+        name: "validate_skill",
+        arguments: { name: "mcp-skill" },
+      }, 22);
+      expect(validationResponse).not.toBeNull();
+      const validation = JSON.parse(validationResponse.result.content[0].text);
+      expect(validation.valid).toBe(true);
+      expect(validation.metadata.portableManifest.commands[0].entry).toBe("src/index.ts");
+
+      const runResponse = await client.request("tools/call", {
+        name: "run_skill",
+        arguments: { name: "mcp-skill", args: ["via-mcp"] },
+      }, 23);
+      expect(runResponse).not.toBeNull();
+      const run = JSON.parse(runResponse.result.content[0].text);
+      expect(run).toMatchObject({ exitCode: 0, skill: "mcp-skill" });
+      expect(run.stdout).toContain("via-mcp");
+
+      const source = join(sourceRoot, "ported-mcp");
+      mkdirSync(join(source, "src"), { recursive: true });
+      writeFileSync(join(source, "SKILL.md"), `---
+name: ported-mcp
+description: Ported through MCP.
+version: 0.3.0
+---
+
+# Ported MCP
+`);
+      writeFileSync(join(source, "package.json"), JSON.stringify({
+        name: "ported-mcp",
+        version: "0.3.0",
+        bin: { "ported-mcp": "src/index.ts" },
+      }, null, 2));
+      writeFileSync(join(source, "src", "index.ts"), "#!/usr/bin/env bun\nconsole.log('ported through mcp');\n");
+
+      const portResponse = await client.request("tools/call", {
+        name: "port_skill",
+        arguments: { path: source },
+      }, 24);
+      expect(portResponse).not.toBeNull();
+      expect(JSON.parse(portResponse.result.content[0].text)).toMatchObject({
+        name: "ported-mcp",
+        created: true,
+      });
+      expect(existsSync(join(home, ".hasna", "skills", "ported-mcp", "skill.json"))).toBe(true);
+    } finally {
+      await client.close();
+      rmSync(sourceRoot, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
     }
   }, 15000);
 

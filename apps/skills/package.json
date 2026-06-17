@@ -1,6 +1,6 @@
 {
   "name": "@hasna/skills",
-  "version": "0.1.41",
+  "version": "0.1.44",
   "description": "Skills library for AI coding agents",
   "type": "module",
   "bin": {
@@ -19,6 +19,7 @@
     "!dist/platform",
     "!dist/server",
     "bin/",
+    "docs/skill-standard.md",
     "skills/",
     "!skills/**/node_modules",
     "!skills/scaffold-project/my-app",

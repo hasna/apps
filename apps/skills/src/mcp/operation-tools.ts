@@ -6,6 +6,7 @@ import pkg from "../../package.json" with { type: "json" };
 
 import {
   CATEGORIES,
+  clearRegistryCache,
   getSkill,
   getSkillsByCategory,
   findSimilarSkills,
@@ -31,10 +32,57 @@ import {
   updateSkillRun,
   writeRunLogs,
 } from "../lib/run-state.js";
+import {
+  portPortableSkill,
+  scaffoldPortableSkill,
+  validatePortableSkillDirectory,
+} from "../lib/portable-skills.js";
 import { cacheClear, mcpError, mcpJson, remoteRunNextActions } from "./helpers.js";
 import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../lib/remote-run-contract.js";
 
 export function registerOperationTools(server: McpServer): void {
+  server.registerTool("scaffold_skill", {
+    title: "Scaffold Skill",
+    description: "Create a portable skill folder under ~/.hasna/skills/<name> with SKILL.md, skill.json, AGENTS.md, package.json, and src/index.ts.",
+    inputSchema: {
+      name: z.string(),
+      description: z.string().optional(),
+      overwrite: z.boolean().optional(),
+    },
+  }, async ({ name, description, overwrite }) => {
+    try {
+      const result = scaffoldPortableSkill(name, { description, overwrite });
+      clearRegistryCache();
+      cacheClear();
+      return mcpJson(result);
+    } catch (err) {
+      return mcpError("SCAFFOLD_FAILED", (err as Error).message);
+    }
+  });
+
+  server.registerTool("port_skill", {
+    title: "Port Skill",
+    description: "Import an existing skill folder into the portable ~/.hasna/skills/<name> standard and add missing standard files.",
+    inputSchema: {
+      path: z.string(),
+      name: z.string().optional(),
+      overwrite: z.boolean().optional(),
+    },
+  }, async ({ path, name, overwrite }) => {
+    try {
+      const result = portPortableSkill(path, { name, overwrite });
+      const validation = validatePortableSkillDirectory(result.name, result.path);
+      clearRegistryCache();
+      cacheClear();
+      return {
+        content: [{ type: "text", text: JSON.stringify({ ...result, valid: validation.valid, issues: validation.issues, warnings: validation.warnings }, null, 2) }],
+        isError: !validation.valid,
+      };
+    } catch (err) {
+      return mcpError("PORT_FAILED", (err as Error).message);
+    }
+  });
+
   server.registerTool("pin_skill", {
     title: "Pin Skill",
     description: "Pin a skill to .skills/project.json. Agent skill-folder installs are disabled; use skills mcp --register.",

@@ -25,6 +25,7 @@ export type McpToolCategory =
   | "feedback"
   | "metadata"
   | "pinning"
+  | "scaffolding"
   | "scheduling"
   | "validation";
 
@@ -214,6 +215,48 @@ const runOutputSchema = objectSchema({
 }, [], "Skill run result.");
 
 const toolContracts: McpToolContract[] = [
+  {
+    name: "scaffold_skill",
+    title: "Scaffold Skill",
+    description: "Create a portable skill folder under ~/.hasna/skills/<name> from the standard template.",
+    params: ["name", "description?", "overwrite?"],
+    category: "scaffolding",
+    sideEffects: "filesystem",
+    stable: true,
+    inputSchema: objectSchema({
+      name: skillNameInput,
+      description: stringSchema("Short description for the new skill."),
+      overwrite: { type: "boolean", default: false },
+    }, ["name"]),
+    outputSchema: objectSchema({
+      name: stringSchema("Normalized skill name."),
+      path: stringSchema("Created skill directory."),
+      created: { type: "boolean" },
+      manifest: objectSchema({}, [], "Portable skill manifest.", true),
+    }, ["name", "path", "created", "manifest"]),
+  },
+  {
+    name: "port_skill",
+    title: "Port Skill",
+    description: "Import an existing skill folder into the portable ~/.hasna/skills/<name> standard.",
+    params: ["path", "name?", "overwrite?"],
+    category: "scaffolding",
+    sideEffects: "filesystem",
+    stable: true,
+    inputSchema: objectSchema({
+      path: stringSchema("Existing skill folder to import."),
+      name: skillNameInput,
+      overwrite: { type: "boolean", default: false },
+    }, ["path"]),
+    outputSchema: objectSchema({
+      name: stringSchema("Normalized skill name."),
+      path: stringSchema("Imported skill directory."),
+      created: { type: "boolean" },
+      valid: { type: "boolean" },
+      issues: arraySchema(validationMessageSchema),
+      warnings: arraySchema(validationMessageSchema),
+    }, ["name", "path", "created", "valid"]),
+  },
   {
     name: "list_skills",
     title: "List Skills",

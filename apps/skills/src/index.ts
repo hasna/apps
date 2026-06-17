@@ -184,6 +184,38 @@ export {
 } from "./lib/skill-validation.js";
 
 export {
+  PORTABLE_SKILL_DEFAULT_VERSION,
+  PORTABLE_SKILL_SCHEMA,
+  PORTABLE_SKILL_STANDARD,
+  findPortableSkill,
+  getPortableSkillPath,
+  getPortableSkillsRoot,
+  listPortableSkillMetas,
+  listPortableSkills,
+  normalizePortableSkillName,
+  portPortableSkill,
+  readPortableSkillManifest,
+  runPortableSkill,
+  scaffoldPortableSkill,
+  validatePortableSkillDirectory,
+  type PortableSkillCommand,
+  type PortableSkillInput,
+  type PortableSkillManifest,
+  type PortableSkillRunOptions,
+  type PortableSkillRunResult,
+  type PortableSkillSummary,
+} from "./lib/portable-skills.js";
+
+export {
+  SKILLS_CLI_MCP_PARITY,
+  findSkillsParityForCliCommand,
+  findSkillsParityForMcpTool,
+  validateSkillsCliMcpParity,
+  type SkillsCliMcpParityDomain,
+  type SkillsCliMcpParityEntry,
+} from "./lib/cli-mcp-parity.js";
+
+export {
   createRegistrySyncArtifact,
   writeRegistrySyncArtifact,
   type RegistrySyncArtifact,
