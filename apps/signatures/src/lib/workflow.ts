@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import { createDocument, getDocumentByIdOrSlug, updateDocument } from "../db/documents.js";
+import { createProviderEvidence } from "../db/provider-evidence.js";
 import { createSignatureField, getFieldById } from "../db/signature-fields.js";
 import { createPlacement } from "../db/signature-placements.js";
 import { getSignatureById } from "../db/signatures.js";
@@ -8,6 +9,7 @@ import {
   getSessionById,
   updateSessionAttachment,
   updateSessionCompletion,
+  updateSessionEvidence,
   updateSessionSigningUrl,
   updateSessionStatus,
 } from "../db/signing-sessions.js";
@@ -18,7 +20,9 @@ import { createCompletionCertificate } from "./certificate.js";
 import { sendSigningEmail } from "./email-integration.js";
 import { renderMarkdownFileToPdf } from "./markdown-pdf.js";
 import { signPdf } from "./pdf-signer.js";
-import type { Person, SignaturePlacement, SigningSession } from "../types/index.js";
+import { assertSignatureLevel, sendWithProvider, type ProviderConnectorOptions, type ProviderRecipient, type ProviderSendResult } from "./provider-integration.js";
+import { sha256File } from "./hash.js";
+import type { Person, ProviderEvidence, SignatureLevel, SignaturePlacement, SigningSession, ValidationStatus } from "../types/index.js";
 
 export interface MarkdownDocumentResult {
   document_id: string;
@@ -119,6 +123,8 @@ export async function signDocumentLocally(input: {
       signer_name: input.signerName ?? person?.name,
       signer_email: input.signerEmail ?? person?.email,
       source: "local",
+      signature_level: "ses",
+      validation_status: "not_applicable",
     });
 
   const placementInput = resolvePlacement({
@@ -169,6 +175,12 @@ export async function signDocumentLocally(input: {
   const completedSession = updateSessionCompletion(session.id, {
     signed_document_path: signed.output_path,
     certificate_path: certificatePath,
+    metadata: {
+      signature_level: "ses",
+      validation_status: "not_applicable",
+      original_document_hash: sha256File(doc.file_path),
+      signed_document_hash: sha256File(signed.output_path),
+    },
   });
 
   return {
@@ -178,6 +190,111 @@ export async function signDocumentLocally(input: {
     placement_id: placement.id,
     pages_signed: signed.pages_signed,
   };
+}
+
+export async function sendDocumentWithProvider(input: {
+  documentId: string;
+  provider: string;
+  apiKey?: string;
+  recipient: ProviderRecipient;
+  subject?: string;
+  message?: string;
+  silent?: boolean;
+  documentUrl?: string;
+  signatureLevel: SignatureLevel;
+  connectors?: ProviderConnectorOptions;
+  dryRun?: boolean;
+}): Promise<{
+  session: SigningSession;
+  provider: ProviderSendResult;
+  evidence: ProviderEvidence;
+}> {
+  const doc = getDocumentByIdOrSlug(input.documentId);
+  const signatureLevel = assertSignatureLevel(input.signatureLevel);
+  const session = createSigningSession({
+    document_id: doc.id,
+    signer_name: input.recipient.name,
+    signer_email: input.recipient.email,
+    source: "provider",
+    connector_name: input.provider,
+    signature_level: signatureLevel,
+    provider_status: input.dryRun ? "prepared" : "sent",
+    validation_status: validationStatusFor(signatureLevel),
+    metadata: {
+      provider: input.provider,
+      dry_run: !!input.dryRun,
+    },
+  });
+  const provider = await sendWithProvider({
+    provider: input.provider,
+    apiKey: input.apiKey,
+    documentName: doc.name,
+    documentPath: input.documentUrl ? undefined : doc.file_path,
+    documentUrl: input.documentUrl,
+    recipients: [input.recipient],
+    subject: input.subject,
+    message: input.message,
+    silent: input.silent,
+    signatureLevel,
+    connectors: input.connectors,
+    dryRun: input.dryRun,
+  });
+  const evidence = createProviderEvidence({
+    document_id: doc.id,
+    session_id: session.id,
+    provider: provider.provider,
+    connector_slug: provider.connector_slug,
+    operation: provider.operation,
+    signature_level: signatureLevel,
+    status: provider.status === "dry_run" ? "prepared" : provider.status === "failed" ? "failed" : "sent",
+    validation_status: provider.status === "dry_run" ? "pending" : validationStatusFor(signatureLevel),
+    remote_document_id: provider.remote_document_id,
+    remote_status: provider.remote_status,
+    request: provider.request,
+    response: provider.response,
+    evidence: {
+      dry_run: !!input.dryRun,
+      provider_status: provider.status,
+      error: provider.error,
+      connector_slug: provider.connector_slug,
+      operation: provider.operation,
+    },
+    original_document_hash: sha256File(doc.file_path),
+  });
+  const updated = updateSessionEvidence(session.id, {
+    signature_level: signatureLevel,
+    provider_status: evidence.status,
+    validation_status: evidence.validation_status,
+    metadata: {
+      provider_evidence_id: evidence.id,
+      provider: provider.provider,
+      connector_slug: provider.connector_slug,
+      operation: provider.operation,
+      remote_document_id: provider.remote_document_id,
+      provider_error: provider.error,
+    },
+  });
+  createAuditEvent({
+    document_id: doc.id,
+    session_id: updated.id,
+    event_type: provider.status === "failed" ? "provider_evidence_created" : "provider_sent",
+    actor_name: input.recipient.name,
+    actor_email: input.recipient.email,
+    message: `${provider.provider} provider ${provider.status === "dry_run" ? "dry run prepared" : provider.status}`,
+    metadata: {
+      evidence_id: evidence.id,
+      provider: provider.provider,
+      connector_slug: provider.connector_slug,
+      operation: provider.operation,
+      signature_level: signatureLevel,
+      validation_status: evidence.validation_status,
+      error: provider.error,
+    },
+  });
+  if (provider.status !== "dry_run" && provider.status !== "failed") {
+    updateDocument(doc.id, { status: "pending" });
+  }
+  return { session: updated, provider, evidence };
 }
 
 export async function sendDocumentForSignature(input: {
@@ -252,6 +369,10 @@ export async function sendDocumentForSignature(input: {
 
   updateDocument(doc.id, { status: "pending" });
   return { session: updated, signing_url: signingUrl, share_link: shareLink, email };
+}
+
+function validationStatusFor(level: SignatureLevel): ValidationStatus {
+  return level === "ses" ? "not_applicable" : "pending";
 }
 
 function resolvePerson(idOrEmail: string): Person | undefined {

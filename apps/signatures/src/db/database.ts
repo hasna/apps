@@ -343,6 +343,22 @@ const MIGRATIONS: [string, string][] = [
     `ALTER TABLE signing_sessions ADD COLUMN completed_at TEXT`,
   ],
   [
+    "006i_signing_session_signature_level",
+    `ALTER TABLE signing_sessions ADD COLUMN signature_level TEXT NOT NULL DEFAULT 'ses'`,
+  ],
+  [
+    "006j_signing_session_assurance_level",
+    `ALTER TABLE signing_sessions ADD COLUMN assurance_level TEXT`,
+  ],
+  [
+    "006k_signing_session_provider_status",
+    `ALTER TABLE signing_sessions ADD COLUMN provider_status TEXT`,
+  ],
+  [
+    "006l_signing_session_validation_status",
+    `ALTER TABLE signing_sessions ADD COLUMN validation_status TEXT`,
+  ],
+  [
     "007_audit_events",
     `
     CREATE TABLE IF NOT EXISTS audit_events (
@@ -373,5 +389,37 @@ const MIGRATIONS: [string, string][] = [
       issued_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     `,
+  ],
+  [
+    "009_provider_evidence",
+    `
+    CREATE TABLE IF NOT EXISTS provider_evidence (
+      id TEXT PRIMARY KEY,
+      document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+      session_id TEXT REFERENCES signing_sessions(id) ON DELETE SET NULL,
+      provider TEXT NOT NULL,
+      connector_slug TEXT,
+      operation TEXT,
+      signature_level TEXT NOT NULL DEFAULT 'ses',
+      status TEXT NOT NULL DEFAULT 'prepared',
+      validation_status TEXT NOT NULL DEFAULT 'pending',
+      remote_document_id TEXT,
+      remote_status TEXT,
+      request TEXT,
+      response TEXT,
+      evidence TEXT,
+      original_document_hash TEXT,
+      signed_document_hash TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS provider_evidence_document_idx ON provider_evidence(document_id);
+    CREATE INDEX IF NOT EXISTS provider_evidence_session_idx ON provider_evidence(session_id);
+    `,
+  ],
+  [
+    "010_provider_evidence_signature_level_cleanup",
+    `UPDATE provider_evidence SET signature_level = 'ses' WHERE signature_level = 'provider' OR signature_level IS NULL`,
   ],
 ];

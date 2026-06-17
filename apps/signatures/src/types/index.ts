@@ -98,6 +98,9 @@ export interface SignaturePlacement {
 
 export type SessionStatus = "pending" | "completed" | "expired";
 export type SessionSource = "local" | "connector" | "browseruse" | "email" | "provider";
+export type SignatureLevel = "ses" | "aes" | "qes" | "eseal" | "qeseal";
+export type EvidenceStatus = "prepared" | "sent" | "completed" | "failed" | "validated";
+export type ValidationStatus = "not_applicable" | "pending" | "valid" | "invalid" | "unknown";
 
 export interface Person {
   id: string;
@@ -129,6 +132,10 @@ export interface SigningSession {
   signed_document_path?: string;
   certificate_path?: string;
   completed_at?: string;
+  signature_level?: SignatureLevel;
+  assurance_level?: string;
+  provider_status?: EvidenceStatus;
+  validation_status?: ValidationStatus;
   created_at: string;
   updated_at: string;
 }
@@ -141,6 +148,9 @@ export type AuditEventType =
   | "email_sent"
   | "provider_created"
   | "provider_sent"
+  | "provider_evidence_created"
+  | "provider_evidence_updated"
+  | "validation_recorded"
   | "signed"
   | "certificate_created"
   | "domain_configured";
@@ -167,6 +177,27 @@ export interface SigningCertificate {
   verification_code: string;
   metadata?: Record<string, unknown>;
   issued_at: string;
+}
+
+export interface ProviderEvidence {
+  id: string;
+  document_id: string;
+  session_id?: string;
+  provider: string;
+  connector_slug?: string;
+  operation?: string;
+  signature_level: SignatureLevel;
+  status: EvidenceStatus;
+  validation_status: ValidationStatus;
+  remote_document_id?: string;
+  remote_status?: string;
+  request?: Record<string, unknown>;
+  response?: unknown;
+  evidence?: Record<string, unknown>;
+  original_document_hash?: string;
+  signed_document_hash?: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Stats {

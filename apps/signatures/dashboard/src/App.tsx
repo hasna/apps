@@ -5,6 +5,7 @@ import "./App.css";
 const API = "/api";
 
 type Tab = "overview" | "agreements" | "signing" | "people" | "signatures" | "certificates" | "setup";
+type SignatureLevel = "ses" | "aes" | "qes" | "eseal" | "qeseal";
 
 interface DocumentItem {
   id: string;
@@ -43,6 +44,9 @@ interface SigningSession {
   signing_url?: string;
   certificate_path?: string;
   signed_document_path?: string;
+  signature_level?: SignatureLevel;
+  provider_status?: string;
+  validation_status?: string;
   updated_at: string;
 }
 
@@ -53,6 +57,20 @@ interface Certificate {
   certificate_path: string;
   verification_code: string;
   issued_at: string;
+}
+
+interface ProviderEvidence {
+  id: string;
+  document_id: string;
+  session_id?: string;
+  provider: string;
+  connector_slug?: string;
+  operation?: string;
+  signature_level: SignatureLevel;
+  status: string;
+  validation_status: string;
+  remote_document_id?: string;
+  updated_at: string;
 }
 
 interface Stats {
@@ -124,10 +142,11 @@ function StatCard({ label, value, tone }: { label: string; value: number; tone: 
   );
 }
 
-function Overview({ stats, documents, sessions }: {
+function Overview({ stats, documents, sessions, evidence }: {
   stats?: Stats;
   documents: DocumentItem[];
   sessions: SigningSession[];
+  evidence: ProviderEvidence[];
 }) {
   const pending = sessions.filter((session) => session.status === "pending");
   const recent = documents.slice(0, 5);
@@ -138,7 +157,7 @@ function Overview({ stats, documents, sessions }: {
         <StatCard label="Agreements" value={stats?.total_documents ?? 0} tone="tone-blue" />
         <StatCard label="People" value={stats?.total_people ?? 0} tone="tone-green" />
         <StatCard label="Sessions" value={stats?.total_sessions ?? 0} tone="tone-amber" />
-        <StatCard label="Certificates" value={sessions.filter((session) => session.status === "completed").length} tone="tone-slate" />
+        <StatCard label="Evidence" value={evidence.length} tone="tone-slate" />
       </section>
 
       <section className="panel">
@@ -179,8 +198,8 @@ function Overview({ stats, documents, sessions }: {
             empty="No pending sessions"
             render={(session) => (
               <Row key={session.id}
-                title={session.signer_name ?? session.signer_email ?? "Unassigned signer"}
-                meta={`${shortId(session.id)} - ${formatDate(session.updated_at)}`}
+              title={session.signer_name ?? session.signer_email ?? "Unassigned signer"}
+                meta={`${shortId(session.id)} - ${session.signature_level ?? "ses"} - ${formatDate(session.updated_at)}`}
                 aside={session.signing_url ? <a href={session.signing_url}>Open</a> : undefined}
               />
             )}
@@ -384,7 +403,8 @@ function Certificates({ certificates }: { certificates: Certificate[] }) {
   );
 }
 
-function Setup({ documents }: { documents: DocumentItem[] }) {
+function Setup({ documents, evidence }: { documents: DocumentItem[]; evidence: ProviderEvidence[] }) {
+  const queryClient = useQueryClient();
   const [domainResult, setDomainResult] = useState("");
   const [providerResult, setProviderResult] = useState("");
   const domainSetup = useMutation({
@@ -393,7 +413,14 @@ function Setup({ documents }: { documents: DocumentItem[] }) {
   });
   const providerSend = useMutation({
     mutationFn: (payload: Record<string, unknown>) => postJson<Record<string, unknown>>(`/documents/${payload["document_id"]}/provider-send`, payload),
-    onSuccess: (result) => setProviderResult(JSON.stringify(result, null, 2)),
+    onSuccess: async (result) => {
+      setProviderResult(JSON.stringify(result, null, 2));
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["provider-evidence"] }),
+        queryClient.invalidateQueries({ queryKey: ["sessions"] }),
+        queryClient.invalidateQueries({ queryKey: ["stats"] }),
+      ]);
+    },
   });
 
   return (
@@ -443,6 +470,15 @@ function Setup({ documents }: { documents: DocumentItem[] }) {
             </select>
           </label>
           <label>Provider <input name="provider" defaultValue="pandadoc" /></label>
+          <label>Signature Level
+            <select name="signature_level" required defaultValue="qes">
+              <option value="ses">SES</option>
+              <option value="aes">AES</option>
+              <option value="qes">QES provider</option>
+              <option value="eseal">eSeal dry-run</option>
+              <option value="qeseal">Qualified eSeal dry-run</option>
+            </select>
+          </label>
           <label>Recipient Email <input name="recipient_email" type="email" required /></label>
           <label>Recipient Name <input name="recipient_name" /></label>
           <label>Subject <input name="subject" /></label>
@@ -450,6 +486,25 @@ function Setup({ documents }: { documents: DocumentItem[] }) {
           <button type="submit" disabled={providerSend.isPending || documents.length === 0}>Send To Provider</button>
           <Result mutation={providerSend} message={providerResult} />
         </form>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Provider Evidence</h2>
+          <span className="count">{evidence.length}</span>
+        </div>
+        <EntityList
+          items={evidence}
+          empty="No provider evidence"
+          render={(item) => (
+            <Row key={item.id}
+              title={`${item.provider} ${item.signature_level}`}
+              meta={`${shortId(item.id)} - ${item.status}/${item.validation_status}`}
+              detail={[item.connector_slug, item.operation, item.remote_document_id].filter(Boolean).join(" - ")}
+              aside={<span className={statusClass(item.status)}>{item.status}</span>}
+            />
+          )}
+        />
       </section>
     </div>
   );
@@ -500,11 +555,13 @@ export function App() {
   const sessions = useQuery({ queryKey: ["sessions"], queryFn: () => fetchJson<SigningSession[]>("/sessions") });
   const signatures = useQuery({ queryKey: ["signatures"], queryFn: () => fetchJson<Signature[]>("/signatures") });
   const certificates = useQuery({ queryKey: ["certificates"], queryFn: () => fetchJson<Certificate[]>("/certificates") });
+  const providerEvidence = useQuery({ queryKey: ["provider-evidence"], queryFn: () => fetchJson<ProviderEvidence[]>("/provider-evidence") });
 
-  const loading = [stats, documents, people, sessions, signatures, certificates].some((query) => query.isLoading);
-  const error = [stats, documents, people, sessions, signatures, certificates].find((query) => query.isError)?.error;
+  const loading = [stats, documents, people, sessions, signatures, certificates, providerEvidence].some((query) => query.isLoading);
+  const error = [stats, documents, people, sessions, signatures, certificates, providerEvidence].find((query) => query.isError)?.error;
   const docs = documents.data ?? [];
   const sessionItems = sessions.data ?? [];
+  const evidence = providerEvidence.data ?? [];
 
   const tabs = useMemo<Array<{ id: Tab; label: string }>>(() => [
     { id: "overview", label: "Overview" },
@@ -543,13 +600,13 @@ export function App() {
       {error instanceof Error && <div className="panel"><div className="result error">{error.message}</div></div>}
       {!loading && !error && (
         <>
-          {tab === "overview" && <Overview stats={stats.data} documents={docs} sessions={sessionItems} />}
+          {tab === "overview" && <Overview stats={stats.data} documents={docs} sessions={sessionItems} evidence={evidence} />}
           {tab === "agreements" && <Agreements documents={docs} />}
           {tab === "signing" && <Signing documents={docs} sessions={sessionItems} />}
           {tab === "people" && <People people={people.data ?? []} />}
           {tab === "signatures" && <Signatures signatures={signatures.data ?? []} />}
           {tab === "certificates" && <Certificates certificates={certificates.data ?? []} />}
-          {tab === "setup" && <Setup documents={docs} />}
+          {tab === "setup" && <Setup documents={docs} evidence={evidence} />}
         </>
       )}
     </main>

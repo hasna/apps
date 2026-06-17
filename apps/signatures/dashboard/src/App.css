@@ -255,13 +255,20 @@ a {
   background: var(--amber);
 }
 
+.badge-prepared,
+.badge-sent,
 .badge-completed {
   background: var(--green);
 }
 
 .badge-cancelled,
+.badge-failed,
 .badge-expired {
   background: var(--red);
+}
+
+.badge-validated {
+  background: var(--blue);
 }
 
 .form {

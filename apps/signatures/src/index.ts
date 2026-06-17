@@ -83,6 +83,7 @@ export {
   updateSessionAttachment,
   updateSessionSigningUrl,
   updateSessionCompletion,
+  updateSessionEvidence,
 } from "./db/signing-sessions.js";
 
 export {
@@ -107,6 +108,13 @@ export {
   getSigningCertificateBySession,
   listSigningCertificates,
 } from "./db/certificates.js";
+
+export {
+  createProviderEvidence,
+  getProviderEvidenceById,
+  listProviderEvidence,
+  updateProviderEvidence,
+} from "./db/provider-evidence.js";
 
 // Settings
 export {
@@ -134,7 +142,8 @@ export { renderMarkdown, renderMarkdownFile, renderTemplateVariables, parseVaria
 export { renderMarkdownToPdf, renderMarkdownFileToPdf } from "./lib/markdown-pdf.js";
 export type { MarkdownPdfResult, RenderedSignatureField } from "./lib/markdown-pdf.js";
 export { createCompletionCertificate } from "./lib/certificate.js";
-export { createDocumentFromMarkdown, signDocumentLocally, sendDocumentForSignature } from "./lib/workflow.js";
+export { createDocumentFromMarkdown, signDocumentLocally, sendDocumentForSignature, sendDocumentWithProvider } from "./lib/workflow.js";
 export { sendSigningEmail } from "./lib/email-integration.js";
 export { setupSigningDomain } from "./lib/domain-integration.js";
-export { sendWithProvider } from "./lib/provider-integration.js";
+export { prepareProviderRequest, sendWithProvider } from "./lib/provider-integration.js";
+export type { ProviderConnectorOptions, ProviderRecipient, ProviderSendInput, ProviderSendResult } from "./lib/provider-integration.js";

@@ -142,18 +142,78 @@ Use `--buy` to ask open-domains to run its full domain setup flow.
 ## Provider Integrations
 
 The built-in local signing flow is first-class. Provider adapters are optional.
-The PandaDoc adapter can prepare a create/send request and use the PandaDoc API when
-`pandadoc_api_key` is configured:
+Provider flows always require an explicit signature level:
+
+- `ses` - simple electronic signature evidence
+- `aes` - advanced electronic signature target
+- `qes` - qualified electronic signature target through a QTSP/provider
+- `eseal` - legal-entity electronic seal target
+- `qeseal` - legal-entity qualified eSeal target
+
+Open Signatures does not turn local signatures into QES. QES and qualified eSeals
+must be completed by a qualified trust-service/provider flow. The app stores the
+request, hashes, provider response, validation status, and audit events as provider
+evidence.
+
+Dry-run a PandaDoc QES request:
+
+```bash
+open-signatures provider send <document-id> \
+  --provider pandadoc \
+  --signature-level qes \
+  --recipient ada@example.com \
+  --recipient-name "Ada Lovelace" \
+  --dry-run
+```
+
+Dry-run a Yousign QES request:
+
+```bash
+open-signatures provider send <document-id> \
+  --provider yousign \
+  --signature-level qes \
+  --recipient ada@example.com \
+  --recipient-name "Ada Lovelace" \
+  --dry-run
+```
+
+List stored provider evidence:
+
+```bash
+open-signatures provider evidence <document-id>
+```
+
+For live connector-backed provider execution, configure either a hosted or local
+Hasna connectors endpoint:
+
+```bash
+open-signatures config set connectors_api_url "https://connectors.example"
+open-signatures config set connectors_api_key "$CONNECTORS_API_KEY"
+```
+
+or:
+
+```bash
+open-signatures config set connectors_server_url "http://localhost:9876"
+```
+
+The provider layer uses `@hasna/connectors-sdk` and can route to `pandadoc` or
+`yousign` connector operations when those connectors and credentials are available.
+Without provider credentials, use `--dry-run` to verify requests and evidence locally.
+
+For direct PandaDoc API calls without connectors:
 
 ```bash
 open-signatures config set pandadoc_api_key "$PANDADOC_API_KEY"
 open-signatures provider send <document-id> \
   --provider pandadoc \
+  --signature-level qes \
   --recipient ada@example.com \
   --recipient-name "Ada Lovelace"
 ```
 
-Use `--dry-run` to inspect the provider request without making API calls.
+PandaDoc documents may require asynchronous readiness polling before send in production
+integrations. Connector-backed execution should own that provider-specific behavior.
 
 ## REST API
 
@@ -169,6 +229,7 @@ Selected endpoints:
 - `POST /api/documents/:id/provider-send`
 - `GET /api/sessions`
 - `GET /api/sessions/:id/certificate`
+- `GET /api/provider-evidence`
 - `GET /sign/:token`
 - `POST /api/sign/:token`
 - `GET /api/people`
@@ -222,6 +283,10 @@ Open Signatures stores signing evidence locally. A completion certificate includ
 metadata, document hashes, session id, and audit summary. This provides useful evidence for
 ordinary electronic signature workflows, but does not provide regulated digital signature,
 qualified electronic signature, or eIDAS/QTSP guarantees.
+
+Provider evidence records are not validation reports by themselves. A QES/eSeal workflow is
+only considered externally validated after a provider/QTSP signed output, proof/audit file,
+and validation report are attached and recorded as valid.
 
 Do not publish local `.hasna/`, `.signatures/`, `.env`, or `.claude/` directories.
 

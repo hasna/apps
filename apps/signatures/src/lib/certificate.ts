@@ -49,6 +49,7 @@ export async function createCompletionCertificate(input: {
   centerText(page, "Certificate of Completion", 500, 34, serifBold, rgb(0.12, 0.12, 0.14));
   centerText(page, "Open Signatures", 462, 14, sansBold, rgb(0.33, 0.33, 0.36));
   centerText(page, "This certifies that the document below was signed and completed.", 420, 15, sans, rgb(0.24, 0.27, 0.32));
+  centerText(page, "Local completion evidence only. Not a qualified electronic signature or QTSP validation report.", 397, 10, sans, rgb(0.43, 0.28, 0.12));
   centerText(page, signer, 365, 30, serifBold, rgb(0.08, 0.11, 0.18));
   centerText(page, input.document.name, 326, 18, serif, rgb(0.14, 0.16, 0.2));
 

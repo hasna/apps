@@ -36,10 +36,10 @@ import { parseCliVariables } from "../lib/markdown-template.js";
 import {
   createDocumentFromMarkdown,
   sendDocumentForSignature,
+  sendDocumentWithProvider,
   signDocumentLocally,
 } from "../lib/workflow.js";
 import { setupSigningDomain } from "../lib/domain-integration.js";
-import { sendWithProvider } from "../lib/provider-integration.js";
 
 const program = new Command();
 
@@ -601,43 +601,84 @@ const providerCmd = program.command("provider").description("External provider i
 
 providerCmd
   .command("send <id-or-slug>")
-  .description("Create/send a provider envelope, currently PandaDoc-compatible")
+  .description("Create/send a provider envelope through connectors or provider API")
   .option("--provider <name>", "Provider name", "pandadoc")
   .option("--api-key <key>", "Provider API key; defaults to config pandadoc_api_key")
   .requiredOption("--recipient <email>", "Recipient email")
   .option("--recipient-name <name>", "Recipient name")
+  .requiredOption("--signature-level <level>", "Signature level: ses|aes|qes|eseal|qeseal")
   .option("--document-url <url>", "Public document URL instead of local file upload")
   .option("--subject <subject>", "Provider email subject")
   .option("--message <message>", "Provider email message")
+  .option("--connectors-api-url <url>", "Hosted @hasna/connectors API URL")
+  .option("--connectors-api-key <key>", "Hosted @hasna/connectors API key")
+  .option("--connectors-server-url <url>", "Local connectors-serve URL")
+  .option("--connectors-account <id>", "Hosted connectors account id")
+  .option("--connectors-profile <name>", "Connectors profile name")
   .option("--silent", "Ask provider not to send recipient notifications")
   .option("--dry-run", "Prepare request without sending")
   .option("--json", "Output as JSON")
   .action(async (idOrSlug: string, opts: Record<string, unknown>) => {
     try {
-      const doc = getDocumentByIdOrSlug(idOrSlug);
       const recipientEmail = opts["recipient"] as string;
-      const result = await sendWithProvider({
-        provider: opts["provider"] as string,
-        apiKey: (opts["apiKey"] as string | undefined) ?? getSetting("pandadoc_api_key") ?? undefined,
-        documentName: doc.name,
-        documentPath: opts["documentUrl"] ? undefined : doc.file_path,
-        documentUrl: opts["documentUrl"] as string | undefined,
-        recipients: [{
+      const provider = opts["provider"] as string;
+      const result = await sendDocumentWithProvider({
+        documentId: idOrSlug,
+        provider,
+        apiKey: (opts["apiKey"] as string | undefined) ?? getSetting(`${provider}_api_key`) ?? getSetting("pandadoc_api_key") ?? undefined,
+        recipient: {
           email: recipientEmail,
           name: (opts["recipientName"] as string | undefined) ?? recipientEmail,
           role: "Signer",
-        }],
+        },
+        signatureLevel: opts["signatureLevel"] as Parameters<typeof sendDocumentWithProvider>[0]["signatureLevel"],
+        documentUrl: opts["documentUrl"] as string | undefined,
         subject: opts["subject"] as string | undefined,
         message: opts["message"] as string | undefined,
         silent: !!opts["silent"],
+        connectors: {
+          apiUrl: (opts["connectorsApiUrl"] as string | undefined) ?? getSetting("connectors_api_url") ?? undefined,
+          apiKey: (opts["connectorsApiKey"] as string | undefined) ?? getSetting("connectors_api_key") ?? undefined,
+          serverUrl: (opts["connectorsServerUrl"] as string | undefined) ?? getSetting("connectors_server_url") ?? undefined,
+          accountId: opts["connectorsAccount"] as string | undefined,
+          profileName: opts["connectorsProfile"] as string | undefined,
+        },
         dryRun: !!opts["dryRun"],
       });
       if (opts["json"]) {
         console.log(JSON.stringify(result, null, 2));
       } else {
-        console.log(result.status === "failed" ? chalk.red("Provider send failed") : chalk.green(`✓ Provider status: ${result.status}`));
-        if (result.remote_document_id) console.log(`  Remote ID: ${chalk.cyan(result.remote_document_id)}`);
-        if (result.error) console.log(`  Error: ${result.error}`);
+        console.log(result.provider.status === "failed" ? chalk.red("Provider send failed") : chalk.green(`✓ Provider status: ${result.provider.status}`));
+        console.log(`  Session:  ${chalk.cyan(result.session.id)}`);
+        console.log(`  Evidence: ${chalk.cyan(result.evidence.id)}`);
+        console.log(`  Level:    ${result.evidence.signature_level}`);
+        if (result.provider.remote_document_id) console.log(`  Remote ID: ${chalk.cyan(result.provider.remote_document_id)}`);
+        if (result.provider.connector_slug) console.log(`  Connector: ${result.provider.connector_slug}:${result.provider.operation}`);
+        if (result.provider.error) console.log(`  Error: ${result.provider.error}`);
+      }
+    } catch (err) {
+      console.error(chalk.red("Error:"), err instanceof Error ? err.message : err);
+      process.exit(1);
+    }
+  });
+
+providerCmd
+  .command("evidence <id-or-slug>")
+  .description("List provider evidence for a document")
+  .option("--json", "Output as JSON")
+  .action(async (idOrSlug: string, opts: Record<string, unknown>) => {
+    try {
+      const { listProviderEvidence } = await import("../db/provider-evidence.js");
+      const doc = getDocumentByIdOrSlug(idOrSlug);
+      const evidence = listProviderEvidence({ document_id: doc.id });
+      if (opts["json"]) {
+        console.log(JSON.stringify(evidence, null, 2));
+      } else if (evidence.length === 0) {
+        console.log(chalk.yellow("No provider evidence found"));
+      } else {
+        for (const item of evidence) {
+          console.log(`${chalk.cyan(item.id)}  ${item.provider}  ${item.signature_level}  ${item.status}/${item.validation_status}`);
+        }
       }
     } catch (err) {
       console.error(chalk.red("Error:"), err instanceof Error ? err.message : err);

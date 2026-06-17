@@ -130,9 +130,18 @@ export const PG_MIGRATIONS: string[] = [
     signed_document_path TEXT,
     certificate_path TEXT,
     completed_at TEXT,
+    signature_level TEXT NOT NULL DEFAULT 'ses',
+    assurance_level TEXT,
+    provider_status TEXT,
+    validation_status TEXT,
     created_at TEXT NOT NULL DEFAULT NOW()::text,
     updated_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
+
+  `ALTER TABLE signing_sessions ADD COLUMN IF NOT EXISTS signature_level TEXT NOT NULL DEFAULT 'ses'`,
+  `ALTER TABLE signing_sessions ADD COLUMN IF NOT EXISTS assurance_level TEXT`,
+  `ALTER TABLE signing_sessions ADD COLUMN IF NOT EXISTS provider_status TEXT`,
+  `ALTER TABLE signing_sessions ADD COLUMN IF NOT EXISTS validation_status TEXT`,
 
   // Migration 10: settings table
   `CREATE TABLE IF NOT EXISTS settings (
@@ -187,4 +196,30 @@ export const PG_MIGRATIONS: string[] = [
     metadata TEXT,
     issued_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
+
+  `CREATE TABLE IF NOT EXISTS provider_evidence (
+    id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    session_id TEXT REFERENCES signing_sessions(id) ON DELETE SET NULL,
+    provider TEXT NOT NULL,
+    connector_slug TEXT,
+    operation TEXT,
+    signature_level TEXT NOT NULL DEFAULT 'ses',
+    status TEXT NOT NULL DEFAULT 'prepared',
+    validation_status TEXT NOT NULL DEFAULT 'pending',
+    remote_document_id TEXT,
+    remote_status TEXT,
+    request TEXT,
+    response TEXT,
+    evidence TEXT,
+    original_document_hash TEXT,
+    signed_document_hash TEXT,
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    updated_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS provider_evidence_document_idx ON provider_evidence(document_id)`,
+  `CREATE INDEX IF NOT EXISTS provider_evidence_session_idx ON provider_evidence(session_id)`,
+  `ALTER TABLE provider_evidence ALTER COLUMN signature_level SET DEFAULT 'ses'`,
+  `UPDATE provider_evidence SET signature_level = 'ses' WHERE signature_level = 'provider' OR signature_level IS NULL`,
 ];

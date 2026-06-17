@@ -30,6 +30,7 @@ import {
 } from "../db/signing-sessions.js";
 import { createPerson, getPersonByIdOrEmail, listPeople } from "../db/people.js";
 import { getSigningCertificateBySession, listSigningCertificates } from "../db/certificates.js";
+import { listProviderEvidence } from "../db/provider-evidence.js";
 import { getStats } from "../db/stats.js";
 import { search } from "../lib/search.js";
 import { detectSignatureFields } from "../lib/pdf-detector.js";
@@ -38,9 +39,8 @@ import { storeDocument } from "../lib/files.js";
 import { signWithBrowseruse, registerSigningSession } from "../lib/connector-integration.js";
 import { shareDocument, receiveDocument } from "../lib/attachments-integration.js";
 import { getSetting, setSetting, getAllSettings } from "../db/settings.js";
-import { createDocumentFromMarkdown, sendDocumentForSignature, signDocumentLocally } from "../lib/workflow.js";
+import { createDocumentFromMarkdown, sendDocumentForSignature, sendDocumentWithProvider, signDocumentLocally } from "../lib/workflow.js";
 import { setupSigningDomain } from "../lib/domain-integration.js";
-import { sendWithProvider } from "../lib/provider-integration.js";
 
 const PORT = parseInt(process.env["PORT"] ?? "19440", 10);
 
@@ -424,26 +424,34 @@ Bun.serve({
       if (providerSendMatch && method === "POST") {
         const id = providerSendMatch[1]!;
         const body = await parseBody(req) as Record<string, unknown>;
-        const doc = getDocumentByIdOrSlug(id);
         const recipient = body["recipient"] as Record<string, unknown> | undefined;
         if (!recipient?.["email"]) return error("recipient.email is required");
-        const result = await sendWithProvider({
-          provider: (body["provider"] as string | undefined) ?? "pandadoc",
-          apiKey: (body["api_key"] as string | undefined) ?? getSetting("pandoc_api_key") ?? getSetting("pandadoc_api_key") ?? undefined,
-          documentName: doc.name,
-          documentPath: body["document_url"] ? undefined : doc.file_path,
+        const provider = (body["provider"] as string | undefined) ?? "pandadoc";
+        if (!body["signature_level"]) return error("signature_level is required: ses, aes, qes, eseal, or qeseal");
+        const result = await sendDocumentWithProvider({
+          documentId: id,
+          provider,
+          apiKey: (body["api_key"] as string | undefined) ?? getSetting(`${provider}_api_key`) ?? getSetting("pandadoc_api_key") ?? undefined,
           documentUrl: body["document_url"] as string | undefined,
-          recipients: [{
+          recipient: {
             email: recipient["email"] as string,
             name: (recipient["name"] as string | undefined) ?? recipient["email"] as string,
             role: (recipient["role"] as string | undefined) ?? "Signer",
-          }],
+          },
+          signatureLevel: body["signature_level"] as Parameters<typeof sendDocumentWithProvider>[0]["signatureLevel"],
           subject: body["subject"] as string | undefined,
           message: body["message"] as string | undefined,
           silent: body["silent"] as boolean | undefined,
+          connectors: {
+            apiUrl: (body["connectors_api_url"] as string | undefined) ?? getSetting("connectors_api_url") ?? undefined,
+            apiKey: (body["connectors_api_key"] as string | undefined) ?? getSetting("connectors_api_key") ?? undefined,
+            serverUrl: (body["connectors_server_url"] as string | undefined) ?? getSetting("connectors_server_url") ?? undefined,
+            accountId: body["connectors_account"] as string | undefined,
+            profileName: body["connectors_profile"] as string | undefined,
+          },
           dryRun: body["dry_run"] as boolean | undefined,
         });
-        return json(result, result.status === "failed" ? 502 : 201);
+        return json(result, result.provider.status === "failed" ? 502 : 201);
       }
 
       const docConnectorSignMatch = path.match(/^\/api\/documents\/([^/]+)\/connector-sign$/);
@@ -494,6 +502,16 @@ Bun.serve({
 
       if (path === "/api/certificates" && method === "GET") {
         return json(listSigningCertificates(url.searchParams.get("document_id") ?? undefined));
+      }
+
+      if (path === "/api/provider-evidence" && method === "GET") {
+        return json(listProviderEvidence({
+          document_id: url.searchParams.get("document_id") ?? undefined,
+          session_id: url.searchParams.get("session_id") ?? undefined,
+          provider: url.searchParams.get("provider") ?? undefined,
+          limit: parseInt(url.searchParams.get("limit") ?? "100"),
+          offset: parseInt(url.searchParams.get("offset") ?? "0"),
+        }));
       }
 
       if (path === "/api/domains/setup" && method === "POST") {

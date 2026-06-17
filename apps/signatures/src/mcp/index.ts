@@ -41,6 +41,7 @@ import { listPlacementsForDocument } from "../db/signature-placements.js";
 import { createSigningSession, updateSessionAttachment, updateSessionStatus, getSessionById } from "../db/signing-sessions.js";
 import { createPerson, listPeople } from "../db/people.js";
 import { getSigningCertificateBySession } from "../db/certificates.js";
+import { listProviderEvidence } from "../db/provider-evidence.js";
 import { getStats } from "../db/stats.js";
 import { searchDocuments } from "../lib/search.js";
 import { detectSignatureFields } from "../lib/pdf-detector.js";
@@ -52,7 +53,7 @@ import { shareDocument, receiveDocument } from "../lib/attachments-integration.j
 import { getSetting, setSetting } from "../db/settings.js";
 import { getDatabase } from "../db/database.js";
 import { isCerebrasConfigured } from "../lib/pdf-detector.js";
-import { createDocumentFromMarkdown, sendDocumentForSignature, signDocumentLocally } from "../lib/workflow.js";
+import { createDocumentFromMarkdown, sendDocumentForSignature, sendDocumentWithProvider, signDocumentLocally } from "../lib/workflow.js";
 
 import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 
@@ -221,6 +222,45 @@ export function buildServer(): Server {
           type: "object",
           properties: { session_id: { type: "string" } },
           required: ["session_id"],
+        },
+      },
+      {
+        name: "signatures_provider_send",
+        description: "Create a provider-backed signing session and durable evidence record using PandaDoc/Yousign dry-run or connectors execution. signature_level is explicit: ses, aes, qes, eseal, qeseal.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            document_id: { type: "string" },
+            provider: { type: "string", enum: ["pandadoc", "yousign"] },
+            recipient_email: { type: "string" },
+            recipient_name: { type: "string" },
+            signature_level: { type: "string", enum: ["ses", "aes", "qes", "eseal", "qeseal"] },
+            subject: { type: "string" },
+            message: { type: "string" },
+            document_url: { type: "string" },
+            silent: { type: "boolean" },
+            dry_run: { type: "boolean" },
+            connectors_api_url: { type: "string" },
+            connectors_api_key: { type: "string" },
+            connectors_server_url: { type: "string" },
+            connectors_account: { type: "string" },
+            connectors_profile: { type: "string" },
+          },
+          required: ["document_id", "provider", "recipient_email", "signature_level"],
+        },
+      },
+      {
+        name: "signatures_provider_evidence_list",
+        description: "List provider evidence records by document, session, or provider",
+        inputSchema: {
+          type: "object",
+          properties: {
+            document_id: { type: "string" },
+            session_id: { type: "string" },
+            provider: { type: "string" },
+            limit: { type: "number" },
+            offset: { type: "number" },
+          },
         },
       },
       {
@@ -628,6 +668,47 @@ export function buildServer(): Server {
           const a = args as Record<string, unknown>;
           const certificate = getSigningCertificateBySession(a["session_id"] as string);
           return { content: [{ type: "text", text: JSON.stringify(certificate, null, 2) }] };
+        }
+
+        case "signatures_provider_send": {
+          const a = args as Record<string, unknown>;
+          const provider = a["provider"] as string;
+          const result = await sendDocumentWithProvider({
+            documentId: a["document_id"] as string,
+            provider,
+            apiKey: getSetting(`${provider}_api_key`) ?? getSetting("pandadoc_api_key") ?? undefined,
+            recipient: {
+              email: a["recipient_email"] as string,
+              name: (a["recipient_name"] as string | undefined) ?? a["recipient_email"] as string,
+              role: "Signer",
+            },
+            signatureLevel: a["signature_level"] as Parameters<typeof sendDocumentWithProvider>[0]["signatureLevel"],
+            documentUrl: a["document_url"] as string | undefined,
+            subject: a["subject"] as string | undefined,
+            message: a["message"] as string | undefined,
+            silent: a["silent"] as boolean | undefined,
+            connectors: {
+              apiUrl: (a["connectors_api_url"] as string | undefined) ?? getSetting("connectors_api_url") ?? undefined,
+              apiKey: (a["connectors_api_key"] as string | undefined) ?? getSetting("connectors_api_key") ?? undefined,
+              serverUrl: (a["connectors_server_url"] as string | undefined) ?? getSetting("connectors_server_url") ?? undefined,
+              accountId: a["connectors_account"] as string | undefined,
+              profileName: a["connectors_profile"] as string | undefined,
+            },
+            dryRun: a["dry_run"] as boolean | undefined ?? true,
+          });
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        }
+
+        case "signatures_provider_evidence_list": {
+          const a = args as Record<string, unknown>;
+          const evidence = listProviderEvidence({
+            document_id: a["document_id"] as string | undefined,
+            session_id: a["session_id"] as string | undefined,
+            provider: a["provider"] as string | undefined,
+            limit: a["limit"] as number | undefined,
+            offset: a["offset"] as number | undefined,
+          });
+          return { content: [{ type: "text", text: JSON.stringify(evidence, null, 2) }] };
         }
 
         case "signatures_signature_create": {
