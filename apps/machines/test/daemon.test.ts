@@ -86,6 +86,17 @@ describe("daemon service lifecycle planning", () => {
     expect(systemPlan.commands.every((cmd) => cmd.sudo === true)).toBe(true);
   });
 
+  test("adds executable directory to service PATH for non-standard bin shims", () => {
+    const plan = buildDaemonInstallPlan({
+      platform: "linux",
+      mode: "user",
+      serviceName: "machines-agent-fixture",
+      executable: "/home/operator/.bun/bin/machines-agent",
+    });
+
+    expect(plan.files[0]?.content).toContain('Environment="PATH=/home/operator/.bun/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"');
+  });
+
   test("plans uninstall, restart, status, and logs without install files", () => {
     const base = {
       platform: "linux" as const,

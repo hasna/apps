@@ -266,7 +266,7 @@ function resolveDaemonServiceOptions(options: DaemonServiceOptions): ResolvedDae
     serviceId: serviceName,
     executable,
     intervalMs,
-    env: buildEnvironment(serviceName, options, warnings),
+    env: buildEnvironment(serviceName, executable, options, warnings),
     warnings,
   };
 }
@@ -295,6 +295,7 @@ function normalizeIntervalMs(value: number | undefined, warnings: string[]): num
 
 function buildEnvironment(
   serviceName: string,
+  executable: string,
   options: DaemonServiceOptions,
   warnings: string[],
 ): Record<string, string> {
@@ -302,6 +303,10 @@ function buildEnvironment(
     HASNA_MACHINES_AGENT_MODE: "daemon",
     HASNA_MACHINES_AGENT_SERVICE: serviceName,
   };
+  const executableDir = dirname(executable);
+  if (!isStandardExecutableDir(executableDir)) {
+    env["PATH"] = `${executableDir}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`;
+  }
 
   if (options.storagePush) {
     env["HASNA_MACHINES_AGENT_STORAGE_PUSH"] = "1";
@@ -325,6 +330,10 @@ function buildEnvironment(
 
   addEnvPlaceholders(env, options.env ?? [], warnings);
   return Object.fromEntries(Object.entries(env).sort(([left], [right]) => left.localeCompare(right)));
+}
+
+function isStandardExecutableDir(path: string): boolean {
+  return ["/bin", "/usr/bin", "/usr/local/bin", "/usr/sbin", "/sbin"].includes(path);
 }
 
 function addEnvPlaceholders(env: Record<string, string>, names: readonly string[], warnings: string[]): void {
