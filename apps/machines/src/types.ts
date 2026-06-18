@@ -115,6 +115,11 @@ export interface FleetStatusMachine {
   manifestDeclared: boolean;
   heartbeatStatus: "online" | "offline" | "unknown";
   lastHeartbeatAt?: string;
+  daemonVersion?: string | null;
+  agentMode?: string | null;
+  storageSyncStatus?: string | null;
+  doctorSummary?: Record<string, unknown> | null;
+  privateMetadata?: boolean;
 }
 
 export interface FleetStatus {

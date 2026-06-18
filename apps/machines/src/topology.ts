@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { getLocalMachineId, listHeartbeats } from "./db.js";
 import { readManifest } from "./manifests.js";
 import { getManifestPath } from "./paths.js";
-import { publicMetadataKeys, redactMetadata } from "./redaction.js";
+import { REDACTED_VALUE, publicMetadataKeys, redactErrorMessage, redactMetadata, redactSensitiveValue } from "./redaction.js";
 import type { MachineManifest, MachinePlatform } from "./types.js";
 import { getPackageVersion } from "./version.js";
 
@@ -46,6 +46,22 @@ export interface MachineTopologyEntry {
   manifest_declared: boolean;
   heartbeat_status: "online" | "offline" | "unknown";
   last_heartbeat_at: string | null;
+  agent: {
+    pid: number | null;
+    daemon_version: string | null;
+    mode: string | null;
+    private_metadata: boolean;
+    platform: string | null;
+    os_version: string | null;
+    os_build: string | null;
+    arch: string | null;
+    uptime_seconds: number | null;
+    tool_versions: Record<string, unknown> | null;
+    tailscale: Record<string, unknown> | null;
+    storage_sync_status: string | null;
+    storage_sync_last_error: string | null;
+    doctor_summary: Record<string, unknown> | null;
+  };
   tailscale: {
     dns_name: string | null;
     ips: string[];
@@ -279,6 +295,10 @@ export interface MachineRouteResolution {
 
 export interface MachineRouteOptions extends MachineTopologyOptions {
   topology?: MachineTopology;
+}
+
+export interface PublicOutputOptions {
+  privateMetadata?: boolean;
 }
 
 export type MachineWorkspacePathSource =
@@ -530,6 +550,16 @@ function selectRouteHint(hints: MachineRouteHint[]): MachineRouteHint | null {
   return [...hints].sort((left, right) => routeRank(left) - routeRank(right))[0] ?? null;
 }
 
+function parseHeartbeatJson(value: string | null | undefined): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
 function buildEntry(input: {
   machineId: string;
   localMachineId: string;
@@ -559,6 +589,22 @@ function buildEntry(input: {
     manifest_declared: Boolean(manifest),
     heartbeat_status: (input.heartbeat?.status as "online" | "offline" | undefined) ?? "unknown",
     last_heartbeat_at: input.heartbeat?.updated_at ?? null,
+    agent: {
+      pid: input.heartbeat?.pid ?? null,
+      daemon_version: input.heartbeat?.daemon_version ?? null,
+      mode: input.heartbeat?.agent_mode ?? null,
+      private_metadata: Boolean(input.heartbeat?.private_metadata),
+      platform: input.heartbeat?.platform ?? null,
+      os_version: input.heartbeat?.os_version ?? null,
+      os_build: input.heartbeat?.os_build ?? null,
+      arch: input.heartbeat?.arch ?? null,
+      uptime_seconds: input.heartbeat?.uptime_seconds ?? null,
+      tool_versions: parseHeartbeatJson(input.heartbeat?.tool_versions_json),
+      tailscale: parseHeartbeatJson(input.heartbeat?.tailscale_json),
+      storage_sync_status: input.heartbeat?.storage_sync_status ?? null,
+      storage_sync_last_error: input.heartbeat?.storage_sync_last_error ?? null,
+      doctor_summary: parseHeartbeatJson(input.heartbeat?.doctor_summary_json),
+    },
     tailscale: {
       dns_name: manifest?.tailscaleName ?? peer?.DNSName?.replace(/\.$/, "") ?? null,
       ips: peer?.TailscaleIPs ?? [],
@@ -617,6 +663,72 @@ export function discoverMachineTopology(options: MachineTopologyOptions = {}): M
     manifest_path_known: existsSync(getManifestPath()),
     machines,
     warnings,
+  };
+}
+
+function redactFleetString(value: string): string {
+  if (!value) return value;
+  return redactErrorMessage(value);
+}
+
+function redactPublicRecord(value: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!value) return null;
+  const redacted: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (/(host|hostname|dns|ip|ips|user|username|serial|address|target|url|token|secret|password|credential)/i.test(key)) {
+      redacted[key] = REDACTED_VALUE;
+      continue;
+    }
+    if (typeof entry === "string") {
+      redacted[key] = redactFleetString(entry);
+    } else if (Array.isArray(entry)) {
+      redacted[key] = entry.map((item) => {
+        if (typeof item === "string") return redactFleetString(item);
+        if (item && typeof item === "object") return redactPublicRecord(item as Record<string, unknown>);
+        return item;
+      });
+    } else if (entry && typeof entry === "object") {
+      redacted[key] = redactPublicRecord(entry as Record<string, unknown>);
+    } else {
+      redacted[key] = entry;
+    }
+  }
+  return redactSensitiveValue(redacted) as Record<string, unknown>;
+}
+
+export function redactTopologyForOutput(topology: MachineTopology, options: PublicOutputOptions = {}): MachineTopology {
+  if (options.privateMetadata) return topology;
+  return {
+    ...topology,
+    local_hostname: REDACTED_VALUE,
+    warnings: topology.warnings.map(redactFleetString),
+    machines: topology.machines.map((machine) => ({
+      ...machine,
+      hostname: machine.hostname ? REDACTED_VALUE : null,
+      user: machine.user ? REDACTED_VALUE : null,
+      tailscale: {
+        ...machine.tailscale,
+        dns_name: machine.tailscale.dns_name ? REDACTED_VALUE : null,
+        ips: machine.tailscale.ips.map(() => REDACTED_VALUE),
+      },
+      ssh: {
+        ...machine.ssh,
+        address: machine.ssh.address ? REDACTED_VALUE : null,
+        command_target: machine.ssh.command_target ? REDACTED_VALUE : null,
+      },
+      route_hints: machine.route_hints.map((hint) => ({
+        ...hint,
+        target: REDACTED_VALUE,
+      })),
+      agent: {
+        ...machine.agent,
+        tailscale: redactPublicRecord(machine.agent.tailscale),
+        storage_sync_last_error: machine.agent.storage_sync_last_error
+          ? redactFleetString(machine.agent.storage_sync_last_error)
+          : null,
+        doctor_summary: redactPublicRecord(machine.agent.doctor_summary),
+      },
+    })),
   };
 }
 
@@ -862,6 +974,22 @@ export function resolveMachineRoute(machineId: string, options: MachineRouteOpti
       reasons: selectedHint ? [] : ["route_target_unresolved"],
     }),
     warnings,
+  };
+}
+
+export function redactRouteForOutput(route: MachineRouteResolution, options: PublicOutputOptions = {}): MachineRouteResolution {
+  if (options.privateMetadata) return route;
+  return {
+    ...route,
+    target: route.target ? REDACTED_VALUE : null,
+    command_target: route.command_target ? REDACTED_VALUE : null,
+    warnings: route.warnings.map(redactFleetString),
+    evidence: {
+      ...route.evidence,
+      selected_hint: route.evidence.selected_hint
+        ? { ...route.evidence.selected_hint, target: REDACTED_VALUE }
+        : null,
+    },
   };
 }
 
@@ -1465,6 +1593,22 @@ export function getLocalMachineTopology(options: MachineTopologyOptions = {}): M
     manifest_declared: false,
     heartbeat_status: "unknown",
     last_heartbeat_at: null,
+    agent: {
+      pid: null,
+      daemon_version: null,
+      mode: null,
+      private_metadata: false,
+      platform: null,
+      os_version: null,
+      os_build: null,
+      arch: null,
+      uptime_seconds: null,
+      tool_versions: null,
+      tailscale: null,
+      storage_sync_status: null,
+      storage_sync_last_error: null,
+      doctor_summary: null,
+    },
     tailscale: { dns_name: null, ips: [], online: null, active: null, last_seen: null },
     ssh: { address: null, route: "local", command_target: "localhost" },
     route_hints: [{ kind: "local", target: "localhost", reachable: true }],

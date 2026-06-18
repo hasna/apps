@@ -15,7 +15,9 @@ import {
   getStorageStatus,
   parseStorageTables,
   resolveTables,
+  PG_MIGRATIONS,
 } from "../src/storage.js";
+import { sslConfigFor } from "../src/remote-storage.js";
 
 const ENV_KEYS = [
   MACHINES_STORAGE_ENV,
@@ -59,6 +61,22 @@ describe("machines storage config", () => {
     expect(resolveTables()).toEqual([...STORAGE_TABLES]);
     expect(parseStorageTables("agent_heartbeats,sync_runs")).toEqual(["agent_heartbeats", "sync_runs"]);
     expect(() => resolveTables(["missing"])).toThrow("Unknown machines storage table");
+  });
+
+  test("postgres migrations add heartbeat enrichment columns compatibly", () => {
+    const migrationSql = PG_MIGRATIONS.join("\n");
+    expect(migrationSql).toContain("ALTER TABLE agent_heartbeats ADD COLUMN IF NOT EXISTS daemon_version TEXT");
+    expect(migrationSql).toContain("ALTER TABLE agent_heartbeats ADD COLUMN IF NOT EXISTS tool_versions_json TEXT");
+    expect(migrationSql).toContain("ALTER TABLE agent_heartbeats ADD COLUMN IF NOT EXISTS tailscale_json TEXT");
+    expect(migrationSql).toContain("ALTER TABLE agent_heartbeats ADD COLUMN IF NOT EXISTS doctor_summary_json TEXT");
+    expect(migrationSql).toContain("ALTER TABLE agent_heartbeats ADD COLUMN IF NOT EXISTS private_metadata INTEGER NOT NULL DEFAULT 0");
+  });
+
+  test("postgres sslmode=require verifies certificates by default", () => {
+    expect(sslConfigFor("postgres://example/machines?sslmode=require")).toEqual({ rejectUnauthorized: true });
+    expect(sslConfigFor("postgres://example/machines?ssl=true")).toEqual({ rejectUnauthorized: true });
+    expect(sslConfigFor("postgres://example/machines?sslmode=no-verify")).toEqual({ rejectUnauthorized: false });
+    expect(sslConfigFor("postgres://example/machines?sslmode=disable")).toBeUndefined();
   });
 
   test("storage status initializes local sync metadata without remote config", () => {

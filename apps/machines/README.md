@@ -281,6 +281,57 @@ Configure database storage with `HASNA_MACHINES_DATABASE_URL` or fallback
 `HASNA_MACHINES_STORAGE_MODE` or `MACHINES_STORAGE_MODE` with `local`,
 `hybrid`, or `remote`.
 
+## Fleet daemon
+
+`machines-agent` can run as a managed heartbeat daemon. The daemon writes local
+SQLite heartbeat rows and can optionally push those rows to PostgreSQL storage
+for cross-network fleet dashboards.
+
+```bash
+machines-agent --once --json
+machines-agent --interval-ms 30000
+HASNA_MACHINES_DATABASE_URL=postgres://... machines-agent --storage-push --interval-ms 30000
+machines-agent --doctor-summary --once --json
+```
+
+Service lifecycle commands are dry-run plans by default and support macOS
+`launchd` plus Linux `systemd` user or system services:
+
+```bash
+machines daemon install --platform macos --mode user --storage-push --doctor-summary --json
+machines daemon install --platform linux --mode user --storage-push --json
+machines daemon status --platform linux --mode user --json
+machines daemon logs --platform macos --mode user
+machines daemon restart --platform linux --mode user --apply --yes
+machines daemon uninstall --platform linux --mode user --apply --yes
+```
+
+Install plans include generated service-file content and the exact lifecycle
+commands. They do not embed raw database URLs or secrets; storage and private
+settings are represented as environment variable names or safe placeholders.
+`--apply` only executes when paired with `--yes`.
+
+By default heartbeat facts are public-safe. Hostnames, usernames, serials,
+private IPs, Tailscale DNS names, database URLs, and secret-like values should
+not appear in public output. Operators that need private fleet facts can opt in
+locally with `--private-metadata` or `HASNA_MACHINES_PRIVATE_METADATA=1`; do
+not share private-mode JSON in OSS issues or docs.
+
+HTTP dashboard/API and MCP private reads require a second operator-side gate:
+set `HASNA_MACHINES_ALLOW_PRIVATE_OUTPUT=1` and pass the explicit
+`privateMetadata=true` query parameter or MCP `private_metadata` argument. The
+caller flag alone is ignored.
+
+Doctor summaries are also opt-in with `--doctor-summary` or
+`HASNA_MACHINES_AGENT_DOCTOR_SUMMARY=1`. The daemon records a compact
+ok/warn/fail count plus redacted blockers and avoids optional private adapters
+inside the heartbeat loop.
+
+`machines topology`, `machines route`, `machines serve`, and `machines-mcp`
+consume the same heartbeat rows. When Tailscale is available, route resolution
+still uses `tailscale status --json` and falls back to Tailscale routes when LAN
+or SSH routes are not verified.
+
 Machine backups are preview-only unless `--apply --yes` is passed. The backup
 target can be explicit or environment-backed:
 
@@ -354,6 +405,9 @@ The dashboard exposes:
 - `/` HTML dashboard
 - `/health` health probe
 - `/api/status` fleet status JSON
+- `/api/topology` manifest, heartbeat, SSH, LAN, and Tailscale topology JSON
+- `/api/routes` resolved route JSON for known machines
+- `/api/daemon/status` daemon heartbeat rows
 - `/api/manifest` current manifest JSON
 - `/api/notifications` notification channel JSON
 - `/api/doctor` doctor report JSON

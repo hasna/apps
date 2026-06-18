@@ -2,6 +2,9 @@ import { EventsClient, sanitizeChannelsForOutput } from "@hasna/events";
 import { diffApps, getAppsStatus } from "./apps.js";
 import { runDoctor } from "./doctor.js";
 import { diffClaudeCli, getClaudeCliStatus } from "./install-claude.js";
+import { getAgentStatus } from "../agent/runtime.js";
+import { PRIVATE_OUTPUT_DENIED_WARNING, isPrivateOutputEnabled } from "../redaction.js";
+import { discoverMachineTopology, redactRouteForOutput, redactTopologyForOutput, resolveMachineRoute } from "../topology.js";
 import { listNotificationChannels, testNotificationChannel } from "./notifications.js";
 import { manifestList } from "./manifest.js";
 import { runSelfTest } from "./self-test.js";
@@ -39,6 +42,9 @@ export function getServeInfo(options: ServeOptions = {}): ServeInfo {
       "/",
       "/health",
       "/api/status",
+      "/api/topology",
+      "/api/routes",
+      "/api/daemon/status",
       "/api/manifest",
       "/api/notifications",
       "/api/webhooks",
@@ -57,6 +63,7 @@ export function getServeInfo(options: ServeOptions = {}): ServeInfo {
 
 export function renderDashboardHtml(): string {
   const status = getStatus();
+  const topology = discoverMachineTopology();
   const manifest = manifestList();
   const notifications = listNotificationChannels();
   const doctor = runDoctor();
@@ -96,12 +103,13 @@ export function renderDashboardHtml(): string {
         <section class="card"><div>Heartbeats</div><div class="stat">${status.heartbeatCount}</div></section>
         <section class="card"><div>Notification channels</div><div class="stat">${notifications.channels.length}</div></section>
         <section class="card"><div>Doctor warnings</div><div class="stat">${doctor.checks.filter((entry) => entry.status !== "ok").length}</div></section>
+        <section class="card"><div>Tailscale routes</div><div class="stat">${topology.machines.filter((machine) => machine.ssh.route === "tailscale").length}</div></section>
       </div>
 
       <section class="card" style="margin-top:16px">
         <h2>Machines</h2>
         <table>
-          <thead><tr><th>ID</th><th>Platform</th><th>Status</th><th>Last heartbeat</th></tr></thead>
+          <thead><tr><th>ID</th><th>Platform</th><th>Status</th><th>Agent</th><th>Storage</th><th>Last heartbeat</th></tr></thead>
           <tbody>
             ${status.machines
               .map(
@@ -109,6 +117,8 @@ export function renderDashboardHtml(): string {
               <td><code>${escapeHtml(machine.machineId)}</code></td>
               <td>${escapeHtml(machine.platform || "unknown")}</td>
               <td><span class="badge ${escapeHtml(machine.heartbeatStatus)}">${escapeHtml(machine.heartbeatStatus)}</span></td>
+              <td>${escapeHtml(machine.agentMode || "unknown")} ${escapeHtml(machine.daemonVersion || "")}</td>
+              <td>${escapeHtml(machine.storageSyncStatus || "unknown")}</td>
               <td>${escapeHtml(machine.lastHeartbeatAt || "—")}</td>
             </tr>`
               )
@@ -158,6 +168,14 @@ export function renderDashboardHtml(): string {
     <script>
       // Auto-refresh dashboard data every 15s
       const REFRESH_INTERVAL = 15000;
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#39;");
+      }
       async function refreshData() {
         try {
           const [statusRes, doctorRes] = await Promise.all([
@@ -178,10 +196,12 @@ export function renderDashboardHtml(): string {
             tbody.innerHTML = status.machines
               .map((m) =>
                 "<tr>" +
-                "<td><code>" + m.machineId + "</code></td>" +
-                "<td>" + (m.platform || "unknown") + "</td>" +
-                '<td><span class="badge ' + m.heartbeatStatus + '">' + m.heartbeatStatus + '</span></td>' +
-                "<td>" + (m.lastHeartbeatAt || "\\u2014") + "</td>" +
+                "<td><code>" + escapeHtml(m.machineId) + "</code></td>" +
+                "<td>" + escapeHtml(m.platform || "unknown") + "</td>" +
+                '<td><span class="badge ' + escapeHtml(m.heartbeatStatus) + '">' + escapeHtml(m.heartbeatStatus) + '</span></td>' +
+                "<td>" + escapeHtml(m.agentMode || "unknown") + " " + escapeHtml(m.daemonVersion || "") + "</td>" +
+                "<td>" + escapeHtml(m.storageSyncStatus || "unknown") + "</td>" +
+                "<td>" + escapeHtml(m.lastHeartbeatAt || "\\u2014") + "</td>" +
                 "</tr>"
               )
               .join("");
@@ -193,9 +213,9 @@ export function renderDashboardHtml(): string {
             doctorTbody.innerHTML = doctor.checks
               .map((c) =>
                 "<tr>" +
-                "<td>" + c.summary + "</td>" +
-                '<td><span class="badge ' + c.status + '">' + c.status + '</span></td>' +
-                '<td class="muted">' + c.detail + "</td>" +
+                "<td>" + escapeHtml(c.summary) + "</td>" +
+                '<td><span class="badge ' + escapeHtml(c.status) + '">' + escapeHtml(c.status) + '</span></td>' +
+                '<td class="muted">' + escapeHtml(c.detail) + "</td>" +
                 "</tr>"
               )
               .join("");
@@ -228,6 +248,15 @@ function jsonError(message: string, status = 400): Response {
   return Response.json({ error: message }, { status });
 }
 
+function privateOutputWarnings(requested: boolean, allowed: boolean): string[] {
+  return requested && !allowed ? [PRIVATE_OUTPUT_DENIED_WARNING] : [];
+}
+
+function appendWarnings<T extends { warnings?: string[] }>(payload: T, warnings: string[]): T {
+  if (warnings.length === 0) return payload;
+  return { ...payload, warnings: [...(payload.warnings ?? []), ...warnings] };
+}
+
 export function startDashboardServer(options: ServeOptions = {}): ReturnType<typeof Bun.serve> {
   const info = getServeInfo(options);
   const events = new EventsClient();
@@ -238,12 +267,34 @@ export function startDashboardServer(options: ServeOptions = {}): ReturnType<typ
       const url = new URL(request.url);
       const machineId = url.searchParams.get("machine") || undefined;
       const tools = url.searchParams.get("tools")?.split(",").map((value) => value.trim()).filter(Boolean);
+      const privateMetadataRequested = url.searchParams.get("privateMetadata") === "true" || url.searchParams.get("private_metadata") === "true";
+      const privateMetadata = privateMetadataRequested && isPrivateOutputEnabled();
+      const privateWarnings = privateOutputWarnings(privateMetadataRequested, privateMetadata);
 
       if (url.pathname === "/health") {
         return Response.json({ ok: true, ...getServeInfo(options) });
       }
       if (url.pathname === "/api/status") {
         return Response.json(getStatus());
+      }
+      if (url.pathname === "/api/topology") {
+        const topology = discoverMachineTopology({ includeTailscale: url.searchParams.get("tailscale") !== "false" });
+        return Response.json(appendWarnings(redactTopologyForOutput(topology, { privateMetadata }), privateWarnings));
+      }
+      if (url.pathname === "/api/routes") {
+        const topology = discoverMachineTopology({ includeTailscale: url.searchParams.get("tailscale") !== "false" });
+        return Response.json({
+          generated_at: topology.generated_at,
+          routes: topology.machines.map((machine) => redactRouteForOutput(resolveMachineRoute(machine.machine_id, { topology }), { privateMetadata })),
+          ...(privateWarnings.length > 0 ? { warnings: privateWarnings } : {}),
+        });
+      }
+      if (url.pathname === "/api/daemon/status") {
+        return Response.json({
+          generated_at: new Date().toISOString(),
+          agents: getAgentStatus(machineId, { privateMetadata }),
+          ...(privateWarnings.length > 0 ? { warnings: privateWarnings } : {}),
+        });
       }
       if (url.pathname === "/api/manifest") {
         return Response.json(manifestList());

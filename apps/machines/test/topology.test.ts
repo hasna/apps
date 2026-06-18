@@ -66,7 +66,7 @@ describe("machine topology SDK", () => {
             HostName: "demo-node-02",
             DNSName: "demo-node-02.tailnet.ts.net.",
             OS: "linux",
-            TailscaleIPs: ["100.85.234.92"],
+            TailscaleIPs: ["203.0.113.92"],
             Online: true,
             Active: false,
           },
@@ -75,7 +75,7 @@ describe("machine topology SDK", () => {
               HostName: "demo-node-01",
               DNSName: "demo-node-01.tailnet.ts.net.",
               OS: "linux",
-              TailscaleIPs: ["100.71.123.34"],
+              TailscaleIPs: ["203.0.113.34"],
               Online: true,
               Active: true,
             },
@@ -92,7 +92,7 @@ describe("machine topology SDK", () => {
 
       const demoNode01 = topology.machines.find((machine) => machine.machine_id === "demo-node-01");
       expect(demoNode01?.manifest_declared).toBe(true);
-      expect(demoNode01?.tailscale.ips).toEqual(["100.71.123.34"]);
+      expect(demoNode01?.tailscale.ips).toEqual(["203.0.113.34"]);
       expect(demoNode01?.ssh.route).toBe("tailscale");
       expect(demoNode01?.ssh.command_target).toBe("operator@demo-node-01.tailnet.ts.net");
       expect(demoNode01?.route_hints.some((hint) => hint.kind === "tailscale")).toBe(true);
@@ -106,6 +106,8 @@ describe("machine topology SDK", () => {
 
       const demoNode02 = topology.machines.find((machine) => machine.machine_id === "demo-node-02");
       expect(demoNode02?.heartbeat_status).toBe("online");
+      expect(demoNode02?.agent.pid).toBe(123);
+      expect(demoNode02?.agent.private_metadata).toBe(false);
 
       const workspace = resolveMachineWorkspace({
         machineId: "demo-node-01",
@@ -207,7 +209,7 @@ describe("machine topology SDK", () => {
               HostName: "demo-node-01",
               DNSName: "demo-node-01.tailnet.ts.net.",
               OS: "linux",
-              TailscaleIPs: ["100.71.123.34"],
+              TailscaleIPs: ["203.0.113.34"],
               Online: true,
               Active: true,
             },

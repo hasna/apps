@@ -11,6 +11,7 @@ export * from "./commands/backup.js";
 export * from "./commands/apps.js";
 export * from "./commands/cert.js";
 export * from "./commands/dns.js";
+export * from "./commands/daemon.js";
 export * from "./commands/doctor.js";
 export * from "./commands/manifest.js";
 export * from "./commands/diff.js";

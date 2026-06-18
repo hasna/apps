@@ -87,7 +87,7 @@ describe("machines consumer SDK", () => {
         last_heartbeat_at: null,
         tailscale: {
           dns_name: "demo-node-01.tailnet.ts.net",
-          ips: ["100.71.123.34"],
+          ips: ["203.0.113.34"],
           online: true,
           active: true,
           last_seen: null,

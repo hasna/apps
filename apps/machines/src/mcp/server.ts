@@ -7,6 +7,7 @@ import { buildAppsPlan, diffApps, getAppsStatus, listApps, runAppsInstall } from
 import { buildCertPlan, runCertPlan } from "../commands/cert.js";
 import { addDomainMapping, listDomainMappings, renderDomainMapping } from "../commands/dns.js";
 import { diffMachines } from "../commands/diff.js";
+import { buildDaemonServicePlan } from "../commands/daemon.js";
 import { runDoctor } from "../commands/doctor.js";
 import { buildClaudeInstallPlan, diffClaudeCli, getClaudeCliStatus, runClaudeInstall } from "../commands/install-claude.js";
 import { buildTailscaleInstallPlan, runTailscaleInstall } from "../commands/install-tailscale.js";
@@ -19,6 +20,7 @@ import {
 } from "../commands/notifications.js";
 import { listPorts } from "../commands/ports.js";
 import { getServeInfo, renderDashboardHtml } from "../commands/serve.js";
+import { PRIVATE_OUTPUT_DENIED_WARNING, isPrivateOutputEnabled } from "../redaction.js";
 import { runSelfTest } from "../commands/self-test.js";
 import { buildSshCommand } from "../commands/ssh.js";
 import { getStatus } from "../commands/status.js";
@@ -26,7 +28,7 @@ import { manifestBootstrapCurrentMachine, manifestGet, manifestList, manifestRem
 import { buildSetupPlan, runSetup } from "../commands/setup.js";
 import { buildSyncPlan, runSync } from "../commands/sync.js";
 import { getAgentStatus } from "../agent/runtime.js";
-import { discoverMachineTopology, resolveMachineRoute, resolveMachineWorkspace } from "../topology.js";
+import { discoverMachineTopology, redactRouteForOutput, redactTopologyForOutput, resolveMachineRoute, resolveMachineWorkspace } from "../topology.js";
 import { checkMachineCompatibility } from "../compatibility.js";
 import { getStorageStatus, storagePull, storagePush, storageSync } from "../storage.js";
 
@@ -45,6 +47,8 @@ export const MACHINE_MCP_TOOL_NAMES = [
   "machines_manifest_get",
   "machines_manifest_remove",
   "machines_agent_status",
+  "machines_daemon_status",
+  "machines_daemon_service_plan",
   "machines_setup_preview",
   "machines_setup_apply",
   "machines_sync_preview",
@@ -91,6 +95,19 @@ export const MACHINE_MCP_TOOL_NAMES = [
 
 export function buildServer(version: string = getPackageVersion()): McpServer {
   return createMcpServer(version);
+}
+
+function privateMetadataAllowed(requested: boolean | undefined): boolean {
+  return requested === true && isPrivateOutputEnabled();
+}
+
+function privateOutputWarnings(requested: boolean | undefined, allowed: boolean): string[] {
+  return requested === true && !allowed ? [PRIVATE_OUTPUT_DENIED_WARNING] : [];
+}
+
+function appendWarnings<T extends { warnings?: string[] }>(payload: T, warnings: string[]): T {
+  if (warnings.length === 0) return payload;
+  return { ...payload, warnings: [...(payload.warnings ?? []), ...warnings] };
 }
 
 export function createMcpServer(version: string): McpServer {
@@ -169,9 +186,73 @@ export function createMcpServer(version: string): McpServer {
     async ({ machine_id }) => ({ content: [{ type: "text", text: JSON.stringify(manifestRemove(machine_id), null, 2) }] })
   );
 
-  server.tool("machines_agent_status", "List current machine agent heartbeats.", {}, async () => ({
-    content: [{ type: "text", text: JSON.stringify(getAgentStatus(), null, 2) }],
-  }));
+  server.tool(
+    "machines_agent_status",
+    "List current machine agent heartbeats.",
+    { private_metadata: z.boolean().optional().describe("Include private heartbeat metadata") },
+    async ({ private_metadata }) => {
+      const privateMetadata = privateMetadataAllowed(private_metadata);
+      const warnings = privateOutputWarnings(private_metadata, privateMetadata);
+      const agents = getAgentStatus(undefined, { privateMetadata });
+      return {
+        content: [{ type: "text", text: JSON.stringify(warnings.length > 0 ? { agents, warnings } : agents, null, 2) }],
+      };
+    }
+  );
+
+  server.tool(
+    "machines_daemon_status",
+    "List fleet daemon heartbeat status rows.",
+    { private_metadata: z.boolean().optional().describe("Include private heartbeat metadata") },
+    async ({ private_metadata }) => {
+      const privateMetadata = privateMetadataAllowed(private_metadata);
+      const warnings = privateOutputWarnings(private_metadata, privateMetadata);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            generated_at: new Date().toISOString(),
+            agents: getAgentStatus(undefined, { privateMetadata }),
+            ...(warnings.length > 0 ? { warnings } : {}),
+          }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
+    "machines_daemon_service_plan",
+    "Plan launchd/systemd lifecycle commands for the machines-agent daemon.",
+    {
+      action: z.enum(["install", "uninstall", "restart", "status", "logs"]).describe("Daemon lifecycle action"),
+      platform: z.enum(["macos", "linux"]).optional().describe("Target service platform"),
+      mode: z.enum(["user", "system"]).optional().describe("Service mode"),
+      service_name: z.string().optional().describe("Service name/label"),
+      executable: z.string().optional().describe("machines-agent executable path"),
+      interval_ms: z.number().optional().describe("Heartbeat interval in milliseconds"),
+      storage_push: z.boolean().optional().describe("Configure heartbeat storage push"),
+      doctor_summary: z.boolean().optional().describe("Configure lightweight doctor summaries in heartbeat metadata"),
+      private_metadata: z.boolean().optional().describe("Opt in to private heartbeat metadata"),
+      env: z.array(z.string()).optional().describe("Environment variable names to include as placeholders"),
+    },
+    async ({ action, platform, mode, service_name, executable, interval_ms, storage_push, doctor_summary, private_metadata, env }) => ({
+      content: [{
+        type: "text",
+        text: JSON.stringify(buildDaemonServicePlan({
+          action,
+          platform,
+          mode,
+          serviceName: service_name,
+          executable,
+          intervalMs: interval_ms,
+          storagePush: storage_push,
+          doctorSummary: doctor_summary,
+          privateMetadata: private_metadata,
+          env,
+        }), null, 2),
+      }],
+    })
+  );
 
   server.tool(
     "machines_setup_preview",
@@ -204,10 +285,16 @@ export function createMcpServer(version: string): McpServer {
   server.tool(
     "machines_topology",
     "Discover local, manifest, heartbeat, SSH, and Tailscale machine topology.",
-    { include_tailscale: z.boolean().optional().describe("Whether to probe tailscale status --json") },
-    async ({ include_tailscale }) => ({
-      content: [{ type: "text", text: JSON.stringify(discoverMachineTopology({ includeTailscale: include_tailscale !== false }), null, 2) }],
-    })
+    {
+      include_tailscale: z.boolean().optional().describe("Whether to probe tailscale status --json"),
+      private_metadata: z.boolean().optional().describe("Include private host/network route fields"),
+    },
+    async ({ include_tailscale, private_metadata }) => {
+      const privateMetadata = privateMetadataAllowed(private_metadata);
+      const warnings = privateOutputWarnings(private_metadata, privateMetadata);
+      const topology = redactTopologyForOutput(discoverMachineTopology({ includeTailscale: include_tailscale !== false }), { privateMetadata });
+      return { content: [{ type: "text", text: JSON.stringify(appendWarnings(topology, warnings), null, 2) }] };
+    }
   );
 
   server.tool(
@@ -312,10 +399,17 @@ export function createMcpServer(version: string): McpServer {
   server.tool(
     "machines_route_resolve",
     "Resolve the best route for a machine using manifest, heartbeat, SSH, LAN, and Tailscale topology.",
-    { machine_id: z.string().describe("Machine identifier"), include_tailscale: z.boolean().optional().describe("Whether to probe tailscale status --json") },
-    async ({ machine_id, include_tailscale }) => ({
-      content: [{ type: "text", text: JSON.stringify(resolveMachineRoute(machine_id, { includeTailscale: include_tailscale !== false }), null, 2) }],
-    })
+    {
+      machine_id: z.string().describe("Machine identifier"),
+      include_tailscale: z.boolean().optional().describe("Whether to probe tailscale status --json"),
+      private_metadata: z.boolean().optional().describe("Include private route targets"),
+    },
+    async ({ machine_id, include_tailscale, private_metadata }) => {
+      const privateMetadata = privateMetadataAllowed(private_metadata);
+      const warnings = privateOutputWarnings(private_metadata, privateMetadata);
+      const route = redactRouteForOutput(resolveMachineRoute(machine_id, { includeTailscale: include_tailscale !== false }), { privateMetadata });
+      return { content: [{ type: "text", text: JSON.stringify(appendWarnings(route, warnings), null, 2) }] };
+    }
   );
 
   server.tool(

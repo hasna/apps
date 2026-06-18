@@ -216,8 +216,10 @@ async function discoverPeers(): Promise<{ host: string; port: number }[]> {
     // tailscale not available
   }
 
-  // Also add hardcoded known peers
-  const knownPeers = ["100.82.44.120", "100.100.226.69", "100.71.123.34", "100.85.234.92"];
+  const knownPeers = (process.env["HASNA_MACHINES_CLIPBOARD_PEERS"] || "")
+    .split(",")
+    .map((peer) => peer.trim())
+    .filter(Boolean);
   for (const ip of knownPeers) {
     if (!peers.some((p) => p.host === ip)) {
       peers.push({ host: ip, port: config.port });

@@ -1,6 +1,11 @@
 import type { MachineManifest } from "./types.js";
 
 export const REDACTED_VALUE = "[redacted]";
+export const PRIVATE_METADATA_ENV = "HASNA_MACHINES_PRIVATE_METADATA";
+export const PRIVATE_METADATA_FALLBACK_ENV = "MACHINES_PRIVATE_METADATA";
+export const PRIVATE_OUTPUT_ENV = "HASNA_MACHINES_ALLOW_PRIVATE_OUTPUT";
+export const PRIVATE_OUTPUT_FALLBACK_ENV = "MACHINES_ALLOW_PRIVATE_OUTPUT";
+export const PRIVATE_OUTPUT_DENIED_WARNING = `private_output_denied:set ${PRIVATE_OUTPUT_ENV}=1 to allow private metadata output`;
 
 const SENSITIVE_KEY_PATTERN = /(password|passwd|token|credential|private[_-]?key|privateKey|api[_-]?key|github.*key|pem|secret)/i;
 const SECRET_REFERENCE_KEY_PATTERN = /(secret(ref(erence)?|key)?|secretRef|secretKey)$/i;
@@ -13,8 +18,23 @@ const SENSITIVE_VALUE_PATTERNS = [
   /\bsk-[A-Za-z0-9_-]{20,}\b/,
 ];
 
+const IPV4_PATTERN = /\b(?:10|127|169\.254|172\.(?:1[6-9]|2\d|3[0-1])|192\.168|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7]))(?:\.\d{1,3}){2}\b/g;
+const IPV6_PATTERN = /\b(?:fc|fd|fe80)[0-9a-f:]*:[0-9a-f:]+\b/gi;
+const DATABASE_URL_PATTERN = /\b(?:postgres(?:ql)?|mysql|mariadb|redis|mongodb|s3):\/\/[^\s"'<>]+/gi;
+const PRIVATE_HOST_PATTERN = /\b(?:[A-Za-z0-9._%+-]+@)?[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*(?:\.tailnet(?:\.[A-Za-z0-9-]+)*|\.ts\.net|\.private(?:\.[A-Za-z0-9-]+)*|\.internal|\.local)\b/gi;
+
 export function isSensitiveKey(key: string): boolean {
   return SENSITIVE_KEY_PATTERN.test(key);
+}
+
+export function isPrivateMetadataEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const value = env[PRIVATE_METADATA_ENV] ?? env[PRIVATE_METADATA_FALLBACK_ENV];
+  return ["1", "true", "yes", "on", "private"].includes(String(value ?? "").trim().toLowerCase());
+}
+
+export function isPrivateOutputEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const value = env[PRIVATE_OUTPUT_ENV] ?? env[PRIVATE_OUTPUT_FALLBACK_ENV];
+  return ["1", "true", "yes", "on", "private"].includes(String(value ?? "").trim().toLowerCase());
 }
 
 function isSecretReferenceKey(key: string): boolean {
@@ -34,6 +54,22 @@ export function redactPath(value: string): string {
     .replace(/\/home\/[^/\s]+/g, "/home/<user>")
     .replace(/\/Users\/[^/\s]+/g, "/Users/<user>")
     .replace(/[A-Za-z]:\\Users\\[^\\\s]+/g, "C:\\Users\\<user>");
+}
+
+export function redactNetworkValue(value: string): string {
+  if (!value.trim()) return value;
+  return REDACTED_VALUE;
+}
+
+export function redactErrorMessage(value: string): string {
+  return redactPath(value)
+    .replace(DATABASE_URL_PATTERN, (match) => {
+      const scheme = match.match(/^([a-z][a-z0-9+.-]*:\/\/)/i)?.[1] ?? "";
+      return `${scheme}${REDACTED_VALUE}`;
+    })
+    .replace(IPV4_PATTERN, REDACTED_VALUE)
+    .replace(IPV6_PATTERN, REDACTED_VALUE)
+    .replace(PRIVATE_HOST_PATTERN, REDACTED_VALUE);
 }
 
 export function redactPrivateRef(value: string): string {

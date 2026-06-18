@@ -37,7 +37,7 @@ function topologyWith(entry: Record<string, unknown>) {
         last_heartbeat_at: null,
         tailscale: {
           dns_name: "demo-mac-005.tailnet.example",
-          ips: ["100.122.241.64"],
+          ips: ["203.0.113.64"],
           online: true,
           active: true,
           last_seen: null,

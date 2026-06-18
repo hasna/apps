@@ -16,6 +16,22 @@ export class SqliteAdapter {
 
 let adapter: SqliteAdapter | null = null;
 
+const AGENT_HEARTBEAT_COLUMNS: Array<{ name: string; definition: string }> = [
+  { name: "daemon_version", definition: "TEXT" },
+  { name: "agent_mode", definition: "TEXT" },
+  { name: "platform", definition: "TEXT" },
+  { name: "os_version", definition: "TEXT" },
+  { name: "os_build", definition: "TEXT" },
+  { name: "arch", definition: "TEXT" },
+  { name: "uptime_seconds", definition: "INTEGER" },
+  { name: "tool_versions_json", definition: "TEXT" },
+  { name: "tailscale_json", definition: "TEXT" },
+  { name: "storage_sync_status", definition: "TEXT" },
+  { name: "storage_sync_last_error", definition: "TEXT" },
+  { name: "doctor_summary_json", definition: "TEXT" },
+  { name: "private_metadata", definition: "INTEGER NOT NULL DEFAULT 0" },
+];
+
 function createTables(db: Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS agent_heartbeats (
@@ -23,9 +39,23 @@ function createTables(db: Database): void {
       pid INTEGER NOT NULL,
       status TEXT NOT NULL,
       updated_at TEXT NOT NULL,
+      daemon_version TEXT,
+      agent_mode TEXT,
+      platform TEXT,
+      os_version TEXT,
+      os_build TEXT,
+      arch TEXT,
+      uptime_seconds INTEGER,
+      tool_versions_json TEXT,
+      tailscale_json TEXT,
+      storage_sync_status TEXT,
+      storage_sync_last_error TEXT,
+      doctor_summary_json TEXT,
+      private_metadata INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (machine_id, pid)
     )
   `);
+  migrateAgentHeartbeats(db);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS setup_runs (
@@ -48,6 +78,15 @@ function createTables(db: Database): void {
       updated_at TEXT NOT NULL
     )
   `);
+}
+
+function migrateAgentHeartbeats(db: Database): void {
+  const columns = db.query("PRAGMA table_info(agent_heartbeats)").all() as Array<{ name: string }>;
+  const existing = new Set(columns.map((column) => column.name));
+  for (const column of AGENT_HEARTBEAT_COLUMNS) {
+    if (existing.has(column.name)) continue;
+    db.exec(`ALTER TABLE agent_heartbeats ADD COLUMN ${column.name} ${column.definition}`);
+  }
 }
 
 export function getAdapter(path = getDbPath()): SqliteAdapter {
@@ -84,15 +123,85 @@ export function closeDb(): void {
   }
 }
 
-export function upsertHeartbeat(machineId: string, pid = process.pid, status: "online" | "offline" = "online"): void {
+export interface HeartbeatUpsertMetadata {
+  daemonVersion?: string | null;
+  agentMode?: string | null;
+  platform?: string | null;
+  osVersion?: string | null;
+  osBuild?: string | null;
+  arch?: string | null;
+  uptimeSeconds?: number | null;
+  toolVersions?: Record<string, unknown> | null;
+  tailscale?: Record<string, unknown> | null;
+  storageSyncStatus?: string | null;
+  storageSyncLastError?: string | null;
+  doctorSummary?: Record<string, unknown> | null;
+  privateMetadata?: boolean;
+}
+
+export function upsertHeartbeat(
+  machineId: string,
+  pid = process.pid,
+  status: "online" | "offline" = "online",
+  metadata: HeartbeatUpsertMetadata = {},
+): void {
   const db = getDb();
   db.query(
-    `INSERT INTO agent_heartbeats (machine_id, pid, status, updated_at)
-     VALUES (?, ?, ?, ?)
+    `INSERT INTO agent_heartbeats (
+       machine_id,
+       pid,
+       status,
+       updated_at,
+       daemon_version,
+       agent_mode,
+       platform,
+       os_version,
+       os_build,
+       arch,
+       uptime_seconds,
+       tool_versions_json,
+       tailscale_json,
+       storage_sync_status,
+       storage_sync_last_error,
+       doctor_summary_json,
+       private_metadata
+     )
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(machine_id, pid) DO UPDATE SET
        status = excluded.status,
-       updated_at = excluded.updated_at`
-  ).run(machineId, pid, status, new Date().toISOString());
+       updated_at = excluded.updated_at,
+       daemon_version = excluded.daemon_version,
+       agent_mode = excluded.agent_mode,
+       platform = excluded.platform,
+       os_version = excluded.os_version,
+       os_build = excluded.os_build,
+       arch = excluded.arch,
+       uptime_seconds = excluded.uptime_seconds,
+       tool_versions_json = excluded.tool_versions_json,
+       tailscale_json = excluded.tailscale_json,
+       storage_sync_status = excluded.storage_sync_status,
+       storage_sync_last_error = excluded.storage_sync_last_error,
+       doctor_summary_json = excluded.doctor_summary_json,
+       private_metadata = excluded.private_metadata`
+  ).run(
+    machineId,
+    pid,
+    status,
+    new Date().toISOString(),
+    metadata.daemonVersion ?? null,
+    metadata.agentMode ?? null,
+    metadata.platform ?? null,
+    metadata.osVersion ?? null,
+    metadata.osBuild ?? null,
+    metadata.arch ?? null,
+    metadata.uptimeSeconds == null ? null : Math.max(0, Math.floor(metadata.uptimeSeconds)),
+    metadata.toolVersions ? JSON.stringify(metadata.toolVersions) : null,
+    metadata.tailscale ? JSON.stringify(metadata.tailscale) : null,
+    metadata.storageSyncStatus ?? null,
+    metadata.storageSyncLastError ?? null,
+    metadata.doctorSummary ? JSON.stringify(metadata.doctorSummary) : null,
+    metadata.privateMetadata ? 1 : 0,
+  );
 }
 
 export function getLocalMachineId(): string {
@@ -104,6 +213,19 @@ export interface StoredHeartbeat {
   pid: number;
   status: string;
   updated_at: string;
+  daemon_version: string | null;
+  agent_mode: string | null;
+  platform: string | null;
+  os_version: string | null;
+  os_build: string | null;
+  arch: string | null;
+  uptime_seconds: number | null;
+  tool_versions_json: string | null;
+  tailscale_json: string | null;
+  storage_sync_status: string | null;
+  storage_sync_last_error: string | null;
+  doctor_summary_json: string | null;
+  private_metadata: number;
 }
 
 export function listHeartbeats(machineId?: string): StoredHeartbeat[] {
@@ -111,7 +233,7 @@ export function listHeartbeats(machineId?: string): StoredHeartbeat[] {
   if (machineId) {
     return db
       .query(
-        `SELECT machine_id, pid, status, updated_at
+        `SELECT *
          FROM agent_heartbeats
          WHERE machine_id = ?
          ORDER BY updated_at DESC`
@@ -121,7 +243,7 @@ export function listHeartbeats(machineId?: string): StoredHeartbeat[] {
 
   return db
     .query(
-      `SELECT machine_id, pid, status, updated_at
+      `SELECT *
        FROM agent_heartbeats
        ORDER BY updated_at DESC`
     )

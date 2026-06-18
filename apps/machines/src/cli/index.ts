@@ -40,7 +40,7 @@ import { resolveScreenTarget, buildScreenCommand, buildScreenEnableCommand, reso
 import { buildSyncPlan, runSync } from "../commands/sync.js";
 import { getStatus } from "../commands/status.js";
 import { repairWorkspaceManifestMappings, type WorkspaceManifestRepairResult } from "../commands/workspace.js";
-import { discoverMachineTopology, resolveMachineRoute, resolveMachineWorkspace } from "../topology.js";
+import { discoverMachineTopology, redactRouteForOutput, redactTopologyForOutput, resolveMachineRoute, resolveMachineWorkspace } from "../topology.js";
 import {
   checkMachineCompatibility,
   type CompatibilityCheck,
@@ -49,6 +49,13 @@ import {
   type CompatibilityWorkspaceSpec,
 } from "../compatibility.js";
 import { runDoctor } from "../commands/doctor.js";
+import {
+  buildDaemonServicePlan,
+  runDaemonServicePlan,
+  type DaemonServiceAction,
+  type DaemonServiceOptions,
+  type DaemonServicePlan,
+} from "../commands/daemon.js";
 import { runSelfTest } from "../commands/self-test.js";
 import { getServeInfo, startDashboardServer } from "../commands/serve.js";
 import { clearClipboardHistory, getDefaultClipboardConfig, getOrCreateClipboardKey, getClipboardStatus, readClipboardConfig, readClipboardHistory, writeClipboardConfig, getConfigPath } from "../commands/clipboard.js";
@@ -329,9 +336,58 @@ function renderFleetStatus(status: FleetStatus): string {
     ]),
     "",
     ...status.machines.map((machine) =>
-      `${machine.machineId.padEnd(18)} ${machine.platform || "unknown"} ${machine.heartbeatStatus} ${machine.lastHeartbeatAt || "—"}`
+      `${machine.machineId.padEnd(18)} ${machine.platform || "unknown"} ${machine.heartbeatStatus} ${machine.agentMode || "agent:unknown"} ${machine.storageSyncStatus || "storage:unknown"} ${machine.lastHeartbeatAt || "—"}`
     ),
   ].join("\n");
+}
+
+function renderShellCommand(command: { program: string; args: string[]; sudo: boolean }): string {
+  const parts = command.sudo ? ["sudo", command.program, ...command.args] : [command.program, ...command.args];
+  return parts.map((part) => /^[A-Za-z0-9_@%+=:,./$-]+$/.test(part) ? part : JSON.stringify(part)).join(" ");
+}
+
+function renderDaemonPlan(plan: DaemonServicePlan): string {
+  const files = plan.files.map((file) => `${file.path} (${file.mode})`);
+  const commands = plan.commands.map((command) => `${command.mutates ? "apply" : "read"} ${command.id}: ${renderShellCommand(command)}`);
+  return [
+    renderKeyValueTable([
+      ["action", plan.action],
+      ["platform", plan.platform],
+      ["mode", plan.mode],
+      ["service", plan.serviceName],
+      ["executable", plan.executable],
+      ["interval", `${plan.intervalMs}ms`],
+      ["warnings", plan.warnings.join(", ") || "none"],
+    ]),
+    renderList("files", files),
+    renderList("commands", commands),
+    renderList("manual steps", plan.manualSteps),
+  ].join("\n");
+}
+
+function parseDaemonOptions(action: DaemonServiceAction, options: {
+  platform?: string;
+  mode?: string;
+  serviceName?: string;
+  executable?: string;
+  intervalMs?: string;
+  storagePush?: boolean;
+  doctorSummary?: boolean;
+  privateMetadata?: boolean;
+  env?: string[];
+}): DaemonServiceOptions {
+  return {
+    action,
+    platform: options.platform as DaemonServiceOptions["platform"],
+    mode: options.mode as DaemonServiceOptions["mode"],
+    serviceName: options.serviceName,
+    executable: options.executable,
+    intervalMs: options.intervalMs ? parseIntegerOption(options.intervalMs, "interval-ms", { min: 1 }) : undefined,
+    storagePush: options.storagePush,
+    doctorSummary: options.doctorSummary,
+    privateMetadata: options.privateMetadata,
+    env: options.env,
+  };
 }
 
 program
@@ -356,6 +412,53 @@ eventsCommand.description("Emit, list, and replay shared events");
 const runtimeCommand = program.command("runtime").description("Watch runtime conditions and emit shared events");
 const clipboardCommand = program.command("clipboard").description("Real-time clipboard sync across fleet machines");
 const installClaudeCommand = program.command("install-claude").description("Install or inspect Claude, Codex, and Gemini CLIs");
+const daemonCommand = program.command("daemon").description("Install and inspect the machines-agent fleet daemon service");
+
+function addDaemonLifecycleCommand(action: DaemonServiceAction, description: string): void {
+  daemonCommand
+    .command(action)
+    .description(description)
+    .option("--platform <platform>", "Service platform to plan for (macos, linux)")
+    .option("--mode <mode>", "Service mode (user, system)", "user")
+    .option("--service-name <name>", "Service name/label", "machines-agent")
+    .option("--executable <path>", "Absolute machines-agent executable path")
+    .option("--interval-ms <ms>", "Heartbeat interval in milliseconds")
+    .option("--storage-push", "Configure daemon to push heartbeat rows to storage", false)
+    .option("--doctor-summary", "Configure daemon to include lightweight doctor summaries", false)
+    .option("--private-metadata", "Opt in to private host/network metadata in heartbeat rows", false)
+    .option("--env <name...>", "Environment variable names to include as placeholders")
+    .option("--apply", "Write service files and run planned commands", false)
+    .option("--yes", "Confirm execution when using --apply", false)
+    .option("-j, --json", "Print JSON output", false)
+    .action((options: {
+      platform?: string;
+      mode?: string;
+      serviceName?: string;
+      executable?: string;
+      intervalMs?: string;
+      storagePush?: boolean;
+      doctorSummary?: boolean;
+      privateMetadata?: boolean;
+      env?: string[];
+      apply?: boolean;
+      yes?: boolean;
+      json?: boolean;
+    }) => {
+      const plan = buildDaemonServicePlan(parseDaemonOptions(action, options));
+      const result = runDaemonServicePlan(plan, { apply: options.apply, yes: options.yes });
+      if (options.json || options.apply) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(renderDaemonPlan(plan));
+    });
+}
+
+addDaemonLifecycleCommand("install", "Plan or install the machines-agent daemon service");
+addDaemonLifecycleCommand("uninstall", "Plan or uninstall the machines-agent daemon service");
+addDaemonLifecycleCommand("restart", "Plan or restart the machines-agent daemon service");
+addDaemonLifecycleCommand("status", "Plan a daemon service status command");
+addDaemonLifecycleCommand("logs", "Plan a daemon service log command");
 
 manifestCommand.command("init").description("Create an empty fleet manifest").action(() => {
   console.log(manifestInit());
@@ -552,9 +655,11 @@ program
   .command("topology")
   .description("Discover local, manifest, heartbeat, SSH, and Tailscale machine topology")
   .option("--no-tailscale", "Skip tailscale status probing")
+  .option("--private-metadata", "Print private host/network route fields", false)
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { tailscale?: boolean; json?: boolean }) => {
-    const topology = discoverMachineTopology({ includeTailscale: options.tailscale !== false });
+  .action((options: { tailscale?: boolean; privateMetadata?: boolean; json?: boolean }) => {
+    const rawTopology = discoverMachineTopology({ includeTailscale: options.tailscale !== false });
+    const topology = redactTopologyForOutput(rawTopology, { privateMetadata: options.privateMetadata });
     if (options.json) {
       console.log(JSON.stringify(topology, null, 2));
       return;
@@ -1054,17 +1159,19 @@ program
   .description("Resolve the best route for a machine")
   .requiredOption("--machine <id>", "Machine identifier")
   .option("--no-tailscale", "Skip tailscale status probing")
+  .option("--private-metadata", "Print private route targets", false)
   .option("--cmd <command>", "Remote command to run")
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine: string; tailscale?: boolean; cmd?: string; json?: boolean }) => {
+  .action((options: { machine: string; tailscale?: boolean; privateMetadata?: boolean; cmd?: string; json?: boolean }) => {
     const topology = discoverMachineTopology({ includeTailscale: options.tailscale !== false });
     const resolved = resolveMachineRoute(options.machine, { topology });
+    const publicResolved = redactRouteForOutput(resolved, { privateMetadata: options.privateMetadata });
     const command = resolved.ok && resolved.target
       ? resolved.route === "local"
         ? options.cmd ?? null
         : buildSshCommand(options.machine, options.cmd, { topology })
       : null;
-    const payload = { ...resolved, command };
+    const payload = { ...publicResolved, command: options.privateMetadata ? command : command ? "[redacted]" : null };
     if (options.json) {
       console.log(JSON.stringify(payload, null, 2));
       return;
@@ -1074,7 +1181,7 @@ program
       process.exitCode = 1;
       return;
     }
-    console.log(command ?? `${resolved.route}:${resolved.target}`);
+    console.log(options.privateMetadata ? command ?? `${resolved.route}:${resolved.target}` : `${publicResolved.route}:${publicResolved.target ?? "unresolved"}`);
   });
 
 program

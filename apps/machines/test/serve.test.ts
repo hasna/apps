@@ -6,6 +6,8 @@ import { EventsClient } from "@hasna/events";
 import { manifestAdd, manifestInit } from "../src/commands/manifest.js";
 import { addNotificationChannel } from "../src/commands/notifications.js";
 import { getServeInfo, renderDashboardHtml, startDashboardServer } from "../src/commands/serve.js";
+import { upsertHeartbeat } from "../src/db.js";
+import { PRIVATE_OUTPUT_DENIED_WARNING } from "../src/redaction.js";
 
 describe("serve", () => {
   afterEach(() => {
@@ -13,6 +15,7 @@ describe("serve", () => {
     delete process.env["HASNA_MACHINES_NOTIFICATIONS_PATH"];
     delete process.env["HASNA_MACHINES_DB_PATH"];
     delete process.env["HASNA_MACHINES_MACHINE_ID"];
+    delete process.env["HASNA_MACHINES_ALLOW_PRIVATE_OUTPUT"];
     delete process.env["HASNA_EVENTS_DIR"];
   });
 
@@ -21,6 +24,9 @@ describe("serve", () => {
     expect(info.host).toBe("0.0.0.0");
     expect(info.port).toBe(7676);
     expect(info.routes).toContain("/api/status");
+    expect(info.routes).toContain("/api/topology");
+    expect(info.routes).toContain("/api/routes");
+    expect(info.routes).toContain("/api/daemon/status");
     expect(info.routes).toContain("/api/doctor");
   });
 
@@ -44,9 +50,22 @@ describe("serve", () => {
     manifestInit();
     manifestAdd({
       id: "demo-node-01",
+      hostname: "demo-node-01.private.example",
+      sshAddress: "operator@demo-node-01.private.example",
+      tailscaleName: "demo-node-01.tailnet.example",
       platform: "linux",
       workspacePath: "/home/operator/workspace",
       apps: [{ name: "shell", manager: "custom", packageName: "sh" }],
+    });
+    upsertHeartbeat("demo-node-01", 42, "online", {
+      agentMode: "daemon",
+      tailscale: { selfDnsName: "demo-node-01.tailnet.example", selfTailscaleIps: ["100.64.0.7"] },
+      storageSyncLastError: "postgres://user:pass@10.0.0.5:5432/machines failed",
+      doctorSummary: {
+        summary: { ok: 1, warn: 1, fail: 0 },
+        blockers: [{ detail: "operator@demo-node-01.private.example 100.64.0.7" }],
+      },
+      privateMetadata: true,
     });
     addNotificationChannel({
       id: "local",
@@ -69,6 +88,13 @@ describe("serve", () => {
     const base = `http://127.0.0.1:${server.port}`;
 
     const doctor = await fetch(`${base}/api/doctor`).then((response) => response.json());
+    const topology = await fetch(`${base}/api/topology?tailscale=false`).then((response) => response.json());
+    const deniedPrivateTopology = await fetch(`${base}/api/topology?tailscale=false&privateMetadata=true`).then((response) => response.json());
+    const deniedPrivateDaemon = await fetch(`${base}/api/daemon/status?privateMetadata=true`).then((response) => response.json());
+    process.env["HASNA_MACHINES_ALLOW_PRIVATE_OUTPUT"] = "1";
+    const privateTopology = await fetch(`${base}/api/topology?tailscale=false&privateMetadata=true`).then((response) => response.json());
+    const routes = await fetch(`${base}/api/routes?tailscale=false`).then((response) => response.json());
+    const daemon = await fetch(`${base}/api/daemon/status`).then((response) => response.json());
     const selfTest = await fetch(`${base}/api/self-test`).then((response) => response.json());
     const apps = await fetch(`${base}/api/apps/status`).then((response) => response.json());
     const webhooks = await fetch(`${base}/api/webhooks`).then((response) => response.json());
@@ -87,6 +113,18 @@ describe("serve", () => {
     server.stop(true);
 
     expect(Array.isArray(doctor.checks)).toBe(true);
+    expect(Array.isArray(topology.machines)).toBe(true);
+    expect(Array.isArray(routes.routes)).toBe(true);
+    expect(Array.isArray(daemon.agents)).toBe(true);
+    expect(JSON.stringify(topology)).not.toContain("demo-node-01.tailnet.example");
+    expect(JSON.stringify(topology)).not.toContain("100.64.0.7");
+    expect(JSON.stringify(routes)).not.toContain("operator@demo-node-01.private.example");
+    expect(JSON.stringify(daemon)).not.toContain("postgres://user:pass");
+    expect(JSON.stringify(daemon)).not.toContain("100.64.0.7");
+    expect(deniedPrivateTopology.warnings).toContain(PRIVATE_OUTPUT_DENIED_WARNING);
+    expect(JSON.stringify(deniedPrivateTopology)).not.toContain("demo-node-01.tailnet.example");
+    expect(deniedPrivateDaemon.warnings).toContain(PRIVATE_OUTPUT_DENIED_WARNING);
+    expect(JSON.stringify(privateTopology)).toContain("demo-node-01.tailnet.example");
     expect(Array.isArray(selfTest.checks)).toBe(true);
     expect(Array.isArray(apps.apps)).toBe(true);
     expect(webhooks[0].id).toBe("events-local");

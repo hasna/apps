@@ -11,10 +11,20 @@ function normalizeParams(params: unknown[]): unknown[] {
   return flat.map((value) => value === undefined ? null : value);
 }
 
-function sslConfigFor(connectionString: string): { rejectUnauthorized: boolean } | undefined {
-  return connectionString.includes("sslmode=require") || connectionString.includes("ssl=true")
-    ? { rejectUnauthorized: false }
-    : undefined;
+export function sslConfigFor(connectionString: string): { rejectUnauthorized: boolean } | undefined {
+  let url: URL;
+  try {
+    url = new URL(connectionString);
+  } catch {
+    return undefined;
+  }
+  const sslMode = url.searchParams.get("sslmode")?.toLowerCase();
+  const ssl = url.searchParams.get("ssl")?.toLowerCase();
+  if (sslMode === "disable" || ssl === "false") return undefined;
+  if (sslMode === "no-verify" || process.env["HASNA_MACHINES_DATABASE_SSL_REJECT_UNAUTHORIZED"] === "0") {
+    return { rejectUnauthorized: false };
+  }
+  return sslMode || ssl === "true" ? { rejectUnauthorized: true } : undefined;
 }
 
 export class PgAdapterAsync {
