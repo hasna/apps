@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, readFileSync, statSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { delimiter, dirname } from "node:path";
 import { platform as osPlatform } from "node:os";
 
 export type DaemonServicePlatform = "macos" | "linux";
@@ -562,15 +562,27 @@ WantedBy=${options.mode === "system" ? "multi-user.target" : "default.target"}
 }
 
 function daemonProgramArguments(options: ResolvedDaemonServiceOptions): string[] {
-  const bunRuntime = siblingBunRuntime(options.executable);
+  const bunRuntime = bunRuntimeForExecutable(options.executable);
   const base = bunRuntime ? [bunRuntime, options.executable] : [options.executable];
   return [...base, "--interval-ms", String(options.intervalMs)];
 }
 
-function siblingBunRuntime(executable: string): string | null {
+function bunRuntimeForExecutable(executable: string): string | null {
   if (!isBunShebangScript(executable)) return null;
-  const candidate = `${dirname(executable)}/bun`;
-  return isExecutableFile(candidate) ? candidate : null;
+  for (const candidate of bunRuntimeCandidates(executable)) {
+    if (isExecutableFile(candidate)) return candidate;
+  }
+  return null;
+}
+
+function bunRuntimeCandidates(executable: string): string[] {
+  const candidates = [
+    `${dirname(executable)}/bun`,
+    process.env["BUN_INSTALL"] ? `${process.env["BUN_INSTALL"]}/bin/bun` : null,
+    process.env["HOME"] ? `${process.env["HOME"]}/.bun/bin/bun` : null,
+    ...(process.env["PATH"] ?? "").split(delimiter).filter(Boolean).map((entry) => `${entry}/bun`),
+  ].filter((value): value is string => Boolean(value));
+  return [...new Set(candidates)];
 }
 
 function isBunShebangScript(executable: string): boolean {

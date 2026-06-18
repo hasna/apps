@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -135,6 +135,36 @@ describe("daemon service lifecycle planning", () => {
     });
 
     expect(plan.files[0]?.content).toContain(`ExecStart=${bun} ${agent} --interval-ms 30000`);
+  });
+
+  test("systemd resolves non-sibling Bun runtime for Bun shims", () => {
+    const previousBunInstall = process.env["BUN_INSTALL"];
+    const dir = mkdtempSync(join(tmpdir(), "machines-daemon-bun-runtime-"));
+    const bunInstall = join(dir, "bun-install");
+    const runtimeDir = join(bunInstall, "bin");
+    const agentDir = join(dir, "global-bin");
+    mkdirSync(runtimeDir, { recursive: true });
+    mkdirSync(agentDir, { recursive: true });
+    const bun = join(runtimeDir, "bun");
+    const agent = join(agentDir, "machines-agent");
+    writeFileSync(bun, "#!/bin/sh\n", "utf8");
+    writeFileSync(agent, "#!/usr/bin/env bun\n", "utf8");
+    chmodSync(bun, 0o755);
+    chmodSync(agent, 0o755);
+
+    process.env["BUN_INSTALL"] = bunInstall;
+    try {
+      const plan = buildDaemonInstallPlan({
+        platform: "linux",
+        mode: "user",
+        executable: agent,
+      });
+
+      expect(plan.files[0]?.content).toContain(`ExecStart=${bun} ${agent} --interval-ms 30000`);
+    } finally {
+      if (previousBunInstall === undefined) delete process.env["BUN_INSTALL"];
+      else process.env["BUN_INSTALL"] = previousBunInstall;
+    }
   });
 
   test("does not invoke sibling bun for non-Bun executables", () => {
