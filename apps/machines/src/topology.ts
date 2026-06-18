@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { arch, hostname, platform, userInfo } from "node:os";
 import { spawnSync } from "node:child_process";
-import { getLocalMachineId, listHeartbeats } from "./db.js";
+import { getLocalMachineId, latestHeartbeatByMachine, listHeartbeats } from "./db.js";
 import { readManifest } from "./manifests.js";
 import { getManifestPath } from "./paths.js";
 import { REDACTED_VALUE, publicMetadataKeys, redactErrorMessage, redactMetadata, redactSensitiveValue } from "./redaction.js";
@@ -629,7 +629,7 @@ export function discoverMachineTopology(options: MachineTopologyOptions = {}): M
   const warnings: string[] = [];
   const manifest = readManifest();
   const heartbeats = listHeartbeats();
-  const heartbeatByMachine = new Map(heartbeats.map((heartbeat) => [heartbeat.machine_id, heartbeat]));
+  const heartbeatByMachine = latestHeartbeatByMachine(heartbeats);
   const localMachineId = getLocalMachineId();
   const peers = options.includeTailscale === false ? new Map<string, TailscalePeer>() : loadTailscalePeers(runner, warnings);
   const machineIds = new Set<string>([

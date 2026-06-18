@@ -250,6 +250,16 @@ export function listHeartbeats(machineId?: string): StoredHeartbeat[] {
     .all() as StoredHeartbeat[];
 }
 
+export function latestHeartbeatByMachine(heartbeats: readonly StoredHeartbeat[]): Map<string, StoredHeartbeat> {
+  const byMachine = new Map<string, StoredHeartbeat>();
+  for (const heartbeat of heartbeats) {
+    if (!byMachine.has(heartbeat.machine_id)) {
+      byMachine.set(heartbeat.machine_id, heartbeat);
+    }
+  }
+  return byMachine;
+}
+
 export function countRuns(table: "setup_runs" | "sync_runs"): number {
   const db = getDb();
   const row = db.query(`SELECT COUNT(*) as count FROM ${table}`).get() as { count: number };

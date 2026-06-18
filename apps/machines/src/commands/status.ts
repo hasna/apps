@@ -1,4 +1,4 @@
-import { countRuns, getLocalMachineId, listHeartbeats } from "../db.js";
+import { countRuns, getLocalMachineId, latestHeartbeatByMachine, listHeartbeats } from "../db.js";
 import { readManifest } from "../manifests.js";
 import { getManifestPath, getDbPath, getNotificationsPath } from "../paths.js";
 import type { FleetStatus } from "../types.js";
@@ -16,7 +16,7 @@ function parseJsonObject(value: string | null | undefined): Record<string, unkno
 export function getStatus(): FleetStatus {
   const manifest = readManifest();
   const heartbeats = listHeartbeats();
-  const heartbeatByMachine = new Map(heartbeats.map((heartbeat) => [heartbeat.machine_id, heartbeat]));
+  const heartbeatByMachine = latestHeartbeatByMachine(heartbeats);
   const machineIds = new Set([
     ...manifest.machines.map((machine) => machine.id),
     ...heartbeats.map((heartbeat) => heartbeat.machine_id),
