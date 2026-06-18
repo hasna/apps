@@ -41,6 +41,8 @@ describe("daemon service lifecycle planning", () => {
     expect(plan.files[0]?.content).toContain("&lt;set:HASNA_MACHINES_DATABASE_URL&gt;");
     expect(plan.files[0]?.content).toContain("<key>HASNA_MACHINES_AGENT_STORAGE_PUSH_RETRIES</key>");
     expect(plan.files[0]?.content).toContain("<string>2</string>");
+    expect(plan.files[0]?.content).toContain(`<string>${process.env["HOME"] ?? "/tmp"}/Library/Logs/machines-agent.fixture.out.log</string>`);
+    expect(plan.files[0]?.content).not.toContain("<string>$HOME/Library/Logs/");
     expect(plan.files[0]?.content).toContain("<key>HASNA_MACHINES_AGENT_DOCTOR_SUMMARY</key>");
     expect(plan.files[0]?.content).toContain("<key>HASNA_MACHINES_PRIVATE_METADATA</key>");
     expect(plan.files[0]?.content).toContain("<string>1</string>");

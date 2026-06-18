@@ -571,7 +571,7 @@ function launchdPlistPath(options: ResolvedDaemonServiceOptions): string {
 function launchdLogPath(options: ResolvedDaemonServiceOptions, stream: "out" | "err"): string {
   const fileName = `${options.serviceId}.${stream}.log`;
   if (options.mode === "system") return `/var/log/${fileName}`;
-  return `$HOME/Library/Logs/${fileName}`;
+  return `${process.env["HOME"] ?? "/tmp"}/Library/Logs/${fileName}`;
 }
 
 function systemdUnitName(options: ResolvedDaemonServiceOptions): string {
