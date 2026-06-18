@@ -1,10 +1,10 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export function getPackageVersion(): string {
   try {
-    const here = dirname(fileURLToPath(import.meta.url));
+    const here = dirname(realpathSync(fileURLToPath(import.meta.url)));
     const candidates = [join(here, "..", "package.json"), join(here, "..", "..", "package.json")];
     const pkgPath = candidates.find((candidate) => existsSync(candidate));
     if (!pkgPath) {
