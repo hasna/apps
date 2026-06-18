@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -97,6 +97,26 @@ describe("daemon service lifecycle planning", () => {
     });
 
     expect(plan.files[0]?.content).toContain('Environment="PATH=/home/operator/.bun/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"');
+  });
+
+  test("launchd invokes sibling bun runtime for Bun shims", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-daemon-bun-shim-"));
+    const bun = join(dir, "bun");
+    const agent = join(dir, "machines-agent");
+    writeFileSync(bun, "#!/bin/sh\n", "utf8");
+    writeFileSync(agent, "#!/usr/bin/env bun\n", "utf8");
+    chmodSync(bun, 0o755);
+    chmodSync(agent, 0o755);
+
+    const plan = buildDaemonInstallPlan({
+      platform: "macos",
+      mode: "user",
+      executable: agent,
+    });
+
+    expect(plan.files[0]?.content).toContain(`<string>${bun}</string>`);
+    expect(plan.files[0]?.content).toContain(`<string>${agent}</string>`);
+    expect(plan.files[0]?.content).toContain("<string>--interval-ms</string>");
   });
 
   test("plans uninstall, restart, status, and logs without install files", () => {

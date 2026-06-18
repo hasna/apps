@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { platform as osPlatform } from "node:os";
 
@@ -509,6 +509,9 @@ function launchdPlist(options: ResolvedDaemonServiceOptions): string {
   const env = Object.entries(options.env)
     .map(([name, value]) => `    <key>${xmlEscape(name)}</key>\n    <string>${xmlEscape(value)}</string>`)
     .join("\n");
+  const programArguments = daemonProgramArguments(options)
+    .map((value) => `    <string>${xmlEscape(value)}</string>`)
+    .join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -517,9 +520,7 @@ function launchdPlist(options: ResolvedDaemonServiceOptions): string {
   <string>${xmlEscape(options.serviceId)}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${xmlEscape(options.executable)}</string>
-    <string>--interval-ms</string>
-    <string>${options.intervalMs}</string>
+${programArguments}
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -542,6 +543,7 @@ function systemdUnit(options: ResolvedDaemonServiceOptions): string {
   const env = Object.entries(options.env)
     .map(([name, value]) => `Environment=${quoteSystemdEnvironment(name, value)}`)
     .join("\n");
+  const execStart = daemonProgramArguments(options).map(quoteSystemdExecArg).join(" ");
   return `[Unit]
 Description=Hasna machines agent
 After=network-online.target
@@ -549,7 +551,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${quoteSystemdExecArg(options.executable)} --interval-ms ${options.intervalMs}
+ExecStart=${execStart}
 Restart=always
 RestartSec=10
 ${env}
@@ -557,6 +559,17 @@ ${env}
 [Install]
 WantedBy=${options.mode === "system" ? "multi-user.target" : "default.target"}
 `;
+}
+
+function daemonProgramArguments(options: ResolvedDaemonServiceOptions): string[] {
+  const bunRuntime = siblingBunRuntime(options.executable);
+  const base = bunRuntime ? [bunRuntime, options.executable] : [options.executable];
+  return [...base, "--interval-ms", String(options.intervalMs)];
+}
+
+function siblingBunRuntime(executable: string): string | null {
+  const candidate = `${dirname(executable)}/bun`;
+  return existsSync(candidate) ? candidate : null;
 }
 
 function launchdDomain(options: ResolvedDaemonServiceOptions): string {
