@@ -59,6 +59,10 @@ describe("MCP public-safe redaction", () => {
     });
 
     const daemonStatus = await callTool("machines_daemon_status");
+    const status = await callTool("machines_status");
+    const deniedPrivateStatus = await callTool("machines_status", { private_metadata: true }) as { warnings?: string[] };
+    const ssh = await callTool("machines_ssh_resolve", { machine_id: "demo-node-01" });
+    const deniedPrivateSsh = await callTool("machines_ssh_resolve", { machine_id: "demo-node-01", private_metadata: true }) as { warnings?: string[] };
     const deniedPrivateDaemonStatus = await callTool("machines_daemon_status", { private_metadata: true }) as { warnings?: string[] };
     const topology = await callTool("machines_topology", { include_tailscale: false });
     const ungatedPrivateTopology = await callTool("machines_topology", { include_tailscale: false, private_metadata: true }) as { warnings?: string[] };
@@ -67,6 +71,10 @@ describe("MCP public-safe redaction", () => {
 
     expect(JSON.stringify(daemonStatus)).not.toContain("postgres://user:pass");
     expect(JSON.stringify(daemonStatus)).not.toContain("100.64.0.7");
+    expect(JSON.stringify(status)).not.toContain("demo-node-01");
+    expect(deniedPrivateStatus.warnings).toContain(PRIVATE_OUTPUT_DENIED_WARNING);
+    expect(JSON.stringify(ssh)).not.toContain("operator@demo-node-01.private.example");
+    expect(deniedPrivateSsh.warnings).toContain(PRIVATE_OUTPUT_DENIED_WARNING);
     expect(deniedPrivateDaemonStatus.warnings).toContain(PRIVATE_OUTPUT_DENIED_WARNING);
     expect(JSON.stringify(topology)).not.toContain("demo-node-01.tailnet.example");
     expect(JSON.stringify(topology)).not.toContain("operator@demo-node-01.private.example");

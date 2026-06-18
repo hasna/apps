@@ -105,18 +105,28 @@ function privateOutputWarnings(requested: boolean | undefined, allowed: boolean)
   return requested === true && !allowed ? [PRIVATE_OUTPUT_DENIED_WARNING] : [];
 }
 
-function appendWarnings<T extends { warnings?: string[] }>(payload: T, warnings: string[]): T {
+function appendWarnings<T>(payload: T, warnings: string[]): T {
   if (warnings.length === 0) return payload;
-  return { ...payload, warnings: [...(payload.warnings ?? []), ...warnings] };
+  const currentWarnings = typeof payload === "object" && payload && "warnings" in payload && Array.isArray(payload.warnings)
+    ? payload.warnings
+    : [];
+  return { ...(payload as Record<string, unknown>), warnings: [...currentWarnings, ...warnings] } as T;
 }
 
 export function createMcpServer(version: string): McpServer {
   const server = new McpServer({ name: "machines", version });
   const events = new EventsClient();
 
-  server.tool("machines_status", "Return local machine fleet status paths and machine identity.", {}, async () => ({
-    content: [{ type: "text", text: JSON.stringify(getStatus(), null, 2) }],
-  }));
+  server.tool(
+    "machines_status",
+    "Return local machine fleet status paths and machine identity.",
+    { private_metadata: z.boolean().optional().describe("Include private local paths and machine identifiers") },
+    async ({ private_metadata }) => {
+      const privateMetadata = privateMetadataAllowed(private_metadata);
+      const warnings = privateOutputWarnings(private_metadata, privateMetadata);
+      return { content: [{ type: "text", text: JSON.stringify(appendWarnings(getStatus({ privateMetadata }), warnings), null, 2) }] };
+    }
+  );
 
   server.tool(
     "machines_doctor",
@@ -457,10 +467,24 @@ export function createMcpServer(version: string): McpServer {
   server.tool(
     "machines_ssh_resolve",
     "Resolve the best SSH route for a machine.",
-    { machine_id: z.string().describe("Machine identifier"), remote_command: z.string().optional().describe("Optional remote command") },
-    async ({ machine_id, remote_command }) => ({
-      content: [{ type: "text", text: JSON.stringify({ resolved: resolveMachineRoute(machine_id), command: buildSshCommand(machine_id, remote_command) }, null, 2) }],
-    })
+    {
+      machine_id: z.string().describe("Machine identifier"),
+      remote_command: z.string().optional().describe("Optional remote command"),
+      private_metadata: z.boolean().optional().describe("Include private SSH target and command"),
+    },
+    async ({ machine_id, remote_command, private_metadata }) => {
+      const privateMetadata = privateMetadataAllowed(private_metadata);
+      const warnings = privateOutputWarnings(private_metadata, privateMetadata);
+      const resolved = resolveMachineRoute(machine_id);
+      const publicResolved = redactRouteForOutput(resolved, { privateMetadata });
+      const command = resolved.ok && privateMetadata ? buildSshCommand(machine_id, remote_command) : resolved.ok ? "[redacted]" : null;
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify(appendWarnings({ resolved: publicResolved, command }, warnings), null, 2),
+        }],
+      };
+    }
   );
 
   server.tool("machines_ports", "List listening ports on a machine.", { machine_id: z.string().optional().describe("Machine identifier") }, async ({ machine_id }) => ({

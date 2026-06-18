@@ -132,6 +132,7 @@ export interface FleetStatus {
   machines: FleetStatusMachine[];
   recentSetupRuns: number;
   recentSyncRuns: number;
+  warnings?: string[];
 }
 
 export type NotificationChannelType = "email" | "webhook" | "command";

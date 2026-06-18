@@ -6,6 +6,7 @@ import { manifestAdd, manifestInit } from "../src/commands/manifest.js";
 import { getStatus } from "../src/commands/status.js";
 import { writeHeartbeat } from "../src/agent/runtime.js";
 import { closeDb, getDb, upsertHeartbeat } from "../src/db.js";
+import { REDACTED_VALUE } from "../src/redaction.js";
 
 const ENV_KEYS = [
   "HASNA_MACHINES_DB_PATH",
@@ -32,7 +33,7 @@ describe("fleet status", () => {
     });
 
     writeHeartbeat("online");
-    const status = getStatus();
+    const status = getStatus({ privateMetadata: true });
     expect(status.manifestMachineCount).toBe(1);
     expect(status.heartbeatCount).toBeGreaterThan(0);
     expect(status.machines.some((machine) => machine.machineId === "demo-node-01")).toBe(true);
@@ -55,9 +56,37 @@ describe("fleet status", () => {
     getDb().query("UPDATE agent_heartbeats SET updated_at = ? WHERE machine_id = ? AND pid = ?").run("2026-06-18T11:37:29.713Z", "demo-node-01", 100);
     getDb().query("UPDATE agent_heartbeats SET updated_at = ? WHERE machine_id = ? AND pid = ?").run("2026-06-18T11:01:38.986Z", "demo-node-01", 101);
 
-    const machine = getStatus().machines.find((entry) => entry.machineId === "demo-node-01");
+    const machine = getStatus({ privateMetadata: true }).machines.find((entry) => entry.machineId === "demo-node-01");
     expect(machine?.heartbeatStatus).toBe("online");
     expect(machine?.daemonVersion).toBe("0.0.39");
     expect(machine?.storageSyncStatus).toBe("disabled");
+  });
+
+  test("redacts local paths and machine identifiers by default", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-status-redacted-"));
+    process.env["HASNA_MACHINES_DB_PATH"] = join(dir, "machines.db");
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "demo-node-01";
+    manifestInit();
+    manifestAdd({
+      id: "demo-node-01",
+      platform: "linux",
+      workspacePath: "/home/operator/workspace",
+    });
+    upsertHeartbeat("demo-node-01", 100, "online", {
+      doctorSummary: { blockers: [{ detail: "operator@demo-node-01.private.example 100.64.0.7" }] },
+      privateMetadata: true,
+    });
+
+    const status = getStatus();
+
+    expect(status.machineId).toBe(REDACTED_VALUE);
+    expect(status.manifestPath).toBe(REDACTED_VALUE);
+    expect(status.dbPath).toBe(REDACTED_VALUE);
+    expect(status.notificationsPath).toBe(REDACTED_VALUE);
+    expect(status.machines[0]?.machineId).toBe(REDACTED_VALUE);
+    expect(status.machines[0]?.doctorSummary).toBeNull();
+    expect(JSON.stringify(status)).not.toContain("demo-node-01");
+    expect(JSON.stringify(status)).not.toContain("operator@demo-node-01.private.example");
   });
 });

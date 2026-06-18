@@ -15,16 +15,17 @@ function check(id: string, status: SelfTestCheck["status"], summary: string, det
 export function runSelfTest(): SelfTestResult {
   const version = getPackageVersion();
   const status = getStatus();
+  const machineId = getLocalMachineId();
   const doctor = runDoctor();
   const serveInfo = getServeInfo();
   const html = renderDashboardHtml();
   const notifications = listNotificationChannels();
-  const apps = listApps(status.machineId);
-  const appsDiff = diffApps(status.machineId);
-  const cliPlan = buildClaudeInstallPlan(status.machineId);
+  const apps = listApps(machineId);
+  const appsDiff = diffApps(machineId);
+  const cliPlan = buildClaudeInstallPlan(machineId);
 
   return {
-    machineId: getLocalMachineId(),
+    machineId,
     checks: [
       check("package-version", version === "0.0.0" ? "fail" : "ok", "Package version resolves", version),
       check(

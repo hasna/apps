@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, statSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { platform as osPlatform } from "node:os";
 
@@ -568,8 +568,29 @@ function daemonProgramArguments(options: ResolvedDaemonServiceOptions): string[]
 }
 
 function siblingBunRuntime(executable: string): string | null {
+  if (!isBunShebangScript(executable)) return null;
   const candidate = `${dirname(executable)}/bun`;
-  return existsSync(candidate) ? candidate : null;
+  return isExecutableFile(candidate) ? candidate : null;
+}
+
+function isBunShebangScript(executable: string): boolean {
+  try {
+    const content = readFileSync(executable, "utf8").slice(0, 256);
+    const firstLine = content.split(/\r?\n/, 1)[0] ?? "";
+    return /^#!.*\bbun\b/.test(firstLine);
+  } catch {
+    return false;
+  }
+}
+
+function isExecutableFile(path: string): boolean {
+  if (!existsSync(path)) return false;
+  try {
+    const stats = statSync(path);
+    return stats.isFile() && (stats.mode & 0o111) !== 0;
+  } catch {
+    return false;
+  }
 }
 
 function launchdDomain(options: ResolvedDaemonServiceOptions): string {

@@ -58,6 +58,7 @@ import {
 } from "../commands/daemon.js";
 import { runSelfTest } from "../commands/self-test.js";
 import { getServeInfo, startDashboardServer } from "../commands/serve.js";
+import { REDACTED_VALUE } from "../redaction.js";
 import { clearClipboardHistory, getDefaultClipboardConfig, getOrCreateClipboardKey, getClipboardStatus, readClipboardConfig, readClipboardHistory, writeClipboardConfig, getConfigPath } from "../commands/clipboard.js";
 import { startClipboardDaemon, stopClipboardDaemon } from "../commands/clipboard-daemon.js";
 import { readHealConfig, writeHealConfig, readHealState, type HealConfig } from "../commands/heal.js";
@@ -1189,14 +1190,27 @@ program
   .description("Choose the best SSH route for a machine")
   .requiredOption("--machine <id>", "Machine identifier")
   .option("--cmd <command>", "Remote command to run")
+  .option("--private-metadata", "Print private SSH target and command", false)
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine: string; cmd?: string; json?: boolean }) => {
+  .action((options: { machine: string; cmd?: string; privateMetadata?: boolean; json?: boolean }) => {
+    const resolved = resolveMachineRoute(options.machine);
+    const publicResolved = redactRouteForOutput(resolved, { privateMetadata: options.privateMetadata });
+    const command = resolved.ok && options.privateMetadata ? buildSshCommand(options.machine, options.cmd) : resolved.ok ? REDACTED_VALUE : null;
     if (options.json) {
-      const resolved = resolveMachineRoute(options.machine);
-      console.log(JSON.stringify({ resolved, command: resolved.ok ? buildSshCommand(options.machine, options.cmd) : null }, null, 2));
+      console.log(JSON.stringify({ resolved: publicResolved, command }, null, 2));
       return;
     }
-    console.log(buildSshCommand(options.machine, options.cmd));
+    if (!resolved.ok) {
+      console.error(chalk.red(resolved.warnings.join("; ") || `No route found for ${options.machine}`));
+      process.exitCode = 1;
+      return;
+    }
+    if (!options.privateMetadata) {
+      console.error(chalk.red("Refusing to print private SSH target; rerun with --private-metadata."));
+      process.exitCode = 1;
+      return;
+    }
+    console.log(command);
   });
 
 program
@@ -1387,8 +1401,8 @@ storageCommand.command("sync").description("Bidirectional storage sync: pull the
   }
 });
 
-program.command("status").description("Print local machine and storage status").option("-j, --json", "Print JSON output", false).action((options: { json?: boolean }) => {
-  const status = getStatus();
+program.command("status").description("Print local machine and storage status").option("--private-metadata", "Print private local paths and machine identifiers", false).option("-j, --json", "Print JSON output", false).action((options: { privateMetadata?: boolean; json?: boolean }) => {
+  const status = getStatus({ privateMetadata: options.privateMetadata });
   printJsonOrText(status, renderFleetStatus(status), options.json);
 });
 

@@ -275,7 +275,7 @@ export function startDashboardServer(options: ServeOptions = {}): ReturnType<typ
         return Response.json({ ok: true, ...getServeInfo(options) });
       }
       if (url.pathname === "/api/status") {
-        return Response.json(getStatus());
+        return Response.json(appendWarnings(getStatus({ privateMetadata }), privateWarnings));
       }
       if (url.pathname === "/api/topology") {
         const topology = discoverMachineTopology({ includeTailscale: url.searchParams.get("tailscale") !== "false" });

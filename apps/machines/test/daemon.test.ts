@@ -119,6 +119,43 @@ describe("daemon service lifecycle planning", () => {
     expect(plan.files[0]?.content).toContain("<string>--interval-ms</string>");
   });
 
+  test("systemd invokes sibling bun runtime for Bun shims", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-daemon-bun-shim-systemd-"));
+    const bun = join(dir, "bun");
+    const agent = join(dir, "machines-agent");
+    writeFileSync(bun, "#!/bin/sh\n", "utf8");
+    writeFileSync(agent, "#!/usr/bin/env bun\n", "utf8");
+    chmodSync(bun, 0o755);
+    chmodSync(agent, 0o755);
+
+    const plan = buildDaemonInstallPlan({
+      platform: "linux",
+      mode: "user",
+      executable: agent,
+    });
+
+    expect(plan.files[0]?.content).toContain(`ExecStart=${bun} ${agent} --interval-ms 30000`);
+  });
+
+  test("does not invoke sibling bun for non-Bun executables", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-daemon-not-bun-shim-"));
+    const bun = join(dir, "bun");
+    const agent = join(dir, "machines-agent");
+    writeFileSync(bun, "#!/bin/sh\n", "utf8");
+    writeFileSync(agent, "#!/bin/sh\nexec node \"$0\" \"$@\"\n", "utf8");
+    chmodSync(bun, 0o755);
+    chmodSync(agent, 0o755);
+
+    const plan = buildDaemonInstallPlan({
+      platform: "macos",
+      mode: "user",
+      executable: agent,
+    });
+
+    expect(plan.files[0]?.content).toContain(`<string>${agent}</string>`);
+    expect(plan.files[0]?.content).not.toContain(`<string>${bun}</string>`);
+  });
+
   test("plans uninstall, restart, status, and logs without install files", () => {
     const base = {
       platform: "linux" as const,

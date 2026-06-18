@@ -144,6 +144,7 @@ CLI and MCP expose the same topology view:
 machines topology --json
 machines topology --no-tailscale --json
 machines route --machine linux-dev-01 --json
+machines ssh --machine linux-dev-01 --private-metadata
 ```
 
 ## Screen sharing
@@ -321,6 +322,11 @@ HTTP dashboard/API and MCP private reads require a second operator-side gate:
 set `HASNA_MACHINES_ALLOW_PRIVATE_OUTPUT=1` and pass the explicit
 `privateMetadata=true` query parameter or MCP `private_metadata` argument. The
 caller flag alone is ignored.
+
+Default status and SSH-resolution output is public-safe: local paths, machine
+identifiers, route targets, and generated SSH commands are redacted unless
+private output is explicitly requested. CLI commands that print raw SSH targets
+require `--private-metadata`.
 
 Doctor summaries are also opt-in with `--doctor-summary` or
 `HASNA_MACHINES_AGENT_DOCTOR_SUMMARY=1`. The daemon records a compact
