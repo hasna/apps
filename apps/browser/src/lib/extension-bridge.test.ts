@@ -225,4 +225,44 @@ describe("extension bridge dispatch", () => {
     }, { timeoutMs: 20 })).rejects.toThrow(/not in BROWSER_ALLOWED_DOMAINS/);
     expect(sentJob).toBe(false);
   });
+
+  it("requires a known allowed current tab URL for non-navigation jobs when domains are allowlisted", async () => {
+    process.env["BROWSER_ALLOWED_DOMAINS"] = "example.test";
+    const pairing = createExtensionPairing();
+    const token = consumeExtensionPairingCode(pairing.code);
+    const data = validateExtensionToken(token.token);
+    const sent: string[] = [];
+    attachExtensionSocket({
+      send(raw: string) {
+        const message = JSON.parse(raw);
+        if (message.type !== "job") return;
+        sent.push(message.job.type);
+        queueMicrotask(() => {
+          handleExtensionSocketMessage(data.token_id, JSON.stringify({
+            type: "result",
+            result: { id: message.job.id, ok: true, data: {}, url: "https://example.test/page" },
+          }));
+        });
+      },
+    }, data);
+
+    await expect(dispatchExtensionJob({
+      id: "click-unknown-url",
+      type: "click",
+      payload: { selector: "#go" },
+    }, { timeoutMs: 20 })).rejects.toThrow(/current tab URL is unknown/);
+    expect(sent).toEqual([]);
+
+    await dispatchExtensionJob({
+      id: "nav-allowed",
+      type: "navigate",
+      payload: { url: "https://example.test/page" },
+    }, { timeoutMs: 100 });
+    await dispatchExtensionJob({
+      id: "click-known-url",
+      type: "click",
+      payload: { selector: "#go" },
+    }, { timeoutMs: 100 });
+    expect(sent).toEqual(["navigate", "click"]);
+  });
 });

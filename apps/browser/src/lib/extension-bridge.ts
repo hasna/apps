@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { getDataDir } from "../db/schema.js";
 import { logEvent } from "../db/timeline.js";
 import { BrowserError, type ConnectedExtensionStatus, type ExtBridgeMessage, type ExtJob, type ExtensionBridgeStatus, type ExtensionPairing, type ExtResult } from "../types/index.js";
-import { assertBrowserCapability, assertBrowserNavigationAllowed, isBrowserCapabilityApproved } from "./policy.js";
+import { allowedDomains, assertBrowserCapability, assertBrowserNavigationAllowed, isBrowserCapabilityApproved } from "./policy.js";
 
 const DEFAULT_PAIRING_TTL_MS = 5 * 60_000;
 const MAX_PAIRING_TTL_MS = 15 * 60_000;
@@ -61,6 +61,7 @@ export interface ConnectedExtension {
   connected_at: string;
   last_seen_at: string;
   user_agent?: string;
+  current_url?: string;
 }
 
 interface PendingDispatch {
@@ -330,6 +331,7 @@ export function handleExtensionSocketMessage(tokenId: string, raw: string | Buff
     title: result.title,
     error: result.ok ? undefined : result.error,
   });
+  if (connection && result.url) connection.current_url = result.url;
   pending.resolve(result);
 }
 
@@ -354,8 +356,8 @@ export function getPairedExtensionOrThrow(tokenId?: string): ConnectedExtension 
 }
 
 export async function dispatchExtensionJob(job: ExtJob, opts: { tokenId?: string; timeoutMs?: number; approvalToken?: string } = {}): Promise<ExtResult> {
-  validateExtensionDispatchJob(job, { approvalToken: opts.approvalToken });
   const connection = getPairedExtensionOrThrow(opts.tokenId);
+  validateExtensionDispatchJob(job, { approvalToken: opts.approvalToken, currentUrl: connection.current_url });
   const timeoutMs = opts.timeoutMs ?? job.timeout_ms ?? DEFAULT_JOB_TIMEOUT_MS;
   const jobWithId = job.id ? job : { ...job, id: randomUUID() } as ExtJob;
 
@@ -391,7 +393,7 @@ export async function dispatchExtensionJob(job: ExtJob, opts: { tokenId?: string
   });
 }
 
-export function validateExtensionDispatchJob(job: ExtJob, opts: { approvalToken?: string } = {}): void {
+export function validateExtensionDispatchJob(job: ExtJob, opts: { approvalToken?: string; currentUrl?: string } = {}): void {
   if (!job || typeof job !== "object") {
     throw new BrowserError("Extension job must be an object", "EXTENSION_JOB_INVALID");
   }
@@ -403,6 +405,15 @@ export function validateExtensionDispatchJob(job: ExtJob, opts: { approvalToken?
   }
   if (job.type === "navigate") {
     assertBrowserNavigationAllowed((job.payload as { url?: string } | undefined)?.url ?? "");
+  }
+  if (job.type !== "navigate" && job.type !== "ping" && allowedDomains().length > 0) {
+    if (!opts.currentUrl) {
+      throw new BrowserError(
+        "Extension current tab URL is unknown. Navigate to an allowed domain before running extension actions with BROWSER_ALLOWED_DOMAINS configured.",
+        "BROWSER_DOMAIN_NOT_ALLOWED",
+      );
+    }
+    assertBrowserNavigationAllowed(opts.currentUrl);
   }
   if (
     job.type === "evaluate"
