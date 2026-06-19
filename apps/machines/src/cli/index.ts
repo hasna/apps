@@ -62,7 +62,7 @@ import {
   type CompatibilityWorkspaceSpec,
 } from "../compatibility.js";
 import { runDoctor } from "../commands/doctor.js";
-import { assertMutationApproved, mutationArgsSha256, mutationPlanDigest } from "../commands/mutation-approval.js";
+import { assertMutationApproved, createTrustedSdkMutationApproval, mutationArgsSha256, mutationPlanDigest } from "../commands/mutation-approval.js";
 import {
   buildDaemonServicePlan,
   runDaemonServicePlan,
@@ -219,6 +219,7 @@ function renderDoctorResult(report: DoctorReport): string {
 function renderSelfTestResult(result: SelfTestResult): string {
   return [
     `machine: ${result.machineId}`,
+    `overall: ${result.overall} ok=${result.counts.ok} warn=${result.counts.warn} fail=${result.counts.fail}`,
     ...result.checks.map((check) => {
       const status = check.status === "ok" ? chalk.green(check.status) : check.status === "warn" ? chalk.yellow(check.status) : chalk.red(check.status);
       return `${check.id.padEnd(20)} ${status} ${check.detail}`;
@@ -2022,7 +2023,7 @@ storageCommand.command("push").description("Push local machine runtime data to s
     const { parseStorageTables, resolveTables, storagePush } = await import("../storage.js");
     const tables = resolveTables(parseStorageTables(options.tables));
     requireCliMutation("storage_push", options.approvalToken, { resourceId: cliResourceId("storage-push", tables.join(",")), args: { tables } });
-    const results = await storagePush({ tables });
+    const results = await storagePush({ tables, trustedLocalMutation: createTrustedSdkMutationApproval() });
     printStorageResults(results, options.json);
   } catch (error) {
     printStorageError(error);
@@ -2034,7 +2035,7 @@ storageCommand.command("pull").description("Pull machine runtime data from stora
     const { parseStorageTables, resolveTables, storagePull } = await import("../storage.js");
     const tables = resolveTables(parseStorageTables(options.tables));
     requireCliMutation("storage_pull", options.approvalToken, { resourceId: cliResourceId("storage-pull", tables.join(",")), args: { tables } });
-    const results = await storagePull({ tables });
+    const results = await storagePull({ tables, trustedLocalMutation: createTrustedSdkMutationApproval() });
     printStorageResults(results, options.json);
   } catch (error) {
     printStorageError(error);
@@ -2046,7 +2047,7 @@ storageCommand.command("sync").description("Bidirectional storage sync: pull the
     const { parseStorageTables, resolveTables, storageSync } = await import("../storage.js");
     const tables = resolveTables(parseStorageTables(options.tables));
     requireCliMutation("storage_sync", options.approvalToken, { resourceId: cliResourceId("storage-sync", tables.join(",")), args: { tables } });
-    const result = await storageSync({ tables });
+    const result = await storageSync({ tables, trustedLocalMutation: createTrustedSdkMutationApproval() });
     if (options.json) {
       console.log(JSON.stringify(result, null, 2));
       return;

@@ -76,6 +76,8 @@ instead of importing private dependencies.
 It also reports noninteractive sudo readiness, SSH certificate support, and
 GitHub App secret-reference readiness without printing credentials or private
 keys.
+`machines self-test --json` includes `overall` and `counts` fields so agents
+can branch on readiness without scanning every check.
 
 Apple device management belongs in the private deployment layer. The public
 setup plan can report enrollment status with `profiles status -type enrollment`,
@@ -288,6 +290,13 @@ Configure database storage with `HASNA_MACHINES_DATABASE_URL` or fallback
 `HASNA_MACHINES_STORAGE_MODE` or `MACHINES_STORAGE_MODE` with `local`,
 `hybrid`, or `remote`.
 
+Remote PostgreSQL storage is fail-closed for TLS. Non-loopback database hosts
+default to verified TLS, and `sslmode=disable`, `ssl=false`,
+`sslmode=no-verify`, or `HASNA_MACHINES_DATABASE_SSL_REJECT_UNAUTHORIZED=0`
+are rejected. For loopback development databases only, set
+`HASNA_MACHINES_ALLOW_INSECURE_DATABASE_TLS=1` to permit disabled or
+non-verified TLS.
+
 ## Fleet daemon
 
 `machines-agent` can run as a managed heartbeat daemon. The daemon writes local
@@ -443,6 +452,16 @@ address (true LAN-direct) instead of the tailnet IP. Off-LAN or offline peers fa
 back to the tailnet IP. The local machine is skipped. The managed block is delimited
 by markers, so re-running `apply` only rewrites that block and leaves the rest of
 `/etc/hosts` untouched.
+
+### Direct @hasna/events bins
+
+`@hasna/events` is a dependency of `@hasna/machines` and publishes its own
+dependency-owned `events` and `hasna-events` binaries. Package managers may
+install those aliases into an application's top-level `node_modules/.bin`, but
+they are not part of the `@hasna/machines` command surface, release scripts,
+daemon plans, MCP tools, or approval model. Use `machines events` and
+`machines webhooks` for machines-scoped event operations; those commands enforce
+machines mutation approval and bind scoped tokens to canonical arguments.
 
 ## Dashboard
 

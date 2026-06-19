@@ -32,7 +32,7 @@ import { getAgentStatus } from "../agent/runtime.js";
 import { discoverMachineTopology, redactRouteForOutput, redactTopologyForOutput, resolveMachineRoute, resolveMachineWorkspace } from "../topology.js";
 import { checkMachineCompatibility } from "../compatibility.js";
 import { getStorageStatus, resolveTables, storagePull, storagePush, storageSync } from "../storage.js";
-import { assertMutationApproved, mutationPlanDigest } from "../commands/mutation-approval.js";
+import { assertMutationApproved, createTrustedSdkMutationApproval, mutationPlanDigest } from "../commands/mutation-approval.js";
 
 export const MACHINE_MCP_TOOL_NAMES = [
   "machines_status",
@@ -852,7 +852,7 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
     async ({ tables, approval_token }) => {
       const resolvedTables = resolveTables(tables);
       requireMcpMutation("storage_push", approval_token, { resourceId: mutationResourceId("storage-push", resolvedTables.join(",")), args: { tables: resolvedTables } });
-      return { content: [{ type: "text", text: JSON.stringify(await storagePush({ tables: resolvedTables }), null, 2) }] };
+      return { content: [{ type: "text", text: JSON.stringify(await storagePush({ tables: resolvedTables, trustedLocalMutation: createTrustedSdkMutationApproval() }), null, 2) }] };
     }
   );
 
@@ -863,7 +863,7 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
     async ({ tables, approval_token }) => {
       const resolvedTables = resolveTables(tables);
       requireMcpMutation("storage_pull", approval_token, { resourceId: mutationResourceId("storage-pull", resolvedTables.join(",")), args: { tables: resolvedTables } });
-      return { content: [{ type: "text", text: JSON.stringify(await storagePull({ tables: resolvedTables }), null, 2) }] };
+      return { content: [{ type: "text", text: JSON.stringify(await storagePull({ tables: resolvedTables, trustedLocalMutation: createTrustedSdkMutationApproval() }), null, 2) }] };
     }
   );
 
@@ -874,7 +874,7 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
     async ({ tables, approval_token }) => {
       const resolvedTables = resolveTables(tables);
       requireMcpMutation("storage_sync", approval_token, { resourceId: mutationResourceId("storage-sync", resolvedTables.join(",")), args: { tables: resolvedTables } });
-      return { content: [{ type: "text", text: JSON.stringify(await storageSync({ tables: resolvedTables }), null, 2) }] };
+      return { content: [{ type: "text", text: JSON.stringify(await storageSync({ tables: resolvedTables, trustedLocalMutation: createTrustedSdkMutationApproval() }), null, 2) }] };
     }
   );
 

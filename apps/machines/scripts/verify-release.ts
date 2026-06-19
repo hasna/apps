@@ -1,11 +1,13 @@
 #!/usr/bin/env bun
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import packageJson from "../package.json" assert { type: "json" };
 
 const PACKAGE_NAME = "@hasna/machines";
 const MAX_PACKAGE_BYTES = 4 * 1024 * 1024;
+const MACHINES_BIN_NAMES = ["machines", "machines-mcp", "machines-agent"] as const;
+const DEPENDENCY_EVENT_BIN_NAMES = ["events", "hasna-events"] as const;
 const REQUIRED_FILES = [
   "package/package.json",
   "package/dist/index.js",
@@ -43,6 +45,7 @@ async function main(): Promise<void> {
     const packed = await pack(tmp);
     const files = await listTarball(packed);
     assertPackageContents(files, packed);
+    await assertPackedPackageBinBoundary(packed);
 
     const appDir = join(tmp, "app");
     mkdirSync(appDir, { recursive: true });
@@ -91,7 +94,14 @@ function assertPackageContents(files: string[], packed: string): void {
   assert(size <= MAX_PACKAGE_BYTES, `packed artifact is too large: ${size} bytes`);
 }
 
+async function assertPackedPackageBinBoundary(packed: string): Promise<void> {
+  const result = await run(["tar", "-xOf", packed, "package/package.json"], { quiet: true });
+  const packedPackage = JSON.parse(result.stdout) as { bin?: Record<string, string> };
+  assertMachinesOwnedBinBoundary(packedPackage.bin ?? {});
+}
+
 function assertReleaseScripts(): void {
+  assertMachinesOwnedBinBoundary(packageJson.bin ?? {});
   const scripts = packageJson.scripts ?? {};
   assert(
     scripts["verify:release"] === "bun run typecheck && bun test && bun run build && bun run smoke:consumer-conformance && bun run scripts/verify-release.ts",
@@ -108,9 +118,12 @@ function assertReleaseScripts(): void {
 
 async function smokeInstalledPackage(appDir: string): Promise<void> {
   await run(["bun", "-e", "import('@hasna/machines').then((m)=>{ if (!m.getPackageVersion || !m.checkMachineCompatibility || !m.resolveMachineWorkspace) throw new Error('missing root exports') })"], { cwd: appDir, quiet: true });
+  await run(["bun", "-e", "import('@hasna/machines').then((m)=>{ for (const name of ['writeManifest','getDb','upsertHeartbeat','writeHeartbeat','watchTmuxPane','getStoragePg','PgAdapterAsync','createTrustedSdkMutationApproval']) if (name in m) throw new Error('raw root export: '+name); })"], { cwd: appDir, quiet: true });
   await run(["bun", "-e", "import('@hasna/machines/consumer').then((m)=>{ if (!m.resolveMachineWorkspace || !m.MACHINES_CONSUMER_CONTRACT_VERSION) throw new Error('missing consumer exports') })"], { cwd: appDir, quiet: true });
   await run(["bun", "-e", "import('@hasna/machines/storage').then((m)=>{ if (!m.getStorageStatus || !m.storagePush) throw new Error('missing storage exports') })"], { cwd: appDir, quiet: true });
+  await run(["bun", "-e", "import('@hasna/machines/storage').then((m)=>{ for (const name of ['getStoragePg','PgAdapterAsync']) if (name in m) throw new Error('raw storage export: '+name); })"], { cwd: appDir, quiet: true });
   await run(["sh", "-lc", "command -v ./node_modules/.bin/machines ./node_modules/.bin/machines-mcp ./node_modules/.bin/machines-agent"], { cwd: appDir, quiet: true });
+  assertInstalledDependencyBinBoundary(appDir);
   await run(["./node_modules/.bin/machines", "--version"], { cwd: appDir, quiet: true, expect: packageJson.version });
   await run(["./node_modules/.bin/machines", "--help"], { cwd: appDir, quiet: true, expect: "Usage:" });
   await run(["./node_modules/.bin/machines", "self-test", "--json"], { cwd: appDir, quiet: true, expect: "\"checks\"" });
@@ -126,6 +139,29 @@ async function smokeInstalledPackage(appDir: string): Promise<void> {
     "--cli-command",
     join(appDir, "node_modules", ".bin", "machines"),
   ], { cwd: appDir, quiet: true, expect: "machines consumer conformance: ok" });
+}
+
+function assertMachinesOwnedBinBoundary(bin: Record<string, string>): void {
+  const actual = Object.keys(bin).sort();
+  assert(JSON.stringify(actual) === JSON.stringify([...MACHINES_BIN_NAMES].sort()), `package bin names must be machines-owned only, got ${actual.join(", ")}`);
+  for (const name of DEPENDENCY_EVENT_BIN_NAMES) {
+    assert(!(name in bin), `package bin must not expose dependency-owned ${name}`);
+  }
+  const scriptValues = Object.values(packageJson.scripts ?? {}).join("\n");
+  assert(!/node_modules\/\.bin\/(?:events|hasna-events)\b/.test(scriptValues), "package scripts must not invoke dependency event bins by node_modules/.bin path");
+  assert(!/(^|[\s;&|])events\s+(?:events|webhooks)\b/.test(scriptValues), "package scripts must not invoke dependency events CLI event/webhook subcommands");
+  assert(!/(^|[\s;&|])hasna-events\s+(?:events|webhooks)\b/.test(scriptValues), "package scripts must not invoke dependency hasna-events event/webhook subcommands");
+  assert(!/(^|[\s;&|])hasna-events(?:\s|$)/.test(scriptValues), "package scripts must not invoke hasna-events directly");
+}
+
+function assertInstalledDependencyBinBoundary(appDir: string): void {
+  for (const name of DEPENDENCY_EVENT_BIN_NAMES) {
+    const binPath = join(appDir, "node_modules", ".bin", name);
+    if (!existsSync(binPath)) continue;
+    const target = realpathSync(binPath);
+    assert(target.includes(join("node_modules", "@hasna", "events")), `dependency-owned ${name} bin must resolve to @hasna/events, got ${target}`);
+    assert(!target.includes(join("node_modules", "@hasna", "machines")), `dependency-owned ${name} bin must not resolve inside @hasna/machines`);
+  }
 }
 
 async function maybeNpmVersions(pkg: string): Promise<string[]> {

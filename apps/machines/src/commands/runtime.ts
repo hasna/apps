@@ -46,6 +46,18 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+function commandBasename(command: string): string {
+  const withoutArgs = command.trim().split(/\s+/, 1)[0] ?? "";
+  return withoutArgs.split(/[\\/]/).filter(Boolean).at(-1) ?? withoutArgs;
+}
+
+export function assertMachinesCommandSafe(command: string): void {
+  const basename = commandBasename(command);
+  if (basename === "events" || basename === "hasna-events") {
+    throw new Error("tmux-hook-plan machines command must invoke the machines CLI, not dependency-owned @hasna/events bins.");
+  }
+}
+
 export function buildTmuxPaneDiedHookPlan(options: {
   tmuxCommand?: string;
   machinesCommand?: string;
@@ -55,6 +67,7 @@ export function buildTmuxPaneDiedHookPlan(options: {
 } = {}): TmuxPaneDiedHookPlan {
   const tmuxCommand = options.tmuxCommand ?? process.env["HASNA_MACHINES_TMUX_BIN"] ?? "tmux";
   const machinesCommand = options.machinesCommand ?? "machines";
+  assertMachinesCommandSafe(machinesCommand);
   const deliver = options.deliver === true;
   const approvalToken = options.approvalToken?.trim();
   const trustedLocalMutation = approvalToken ? false : options.trustedLocalMutation === true;

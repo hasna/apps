@@ -29,6 +29,17 @@ export interface MutationApprovalOptions extends MutationApprovalScope {
   now?: number | Date;
 }
 
+export interface SdkMutationApprovalOptions {
+  approvalToken?: string;
+  trustedLocalMutation?: TrustedSdkMutationApproval;
+  callerId?: string;
+  runId?: string;
+}
+
+export type TrustedSdkMutationApproval = Readonly<{
+  __trustedSdkMutationApproval?: never;
+}>;
+
 export interface MutationApprovalClaims extends MutationApprovalScope {
   version: 1;
   issuedAt: number;
@@ -55,6 +66,17 @@ const TOKEN_PREFIX = "machines-mut-v1";
 const DEFAULT_TOKEN_TTL_MS = 5 * 60 * 1_000;
 const MAX_TOKEN_TTL_MS = 5 * 60 * 1_000;
 const MAX_CLOCK_SKEW_MS = 30_000;
+const trustedSdkMutationApprovals = new WeakSet<object>();
+
+export function createTrustedSdkMutationApproval(): TrustedSdkMutationApproval {
+  const approval = {};
+  trustedSdkMutationApprovals.add(approval);
+  return approval as TrustedSdkMutationApproval;
+}
+
+function isTrustedSdkMutationApproval(approval: TrustedSdkMutationApproval | undefined): boolean {
+  return typeof approval === "object" && approval !== null && trustedSdkMutationApprovals.has(approval);
+}
 
 function isTruthy(value: string | undefined): boolean {
   return value === "1" || value?.toLowerCase() === "true" || value?.toLowerCase() === "yes";
@@ -377,5 +399,32 @@ export function assertMutationApproved(options: MutationApprovalOptions): void {
 
   throw new Error(
     `Fleet mutation blocked: ${options.surface}.${options.operation} requires operator approval; ${approvalHint}.`
+  );
+}
+
+export function assertSdkMutationApproved(
+  scope: Omit<MutationApprovalScope, "surface" | "transport" | "callerId" | "runId">,
+  options: SdkMutationApprovalOptions = {},
+): void {
+  if (isTrustedSdkMutationApproval(options.trustedLocalMutation)) return;
+
+  const decision = verifyMutationApprovalToken({
+    surface: "sdk",
+    operation: scope.operation,
+    machineId: scope.machineId,
+    resourceId: scope.resourceId,
+    callerId: options.callerId,
+    runId: options.runId,
+    transport: "sdk",
+    args: scope.args,
+    argsSha256: scope.argsSha256,
+    approvalToken: options.approvalToken,
+    env: process.env,
+  });
+
+  if (decision.approved) return;
+
+  throw new Error(
+    `Fleet mutation blocked: sdk.${scope.operation} requires a scoped SDK approval token.`
   );
 }

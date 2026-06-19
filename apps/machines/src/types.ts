@@ -243,8 +243,16 @@ export interface SelfTestCheck {
   detail: string;
 }
 
+export interface SelfTestCounts {
+  ok: number;
+  warn: number;
+  fail: number;
+}
+
 export interface SelfTestResult {
   machineId: string;
+  overall: SelfTestCheck["status"];
+  counts: SelfTestCounts;
   checks: SelfTestCheck[];
 }
 

@@ -17,13 +17,19 @@ import {
   resolveTables,
   PG_MIGRATIONS,
 } from "../src/storage.js";
-import { sslConfigFor } from "../src/remote-storage.js";
+import {
+  MACHINES_DATABASE_ALLOW_INSECURE_TLS_ENV,
+  MACHINES_DATABASE_SSL_REJECT_UNAUTHORIZED_ENV,
+  sslConfigFor,
+} from "../src/remote-storage.js";
 
 const ENV_KEYS = [
   MACHINES_STORAGE_ENV,
   MACHINES_STORAGE_FALLBACK_ENV,
   MACHINES_STORAGE_MODE_ENV,
   MACHINES_STORAGE_MODE_FALLBACK_ENV,
+  MACHINES_DATABASE_ALLOW_INSECURE_TLS_ENV,
+  MACHINES_DATABASE_SSL_REJECT_UNAUTHORIZED_ENV,
   "HASNA_MACHINES_DB_PATH",
 ] as const;
 
@@ -72,11 +78,55 @@ describe("machines storage config", () => {
     expect(migrationSql).toContain("ALTER TABLE agent_heartbeats ADD COLUMN IF NOT EXISTS private_metadata INTEGER NOT NULL DEFAULT 0");
   });
 
-  test("postgres sslmode=require verifies certificates by default", () => {
-    expect(sslConfigFor("postgres://example/machines?sslmode=require")).toEqual({ rejectUnauthorized: true });
-    expect(sslConfigFor("postgres://example/machines?ssl=true")).toEqual({ rejectUnauthorized: true });
-    expect(sslConfigFor("postgres://example/machines?sslmode=no-verify")).toEqual({ rejectUnauthorized: false });
-    expect(sslConfigFor("postgres://example/machines?sslmode=disable")).toBeUndefined();
+  test("postgres remote storage verifies TLS by default", () => {
+    expect(sslConfigFor("postgres://example/machines", {})).toEqual({ rejectUnauthorized: true });
+    expect(sslConfigFor("postgres://example/machines?sslmode=require", {})).toEqual({ rejectUnauthorized: true });
+    expect(sslConfigFor("postgres://example/machines?sslmode=verify-full", {})).toEqual({ rejectUnauthorized: true });
+    expect(sslConfigFor("postgres://example/machines?ssl=true", {})).toEqual({ rejectUnauthorized: true });
+  });
+
+  test("postgres remote storage rejects insecure TLS modes", () => {
+    expect(() => sslConfigFor("postgres://example/machines?sslmode=no-verify", {})).toThrow(
+      "PostgreSQL TLS certificate verification cannot be disabled",
+    );
+    expect(() => sslConfigFor("postgres://example/machines?sslmode=disable", {})).toThrow(
+      "Insecure PostgreSQL TLS mode is rejected",
+    );
+    expect(() => sslConfigFor("postgres://example/machines?ssl=false", {})).toThrow(
+      "Insecure PostgreSQL TLS mode is rejected",
+    );
+    expect(() => sslConfigFor("postgres://example/machines", { [MACHINES_DATABASE_SSL_REJECT_UNAUTHORIZED_ENV]: "0" })).toThrow(
+      "PostgreSQL TLS certificate verification cannot be disabled",
+    );
+    expect(() =>
+      sslConfigFor("postgres://example/machines?sslmode=no-verify", { [MACHINES_DATABASE_ALLOW_INSECURE_TLS_ENV]: "1" })
+    ).toThrow("PostgreSQL TLS certificate verification cannot be disabled");
+  });
+
+  test("postgres loopback storage only permits insecure TLS with explicit local override", () => {
+    expect(sslConfigFor("postgres://127.0.0.1/machines", {})).toBeUndefined();
+    expect(sslConfigFor("postgres://localhost/machines", {})).toBeUndefined();
+    expect(sslConfigFor("postgres://[::1]/machines", {})).toBeUndefined();
+
+    expect(() => sslConfigFor("postgres://127.0.0.1/machines?sslmode=disable", {})).toThrow(
+      "Insecure PostgreSQL TLS mode is rejected",
+    );
+    expect(() => sslConfigFor("postgres://localhost/machines?sslmode=no-verify", {})).toThrow(
+      "PostgreSQL TLS certificate verification cannot be disabled",
+    );
+
+    const allowLocalInsecure = { [MACHINES_DATABASE_ALLOW_INSECURE_TLS_ENV]: "1" };
+    expect(sslConfigFor("postgres://127.0.0.1/machines?sslmode=disable", allowLocalInsecure)).toBeUndefined();
+    expect(sslConfigFor("postgres://localhost/machines?ssl=false", allowLocalInsecure)).toBeUndefined();
+    expect(sslConfigFor("postgres://[::1]/machines?sslmode=no-verify", allowLocalInsecure)).toEqual({ rejectUnauthorized: false });
+    expect(sslConfigFor("postgres://127.0.0.1/machines", {
+      [MACHINES_DATABASE_ALLOW_INSECURE_TLS_ENV]: "true",
+      [MACHINES_DATABASE_SSL_REJECT_UNAUTHORIZED_ENV]: "0",
+    })).toEqual({ rejectUnauthorized: false });
+  });
+
+  test("postgres ssl config ignores invalid database URLs", () => {
+    expect(sslConfigFor("not a url", {})).toBeUndefined();
   });
 
   test("storage status initializes local sync metadata without remote config", () => {

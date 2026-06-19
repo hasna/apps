@@ -286,6 +286,25 @@ exit 1
     }
   });
 
+  test("runtime tmux hook plan rejects dependency-owned events bins", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-runtime-hook-plan-"));
+    try {
+      const env = mutationEnv(dir);
+      for (const command of ["events", "hasna-events", "/tmp/node_modules/.bin/events", "/tmp/node_modules/.bin/hasna-events"]) {
+        const result = await runMachinesCli(["runtime", "tmux-hook-plan", "--trusted-local-mutation", "--machines-command", command, "--json"], env);
+        expect(result.exitCode).not.toBe(0);
+        expect(result.stderr).toContain("must invoke the machines CLI");
+      }
+
+      const allowed = await runMachinesCli(["runtime", "tmux-hook-plan", "--trusted-local-mutation", "--machines-command", "/opt/bin/machines", "--json"], env);
+      expect(allowed.stderr).toBe("");
+      expect(allowed.exitCode).toBe(0);
+      expect(JSON.parse(allowed.stdout).shellCommand).toContain("/opt/bin/machines");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("webhooks add requires scoped approval and binds target arguments", async () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-events-cli-"));
     const env = mutationEnv(dir);
@@ -492,6 +511,29 @@ exit 1
       expect(replayed.stderr).toBe("");
       expect(replayed.exitCode).toBe(0);
       expect(JSON.parse(replayed.stdout).events.length).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("storage commands hand off approved CLI mutations to the storage layer", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-storage-cli-"));
+    const env = {
+      ...mutationEnv(dir),
+      HASNA_MACHINES_DATABASE_URL: "",
+      MACHINES_DATABASE_URL: "",
+    };
+    try {
+      const tables = ["agent_heartbeats"];
+      const withoutToken = await runMachinesCli(["storage", "push", "--tables", "agent_heartbeats", "--json"], env);
+      expect(withoutToken.exitCode).not.toBe(0);
+      expect(withoutToken.stderr).toContain("requires operator approval");
+
+      const token = approvalToken("storage_push", "storage-push:agent_heartbeats", { tables });
+      const approved = await runMachinesCli(["storage", "push", "--tables", "agent_heartbeats", "--json", "--approval-token", token], env);
+      expect(approved.exitCode).not.toBe(0);
+      expect(approved.stderr).toContain("Missing HASNA_MACHINES_DATABASE_URL");
+      expect(approved.stderr).not.toContain("sdk.machines_storage_push requires");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

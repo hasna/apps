@@ -12,6 +12,17 @@ function check(id: string, status: SelfTestCheck["status"], summary: string, det
   return { id, status, summary, detail };
 }
 
+function summarize(checks: SelfTestCheck[]): Pick<SelfTestResult, "overall" | "counts"> {
+  const counts = checks.reduce((acc, entry) => {
+    acc[entry.status] += 1;
+    return acc;
+  }, { ok: 0, warn: 0, fail: 0 });
+  return {
+    overall: counts.fail > 0 ? "fail" : counts.warn > 0 ? "warn" : "ok",
+    counts,
+  };
+}
+
 export function runSelfTest(): SelfTestResult {
   const version = getPackageVersion();
   const status = getStatus();
@@ -24,9 +35,7 @@ export function runSelfTest(): SelfTestResult {
   const appsDiff = diffApps(machineId);
   const cliPlan = buildClaudeInstallPlan(machineId);
 
-  return {
-    machineId,
-    checks: [
+  const checks = [
       check("package-version", version === "0.0.0" ? "fail" : "ok", "Package version resolves", version),
       check(
         "status",
@@ -61,6 +70,10 @@ export function runSelfTest(): SelfTestResult {
         "Install plan renders",
         `${cliPlan.steps.length} steps`
       ),
-    ],
+    ];
+  return {
+    machineId,
+    ...summarize(checks),
+    checks,
   };
 }

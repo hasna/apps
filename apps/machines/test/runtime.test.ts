@@ -26,8 +26,18 @@ describe("runtime tmux monitor", () => {
       expect.stringContaining("machines"),
     ]);
     expect(plan.shellCommand).toContain("pane-died");
+    expect(plan.shellCommand).toContain("machines");
+    expect(plan.shellCommand).toContain("events");
+    expect(plan.shellCommand).toContain("emit");
+    expect(plan.shellCommand).not.toContain("hasna-events");
     expect(plan.shellCommand).toContain("HASNA_MACHINES_ALLOW_MUTATIONS=1");
     expect(plan.shellCommand).toContain("--no-deliver");
+  });
+
+  test("rejects dependency-owned event binaries for tmux hook plans", () => {
+    for (const machinesCommand of ["events", "hasna-events", "/tmp/node_modules/.bin/events", "/tmp/node_modules/.bin/hasna-events"]) {
+      expect(() => buildTmuxPaneDiedHookPlan({ machinesCommand, trustedLocalMutation: true })).toThrow("must invoke the machines CLI");
+    }
   });
 
   test("does not include trusted mutation env by default", () => {

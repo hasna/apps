@@ -19,6 +19,8 @@ afterEach(() => {
   delete process.env["HASNA_MACHINES_NOTIFICATIONS_PATH"];
   delete process.env["HASNA_MACHINES_MANIFEST_PATH"];
   delete process.env["HASNA_MACHINES_DB_PATH"];
+  delete process.env["HASNA_MACHINES_DATABASE_URL"];
+  delete process.env["MACHINES_DATABASE_URL"];
   delete process.env["HASNA_MACHINES_MUTATION_REPLAY_PATH"];
 });
 
@@ -42,6 +44,10 @@ test("exports expected MCP tool surface", () => {
   expect(MACHINE_MCP_TOOL_NAMES).toContain("storage_push");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("storage_pull");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("storage_sync");
+  expect(MACHINE_MCP_TOOL_NAMES).not.toContain("events");
+  expect(MACHINE_MCP_TOOL_NAMES).not.toContain("hasna_events");
+  expect(MACHINE_MCP_TOOL_NAMES).not.toContain("webhooks");
+  expect(MACHINE_MCP_TOOL_NAMES.filter((name) => /^(events|hasna_events|webhooks)(_|$)/.test(name))).toEqual([]);
   expect(createMcpServer("0.0.1")).toBeDefined();
 });
 
@@ -294,5 +300,45 @@ test("MCP apps apply tokens are bound to the approved plan digest", async () => 
     await client.close();
     await server.close();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("MCP storage tools hand off approved mutations to the storage layer", async () => {
+  process.env[MUTATION_APPROVAL_TOKEN_ENV] = "secret";
+  delete process.env["HASNA_MACHINES_DATABASE_URL"];
+  delete process.env["MACHINES_DATABASE_URL"];
+  const tables = ["agent_heartbeats"];
+  const token = createMutationApprovalToken({
+    surface: "mcp",
+    operation: "storage_push",
+    resourceId: "storage-push:agent_heartbeats",
+    callerId: "mcp",
+    runId: "mcp",
+    transport: "mcp:stdio",
+    args: { tables },
+  }, { env: process.env, now: Date.now(), nonce: "mcp-storage-approved-handoff" });
+  const server = createMcpServer("0.0.1");
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "storage-approved-handoff-test", version: "0.0.1" });
+
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+
+  try {
+    let failureText = "";
+    try {
+      const result = await client.callTool({
+        name: "storage_push",
+        arguments: { tables, approval_token: token },
+      });
+      failureText = JSON.stringify(result);
+    } catch (error) {
+      failureText = error instanceof Error ? error.message : String(error);
+    }
+    expect(failureText).toContain("Missing HASNA_MACHINES_DATABASE_URL");
+    expect(failureText).not.toContain("sdk.machines_storage_push requires");
+  } finally {
+    await client.close();
+    await server.close();
   }
 });

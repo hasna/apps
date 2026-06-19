@@ -24,6 +24,8 @@ describe("self-test", () => {
 
     const result = runSelfTest();
     expect(result.machineId).toBe("demo-node-01");
+    expect(result.overall).toBe(result.counts.fail > 0 ? "fail" : result.counts.warn > 0 ? "warn" : "ok");
+    expect(result.counts.ok + result.counts.warn + result.counts.fail).toBe(result.checks.length);
     expect(result.checks.length).toBeGreaterThanOrEqual(8);
     expect(result.checks.some((check) => check.id === "doctor")).toBe(true);
   });
