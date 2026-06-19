@@ -307,4 +307,352 @@ export const PG_MIGRATIONS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_file_links_source ON file_links(app, source_type, source_id)`,
   `CREATE INDEX IF NOT EXISTS idx_file_access_events_asset ON file_access_events(asset_id, created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_file_access_events_org ON file_access_events(org_id, created_at)`,
+
+  // Migration 22: canonical Google Drive object mapping for Hasna XYZ S3 migration
+  `ALTER TABLE google_drive_imported_objects ADD COLUMN IF NOT EXISTS raw_bucket TEXT`,
+  `ALTER TABLE google_drive_imported_objects ADD COLUMN IF NOT EXISTS raw_key TEXT`,
+  `ALTER TABLE google_drive_imported_objects ADD COLUMN IF NOT EXISTS canonical_bucket TEXT`,
+  `ALTER TABLE google_drive_imported_objects ADD COLUMN IF NOT EXISTS canonical_key TEXT`,
+  `ALTER TABLE google_drive_imported_objects ADD COLUMN IF NOT EXISTS canonical_sha256 TEXT`,
+  `ALTER TABLE google_drive_imported_objects ADD COLUMN IF NOT EXISTS promotion_action TEXT`,
+  `ALTER TABLE google_drive_imported_objects ADD COLUMN IF NOT EXISTS promotion_status TEXT`,
+  `CREATE INDEX IF NOT EXISTS idx_google_drive_imported_objects_canonical_key
+    ON google_drive_imported_objects(canonical_bucket, canonical_key)`,
+  `CREATE INDEX IF NOT EXISTS idx_google_drive_imported_objects_canonical_sha256
+    ON google_drive_imported_objects(canonical_sha256)`,
+
+  // Migration 23: large Drive objects exceed 32-bit integer size.
+  `ALTER TABLE files ALTER COLUMN size TYPE BIGINT USING size::bigint`,
+
+  // Migration 24: Drive archive organization/review workflow
+  `CREATE TABLE IF NOT EXISTS file_organization_reviews (
+    id TEXT PRIMARY KEY,
+    file_id TEXT NOT NULL UNIQUE REFERENCES files(id) ON DELETE CASCADE,
+    source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+    profile TEXT,
+    drive_id TEXT,
+    root_type TEXT NOT NULL DEFAULT 'unknown'
+      CHECK(root_type IN ('my_drive', 'shared_drive', 'unknown')),
+    original_path TEXT NOT NULL,
+    current_path TEXT NOT NULL,
+    target_path TEXT,
+    target_collection_id TEXT REFERENCES collections(id) ON DELETE SET NULL,
+    target_project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    owner TEXT,
+    labels TEXT NOT NULL DEFAULT '[]',
+    duplicate_group_id TEXT,
+    review_status TEXT NOT NULL DEFAULT 'unreviewed'
+      CHECK(review_status IN ('unreviewed', 'in_review', 'approved', 'moved', 'duplicate', 'ignored')),
+    priority TEXT NOT NULL DEFAULT 'normal',
+    reviewer TEXT,
+    reviewed_at TEXT,
+    notes TEXT,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    updated_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `CREATE TABLE IF NOT EXISTS file_organization_events (
+    id TEXT PRIMARY KEY,
+    review_id TEXT NOT NULL REFERENCES file_organization_reviews(id) ON DELETE CASCADE,
+    file_id TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    action TEXT NOT NULL,
+    actor TEXT,
+    from_status TEXT,
+    to_status TEXT,
+    before_state TEXT,
+    after_state TEXT,
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_file_organization_reviews_status
+    ON file_organization_reviews(review_status, updated_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_file_organization_reviews_root
+    ON file_organization_reviews(profile, root_type)`,
+  `CREATE INDEX IF NOT EXISTS idx_file_organization_reviews_owner
+    ON file_organization_reviews(owner, review_status)`,
+  `CREATE INDEX IF NOT EXISTS idx_file_organization_reviews_duplicate
+    ON file_organization_reviews(duplicate_group_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_file_organization_events_review
+    ON file_organization_events(review_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_file_organization_events_file
+    ON file_organization_events(file_id, created_at)`,
+
+  // Migration 25: explicit Drive ACL/permission review state
+  `ALTER TABLE file_organization_reviews ADD COLUMN IF NOT EXISTS acl_review_status TEXT NOT NULL DEFAULT 'needs_review'
+    CHECK(acl_review_status IN ('needs_review', 'approved', 'restricted', 'external_review', 'unknown'))`,
+  `ALTER TABLE file_organization_reviews ADD COLUMN IF NOT EXISTS permission_scope TEXT NOT NULL DEFAULT 'unknown'
+    CHECK(permission_scope IN ('unknown', 'private', 'domain', 'shared_drive', 'external', 'public', 'mixed'))`,
+  `ALTER TABLE file_organization_reviews ADD COLUMN IF NOT EXISTS permission_risk TEXT NOT NULL DEFAULT 'unknown'
+    CHECK(permission_risk IN ('unknown', 'low', 'medium', 'high'))`,
+  `ALTER TABLE file_organization_reviews ADD COLUMN IF NOT EXISTS permission_notes TEXT`,
+  `ALTER TABLE file_organization_reviews ADD COLUMN IF NOT EXISTS permissions_metadata TEXT NOT NULL DEFAULT '{}'`,
+  `CREATE INDEX IF NOT EXISTS idx_file_organization_reviews_acl
+    ON file_organization_reviews(acl_review_status, permission_risk)`,
+
+  // Migration 26: immutable file revision identities for source refs and knowledge indexing.
+  `CREATE TABLE IF NOT EXISTS file_versions (
+    id TEXT PRIMARY KEY,
+    file_id TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+    source_ref TEXT NOT NULL UNIQUE,
+    revision_identity TEXT NOT NULL,
+    content_hash_algorithm TEXT NOT NULL DEFAULT 'unknown',
+    content_hash TEXT,
+    size BIGINT NOT NULL DEFAULT 0,
+    mime TEXT NOT NULL DEFAULT 'application/octet-stream',
+    storage_provider TEXT NOT NULL DEFAULT 'unknown'
+      CHECK(storage_provider IN ('local', 's3', 'unknown')),
+    bucket TEXT,
+    region TEXT,
+    object_key TEXT,
+    local_path TEXT,
+    source_path TEXT NOT NULL,
+    source_modified_at TEXT,
+    indexed_at TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'active'
+      CHECK(state IN ('active', 'deleted', 'moved')),
+    source_provenance TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    UNIQUE(file_id, revision_identity)
+  )`,
+  `WITH current_versions AS (
+    SELECT
+      f.id AS file_id,
+      f.source_id AS source_id,
+      COALESCE(g.canonical_sha256, f.hash, '') || '|' ||
+        CASE
+          WHEN g.canonical_sha256 IS NOT NULL AND g.canonical_sha256 != '' THEN 'sha256'
+          WHEN s.type = 'local' AND f.hash IS NOT NULL AND f.hash != '' THEN 'blake3'
+          WHEN s.type = 's3' AND f.hash IS NOT NULL AND f.hash != '' THEN 'etag'
+          WHEN f.hash IS NOT NULL AND f.hash != '' THEN 'source'
+          ELSE 'unknown'
+        END || '|' ||
+        f.size::text || '|' ||
+        f.mime || '|' ||
+        f.path || '|' ||
+        COALESCE(f.modified_at, '') || '|' ||
+        f.status || '|' ||
+        COALESCE(g.canonical_bucket, CASE WHEN g.storage_type = 's3' THEN ds.bucket ELSE s.bucket END, '') || '|' ||
+        COALESCE(g.canonical_key, CASE WHEN g.storage_type = 's3' THEN g.storage_key WHEN s.type = 's3' THEN f.path END, '') || '|' ||
+        COALESCE(CASE
+          WHEN g.storage_type = 'local' AND ds.path IS NOT NULL AND g.storage_key IS NOT NULL THEN ds.path || '/' || g.storage_key
+          WHEN s.type = 'local' AND s.path IS NOT NULL THEN s.path || '/' || f.path
+        END, '') AS revision_identity,
+      CASE
+        WHEN g.canonical_sha256 IS NOT NULL AND g.canonical_sha256 != '' THEN 'sha256'
+        WHEN s.type = 'local' AND f.hash IS NOT NULL AND f.hash != '' THEN 'blake3'
+        WHEN s.type = 's3' AND f.hash IS NOT NULL AND f.hash != '' THEN 'etag'
+        WHEN f.hash IS NOT NULL AND f.hash != '' THEN 'source'
+        ELSE 'unknown'
+      END AS content_hash_algorithm,
+      COALESCE(g.canonical_sha256, f.hash) AS content_hash,
+      f.size AS size,
+      f.mime AS mime,
+      CASE
+        WHEN g.canonical_bucket IS NOT NULL AND g.canonical_key IS NOT NULL THEN 's3'
+        WHEN g.storage_type = 's3' THEN 's3'
+        WHEN g.storage_type = 'local' THEN 'local'
+        WHEN s.type = 's3' THEN 's3'
+        WHEN s.type = 'local' THEN 'local'
+        ELSE 'unknown'
+      END AS storage_provider,
+      COALESCE(g.canonical_bucket, CASE WHEN g.storage_type = 's3' THEN ds.bucket ELSE s.bucket END) AS bucket,
+      COALESCE(ds.region, s.region) AS region,
+      COALESCE(g.canonical_key, CASE WHEN g.storage_type = 's3' THEN g.storage_key WHEN s.type = 's3' THEN f.path END) AS object_key,
+      CASE
+        WHEN g.storage_type = 'local' AND ds.path IS NOT NULL AND g.storage_key IS NOT NULL THEN ds.path || '/' || g.storage_key
+        WHEN s.type = 'local' AND s.path IS NOT NULL THEN s.path || '/' || f.path
+      END AS local_path,
+      f.path AS source_path,
+      f.modified_at AS source_modified_at,
+      f.indexed_at AS indexed_at,
+      f.status AS state,
+      json_build_object(
+        'source_type', s.type,
+        'source_name', s.name,
+        'source_prefix', s.prefix,
+        'google_drive_source_id', g.source_id,
+        'google_drive_file_id', g.file_id,
+        'google_drive_drive_id', g.drive_id,
+        'raw_bucket', g.raw_bucket,
+        'raw_key', g.raw_key,
+        'destination_source_id', g.destination_source_id
+      )::text AS source_provenance,
+      f.created_at AS created_at
+    FROM files f
+    JOIN sources s ON s.id = f.source_id
+    LEFT JOIN google_drive_imported_objects g
+      ON g.file_record_id = f.id AND g.deleted = FALSE
+    LEFT JOIN sources ds ON ds.id = g.destination_source_id
+  ),
+  numbered_versions AS (
+    SELECT
+      'rev_' || substr(md5(file_id || ':' || clock_timestamp()::text || ':' || random()::text), 1, 20) AS revision_id,
+      *
+    FROM current_versions
+  )
+  INSERT INTO file_versions (
+    id, file_id, source_id, source_ref, revision_identity,
+    content_hash_algorithm, content_hash, size, mime, storage_provider,
+    bucket, region, object_key, local_path, source_path, source_modified_at,
+    indexed_at, state, source_provenance, created_at
+  )
+  SELECT
+    revision_id,
+    file_id,
+    source_id,
+    'open-files://file/' || file_id || '/revision/' || revision_id,
+    revision_identity,
+    content_hash_algorithm,
+    content_hash,
+    size,
+    mime,
+    storage_provider,
+    bucket,
+    region,
+    object_key,
+    local_path,
+    source_path,
+    source_modified_at,
+    indexed_at,
+    state,
+    source_provenance,
+    created_at
+  FROM numbered_versions
+  ON CONFLICT (file_id, revision_identity) DO NOTHING`,
+  `CREATE INDEX IF NOT EXISTS idx_file_versions_file
+    ON file_versions(file_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_file_versions_source
+    ON file_versions(source_id, source_path)`,
+  `CREATE INDEX IF NOT EXISTS idx_file_versions_hash
+    ON file_versions(content_hash_algorithm, content_hash)`,
+  `CREATE INDEX IF NOT EXISTS idx_file_versions_storage
+    ON file_versions(storage_provider, bucket, object_key)`,
+
+  // Migration 27: first-class immutable S3 object identity records.
+  `CREATE TABLE IF NOT EXISTS s3_objects (
+    id TEXT PRIMARY KEY,
+    source_id TEXT REFERENCES sources(id) ON DELETE SET NULL,
+    identity TEXT NOT NULL UNIQUE,
+    bucket TEXT NOT NULL,
+    region TEXT,
+    object_key TEXT NOT NULL,
+    version_id TEXT,
+    etag TEXT,
+    checksum_sha256 TEXT,
+    size BIGINT NOT NULL DEFAULT 0,
+    content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+    storage_class TEXT,
+    server_side_encryption TEXT,
+    sse_kms_key_id TEXT,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    org_id TEXT,
+    company_id TEXT,
+    project_id TEXT,
+    app TEXT,
+    discovered_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    updated_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `ALTER TABLE file_versions ADD COLUMN IF NOT EXISTS s3_object_id TEXT REFERENCES s3_objects(id) ON DELETE SET NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_s3_objects_bucket_key
+    ON s3_objects(bucket, object_key)`,
+  `CREATE INDEX IF NOT EXISTS idx_s3_objects_checksum
+    ON s3_objects(checksum_sha256)`,
+  `CREATE INDEX IF NOT EXISTS idx_s3_objects_source
+    ON s3_objects(source_id, object_key)`,
+  `CREATE INDEX IF NOT EXISTS idx_s3_objects_scope
+    ON s3_objects(org_id, company_id, project_id, app)`,
+  `CREATE INDEX IF NOT EXISTS idx_file_versions_s3_object
+    ON file_versions(s3_object_id)`,
+
+  // Migration 28: durable source change outbox for open-knowledge reindexing.
+  `CREATE TABLE IF NOT EXISTS knowledge_source_outbox_events (
+    id TEXT PRIMARY KEY,
+    cursor BIGINT NOT NULL UNIQUE,
+    event_type TEXT NOT NULL CHECK(event_type IN (
+      'source_created', 'indexed', 'updated', 'deleted', 'moved', 'hash_changed',
+      'revision_changed', 'extraction_ready', 'extraction_failed',
+      'extraction_changed', 'permission_changed', 'acl_revoked',
+      'canonical_key_changed', 'source_disabled', 'source_enabled',
+      'source_updated'
+    )),
+    source_ref TEXT,
+    file_id TEXT,
+    source_id TEXT,
+    revision_id TEXT,
+    previous_revision_id TEXT,
+    status TEXT,
+    hash TEXT,
+    size BIGINT,
+    mime TEXT,
+    path TEXT,
+    idempotency_key TEXT UNIQUE,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `CREATE TABLE IF NOT EXISTS knowledge_source_outbox_checkpoints (
+    consumer_id TEXT PRIMARY KEY,
+    cursor BIGINT NOT NULL DEFAULT 0,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    updated_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_source_outbox_cursor
+    ON knowledge_source_outbox_events(cursor)`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_source_outbox_type
+    ON knowledge_source_outbox_events(event_type, cursor)`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_source_outbox_file
+    ON knowledge_source_outbox_events(file_id, cursor)`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_source_outbox_source
+    ON knowledge_source_outbox_events(source_id, cursor)`,
+
+  // Migration 29: derived search documents for extracted/OCR/transcript/AI summary artifacts.
+  `CREATE TABLE IF NOT EXISTS file_search_documents (
+    id TEXT PRIMARY KEY,
+    file_id TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    revision_id TEXT REFERENCES file_versions(id) ON DELETE SET NULL,
+    source_ref TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN (
+      'extracted_text',
+      'extraction_summary',
+      'ocr_text',
+      'vision_summary',
+      'transcript',
+      'llm_summary',
+      'semantic_metadata',
+      'manual_note'
+    )),
+    extractor TEXT NOT NULL DEFAULT 'unknown',
+    content_hash TEXT NOT NULL,
+    searchable_text TEXT NOT NULL DEFAULT '',
+    metadata TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'ready' CHECK(status IN ('ready', 'partial', 'unsupported', 'error', 'stale')),
+    private BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    updated_at TEXT NOT NULL DEFAULT NOW()::text,
+    UNIQUE(file_id, kind, source_ref, content_hash)
+  )`,
+  `ALTER TABLE file_search_documents
+    ADD COLUMN IF NOT EXISTS search_vector tsvector
+    GENERATED ALWAYS AS (
+      to_tsvector(
+        'simple',
+        coalesce(kind, '') || ' ' ||
+        coalesce(extractor, '') || ' ' ||
+        coalesce(searchable_text, '') || ' ' ||
+        coalesce(metadata, '')
+      )
+    ) STORED`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_file_search_documents_unique
+    ON file_search_documents(file_id, kind, source_ref, content_hash)`,
+  `CREATE INDEX IF NOT EXISTS idx_file_search_documents_file
+    ON file_search_documents(file_id, status, updated_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_file_search_documents_kind
+    ON file_search_documents(kind, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_file_search_documents_revision
+    ON file_search_documents(revision_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_file_search_documents_hash
+    ON file_search_documents(content_hash)`,
+  `CREATE INDEX IF NOT EXISTS idx_file_search_documents_search_vector
+    ON file_search_documents USING GIN(search_vector)`,
 ];

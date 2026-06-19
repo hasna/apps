@@ -7,3 +7,11 @@ dashboard/dist/
 .env
 .secrets/
 bun.lock
+.codewith/codewith.db
+.codewith/private-artifacts/
+.hasna/
+.takumi/
+5MiB
+25MiB
+__pycache__/
+*.pyc

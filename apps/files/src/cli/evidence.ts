@@ -12,6 +12,7 @@ import {
   signEvidenceDownload,
   uploadEvidenceFile,
   verifyEvidenceAsset,
+  DEFAULT_EVIDENCE_S3_BUCKET,
   type EvidenceStorageOptions,
 } from "../lib/evidence.js";
 import type { FileAssetStatus } from "../types/index.js";
@@ -26,7 +27,7 @@ export function registerEvidenceCommands(program: Command): void {
     .description("Show the production evidence storage defaults")
     .option("--json", "Output as JSON")
     .action((opts: { json?: boolean }) => {
-      const storage = getEvidenceStorageOptions({ provider: "s3", bucket: "hasna-files-prod" });
+      const storage = getEvidenceStorageOptions({ provider: "s3", bucket: DEFAULT_EVIDENCE_S3_BUCKET });
       if (opts.json) {
         console.log(JSON.stringify(storage, null, 2));
         return;
@@ -53,7 +54,7 @@ export function registerEvidenceCommands(program: Command): void {
     .option("--classification <value>", "Classification", "evidence")
     .option("--storage-class <value>", "Retention storage class metadata")
     .option("--storage <provider>", "Storage provider: s3 or local")
-    .option("--bucket <bucket>", "S3 bucket", "hasna-files-prod")
+    .option("--bucket <bucket>", "S3 bucket", DEFAULT_EVIDENCE_S3_BUCKET)
     .option("--region <region>", "S3 region")
     .option("--aws-profile <profile>", "AWS profile")
     .option("--prefix <prefix>", "Object key prefix")
@@ -92,7 +93,7 @@ export function registerEvidenceCommands(program: Command): void {
     .option("--source-id <id>", "Domain source id to link after upload")
     .option("--link-kind <kind>", "Link kind, defaults to --kind")
     .option("--storage <provider>", "Storage provider: s3 or local")
-    .option("--bucket <bucket>", "S3 bucket", "hasna-files-prod")
+    .option("--bucket <bucket>", "S3 bucket", DEFAULT_EVIDENCE_S3_BUCKET)
     .option("--region <region>", "S3 region")
     .option("--aws-profile <profile>", "AWS profile")
     .option("--prefix <prefix>", "Object key prefix")
@@ -128,7 +129,7 @@ export function registerEvidenceCommands(program: Command): void {
     .command("complete <intent-id>")
     .description("Complete an upload intent after the client uploads bytes")
     .option("--storage <provider>", "Storage provider: s3 or local")
-    .option("--bucket <bucket>", "S3 bucket", "hasna-files-prod")
+    .option("--bucket <bucket>", "S3 bucket", DEFAULT_EVIDENCE_S3_BUCKET)
     .option("--region <region>", "S3 region")
     .option("--aws-profile <profile>", "AWS profile")
     .option("--prefix <prefix>", "Object key prefix")
@@ -173,7 +174,7 @@ export function registerEvidenceCommands(program: Command): void {
     .option("--purpose <purpose>", "Access purpose")
     .option("--expires <seconds>", "Expiry seconds", "300")
     .option("--storage <provider>", "Storage provider: s3 or local")
-    .option("--bucket <bucket>", "S3 bucket", "hasna-files-prod")
+    .option("--bucket <bucket>", "S3 bucket", DEFAULT_EVIDENCE_S3_BUCKET)
     .option("--region <region>", "S3 region")
     .option("--aws-profile <profile>", "AWS profile")
     .option("--prefix <prefix>", "Object key prefix")
@@ -195,7 +196,7 @@ export function registerEvidenceCommands(program: Command): void {
     .command("verify <asset-id>")
     .description("Verify stored object size and checksum")
     .option("--storage <provider>", "Storage provider: s3 or local")
-    .option("--bucket <bucket>", "S3 bucket", "hasna-files-prod")
+    .option("--bucket <bucket>", "S3 bucket", DEFAULT_EVIDENCE_S3_BUCKET)
     .option("--region <region>", "S3 region")
     .option("--aws-profile <profile>", "AWS profile")
     .option("--prefix <prefix>", "Object key prefix")

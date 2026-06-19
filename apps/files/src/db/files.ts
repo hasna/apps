@@ -1,7 +1,10 @@
 import { getDb } from "./database.js";
 import { nanoid } from "nanoid";
+import { getLatestFileVersion, upsertCurrentFileVersion } from "./file-versions.js";
+import { appendKnowledgeSourceOutboxEvent } from "./knowledge-outbox.js";
 import { generateCanonicalName } from "../lib/normalize.js";
-import type { FileRecord, FileWithTags, ListFilesOptions, FileStatus } from "../types/index.js";
+import { buildOpenFilesFileRef } from "../lib/source-ref.js";
+import type { FileRecord, FileVersion, FileWithTags, ListFilesOptions, FileStatus, KnowledgeSourceOutboxEventType } from "../types/index.js";
 
 interface FileRow {
   id: string;
@@ -44,6 +47,7 @@ export function upsertFile(input: Omit<FileRecord, "id" | "indexed_at" | "create
   ).get(input.source_id, input.path);
 
   if (existing) {
+    const previousVersion = getLatestFileVersion(existing.id);
     db.run(
       `UPDATE files SET source_id=?, machine_id=?, path=?, name=?, ext=?, size=?, mime=?, hash=?, status=?, modified_at=?, indexed_at=datetime('now'), sync_version=sync_version+1
        WHERE id=?`,
@@ -54,8 +58,17 @@ export function upsertFile(input: Omit<FileRecord, "id" | "indexed_at" | "create
       const canonical = generateCanonicalName(input.name);
       db.run("UPDATE files SET original_name=?, canonical_name=? WHERE id=?", [input.name, canonical, existing.id]);
     }
-    syncFts(existing.id);
-    return toFile(db.query<FileRow, [string]>("SELECT * FROM files WHERE id=?").get(existing.id)!);
+    refreshFileFts(existing.id);
+    const currentVersion = upsertCurrentFileVersion(existing.id);
+    const next = toFile(db.query<FileRow, [string]>("SELECT * FROM files WHERE id=?").get(existing.id)!);
+    const eventType = classifyFileChange(existing, input);
+    emitFileOutboxEvent(eventType, next, currentVersion, previousVersion, {
+      previous_path: existing.path,
+      previous_status: existing.status,
+      previous_hash: existing.hash ?? undefined,
+    });
+    emitDerivedRevisionOutboxEvents(next, currentVersion, previousVersion);
+    return next;
   }
 
   const id = input.id ?? `f_${nanoid(10)}`;
@@ -65,21 +78,78 @@ export function upsertFile(input: Omit<FileRecord, "id" | "indexed_at" | "create
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [id, input.source_id, input.machine_id, input.path, input.name, input.name, canonical, input.ext, input.size, input.mime, input.hash ?? null, input.status, input.modified_at ?? null]
   );
-  syncFts(id);
-  return toFile(db.query<FileRow, [string]>("SELECT * FROM files WHERE id=?").get(id)!);
+  refreshFileFts(id);
+  const currentVersion = upsertCurrentFileVersion(id);
+  const file = toFile(db.query<FileRow, [string]>("SELECT * FROM files WHERE id=?").get(id)!);
+  emitFileOutboxEvent("indexed", file, currentVersion, null);
+  return file;
 }
 
-function syncFts(file_id: string): void {
+function emitDerivedRevisionOutboxEvents(
+  file: FileRecord,
+  currentVersion: FileVersion | null,
+  previousVersion: FileVersion | null,
+): void {
+  if (!currentVersion || !previousVersion || currentVersion.id === previousVersion.id) return;
+  emitFileOutboxEvent("revision_changed", file, currentVersion, previousVersion, {
+    previous_revision_ref: previousVersion.source_ref,
+  });
+  if (
+    currentVersion.bucket !== previousVersion.bucket
+    || currentVersion.object_key !== previousVersion.object_key
+  ) {
+    emitFileOutboxEvent("canonical_key_changed", file, currentVersion, previousVersion, {
+      previous_bucket: previousVersion.bucket,
+      previous_object_key: previousVersion.object_key,
+    });
+  }
+}
+
+export function refreshFileFts(file_id: string): void {
   const db = getDb();
   const file = db.query<FileRow, [string]>("SELECT * FROM files WHERE id=?").get(file_id);
   if (!file) return;
   const tags = db.query<{ name: string }, [string]>(
     "SELECT t.name FROM tags t JOIN file_tags ft ON ft.tag_id=t.id WHERE ft.file_id=?"
   ).all(file_id).map((r) => r.name).join(" ");
+  const organization = db.query<{
+    owner: string | null;
+    target_path: string | null;
+    labels: string | null;
+    review_status: string | null;
+  }, [string]>(
+    "SELECT owner, target_path, labels, review_status FROM file_organization_reviews WHERE file_id=? LIMIT 1"
+  ).get(file_id);
   db.run("DELETE FROM files_fts WHERE id=?", [file_id]);
   db.run(
-    "INSERT INTO files_fts (id, name, path, ext, mime, tags, canonical_name, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    [file_id, file.name, file.path, file.ext, file.mime, tags, file.canonical_name ?? "", file.description ?? ""]
+    `INSERT INTO files_fts (
+      id,
+      name,
+      path,
+      ext,
+      mime,
+      tags,
+      canonical_name,
+      description,
+      organization_owner,
+      organization_target_path,
+      organization_labels,
+      organization_status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      file_id,
+      file.name,
+      file.path,
+      file.ext,
+      file.mime,
+      tags,
+      file.canonical_name ?? "",
+      file.description ?? "",
+      organization?.owner ?? "",
+      organization?.target_path ?? "",
+      organization?.labels ?? "",
+      organization?.review_status ?? "",
+    ]
   );
 }
 
@@ -156,23 +226,53 @@ export function searchFiles(query: string, opts: Omit<ListFilesOptions, "query">
 }
 
 export function markFileDeleted(source_id: string, path: string): boolean {
+  const before = getDb().query<FileRow, [string, string]>(
+    "SELECT * FROM files WHERE source_id=? AND path=? AND status='active'",
+  ).get(source_id, path);
+  const previousVersion = before ? getLatestFileVersion(before.id) : null;
   const result = getDb().run(
-    "UPDATE files SET status='deleted', indexed_at=datetime('now') WHERE source_id=? AND path=? AND status='active'",
+    "UPDATE files SET status='deleted', indexed_at=datetime('now'), sync_version=sync_version+1 WHERE source_id=? AND path=? AND status='active'",
     [source_id, path]
   );
+  if (result.changes > 0) {
+    const row = getDb().query<{ id: string }, [string, string]>(
+      "SELECT id FROM files WHERE source_id=? AND path=?",
+    ).get(source_id, path);
+    if (row) {
+      const currentVersion = upsertCurrentFileVersion(row.id);
+      const next = getDb().query<FileRow, [string]>("SELECT * FROM files WHERE id=?").get(row.id);
+      if (next) emitFileOutboxEvent("deleted", toFile(next), currentVersion, previousVersion);
+    }
+  }
   return result.changes > 0;
 }
 
 export function markFileDeletedById(id: string): boolean {
+  const before = getDb().query<FileRow, [string]>(
+    "SELECT * FROM files WHERE id=? AND status='active'",
+  ).get(id);
+  const previousVersion = before ? getLatestFileVersion(before.id) : null;
   const result = getDb().run(
-    "UPDATE files SET status='deleted', indexed_at=datetime('now') WHERE id=? AND status='active'",
+    "UPDATE files SET status='deleted', indexed_at=datetime('now'), sync_version=sync_version+1 WHERE id=? AND status='active'",
     [id]
   );
+  if (result.changes > 0) {
+    const currentVersion = upsertCurrentFileVersion(id);
+    const next = getDb().query<FileRow, [string]>("SELECT * FROM files WHERE id=?").get(id);
+    if (next) emitFileOutboxEvent("deleted", toFile(next), currentVersion, previousVersion);
+  }
   return result.changes > 0;
 }
 
 export function deleteFile(id: string): boolean {
+  const before = getDb().query<FileRow, [string]>("SELECT * FROM files WHERE id=?").get(id);
+  const previousVersion = before ? getLatestFileVersion(before.id) : null;
   const result = getDb().run("DELETE FROM files WHERE id=?", [id]);
+  if (result.changes > 0 && before) {
+    emitFileOutboxEvent("deleted", { ...toFile(before), status: "deleted" }, previousVersion, previousVersion, {
+      physical_delete: true,
+    });
+  }
   return result.changes > 0;
 }
 
@@ -187,8 +287,11 @@ export function annotateFile(id: string, description: string): FileRecord | null
   const db = getDb();
   const result = db.run("UPDATE files SET description = ?, sync_version = sync_version + 1 WHERE id = ?", [description, id]);
   if (result.changes === 0) return null;
-  syncFts(id);
-  return toFile(db.query<FileRow, [string]>("SELECT * FROM files WHERE id=?").get(id)!);
+  refreshFileFts(id);
+  const file = toFile(db.query<FileRow, [string]>("SELECT * FROM files WHERE id=?").get(id)!);
+  const version = getLatestFileVersion(id);
+  emitFileOutboxEvent("updated", file, version, version, { metadata_changed: "description" });
+  return file;
 }
 
 export function getMaxSyncVersion(): number {
@@ -209,5 +312,64 @@ export function refreshAllFts(): void {
   const db = getDb();
   db.run("DELETE FROM files_fts");
   const files = db.query<FileRow, []>("SELECT * FROM files").all();
-  for (const f of files) syncFts(f.id);
+  for (const f of files) refreshFileFts(f.id);
+}
+
+function classifyFileChange(
+  existing: FileRow,
+  input: Omit<FileRecord, "id" | "indexed_at" | "created_at"> & { id?: string },
+): KnowledgeSourceOutboxEventType {
+  if (input.status === "deleted" && existing.status !== "deleted") return "deleted";
+  if (input.status === "moved" || existing.path !== input.path) return "moved";
+  if ((existing.hash ?? null) !== (input.hash ?? null)) return "hash_changed";
+  return "updated";
+}
+
+function emitFileOutboxEvent(
+  eventType: KnowledgeSourceOutboxEventType,
+  file: FileRecord,
+  currentVersion: FileVersion | null,
+  previousVersion: FileVersion | null,
+  metadata: Record<string, unknown> = {},
+): void {
+  const sourceRef = currentVersion?.source_ref ?? previousVersion?.source_ref ?? buildOpenFilesFileRef(file.id);
+  const hash = currentVersion?.content_hash ?? file.hash;
+  appendKnowledgeSourceOutboxEvent({
+    event_type: eventType,
+    source_ref: sourceRef,
+    file_id: file.id,
+    source_id: file.source_id,
+    revision_id: currentVersion?.id,
+    previous_revision_id: previousVersion?.id,
+    status: currentVersion?.state ?? file.status,
+    hash: hash ? formatHash(currentVersion?.content_hash_algorithm, hash) : undefined,
+    size: currentVersion?.size ?? file.size,
+    mime: currentVersion?.mime ?? file.mime,
+    path: currentVersion?.source_path ?? file.path,
+    idempotency_key: buildFileOutboxIdempotencyKey(eventType, file, currentVersion, previousVersion, metadata),
+    metadata,
+  });
+}
+
+function buildFileOutboxIdempotencyKey(
+  eventType: KnowledgeSourceOutboxEventType,
+  file: FileRecord,
+  currentVersion: FileVersion | null,
+  previousVersion: FileVersion | null,
+  metadata: Record<string, unknown>,
+): string | undefined {
+  if (metadata.metadata_changed || metadata.physical_delete) return undefined;
+  return [
+    eventType,
+    file.id,
+    previousVersion?.id ?? "",
+    currentVersion?.id ?? "",
+    file.status,
+    file.path,
+  ].join(":");
+}
+
+function formatHash(algorithm: string | undefined, hash: string): string {
+  if (!algorithm || algorithm === "unknown") return hash;
+  return `${algorithm}:${hash}`;
 }

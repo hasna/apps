@@ -19,6 +19,7 @@ import { lookup as mimeLookup } from "mime-types";
 import { upsertFile, listFiles } from "../db/files.js";
 import { getDb } from "../db/database.js";
 import { markSourceIndexed } from "../db/sources.js";
+import { upsertS3ObjectRecord } from "../db/s3-objects.js";
 import type { Source, IndexStats, S3Config } from "../types/index.js";
 import type { StreamingBlobPayloadInputTypes } from "@smithy/types";
 
@@ -110,7 +111,25 @@ async function indexS3Object(
     const mime = (mimeLookup(name) || "application/octet-stream") as string;
     const size = obj.Size ?? 0;
     const modified_at = obj.LastModified?.toISOString();
-    const hash = obj.ETag?.replace(/"/g, "");
+    const etag = obj.ETag?.replace(/"/g, "");
+
+    upsertS3ObjectRecord({
+      source_id: source.id,
+      bucket: source.bucket!,
+      region: source.region ?? "us-east-1",
+      object_key: key,
+      etag,
+      size,
+      content_type: mime,
+      storage_class: obj.StorageClass,
+      discovered_at: modified_at,
+      metadata: {
+        discovery: "list_objects_v2",
+        checksum_algorithm: obj.ChecksumAlgorithm,
+        checksum_type: obj.ChecksumType,
+        etag_is_content_hash: false,
+      },
+    });
 
     const result = upsertFile({
       source_id: source.id,
@@ -120,7 +139,7 @@ async function indexS3Object(
       ext,
       size,
       mime,
-      hash,
+      hash: undefined,
       status: "active",
       modified_at,
     });
@@ -162,18 +181,26 @@ export async function uploadBufferToS3(
 ): Promise<string> {
   if (!source.bucket) throw new Error("S3 source missing bucket");
   const client = makeClient(source);
+  const params = {
+    Bucket: source.bucket,
+    Key: s3Key,
+    Body: body,
+    ContentType: contentType,
+    ...(contentLength !== undefined ? { ContentLength: contentLength } : {}),
+    ...(metadata ? { Metadata: metadata } : {}),
+    ...(checksumSha256
+      ? { ChecksumAlgorithm: "SHA256" as const, ChecksumSHA256: normalizeSha256Checksum(checksumSha256) }
+      : {}),
+  };
+
+  if (checksumSha256) {
+    await client.send(new PutObjectCommand(params));
+    return s3Key;
+  }
 
   const upload = new Upload({
     client,
-    params: {
-      Bucket: source.bucket,
-      Key: s3Key,
-      Body: body,
-      ContentType: contentType,
-      ...(contentLength !== undefined ? { ContentLength: contentLength } : {}),
-      ...(metadata ? { Metadata: metadata } : {}),
-      ...(checksumSha256 ? { ChecksumSHA256: normalizeSha256Checksum(checksumSha256) } : {}),
-    },
+    params,
   });
 
   await upload.done();
@@ -234,7 +261,9 @@ export async function getPresignedPutUrl(
       Key: filePath,
       ContentType: opts.contentType,
       ...(opts.contentLength !== undefined ? { ContentLength: opts.contentLength } : {}),
-      ...(opts.checksumSha256 ? { ChecksumSHA256: normalizeSha256Checksum(opts.checksumSha256) } : {}),
+      ...(opts.checksumSha256
+        ? { ChecksumAlgorithm: "SHA256" as const, ChecksumSHA256: normalizeSha256Checksum(opts.checksumSha256) }
+        : {}),
       ...(opts.metadata ? { Metadata: opts.metadata } : {}),
     }),
     { expiresIn: opts.expiresIn ?? 600 },
@@ -245,7 +274,12 @@ export async function headS3Object(source: Source, filePath: string): Promise<{
   size: number;
   mime: string;
   modified_at: string;
+  version_id?: string;
+  etag?: string;
   checksum_sha256?: string;
+  storage_class?: string;
+  server_side_encryption?: string;
+  sse_kms_key_id?: string;
   metadata: Record<string, string>;
 } | null> {
   if (!source.bucket) return null;
@@ -256,7 +290,12 @@ export async function headS3Object(source: Source, filePath: string): Promise<{
       size: resp.ContentLength ?? 0,
       mime: resp.ContentType ?? "application/octet-stream",
       modified_at: resp.LastModified?.toISOString() ?? new Date().toISOString(),
-      checksum_sha256: resp.ChecksumSHA256,
+      version_id: resp.VersionId,
+      etag: resp.ETag?.replace(/"/g, ""),
+      checksum_sha256: normalizeSha256ChecksumToHex(resp.ChecksumSHA256),
+      storage_class: resp.StorageClass,
+      server_side_encryption: resp.ServerSideEncryption,
+      sse_kms_key_id: resp.SSEKMSKeyId,
       metadata: resp.Metadata ?? {},
     };
   } catch {
@@ -272,4 +311,16 @@ function normalizeSha256Checksum(checksum: string): string {
   return /^[a-f0-9]{64}$/i.test(checksum)
     ? Buffer.from(checksum, "hex").toString("base64")
     : checksum;
+}
+
+function normalizeSha256ChecksumToHex(checksum: string | undefined): string | undefined {
+  if (!checksum) return undefined;
+  if (/^[a-f0-9]{64}$/i.test(checksum)) return checksum.toLowerCase();
+  try {
+    const decoded = Buffer.from(checksum, "base64");
+    if (decoded.length === 32) return decoded.toString("hex");
+  } catch {
+    return checksum;
+  }
+  return checksum;
 }

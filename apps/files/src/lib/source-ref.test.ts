@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
+  buildOpenFilesAssetRef,
+  buildOpenFilesAssetRevisionRef,
   buildOpenFilesFileRef,
   buildOpenFilesFileRevisionRef,
   buildOpenFilesSourcePathRef,
@@ -31,6 +33,25 @@ describe("open-files source refs", () => {
     });
   });
 
+  test("builds and parses evidence asset refs", () => {
+    const uri = buildOpenFilesAssetRef("asset_123");
+    const revisionUri = buildOpenFilesAssetRevisionRef("asset_123", "assetrev_456");
+
+    expect(uri).toBe("open-files://asset/asset_123");
+    expect(revisionUri).toBe("open-files://asset/asset_123/revision/assetrev_456");
+    expect(parseOpenFilesSourceRef(uri)).toEqual({
+      kind: "asset",
+      uri,
+      asset_id: "asset_123",
+      revision_id: undefined,
+    });
+    expect(parseOpenFilesSourceRef(revisionUri)).toMatchObject({
+      kind: "asset",
+      asset_id: "asset_123",
+      revision_id: "assetrev_456",
+    });
+  });
+
   test("builds and parses source path refs with encoded paths", () => {
     const uri = buildOpenFilesSourcePathRef("src_abc", "Team Drive/Notes/Q2 plan.md");
 
@@ -44,9 +65,12 @@ describe("open-files source refs", () => {
 
   test("rejects malformed refs", () => {
     expect(isOpenFilesSourceRef("open-files://file/f_123")).toBe(true);
+    expect(isOpenFilesSourceRef("open-files://asset/asset_123")).toBe(true);
     expect(isOpenFilesSourceRef("s3://bucket/key")).toBe(false);
     expect(() => buildOpenFilesFileRef("bad/id")).toThrow("Invalid file id");
+    expect(() => buildOpenFilesAssetRef("bad/id")).toThrow("Invalid asset id");
     expect(() => parseOpenFilesSourceRef("open-files://file")).toThrow("Missing file id");
+    expect(() => parseOpenFilesSourceRef("open-files://asset")).toThrow("Missing asset id");
     expect(() => parseOpenFilesSourceRef("open-files://source/src_abc")).toThrow("Expected open-files://source");
   });
 });

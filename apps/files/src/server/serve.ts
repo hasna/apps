@@ -28,6 +28,8 @@ import type { FileAssetStatus, GoogleDriveConfig, S3Config, SourceType } from ".
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
 
+type RestCapability = "mutations" | "destructive" | "imports" | "signed_urls" | "downloads" | "indexing";
+
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
@@ -37,6 +39,29 @@ function json(data: unknown, status = 200): Response {
 
 function err(msg: string, status = 400): Response {
   return json({ error: msg }, status);
+}
+
+function requireRestCapability(capability: RestCapability): Response | null {
+  if (restCapabilityEnabled(capability)) return null;
+  return err(
+    `REST capability '${capability}' is disabled. Set ${restCapabilityEnvName(capability)}=1 or OPEN_FILES_REST_ALLOW_ALL=1 to enable this route.`,
+    403,
+  );
+}
+
+function restCapabilityEnabled(capability: RestCapability): boolean {
+  return truthyEnv(process.env.OPEN_FILES_REST_ALLOW_ALL)
+    || truthyEnv(process.env.OPEN_FILES_ALLOW_ALL)
+    || truthyEnv(process.env[restCapabilityEnvName(capability)])
+    || truthyEnv(process.env[`OPEN_FILES_ALLOW_${capability.toUpperCase()}`]);
+}
+
+function restCapabilityEnvName(capability: RestCapability): string {
+  return `OPEN_FILES_REST_ALLOW_${capability.toUpperCase()}`;
+}
+
+function truthyEnv(value: string | undefined): boolean {
+  return value === "1" || value === "true" || value === "yes" || value === "on";
 }
 
 async function parseBody(req: Request): Promise<Record<string, unknown>> {
@@ -115,6 +140,8 @@ export function startServer(port: number): void {
         return json(listSources(machine_id));
       }
       if (path === "/sources" && method === "POST") {
+        const denied = requireRestCapability("mutations");
+        if (denied) return denied;
         const body = await parseBody(req);
         const machine = getCurrentMachine();
         const type = (body.type as SourceType | undefined) ?? "local";
@@ -131,11 +158,15 @@ export function startServer(port: number): void {
         return json(source, 201);
       }
       if (path.match(/^\/sources\/[^/]+$/) && method === "DELETE") {
+        const denied = requireRestCapability("destructive");
+        if (denied) return denied;
         const id = path.split("/")[2]!;
         deleteSource(id);
         return json({ ok: true });
       }
       if (path.match(/^\/sources\/[^/]+\/index$/) && method === "POST") {
+        const denied = requireRestCapability("indexing");
+        if (denied) return denied;
         const id = path.split("/")[2]!;
         const source = getSource(id);
         if (!source) return err("Source not found", 404);
@@ -176,6 +207,8 @@ export function startServer(port: number): void {
         return json(file);
       }
       if (path.match(/^\/files\/[^/]+\/download$/) && method === "GET") {
+        const denied = requireRestCapability("downloads");
+        if (denied) return denied;
         const id = path.split("/")[2]!;
         const file = getFile(id);
         if (!file) return err("File not found", 404);
@@ -190,6 +223,8 @@ export function startServer(port: number): void {
         return json({ downloaded_to: dest });
       }
       if (path.match(/^\/files\/[^/]+\/tags$/) && method === "POST") {
+        const denied = requireRestCapability("mutations");
+        if (denied) return denied;
         const id = path.split("/")[2]!;
         const body = await parseBody(req);
         const tags = (body.tags as string[]) ?? [];
@@ -197,6 +232,8 @@ export function startServer(port: number): void {
         return json({ ok: true });
       }
       if (path.match(/^\/files\/[^/]+\/tags$/) && method === "DELETE") {
+        const denied = requireRestCapability("mutations");
+        if (denied) return denied;
         const id = path.split("/")[2]!;
         const body = await parseBody(req);
         const tags = (body.tags as string[]) ?? [];
@@ -210,16 +247,22 @@ export function startServer(port: number): void {
       // ── Collections ───────────────────────────────────────────────────────
       if (path === "/collections" && method === "GET") return json(listCollections());
       if (path === "/collections" && method === "POST") {
+        const denied = requireRestCapability("mutations");
+        if (denied) return denied;
         const body = await parseBody(req);
         return json(createCollection(body.name as string, body.description as string | undefined), 201);
       }
       if (path.match(/^\/collections\/[^/]+\/files$/) && method === "POST") {
+        const denied = requireRestCapability("mutations");
+        if (denied) return denied;
         const id = path.split("/")[2]!;
         const body = await parseBody(req);
         addToCollection(id, body.file_id as string);
         return json({ ok: true });
       }
       if (path.match(/^\/collections\/[^/]+\/files\/[^/]+$/) && method === "DELETE") {
+        const denied = requireRestCapability("mutations");
+        if (denied) return denied;
         const parts = path.split("/");
         removeFromCollection(parts[2]!, parts[4]!);
         return json({ ok: true });
@@ -228,16 +271,22 @@ export function startServer(port: number): void {
       // ── Projects ──────────────────────────────────────────────────────────
       if (path === "/projects" && method === "GET") return json(listProjects());
       if (path === "/projects" && method === "POST") {
+        const denied = requireRestCapability("mutations");
+        if (denied) return denied;
         const body = await parseBody(req);
         return json(createProject(body.name as string, body.description as string | undefined), 201);
       }
       if (path.match(/^\/projects\/[^/]+\/files$/) && method === "POST") {
+        const denied = requireRestCapability("mutations");
+        if (denied) return denied;
         const id = path.split("/")[2]!;
         const body = await parseBody(req);
         addToProject(id, body.file_id as string);
         return json({ ok: true });
       }
       if (path.match(/^\/projects\/[^/]+\/files\/[^/]+$/) && method === "DELETE") {
+        const denied = requireRestCapability("mutations");
+        if (denied) return denied;
         const parts = path.split("/");
         removeFromProject(parts[2]!, parts[4]!);
         return json({ ok: true });
@@ -249,6 +298,8 @@ export function startServer(port: number): void {
 
       // ── Sync ──────────────────────────────────────────────────────────────
       if (path === "/sync" && method === "POST") {
+        const denied = requireRestCapability("mutations");
+        if (denied) return denied;
         const body = await parseBody(req);
         const peers = (body.peers as string[]) ?? [];
         if (!peers.length) return err("peers array required");
@@ -295,6 +346,8 @@ export function startServer(port: number): void {
         }
 
         if (path === "/evidence/upload-intents" && method === "POST") {
+          const denied = requireRestCapability("signed_urls") ?? requireRestCapability("mutations");
+          if (denied) return denied;
           const body = await parseBody(req);
           const result = await createEvidenceUploadIntent({
             org_id: requiredString(body, "org_id"),
@@ -319,12 +372,16 @@ export function startServer(port: number): void {
 
         const completeMatch = path.match(/^\/evidence\/upload-intents\/([^/]+)\/complete$/);
         if (completeMatch && method === "POST") {
+          const denied = requireRestCapability("mutations");
+          if (denied) return denied;
           const body = await parseBody(req);
           return json(await completeEvidenceUpload(completeMatch[1]!, evidenceStorageFromBody(body)));
         }
 
         const linkMatch = path.match(/^\/evidence\/assets\/([^/]+)\/links$/);
         if (linkMatch && method === "POST") {
+          const denied = requireRestCapability("mutations");
+          if (denied) return denied;
           const body = await parseBody(req);
           return json(linkEvidenceAsset({
             asset_id: linkMatch[1]!,
@@ -340,6 +397,8 @@ export function startServer(port: number): void {
 
         const signMatch = path.match(/^\/evidence\/assets\/([^/]+)\/download-url$/);
         if (signMatch && method === "POST") {
+          const denied = requireRestCapability("signed_urls") ?? requireRestCapability("downloads");
+          if (denied) return denied;
           const body = await parseBody(req);
           return json(await signEvidenceDownload({
             asset_id: signMatch[1]!,
@@ -351,6 +410,8 @@ export function startServer(port: number): void {
 
         const verifyMatch = path.match(/^\/evidence\/assets\/([^/]+)\/verify$/);
         if (verifyMatch && method === "POST") {
+          const denied = requireRestCapability("indexing");
+          if (denied) return denied;
           const body = await parseBody(req);
           return json(await verifyEvidenceAsset(verifyMatch[1]!, evidenceStorageFromBody(body)));
         }

@@ -1,24 +1,52 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
+import { registerEventsCommands } from "@hasna/events/commander";
 import chalk from "chalk";
 import { getCurrentMachine, listMachines } from "../db/machines.js";
 import { createSource, listSources, deleteSource, getSource, updateSource } from "../db/sources.js";
 import { listFiles, getFile } from "../db/files.js";
 import { searchFiles } from "../db/search.js";
+import { getLatestFileVersion } from "../db/file-versions.js";
+import {
+  deleteFileSearchDocument,
+  getFileSearchIndexStats,
+  listFileSearchDocuments,
+  refreshAllFileSearchDocumentFts,
+  upsertFileSearchDocument,
+} from "../db/file-search-documents.js";
 import { listTags, tagFile, untagFile } from "../db/tags.js";
 import { createCollection, listCollections, addToCollection, deleteCollection } from "../db/collections.js";
 import { createProject, listProjects, addToProject, deleteProject } from "../db/projects.js";
 import { listPeers, addPeer, removePeer } from "../db/peers.js";
 import { getConfigPath, loadConfig, setConfigValue } from "../lib/config.js";
 import { registerEvidenceCommands } from "./evidence.js";
+import { registerOrganizationCommands } from "./organize.js";
+import { registerStorageCommands } from "./storage.js";
 import { indexLocalSource } from "../lib/indexer.js";
 import { listGoogleDriveItems, listGoogleDriveProfiles, listGoogleDriveSharedDrives, preflightGoogleDriveSource, syncGoogleDriveSource } from "../lib/google-drive.js";
-import { indexS3Source, downloadFromS3, uploadToS3 } from "../lib/s3.js";
+import { indexS3Source, uploadToS3 } from "../lib/s3.js";
+import { downloadResolvedFileObject, resolveFileObject, resolvedFileObjectSummary } from "../lib/file-object.js";
+import { extractTextFromFile } from "../lib/extraction.js";
+import { extractTextSnapshotFromFile } from "../lib/extraction-snapshot.js";
+import { doctorKnowledgeSources } from "../lib/knowledge-doctor.js";
+import { exportKnowledgeSourceManifest, formatKnowledgeSourceManifest } from "../lib/knowledge-manifest.js";
+import { resolveKnowledgeSourceRef } from "../lib/knowledge-resolver.js";
+import { buildOpenFilesFileRef, buildOpenFilesFileRevisionRef } from "../lib/source-ref.js";
+import { acknowledgeKnowledgeSourceOutbox, pollKnowledgeSourceOutbox } from "../db/knowledge-outbox.js";
 import { getDb, getDbPath } from "../db/database.js";
 import { requireId } from "../db/resolve.js";
 import { resolve, join } from "path";
 import { existsSync, readFileSync } from "fs";
-import type { GoogleDriveConfig, S3Config } from "../types/index.js";
+import type {
+  FileSearchDocument,
+  FileSearchDocumentKind,
+  FileSearchDocumentStatus,
+  GoogleDriveConfig,
+  KnowledgeSourceManifestFormat,
+  KnowledgeSourceResolveMode,
+  S3Config,
+  SearchScope,
+} from "../types/index.js";
 
 import { createRequire } from "module";
 const _require = createRequire(import.meta.url);
@@ -26,12 +54,20 @@ const _pkg = _require("../../package.json") as { version: string };
 
 const program = new Command();
 
+const DEFAULT_PROD_FILES_BUCKET = "hasna-xyz-opensource-files-prod";
+const DEFAULT_PROD_FILES_REGION = "us-east-1";
+const DEFAULT_PROD_FILES_PREFIX = "imports/google-drive/live";
+const DEFAULT_PROD_FILES_SOURCE_NAME = "prod-files-drive";
+
 program
   .name("files")
   .description("Agent-first file management — index, sync, search, and retrieve files across local, S3, and Google Drive sources")
   .version(_pkg.version);
 
 registerEvidenceCommands(program);
+registerEventsCommands(program, { source: "files" });
+registerOrganizationCommands(program);
+registerStorageCommands(program);
 
 // ─── sources ────────────────────────────────────────────────────────────────
 
@@ -221,12 +257,12 @@ sources
 sources
   .command("bootstrap-prod-files")
   .alias("bootstrap-prod-emails")
-  .description("Create or update the production S3 source for Google Drive archive sync")
-  .option("--bucket <bucket>", "Production archive bucket", "hasna-xyz-prod-emails")
-  .option("--region <region>", "AWS region", "us-west-2")
+  .description("Create or update the canonical production S3 source for Google Drive archive sync")
+  .option("--bucket <bucket>", "Production archive bucket", DEFAULT_PROD_FILES_BUCKET)
+  .option("--region <region>", "AWS region", DEFAULT_PROD_FILES_REGION)
   .option("--aws-profile <profile>", "AWS shared config profile", "hasna-xyz-infra")
-  .option("--prefix <prefix>", "S3 key prefix for Drive objects", "drive")
-  .option("-n, --name <name>", "Source name", "prod-emails-drive")
+  .option("--prefix <prefix>", "S3 key prefix for new Drive imports", DEFAULT_PROD_FILES_PREFIX)
+  .option("-n, --name <name>", "Source name", DEFAULT_PROD_FILES_SOURCE_NAME)
   .option("--no-google-drive-default", "Do not set this source as the default Google Drive destination")
   .option("--json", "Output as JSON")
   .action((opts: {
@@ -240,8 +276,8 @@ sources
   }) => {
     const machine = getCurrentMachine();
     const config: S3Config = { profile: opts.awsProfile };
-    const legacyProductionNames = new Set([opts.name, "prod-files", "prod-emails-drive"]);
-    const legacyProductionBuckets = new Set([opts.bucket, "hasna-xyz-prod-files", "hasna-xyz-prod-emails", "hasna-prod-files"]);
+    const productionNames = new Set([opts.name, DEFAULT_PROD_FILES_SOURCE_NAME, "prod-files", "prod-emails-drive"]);
+    const productionBuckets = new Set([opts.bucket, DEFAULT_PROD_FILES_BUCKET, "hasna-xyz-prod-files", "hasna-xyz-prod-emails", "hasna-prod-files"]);
     const allSources = listSources();
     const activeDriveDestinationIds = new Set(
       allSources
@@ -252,7 +288,7 @@ sources
     const configuredDefaultId = loadConfig().google_drive_default_destination_source_id;
     const candidates = allSources.filter((source) =>
       source.type === "s3"
-        && (legacyProductionNames.has(source.name) || legacyProductionBuckets.has(source.bucket ?? ""))
+        && (productionNames.has(source.name) || productionBuckets.has(source.bucket ?? ""))
     );
     const existing = candidates.find((source) => activeDriveDestinationIds.has(source.id) && source.enabled)
       ?? candidates.find((source) => configuredDefaultId === source.id && source.enabled)
@@ -581,20 +617,32 @@ program
 
 program
   .command("search <query>")
-  .description("Search files by name, path, or tags")
+  .description("Search files by metadata and indexed derived content")
   .option("-s, --source <id>", "Filter by source ID")
   .option("-m, --machine <id>", "Filter by machine ID")
   .option("-t, --tag <tag>", "Filter by tag")
   .option("-e, --ext <ext>", "Filter by extension")
+  .option("--scope <scope>", "Search scope: all, metadata, content", "all")
   .option("-l, --limit <n>", "Max results", "20")
   .option("--offset <n>", "Offset", "0")
   .option("--json", "Output as JSON")
-  .action((query: string, opts: { source?: string; machine?: string; tag?: string; ext?: string; limit: string; offset: string; json?: boolean }) => {
+  .action((query: string, opts: {
+    source?: string;
+    machine?: string;
+    tag?: string;
+    ext?: string;
+    scope: string;
+    limit: string;
+    offset: string;
+    json?: boolean;
+  }) => {
     let limit: number;
     let offset: number;
+    let scope: SearchScope;
     try {
       limit = parseIntFlag(opts.limit, "limit", { min: 1 });
       offset = parseIntFlag(opts.offset, "offset", { min: 0 });
+      scope = parseSearchScope(opts.scope);
     } catch (e) {
       console.error(chalk.red((e as Error).message));
       process.exit(1);
@@ -607,15 +655,169 @@ program
       ext: opts.ext,
       limit,
       offset,
+      search_scope: scope,
     });
     if (opts.json) { console.log(JSON.stringify(results, null, 2)); return; }
     if (!results.length) { console.log(chalk.dim("No results.")); return; }
     for (const f of results) {
       const tags = f.tags.length ? chalk.yellow(` [${f.tags.join(", ")}]`) : "";
       const src = f.source_name ? chalk.dim(` (${f.source_name})`) : "";
-      console.log(`${chalk.bold(f.id)}  ${chalk.cyan(f.name)}  ${chalk.dim(f.path)}${tags}${src}`);
+      const target = f.organization_target_path ? chalk.green(` -> ${f.organization_target_path}`) : "";
+      const match = formatSearchMatch(f.search_match_sources, f.search_document_kinds);
+      console.log(`${chalk.bold(f.id)}  ${chalk.cyan(f.name)}  ${chalk.dim(f.path)}${target}${tags}${src}${match}`);
     }
     console.log(chalk.dim(`\n${results.length} result(s)`));
+  });
+
+// ─── search index ──────────────────────────────────────────────────────────
+
+const searchIndex = program.command("search-index").description("Manage derived search documents for extracted artifacts");
+
+searchIndex
+  .command("add <file-id>")
+  .description("Index a bounded extracted/OCR/transcript/summary text artifact for a file")
+  .requiredOption("--text-file <path>", "Local text artifact to index")
+  .option("--kind <kind>", "Document kind", "extracted_text")
+  .option("--extractor <name>", "Extractor or agent that produced the artifact", "manual")
+  .option("--source-ref <ref>", "Source ref for the artifact; defaults to the latest file revision ref")
+  .option("--revision <id>", "File revision id for the artifact")
+  .option("--content-hash <hash>", "Artifact content hash; defaults to sha256 of indexed text")
+  .option("--status <status>", "ready, partial, unsupported, error, stale", "ready")
+  .option("--metadata-json <json>", "Small JSON metadata object to store with the index row")
+  .option("--metadata-file <path>", "Path to a small JSON metadata object")
+  .option("--max-chars <n>", "Maximum UTF-8 characters to index from the artifact", "200000")
+  .option("--public", "Mark the derived document as non-private")
+  .option("--no-replace-existing", "Do not mark older same-kind/source-ref documents stale")
+  .option("--json", "Output as JSON")
+  .action((fileId: string, opts: {
+    textFile: string;
+    kind: string;
+    extractor: string;
+    sourceRef?: string;
+    revision?: string;
+    contentHash?: string;
+    status: string;
+    metadataJson?: string;
+    metadataFile?: string;
+    maxChars: string;
+    public?: boolean;
+    replaceExisting?: boolean;
+    json?: boolean;
+  }) => {
+    try {
+      const id = requireId(fileId, "files");
+      if (!getFile(id)) throw new Error(`File not found: ${id}`);
+      const textPath = resolve(opts.textFile);
+      if (!existsSync(textPath)) throw new Error(`Text artifact not found: ${opts.textFile}`);
+
+      const kind = parseFileSearchDocumentKind(opts.kind);
+      const status = parseFileSearchDocumentStatus(opts.status);
+      const maxChars = parseIntFlag(opts.maxChars, "max-chars", { min: 1 });
+      const rawText = readFileSync(textPath, "utf8");
+      const searchableText = rawText.slice(0, maxChars);
+      const truncated = rawText.length > searchableText.length;
+      const revisionId = opts.revision ?? getLatestFileVersion(id)?.id;
+      const sourceRef = opts.sourceRef
+        ?? (revisionId ? buildOpenFilesFileRevisionRef(id, revisionId) : buildOpenFilesFileRef(id));
+      const metadata = {
+        ...readMetadataObject(opts.metadataJson, opts.metadataFile),
+        ...(truncated ? {
+          cli_index_truncated: true,
+          original_chars: rawText.length,
+          indexed_chars: searchableText.length,
+        } : {}),
+      };
+
+      const document = upsertFileSearchDocument({
+        file_id: id,
+        revision_id: revisionId,
+        source_ref: sourceRef,
+        kind,
+        extractor: opts.extractor,
+        content_hash: opts.contentHash,
+        searchable_text: searchableText,
+        metadata,
+        status,
+        private: !opts.public,
+        replace_existing: opts.replaceExisting,
+      });
+      const safe = formatSearchDocumentForOutput(document);
+      if (opts.json) { console.log(JSON.stringify(safe, null, 2)); return; }
+      console.log(chalk.green(`indexed search document: ${safe.id}`));
+      console.log(chalk.dim(`file:${safe.file_id} kind:${safe.kind} status:${safe.status} chars:${safe.searchable_chars}`));
+    } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
+  });
+
+searchIndex
+  .command("list [file-id]")
+  .description("List derived search documents without printing indexed text")
+  .option("--kind <kind>", "Filter by document kind")
+  .option("--status <status>", "Filter by status")
+  .option("-l, --limit <n>", "Max documents", "50")
+  .option("--offset <n>", "Offset", "0")
+  .option("--json", "Output as JSON")
+  .action((fileId: string | undefined, opts: {
+    kind?: string;
+    status?: string;
+    limit: string;
+    offset: string;
+    json?: boolean;
+  }) => {
+    try {
+      const docs = listFileSearchDocuments({
+        file_id: fileId ? requireId(fileId, "files") : undefined,
+        kind: opts.kind ? parseFileSearchDocumentKind(opts.kind) : undefined,
+        status: opts.status ? parseFileSearchDocumentStatus(opts.status) : undefined,
+        limit: parseIntFlag(opts.limit, "limit", { min: 1 }),
+        offset: parseIntFlag(opts.offset, "offset", { min: 0 }),
+      }).map(formatSearchDocumentForOutput);
+      if (opts.json) { console.log(JSON.stringify(docs, null, 2)); return; }
+      if (!docs.length) { console.log(chalk.dim("No search documents found.")); return; }
+      for (const doc of docs) {
+        console.log(`${chalk.bold(doc.id)}  ${chalk.cyan(doc.kind)}  ${doc.status}  ${chalk.dim(`chars:${doc.searchable_chars} updated:${doc.updated_at}`)}`);
+      }
+      console.log(chalk.dim(`\n${docs.length} document(s)`));
+    } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
+  });
+
+searchIndex
+  .command("remove <document-id>")
+  .description("Remove a derived search document and its FTS entry")
+  .option("--json", "Output as JSON")
+  .action((documentId: string, opts: { json?: boolean }) => {
+    try {
+      const removed = deleteFileSearchDocument(documentId);
+      if (opts.json) { console.log(JSON.stringify({ removed }, null, 2)); return; }
+      console.log(removed ? chalk.green("removed") : chalk.dim("not found"));
+    } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
+  });
+
+searchIndex
+  .command("stats")
+  .description("Show derived search index coverage")
+  .option("--json", "Output as JSON")
+  .action((opts: { json?: boolean }) => {
+    const stats = getFileSearchIndexStats();
+    if (opts.json) { console.log(JSON.stringify(stats, null, 2)); return; }
+    console.log(chalk.bold("derived search index"));
+    console.log(`documents: ${stats.documents}  indexed_files: ${stats.indexed_files}  stale: ${stats.stale_documents}`);
+    console.log(`active_files: ${stats.active_files}  active_indexed: ${stats.active_indexed_files}  missing_active_index: ${stats.missing_indexed_active_files}  coverage: ${stats.indexed_active_coverage_pct}%`);
+    console.log(`organized: ${stats.organized_active_files}  with_owner: ${stats.active_files_with_owner}  with_target_path: ${stats.active_files_with_target_path}  with_canonical_name: ${stats.active_files_with_canonical_name}`);
+    for (const row of stats.by_kind) console.log(`  ${chalk.cyan(row.kind.padEnd(20))} ${row.count}`);
+    if (stats.by_owner.length) {
+      console.log(chalk.dim("by owner"));
+      for (const row of stats.by_owner) console.log(`  ${chalk.cyan(row.owner.padEnd(20))} active:${row.active_files} indexed:${row.indexed_files}`);
+    }
+  });
+
+searchIndex
+  .command("rebuild-fts")
+  .description("Rebuild derived search FTS entries from stored search documents")
+  .option("--json", "Output as JSON")
+  .action((opts: { json?: boolean }) => {
+    const refreshed = refreshAllFileSearchDocumentFts();
+    if (opts.json) { console.log(JSON.stringify({ refreshed }, null, 2)); return; }
+    console.log(chalk.green(`refreshed ${refreshed} search document(s)`));
   });
 
 // ─── list ───────────────────────────────────────────────────────────────────
@@ -722,19 +924,23 @@ program
   .command("download <file-id> [dest]")
   .description("Download a file to local disk")
   .action(async (fileId: string, dest?: string) => {
-    let file; try { file = getFile(requireId(fileId, "files"))!; } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
-    const source = getSource(file.source_id);
-    if (!source) { console.error(chalk.red("Source not found")); process.exit(1); }
+    let resolved;
+    try {
+      resolved = resolveFileObject(requireId(fileId, "files"));
+    } catch (e) {
+      console.error(chalk.red((e as Error).message));
+      process.exit(1);
+    }
 
-    if (source.type === "local") {
-      const fullPath = join(source.path!, file.path);
+    if (resolved.storageSource.type === "local") {
+      const fullPath = join(resolved.storageSource.path!, resolved.objectKey);
       console.log(chalk.dim(`Local file at: ${fullPath}`));
       return;
     }
 
-    const outPath = dest ?? file.name;
-    console.log(chalk.dim(`Downloading ${file.name}...`));
-    await downloadFromS3(source, file.path, outPath);
+    const outPath = dest ?? resolved.file.name;
+    console.log(chalk.dim(`Downloading ${resolved.file.name}...`));
+    await downloadResolvedFileObject(resolved, outPath);
     console.log(chalk.green(`✓ Downloaded to ${outPath}`));
   });
 
@@ -837,6 +1043,34 @@ program
     console.log(`${chalk.bold("Modified:")}  ${file.modified_at ?? "-"}`);
     console.log(`${chalk.bold("Source:")}    ${file.source_id}`);
     console.log(`${chalk.bold("Machine:")}   ${file.machine_id}`);
+  });
+
+program
+  .command("resolve <file-id>")
+  .description("Resolve a file to its current object storage location")
+  .option("--json", "Output as JSON")
+  .action((fileId: string, opts: { json?: boolean }) => {
+    try {
+      const resolved = resolveFileObject(requireId(fileId, "files"));
+      const summary = resolvedFileObjectSummary(resolved);
+      if (opts.json) {
+        console.log(JSON.stringify(summary, null, 2));
+        return;
+      }
+
+      const storage = summary.storage as Record<string, unknown>;
+      console.log(`${chalk.bold("ID:")}        ${resolved.file.id}`);
+      console.log(`${chalk.bold("Name:")}      ${resolved.file.name}`);
+      console.log(`${chalk.bold("Kind:")}      ${storage.kind}`);
+      console.log(`${chalk.bold("Provider:")}  ${storage.provider}`);
+      if (storage.bucket) console.log(`${chalk.bold("Bucket:")}    ${storage.bucket}`);
+      if (storage.region) console.log(`${chalk.bold("Region:")}    ${storage.region}`);
+      if (storage.key) console.log(`${chalk.bold("Key:")}       ${storage.key}`);
+      if (storage.path) console.log(`${chalk.bold("Path:")}      ${storage.path}`);
+    } catch (e) {
+      console.error(chalk.red((e as Error).message));
+      process.exit(1);
+    }
   });
 
 program
@@ -1076,6 +1310,329 @@ program
   });
 
 program
+  .command("extract-text <file-id>")
+  .description("Return chunk-ready extracted text metadata for knowledge indexing")
+  .option("--json", "Output as JSON")
+  .option("--max-bytes <n>", "Maximum bytes to read", "1048576")
+  .option("--segment-chars <n>", "Maximum characters per segment", "4000")
+  .option("--redact <pattern>", "Regex pattern to redact; can be repeated", collectValues, [] as string[])
+  .action(async (fileId: string, opts: {
+    json?: boolean;
+    maxBytes: string;
+    segmentChars: string;
+    redact: string[];
+  }) => {
+    try {
+      const maxBytes = parseIntFlag(opts.maxBytes, "max-bytes", { min: 1 });
+      const maxSegmentChars = parseIntFlag(opts.segmentChars, "segment-chars", { min: 256 });
+      const redactPatterns = opts.redact.map((pattern) => new RegExp(pattern, "g"));
+      const result = await extractTextFromFile(requireId(fileId, "files"), {
+        max_bytes: maxBytes,
+        max_segment_chars: maxSegmentChars,
+        redact_patterns: redactPatterns,
+      });
+
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      console.log(chalk.bold(`status: ${result.status}`));
+      if (result.status_reason) console.log(chalk.dim(result.status_reason));
+      for (const segment of result.segments) {
+        if (result.segments.length > 1) {
+          console.log(chalk.dim(`\n--- segment ${segment.index + 1}/${result.segments.length} lines ${segment.line_start}-${segment.line_end} bytes ${segment.byte_start}-${segment.byte_end} ---`));
+        }
+        process.stdout.write(segment.text);
+        if (!segment.text.endsWith("\n")) process.stdout.write("\n");
+      }
+    } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
+  });
+
+program
+  .command("extract-snapshot <file-id>")
+  .description("Return a deterministic extraction snapshot for semantic chunking")
+  .option("--json", "Output as JSON")
+  .option("--max-bytes <n>", "Maximum bytes to read", "1048576")
+  .option("--segment-chars <n>", "Maximum characters per source segment", "4000")
+  .option("--redact <pattern>", "Regex pattern to redact; can be repeated", collectValues, [] as string[])
+  .action(async (fileId: string, opts: {
+    json?: boolean;
+    maxBytes: string;
+    segmentChars: string;
+    redact: string[];
+  }) => {
+    try {
+      const maxBytes = parseIntFlag(opts.maxBytes, "max-bytes", { min: 1 });
+      const maxSegmentChars = parseIntFlag(opts.segmentChars, "segment-chars", { min: 256 });
+      const snapshot = await extractTextSnapshotFromFile(requireId(fileId, "files"), {
+        max_bytes: maxBytes,
+        max_segment_chars: maxSegmentChars,
+        redact_patterns: opts.redact.map((pattern) => new RegExp(pattern, "g")),
+      });
+
+      if (opts.json) {
+        console.log(JSON.stringify(snapshot, null, 2));
+        return;
+      }
+
+      console.log(chalk.bold(`snapshot: ${snapshot.snapshot_id}`));
+      console.log(`status: ${snapshot.status}`);
+      console.log(`hash: ${snapshot.content_hash_algorithm}:${snapshot.content_hash}`);
+      console.log(`sections: ${snapshot.sections.length}`);
+      for (const section of snapshot.sections) {
+        console.log(chalk.dim(`\n--- ${section.title ?? section.id} lines ${section.line_start}-${section.line_end} bytes ${section.byte_start}-${section.byte_end} ---`));
+        process.stdout.write(section.text);
+        if (!section.text.endsWith("\n")) process.stdout.write("\n");
+      }
+    } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
+  });
+
+const knowledge = program.command("knowledge").description("Read-only source APIs for knowledge indexing");
+
+knowledge
+  .command("manifest")
+  .description("Export a read-only source manifest for knowledge indexing")
+  .option("--source <id>", "Filter by source id")
+  .option("--collection <id>", "Filter by collection id")
+  .option("--project <id>", "Filter by project id")
+  .option("--tag <name>", "Filter by tag")
+  .option("--status <status>", "Filter by file status: active, deleted, moved, all")
+  .option("--include-deleted", "Include soft-deleted rows")
+  .option("--delta", "Export a delta manifest including tombstones")
+  .option("--since-cursor <cursor>", "Delta cursor from a previous manifest")
+  .option("--since-sync-version <n>", "Delta from a sync_version")
+  .option("--cursor <cursor>", "Page cursor")
+  .option("--limit <n>", "Max file rows", "100")
+  .option("--format <format>", "Output format: json or jsonl", "json")
+  .option("--out <path>", "Write manifest artifact to a local path")
+  .option("--include-acl-summary", "Include organization/ACL review summary")
+  .option("--include-evidence-assets", "Include evidence asset rows")
+  .option("--json", "Output manifest JSON")
+  .action(async (opts: {
+    source?: string;
+    collection?: string;
+    project?: string;
+    tag?: string;
+    status?: string;
+    includeDeleted?: boolean;
+    delta?: boolean;
+    sinceCursor?: string;
+    sinceSyncVersion?: string;
+    cursor?: string;
+    limit: string;
+    format: string;
+    out?: string;
+    includeAclSummary?: boolean;
+    includeEvidenceAssets?: boolean;
+    json?: boolean;
+  }) => {
+    try {
+      const limit = parseIntFlag(opts.limit, "limit", { min: 1 });
+      const format = parseManifestFormat(opts.format);
+      const manifest = await exportKnowledgeSourceManifest({
+        source_id: opts.source,
+        collection_id: opts.collection,
+        project_id: opts.project,
+        tag: opts.tag,
+        status: opts.status as any,
+        include_deleted: opts.includeDeleted,
+        delta: opts.delta,
+        since_cursor: opts.sinceCursor,
+        since_sync_version: opts.sinceSyncVersion ? parseIntFlag(opts.sinceSyncVersion, "since-sync-version", { min: 0 }) : undefined,
+        cursor: opts.cursor,
+        limit,
+        format,
+        output: opts.out ? { provider: "local", path: opts.out, format } : undefined,
+        include_acl_summary: opts.includeAclSummary,
+        include_evidence_assets: opts.includeEvidenceAssets,
+      });
+
+      if (opts.json || format === "json") {
+        console.log(JSON.stringify(manifest, null, 2));
+        return;
+      }
+
+      if (opts.out) {
+        console.log(chalk.green(`manifest written: ${manifest.artifact?.path}`));
+        console.log(chalk.dim(`items:${manifest.item_count} high_watermark:${manifest.high_watermark}`));
+        return;
+      }
+
+      process.stdout.write(formatKnowledgeSourceManifest(manifest, format));
+    } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
+  });
+
+knowledge
+  .command("doctor [sourceRefs...]")
+  .description("Diagnose open-files source refs for knowledge sync readiness")
+  .option("--source <id>", "Diagnose refs from a source manifest")
+  .option("--collection <id>", "Filter manifest refs by collection id")
+  .option("--project <id>", "Filter manifest refs by project id")
+  .option("--tag <name>", "Filter manifest refs by tag")
+  .option("--status <status>", "Filter manifest refs by file status: active, deleted, moved, all")
+  .option("--limit <n>", "Maximum refs to diagnose", "100")
+  .option("--purpose <purpose>", "Purpose label", "knowledge_index")
+  .option("--no-extracted-text-required", "Do not flag refs that lack extracted text support")
+  .option("--check-extracted-text", "Run a bounded read-only extraction check")
+  .option("--max-bytes <n>", "Maximum bytes for extraction check", "262144")
+  .option("--segment-chars <n>", "Maximum characters per extracted segment", "4000")
+  .option("--json", "Output as JSON")
+  .action(async (sourceRefs: string[], opts: {
+    source?: string;
+    collection?: string;
+    project?: string;
+    tag?: string;
+    status?: string;
+    limit: string;
+    purpose: string;
+    extractedTextRequired?: boolean;
+    checkExtractedText?: boolean;
+    maxBytes: string;
+    segmentChars: string;
+    json?: boolean;
+  }) => {
+    try {
+      const report = await doctorKnowledgeSources({
+        source_refs: sourceRefs,
+        source_id: opts.source,
+        collection_id: opts.collection,
+        project_id: opts.project,
+        tag: opts.tag,
+        status: opts.status as any,
+        limit: parseIntFlag(opts.limit, "limit", { min: 1 }),
+        purpose: opts.purpose,
+        require_extracted_text: opts.extractedTextRequired,
+        check_extracted_text: opts.checkExtractedText,
+        max_bytes: parseIntFlag(opts.maxBytes, "max-bytes", { min: 1 }),
+        max_segment_chars: parseIntFlag(opts.segmentChars, "segment-chars", { min: 256 }),
+      });
+
+      if (opts.json) {
+        console.log(JSON.stringify(report, null, 2));
+        return;
+      }
+
+      console.log(chalk.bold(`knowledge source doctor: ${report.checked_count} checked`));
+      console.log(`ready: ${report.summary.ready}  needs_action: ${report.summary.needs_action}`);
+      for (const check of report.checks) {
+        const color = check.status === "ready" ? chalk.green : chalk.yellow;
+        console.log(color(`${check.status}: ${check.source_ref}`));
+        if (check.issue_codes.length) console.log(chalk.dim(`  issues: ${check.issue_codes.join(", ")}`));
+        if (check.actions.length) console.log(chalk.dim(`  actions: ${check.actions.join(", ")}`));
+        if (check.status_reason) console.log(chalk.dim(`  reason: ${check.status_reason}`));
+      }
+    } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
+  });
+
+knowledge
+  .command("resolve <source-ref>")
+  .description("Resolve an open-files:// source ref with read-only policy")
+  .option("--mode <mode>", "metadata, content, extracted_text, snapshot, signed_url", "metadata")
+  .option("--purpose <purpose>", "Purpose label", "knowledge_index")
+  .option("--max-bytes <n>", "Maximum bytes to read", "262144")
+  .option("--segment-chars <n>", "Maximum characters per segment", "4000")
+  .option("--mime <mime>", "Allowed MIME type; can be repeated", collectValues, [] as string[])
+  .option("--allow-binary", "Allow binary MIME types")
+  .option("--signed-url-expires <seconds>", "Signed URL expiration seconds", "600")
+  .option("--json", "Output as JSON")
+  .action(async (sourceRef: string, opts: {
+    mode: string;
+    purpose: string;
+    maxBytes: string;
+    segmentChars: string;
+    mime: string[];
+    allowBinary?: boolean;
+    signedUrlExpires: string;
+    json?: boolean;
+  }) => {
+    try {
+      const mode = parseResolveMode(opts.mode);
+      const result = await resolveKnowledgeSourceRef(sourceRef, {
+        mode,
+        purpose: opts.purpose,
+        max_bytes: parseIntFlag(opts.maxBytes, "max-bytes", { min: 1 }),
+        max_segment_chars: parseIntFlag(opts.segmentChars, "segment-chars", { min: 256 }),
+        allowed_mimes: opts.mime.length > 0 ? opts.mime : undefined,
+        allow_binary: opts.allowBinary,
+        signed_url_expires_in: parseIntFlag(opts.signedUrlExpires, "signed-url-expires", { min: 1 }),
+      });
+
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      console.log(chalk.bold(`${result.status}: ${result.source_ref}`));
+      if (result.status_reason) console.log(chalk.dim(result.status_reason));
+      console.log(`mode: ${mode}`);
+      console.log(`mime: ${result.content.mime}`);
+      if (result.content.bytes_read !== undefined) console.log(`bytes_read: ${result.content.bytes_read}`);
+      if (result.content.extraction?.snapshot_id) console.log(`snapshot: ${result.content.extraction.snapshot_id}`);
+      if (result.access?.url) console.log(result.access.url);
+    } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
+  });
+
+const knowledgeOutbox = knowledge.command("outbox").description("Poll or acknowledge source change outbox events");
+
+knowledgeOutbox
+  .command("poll")
+  .description("Poll source change outbox events")
+  .option("--consumer <id>", "Consumer checkpoint id")
+  .option("--after-cursor <n>", "Poll after cursor")
+  .option("--event-type <type>", "Filter event type; can be repeated", collectValues, [] as string[])
+  .option("--source <id>", "Filter by source id")
+  .option("--file <id>", "Filter by file id")
+  .option("--limit <n>", "Max events", "100")
+  .option("--json", "Output as JSON")
+  .action((opts: {
+    consumer?: string;
+    afterCursor?: string;
+    eventType: string[];
+    source?: string;
+    file?: string;
+    limit: string;
+    json?: boolean;
+  }) => {
+    try {
+      const result = pollKnowledgeSourceOutbox({
+        consumer_id: opts.consumer,
+        after_cursor: opts.afterCursor ? parseIntFlag(opts.afterCursor, "after-cursor", { min: 0 }) : undefined,
+        event_types: opts.eventType.length > 0 ? opts.eventType as any : undefined,
+        source_id: opts.source,
+        file_id: opts.file,
+        limit: parseIntFlag(opts.limit, "limit", { min: 1 }),
+      });
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      for (const event of result.events) {
+        console.log(`${event.cursor} ${event.event_type} ${event.source_ref ?? event.file_id ?? event.source_id ?? ""}`);
+      }
+      console.log(chalk.dim(`next_cursor: ${result.next_cursor}${result.has_more ? " (more)" : ""}`));
+    } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
+  });
+
+knowledgeOutbox
+  .command("ack <consumer-id> <cursor>")
+  .description("Acknowledge source change outbox progress")
+  .option("--json", "Output as JSON")
+  .action((consumerId: string, cursor: string, opts: { json?: boolean }) => {
+    try {
+      const checkpoint = acknowledgeKnowledgeSourceOutbox(
+        consumerId,
+        parseIntFlag(cursor, "cursor", { min: 0 }),
+      );
+      if (opts.json) {
+        console.log(JSON.stringify(checkpoint, null, 2));
+        return;
+      }
+      console.log(chalk.green(`acknowledged ${checkpoint.consumer_id} at cursor ${checkpoint.cursor}`));
+    } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
+  });
+
+program
   .command("recent")
   .description("Show recently indexed files")
   .option("-l, --limit <n>", "Max results", "20")
@@ -1170,6 +1727,91 @@ function collectValues(value: string, values: string[]): string[] {
   return values;
 }
 
+function parseSearchScope(value: string): SearchScope {
+  if (value === "all" || value === "metadata" || value === "content") return value;
+  throw new Error("Invalid --scope: expected all, metadata, or content");
+}
+
+function parseFileSearchDocumentKind(value: string): FileSearchDocumentKind {
+  const kinds: FileSearchDocumentKind[] = [
+    "extracted_text",
+    "extraction_summary",
+    "ocr_text",
+    "vision_summary",
+    "transcript",
+    "llm_summary",
+    "semantic_metadata",
+    "manual_note",
+  ];
+  if (kinds.includes(value as FileSearchDocumentKind)) return value as FileSearchDocumentKind;
+  throw new Error(`Invalid --kind: expected one of ${kinds.join(", ")}`);
+}
+
+function parseFileSearchDocumentStatus(value: string): FileSearchDocumentStatus {
+  const statuses: FileSearchDocumentStatus[] = ["ready", "partial", "unsupported", "error", "stale"];
+  if (statuses.includes(value as FileSearchDocumentStatus)) return value as FileSearchDocumentStatus;
+  throw new Error(`Invalid --status: expected one of ${statuses.join(", ")}`);
+}
+
+function readMetadataObject(metadataJson?: string, metadataFile?: string): Record<string, unknown> {
+  const metadata: Record<string, unknown> = {};
+  if (metadataFile) {
+    const path = resolve(metadataFile);
+    if (!existsSync(path)) throw new Error(`Metadata file not found: ${metadataFile}`);
+    Object.assign(metadata, parseJsonObject(readFileSync(path, "utf8"), "--metadata-file"));
+  }
+  if (metadataJson) {
+    Object.assign(metadata, parseJsonObject(metadataJson, "--metadata-json"));
+  }
+  return metadata;
+}
+
+function parseJsonObject(raw: string, label: string): Record<string, unknown> {
+  const parsed = JSON.parse(raw) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${label} must be a JSON object`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function formatSearchMatch(sources?: string[], kinds?: string[]): string {
+  if (!sources?.length) return "";
+  const contentKinds = kinds?.length ? `:${kinds.join(",")}` : "";
+  return chalk.dim(` [${sources.map((source) => source === "content" ? `content${contentKinds}` : source).join(", ")}]`);
+}
+
+function formatSearchDocumentForOutput(document: FileSearchDocument): {
+  id: string;
+  file_id: string;
+  revision_id?: string;
+  source_ref: string;
+  kind: FileSearchDocumentKind;
+  extractor: string;
+  content_hash: string;
+  status: FileSearchDocumentStatus;
+  private: boolean;
+  searchable_chars: number;
+  metadata_keys: string[];
+  created_at: string;
+  updated_at: string;
+} {
+  return {
+    id: document.id,
+    file_id: document.file_id,
+    revision_id: document.revision_id,
+    source_ref: document.source_ref,
+    kind: document.kind,
+    extractor: document.extractor,
+    content_hash: document.content_hash,
+    status: document.status,
+    private: document.private,
+    searchable_chars: document.searchable_text.length,
+    metadata_keys: Object.keys(document.metadata).sort(),
+    created_at: document.created_at,
+    updated_at: document.updated_at,
+  };
+}
+
 function parseIntFlag(value: string, name: string, opts: { min?: number } = {}): number {
   const n = Number(value);
   const min = opts.min ?? 0;
@@ -1177,6 +1819,22 @@ function parseIntFlag(value: string, name: string, opts: { min?: number } = {}):
     throw new Error(`Invalid --${name} value "${value}" (must be an integer >= ${min})`);
   }
   return n;
+}
+
+function parseManifestFormat(value: string): KnowledgeSourceManifestFormat {
+  if (value === "json" || value === "jsonl") return value;
+  throw new Error("Invalid --format: expected json or jsonl");
+}
+
+function parseResolveMode(value: string): KnowledgeSourceResolveMode {
+  if (
+    value === "metadata"
+    || value === "content"
+    || value === "extracted_text"
+    || value === "snapshot"
+    || value === "signed_url"
+  ) return value;
+  throw new Error("Invalid --mode: expected metadata, content, extracted_text, snapshot, or signed_url");
 }
 
 function parseSize(s: string): number {

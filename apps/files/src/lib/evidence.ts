@@ -71,15 +71,18 @@ export interface EvidenceDownloadGrant {
   expires_at: string;
 }
 
+export const DEFAULT_EVIDENCE_S3_BUCKET = "hasna-xyz-opensource-files-prod";
+export const DEFAULT_EVIDENCE_S3_REGION = "us-east-1";
+
 export function getEvidenceStorageOptions(overrides: EvidenceStorageOptions = {}): Required<EvidenceStorageOptions> {
   const provider = overrides.provider ?? (process.env.HASNA_FILES_EVIDENCE_STORAGE as FileStorageProvider | undefined) ?? "s3";
   return {
     provider,
-    bucket: overrides.bucket ?? process.env.HASNA_FILES_EVIDENCE_BUCKET ?? "hasna-files-prod",
-    region: overrides.region ?? process.env.HASNA_FILES_EVIDENCE_REGION ?? "us-east-1",
-    profile: overrides.profile ?? process.env.HASNA_FILES_EVIDENCE_AWS_PROFILE ?? process.env.AWS_PROFILE ?? "",
-    endpoint: overrides.endpoint ?? process.env.HASNA_FILES_EVIDENCE_S3_ENDPOINT ?? "",
-    prefix: trimSlashes(overrides.prefix ?? process.env.HASNA_FILES_EVIDENCE_PREFIX ?? ""),
+    bucket: overrides.bucket ?? process.env.HASNA_FILES_S3_BUCKET ?? process.env.HASNA_FILES_EVIDENCE_BUCKET ?? DEFAULT_EVIDENCE_S3_BUCKET,
+    region: overrides.region ?? process.env.HASNA_FILES_AWS_REGION ?? process.env.HASNA_FILES_S3_REGION ?? process.env.HASNA_FILES_EVIDENCE_REGION ?? DEFAULT_EVIDENCE_S3_REGION,
+    profile: overrides.profile ?? process.env.HASNA_FILES_AWS_PROFILE ?? process.env.HASNA_FILES_EVIDENCE_AWS_PROFILE ?? process.env.AWS_PROFILE ?? "",
+    endpoint: overrides.endpoint ?? process.env.HASNA_FILES_S3_ENDPOINT ?? process.env.HASNA_FILES_EVIDENCE_S3_ENDPOINT ?? "",
+    prefix: trimSlashes(overrides.prefix ?? process.env.HASNA_FILES_S3_PREFIX ?? process.env.HASNA_FILES_EVIDENCE_PREFIX ?? ""),
     localRoot: overrides.localRoot ?? process.env.HASNA_FILES_EVIDENCE_LOCAL_ROOT ?? join(getDataDir(), "evidence"),
   };
 }

@@ -10,9 +10,17 @@ Internal apps should store `file_asset_id` plus domain metadata such as `company
 
 ## Production Bucket
 
-Use `hasna-files-prod` as the production evidence bucket for now.
+`hasna-xyz-opensource-files-prod` is the production bucket for this repo,
+following the Hasna XYZ storage naming pattern. Detailed migration runbooks stay
+in private operator evidence and are not part of the public package.
 
-Default object layout:
+The old `hasna-files-prod` bucket is legacy only. Its discovered smoke evidence
+objects were copied to
+`hasna-xyz-opensource-files-prod/imports/legacy-buckets/hasna-files-prod-2026-06-08/raw/`
+on 2026-06-08. Keep the old bucket readable until rollback windows and global
+legacy retirement gates close, but do not use it for new writes.
+
+Current evidence object layout:
 
 ```txt
 quarantine/orgs/{org_id}/companies/{company_id|_global}/{app}/{yyyy}/{mm}/{kind}/{asset_id}/{filename}
@@ -33,6 +41,29 @@ Files enter the bucket under `quarantine/` and move to the final key only after 
 ## Local Mode
 
 Local filesystem storage is allowed for development, tests, offline, and self-hosted deployments. Production internal apps should use the shared bucket through this package.
+
+## Environment
+
+Repo-level object storage aliases are preferred:
+
+```bash
+HASNA_FILES_S3_BUCKET=hasna-xyz-opensource-files-prod
+HASNA_FILES_S3_PREFIX=objects
+HASNA_FILES_AWS_REGION=us-east-1
+HASNA_FILES_S3_ENDPOINT=
+```
+
+The existing `HASNA_FILES_EVIDENCE_*` variables remain compatible for apps that
+already use evidence-specific configuration.
+
+## 2026-06-09 Checksum Note
+
+S3 uploads that include a SHA-256 checksum must set both the checksum value and
+`ChecksumAlgorithm=SHA256`. Checksum-bound direct uploads use single
+`PutObject`; multipart upload does not accept the same whole-object checksum
+semantics. Presigned PUTs also include the checksum algorithm. Verification
+evidence should record aggregate status, checksum algorithm, size, and result;
+private asset ids and object keys stay in operator artifacts.
 
 ## Security Defaults
 

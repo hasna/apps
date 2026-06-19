@@ -11,18 +11,188 @@ import { createCollection, updateCollection, listCollections, getCollection, del
 import { createProject, updateProject, listProjects, getProject, deleteProject, addToProject, removeFromProject } from "../db/projects.js";
 import { indexLocalSource } from "../lib/indexer.js";
 import { listGoogleDriveItems, listGoogleDriveProfiles, preflightGoogleDriveSource, syncGoogleDriveSource } from "../lib/google-drive.js";
-import { createS3ClientConfig, indexS3Source, downloadFromS3, uploadToS3, getPresignedUrl } from "../lib/s3.js";
+import { indexS3Source, downloadFromS3, uploadToS3, getPresignedUrl } from "../lib/s3.js";
+import { downloadResolvedFileObject, resolveFileObject, resolvedFileObjectSummary } from "../lib/file-object.js";
+import { extractTextFromFile } from "../lib/extraction.js";
+import { extractTextSnapshotFromFile } from "../lib/extraction-snapshot.js";
+import { doctorKnowledgeSources } from "../lib/knowledge-doctor.js";
+import { exportKnowledgeSourceManifest } from "../lib/knowledge-manifest.js";
+import { resolveKnowledgeSourceRef } from "../lib/knowledge-resolver.js";
+import { acknowledgeKnowledgeSourceOutbox, pollKnowledgeSourceOutbox } from "../db/knowledge-outbox.js";
+import { parseOpenFilesSourceRef } from "../lib/source-ref.js";
 import { registerEvidenceTools } from "./evidence-tools.js";
+import { registerOrganizationTools } from "./organization-tools.js";
+import { registerStorageTools } from "./storage-tools.js";
 import { registerAgent, getAgent, listAgents as listDbAgents, updateAgentHeartbeat, setAgentFocus } from "../db/agents.js";
 import { logActivity, getFileHistory, getAgentActivity, getSessionActivity } from "../db/activity.js";
-import { join } from "path";
+import { basename, join } from "path";
 import { existsSync } from "fs";
 import { homedir } from "os";
 import { createRequire } from "module";
-import type { GoogleDriveConfig, S3Config } from "../types/index.js";
+import { buildOpenFilesFileRef } from "../lib/source-ref.js";
+import type { GoogleDriveConfig, KnowledgeSourceManifestFormat, KnowledgeSourceResolveMode, S3Config } from "../types/index.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
+
+type McpCapability = "mutations" | "destructive" | "imports" | "signed_urls" | "downloads" | "indexing";
+
+const MCP_TOOL_CAPABILITIES: Record<string, McpCapability[]> = {
+  add_source: ["mutations"],
+  add_google_drive_source: ["mutations"],
+  sync_google_drive: ["imports"],
+  remove_source: ["destructive"],
+  index_source: ["indexing"],
+  download_file: ["downloads"],
+  upload_file: ["mutations"],
+  create_evidence_upload_intent: ["mutations", "signed_urls"],
+  upload_evidence_file: ["imports"],
+  complete_evidence_upload: ["mutations"],
+  link_evidence_asset: ["mutations"],
+  sign_evidence_download: ["signed_urls", "downloads"],
+  verify_evidence_asset: ["indexing"],
+  files_storage_push: ["mutations"],
+  files_storage_pull: ["mutations"],
+  files_storage_sync: ["mutations"],
+  tag_file: ["mutations"],
+  untag_file: ["mutations"],
+  delete_tag: ["mutations"],
+  create_collection: ["mutations"],
+  update_collection: ["mutations"],
+  auto_populate_collection: ["mutations"],
+  add_to_collection: ["mutations"],
+  remove_from_collection: ["mutations"],
+  delete_collection: ["mutations"],
+  create_project: ["mutations"],
+  update_project: ["mutations"],
+  add_to_project: ["mutations"],
+  remove_from_project: ["mutations"],
+  delete_project: ["mutations"],
+  get_file_url: ["signed_urls"],
+  ack_knowledge_outbox: ["mutations"],
+  bulk_tag: ["mutations"],
+  move_file: ["mutations"],
+  copy_file: ["mutations"],
+  rename_file: ["mutations"],
+  delete_file: ["mutations"],
+  restore_file: ["mutations"],
+  annotate_file: ["mutations"],
+  normalize_source: ["mutations"],
+  import_from_url: ["imports"],
+  import_from_local: ["imports"],
+  bulk_import: ["imports"],
+  resolve_conflict: ["mutations"],
+  purge_deleted: ["destructive"],
+  get_or_create_collection: ["mutations"],
+  get_or_create_project: ["mutations"],
+  watch_source: ["indexing"],
+  unwatch_source: ["indexing"],
+};
+
+const DEFAULT_MCP_READ_BYTES = 100 * 1024;
+const MAX_MCP_READ_BYTES = 10 * 1024 * 1024;
+const DEFAULT_MCP_IMPORT_BYTES = 100 * 1024 * 1024;
+const MAX_MCP_IMPORT_BYTES = 2 * 1024 * 1024 * 1024;
+
+function mcpToolDenied(toolName: string, capabilities: McpCapability[]) {
+  const envNames = capabilities.map((capability) => capabilityEnvName(capability));
+  return {
+    content: [{
+      type: "text" as const,
+      text: [
+        `MCP tool '${toolName}' requires explicit capability: ${capabilities.join(", ")}.`,
+        `Start files-mcp with ${envNames.join(" and ")} set to 1, or OPEN_FILES_MCP_ALLOW_ALL=1.`,
+      ].join(" "),
+    }],
+    isError: true,
+  };
+}
+
+function requireMcpToolCapabilities(toolName: string) {
+  const capabilities = MCP_TOOL_CAPABILITIES[toolName] ?? [];
+  const missing = capabilities.filter((capability) => !mcpCapabilityEnabled(capability));
+  return missing.length ? mcpToolDenied(toolName, missing) : null;
+}
+
+function requireMcpCapability(toolName: string, capability: McpCapability) {
+  return mcpCapabilityEnabled(capability) ? null : mcpToolDenied(toolName, [capability]);
+}
+
+function mcpCapabilityEnabled(capability: McpCapability): boolean {
+  return truthyEnv(process.env.OPEN_FILES_MCP_ALLOW_ALL)
+    || truthyEnv(process.env.OPEN_FILES_ALLOW_ALL)
+    || truthyEnv(process.env[`OPEN_FILES_ALLOW_${capability.toUpperCase()}`])
+    || truthyEnv(process.env[capabilityEnvName(capability)]);
+}
+
+function capabilityEnvName(capability: McpCapability): string {
+  return `OPEN_FILES_MCP_ALLOW_${capability.toUpperCase()}`;
+}
+
+function truthyEnv(value: string | undefined): boolean {
+  return value === "1" || value === "true" || value === "yes" || value === "on";
+}
+
+function normalizeMcpReadLimit(value: number | undefined): number {
+  if (!Number.isFinite(value ?? DEFAULT_MCP_READ_BYTES)) return DEFAULT_MCP_READ_BYTES;
+  const normalized = Math.floor(value ?? DEFAULT_MCP_READ_BYTES);
+  if (normalized <= 0) return DEFAULT_MCP_READ_BYTES;
+  return Math.min(normalized, MAX_MCP_READ_BYTES);
+}
+
+function normalizeMcpImportLimit(): number {
+  const parsed = Number(process.env.OPEN_FILES_MCP_IMPORT_MAX_BYTES);
+  if (!Number.isFinite(parsed)) return DEFAULT_MCP_IMPORT_BYTES;
+  if (parsed <= 0) return DEFAULT_MCP_IMPORT_BYTES;
+  return Math.min(Math.floor(parsed), MAX_MCP_IMPORT_BYTES);
+}
+
+function normalizeManagedRelativePath(value: string | undefined, fallback: string): string {
+  const raw = (value && value.trim().length ? value : fallback).trim().replace(/\\/g, "/");
+  if (!raw || raw.includes("\0") || raw.startsWith("/") || /^[A-Za-z]:\//.test(raw)) {
+    throw new Error("Destination path must be a relative managed path.");
+  }
+  const parts = raw.split("/");
+  if (parts.some((part) => !part || part === "." || part === "..")) {
+    throw new Error("Destination path must not contain empty, '.', or '..' segments.");
+  }
+  return parts.join("/");
+}
+
+function safeTempFileName(fileName: string): string {
+  return basename(fileName).replace(/[^A-Za-z0-9._-]/g, "_") || "downloaded-file";
+}
+
+async function readResponseBodyWithLimit(resp: Response, maxBytes: number): Promise<Buffer> {
+  const contentLength = Number(resp.headers.get("content-length") ?? "");
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new Error(`Remote file is ${contentLength} bytes; max import size is ${maxBytes} bytes.`);
+  }
+  if (!resp.body) return Buffer.from(await resp.arrayBuffer()).subarray(0, maxBytes);
+
+  const reader = resp.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        throw new Error(`Remote file exceeds max import size of ${maxBytes} bytes.`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks);
+}
+
+function mcpError(message: string) {
+  return { content: [{ type: "text" as const, text: message }], isError: true };
+}
 
 export function buildServer(): McpServer {
   const server = new McpServer({
@@ -38,10 +208,16 @@ function registerTool(
   inputSchema: Record<string, z.ZodTypeAny>,
   handler: ToolHandler,
 ): void {
-  (server.tool as any)(name, description, inputSchema, handler);
+  (server.tool as any)(name, description, inputSchema, async (params: any) => {
+    const denied = requireMcpToolCapabilities(name);
+    if (denied) return denied;
+    return handler(params);
+  });
 }
 
 registerEvidenceTools(registerTool);
+registerOrganizationTools(registerTool);
+registerStorageTools(registerTool);
 
 // ─── Sources ──────────────────────────────────────────────────────────────────
 
@@ -257,19 +433,21 @@ registerTool("download_file", "Download a file from S3 to a local path", {
   dest: z.string().optional().describe("Destination path (defaults to ~/Downloads/<filename>)"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ id, dest, agent_id }) => {
-  const file = getFile(id);
-  if (!file) return { content: [{ type: "text", text: `File not found: ${id}` }], isError: true };
-  const source = getSource(file.source_id);
-  if (!source) return { content: [{ type: "text", text: "Source not found" }], isError: true };
+  let resolved;
+  try {
+    resolved = resolveFileObject(id);
+  } catch (error) {
+    return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
+  }
 
-  if (source.type === "local") {
-    const fullPath = join(source.path!, file.path);
+  if (resolved.storageSource.type === "local") {
+    const fullPath = join(resolved.storageSource.path!, resolved.objectKey);
     if (agent_id) logActivity({ agent_id, action: "read", file_id: id, metadata: { path: fullPath } });
     return { content: [{ type: "text", text: `Local file: ${fullPath}` }] };
   }
 
-  const outPath = dest ?? join(homedir(), "Downloads", file.name);
-  await downloadFromS3(source, file.path, outPath);
+  const outPath = dest ?? join(homedir(), "Downloads", resolved.file.name);
+  await downloadResolvedFileObject(resolved, outPath);
   if (agent_id) logActivity({ agent_id, action: "download", file_id: id, metadata: { dest: outPath } });
   return { content: [{ type: "text", text: `Downloaded to: ${outPath}` }] };
 });
@@ -474,13 +652,26 @@ registerTool("get_file_url", "Get a pre-signed URL for temporary access to an S3
   id: z.string().describe("File ID"),
   expires_in: z.number().optional().default(3600).describe("URL expiry in seconds (default 1 hour)"),
 }, async ({ id, expires_in }) => {
-  const file = getFile(id);
-  if (!file) return { content: [{ type: "text", text: `File not found: ${id}` }], isError: true };
-  const source = getSource(file.source_id);
-  if (!source) return { content: [{ type: "text", text: "Source not found" }], isError: true };
-  if (source.type !== "s3") return { content: [{ type: "text", text: "get_file_url only works with S3 sources" }], isError: true };
-  const url = await getPresignedUrl(source, file.path, expires_in ?? 3600);
+  let resolved;
+  try {
+    resolved = resolveFileObject(id);
+  } catch (error) {
+    return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
+  }
+  if (resolved.storageSource.type !== "s3") return { content: [{ type: "text", text: "get_file_url only works with S3-backed files" }], isError: true };
+  const expiresIn = Math.min(Math.max(Math.floor(expires_in ?? 600), 1), 3600);
+  const url = await getPresignedUrl(resolved.storageSource, resolved.objectKey, expiresIn);
   return { content: [{ type: "text", text: url }] };
+});
+
+registerTool("resolve_file_storage", "Resolve a file to its current object storage location", {
+  id: z.string().describe("File ID"),
+}, ({ id }) => {
+  try {
+    return { content: [{ type: "text", text: JSON.stringify(resolvedFileObjectSummary(resolveFileObject(id)), null, 2) }] };
+  } catch (error) {
+    return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
+  }
 });
 
 // ─── get_file_content ─────────────────────────────────────────────────────────
@@ -490,49 +681,239 @@ registerTool("get_file_content", "Read the content of a text file (local or S3 s
   max_bytes: z.number().optional().default(102400).describe("Max bytes to read (default 100KB)"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ id, max_bytes, agent_id }) => {
-  const file = getFile(id);
-  if (!file) return { content: [{ type: "text", text: `File not found: ${id}` }], isError: true };
-  const source = getSource(file.source_id);
-  if (!source) return { content: [{ type: "text", text: "Source not found" }], isError: true };
-
-  const limit = max_bytes ?? 102400;
-  let buf: Buffer;
-
-  if (source.type === "local") {
-    const fullPath = join(source.path!, file.path);
-    const { readFileSync } = await import("fs");
-    try {
-      buf = readFileSync(fullPath);
-    } catch (e) {
-      return { content: [{ type: "text", text: `Failed to read file: ${(e as Error).message}` }], isError: true };
+  try {
+    const limit = normalizeMcpReadLimit(max_bytes);
+    const resolution = await resolveKnowledgeSourceRef(buildOpenFilesFileRef(id), {
+      mode: "content",
+      purpose: "agent_context",
+      max_bytes: limit,
+      agent_id,
+    });
+    const text = resolution.content.text;
+    if ((resolution.status !== "ready" && resolution.status !== "too_large") || text === undefined) {
+      return mcpError(resolution.status_reason ?? `File content is not readable as text: ${resolution.status}`);
     }
-  } else if (source.type === "s3") {
-    try {
-      const { GetObjectCommand, S3Client } = await import("@aws-sdk/client-s3");
-      const client = new S3Client(createS3ClientConfig(source));
-      const resp = await client.send(new GetObjectCommand({
-        Bucket: source.bucket!,
-        Key: file.path,
-        Range: `bytes=0-${limit - 1}`,
-      }));
-      if (!resp.Body) return { content: [{ type: "text", text: "Empty response from S3" }], isError: true };
-      const chunks: Uint8Array[] = [];
-      for await (const chunk of resp.Body as AsyncIterable<Uint8Array>) { chunks.push(chunk); }
-      buf = Buffer.concat(chunks);
-    } catch (e) {
-      return { content: [{ type: "text", text: `Failed to read S3 file: ${(e as Error).message}` }], isError: true };
-    }
-  } else {
-    return { content: [{ type: "text", text: `Unsupported source type: ${source.type}` }], isError: true };
+    const truncated = Boolean(resolution.content.truncated);
+    const suffix = truncated
+      ? `\n\n[truncated - ${resolution.content.bytes_read ?? Buffer.byteLength(text)} bytes read, max ${limit} bytes]`
+      : "";
+    return { content: [{ type: "text" as const, text: `${text}${suffix}` }] };
+  } catch (error) {
+    return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
   }
+});
 
-  const slice = buf.slice(0, limit);
-  const text = slice.toString("utf8");
-  const truncated = buf.length > limit;
-  if (agent_id) logActivity({ agent_id, action: "read", file_id: id, metadata: { bytes_read: slice.length, truncated } });
-  return {
-    content: [{ type: "text", text: truncated ? `${text}\n\n[truncated — ${buf.length} bytes total, showing first ${limit} bytes]` : text }],
-  };
+registerTool("extract_file_text", "Return chunk-ready extracted text metadata for knowledge indexing", {
+  id: z.string().describe("File ID"),
+  max_bytes: z.number().optional().default(1048576).describe("Maximum bytes to read"),
+  segment_chars: z.number().optional().default(4000).describe("Maximum characters per segment"),
+  redact_patterns: z.array(z.string()).optional().describe("Regex patterns to redact from segment text"),
+}, async ({ id, max_bytes, segment_chars, redact_patterns }) => {
+  try {
+    const result = await extractTextFromFile(id, {
+      max_bytes,
+      max_segment_chars: segment_chars,
+      redact_patterns: (redact_patterns as string[] | undefined)?.map((pattern: string) => new RegExp(pattern, "g")),
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  } catch (error) {
+    return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
+  }
+});
+
+registerTool("extract_file_snapshot", "Return a deterministic extraction snapshot for semantic chunking", {
+  id: z.string().describe("File ID"),
+  max_bytes: z.number().optional().default(1048576).describe("Maximum bytes to read"),
+  segment_chars: z.number().optional().default(4000).describe("Maximum characters per source segment"),
+  redact_patterns: z.array(z.string()).optional().describe("Regex patterns to redact from snapshot text"),
+}, async ({ id, max_bytes, segment_chars, redact_patterns }) => {
+  try {
+    const result = await extractTextSnapshotFromFile(id, {
+      max_bytes,
+      max_segment_chars: segment_chars,
+      redact_patterns: (redact_patterns as string[] | undefined)?.map((pattern: string) => new RegExp(pattern, "g")),
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  } catch (error) {
+    return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
+  }
+});
+
+registerTool("export_knowledge_manifest", "Export a read-only open-files source manifest for knowledge indexing", {
+  source_id: z.string().optional(),
+  collection_id: z.string().optional(),
+  project_id: z.string().optional(),
+  tag: z.string().optional(),
+  status: z.enum(["active", "deleted", "moved", "all"]).optional(),
+  include_deleted: z.boolean().optional(),
+  delta: z.boolean().optional(),
+  since_cursor: z.string().optional(),
+  since_sync_version: z.number().optional(),
+  cursor: z.string().optional(),
+  limit: z.number().optional().default(100),
+  format: z.enum(["json", "jsonl"]).optional().default("json"),
+  output_local_path: z.string().optional(),
+  output_s3_source_id: z.string().optional(),
+  output_s3_key: z.string().optional(),
+  include_acl_summary: z.boolean().optional(),
+  include_evidence_assets: z.boolean().optional(),
+}, async (params) => {
+  try {
+    if (params.output_local_path || params.output_s3_source_id || params.output_s3_key) {
+      const denied = requireMcpCapability("export_knowledge_manifest", "mutations");
+      if (denied) return denied;
+    }
+    const output = params.output_local_path
+      ? { provider: "local" as const, path: params.output_local_path, format: params.format as KnowledgeSourceManifestFormat }
+      : params.output_s3_source_id && params.output_s3_key
+        ? { provider: "s3" as const, source_id: params.output_s3_source_id, key: params.output_s3_key, format: params.format as KnowledgeSourceManifestFormat }
+        : undefined;
+    const manifest = await exportKnowledgeSourceManifest({
+      source_id: params.source_id,
+      collection_id: params.collection_id,
+      project_id: params.project_id,
+      tag: params.tag,
+      status: params.status,
+      include_deleted: params.include_deleted,
+      delta: params.delta,
+      since_cursor: params.since_cursor,
+      since_sync_version: params.since_sync_version,
+      cursor: params.cursor,
+      limit: params.limit,
+      format: params.format as KnowledgeSourceManifestFormat,
+      output,
+      include_acl_summary: params.include_acl_summary,
+      include_evidence_assets: params.include_evidence_assets,
+    });
+    return { content: [{ type: "text", text: JSON.stringify(manifest, null, 2) }] };
+  } catch (error) {
+    return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
+  }
+});
+
+registerTool("resolve_knowledge_source", "Resolve an open-files:// source ref with read-only policy", {
+  source_ref: z.string().describe("open-files:// source ref"),
+  mode: z.enum(["metadata", "content", "extracted_text", "snapshot", "signed_url"]).optional().default("metadata"),
+  purpose: z.string().optional().default("knowledge_index"),
+  max_bytes: z.number().optional().default(262144),
+  segment_chars: z.number().optional().default(4000),
+  allowed_mimes: z.array(z.string()).optional(),
+  allow_binary: z.boolean().optional(),
+  signed_url_expires_in: z.number().optional().default(600),
+  agent_id: z.string().optional(),
+  session_id: z.string().optional(),
+}, async (params) => {
+  try {
+    const result = await resolveKnowledgeSourceRef(params.source_ref, {
+      mode: params.mode as KnowledgeSourceResolveMode,
+      purpose: params.purpose,
+      max_bytes: params.max_bytes,
+      max_segment_chars: params.segment_chars,
+      allowed_mimes: params.allowed_mimes,
+      allow_binary: params.allow_binary,
+      signed_url_expires_in: params.signed_url_expires_in,
+      agent_id: params.agent_id,
+      session_id: params.session_id,
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  } catch (error) {
+    return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
+  }
+});
+
+registerTool("doctor_knowledge_sources", "Diagnose open-files source refs for knowledge sync readiness", {
+  source_refs: z.array(z.string()).optional(),
+  source_id: z.string().optional(),
+  collection_id: z.string().optional(),
+  project_id: z.string().optional(),
+  tag: z.string().optional(),
+  status: z.enum(["active", "deleted", "moved", "all"]).optional(),
+  limit: z.number().optional().default(100),
+  purpose: z.string().optional().default("knowledge_index"),
+  require_extracted_text: z.boolean().optional().default(true),
+  check_extracted_text: z.boolean().optional().default(false),
+  max_bytes: z.number().optional().default(262144),
+  segment_chars: z.number().optional().default(4000),
+}, async (params) => {
+  try {
+    const result = await doctorKnowledgeSources({
+      source_refs: params.source_refs,
+      source_id: params.source_id,
+      collection_id: params.collection_id,
+      project_id: params.project_id,
+      tag: params.tag,
+      status: params.status,
+      limit: params.limit,
+      purpose: params.purpose,
+      require_extracted_text: params.require_extracted_text,
+      check_extracted_text: params.check_extracted_text,
+      max_bytes: params.max_bytes,
+      max_segment_chars: params.segment_chars,
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  } catch (error) {
+    return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
+  }
+});
+
+registerTool("resolve_extracted_text", "Resolve extracted text for an open-files:// source ref", {
+  source_ref: z.string().describe("open-files:// file or revision ref"),
+  purpose: z.string().optional().default("knowledge_index"),
+  max_bytes: z.number().optional().default(1048576),
+  segment_chars: z.number().optional().default(4000),
+}, async ({ source_ref, purpose, max_bytes, segment_chars }) => {
+  try {
+    parseOpenFilesSourceRef(source_ref);
+    const result = await resolveKnowledgeSourceRef(source_ref, {
+      mode: "extracted_text",
+      purpose,
+      max_bytes,
+      max_segment_chars: segment_chars,
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  } catch (error) {
+    return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
+  }
+});
+
+registerTool("poll_knowledge_outbox", "Poll open-files source change outbox events for reindexing", {
+  consumer_id: z.string().optional(),
+  after_cursor: z.number().optional(),
+  event_types: z.array(z.enum([
+    "source_created", "indexed", "updated", "deleted", "moved", "hash_changed",
+    "revision_changed", "extraction_ready", "extraction_failed", "extraction_changed",
+    "permission_changed", "acl_revoked", "canonical_key_changed",
+    "source_disabled", "source_enabled", "source_updated",
+  ])).optional(),
+  source_id: z.string().optional(),
+  file_id: z.string().optional(),
+  limit: z.number().optional().default(100),
+}, async (params) => {
+  try {
+    const result = pollKnowledgeSourceOutbox({
+      consumer_id: params.consumer_id,
+      after_cursor: params.after_cursor,
+      event_types: params.event_types,
+      source_id: params.source_id,
+      file_id: params.file_id,
+      limit: params.limit,
+    });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  } catch (error) {
+    return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
+  }
+});
+
+registerTool("ack_knowledge_outbox", "Acknowledge open-files source change outbox progress for a consumer", {
+  consumer_id: z.string(),
+  cursor: z.number(),
+}, async ({ consumer_id, cursor }) => {
+  try {
+    const checkpoint = acknowledgeKnowledgeSourceOutbox(consumer_id, cursor);
+    return { content: [{ type: "text", text: JSON.stringify(checkpoint, null, 2) }] };
+  } catch (error) {
+    return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
+  }
 });
 
 // ─── bulk_tag ─────────────────────────────────────────────────────────────────
@@ -563,26 +944,33 @@ registerTool("describe_file", "Get file metadata + first lines of content in one
   id: z.string().describe("File ID"),
   lines: z.number().optional().default(50).describe("Number of lines to preview (default 50)"),
 }, async ({ id, lines }) => {
-  const file = getFile(id);
-  if (!file) return { content: [{ type: "text", text: `File not found: ${id}` }], isError: true };
-  const source = getSource(file.source_id);
+  let resolved;
+  try {
+    resolved = resolveFileObject(id);
+  } catch (error) {
+    return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
+  }
 
   let preview = "";
-  if (source?.type === "local") {
-    const { readFileSync } = await import("fs");
-    const { join } = await import("path");
-    try {
-      const fullPath = join(source.path!, file.path);
-      const content = readFileSync(fullPath, "utf8");
-      preview = content.split("\n").slice(0, lines ?? 50).join("\n");
-    } catch { preview = "(binary or unreadable)"; }
-  } else if (source?.type === "s3") {
-    preview = "(S3 file — use get_file_content or get_file_url to access)";
+  try {
+    const resolution = await resolveKnowledgeSourceRef(buildOpenFilesFileRef(id), {
+      mode: "content",
+      purpose: "agent_context",
+      max_bytes: 32 * 1024,
+    });
+    if (resolution.content.text !== undefined && (resolution.status === "ready" || resolution.status === "too_large")) {
+      preview = resolution.content.text.split("\n").slice(0, lines ?? 50).join("\n");
+    } else {
+      preview = resolution.status_reason ?? "(binary or unreadable)";
+    }
+  } catch {
+    preview = "(binary or unreadable)";
   }
 
   const result = {
-    ...file,
-    source_name: source?.name,
+    ...resolved.file,
+    source_name: resolved.source.name,
+    storage: (resolvedFileObjectSummary(resolved).storage as Record<string, unknown>),
     preview,
   };
   return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
@@ -595,6 +983,12 @@ registerTool("move_file", "Move a file to a different path within the same sourc
   dest_path: z.string().describe("New path within the source"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ file_id, dest_path, agent_id }) => {
+  let safeDestPath: string;
+  try {
+    safeDestPath = normalizeManagedRelativePath(dest_path, dest_path);
+  } catch (error) {
+    return mcpError(error instanceof Error ? error.message : String(error));
+  }
   const file = getFile(file_id);
   if (!file) return { content: [{ type: "text" as const, text: `File not found: ${file_id}` }], isError: true };
   const source = getSource(file.source_id);
@@ -604,15 +998,15 @@ registerTool("move_file", "Move a file to a different path within the same sourc
     const { renameSync, mkdirSync } = await import("fs");
     const { join: jp, dirname } = await import("path");
     const oldPath = jp(source.path!, file.path);
-    const newPath = jp(source.path!, dest_path);
+    const newPath = jp(source.path!, safeDestPath);
     mkdirSync(dirname(newPath), { recursive: true });
     renameSync(oldPath, newPath);
   }
   // Update DB
   const { getDb: getMoveDb } = await import("../db/database.js");
-  getMoveDb().run("UPDATE files SET path=?, status='active', sync_version=sync_version+1 WHERE id=?", [dest_path, file_id]);
-  if (agent_id) logActivity({ agent_id, action: "move", file_id, metadata: { from: file.path, to: dest_path } });
-  return { content: [{ type: "text" as const, text: `Moved ${file.path} → ${dest_path}` }] };
+  getMoveDb().run("UPDATE files SET path=?, status='active', sync_version=sync_version+1 WHERE id=?", [safeDestPath, file_id]);
+  if (agent_id) logActivity({ agent_id, action: "move", file_id, metadata: { from: file.path, to: safeDestPath } });
+  return { content: [{ type: "text" as const, text: `Moved ${file.path} -> ${safeDestPath}` }] };
 });
 
 registerTool("copy_file", "Copy a file to another source (local→S3, S3→local, etc.)", {
@@ -627,7 +1021,12 @@ registerTool("copy_file", "Copy a file to another source (local→S3, S3→local
   const dstSource = getSource(dest_source_id);
   if (!srcSource || !dstSource) return { content: [{ type: "text" as const, text: "Source not found" }], isError: true };
 
-  const finalDest = dest_path ?? file.name;
+  let finalDest: string;
+  try {
+    finalDest = normalizeManagedRelativePath(dest_path, file.name);
+  } catch (error) {
+    return mcpError(error instanceof Error ? error.message : String(error));
+  }
   const { join: jp } = await import("path");
 
   if (srcSource.type === "local" && dstSource.type === "local") {
@@ -663,21 +1062,28 @@ registerTool("rename_file", "Rename a file and regenerate its canonical name", {
   new_name: z.string().describe("New file name"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ file_id, new_name, agent_id }) => {
+  let safeName: string;
+  try {
+    safeName = normalizeManagedRelativePath(new_name, new_name);
+    if (safeName.includes("/")) throw new Error("New file name must not contain path separators.");
+  } catch (error) {
+    return mcpError(error instanceof Error ? error.message : String(error));
+  }
   const file = getFile(file_id);
   if (!file) return { content: [{ type: "text" as const, text: `File not found: ${file_id}` }], isError: true };
 
   const { generateCanonicalName: genCan } = await import("../lib/normalize.js");
   const { extname: en } = await import("path");
-  const canonical = genCan(new_name);
-  const ext = en(new_name).toLowerCase();
+  const canonical = genCan(safeName);
+  const ext = en(safeName).toLowerCase();
   const { getDb: getRenameDb } = await import("../db/database.js");
   getRenameDb().run(
     "UPDATE files SET name=?, original_name=?, canonical_name=?, ext=?, sync_version=sync_version+1 WHERE id=?",
-    [new_name, new_name, canonical, ext, file_id]
+    [safeName, safeName, canonical, ext, file_id]
   );
 
-  if (agent_id) logActivity({ agent_id, action: "rename", file_id, metadata: { old_name: file.name, new_name } });
-  return { content: [{ type: "text" as const, text: `Renamed to ${new_name} (canonical: ${canonical})` }] };
+  if (agent_id) logActivity({ agent_id, action: "rename", file_id, metadata: { old_name: file.name, new_name: safeName } });
+  return { content: [{ type: "text" as const, text: `Renamed to ${safeName} (canonical: ${canonical})` }] };
 });
 
 registerTool("delete_file", "Soft-delete a file (or hard-delete from disk/S3)", {
@@ -689,6 +1095,8 @@ registerTool("delete_file", "Soft-delete a file (or hard-delete from disk/S3)", 
   if (!file) return { content: [{ type: "text" as const, text: `File not found: ${file_id}` }], isError: true };
 
   if (hard_delete) {
+    const denied = requireMcpCapability("delete_file hard_delete", "destructive");
+    if (denied) return denied;
     const source = getSource(file.source_id);
     if (source?.type === "local") {
       const { unlinkSync } = await import("fs");
@@ -837,11 +1245,13 @@ registerTool("import_from_url", "Import a file from any URL (iCloud, Google Driv
 
     const { writeFileSync, mkdirSync } = await import("fs");
     const { join: joinPath, dirname } = await import("path");
-    const body = Buffer.from(await resp.arrayBuffer());
+    const safeFileName = safeTempFileName(fileName);
+    const finalRelativePath = normalizeManagedRelativePath(dest_path, safeFileName);
+    const body = await readResponseBodyWithLimit(resp, normalizeMcpImportLimit());
 
     if (source.type === "local") {
       const destDir = source.path!;
-      const finalPath = dest_path ? joinPath(destDir, dest_path) : joinPath(destDir, fileName);
+      const finalPath = joinPath(destDir, finalRelativePath);
       mkdirSync(dirname(finalPath), { recursive: true });
       writeFileSync(finalPath, body);
 
@@ -849,10 +1259,9 @@ registerTool("import_from_url", "Import a file from any URL (iCloud, Google Driv
       await indexLocalSource(source, machine.id);
     } else if (source.type === "s3") {
       // Write to temp, upload, cleanup
-      const tmpPath = `/tmp/files-import-${Date.now()}-${fileName}`;
+      const tmpPath = `/tmp/files-import-${Date.now()}-${safeFileName}`;
       writeFileSync(tmpPath, body);
-      const key = dest_path ?? fileName;
-      await uploadToS3(source, tmpPath, key);
+      await uploadToS3(source, tmpPath, finalRelativePath);
       const { unlinkSync } = await import("fs");
       try { unlinkSync(tmpPath); } catch {}
       const machine = getCurrentMachine();
@@ -862,15 +1271,14 @@ registerTool("import_from_url", "Import a file from any URL (iCloud, Google Driv
     // Apply tags if provided
     if (importTags?.length) {
       const { getFileByPath: getByPath } = await import("../db/files.js");
-      const relPath = dest_path ?? fileName;
-      const file = getByPath(dest_source_id, relPath);
+      const file = getByPath(dest_source_id, finalRelativePath);
       if (file) {
         for (const tag of importTags) tagFile(file.id, tag);
       }
     }
 
-    if (agent_id) logActivity({ agent_id, action: "import", source_id: dest_source_id, metadata: { url: fileUrl, fileName } });
-    return { content: [{ type: "text" as const, text: `Imported ${fileName} to source ${source.name}` }] };
+    if (agent_id) logActivity({ agent_id, action: "import", source_id: dest_source_id, metadata: { url: fileUrl, fileName: safeFileName, path: finalRelativePath } });
+    return { content: [{ type: "text" as const, text: `Imported ${safeFileName} to source ${source.name}` }] };
   } catch (e) {
     return { content: [{ type: "text" as const, text: `Import failed: ${(e as Error).message}` }], isError: true };
   }
@@ -890,18 +1298,23 @@ registerTool("import_from_local", "Import a file from any local path into a mana
 
   const { copyFileSync, renameSync, mkdirSync: mkDir } = await import("fs");
   const { join: joinPath, dirname, basename: baseName } = await import("path");
-  const fileName = baseName(srcPath);
+  const fileName = safeTempFileName(baseName(srcPath));
+  let finalRelativePath: string;
+  try {
+    finalRelativePath = normalizeManagedRelativePath(dest_path, fileName);
+  } catch (error) {
+    return mcpError(error instanceof Error ? error.message : String(error));
+  }
 
   if (source.type === "local") {
-    const finalPath = dest_path ? joinPath(source.path!, dest_path) : joinPath(source.path!, fileName);
+    const finalPath = joinPath(source.path!, finalRelativePath);
     mkDir(dirname(finalPath), { recursive: true });
     if (copy) copyFileSync(srcPath, finalPath);
     else renameSync(srcPath, finalPath);
     const machine = getCurrentMachine();
     await indexLocalSource(source, machine.id);
   } else if (source.type === "s3") {
-    const key = dest_path ?? fileName;
-    await uploadToS3(source, srcPath, key);
+    await uploadToS3(source, srcPath, finalRelativePath);
     if (!copy) { const { unlinkSync } = await import("fs"); try { unlinkSync(srcPath); } catch {} }
     const machine = getCurrentMachine();
     await indexS3Source(source, machine.id);
@@ -909,14 +1322,13 @@ registerTool("import_from_local", "Import a file from any local path into a mana
 
   if (importTags?.length) {
     const { getFileByPath: getByPath } = await import("../db/files.js");
-    const relPath = dest_path ?? fileName;
-    const file = getByPath(dest_source_id, relPath);
+    const file = getByPath(dest_source_id, finalRelativePath);
     if (file) {
       for (const tag of importTags) tagFile(file.id, tag);
     }
   }
 
-  if (agent_id) logActivity({ agent_id, action: "import", source_id: dest_source_id, metadata: { src: srcPath, copy } });
+  if (agent_id) logActivity({ agent_id, action: "import", source_id: dest_source_id, metadata: { src: srcPath, copy, path: finalRelativePath } });
   return { content: [{ type: "text" as const, text: `Imported ${fileName} to source ${source.name}` }] };
 });
 
@@ -940,32 +1352,34 @@ registerTool("bulk_import", "Import multiple files at once from URLs or local pa
         const resp = await fetch(item.url_or_path);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const urlPath = new URL(item.url_or_path).pathname;
-        const fileName = decodeURIComponent(urlPath.split("/").pop() || "file");
+        const fileName = safeTempFileName(decodeURIComponent(urlPath.split("/").pop() || "file"));
         const { writeFileSync: ws } = await import("fs");
         const tmpPath = `/tmp/files-import-${Date.now()}-${fileName}`;
-        ws(tmpPath, Buffer.from(await resp.arrayBuffer()));
+        ws(tmpPath, await readResponseBodyWithLimit(resp, normalizeMcpImportLimit()));
         const source = getSource(dest_source_id)!;
+        const finalPath = normalizeManagedRelativePath(undefined, fileName);
         if (source.type === "s3") {
-          await uploadToS3(source, tmpPath, fileName);
+          await uploadToS3(source, tmpPath, finalPath);
         } else {
           const { copyFileSync: cpf, mkdirSync: mkd } = await import("fs");
           const { join: jp } = await import("path");
           mkd(source.path!, { recursive: true });
-          cpf(tmpPath, jp(source.path!, fileName));
+          cpf(tmpPath, jp(source.path!, finalPath));
         }
         const { unlinkSync: ul } = await import("fs"); try { ul(tmpPath); } catch {}
       } else {
         if (!existsSync(item.url_or_path)) throw new Error(`File not found: ${item.url_or_path}`);
         const source = getSource(dest_source_id)!;
         const { basename: bn } = await import("path");
-        const fileName = bn(item.url_or_path);
+        const fileName = safeTempFileName(bn(item.url_or_path));
+        const finalPath = normalizeManagedRelativePath(undefined, fileName);
         if (source.type === "s3") {
-          await uploadToS3(source, item.url_or_path, fileName);
+          await uploadToS3(source, item.url_or_path, finalPath);
         } else {
           const { copyFileSync: cpf, mkdirSync: mkd } = await import("fs");
           const { join: jp } = await import("path");
           mkd(source.path!, { recursive: true });
-          cpf(item.url_or_path, jp(source.path!, fileName));
+          cpf(item.url_or_path, jp(source.path!, finalPath));
         }
       }
       imported++;

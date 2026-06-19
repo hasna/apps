@@ -26,17 +26,31 @@ connectors auth googledrive
 ```
 
 Add or repair the production S3 destination once. This stores the AWS named
-profile on the source and sets it as the default Google Drive destination:
+profile on the source and sets it as the default Google Drive destination.
+As of the 2026 storage migration cutover, the default bootstrap points new
+Drive imports at the canonical open-files bucket:
 
 ```bash
-files sources bootstrap-prod-emails
+files sources bootstrap-prod-files
 files sources add-google-drive --all-profiles --all
 files sources sync-google-drive --dry-run
 files sources sync-google-drive
 ```
 
-The production default is `s3://hasna-xyz-prod-emails/drive/<profile>/...`
-using the `hasna-xyz-infra` AWS profile.
+The canonical bootstrap destination is
+`s3://hasna-xyz-opensource-files-prod/imports/google-drive/live/<profile>/...`
+using the `hasna-xyz-infra` AWS profile. The previous production default pointed at
+`s3://hasna-xyz-prod-emails/drive/<profile>/...` using the `hasna-xyz-infra`
+AWS profile and remains a legacy compatibility alias only. The full Google
+Drive archive found during the June 2026 audit is under
+`s3://hasna-xyz-prod-files/google-drive/`.
+
+The canonical target bucket for this repo is
+`hasna-xyz-opensource-files-prod`; the verified canonical content-addressed
+archive lives under `objects/sha256/`, while future Drive sync imports should
+land under `imports/google-drive/live/`. Detailed S3, secrets, and RDS
+migration runbooks are operator evidence and are not shipped in the public
+package.
 
 For a custom S3 destination, pass the shared AWS profile explicitly:
 
@@ -55,13 +69,40 @@ files sources add-google-drive --profile personal --all --destination-source <lo
 Synced files are indexed under the actual S3 or local destination source, so
 `files download`, `files where`, and MCP file tools operate on the stored copy.
 
+To organize the migrated Google Drive corpus into the unified open-files
+taxonomy, run the policy command as a dry-run first:
+
+```bash
+files organize apply-drive-policy --json
+files organize apply-drive-policy --apply
+```
+
+This updates review metadata only: owner, normalized virtual target path,
+duplicate status, and broad additive permission metadata. Canonical S3 objects
+stay under `objects/sha256/`, and legacy/import buckets stay readable until the
+final retirement audit.
+
 ## MCP Server
 
 ```bash
 files-mcp
 ```
 
-Includes file, source, Google Drive, project, collection, agent activity, and evidence-vault tools.
+Includes file, source, Google Drive, project, collection, agent activity, and
+evidence-vault tools. Agent-facing mutation, destructive, import, signed URL,
+download, and indexing tools fail closed unless explicitly enabled:
+
+```bash
+OPEN_FILES_MCP_ALLOW_MUTATIONS=1 files-mcp
+OPEN_FILES_MCP_ALLOW_IMPORTS=1 files-mcp
+OPEN_FILES_MCP_ALLOW_SIGNED_URLS=1 files-mcp
+OPEN_FILES_MCP_ALLOW_DOWNLOADS=1 files-mcp
+OPEN_FILES_MCP_ALLOW_INDEXING=1 files-mcp
+OPEN_FILES_MCP_ALLOW_DESTRUCTIVE=1 files-mcp
+```
+
+`OPEN_FILES_ALLOW_<CAPABILITY>=1` or `OPEN_FILES_MCP_ALLOW_ALL=1` may be used
+for controlled local operator sessions.
 
 ## HTTP mode
 
@@ -84,6 +125,10 @@ Stdio remains the default when no `--http` flag is passed.
 files-serve
 ```
 
+REST mutation, destructive, signed URL, download, import, and indexing routes
+are also disabled by default. Use `OPEN_FILES_REST_ALLOW_<CAPABILITY>=1` or
+`OPEN_FILES_ALLOW_<CAPABILITY>=1` for controlled operator sessions.
+
 ## Evidence Vault
 
 `@hasna/files` is also the shared evidence layer for Hasna internal apps. Apps
@@ -91,7 +136,8 @@ store `file_asset_id` plus domain metadata; this package owns durable storage,
 upload intents, checksum verification, quarantine promotion, signed downloads,
 retention metadata, and access audit.
 
-Production evidence storage defaults to the shared `hasna-files-prod` S3 bucket:
+Production evidence storage defaults to the canonical
+`hasna-xyz-opensource-files-prod` S3 bucket:
 
 ```bash
 files evidence configure-prod
@@ -118,7 +164,28 @@ boundary and object layout.
 
 ## Storage
 
-Files stores metadata locally in SQLite under the Hasna data directory. The repo includes its own S3 integrations and PostgreSQL migration definitions for remote deployments without depending on the shared cloud package.
+Files stores metadata locally in SQLite under the Hasna data directory. Remote
+metadata sync uses this repo's PostgreSQL schema directly, without depending on
+the shared cloud package.
+
+```bash
+export HASNA_FILES_STORAGE_MODE=hybrid
+export HASNA_FILES_DATABASE_URL=postgres://user:pass@host:5432/files
+export HASNA_FILES_S3_BUCKET=hasna-xyz-opensource-files-prod
+export HASNA_FILES_S3_PREFIX=objects
+export HASNA_FILES_AWS_REGION=us-east-1
+
+files storage status
+files storage push --tables machines,sources,files
+files storage pull
+files storage sync
+```
+
+`HASNA_FILES_STORAGE_MODE` accepts `local`, `hybrid`, or `remote`. The older
+`HASNA_FILES_EVIDENCE_*` S3 settings are still supported for evidence uploads,
+but `HASNA_FILES_S3_BUCKET`, `HASNA_FILES_S3_PREFIX`, `HASNA_FILES_AWS_REGION`,
+and `HASNA_FILES_S3_ENDPOINT` are the canonical repo-level object storage
+aliases.
 
 ## Knowledge Source Contract
 

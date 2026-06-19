@@ -81,7 +81,7 @@ describe("sources CLI", () => {
     expect(new TextDecoder().decode(result.stderr)).toContain("Use either --aws-profile");
   });
 
-  test("bootstraps prod-emails Drive archive with the shared email bucket defaults", () => {
+  test("bootstraps the legacy prod-emails alias with canonical files bucket defaults", () => {
     const env = cliEnv();
     const bootstrap = Bun.spawnSync({
       cmd: ["bun", "run", cliPath, "sources", "bootstrap-prod-emails", "--json"],
@@ -96,10 +96,10 @@ describe("sources CLI", () => {
     };
 
     expect(bootstrapped.source).toMatchObject({
-      name: "prod-emails-drive",
-      bucket: "hasna-xyz-prod-emails",
-      prefix: "drive",
-      region: "us-west-2",
+      name: "prod-files-drive",
+      bucket: "hasna-xyz-opensource-files-prod",
+      prefix: "imports/google-drive/live",
+      region: "us-east-1",
       config: { profile: "hasna-xyz-infra" },
     });
     expect(bootstrapped.google_drive_default_destination_source_id).toBeDefined();
@@ -128,10 +128,10 @@ describe("sources CLI", () => {
     };
 
     expect(bootstrapped.source).toMatchObject({
-      name: "prod-emails-drive",
-      bucket: "hasna-xyz-prod-emails",
-      prefix: "drive",
-      region: "us-west-2",
+      name: "prod-files-drive",
+      bucket: "hasna-xyz-opensource-files-prod",
+      prefix: "imports/google-drive/live",
+      region: "us-east-1",
       config: { profile: "hasna-xyz-infra" },
     });
     expect(bootstrapped.google_drive_default_destination_source_id).toBe(bootstrapped.source.id);
@@ -144,7 +144,7 @@ describe("sources CLI", () => {
     });
     const sources = JSON.parse(new TextDecoder().decode(list.stdout)) as Array<{ type: string; bucket?: string; prefix?: string }>;
     expect(sources.filter((source) => source.type === "s3")).toEqual([
-      expect.objectContaining({ bucket: "hasna-xyz-prod-emails", prefix: "drive" }),
+      expect.objectContaining({ bucket: "hasna-xyz-opensource-files-prod", prefix: "imports/google-drive/live" }),
     ]);
 
     const config = Bun.spawnSync({
@@ -235,8 +235,8 @@ describe("sources CLI", () => {
 
     expect(bootstrapped.source.id).toBe(activeId);
     expect(bootstrapped.source).toMatchObject({
-      bucket: "hasna-xyz-prod-emails",
-      prefix: "drive",
+      bucket: "hasna-xyz-opensource-files-prod",
+      prefix: "imports/google-drive/live",
     });
     expect(bootstrapped.google_drive_default_destination_source_id).toBe(activeId);
     expect(bootstrapped.updated_google_drive_source_ids).toEqual([]);
@@ -255,7 +255,7 @@ describe("sources CLI", () => {
       enabled: boolean;
     }>;
     expect(sources.find((source) => source.id === activeId)).toMatchObject({
-      bucket: "hasna-xyz-prod-emails",
+      bucket: "hasna-xyz-opensource-files-prod",
       enabled: true,
     });
     expect(sources.find((source) => source.id === disabledId)).toMatchObject({
@@ -321,8 +321,8 @@ describe("sources CLI", () => {
     };
     expect(bootstrapped.source.id).toBe(legacyId);
     expect(bootstrapped.source).toMatchObject({
-      bucket: "hasna-xyz-prod-emails",
-      prefix: "drive",
+      bucket: "hasna-xyz-opensource-files-prod",
+      prefix: "imports/google-drive/live",
     });
     expect(bootstrapped.updated_google_drive_source_ids).toEqual([]);
 

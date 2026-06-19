@@ -1,5 +1,7 @@
 import { getDb } from "./database.js";
 import { nanoid } from "nanoid";
+import { appendKnowledgeSourceOutboxEvent } from "./knowledge-outbox.js";
+import type { KnowledgeSourceOutboxEventType } from "../types/index.js";
 import type { Source, SourceType, SourceConfig } from "../types/index.js";
 
 interface SourceRow {
@@ -60,7 +62,21 @@ export function createSource(input: {
       input.machine_id,
     ]
   );
-  return getSource(id)!;
+  const source = getSource(id)!;
+  appendKnowledgeSourceOutboxEvent({
+    event_type: "source_created",
+    source_id: source.id,
+    status: source.enabled ? "active" : "disabled",
+    path: source.path,
+    idempotency_key: `source_created:${source.id}`,
+    metadata: {
+      source_type: source.type,
+      bucket: source.bucket,
+      prefix: source.prefix,
+      region: source.region,
+    },
+  });
+  return source;
 }
 
 export function getSource(id: string): Source | null {
@@ -81,6 +97,7 @@ export function updateSource(
   updates: Partial<Pick<Source, "name" | "enabled" | "config" | "path" | "bucket" | "prefix" | "region">>,
 ): Source | null {
   const db = getDb();
+  const before = getSource(id);
   const fields: string[] = ["updated_at = datetime('now')"];
   const values: unknown[] = [];
   if (updates.name !== undefined) { fields.push("name = ?"); values.push(updates.name); }
@@ -92,11 +109,27 @@ export function updateSource(
   if (updates.region !== undefined) { fields.push("region = ?"); values.push(updates.region); }
   if (fields.length === 1) return getSource(id);
   db.run(`UPDATE sources SET ${fields.join(", ")} WHERE id = ?`, [...values as import("bun:sqlite").SQLQueryBindings[], id]);
-  return getSource(id);
+  const after = getSource(id);
+  if (after) emitSourceOutboxEvent(classifySourceChange(before, after, updates), before, after, updates);
+  return after;
 }
 
 export function deleteSource(id: string): boolean {
+  const before = getSource(id);
   const result = getDb().run("DELETE FROM sources WHERE id = ?", [id]);
+  if (result.changes > 0 && before) {
+    appendKnowledgeSourceOutboxEvent({
+      event_type: "source_disabled",
+      source_id: before.id,
+      status: "deleted",
+      path: before.path,
+      idempotency_key: `source_disabled:${before.id}:deleted`,
+      metadata: {
+        source_type: before.type,
+        deleted: true,
+      },
+    });
+  }
   return result.changes > 0;
 }
 
@@ -105,4 +138,46 @@ export function markSourceIndexed(id: string, file_count: number): void {
     "UPDATE sources SET last_indexed_at = datetime('now'), file_count = ?, updated_at = datetime('now') WHERE id = ?",
     [file_count, id]
   );
+}
+
+function classifySourceChange(
+  before: Source | null,
+  after: Source,
+  updates: Partial<Pick<Source, "name" | "enabled" | "config" | "path" | "bucket" | "prefix" | "region">>,
+): KnowledgeSourceOutboxEventType {
+  if (before?.enabled !== after.enabled && after.enabled === false) return "source_disabled";
+  if (before?.enabled !== after.enabled && after.enabled === true) return "source_enabled";
+  if (updates.enabled === false) return "source_disabled";
+  if (updates.enabled === true) return "source_enabled";
+  return "source_updated";
+}
+
+function emitSourceOutboxEvent(
+  eventType: KnowledgeSourceOutboxEventType,
+  before: Source | null,
+  after: Source,
+  updates: Partial<Pick<Source, "name" | "enabled" | "config" | "path" | "bucket" | "prefix" | "region">>,
+): void {
+  const changedFields = Object.keys(updates).filter((key) => key !== "config").sort();
+  if (updates.config !== undefined) changedFields.push("config");
+  appendKnowledgeSourceOutboxEvent({
+    event_type: eventType,
+    source_id: after.id,
+    status: after.enabled ? "active" : "disabled",
+    path: after.path,
+    idempotency_key: [
+      eventType,
+      after.id,
+      after.enabled ? "enabled" : "disabled",
+      after.updated_at,
+      changedFields.join(","),
+    ].join(":"),
+    metadata: {
+      source_type: after.type,
+      changed_fields: changedFields,
+      previous_enabled: before?.enabled,
+      enabled: after.enabled,
+      config_changed: updates.config !== undefined,
+    },
+  });
 }
