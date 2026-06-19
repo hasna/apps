@@ -41,6 +41,8 @@ if [[ "\${ANTHROPIC_API_KEY:-}" != "ignored" || -n "\${OPENAI_API_KEY:-}" ]]; th
   exit 4
 fi
 printf '%s\\n' "$@"
+printf 'stdin:'
+cat
 `,
     );
     chmodSync(claude, 0o755);
@@ -68,7 +70,8 @@ printf '%s\\n' "$@"
         },
       });
       expect(result.status).toBe("succeeded");
-      expect(result.stdout).toContain("say ok");
+      expect(result.stdout).toContain("stdin:say ok");
+      expect(result.stdout.trim().split(/\r?\n/)).not.toContain("say ok");
     } finally {
       store.close();
     }

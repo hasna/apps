@@ -5,6 +5,7 @@ import type { AccountRef, AgentProvider, CatchUpPolicy, CreateLoopInput, LoopTar
 import { daemonLogPath } from "../lib/paths.js";
 import {
   publicLoop,
+  publicExecutorResult,
   publicRun,
   publicWorkflow,
   publicWorkflowEvent,
@@ -15,7 +16,7 @@ import {
 import { parseDuration } from "../lib/schedule.js";
 import { Store } from "../lib/store.js";
 import { executeWorkflow, preflightWorkflow } from "../lib/workflow-runner.js";
-import { advanceLoop, executeClaimedRun, manualRunScheduledFor, shouldAdvanceManualRun, tick } from "../lib/scheduler.js";
+import { advanceLoop, executeClaimedRun, manualRunScheduledFor, manualRunSource, shouldAdvanceManualRun, tick } from "../lib/scheduler.js";
 import { daemonStatus, stopDaemon } from "../daemon/control.js";
 import { runDaemon, startDaemon } from "../daemon/daemon.js";
 import { enableStartup, installStartup } from "../daemon/install.js";
@@ -24,7 +25,7 @@ import { runDoctor } from "../lib/doctor.js";
 
 const program = new Command();
 
-program.name("loops").description("Persistent local loops for commands and headless coding agents").version("0.3.2");
+program.name("loops").description("Persistent local loops for commands and headless coding agents").version("0.3.3");
 program.option("-j, --json", "print JSON");
 
 function isJson(): boolean {
@@ -311,14 +312,15 @@ workflows.command("inspect <runId>").description("show a workflow run with steps
     const events = store.listWorkflowEvents(run.id);
     const value = {
       workflowRun: publicWorkflowRun(run),
-      steps: steps.map((step) => publicWorkflowStepRun(step, isJson())),
+      steps: steps.map((step) => publicWorkflowStepRun(step)),
       events: events.map(publicWorkflowEvent),
     };
     if (isJson()) print(value);
     else {
       console.log(`${run.id}  ${run.status}  ${run.workflowName}`);
       for (const step of steps) {
-        console.log(`  ${String(step.sequence).padStart(2, "0")}  ${step.status.padEnd(10)}  ${step.stepId}  ${step.error ?? ""}`);
+        const publicStep = publicWorkflowStepRun(step);
+        console.log(`  ${String(step.sequence).padStart(2, "0")}  ${step.status.padEnd(10)}  ${step.stepId}  ${publicStep.error ?? ""}`);
       }
       console.log(`  events=${events.length}`);
     }
@@ -338,7 +340,7 @@ workflows
       const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0];
       const steps = run ? store.listWorkflowStepRuns(run.id) : [];
       const value = {
-        result,
+        result: publicExecutorResult(result),
         workflowRun: run ? publicWorkflowRun(run) : undefined,
         steps: steps.map((step) => publicWorkflowStepRun(step, opts.showOutput)),
       };
@@ -346,7 +348,8 @@ workflows
       else {
         console.log(`${run?.id ?? workflow.id} ${result.status}`);
         for (const step of steps) {
-          console.log(`  ${String(step.sequence).padStart(2, "0")}  ${step.status.padEnd(10)}  ${step.stepId}  ${step.error ?? ""}`);
+          const publicStep = publicWorkflowStepRun(step, opts.showOutput);
+          console.log(`  ${String(step.sequence).padStart(2, "0")}  ${step.status.padEnd(10)}  ${step.stepId}  ${publicStep.error ?? ""}`);
           if (opts.showOutput) printTextOutput(step);
         }
       }
@@ -524,15 +527,26 @@ program
       const loop = store.requireLoop(idOrName);
       const runnerId = `manual:${process.pid}`;
       const now = new Date();
-      const scheduledFor = manualRunScheduledFor(loop, now);
-      const shouldAdvance = shouldAdvanceManualRun(loop, scheduledFor, now);
-      const claim = store.claimRun(loop, scheduledFor, runnerId, now);
+      let scheduledFor = manualRunScheduledFor(loop, now);
+      let source = manualRunSource(loop, scheduledFor, now);
+      let shouldAdvance = shouldAdvanceManualRun(loop, scheduledFor, now);
+      let claim = store.claimRun(loop, scheduledFor, runnerId, now);
+      if (!claim && shouldAdvance) {
+        const existing = store.getRunBySlot(loop.id, scheduledFor);
+        if (existing && existing.status !== "running") {
+          scheduledFor = now.toISOString();
+          source = "ad_hoc";
+          shouldAdvance = false;
+          claim = store.claimRun(loop, scheduledFor, runnerId, now);
+        }
+      }
       if (!claim) throw new Error("could not claim manual run");
       const run = await executeClaimedRun({ store, runnerId, loop: claim.loop, run: claim.run });
       if (shouldAdvance) {
         advanceLoop(store, claim.loop, run, new Date(run.finishedAt ?? new Date()), run.status === "succeeded");
       }
-      print(publicRun(run, opts.showOutput), `${run.id} ${run.status}`);
+      const value = { ...publicRun(run, opts.showOutput), runNow: { source, advancesLoop: shouldAdvance } };
+      print(value, `${run.id} ${run.status} source=${source} slot=${run.scheduledFor}`);
       if (!isJson() && opts.showOutput) printTextOutput(run);
       if (run.status !== "succeeded") process.exitCode = 1;
     } finally {

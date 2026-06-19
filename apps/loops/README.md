@@ -170,6 +170,12 @@ loops run-now <id-or-name>
 
 Use `--json` for machine-readable output. Prompt bodies and run stdout/stderr are redacted by default in status output. `loops run-now` exits non-zero when the recorded run fails or times out.
 
+`loops run-now` reports the manual run source:
+
+- `source=ad_hoc`: the loop was not due yet, so OpenLoops created a one-off manual slot. This is a single immediate attempt and does not schedule retries or consume the future scheduled slot.
+- `source=due_slot`: the persisted scheduled slot was already due, so the manual run claims that slot and advances or retries the loop using normal scheduler rules.
+- `source=retry_slot`: the loop was waiting on a failed slot retry, so the manual run claims that retry slot and advances the loop using normal retry rules.
+
 ## Daemon
 
 ```bash
@@ -207,6 +213,7 @@ On Linux this writes a user systemd service. On macOS it writes a LaunchAgent pl
 - `overlap=skip` by default: a due slot records a skipped run if a previous run is still active.
 - Each run is keyed by `(loop_id, scheduled_for)` so a slot is claimed once.
 - Failed slots retry only when `--attempts` is greater than `1`; retries keep the original `scheduled_for` value.
+- Failed ad-hoc manual `run-now` slots are single attempts and do not schedule retries. Due-slot and retry-slot manual runs use normal retry behavior.
 - Running rows have leases. If a daemon dies, a later daemon marks expired running rows as `abandoned`.
 
 ## Agent Adapter Notes
@@ -218,6 +225,7 @@ The adapters intentionally use provider command surfaces instead of pretending e
 - AI Copilot and OpenCode use `run --format json --pure`.
 - Cursor is CLI-first for now via `cursor-agent -p`; treat output as less stable until a stronger public SDK contract is selected.
 - Codex uses `codex exec --json --ephemeral --ask-for-approval never`.
+- Agent prompts are sent through child stdin instead of argv so prompt bodies do not appear in process listings.
 - When `--account` or a step `account` is set, OpenLoops resolves `accounts env <profile> --tool <tool>` before spawning the target, strips inherited tool home/API-key variables, and applies the selected profile only to that process. Missing account profiles fail before the provider binary receives the prompt.
 - `--auth-profile` and step `authProfile` are provider-native auth selectors. They currently apply to Codewith and are passed to Codewith as `--auth-profile <name>` before `exec`; they do not call OpenAccounts.
 - Daemon and scheduled runs prepend common user executable directories such as `~/.local/bin` and `~/.bun/bin` before resolving provider CLIs.

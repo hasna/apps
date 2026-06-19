@@ -1,16 +1,31 @@
-import type { Loop, LoopRun, WorkflowEvent, WorkflowRun, WorkflowSpec, WorkflowStepRun } from "../types.js";
+import type { ExecutorResult, Loop, LoopRun, WorkflowEvent, WorkflowRun, WorkflowSpec, WorkflowStepRun } from "../types.js";
 
 const TEXT_OUTPUT_LIMIT = 32 * 1024;
+const SENSITIVE_PAYLOAD_KEYS = new Set(["env", "error", "prompt", "reason", "stderr", "stdout"]);
 
-export function redact(value: string | undefined, visible = 80): string | undefined {
+export function redact(value: string | undefined, visible = 0): string | undefined {
   if (!value) return value;
   if (value.length <= visible) return value;
+  if (visible <= 0) return `[redacted ${value.length} chars]`;
   return `${value.slice(0, visible)}... [redacted ${value.length - visible} chars]`;
 }
 
 function truncateTextOutput(value: string): string {
   if (value.length <= TEXT_OUTPUT_LIMIT) return value;
   return `${value.slice(0, TEXT_OUTPUT_LIMIT)}\n[truncated ${value.length - TEXT_OUTPUT_LIMIT} chars]`;
+}
+
+function redactSensitivePayload(value: unknown, key?: string): unknown {
+  if (key && SENSITIVE_PAYLOAD_KEYS.has(key)) {
+    if (typeof value === "string") return redact(value);
+    if (value === undefined || value === null) return value;
+    return "[redacted]";
+  }
+  if (Array.isArray(value)) return value.map((item) => redactSensitivePayload(item));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([entryKey, entryValue]) => [entryKey, redactSensitivePayload(entryValue, entryKey)]));
+  }
+  return value;
 }
 
 export function textOutputBlocks(
@@ -54,6 +69,15 @@ export function publicRun(run: LoopRun, showOutput = false): Record<string, unkn
   };
 }
 
+export function publicExecutorResult(result: ExecutorResult, showOutput = false): Record<string, unknown> {
+  return {
+    ...result,
+    stdout: showOutput ? result.stdout : result.stdout ? `[redacted ${result.stdout.length} chars]` : undefined,
+    stderr: showOutput ? result.stderr : result.stderr ? `[redacted ${result.stderr.length} chars]` : undefined,
+    error: redact(result.error),
+  };
+}
+
 export function publicWorkflow(workflow: WorkflowSpec): Record<string, unknown> {
   return {
     ...workflow,
@@ -70,7 +94,7 @@ export function publicWorkflow(workflow: WorkflowSpec): Record<string, unknown> 
 }
 
 export function publicWorkflowRun(run: WorkflowRun): Record<string, unknown> {
-  return { ...run };
+  return { ...run, error: redact(run.error) };
 }
 
 export function publicWorkflowStepRun(run: WorkflowStepRun, showOutput = false): Record<string, unknown> {
@@ -78,9 +102,10 @@ export function publicWorkflowStepRun(run: WorkflowStepRun, showOutput = false):
     ...run,
     stdout: showOutput ? run.stdout : run.stdout ? `[redacted ${run.stdout.length} chars]` : undefined,
     stderr: showOutput ? run.stderr : run.stderr ? `[redacted ${run.stderr.length} chars]` : undefined,
+    error: redact(run.error),
   };
 }
 
 export function publicWorkflowEvent(event: WorkflowEvent): Record<string, unknown> {
-  return { ...event };
+  return { ...event, payload: redactSensitivePayload(event.payload) };
 }

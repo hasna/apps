@@ -60,9 +60,17 @@ export class LoopsClient {
   async runNow(idOrName: string): Promise<LoopRun> {
     const loop = this.get(idOrName);
     const now = new Date();
-    const scheduledFor = manualRunScheduledFor(loop, now);
-    const shouldAdvance = shouldAdvanceManualRun(loop, scheduledFor, now);
-    const claim = this.store.claimRun(loop, scheduledFor, this.runnerId, now);
+    let scheduledFor = manualRunScheduledFor(loop, now);
+    let shouldAdvance = shouldAdvanceManualRun(loop, scheduledFor, now);
+    let claim = this.store.claimRun(loop, scheduledFor, this.runnerId, now);
+    if (!claim && shouldAdvance) {
+      const existing = this.store.getRunBySlot(loop.id, scheduledFor);
+      if (existing && existing.status !== "running") {
+        scheduledFor = now.toISOString();
+        shouldAdvance = false;
+        claim = this.store.claimRun(loop, scheduledFor, this.runnerId, now);
+      }
+    }
     if (!claim) throw new Error(`could not claim manual run for ${idOrName}`);
     const run = await executeClaimedRun({ store: this.store, runnerId: this.runnerId, loop: claim.loop, run: claim.run });
     if (shouldAdvance) {

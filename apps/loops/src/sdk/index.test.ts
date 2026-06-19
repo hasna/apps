@@ -7,6 +7,39 @@ import { Store } from "../lib/store.js";
 import { LoopsClient } from "./index.js";
 
 describe("loops sdk", () => {
+  test("runNow falls back to ad hoc when the due slot is already terminal", async () => {
+    const store = new Store(":memory:");
+    const client = new LoopsClient({ store, runnerId: "manual" });
+    try {
+      const loop = client.create({
+        name: "sdk-terminal-due",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "true" },
+      });
+      const dueSlot = loop.nextRunAt!;
+      const claim = store.claimRun(loop, dueSlot, "seed", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      store.finalizeRun(
+        claim!.run.id,
+        {
+          status: "succeeded",
+          finishedAt: "2026-01-01T00:00:01.000Z",
+          durationMs: 1_000,
+          stdout: "seed",
+          stderr: "",
+        },
+        { claimedBy: "seed", now: new Date("2026-01-01T00:00:01Z") },
+      );
+
+      const run = await client.runNow(loop.id);
+      expect(run.status).toBe("succeeded");
+      expect(run.scheduledFor).not.toBe(dueSlot);
+      expect(store.getLoop(loop.id)?.nextRunAt).toBe(dueSlot);
+    } finally {
+      client.close();
+    }
+  });
+
   test("runNow records pid and heartbeats so daemon ticks do not duplicate due work", async () => {
     const store = new Store(":memory:");
     const client = new LoopsClient({ store, runnerId: "manual" });

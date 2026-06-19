@@ -1,9 +1,10 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { Store } from "../lib/store.js";
 import { runDaemon } from "./daemon.js";
+import { tick } from "../lib/scheduler.js";
 
 describe("daemon", () => {
   test("executes workflow loop targets from the daemon tick path", async () => {
@@ -88,6 +89,202 @@ describe("daemon", () => {
       expect(existsSync(marker)).toBe(false);
     } finally {
       if (!controller.signal.aborted) controller.abort();
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("aborts active child work when the daemon lease is lost", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-daemon-lease-"));
+    const marker = join(root, "late-write");
+    const store = new Store(":memory:");
+    try {
+      store.createLoop({
+        name: "daemon-lease-loss",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "command", command: `sleep 1; printf late > ${JSON.stringify(marker)}`, shell: true },
+        leaseMs: 100,
+      });
+
+      const daemon = runDaemon({
+        store,
+        pidPath: join(root, "loops-daemon.pid"),
+        intervalMs: 5,
+        sleep: async (ms) => Bun.sleep(ms),
+        log: () => undefined,
+      });
+
+      let leaseDeleted = false;
+      for (let i = 0; i < 100; i++) {
+        const run = store.listRuns({ limit: 1 })[0];
+        const lease = store.getDaemonLease();
+        if (run?.status === "running" && lease) {
+          store.releaseDaemonLease(lease.id);
+          leaseDeleted = true;
+          break;
+        }
+        await Bun.sleep(10);
+      }
+      await daemon;
+
+      const run = store.listRuns({ limit: 1 })[0];
+      expect(leaseDeleted).toBe(true);
+      expect(run?.status).toBe("running");
+      await Bun.sleep(1_100);
+      expect(existsSync(marker)).toBe(false);
+
+      const recovered = await tick({
+        store,
+        runnerId: "recovery",
+        now: () => new Date(Date.now() + 1_000),
+        execute: async () => {
+          throw new Error("should not execute after recovery");
+        },
+      });
+      expect(recovered.recovered).toHaveLength(1);
+      expect(store.getRun(run!.id)?.status).toBe("abandoned");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a completed child result when the daemon lease was lost before finalization", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-daemon-lease-race-"));
+    const marker = join(root, "fast-write");
+    const gate = join(root, "gate");
+    const store = new Store(":memory:");
+    const controller = new AbortController();
+    try {
+      store.createLoop({
+        name: "daemon-lease-race",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: {
+          type: "command",
+          command: `while [ ! -f ${JSON.stringify(gate)} ]; do sleep 0.01; done; printf fast > ${JSON.stringify(marker)}`,
+          shell: true,
+        },
+        leaseMs: 100,
+      });
+
+      const daemon = runDaemon({
+        store,
+        pidPath: join(root, "loops-daemon.pid"),
+        intervalMs: 1_000,
+        signal: controller.signal,
+        sleep: async (ms) => Bun.sleep(ms),
+        log: () => undefined,
+      });
+
+      let leaseDeleted = false;
+      for (let i = 0; i < 100; i++) {
+        const run = store.listRuns({ limit: 1 })[0];
+        const lease = store.getDaemonLease();
+        if (run?.status === "running" && lease) {
+          store.releaseDaemonLease(lease.id);
+          writeFileSync(gate, "go");
+          leaseDeleted = true;
+          break;
+        }
+        await Bun.sleep(10);
+      }
+      await daemon;
+
+      const run = store.listRuns({ limit: 1 })[0];
+      expect(leaseDeleted).toBe(true);
+      expect(existsSync(marker)).toBe(true);
+      expect(run?.status).toBe("running");
+      expect(run?.stdout).toBeUndefined();
+
+      const recovered = await tick({
+        store,
+        runnerId: "recovery",
+        now: () => new Date(Date.now() + 1_000),
+        execute: async () => {
+          throw new Error("should not execute after recovery");
+        },
+      });
+      expect(recovered.recovered).toHaveLength(1);
+      expect(store.getRun(run!.id)?.status).toBe("abandoned");
+    } finally {
+      if (!controller.signal.aborted) controller.abort();
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("does not commit workflow step success after daemon lease loss", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-daemon-workflow-lease-race-"));
+    const marker = join(root, "workflow-fast-write");
+    const gate = join(root, "workflow-gate");
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "daemon-workflow-lease-race",
+        steps: [
+          {
+            id: "fast",
+            target: {
+              type: "command",
+              command: `while [ ! -f ${JSON.stringify(gate)} ]; do sleep 0.01; done; printf fast > ${JSON.stringify(marker)}`,
+              shell: true,
+            },
+          },
+        ],
+      });
+      const loop = store.createLoop({
+        name: "daemon-workflow-lease-loop",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "workflow", workflowId: workflow.id },
+        maxAttempts: 2,
+        retryDelayMs: 1_000,
+        leaseMs: 100,
+      });
+
+      const daemon = runDaemon({
+        store,
+        pidPath: join(root, "loops-daemon.pid"),
+        intervalMs: 1_000,
+        sleep: async (ms) => Bun.sleep(ms),
+        log: () => undefined,
+      });
+
+      let leaseDeleted = false;
+      let workflowRunId: string | undefined;
+      for (let i = 0; i < 100; i++) {
+        const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0];
+        const step = run ? store.getWorkflowStepRun(run.id, "fast") : undefined;
+        const lease = store.getDaemonLease();
+        if (run && step?.status === "running" && lease) {
+          workflowRunId = run.id;
+          store.releaseDaemonLease(lease.id);
+          writeFileSync(gate, "go");
+          leaseDeleted = true;
+          break;
+        }
+        await Bun.sleep(10);
+      }
+      await daemon;
+
+      expect(leaseDeleted).toBe(true);
+      expect(existsSync(marker)).toBe(true);
+      expect(workflowRunId).toBeDefined();
+      expect(store.requireWorkflowRun(workflowRunId!).status).not.toBe("succeeded");
+      expect(store.getWorkflowStepRun(workflowRunId!, "fast")?.status).not.toBe("succeeded");
+
+      const recovered = await tick({
+        store,
+        runnerId: "recovery",
+        now: () => new Date(Date.now() + 1_000),
+        execute: async () => {
+          throw new Error("retry should not be due in the same recovery tick");
+        },
+      });
+      expect(recovered.recovered).toHaveLength(1);
+      expect(store.requireWorkflowRun(workflowRunId!).status).toBe("failed");
+      expect(store.getWorkflowStepRun(workflowRunId!, "fast")?.status).toBe("skipped");
+      expect(store.getLoop(loop.id)?.retryScheduledFor).toBe(loop.nextRunAt);
+    } finally {
       store.close();
       rmSync(root, { recursive: true, force: true });
     }

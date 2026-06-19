@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import type { AccountRef, AgentProvider, AgentTarget, CommandTarget, ExecutableTarget, ExecutorResult, Loop, LoopRun } from "../types.js";
+import type { AccountRef, AgentProvider, AgentTarget, CommandTarget, ExecutableTarget, ExecutorResult, Loop, LoopRun, PersistGuardOptions } from "../types.js";
 import { accountToolForProvider, resolveAccountEnv } from "./accounts.js";
 import { commandNotFoundMessage, executableExists, normalizeExecutionPath } from "./env.js";
 import { nowIso } from "./ids.js";
@@ -8,7 +8,7 @@ import { nowIso } from "./ids.js";
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024;
 
-export interface ExecuteOptions {
+export interface ExecuteOptions extends PersistGuardOptions {
   maxOutputBytes?: number;
   env?: NodeJS.ProcessEnv;
   log?: (message: string) => void;
@@ -31,6 +31,18 @@ export interface PreflightResult {
   command: string;
   accountProfile?: string;
   accountTool?: string;
+}
+
+interface CommandSpec {
+  command: string;
+  args: string[];
+  cwd?: string;
+  shell?: boolean;
+  env?: Record<string, string>;
+  timeoutMs: number;
+  account?: AccountRef;
+  accountTool?: string;
+  stdin?: string;
 }
 
 const AUTH_ENV_KEYS = [
@@ -107,13 +119,13 @@ function agentArgs(target: AgentTarget): string[] {
       args.push("-p", "--output-format", "json");
       if (target.model) args.push("--model", target.model);
       if (target.agent) args.push("--agent", target.agent);
-      args.push(...(target.extraArgs ?? []), target.prompt);
+      args.push(...(target.extraArgs ?? []));
       return args;
     case "cursor":
       args.push("-p");
       if (target.model) args.push("--model", target.model);
       if (target.agent) args.push("--agent", target.agent);
-      args.push(...(target.extraArgs ?? []), target.prompt);
+      args.push(...(target.extraArgs ?? []));
       return args;
     case "codewith":
       args.push(
@@ -131,14 +143,14 @@ function agentArgs(target: AgentTarget): string[] {
       if (target.cwd) args.push("--cd", target.cwd);
       if (target.model) args.push("--model", target.model);
       if (target.agent) args.push("--agent", target.agent);
-      args.push(...(target.extraArgs ?? []), target.prompt);
+      args.push(...(target.extraArgs ?? []));
       return args;
     case "codex":
       args.push("exec", "--json", "--ephemeral", "--ask-for-approval", "never", "--sandbox", "workspace-write");
       if (isolation === "safe") args.push("--ignore-rules");
       if (target.cwd) args.push("--cd", target.cwd);
       if (target.model) args.push("--model", target.model);
-      args.push(...(target.extraArgs ?? []), target.prompt);
+      args.push(...(target.extraArgs ?? []));
       return args;
     case "aicopilot":
       args.push("run", "--format", "json");
@@ -146,7 +158,7 @@ function agentArgs(target: AgentTarget): string[] {
       if (target.cwd) args.push("--dir", target.cwd);
       if (target.model) args.push("--model", target.model);
       if (target.agent) args.push("--agent", target.agent);
-      args.push(...(target.extraArgs ?? []), target.prompt);
+      args.push(...(target.extraArgs ?? []));
       return args;
     case "opencode":
       args.push("run", "--format", "json");
@@ -154,21 +166,12 @@ function agentArgs(target: AgentTarget): string[] {
       if (target.cwd) args.push("--dir", target.cwd);
       if (target.model) args.push("--model", target.model);
       if (target.agent) args.push("--agent", target.agent);
-      args.push(...(target.extraArgs ?? []), target.prompt);
+      args.push(...(target.extraArgs ?? []));
       return args;
   }
 }
 
-function commandSpec(target: ExecutableTarget): {
-  command: string;
-  args: string[];
-  cwd?: string;
-  shell?: boolean;
-  env?: Record<string, string>;
-  timeoutMs: number;
-  account?: AccountRef;
-  accountTool?: string;
-} {
+function commandSpec(target: ExecutableTarget): CommandSpec {
   if (target.type === "command") {
     const commandTarget = target as CommandTarget;
     return {
@@ -190,11 +193,12 @@ function commandSpec(target: ExecutableTarget): {
     timeoutMs: agentTarget.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     account: agentTarget.account,
     accountTool: agentTarget.account?.tool ?? accountToolForProvider(agentTarget.provider),
+    stdin: agentTarget.prompt,
   };
 }
 
 function executionEnv(
-  spec: ReturnType<typeof commandSpec>,
+  spec: CommandSpec,
   metadata: ExecutionMetadata,
   opts: ExecuteOptions,
 ): NodeJS.ProcessEnv {
@@ -266,9 +270,16 @@ export async function executeTarget(
     env,
     shell: spec.shell ?? false,
     detached: true,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: spec.stdin === undefined ? ["ignore", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
   });
   if (child.pid) opts.onSpawn?.(child.pid);
+
+  if (spec.stdin !== undefined && child.stdin) {
+    child.stdin.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code !== "EPIPE") error = err.message;
+    });
+    child.stdin.end(spec.stdin);
+  }
 
   const abortHandler = (): void => {
     error = "cancelled";
@@ -277,10 +288,10 @@ export async function executeTarget(
   if (opts.signal?.aborted) abortHandler();
   opts.signal?.addEventListener("abort", abortHandler, { once: true });
 
-  child.stdout.on("data", (chunk: Buffer) => {
+  child.stdout?.on("data", (chunk: Buffer) => {
     stdout = appendBounded(stdout, chunk, maxOutputBytes);
   });
-  child.stderr.on("data", (chunk: Buffer) => {
+  child.stderr?.on("data", (chunk: Buffer) => {
     stderr = appendBounded(stderr, chunk, maxOutputBytes);
   });
 

@@ -21,6 +21,11 @@ import { dbPath } from "./paths.js";
 import { initialNextRun } from "./schedule.js";
 import { normalizeCreateWorkflowInput } from "./workflow-spec.js";
 
+interface DaemonLeaseFence {
+  daemonLeaseId?: string;
+  now?: Date;
+}
+
 interface LoopRow {
   id: string;
   name: string;
@@ -283,6 +288,7 @@ export interface CreateWorkflowRunInput {
   loopRun?: LoopRun;
   scheduledFor?: string;
   idempotencyKey?: string;
+  daemonLeaseId?: string;
 }
 
 export class Store {
@@ -442,6 +448,14 @@ export class Store {
       .run("0001_initial_and_workflows", nowIso());
   }
 
+  private assertDaemonLeaseFence(opts: DaemonLeaseFence = {}, now: string = nowIso()): void {
+    if (!opts.daemonLeaseId) return;
+    const row = this.db
+      .query<{ id: string }, [string, string]>("SELECT id FROM daemon_lease WHERE id = ? AND expires_at > ?")
+      .get(opts.daemonLeaseId, now);
+    if (!row) throw new Error("daemon lease lost");
+  }
+
   createLoop(input: CreateLoopInput, from: Date = new Date()): Loop {
     const now = nowIso();
     const loop: Loop = {
@@ -532,14 +546,20 @@ export class Store {
   updateLoop(
     id: string,
     patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt">>,
+    opts: DaemonLeaseFence = {},
   ): Loop {
     const current = this.getLoop(id);
     if (!current) throw new Error(`loop not found: ${id}`);
-    const merged: Loop = { ...current, ...patch, updatedAt: nowIso() };
+    const updated = (opts.now ?? new Date()).toISOString();
+    const merged: Loop = { ...current, ...patch, updatedAt: updated };
     this.db
       .query(
         `UPDATE loops SET status=$status, next_run_at=$nextRun, retry_scheduled_for=$retrySlot,
-         expires_at=$expiresAt, updated_at=$updated WHERE id=$id`,
+         expires_at=$expiresAt, updated_at=$updated
+         WHERE id=$id
+           AND ($daemonLeaseId IS NULL OR EXISTS (
+             SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+           ))`,
       )
       .run({
         $id: id,
@@ -548,8 +568,12 @@ export class Store {
         $retrySlot: merged.retryScheduledFor ?? null,
         $expiresAt: merged.expiresAt ?? null,
         $updated: merged.updatedAt,
+        $daemonLeaseId: opts.daemonLeaseId ?? null,
+        $now: updated,
       });
-    return merged;
+    const after = this.getLoop(id);
+    if (!after) throw new Error(`loop not found after update: ${id}`);
+    return after;
   }
 
   deleteLoop(idOrName: string): boolean {
@@ -638,11 +662,15 @@ export class Store {
           "SELECT * FROM workflow_runs WHERE workflow_id = ? AND idempotency_key = ? LIMIT 1",
         )
         .get(input.workflow.id, input.idempotencyKey);
-      if (existing) return rowToWorkflowRun(existing);
+      if (existing) {
+        this.assertDaemonLeaseFence(input);
+        return rowToWorkflowRun(existing);
+      }
     }
 
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      this.assertDaemonLeaseFence(input, now);
       if (input.idempotencyKey) {
         const existing = this.db
           .query<WorkflowRunRow, [string, string]>(
@@ -784,39 +812,70 @@ export class Store {
     return Boolean(run && ["succeeded", "failed", "timed_out", "cancelled"].includes(run.status));
   }
 
-  startWorkflowStepRun(workflowRunId: string, stepId: string): WorkflowStepRun {
-    const now = nowIso();
-    const res = this.db
-      .query(
-        `UPDATE workflow_step_runs
-         SET status='running', started_at=$started, finished_at=NULL, exit_code=NULL, duration_ms=NULL,
-          pid=NULL, stdout=NULL, stderr=NULL, error=NULL, updated_at=$updated
-         WHERE workflow_run_id=$workflowRunId
-           AND step_id=$stepId
-           AND status IN ('pending', 'failed', 'timed_out')
-           AND EXISTS (
-             SELECT 1 FROM workflow_runs
-             WHERE id=$workflowRunId AND status='running'
-           )`,
-      )
-      .run({ $workflowRunId: workflowRunId, $stepId: stepId, $started: now, $updated: now });
-    const run = this.getWorkflowStepRun(workflowRunId, stepId);
-    if (!run) throw new Error(`workflow step run not found: ${workflowRunId}/${stepId}`);
-    if (res.changes !== 1) {
-      throw new Error(`workflow step is not claimable: ${workflowRunId}/${stepId} status=${run.status}`);
+  startWorkflowStepRun(workflowRunId: string, stepId: string, opts: DaemonLeaseFence = {}): WorkflowStepRun {
+    const now = (opts.now ?? new Date()).toISOString();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const res = this.db
+        .query(
+          `UPDATE workflow_step_runs
+           SET status='running', started_at=$started, finished_at=NULL, exit_code=NULL, duration_ms=NULL,
+            pid=NULL, stdout=NULL, stderr=NULL, error=NULL, updated_at=$updated
+           WHERE workflow_run_id=$workflowRunId
+             AND step_id=$stepId
+             AND status IN ('pending', 'failed', 'timed_out')
+             AND EXISTS (
+               SELECT 1 FROM workflow_runs
+               WHERE id=$workflowRunId AND status='running'
+             )
+             AND ($daemonLeaseId IS NULL OR EXISTS (
+               SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+             ))`,
+        )
+        .run({
+          $workflowRunId: workflowRunId,
+          $stepId: stepId,
+          $started: now,
+          $updated: now,
+          $daemonLeaseId: opts.daemonLeaseId ?? null,
+          $now: now,
+        });
+      const run = this.getWorkflowStepRun(workflowRunId, stepId);
+      if (!run) throw new Error(`workflow step run not found: ${workflowRunId}/${stepId}`);
+      if (res.changes !== 1) {
+        throw new Error(`workflow step is not claimable: ${workflowRunId}/${stepId} status=${run.status}`);
+      }
+      this.appendWorkflowEvent(workflowRunId, "step_started", stepId);
+      this.db.exec("COMMIT");
+      return run;
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* transaction may already be closed */
+      }
+      throw error;
     }
-    this.appendWorkflowEvent(workflowRunId, "step_started", stepId);
-    return run;
   }
 
-  markWorkflowStepPid(workflowRunId: string, stepId: string, pid: number): WorkflowStepRun {
-    const now = nowIso();
+  markWorkflowStepPid(workflowRunId: string, stepId: string, pid: number, opts: DaemonLeaseFence = {}): WorkflowStepRun {
+    const now = (opts.now ?? new Date()).toISOString();
     this.db
       .query(
         `UPDATE workflow_step_runs SET pid=$pid, updated_at=$updated
-         WHERE workflow_run_id=$workflowRunId AND step_id=$stepId AND status='running'`,
+         WHERE workflow_run_id=$workflowRunId AND step_id=$stepId AND status='running'
+           AND ($daemonLeaseId IS NULL OR EXISTS (
+             SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+           ))`,
       )
-      .run({ $workflowRunId: workflowRunId, $stepId: stepId, $pid: pid, $updated: now });
+      .run({
+        $workflowRunId: workflowRunId,
+        $stepId: stepId,
+        $pid: pid,
+        $updated: now,
+        $daemonLeaseId: opts.daemonLeaseId ?? null,
+        $now: now,
+      });
     const run = this.getWorkflowStepRun(workflowRunId, stepId);
     if (!run) throw new Error(`workflow step run not found after pid update: ${workflowRunId}/${stepId}`);
     return run;
@@ -861,46 +920,85 @@ export class Store {
     stepId: string,
     patch: Pick<WorkflowStepRun, "status" | "finishedAt" | "durationMs" | "stdout" | "stderr"> &
       Partial<Pick<WorkflowStepRun, "exitCode" | "error">>,
+    opts: DaemonLeaseFence = {},
   ): WorkflowStepRun {
     const finishedAt = patch.finishedAt ?? nowIso();
-    const res = this.db
-      .query(
-        `UPDATE workflow_step_runs SET status=$status, finished_at=$finished, exit_code=$exitCode, duration_ms=$durationMs,
-         pid=NULL, stdout=$stdout, stderr=$stderr, error=$error, updated_at=$updated
-         WHERE workflow_run_id=$workflowRunId AND step_id=$stepId AND status='running'`,
-      )
-      .run({
-        $workflowRunId: workflowRunId,
-        $stepId: stepId,
-        $status: patch.status,
-        $finished: finishedAt,
-        $exitCode: patch.exitCode ?? null,
-        $durationMs: patch.durationMs ?? null,
-        $stdout: patch.stdout ?? null,
-        $stderr: patch.stderr ?? null,
-        $error: patch.error ?? null,
-        $updated: finishedAt,
-      });
-    if (res.changes === 1) {
-      this.appendWorkflowEvent(workflowRunId, `step_${patch.status}`, stepId, {
-        exitCode: patch.exitCode,
-        error: patch.error,
-      });
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const res = this.db
+        .query(
+          `UPDATE workflow_step_runs SET status=$status, finished_at=$finished, exit_code=$exitCode, duration_ms=$durationMs,
+           pid=NULL, stdout=$stdout, stderr=$stderr, error=$error, updated_at=$updated
+           WHERE workflow_run_id=$workflowRunId AND step_id=$stepId AND status='running'
+             AND ($daemonLeaseId IS NULL OR EXISTS (
+               SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+             ))`,
+        )
+        .run({
+          $workflowRunId: workflowRunId,
+          $stepId: stepId,
+          $status: patch.status,
+          $finished: finishedAt,
+          $exitCode: patch.exitCode ?? null,
+          $durationMs: patch.durationMs ?? null,
+          $stdout: patch.stdout ?? null,
+          $stderr: patch.stderr ?? null,
+          $error: patch.error ?? null,
+          $updated: finishedAt,
+          $daemonLeaseId: opts.daemonLeaseId ?? null,
+          $now: (opts.now ?? new Date(finishedAt)).toISOString(),
+        });
+      if (res.changes === 1) {
+        this.appendWorkflowEvent(workflowRunId, `step_${patch.status}`, stepId, {
+          exitCode: patch.exitCode,
+          error: patch.error,
+        });
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* transaction may already be closed */
+      }
+      throw error;
     }
     const run = this.getWorkflowStepRun(workflowRunId, stepId);
     if (!run) throw new Error(`workflow step run not found after finalize: ${workflowRunId}/${stepId}`);
     return run;
   }
 
-  skipWorkflowStepRun(workflowRunId: string, stepId: string, reason: string): WorkflowStepRun {
-    const now = nowIso();
-    const res = this.db
-      .query(
-        `UPDATE workflow_step_runs SET status='skipped', finished_at=$finished, pid=NULL, error=$error, updated_at=$updated
-         WHERE workflow_run_id=$workflowRunId AND step_id=$stepId AND status IN ('pending', 'running')`,
-      )
-      .run({ $workflowRunId: workflowRunId, $stepId: stepId, $finished: now, $error: reason, $updated: now });
-    if (res.changes === 1) this.appendWorkflowEvent(workflowRunId, "step_skipped", stepId, { reason });
+  skipWorkflowStepRun(workflowRunId: string, stepId: string, reason: string, opts: DaemonLeaseFence = {}): WorkflowStepRun {
+    const now = (opts.now ?? new Date()).toISOString();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const res = this.db
+        .query(
+          `UPDATE workflow_step_runs SET status='skipped', finished_at=$finished, pid=NULL, error=$error, updated_at=$updated
+           WHERE workflow_run_id=$workflowRunId AND step_id=$stepId AND status IN ('pending', 'running')
+             AND ($daemonLeaseId IS NULL OR EXISTS (
+               SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+             ))`,
+        )
+        .run({
+          $workflowRunId: workflowRunId,
+          $stepId: stepId,
+          $finished: now,
+          $error: reason,
+          $updated: now,
+          $daemonLeaseId: opts.daemonLeaseId ?? null,
+          $now: now,
+        });
+      if (res.changes === 1) this.appendWorkflowEvent(workflowRunId, "step_skipped", stepId, { reason });
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* transaction may already be closed */
+      }
+      throw error;
+    }
     const run = this.getWorkflowStepRun(workflowRunId, stepId);
     if (!run) throw new Error(`workflow step run not found after skip: ${workflowRunId}/${stepId}`);
     return run;
@@ -910,24 +1008,44 @@ export class Store {
     workflowRunId: string,
     status: WorkflowRunStatus,
     patch: Partial<Pick<WorkflowRun, "finishedAt" | "durationMs" | "error">> = {},
+    opts: DaemonLeaseFence = {},
   ): WorkflowRun {
     const finishedAt = patch.finishedAt ?? nowIso();
-    const res = this.db
-      .query(
-        `UPDATE workflow_runs SET status=$status, finished_at=$finished, duration_ms=$durationMs, error=$error, updated_at=$updated
-         WHERE id=$id AND status NOT IN ('succeeded', 'failed', 'timed_out', 'cancelled')`,
-      )
-      .run({
-        $id: workflowRunId,
-        $status: status,
-        $finished: finishedAt,
-        $durationMs: patch.durationMs ?? null,
-        $error: patch.error ?? null,
-        $updated: finishedAt,
-      });
+    let changed = false;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const res = this.db
+        .query(
+          `UPDATE workflow_runs SET status=$status, finished_at=$finished, duration_ms=$durationMs, error=$error, updated_at=$updated
+           WHERE id=$id AND status NOT IN ('succeeded', 'failed', 'timed_out', 'cancelled')
+             AND ($daemonLeaseId IS NULL OR EXISTS (
+               SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+             ))`,
+        )
+        .run({
+          $id: workflowRunId,
+          $status: status,
+          $finished: finishedAt,
+          $durationMs: patch.durationMs ?? null,
+          $error: patch.error ?? null,
+          $updated: finishedAt,
+          $daemonLeaseId: opts.daemonLeaseId ?? null,
+          $now: (opts.now ?? new Date(finishedAt)).toISOString(),
+        });
+      changed = res.changes === 1;
+      if (changed) this.appendWorkflowEvent(workflowRunId, status, undefined, { error: patch.error });
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* transaction may already be closed */
+      }
+      throw error;
+    }
     const run = this.getWorkflowRun(workflowRunId);
     if (!run) throw new Error(`workflow run not found after finalize: ${workflowRunId}`);
-    if (res.changes === 1) this.appendWorkflowEvent(workflowRunId, status, undefined, { error: patch.error });
+    void changed;
     return run;
   }
 
@@ -1012,18 +1130,34 @@ export class Store {
     return (row?.count ?? 0) > 0;
   }
 
-  markRunPid(id: string, pid: number, claimedBy?: string): LoopRun | undefined {
-    const now = nowIso();
+  markRunPid(id: string, pid: number, claimedBy?: string, opts: DaemonLeaseFence = {}): LoopRun | undefined {
+    const now = (opts.now ?? new Date()).toISOString();
     const res = claimedBy
       ? this.db
           .query(
             `UPDATE loop_runs SET pid=$pid, updated_at=$updated
-             WHERE id=$id AND status='running' AND claimed_by=$claimedBy`,
+             WHERE id=$id AND status='running' AND claimed_by=$claimedBy
+               AND ($daemonLeaseId IS NULL OR EXISTS (
+                 SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+               ))`,
           )
-          .run({ $id: id, $pid: pid, $updated: now, $claimedBy: claimedBy })
+          .run({
+            $id: id,
+            $pid: pid,
+            $updated: now,
+            $claimedBy: claimedBy,
+            $daemonLeaseId: opts.daemonLeaseId ?? null,
+            $now: now,
+          })
       : this.db
-          .query("UPDATE loop_runs SET pid=$pid, updated_at=$updated WHERE id=$id AND status='running'")
-          .run({ $id: id, $pid: pid, $updated: now });
+          .query(
+            `UPDATE loop_runs SET pid=$pid, updated_at=$updated
+             WHERE id=$id AND status='running'
+               AND ($daemonLeaseId IS NULL OR EXISTS (
+                 SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+               ))`,
+          )
+          .run({ $id: id, $pid: pid, $updated: now, $daemonLeaseId: opts.daemonLeaseId ?? null, $now: now });
     if (res.changes !== 1) return undefined;
     return this.getRun(id);
   }
@@ -1043,7 +1177,7 @@ export class Store {
     return liveWorkflowSteps.some((step) => isProcessAlive(step.pid));
   }
 
-  createSkippedRun(loop: Loop, scheduledFor: string, reason: string): LoopRun {
+  createSkippedRun(loop: Loop, scheduledFor: string, reason: string, opts: DaemonLeaseFence = {}): LoopRun {
     const now = nowIso();
     const run: LoopRun = {
       id: genId(),
@@ -1057,25 +1191,37 @@ export class Store {
       createdAt: now,
       updatedAt: now,
     };
-    this.db
-      .query(
-        `INSERT OR IGNORE INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, started_at, finished_at,
-          claimed_by, lease_expires_at, pid, exit_code, duration_ms, stdout, stderr, error, created_at, updated_at)
-         VALUES ($id, $loopId, $loopName, $scheduledFor, $attempt, $status, NULL, $finished, NULL, NULL, NULL, NULL, NULL,
-          NULL, NULL, $error, $created, $updated)`,
-      )
-      .run({
-        $id: run.id,
-        $loopId: run.loopId,
-        $loopName: run.loopName,
-        $scheduledFor: run.scheduledFor,
-        $attempt: run.attempt,
-        $status: run.status,
-        $finished: run.finishedAt ?? null,
-        $error: run.error ?? null,
-        $created: run.createdAt,
-        $updated: run.updatedAt,
-      });
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.assertDaemonLeaseFence(opts, now);
+      this.db
+        .query(
+          `INSERT OR IGNORE INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, started_at, finished_at,
+            claimed_by, lease_expires_at, pid, exit_code, duration_ms, stdout, stderr, error, created_at, updated_at)
+           VALUES ($id, $loopId, $loopName, $scheduledFor, $attempt, $status, NULL, $finished, NULL, NULL, NULL, NULL, NULL,
+            NULL, NULL, $error, $created, $updated)`,
+        )
+        .run({
+          $id: run.id,
+          $loopId: run.loopId,
+          $loopName: run.loopName,
+          $scheduledFor: run.scheduledFor,
+          $attempt: run.attempt,
+          $status: run.status,
+          $finished: run.finishedAt ?? null,
+          $error: run.error ?? null,
+          $created: run.createdAt,
+          $updated: run.updatedAt,
+        });
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* transaction may already be closed */
+      }
+      throw error;
+    }
     return this.getRunBySlot(loop.id, scheduledFor) ?? run;
   }
 
@@ -1091,12 +1237,38 @@ export class Store {
     return row ? rowToRun(row) : undefined;
   }
 
-  claimRun(loop: Loop, scheduledFor: string, runnerId: string, now: Date = new Date()): ClaimRunResult | undefined {
+  nextRetryableRun(loopId: string, maxAttempts: number, afterScheduledFor?: string): LoopRun | undefined {
+    const row = afterScheduledFor
+      ? this.db
+          .query<RunRow, [string, string, number]>(
+            `SELECT * FROM loop_runs
+             WHERE loop_id = ? AND scheduled_for > ? AND status IN ('failed', 'timed_out', 'abandoned') AND attempt < ?
+             ORDER BY scheduled_for ASC LIMIT 1`,
+          )
+          .get(loopId, afterScheduledFor, maxAttempts)
+      : this.db
+          .query<RunRow, [string, number]>(
+            `SELECT * FROM loop_runs
+             WHERE loop_id = ? AND status IN ('failed', 'timed_out', 'abandoned') AND attempt < ?
+             ORDER BY scheduled_for ASC LIMIT 1`,
+          )
+          .get(loopId, maxAttempts);
+    return row ? rowToRun(row) : undefined;
+  }
+
+  claimRun(
+    loop: Loop,
+    scheduledFor: string,
+    runnerId: string,
+    now: Date = new Date(),
+    opts: DaemonLeaseFence = {},
+  ): ClaimRunResult | undefined {
     const startedAt = now.toISOString();
     const leaseExpiresAt = new Date(now.getTime() + loop.leaseMs).toISOString();
 
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      this.assertDaemonLeaseFence(opts, startedAt);
       const existing = this.getRunBySlot(loop.id, scheduledFor);
 
       if (existing) {
@@ -1197,7 +1369,7 @@ export class Store {
     id: string,
     patch: Pick<LoopRun, "status" | "finishedAt" | "durationMs" | "stdout" | "stderr"> &
       Partial<Pick<LoopRun, "exitCode" | "error" | "pid">>,
-    opts: { claimedBy?: string; now?: Date } = {},
+    opts: { claimedBy?: string; now?: Date; daemonLeaseId?: string } = {},
   ): LoopRun {
     const finishedAt = patch.finishedAt ?? nowIso();
     const params = {
@@ -1213,13 +1385,17 @@ export class Store {
       $updated: finishedAt,
       $claimedBy: opts.claimedBy ?? null,
       $now: (opts.now ?? new Date()).toISOString(),
+      $daemonLeaseId: opts.daemonLeaseId ?? null,
     };
     const res = opts.claimedBy
       ? this.db
           .query(
             `UPDATE loop_runs SET status=$status, finished_at=$finished, lease_expires_at=NULL, pid=$pid, exit_code=$exitCode,
              duration_ms=$durationMs, stdout=$stdout, stderr=$stderr, error=$error, updated_at=$updated
-             WHERE id=$id AND status='running' AND claimed_by=$claimedBy AND lease_expires_at > $now`,
+             WHERE id=$id AND status='running' AND claimed_by=$claimedBy AND lease_expires_at > $now
+               AND ($daemonLeaseId IS NULL OR EXISTS (
+                 SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+               ))`,
           )
           .run(params)
       : this.db
@@ -1234,14 +1410,30 @@ export class Store {
     return run;
   }
 
-  heartbeatRunLease(id: string, claimedBy: string, leaseMs: number, now: Date = new Date()): LoopRun | undefined {
+  heartbeatRunLease(
+    id: string,
+    claimedBy: string,
+    leaseMs: number,
+    now: Date = new Date(),
+    opts: DaemonLeaseFence = {},
+  ): LoopRun | undefined {
     const expiresAt = new Date(now.getTime() + leaseMs).toISOString();
     const res = this.db
       .query(
         `UPDATE loop_runs SET lease_expires_at=$expires, updated_at=$updated
-         WHERE id=$id AND status='running' AND claimed_by=$claimedBy`,
+         WHERE id=$id AND status='running' AND claimed_by=$claimedBy AND lease_expires_at > $now
+           AND ($daemonLeaseId IS NULL OR EXISTS (
+             SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+           ))`,
       )
-      .run({ $id: id, $claimedBy: claimedBy, $expires: expiresAt, $updated: now.toISOString() });
+      .run({
+        $id: id,
+        $claimedBy: claimedBy,
+        $expires: expiresAt,
+        $updated: now.toISOString(),
+        $now: now.toISOString(),
+        $daemonLeaseId: opts.daemonLeaseId ?? null,
+      });
     if (res.changes !== 1) return undefined;
     return this.getRun(id);
   }
@@ -1269,7 +1461,7 @@ export class Store {
     return rows.map(rowToRun);
   }
 
-  recoverExpiredRunLeases(now: Date = new Date()): LoopRun[] {
+  recoverExpiredRunLeases(now: Date = new Date(), opts: DaemonLeaseFence = {}): LoopRun[] {
     const rows = this.db
       .query<RunRow, [string]>("SELECT * FROM loop_runs WHERE status = 'running' AND lease_expires_at <= ?")
       .all(now.toISOString());
@@ -1278,36 +1470,80 @@ export class Store {
       if (row.pid && isProcessAlive(row.pid)) continue;
       if (this.hasLiveWorkflowStepProcesses(row.id)) continue;
       const finished = now.toISOString();
-      this.db
-        .query(
-          `UPDATE loop_runs SET status='abandoned', finished_at=$finished, lease_expires_at=NULL,
-           error='run lease expired before completion', updated_at=$updated WHERE id=$id`,
-        )
-        .run({ $id: row.id, $finished: finished, $updated: finished });
-      const workflowRows = this.db
-        .query<WorkflowRunRow, [string]>(
-          "SELECT * FROM workflow_runs WHERE loop_run_id = ? AND status NOT IN ('succeeded', 'failed', 'timed_out', 'cancelled')",
-        )
-        .all(row.id);
-      for (const workflowRow of workflowRows) {
-        this.db
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        const res = this.db
           .query(
-            `UPDATE workflow_runs
-             SET status='failed', finished_at=$finished, error='parent loop run lease expired before completion', updated_at=$updated
-             WHERE id=$id AND status NOT IN ('succeeded', 'failed', 'timed_out', 'cancelled')`,
+            `UPDATE loop_runs SET status='abandoned', finished_at=$finished, lease_expires_at=NULL,
+             error='run lease expired before completion', updated_at=$updated
+             WHERE id=$id AND status='running' AND lease_expires_at <= $now
+               AND ($daemonLeaseId IS NULL OR EXISTS (
+                 SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+               ))`,
           )
-          .run({ $id: workflowRow.id, $finished: finished, $updated: finished });
-        this.db
-          .query(
-            `UPDATE workflow_step_runs
-             SET status='skipped', finished_at=$finished, pid=NULL, error='parent loop run lease expired before completion', updated_at=$updated
-             WHERE workflow_run_id=$workflowRunId AND status IN ('pending', 'running')`,
+          .run({
+            $id: row.id,
+            $finished: finished,
+            $updated: finished,
+            $now: finished,
+            $daemonLeaseId: opts.daemonLeaseId ?? null,
+          });
+        if (res.changes !== 1) {
+          this.db.exec("COMMIT");
+          continue;
+        }
+        const workflowRows = this.db
+          .query<WorkflowRunRow, [string]>(
+            "SELECT * FROM workflow_runs WHERE loop_run_id = ? AND status NOT IN ('succeeded', 'failed', 'timed_out', 'cancelled')",
           )
-          .run({ $workflowRunId: workflowRow.id, $finished: finished, $updated: finished });
-        this.appendWorkflowEvent(workflowRow.id, "failed", undefined, {
-          error: "parent loop run lease expired before completion",
-          loopRunId: row.id,
-        });
+          .all(row.id);
+        for (const workflowRow of workflowRows) {
+          const workflowRes = this.db
+            .query(
+              `UPDATE workflow_runs
+               SET status='failed', finished_at=$finished, error='parent loop run lease expired before completion', updated_at=$updated
+               WHERE id=$id AND status NOT IN ('succeeded', 'failed', 'timed_out', 'cancelled')
+                 AND ($daemonLeaseId IS NULL OR EXISTS (
+                   SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+                 ))`,
+            )
+            .run({
+              $id: workflowRow.id,
+              $finished: finished,
+              $updated: finished,
+              $now: finished,
+              $daemonLeaseId: opts.daemonLeaseId ?? null,
+            });
+          if (workflowRes.changes !== 1) continue;
+          this.db
+            .query(
+              `UPDATE workflow_step_runs
+               SET status='skipped', finished_at=$finished, pid=NULL, error='parent loop run lease expired before completion', updated_at=$updated
+               WHERE workflow_run_id=$workflowRunId AND status IN ('pending', 'running')
+                 AND ($daemonLeaseId IS NULL OR EXISTS (
+                   SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+                 ))`,
+            )
+            .run({
+              $workflowRunId: workflowRow.id,
+              $finished: finished,
+              $updated: finished,
+              $now: finished,
+              $daemonLeaseId: opts.daemonLeaseId ?? null,
+            });
+          this.appendWorkflowEvent(workflowRow.id, "failed", undefined, {
+            error: "parent loop run lease expired before completion",
+            loopRunId: row.id,
+          });
+        }
+        this.db.exec("COMMIT");
+      } catch (error) {
+        try {
+          this.db.exec("ROLLBACK");
+        } catch {
+          /* transaction may already be closed */
+        }
+        throw error;
       }
       const run = this.getRun(row.id);
       if (run) recovered.push(run);
@@ -1315,14 +1551,17 @@ export class Store {
     return recovered;
   }
 
-  expireLoops(now: Date = new Date()): Loop[] {
+  expireLoops(now: Date = new Date(), opts: DaemonLeaseFence = {}): Loop[] {
     const rows = this.db
       .query<LoopRow, [string]>(
         "SELECT * FROM loops WHERE status = 'active' AND expires_at IS NOT NULL AND expires_at <= ?",
       )
       .all(now.toISOString());
     const expired: Loop[] = [];
-    for (const row of rows) expired.push(this.updateLoop(row.id, { status: "expired", nextRunAt: undefined }));
+    for (const row of rows) {
+      const updated = this.updateLoop(row.id, { status: "expired", nextRunAt: undefined }, opts);
+      if (updated.status === "expired") expired.push(updated);
+    }
     return expired;
   }
 
@@ -1387,9 +1626,9 @@ export class Store {
     const expiresAt = new Date(now.getTime() + ttlMs).toISOString();
     const res = this.db
       .query(
-        `UPDATE daemon_lease SET heartbeat_at=$heartbeat, expires_at=$expires, updated_at=$updated WHERE id=$id`,
+        `UPDATE daemon_lease SET heartbeat_at=$heartbeat, expires_at=$expires, updated_at=$updated WHERE id=$id AND expires_at > $now`,
       )
-      .run({ $id: id, $heartbeat: now.toISOString(), $expires: expiresAt, $updated: now.toISOString() });
+      .run({ $id: id, $heartbeat: now.toISOString(), $expires: expiresAt, $updated: now.toISOString(), $now: now.toISOString() });
     if (res.changes !== 1) return undefined;
     return this.getDaemonLease();
   }

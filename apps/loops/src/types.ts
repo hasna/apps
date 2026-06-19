@@ -230,3 +230,8 @@ export interface ExecutorResult {
   finishedAt: string;
   durationMs: number;
 }
+
+export interface PersistGuardOptions {
+  beforePersist?: () => void;
+  daemonLeaseId?: string;
+}

@@ -53,6 +53,7 @@ export async function executeWorkflow(
     loopRun: opts.loopRun,
     scheduledFor: opts.scheduledFor,
     idempotencyKey: opts.idempotencyKey,
+    daemonLeaseId: opts.daemonLeaseId,
   });
   const startedAt = run.startedAt ?? nowIso();
   if (run.status === "succeeded" || run.status === "failed" || run.status === "timed_out" || run.status === "cancelled") {
@@ -93,13 +94,15 @@ export async function executeWorkflow(
       return !dependencyStep?.continueOnFailure;
     });
     if (blockedBy) {
-      store.skipWorkflowStepRun(run.id, step.id, `dependency did not succeed: ${blockedBy}`);
+      opts.beforePersist?.();
+      store.skipWorkflowStepRun(run.id, step.id, `dependency did not succeed: ${blockedBy}`, { daemonLeaseId: opts.daemonLeaseId });
       blockingError ??= `step ${step.id} blocked by dependency ${blockedBy}`;
       terminalStatus = "failed";
       continue;
     }
 
-    const startedStep = store.startWorkflowStepRun(run.id, step.id);
+    opts.beforePersist?.();
+    const startedStep = store.startWorkflowStepRun(run.id, step.id, { daemonLeaseId: opts.daemonLeaseId });
     if (startedStep.status !== "running") {
       terminalStatus = "failed";
       blockingError = `step ${step.id} could not start because workflow is no longer running`;
@@ -129,7 +132,8 @@ export async function executeWorkflow(
         ...opts,
         signal: controller.signal,
         onSpawn: (pid) => {
-          store.markWorkflowStepPid(run.id, step.id, pid);
+          opts.beforePersist?.();
+          store.markWorkflowStepPid(run.id, step.id, pid, { daemonLeaseId: opts.daemonLeaseId });
           opts.onSpawn?.(pid);
         },
       });
@@ -157,6 +161,7 @@ export async function executeWorkflow(
       blockingError = "workflow run was cancelled";
       break;
     }
+    opts.beforePersist?.();
     store.finalizeWorkflowStepRun(run.id, step.id, {
       status: result.status,
       finishedAt: result.finishedAt,
@@ -165,6 +170,8 @@ export async function executeWorkflow(
       stderr: result.stderr,
       exitCode: result.exitCode,
       error: result.error,
+    }, {
+      daemonLeaseId: opts.daemonLeaseId,
     });
     if (result.status !== "succeeded" && !step.continueOnFailure) {
       terminalStatus = result.status;
@@ -177,7 +184,9 @@ export async function executeWorkflow(
     for (const step of ordered) {
       const existing = store.getWorkflowStepRun(run.id, step.id);
       if (existing?.status === "pending" || existing?.status === "running") {
-        store.skipWorkflowStepRun(run.id, step.id, blockingError ?? "workflow stopped before step could run");
+        store.skipWorkflowStepRun(run.id, step.id, blockingError ?? "workflow stopped before step could run", {
+          daemonLeaseId: opts.daemonLeaseId,
+        });
       }
     }
   }
@@ -195,10 +204,13 @@ export async function executeWorkflow(
       terminalRun.error ?? blockingError,
     );
   }
+  opts.beforePersist?.();
   const finalRun = store.finalizeWorkflowRun(run.id, terminalStatus, {
     finishedAt,
     durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
     error: blockingError,
+  }, {
+    daemonLeaseId: opts.daemonLeaseId,
   });
   const steps = store.listWorkflowStepRuns(run.id);
   return workflowResult(

@@ -88,8 +88,10 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
         const result = await tick({
           store,
           runnerId,
+          daemonLeaseId: leaseId,
+          beforeRun: () => ensureLease(),
           execute: async (loop, run) => {
-            const heartbeatMs = Math.max(1_000, Math.floor(leaseTtlMs / 3));
+            const heartbeatMs = Math.max(25, Math.min(1_000, intervalMs, Math.floor(leaseTtlMs / 10)));
             const timer = setInterval(() => {
               try {
                 ensureLease();
@@ -101,14 +103,21 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
             try {
               const result = await executeLoopTarget(store, loop, run, {
                 signal: runAbort.signal,
-                onSpawn: (pid) => store.markRunPid(run.id, pid, runnerId),
+                beforePersist: () => ensureLease(),
+                daemonLeaseId: leaseId,
+                onSpawn: (pid) => {
+                  ensureLease();
+                  store.markRunPid(run.id, pid, runnerId, { daemonLeaseId: leaseId });
+                },
               });
+              ensureLease();
               if (leaseLost) throw new Error("daemon lease lost during run");
               return result;
             } finally {
               clearInterval(timer);
             }
           },
+          beforeFinalize: () => ensureLease(),
           onError: (loop, err) => log(`loop ${loop.id} failed: ${err instanceof Error ? err.message : String(err)}`),
         });
         const changed = result.completed.length + result.skipped.length + result.recovered.length + result.expired.length;
