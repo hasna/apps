@@ -2,6 +2,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
+  registerTool,
   z,
   json,
   err,
@@ -36,7 +37,7 @@ export function register(server: McpServer) {
 
 // ── Session Tools ─────────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_session_create",
   `Create a new browser session. Returns a session object with an id you must pass to other tools.
 
@@ -72,6 +73,7 @@ TIPS:
     force_new: z.boolean().optional().default(false).describe("Force create a new session even if agent already has one"),
     tags: z.array(z.string()).optional(),
     cdp_url: z.string().optional().describe("Connect to existing Chrome via CDP (e.g. http://localhost:9222). Start Chrome with --remote-debugging-port=9222"),
+    approval_token: z.string().optional().describe("Operator approval token for high-risk browser capabilities"),
     tui_theme: z.enum(["dark", "light", "system"]).optional().default("system")
       .describe("TUI engine only: terminal color theme. 'system' auto-detects OS dark/light mode. Choose 'light' for light backgrounds or 'dark' for dark backgrounds."),
     tui_font_size: z.number().optional().default(14)
@@ -79,7 +81,7 @@ TIPS:
     tui_method: z.enum(["buffer", "dom"]).optional().default("buffer")
       .describe("TUI engine only: how terminal state is read. 'buffer' reads xterm's internal buffer; 'dom' reads rendered DOM rows for a more structured browser-native view."),
   },
-  async ({ engine, use_case, project_id, agent_id, start_url, headless, viewport_width, viewport_height, stealth, auto_gallery, storage_state, force_new, tags, cdp_url, tui_theme, tui_font_size, tui_method }) => {
+  async ({ engine, use_case, project_id, agent_id, start_url, headless, viewport_width, viewport_height, stealth, auto_gallery, storage_state, force_new, tags, cdp_url, approval_token, tui_theme, tui_font_size, tui_method }) => {
     try {
       // Auto-reuse: if agent already has an active session, return it
       if (agent_id && !force_new) {
@@ -98,6 +100,7 @@ TIPS:
         autoGallery: auto_gallery,
         storageState: storage_state,
         cdpUrl: cdp_url,
+        approvalToken: approval_token,
         tuiTheme: tui_theme as "dark" | "light" | "system" | undefined,
         tuiFontSize: tui_font_size,
         tuiMethod: tui_method as "buffer" | "dom" | undefined,
@@ -113,7 +116,7 @@ TIPS:
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_session_list",
   "List all browser sessions. Optionally filter by tag.",
   { status: z.enum(["active", "closed", "error"]).optional(), project_id: z.string().optional(), tag: z.string().optional() },
@@ -128,7 +131,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_session_close",
   "Close a browser session",
   { session_id: z.string().optional() },
@@ -146,7 +149,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_session_fork",
   "Fork a session: create a new session with the same auth state (cookies, storage) and URL as an existing one. Like git branch for browser sessions.",
   { source_session_id: z.string(), name: z.string().optional() },
@@ -176,7 +179,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_session_timeline",
   "Get chronological action log for a session",
   { session_id: z.string().optional(), limit: z.number().optional().default(50) },
@@ -189,7 +192,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_session_get_by_name",
   "Get a session by its name",
   { name: z.string() },
@@ -202,7 +205,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_session_rename",
   "Rename a browser session",
   { session_id: z.string().optional(), name: z.string() },
@@ -214,7 +217,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_session_lock",
   "Lock a session so only the specified agent can use it",
   { session_id: z.string().optional(), agent_id: z.string() },
@@ -227,7 +230,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_session_unlock",
   "Unlock a session",
   { session_id: z.string().optional(), agent_id: z.string().optional() },
@@ -240,7 +243,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_session_transfer",
   "Transfer session ownership to another agent",
   { session_id: z.string().optional(), to_agent_id: z.string() },
@@ -253,7 +256,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_session_tag",
   "Add a tag to a session for categorization (e.g. qa, scraping, monitoring)",
   { session_id: z.string().optional(), tag: z.string() },
@@ -266,7 +269,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_session_untag",
   "Remove a tag from a session",
   { session_id: z.string().optional(), tag: z.string() },
@@ -279,7 +282,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_session_save_state",
   "Save current session's auth state (cookies, localStorage) for reuse. Use after login to avoid re-authenticating.",
   { session_id: z.string().optional(), name: z.string().describe("Name for this state (e.g. 'github', 'gmail')") },
@@ -294,7 +297,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_session_list_states",
   "List all saved storage states (auth snapshots)",
   {},
@@ -307,7 +310,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_session_delete_state",
   "Delete a saved storage state",
   { name: z.string() },
@@ -319,7 +322,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_session_stats",
   "Get session info and estimated token usage (based on network log, console log, and gallery entry sizes).",
   { session_id: z.string().optional() },
@@ -367,7 +370,7 @@ server.tool(
 
 // ── Tab Tools ─────────────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_tab_new",
   "Open a new tab in the session's browser context, optionally navigating to a URL",
   { session_id: z.string().optional(), url: z.string().optional() },
@@ -381,7 +384,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_tab_list",
   "List all open tabs in the session's browser context",
   { session_id: z.string().optional() },
@@ -395,7 +398,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_tab_switch",
   "Switch to a different tab by index. Updates the session's active page.",
   { session_id: z.string().optional(), tab_id: z.number() },
@@ -410,7 +413,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_tab_close",
   "Close a tab by index. Cannot close the last tab.",
   { session_id: z.string().optional(), tab_id: z.number() },

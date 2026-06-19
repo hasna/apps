@@ -1,5 +1,7 @@
 // ─── Shared helpers, state, and re-exports for MCP tool modules ──────────────
 
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
 export { z } from "zod";
 export { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
@@ -71,6 +73,15 @@ export {
 // Re-export screenshot/pdf
 export { takeScreenshot, generatePDF } from "../lib/screenshot.js";
 
+// Re-export video recording
+export {
+  startVideoRecording,
+  stopVideoRecording,
+  listVideos,
+  getVideo,
+  deleteVideo,
+} from "../lib/video-recording.js";
+
 // Re-export network
 export { enableNetworkLogging, addInterceptRule, clearInterceptRules, startHAR } from "../lib/network.js";
 
@@ -118,7 +129,7 @@ export {
 } from "../db/gallery.js";
 
 // Re-export downloads
-export { saveToDownloads, listDownloads, getDownload, deleteDownload, cleanStaleDownloads, exportToPath } from "../lib/downloads.js";
+export { saveToDownloads, importFileToDownloads, listDownloads, getDownload, deleteDownload, cleanStaleDownloads, exportToPath } from "../lib/downloads.js";
 
 // Re-export gallery diff
 export { diffImages } from "../lib/gallery-diff.js";
@@ -170,6 +181,22 @@ export const harCaptures = new Map<string, ReturnType<typeof _startHAR>>();
 
 export function json(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+}
+
+type ToolSchema = Record<string, unknown>;
+type ToolHandler = (args: any, extra: any) => unknown;
+type ToolRegistrar = {
+  tool(name: string, description: string, schema: ToolSchema, handler: ToolHandler): unknown;
+};
+
+export function registerTool(
+  server: McpServer,
+  name: string,
+  description: string,
+  schema: ToolSchema,
+  handler: ToolHandler,
+): void {
+  (server as unknown as ToolRegistrar).tool(name, description, schema, handler);
 }
 
 export function err(e: unknown) {

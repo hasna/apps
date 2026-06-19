@@ -2,6 +2,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
+  registerTool,
   z,
   json,
   err,
@@ -28,7 +29,7 @@ export function registerIntegrationAndMeta(server: McpServer) {
 
 const activeWatchHandles = new Map<string, ReturnType<typeof watchPage>>();
 
-server.tool(
+registerTool(server,
   "browser_watch_start",
   "Start watching a page for DOM changes",
   { session_id: z.string().optional(), selector: z.string().optional(), interval_ms: z.number().optional().default(500), max_changes: z.number().optional().default(50) },
@@ -43,7 +44,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_watch_get_changes",
   "Get DOM changes captured by a watch",
   { watch_id: z.string() },
@@ -55,7 +56,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_watch_stop",
   "Stop a DOM change watcher",
   { watch_id: z.string() },
@@ -70,7 +71,7 @@ server.tool(
 
 // ── open-* Integration Tools ──────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_secrets_login",
   "Login to a service using credentials from open-secrets vault or ~/.secrets.",
   { session_id: z.string().optional(), service: z.string(), login_url: z.string().optional(), save_profile: z.boolean().optional().default(true) },
@@ -91,7 +92,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_remember",
   "Store page facts in open-mementos for future recall.",
   { session_id: z.string().optional(), facts: z.record(z.unknown()), tags: z.array(z.string()).optional() },
@@ -107,7 +108,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_recall",
   "Retrieve cached page facts from open-mementos.",
   { url: z.string(), max_age_hours: z.number().optional().default(24) },
@@ -120,7 +121,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_session_announce",
   "Announce to other agents via open-conversations what this session is browsing.",
   { session_id: z.string().optional(), message: z.string().optional() },
@@ -136,7 +137,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_check_navigation",
   "Check if another agent is already scraping this URL.",
   { url: z.string() },
@@ -148,7 +149,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_task_queue",
   "Queue a browser task in open-todos for agents to pick up.",
   { title: z.string(), description: z.string(), url: z.string().optional(), priority: z.enum(["low", "medium", "high", "critical"]).optional().default("medium") },
@@ -160,7 +161,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_task_list",
   "List pending browser tasks from open-todos.",
   { status: z.enum(["pending", "in_progress"]).optional() },
@@ -173,7 +174,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_task_complete",
   "Mark a browser task as completed with extracted result data.",
   { task_id: z.string(), result: z.record(z.unknown()) },
@@ -186,7 +187,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_skill_run",
   "Run a pre-built browser skill (login, extract-pricing, monitor-price, etc.).",
   { session_id: z.string().optional(), skill: z.string(), params: z.record(z.unknown()).optional().default({}) },
@@ -200,7 +201,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_skill_list",
   "List available browser skills.",
   {},
@@ -214,7 +215,7 @@ server.tool(
 
 // ── browser_batch ─────────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_batch",
   "Execute multiple browser actions in one call. Returns final snapshot.",
   {
@@ -302,7 +303,7 @@ server.tool(
 
 // ── browser_parallel ──────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_parallel",
   "Execute actions across multiple sessions in parallel.",
   {
@@ -317,7 +318,10 @@ server.tool(
     try {
       const t0 = Date.now();
 
-      const promises = actions.map(async (action, index) => {
+      const promises = actions.map(async (
+        action: { session_id: string; tool: string; args?: Record<string, unknown> },
+        index: number,
+      ) => {
         try {
           const sid = action.session_id;
           const page = getSessionPage(sid);
@@ -389,7 +393,7 @@ server.tool(
 
 // ── browser_pool_status ───────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_pool_status",
   "Get status of the pre-warmed browser session pool.",
   {},
@@ -402,7 +406,7 @@ server.tool(
 
 // ── Cron & URL Watch ───────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_cron_create",
   "Schedule a browser task to run automatically.",
   { schedule: z.string(), url: z.string().optional(), skill: z.string().optional(), extract: z.record(z.string()).optional(), name: z.string().optional() },
@@ -414,23 +418,23 @@ server.tool(
   }
 );
 
-server.tool("browser_cron_list", "List scheduled browser cron jobs.", {},
+registerTool(server, "browser_cron_list", "List scheduled browser cron jobs.", {},
   async () => { try { const { listCronJobs } = await import("../lib/cron-manager.js"); return json({ jobs: listCronJobs() }); } catch (e) { return err(e); } }
 );
 
-server.tool("browser_cron_delete", "Delete a cron job.", { id: z.string() },
+registerTool(server, "browser_cron_delete", "Delete a cron job.", { id: z.string() },
   async ({ id }) => { try { const { deleteCronJob } = await import("../lib/cron-manager.js"); return json({ deleted: deleteCronJob(id) }); } catch (e) { return err(e); } }
 );
 
-server.tool("browser_cron_run_now", "Manually trigger a cron job.", { id: z.string() },
+registerTool(server, "browser_cron_run_now", "Manually trigger a cron job.", { id: z.string() },
   async ({ id }) => { try { const { runCronJobNow } = await import("../lib/cron-manager.js"); return json(await runCronJobNow(id)); } catch (e) { return err(e); } }
 );
 
-server.tool("browser_cron_enable", "Enable/disable a cron job.", { id: z.string(), enabled: z.boolean() },
+registerTool(server, "browser_cron_enable", "Enable/disable a cron job.", { id: z.string(), enabled: z.boolean() },
   async ({ id, enabled }) => { try { const { enableCronJob } = await import("../lib/cron-manager.js"); return json(enableCronJob(id, enabled)); } catch (e) { return err(e); } }
 );
 
-server.tool(
+registerTool(server,
   "browser_watch_url",
   "Monitor a URL for content changes on a schedule.",
   { url: z.string(), schedule: z.string().optional().default("*/5 * * * *"), selector: z.string().optional(), name: z.string().optional() },
@@ -442,21 +446,21 @@ server.tool(
   }
 );
 
-server.tool("browser_watch_list", "List URL watchers.", {},
+registerTool(server, "browser_watch_list", "List URL watchers.", {},
   async () => { try { const { listWatchJobs } = await import("../lib/url-watcher.js"); return json({ watches: listWatchJobs() }); } catch (e) { return err(e); } }
 );
 
-server.tool("browser_watch_events", "Get change events from a watcher.", { watch_id: z.string(), limit: z.number().optional().default(20) },
+registerTool(server, "browser_watch_events", "Get change events from a watcher.", { watch_id: z.string(), limit: z.number().optional().default(20) },
   async ({ watch_id, limit }) => { try { const { getWatchEvents } = await import("../lib/url-watcher.js"); return json({ events: getWatchEvents(watch_id, limit) }); } catch (e) { return err(e); } }
 );
 
-server.tool("browser_watch_delete", "Delete a URL watcher.", { watch_id: z.string() },
+registerTool(server, "browser_watch_delete", "Delete a URL watcher.", { watch_id: z.string() },
   async ({ watch_id }) => { try { const { deleteWatchJob } = await import("../lib/url-watcher.js"); return json({ deleted: deleteWatchJob(watch_id) }); } catch (e) { return err(e); } }
 );
 
 // ── browser_task ──────────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_task",
   "Execute a natural language browser task autonomously using Claude Haiku.",
   { session_id: z.string().optional(), task: z.string(), max_steps: z.number().optional().default(10), model: z.string().optional() },

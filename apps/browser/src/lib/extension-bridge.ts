@@ -4,9 +4,24 @@ import { dirname, join } from "node:path";
 import { getDataDir } from "../db/schema.js";
 import { logEvent } from "../db/timeline.js";
 import { BrowserError, type ConnectedExtensionStatus, type ExtBridgeMessage, type ExtJob, type ExtensionBridgeStatus, type ExtensionPairing, type ExtResult } from "../types/index.js";
+import { assertBrowserCapability, assertBrowserNavigationAllowed, isBrowserCapabilityApproved } from "./policy.js";
 
 const DEFAULT_PAIRING_TTL_MS = 5 * 60_000;
+const MAX_PAIRING_TTL_MS = 15 * 60_000;
 const DEFAULT_JOB_TIMEOUT_MS = 30_000;
+const EXTENSION_JOB_TYPES = new Set<ExtJob["type"]>([
+  "ping",
+  "navigate",
+  "click",
+  "type",
+  "fill",
+  "press",
+  "wait",
+  "scroll",
+  "extract",
+  "screenshot",
+  "evaluate",
+]);
 
 interface PairingRecord {
   code: string;
@@ -163,14 +178,22 @@ function rejectPendingForToken(tokenId: string, reason: string): void {
   }
 }
 
+function normalizePairingTtlMs(ttlMs = DEFAULT_PAIRING_TTL_MS): number {
+  if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
+    throw new BrowserError("Extension pairing TTL must be a positive finite number", "EXTENSION_PAIRING_TTL_INVALID");
+  }
+  return Math.min(Math.round(ttlMs), MAX_PAIRING_TTL_MS);
+}
+
 export function createExtensionPairing(ttlMs = DEFAULT_PAIRING_TTL_MS): ExtensionPairing {
   prunePairings();
+  const normalizedTtlMs = normalizePairingTtlMs(ttlMs);
   let code = "";
   do {
     code = String(randomInt(0, 1_000_000)).padStart(6, "0");
   } while (pairings.has(code));
 
-  const expiresAt = Date.now() + ttlMs;
+  const expiresAt = Date.now() + normalizedTtlMs;
   pairings.set(code, { code, expiresAt });
   return { code, expires_at: new Date(expiresAt).toISOString() };
 }
@@ -328,7 +351,8 @@ export function getPairedExtensionOrThrow(tokenId?: string): ConnectedExtension 
   return connection;
 }
 
-export async function dispatchExtensionJob(job: ExtJob, opts: { tokenId?: string; timeoutMs?: number } = {}): Promise<ExtResult> {
+export async function dispatchExtensionJob(job: ExtJob, opts: { tokenId?: string; timeoutMs?: number; approvalToken?: string } = {}): Promise<ExtResult> {
+  validateExtensionDispatchJob(job, { approvalToken: opts.approvalToken });
   const connection = getPairedExtensionOrThrow(opts.tokenId);
   const timeoutMs = opts.timeoutMs ?? job.timeout_ms ?? DEFAULT_JOB_TIMEOUT_MS;
   const jobWithId = job.id ? job : { ...job, id: randomUUID() } as ExtJob;
@@ -363,6 +387,34 @@ export async function dispatchExtensionJob(job: ExtJob, opts: { tokenId?: string
       reject(error instanceof Error ? error : new Error(String(error)));
     }
   });
+}
+
+export function validateExtensionDispatchJob(job: ExtJob, opts: { approvalToken?: string } = {}): void {
+  if (!job || typeof job !== "object") {
+    throw new BrowserError("Extension job must be an object", "EXTENSION_JOB_INVALID");
+  }
+  if (typeof job.id !== "string" || !job.id) {
+    throw new BrowserError("Extension job id is required", "EXTENSION_JOB_INVALID");
+  }
+  if (!EXTENSION_JOB_TYPES.has(job.type)) {
+    throw new BrowserError(`Unsupported extension job type: ${(job as { type?: unknown }).type}`, "EXTENSION_JOB_INVALID");
+  }
+  if (job.type === "navigate") {
+    assertBrowserNavigationAllowed((job.payload as { url?: string } | undefined)?.url ?? "");
+  }
+  if (
+    job.type === "evaluate"
+    && process.env["BROWSER_EXTENSION_ALLOW_EVAL"] !== "1"
+    && !isBrowserCapabilityApproved("extension_evaluate", { approvalToken: opts.approvalToken })
+  ) {
+    throw new BrowserError(
+      "Extension evaluate dispatch is disabled by default. Set BROWSER_EXTENSION_ALLOW_EVAL=1 or pass an approved browser capability token to allow arbitrary JavaScript jobs.",
+      "EXTENSION_EVAL_DISABLED",
+    );
+  }
+  if (job.type === "evaluate" && process.env["BROWSER_EXTENSION_ALLOW_EVAL"] !== "1") {
+    assertBrowserCapability("extension_evaluate", { approvalToken: opts.approvalToken });
+  }
 }
 
 export function getExtensionBridgeStatus(): ExtensionBridgeStatus {

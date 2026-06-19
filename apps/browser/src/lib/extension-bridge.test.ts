@@ -10,6 +10,7 @@ import {
   dispatchExtensionJob,
   getExtensionBridgeStatus,
   handleExtensionSocketMessage,
+  prepareExtensionSocketUpgrade,
   resetExtensionBridgeForTests,
   revokeExtensionToken,
   validateExtensionToken,
@@ -32,6 +33,10 @@ afterEach(() => {
   try { rmSync(tmpDir, { recursive: true, force: true }); } catch {}
   delete process.env["BROWSER_DB_PATH"];
   delete process.env["BROWSER_DATA_DIR"];
+  delete process.env["BROWSER_ALLOWED_DOMAINS"];
+  delete process.env["BROWSER_ALLOW_RISKY_CAPABILITIES"];
+  delete process.env["BROWSER_CAPABILITY_TOKEN"];
+  delete process.env["BROWSER_EXTENSION_ALLOW_EVAL"];
 });
 
 describe("extension bridge pairing", () => {
@@ -49,6 +54,26 @@ describe("extension bridge pairing", () => {
     const pairing = createExtensionPairing(1);
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(() => consumeExtensionPairingCode(pairing.code)).toThrow();
+  });
+
+  it("rejects invalid pairing TTLs and caps very long TTLs", () => {
+    expect(() => createExtensionPairing(0)).toThrow(/TTL/);
+    expect(() => createExtensionPairing(Number.POSITIVE_INFINITY)).toThrow(/TTL/);
+
+    const before = Date.now();
+    const pairing = createExtensionPairing(999 * 60_000);
+    const ttl = new Date(pairing.expires_at).getTime() - before;
+    expect(ttl).toBeLessThanOrEqual(15 * 60_000 + 1000);
+  });
+
+  it("prepares loopback WebSocket upgrades and rejects non-loopback hosts", () => {
+    const pairing = createExtensionPairing(60_000);
+    const accepted = prepareExtensionSocketUpgrade(new Request(`ws://127.0.0.1:7030/extension/ws?code=${pairing.code}`));
+    expect(accepted.ok).toBe(true);
+
+    const rejected = prepareExtensionSocketUpgrade(new Request("ws://example.com/extension/ws?code=123456"));
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.response.status).toBe(403);
   });
 
   it("revokes tokens and disconnects sockets", () => {
@@ -111,5 +136,81 @@ describe("extension bridge dispatch", () => {
     const pending = dispatchExtensionJob({ id: "disconnect", type: "ping" }, { timeoutMs: 1000 });
     detachExtensionSocket(data.token_id);
     await expect(pending).rejects.toThrow(/disconnected/);
+  });
+
+  it("rejects unsupported job types before dispatch", async () => {
+    const pairing = createExtensionPairing();
+    const token = consumeExtensionPairingCode(pairing.code);
+    const data = validateExtensionToken(token.token);
+    let sentJob = false;
+    attachExtensionSocket({ send(raw: string) {
+      if (JSON.parse(raw).type === "job") sentJob = true;
+    } }, data);
+
+    await expect(dispatchExtensionJob({ id: "bad", type: "unknown" } as any, { timeoutMs: 20 })).rejects.toThrow(/Unsupported extension job type/);
+    expect(sentJob).toBe(false);
+  });
+
+  it("rejects raw evaluate dispatch unless explicitly enabled", async () => {
+    const pairing = createExtensionPairing();
+    const token = consumeExtensionPairingCode(pairing.code);
+    const data = validateExtensionToken(token.token);
+    let sentJob = false;
+    attachExtensionSocket({ send(raw: string) {
+      if (JSON.parse(raw).type === "job") sentJob = true;
+    } }, data);
+
+    await expect(dispatchExtensionJob({
+      id: "eval",
+      type: "evaluate",
+      payload: { expression: "document.title" },
+    }, { timeoutMs: 20 })).rejects.toThrow(/evaluate dispatch is disabled/);
+    expect(sentJob).toBe(false);
+  });
+
+  it("allows evaluate dispatch with a matching browser capability token", async () => {
+    process.env["BROWSER_CAPABILITY_TOKEN"] = "secret";
+    const pairing = createExtensionPairing();
+    const token = consumeExtensionPairingCode(pairing.code);
+    const data = validateExtensionToken(token.token);
+    attachExtensionSocket({
+      send(raw: string) {
+        const message = JSON.parse(raw);
+        if (message.type === "job") {
+          queueMicrotask(() => {
+            handleExtensionSocketMessage(data.token_id, JSON.stringify({
+              type: "result",
+              result: { id: message.job.id, ok: true, data: { title: "ok" } },
+            }));
+          });
+        }
+      },
+    }, data);
+
+    const result = await dispatchExtensionJob({
+      id: "eval-approved",
+      type: "evaluate",
+      payload: { expression: "document.title" },
+    }, { timeoutMs: 100, approvalToken: "secret" });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects non-allowlisted navigate jobs before dispatch", async () => {
+    process.env["BROWSER_ALLOWED_DOMAINS"] = "example.test";
+    const pairing = createExtensionPairing();
+    const token = consumeExtensionPairingCode(pairing.code);
+    const data = validateExtensionToken(token.token);
+    let sentJob = false;
+    attachExtensionSocket({ send(raw: string) {
+      if (JSON.parse(raw).type === "job") sentJob = true;
+    } }, data);
+
+    await expect(dispatchExtensionJob({
+      id: "nav-blocked",
+      type: "navigate",
+      payload: { url: "https://evil.test" },
+    }, { timeoutMs: 20 })).rejects.toThrow(/not in BROWSER_ALLOWED_DOMAINS/);
+    expect(sentJob).toBe(false);
   });
 });

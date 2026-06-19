@@ -1,10 +1,10 @@
 {
   "name": "@hasna/browser-extension",
-  "version": "0.4.13",
+  "version": "0.4.17",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build && cp manifest.json dist/manifest.json && cp dist/src/popup/popup.html dist/popup.html",
+    "build": "vite build && cp manifest.json dist/manifest.json && cp dist/src/popup/popup.html dist/popup.html && rm -rf dist/src",
     "test": "bun test src/**/*.test.ts"
   },
   "devDependencies": {

@@ -4,7 +4,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { registerCloudTools } from "@hasna/cloud";
 
 import { register as registerSessions } from "./sessions.js";
 import { register as registerActions } from "./actions.js";
@@ -13,6 +12,7 @@ import { register as registerNetwork } from "./network.js";
 import { register as registerData } from "./data.js";
 import { register as registerTui } from "./tui.js";
 import { register as registerExtension } from "./extension.js";
+import { registerStorageTools } from "./storage.js";
 import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 
 const _pkg = JSON.parse(readFileSync(join(import.meta.dir, "../../package.json"), "utf8")) as { version: string };
@@ -30,7 +30,7 @@ export function buildServer(): McpServer {
   registerData(server);
   registerTui(server);
   registerExtension(server);
-  registerCloudTools(server, "browser");
+  registerStorageTools(server);
 
   return server;
 }

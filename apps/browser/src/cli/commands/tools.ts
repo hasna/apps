@@ -9,9 +9,12 @@ import { takeScreenshot } from "../../lib/screenshot.js";
 import { registerAgent, heartbeat, listAgents } from "../../lib/agents.js";
 import { ensureProject, listProjects } from "../../db/projects.js";
 import { startRecording, stopRecording, replayRecording } from "../../lib/recorder.js";
+import { startVideoRecording, stopVideoRecording, listVideos, deleteVideo } from "../../lib/video-recording.js";
+import { resolveVideoRecordingPreset, VIDEO_PRESET_NAMES } from "../../lib/video-presets.js";
+import { recordX11BrowserVideo } from "../../lib/x11-video.js";
 import { listRecordings } from "../../db/recordings.js";
 import { isLightpandaAvailable } from "../../engines/lightpanda.js";
-import type { BrowserEngine } from "../../types/index.js";
+import type { BrowserEngine, VideoRecordingCaptureMode, VideoRecordingCodec, VideoRecordingEncoding, VideoRecordingOptions, VideoRecordingPreset } from "../../types/index.js";
 import { UseCase } from "../../types/index.js";
 
 export function register(program: Command) {
@@ -68,6 +71,219 @@ recordCmd
     } else {
       recordings.forEach((r) => console.log(`${r.id} "${r.name}" (${r.steps.length} steps) ${r.created_at}`));
     }
+  });
+
+// ─── video ───────────────────────────────────────────────────────────────────
+
+const videoCmd = program.command("video").description("Record browser sessions as video");
+
+videoCmd
+  .command("record <target>")
+  .description("Record a URL or, with --engine tui, a terminal command to a video for a fixed duration")
+  .option("--name <name>", "Recording name")
+  .option("--duration <seconds>", "Duration to record", "5")
+  .option("--quality <quality>", "Quality: source|low|medium|high|ultra", "high")
+  .option("--format <format>", "Output format: webm|mp4|mov", "webm")
+  .option("--capture-mode <mode>", "Capture backend: native|cdp|x11")
+  .option("--codec <codec>", "Transcoded codec: h264|prores")
+  .option("--encoding <mode>", "Encoder fidelity: auto|balanced|crisp|lossless|prores", "auto")
+  .option("--crf <value>", "H.264 CRF: 0 lossless, 10-12 near-lossless UI, 18 balanced")
+  .option("--fps <fps>", "Output frame rate for CDP/X11 capture", "30")
+  .option("--display-scale <factor>", "X11 capture browser scale, e.g. 2 for Retina-style 4K")
+  .option("--xvfb-path <path>", "Path to Xvfb for --capture-mode x11")
+  .option("--video-bitrate <rate>", "Optional H.264 target bitrate, e.g. 25M or 50000k")
+  .option("--ffmpeg-preset <preset>", "x264 speed/quality preset, e.g. slow or veryslow")
+  .option("--keep-raw-video", "Keep the native Playwright WebM next to the final export")
+  .option("--preset <preset>", `Social preset: ${VIDEO_PRESET_NAMES.join("|")}`, "source")
+  .option("--width <px>", "Explicit video width")
+  .option("--height <px>", "Explicit video height")
+  .option("--engine <engine>", "Browser engine", "playwright")
+  .option("--tui-theme <theme>", "TUI theme for recorded terminal: light|dark|system")
+  .option("--tui-font-size <px>", "TUI font size in the recorded terminal")
+  .option("--tui-zoom <factor>", "Scale TUI font/chrome, e.g. 0.85 or 1.15", "1")
+  .option("--tui-frame <mode>", "TUI terminal frame: auto|on|off", "auto")
+  .option("--tui-frame-fit <mode>", "TUI frame sizing: preset|canvas", "preset")
+  .option("--tui-padding <px>", "Padding around framed TUI recordings")
+  .option("--tui-window-width <px>", "TUI terminal window width inside the video canvas")
+  .option("--tui-window-height <px>", "TUI terminal window height inside the video canvas")
+  .option("--tui-title <title>", "TUI terminal window title")
+  .option("--background <css>", "Background color for framed TUI recordings")
+  .option("--headed", "Run in headed (visible) mode")
+  .option("--json", "Output JSON")
+  .action(async (target: string, opts: {
+    name?: string;
+    duration: string;
+    quality: string;
+    format: string;
+    captureMode?: string;
+    codec?: string;
+    encoding: string;
+    crf?: string;
+    fps: string;
+    displayScale?: string;
+    xvfbPath?: string;
+    videoBitrate?: string;
+    ffmpegPreset?: string;
+    keepRawVideo?: boolean;
+    preset: string;
+    width?: string;
+    height?: string;
+    engine: string;
+    tuiTheme?: "dark" | "light" | "system";
+    tuiFontSize?: string;
+    tuiZoom: string;
+    tuiFrame: string;
+    tuiFrameFit: string;
+    tuiPadding?: string;
+    tuiWindowWidth?: string;
+    tuiWindowHeight?: string;
+    tuiTitle?: string;
+    background?: string;
+    headed?: boolean;
+    json?: boolean;
+  }) => {
+    const width = opts.width ? parseInt(opts.width, 10) : undefined;
+    const height = opts.height ? parseInt(opts.height, 10) : undefined;
+    const tuiFontSize = opts.tuiFontSize ? parseInt(opts.tuiFontSize, 10) : undefined;
+    const tuiZoom = opts.tuiZoom ? parseFloat(opts.tuiZoom) : undefined;
+    const tuiPadding = opts.tuiPadding ? parseInt(opts.tuiPadding, 10) : undefined;
+    const tuiWindowWidth = opts.tuiWindowWidth ? parseInt(opts.tuiWindowWidth, 10) : undefined;
+    const tuiWindowHeight = opts.tuiWindowHeight ? parseInt(opts.tuiWindowHeight, 10) : undefined;
+    const crf = opts.crf ? parseInt(opts.crf, 10) : undefined;
+    const fps = opts.fps ? parseInt(opts.fps, 10) : undefined;
+    const displayScale = opts.displayScale ? parseFloat(opts.displayScale) : undefined;
+    const durationMs = Math.max(1, parseFloat(opts.duration) || 5) * 1000;
+    const engine = opts.engine as BrowserEngine;
+    if (!["webm", "mp4", "mov"].includes(opts.format)) {
+      throw new Error(`Unknown --format "${opts.format}". Expected webm, mp4, or mov.`);
+    }
+    if (opts.codec && !["h264", "prores"].includes(opts.codec)) {
+      throw new Error(`Unknown --codec "${opts.codec}". Expected h264 or prores.`);
+    }
+    if (opts.captureMode && !["native", "cdp", "x11"].includes(opts.captureMode)) {
+      throw new Error(`Unknown --capture-mode "${opts.captureMode}". Expected native, cdp, or x11.`);
+    }
+    if (!["auto", "balanced", "crisp", "lossless", "prores"].includes(opts.encoding)) {
+      throw new Error(`Unknown --encoding "${opts.encoding}". Expected auto, balanced, crisp, lossless, or prores.`);
+    }
+    const presetName = VIDEO_PRESET_NAMES.includes(opts.preset as VideoRecordingPreset)
+      ? opts.preset as VideoRecordingPreset
+      : "source";
+    if (presetName !== opts.preset) {
+      throw new Error(`Unknown video preset "${opts.preset}". Expected one of: ${VIDEO_PRESET_NAMES.join(", ")}`);
+    }
+    const tuiFrameEnabled = opts.tuiFrame === "on"
+      ? true
+      : opts.tuiFrame === "off"
+        ? false
+        : undefined;
+    if (!["auto", "on", "off"].includes(opts.tuiFrame)) {
+      throw new Error(`Unknown --tui-frame mode "${opts.tuiFrame}". Expected auto, on, or off.`);
+    }
+    if (!["preset", "canvas"].includes(opts.tuiFrameFit)) {
+      throw new Error(`Unknown --tui-frame-fit mode "${opts.tuiFrameFit}". Expected preset or canvas.`);
+    }
+    const videoOptions: VideoRecordingOptions = {
+      name: opts.name,
+      quality: opts.quality as "source" | "low" | "medium" | "high" | "ultra",
+      format: opts.format as "webm" | "mp4" | "mov",
+      captureMode: opts.captureMode as VideoRecordingCaptureMode | undefined,
+      codec: opts.codec as VideoRecordingCodec | undefined,
+      encoding: opts.encoding === "auto" ? undefined : opts.encoding as VideoRecordingEncoding,
+      crf,
+      fps,
+      displayScale,
+      xvfbPath: opts.xvfbPath,
+      videoBitrate: opts.videoBitrate,
+      ffmpegPreset: opts.ffmpegPreset,
+      keepRawVideo: opts.keepRawVideo,
+      preset: presetName,
+      width,
+      height,
+      tuiTheme: opts.tuiTheme,
+      tuiFontSize,
+      tuiZoom,
+      tuiFrame: {
+        enabled: tuiFrameEnabled,
+        fit: opts.tuiFrameFit as "preset" | "canvas",
+        padding: tuiPadding,
+        width: tuiWindowWidth,
+        height: tuiWindowHeight,
+        title: opts.tuiTitle,
+        background: opts.background,
+      },
+    };
+
+    if (videoOptions.captureMode === "x11") {
+      if (engine === "tui") {
+        throw new Error("--capture-mode x11 records browser pages. Use the normal TUI video path for --engine tui.");
+      }
+      const stopped = await recordX11BrowserVideo(target, {
+        ...videoOptions,
+        durationMs,
+      });
+      if (opts.json) {
+        console.log(JSON.stringify(stopped, null, 2));
+      } else {
+        console.log(chalk.green(`✓ Video saved: ${stopped.path}`));
+        console.log(chalk.gray(`  Size: ${((stopped.size_bytes ?? 0) / 1024 / 1024).toFixed(2)} MB`));
+        console.log(chalk.gray(`  Duration: ${((stopped.duration_ms ?? 0) / 1000).toFixed(1)}s`));
+      }
+      return;
+    }
+    const resolvedPreset = resolveVideoRecordingPreset(videoOptions);
+    const { session, page } = await createSession({
+      engine,
+      startUrl: target,
+      headless: !opts.headed,
+      viewport: resolvedPreset.width && resolvedPreset.height ? { width: resolvedPreset.width, height: resolvedPreset.height } : undefined,
+      tuiTheme: opts.tuiTheme ?? resolvedPreset.tuiTheme,
+      tuiFontSize: tuiFontSize ?? resolvedPreset.tuiFontSize,
+    });
+
+    try {
+      if (engine !== "tui") {
+        await navigate(page, target);
+      }
+      const recording = await startVideoRecording(session.id, videoOptions);
+      await new Promise((resolve) => setTimeout(resolve, durationMs));
+      const stopped = await stopVideoRecording(recording.id);
+      if (opts.json) {
+        console.log(JSON.stringify(stopped, null, 2));
+      } else {
+        console.log(chalk.green(`✓ Video saved: ${stopped.path}`));
+        console.log(chalk.gray(`  Size: ${((stopped.size_bytes ?? 0) / 1024 / 1024).toFixed(2)} MB`));
+        console.log(chalk.gray(`  Duration: ${((stopped.duration_ms ?? 0) / 1000).toFixed(1)}s`));
+      }
+    } finally {
+      await closeSession(session.id).catch(() => {});
+    }
+  });
+
+videoCmd
+  .command("list")
+  .description("List saved video recordings")
+  .option("--json", "Output JSON")
+  .action((opts: { json?: boolean }) => {
+    const recordings = listVideos();
+    if (opts.json) {
+      console.log(JSON.stringify({ recordings }, null, 2));
+    } else if (recordings.length === 0) {
+      console.log(chalk.gray("No video recordings found"));
+    } else {
+      recordings.forEach((r) => {
+        const size = r.size_bytes ? `${(r.size_bytes / 1024 / 1024).toFixed(2)} MB` : "pending";
+        console.log(`${r.id} "${r.name}" ${r.status} ${r.format} ${r.width}x${r.height} ${size}`);
+      });
+    }
+  });
+
+videoCmd
+  .command("delete <recording_id>")
+  .description("Delete a saved video recording and file")
+  .action((id: string) => {
+    deleteVideo(id);
+    console.log(chalk.green(`✓ Video deleted: ${id}`));
   });
 
 // ─── agent ───────────────────────────────────────────────────────────────────
@@ -603,10 +819,9 @@ feedbackCmd
   .description("Send feedback or report a bug")
   .option("--email <email>", "Your email (optional)")
   .action(async (message: string, opts: { email?: string }) => {
-    const { saveFeedback } = await import("@hasna/cloud");
-    const { getDatabase } = await import("../../db/schema.js");
+    const { getDatabase, saveFeedback } = await import("../../db/schema.js");
     const db = getDatabase();
-    saveFeedback(db, { service: "browser", message, email: opts.email });
+    saveFeedback({ service: "browser", message, email: opts.email }, db);
     console.log(chalk.green("✓ Feedback saved. Thank you!"));
   });
 

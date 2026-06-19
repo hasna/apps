@@ -5,7 +5,11 @@ import type {
   ScreenshotResult,
   Session,
   SessionOptions,
+  VideoRecording,
+  VideoRecordingOptions,
+  VideoRecordingStatus,
 } from "./types/index.js";
+import type { VideoRecordingFilter } from "./db/video-recordings.js";
 import {
   closeSession as closeBrowserSession,
   createSession as createBrowserSession,
@@ -21,6 +25,11 @@ import {
 } from "./lib/actions.js";
 import { getPageInfo as getBrowserPageInfo } from "./lib/extractor.js";
 import { takeScreenshot as takeBrowserScreenshot } from "./lib/screenshot.js";
+import { listVideoRecordings as listBrowserVideos } from "./db/video-recordings.js";
+
+type StartVideoRecordingFn = (sessionId: string, options?: VideoRecordingOptions) => Promise<VideoRecording>;
+type StopVideoRecordingFn = (recordingId: string) => Promise<VideoRecording>;
+type ListVideosFn = (filter?: VideoRecordingFilter & { status?: VideoRecordingStatus }) => VideoRecording[];
 
 export interface BrowserSDKSession {
   id: string;
@@ -42,6 +51,9 @@ export interface BrowserSDKDependencies {
   pressKey?: typeof pressKeyAction;
   waitForSelector?: typeof waitForSelectorAction;
   takeScreenshot?: typeof takeBrowserScreenshot;
+  startVideoRecording?: StartVideoRecordingFn;
+  stopVideoRecording?: StopVideoRecordingFn;
+  listVideos?: ListVideosFn;
 }
 
 export interface BrowserSDKOptions {
@@ -93,6 +105,15 @@ function buildDependencies(input?: BrowserSDKDependencies): RequiredBrowserSDKDe
     pressKey: input?.pressKey ?? pressKeyAction,
     waitForSelector: input?.waitForSelector ?? waitForSelectorAction,
     takeScreenshot: input?.takeScreenshot ?? takeBrowserScreenshot,
+    startVideoRecording: input?.startVideoRecording ?? (async (sessionId, options) => {
+      const mod = await import("./lib/video-recording.js");
+      return mod.startVideoRecording(sessionId, options);
+    }),
+    stopVideoRecording: input?.stopVideoRecording ?? (async (recordingId) => {
+      const mod = await import("./lib/video-recording.js");
+      return mod.stopVideoRecording(recordingId);
+    }),
+    listVideos: input?.listVideos ?? listBrowserVideos,
   };
 }
 
@@ -162,6 +183,28 @@ export class BrowserSDK {
       ...options,
       sessionId,
     });
+  }
+
+  async startVideo(ref: BrowserSDKSessionRef, options?: VideoRecordingOptions): Promise<VideoRecording> {
+    const sessionId = typeof ref === "string" ? ref : ref.id;
+    const recording = await this.deps.startVideoRecording(sessionId, options);
+    const cached = this.sessions.get(sessionId);
+    if (cached) cached.page = this.deps.getSessionPage(sessionId);
+    if (typeof ref !== "string") ref.page = this.deps.getSessionPage(sessionId);
+    return recording;
+  }
+
+  async stopVideo(recordingId: string): Promise<VideoRecording> {
+    const recording = await this.deps.stopVideoRecording(recordingId);
+    if (recording.session_id) {
+      const cached = this.sessions.get(recording.session_id);
+      if (cached) cached.page = this.deps.getSessionPage(recording.session_id);
+    }
+    return recording;
+  }
+
+  listVideos(filter?: VideoRecordingFilter & { status?: VideoRecordingStatus }): VideoRecording[] {
+    return this.deps.listVideos(filter);
   }
 
   async close(ref: BrowserSDKSessionRef): Promise<Session> {

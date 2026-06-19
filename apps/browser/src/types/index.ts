@@ -149,6 +149,7 @@ export interface SessionOptions {
   autoGallery?: boolean;       // default: false — auto-save screenshot to gallery on every navigate
   cdpUrl?: string;             // Connect to existing Chrome via CDP (e.g. http://localhost:9222)
   storageState?: string;        // Name of a saved storage state to load (restores cookies/auth)
+  approvalToken?: string;        // Operator approval token for high-risk real-session capabilities
   tuiTheme?: "dark" | "light" | "system";  // TUI engine only: terminal color theme (default: "system")
   tuiFontSize?: number;                    // TUI engine only: terminal font size in px (default: 14)
   tuiMethod?: "buffer" | "dom";          // TUI engine only: how terminal state is read (default: "buffer")
@@ -300,6 +301,81 @@ export interface ReplayResult {
   steps_failed: number;
   errors: string[];
   duration_ms: number;
+}
+
+// ─── Video Recording ─────────────────────────────────────────────────────────
+
+export type VideoRecordingStatus = "recording" | "completed" | "failed";
+export type VideoRecordingQuality = "source" | "low" | "medium" | "high" | "ultra";
+export type VideoRecordingFormat = "webm" | "mp4" | "mov";
+export type VideoRecordingCodec = "h264" | "prores";
+export type VideoRecordingEncoding = "balanced" | "crisp" | "lossless" | "prores";
+export type VideoRecordingCaptureMode = "native" | "cdp" | "x11";
+export type VideoRecordingPreset =
+  | "source"
+  | "square"
+  | "vertical"
+  | "landscape"
+  | "x-square"
+  | "x-vertical"
+  | "x-landscape"
+  | "reels"
+  | "tiktok";
+
+export interface VideoTuiFrameOptions {
+  enabled?: boolean;
+  fit?: "preset" | "canvas";
+  width?: number;
+  height?: number;
+  padding?: number;
+  borderRadius?: number;
+  title?: string;
+  background?: string;
+  shadow?: boolean;
+}
+
+export interface VideoRecordingOptions {
+  name?: string;
+  projectId?: string;
+  quality?: VideoRecordingQuality;
+  format?: VideoRecordingFormat;
+  codec?: VideoRecordingCodec;
+  encoding?: VideoRecordingEncoding;
+  captureMode?: VideoRecordingCaptureMode;
+  crf?: number;
+  fps?: number;
+  displayScale?: number;
+  xvfbPath?: string;
+  videoBitrate?: string;
+  ffmpegPreset?: string;
+  keepRawVideo?: boolean;
+  preset?: VideoRecordingPreset;
+  width?: number;
+  height?: number;
+  tuiTheme?: "dark" | "light" | "system";
+  tuiFontSize?: number;
+  tuiZoom?: number;
+  tuiFrame?: VideoTuiFrameOptions;
+}
+
+export interface VideoRecording {
+  id: string;
+  session_id?: string;
+  project_id?: string;
+  name: string;
+  status: VideoRecordingStatus;
+  path?: string;
+  download_id?: string;
+  url?: string;
+  title?: string;
+  format: VideoRecordingFormat;
+  width: number;
+  height: number;
+  size_bytes?: number;
+  duration_ms?: number;
+  started_at: string;
+  stopped_at?: string;
+  error?: string;
 }
 
 // ─── Crawl ───────────────────────────────────────────────────────────────────

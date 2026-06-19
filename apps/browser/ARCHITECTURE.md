@@ -29,6 +29,11 @@ of launching a headless browser, `extension/dist` is loaded into the user's own
 Chrome profile and the service worker opens an outbound loopback WebSocket to
 `browser-serve`.
 
+This means jobs run in the user's real Chrome profile and network context.
+It does not make injected DOM events hardware-level user input: events created
+with `dispatchEvent()` remain synthetic from the page's perspective, including
+`Event.isTrusted === false`.
+
 Core files:
 
 - `extension/`: MV3 extension Vite build.
@@ -45,6 +50,10 @@ code; the user enters it in the extension popup; the server upgrades the
 WebSocket and returns a persistent token saved only in `chrome.storage.local`.
 Website credentials are never copied into the server. Arbitrary JavaScript
 jobs are disabled unless `BROWSER_EXTENSION_ALLOW_EVAL=1`.
+
+The default extension manifest intentionally avoids `chrome.cookies`; provider
+cookie access belongs in an explicit opt-in extension build or per-provider
+permission flow.
 
 ## Backend Selection
 

@@ -94,7 +94,9 @@ describe("CLI — help flags", () => {
     expect(stdout).toContain("session");
     expect(stdout).toContain("extension");
     expect(stdout).toContain("agent");
+    expect(stdout).toContain("events");
     expect(stdout).toContain("project");
+    expect(stdout).toContain("webhooks");
   });
 
   it("browser session --help shows subcommands", async () => {
@@ -145,6 +147,46 @@ describe("CLI — help flags", () => {
     const { stdout: webhooksOut, code: webhooksCode } = await runCli("webhooks", "list", "--json");
     expect(webhooksCode).toBe(0);
     expect(JSON.parse(webhooksOut)).toEqual([]);
+  });
+
+  it("browser video --help shows subcommands", async () => {
+    const { stdout, code } = await runCli("video", "--help");
+    expect(code).toBe(0);
+    expect(stdout).toContain("record");
+    expect(stdout).toContain("list");
+    expect(stdout).toContain("delete");
+  });
+
+  it("browser video record --help documents TUI command recording", async () => {
+    const { stdout, code } = await runCli("video", "record", "--help");
+    expect(code).toBe(0);
+    expect(stdout).toContain("terminal command");
+    expect(stdout).toContain("--engine");
+    expect(stdout).toContain("--format");
+    expect(stdout).toContain("--capture-mode");
+    expect(stdout).toContain("--encoding");
+    expect(stdout).toContain("--crf");
+    expect(stdout).toContain("--fps");
+    expect(stdout).toContain("--display-scale");
+    expect(stdout).toContain("--xvfb-path");
+    expect(stdout).toContain("--video-bitrate");
+    expect(stdout).toContain("--ffmpeg-preset");
+    expect(stdout).toContain("--preset");
+    expect(stdout).toContain("--tui-font-size");
+    expect(stdout).toContain("--tui-zoom");
+    expect(stdout).toContain("--tui-frame-fit");
+    expect(stdout).toContain("--tui-padding");
+  });
+
+  it("browser video record rejects invalid options before launching capture", async () => {
+    const { stderr, code, timedOut } = await runCliWithTimeout(
+      ["video", "record", "https://example.test", "--format", "avi"],
+      5_000,
+    );
+
+    expect(timedOut).toBe(false);
+    expect(code).not.toBe(0);
+    expect(stderr).toContain("Unknown --format");
   });
 });
 

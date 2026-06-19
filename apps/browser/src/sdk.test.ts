@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { Page } from "playwright";
 import { BrowserSDK, createBrowserSDK, type BrowserSDKDependencies } from "./sdk.js";
-import type { PageInfo, Session } from "./types/index.js";
+import type { PageInfo, Session, VideoRecording } from "./types/index.js";
 
 function createFakePage(urlRef: { current: string }): Page {
   return {
@@ -37,6 +37,17 @@ function createDeps() {
     text_length: 9,
     has_console_errors: false,
     viewport: { width: 1280, height: 720 },
+  });
+
+  const videoRecording = (): VideoRecording => ({
+    id: "video-1",
+    session_id: session.id,
+    name: "sdk-video",
+    status: "recording",
+    format: "webm",
+    width: 1280,
+    height: 720,
+    started_at: "2026-01-01T00:00:00.000Z",
   });
 
   const deps = {
@@ -84,6 +95,26 @@ function createDeps() {
         compressed_size_bytes: 3,
         compression_ratio: 1,
       };
+    },
+    startVideoRecording: async (sessionId: string) => {
+      calls.push(`startVideo:${sessionId}`);
+      return videoRecording();
+    },
+    stopVideoRecording: async (recordingId: string) => {
+      calls.push(`stopVideo:${recordingId}`);
+      return {
+        ...videoRecording(),
+        id: recordingId,
+        status: "completed" as const,
+        path: "/tmp/sdk-video.webm",
+        size_bytes: 2048,
+        duration_ms: 1000,
+        stopped_at: "2026-01-01T00:00:01.000Z",
+      };
+    },
+    listVideos: () => {
+      calls.push("listVideos");
+      return [videoRecording()];
     },
   } satisfies BrowserSDKDependencies;
 
@@ -154,5 +185,22 @@ describe("BrowserSDK", () => {
     });
 
     expect(calls).not.toContain("closeSession:session-1");
+  });
+
+  it("starts, stops, and lists video recordings", async () => {
+    const { calls, deps } = createDeps();
+    const sdk = createBrowserSDK({ dependencies: deps });
+    const handle = await sdk.open();
+
+    const started = await sdk.startVideo(handle, { quality: "high" });
+    const stopped = await sdk.stopVideo(started.id);
+    const videos = sdk.listVideos();
+
+    expect(started.status).toBe("recording");
+    expect(stopped.status).toBe("completed");
+    expect(videos).toHaveLength(1);
+    expect(calls).toContain("startVideo:session-1");
+    expect(calls).toContain("stopVideo:video-1");
+    expect(calls).toContain("listVideos");
   });
 });

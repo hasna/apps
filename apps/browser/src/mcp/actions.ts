@@ -2,6 +2,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
+  registerTool,
   z,
   json,
   err,
@@ -42,12 +43,13 @@ import {
   setLastSnapshot,
   logEvent,
 } from "./helpers.js";
+import { assertBrowserCapability } from "../lib/policy.js";
 
 export function register(server: McpServer) {
 
 // ── Navigation Tools ──────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_navigate",
   "Navigate to a URL. Auto-detects redirects, auto-names session, returns compact refs + thumbnail.",
   {
@@ -152,7 +154,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_back",
   "Navigate back in browser history",
   { session_id: z.string().optional() },
@@ -166,7 +168,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_forward",
   "Navigate forward in browser history",
   { session_id: z.string().optional() },
@@ -180,7 +182,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_reload",
   "Reload the current page",
   { session_id: z.string().optional() },
@@ -196,7 +198,7 @@ server.tool(
 
 // ── Interaction Tools ─────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_click",
   "Click an element by ref (from snapshot) or CSS selector. Prefer ref for reliability. Self-healing auto-tries fallback selectors if element not found.",
   { session_id: z.string().optional(), selector: z.string().optional(), ref: z.string().optional(), button: z.enum(["left", "right", "middle"]).optional(), timeout: z.number().optional(), self_heal: z.boolean().optional().default(true).describe("Auto-try fallback selectors if element not found") },
@@ -220,7 +222,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_type",
   "Type text into an element by ref or selector. Prefer ref. Self-healing auto-tries fallback selectors if element not found.",
   { session_id: z.string().optional(), selector: z.string().optional(), ref: z.string().optional(), text: z.string(), clear: z.boolean().optional().default(false), delay: z.number().optional(), self_heal: z.boolean().optional().default(true).describe("Auto-try fallback selectors if element not found") },
@@ -244,7 +246,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_hover",
   "Hover over an element by ref or selector",
   { session_id: z.string().optional(), selector: z.string().optional(), ref: z.string().optional() },
@@ -260,7 +262,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_scroll",
   "Scroll the page",
   { session_id: z.string().optional(), direction: z.enum(["up", "down", "left", "right"]).optional().default("down"), amount: z.number().optional().default(300) },
@@ -274,7 +276,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_select",
   "Select a dropdown option by ref or selector",
   { session_id: z.string().optional(), selector: z.string().optional(), ref: z.string().optional(), value: z.string() },
@@ -290,7 +292,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_toggle",
   "Check or uncheck a checkbox by ref or selector",
   { session_id: z.string().optional(), selector: z.string().optional(), ref: z.string().optional(), checked: z.boolean() },
@@ -306,12 +308,13 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_upload",
   "Upload a file to an input element",
-  { session_id: z.string().optional(), selector: z.string(), file_path: z.string() },
-  async ({ session_id, selector, file_path }) => {
+  { session_id: z.string().optional(), selector: z.string(), file_path: z.string(), approval_token: z.string().optional() },
+  async ({ session_id, selector, file_path, approval_token }) => {
     try {
+      assertBrowserCapability("file_upload", { approvalToken: approval_token });
       // Reject paths containing '..' or pointing outside the data directory
       if (file_path.includes("..")) {
         return err(new Error("File path must not contain '..'"));
@@ -328,7 +331,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_press_key",
   "Press a keyboard key",
   { session_id: z.string().optional(), key: z.string() },
@@ -342,7 +345,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_wait",
   "Wait for a selector to appear",
   { session_id: z.string().optional(), selector: z.string(), state: z.enum(["attached", "detached", "visible", "hidden"]).optional(), timeout: z.number().optional() },
@@ -356,7 +359,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_wait_for_navigation",
   "Wait for URL change after a click or action. Returns the new URL and title.",
   { session_id: z.string().optional(), timeout: z.number().optional().default(30000), url_pattern: z.string().optional() },
@@ -375,7 +378,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_wait_for_idle",
   "Wait until no network requests are in-flight for a specified duration. Essential for SPAs that load data after navigation.",
   {
@@ -428,7 +431,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_wait_for_text",
   "Wait until specific text appears on the page",
   { session_id: z.string().optional(), text: z.string(), timeout: z.number().optional().default(10000), exact: z.boolean().optional().default(false) },
@@ -443,7 +446,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_click_text",
   "Click an element by its visible text content",
   { session_id: z.string().optional(), text: z.string(), exact: z.boolean().optional().default(false), timeout: z.number().optional() },
@@ -457,7 +460,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_fill_form",
   "Fill multiple form fields in one call. Fields map: { selector: value }. Handles text, checkboxes, selects. Self-healing auto-tries fallback selectors per field.",
   {
@@ -476,7 +479,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_find_visual",
   "Find an element using AI vision when selectors and a11y refs fail. Useful for canvas, images, custom widgets. Takes a screenshot and asks a vision model to locate the element.",
   {
@@ -504,7 +507,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_scroll_to_element",
   "Scroll an element into view (by ref or selector) then optionally take a screenshot of it. Replaces scroll + wait + screenshot pattern.",
   {
@@ -552,7 +555,7 @@ server.tool(
 
 // ── Dialog Tools ──────────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_handle_dialog",
   "Accept or dismiss a pending dialog (alert, confirm, prompt). Handles the oldest pending dialog.",
   { session_id: z.string().optional(), action: z.enum(["accept", "dismiss"]), prompt_text: z.string().optional() },
@@ -567,7 +570,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_get_dialogs",
   "Get all pending dialogs for a session",
   { session_id: z.string().optional() },

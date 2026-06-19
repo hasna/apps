@@ -29,32 +29,47 @@ function metaPath(filePath: string): string {
   return `${filePath}.meta.json`;
 }
 
+function uniqueDownloadPath(filename: string, sessionId?: string): { id: string; filePath: string; filename: string } {
+  const dir = getDownloadsDir(sessionId);
+  const id = randomUUID();
+  const ext = extname(filename) || "";
+  const stem = basename(filename, ext);
+  const uniqueName = `${stem}-${id.slice(0, 8)}${ext}`;
+  return { id, filePath: join(dir, uniqueName), filename: uniqueName };
+}
+
+function writeDownloadMeta(
+  filePath: string,
+  id: string,
+  originalName: string,
+  sizeBytes: number,
+  opts?: { sessionId?: string; type?: string; sourceUrl?: string; metadata?: Record<string, unknown> }
+): DownloadMeta {
+  const meta: DownloadMeta = {
+    id,
+    type: opts?.type ?? detectType(originalName),
+    source_url: opts?.sourceUrl,
+    session_id: opts?.sessionId,
+    created_at: new Date().toISOString(),
+    size_bytes: sizeBytes,
+    original_name: originalName,
+    ...opts?.metadata,
+  } as DownloadMeta;
+
+  writeFileSync(metaPath(filePath), JSON.stringify(meta, null, 2));
+  return meta;
+}
+
 export function saveToDownloads(
   buffer: Buffer,
   filename: string,
   opts?: { sessionId?: string; type?: string; sourceUrl?: string; metadata?: Record<string, unknown> }
 ): DownloadedFile {
-  const dir = getDownloadsDir(opts?.sessionId);
-  const id = randomUUID();
-  const ext = extname(filename) || "";
-  const stem = basename(filename, ext);
-  const uniqueName = `${stem}-${id.slice(0, 8)}${ext}`;
-  const filePath = join(dir, uniqueName);
+  const { id, filePath, filename: uniqueName } = uniqueDownloadPath(filename, opts?.sessionId);
 
   writeFileSync(filePath, buffer);
 
-  const meta: DownloadMeta = {
-    id,
-    type: opts?.type ?? detectType(filename),
-    source_url: opts?.sourceUrl,
-    session_id: opts?.sessionId,
-    created_at: new Date().toISOString(),
-    size_bytes: buffer.length,
-    original_name: filename,
-    ...opts?.metadata,
-  } as DownloadMeta;
-
-  writeFileSync(metaPath(filePath), JSON.stringify(meta, null, 2));
+  const meta = writeDownloadMeta(filePath, id, filename, buffer.length, opts);
 
   return {
     id,
@@ -65,6 +80,30 @@ export function saveToDownloads(
     session_id: meta.session_id,
     created_at: meta.created_at,
     size_bytes: buffer.length,
+    meta_path: metaPath(filePath),
+  };
+}
+
+export function importFileToDownloads(
+  sourcePath: string,
+  filename?: string,
+  opts?: { sessionId?: string; type?: string; sourceUrl?: string; metadata?: Record<string, unknown> }
+): DownloadedFile {
+  const originalName = filename ?? basename(sourcePath);
+  const { id, filePath, filename: uniqueName } = uniqueDownloadPath(originalName, opts?.sessionId);
+  copyFileSync(sourcePath, filePath);
+  const sizeBytes = statSync(filePath).size;
+  const meta = writeDownloadMeta(filePath, id, originalName, sizeBytes, opts);
+
+  return {
+    id,
+    path: filePath,
+    filename: uniqueName,
+    type: meta.type,
+    source_url: meta.source_url,
+    session_id: meta.session_id,
+    created_at: meta.created_at,
+    size_bytes: sizeBytes,
     meta_path: metaPath(filePath),
   };
 }

@@ -2,6 +2,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
+  registerTool,
   z,
   json,
   err,
@@ -16,7 +17,7 @@ export function registerAgentsAndProjects(server: McpServer) {
 
 // ── Agent Tools ───────────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "register_agent",
   "Register an agent session. Returns agent_id. Auto-triggers a heartbeat.",
   {
@@ -34,7 +35,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "heartbeat",
   "Update last_seen_at to signal agent is active.",
   { agent_id: z.string() },
@@ -46,7 +47,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "list_agents",
   "List all registered agents.",
   { project_id: z.string().optional() },
@@ -57,7 +58,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "set_focus",
   "Set active project context for this agent session.",
   { agent_id: z.string(), project_id: z.string().optional() },
@@ -72,7 +73,7 @@ server.tool(
 
 // ── Project Tools ─────────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_project_create",
   "Create or ensure a project exists",
   { name: z.string(), path: z.string(), description: z.string().optional() },
@@ -84,7 +85,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_project_list",
   "List all registered projects",
   {},

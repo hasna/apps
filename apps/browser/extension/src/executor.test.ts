@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Window } from "happy-dom";
 import { executeDomJob } from "./executor";
 
@@ -36,6 +38,11 @@ afterEach(() => {
 });
 
 describe("extension DOM executor", () => {
+  it("keeps cookie access out of the default manifest", () => {
+    const manifest = JSON.parse(readFileSync(join(import.meta.dir, "../manifest.json"), "utf8")) as { permissions?: string[] };
+    expect(manifest.permissions ?? []).not.toContain("cookies");
+  });
+
   it("clicks the selected node", async () => {
     document.body.innerHTML = `<button id="run">Run</button>`;
     let clicks = 0;

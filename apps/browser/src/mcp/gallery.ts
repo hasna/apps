@@ -2,6 +2,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
+  registerTool,
   z,
   json,
   err,
@@ -26,7 +27,7 @@ export function registerGalleryAndDownloads(server: McpServer) {
 
 // ── Gallery ───────────────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_gallery_list",
   "List screenshot gallery entries with optional filters",
   {
@@ -47,7 +48,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_gallery_get",
   "Get a gallery entry by id, including thumbnail base64",
   { id: z.string() },
@@ -64,7 +65,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_gallery_tag",
   "Add a tag to a gallery entry",
   { id: z.string(), tag: z.string() },
@@ -75,7 +76,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_gallery_untag",
   "Remove a tag from a gallery entry",
   { id: z.string(), tag: z.string() },
@@ -86,7 +87,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_gallery_favorite",
   "Mark or unmark a gallery entry as favorite",
   { id: z.string(), favorited: z.boolean() },
@@ -97,7 +98,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_gallery_delete",
   "Delete a gallery entry",
   { id: z.string() },
@@ -109,7 +110,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_gallery_search",
   "Search gallery entries by url, title, notes, or tags",
   { q: z.string(), limit: z.number().optional().default(20) },
@@ -120,7 +121,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_gallery_stats",
   "Get gallery statistics: total, size, favorites, by-format breakdown",
   { project_id: z.string().optional() },
@@ -131,7 +132,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_gallery_diff",
   "Pixel-diff two gallery screenshots. Returns diff image base64 + changed pixel count.",
   { id1: z.string(), id2: z.string() },
@@ -149,7 +150,7 @@ server.tool(
 
 // ── Downloads ─────────────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_downloads_list",
   "List all files in the downloads folder",
   { session_id: z.string().optional() },
@@ -160,7 +161,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_downloads_get",
   "Get a downloaded file by id, returning base64 content and metadata",
   { id: z.string(), session_id: z.string().optional() },
@@ -174,7 +175,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_downloads_delete",
   "Delete a downloaded file by id",
   { id: z.string(), session_id: z.string().optional() },
@@ -185,7 +186,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_downloads_clean",
   "Delete all downloaded files older than N days (default 7)",
   { older_than_days: z.number().optional().default(7) },
@@ -196,7 +197,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_downloads_export",
   "Copy a downloaded file to a target path",
   { id: z.string(), target_path: z.string(), session_id: z.string().optional() },
@@ -208,7 +209,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_persist_file",
   "Persist a file permanently via open-files SDK (or local fallback)",
   { download_id: z.string().optional(), path: z.string().optional(), project_id: z.string().optional(), tags: z.array(z.string()).optional() },

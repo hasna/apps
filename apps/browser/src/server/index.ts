@@ -1,5 +1,8 @@
-import { join } from "node:path";
+#!/usr/bin/env bun
+
+import { join, resolve } from "node:path";
 import { existsSync } from "node:fs";
+import { ZodError, type ZodSchema } from "zod";
 import { createSession, closeSession, listSessions, getSessionPage } from "../lib/session.js";
 import { navigate, click, type as typeAction, scroll } from "../lib/actions.js";
 import { getText, getHTML, getLinks, extract } from "../lib/extractor.js";
@@ -9,6 +12,7 @@ import { getPerformanceMetrics } from "../lib/performance.js";
 import { enableConsoleCapture } from "../lib/console.js";
 import { crawl } from "../lib/crawler.js";
 import { startRecording, stopRecording, replayRecording } from "../lib/recorder.js";
+import { startVideoRecording, stopVideoRecording, listVideos, getVideo, deleteVideo } from "../lib/video-recording.js";
 import { attachExtensionSocket, createExtensionPairing, detachExtensionSocket, dispatchExtensionJob, getExtensionBridgeStatus, handleExtensionSocketMessage, prepareExtensionSocketUpgrade, revokeExtensionToken, type ExtensionSocketData } from "../lib/extension-bridge.js";
 import { registerAgent, heartbeat, listAgents, getAgent } from "../lib/agents.js";
 import { ensureProject, listProjects, getProject } from "../db/projects.js";
@@ -19,41 +23,12 @@ import { listEntries, getEntry, tagEntry, favoriteEntry, deleteEntry, searchEntr
 import { listDownloads, getDownload, deleteDownload, cleanStaleDownloads } from "../lib/downloads.js";
 import { diffImages } from "../lib/gallery-diff.js";
 import type { BrowserEngine } from "../types/index.js";
+import { authenticate, corsHeaders, resolveSecurityConfig } from "./security.js";
+import { createSessionRequestSchema, extensionDispatchRequestSchema, extensionPairRequestSchema, formatZodError, videoStartRequestSchema } from "./schemas.js";
 
 const PORT = parseInt(process.env["BROWSER_SERVER_PORT"] ?? "7030");
-const API_KEY = process.env["BROWSER_API_KEY"] ?? null;
-const ALLOWED_ORIGIN = process.env["BROWSER_ALLOWED_ORIGIN"] ?? (API_KEY ? null : "http://localhost:3000");
+const SECURITY = resolveSecurityConfig();
 const startTime = Date.now();
-
-function corsHeaders(origin: string | null): Record<string, string> {
-  const headers: Record<string, string> = {
-    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-  };
-  if (origin) {
-    // If no API_KEY (dev mode), restrict to localhost origins only
-    if (!API_KEY && !origin.startsWith("http://localhost") && !origin.startsWith("http://127.0.0.1")) {
-      headers["Access-Control-Allow-Origin"] = ALLOWED_ORIGIN ?? "http://localhost:3000";
-    } else {
-      headers["Access-Control-Allow-Origin"] = origin;
-    }
-  }
-  return headers;
-}
-
-// Authenticate request — returns null if valid, Response if not
-function authenticate(req: Request): Response | null {
-  if (!API_KEY) return null; // Dev mode: no key required
-  const header = req.headers.get("Authorization") ?? "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  if (token !== API_KEY) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-  return null;
-}
 
 // ─── Active state ─────────────────────────────────────────────────────────────
 const networkCleanup = new Map<string, () => void>();
@@ -73,6 +48,17 @@ async function safeJson(req: Request): Promise<{ body: Record<string, unknown> }
     return { body };
   } catch {
     return { error: badRequest("Invalid or missing JSON body") };
+  }
+}
+
+function parseBody<T>(body: Record<string, unknown>, schema: ZodSchema<T>, extraHeaders?: Record<string, string>): { value: T } | { error: Response } {
+  try {
+    return { value: schema.parse(body) };
+  } catch (error) {
+    if (error instanceof ZodError) {
+      return { error: badRequest(formatZodError(error), extraHeaders) };
+    }
+    return { error: badRequest("Invalid request body", extraHeaders) };
   }
 }
 
@@ -114,27 +100,80 @@ const server = Bun.serve<ExtensionSocketData>({
     const path = url.pathname;
     const method = req.method;
     const origin = req.headers.get("Origin") ?? undefined;
-    const headers = corsHeaders(origin ?? null);
+    const headers = corsHeaders(origin ?? null, SECURITY);
+    const dashboardDist = process.env["BROWSER_DASHBOARD_DIST"] ?? join(import.meta.dir, "../../dashboard/dist");
+    const hasDashboard = existsSync(dashboardDist);
+
+    const withHeaders = (response: Response): Response => {
+      for (const [key, value] of Object.entries(headers)) {
+        if (!response.headers.has(key)) response.headers.set(key, value);
+      }
+      return response;
+    };
+    const ok = (data: unknown, status = 200, extraHeaders?: Record<string, string>) => withHeaders(new Response(JSON.stringify(data), {
+      status,
+      headers: { "Content-Type": "application/json", ...(extraHeaders ?? {}) },
+    }));
+    const notFound = (msg: string, extraHeaders?: Record<string, string>) => withHeaders(new Response(JSON.stringify({ error: msg }), {
+      status: 404,
+      headers: { "Content-Type": "application/json", ...(extraHeaders ?? {}) },
+    }));
+    const badRequest = (msg: string, extraHeaders?: Record<string, string>) => withHeaders(new Response(JSON.stringify({ error: msg }), {
+      status: 400,
+      headers: { "Content-Type": "application/json", ...(extraHeaders ?? {}) },
+    }));
+    const serverError = (error: unknown, extraHeaders?: Record<string, string>) => {
+      const msg = error instanceof Error ? error.message : String(error);
+      return withHeaders(new Response(JSON.stringify({ error: msg }), {
+        status: 500,
+        headers: { "Content-Type": "application/json", ...(extraHeaders ?? {}) },
+      }));
+    };
+    const safeJson = async (request: Request): Promise<{ body: Record<string, unknown> } | { error: Response }> => {
+      try {
+        const contentType = request.headers.get("content-type") ?? "";
+        if (!contentType.includes("application/json")) {
+          return { error: badRequest("Content-Type must be application/json") };
+        }
+        return { body: await request.json() as Record<string, unknown> };
+      } catch {
+        return { error: badRequest("Invalid or missing JSON body") };
+      }
+    };
+    const parseBody = <T>(body: Record<string, unknown>, schema: ZodSchema<T>, extraHeaders?: Record<string, string>): { value: T } | { error: Response } => {
+      try {
+        return { value: schema.parse(body) };
+      } catch (error) {
+        if (error instanceof ZodError) {
+          return { error: badRequest(formatZodError(error), extraHeaders) };
+        }
+        return { error: badRequest("Invalid request body", extraHeaders) };
+      }
+    };
+    const isStaticDashboardRequest = hasDashboard
+      && !path.startsWith("/api/")
+      && path !== "/extension/ws"
+      && method === "GET";
 
     if (method === "OPTIONS") {
       return new Response(null, { status: 204, headers });
     }
 
     // Authenticate all non-health, non-dashboard requests
-    if (!path.startsWith("/dashboard") && path !== "/health" && path !== "/extension/ws") {
-      const authError = authenticate(req);
-      if (authError) return authError;
+    if (!isStaticDashboardRequest && path !== "/health" && path !== "/extension/ws") {
+      const authError = authenticate(req, SECURITY);
+      if (authError) return withHeaders(authError);
     }
 
     try {
       // ── Chrome extension bridge WebSocket ───────────────────────────────
       if (path === "/extension/ws" && method === "GET") {
         const prepared = prepareExtensionSocketUpgrade(req);
-        if (!prepared.ok) return prepared.response;
+        if (!prepared.ok) return withHeaders(prepared.response);
         if (server.upgrade(req, { data: prepared.data })) {
           return undefined as unknown as Response;
         }
-        return new Response("WebSocket upgrade failed", { status: 426 });
+        return withHeaders(new Response("WebSocket upgrade failed", { status: 426 }));
       }
 
       // ── Health ──────────────────────────────────────────────────────────
@@ -153,7 +192,9 @@ const server = Bun.serve<ExtensionSocketData>({
         if ((req.headers.get("content-type") ?? "").includes("application/json")) {
           const parsed = await safeJson(req);
           if ("error" in parsed) return parsed.error;
-          ttlMs = typeof parsed.body.ttl_ms === "number" ? parsed.body.ttl_ms : undefined;
+          const checked = parseBody(parsed.body, extensionPairRequestSchema, headers);
+          if ("error" in checked) return checked.error;
+          ttlMs = checked.value.ttl_ms;
         }
         const pairing = createExtensionPairing(ttlMs);
         return ok({
@@ -180,11 +221,13 @@ const server = Bun.serve<ExtensionSocketData>({
       if (path === "/api/extension/dispatch" && method === "POST") {
         const parsed = await safeJson(req);
         if ("error" in parsed) return parsed.error;
-        const body = parsed.body;
-        if (!body.job || typeof body.job !== "object") return badRequest("job required", headers);
+        const checked = parseBody(parsed.body, extensionDispatchRequestSchema, headers);
+        if ("error" in checked) return checked.error;
+        const body = checked.value;
         const result = await dispatchExtensionJob(body.job as any, {
-          tokenId: body.token_id as string | undefined,
-          timeoutMs: body.timeout_ms as number | undefined,
+          tokenId: body.token_id,
+          timeoutMs: body.timeout_ms,
+          approvalToken: body.approval_token,
         });
         return ok({ result });
       }
@@ -199,13 +242,18 @@ const server = Bun.serve<ExtensionSocketData>({
       if (path === "/api/sessions" && method === "POST") {
         const parsed = await safeJson(req);
         if ("error" in parsed) return parsed.error;
-        const body = parsed.body;
+        const checked = parseBody(parsed.body, createSessionRequestSchema, headers);
+        if ("error" in checked) return checked.error;
+        const body = checked.value;
         const { session } = await createSession({
           engine: (body.engine as BrowserEngine) ?? "auto",
-          projectId: body.project_id as string | undefined,
-          agentId: body.agent_id as string | undefined,
-          startUrl: body.start_url as string | undefined,
-          headless: (body.headless as boolean) ?? true,
+          projectId: body.project_id,
+          agentId: body.agent_id,
+          startUrl: body.start_url,
+          headless: body.headless ?? true,
+          cdpUrl: body.cdp_url,
+          storageState: body.storage_state,
+          approvalToken: body.approval_token,
         });
         return ok({ session }, 201);
       }
@@ -338,6 +386,90 @@ const server = Bun.serve<ExtensionSocketData>({
         const id = path.split("/")[3];
         const { deleteRecording } = await import("../db/recordings.js");
         deleteRecording(id);
+        return ok({ deleted: id });
+      }
+
+      // ── Video recordings ─────────────────────────────────────────────────
+      if (path === "/api/videos" && method === "GET") {
+        return ok({
+          recordings: listVideos({
+            projectId: url.searchParams.get("project_id") ?? undefined,
+            sessionId: url.searchParams.get("session_id") ?? undefined,
+            status: (url.searchParams.get("status") as "recording" | "completed" | "failed" | null) ?? undefined,
+          }),
+        });
+      }
+
+      if (path === "/api/videos/start" && method === "POST") {
+        const parsed = await safeJson(req);
+        if ("error" in parsed) return parsed.error;
+        const checked = parseBody(parsed.body, videoStartRequestSchema, headers);
+        if ("error" in checked) return checked.error;
+        const body = checked.value;
+        const recording = await startVideoRecording(body.session_id as string, {
+          name: body.name,
+          projectId: body.project_id,
+          quality: body.quality,
+          format: body.format,
+          captureMode: body.capture_mode,
+          codec: body.codec,
+          encoding: body.encoding,
+          crf: body.crf,
+          fps: body.fps,
+          videoBitrate: body.video_bitrate,
+          ffmpegPreset: body.ffmpeg_preset,
+          keepRawVideo: body.keep_raw_video,
+          preset: body.preset,
+          width: body.width,
+          height: body.height,
+          tuiTheme: body.tui_theme,
+          tuiFontSize: body.tui_font_size,
+          tuiZoom: body.tui_zoom,
+          tuiFrame: body.tui_frame,
+        });
+        return ok({ recording }, 201);
+      }
+
+      if (path.match(/^\/api\/videos\/([^/]+)\/stop$/) && method === "POST") {
+        const id = path.split("/")[3];
+        const recording = await stopVideoRecording(id);
+        return ok({ recording });
+      }
+
+      if (path.match(/^\/api\/videos\/([^/]+)\/raw$/) && method === "GET") {
+        const id = path.split("/")[3];
+        let recording: ReturnType<typeof getVideo>;
+        try {
+          recording = getVideo(id);
+        } catch {
+          return notFound("Video not found", headers);
+        }
+        if (!recording.path || !existsSync(recording.path)) return notFound("Video not found", headers);
+        return new Response(Bun.file(recording.path), {
+          headers: {
+            ...headers,
+            "Content-Type": recording.format === "mp4"
+              ? "video/mp4"
+              : recording.format === "mov"
+                ? "video/quicktime"
+                : "video/webm",
+            "Content-Disposition": `inline; filename="${recording.name.replace(/"/g, "")}.${recording.format}"`,
+          },
+        });
+      }
+
+      if (path.match(/^\/api\/videos\/([^/]+)$/) && method === "GET") {
+        const id = path.split("/")[3];
+        try {
+          return ok({ recording: getVideo(id) });
+        } catch {
+          return notFound("Video not found", headers);
+        }
+      }
+
+      if (path.match(/^\/api\/videos\/([^/]+)$/) && method === "DELETE") {
+        const id = path.split("/")[3];
+        deleteVideo(id);
         return ok({ deleted: id });
       }
 
@@ -475,21 +607,24 @@ const server = Bun.serve<ExtensionSocketData>({
         return ok({ deleted: deleteDownload(id) });
       }
 
+      if (path.startsWith("/api/")) {
+        return notFound(`Route not found: ${method} ${path}`, headers);
+      }
+
       // ── Dashboard (static) — path traversal safe ─────────────────────────
-      const dashboardDist = join(import.meta.dir, "../../dashboard/dist");
-      if (existsSync(dashboardDist)) {
+      if (hasDashboard) {
         // Reject any traversal attempts
         const cleanPath = path.replace(/^\//, "");
-        if (cleanPath.includes("..") || cleanPath.startsWith("/")) return notFound("Not found", headers);
-        const filePath = path === "/" ? join(dashboardDist, "index.html") : join(dashboardDist, cleanPath);
-        // Double-check: resolved path must stay within dashboardDist
-        const resolved = (await Bun.file(filePath).arrayBuffer().then(() => join(dashboardDist, cleanPath))) || "";
-        if (!resolved.startsWith(dashboardDist)) return notFound("Not found", headers);
+        const dashboardRoot = resolve(dashboardDist);
+        const filePath = path === "/" ? join(dashboardRoot, "index.html") : resolve(dashboardRoot, cleanPath);
+        if (!filePath.startsWith(`${dashboardRoot}/`) && filePath !== join(dashboardRoot, "index.html")) {
+          return notFound("Not found", headers);
+        }
         if (existsSync(filePath)) {
           return new Response(Bun.file(filePath), { headers });
         }
         // SPA fallback
-        return new Response(Bun.file(join(dashboardDist, "index.html")), { headers });
+        return new Response(Bun.file(join(dashboardRoot, "index.html")), { headers });
       }
 
       if (path === "/" || path === "") {

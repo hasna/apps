@@ -9,6 +9,7 @@ import { getTimeline } from "../db/timeline.js";
 import { resetDatabase } from "../db/schema.js";
 
 const RUN_E2E = process.env["BROWSER_E2E"] === "1";
+const HEADLESS_E2E = process.env["BROWSER_E2E_HEADLESS"] === "1";
 
 let tmpDir = "";
 
@@ -125,7 +126,7 @@ describe("extension engine e2e", () => {
       }).then((res) => res.json()) as { code: string };
 
       context = await chromium.launchPersistentContext(join(tmpDir, "chrome-profile"), {
-        headless: false,
+        headless: HEADLESS_E2E ? true : false,
         args: [
           `--disable-extensions-except=${extensionPath}`,
           `--load-extension=${extensionPath}`,

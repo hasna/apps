@@ -1,8 +1,27 @@
-import { SqliteAdapter as Database } from "@hasna/cloud";
-import type { TypedDb } from "../types/cloud-augment.js";
+import { Database } from "bun:sqlite";
+import type { TypedDb } from "../types/db-adapter.js";
 import { join } from "node:path";
 import { mkdirSync, existsSync, readdirSync, copyFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
+import { randomUUID } from "node:crypto";
+
+export interface FeedbackInput {
+  service?: string;
+  version?: string;
+  message: string;
+  email?: string;
+  machineId?: string;
+}
+
+export interface FeedbackEntry {
+  id: string;
+  service: string;
+  version: string;
+  message: string;
+  email: string;
+  machine_id: string;
+  created_at: string;
+}
 
 export function getDataDir(): string {
   if (process.env["BROWSER_DATA_DIR"]) return process.env["BROWSER_DATA_DIR"];
@@ -66,6 +85,39 @@ export function resetDatabase(): void {
   if (_db) { try { _db.close(); } catch {} }
   _db = null;
   _dbPath = null;
+}
+
+export function saveFeedback(input: FeedbackInput, db = getDatabase()): FeedbackEntry {
+  const entry: FeedbackEntry = {
+    id: randomUUID(),
+    service: input.service ?? "browser",
+    version: input.version ?? "",
+    message: input.message,
+    email: input.email ?? "",
+    machine_id: input.machineId ?? process.env["HOSTNAME"] ?? "",
+    created_at: new Date().toISOString(),
+  };
+  db.prepare(`
+    INSERT INTO feedback (id, service, version, message, email, machine_id, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    entry.id,
+    entry.service,
+    entry.version,
+    entry.message,
+    entry.email,
+    entry.machine_id,
+    entry.created_at,
+  );
+  return entry;
+}
+
+export function listFeedback(limit = 50, db = getDatabase()): FeedbackEntry[] {
+  return db
+    .query<FeedbackEntry, [number]>(
+      "SELECT id, service, version, message, email, machine_id, created_at FROM feedback ORDER BY created_at DESC LIMIT ?"
+    )
+    .all(limit);
 }
 
 function runMigrations(db: TypedDb): void {
@@ -378,6 +430,35 @@ function runMigrations(db: TypedDb): void {
         );
       `,
     },
+    {
+      version: 11,
+      sql: `
+        CREATE TABLE IF NOT EXISTS video_recordings (
+          id          TEXT PRIMARY KEY,
+          session_id  TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+          project_id  TEXT REFERENCES projects(id) ON DELETE SET NULL,
+          name        TEXT NOT NULL,
+          status      TEXT NOT NULL DEFAULT 'recording',
+          path        TEXT,
+          download_id TEXT,
+          url         TEXT,
+          title       TEXT,
+          format      TEXT NOT NULL DEFAULT 'webm',
+          width       INTEGER NOT NULL,
+          height      INTEGER NOT NULL,
+          size_bytes  INTEGER,
+          duration_ms INTEGER,
+          started_at  TEXT NOT NULL DEFAULT (datetime('now')),
+          stopped_at  TEXT,
+          error       TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_video_recordings_session ON video_recordings(session_id);
+        CREATE INDEX IF NOT EXISTS idx_video_recordings_project ON video_recordings(project_id);
+        CREATE INDEX IF NOT EXISTS idx_video_recordings_status ON video_recordings(status);
+        CREATE INDEX IF NOT EXISTS idx_video_recordings_started ON video_recordings(started_at);
+      `,
+    },
   ];
 
   for (const m of migrations) {
@@ -385,7 +466,7 @@ function runMigrations(db: TypedDb): void {
       db.transaction(() => {
         db.exec(m.sql);
         db.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(m.version);
-      });
+      })();
     }
   }
 }

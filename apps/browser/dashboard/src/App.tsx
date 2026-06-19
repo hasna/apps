@@ -44,7 +44,7 @@ export default function App() {
     console: <ConsolePage sessionId={selectedSession} />,
     screenshots: <ScreenshotsPage sessionId={selectedSession} />,
     performance: <PerformancePage sessionId={selectedSession} />,
-    recordings: <RecordingsPage />,
+    recordings: <RecordingsPage sessionId={selectedSession} />,
     agents: <AgentsPage />,
     projects: <ProjectsPage />,
   };

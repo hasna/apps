@@ -14,6 +14,7 @@ import { enableNetworkLogging } from "./network.js";
 import { enableConsoleCapture } from "./console.js";
 import { applyStealthPatches } from "./stealth.js";
 import { setupDialogHandler } from "./dialogs.js";
+import { assertBrowserCapability, assertBrowserNavigationAllowed } from "./policy.js";
 
 // ─── In-memory handle store ───────────────────────────────────────────────────
 
@@ -109,6 +110,7 @@ export interface CreateSessionResult {
 export async function createSession(opts: SessionOptions = {}): Promise<CreateSessionResult> {
   // CDP attach: connect to existing browser
   if (opts.cdpUrl) {
+    assertBrowserCapability("cdp_attach", { approvalToken: opts.approvalToken });
     const { connectToExistingBrowser } = await import("../engines/cdp.js");
     const cdpBrowser = await connectToExistingBrowser(opts.cdpUrl);
     const contexts = cdpBrowser.contexts();
@@ -143,6 +145,8 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
     : opts.engine;
 
   const resolvedEngine: BrowserEngine = engine === "auto" ? "playwright" : engine;
+  if (opts.startUrl) assertBrowserNavigationAllowed(opts.startUrl);
+  if (opts.storageState) assertBrowserCapability("storage_state", { approvalToken: opts.approvalToken });
 
   let browser: Browser | null = null;
   let bunView: BunWebViewSession | null = null;
@@ -192,6 +196,7 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
     const context = await browser.newContext({ viewport: opts.viewport ?? { width: 1280, height: 720 } });
     page = await context.newPage();
   } else if (resolvedEngine === "tui") {
+    assertBrowserCapability("tui_launch", { approvalToken: opts.approvalToken });
     // ── TUI engine: ttyd + Playwright ──
     const command = opts.startUrl ?? "bash";
     const tuiSess = await launchTui(command, {
@@ -224,6 +229,7 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
 
     return { session, page };
   } else if (resolvedEngine === "extension") {
+    assertBrowserCapability("extension_session", { approvalToken: opts.approvalToken });
     const session = dbCreateSession({
       engine: "extension",
       projectId: opts.projectId,
@@ -390,6 +396,9 @@ export function setSessionPage(sessionId: string, page: Page): void {
   const handle = handles.get(sessionId);
   if (!handle) throw new SessionNotFoundError(sessionId);
   handle.page = page;
+  if (handle.tuiSession) {
+    handle.tuiSession.page = page;
+  }
 }
 
 export async function closeSession(sessionId: string): Promise<Session> {
@@ -399,6 +408,10 @@ export async function closeSession(sessionId: string): Promise<Session> {
       if (handle.engine === "tui") {
         stopTuiRecording(sessionId);
       }
+      try {
+        const { stopAllVideoRecordingsForSession } = await import("./video-recording.js");
+        await stopAllVideoRecordingsForSession(sessionId);
+      } catch {}
       for (const cleanup of handle.cleanups) {
         try { await cleanup(); } catch {}
       }

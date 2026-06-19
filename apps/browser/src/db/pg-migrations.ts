@@ -1,5 +1,5 @@
 /**
- * PostgreSQL migrations for open-browser cloud sync.
+ * PostgreSQL migrations for open-browser storage sync.
  *
  * Equivalent to the SQLite schema in schema.ts plus lazy tables from
  * url-watcher.ts and cron-manager.ts, translated for PostgreSQL.
@@ -279,6 +279,32 @@ export const PG_MIGRATIONS: string[] = [
     machine_id TEXT DEFAULT '',
     created_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
+
+  // Migration 11: Video recordings
+  `CREATE TABLE IF NOT EXISTS video_recordings (
+    id          TEXT PRIMARY KEY,
+    session_id  TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+    project_id  TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    name        TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'recording',
+    path        TEXT,
+    download_id TEXT,
+    url         TEXT,
+    title       TEXT,
+    format      TEXT NOT NULL DEFAULT 'webm',
+    width       INTEGER NOT NULL,
+    height      INTEGER NOT NULL,
+    size_bytes  INTEGER,
+    duration_ms INTEGER,
+    started_at  TEXT NOT NULL DEFAULT NOW()::text,
+    stopped_at  TEXT,
+    error       TEXT
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_video_recordings_session ON video_recordings(session_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_video_recordings_project ON video_recordings(project_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_video_recordings_status ON video_recordings(status)`,
+  `CREATE INDEX IF NOT EXISTS idx_video_recordings_started ON video_recordings(started_at)`,
 
   // Lazy tables from url-watcher.ts
   `CREATE TABLE IF NOT EXISTS watch_jobs (

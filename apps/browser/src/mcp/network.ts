@@ -2,6 +2,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
+  registerTool,
   z,
   json,
   err,
@@ -37,7 +38,7 @@ export function register(server: McpServer) {
 
 // ── Storage Tools ─────────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_cookies_get",
   "Get cookies from the current session",
   { session_id: z.string().optional(), name: z.string().optional(), domain: z.string().optional() },
@@ -50,7 +51,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_cookies_set",
   "Set a cookie in the current session",
   {
@@ -81,7 +82,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_cookies_clear",
   "Clear cookies from the current session",
   { session_id: z.string().optional(), name: z.string().optional(), domain: z.string().optional() },
@@ -95,7 +96,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_storage_get",
   "Get localStorage or sessionStorage values",
   { session_id: z.string().optional(), key: z.string().optional(), storage_type: z.enum(["local", "session"]).optional().default("local") },
@@ -111,7 +112,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_storage_set",
   "Set a localStorage or sessionStorage value",
   { session_id: z.string().optional(), key: z.string(), value: z.string(), storage_type: z.enum(["local", "session"]).optional().default("local") },
@@ -131,7 +132,7 @@ server.tool(
 
 // ── Network Tools ─────────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_network_log",
   "Get captured network requests for a session",
   { session_id: z.string().optional() },
@@ -150,7 +151,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_network_intercept",
   "Add a network interception rule",
   {
@@ -176,7 +177,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_har_start",
   "Start HAR capture for a session",
   { session_id: z.string().optional() },
@@ -191,7 +192,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_har_stop",
   "Stop HAR capture and return the HAR data",
   { session_id: z.string().optional() },
@@ -216,7 +217,7 @@ server.tool(
 
 // ── Response Intercept Tools ──────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_intercept_response",
   "Intercept and modify API responses for testing. Mock data, simulate errors, add latency.",
   {
@@ -258,7 +259,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_intercept_clear",
   "Remove all response intercepts from a session",
   { session_id: z.string().optional() },
@@ -274,7 +275,7 @@ server.tool(
 
 // ── Performance Tools ─────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_performance",
   "Get performance metrics for the current page",
   { session_id: z.string().optional() },
@@ -288,7 +289,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_detect_env",
   "Detect if the current page is running in production, development, staging, or local environment. Analyzes URL, meta tags, source maps, analytics SDKs, and more.",
   { session_id: z.string().optional() },
@@ -303,7 +304,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_performance_deep",
   "Deep performance analysis: Web Vitals, resource breakdown by type, largest resources, third-party scripts with categories, DOM complexity, memory usage.",
   { session_id: z.string().optional() },
@@ -320,7 +321,7 @@ server.tool(
 
 // ── Accessibility Tools ───────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_accessibility_audit",
   "Run accessibility audit on the page. Injects axe-core and returns violations grouped by severity (critical, serious, moderate, minor).",
   { session_id: z.string().optional(), selector: z.string().optional().describe("Scope audit to a specific element") },
@@ -378,7 +379,7 @@ server.tool(
 
 // ── Console Tools ─────────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_console_log",
   "Get captured console messages for a session",
   { session_id: z.string().optional(), level: z.enum(["log", "warn", "error", "debug", "info"]).optional() },
@@ -396,7 +397,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_has_errors",
   "Quick check: does the session have any console errors?",
   { session_id: z.string().optional() },
@@ -409,7 +410,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_clear_errors",
   "Clear console error log for a session",
   { session_id: z.string().optional() },
@@ -425,7 +426,7 @@ server.tool(
 
 // ── Profile Tools ─────────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_profile_save",
   "Save cookies + localStorage from the current session as a named profile",
   { session_id: z.string().optional(), name: z.string() },
@@ -439,7 +440,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_profile_load",
   "Load a saved profile and apply cookies + localStorage to the current session",
   { session_id: z.string().optional().optional(), name: z.string() },
@@ -457,7 +458,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_profile_list",
   "List all saved browser profiles",
   {},
@@ -468,7 +469,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_profile_delete",
   "Delete a saved browser profile",
   { name: z.string() },
@@ -481,7 +482,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_profile_auto_refresh",
   "Schedule automatic cookie refresh to keep a profile session alive.",
   { name: z.string(), refresh_url: z.string(), schedule: z.string().optional().default("0 */6 * * *") },
@@ -496,7 +497,7 @@ server.tool(
 
 // ── Performance Budget ────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_performance_budget",
   "Check page performance against a budget. Set thresholds for LCP, FCP, CLS, TTFB, DOM complete, and load event. Returns pass/fail per metric with actual values.",
   {

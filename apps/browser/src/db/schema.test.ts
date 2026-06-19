@@ -33,6 +33,7 @@ describe("DB schema", () => {
     expect(tables).toContain("network_log");
     expect(tables).toContain("console_log");
     expect(tables).toContain("recordings");
+    expect(tables).toContain("video_recordings");
     expect(tables).toContain("crawl_results");
     expect(tables).toContain("agents");
     expect(tables).toContain("projects");

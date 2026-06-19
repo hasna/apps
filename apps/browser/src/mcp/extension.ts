@@ -1,9 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z, json, err } from "./helpers.js";
+import { registerTool, z, json, err } from "./helpers.js";
 import { createExtensionPairing, getExtensionBridgeStatus, revokeExtensionToken } from "../lib/extension-bridge.js";
 
 export function register(server: McpServer) {
-  server.tool(
+  registerTool(server,
     "browser_extension_pair",
     "Create a short-lived Chrome extension pairing code. Load extension/dist as an unpacked extension, then enter this code in the popup.",
     {
@@ -16,7 +16,7 @@ export function register(server: McpServer) {
     },
   );
 
-  server.tool(
+  registerTool(server,
     "browser_extension_status",
     "Show paired and connected Chrome extension bridge status.",
     {},
@@ -27,7 +27,7 @@ export function register(server: McpServer) {
     },
   );
 
-  server.tool(
+  registerTool(server,
     "browser_extension_unpair",
     "Revoke a paired Chrome extension token. If token_id is omitted, all extension tokens are revoked.",
     {

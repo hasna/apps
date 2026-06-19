@@ -2,7 +2,7 @@
 // Terminal UI testing tools — interact with, observe, assert, and record TUI apps.
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z, json, err, resolveSessionId, getSessionPage } from "./helpers.js";
+import { registerTool, z, json, err, resolveSessionId, getSessionPage } from "./helpers.js";
 import { getTerminalState, isTuiHealthy, reconnectTui, waitForTerminalText, type TuiSession } from "../engines/tui.js";
 import { getSessionEngine, getSessionTuiSession } from "../lib/session.js";
 import { stopTuiRecording, trackTuiRecording } from "../lib/tui-recording.js";
@@ -148,7 +148,7 @@ export function register(server: McpServer) {
 
 // ── browser_tui_send_keys ────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_tui_send_keys",
   `Send keystrokes to a TUI terminal session. Use friendly key names.
 
@@ -172,7 +172,7 @@ For typing text, use browser_tui_send_text instead.`,
       assertTuiSession(sid);
 
       const result = await withTuiHealth(sid, async (page) => {
-        const keyList = keys.split(",").map((k) => k.trim().toLowerCase());
+        const keyList = keys.split(",").map((k: string) => k.trim().toLowerCase());
         const sent: string[] = [];
         for (const key of keyList) {
           const mapped = KEY_MAP[key];
@@ -202,7 +202,7 @@ For typing text, use browser_tui_send_text instead.`,
 
 // ── browser_tui_send_text ────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_tui_send_text",
   `Type text into a TUI terminal and optionally press Enter. This is the most common way to interact with terminal apps.`,
   {
@@ -238,7 +238,7 @@ server.tool(
 
 // ── browser_tui_resize ───────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_tui_resize",
   "Resize the terminal to a specific number of columns and rows.",
   {
@@ -272,7 +272,7 @@ server.tool(
 
 // ── browser_tui_get_text ─────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_tui_get_text",
   `Get the text content from the terminal buffer. Returns all visible text, or a specific row range.`,
   {
@@ -306,7 +306,7 @@ server.tool(
 
 // ── browser_tui_wait_for_text ────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_tui_wait_for_text",
   `Wait for specific text to appear in the terminal output. Polls until found or timeout.
   Returns stuck:true if the terminal became unresponsive during the wait.`,
@@ -335,7 +335,7 @@ server.tool(
 
 // ── browser_tui_get_cursor ───────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_tui_get_cursor",
   "Get the current cursor position (row and column) in the terminal.",
   {
@@ -364,7 +364,7 @@ server.tool(
 
 // ── browser_tui_assert ───────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_tui_assert",
   `Assert conditions on the terminal state. Chain multiple conditions with AND.
 
@@ -440,7 +440,7 @@ CONDITION SYNTAX:
 
 // ── browser_tui_snapshot ─────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_tui_snapshot",
   "Capture a structured snapshot of the terminal buffer: all rows, row refs, cursor position, dimensions, and theme.",
   {
@@ -477,7 +477,7 @@ server.tool(
 
 // ── browser_tui_record_start ─────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_tui_record_start",
   "Start recording the terminal session as an asciicast v2 file.",
   {
@@ -537,7 +537,7 @@ server.tool(
 
 // ── browser_tui_record_stop ──────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_tui_record_stop",
   "Stop recording and return the asciicast v2 JSON.",
   { session_id: z.string().optional() },
@@ -578,7 +578,7 @@ server.tool(
 
 // ── browser_tui_health ───────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_tui_health",
   `Health check for a TUI session. Returns healthy status, latency, reconnect count, and the active read method.
   Use this to verify a session is still responsive before running other tools.`,

@@ -2,6 +2,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
+  registerTool,
   z,
   json,
   err,
@@ -22,7 +23,7 @@ export function register(server: McpServer) {
 
 // ── Recording Tools ───────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_record_start",
   "Start recording actions in a session",
   { session_id: z.string().optional(), name: z.string(), project_id: z.string().optional() },
@@ -36,7 +37,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_record_step",
   "Manually add a step to an active recording",
   {
@@ -54,7 +55,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_record_stop",
   "Stop recording and save the recording",
   { recording_id: z.string() },
@@ -66,7 +67,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_record_replay",
   "Replay a recorded sequence in a session",
   { session_id: z.string().optional(), recording_id: z.string() },
@@ -80,7 +81,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_recordings_list",
   "List all recordings",
   { project_id: z.string().optional() },
@@ -93,7 +94,7 @@ server.tool(
 
 // ── Workflow Tools ─────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_workflow_save",
   "Save a recording as a reusable workflow with self-healing replay",
   { recording_id: z.string(), name: z.string(), description: z.string().optional() },
@@ -105,7 +106,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_workflow_list",
   "List all saved workflows",
   {},
@@ -118,7 +119,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_workflow_run",
   "Run a saved workflow with self-healing. If selectors changed, auto-adapts and reports what was healed.",
   { session_id: z.string().optional(), name: z.string() },
@@ -136,7 +137,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_workflow_delete",
   "Delete a saved workflow",
   { name: z.string() },
@@ -150,7 +151,7 @@ server.tool(
 
 // ── Crawl Tools ───────────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_crawl",
   "Crawl a URL recursively and return discovered pages",
   {
@@ -177,7 +178,7 @@ server.tool(
 
 // ── Auth Flow Tools ──────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_auth_record",
   "Start recording a login flow. Navigate to the login page, perform the login, then call browser_auth_stop to save.",
   { session_id: z.string().optional(), name: z.string().describe("Name for this auth flow (e.g. 'github', 'gmail')"), start_url: z.string().optional().describe("Login page URL") },
@@ -192,7 +193,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_auth_stop",
   "Stop recording a login flow and save as a reusable auth flow with storage state.",
   { session_id: z.string().optional(), name: z.string(), recording_id: z.string() },
@@ -215,7 +216,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_auth_replay",
   "Manually replay a saved auth flow for a domain",
   { session_id: z.string().optional(), name: z.string().describe("Auth flow name to replay") },
@@ -232,7 +233,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_auth_list",
   "List all saved auth flows",
   {},
@@ -244,7 +245,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_auth_delete",
   "Delete a saved auth flow",
   { name: z.string() },
@@ -258,7 +259,7 @@ server.tool(
 
 // ── Export Recording ──────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_record_export",
   "Export a recording as a Playwright test (.spec.ts), Puppeteer script, or JSON. Returns the generated code as text.",
   {

@@ -5,7 +5,7 @@ export * from "./types/index.js";
 export * from "./sdk.js";
 
 // DB
-export { getDatabase, getDataDir, resetDatabase } from "./db/schema.js";
+export { getDatabase, getDataDir, resetDatabase, saveFeedback, listFeedback } from "./db/schema.js";
 export { createProject, ensureProject, getProject, getProjectByName, listProjects, updateProject, deleteProject } from "./db/projects.js";
 export { registerAgent as dbRegisterAgent, heartbeat as dbHeartbeat, getAgent, getAgentByName, listAgents as dbListAgents, updateAgent, deleteAgent, cleanStaleAgents } from "./db/agents.js";
 export type { RegisterAgentOptions } from "./db/agents.js";
@@ -21,7 +21,6 @@ export { recordHeartbeat, getLastHeartbeat, listHeartbeats, cleanOldHeartbeats }
 export * from "./engines/playwright.js";
 export * from "./engines/cdp.js";
 export * from "./engines/lightpanda.js";
-export * from "./engines/extension.js";
 export { selectEngine, isEngineAvailable, inferUseCase } from "./engines/selector.js";
 
 // Lib
@@ -34,6 +33,5 @@ export * from "./lib/console.js";
 export * from "./lib/screenshot.js";
 export * from "./lib/storage.js";
 export * from "./lib/recorder.js";
-export * from "./lib/extension-bridge.js";
 export * from "./lib/crawler.js";
 export * from "./lib/agents.js";

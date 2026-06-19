@@ -3,8 +3,7 @@
 import { Command } from "commander";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { registerCloudCommands } from "@hasna/cloud";
-import { registerEventsCommands } from "@hasna/events/commander";
+import { registerStorageCommands } from "./commands/storage.js";
 
 const pkg = JSON.parse(readFileSync(join(import.meta.dir, "../../package.json"), "utf8"));
 const program = new Command();
@@ -17,13 +16,25 @@ import { register as registerScript } from "./commands/script.js";
 import { register as registerTools } from "./commands/tools.js";
 import { register as registerExtension } from "./commands/extension.js";
 
+async function registerSharedEvents(program: Command): Promise<void> {
+  try {
+    const specifier = "@hasna/events/commander";
+    const events = await import(specifier) as {
+      registerEventsCommands?: (program: Command, options: { source: string }) => void;
+    };
+    events.registerEventsCommands?.(program, { source: "browser" });
+  } catch (error) {
+    process.stderr.write(`[browser] shared events commands unavailable: ${error instanceof Error ? error.message : String(error)}\n`);
+  }
+}
+
 registerBrowse(program);
 registerSession(program);
 registerScript(program);
 registerTools(program);
 registerExtension(program);
-registerCloudCommands(program, "browser");
-registerEventsCommands(program, { source: "browser" });
+registerStorageCommands(program);
+await registerSharedEvents(program);
 
 try {
   await program.parseAsync(process.argv);

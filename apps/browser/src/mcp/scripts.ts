@@ -2,6 +2,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
+  registerTool,
   z,
   json,
   err,
@@ -15,7 +16,7 @@ export function register(server: McpServer) {
 
 // ── Scripts (browser + connector + AI workflows, SQLite-backed) ──────────────
 
-server.tool(
+registerTool(server,
   "browser_script_run",
   "Run a saved script asynchronously. Returns run_id immediately — poll with browser_script_status for step-by-step progress. Scripts combine browser actions + connector calls + AI reasoning. Works with any engine (Bun.WebView, Playwright, CDP).",
   {
@@ -53,7 +54,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_script_status",
   "Check progress of a running script. Shows current step, step-by-step log with durations, and final result when complete.",
   { run_id: z.string() },
@@ -75,7 +76,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_script_list",
   "List all saved scripts",
   {},
@@ -89,7 +90,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_script_save",
   "Save a script. Steps are stored in SQLite. Each step has a type (browser/connector/extract/wait/condition/save_state), config, and optional AI config for intelligent fallbacks.",
   {
@@ -115,7 +116,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_script_delete",
   "Delete a saved script",
   { name: z.string() },
@@ -129,7 +130,7 @@ server.tool(
 
 // ── Data Extraction Tools ────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_detect_apis",
   "Scan network traffic for JSON API endpoints. Returns discovered endpoints with methods, status codes, and URLs.",
   { session_id: z.string().optional() },
@@ -143,7 +144,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_dataset_save",
   "Save extracted data as a named dataset for later use",
   { name: z.string(), data: z.array(z.record(z.unknown())), source_url: z.string().optional() },
@@ -156,7 +157,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_dataset_list",
   "List all saved datasets",
   {},
@@ -168,7 +169,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_dataset_export",
   "Export a dataset as JSON or CSV file",
   { name: z.string(), format: z.enum(["json", "csv"]).optional().default("json") },
@@ -180,7 +181,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_dataset_delete",
   "Delete a saved dataset",
   { name: z.string() },

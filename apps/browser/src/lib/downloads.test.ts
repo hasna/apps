@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { saveToDownloads, listDownloads, getDownload, deleteDownload, cleanStaleDownloads, exportToPath, getDownloadsDir } from "./downloads.js";
+import { saveToDownloads, importFileToDownloads, listDownloads, getDownload, deleteDownload, cleanStaleDownloads, exportToPath, getDownloadsDir } from "./downloads.js";
 
 let tmpDir: string;
 
@@ -30,6 +30,22 @@ describe("downloads lib", () => {
     expect(file.type).toBe("screenshot");
     expect(existsSync(file.path)).toBe(true);
     expect(existsSync(file.meta_path)).toBe(true);
+  });
+
+  it("importFileToDownloads copies an existing file and writes sidecar metadata", () => {
+    const source = join(tmpDir, "source.webm");
+    writeFileSync(source, "video-bytes");
+    const file = importFileToDownloads(source, "capture.webm", {
+      sessionId: "sess-video",
+      type: "video",
+      metadata: { width: 1280, height: 720 },
+    });
+    expect(file.type).toBe("video");
+    expect(file.session_id).toBe("sess-video");
+    expect(existsSync(file.path)).toBe(true);
+    const meta = JSON.parse(readFileSync(file.meta_path, "utf8"));
+    expect(meta.width).toBe(1280);
+    expect(meta.height).toBe(720);
   });
 
   it("sidecar meta.json is valid JSON with correct fields", () => {

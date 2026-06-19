@@ -2,6 +2,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
+  registerTool,
   z,
   json,
   err,
@@ -33,7 +34,7 @@ export function register(server: McpServer) {
 
 // ── Extraction Tools ──────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_get_text",
   "Get text content from the page or a selector. Sanitizes prompt injection by default.",
   { session_id: z.string().optional(), selector: z.string().optional(), sanitize: z.boolean().optional().default(true).describe("Strip prompt injection patterns from text (default: true)") },
@@ -52,7 +53,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_get_html",
   "Get HTML content from the page or a selector. Sanitizes prompt injection by default.",
   { session_id: z.string().optional(), selector: z.string().optional(), sanitize: z.boolean().optional().default(true).describe("Strip prompt injection patterns and hidden elements from HTML (default: true)") },
@@ -71,7 +72,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_get_links",
   "Get all links from the current page",
   { session_id: z.string().optional() },
@@ -85,7 +86,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_extract",
   "Extract content from the page in a specified format. Sanitizes prompt injection by default.",
   {
@@ -120,7 +121,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_find",
   "Find elements matching a selector and return their text",
   { session_id: z.string().optional(), selector: z.string() },
@@ -135,7 +136,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_snapshot",
   "Get accessibility snapshot with element refs (@e0, @e1...). Use compact=true (default) for token-efficient output. Use refs in browser_click, browser_type, etc. Sanitizes prompt injection by default.",
   {
@@ -192,7 +193,7 @@ server.tool(
 
 // ── Capture Tools ─────────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_screenshot",
   "Take a screenshot. Use selector to capture a specific element/section instead of the full page. Use detail='high' for AI-readable full image, 'low' for fast thumbnail. Use annotate=true to overlay numbered labels on interactive elements.",
   {
@@ -255,7 +256,7 @@ server.tool(
   }
 );
 
-server.tool(
+registerTool(server,
   "browser_pdf",
   "Generate a PDF of the current page",
   {
@@ -283,7 +284,7 @@ server.tool(
 
 // ── Evaluate ──────────────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_evaluate",
   "Execute JavaScript in the page context",
   { session_id: z.string().optional(), script: z.string() },
@@ -299,7 +300,7 @@ server.tool(
 
 // ── Element exists ────────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_element_exists",
   "Check if a selector exists on the page (no throw, returns boolean)",
   { session_id: z.string().optional(), selector: z.string(), check_visible: z.boolean().optional().default(false) },
@@ -314,7 +315,7 @@ server.tool(
 
 // ── Page info ─────────────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_get_page_info",
   "Get a full page summary in one call: url, title, meta tags, link/image/form counts, text length",
   { session_id: z.string().optional() },
@@ -333,7 +334,7 @@ server.tool(
 
 // ── Combined: scroll + screenshot ─────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_scroll_and_screenshot",
   "Scroll the page and take a screenshot in one call. Saves 3 separate tool calls.",
   { session_id: z.string().optional(), direction: z.enum(["up", "down", "left", "right"]).optional().default("down"), amount: z.number().optional().default(500), wait_ms: z.number().optional().default(300) },
@@ -357,7 +358,7 @@ server.tool(
 
 // ── Snapshot Diff ────────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_snapshot_diff",
   "Take a new accessibility snapshot and diff it against the last snapshot for this session. Shows added/removed/modified interactive elements.",
   { session_id: z.string().optional() },
@@ -394,7 +395,7 @@ server.tool(
 
 // ── browser_check ─────────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_check",
   "RECOMMENDED FIRST CALL: one-shot page summary — url, title, errors, performance, thumbnail, refs. Replaces 4+ separate tool calls.",
   { session_id: z.string().optional() },
@@ -429,7 +430,7 @@ server.tool(
 
 // ── Extract structured ────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_extract_structured",
   "Extract structured data from page: tables, lists, JSON-LD, Open Graph, meta tags, and repeated elements (cards/items).",
   { session_id: z.string().optional() },
@@ -454,7 +455,7 @@ server.tool(
 
 // ── Assert ────────────────────────────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_assert",
   "Assert page conditions in one call. Conditions: 'url contains X', 'text:\"Y\" is visible', 'element:\"#id\" exists', 'count:\"a\" > 10', 'title contains Z'. Chain with AND.",
   { session_id: z.string().optional(), condition: z.string() },
@@ -499,7 +500,7 @@ server.tool(
 
 // ── Visual diff between two URLs ─────────────────────────────────────────────
 
-server.tool(
+registerTool(server,
   "browser_diff",
   "Visual diff between two URLs or a URL and a gallery entry. Screenshots both, returns a pixel diff image highlighting changes in red.",
   {
