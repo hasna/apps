@@ -146,13 +146,15 @@ function prunePairings(): void {
 }
 
 function isLoopbackHostname(hostname: string): boolean {
-  return hostname === "localhost"
-    || hostname === "127.0.0.1"
-    || hostname === "::1"
-    || hostname === "[::1]";
+  const normalized = hostname.replace(/^\[|\]$/g, "");
+  return normalized === "localhost"
+    || normalized === "127.0.0.1"
+    || normalized === "::1"
+    || normalized === "::ffff:127.0.0.1";
 }
 
-function isLoopbackRequest(req: Request): boolean {
+function isLoopbackRequest(req: Request, peerAddress?: string | null): boolean {
+  if (peerAddress) return isLoopbackHostname(peerAddress);
   const url = new URL(req.url);
   return isLoopbackHostname(url.hostname);
 }
@@ -224,8 +226,8 @@ export function validateExtensionToken(token: string): ExtensionSocketData {
   };
 }
 
-export function prepareExtensionSocketUpgrade(req: Request): { ok: true; data: ExtensionSocketData } | { ok: false; response: Response } {
-  if (!isLoopbackRequest(req)) {
+export function prepareExtensionSocketUpgrade(req: Request, peerAddress?: string | null): { ok: true; data: ExtensionSocketData } | { ok: false; response: Response } {
+  if (!isLoopbackRequest(req, peerAddress)) {
     return {
       ok: false,
       response: new Response("Extension WebSocket is loopback-only", { status: 403 }),

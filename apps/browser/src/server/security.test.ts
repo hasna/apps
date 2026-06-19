@@ -109,10 +109,10 @@ describe("browser server security", () => {
       job: { id: "job-1", type: "navigate", payload: { url: "https://example.test" } },
     }).success).toBe(true);
 
-    const missingToken = extensionDispatchRequestSchema.safeParse({
+    const defaultConnectedExtension = extensionDispatchRequestSchema.safeParse({
       job: { id: "job-1", type: "navigate" },
     });
-    expect(missingToken.success).toBe(false);
+    expect(defaultConnectedExtension.success).toBe(true);
   });
 
   it("rejects invalid video start options before capture starts", () => {
@@ -126,6 +126,11 @@ describe("browser server security", () => {
     expect(videoStartRequestSchema.safeParse({
       session_id: "session-1",
       format: "avi",
+    }).success).toBe(false);
+
+    expect(videoStartRequestSchema.safeParse({
+      session_id: "session-1",
+      capture_mode: "x11",
     }).success).toBe(false);
   });
 

@@ -242,6 +242,8 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
       sessionId: session.id,
       viewport: opts.viewport,
       serverUrl: opts.extensionServerUrl,
+      tokenId: opts.extensionTokenId,
+      approvalToken: opts.approvalToken,
     });
 
     handles.set(session.id, { browser: null, bunView: null, tuiSession: null, page, engine: "extension", cleanups: [], tokenBudget: { total: 0, used: 0 }, lastActivity: Date.now(), autoGallery: opts.autoGallery ?? false, startUrl: opts.startUrl ?? "" });

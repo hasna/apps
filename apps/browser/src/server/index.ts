@@ -168,7 +168,7 @@ const server = Bun.serve<ExtensionSocketData>({
     try {
       // ── Chrome extension bridge WebSocket ───────────────────────────────
       if (path === "/extension/ws" && method === "GET") {
-        const prepared = prepareExtensionSocketUpgrade(req);
+        const prepared = prepareExtensionSocketUpgrade(req, server.requestIP(req)?.address);
         if (!prepared.ok) return withHeaders(prepared.response);
         if (server.upgrade(req, { data: prepared.data })) {
           return undefined as unknown as Response;
@@ -254,6 +254,8 @@ const server = Bun.serve<ExtensionSocketData>({
           cdpUrl: body.cdp_url,
           storageState: body.storage_state,
           approvalToken: body.approval_token,
+          extensionServerUrl: body.extension_server_url,
+          extensionTokenId: body.extension_token_id,
         });
         return ok({ session }, 201);
       }

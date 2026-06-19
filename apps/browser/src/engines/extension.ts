@@ -10,6 +10,7 @@ export interface ExtensionPageOptions {
   serverUrl?: string;
   viewport?: { width: number; height: number };
   allowEval?: boolean;
+  approvalToken?: string;
 }
 
 interface ExtensionPageInfoData {
@@ -106,13 +107,13 @@ class ExtensionLocator {
   }
 }
 
-type ExtensionDispatcher = (job: ExtJob, opts: { tokenId?: string; timeoutMs?: number }) => Promise<ExtResult>;
+type ExtensionDispatcher = (job: ExtJob, opts: { tokenId?: string; timeoutMs?: number; approvalToken?: string }) => Promise<ExtResult>;
 
 function normalizeServerUrl(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
-async function remoteDispatch(serverUrl: string, job: ExtJob, opts: { tokenId?: string; timeoutMs?: number }): Promise<ExtResult> {
+async function remoteDispatch(serverUrl: string, job: ExtJob, opts: { tokenId?: string; timeoutMs?: number; approvalToken?: string }): Promise<ExtResult> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   const apiKey = process.env["BROWSER_API_KEY"];
   if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
@@ -121,8 +122,9 @@ async function remoteDispatch(serverUrl: string, job: ExtJob, opts: { tokenId?: 
     headers,
     body: JSON.stringify({
       job,
-      token_id: opts.tokenId,
+      token_id: opts.tokenId || undefined,
       timeout_ms: opts.timeoutMs,
+      approval_token: opts.approvalToken,
     }),
   });
   if (!response.ok) {
@@ -145,13 +147,15 @@ export class ExtensionPage {
   private readonly tokenId?: string;
   private readonly viewport: { width: number; height: number };
   private readonly allowEval: boolean;
+  private readonly approvalToken?: string;
   private readonly dispatcher: ExtensionDispatcher;
 
   constructor(connection: Pick<ConnectedExtension, "token_id">, opts: ExtensionPageOptions & { dispatcher?: ExtensionDispatcher } = {}) {
     this.sessionId = opts.sessionId;
-    this.tokenId = opts.tokenId ?? connection.token_id;
+    this.tokenId = opts.tokenId || connection.token_id || undefined;
     this.viewport = opts.viewport ?? { width: 1280, height: 720 };
     this.allowEval = opts.allowEval ?? process.env["BROWSER_EXTENSION_ALLOW_EVAL"] === "1";
+    this.approvalToken = opts.approvalToken;
     this.dispatcher = opts.dispatcher ?? dispatchExtensionJob;
   }
 
@@ -168,7 +172,7 @@ export class ExtensionPage {
         logEvent(this.sessionId, "extension_job", { engine: "extension", job_id: job.id, job_type: type, payload });
       } catch {}
     }
-    const result = await this.dispatcher(job, { tokenId: this.tokenId, timeoutMs });
+    const result = await this.dispatcher(job, { tokenId: this.tokenId, timeoutMs, approvalToken: this.approvalToken });
     if (result.ok) {
       if (result.url) this.lastUrl = result.url;
       if (result.title) this.lastTitle = result.title;

@@ -13,6 +13,8 @@ export const createSessionRequestSchema = z.object({
   cdp_url: z.string().min(1).optional(),
   storage_state: z.string().min(1).optional(),
   approval_token: z.string().min(1).optional(),
+  extension_server_url: z.string().min(1).optional(),
+  extension_token_id: z.string().min(1).optional(),
 }).passthrough();
 
 export const extensionPairRequestSchema = z.object({
@@ -20,7 +22,7 @@ export const extensionPairRequestSchema = z.object({
 }).passthrough();
 
 export const extensionDispatchRequestSchema = z.object({
-  token_id: z.string().min(1),
+  token_id: z.string().min(1).optional(),
   timeout_ms: z.number().int().positive().max(300_000).optional(),
   approval_token: z.string().min(1).optional(),
   job: z.object({
@@ -35,7 +37,7 @@ export const videoStartRequestSchema = z.object({
   project_id: z.string().min(1).optional(),
   quality: z.enum(["source", "low", "medium", "high", "ultra"]).optional(),
   format: z.enum(["webm", "mp4", "mov"]).optional(),
-  capture_mode: z.enum(["native", "cdp", "x11"]).optional(),
+  capture_mode: z.enum(["native", "cdp"]).optional(),
   codec: z.enum(["h264", "prores"]).optional(),
   encoding: z.enum(["balanced", "crisp", "lossless", "prores"]).optional(),
   crf: z.number().int().min(0).max(51).optional(),

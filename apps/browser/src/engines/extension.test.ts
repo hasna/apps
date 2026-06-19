@@ -12,7 +12,7 @@ import {
   resetExtensionBridgeForTests,
   validateExtensionToken,
 } from "../lib/extension-bridge.js";
-import { createExtensionPage } from "./extension.js";
+import { ExtensionPage, createExtensionPage } from "./extension.js";
 import { isEngineAvailable, selectEngine } from "./selector.js";
 
 let tmpDir: string;
@@ -113,5 +113,20 @@ describe("ExtensionPage proxy", () => {
     const { page, jobs } = setupPage(() => 42);
     expect(await page.evaluate(() => 42)).toBe(42);
     expect(jobs[0].type).toBe("evaluate");
+  });
+
+  it("omits blank token ids and forwards approval tokens to remote dispatchers", async () => {
+    process.env["BROWSER_EXTENSION_ALLOW_EVAL"] = "1";
+    const dispatches: Array<{ tokenId?: string; approvalToken?: string }> = [];
+    const page = new ExtensionPage({ token_id: "" }, {
+      approvalToken: "approved",
+      dispatcher: async (_job, opts) => {
+        dispatches.push({ tokenId: opts.tokenId, approvalToken: opts.approvalToken });
+        return { id: _job.id, ok: true, data: 7 };
+      },
+    });
+
+    expect(await page.evaluate(() => 7)).toBe(7);
+    expect(dispatches).toEqual([{ tokenId: undefined, approvalToken: "approved" }]);
   });
 });

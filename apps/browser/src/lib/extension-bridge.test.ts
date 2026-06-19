@@ -76,6 +76,18 @@ describe("extension bridge pairing", () => {
     if (!rejected.ok) expect(rejected.response.status).toBe(403);
   });
 
+  it("uses the peer address for loopback checks when Bun provides it", () => {
+    const pairing = createExtensionPairing(60_000);
+    const spoofedHost = new Request(`ws://127.0.0.1:7030/extension/ws?code=${pairing.code}`);
+
+    const rejected = prepareExtensionSocketUpgrade(spoofedHost, "203.0.113.10");
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.response.status).toBe(403);
+
+    const accepted = prepareExtensionSocketUpgrade(spoofedHost, "127.0.0.1");
+    expect(accepted.ok).toBe(true);
+  });
+
   it("revokes tokens and disconnects sockets", () => {
     const pairing = createExtensionPairing();
     const token = consumeExtensionPairingCode(pairing.code);

@@ -154,6 +154,7 @@ export interface SessionOptions {
   tuiFontSize?: number;                    // TUI engine only: terminal font size in px (default: 14)
   tuiMethod?: "buffer" | "dom";          // TUI engine only: how terminal state is read (default: "buffer")
   extensionServerUrl?: string;             // Extension engine only: browser-serve URL for out-of-process SDK/CLI dispatch
+  extensionTokenId?: string;               // Extension engine only: target a specific paired extension token id
 }
 
 // ─── Snapshot ────────────────────────────────────────────────────────────────
