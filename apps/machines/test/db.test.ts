@@ -29,6 +29,7 @@ describe("database", () => {
       .all() as Array<{ name: string }>;
     const names = tables.map((table) => table.name);
     expect(names).toContain("agent_heartbeats");
+    expect(names).toContain("mutation_approval_nonces");
     expect(names).toContain("setup_runs");
     expect(names).toContain("sync_runs");
 

@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { readManifest } from "../manifests.js";
 import { ensureParentDir } from "../paths.js";
 import { getLocalMachineId, recordSyncRun } from "../db.js";
+import { assertMutationPlanDigest, attachMutationPlanDigest } from "./mutation-approval.js";
 import { describeMachineCommandFailure, resolveMachineCommand, runMachineCommand, type MachineCommandRunner } from "../remote.js";
 import type { MachineManifest, SyncAction, SyncResult } from "../types.js";
 
@@ -112,12 +113,12 @@ export function buildSyncPlan(machineId?: string, runner: MachineCommandRunner =
     ...detectFileActions(target),
   ];
 
-  return {
+  return attachMutationPlanDigest({
     machineId: target.id,
     mode: "plan",
     actions,
     executed: 0,
-  };
+  });
 }
 
 function applyFileAction(command: string): void {
@@ -142,14 +143,29 @@ function applyFileAction(command: string): void {
   }
 }
 
+export interface RunSyncOptions {
+  apply?: boolean;
+  yes?: boolean;
+  expectedPlanDigest?: string;
+}
+
 export function runSync(
   machineId?: string,
-  options: { apply?: boolean; yes?: boolean } = {},
+  options: RunSyncOptions = {},
   runner: MachineCommandRunner = runMachineCommand
 ): SyncResult {
   const plan = buildSyncPlan(machineId, runner);
+  return runSyncPlan(plan, options, runner);
+}
+
+export function runSyncPlan(
+  plan: SyncResult,
+  options: RunSyncOptions = {},
+  runner: MachineCommandRunner = runMachineCommand
+): SyncResult {
+  assertMutationPlanDigest(plan, options.expectedPlanDigest);
   if (!options.apply) {
-    return plan;
+    return attachMutationPlanDigest({ ...plan, mode: "plan", executed: 0 });
   }
 
   if (!options.yes) {
@@ -178,12 +194,12 @@ export function runSync(
     executed += 1;
   }
 
-  const summary: SyncResult = {
+  const summary: SyncResult = attachMutationPlanDigest({
     machineId: plan.machineId,
     mode: "apply",
     actions: plan.actions,
     executed,
-  };
+  });
   recordSyncRun(plan.machineId, "completed", summary);
   return summary;
 }

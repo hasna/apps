@@ -55,4 +55,32 @@ describe("tailscale install", () => {
     expect(result.executed).toBe(1);
     expect(calls).toEqual(["remote-mac:brew install --cask tailscale"]);
   });
+
+  test("rejects stale expected plan digests before running install commands", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-tailscale-plan-digest-"));
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "local-fixture";
+    manifestInit();
+    manifestAdd({
+      id: "remote-node",
+      platform: "macos",
+      workspacePath: "/Users/operator/Workspace",
+    });
+    const approvedPlan = buildTailscaleInstallPlan("remote-node");
+    manifestAdd({
+      id: "remote-node",
+      platform: "linux",
+      workspacePath: "/home/operator/workspace",
+    });
+
+    const calls: string[] = [];
+    const runner: MachineCommandRunner = (machineId, command) => {
+      calls.push(`${machineId}:${command}`);
+      return { machineId, source: "ssh", stdout: "", stderr: "", exitCode: 0 };
+    };
+
+    expect(() => runTailscaleInstall("remote-node", { apply: true, yes: true, expectedPlanDigest: approvedPlan.planDigest }, runner))
+      .toThrow("Approved plan digest");
+    expect(calls).toEqual([]);
+  });
 });

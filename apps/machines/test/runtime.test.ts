@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { EventInput } from "@hasna/events";
-import { watchTmuxPane, type TmuxPaneProbeResult } from "../src/commands/runtime.js";
+import { buildTmuxPaneDiedHookPlan, watchTmuxPane, type TmuxPaneProbeResult } from "../src/commands/runtime.js";
 
 function probe(target: string, exists: boolean, paneId?: string): TmuxPaneProbeResult {
   return {
@@ -14,6 +14,40 @@ function probe(target: string, exists: boolean, paneId?: string): TmuxPaneProbeR
 }
 
 describe("runtime tmux monitor", () => {
+  test("builds an explicit trusted-local tmux pane-died hook plan", () => {
+    const plan = buildTmuxPaneDiedHookPlan({ tmuxCommand: "tmux", machinesCommand: "machines", trustedLocalMutation: true });
+    expect(plan.eventType).toBe("machines.tmux.pane_died");
+    expect(plan.deliver).toBe(false);
+    expect(plan.trustedLocalMutation).toBe(true);
+    expect(plan.args).toEqual([
+      "set-hook",
+      "-g",
+      "pane-died",
+      expect.stringContaining("machines"),
+    ]);
+    expect(plan.shellCommand).toContain("pane-died");
+    expect(plan.shellCommand).toContain("HASNA_MACHINES_ALLOW_MUTATIONS=1");
+    expect(plan.shellCommand).toContain("--no-deliver");
+  });
+
+  test("does not include trusted mutation env by default", () => {
+    const plan = buildTmuxPaneDiedHookPlan({ tmuxCommand: "tmux", machinesCommand: "machines" });
+    expect(plan.trustedLocalMutation).toBe(false);
+    expect(plan.shellCommand).not.toContain("HASNA_MACHINES_ALLOW_MUTATIONS=1");
+  });
+
+  test("builds a tmux hook plan with a scoped approval token when provided", () => {
+    const plan = buildTmuxPaneDiedHookPlan({
+      tmuxCommand: "tmux",
+      machinesCommand: "machines",
+      approvalToken: "token-123",
+    });
+    expect(plan.trustedLocalMutation).toBe(false);
+    expect(plan.shellCommand).toContain("--approval-token");
+    expect(plan.shellCommand).toContain("token-123");
+    expect(plan.shellCommand).not.toContain("HASNA_MACHINES_ALLOW_MUTATIONS=1");
+  });
+
   test("emits pane_died after a previously present pane disappears", async () => {
     const emitted: Array<{ input: EventInput; options: unknown }> = [];
     const sequence = [

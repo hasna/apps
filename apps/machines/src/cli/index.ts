@@ -1,7 +1,18 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
-import { registerEventCommands, registerWebhookCommands } from "@hasna/events/commander";
+import {
+  EventsClient,
+  getEventsDataDir,
+  sanitizeChannelForOutput,
+  sanitizeChannelsForOutput,
+  type ChannelConfig,
+  type EventEnvelope,
+  type EventFilter,
+  type EventSeverity,
+} from "@hasna/events";
 import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { join, resolve } from "node:path";
 import chalk from "chalk";
 import { getPackageVersion } from "../version.js";
 import {
@@ -13,31 +24,32 @@ import {
   manifestRemove,
   manifestValidate,
 } from "../commands/manifest.js";
-import { buildSetupPlan, runSetup } from "../commands/setup.js";
-import { buildBackupPlan, runBackup } from "../commands/backup.js";
+import { buildSetupPlan, runSetupPlan } from "../commands/setup.js";
+import { buildBackupPlan, resolveBackupTarget, runBackup } from "../commands/backup.js";
 import { buildCertPlan, runCertPlan } from "../commands/cert.js";
 import { addDomainMapping, listDomainMappings, renderDomainMapping } from "../commands/dns.js";
 import { diffMachines } from "../commands/diff.js";
-import { buildAppsPlan, diffApps, getAppsStatus, listApps, runAppsInstall } from "../commands/apps.js";
+import { buildAppsPlan, diffApps, getAppsStatus, listApps, runAppsPlan } from "../commands/apps.js";
 import {
   buildClaudeInstallPlan,
   diffClaudeCli,
   getClaudeCliStatus,
-  runClaudeInstall,
+  runClaudeInstallPlan,
 } from "../commands/install-claude.js";
-import { buildTailscaleInstallPlan, runTailscaleInstall } from "../commands/install-tailscale.js";
+import { buildTailscaleInstallPlan, runTailscaleInstallPlan } from "../commands/install-tailscale.js";
 import {
   addNotificationChannel,
+  createTrustedNotificationApproval,
   dispatchNotificationEvent,
   listNotificationChannels,
   removeNotificationChannel,
   testNotificationChannel,
 } from "../commands/notifications.js";
 import { listPorts } from "../commands/ports.js";
-import { watchTmuxPane } from "../commands/runtime.js";
+import { buildTmuxPaneDiedHookPlan, watchTmuxPane } from "../commands/runtime.js";
 import { buildSshCommand, resolveSshTarget } from "../commands/ssh.js";
 import { resolveScreenTarget, buildScreenCommand, buildScreenEnableCommand, resolveScreenCredentials } from "../commands/screen.js";
-import { buildSyncPlan, runSync } from "../commands/sync.js";
+import { buildSyncPlan, runSyncPlan } from "../commands/sync.js";
 import { getStatus } from "../commands/status.js";
 import { repairWorkspaceManifestMappings, type WorkspaceManifestRepairResult } from "../commands/workspace.js";
 import { discoverMachineTopology, redactRouteForOutput, redactTopologyForOutput, resolveMachineRoute, resolveMachineWorkspace } from "../topology.js";
@@ -49,6 +61,7 @@ import {
   type CompatibilityWorkspaceSpec,
 } from "../compatibility.js";
 import { runDoctor } from "../commands/doctor.js";
+import { assertMutationApproved, mutationArgsSha256, mutationPlanDigest } from "../commands/mutation-approval.js";
 import {
   buildDaemonServicePlan,
   runDaemonServicePlan,
@@ -74,8 +87,6 @@ import {
 } from "../commands/heal-daemon.js";
 import { getManifestPath, getClipboardKeyPath } from "../paths.js";
 import { parseIntegerOption, renderKeyValueTable, renderList } from "../cli-utils.js";
-import { rmSync } from "node:fs";
-import { readFileSync } from "node:fs";
 import type {
   AppsDiffResult,
   AppsStatusResult,
@@ -400,20 +411,459 @@ program
 const manifestCommand = program.command("manifest").description("Manage the fleet manifest");
 const appsCommand = program.command("apps").description("Manage installed applications per machine");
 const notificationsCommand = program.command("notifications").description("Manage fleet alert delivery channels");
-const eventWebhooksCommand = registerWebhookCommands(program, { source: "machines" });
-eventWebhooksCommand.description("Manage shared event webhook subscriptions");
-const webhookTestCommand = eventWebhooksCommand.commands.find((command: Command) => command.name() === "test");
-const webhookOptions = (webhookTestCommand?.options ?? []) as Array<{ long?: string; defaultValue?: string }>;
-const webhookMessageOption = webhookOptions.find((option) => option.long === "--message");
-if (webhookMessageOption) {
-  webhookMessageOption.defaultValue = "Shared events test delivery";
-}
-const eventsCommand = registerEventCommands(program, { source: "machines" });
-eventsCommand.description("Emit, list, and replay shared events");
+const eventWebhooksCommand = program.command("webhooks").description("Manage shared event webhook subscriptions");
+const eventsCommand = program.command("events").description("Emit, list, and replay shared events");
 const runtimeCommand = program.command("runtime").description("Watch runtime conditions and emit shared events");
 const clipboardCommand = program.command("clipboard").description("Real-time clipboard sync across fleet machines");
 const installClaudeCommand = program.command("install-claude").description("Install or inspect Claude, Codex, and Gemini CLIs");
 const daemonCommand = program.command("daemon").description("Install and inspect the machines-agent fleet daemon service");
+const trustedNotificationApproval = createTrustedNotificationApproval();
+
+function cliMachineId(machineId: string | null | undefined): string {
+  return machineId?.trim() || "local";
+}
+
+function cliResourceId(kind: string, ...parts: Array<string | number | boolean | undefined | null>): string {
+  const values = parts
+    .map((part) => String(part ?? "*").trim())
+    .filter(Boolean)
+    .join(":");
+  return values ? `${kind}:${values}` : kind;
+}
+
+function cliMutationCallerId(): string {
+  return process.env["HASNA_MACHINES_MUTATION_CALLER_ID"]?.trim() || "cli";
+}
+
+function cliMutationRunId(): string {
+  return process.env["HASNA_MACHINES_MUTATION_RUN_ID"]?.trim() || "cli";
+}
+
+function requireCliMutation(
+  operation: string,
+  approvalToken: string | undefined,
+  scope: { machineId?: string | null; resourceId?: string | null; args?: unknown } = {},
+): void {
+  assertMutationApproved({
+    surface: "cli",
+    operation,
+    transport: "cli",
+    callerId: cliMutationCallerId(),
+    runId: cliMutationRunId(),
+    machineId: scope.machineId === undefined ? undefined : cliMachineId(scope.machineId),
+    resourceId: scope.resourceId === undefined || scope.resourceId === null ? undefined : scope.resourceId,
+    args: scope.args,
+    approvalToken,
+  });
+}
+
+function cliPlanApprovalArgs<T extends Record<string, unknown>>(args: T, plan: unknown): T & { plan_digest: string } {
+  return {
+    ...args,
+    plan_digest: mutationPlanDigest(plan),
+  };
+}
+
+function cliPlanResourceId(operation: string, machineId: string, plan: unknown): string {
+  return cliResourceId("plan", operation, machineId, mutationPlanDigest(plan));
+}
+
+function createEventsClient(): EventsClient {
+  return new EventsClient();
+}
+
+function eventStoreDir(): string {
+  return resolve(getEventsDataDir());
+}
+
+function eventStoreScope(): { event_store_dir: string } {
+  return { event_store_dir: eventStoreDir() };
+}
+
+function eventStoreResourceId(kind: string, ...parts: Array<string | number | boolean | undefined | null>): string {
+  return cliResourceId(kind, mutationArgsSha256(eventStoreScope()), ...parts);
+}
+
+function withEventStoreScope<T extends Record<string, unknown>>(args: T): T & { event_store_dir: string } {
+  return { event_store_dir: eventStoreDir(), ...args };
+}
+
+function readJsonArrayFile<T>(path: string): T[] {
+  if (!existsSync(path)) return [];
+  const raw = readFileSync(path, "utf8").trim();
+  if (!raw) return [];
+  const parsed = JSON.parse(raw);
+  if (!Array.isArray(parsed)) throw new Error(`Expected ${path} to contain a JSON array.`);
+  return parsed as T[];
+}
+
+function readEventChannelsWithoutInit(): ChannelConfig[] {
+  return readJsonArrayFile<ChannelConfig>(join(eventStoreDir(), "channels.json"));
+}
+
+function readEventsWithoutInit(): EventEnvelope[] {
+  return readJsonArrayFile<EventEnvelope>(join(eventStoreDir(), "events.json"));
+}
+
+function filterEventsForReplay(events: EventEnvelope[], options: { id?: string; source?: string; type?: string }): EventEnvelope[] {
+  return events.filter((event) => {
+    if (options.id && event.id !== options.id) return false;
+    if (options.source && event.source !== options.source) return false;
+    if (options.type && event.type !== options.type) return false;
+    return true;
+  });
+}
+
+function collectOptionValues(value: string, previous: string[] = []): string[] {
+  previous.push(value);
+  return previous;
+}
+
+function parseNumberOption(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) throw new Error(`Expected a finite number, got ${value}`);
+  return parsed;
+}
+
+function parseJsonObjectOption(value: string | undefined, fallback: Record<string, unknown>): Record<string, unknown> {
+  if (value === undefined) return fallback;
+  const parsed = JSON.parse(value);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Expected a JSON object.");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function parseHeaderOptions(values: string[] | undefined): Record<string, string> | undefined {
+  if (!values?.length) return undefined;
+  const headers: Record<string, string> = {};
+  for (const value of values) {
+    const separator = value.indexOf("=");
+    if (separator === -1) throw new Error(`Invalid header, expected name=value: ${value}`);
+    headers[value.slice(0, separator)] = value.slice(separator + 1);
+  }
+  return headers;
+}
+
+function buildEventFilter(options: {
+  source?: string;
+  type?: string;
+  subject?: string;
+  severity?: string;
+}): EventFilter[] | undefined {
+  const filter: EventFilter = {};
+  if (options.source) filter.source = options.source;
+  if (options.type) filter.type = options.type;
+  if (options.subject) filter.subject = options.subject;
+  if (options.severity) filter.severity = options.severity;
+  return Object.keys(filter).length > 0 ? [filter] : undefined;
+}
+
+function wantsCommandJson(options: { json?: boolean }, command: Command): boolean {
+  return Boolean(options.json || command.optsWithGlobals?.().json || command.parent?.optsWithGlobals?.().json || program.opts().quiet);
+}
+
+function printCommandResult(data: unknown, text: string, json: boolean): void {
+  if (json || program.opts().quiet) {
+    console.log(JSON.stringify(data, null, 2));
+    return;
+  }
+  console.log(text);
+}
+
+interface WebhookAddCliOptions {
+  id: string;
+  transport: "webhook" | "command" | string;
+  name?: string;
+  type?: string;
+  source?: string;
+  subject?: string;
+  severity?: string;
+  secret?: string;
+  header?: string[];
+  arg?: string[];
+  timeoutMs?: number;
+  retryAttempts?: number;
+  retryBackoffMs?: number;
+  redact?: string[];
+  disabled?: boolean;
+  approvalToken?: string;
+  json?: boolean;
+}
+
+interface WebhookTestCliOptions {
+  type: string;
+  subject?: string;
+  message: string;
+  data?: string;
+  approvalToken?: string;
+  json?: boolean;
+}
+
+interface EventsEmitCliOptions {
+  source?: string;
+  subject?: string;
+  severity: EventSeverity;
+  message?: string;
+  dedupeKey?: string;
+  data?: string;
+  metadata?: string;
+  deliver?: boolean;
+  dedupe?: boolean;
+  approvalToken?: string;
+  json?: boolean;
+}
+
+interface EventsReplayCliOptions {
+  id?: string;
+  source?: string;
+  type?: string;
+  dryRun?: boolean;
+  approvalToken?: string;
+  json?: boolean;
+}
+
+interface RuntimeTmuxWatchCliOptions {
+  intervalMs?: string;
+  maxChecks?: string;
+  once?: boolean;
+  deliver?: boolean;
+  approvalToken?: string;
+  json?: boolean;
+}
+
+function runtimeTmuxCommand(): string {
+  return process.env["HASNA_MACHINES_TMUX_BIN"]?.trim() || "tmux";
+}
+
+function runtimeTmuxEventTypes(once: boolean): string[] {
+  return once ? ["machines.tmux.pane_missing"] : ["machines.tmux.pane_died"];
+}
+
+eventWebhooksCommand
+  .command("add")
+  .description("Add or replace a webhook or command subscription")
+  .argument("<target>", "Webhook URL or command binary")
+  .requiredOption("--id <id>", "Subscription/channel identifier")
+  .option("--transport <kind>", "Transport kind: webhook or command", "webhook")
+  .option("--name <name>", "Display name")
+  .option("--type <pattern>", "Event type filter, e.g. todos.task.*")
+  .option("--source <pattern>", "Event source filter")
+  .option("--subject <pattern>", "Event subject filter")
+  .option("--severity <pattern>", "Event severity filter")
+  .option("--secret <secret>", "Webhook HMAC secret")
+  .option("--header <name=value...>", "Webhook header", collectOptionValues, [])
+  .option("--arg <arg...>", "Command argument", collectOptionValues, [])
+  .option("--timeout-ms <ms>", "Transport timeout in milliseconds", parseNumberOption)
+  .option("--retry-attempts <n>", "Maximum delivery attempts", parseNumberOption)
+  .option("--retry-backoff-ms <ms>", "Initial retry backoff in milliseconds", parseNumberOption)
+  .option("--redact <path...>", "Event field path to redact before delivery", collectOptionValues, [])
+  .option("--disabled", "Create channel disabled", false)
+  .option("--approval-token <token>", "Scoped mutation approval token")
+  .option("-j, --json", "Print JSON output", false)
+  .action(async (target: string, options: WebhookAddCliOptions, command: Command) => {
+    const headers = parseHeaderOptions(options.header);
+    const commandArgs = options.arg ?? [];
+    const redactPaths = options.redact ?? [];
+    const enabled = !options.disabled;
+    const filter = buildEventFilter(options);
+    const channel: Omit<ChannelConfig, "createdAt" | "updatedAt"> = {
+      id: options.id,
+      name: options.name,
+      enabled,
+      transport: options.transport as ChannelConfig["transport"],
+      filters: filter,
+      retry: options.retryAttempts || options.retryBackoffMs
+        ? { maxAttempts: options.retryAttempts, backoffMs: options.retryBackoffMs }
+        : undefined,
+      redact: redactPaths.length > 0 ? { paths: redactPaths } : undefined,
+    };
+    if (options.transport === "webhook") {
+      channel.webhook = { url: target, secret: options.secret, headers, timeoutMs: options.timeoutMs };
+    } else if (options.transport === "command") {
+      channel.command = { command: target, args: commandArgs, timeoutMs: options.timeoutMs };
+    } else {
+      throw new Error(`Transport ${options.transport} is reserved for future use and cannot be added yet`);
+    }
+
+    requireCliMutation("machines_webhooks_add", options.approvalToken, {
+      resourceId: eventStoreResourceId("webhook", options.id),
+      args: withEventStoreScope({
+        channel_id: options.id,
+        target,
+        transport: options.transport,
+        name: options.name,
+        event_type: options.type,
+        source: options.source,
+        subject: options.subject,
+        severity: options.severity,
+        secret: options.secret,
+        headers,
+        args: commandArgs,
+        timeout_ms: options.timeoutMs,
+        retry_attempts: options.retryAttempts,
+        retry_backoff_ms: options.retryBackoffMs,
+        redact: redactPaths,
+        enabled,
+      }),
+    });
+    const saved = await createEventsClient().addChannel(channel);
+    printCommandResult(sanitizeChannelForOutput(saved), `Added ${saved.transport} channel ${saved.id}`, wantsCommandJson(options, command));
+  });
+
+eventWebhooksCommand.command("list").description("List configured subscriptions").option("-j, --json", "Print JSON output", false).action(async (options: { json?: boolean }, command: Command) => {
+  const channels = readEventChannelsWithoutInit();
+  if (wantsCommandJson(options, command)) {
+    console.log(JSON.stringify(sanitizeChannelsForOutput(channels), null, 2));
+    return;
+  }
+  if (!channels.length) {
+    console.log("No channels configured.");
+    return;
+  }
+  for (const channel of channels) {
+    console.log(`${channel.id}\t${channel.enabled ? "enabled" : "disabled"}\t${channel.transport}\t${channel.webhook?.url ?? channel.command?.command ?? channel.transport}`);
+  }
+});
+
+eventWebhooksCommand
+  .command("remove")
+  .description("Remove a subscription")
+  .argument("<id>", "Subscription/channel identifier")
+  .option("--approval-token <token>", "Scoped mutation approval token")
+  .option("-j, --json", "Print JSON output", false)
+  .action(async (id: string, options: { approvalToken?: string; json?: boolean }, command: Command) => {
+    requireCliMutation("machines_webhooks_remove", options.approvalToken, {
+      resourceId: eventStoreResourceId("webhook", id),
+      args: withEventStoreScope({ channel_id: id }),
+    });
+    const removed = await createEventsClient().removeChannel(id);
+    printCommandResult({ removed }, removed ? `Removed ${id}` : `Channel not found: ${id}`, wantsCommandJson(options, command));
+  });
+
+eventWebhooksCommand
+  .command("test")
+  .description("Send a test event to one subscription")
+  .argument("<id>", "Subscription/channel identifier")
+  .option("--type <type>", "Event type", "events.test")
+  .option("--subject <subject>", "Event subject")
+  .option("--message <message>", "Event message", "Shared events test delivery")
+  .option("--data <json>", "Event data JSON object")
+  .option("--approval-token <token>", "Scoped mutation approval token")
+  .option("-j, --json", "Print JSON output", false)
+  .action(async (id: string, options: WebhookTestCliOptions, command: Command) => {
+    const data = parseJsonObjectOption(options.data, { test: true });
+    const subject = options.subject ?? id;
+    requireCliMutation("machines_webhooks_test", options.approvalToken, {
+      resourceId: eventStoreResourceId("webhook-test", id, options.type),
+      args: withEventStoreScope({ channel_id: id, event_type: options.type, subject, message: options.message, data }),
+    });
+    const result = await createEventsClient().testChannel(id, {
+      source: "machines",
+      type: options.type,
+      subject,
+      message: options.message,
+      data,
+    });
+    printCommandResult(result, `${result.status}: ${result.channelId}`, wantsCommandJson(options, command));
+  });
+
+eventsCommand
+  .command("emit")
+  .description("Emit an event from this app")
+  .argument("<type>", "Event type")
+  .option("--source <source>", "Event source override")
+  .option("--subject <subject>", "Event subject")
+  .option("--severity <severity>", "Event severity", "info")
+  .option("--message <message>", "Event message")
+  .option("--dedupe-key <key>", "Dedupe key")
+  .option("--data <json>", "Event data JSON object")
+  .option("--metadata <json>", "Event metadata JSON object")
+  .option("--no-deliver", "Record without delivering")
+  .option("--no-dedupe", "Allow duplicate id/dedupeKey events")
+  .option("--approval-token <token>", "Scoped mutation approval token")
+  .option("-j, --json", "Print JSON output", false)
+  .action(async (type: string, options: EventsEmitCliOptions, command: Command) => {
+    const source = options.source ?? "machines";
+    const data = parseJsonObjectOption(options.data, {});
+    const metadata = parseJsonObjectOption(options.metadata, {});
+    requireCliMutation("machines_events_emit", options.approvalToken, {
+      resourceId: eventStoreResourceId("event", type, options.subject, options.dedupeKey),
+      args: withEventStoreScope({
+        event_type: type,
+        source,
+        subject: options.subject,
+        severity: options.severity,
+        message: options.message,
+        data,
+        metadata,
+        dedupe_key: options.dedupeKey,
+        deliver: options.deliver,
+        dedupe: options.dedupe,
+      }),
+    });
+    const result = await createEventsClient().emit({
+      source,
+      type,
+      subject: options.subject,
+      severity: options.severity,
+      message: options.message,
+      dedupeKey: options.dedupeKey,
+      data,
+      metadata,
+    }, { deliver: options.deliver, dedupe: options.dedupe });
+    printCommandResult(result, `${result.deduped ? "Deduped" : "Emitted"} ${result.event.id} to ${result.deliveries.length} channel(s)`, wantsCommandJson(options, command));
+  });
+
+eventsCommand
+  .command("list")
+  .description("List recorded events")
+  .option("--source <source>", "Filter by source")
+  .option("--type <type>", "Filter by type")
+  .option("--limit <n>", "Limit results", parseNumberOption)
+  .option("-j, --json", "Print JSON output", false)
+  .action(async (options: { source?: string; type?: string; limit?: number; json?: boolean }, command: Command) => {
+    let rows = readEventsWithoutInit();
+    if (options.source) rows = rows.filter((event) => event.source === options.source);
+    if (options.type) rows = rows.filter((event) => event.type === options.type);
+    if (options.limit) rows = rows.slice(-options.limit);
+    if (wantsCommandJson(options, command)) {
+      console.log(JSON.stringify(rows, null, 2));
+      return;
+    }
+    if (!rows.length) {
+      console.log("No events recorded.");
+      return;
+    }
+    for (const event of rows) {
+      console.log(`${event.time}\t${event.id}\t${event.source}\t${event.type}\t${event.severity}`);
+    }
+  });
+
+eventsCommand
+  .command("replay")
+  .description("Replay recorded events")
+  .option("--id <id>", "Replay one event id")
+  .option("--source <source>", "Filter by source")
+  .option("--type <type>", "Filter by type")
+  .option("--dry-run", "Preview without delivery", false)
+  .option("--approval-token <token>", "Scoped mutation approval token")
+  .option("-j, --json", "Print JSON output", false)
+  .action(async (options: EventsReplayCliOptions, command: Command) => {
+    if (options.dryRun !== true) {
+      requireCliMutation("machines_events_replay", options.approvalToken, {
+        resourceId: eventStoreResourceId("event-replay", options.id, options.source, options.type),
+        args: withEventStoreScope({ event_id: options.id, source: options.source, event_type: options.type, dry_run: false }),
+      });
+    }
+    const result = options.dryRun === true ? { events: filterEventsForReplay(readEventsWithoutInit(), options), deliveries: [] } : await createEventsClient().replay({
+      eventId: options.id,
+      source: options.source,
+      type: options.type,
+      dryRun: options.dryRun,
+    });
+    printCommandResult(result, `Replayed ${result.events.length} event(s), ${result.deliveries.length} delivery result(s)`, wantsCommandJson(options, command));
+  });
 
 function addDaemonLifecycleCommand(action: DaemonServiceAction, description: string): void {
   daemonCommand
@@ -430,6 +880,7 @@ function addDaemonLifecycleCommand(action: DaemonServiceAction, description: str
     .option("--env <name...>", "Environment variable names to include as placeholders")
     .option("--apply", "Write service files and run planned commands", false)
     .option("--yes", "Confirm execution when using --apply", false)
+    .option("--approval-token <token>", "Scoped mutation approval token")
     .option("-j, --json", "Print JSON output", false)
     .action((options: {
       platform?: string;
@@ -443,9 +894,14 @@ function addDaemonLifecycleCommand(action: DaemonServiceAction, description: str
       env?: string[];
       apply?: boolean;
       yes?: boolean;
+      approvalToken?: string;
       json?: boolean;
     }) => {
-      const plan = buildDaemonServicePlan(parseDaemonOptions(action, options));
+      const planOptions = parseDaemonOptions(action, options);
+      const plan = buildDaemonServicePlan(planOptions);
+      if (options.apply) {
+        requireCliMutation(`daemon_${action}`, options.approvalToken, { resourceId: cliResourceId("daemon", action, options.serviceName), args: planOptions });
+      }
       const result = runDaemonServicePlan(plan, { apply: options.apply, yes: options.yes });
       if (options.json || options.apply) {
         console.log(JSON.stringify(result, null, 2));
@@ -461,9 +917,12 @@ addDaemonLifecycleCommand("restart", "Plan or restart the machines-agent daemon 
 addDaemonLifecycleCommand("status", "Plan a daemon service status command");
 addDaemonLifecycleCommand("logs", "Plan a daemon service log command");
 
-manifestCommand.command("init").description("Create an empty fleet manifest").action(() => {
-  console.log(manifestInit());
-});
+manifestCommand.command("init").description("Create an empty fleet manifest")
+  .option("--approval-token <token>", "Scoped mutation approval token")
+  .action((options: { approvalToken?: string }) => {
+    requireCliMutation("manifest_init", options.approvalToken, { resourceId: "manifest:init", args: {} });
+    console.log(manifestInit());
+  });
 
 manifestCommand.command("path").description("Print the manifest path").action(() => {
   console.log(getManifestPath());
@@ -477,9 +936,12 @@ manifestCommand.command("validate").description("Validate the fleet manifest").a
   console.log(JSON.stringify(manifestValidate(), null, 2));
 });
 
-manifestCommand.command("bootstrap").description("Detect and upsert the current machine into the manifest").action(() => {
-  console.log(JSON.stringify(manifestBootstrapCurrentMachine(), null, 2));
-});
+manifestCommand.command("bootstrap").description("Detect and upsert the current machine into the manifest")
+  .option("--approval-token <token>", "Scoped mutation approval token")
+  .action((options: { approvalToken?: string }) => {
+    requireCliMutation("manifest_bootstrap", options.approvalToken, { resourceId: "manifest:bootstrap", args: {} });
+    console.log(JSON.stringify(manifestBootstrapCurrentMachine(), null, 2));
+  });
 
 manifestCommand
   .command("get")
@@ -499,7 +961,9 @@ manifestCommand
   .command("remove")
   .description("Remove a machine from the manifest")
   .argument("<id>", "Machine identifier")
-  .action((id: string) => {
+  .option("--approval-token <token>", "Scoped mutation approval token")
+  .action((id: string, options: { approvalToken?: string }) => {
+    requireCliMutation("manifest_remove", options.approvalToken, { machineId: id, args: { machine_id: id } });
     console.log(JSON.stringify(manifestRemove(id), null, 2));
   });
 
@@ -520,6 +984,7 @@ manifestCommand
   .option("--file <spec...>", "File sync spec source:target[:copy|symlink]")
   .option("--metadata <json>", "Machine metadata as JSON")
   .option("--from-stdin", "Read the full MachineManifest JSON from stdin")
+  .option("--approval-token <token>", "Scoped mutation approval token")
   .action((options: Record<string, string | string[] | boolean | undefined>) => {
     const fromStdin = Boolean(options["fromStdin"] || options["from-stdin"]);
     if (fromStdin) {
@@ -529,6 +994,7 @@ manifestCommand
       }
       const input = readFileSync(0, "utf8");
       const machine = JSON.parse(input) as MachineManifest;
+      requireCliMutation("manifest_add", typeof options["approvalToken"] === "string" ? options["approvalToken"] : undefined, { machineId: machine.id, args: machine });
       console.log(JSON.stringify(manifestAdd(machine), null, 2));
       return;
     }
@@ -576,6 +1042,7 @@ manifestCommand
       apps,
       files,
     };
+    requireCliMutation("manifest_add", typeof options["approvalToken"] === "string" ? options["approvalToken"] : undefined, { machineId: machine.id, args: machine });
     console.log(JSON.stringify(manifestAdd(machine), null, 2));
   });
 
@@ -623,8 +1090,16 @@ appsCommand
   .description("Install manifest-managed apps for a machine")
   .option("--machine <id>", "Machine identifier")
   .option("--yes", "Confirm execution", false)
-  .action((options: { machine?: string; yes?: boolean }) => {
-    const result = runAppsInstall(options.machine, { apply: true, yes: options.yes });
+  .option("--approval-token <token>", "Scoped mutation approval token")
+  .action((options: { machine?: string; yes?: boolean; approvalToken?: string }) => {
+    const resolvedMachineId = cliMachineId(options.machine);
+    const plan = buildAppsPlan(options.machine);
+    requireCliMutation("apps_apply", options.approvalToken, {
+      machineId: resolvedMachineId,
+      resourceId: cliPlanResourceId("apps_apply", resolvedMachineId, plan),
+      args: cliPlanApprovalArgs({ machine_id: resolvedMachineId, yes: options.yes }, plan),
+    });
+    const result = runAppsPlan(plan, { apply: true, yes: options.yes });
     console.log(JSON.stringify(result, null, 2));
   });
 
@@ -634,9 +1109,22 @@ program
   .option("--machine <id>", "Machine identifier")
   .option("--apply", "Execute provisioning commands instead of previewing the plan", false)
   .option("--yes", "Confirm execution when using --apply", false)
+  .option("--approval-token <token>", "Scoped mutation approval token")
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine?: string; apply?: boolean; yes?: boolean; json?: boolean }) => {
-    const result = options.apply ? runSetup(options.machine, { apply: true, yes: options.yes }) : buildSetupPlan(options.machine);
+  .action((options: { machine?: string; apply?: boolean; yes?: boolean; approvalToken?: string; json?: boolean }) => {
+    if (options.apply) {
+      const resolvedMachineId = cliMachineId(options.machine);
+      const plan = buildSetupPlan(options.machine);
+      requireCliMutation("setup_apply", options.approvalToken, {
+        machineId: resolvedMachineId,
+        resourceId: cliPlanResourceId("setup_apply", resolvedMachineId, plan),
+        args: cliPlanApprovalArgs({ machine_id: resolvedMachineId, yes: options.yes }, plan),
+      });
+      const result = runSetupPlan(plan, { apply: true, yes: options.yes });
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    const result = buildSetupPlan(options.machine);
     console.log(JSON.stringify(result, null, 2));
   });
 
@@ -646,9 +1134,22 @@ program
   .option("--machine <id>", "Machine identifier")
   .option("--apply", "Execute reconciliation commands instead of previewing the plan", false)
   .option("--yes", "Confirm execution when using --apply", false)
+  .option("--approval-token <token>", "Scoped mutation approval token")
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine?: string; apply?: boolean; yes?: boolean; json?: boolean }) => {
-    const result = options.apply ? runSync(options.machine, { apply: true, yes: options.yes }) : buildSyncPlan(options.machine);
+  .action((options: { machine?: string; apply?: boolean; yes?: boolean; approvalToken?: string; json?: boolean }) => {
+    if (options.apply) {
+      const resolvedMachineId = cliMachineId(options.machine);
+      const plan = buildSyncPlan(options.machine);
+      requireCliMutation("sync_apply", options.approvalToken, {
+        machineId: resolvedMachineId,
+        resourceId: cliPlanResourceId("sync_apply", resolvedMachineId, plan),
+        args: cliPlanApprovalArgs({ machine_id: resolvedMachineId, yes: options.yes }, plan),
+      });
+      const result = runSyncPlan(plan, { apply: true, yes: options.yes });
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    const result = buildSyncPlan(options.machine);
     console.log(JSON.stringify(result, null, 2));
   });
 
@@ -792,6 +1293,7 @@ workspaceCommand
   .option("--apply", "Write the mappings into the manifest", false)
   .option("--allow-untrusted", "Allow writing mappings for machines not marked trusted", false)
   .option("--no-tailscale", "Skip tailscale status probing")
+  .option("--approval-token <token>", "Scoped mutation approval token")
   .option("-j, --json", "Print JSON output", false)
   .action((options: {
     machine: string;
@@ -804,8 +1306,20 @@ workspaceCommand
     apply?: boolean;
     allowUntrusted?: boolean;
     tailscale?: boolean;
+    approvalToken?: string;
     json?: boolean;
   }) => {
+    if (options.apply) requireCliMutation("workspace_repair", options.approvalToken, { machineId: options.machine, args: {
+      machine: options.machine,
+      project: options.project,
+      repo: options.repo,
+      openFilesRepo: options.openFilesRepo,
+      workspaceRoot: options.workspaceRoot,
+      projectRoot: options.projectRoot,
+      openFilesRoot: options.openFilesRoot,
+      allowUntrusted: options.allowUntrusted,
+      tailscale: options.tailscale,
+    } });
     const result = repairWorkspaceManifestMappings({
       machineId: options.machine,
       projectId: options.project,
@@ -840,8 +1354,13 @@ program
   .option("--prefix <prefix>", "S3 key prefix; defaults to HASNA_MACHINES_S3_PREFIX, MACHINES_S3_PREFIX, or machines")
   .option("--apply", "Execute backup commands instead of previewing the plan", false)
   .option("--yes", "Confirm execution when using --apply", false)
+  .option("--approval-token <token>", "Scoped mutation approval token")
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { bucket?: string; prefix?: string; apply?: boolean; yes?: boolean; json?: boolean }) => {
+  .action((options: { bucket?: string; prefix?: string; apply?: boolean; yes?: boolean; approvalToken?: string; json?: boolean }) => {
+    if (options.apply) {
+      const target = resolveBackupTarget({ bucket: options.bucket, prefix: options.prefix });
+      requireCliMutation("backup_apply", options.approvalToken, { resourceId: cliResourceId("backup", target.bucket, target.prefix), args: { bucket: target.bucket, prefix: target.prefix, yes: options.yes } });
+    }
     const result = options.apply
       ? runBackup(options.bucket, options.prefix, { apply: true, yes: options.yes })
       : buildBackupPlan(options.bucket, options.prefix);
@@ -856,8 +1375,10 @@ certCommand
   .argument("<domains...>", "Domains to include in the certificate")
   .option("--apply", "Execute certificate commands instead of previewing them", false)
   .option("--yes", "Confirm execution when using --apply", false)
+  .option("--approval-token <token>", "Scoped mutation approval token")
   .option("-j, --json", "Print JSON output", false)
-  .action((domains: string[], options: { apply?: boolean; yes?: boolean; json?: boolean }) => {
+  .action((domains: string[], options: { apply?: boolean; yes?: boolean; approvalToken?: string; json?: boolean }) => {
+    if (options.apply) requireCliMutation("cert_apply", options.approvalToken, { resourceId: cliResourceId("cert", domains.join(",")), args: { domains, yes: options.yes } });
     const result = options.apply ? runCertPlan(domains, { apply: true, yes: options.yes }) : buildCertPlan(domains);
     console.log(JSON.stringify(result, null, 2));
   });
@@ -870,9 +1391,12 @@ dnsCommand
   .requiredOption("--domain <domain>", "Domain name")
   .requiredOption("--port <port>", "Target port")
   .option("--target-host <host>", "Target host", "127.0.0.1")
+  .option("--approval-token <token>", "Scoped mutation approval token")
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { domain: string; port: string; targetHost: string; json?: boolean }) => {
-    const result = addDomainMapping(options.domain, parseIntegerOption(options.port, "port", { min: 1, max: 65535 }), options.targetHost);
+  .action((options: { domain: string; port: string; targetHost: string; approvalToken?: string; json?: boolean }) => {
+    const port = parseIntegerOption(options.port, "port", { min: 1, max: 65535 });
+    requireCliMutation("dns_add", options.approvalToken, { resourceId: cliResourceId("dns", options.domain), args: { domain: options.domain, port, target_host: options.targetHost } });
+    const result = addDomainMapping(options.domain, port, options.targetHost);
     console.log(JSON.stringify(result, null, 2));
   });
 
@@ -894,18 +1418,25 @@ notificationsCommand
   .description("Add or replace a notification channel")
   .requiredOption("--id <id>", "Channel identifier")
   .requiredOption("--type <type>", "email | webhook | command")
-  .requiredOption("--target <target>", "Email, webhook URL, or shell command")
+  .requiredOption("--target <target>", "Email, webhook URL, or command executable")
+  .option("--arg <arg...>", "Command argument for command transports", collectOptionValues, [])
   .option("--event <event...>", "Events routed to this channel", ["setup_failed", "sync_failed"])
   .option("--disabled", "Create the channel in disabled state", false)
+  .option("--approval-token <token>", "Operator mutation approval token for command transports")
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { id: string; type: "email" | "webhook" | "command"; target: string; event: string[]; disabled?: boolean; json?: boolean }) => {
+  .action((options: { id: string; type: "email" | "webhook" | "command"; target: string; arg?: string[]; event: string[]; disabled?: boolean; approvalToken?: string; json?: boolean }) => {
+    const enabled = !options.disabled;
+    const events = [...new Set(options.event)];
+    const commandArgs = options.arg ?? [];
+    requireCliMutation("notifications_add", options.approvalToken, { resourceId: cliResourceId("notification", options.id), args: { id: options.id, type: options.type, target: options.target, args: commandArgs, event: events, enabled } });
     const result = addNotificationChannel({
       id: options.id,
       type: options.type,
       target: options.target,
-      events: options.event,
-      enabled: !options.disabled,
-    });
+      commandArgs: options.type === "command" && commandArgs.length > 0 ? commandArgs : undefined,
+      events,
+      enabled,
+    }, { trustedApproval: trustedNotificationApproval });
     printJsonOrText(result, renderNotificationConfigResult(result), options.json);
   });
 
@@ -922,11 +1453,14 @@ notificationsCommand
   .option("--message <message>", "Test message", "machines notification test")
   .option("--apply", "Execute the notification test instead of previewing it", false)
   .option("--yes", "Confirm execution when using --apply", false)
+  .option("--approval-token <token>", "Operator mutation approval token for command transports")
   .option("-j, --json", "Print JSON output", false)
-  .action(async (options: { channel: string; event: string; message: string; apply?: boolean; yes?: boolean; json?: boolean }) => {
+  .action(async (options: { channel: string; event: string; message: string; apply?: boolean; yes?: boolean; approvalToken?: string; json?: boolean }) => {
+    if (options.apply) requireCliMutation("notifications_test", options.approvalToken, { resourceId: cliResourceId("notification-test", options.channel, options.event), args: { channel: options.channel, event: options.event, message: options.message, yes: options.yes } });
     const result = await testNotificationChannel(options.channel, options.event, options.message, {
       apply: options.apply,
       yes: options.yes,
+      trustedApproval: options.apply === true ? trustedNotificationApproval : undefined,
     });
     printJsonOrText(result, renderNotificationTestResult(result), options.json);
   });
@@ -937,9 +1471,11 @@ notificationsCommand
   .requiredOption("--event <name>", "Event name")
   .requiredOption("--message <message>", "Message body")
   .option("--channel <id>", "Limit delivery to one channel")
+  .option("--approval-token <token>", "Operator mutation approval token for command transports")
   .option("-j, --json", "Print JSON output", false)
-  .action(async (options: { event: string; message: string; channel?: string; json?: boolean }) => {
-    const result = await dispatchNotificationEvent(options.event, options.message, { channelId: options.channel });
+  .action(async (options: { event: string; message: string; channel?: string; approvalToken?: string; json?: boolean }) => {
+    requireCliMutation("notifications_dispatch", options.approvalToken, { resourceId: cliResourceId("notification-dispatch", options.channel, options.event), args: { event: options.event, message: options.message, channel: options.channel } });
+    const result = await dispatchNotificationEvent(options.event, options.message, { channelId: options.channel, trustedApproval: trustedNotificationApproval });
     printJsonOrText(result, renderNotificationDispatchResult(result), options.json);
   });
 
@@ -947,10 +1483,35 @@ notificationsCommand
   .command("remove")
   .description("Remove a notification channel")
   .argument("<id>", "Channel identifier")
+  .option("--approval-token <token>", "Scoped mutation approval token")
   .option("-j, --json", "Print JSON output", false)
-  .action((id: string, options: { json?: boolean }) => {
+  .action((id: string, options: { approvalToken?: string; json?: boolean }) => {
+    requireCliMutation("notifications_remove", options.approvalToken, { resourceId: cliResourceId("notification", id), args: { id } });
     const result = removeNotificationChannel(id);
     printJsonOrText(result, renderNotificationConfigResult(result), options.json);
+  });
+
+runtimeCommand
+  .command("tmux-hook-plan")
+  .description("Print a tmux pane-died hook command that emits machines events")
+  .option("--machines-command <command>", "machines CLI executable", "machines")
+  .option("--tmux-command <command>", "tmux executable")
+  .option("--deliver", "Deliver webhooks from the hook instead of recording only", false)
+  .option("--approval-token <token>", "Scoped mutation token for the generated events emit command")
+  .option("--trusted-local-mutation", "Include process-local trusted mutation env when no approval token is supplied", false)
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { machinesCommand?: string; tmuxCommand?: string; deliver?: boolean; approvalToken?: string; trustedLocalMutation?: boolean; json?: boolean }) => {
+    if (!options.approvalToken && options.trustedLocalMutation !== true) {
+      throw new Error("tmux-hook-plan requires --approval-token or explicit --trusted-local-mutation.");
+    }
+    const result = buildTmuxPaneDiedHookPlan({
+      machinesCommand: options.machinesCommand,
+      tmuxCommand: options.tmuxCommand,
+      deliver: options.deliver,
+      approvalToken: options.approvalToken,
+      trustedLocalMutation: options.trustedLocalMutation,
+    });
+    printJsonOrText(result, result.shellCommand, options.json);
   });
 
 runtimeCommand
@@ -961,19 +1522,44 @@ runtimeCommand
   .option("--max-checks <n>", "Stop after N checks instead of watching forever")
   .option("--once", "Probe once and emit machines.tmux.pane_missing when absent", false)
   .option("--no-deliver", "Record the event without webhook delivery")
+  .option("--approval-token <token>", "Scoped mutation approval token for event delivery")
   .option("-j, --json", "Print JSON output", false)
-  .action(async (target: string, options: { intervalMs?: string; maxChecks?: string; once?: boolean; deliver?: boolean; json?: boolean }) => {
+  .action(async (target: string, options: RuntimeTmuxWatchCliOptions) => {
+    const normalizedTarget = target.trim();
+    if (!normalizedTarget) throw new Error("tmux pane target is required");
+    const intervalMs = parseIntegerOption(options.intervalMs ?? "5000", "interval-ms", { min: 0 });
     const maxChecks = options.once
       ? 1
       : options.maxChecks
         ? parseIntegerOption(options.maxChecks, "max-checks", { min: 1 })
         : undefined;
+    const once = Boolean(options.once);
+    const deliver = options.deliver !== false;
+    const tmuxCommand = runtimeTmuxCommand();
+    const eventTypes = runtimeTmuxEventTypes(once);
+    const scopedIntervalMs = once ? undefined : intervalMs;
+    if (deliver) {
+      requireCliMutation("machines_runtime_tmux_watch_deliver", options.approvalToken, {
+        resourceId: eventStoreResourceId("runtime-tmux-watch", normalizedTarget, eventTypes.join(",")),
+        args: withEventStoreScope({
+          target: normalizedTarget,
+          event_types: eventTypes,
+          interval_ms: scopedIntervalMs,
+          max_checks: maxChecks,
+          once,
+          emit_initial_missing: once,
+          deliver: true,
+          tmux_command: tmuxCommand,
+        }),
+      });
+    }
     const result = await watchTmuxPane({
-      target,
-      intervalMs: parseIntegerOption(options.intervalMs ?? "5000", "interval-ms", { min: 0 }),
+      target: normalizedTarget,
+      intervalMs,
       maxChecks,
-      emitInitialMissing: Boolean(options.once),
-      deliver: options.deliver !== false,
+      emitInitialMissing: once,
+      deliver,
+      tmuxCommand,
       onProbe: options.json ? undefined : (probe) => {
         const status = probe.exists ? chalk.green("present") : chalk.yellow("missing");
         console.error(`tmux ${probe.target}: ${status}${probe.paneId ? ` ${probe.paneId}` : ""}`);
@@ -1135,9 +1721,17 @@ installClaudeCommand
   .option("--machine <id>", "Machine identifier")
   .option("--tool <name...>", "CLI tools to install (claude, codex, gemini)")
   .option("--yes", "Confirm execution when using apply", false)
+  .option("--approval-token <token>", "Scoped mutation approval token")
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine?: string; tool?: string[]; yes?: boolean; json?: boolean }) => {
-    const result = runClaudeInstall(options.machine, options.tool, { apply: true, yes: options.yes });
+  .action((options: { machine?: string; tool?: string[]; yes?: boolean; approvalToken?: string; json?: boolean }) => {
+    const resolvedMachineId = cliMachineId(options.machine);
+    const plan = buildClaudeInstallPlan(options.machine, options.tool);
+    requireCliMutation("install_claude_apply", options.approvalToken, {
+      machineId: resolvedMachineId,
+      resourceId: cliPlanResourceId("install_claude_apply", resolvedMachineId, plan),
+      args: cliPlanApprovalArgs({ machine_id: resolvedMachineId, tools: options.tool, yes: options.yes }, plan),
+    });
+    const result = runClaudeInstallPlan(plan, { apply: true, yes: options.yes });
     console.log(JSON.stringify(result, null, 2));
   });
 
@@ -1147,11 +1741,22 @@ program
   .option("--machine <id>", "Machine identifier")
   .option("--apply", "Execute installation commands instead of previewing the plan", false)
   .option("--yes", "Confirm execution when using --apply", false)
+  .option("--approval-token <token>", "Scoped mutation approval token")
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine?: string; apply?: boolean; yes?: boolean; json?: boolean }) => {
-    const result = options.apply
-      ? runTailscaleInstall(options.machine, { apply: true, yes: options.yes })
-      : buildTailscaleInstallPlan(options.machine);
+  .action((options: { machine?: string; apply?: boolean; yes?: boolean; approvalToken?: string; json?: boolean }) => {
+    if (options.apply) {
+      const resolvedMachineId = cliMachineId(options.machine);
+      const plan = buildTailscaleInstallPlan(options.machine);
+      requireCliMutation("install_tailscale_apply", options.approvalToken, {
+        machineId: resolvedMachineId,
+        resourceId: cliPlanResourceId("install_tailscale_apply", resolvedMachineId, plan),
+        args: cliPlanApprovalArgs({ machine_id: resolvedMachineId, yes: options.yes }, plan),
+      });
+      const result = runTailscaleInstallPlan(plan, { apply: true, yes: options.yes });
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    const result = buildTailscaleInstallPlan(options.machine);
     console.log(JSON.stringify(result, null, 2));
   });
 
@@ -1364,30 +1969,36 @@ storageCommand.command("status").description("Show storage sync status").option(
   ]), options.json);
 });
 
-storageCommand.command("push").description("Push local machine runtime data to storage PostgreSQL").option("--tables <tables>", "Comma-separated table names").option("-j, --json", "Print JSON output", false).action(async (options: { tables?: string; json?: boolean }) => {
+storageCommand.command("push").description("Push local machine runtime data to storage PostgreSQL").option("--tables <tables>", "Comma-separated table names").option("--approval-token <token>", "Scoped mutation approval token").option("-j, --json", "Print JSON output", false).action(async (options: { tables?: string; approvalToken?: string; json?: boolean }) => {
   try {
-    const { parseStorageTables, storagePush } = await import("../storage.js");
-    const results = await storagePush({ tables: parseStorageTables(options.tables) });
+    const { parseStorageTables, resolveTables, storagePush } = await import("../storage.js");
+    const tables = resolveTables(parseStorageTables(options.tables));
+    requireCliMutation("storage_push", options.approvalToken, { resourceId: cliResourceId("storage-push", tables.join(",")), args: { tables } });
+    const results = await storagePush({ tables });
     printStorageResults(results, options.json);
   } catch (error) {
     printStorageError(error);
   }
 });
 
-storageCommand.command("pull").description("Pull machine runtime data from storage PostgreSQL to local SQLite").option("--tables <tables>", "Comma-separated table names").option("-j, --json", "Print JSON output", false).action(async (options: { tables?: string; json?: boolean }) => {
+storageCommand.command("pull").description("Pull machine runtime data from storage PostgreSQL to local SQLite").option("--tables <tables>", "Comma-separated table names").option("--approval-token <token>", "Scoped mutation approval token").option("-j, --json", "Print JSON output", false).action(async (options: { tables?: string; approvalToken?: string; json?: boolean }) => {
   try {
-    const { parseStorageTables, storagePull } = await import("../storage.js");
-    const results = await storagePull({ tables: parseStorageTables(options.tables) });
+    const { parseStorageTables, resolveTables, storagePull } = await import("../storage.js");
+    const tables = resolveTables(parseStorageTables(options.tables));
+    requireCliMutation("storage_pull", options.approvalToken, { resourceId: cliResourceId("storage-pull", tables.join(",")), args: { tables } });
+    const results = await storagePull({ tables });
     printStorageResults(results, options.json);
   } catch (error) {
     printStorageError(error);
   }
 });
 
-storageCommand.command("sync").description("Bidirectional storage sync: pull then push").option("--tables <tables>", "Comma-separated table names").option("-j, --json", "Print JSON output", false).action(async (options: { tables?: string; json?: boolean }) => {
+storageCommand.command("sync").description("Bidirectional storage sync: pull then push").option("--tables <tables>", "Comma-separated table names").option("--approval-token <token>", "Scoped mutation approval token").option("-j, --json", "Print JSON output", false).action(async (options: { tables?: string; approvalToken?: string; json?: boolean }) => {
   try {
-    const { parseStorageTables, storageSync } = await import("../storage.js");
-    const result = await storageSync({ tables: parseStorageTables(options.tables) });
+    const { parseStorageTables, resolveTables, storageSync } = await import("../storage.js");
+    const tables = resolveTables(parseStorageTables(options.tables));
+    requireCliMutation("storage_sync", options.approvalToken, { resourceId: cliResourceId("storage-sync", tables.join(",")), args: { tables } });
+    const result = await storageSync({ tables });
     if (options.json) {
       console.log(JSON.stringify(result, null, 2));
       return;
@@ -1428,7 +2039,7 @@ program
 program
   .command("serve")
   .description("Serve a local fleet dashboard and JSON API")
-  .option("--host <host>", "Host interface to bind", "0.0.0.0")
+  .option("--host <host>", "Host interface to bind", "127.0.0.1")
   .option("--port <port>", "Port to bind", "7676")
   .option("-j, --json", "Print serve config and exit", false)
   .action((options: { host: string; port: string; json?: boolean }) => {

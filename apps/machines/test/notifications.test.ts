@@ -9,10 +9,14 @@ import {
   removeNotificationChannel,
   testNotificationChannel,
 } from "../src/commands/notifications.js";
+import { MUTATION_APPROVAL_FLAG_ENV } from "../src/commands/mutation-approval.js";
 
 describe("notifications", () => {
   afterEach(() => {
     delete process.env["HASNA_MACHINES_NOTIFICATIONS_PATH"];
+    delete process.env[MUTATION_APPROVAL_FLAG_ENV];
+    delete process.env["HASNA_MACHINES_MUTATION_APPROVAL"];
+    delete process.env["HASNA_MACHINES_MUTATION_TOKEN"];
   });
 
   test("adds and lists channels", () => {
@@ -53,14 +57,17 @@ describe("notifications", () => {
   test("dispatches command notifications", async () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-notify-command-"));
     process.env["HASNA_MACHINES_NOTIFICATIONS_PATH"] = join(dir, "notifications.json");
+    process.env[MUTATION_APPROVAL_FLAG_ENV] = "1";
 
     addNotificationChannel({
       id: "local",
       type: "command",
-      target: "printf 'ok:%s' \"$HASNA_MACHINES_NOTIFICATION_EVENT\"",
+      target: "/bin/sh",
+      commandArgs: ["-c", "printf 'ok:%s' \"$HASNA_MACHINES_NOTIFICATION_EVENT\""],
       events: ["manual.test"],
       enabled: true,
     });
+    expect(listNotificationChannels().channels[0]?.commandArgs).toEqual(["-c", "printf 'ok:%s' \"$HASNA_MACHINES_NOTIFICATION_EVENT\""]);
 
     const result = await testNotificationChannel("local", "manual.test", "hello", { apply: true, yes: true });
     expect(result.mode).toBe("apply");
@@ -70,6 +77,47 @@ describe("notifications", () => {
     const summary = await dispatchNotificationEvent("manual.test", "hello");
     expect(summary.deliveries).toHaveLength(1);
     expect(summary.deliveries[0]?.delivered).toBe(true);
+  });
+
+  test("blocks command notification add and dispatch without mutation approval", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-notify-command-blocked-"));
+    process.env["HASNA_MACHINES_NOTIFICATIONS_PATH"] = join(dir, "notifications.json");
+
+    expect(() => addNotificationChannel({
+      id: "local",
+      type: "command",
+      target: "/bin/sh",
+      commandArgs: ["-c", "printf ok"],
+      events: ["manual.test"],
+      enabled: true,
+    })).toThrow("requires operator approval");
+    expect(() => addNotificationChannel({
+      id: "local",
+      type: "command",
+      target: "/bin/sh",
+      commandArgs: ["-c", "printf ok"],
+      events: ["manual.test"],
+      enabled: true,
+    }, { approved: true } as never)).toThrow("requires operator approval");
+
+    process.env[MUTATION_APPROVAL_FLAG_ENV] = "1";
+    addNotificationChannel({
+      id: "local",
+      type: "command",
+      target: "/bin/sh",
+      commandArgs: ["-c", "printf ok"],
+      events: ["manual.test"],
+      enabled: true,
+    });
+    delete process.env[MUTATION_APPROVAL_FLAG_ENV];
+
+    await expect(testNotificationChannel("local", "manual.test", "hello", { apply: true, yes: true }))
+      .rejects.toThrow("requires operator approval");
+
+    const summary = await dispatchNotificationEvent("manual.test", "hello");
+    expect(summary.deliveries).toHaveLength(1);
+    expect(summary.deliveries[0]?.delivered).toBe(false);
+    expect(summary.deliveries[0]?.detail).toContain("requires operator approval");
   });
 
   test("dispatches webhook notifications", async () => {
@@ -105,11 +153,13 @@ describe("notifications", () => {
   test("removes channels", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-notify-"));
     process.env["HASNA_MACHINES_NOTIFICATIONS_PATH"] = join(dir, "notifications.json");
+    process.env[MUTATION_APPROVAL_FLAG_ENV] = "1";
 
     addNotificationChannel({
       id: "local",
       type: "command",
-      target: "echo ok",
+      target: "/bin/echo",
+      commandArgs: ["ok"],
       events: ["manual.test"],
       enabled: true,
     });

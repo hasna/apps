@@ -68,6 +68,7 @@ export interface AgentHeartbeat {
 export interface SetupResult {
   machineId: string;
   mode: "plan" | "apply";
+  planDigest?: string;
   steps: SetupStep[];
   executed: number;
 }
@@ -83,6 +84,7 @@ export interface SetupStep {
 export interface SyncResult {
   machineId: string;
   mode: "plan" | "apply";
+  planDigest?: string;
   actions: SyncAction[];
   executed: number;
 }
@@ -141,6 +143,7 @@ export interface NotificationChannel {
   id: string;
   type: NotificationChannelType;
   target: string;
+  commandArgs?: string[];
   events: string[];
   enabled: boolean;
 }

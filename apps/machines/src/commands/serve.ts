@@ -1,14 +1,16 @@
-import { EventsClient, sanitizeChannelsForOutput } from "@hasna/events";
+import { EventsClient, getEventsDataDir, sanitizeChannelsForOutput } from "@hasna/events";
+import { resolve } from "node:path";
 import { diffApps, getAppsStatus } from "./apps.js";
 import { runDoctor } from "./doctor.js";
 import { diffClaudeCli, getClaudeCliStatus } from "./install-claude.js";
 import { getAgentStatus } from "../agent/runtime.js";
 import { PRIVATE_OUTPUT_DENIED_WARNING, isPrivateOutputEnabled } from "../redaction.js";
 import { discoverMachineTopology, redactRouteForOutput, redactTopologyForOutput, resolveMachineRoute } from "../topology.js";
-import { listNotificationChannels, testNotificationChannel } from "./notifications.js";
+import { createTrustedNotificationApproval, listNotificationChannels, testNotificationChannel } from "./notifications.js";
 import { manifestList } from "./manifest.js";
 import { runSelfTest } from "./self-test.js";
 import { getStatus } from "./status.js";
+import { MUTATION_APPROVAL_CALLER_ENV, MUTATION_APPROVAL_RUN_ENV, mutationArgsSha256, verifyMutationApprovalToken } from "./mutation-approval.js";
 
 export interface ServeOptions {
   host?: string;
@@ -32,7 +34,7 @@ function escapeHtml(value: string): string {
 }
 
 export function getServeInfo(options: ServeOptions = {}): ServeInfo {
-  const host = options.host || "0.0.0.0";
+  const host = options.host || "127.0.0.1";
   const port = options.port || 7676;
   return {
     host,
@@ -248,6 +250,80 @@ function jsonError(message: string, status = 400): Response {
   return Response.json({ error: message }, { status });
 }
 
+function dashboardResourceId(kind: string, ...parts: Array<string | number | boolean | undefined | null>): string {
+  const values = parts
+    .map((part) => String(part ?? "*").trim())
+    .filter(Boolean)
+    .join(":");
+  return values ? `${kind}:${values}` : kind;
+}
+
+function eventStoreDir(): string {
+  return resolve(getEventsDataDir());
+}
+
+function eventStoreScope(): { event_store_dir: string } {
+  return { event_store_dir: eventStoreDir() };
+}
+
+function eventStoreResourceId(kind: string, ...parts: Array<string | number | boolean | undefined | null>): string {
+  return dashboardResourceId(kind, mutationArgsSha256(eventStoreScope()), ...parts);
+}
+
+function withEventStoreScope<T extends Record<string, unknown>>(args: T): T & { event_store_dir: string } {
+  return { event_store_dir: eventStoreDir(), ...args };
+}
+
+function dashboardMutationCallerId(): string {
+  return process.env[MUTATION_APPROVAL_CALLER_ENV]?.trim() || "dashboard";
+}
+
+function dashboardMutationRunId(): string {
+  return process.env[MUTATION_APPROVAL_RUN_ENV]?.trim() || "dashboard";
+}
+
+function approvalTokenFromRequest(request: Request, body: Record<string, unknown>): string | undefined {
+  const bodyToken = typeof body["approval_token"] === "string"
+    ? body["approval_token"]
+    : typeof body["approvalToken"] === "string"
+      ? body["approvalToken"]
+      : undefined;
+  if (bodyToken?.trim()) return bodyToken;
+
+  const headerToken = request.headers.get("x-hasna-approval-token")?.trim();
+  if (headerToken) return headerToken;
+
+  const authorization = request.headers.get("authorization")?.trim();
+  if (authorization?.toLowerCase().startsWith("bearer ")) {
+    return authorization.slice("bearer ".length).trim();
+  }
+  return undefined;
+}
+
+function requireDashboardMutation(
+  operation: string,
+  request: Request,
+  body: Record<string, unknown>,
+  scope: { resourceId?: string; args?: unknown } = {},
+): Response | undefined {
+  const decision = verifyMutationApprovalToken({
+    surface: "dashboard",
+    operation,
+    transport: "dashboard:http",
+    callerId: dashboardMutationCallerId(),
+    runId: dashboardMutationRunId(),
+    resourceId: scope.resourceId,
+    args: scope.args,
+    approvalToken: approvalTokenFromRequest(request, body),
+  });
+  if (decision.approved) return undefined;
+  return jsonError(`Mutation approval denied: ${decision.reason ?? "approval_token is invalid."}`, 403);
+}
+
+function objectBodyValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
 function privateOutputWarnings(requested: boolean, allowed: boolean): string[] {
   return requested && !allowed ? [PRIVATE_OUTPUT_DENIED_WARNING] : [];
 }
@@ -260,6 +336,7 @@ function appendWarnings<T extends { warnings?: string[] }>(payload: T, warnings:
 export function startDashboardServer(options: ServeOptions = {}): ReturnType<typeof Bun.serve> {
   const info = getServeInfo(options);
   const events = new EventsClient();
+  const trustedNotificationApproval = createTrustedNotificationApproval();
   return Bun.serve({
     hostname: info.host,
     port: info.port,
@@ -325,8 +402,24 @@ export function startDashboardServer(options: ServeOptions = {}): ReturnType<typ
         const severity = typeof body["severity"] === "string" ? body["severity"] : undefined;
         const message = typeof body["message"] === "string" ? body["message"] : undefined;
         const dedupeKey = typeof body["dedupeKey"] === "string" ? body["dedupeKey"] : undefined;
-        const data = body["data"] && typeof body["data"] === "object" && !Array.isArray(body["data"]) ? body["data"] as Record<string, unknown> : {};
-        const metadata = body["metadata"] && typeof body["metadata"] === "object" && !Array.isArray(body["metadata"]) ? body["metadata"] as Record<string, unknown> : {};
+        const data = objectBodyValue(body["data"]);
+        const metadata = objectBodyValue(body["metadata"]);
+        const denied = requireDashboardMutation("machines_events_emit", request, body, {
+          resourceId: eventStoreResourceId("event", type, subject, dedupeKey),
+          args: withEventStoreScope({
+            event_type: type,
+            source,
+            subject,
+            severity,
+            message,
+            data,
+            metadata,
+            dedupe_key: dedupeKey,
+            deliver: true,
+            dedupe: true,
+          }),
+        });
+        if (denied) return denied;
         return Response.json(await events.emit({
           source,
           type,
@@ -369,8 +462,19 @@ export function startDashboardServer(options: ServeOptions = {}): ReturnType<typ
         const message = typeof body["message"] === "string" ? body["message"] : undefined;
         const apply = body["apply"] === true;
         const yes = body["yes"] === true;
+        const resolvedEvent = event ?? "manual.test";
+        const resolvedMessage = message ?? "machines notification test";
+        const denied = requireDashboardMutation("machines_notifications_test", request, body, {
+          resourceId: dashboardResourceId("notification-test", channelId, resolvedEvent),
+          args: { channel_id: channelId, event: resolvedEvent, message: resolvedMessage, apply, yes },
+        });
+        if (denied) return denied;
         try {
-          return Response.json(await testNotificationChannel(channelId, event, message, { apply, yes }));
+          return Response.json(await testNotificationChannel(channelId, resolvedEvent, resolvedMessage, {
+            apply,
+            yes,
+            trustedApproval: apply ? trustedNotificationApproval : undefined,
+          }));
         } catch (error) {
           return jsonError(error instanceof Error ? error.message : String(error));
         }
@@ -385,13 +489,21 @@ export function startDashboardServer(options: ServeOptions = {}): ReturnType<typ
           return jsonError("channelId is required.");
         }
         const type = typeof body["type"] === "string" ? body["type"] : "events.test";
-        const message = typeof body["message"] === "string" ? body["message"] : undefined;
+        const subject = channelId;
+        const message = typeof body["message"] === "string" ? body["message"] : "Hasna events test delivery";
+        const data = objectBodyValue(body["data"]);
+        const denied = requireDashboardMutation("machines_webhooks_test", request, body, {
+          resourceId: eventStoreResourceId("webhook-test", channelId, type),
+          args: withEventStoreScope({ channel_id: channelId, event_type: type, subject, message, data }),
+        });
+        if (denied) return denied;
         try {
           return Response.json(await events.testChannel(channelId, {
             source: "machines",
             type,
-            subject: channelId,
+            subject,
             message,
+            data,
           }));
         } catch (error) {
           return jsonError(error instanceof Error ? error.message : String(error));

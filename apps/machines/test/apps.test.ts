@@ -133,4 +133,34 @@ describe("apps", () => {
     expect(result.executed).toBe(1);
     expect(calls).toEqual(["remote-mac:brew install --cask 'ghostty'"]);
   });
+
+  test("rejects stale expected plan digests before running app install commands", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-apps-plan-digest-"));
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "local-fixture";
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
+    manifestInit();
+    manifestAdd({
+      id: "remote-mac",
+      platform: "macos",
+      workspacePath: "/Users/operator/Workspace",
+      apps: [],
+    });
+    const approvedPlan = buildAppsPlan("remote-mac");
+    manifestAdd({
+      id: "remote-mac",
+      platform: "macos",
+      workspacePath: "/Users/operator/Workspace",
+      apps: [{ name: "ghostty", manager: "cask" }],
+    });
+
+    const calls: string[] = [];
+    const runner: MachineCommandRunner = (machineId, command) => {
+      calls.push(`${machineId}:${command}`);
+      return { machineId, source: "ssh", stdout: "", stderr: "", exitCode: 0 };
+    };
+
+    expect(() => runAppsInstall("remote-mac", { apply: true, yes: true, expectedPlanDigest: approvedPlan.planDigest }, runner))
+      .toThrow("Approved plan digest");
+    expect(calls).toEqual([]);
+  });
 });

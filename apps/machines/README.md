@@ -23,6 +23,12 @@ Endpoints on `127.0.0.1` only:
 - `GET /health` → `{"status":"ok","name":"machines"}`
 - `POST /mcp` → MCP Streamable HTTP
 
+HTTP mode rejects browser requests with untrusted `Origin` headers, caps JSON
+bodies at `MACHINES_HTTP_MAX_BODY_BYTES` (default 1 MiB), and requires either
+`MACHINES_API_KEY` or loopback-only `MACHINES_ALLOW_UNAUTHENTICATED=1`. Use
+`MACHINES_HTTP_ALLOWED_ORIGINS=https://ops.example` for an explicit browser
+origin allowlist.
+
 ## Manifest
 
 `machines.json` is the desired fleet declaration.
@@ -373,6 +379,7 @@ machines install-tailscale --machine mac-lab-01 --json
 
 ```bash
 machines notifications add --id ops --type webhook --target https://example.com/hook --event sync_failed
+machines notifications add --id cmd --type command --target /bin/sh --arg -c --arg 'printf "%s\n" "$HASNA_MACHINES_NOTIFICATION_EVENT"'
 machines notifications list
 machines notifications test --channel ops
 machines notifications test --channel ops --apply --yes
@@ -381,7 +388,9 @@ machines notifications dispatch --event manual.test --message "hello fleet"
 
 - `email` channels deliver through local `sendmail` or `mail` when available
 - `webhook` channels deliver JSON via HTTP POST
-- `command` channels execute the configured command with `HASNA_MACHINES_NOTIFICATION_*` env vars
+- `command` channels execute an explicit command executable plus optional `--arg`
+  values with `HASNA_MACHINES_NOTIFICATION_*` env vars; use `/bin/sh -c ...`
+  explicitly if a shell is required
 
 ## Runtime Events
 
@@ -390,19 +399,31 @@ events without sending keys, killing panes, or changing tmux state.
 
 ```bash
 machines runtime tmux-watch %11 --once --json
-machines runtime tmux-watch session:0.1 --interval-ms 5000
+machines runtime tmux-watch session:0.1 --interval-ms 5000 --approval-token "$TOKEN"
+machines runtime tmux-hook-plan --trusted-local-mutation --json
+machines runtime tmux-hook-plan --approval-token "$TOKEN"
 machines webhooks add https://example.com/hook --id tmux-alerts --type machines.tmux.pane_died
 ```
 
 When a pane was present and later disappears, the command records
 `machines.tmux.pane_died`. With `--once`, a missing pane records
 `machines.tmux.pane_missing`; add `--no-deliver` to record without webhook
-delivery.
+delivery. Runtime event delivery requires a scoped mutation approval token; local
+no-deliver recording remains available for diagnostics.
+
+`machines runtime tmux-hook-plan` prints a native tmux `pane-died` hook command
+for operators that prefer tmux hooks over polling. It is read-only and does not
+install hooks. Pass `--approval-token` when you want the generated hook command
+to be scoped to a short-lived approval token, or pass
+`--trusted-local-mutation` to generate a process-local
+`HASNA_MACHINES_ALLOW_MUTATIONS=1` prefix for local event recording.
 
 ## Dashboard
 
 ```bash
 machines serve --json
+machines serve --port 7676
+# Explicitly expose beyond loopback only on a trusted network:
 machines serve --host 0.0.0.0 --port 7676
 ```
 
@@ -416,13 +437,15 @@ The dashboard exposes:
 - `/api/daemon/status` daemon heartbeat rows
 - `/api/manifest` current manifest JSON
 - `/api/notifications` notification channel JSON
+- `/api/webhooks` shared event webhook channel JSON
+- `/api/events` shared event JSON
 - `/api/doctor` doctor report JSON
 - `/api/self-test` smoke-check JSON
 - `/api/apps/status` app inventory JSON
 - `/api/apps/diff` app drift JSON
 - `/api/install-claude/status` CLI inventory JSON
 - `/api/install-claude/diff` CLI drift JSON
-- `/api/notifications/test` POST endpoint for test delivery
+- `/api/events`, `/api/notifications/test`, `/api/webhooks/test` POST mutation routes require scoped dashboard mutation approval tokens
 
 ## Local development
 

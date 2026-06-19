@@ -93,4 +93,27 @@ describe("sync planning", () => {
     expect(calls.every((call) => call.startsWith("remote-mac:"))).toBe(true);
     expect(calls.some((call) => call.includes("brew install 'ripgrep'"))).toBe(true);
   });
+
+  test("rejects stale expected plan digests before applying file sync actions", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-sync-plan-digest-"));
+    const source = join(dir, "source.txt");
+    const target = join(dir, "target.txt");
+    writeFileSync(source, "approved", "utf8");
+    writeFileSync(target, "approved", "utf8");
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "local-fixture";
+    manifestInit();
+    manifestAdd({
+      id: "local-fixture",
+      platform: "linux",
+      workspacePath: "/home/operator/workspace",
+      files: [{ source, target, mode: "copy" }],
+    });
+    const approvedPlan = buildSyncPlan("local-fixture");
+
+    writeFileSync(target, "drifted", "utf8");
+    expect(() => runSync("local-fixture", { apply: true, yes: true, expectedPlanDigest: approvedPlan.planDigest }))
+      .toThrow("Approved plan digest");
+    expect(readFileSync(target, "utf8")).toBe("drifted");
+  });
 });

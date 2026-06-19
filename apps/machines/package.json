@@ -1,6 +1,6 @@
 {
   "name": "@hasna/machines",
-  "version": "0.0.45",
+  "version": "0.0.46",
   "description": "Machine fleet management CLI + MCP for developers",
   "type": "module",
   "license": "Apache-2.0",
@@ -28,7 +28,8 @@
   "files": [
     "dist",
     "schemas",
-    "scripts",
+    "scripts/consumer-conformance.mjs",
+    "LICENSE",
     "README.md"
   ],
   "scripts": {
@@ -36,10 +37,11 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "smoke:consumer-conformance": "bun scripts/consumer-conformance.mjs",
+    "verify:release": "bun run typecheck && bun test && bun run build && bun run smoke:consumer-conformance && bun run scripts/verify-release.ts",
     "dev": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:agent": "bun run src/agent/index.ts",
-    "prepublishOnly": "bun run build",
+    "prepublishOnly": "bun run verify:release",
     "postinstall": "mkdir -p $HOME/.hasna/machines 2>/dev/null || true"
   },
   "keywords": [

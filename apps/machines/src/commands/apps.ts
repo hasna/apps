@@ -1,4 +1,5 @@
 import { detectCurrentMachineManifest, getManifestMachine } from "../manifests.js";
+import { assertMutationPlanDigest, attachMutationPlanDigest } from "./mutation-approval.js";
 import { requireMachineCommandSuccess, runMachineCommand, type MachineCommandRunner } from "../remote.js";
 import type {
   AppsDiffResult,
@@ -119,12 +120,18 @@ export function listApps(machineId?: string): { machineId: string; apps: Manifes
 
 export function buildAppsPlan(machineId?: string): SetupResult {
   const machine = resolveMachine(machineId);
-  return {
+  return attachMutationPlanDigest({
     machineId: machine.id,
     mode: "plan",
     steps: buildAppSteps(machine),
     executed: 0,
-  };
+  });
+}
+
+export interface RunAppsInstallOptions {
+  apply?: boolean;
+  yes?: boolean;
+  expectedPlanDigest?: string;
 }
 
 export function getAppsStatus(machineId?: string, runner: MachineCommandRunner = runMachineCommand): AppsStatusResult {
@@ -152,11 +159,20 @@ export function diffApps(machineId?: string, runner: MachineCommandRunner = runM
 
 export function runAppsInstall(
   machineId?: string,
-  options: { apply?: boolean; yes?: boolean } = {},
+  options: RunAppsInstallOptions = {},
   runner: MachineCommandRunner = runMachineCommand
 ): SetupResult {
   const plan = buildAppsPlan(machineId);
-  if (!options.apply) return plan;
+  return runAppsPlan(plan, options, runner);
+}
+
+export function runAppsPlan(
+  plan: SetupResult,
+  options: RunAppsInstallOptions = {},
+  runner: MachineCommandRunner = runMachineCommand
+): SetupResult {
+  assertMutationPlanDigest(plan, options.expectedPlanDigest);
+  if (!options.apply) return attachMutationPlanDigest({ ...plan, mode: "plan", executed: 0 });
   if (!options.yes) {
     throw new Error("App installation requires --yes.");
   }
@@ -167,10 +183,10 @@ export function runAppsInstall(
     executed += 1;
   }
 
-  return {
+  return attachMutationPlanDigest({
     machineId: plan.machineId,
     mode: "apply",
     steps: plan.steps,
     executed,
-  };
+  });
 }

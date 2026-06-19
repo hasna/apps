@@ -8,8 +8,25 @@ export interface ResolvedSshTarget {
   warnings: string[];
 }
 
+export interface SshCommandPlan extends ResolvedSshTarget {
+  command: "ssh";
+  args: string[];
+  shellCommand: string;
+}
+
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+export function validateSshTarget(target: string): string {
+  const trimmed = target.trim();
+  if (!trimmed || trimmed.startsWith("-") || /[\s"'`$\\;&|<>()[\]{}]/.test(trimmed)) {
+    throw new Error(`Unsafe SSH target: ${target}`);
+  }
+  if (!/^(?:[A-Za-z0-9._%+-]+@)?[A-Za-z0-9._:-]+$/.test(trimmed)) {
+    throw new Error(`Unsafe SSH target: ${target}`);
+  }
+  return trimmed;
 }
 
 export function resolveSshTarget(machineId: string, options: MachineRouteOptions = {}): ResolvedSshTarget {
@@ -22,7 +39,7 @@ export function resolveSshTarget(machineId: string, options: MachineRouteOptions
   }
   return {
     machineId: resolved.machine_id ?? machineId,
-    target: resolved.command_target ?? resolved.target,
+    target: validateSshTarget(resolved.command_target ?? resolved.target),
     route: resolved.route,
     confidence: resolved.confidence,
     warnings: resolved.warnings,
@@ -30,6 +47,21 @@ export function resolveSshTarget(machineId: string, options: MachineRouteOptions
 }
 
 export function buildSshCommand(machineId: string, remoteCommand?: string, options: MachineRouteOptions = {}): string {
+  return buildSshCommandPlan(machineId, remoteCommand, options).shellCommand;
+}
+
+export function buildSshCommandArgs(machineId: string, remoteCommand?: string, options: MachineRouteOptions = {}): string[] {
+  return buildSshCommandPlan(machineId, remoteCommand, options).args;
+}
+
+export function buildSshCommandPlan(machineId: string, remoteCommand?: string, options: MachineRouteOptions = {}): SshCommandPlan {
   const resolved = resolveSshTarget(machineId, options);
-  return remoteCommand ? `ssh ${resolved.target} ${shellQuote(remoteCommand)}` : `ssh ${resolved.target}`;
+  const args = remoteCommand ? [resolved.target, remoteCommand] : [resolved.target];
+  const shellCommand = `ssh ${args.map(shellQuote).join(" ")}`;
+  return {
+    ...resolved,
+    command: "ssh",
+    args,
+    shellCommand,
+  };
 }

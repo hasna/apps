@@ -33,6 +33,63 @@ export interface TmuxWatchResult {
   emitted?: EmitResult;
 }
 
+export interface TmuxPaneDiedHookPlan {
+  tmuxCommand: string;
+  args: string[];
+  shellCommand: string;
+  eventType: "machines.tmux.pane_died";
+  deliver: boolean;
+  trustedLocalMutation: boolean;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+export function buildTmuxPaneDiedHookPlan(options: {
+  tmuxCommand?: string;
+  machinesCommand?: string;
+  deliver?: boolean;
+  approvalToken?: string;
+  trustedLocalMutation?: boolean;
+} = {}): TmuxPaneDiedHookPlan {
+  const tmuxCommand = options.tmuxCommand ?? process.env["HASNA_MACHINES_TMUX_BIN"] ?? "tmux";
+  const machinesCommand = options.machinesCommand ?? "machines";
+  const deliver = options.deliver === true;
+  const approvalToken = options.approvalToken?.trim();
+  const trustedLocalMutation = approvalToken ? false : options.trustedLocalMutation === true;
+  const emitArgs = [
+    "events",
+    "emit",
+    "machines.tmux.pane_died",
+    "--source",
+    "machines",
+    "--subject",
+    "tmux:#{hook_pane}",
+    "--severity",
+    "warning",
+    "--message",
+    "tmux pane died: #{hook_pane}",
+    "--data",
+    "{\"target\":\"#{hook_pane}\",\"session\":\"#{session_name}\",\"window\":\"#{window_index}\"}",
+  ];
+  if (!deliver) emitArgs.push("--no-deliver");
+  if (approvalToken) emitArgs.push("--approval-token", approvalToken);
+  const command = [machinesCommand, ...emitArgs].map(shellQuote).join(" ");
+  const runShell = trustedLocalMutation
+    ? `HASNA_MACHINES_ALLOW_MUTATIONS=1 ${command}`
+    : command;
+  const args = ["set-hook", "-g", "pane-died", `run-shell ${shellQuote(runShell)}`];
+  return {
+    tmuxCommand,
+    args,
+    shellCommand: [tmuxCommand, ...args].map(shellQuote).join(" "),
+    eventType: "machines.tmux.pane_died",
+    deliver,
+    trustedLocalMutation,
+  };
+}
+
 export function probeTmuxPane(target: string, tmuxCommand = process.env["HASNA_MACHINES_TMUX_BIN"] || "tmux"): TmuxPaneProbeResult {
   const checkedAt = new Date().toISOString();
   const result = spawnSync(tmuxCommand, ["display-message", "-p", "-t", target, "#{pane_id}"], {

@@ -14,10 +14,20 @@ export * from "./commands/dns.js";
 export * from "./commands/daemon.js";
 export * from "./commands/doctor.js";
 export * from "./commands/manifest.js";
+export * from "./commands/mutation-approval.js";
 export * from "./commands/diff.js";
 export * from "./commands/install-claude.js";
 export * from "./commands/install-tailscale.js";
-export * from "./commands/notifications.js";
+export {
+  addNotificationChannel,
+  dispatchNotificationEvent,
+  getDefaultNotificationConfig,
+  listNotificationChannels,
+  readNotificationConfig,
+  removeNotificationChannel,
+  testNotificationChannel,
+  writeNotificationConfig,
+} from "./commands/notifications.js";
 export * from "./commands/ports.js";
 export * from "./commands/runtime.js";
 export * from "./commands/self-test.js";

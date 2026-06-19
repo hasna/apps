@@ -75,4 +75,34 @@ describe("setup planning", () => {
     expect(calls.some((call) => call.includes("AutomaticallyInstallMacOSUpdates -int 0"))).toBe(true);
     expect(calls.some((call) => call.includes("profiles status -type enrollment"))).toBe(true);
   });
+
+  test("rejects stale expected plan digests before running setup commands", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-setup-plan-digest-"));
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "local-fixture";
+    manifestInit();
+    manifestAdd({
+      id: "remote-mac",
+      platform: "macos",
+      workspacePath: "/Users/operator/Workspace",
+      packages: [],
+    });
+    const approvedPlan = buildSetupPlan("remote-mac");
+    manifestAdd({
+      id: "remote-mac",
+      platform: "macos",
+      workspacePath: "/Users/operator/Workspace",
+      packages: [{ name: "ripgrep", manager: "brew" }],
+    });
+
+    const calls: string[] = [];
+    const runner: MachineCommandRunner = (machineId, command) => {
+      calls.push(`${machineId}:${command}`);
+      return { machineId, source: "ssh", stdout: "", stderr: "", exitCode: 0 };
+    };
+
+    expect(() => runSetup("remote-mac", { apply: true, yes: true, expectedPlanDigest: approvedPlan.planDigest }, runner))
+      .toThrow("Approved plan digest");
+    expect(calls).toEqual([]);
+  });
 });

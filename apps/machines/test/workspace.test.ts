@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { manifestAdd, manifestInit } from "../src/commands/manifest.js";
+import { MUTATION_APPROVAL_FLAG_ENV } from "../src/commands/mutation-approval.js";
 import { repairWorkspaceManifestMappings } from "../src/commands/workspace.js";
 import { readManifest } from "../src/manifests.js";
 import { resolveMachineWorkspace } from "../src/topology.js";
@@ -11,6 +12,7 @@ import { resolveMachineWorkspace } from "../src/topology.js";
 const ENV_KEYS = [
   "HASNA_MACHINES_MANIFEST_PATH",
   "HASNA_MACHINES_MACHINE_ID",
+  MUTATION_APPROVAL_FLAG_ENV,
 ] as const;
 
 afterEach(() => {
@@ -96,6 +98,7 @@ describe("workspace resolver CLI", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-workspace-doctor-untrusted-"));
     try {
       process.env.HASNA_MACHINES_MANIFEST_PATH = join(dir, "machines.json");
+      process.env[MUTATION_APPROVAL_FLAG_ENV] = "1";
       manifestInit();
       manifestAdd({
         id: "demo-node-01",
@@ -152,6 +155,7 @@ describe("workspace resolver CLI", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-workspace-doctor-missing-"));
     try {
       process.env.HASNA_MACHINES_MANIFEST_PATH = join(dir, "machines.json");
+      process.env[MUTATION_APPROVAL_FLAG_ENV] = "1";
       manifestInit();
 
       const resolved = resolveMachineWorkspace({
@@ -277,6 +281,7 @@ describe("workspace resolver CLI", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-workspace-repair-cli-"));
     try {
       process.env.HASNA_MACHINES_MANIFEST_PATH = join(dir, "machines.json");
+      process.env[MUTATION_APPROVAL_FLAG_ENV] = "1";
       manifestInit();
       manifestAdd({
         id: "demo-node-01",

@@ -7,6 +7,7 @@ export class SqliteAdapter {
 
   constructor(path: string) {
     this.raw = new Database(path);
+    this.raw.exec("PRAGMA busy_timeout = 5000");
   }
 
   close(): void {
@@ -77,6 +78,25 @@ function createTables(db: Database): void {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS mutation_approval_nonces (
+      nonce_sha256 TEXT PRIMARY KEY,
+      token_sha256 TEXT NOT NULL,
+      surface TEXT NOT NULL,
+      operation TEXT NOT NULL,
+      caller_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      transport TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      used_at INTEGER NOT NULL
+    )
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS mutation_approval_nonces_expires_at_idx
+    ON mutation_approval_nonces (expires_at)
   `);
 }
 

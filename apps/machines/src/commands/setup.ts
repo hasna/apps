@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { readManifest } from "../manifests.js";
 import { getLocalMachineId, recordSetupRun } from "../db.js";
+import { assertMutationPlanDigest, attachMutationPlanDigest } from "./mutation-approval.js";
 import { describeMachineCommandFailure, runMachineCommand, type MachineCommandRunner } from "../remote.js";
 import type { MachineManifest, SetupResult, SetupStep } from "../types.js";
 
@@ -118,22 +119,37 @@ export function buildSetupPlan(machineId?: string): SetupResult {
 
   const steps = [...buildBaseSteps(target), ...buildPackageSteps(target)];
 
-  return {
+  return attachMutationPlanDigest({
     machineId: target.id,
     mode: "plan",
     steps,
     executed: 0,
-  };
+  });
+}
+
+export interface RunSetupOptions {
+  apply?: boolean;
+  yes?: boolean;
+  expectedPlanDigest?: string;
 }
 
 export function runSetup(
   machineId?: string,
-  options: { apply?: boolean; yes?: boolean } = {},
+  options: RunSetupOptions = {},
   runner: MachineCommandRunner = runMachineCommand
 ): SetupResult {
   const plan = buildSetupPlan(machineId);
+  return runSetupPlan(plan, options, runner);
+}
+
+export function runSetupPlan(
+  plan: SetupResult,
+  options: RunSetupOptions = {},
+  runner: MachineCommandRunner = runMachineCommand
+): SetupResult {
+  assertMutationPlanDigest(plan, options.expectedPlanDigest);
   if (!options.apply) {
-    return plan;
+    return attachMutationPlanDigest({ ...plan, mode: "plan", executed: 0 });
   }
 
   if (!options.yes) {
@@ -157,12 +173,12 @@ export function runSetup(
     executed += 1;
   }
 
-  const summary: SetupResult = {
+  const summary: SetupResult = attachMutationPlanDigest({
     machineId: plan.machineId,
     mode: "apply",
     steps: plan.steps,
     executed,
-  };
+  });
   recordSetupRun(plan.machineId, "completed", summary);
   return summary;
 }

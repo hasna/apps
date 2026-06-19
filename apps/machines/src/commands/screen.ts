@@ -1,4 +1,4 @@
-import { buildSshCommand } from "./ssh.js";
+import { buildSshCommandPlan } from "./ssh.js";
 import {
   discoverMachineTopology,
   resolveMachineRoute,
@@ -33,6 +33,10 @@ export interface ScreenEnableCommandPlan {
   user: string;
   passwordSecretKey: string;
   remoteCommand: string;
+  secretsCommand: string;
+  secretsCommandArgs: string[];
+  sshCommand: string;
+  sshCommandArgs: string[];
   command: string;
 }
 
@@ -207,11 +211,17 @@ export function buildScreenEnableCommand(machineId: string, options: ScreenEnabl
   }
   const secretsCommand = options.secretsCommand || "secrets";
   const remoteCommand = buildScreenEnableRemoteCommandFromStdin(credentials.user);
+  const secretsCommandArgs = [secretsCommand, "get", credentials.passwordSecretKey];
+  const sshPlan = buildSshCommandPlan(machineId, remoteCommand, options);
   return {
     machineId: credentials.machineId,
     user: credentials.user,
     passwordSecretKey: credentials.passwordSecretKey,
     remoteCommand,
-    command: `${shellCommand([secretsCommand, "get", credentials.passwordSecretKey])} | ${buildSshCommand(machineId, remoteCommand, options)}`,
+    secretsCommand,
+    secretsCommandArgs,
+    sshCommand: sshPlan.command,
+    sshCommandArgs: sshPlan.args,
+    command: `${shellCommand(secretsCommandArgs)} | ${sshPlan.shellCommand}`,
   };
 }

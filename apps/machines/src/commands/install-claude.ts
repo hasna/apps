@@ -1,4 +1,5 @@
 import { detectCurrentMachineManifest, getManifestMachine } from "../manifests.js";
+import { assertMutationPlanDigest, attachMutationPlanDigest } from "./mutation-approval.js";
 import { requireMachineCommandSuccess, runMachineCommand, type MachineCommandRunner } from "../remote.js";
 import type { ClaudeCliDiffResult, ClaudeCliStatusResult, CliToolStatus, MachineManifest, SetupResult, SetupStep } from "../types.js";
 
@@ -66,12 +67,12 @@ function parseProbe(tool: AiCliTool, stdout: string): CliToolStatus {
 
 export function buildClaudeInstallPlan(machineId?: string, tools?: string[]): SetupResult {
   const machine = resolveMachine(machineId);
-  return {
+  return attachMutationPlanDigest({
     machineId: machine.id,
     mode: "plan",
     steps: buildInstallSteps(machine, tools),
     executed: 0,
-  };
+  });
 }
 
 export function getClaudeCliStatus(
@@ -105,14 +106,29 @@ export function diffClaudeCli(
   };
 }
 
+export interface RunClaudeInstallOptions {
+  apply?: boolean;
+  yes?: boolean;
+  expectedPlanDigest?: string;
+}
+
 export function runClaudeInstall(
   machineId?: string,
   tools?: string[],
-  options: { apply?: boolean; yes?: boolean } = {},
+  options: RunClaudeInstallOptions = {},
   runner: MachineCommandRunner = runMachineCommand
 ): SetupResult {
   const plan = buildClaudeInstallPlan(machineId, tools);
-  if (!options.apply) return plan;
+  return runClaudeInstallPlan(plan, options, runner);
+}
+
+export function runClaudeInstallPlan(
+  plan: SetupResult,
+  options: RunClaudeInstallOptions = {},
+  runner: MachineCommandRunner = runMachineCommand
+): SetupResult {
+  assertMutationPlanDigest(plan, options.expectedPlanDigest);
+  if (!options.apply) return attachMutationPlanDigest({ ...plan, mode: "plan", executed: 0 });
   if (!options.yes) {
     throw new Error("Claude CLI installation requires --yes.");
   }
@@ -123,10 +139,10 @@ export function runClaudeInstall(
     executed += 1;
   }
 
-  return {
+  return attachMutationPlanDigest({
     machineId: plan.machineId,
     mode: "apply",
     steps: plan.steps,
     executed,
-  };
+  });
 }

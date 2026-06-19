@@ -1,4 +1,5 @@
 import { getManifestMachine, detectCurrentMachineManifest } from "../manifests.js";
+import { assertMutationPlanDigest, attachMutationPlanDigest } from "./mutation-approval.js";
 import { requireMachineCommandSuccess, runMachineCommand, type MachineCommandRunner } from "../remote.js";
 import type { MachineManifest, SetupResult, SetupStep } from "../types.js";
 
@@ -41,21 +42,36 @@ export function buildTailscaleInstallPlan(machineId?: string): SetupResult {
   if (!machine) {
     throw new Error(`Machine not found in manifest: ${machineId}`);
   }
-  return {
+  return attachMutationPlanDigest({
     machineId: machine.id,
     mode: "plan",
     steps: buildInstallSteps(machine),
     executed: 0,
-  };
+  });
+}
+
+export interface RunTailscaleInstallOptions {
+  apply?: boolean;
+  yes?: boolean;
+  expectedPlanDigest?: string;
 }
 
 export function runTailscaleInstall(
   machineId?: string,
-  options: { apply?: boolean; yes?: boolean } = {},
+  options: RunTailscaleInstallOptions = {},
   runner: MachineCommandRunner = runMachineCommand
 ): SetupResult {
   const plan = buildTailscaleInstallPlan(machineId);
-  if (!options.apply) return plan;
+  return runTailscaleInstallPlan(plan, options, runner);
+}
+
+export function runTailscaleInstallPlan(
+  plan: SetupResult,
+  options: RunTailscaleInstallOptions = {},
+  runner: MachineCommandRunner = runMachineCommand
+): SetupResult {
+  assertMutationPlanDigest(plan, options.expectedPlanDigest);
+  if (!options.apply) return attachMutationPlanDigest({ ...plan, mode: "plan", executed: 0 });
   if (!options.yes) {
     throw new Error("Tailscale install requires --yes.");
   }
@@ -66,10 +82,10 @@ export function runTailscaleInstall(
     executed += 1;
   }
 
-  return {
+  return attachMutationPlanDigest({
     machineId: plan.machineId,
     mode: "apply",
     steps: plan.steps,
     executed,
-  };
+  });
 }

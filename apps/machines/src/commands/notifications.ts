@@ -1,6 +1,8 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { delimiter, isAbsolute, join } from "node:path";
 import { z } from "zod";
 import { ensureParentDir, getNotificationsPath } from "../paths.js";
+import { assertMutationApproved } from "./mutation-approval.js";
 import type {
   NotificationChannel,
   NotificationConfig,
@@ -13,6 +15,7 @@ const notificationChannelSchema = z.object({
   id: z.string(),
   type: z.enum(["email", "webhook", "command"]),
   target: z.string(),
+  commandArgs: z.array(z.string()).optional(),
   events: z.array(z.string()),
   enabled: z.boolean(),
 });
@@ -23,21 +26,41 @@ const notificationConfigSchema = z.object({
   channels: z.array(notificationChannelSchema),
 });
 
+const trustedNotificationApproval = Symbol("trustedNotificationApproval");
+
+export type TrustedNotificationApproval = {
+  readonly [trustedNotificationApproval]: true;
+};
+
+export function createTrustedNotificationApproval(): TrustedNotificationApproval {
+  return { [trustedNotificationApproval]: true };
+}
+
+function isTrustedNotificationApproval(approval: TrustedNotificationApproval | undefined): boolean {
+  return approval?.[trustedNotificationApproval] === true;
+}
+
 function sortChannels(channels: NotificationChannel[]): NotificationChannel[] {
   return [...channels].sort((left, right) => left.id.localeCompare(right.id));
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
+function hasCommand(binary: string): boolean {
+  return Boolean(resolveExecutable(binary));
 }
 
-function hasCommand(binary: string): boolean {
-  const result = Bun.spawnSync(["bash", "-lc", `command -v ${binary} >/dev/null 2>&1`], {
-    stdout: "ignore",
-    stderr: "ignore",
-    env: process.env,
-  });
-  return result.exitCode === 0;
+function resolveExecutable(binary: string): string | null {
+  const trimmed = binary.trim();
+  if (!trimmed) return null;
+  const candidates = isAbsolute(trimmed)
+    ? [trimmed]
+    : (process.env.PATH ?? "").split(delimiter).filter(Boolean).map((dir) => join(dir, trimmed));
+  for (const candidate of candidates) {
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {}
+  }
+  return null;
 }
 
 function buildNotificationPreview(channel: NotificationChannel, event: string, message: string): string {
@@ -49,7 +72,8 @@ function buildNotificationPreview(channel: NotificationChannel, event: string, m
     return `POST ${channel.target} with payload {\"event\":\"${event}\",\"message\":\"${message}\"}`;
   }
 
-  return `${channel.target} --event ${event} --message ${JSON.stringify(message)}`;
+  const args = channel.commandArgs?.length ? ` ${channel.commandArgs.join(" ")}` : "";
+  return `${channel.target}${args} with HASNA_MACHINES_NOTIFICATION_* environment`;
 }
 
 async function dispatchEmail(channel: NotificationChannel, event: string, message: string): Promise<NotificationDispatchResult> {
@@ -57,7 +81,7 @@ async function dispatchEmail(channel: NotificationChannel, event: string, messag
   const body = `To: ${channel.target}\nSubject: ${subject}\nContent-Type: text/plain; charset=utf-8\n\n${message}\n`;
 
   if (hasCommand("sendmail")) {
-    const result = Bun.spawnSync(["bash", "-lc", "sendmail -t"], {
+    const result = Bun.spawnSync(["sendmail", "-t"], {
       stdin: new TextEncoder().encode(body),
       stdout: "pipe",
       stderr: "pipe",
@@ -76,8 +100,8 @@ async function dispatchEmail(channel: NotificationChannel, event: string, messag
   }
 
   if (hasCommand("mail")) {
-    const command = `printf %s ${shellQuote(message)} | mail -s ${shellQuote(subject)} ${shellQuote(channel.target)}`;
-    const result = Bun.spawnSync(["bash", "-lc", command], {
+    const result = Bun.spawnSync(["mail", "-s", subject, channel.target], {
+      stdin: new TextEncoder().encode(`${message}\n`),
       stdout: "pipe",
       stderr: "pipe",
       env: process.env,
@@ -125,8 +149,27 @@ async function dispatchWebhook(channel: NotificationChannel, event: string, mess
   };
 }
 
-async function dispatchCommand(channel: NotificationChannel, event: string, message: string): Promise<NotificationDispatchResult> {
-  const result = Bun.spawnSync(["bash", "-lc", channel.target], {
+async function dispatchCommand(
+  channel: NotificationChannel,
+  event: string,
+  message: string,
+  options: { approvalToken?: string; trustedApproval?: TrustedNotificationApproval } = {}
+): Promise<NotificationDispatchResult> {
+  if (!isTrustedNotificationApproval(options.trustedApproval)) {
+    assertMutationApproved({
+      surface: "notifications",
+      operation: "dispatch_command",
+      resourceId: channel.id,
+      approvalToken: options.approvalToken,
+    });
+  }
+
+  const executable = resolveExecutable(channel.target);
+  if (!executable) {
+    throw new Error(`Command executable not found or not executable: ${channel.target}`);
+  }
+
+  const result = Bun.spawnSync([executable, ...(channel.commandArgs ?? [])], {
     stdout: "pipe",
     stderr: "pipe",
     env: {
@@ -151,7 +194,12 @@ async function dispatchCommand(channel: NotificationChannel, event: string, mess
   };
 }
 
-async function dispatchChannel(channel: NotificationChannel, event: string, message: string): Promise<NotificationDispatchResult> {
+async function dispatchChannel(
+  channel: NotificationChannel,
+  event: string,
+  message: string,
+  options: { approvalToken?: string; trustedApproval?: TrustedNotificationApproval } = {}
+): Promise<NotificationDispatchResult> {
   if (!channel.enabled) {
     return {
       channelId: channel.id,
@@ -170,7 +218,7 @@ async function dispatchChannel(channel: NotificationChannel, event: string, mess
     return dispatchWebhook(channel, event, message);
   }
 
-  return dispatchCommand(channel, event, message);
+  return dispatchCommand(channel, event, message, options);
 }
 
 export function getDefaultNotificationConfig(): NotificationConfig {
@@ -204,11 +252,24 @@ export function listNotificationChannels(): NotificationConfig {
   return readNotificationConfig();
 }
 
-export function addNotificationChannel(channel: NotificationChannel): NotificationConfig {
+export function addNotificationChannel(
+  channel: NotificationChannel,
+  options: { approvalToken?: string; trustedApproval?: TrustedNotificationApproval } = {},
+): NotificationConfig {
+  if (channel.type === "command" && !isTrustedNotificationApproval(options.trustedApproval)) {
+    assertMutationApproved({
+      surface: "notifications",
+      operation: "add_command_channel",
+      resourceId: channel.id,
+      approvalToken: options.approvalToken,
+    });
+  }
+
   const config = readNotificationConfig();
   const channels = config.channels.filter((entry) => entry.id !== channel.id);
   channels.push({
     ...channel,
+    commandArgs: channel.commandArgs?.map(String),
     events: [...new Set(channel.events)],
   });
   return writeNotificationConfig({ ...config, channels });
@@ -225,7 +286,7 @@ export function removeNotificationChannel(channelId: string): NotificationConfig
 export async function dispatchNotificationEvent(
   event: string,
   message: string,
-  options: { channelId?: string } = {}
+  options: { channelId?: string; approvalToken?: string; trustedApproval?: TrustedNotificationApproval } = {}
 ): Promise<NotificationDispatchSummary> {
   const channels = readNotificationConfig().channels.filter((channel) => {
     if (options.channelId && channel.id !== options.channelId) {
@@ -237,7 +298,7 @@ export async function dispatchNotificationEvent(
   const deliveries: NotificationDispatchResult[] = [];
   for (const channel of channels) {
     try {
-      deliveries.push(await dispatchChannel(channel, event, message));
+      deliveries.push(await dispatchChannel(channel, event, message, { approvalToken: options.approvalToken, trustedApproval: options.trustedApproval }));
     } catch (error) {
       deliveries.push({
         channelId: channel.id,
@@ -260,7 +321,7 @@ export async function testNotificationChannel(
   channelId: string,
   event = "manual.test",
   message = "machines notification test",
-  options: { apply?: boolean; yes?: boolean } = {}
+  options: { apply?: boolean; yes?: boolean; approvalToken?: string; trustedApproval?: TrustedNotificationApproval } = {}
 ): Promise<NotificationTestResult> {
   const channel = readNotificationConfig().channels.find((entry) => entry.id === channelId);
   if (!channel) {
@@ -282,7 +343,7 @@ export async function testNotificationChannel(
     throw new Error("Notification test execution requires --yes.");
   }
 
-  const delivery = await dispatchChannel(channel, event, message);
+  const delivery = await dispatchChannel(channel, event, message, { approvalToken: options.approvalToken, trustedApproval: options.trustedApproval });
   return {
     channelId,
     mode: "apply",
