@@ -1,0 +1,77 @@
+{
+  "name": "@hasna/loops",
+  "version": "0.1.0",
+  "description": "Persistent local loop runner for deterministic commands and headless AI coding agents",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "loops": "dist/cli/index.js",
+    "loops-daemon": "dist/daemon/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./sdk": {
+      "types": "./dist/sdk/index.d.ts",
+      "import": "./dist/sdk/index.js"
+    },
+    "./storage": {
+      "types": "./dist/lib/store.d.ts",
+      "import": "./dist/lib/store.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "docs",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && bun build src/cli/index.ts src/daemon/index.ts src/index.ts src/sdk/index.ts src/lib/store.ts --outdir dist --target bun --packages external && chmod +x dist/cli/index.js dist/daemon/index.js && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "build:bin": "bun build src/cli/index.ts --compile --outfile dist/loops",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "prepare": "bun run build",
+    "dev:cli": "bun run src/cli/index.ts",
+    "dev:daemon": "bun run src/daemon/index.ts",
+    "prepublishOnly": "bun run build"
+  },
+  "keywords": [
+    "loops",
+    "scheduler",
+    "daemon",
+    "agents",
+    "claude",
+    "cursor",
+    "codewith",
+    "opencode",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/loops.git"
+  },
+  "homepage": "https://github.com/hasna/loops#readme",
+  "bugs": {
+    "url": "https://github.com/hasna/loops/issues"
+  },
+  "author": "Hasna <andrei@hasna.com>",
+  "license": "Apache-2.0",
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "dependencies": {
+    "commander": "^13.1.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.3"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  }
+}

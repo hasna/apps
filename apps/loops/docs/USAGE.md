@@ -1,4 +1,4 @@
-# OpenLoops
+# OpenLoops Usage
 
 OpenLoops is a local CLI and daemon for persistent loops: scheduled or recurring work that survives process restarts and records every run.
 
