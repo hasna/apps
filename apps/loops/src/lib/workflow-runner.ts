@@ -1,5 +1,5 @@
-import type { ExecutableTarget, ExecutorResult, Loop, LoopRun, WorkflowRun, WorkflowSpec, WorkflowStep } from "../types.js";
-import { executeLoop, executeTarget, type ExecuteOptions } from "./executor.js";
+import type { ExecutableTarget, ExecutorResult, Loop, LoopRun, WorkflowRun, WorkflowRunStatus, WorkflowSpec, WorkflowStep } from "../types.js";
+import { executeLoop, executeTarget, preflightTarget, type ExecuteOptions } from "./executor.js";
 import { nowIso } from "./ids.js";
 import type { Store } from "./store.js";
 import { workflowExecutionOrder } from "./workflow-spec.js";
@@ -9,25 +9,30 @@ export interface ExecuteWorkflowOptions extends ExecuteOptions {
   loopRun?: LoopRun;
   scheduledFor?: string;
   idempotencyKey?: string;
+  cancelPollMs?: number;
+  signalTimeoutMessage?: () => string | undefined;
 }
 
 function targetWithStepAccount(step: WorkflowStep): ExecutableTarget {
   const account = step.account ?? step.target.account;
-  if (!account) return step.target;
-  return { ...step.target, account } as ExecutableTarget;
+  const timeoutMs = step.timeoutMs ?? step.target.timeoutMs;
+  if (!account && timeoutMs === step.target.timeoutMs) return step.target;
+  return { ...step.target, account, timeoutMs } as ExecutableTarget;
 }
 
 function workflowResult(
   workflowRun: WorkflowRun,
-  status: ExecutorResult["status"],
+  status: WorkflowRunStatus,
   startedAt: string,
   finishedAt: string,
   stdout: string,
   error?: string,
 ): ExecutorResult {
+  const executorStatus: ExecutorResult["status"] =
+    status === "succeeded" ? "succeeded" : status === "timed_out" ? "timed_out" : "failed";
   return {
-    status,
-    exitCode: status === "succeeded" ? 0 : 1,
+    status: executorStatus,
+    exitCode: executorStatus === "succeeded" ? 0 : 1,
     stdout,
     stderr: "",
     error,
@@ -50,7 +55,7 @@ export async function executeWorkflow(
     idempotencyKey: opts.idempotencyKey,
   });
   const startedAt = run.startedAt ?? nowIso();
-  if (run.status === "succeeded" || run.status === "failed" || run.status === "timed_out") {
+  if (run.status === "succeeded" || run.status === "failed" || run.status === "timed_out" || run.status === "cancelled") {
     const steps = store.listWorkflowStepRuns(run.id);
     return workflowResult(
       run,
@@ -61,15 +66,25 @@ export async function executeWorkflow(
       run.error,
     );
   }
-
   const ordered = workflowExecutionOrder(workflow);
   const byId = new Map(workflow.steps.map((step) => [step.id, step]));
   let blockingError: string | undefined;
-  let terminalStatus: ExecutorResult["status"] = "succeeded";
+  let terminalStatus: WorkflowRunStatus = "succeeded";
 
   for (const step of ordered) {
+    if (store.isWorkflowRunTerminal(run.id)) {
+      terminalStatus = store.requireWorkflowRun(run.id).status;
+      blockingError = "workflow run was cancelled";
+      break;
+    }
+    const pendingTimeout = opts.signal?.aborted ? opts.signalTimeoutMessage?.() : undefined;
+    if (pendingTimeout) {
+      terminalStatus = "timed_out";
+      blockingError = pendingTimeout;
+      break;
+    }
     const existing = store.getWorkflowStepRun(run.id, step.id);
-    if (existing?.status === "succeeded" || existing?.status === "skipped") continue;
+    if (existing?.status === "succeeded" || existing?.status === "skipped" || existing?.status === "cancelled") continue;
 
     const blockedBy = (step.dependsOn ?? []).find((dependencyId) => {
       const dependencyRun = store.getWorkflowStepRun(run.id, dependencyId);
@@ -84,21 +99,64 @@ export async function executeWorkflow(
       continue;
     }
 
-    store.startWorkflowStepRun(run.id, step.id);
-    const result = await executeTarget(
-      targetWithStepAccount(step),
-      {
-        loopId: opts.loop?.id,
-        loopName: opts.loop?.name,
-        runId: opts.loopRun?.id,
-        scheduledFor: opts.loopRun?.scheduledFor ?? opts.scheduledFor,
-        workflowId: workflow.id,
-        workflowName: workflow.name,
-        workflowRunId: run.id,
-        workflowStepId: step.id,
-      },
-      opts,
-    );
+    const startedStep = store.startWorkflowStepRun(run.id, step.id);
+    if (startedStep.status !== "running") {
+      terminalStatus = "failed";
+      blockingError = `step ${step.id} could not start because workflow is no longer running`;
+      break;
+    }
+    const metadata = {
+      loopId: opts.loop?.id,
+      loopName: opts.loop?.name,
+      runId: opts.loopRun?.id,
+      scheduledFor: opts.loopRun?.scheduledFor ?? opts.scheduledFor,
+      workflowId: workflow.id,
+      workflowName: workflow.name,
+      workflowRunId: run.id,
+      workflowStepId: step.id,
+    };
+    let result: ExecutorResult;
+    const controller = new AbortController();
+    const externalAbort = (): void => controller.abort();
+    if (opts.signal?.aborted) controller.abort();
+    opts.signal?.addEventListener("abort", externalAbort, { once: true });
+    const cancelTimer = setInterval(() => {
+      if (store.getWorkflowRun(run.id)?.status === "cancelled") controller.abort();
+    }, opts.cancelPollMs ?? 500);
+    cancelTimer.unref();
+    try {
+      result = await executeTarget(targetWithStepAccount(step), metadata, {
+        ...opts,
+        signal: controller.signal,
+        onSpawn: (pid) => {
+          store.markWorkflowStepPid(run.id, step.id, pid);
+          opts.onSpawn?.(pid);
+        },
+      });
+    } catch (error) {
+      const finishedAt = nowIso();
+      result = {
+        status: "failed",
+        stdout: "",
+        stderr: "",
+        error: error instanceof Error ? error.message : String(error),
+        startedAt: startedStep.startedAt ?? finishedAt,
+        finishedAt,
+        durationMs: new Date(finishedAt).getTime() - new Date(startedStep.startedAt ?? finishedAt).getTime(),
+      };
+    } finally {
+      clearInterval(cancelTimer);
+      opts.signal?.removeEventListener("abort", externalAbort);
+    }
+    const timeoutMessage = opts.signal?.aborted ? opts.signalTimeoutMessage?.() : undefined;
+    if (timeoutMessage && result.status === "failed") {
+      result = { ...result, status: "timed_out", error: timeoutMessage };
+    }
+    if (store.isWorkflowRunTerminal(run.id)) {
+      terminalStatus = store.requireWorkflowRun(run.id).status;
+      blockingError = "workflow run was cancelled";
+      break;
+    }
     store.finalizeWorkflowStepRun(run.id, step.id, {
       status: result.status,
       finishedAt: result.finishedAt,
@@ -125,6 +183,18 @@ export async function executeWorkflow(
   }
 
   const finishedAt = nowIso();
+  if (store.isWorkflowRunTerminal(run.id)) {
+    const terminalRun = store.requireWorkflowRun(run.id);
+    const steps = store.listWorkflowStepRuns(run.id);
+    return workflowResult(
+      terminalRun,
+      terminalRun.status,
+      startedAt,
+      terminalRun.finishedAt ?? finishedAt,
+      JSON.stringify({ workflowRun: terminalRun, steps }, null, 2),
+      terminalRun.error ?? blockingError,
+    );
+  }
   const finalRun = store.finalizeWorkflowRun(run.id, terminalStatus, {
     finishedAt,
     durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
@@ -141,6 +211,20 @@ export async function executeWorkflow(
   );
 }
 
+export function preflightWorkflow(workflow: WorkflowSpec, opts: ExecuteOptions = {}): ReturnType<typeof preflightTarget>[] {
+  return workflowExecutionOrder(workflow).map((step) =>
+    preflightTarget(
+      targetWithStepAccount(step),
+      {
+        workflowId: workflow.id,
+        workflowName: workflow.name,
+        workflowStepId: step.id,
+      },
+      opts,
+    ),
+  );
+}
+
 export async function executeLoopTarget(
   store: Store,
   loop: Loop,
@@ -149,11 +233,31 @@ export async function executeLoopTarget(
 ): Promise<ExecutorResult> {
   if (loop.target.type !== "workflow") return executeLoop(loop, run, opts);
   const workflow = store.requireWorkflow(loop.target.workflowId);
-  return executeWorkflow(store, workflow, {
-    ...opts,
-    loop,
-    loopRun: run,
-    scheduledFor: run.scheduledFor,
-    idempotencyKey: `${loop.id}:${run.scheduledFor}`,
-  });
+  const controller = loop.target.timeoutMs ? new AbortController() : undefined;
+  let workflowTimedOut = false;
+  const externalAbort = (): void => controller?.abort();
+  if (controller && opts.signal?.aborted) controller.abort();
+  if (controller) opts.signal?.addEventListener("abort", externalAbort, { once: true });
+  const timer = controller
+    ? setTimeout(() => {
+        workflowTimedOut = true;
+        controller.abort();
+      }, loop.target.timeoutMs)
+    : undefined;
+  timer?.unref();
+  try {
+    return await executeWorkflow(store, workflow, {
+      ...opts,
+      signal: controller?.signal ?? opts.signal,
+      signalTimeoutMessage: () =>
+        workflowTimedOut && loop.target.type === "workflow" ? `workflow timed out after ${loop.target.timeoutMs}ms` : undefined,
+      loop,
+      loopRun: run,
+      scheduledFor: run.scheduledFor,
+      idempotencyKey: `${loop.id}:${run.scheduledFor}:attempt:${run.attempt}`,
+    });
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (controller) opts.signal?.removeEventListener("abort", externalAbort);
+  }
 }

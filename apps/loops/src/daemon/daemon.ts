@@ -3,7 +3,7 @@ import { hostname } from "node:os";
 import { spawn } from "node:child_process";
 import { genId } from "../lib/ids.js";
 import { daemonLogPath, ensureDataDir, pidFilePath } from "../lib/paths.js";
-import { executeLoop } from "../lib/executor.js";
+import { executeLoopTarget } from "../lib/workflow-runner.js";
 import { tick } from "../lib/scheduler.js";
 import { Store } from "../lib/store.js";
 import { isDaemonRunning, removePid, writePid } from "./control.js";
@@ -17,6 +17,7 @@ export interface RunDaemonOptions {
   shouldStop?: () => boolean;
   sleep?: (ms: number) => Promise<void>;
   log?: (message: string) => void;
+  signal?: AbortSignal;
 }
 
 function intervalFromEnv(): number | undefined {
@@ -36,6 +37,7 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
   const ownStore = !opts.store;
   const store = opts.store ?? new Store();
   const leaseId = genId();
+  const runnerId = `${hostname()}:${process.pid}:${leaseId}`;
   const intervalMs = opts.intervalMs ?? intervalFromEnv() ?? 1_000;
   const leaseTtlMs = opts.leaseTtlMs ?? Math.max(60_000, intervalMs * 10);
   const log = opts.log ?? ((message: string) => console.error(`[loops-daemon] ${message}`));
@@ -53,18 +55,25 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
 
   let stopFlag = false;
   let leaseLost = false;
+  const runAbort = new AbortController();
+  const requestStop = (message?: string): void => {
+    stopFlag = true;
+    if (!runAbort.signal.aborted) runAbort.abort();
+    if (message) log(message);
+  };
   const ensureLease = (): void => {
     const current = store.heartbeatDaemonLease(leaseId, leaseTtlMs);
     if (!current || current.id !== leaseId) {
       leaseLost = true;
-      stopFlag = true;
+      requestStop("daemon lease lost");
       throw new Error("daemon lease lost");
     }
   };
   const onSignal = (): void => {
-    stopFlag = true;
-    log("stop signal received");
+    requestStop("stop signal received");
   };
+  if (opts.signal?.aborted) onSignal();
+  opts.signal?.addEventListener("abort", onSignal, { once: true });
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
 
@@ -78,7 +87,7 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
         ensureLease();
         const result = await tick({
           store,
-          runnerId: `${hostname()}:${process.pid}:${leaseId}`,
+          runnerId,
           execute: async (loop, run) => {
             const heartbeatMs = Math.max(1_000, Math.floor(leaseTtlMs / 3));
             const timer = setInterval(() => {
@@ -90,7 +99,10 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
             }, heartbeatMs);
             timer.unref();
             try {
-              const result = await executeLoop(loop, run);
+              const result = await executeLoopTarget(store, loop, run, {
+                signal: runAbort.signal,
+                onSpawn: (pid) => store.markRunPid(run.id, pid, runnerId),
+              });
               if (leaseLost) throw new Error("daemon lease lost during run");
               return result;
             } finally {
@@ -108,6 +120,7 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
       },
     });
   } finally {
+    opts.signal?.removeEventListener("abort", onSignal);
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
     store.releaseDaemonLease(leaseId);

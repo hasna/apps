@@ -1,11 +1,20 @@
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { dirname } from "node:path";
 import { daemonLogPath, launchdPlistPath, systemdServicePath } from "../lib/paths.js";
+
+export interface StartupEnableResult {
+  command: string;
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
 
 export interface InstallStartupResult {
   platform: NodeJS.Platform;
   path: string;
   instructions: string[];
+  enableResults?: StartupEnableResult[];
 }
 
 export function installStartup(
@@ -78,4 +87,25 @@ ${args.map((arg) => `    <string>${arg}</string>`).join("\n")}
   }
 
   throw new Error(`startup install is not implemented for ${process.platform}`);
+}
+
+export function enableStartup(result: InstallStartupResult): StartupEnableResult[] {
+  const commands =
+    result.platform === "linux"
+      ? ["systemctl --user daemon-reload", "systemctl --user enable --now loops-daemon.service"]
+      : result.platform === "darwin"
+        ? [`launchctl load -w ${result.path}`]
+        : [];
+  return commands.map((command) => {
+    const run = spawnSync("sh", ["-c", command], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return {
+      command,
+      status: run.status,
+      stdout: run.stdout.trim(),
+      stderr: run.stderr.trim(),
+    };
+  });
 }

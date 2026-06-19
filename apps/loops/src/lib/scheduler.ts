@@ -20,11 +20,23 @@ export interface TickResult {
   expired: Loop[];
 }
 
+export function manualRunScheduledFor(loop: Loop, now: Date = new Date()): string {
+  if (loop.nextRunAt && new Date(loop.nextRunAt).getTime() <= now.getTime()) {
+    return loop.retryScheduledFor ?? loop.nextRunAt;
+  }
+  return now.toISOString();
+}
+
+export function shouldAdvanceManualRun(loop: Loop, scheduledFor: string, now: Date = new Date()): boolean {
+  if (!loop.nextRunAt || new Date(loop.nextRunAt).getTime() > now.getTime()) return false;
+  return scheduledFor === (loop.retryScheduledFor ?? loop.nextRunAt);
+}
+
 function nextAfterRetry(loop: Loop, now: Date): string {
   return new Date(now.getTime() + loop.retryDelayMs).toISOString();
 }
 
-function advanceLoop(store: Store, loop: Loop, run: LoopRun, finishedAt: Date, succeeded: boolean): void {
+export function advanceLoop(store: Store, loop: Loop, run: LoopRun, finishedAt: Date, succeeded: boolean): void {
   if (run.status === "running") return;
   const current = store.getLoop(loop.id);
   if (!current || current.status !== "active") return;
@@ -46,6 +58,59 @@ function advanceLoop(store: Store, loop: Loop, run: LoopRun, finishedAt: Date, s
   });
 }
 
+export async function executeClaimedRun(deps: {
+  store: Store;
+  runnerId: string;
+  loop: Loop;
+  run: LoopRun;
+  now?: () => Date;
+  execute?: (loop: Loop, run: LoopRun) => Promise<ExecutorResult>;
+  onError?: (loop: Loop, error: unknown) => void;
+}): Promise<LoopRun> {
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  const heartbeatEveryMs = Math.max(10, Math.min(60_000, Math.floor(deps.loop.leaseMs / 3)));
+  heartbeat = setInterval(() => {
+    deps.store.heartbeatRunLease(deps.run.id, deps.runnerId, deps.loop.leaseMs);
+  }, heartbeatEveryMs);
+  heartbeat.unref();
+
+  try {
+    const result = await (deps.execute ?? ((loop, run) =>
+      executeLoopTarget(deps.store, loop, run, {
+        onSpawn: (pid) => deps.store.markRunPid(run.id, pid, deps.runnerId),
+      })))(deps.loop, deps.run);
+    return deps.store.finalizeRun(deps.run.id, {
+      status: result.status,
+      finishedAt: result.finishedAt,
+      durationMs: result.durationMs,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+      error: result.error,
+      pid: result.pid,
+    }, {
+      claimedBy: deps.runnerId,
+      now: deps.now?.() ?? new Date(result.finishedAt),
+    });
+  } catch (err) {
+    deps.onError?.(deps.loop, err);
+    const finishedAt = new Date();
+    return deps.store.finalizeRun(deps.run.id, {
+      status: "failed",
+      finishedAt: finishedAt.toISOString(),
+      durationMs: finishedAt.getTime() - new Date(deps.run.startedAt ?? deps.run.createdAt).getTime(),
+      stdout: "",
+      stderr: "",
+      error: err instanceof Error ? err.message : String(err),
+    }, {
+      claimedBy: deps.runnerId,
+      now: deps.now?.() ?? finishedAt,
+    });
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
+  }
+}
+
 async function runSlot(deps: SchedulerDeps, loop: Loop, scheduledFor: string): Promise<LoopRun | undefined> {
   const now = deps.now?.() ?? new Date();
   if (loop.overlap === "skip" && deps.store.hasRunningRun(loop.id)) {
@@ -59,51 +124,18 @@ async function runSlot(deps: SchedulerDeps, loop: Loop, scheduledFor: string): P
   if (!claim) return undefined;
   deps.onRun?.(claim.run);
 
-  let heartbeat: ReturnType<typeof setInterval> | undefined;
-  const heartbeatEveryMs = Math.max(1_000, Math.min(60_000, Math.floor(claim.loop.leaseMs / 3)));
-  heartbeat = setInterval(() => {
-    deps.store.heartbeatRunLease(claim.run.id, deps.runnerId, claim.loop.leaseMs);
-  }, heartbeatEveryMs);
-  heartbeat.unref();
-
-  try {
-    const result = await (deps.execute ?? ((loop, run) => executeLoopTarget(deps.store, loop, run)))(claim.loop, claim.run);
-    const finalRun = deps.store.finalizeRun(claim.run.id, {
-      status: result.status,
-      finishedAt: result.finishedAt,
-      durationMs: result.durationMs,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      exitCode: result.exitCode,
-      error: result.error,
-      pid: result.pid,
-    }, {
-      claimedBy: deps.runnerId,
-      now: deps.now?.() ?? new Date(result.finishedAt),
-    });
-    advanceLoop(deps.store, claim.loop, finalRun, new Date(result.finishedAt), finalRun.status === "succeeded");
-    deps.onRun?.(finalRun);
-    return finalRun;
-  } catch (err) {
-    deps.onError?.(claim.loop, err);
-    const finishedAt = new Date();
-    const finalRun = deps.store.finalizeRun(claim.run.id, {
-      status: "failed",
-      finishedAt: finishedAt.toISOString(),
-      durationMs: finishedAt.getTime() - new Date(claim.run.startedAt ?? claim.run.createdAt).getTime(),
-      stdout: "",
-      stderr: "",
-      error: err instanceof Error ? err.message : String(err),
-    }, {
-      claimedBy: deps.runnerId,
-      now: deps.now?.() ?? finishedAt,
-    });
-    advanceLoop(deps.store, claim.loop, finalRun, finishedAt, false);
-    deps.onRun?.(finalRun);
-    return finalRun;
-  } finally {
-    if (heartbeat) clearInterval(heartbeat);
-  }
+  const finalRun = await executeClaimedRun({
+    store: deps.store,
+    runnerId: deps.runnerId,
+    loop: claim.loop,
+    run: claim.run,
+    now: deps.now,
+    execute: deps.execute,
+    onError: deps.onError,
+  });
+  advanceLoop(deps.store, claim.loop, finalRun, new Date(finalRun.finishedAt ?? new Date()), finalRun.status === "succeeded");
+  deps.onRun?.(finalRun);
+  return finalRun;
 }
 
 export async function tick(deps: SchedulerDeps): Promise<TickResult> {

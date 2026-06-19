@@ -99,6 +99,7 @@ interface WorkflowStepRunRow {
   started_at: string | null;
   finished_at: string | null;
   exit_code: number | null;
+  pid: number | null;
   duration_ms: number | null;
   stdout: string | null;
   stderr: string | null;
@@ -226,6 +227,7 @@ function rowToWorkflowStepRun(row: WorkflowStepRunRow): WorkflowStepRun {
     startedAt: row.started_at ?? undefined,
     finishedAt: row.finished_at ?? undefined,
     exitCode: row.exit_code ?? undefined,
+    pid: row.pid ?? undefined,
     durationMs: row.duration_ms ?? undefined,
     stdout: row.stdout ?? undefined,
     stderr: row.stderr ?? undefined,
@@ -247,6 +249,15 @@ function rowToWorkflowEvent(row: WorkflowEventRow): WorkflowEvent {
     payload: row.payload_json ? (JSON.parse(row.payload_json) as Record<string, unknown>) : undefined,
     createdAt: row.created_at,
   };
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function rowToLease(row: LeaseRow): DaemonLease {
@@ -395,6 +406,7 @@ export class Store {
         started_at TEXT,
         finished_at TEXT,
         exit_code INTEGER,
+        pid INTEGER,
         duration_ms INTEGER,
         stdout TEXT,
         stderr TEXT,
@@ -420,6 +432,11 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS idx_workflow_events_run_sequence ON workflow_events(workflow_run_id, sequence);
     `);
+    try {
+      this.db.query("ALTER TABLE workflow_step_runs ADD COLUMN pid INTEGER").run();
+    } catch {
+      /* column already exists */
+    }
     this.db
       .query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)")
       .run("0001_initial_and_workflows", nowIso());
@@ -664,8 +681,8 @@ export class Store {
         this.db
           .query(
             `INSERT INTO workflow_step_runs (id, workflow_run_id, step_id, sequence, status, started_at, finished_at,
-              exit_code, duration_ms, stdout, stderr, error, account_profile, account_tool, created_at, updated_at)
-             VALUES ($id, $workflowRunId, $stepId, $sequence, 'pending', NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+              exit_code, pid, duration_ms, stdout, stderr, error, account_profile, account_tool, created_at, updated_at)
+             VALUES ($id, $workflowRunId, $stepId, $sequence, 'pending', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
               $accountProfile, $accountTool, $created, $updated)`,
           )
           .run({
@@ -717,6 +734,12 @@ export class Store {
     return row ? rowToWorkflowRun(row) : undefined;
   }
 
+  requireWorkflowRun(id: string): WorkflowRun {
+    const run = this.getWorkflowRun(id);
+    if (!run) throw new Error(`workflow run not found: ${id}`);
+    return run;
+  }
+
   listWorkflowRuns(opts: { workflowId?: string; loopRunId?: string; limit?: number } = {}): WorkflowRun[] {
     const limit = opts.limit ?? 100;
     let rows: WorkflowRunRow[];
@@ -756,20 +779,81 @@ export class Store {
     return row ? rowToWorkflowStepRun(row) : undefined;
   }
 
+  isWorkflowRunTerminal(workflowRunId: string): boolean {
+    const run = this.getWorkflowRun(workflowRunId);
+    return Boolean(run && ["succeeded", "failed", "timed_out", "cancelled"].includes(run.status));
+  }
+
   startWorkflowStepRun(workflowRunId: string, stepId: string): WorkflowStepRun {
     const now = nowIso();
-    this.db
+    const res = this.db
       .query(
         `UPDATE workflow_step_runs
          SET status='running', started_at=$started, finished_at=NULL, exit_code=NULL, duration_ms=NULL,
-          stdout=NULL, stderr=NULL, error=NULL, updated_at=$updated
-         WHERE workflow_run_id=$workflowRunId AND step_id=$stepId AND status IN ('pending', 'running', 'failed', 'timed_out')`,
+          pid=NULL, stdout=NULL, stderr=NULL, error=NULL, updated_at=$updated
+         WHERE workflow_run_id=$workflowRunId
+           AND step_id=$stepId
+           AND status IN ('pending', 'failed', 'timed_out')
+           AND EXISTS (
+             SELECT 1 FROM workflow_runs
+             WHERE id=$workflowRunId AND status='running'
+           )`,
       )
       .run({ $workflowRunId: workflowRunId, $stepId: stepId, $started: now, $updated: now });
-    this.appendWorkflowEvent(workflowRunId, "step_started", stepId);
     const run = this.getWorkflowStepRun(workflowRunId, stepId);
     if (!run) throw new Error(`workflow step run not found: ${workflowRunId}/${stepId}`);
+    if (res.changes !== 1) {
+      throw new Error(`workflow step is not claimable: ${workflowRunId}/${stepId} status=${run.status}`);
+    }
+    this.appendWorkflowEvent(workflowRunId, "step_started", stepId);
     return run;
+  }
+
+  markWorkflowStepPid(workflowRunId: string, stepId: string, pid: number): WorkflowStepRun {
+    const now = nowIso();
+    this.db
+      .query(
+        `UPDATE workflow_step_runs SET pid=$pid, updated_at=$updated
+         WHERE workflow_run_id=$workflowRunId AND step_id=$stepId AND status='running'`,
+      )
+      .run({ $workflowRunId: workflowRunId, $stepId: stepId, $pid: pid, $updated: now });
+    const run = this.getWorkflowStepRun(workflowRunId, stepId);
+    if (!run) throw new Error(`workflow step run not found after pid update: ${workflowRunId}/${stepId}`);
+    return run;
+  }
+
+  recoverWorkflowRun(workflowRunId: string, reason = "workflow run recovered for retry"): {
+    run: WorkflowRun;
+    recoveredSteps: WorkflowStepRun[];
+  } {
+    const now = nowIso();
+    const before = this.listWorkflowStepRuns(workflowRunId).filter((step) => step.status === "running");
+    const live = before.filter((step) => step.pid !== undefined && isProcessAlive(step.pid));
+    if (live.length > 0) {
+      throw new Error(
+        `cannot recover workflow run while step processes are still alive: ${live
+          .map((step) => `${step.stepId} pid=${step.pid}`)
+          .join(", ")}`,
+      );
+    }
+    this.db
+      .query(
+        `UPDATE workflow_step_runs
+         SET status='pending', started_at=NULL, finished_at=NULL, exit_code=NULL, pid=NULL, duration_ms=NULL,
+          stdout=NULL, stderr=NULL, error=$reason, updated_at=$updated
+         WHERE workflow_run_id=$workflowRunId AND status='running'`,
+      )
+      .run({ $workflowRunId: workflowRunId, $reason: reason, $updated: now });
+    if (before.length > 0) {
+      this.appendWorkflowEvent(workflowRunId, "recovered", undefined, {
+        reason,
+        recoveredSteps: before.map((step) => step.stepId),
+      });
+    }
+    return {
+      run: this.requireWorkflowRun(workflowRunId),
+      recoveredSteps: before.map((step) => this.getWorkflowStepRun(workflowRunId, step.stepId)).filter(Boolean) as WorkflowStepRun[],
+    };
   }
 
   finalizeWorkflowStepRun(
@@ -779,11 +863,11 @@ export class Store {
       Partial<Pick<WorkflowStepRun, "exitCode" | "error">>,
   ): WorkflowStepRun {
     const finishedAt = patch.finishedAt ?? nowIso();
-    this.db
+    const res = this.db
       .query(
         `UPDATE workflow_step_runs SET status=$status, finished_at=$finished, exit_code=$exitCode, duration_ms=$durationMs,
-         stdout=$stdout, stderr=$stderr, error=$error, updated_at=$updated
-         WHERE workflow_run_id=$workflowRunId AND step_id=$stepId`,
+         pid=NULL, stdout=$stdout, stderr=$stderr, error=$error, updated_at=$updated
+         WHERE workflow_run_id=$workflowRunId AND step_id=$stepId AND status='running'`,
       )
       .run({
         $workflowRunId: workflowRunId,
@@ -797,10 +881,12 @@ export class Store {
         $error: patch.error ?? null,
         $updated: finishedAt,
       });
-    this.appendWorkflowEvent(workflowRunId, `step_${patch.status}`, stepId, {
-      exitCode: patch.exitCode,
-      error: patch.error,
-    });
+    if (res.changes === 1) {
+      this.appendWorkflowEvent(workflowRunId, `step_${patch.status}`, stepId, {
+        exitCode: patch.exitCode,
+        error: patch.error,
+      });
+    }
     const run = this.getWorkflowStepRun(workflowRunId, stepId);
     if (!run) throw new Error(`workflow step run not found after finalize: ${workflowRunId}/${stepId}`);
     return run;
@@ -808,13 +894,13 @@ export class Store {
 
   skipWorkflowStepRun(workflowRunId: string, stepId: string, reason: string): WorkflowStepRun {
     const now = nowIso();
-    this.db
+    const res = this.db
       .query(
-        `UPDATE workflow_step_runs SET status='skipped', finished_at=$finished, error=$error, updated_at=$updated
-         WHERE workflow_run_id=$workflowRunId AND step_id=$stepId`,
+        `UPDATE workflow_step_runs SET status='skipped', finished_at=$finished, pid=NULL, error=$error, updated_at=$updated
+         WHERE workflow_run_id=$workflowRunId AND step_id=$stepId AND status IN ('pending', 'running')`,
       )
       .run({ $workflowRunId: workflowRunId, $stepId: stepId, $finished: now, $error: reason, $updated: now });
-    this.appendWorkflowEvent(workflowRunId, "step_skipped", stepId, { reason });
+    if (res.changes === 1) this.appendWorkflowEvent(workflowRunId, "step_skipped", stepId, { reason });
     const run = this.getWorkflowStepRun(workflowRunId, stepId);
     if (!run) throw new Error(`workflow step run not found after skip: ${workflowRunId}/${stepId}`);
     return run;
@@ -826,10 +912,10 @@ export class Store {
     patch: Partial<Pick<WorkflowRun, "finishedAt" | "durationMs" | "error">> = {},
   ): WorkflowRun {
     const finishedAt = patch.finishedAt ?? nowIso();
-    this.db
+    const res = this.db
       .query(
         `UPDATE workflow_runs SET status=$status, finished_at=$finished, duration_ms=$durationMs, error=$error, updated_at=$updated
-         WHERE id=$id`,
+         WHERE id=$id AND status NOT IN ('succeeded', 'failed', 'timed_out', 'cancelled')`,
       )
       .run({
         $id: workflowRunId,
@@ -839,10 +925,44 @@ export class Store {
         $error: patch.error ?? null,
         $updated: finishedAt,
       });
-    this.appendWorkflowEvent(workflowRunId, status, undefined, { error: patch.error });
     const run = this.getWorkflowRun(workflowRunId);
     if (!run) throw new Error(`workflow run not found after finalize: ${workflowRunId}`);
+    if (res.changes === 1) this.appendWorkflowEvent(workflowRunId, status, undefined, { error: patch.error });
     return run;
+  }
+
+  cancelWorkflowRun(workflowRunId: string, reason = "cancelled by user"): WorkflowRun {
+    const now = nowIso();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const run = this.requireWorkflowRun(workflowRunId);
+      if (!["succeeded", "failed", "timed_out", "cancelled"].includes(run.status)) {
+        this.db
+          .query(
+            `UPDATE workflow_runs
+             SET status='cancelled', finished_at=$finished, error=$reason, updated_at=$updated
+             WHERE id=$id AND status NOT IN ('succeeded', 'failed', 'timed_out', 'cancelled')`,
+          )
+          .run({ $id: workflowRunId, $finished: now, $reason: reason, $updated: now });
+        this.db
+          .query(
+            `UPDATE workflow_step_runs
+             SET status='cancelled', finished_at=$finished, pid=NULL, error=$reason, updated_at=$updated
+             WHERE workflow_run_id=$workflowRunId AND status IN ('pending', 'running')`,
+          )
+          .run({ $workflowRunId: workflowRunId, $finished: now, $reason: reason, $updated: now });
+        this.appendWorkflowEvent(workflowRunId, "cancelled", undefined, { reason });
+      }
+      this.db.exec("COMMIT");
+      return this.requireWorkflowRun(workflowRunId);
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* transaction may already be closed */
+      }
+      throw error;
+    }
   }
 
   appendWorkflowEvent(
@@ -890,6 +1010,37 @@ export class Store {
       .query<{ count: number }, [string]>("SELECT COUNT(*) AS count FROM loop_runs WHERE loop_id = ? AND status = 'running'")
       .get(loopId);
     return (row?.count ?? 0) > 0;
+  }
+
+  markRunPid(id: string, pid: number, claimedBy?: string): LoopRun | undefined {
+    const now = nowIso();
+    const res = claimedBy
+      ? this.db
+          .query(
+            `UPDATE loop_runs SET pid=$pid, updated_at=$updated
+             WHERE id=$id AND status='running' AND claimed_by=$claimedBy`,
+          )
+          .run({ $id: id, $pid: pid, $updated: now, $claimedBy: claimedBy })
+      : this.db
+          .query("UPDATE loop_runs SET pid=$pid, updated_at=$updated WHERE id=$id AND status='running'")
+          .run({ $id: id, $pid: pid, $updated: now });
+    if (res.changes !== 1) return undefined;
+    return this.getRun(id);
+  }
+
+  private hasLiveWorkflowStepProcesses(loopRunId: string): boolean {
+    const liveWorkflowSteps = this.db
+      .query<{ workflow_run_id: string; step_id: string; pid: number }, [string]>(
+        `SELECT wr.id AS workflow_run_id, wsr.step_id AS step_id, wsr.pid AS pid
+         FROM workflow_runs wr
+         JOIN workflow_step_runs wsr ON wsr.workflow_run_id = wr.id
+         WHERE wr.loop_run_id = ?
+           AND wr.status NOT IN ('succeeded', 'failed', 'timed_out', 'cancelled')
+           AND wsr.status = 'running'
+           AND wsr.pid IS NOT NULL`,
+      )
+      .all(loopRunId);
+    return liveWorkflowSteps.some((step) => isProcessAlive(step.pid));
   }
 
   createSkippedRun(loop: Loop, scheduledFor: string, reason: string): LoopRun {
@@ -950,6 +1101,14 @@ export class Store {
 
       if (existing) {
         if (existing.status === "running") {
+          if (existing.leaseExpiresAt && existing.leaseExpiresAt <= startedAt && existing.pid && isProcessAlive(existing.pid)) {
+            this.db.exec("COMMIT");
+            return undefined;
+          }
+          if (existing.leaseExpiresAt && existing.leaseExpiresAt <= startedAt && this.hasLiveWorkflowStepProcesses(existing.id)) {
+            this.db.exec("COMMIT");
+            return undefined;
+          }
           const res = this.db
             .query(
               `UPDATE loop_runs SET status='running', started_at=$started, finished_at=NULL,
@@ -1116,12 +1275,40 @@ export class Store {
       .all(now.toISOString());
     const recovered: LoopRun[] = [];
     for (const row of rows) {
+      if (row.pid && isProcessAlive(row.pid)) continue;
+      if (this.hasLiveWorkflowStepProcesses(row.id)) continue;
+      const finished = now.toISOString();
       this.db
         .query(
           `UPDATE loop_runs SET status='abandoned', finished_at=$finished, lease_expires_at=NULL,
            error='run lease expired before completion', updated_at=$updated WHERE id=$id`,
         )
-        .run({ $id: row.id, $finished: now.toISOString(), $updated: now.toISOString() });
+        .run({ $id: row.id, $finished: finished, $updated: finished });
+      const workflowRows = this.db
+        .query<WorkflowRunRow, [string]>(
+          "SELECT * FROM workflow_runs WHERE loop_run_id = ? AND status NOT IN ('succeeded', 'failed', 'timed_out', 'cancelled')",
+        )
+        .all(row.id);
+      for (const workflowRow of workflowRows) {
+        this.db
+          .query(
+            `UPDATE workflow_runs
+             SET status='failed', finished_at=$finished, error='parent loop run lease expired before completion', updated_at=$updated
+             WHERE id=$id AND status NOT IN ('succeeded', 'failed', 'timed_out', 'cancelled')`,
+          )
+          .run({ $id: workflowRow.id, $finished: finished, $updated: finished });
+        this.db
+          .query(
+            `UPDATE workflow_step_runs
+             SET status='skipped', finished_at=$finished, pid=NULL, error='parent loop run lease expired before completion', updated_at=$updated
+             WHERE workflow_run_id=$workflowRunId AND status IN ('pending', 'running')`,
+          )
+          .run({ $workflowRunId: workflowRow.id, $finished: finished, $updated: finished });
+        this.appendWorkflowEvent(workflowRow.id, "failed", undefined, {
+          error: "parent loop run lease expired before completion",
+          loopRunId: row.id,
+        });
+      }
       const run = this.getRun(row.id);
       if (run) recovered.push(run);
     }

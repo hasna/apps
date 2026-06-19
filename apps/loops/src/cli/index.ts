@@ -13,16 +13,17 @@ import {
 } from "../lib/format.js";
 import { parseDuration } from "../lib/schedule.js";
 import { Store } from "../lib/store.js";
-import { executeLoopTarget, executeWorkflow } from "../lib/workflow-runner.js";
-import { tick } from "../lib/scheduler.js";
+import { executeWorkflow, preflightWorkflow } from "../lib/workflow-runner.js";
+import { advanceLoop, executeClaimedRun, manualRunScheduledFor, shouldAdvanceManualRun, tick } from "../lib/scheduler.js";
 import { daemonStatus, stopDaemon } from "../daemon/control.js";
 import { runDaemon, startDaemon } from "../daemon/daemon.js";
-import { installStartup } from "../daemon/install.js";
+import { enableStartup, installStartup } from "../daemon/install.js";
 import { workflowBodyFromJson } from "../lib/workflow-spec.js";
+import { runDoctor } from "../lib/doctor.js";
 
 const program = new Command();
 
-program.name("loops").description("Persistent local loops for commands and headless coding agents").version("0.2.0");
+program.name("loops").description("Persistent local loops for commands and headless coding agents").version("0.3.0");
 program.option("-j, --json", "print JSON");
 
 function isJson(): boolean {
@@ -225,6 +226,28 @@ addScheduleOptions(
 const workflows = program.command("workflows").alias("workflow").description("manage workflow specs and runs");
 
 workflows
+  .command("validate <file>")
+  .description("validate a workflow JSON file without storing or running it")
+  .option("--name <name>", "override workflow name from the file")
+  .option("--preflight", "also check account env and target executables")
+  .action((file, opts) => {
+    const body = workflowBodyFromJson(JSON.parse(readFileSync(file, "utf8")), opts.name);
+    const now = new Date().toISOString();
+    const workflow = {
+      id: "validation",
+      name: body.name,
+      description: body.description,
+      version: body.version ?? 1,
+      status: "active" as const,
+      steps: body.steps,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const preflight = opts.preflight ? preflightWorkflow(workflow) : undefined;
+    print({ valid: true, workflow: publicWorkflow(workflow), preflight }, `valid workflow ${workflow.name} steps=${workflow.steps.length}`);
+  });
+
+workflows
   .command("create <file>")
   .description("validate and store a workflow JSON file")
   .option("--name <name>", "override workflow name from the file")
@@ -267,6 +290,30 @@ workflows.command("show <idOrName>").action((idOrName) => {
   }
 });
 
+workflows.command("inspect <runId>").description("show a workflow run with steps and events").action((runId) => {
+  const store = new Store();
+  try {
+    const run = store.requireWorkflowRun(runId);
+    const steps = store.listWorkflowStepRuns(run.id);
+    const events = store.listWorkflowEvents(run.id);
+    const value = {
+      workflowRun: publicWorkflowRun(run),
+      steps: steps.map((step) => publicWorkflowStepRun(step, isJson())),
+      events: events.map(publicWorkflowEvent),
+    };
+    if (isJson()) print(value);
+    else {
+      console.log(`${run.id}  ${run.status}  ${run.workflowName}`);
+      for (const step of steps) {
+        console.log(`  ${String(step.sequence).padStart(2, "0")}  ${step.status.padEnd(10)}  ${step.stepId}  ${step.error ?? ""}`);
+      }
+      console.log(`  events=${events.length}`);
+    }
+  } finally {
+    store.close();
+  }
+});
+
 workflows
   .command("run <idOrName>")
   .option("--show-output", "show step stdout/stderr")
@@ -282,7 +329,13 @@ workflows
         workflowRun: run ? publicWorkflowRun(run) : undefined,
         steps: steps.map((step) => publicWorkflowStepRun(step, opts.showOutput)),
       };
-      print(value, `${run?.id ?? workflow.id} ${result.status}`);
+      if (isJson()) print(value);
+      else {
+        console.log(`${run?.id ?? workflow.id} ${result.status}`);
+        for (const step of steps) {
+          console.log(`  ${String(step.sequence).padStart(2, "0")}  ${step.status.padEnd(10)}  ${step.stepId}  ${step.error ?? ""}`);
+        }
+      }
     } finally {
       store.close();
     }
@@ -320,6 +373,40 @@ workflows
           console.log(`${String(event.sequence).padStart(3, "0")}  ${event.eventType.padEnd(14)}  ${event.stepId ?? "-"}  ${event.createdAt}`);
         }
       }
+    } finally {
+      store.close();
+    }
+  });
+
+workflows
+  .command("cancel <runId>")
+  .description("mark a workflow run cancelled and cancel pending/running steps")
+  .option("--reason <reason>", "cancellation reason", "cancelled by user")
+  .action((runId, opts) => {
+    const store = new Store();
+    try {
+      const run = store.cancelWorkflowRun(runId, opts.reason);
+      print(publicWorkflowRun(run), `${run.id} ${run.status}`);
+    } finally {
+      store.close();
+    }
+  });
+
+workflows
+  .command("recover <runId>")
+  .description("reset interrupted running workflow steps to pending")
+  .option("--reason <reason>", "recovery reason", "manual recovery")
+  .action((runId, opts) => {
+    const store = new Store();
+    try {
+      const result = store.recoverWorkflowRun(runId, opts.reason);
+      print(
+        {
+          workflowRun: publicWorkflowRun(result.run),
+          recoveredSteps: result.recoveredSteps.map((step) => publicWorkflowStepRun(step)),
+        },
+        `${result.run.id} recovered=${result.recoveredSteps.length}`,
+      );
     } finally {
       store.close();
     }
@@ -417,27 +504,22 @@ program
   .command("run-now <idOrName>")
   .option("--show-output", "show stdout/stderr")
   .action(async (idOrName, opts) => {
-  const store = new Store();
-  try {
-    const loop = store.requireLoop(idOrName);
-    const claim = store.claimRun(loop, new Date().toISOString(), `manual:${process.pid}`);
-    if (!claim) throw new Error("could not claim manual run");
-    const result = await executeLoopTarget(store, loop, claim.run);
-    const run = store.finalizeRun(claim.run.id, {
-      status: result.status,
-      finishedAt: result.finishedAt,
-      durationMs: result.durationMs,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      exitCode: result.exitCode,
-      error: result.error,
-      pid: result.pid,
-    }, {
-      claimedBy: claim.run.claimedBy,
-    });
-    print(publicRun(run, opts.showOutput), `${run.id} ${run.status}`);
-  } finally {
-    store.close();
+    const store = new Store();
+    try {
+      const loop = store.requireLoop(idOrName);
+      const runnerId = `manual:${process.pid}`;
+      const now = new Date();
+      const scheduledFor = manualRunScheduledFor(loop, now);
+      const shouldAdvance = shouldAdvanceManualRun(loop, scheduledFor, now);
+      const claim = store.claimRun(loop, scheduledFor, runnerId, now);
+      if (!claim) throw new Error("could not claim manual run");
+      const run = await executeClaimedRun({ store, runnerId, loop: claim.loop, run: claim.run });
+      if (shouldAdvance) {
+        advanceLoop(store, claim.loop, run, new Date(run.finishedAt ?? new Date()), run.status === "succeeded");
+      }
+      print(publicRun(run, opts.showOutput), `${run.id} ${run.status}`);
+    } finally {
+      store.close();
   }
 });
 
@@ -446,6 +528,23 @@ program.command("tick").description("run one scheduler tick").action(async () =>
   try {
     const result = await tick({ store, runnerId: `manual-tick:${process.pid}` });
     print(result, `completed=${result.completed.length} skipped=${result.skipped.length} recovered=${result.recovered.length}`);
+  } finally {
+    store.close();
+  }
+});
+
+program.command("doctor").description("check local OpenLoops runtime dependencies and state").action(() => {
+  const store = new Store();
+  try {
+    const report = runDoctor(store);
+    if (isJson()) print(report);
+    else {
+      for (const check of report.checks) {
+        const marker = check.status === "ok" ? "ok" : check.status === "warn" ? "warn" : "fail";
+        console.log(`${marker.padEnd(4)} ${check.id.padEnd(22)} ${check.message}${check.detail ? ` (${check.detail})` : ""}`);
+      }
+      if (!report.ok) process.exitCode = 1;
+    }
   } finally {
     store.close();
   }
@@ -477,10 +576,18 @@ daemon.command("status").action(() => {
   }
 });
 
-daemon.command("install").description("write a systemd user service or launchd plist").action(() => {
-  const result = installStartup(process.argv[1] ?? "loops");
-  print(result, `wrote ${result.path}\n${result.instructions.join("\n")}`);
-});
+daemon
+  .command("install")
+  .description("write a systemd user service or launchd plist")
+  .option("--enable", "also enable/start the user service when supported")
+  .action((opts) => {
+    const result = installStartup(process.argv[1] ?? "loops");
+    if (opts.enable) result.enableResults = enableStartup(result);
+    const enableText = result.enableResults
+      ? `\n${result.enableResults.map((item) => `${item.command} -> ${item.status === 0 ? "ok" : `exit ${item.status}`}`).join("\n")}`
+      : "";
+    print(result, `wrote ${result.path}\n${result.instructions.join("\n")}${enableText}`);
+  });
 
 daemon
   .command("logs")

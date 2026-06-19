@@ -48,6 +48,26 @@ function primaryAccountDir(output: string): string | undefined {
   return undefined;
 }
 
+function accountDirEnvVar(tool: string): string | undefined {
+  switch (tool) {
+    case "claude":
+      return "CLAUDE_CONFIG_DIR";
+    case "codex":
+    case "codex-app":
+      return "CODEX_HOME";
+    case "cursor":
+      return "CURSOR_CONFIG_DIR";
+    case "opencode":
+      return "OPENCODE_CONFIG_DIR";
+    case "codewith":
+      return "CODEWITH_HOME";
+    case "aicopilot":
+      return "AICOPILOT_CONFIG_DIR";
+    default:
+      return undefined;
+  }
+}
+
 export function resolveAccountEnv(
   account: AccountRef | undefined,
   toolHint?: string,
@@ -68,11 +88,12 @@ export function resolveAccountEnv(
     const stderr = result.stderr.trim();
     throw new Error(`accounts env failed for ${account.profile}/${tool}${stderr ? `: ${stderr}` : ""}`);
   }
-  const profileDir = primaryAccountDir(result.stdout);
+  const accountEnv = parseAccountExportLines(result.stdout);
+  const profileDir = (accountDirEnvVar(tool) ? accountEnv[accountDirEnvVar(tool)!] : undefined) ?? primaryAccountDir(result.stdout);
   if (!profileDir) throw new Error(`accounts env returned no profile directory for ${account.profile}/${tool}`);
   if (!existsSync(profileDir)) throw new Error(`account profile directory does not exist for ${account.profile}/${tool}: ${profileDir}`);
   return {
-    ...parseAccountExportLines(result.stdout),
+    ...accountEnv,
     LOOPS_ACCOUNT_PROFILE: account.profile,
     LOOPS_ACCOUNT_TOOL: tool,
   };

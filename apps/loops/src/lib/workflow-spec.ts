@@ -14,6 +14,9 @@ function validateTarget(value: unknown, label: string): ExecutableTarget {
   assertObject(value, label);
   if (value.type === "command") {
     assertString(value.command, `${label}.command`);
+    if (value.shell !== true && /\s/.test(value.command.trim())) {
+      throw new Error(`${label}.command must be an executable without spaces when shell is false; put flags in args or set shell true`);
+    }
     return value as unknown as ExecutableTarget;
   }
   if (value.type === "agent") {

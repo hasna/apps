@@ -1,5 +1,6 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
+import { existsSync } from "node:fs";
 import type { AccountRef, AgentProvider, AgentTarget, CommandTarget, ExecutableTarget, ExecutorResult, Loop, LoopRun } from "../types.js";
 import { accountToolForProvider, resolveAccountEnv } from "./accounts.js";
 import { nowIso } from "./ids.js";
@@ -11,6 +12,8 @@ export interface ExecuteOptions {
   maxOutputBytes?: number;
   env?: NodeJS.ProcessEnv;
   log?: (message: string) => void;
+  signal?: AbortSignal;
+  onSpawn?: (pid: number) => void;
 }
 
 export interface ExecutionMetadata {
@@ -22,6 +25,12 @@ export interface ExecutionMetadata {
   workflowName?: string;
   workflowRunId?: string;
   workflowStepId?: string;
+}
+
+export interface PreflightResult {
+  command: string;
+  accountProfile?: string;
+  accountTool?: string;
 }
 
 const AUTH_ENV_KEYS = [
@@ -197,6 +206,32 @@ function executionEnv(
   return env;
 }
 
+function commandExists(command: string, env: NodeJS.ProcessEnv): boolean {
+  if (command.includes("/") && existsSync(command)) return true;
+  const result = spawnSync("sh", ["-c", "command -v \"$1\" >/dev/null", "sh", command], {
+    env,
+    stdio: "ignore",
+  });
+  return (result.status ?? 1) === 0;
+}
+
+export function preflightTarget(
+  target: ExecutableTarget,
+  metadata: ExecutionMetadata = {},
+  opts: ExecuteOptions = {},
+): PreflightResult {
+  const spec = commandSpec(target);
+  const env = executionEnv(spec, metadata, opts);
+  if (!spec.shell && !commandExists(spec.command, env)) {
+    throw new Error(`Executable not found in PATH: ${spec.command}`);
+  }
+  return {
+    command: spec.command,
+    accountProfile: spec.account?.profile,
+    accountTool: spec.accountTool,
+  };
+}
+
 export async function executeTarget(
   target: ExecutableTarget,
   metadata: ExecutionMetadata = {},
@@ -212,6 +247,17 @@ export async function executeTarget(
   let error: string | undefined;
 
   const env = executionEnv(spec, metadata, opts);
+  if (!spec.shell && !commandExists(spec.command, env)) {
+    return {
+      status: "failed",
+      stdout: "",
+      stderr: "",
+      error: `Executable not found in PATH: ${spec.command}`,
+      startedAt,
+      finishedAt: nowIso(),
+      durationMs: 0,
+    };
+  }
 
   const child = spawn(spec.command, spec.args, {
     cwd: spec.cwd,
@@ -220,6 +266,14 @@ export async function executeTarget(
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  if (child.pid) opts.onSpawn?.(child.pid);
+
+  const abortHandler = (): void => {
+    error = "cancelled";
+    if (child.pid) killProcessGroup(child.pid);
+  };
+  if (opts.signal?.aborted) abortHandler();
+  opts.signal?.addEventListener("abort", abortHandler, { once: true });
 
   child.stdout.on("data", (chunk: Buffer) => {
     stdout = appendBounded(stdout, chunk, maxOutputBytes);
@@ -242,6 +296,7 @@ export async function executeTarget(
     error = err instanceof Error ? err.message : String(err);
   } finally {
     clearTimeout(timer);
+    opts.signal?.removeEventListener("abort", abortHandler);
   }
 
   const finishedAt = nowIso();

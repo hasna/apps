@@ -83,9 +83,9 @@ export type LoopTarget = ExecutableTarget | WorkflowTarget;
 
 export type WorkflowStatus = "active" | "archived";
 
-export type WorkflowRunStatus = "running" | "succeeded" | "failed" | "timed_out";
+export type WorkflowRunStatus = "running" | "succeeded" | "failed" | "timed_out" | "cancelled";
 
-export type WorkflowStepRunStatus = "pending" | "running" | "succeeded" | "failed" | "timed_out" | "skipped";
+export type WorkflowStepRunStatus = "pending" | "running" | "succeeded" | "failed" | "timed_out" | "skipped" | "cancelled";
 
 export interface WorkflowStep {
   id: string;
@@ -142,6 +142,7 @@ export interface WorkflowStepRun {
   startedAt?: string;
   finishedAt?: string;
   exitCode?: number;
+  pid?: number;
   durationMs?: number;
   stdout?: string;
   stderr?: string;

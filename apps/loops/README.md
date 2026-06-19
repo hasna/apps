@@ -95,7 +95,8 @@ Create a workflow JSON file:
       "id": "status",
       "target": {
         "type": "command",
-        "command": "git status --short",
+        "command": "git",
+        "args": ["status", "--short"],
         "cwd": "/path/to/repo"
       }
     },
@@ -117,14 +118,31 @@ Create a workflow JSON file:
 Save, run, inspect, and schedule it:
 
 ```bash
+loops workflows validate repo-morning.json
+loops workflows validate repo-morning.json --preflight
 loops workflows create repo-morning.json
 loops workflows run repo-morning --show-output
 loops workflows runs repo-morning
+loops workflows inspect <workflow-run-id>
 loops workflows events <workflow-run-id>
+loops workflows cancel <workflow-run-id> --reason "no longer needed"
+loops workflows recover <workflow-run-id>
 loops create workflow repo-morning-loop --workflow repo-morning --cron "0 8 * * *"
 ```
 
 Workflow specs are stored separately from loops. A loop can schedule a workflow, but workflow runs and step runs have their own durable rows and events. Steps run in dependency order and a scheduled workflow run is idempotent per loop slot.
+
+For command steps, `command` is the executable when `shell` is not true. Put flags in `args`:
+
+```json
+{ "type": "command", "command": "git", "args": ["status", "--short"] }
+```
+
+Use `shell: true` only when you intentionally want shell parsing:
+
+```json
+{ "type": "command", "command": "git status --short", "shell": true }
+```
 
 ## Manage
 
@@ -148,6 +166,7 @@ loops daemon start
 loops daemon status
 loops daemon logs
 loops daemon stop
+loops doctor
 ```
 
 Run in the foreground for supervised environments:
@@ -160,9 +179,10 @@ Install startup integration:
 
 ```bash
 loops daemon install
+loops daemon install --enable
 ```
 
-On Linux this writes a user systemd service. On macOS it writes a LaunchAgent plist. The command prints the exact enable/load commands to run.
+On Linux this writes a user systemd service. On macOS it writes a LaunchAgent plist. The command prints the exact enable/load commands to run. `--enable` runs the user-service enable/start command when supported.
 
 ## Scheduling Contract
 
@@ -187,6 +207,6 @@ The adapters intentionally use provider command surfaces instead of pretending e
 - AI Copilot and OpenCode use `run --format json --pure`.
 - Cursor is CLI-first for now via `cursor-agent -p`; treat output as less stable until a stronger public SDK contract is selected.
 - Codex uses `codex exec --json --ephemeral --ask-for-approval never`.
-- When `--account` or a step `account` is set, OpenLoops resolves `accounts env <profile> --tool <tool>` before spawning the target, strips inherited tool home/API-key variables, and applies the selected profile only to that process.
+- When `--account` or a step `account` is set, OpenLoops resolves `accounts env <profile> --tool <tool>` before spawning the target, strips inherited tool home/API-key variables, and applies the selected profile only to that process. Missing account profiles fail before the provider binary receives the prompt.
 
 For production loops that can mutate repos, prefer disposable worktrees and explicit prompts that name allowed write scope.

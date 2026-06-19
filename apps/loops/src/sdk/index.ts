@@ -1,6 +1,5 @@
 import type { CreateLoopInput, Loop, LoopRun } from "../types.js";
-import { executeLoopTarget } from "../lib/workflow-runner.js";
-import { tick } from "../lib/scheduler.js";
+import { advanceLoop, executeClaimedRun, manualRunScheduledFor, shouldAdvanceManualRun, tick } from "../lib/scheduler.js";
 import { Store } from "../lib/store.js";
 
 export interface LoopsClientOptions {
@@ -60,22 +59,16 @@ export class LoopsClient {
 
   async runNow(idOrName: string): Promise<LoopRun> {
     const loop = this.get(idOrName);
-    const scheduledFor = new Date().toISOString();
-    const claim = this.store.claimRun(loop, scheduledFor, this.runnerId);
+    const now = new Date();
+    const scheduledFor = manualRunScheduledFor(loop, now);
+    const shouldAdvance = shouldAdvanceManualRun(loop, scheduledFor, now);
+    const claim = this.store.claimRun(loop, scheduledFor, this.runnerId, now);
     if (!claim) throw new Error(`could not claim manual run for ${idOrName}`);
-    const result = await executeLoopTarget(this.store, loop, claim.run);
-    return this.store.finalizeRun(claim.run.id, {
-      status: result.status,
-      finishedAt: result.finishedAt,
-      durationMs: result.durationMs,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      exitCode: result.exitCode,
-      error: result.error,
-      pid: result.pid,
-    }, {
-      claimedBy: claim.run.claimedBy,
-    });
+    const run = await executeClaimedRun({ store: this.store, runnerId: this.runnerId, loop: claim.loop, run: claim.run });
+    if (shouldAdvance) {
+      advanceLoop(this.store, claim.loop, run, new Date(run.finishedAt ?? new Date()), run.status === "succeeded");
+    }
+    return run;
   }
 
   close(): void {
