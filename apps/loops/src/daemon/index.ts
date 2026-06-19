@@ -7,7 +7,7 @@ import { Store } from "../lib/store.js";
 
 const program = new Command();
 
-program.name("loops-daemon").description("OpenLoops daemon helper").version("0.3.0");
+program.name("loops-daemon").description("OpenLoops daemon helper").version("0.3.1");
 
 program
   .command("run")

@@ -1,8 +1,8 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { existsSync } from "node:fs";
 import type { AccountRef, AgentProvider, AgentTarget, CommandTarget, ExecutableTarget, ExecutorResult, Loop, LoopRun } from "../types.js";
 import { accountToolForProvider, resolveAccountEnv } from "./accounts.js";
+import { commandNotFoundMessage, executableExists, normalizeExecutionPath } from "./env.js";
 import { nowIso } from "./ids.js";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
@@ -116,7 +116,16 @@ function agentArgs(target: AgentTarget): string[] {
       args.push(...(target.extraArgs ?? []), target.prompt);
       return args;
     case "codewith":
-      args.push("exec", "--json", "--ephemeral", "--ask-for-approval", "never", "--sandbox", "workspace-write");
+      args.push(
+        "--ask-for-approval",
+        "never",
+        "exec",
+        "--json",
+        "--ephemeral",
+        "--sandbox",
+        "workspace-write",
+        "--skip-git-repo-check",
+      );
       if (isolation === "safe") args.push("--ignore-rules");
       if (target.cwd) args.push("--cd", target.cwd);
       if (target.model) args.push("--model", target.model);
@@ -195,6 +204,7 @@ function executionEnv(
     Object.assign(env, accountEnv);
   }
   Object.assign(env, spec.env ?? {});
+  env.PATH = normalizeExecutionPath(env);
   if (metadata.loopId) env.LOOPS_LOOP_ID = metadata.loopId;
   if (metadata.loopName) env.LOOPS_LOOP_NAME = metadata.loopName;
   if (metadata.runId) env.LOOPS_RUN_ID = metadata.runId;
@@ -206,15 +216,6 @@ function executionEnv(
   return env;
 }
 
-function commandExists(command: string, env: NodeJS.ProcessEnv): boolean {
-  if (command.includes("/") && existsSync(command)) return true;
-  const result = spawnSync("sh", ["-c", "command -v \"$1\" >/dev/null", "sh", command], {
-    env,
-    stdio: "ignore",
-  });
-  return (result.status ?? 1) === 0;
-}
-
 export function preflightTarget(
   target: ExecutableTarget,
   metadata: ExecutionMetadata = {},
@@ -222,8 +223,8 @@ export function preflightTarget(
 ): PreflightResult {
   const spec = commandSpec(target);
   const env = executionEnv(spec, metadata, opts);
-  if (!spec.shell && !commandExists(spec.command, env)) {
-    throw new Error(`Executable not found in PATH: ${spec.command}`);
+  if (!spec.shell && !executableExists(spec.command, env)) {
+    throw new Error(commandNotFoundMessage(spec.command, env));
   }
   return {
     command: spec.command,
@@ -247,12 +248,12 @@ export async function executeTarget(
   let error: string | undefined;
 
   const env = executionEnv(spec, metadata, opts);
-  if (!spec.shell && !commandExists(spec.command, env)) {
+  if (!spec.shell && !executableExists(spec.command, env)) {
     return {
       status: "failed",
       stdout: "",
       stderr: "",
-      error: `Executable not found in PATH: ${spec.command}`,
+      error: commandNotFoundMessage(spec.command, env),
       startedAt,
       finishedAt: nowIso(),
       durationMs: 0,

@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname } from "node:path";
 import { daemonLogPath, launchdPlistPath, systemdServicePath } from "../lib/paths.js";
+import { normalizeExecutionPath } from "../lib/env.js";
 
 export interface StartupEnableResult {
   command: string;
@@ -23,6 +24,7 @@ export function installStartup(
   args: string[] = ["daemon", "run"],
 ): InstallStartupResult {
   const command = [execPath, cliEntry, ...args].join(" ");
+  const pathEnv = normalizeExecutionPath(process.env);
   if (process.platform === "linux") {
     const path = systemdServicePath();
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -37,7 +39,7 @@ Type=simple
 ExecStart=${command}
 Restart=always
 RestartSec=5
-Environment=PATH=${process.env.PATH ?? ""}
+Environment=PATH=${pathEnv}
 
 [Install]
 WantedBy=default.target
@@ -72,6 +74,10 @@ ${args.map((arg) => `    <string>${arg}</string>`).join("\n")}
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>${pathEnv}</string>
+  </dict>
   <key>StandardOutPath</key><string>${daemonLogPath()}</string>
   <key>StandardErrorPath</key><string>${daemonLogPath()}</string>
 </dict>

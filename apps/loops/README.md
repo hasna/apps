@@ -203,10 +203,11 @@ On Linux this writes a user systemd service. On macOS it writes a LaunchAgent pl
 The adapters intentionally use provider command surfaces instead of pretending every agent has one SDK:
 
 - Claude uses `claude -p --output-format json` and safe-mode/local setting sources by default.
-- Codewith uses `codewith exec --json --ephemeral --ask-for-approval never`.
+- Codewith uses `codewith --ask-for-approval never exec --json --ephemeral --skip-git-repo-check`.
 - AI Copilot and OpenCode use `run --format json --pure`.
 - Cursor is CLI-first for now via `cursor-agent -p`; treat output as less stable until a stronger public SDK contract is selected.
 - Codex uses `codex exec --json --ephemeral --ask-for-approval never`.
 - When `--account` or a step `account` is set, OpenLoops resolves `accounts env <profile> --tool <tool>` before spawning the target, strips inherited tool home/API-key variables, and applies the selected profile only to that process. Missing account profiles fail before the provider binary receives the prompt.
+- Daemon and scheduled runs prepend common user executable directories such as `~/.local/bin` and `~/.bun/bin` before resolving provider CLIs.
 
 For production loops that can mutate repos, prefer disposable worktrees and explicit prompts that name allowed write scope.

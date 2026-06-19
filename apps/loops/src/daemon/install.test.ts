@@ -14,6 +14,8 @@ describe("installStartup", () => {
         const service = readFileSync(result.path, "utf8");
         expect(service).toContain("ExecStart=/usr/bin/bun loops-daemon run");
         expect(service).not.toContain("loops-daemon daemon run");
+        expect(service).toContain(`${process.env.HOME}/.local/bin`);
+        expect(service).toContain(`${process.env.HOME}/.bun/bin`);
       }
     } finally {
       if (oldHome === undefined) delete process.env.HOME;

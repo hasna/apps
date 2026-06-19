@@ -10,6 +10,7 @@ import {
   publicWorkflowEvent,
   publicWorkflowRun,
   publicWorkflowStepRun,
+  textOutputBlocks,
 } from "../lib/format.js";
 import { parseDuration } from "../lib/schedule.js";
 import { Store } from "../lib/store.js";
@@ -23,7 +24,7 @@ import { runDoctor } from "../lib/doctor.js";
 
 const program = new Command();
 
-program.name("loops").description("Persistent local loops for commands and headless coding agents").version("0.3.0");
+program.name("loops").description("Persistent local loops for commands and headless coding agents").version("0.3.1");
 program.option("-j, --json", "print JSON");
 
 function isJson(): boolean {
@@ -33,6 +34,10 @@ function isJson(): boolean {
 function print(value: unknown, human?: string): void {
   if (isJson() || !human) console.log(JSON.stringify(value, null, 2));
   else console.log(human);
+}
+
+function printTextOutput(value: { stdout?: string; stderr?: string }): void {
+  for (const line of textOutputBlocks(value, { indent: "  " })) console.log(line);
 }
 
 function parseSchedule(opts: { at?: string; every?: string; cron?: string; dynamic?: boolean }): ScheduleSpec {
@@ -334,6 +339,7 @@ workflows
         console.log(`${run?.id ?? workflow.id} ${result.status}`);
         for (const step of steps) {
           console.log(`  ${String(step.sequence).padStart(2, "0")}  ${step.status.padEnd(10)}  ${step.stepId}  ${step.error ?? ""}`);
+          if (opts.showOutput) printTextOutput(step);
         }
       }
     } finally {
@@ -465,6 +471,7 @@ program
           console.log(
             `${run.id}  ${run.status.padEnd(10)}  attempt=${run.attempt}  slot=${run.scheduledFor}  ${run.loopName}`,
           );
+          if (opts.showOutput) printTextOutput(run);
         }
       }
     } finally {
@@ -518,6 +525,7 @@ program
         advanceLoop(store, claim.loop, run, new Date(run.finishedAt ?? new Date()), run.status === "succeeded");
       }
       print(publicRun(run, opts.showOutput), `${run.id} ${run.status}`);
+      if (!isJson() && opts.showOutput) printTextOutput(run);
     } finally {
       store.close();
   }

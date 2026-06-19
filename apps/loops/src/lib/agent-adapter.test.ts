@@ -75,4 +75,41 @@ describe("agent adapters", () => {
       store.close();
     }
   });
+
+  test("runs codewith with global approval policy before exec", async () => {
+    const binDir = mkdtempSync(join(tmpdir(), "loops-codewith-"));
+    const fake = join(binDir, "codewith");
+    await Bun.write(fake, "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\"\n");
+    chmodSync(fake, 0o755);
+
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "codewith-agent",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "codewith",
+          prompt: "say ok",
+          cwd: ".",
+          configIsolation: "safe",
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+      });
+      expect(result.status).toBe("succeeded");
+      const args = result.stdout.trim().split(/\r?\n/);
+      expect(args.slice(0, 3)).toEqual(["--ask-for-approval", "never", "exec"]);
+      expect(args).toContain("--json");
+      expect(args).toContain("--ephemeral");
+      expect(args).toContain("--skip-git-repo-check");
+      expect(args.indexOf("--ask-for-approval")).toBeLessThan(args.indexOf("exec"));
+      expect(args).toContain("say ok");
+    } finally {
+      store.close();
+    }
+  });
 });
