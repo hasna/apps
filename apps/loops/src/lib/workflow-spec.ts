@@ -24,6 +24,10 @@ function validateTarget(value: unknown, label: string): ExecutableTarget {
     assertString(value.prompt, `${label}.prompt`);
     const providers = ["claude", "cursor", "codewith", "aicopilot", "opencode", "codex"];
     if (!providers.includes(value.provider)) throw new Error(`${label}.provider must be one of ${providers.join(", ")}`);
+    if (value.authProfile !== undefined) {
+      assertString(value.authProfile, `${label}.authProfile`);
+      if (value.provider !== "codewith") throw new Error(`${label}.authProfile is currently supported only for provider codewith`);
+    }
     return value as unknown as ExecutableTarget;
   }
   throw new Error(`${label}.type must be command or agent`);

@@ -117,6 +117,7 @@ function agentArgs(target: AgentTarget): string[] {
       return args;
     case "codewith":
       args.push(
+        ...(target.authProfile ? ["--auth-profile", target.authProfile] : []),
         "--ask-for-approval",
         "never",
         "exec",

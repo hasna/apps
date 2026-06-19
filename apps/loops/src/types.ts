@@ -64,6 +64,7 @@ export interface AgentTarget {
   cwd?: string;
   model?: string;
   agent?: string;
+  authProfile?: string;
   extraArgs?: string[];
   timeoutMs?: number;
   configIsolation?: AgentConfigIsolation;

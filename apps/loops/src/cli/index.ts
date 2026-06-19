@@ -24,7 +24,7 @@ import { runDoctor } from "../lib/doctor.js";
 
 const program = new Command();
 
-program.name("loops").description("Persistent local loops for commands and headless coding agents").version("0.3.1");
+program.name("loops").description("Persistent local loops for commands and headless coding agents").version("0.3.2");
 program.option("-j, --json", "print JSON");
 
 function isJson(): boolean {
@@ -137,6 +137,12 @@ function accountFromOpts(opts: { account?: string; accountTool?: string }): Acco
   return opts.account ? { profile: opts.account, tool: opts.accountTool } : undefined;
 }
 
+function providerAuthProfileFromOpts(opts: { authProfile?: string }, provider: AgentProvider): string | undefined {
+  if (!opts.authProfile) return undefined;
+  if (provider !== "codewith") throw new Error("--auth-profile is currently supported only for --provider codewith");
+  return opts.authProfile;
+}
+
 const create = program.command("create").description("create loops");
 
 addAccountOptions(
@@ -177,6 +183,7 @@ addAccountOptions(
       .option("--cwd <dir>", "working directory")
       .option("--model <model>", "model")
       .option("--agent <agent>", "provider-specific agent")
+      .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
       .option("--timeout <duration>", "run timeout")
       .option("--config-isolation <mode>", "safe or none", "safe"),
   ),
@@ -197,6 +204,7 @@ addAccountOptions(
       cwd: opts.cwd,
       model: opts.model,
       agent: opts.agent,
+      authProfile: providerAuthProfileFromOpts(opts, provider),
       timeoutMs: opts.timeout ? parseDuration(opts.timeout) : undefined,
       configIsolation: opts.configIsolation,
       account: accountFromOpts(opts),
@@ -526,6 +534,7 @@ program
       }
       print(publicRun(run, opts.showOutput), `${run.id} ${run.status}`);
       if (!isJson() && opts.showOutput) printTextOutput(run);
+      if (run.status !== "succeeded") process.exitCode = 1;
     } finally {
       store.close();
   }

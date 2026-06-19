@@ -112,4 +112,40 @@ describe("agent adapters", () => {
       store.close();
     }
   });
+
+  test("runs codewith with provider-native auth profile before exec", async () => {
+    const binDir = mkdtempSync(join(tmpdir(), "loops-codewith-auth-"));
+    const fake = join(binDir, "codewith");
+    await Bun.write(fake, "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\"\n");
+    chmodSync(fake, 0o755);
+
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "codewith-profile-agent",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "codewith",
+          authProfile: "account001",
+          prompt: "say ok",
+          cwd: ".",
+          configIsolation: "safe",
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+      });
+      expect(result.status).toBe("succeeded");
+      const args = result.stdout.trim().split(/\r?\n/);
+      expect(args.slice(0, 5)).toEqual(["--auth-profile", "account001", "--ask-for-approval", "never", "exec"]);
+      expect(args.indexOf("--auth-profile")).toBeLessThan(args.indexOf("exec"));
+      expect(args).toContain("--skip-git-repo-check");
+      expect(args).toContain("say ok");
+    } finally {
+      store.close();
+    }
+  });
 });
