@@ -1,14 +1,15 @@
-# OpenLoops Usage
+# OpenLoops
 
-OpenLoops is a local CLI and daemon for persistent loops: scheduled or recurring work that survives process restarts and records every run.
+OpenLoops is a local CLI and daemon for persistent loops and workflows: scheduled or recurring work that survives process restarts and records every run.
 
-It supports deterministic command loops today and guarded CLI adapters for headless coding agents:
+It supports deterministic command loops, JSON-defined workflows, and guarded CLI adapters for headless coding agents:
 
 - `claude`
 - `cursor-agent`
 - `codewith exec`
 - `aicopilot run`
 - `opencode run`
+- `codex exec`
 
 ## Install
 
@@ -53,6 +54,18 @@ loops create agent morning-check \
   --prompt "Check whether this repo is healthy and summarize required action."
 ```
 
+Run a Claude loop with an isolated OpenAccounts profile:
+
+```bash
+loops create agent morning-check \
+  --provider claude \
+  --account work \
+  --account-tool claude \
+  --cron "0 8 * * *" \
+  --cwd /path/to/repo \
+  --prompt "Check whether this repo is healthy and summarize required action."
+```
+
 Run a Codewith loop every 15 minutes:
 
 ```bash
@@ -62,6 +75,56 @@ loops create agent supply-chain-watch \
   --cwd /path/to/repo \
   --prompt "Check for suspicious dependency or supply-chain changes. Report only concrete findings."
 ```
+
+For `codewith` and `aicopilot` account isolation, register matching OpenAccounts tools first if they are not built in on the machine:
+
+```bash
+accounts tools add codewith --label "Codewith" --env-var CODEWITH_HOME --bin codewith
+accounts tools add aicopilot --label "AI Copilot" --env-var AICOPILOT_CONFIG_DIR --bin aicopilot
+```
+
+## Workflows
+
+Create a workflow JSON file:
+
+```json
+{
+  "name": "repo-morning",
+  "steps": [
+    {
+      "id": "status",
+      "target": {
+        "type": "command",
+        "command": "git status --short",
+        "cwd": "/path/to/repo"
+      }
+    },
+    {
+      "id": "review",
+      "dependsOn": ["status"],
+      "target": {
+        "type": "agent",
+        "provider": "codex",
+        "account": { "profile": "work", "tool": "codex" },
+        "cwd": "/path/to/repo",
+        "prompt": "Review the repository status and summarize concrete next actions."
+      }
+    }
+  ]
+}
+```
+
+Save, run, inspect, and schedule it:
+
+```bash
+loops workflows create repo-morning.json
+loops workflows run repo-morning --show-output
+loops workflows runs repo-morning
+loops workflows events <workflow-run-id>
+loops create workflow repo-morning-loop --workflow repo-morning --cron "0 8 * * *"
+```
+
+Workflow specs are stored separately from loops. A loop can schedule a workflow, but workflow runs and step runs have their own durable rows and events. Steps run in dependency order and a scheduled workflow run is idempotent per loop slot.
 
 ## Manage
 
@@ -123,5 +186,7 @@ The adapters intentionally use provider command surfaces instead of pretending e
 - Codewith uses `codewith exec --json --ephemeral --ask-for-approval never`.
 - AI Copilot and OpenCode use `run --format json --pure`.
 - Cursor is CLI-first for now via `cursor-agent -p`; treat output as less stable until a stronger public SDK contract is selected.
+- Codex uses `codex exec --json --ephemeral --ask-for-approval never`.
+- When `--account` or a step `account` is set, OpenLoops resolves `accounts env <profile> --tool <tool>` before spawning the target, strips inherited tool home/API-key variables, and applies the selected profile only to that process.
 
 For production loops that can mutate repos, prefer disposable worktrees and explicit prompts that name allowed write scope.

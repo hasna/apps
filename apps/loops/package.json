@@ -1,7 +1,7 @@
 {
   "name": "@hasna/loops",
-  "version": "0.1.0",
-  "description": "Persistent local loop runner for deterministic commands and headless AI coding agents",
+  "version": "0.2.0",
+  "description": "Persistent local loop and workflow runner for deterministic commands and headless AI coding agents",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import type { AgentProvider, AgentTarget, CommandTarget, ExecutorResult, Loop, LoopRun } from "../types.js";
+import type { AccountRef, AgentProvider, AgentTarget, CommandTarget, ExecutableTarget, ExecutorResult, Loop, LoopRun } from "../types.js";
+import { accountToolForProvider, resolveAccountEnv } from "./accounts.js";
 import { nowIso } from "./ids.js";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
@@ -11,6 +12,35 @@ export interface ExecuteOptions {
   env?: NodeJS.ProcessEnv;
   log?: (message: string) => void;
 }
+
+export interface ExecutionMetadata {
+  loopId?: string;
+  loopName?: string;
+  runId?: string;
+  scheduledFor?: string;
+  workflowId?: string;
+  workflowName?: string;
+  workflowRunId?: string;
+  workflowStepId?: string;
+}
+
+const AUTH_ENV_KEYS = [
+  "CLAUDE_CONFIG_DIR",
+  "CODEWITH_HOME",
+  "CODEX_HOME",
+  "CURSOR_CONFIG_DIR",
+  "OPENCODE_CONFIG_DIR",
+  "AICOPILOT_CONFIG_DIR",
+  "ANTHROPIC_API_KEY",
+  "OPENAI_API_KEY",
+  "OPENROUTER_API_KEY",
+  "GITHUB_TOKEN",
+  "GH_TOKEN",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+  "XDG_STATE_HOME",
+  "XDG_CACHE_HOME",
+];
 
 function appendBounded(current: string, chunk: Buffer, maxBytes: number): string {
   const next = current + chunk.toString("utf8");
@@ -54,6 +84,8 @@ function providerCommand(provider: AgentProvider): string {
       return "aicopilot";
     case "opencode":
       return "opencode";
+    case "codex":
+      return "codex";
   }
 }
 
@@ -82,6 +114,13 @@ function agentArgs(target: AgentTarget): string[] {
       if (target.agent) args.push("--agent", target.agent);
       args.push(...(target.extraArgs ?? []), target.prompt);
       return args;
+    case "codex":
+      args.push("exec", "--json", "--ephemeral", "--ask-for-approval", "never", "--sandbox", "workspace-write");
+      if (isolation === "safe") args.push("--ignore-rules");
+      if (target.cwd) args.push("--cd", target.cwd);
+      if (target.model) args.push("--model", target.model);
+      args.push(...(target.extraArgs ?? []), target.prompt);
+      return args;
     case "aicopilot":
       args.push("run", "--format", "json");
       if (isolation === "safe") args.push("--pure");
@@ -101,15 +140,16 @@ function agentArgs(target: AgentTarget): string[] {
   }
 }
 
-function commandSpec(loop: Loop): {
+function commandSpec(target: ExecutableTarget): {
   command: string;
   args: string[];
   cwd?: string;
   shell?: boolean;
   env?: Record<string, string>;
   timeoutMs: number;
+  account?: AccountRef;
+  accountTool?: string;
 } {
-  const target = loop.target;
   if (target.type === "command") {
     const commandTarget = target as CommandTarget;
     return {
@@ -119,6 +159,8 @@ function commandSpec(loop: Loop): {
       shell: commandTarget.shell,
       env: commandTarget.env,
       timeoutMs: commandTarget.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      account: commandTarget.account,
+      accountTool: commandTarget.account?.tool,
     };
   }
   const agentTarget = target as AgentTarget;
@@ -127,11 +169,40 @@ function commandSpec(loop: Loop): {
     args: agentArgs(agentTarget),
     cwd: agentTarget.cwd,
     timeoutMs: agentTarget.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    account: agentTarget.account,
+    accountTool: agentTarget.account?.tool ?? accountToolForProvider(agentTarget.provider),
   };
 }
 
-export async function executeLoop(loop: Loop, run: LoopRun, opts: ExecuteOptions = {}): Promise<ExecutorResult> {
-  const spec = commandSpec(loop);
+function executionEnv(
+  spec: ReturnType<typeof commandSpec>,
+  metadata: ExecutionMetadata,
+  opts: ExecuteOptions,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...(opts.env ?? process.env) };
+  if (spec.account) {
+    const accountEnv = resolveAccountEnv(spec.account, spec.accountTool, env);
+    for (const key of AUTH_ENV_KEYS) delete env[key];
+    Object.assign(env, accountEnv);
+  }
+  Object.assign(env, spec.env ?? {});
+  if (metadata.loopId) env.LOOPS_LOOP_ID = metadata.loopId;
+  if (metadata.loopName) env.LOOPS_LOOP_NAME = metadata.loopName;
+  if (metadata.runId) env.LOOPS_RUN_ID = metadata.runId;
+  if (metadata.scheduledFor) env.LOOPS_SCHEDULED_FOR = metadata.scheduledFor;
+  if (metadata.workflowId) env.LOOPS_WORKFLOW_ID = metadata.workflowId;
+  if (metadata.workflowName) env.LOOPS_WORKFLOW_NAME = metadata.workflowName;
+  if (metadata.workflowRunId) env.LOOPS_WORKFLOW_RUN_ID = metadata.workflowRunId;
+  if (metadata.workflowStepId) env.LOOPS_WORKFLOW_STEP_ID = metadata.workflowStepId;
+  return env;
+}
+
+export async function executeTarget(
+  target: ExecutableTarget,
+  metadata: ExecutionMetadata = {},
+  opts: ExecuteOptions = {},
+): Promise<ExecutorResult> {
+  const spec = commandSpec(target);
   const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
   const startedAt = nowIso();
   let stdout = "";
@@ -140,14 +211,7 @@ export async function executeLoop(loop: Loop, run: LoopRun, opts: ExecuteOptions
   let exitCode: number | undefined;
   let error: string | undefined;
 
-  const env = {
-    ...(opts.env ?? process.env),
-    ...(spec.env ?? {}),
-    LOOPS_LOOP_ID: loop.id,
-    LOOPS_LOOP_NAME: loop.name,
-    LOOPS_RUN_ID: run.id,
-    LOOPS_SCHEDULED_FOR: run.scheduledFor,
-  };
+  const env = executionEnv(spec, metadata, opts);
 
   const child = spawn(spec.command, spec.args, {
     cwd: spec.cwd,
@@ -218,4 +282,20 @@ export async function executeLoop(loop: Loop, run: LoopRun, opts: ExecuteOptions
     finishedAt,
     durationMs,
   };
+}
+
+export async function executeLoop(loop: Loop, run: LoopRun, opts: ExecuteOptions = {}): Promise<ExecutorResult> {
+  if (loop.target.type === "workflow") {
+    throw new Error("workflow loop targets must be executed with executeLoopTarget");
+  }
+  return executeTarget(
+    loop.target,
+    {
+      loopId: loop.id,
+      loopName: loop.name,
+      runId: run.id,
+      scheduledFor: run.scheduledFor,
+    },
+    opts,
+  );
 }

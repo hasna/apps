@@ -1,5 +1,5 @@
 import type { CreateLoopInput, Loop, LoopRun } from "../types.js";
-import { executeLoop } from "../lib/executor.js";
+import { executeLoopTarget } from "../lib/workflow-runner.js";
 import { tick } from "../lib/scheduler.js";
 import { Store } from "../lib/store.js";
 
@@ -63,7 +63,7 @@ export class LoopsClient {
     const scheduledFor = new Date().toISOString();
     const claim = this.store.claimRun(loop, scheduledFor, this.runnerId);
     if (!claim) throw new Error(`could not claim manual run for ${idOrName}`);
-    const result = await executeLoop(loop, claim.run);
+    const result = await executeLoopTarget(this.store, loop, claim.run);
     return this.store.finalizeRun(claim.run.id, {
       status: result.status,
       finishedAt: result.finishedAt,
@@ -73,6 +73,8 @@ export class LoopsClient {
       exitCode: result.exitCode,
       error: result.error,
       pid: result.pid,
+    }, {
+      claimedBy: claim.run.claimedBy,
     });
   }
 

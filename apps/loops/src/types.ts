@@ -14,6 +14,11 @@ export type OverlapPolicy = "skip" | "allow";
 
 export type IntervalAnchor = "fixed_rate" | "fixed_delay";
 
+export interface AccountRef {
+  profile: string;
+  tool?: string;
+}
+
 export interface OnceSchedule {
   type: "once";
   at: string;
@@ -45,9 +50,10 @@ export interface CommandTarget {
   shell?: boolean;
   env?: Record<string, string>;
   timeoutMs?: number;
+  account?: AccountRef;
 }
 
-export type AgentProvider = "claude" | "cursor" | "codewith" | "aicopilot" | "opencode";
+export type AgentProvider = "claude" | "cursor" | "codewith" | "aicopilot" | "opencode" | "codex";
 
 export type AgentConfigIsolation = "safe" | "none";
 
@@ -61,9 +67,100 @@ export interface AgentTarget {
   extraArgs?: string[];
   timeoutMs?: number;
   configIsolation?: AgentConfigIsolation;
+  account?: AccountRef;
 }
 
-export type LoopTarget = CommandTarget | AgentTarget;
+export interface WorkflowTarget {
+  type: "workflow";
+  workflowId: string;
+  input?: Record<string, string>;
+  timeoutMs?: number;
+}
+
+export type ExecutableTarget = CommandTarget | AgentTarget;
+
+export type LoopTarget = ExecutableTarget | WorkflowTarget;
+
+export type WorkflowStatus = "active" | "archived";
+
+export type WorkflowRunStatus = "running" | "succeeded" | "failed" | "timed_out";
+
+export type WorkflowStepRunStatus = "pending" | "running" | "succeeded" | "failed" | "timed_out" | "skipped";
+
+export interface WorkflowStep {
+  id: string;
+  name?: string;
+  description?: string;
+  target: ExecutableTarget;
+  dependsOn?: string[];
+  continueOnFailure?: boolean;
+  timeoutMs?: number;
+  account?: AccountRef;
+}
+
+export interface WorkflowSpec {
+  id: string;
+  name: string;
+  description?: string;
+  version: number;
+  status: WorkflowStatus;
+  steps: WorkflowStep[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateWorkflowInput {
+  name: string;
+  description?: string;
+  steps: WorkflowStep[];
+  version?: number;
+}
+
+export interface WorkflowRun {
+  id: string;
+  workflowId: string;
+  workflowName: string;
+  loopId?: string;
+  loopRunId?: string;
+  scheduledFor?: string;
+  idempotencyKey?: string;
+  status: WorkflowRunStatus;
+  startedAt?: string;
+  finishedAt?: string;
+  durationMs?: number;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkflowStepRun {
+  id: string;
+  workflowRunId: string;
+  stepId: string;
+  sequence: number;
+  status: WorkflowStepRunStatus;
+  startedAt?: string;
+  finishedAt?: string;
+  exitCode?: number;
+  durationMs?: number;
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+  accountProfile?: string;
+  accountTool?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkflowEvent {
+  id: string;
+  workflowRunId: string;
+  sequence: number;
+  eventType: string;
+  stepId?: string;
+  payload?: Record<string, unknown>;
+  createdAt: string;
+}
 
 export interface Loop {
   id: string;

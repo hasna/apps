@@ -1,20 +1,28 @@
 #!/usr/bin/env bun
 import { existsSync, readFileSync } from "node:fs";
 import { Command } from "commander";
-import type { AgentProvider, CatchUpPolicy, CreateLoopInput, LoopTarget, OverlapPolicy, ScheduleSpec } from "../types.js";
+import type { AccountRef, AgentProvider, CatchUpPolicy, CreateLoopInput, LoopTarget, OverlapPolicy, ScheduleSpec } from "../types.js";
 import { daemonLogPath } from "../lib/paths.js";
-import { publicLoop, publicRun } from "../lib/format.js";
+import {
+  publicLoop,
+  publicRun,
+  publicWorkflow,
+  publicWorkflowEvent,
+  publicWorkflowRun,
+  publicWorkflowStepRun,
+} from "../lib/format.js";
 import { parseDuration } from "../lib/schedule.js";
 import { Store } from "../lib/store.js";
-import { executeLoop } from "../lib/executor.js";
+import { executeLoopTarget, executeWorkflow } from "../lib/workflow-runner.js";
 import { tick } from "../lib/scheduler.js";
 import { daemonStatus, stopDaemon } from "../daemon/control.js";
 import { runDaemon, startDaemon } from "../daemon/daemon.js";
 import { installStartup } from "../daemon/install.js";
+import { workflowBodyFromJson } from "../lib/workflow-spec.js";
 
 const program = new Command();
 
-program.name("loops").description("Persistent local loops for commands and headless coding agents").version("0.1.0");
+program.name("loops").description("Persistent local loops for commands and headless coding agents").version("0.2.0");
 program.option("-j, --json", "print JSON");
 
 function isJson(): boolean {
@@ -112,16 +120,29 @@ function addScheduleOptions(command: Command): Command {
     .option("-d, --description <text>", "description");
 }
 
+function addAccountOptions(command: Command): Command {
+  return command
+    .option("--account <profile>", "OpenAccounts profile name for this target")
+    .option("--account-tool <tool>", "OpenAccounts tool id; defaults from provider for agents");
+}
+
+function accountFromOpts(opts: { account?: string; accountTool?: string }): AccountRef | undefined {
+  if (!opts.account && opts.accountTool) throw new Error("--account-tool requires --account");
+  return opts.account ? { profile: opts.account, tool: opts.accountTool } : undefined;
+}
+
 const create = program.command("create").description("create loops");
 
-addScheduleOptions(
-  create
-    .command("command <name>")
-    .description("create a deterministic shell command loop")
-    .requiredOption("--cmd <command>", "command string to execute")
-    .option("--cwd <dir>", "working directory")
-    .option("--timeout <duration>", "run timeout")
-    .option("--no-shell", "execute without a shell"),
+addAccountOptions(
+  addScheduleOptions(
+    create
+      .command("command <name>")
+      .description("create a deterministic shell command loop")
+      .requiredOption("--cmd <command>", "command string to execute")
+      .option("--cwd <dir>", "working directory")
+      .option("--timeout <duration>", "run timeout")
+      .option("--no-shell", "execute without a shell"),
+  ),
 ).action((name, opts) => {
   const store = new Store();
   try {
@@ -131,6 +152,7 @@ addScheduleOptions(
       cwd: opts.cwd,
       shell: opts.shell,
       timeoutMs: opts.timeout ? parseDuration(opts.timeout) : undefined,
+      account: accountFromOpts(opts),
     };
     const loop = store.createLoop(baseCreateInput(name, opts, target));
     print(publicLoop(loop), `created loop ${loop.id} (${loop.name}) next=${loop.nextRunAt}`);
@@ -139,20 +161,22 @@ addScheduleOptions(
   }
 });
 
-addScheduleOptions(
-  create
-    .command("agent <name>")
-    .description("create a headless coding-agent loop")
-    .requiredOption("--provider <provider>", "claude, cursor, codewith, aicopilot, or opencode")
-    .requiredOption("--prompt <prompt>", "agent prompt")
-    .option("--cwd <dir>", "working directory")
-    .option("--model <model>", "model")
-    .option("--agent <agent>", "provider-specific agent")
-    .option("--timeout <duration>", "run timeout")
-    .option("--config-isolation <mode>", "safe or none", "safe"),
+addAccountOptions(
+  addScheduleOptions(
+    create
+      .command("agent <name>")
+      .description("create a headless coding-agent loop")
+      .requiredOption("--provider <provider>", "claude, cursor, codewith, aicopilot, opencode, or codex")
+      .requiredOption("--prompt <prompt>", "agent prompt")
+      .option("--cwd <dir>", "working directory")
+      .option("--model <model>", "model")
+      .option("--agent <agent>", "provider-specific agent")
+      .option("--timeout <duration>", "run timeout")
+      .option("--config-isolation <mode>", "safe or none", "safe"),
+  ),
 ).action((name, opts) => {
   const provider = opts.provider as AgentProvider;
-  if (!["claude", "cursor", "codewith", "aicopilot", "opencode"].includes(provider)) {
+  if (!["claude", "cursor", "codewith", "aicopilot", "opencode", "codex"].includes(provider)) {
     throw new Error("unsupported provider");
   }
   if (!["safe", "none"].includes(opts.configIsolation)) {
@@ -169,9 +193,143 @@ addScheduleOptions(
       agent: opts.agent,
       timeoutMs: opts.timeout ? parseDuration(opts.timeout) : undefined,
       configIsolation: opts.configIsolation,
+      account: accountFromOpts(opts),
     };
     const loop = store.createLoop(baseCreateInput(name, opts, target));
     print(publicLoop(loop), `created loop ${loop.id} (${loop.name}) next=${loop.nextRunAt}`);
+  } finally {
+    store.close();
+  }
+});
+
+addScheduleOptions(
+  create
+    .command("workflow <name>")
+    .description("schedule a stored workflow")
+    .requiredOption("--workflow <idOrName>", "workflow id or name"),
+).action((name, opts) => {
+  const store = new Store();
+  try {
+    const workflow = store.requireWorkflow(opts.workflow);
+    const target: LoopTarget = {
+      type: "workflow",
+      workflowId: workflow.id,
+    };
+    const loop = store.createLoop(baseCreateInput(name, opts, target));
+    print(publicLoop(loop), `created workflow loop ${loop.id} (${loop.name}) workflow=${workflow.name} next=${loop.nextRunAt}`);
+  } finally {
+    store.close();
+  }
+});
+
+const workflows = program.command("workflows").alias("workflow").description("manage workflow specs and runs");
+
+workflows
+  .command("create <file>")
+  .description("validate and store a workflow JSON file")
+  .option("--name <name>", "override workflow name from the file")
+  .action((file, opts) => {
+    const store = new Store();
+    try {
+      const body = workflowBodyFromJson(JSON.parse(readFileSync(file, "utf8")), opts.name);
+      const workflow = store.createWorkflow(body);
+      print(publicWorkflow(workflow), `created workflow ${workflow.id} (${workflow.name}) steps=${workflow.steps.length}`);
+    } finally {
+      store.close();
+    }
+  });
+
+workflows
+  .command("list")
+  .alias("ls")
+  .option("--status <status>", "active or archived", "active")
+  .action((opts) => {
+    const store = new Store();
+    try {
+      const workflowsList = store.listWorkflows({ status: opts.status });
+      if (isJson()) print(workflowsList.map(publicWorkflow));
+      else {
+        for (const workflow of workflowsList) {
+          console.log(`${workflow.id}  ${workflow.status.padEnd(8)}  steps=${workflow.steps.length}  ${workflow.name}`);
+        }
+      }
+    } finally {
+      store.close();
+    }
+  });
+
+workflows.command("show <idOrName>").action((idOrName) => {
+  const store = new Store();
+  try {
+    print(publicWorkflow(store.requireWorkflow(idOrName)));
+  } finally {
+    store.close();
+  }
+});
+
+workflows
+  .command("run <idOrName>")
+  .option("--show-output", "show step stdout/stderr")
+  .action(async (idOrName, opts) => {
+    const store = new Store();
+    try {
+      const workflow = store.requireWorkflow(idOrName);
+      const result = await executeWorkflow(store, workflow);
+      const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0];
+      const steps = run ? store.listWorkflowStepRuns(run.id) : [];
+      const value = {
+        result,
+        workflowRun: run ? publicWorkflowRun(run) : undefined,
+        steps: steps.map((step) => publicWorkflowStepRun(step, opts.showOutput)),
+      };
+      print(value, `${run?.id ?? workflow.id} ${result.status}`);
+    } finally {
+      store.close();
+    }
+  });
+
+workflows
+  .command("runs [idOrName]")
+  .option("--limit <n>", "limit", "50")
+  .action((idOrName, opts) => {
+    const store = new Store();
+    try {
+      const workflow = idOrName ? store.requireWorkflow(idOrName) : undefined;
+      const runs = store.listWorkflowRuns({ workflowId: workflow?.id, limit: Number(opts.limit) });
+      if (isJson()) print(runs.map(publicWorkflowRun));
+      else {
+        for (const run of runs) {
+          console.log(`${run.id}  ${run.status.padEnd(10)}  ${run.workflowName}  started=${run.startedAt ?? "-"}`);
+        }
+      }
+    } finally {
+      store.close();
+    }
+  });
+
+workflows
+  .command("events <runId>")
+  .option("--limit <n>", "limit", "200")
+  .action((runId, opts) => {
+    const store = new Store();
+    try {
+      const events = store.listWorkflowEvents(runId, Number(opts.limit));
+      if (isJson()) print(events.map(publicWorkflowEvent));
+      else {
+        for (const event of events) {
+          console.log(`${String(event.sequence).padStart(3, "0")}  ${event.eventType.padEnd(14)}  ${event.stepId ?? "-"}  ${event.createdAt}`);
+        }
+      }
+    } finally {
+      store.close();
+    }
+  });
+
+workflows.command("archive <idOrName>").action((idOrName) => {
+  const store = new Store();
+  try {
+    const workflow = store.archiveWorkflow(idOrName);
+    print(publicWorkflow(workflow), `${workflow.id} ${workflow.status}`);
   } finally {
     store.close();
   }
@@ -264,7 +422,7 @@ program
     const loop = store.requireLoop(idOrName);
     const claim = store.claimRun(loop, new Date().toISOString(), `manual:${process.pid}`);
     if (!claim) throw new Error("could not claim manual run");
-    const result = await executeLoop(loop, claim.run);
+    const result = await executeLoopTarget(store, loop, claim.run);
     const run = store.finalizeRun(claim.run.id, {
       status: result.status,
       finishedAt: result.finishedAt,
@@ -274,6 +432,8 @@ program
       exitCode: result.exitCode,
       error: result.error,
       pid: result.pid,
+    }, {
+      claimedBy: claim.run.claimedBy,
     });
     print(publicRun(run, opts.showOutput), `${run.id} ${run.status}`);
   } finally {

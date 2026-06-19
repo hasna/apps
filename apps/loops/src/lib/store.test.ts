@@ -93,4 +93,37 @@ describe("Store", () => {
       store.close();
     }
   });
+
+  test("fenced finalization cannot overwrite an abandoned expired run", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "fenced",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+          leaseMs: 10,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      store.recoverExpiredRunLeases(new Date("2026-01-01T00:00:01Z"));
+      const final = store.finalizeRun(
+        claim!.run.id,
+        {
+          status: "succeeded",
+          finishedAt: "2026-01-01T00:00:02.000Z",
+          durationMs: 2_000,
+          stdout: "late",
+          stderr: "",
+        },
+        { claimedBy: "runner", now: new Date("2026-01-01T00:00:02Z") },
+      );
+      expect(final.status).toBe("abandoned");
+      expect(final.stdout).toBeUndefined();
+    } finally {
+      store.close();
+    }
+  });
 });

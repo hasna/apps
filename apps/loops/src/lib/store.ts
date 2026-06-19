@@ -1,10 +1,25 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { CatchUpPolicy, CreateLoopInput, Loop, LoopRun, LoopStatus, RunStatus } from "../types.js";
+import type {
+  CatchUpPolicy,
+  CreateLoopInput,
+  CreateWorkflowInput,
+  Loop,
+  LoopRun,
+  LoopStatus,
+  RunStatus,
+  WorkflowEvent,
+  WorkflowRun,
+  WorkflowRunStatus,
+  WorkflowSpec,
+  WorkflowStepRun,
+  WorkflowStepRunStatus,
+} from "../types.js";
 import { genId, nowIso } from "./ids.js";
 import { dbPath } from "./paths.js";
 import { initialNextRun } from "./schedule.js";
+import { normalizeCreateWorkflowInput } from "./workflow-spec.js";
 
 interface LoopRow {
   id: string;
@@ -45,6 +60,63 @@ interface RunRow {
   error: string | null;
   created_at: string;
   updated_at: string;
+}
+
+interface WorkflowRow {
+  id: string;
+  name: string;
+  description: string | null;
+  version: number;
+  status: string;
+  steps_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface WorkflowRunRow {
+  id: string;
+  workflow_id: string;
+  workflow_name: string;
+  loop_id: string | null;
+  loop_run_id: string | null;
+  scheduled_for: string | null;
+  idempotency_key: string | null;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_ms: number | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface WorkflowStepRunRow {
+  id: string;
+  workflow_run_id: string;
+  step_id: string;
+  sequence: number;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  exit_code: number | null;
+  duration_ms: number | null;
+  stdout: string | null;
+  stderr: string | null;
+  error: string | null;
+  account_profile: string | null;
+  account_tool: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface WorkflowEventRow {
+  id: string;
+  workflow_run_id: string;
+  sequence: number;
+  event_type: string;
+  step_id: string | null;
+  payload_json: string | null;
+  created_at: string;
 }
 
 export interface DaemonLease {
@@ -112,6 +184,71 @@ function rowToRun(row: RunRow): LoopRun {
   };
 }
 
+function rowToWorkflow(row: WorkflowRow): WorkflowSpec {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description ?? undefined,
+    version: row.version,
+    status: row.status as WorkflowSpec["status"],
+    steps: JSON.parse(row.steps_json) as WorkflowSpec["steps"],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToWorkflowRun(row: WorkflowRunRow): WorkflowRun {
+  return {
+    id: row.id,
+    workflowId: row.workflow_id,
+    workflowName: row.workflow_name,
+    loopId: row.loop_id ?? undefined,
+    loopRunId: row.loop_run_id ?? undefined,
+    scheduledFor: row.scheduled_for ?? undefined,
+    idempotencyKey: row.idempotency_key ?? undefined,
+    status: row.status as WorkflowRunStatus,
+    startedAt: row.started_at ?? undefined,
+    finishedAt: row.finished_at ?? undefined,
+    durationMs: row.duration_ms ?? undefined,
+    error: row.error ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToWorkflowStepRun(row: WorkflowStepRunRow): WorkflowStepRun {
+  return {
+    id: row.id,
+    workflowRunId: row.workflow_run_id,
+    stepId: row.step_id,
+    sequence: row.sequence,
+    status: row.status as WorkflowStepRunStatus,
+    startedAt: row.started_at ?? undefined,
+    finishedAt: row.finished_at ?? undefined,
+    exitCode: row.exit_code ?? undefined,
+    durationMs: row.duration_ms ?? undefined,
+    stdout: row.stdout ?? undefined,
+    stderr: row.stderr ?? undefined,
+    error: row.error ?? undefined,
+    accountProfile: row.account_profile ?? undefined,
+    accountTool: row.account_tool ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToWorkflowEvent(row: WorkflowEventRow): WorkflowEvent {
+  return {
+    id: row.id,
+    workflowRunId: row.workflow_run_id,
+    sequence: row.sequence,
+    eventType: row.event_type,
+    stepId: row.step_id ?? undefined,
+    payload: row.payload_json ? (JSON.parse(row.payload_json) as Record<string, unknown>) : undefined,
+    createdAt: row.created_at,
+  };
+}
+
 function rowToLease(row: LeaseRow): DaemonLease {
   return {
     id: row.id,
@@ -129,6 +266,14 @@ export interface ClaimRunResult {
   loop: Loop;
 }
 
+export interface CreateWorkflowRunInput {
+  workflow: WorkflowSpec;
+  loop?: Loop;
+  loopRun?: LoopRun;
+  scheduledFor?: string;
+  idempotencyKey?: string;
+}
+
 export class Store {
   private db: Database;
 
@@ -143,6 +288,11 @@ export class Store {
 
   private migrate(): void {
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        id TEXT PRIMARY KEY,
+        applied_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS loops (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -199,7 +349,80 @@ export class Store {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS workflow_specs (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        version INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        steps_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_workflows_status_name ON workflow_specs(status, name);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_workflows_name_active ON workflow_specs(name) WHERE status = 'active';
+
+      CREATE TABLE IF NOT EXISTS workflow_runs (
+        id TEXT PRIMARY KEY,
+        workflow_id TEXT NOT NULL REFERENCES workflow_specs(id) ON DELETE CASCADE,
+        workflow_name TEXT NOT NULL,
+        loop_id TEXT REFERENCES loops(id) ON DELETE SET NULL,
+        loop_run_id TEXT REFERENCES loop_runs(id) ON DELETE SET NULL,
+        scheduled_for TEXT,
+        idempotency_key TEXT,
+        status TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        duration_ms INTEGER,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_runs_idempotency
+        ON workflow_runs(workflow_id, idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow_created ON workflow_runs(workflow_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_workflow_runs_loop_run ON workflow_runs(loop_run_id);
+      CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(status);
+
+      CREATE TABLE IF NOT EXISTS workflow_step_runs (
+        id TEXT PRIMARY KEY,
+        workflow_run_id TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+        step_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        exit_code INTEGER,
+        duration_ms INTEGER,
+        stdout TEXT,
+        stderr TEXT,
+        error TEXT,
+        account_profile TEXT,
+        account_tool TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(workflow_run_id, step_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_workflow_step_runs_run_sequence ON workflow_step_runs(workflow_run_id, sequence);
+      CREATE INDEX IF NOT EXISTS idx_workflow_step_runs_status ON workflow_step_runs(status);
+
+      CREATE TABLE IF NOT EXISTS workflow_events (
+        id TEXT PRIMARY KEY,
+        workflow_run_id TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+        sequence INTEGER NOT NULL,
+        event_type TEXT NOT NULL,
+        step_id TEXT,
+        payload_json TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE(workflow_run_id, sequence)
+      );
+      CREATE INDEX IF NOT EXISTS idx_workflow_events_run_sequence ON workflow_events(workflow_run_id, sequence);
     `);
+    this.db
+      .query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)")
+      .run("0001_initial_and_workflows", nowIso());
   }
 
   createLoop(input: CreateLoopInput, from: Date = new Date()): Loop {
@@ -316,6 +539,350 @@ export class Store {
     const loop = this.requireLoop(idOrName);
     const res = this.db.query("DELETE FROM loops WHERE id = ?").run(loop.id);
     return res.changes > 0;
+  }
+
+  createWorkflow(input: CreateWorkflowInput): WorkflowSpec {
+    const normalized = normalizeCreateWorkflowInput(input);
+    const now = nowIso();
+    const workflow: WorkflowSpec = {
+      id: genId(),
+      name: normalized.name,
+      description: normalized.description,
+      version: normalized.version ?? 1,
+      status: "active",
+      steps: normalized.steps,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.db
+      .query(
+        `INSERT INTO workflow_specs (id, name, description, version, status, steps_json, created_at, updated_at)
+         VALUES ($id, $name, $description, $version, $status, $steps, $created, $updated)`,
+      )
+      .run({
+        $id: workflow.id,
+        $name: workflow.name,
+        $description: workflow.description ?? null,
+        $version: workflow.version,
+        $status: workflow.status,
+        $steps: JSON.stringify(workflow.steps),
+        $created: workflow.createdAt,
+        $updated: workflow.updatedAt,
+      });
+    return workflow;
+  }
+
+  getWorkflow(id: string): WorkflowSpec | undefined {
+    const row = this.db.query<WorkflowRow, [string]>("SELECT * FROM workflow_specs WHERE id = ?").get(id);
+    return row ? rowToWorkflow(row) : undefined;
+  }
+
+  findWorkflowByName(name: string): WorkflowSpec | undefined {
+    const row = this.db
+      .query<WorkflowRow, [string]>(
+        "SELECT * FROM workflow_specs WHERE name = ? AND status = 'active' ORDER BY updated_at DESC LIMIT 1",
+      )
+      .get(name);
+    return row ? rowToWorkflow(row) : undefined;
+  }
+
+  requireWorkflow(idOrName: string): WorkflowSpec {
+    return this.getWorkflow(idOrName) ?? this.findWorkflowByName(idOrName) ?? (() => {
+      throw new Error(`workflow not found: ${idOrName}`);
+    })();
+  }
+
+  listWorkflows(opts: { status?: WorkflowSpec["status"]; limit?: number } = {}): WorkflowSpec[] {
+    const limit = opts.limit ?? 200;
+    const rows = opts.status
+      ? this.db
+          .query<WorkflowRow, [string, number]>("SELECT * FROM workflow_specs WHERE status = ? ORDER BY updated_at DESC LIMIT ?")
+          .all(opts.status, limit)
+      : this.db.query<WorkflowRow, [number]>("SELECT * FROM workflow_specs ORDER BY status ASC, updated_at DESC LIMIT ?").all(limit);
+    return rows.map(rowToWorkflow);
+  }
+
+  archiveWorkflow(idOrName: string): WorkflowSpec {
+    const workflow = this.requireWorkflow(idOrName);
+    const updated = nowIso();
+    this.db
+      .query("UPDATE workflow_specs SET status='archived', updated_at=? WHERE id=?")
+      .run(updated, workflow.id);
+    const archived = this.getWorkflow(workflow.id);
+    if (!archived) throw new Error(`workflow not found after archive: ${workflow.id}`);
+    return archived;
+  }
+
+  createWorkflowRun(input: CreateWorkflowRunInput): WorkflowRun {
+    const now = nowIso();
+    if (input.idempotencyKey) {
+      const existing = this.db
+        .query<WorkflowRunRow, [string, string]>(
+          "SELECT * FROM workflow_runs WHERE workflow_id = ? AND idempotency_key = ? LIMIT 1",
+        )
+        .get(input.workflow.id, input.idempotencyKey);
+      if (existing) return rowToWorkflowRun(existing);
+    }
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      if (input.idempotencyKey) {
+        const existing = this.db
+          .query<WorkflowRunRow, [string, string]>(
+            "SELECT * FROM workflow_runs WHERE workflow_id = ? AND idempotency_key = ? LIMIT 1",
+          )
+          .get(input.workflow.id, input.idempotencyKey);
+        if (existing) {
+          this.db.exec("COMMIT");
+          return rowToWorkflowRun(existing);
+        }
+      }
+
+      const runId = genId();
+      this.db
+        .query(
+          `INSERT INTO workflow_runs (id, workflow_id, workflow_name, loop_id, loop_run_id, scheduled_for, idempotency_key,
+            status, started_at, finished_at, duration_ms, error, created_at, updated_at)
+           VALUES ($id, $workflowId, $workflowName, $loopId, $loopRunId, $scheduledFor, $idempotencyKey,
+            'running', $started, NULL, NULL, NULL, $created, $updated)`,
+        )
+        .run({
+          $id: runId,
+          $workflowId: input.workflow.id,
+          $workflowName: input.workflow.name,
+          $loopId: input.loop?.id ?? null,
+          $loopRunId: input.loopRun?.id ?? null,
+          $scheduledFor: input.scheduledFor ?? input.loopRun?.scheduledFor ?? null,
+          $idempotencyKey: input.idempotencyKey ?? null,
+          $started: now,
+          $created: now,
+          $updated: now,
+        });
+
+      input.workflow.steps.forEach((step, sequence) => {
+        const account = step.account ?? step.target.account;
+        this.db
+          .query(
+            `INSERT INTO workflow_step_runs (id, workflow_run_id, step_id, sequence, status, started_at, finished_at,
+              exit_code, duration_ms, stdout, stderr, error, account_profile, account_tool, created_at, updated_at)
+             VALUES ($id, $workflowRunId, $stepId, $sequence, 'pending', NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+              $accountProfile, $accountTool, $created, $updated)`,
+          )
+          .run({
+            $id: genId(),
+            $workflowRunId: runId,
+            $stepId: step.id,
+            $sequence: sequence,
+            $accountProfile: account?.profile ?? null,
+            $accountTool: account?.tool ?? null,
+            $created: now,
+            $updated: now,
+          });
+      });
+
+      this.db
+        .query(
+          `INSERT INTO workflow_events (id, workflow_run_id, sequence, event_type, step_id, payload_json, created_at)
+           VALUES ($id, $workflowRunId, 1, 'created', NULL, $payload, $created)`,
+        )
+        .run({
+          $id: genId(),
+          $workflowRunId: runId,
+          $payload: JSON.stringify({
+            workflowId: input.workflow.id,
+            workflowName: input.workflow.name,
+            stepCount: input.workflow.steps.length,
+            loopId: input.loop?.id,
+            loopRunId: input.loopRun?.id,
+          }),
+          $created: now,
+        });
+
+      this.db.exec("COMMIT");
+      const run = this.getWorkflowRun(runId);
+      if (!run) throw new Error(`workflow run not found after create: ${runId}`);
+      return run;
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* transaction may already be closed */
+      }
+      throw error;
+    }
+  }
+
+  getWorkflowRun(id: string): WorkflowRun | undefined {
+    const row = this.db.query<WorkflowRunRow, [string]>("SELECT * FROM workflow_runs WHERE id = ?").get(id);
+    return row ? rowToWorkflowRun(row) : undefined;
+  }
+
+  listWorkflowRuns(opts: { workflowId?: string; loopRunId?: string; limit?: number } = {}): WorkflowRun[] {
+    const limit = opts.limit ?? 100;
+    let rows: WorkflowRunRow[];
+    if (opts.workflowId) {
+      rows = this.db
+        .query<WorkflowRunRow, [string, number]>(
+          "SELECT * FROM workflow_runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT ?",
+        )
+        .all(opts.workflowId, limit);
+    } else if (opts.loopRunId) {
+      rows = this.db
+        .query<WorkflowRunRow, [string, number]>(
+          "SELECT * FROM workflow_runs WHERE loop_run_id = ? ORDER BY created_at DESC LIMIT ?",
+        )
+        .all(opts.loopRunId, limit);
+    } else {
+      rows = this.db.query<WorkflowRunRow, [number]>("SELECT * FROM workflow_runs ORDER BY created_at DESC LIMIT ?").all(limit);
+    }
+    return rows.map(rowToWorkflowRun);
+  }
+
+  listWorkflowStepRuns(workflowRunId: string): WorkflowStepRun[] {
+    const rows = this.db
+      .query<WorkflowStepRunRow, [string]>(
+        "SELECT * FROM workflow_step_runs WHERE workflow_run_id = ? ORDER BY sequence ASC",
+      )
+      .all(workflowRunId);
+    return rows.map(rowToWorkflowStepRun);
+  }
+
+  getWorkflowStepRun(workflowRunId: string, stepId: string): WorkflowStepRun | undefined {
+    const row = this.db
+      .query<WorkflowStepRunRow, [string, string]>(
+        "SELECT * FROM workflow_step_runs WHERE workflow_run_id = ? AND step_id = ?",
+      )
+      .get(workflowRunId, stepId);
+    return row ? rowToWorkflowStepRun(row) : undefined;
+  }
+
+  startWorkflowStepRun(workflowRunId: string, stepId: string): WorkflowStepRun {
+    const now = nowIso();
+    this.db
+      .query(
+        `UPDATE workflow_step_runs
+         SET status='running', started_at=$started, finished_at=NULL, exit_code=NULL, duration_ms=NULL,
+          stdout=NULL, stderr=NULL, error=NULL, updated_at=$updated
+         WHERE workflow_run_id=$workflowRunId AND step_id=$stepId AND status IN ('pending', 'running', 'failed', 'timed_out')`,
+      )
+      .run({ $workflowRunId: workflowRunId, $stepId: stepId, $started: now, $updated: now });
+    this.appendWorkflowEvent(workflowRunId, "step_started", stepId);
+    const run = this.getWorkflowStepRun(workflowRunId, stepId);
+    if (!run) throw new Error(`workflow step run not found: ${workflowRunId}/${stepId}`);
+    return run;
+  }
+
+  finalizeWorkflowStepRun(
+    workflowRunId: string,
+    stepId: string,
+    patch: Pick<WorkflowStepRun, "status" | "finishedAt" | "durationMs" | "stdout" | "stderr"> &
+      Partial<Pick<WorkflowStepRun, "exitCode" | "error">>,
+  ): WorkflowStepRun {
+    const finishedAt = patch.finishedAt ?? nowIso();
+    this.db
+      .query(
+        `UPDATE workflow_step_runs SET status=$status, finished_at=$finished, exit_code=$exitCode, duration_ms=$durationMs,
+         stdout=$stdout, stderr=$stderr, error=$error, updated_at=$updated
+         WHERE workflow_run_id=$workflowRunId AND step_id=$stepId`,
+      )
+      .run({
+        $workflowRunId: workflowRunId,
+        $stepId: stepId,
+        $status: patch.status,
+        $finished: finishedAt,
+        $exitCode: patch.exitCode ?? null,
+        $durationMs: patch.durationMs ?? null,
+        $stdout: patch.stdout ?? null,
+        $stderr: patch.stderr ?? null,
+        $error: patch.error ?? null,
+        $updated: finishedAt,
+      });
+    this.appendWorkflowEvent(workflowRunId, `step_${patch.status}`, stepId, {
+      exitCode: patch.exitCode,
+      error: patch.error,
+    });
+    const run = this.getWorkflowStepRun(workflowRunId, stepId);
+    if (!run) throw new Error(`workflow step run not found after finalize: ${workflowRunId}/${stepId}`);
+    return run;
+  }
+
+  skipWorkflowStepRun(workflowRunId: string, stepId: string, reason: string): WorkflowStepRun {
+    const now = nowIso();
+    this.db
+      .query(
+        `UPDATE workflow_step_runs SET status='skipped', finished_at=$finished, error=$error, updated_at=$updated
+         WHERE workflow_run_id=$workflowRunId AND step_id=$stepId`,
+      )
+      .run({ $workflowRunId: workflowRunId, $stepId: stepId, $finished: now, $error: reason, $updated: now });
+    this.appendWorkflowEvent(workflowRunId, "step_skipped", stepId, { reason });
+    const run = this.getWorkflowStepRun(workflowRunId, stepId);
+    if (!run) throw new Error(`workflow step run not found after skip: ${workflowRunId}/${stepId}`);
+    return run;
+  }
+
+  finalizeWorkflowRun(
+    workflowRunId: string,
+    status: WorkflowRunStatus,
+    patch: Partial<Pick<WorkflowRun, "finishedAt" | "durationMs" | "error">> = {},
+  ): WorkflowRun {
+    const finishedAt = patch.finishedAt ?? nowIso();
+    this.db
+      .query(
+        `UPDATE workflow_runs SET status=$status, finished_at=$finished, duration_ms=$durationMs, error=$error, updated_at=$updated
+         WHERE id=$id`,
+      )
+      .run({
+        $id: workflowRunId,
+        $status: status,
+        $finished: finishedAt,
+        $durationMs: patch.durationMs ?? null,
+        $error: patch.error ?? null,
+        $updated: finishedAt,
+      });
+    this.appendWorkflowEvent(workflowRunId, status, undefined, { error: patch.error });
+    const run = this.getWorkflowRun(workflowRunId);
+    if (!run) throw new Error(`workflow run not found after finalize: ${workflowRunId}`);
+    return run;
+  }
+
+  appendWorkflowEvent(
+    workflowRunId: string,
+    eventType: string,
+    stepId?: string,
+    payload?: Record<string, unknown>,
+  ): WorkflowEvent {
+    const now = nowIso();
+    const current = this.db
+      .query<{ sequence: number | null }, [string]>("SELECT MAX(sequence) AS sequence FROM workflow_events WHERE workflow_run_id = ?")
+      .get(workflowRunId);
+    const sequence = (current?.sequence ?? 0) + 1;
+    const id = genId();
+    this.db
+      .query(
+        `INSERT INTO workflow_events (id, workflow_run_id, sequence, event_type, step_id, payload_json, created_at)
+         VALUES ($id, $workflowRunId, $sequence, $eventType, $stepId, $payload, $created)`,
+      )
+      .run({
+        $id: id,
+        $workflowRunId: workflowRunId,
+        $sequence: sequence,
+        $eventType: eventType,
+        $stepId: stepId ?? null,
+        $payload: payload ? JSON.stringify(payload) : null,
+        $created: now,
+      });
+    const event = this.db.query<WorkflowEventRow, [string]>("SELECT * FROM workflow_events WHERE id = ?").get(id);
+    if (!event) throw new Error(`workflow event not found after append: ${id}`);
+    return rowToWorkflowEvent(event);
+  }
+
+  listWorkflowEvents(workflowRunId: string, limit = 200): WorkflowEvent[] {
+    const rows = this.db
+      .query<WorkflowEventRow, [string, number]>(
+        "SELECT * FROM workflow_events WHERE workflow_run_id = ? ORDER BY sequence ASC LIMIT ?",
+      )
+      .all(workflowRunId, limit);
+    return rows.map(rowToWorkflowEvent);
   }
 
   hasRunningRun(loopId: string): boolean {
@@ -471,28 +1038,53 @@ export class Store {
     id: string,
     patch: Pick<LoopRun, "status" | "finishedAt" | "durationMs" | "stdout" | "stderr"> &
       Partial<Pick<LoopRun, "exitCode" | "error" | "pid">>,
+    opts: { claimedBy?: string; now?: Date } = {},
   ): LoopRun {
     const finishedAt = patch.finishedAt ?? nowIso();
-    this.db
-      .query(
-        `UPDATE loop_runs SET status=$status, finished_at=$finished, lease_expires_at=NULL, pid=$pid, exit_code=$exitCode,
-         duration_ms=$durationMs, stdout=$stdout, stderr=$stderr, error=$error, updated_at=$updated WHERE id=$id`,
-      )
-      .run({
-        $id: id,
-        $status: patch.status,
-        $finished: finishedAt,
-        $pid: patch.pid ?? null,
-        $exitCode: patch.exitCode ?? null,
-        $durationMs: patch.durationMs ?? null,
-        $stdout: patch.stdout ?? null,
-        $stderr: patch.stderr ?? null,
-        $error: patch.error ?? null,
-        $updated: finishedAt,
-      });
+    const params = {
+      $id: id,
+      $status: patch.status,
+      $finished: finishedAt,
+      $pid: patch.pid ?? null,
+      $exitCode: patch.exitCode ?? null,
+      $durationMs: patch.durationMs ?? null,
+      $stdout: patch.stdout ?? null,
+      $stderr: patch.stderr ?? null,
+      $error: patch.error ?? null,
+      $updated: finishedAt,
+      $claimedBy: opts.claimedBy ?? null,
+      $now: (opts.now ?? new Date()).toISOString(),
+    };
+    const res = opts.claimedBy
+      ? this.db
+          .query(
+            `UPDATE loop_runs SET status=$status, finished_at=$finished, lease_expires_at=NULL, pid=$pid, exit_code=$exitCode,
+             duration_ms=$durationMs, stdout=$stdout, stderr=$stderr, error=$error, updated_at=$updated
+             WHERE id=$id AND status='running' AND claimed_by=$claimedBy AND lease_expires_at > $now`,
+          )
+          .run(params)
+      : this.db
+          .query(
+            `UPDATE loop_runs SET status=$status, finished_at=$finished, lease_expires_at=NULL, pid=$pid, exit_code=$exitCode,
+             duration_ms=$durationMs, stdout=$stdout, stderr=$stderr, error=$error, updated_at=$updated WHERE id=$id`,
+          )
+          .run(params);
     const run = this.getRun(id);
     if (!run) throw new Error(`run not found after finalize: ${id}`);
+    if (opts.claimedBy && res.changes !== 1) return run;
     return run;
+  }
+
+  heartbeatRunLease(id: string, claimedBy: string, leaseMs: number, now: Date = new Date()): LoopRun | undefined {
+    const expiresAt = new Date(now.getTime() + leaseMs).toISOString();
+    const res = this.db
+      .query(
+        `UPDATE loop_runs SET lease_expires_at=$expires, updated_at=$updated
+         WHERE id=$id AND status='running' AND claimed_by=$claimedBy`,
+      )
+      .run({ $id: id, $claimedBy: claimedBy, $expires: expiresAt, $updated: now.toISOString() });
+    if (res.changes !== 1) return undefined;
+    return this.getRun(id);
   }
 
   listRuns(opts: { loopId?: string; status?: RunStatus; limit?: number } = {}): LoopRun[] {
