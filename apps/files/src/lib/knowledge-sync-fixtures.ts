@@ -52,28 +52,28 @@ export interface KnowledgeSyncFixturePack {
 }
 
 const GENERATED_AT = "2026-06-09T00:00:00.000Z";
-const SOURCE_ID_SPARK01 = "src_fixture_drive_spark01";
-const SOURCE_ID_SPARK02 = "src_fixture_drive_spark02";
+const SOURCE_ID_NODE_A = "src_fixture_drive_linux-node-a";
+const SOURCE_ID_NODE_B = "src_fixture_drive_linux-node-b";
 const SOURCE_NAME = "Knowledge sync fixture Drive";
 const DEFAULT_PURPOSES = ["knowledge_index", "knowledge_answer", "agent_context"];
 const NO_PURPOSES: string[] = [];
 type FixtureAclSummary = NonNullable<KnowledgeSyncFixtureManifestItem["acl_summary"]>;
 type FixturePermissions = KnowledgeSyncFixtureManifestItem["permissions"] & { denied_purposes?: string[] };
-type FixtureMachine = "spark01" | "spark02";
+type FixtureMachine = "linux-node-a" | "linux-node-b";
 
 const FIXTURE_MACHINES: Record<FixtureMachine, KnowledgeSyncFixtureManifestItem["open_files_root"]["machine"]> = {
-  spark01: {
-    machine_id: "m_fixture_spark01",
-    name: "spark01",
-    hostname: "spark01",
+  "linux-node-a": {
+    machine_id: "m_fixture_linux-node-a",
+    name: "linux-node-a",
+    hostname: "linux-node-a",
     platform: "linux",
     arch: "x64",
     is_current: false,
   },
-  spark02: {
-    machine_id: "m_fixture_spark02",
-    name: "spark02",
-    hostname: "spark02",
+  "linux-node-b": {
+    machine_id: "m_fixture_linux-node-b",
+    name: "linux-node-b",
+    hostname: "linux-node-b",
     platform: "linux",
     arch: "x64",
     is_current: false,
@@ -164,7 +164,7 @@ export function buildKnowledgeSyncFixtureOutboxEvents(): KnowledgeSyncFixtureOut
       file_id: "f_fixture_deleted",
       revision_id: "rev_fixture_deleted_before",
       status: "deleted",
-      path: "google-drive/hasna-xyz/my-drive/archive/delete-me.md",
+      path: "google-drive/example/my-drive/archive/delete-me.md",
       hash: "sha256:2222222222222222222222222222222222222222222222222222222222222222",
       metadata: { reason: "fixture_deleted_source" },
     }),
@@ -175,7 +175,7 @@ export function buildKnowledgeSyncFixtureOutboxEvents(): KnowledgeSyncFixtureOut
       revision_id: "rev_fixture_stale_after",
       previous_revision_id: "rev_fixture_stale_before",
       status: "active",
-      path: "google-drive/hasna-xyz/shared-drive/knowledge/current-policy.md",
+      path: "google-drive/example/shared-drive/knowledge/current-policy.md",
       hash: "sha256:3333333333333333333333333333333333333333333333333333333333333333",
       metadata: {
         reason: "fixture_stale_revision",
@@ -188,7 +188,7 @@ export function buildKnowledgeSyncFixtureOutboxEvents(): KnowledgeSyncFixtureOut
       file_id: "f_fixture_acl",
       revision_id: "rev_fixture_acl_before",
       status: "active",
-      path: "google-drive/hasna-xyz/shared-drive/legal/restricted-brief.md",
+      path: "google-drive/example/shared-drive/legal/restricted-brief.md",
       hash: "sha256:5555555555555555555555555555555555555555555555555555555555555555",
       permissions: restrictedPermissions(),
       metadata: { reason: "fixture_acl_revoked", acl_review_status: "restricted", permission_risk: "high" },
@@ -199,7 +199,7 @@ export function buildKnowledgeSyncFixtureOutboxEvents(): KnowledgeSyncFixtureOut
       file_id: "f_fixture_extract_failed",
       revision_id: "rev_fixture_extract_failed",
       status: "active",
-      path: "google-drive/hasna-xyz/shared-drive/product/failed-extraction.pdf",
+      path: "google-drive/example/shared-drive/product/failed-extraction.pdf",
       hash: "sha256:6666666666666666666666666666666666666666666666666666666666666666",
       metadata: { reason: "fixture_extraction_failed", extractor: "fixture", error_code: "unsupported_encrypted_pdf" },
     }),
@@ -210,11 +210,11 @@ export function buildKnowledgeSyncFixtureOutboxEvents(): KnowledgeSyncFixtureOut
       revision_id: "rev_fixture_renamed_after",
       previous_revision_id: "rev_fixture_renamed_before",
       status: "moved",
-      path: "google-drive/hasna-xyz/shared-drive/knowledge/renamed/current-name.md",
+      path: "google-drive/example/shared-drive/knowledge/renamed/current-name.md",
       hash: "sha256:7777777777777777777777777777777777777777777777777777777777777777",
       metadata: {
         reason: "fixture_renamed_path",
-        previous_path: "google-drive/hasna-xyz/shared-drive/knowledge/old-name.md",
+        previous_path: "google-drive/example/shared-drive/knowledge/old-name.md",
         canonical_key_changed: true,
       },
     }),
@@ -231,60 +231,60 @@ function baselineManifestItems(): KnowledgeSyncFixtureManifestItem[] {
       caseName: "duplicate_hash",
       fileId: "f_fixture_duplicate_a",
       revisionId: "rev_fixture_duplicate_a",
-      path: "google-drive/hasna-xyz/shared-drive/finance/duplicate-a.md",
+      path: "google-drive/example/shared-drive/finance/duplicate-a.md",
       name: "duplicate-a.md",
       hash: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-      machine: "spark01",
+      machine: "linux-node-a",
       text: "Duplicate hash fixture alpha content. This source must remain distinct from duplicate beta.",
     }),
     fileItem({
       caseName: "duplicate_hash",
       fileId: "f_fixture_duplicate_b",
       revisionId: "rev_fixture_duplicate_b",
-      path: "google-drive/hasna-xyz/shared-drive/finance/duplicate-b.md",
+      path: "google-drive/example/shared-drive/finance/duplicate-b.md",
       name: "duplicate-b.md",
       hash: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-      machine: "spark02",
+      machine: "linux-node-b",
       text: "Duplicate hash fixture beta content. This source must remain distinct from duplicate alpha.",
     }),
     fileItem({
       caseName: "deleted_source",
       fileId: "f_fixture_deleted",
       revisionId: "rev_fixture_deleted_before",
-      path: "google-drive/hasna-xyz/my-drive/archive/delete-me.md",
+      path: "google-drive/example/my-drive/archive/delete-me.md",
       name: "delete-me.md",
       hash: "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-      machine: "spark01",
+      machine: "linux-node-a",
       text: "Deleted source fixture text. This must disappear from search and citations after outbox consumption.",
     }),
     fileItem({
       caseName: "stale_revision",
       fileId: "f_fixture_stale",
       revisionId: "rev_fixture_stale_before",
-      path: "google-drive/hasna-xyz/shared-drive/knowledge/current-policy.md",
+      path: "google-drive/example/shared-drive/knowledge/current-policy.md",
       name: "current-policy.md",
       hash: "sha256:4444444444444444444444444444444444444444444444444444444444444444",
-      machine: "spark02",
+      machine: "linux-node-b",
       text: "Stale revision fixture old policy text. This must not survive a revision_changed event.",
     }),
     fileItem({
       caseName: "acl_revoked",
       fileId: "f_fixture_acl",
       revisionId: "rev_fixture_acl_before",
-      path: "google-drive/hasna-xyz/shared-drive/legal/restricted-brief.md",
+      path: "google-drive/example/shared-drive/legal/restricted-brief.md",
       name: "restricted-brief.md",
       hash: "sha256:5555555555555555555555555555555555555555555555555555555555555555",
-      machine: "spark01",
+      machine: "linux-node-a",
       text: "ACL revoked fixture confidential brief. This must not appear after access is revoked.",
     }),
     fileItem({
       caseName: "renamed_path",
       fileId: "f_fixture_renamed",
       revisionId: "rev_fixture_renamed_before",
-      path: "google-drive/hasna-xyz/shared-drive/knowledge/old-name.md",
+      path: "google-drive/example/shared-drive/knowledge/old-name.md",
       name: "old-name.md",
       hash: "sha256:7777777777777777777777777777777777777777777777777777777777777777",
-      machine: "spark02",
+      machine: "linux-node-b",
       text: "Renamed path fixture old path text. This must be invalidated after the move event.",
     }),
   ];
@@ -297,7 +297,7 @@ function currentManifestItems(): KnowledgeSyncFixtureManifestItem[] {
       caseName: "deleted_source",
       fileId: "f_fixture_deleted",
       revisionId: "rev_fixture_deleted_before",
-      path: "google-drive/hasna-xyz/my-drive/archive/delete-me.md",
+      path: "google-drive/example/my-drive/archive/delete-me.md",
       name: "delete-me.md",
       hash: "sha256:2222222222222222222222222222222222222222222222222222222222222222",
       status: "deleted",
@@ -305,56 +305,56 @@ function currentManifestItems(): KnowledgeSyncFixtureManifestItem[] {
       tombstone: true,
       permissions: restrictedPermissions(),
       extractionStatus: "unsupported",
-      machine: "spark01",
+      machine: "linux-node-a",
     }),
     fileItem({
       caseName: "stale_revision",
       fileId: "f_fixture_stale",
       revisionId: "rev_fixture_stale_after",
-      path: "google-drive/hasna-xyz/shared-drive/knowledge/current-policy.md",
+      path: "google-drive/example/shared-drive/knowledge/current-policy.md",
       name: "current-policy.md",
       hash: "sha256:3333333333333333333333333333333333333333333333333333333333333333",
       text: "Current revision fixture replacement policy text. This may be indexed after stale chunks are invalidated.",
       syncVersion: 2,
-      machine: "spark02",
+      machine: "linux-node-b",
     }),
     fileItem({
       caseName: "acl_revoked",
       fileId: "f_fixture_acl",
       revisionId: "rev_fixture_acl_before",
-      path: "google-drive/hasna-xyz/shared-drive/legal/restricted-brief.md",
+      path: "google-drive/example/shared-drive/legal/restricted-brief.md",
       name: "restricted-brief.md",
       hash: "sha256:5555555555555555555555555555555555555555555555555555555555555555",
       permissions: restrictedPermissions(),
       aclStatus: "restricted",
       permissionRisk: "high",
       extractionStatus: "unsupported",
-      machine: "spark01",
+      machine: "linux-node-a",
     }),
     fileItem({
       caseName: "extraction_failed",
       fileId: "f_fixture_extract_failed",
       revisionId: "rev_fixture_extract_failed",
-      path: "google-drive/hasna-xyz/shared-drive/product/failed-extraction.pdf",
+      path: "google-drive/example/shared-drive/product/failed-extraction.pdf",
       name: "failed-extraction.pdf",
       hash: "sha256:6666666666666666666666666666666666666666666666666666666666666666",
       mime: "application/pdf",
       extractionStatus: "error",
       extractionStatusReason: "unsupported_encrypted_pdf",
       syncVersion: 2,
-      machine: "spark02",
+      machine: "linux-node-b",
     }),
     fileItem({
       caseName: "renamed_path",
       fileId: "f_fixture_renamed",
       revisionId: "rev_fixture_renamed_after",
-      path: "google-drive/hasna-xyz/shared-drive/knowledge/renamed/current-name.md",
+      path: "google-drive/example/shared-drive/knowledge/renamed/current-name.md",
       name: "current-name.md",
       hash: "sha256:7777777777777777777777777777777777777777777777777777777777777777",
       text: "Renamed path fixture current path text. This may be indexed after the old path citation is invalidated.",
       status: "moved",
       syncVersion: 2,
-      machine: "spark02",
+      machine: "linux-node-b",
     }),
   ];
 }
@@ -381,9 +381,9 @@ function fileItem(input: {
 }): KnowledgeSyncFixtureManifestItem {
   const status = input.status ?? "active";
   const textAvailable = Boolean(input.text);
-  const machineName = input.machine ?? "spark01";
+  const machineName = input.machine ?? "linux-node-a";
   const machine = FIXTURE_MACHINES[machineName];
-  const sourceId = machineName === "spark01" ? SOURCE_ID_SPARK01 : SOURCE_ID_SPARK02;
+  const sourceId = machineName === "linux-node-a" ? SOURCE_ID_NODE_A : SOURCE_ID_NODE_B;
   return {
     kind: "file",
     source_ref: `open-files://file/${input.fileId}`,
@@ -499,8 +499,8 @@ function fixtureSourceId(fileId: string): string {
     || fileId.includes("stale")
     || fileId.includes("extract_failed")
     || fileId.includes("renamed")
-    ? SOURCE_ID_SPARK02
-    : SOURCE_ID_SPARK01;
+    ? SOURCE_ID_NODE_B
+    : SOURCE_ID_NODE_A;
 }
 
 function fixtureRootEvidenceHash(sourceId: string, sourcePath: string, machineId: string): string {

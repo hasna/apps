@@ -1,12 +1,12 @@
 # Evidence Storage Contract
 
-`@hasna/files` is the shared durable file and evidence layer for Hasna internal apps.
+`@hasna/files` is a shared durable file and evidence layer for apps.
 
 ## Boundary
 
 Apps own domain meaning. `@hasna/files` owns bytes.
 
-Internal apps should store `file_asset_id` plus domain metadata such as `company_id`, `source_type`, `source_id`, and `kind`. They should not own production bucket names, object keys, signed URL generation, retention behavior, or file access audit.
+Apps should store `file_asset_id` plus domain metadata such as `company_id`, `source_type`, `source_id`, and `kind`. They should not own production bucket names, object keys, signed URL generation, retention behavior, or file access audit.
 
 ## Production Bucket
 
@@ -14,11 +14,9 @@ Internal apps should store `file_asset_id` plus domain metadata such as `company
 following the Hasna XYZ storage naming pattern. Detailed migration runbooks stay
 in private operator evidence and are not part of the public package.
 
-The old `hasna-files-prod` bucket is legacy only. Its discovered smoke evidence
-objects were copied to
-`hasna-xyz-opensource-files-prod/imports/legacy-buckets/hasna-files-prod-2026-06-08/raw/`
-on 2026-06-08. Keep the old bucket readable until rollback windows and global
-legacy retirement gates close, but do not use it for new writes.
+The old `hasna-files-prod` bucket is legacy only. Keep old buckets readable
+until rollback windows and global legacy retirement gates close, but do not use
+them for new writes.
 
 Current evidence object layout:
 
@@ -40,7 +38,7 @@ Files enter the bucket under `quarantine/` and move to the final key only after 
 
 ## Local Mode
 
-Local filesystem storage is allowed for development, tests, offline, and self-hosted deployments. Production internal apps should use the shared bucket through this package.
+Local filesystem storage is allowed for development, tests, offline, and self-hosted deployments. Hosted apps should use their configured bucket through this package.
 
 ## Environment
 

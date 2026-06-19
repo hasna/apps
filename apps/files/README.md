@@ -55,7 +55,7 @@ package.
 For a custom S3 destination, pass the shared AWS profile explicitly:
 
 ```bash
-files sources add s3://my-files-bucket/google-drive --region us-east-1 --aws-profile hasna-xyz-infra
+files sources add s3://my-files-bucket/google-drive --region us-east-1 --aws-profile files-sync
 ```
 
 To sync into local storage instead, add a local source and pass it as the
@@ -197,6 +197,11 @@ and read-only access. Stable refs use `open-files://file/<id>` and
 
 See [docs/knowledge-source-contract.md](docs/knowledge-source-contract.md) for
 the URI, resolver, manifest export, and change outbox plan.
+
+Private fleet manifests should be passed by source ref, not copied into public
+packages or logs. Use `buildOpenFilesFleetManifestRef(sourceId, path)` and
+`describeOpenFilesSourceRef(ref, { private: true })` when a caller needs a
+public-safe descriptor.
 
 ## Data Directory
 

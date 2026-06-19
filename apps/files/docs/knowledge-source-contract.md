@@ -68,20 +68,20 @@ Local flow:
 Remote flow:
 
 1. `open-files` owns the S3 source or canonical object bucket, for example
-   `s3://hasna-xyz-opensource-files-prod/objects/sha256/...`.
+   `s3://example-files-prod/objects/sha256/...`.
 2. `open-files` writes manifest and extraction artifacts to a local directory or
    S3 job prefix.
 3. `open-knowledge` can run locally or in a future SaaS worker, fetch only the
    manifest/extracted text it is allowed to read, and store knowledge artifacts
-   in `.hasna/apps/knowledge` or its own configured S3 bucket.
+   in a local app data directory or its own configured S3 bucket.
 
-Canonical Hasna XYZ production paths:
+Example hosted paths:
 
 ```txt
-open-files source bucket: s3://hasna-xyz-opensource-files-prod/objects/sha256/...
-open-files secrets: hasna/xyz/opensource/files/prod/{env,aws,s3,rds}
-open-knowledge artifact bucket: s3://hasna-xyz-opensource-knowledge-prod/.hasna/apps/knowledge/
-open-knowledge secrets: hasna/xyz/opensource/knowledge/prod/{env,aws,s3}
+open-files source bucket: s3://example-files-prod/objects/sha256/...
+open-files secrets: secrets://files/prod/{env,aws,s3,rds}
+open-knowledge artifact bucket: s3://example-knowledge-prod/artifacts/
+open-knowledge secrets: secrets://knowledge/prod/{env,aws,s3}
 ```
 
 The knowledge bucket is for generated artifacts only: chunk indexes, wiki
@@ -122,7 +122,7 @@ Current CLI examples:
 
 ```bash
 files sources add ~/Documents --name local-docs
-files sources add s3://hasna-xyz-opensource-files-prod/imports/google-drive --region us-east-1 --aws-profile hasna-xyz-infra
+files sources add s3://example-files-prod/imports/google-drive --region us-east-1 --aws-profile files-sync
 files sources list --json
 ```
 
@@ -181,7 +181,7 @@ The resolver returns a manifest object, not raw storage credentials:
   "source_id": "src_abc",
   "storage": {
     "provider": "s3",
-    "bucket": "hasna-xyz-opensource-files-prod",
+    "bucket": "example-files-prod",
     "key": "objects/sha256/aa/bb/<sha256>",
     "region": "us-east-1"
   },

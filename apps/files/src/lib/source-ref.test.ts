@@ -4,7 +4,9 @@ import {
   buildOpenFilesAssetRevisionRef,
   buildOpenFilesFileRef,
   buildOpenFilesFileRevisionRef,
+  buildOpenFilesFleetManifestRef,
   buildOpenFilesSourcePathRef,
+  describeOpenFilesSourceRef,
   isOpenFilesSourceRef,
   parseOpenFilesSourceRef,
 } from "./source-ref.js";
@@ -72,5 +74,19 @@ describe("open-files source refs", () => {
     expect(() => parseOpenFilesSourceRef("open-files://file")).toThrow("Missing file id");
     expect(() => parseOpenFilesSourceRef("open-files://asset")).toThrow("Missing asset id");
     expect(() => parseOpenFilesSourceRef("open-files://source/src_abc")).toThrow("Expected open-files://source");
+  });
+
+  test("describes private fleet manifest refs without raw paths", () => {
+    const uri = buildOpenFilesFleetManifestRef("src_fleet", "private/fleet/machines.json");
+
+    expect(uri).toBe("open-files://source/src_fleet/path/private%2Ffleet%2Fmachines.json");
+    expect(describeOpenFilesSourceRef(uri, { private: true })).toEqual({
+      uri,
+      kind: "source_path",
+      source_id: "src_fleet",
+      path_hint: "<redacted>/machines.json",
+      private: true,
+      public_safe: true,
+    });
   });
 });

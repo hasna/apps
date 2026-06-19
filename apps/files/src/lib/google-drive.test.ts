@@ -289,10 +289,10 @@ describe("Google Drive sync", () => {
     const s3Source = createSource({
       name: "prod-emails-drive",
       type: "s3",
-      bucket: "hasna-xyz-prod-emails",
+      bucket: "example-prod-emails",
       prefix: "imports",
       region: "us-west-2",
-      config: { profile: "hasna-xyz-infra" },
+      config: { profile: "files-sync" },
       machine_id: machine.id,
     });
     const googleSource = createSource({
@@ -337,10 +337,10 @@ describe("Google Drive sync", () => {
     expect(result.destination).toMatchObject({
       source_id: s3Source.id,
       type: "s3",
-      bucket: "hasna-xyz-prod-emails",
+      bucket: "example-prod-emails",
       prefix: "imports",
       region: "us-west-2",
-      aws_profile: "hasna-xyz-infra",
+      aws_profile: "files-sync",
     });
     expect(result.auth).toMatchObject({ profile: "work", authRequired: false });
     expect(result.item_count).toBe(2);
@@ -355,9 +355,9 @@ describe("Google Drive sync", () => {
     const s3Source = createSource({
       name: "prod-emails-drive",
       type: "s3",
-      bucket: "hasna-xyz-prod-emails",
+      bucket: "example-prod-emails",
       region: "us-west-2",
-      config: { profile: "hasna-xyz-infra" },
+      config: { profile: "files-sync" },
       machine_id: machine.id,
     });
     const googleSource = createSource({
@@ -834,9 +834,9 @@ describe("Google Drive sync", () => {
     const s3Source = createSource({
       name: "prod-emails-drive",
       type: "s3",
-      bucket: "hasna-xyz-prod-emails",
+      bucket: "example-prod-emails",
       region: "us-west-2",
-      config: { profile: "hasna-xyz-infra" },
+      config: { profile: "files-sync" },
       machine_id: machine.id,
     });
     const googleSource = createSource({
@@ -892,9 +892,9 @@ describe("Google Drive sync", () => {
     const s3Source = createSource({
       name: "prod-files",
       type: "s3",
-      bucket: "hasna-xyz-prod-files",
+      bucket: "example-prod-files",
       region: "us-east-1",
-      config: { profile: "hasna-xyz-infra" },
+      config: { profile: "files-sync" },
       machine_id: machine.id,
     });
     const googleSource = createSource({
@@ -940,10 +940,10 @@ describe("Google Drive sync", () => {
     const s3Source = createSource({
       name: "prod-files",
       type: "s3",
-      bucket: "hasna-xyz-prod-files",
+      bucket: "example-prod-files",
       prefix: "google-drive",
       region: "us-east-1",
-      config: { profile: "hasna-xyz-infra" },
+      config: { profile: "files-sync" },
       machine_id: machine.id,
     });
     const googleSource = createSource({
@@ -976,7 +976,7 @@ describe("Google Drive sync", () => {
     expect(await syncGoogleDriveSource(googleSource)).toMatchObject({ added: 1, updated: 0, errors: 0 });
     updateSource(s3Source.id, {
       name: "prod-emails-drive",
-      bucket: "hasna-xyz-prod-emails",
+      bucket: "example-prod-emails",
       prefix: "drive",
       region: "us-west-2",
     });
@@ -1000,9 +1000,9 @@ describe("Google Drive sync", () => {
     const s3Source = createSource({
       name: "prod-emails-drive",
       type: "s3",
-      bucket: "hasna-xyz-prod-emails",
+      bucket: "example-prod-emails",
       region: "us-west-2",
-      config: { profile: "hasna-xyz-infra" },
+      config: { profile: "files-sync" },
       machine_id: machine.id,
     });
     const googleSource = createSource({

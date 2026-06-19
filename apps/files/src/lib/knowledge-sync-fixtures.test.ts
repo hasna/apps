@@ -27,10 +27,10 @@ describe("knowledge sync fixtures", () => {
       "f_fixture_duplicate_b",
     ]);
     expect(new Set(pack.current_manifest.items.map((item) => item.open_files_root.machine.hostname))).toEqual(
-      new Set(["spark01", "spark02"]),
+      new Set(["linux-node-a", "linux-node-b"]),
     );
     for (const item of pack.current_manifest.items) {
-      expect(item.open_files_root.open_files_root).toMatch(/^open-files:\/\/source\/src_fixture_drive_spark0[12]$/);
+      expect(item.open_files_root.open_files_root).toMatch(/^open-files:\/\/source\/src_fixture_drive_linux-node-[ab]$/);
       expect(item.open_files_root.evidence_hash).toMatch(/^sha256:[a-f0-9]{64}$/);
       expect(item.open_files_root.s3).toMatchObject({
         bucket: "hasna-xyz-opensource-files-prod",
@@ -70,7 +70,7 @@ describe("knowledge sync fixtures", () => {
       revision_id: "rev_fixture_stale_after",
     });
     expect(pack.outbox_events[4]?.metadata).toMatchObject({
-      previous_path: "google-drive/hasna-xyz/shared-drive/knowledge/old-name.md",
+      previous_path: "google-drive/example/shared-drive/knowledge/old-name.md",
       canonical_key_changed: true,
     });
   });

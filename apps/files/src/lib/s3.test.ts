@@ -14,9 +14,9 @@ describe("S3 client configuration", () => {
       return async () => ({ accessKeyId: "profile-access", secretAccessKey: "profile-secret" });
     }) as typeof import("@aws-sdk/credential-providers").fromIni);
 
-    const config = createS3ClientConfig(s3Source({ config: { profile: "hasna-xyz-infra" } }));
+    const config = createS3ClientConfig(s3Source({ config: { profile: "files-sync" } }));
 
-    expect(requestedProfile).toBe("hasna-xyz-infra");
+    expect(requestedProfile).toBe("files-sync");
     expect(typeof config.credentials).toBe("function");
     await expect((config.credentials as () => Promise<unknown>)()).resolves.toMatchObject({
       accessKeyId: "profile-access",
@@ -35,7 +35,7 @@ describe("S3 client configuration", () => {
       config: {
         accessKeyId: "static-access",
         secretAccessKey: "static-secret",
-        profile: "hasna-xyz-infra",
+        profile: "files-sync",
       },
     }));
 
@@ -52,7 +52,7 @@ function s3Source(overrides: Partial<Source> = {}): Source {
     id: "src_test",
     name: "S3",
     type: "s3",
-    bucket: "hasna-xyz-prod-emails",
+    bucket: "example-prod-emails",
     region: "us-west-2",
     config: {},
     machine_id: "machine",
