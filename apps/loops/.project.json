@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "id": "wks_80xyi2gvkuol",
+  "slug": "open-loops",
+  "name": "open-loops",
+  "kind": "open-source",
+  "root_id": "root_28xtmiu5mi8j",
+  "recipe_id": null,
+  "primary_path": "/home/hasna/workspace/hasna/opensource/open-loops",
+  "git_remote": null,
+  "tags": [
+    "hasna",
+    "opensource",
+    "loops"
+  ],
+  "integrations": {},
+  "generated_at": "2026-06-19T10:53:39.205Z"
+}
