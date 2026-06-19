@@ -33,6 +33,7 @@ afterEach(async () => {
   resetMcpHttpStateForTests();
 
   delete process.env["DOMAINS_DIR"];
+  delete process.env["DOMAINS_MCP_SAFE_MODE"];
   const { closeDatabase } = await import("../db/database.js");
   closeDatabase();
 
@@ -114,6 +115,31 @@ describe("stdio mode", () => {
     const tools = await client.listTools();
     expect(tools.tools.some((tool) => tool.name === "count_domains")).toBe(true);
     expect(tools.tools.some((tool) => tool.name === "list_domains")).toBe(true);
+
+    await client.close();
+  });
+
+  it("safe mode omits mutating tools", async () => {
+    useTempDb();
+    process.env["DOMAINS_MCP_SAFE_MODE"] = "1";
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+    await buildServer().connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const tools = await client.listTools();
+    const names = tools.tools.map((tool) => tool.name);
+    expect(names).toContain("list_domains");
+    expect(names).toContain("count_domains");
+    expect(names).not.toContain("create_domain");
+    expect(names).not.toContain("update_domain");
+    expect(names).not.toContain("domain_setup");
+    expect(names).not.toContain("dns_set");
+    expect(names).not.toContain("r53_register_domain");
+    expect(names).not.toContain("r53_upsert_record");
+    expect(names).not.toContain("r53_delete_record");
+    expect(names).not.toContain("sync_route53");
 
     await client.close();
   });

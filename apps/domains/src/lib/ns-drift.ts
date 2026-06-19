@@ -1,5 +1,5 @@
 /**
- * NS drift reconciler — enforces the always-Cloudflare-DNS invariant across the
+ * NS drift reconciler — enforces Cloudflare DNS delegation for portfolios that choose it.
  * portfolio: every domain's nameservers must point to Cloudflare. Detects drift
  * (registrar NS not Cloudflare) and can re-delegate. Pure detection + an
  * injected reconcile loop, so it is fully testable.

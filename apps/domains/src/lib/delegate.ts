@@ -1,5 +1,5 @@
 /**
- * Cloudflare delegation — the always-Cloudflare-DNS rule in one place.
+ * Cloudflare delegation helper for domains that should use Cloudflare DNS.
  *
  * After a domain is registered with ANY registrar, DNS is managed in Cloudflare:
  * create (or reuse) a Cloudflare zone, then point the registrar's nameservers at

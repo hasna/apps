@@ -1,11 +1,18 @@
 # @hasna/domains
 
-Domain portfolio and DNS management for AI agents — CLI + MCP server with SQLite.
+Domain portfolio, registrar, marketplace, and DNS management for AI agents — CLI + MCP server with SQLite. Core registrar/DNS commands load by default; heavier integrations are optional command groups.
 
 ## Features
 
-- **Domain portfolio management** — track registrar, expiry, SSL, nameservers, status
+- **Domain portfolio management** — track registrar, expiry, SSL, nameservers, pricing, lifecycle status, and notes
+- **Registrar sync and purchase flows** — direct Route 53 and Namecheap registration plus GoDaddy and Brandsight provider surfaces through a shared provider registry
+- **Nameserver delegation** — Route 53 and Namecheap adapters can update registrar nameservers when the provider API supports it
+- **DNS provider management** — create or reuse Cloudflare or Route 53 zones and manage DNS records through the DNS provider layer
 - **DNS record CRUD** — A, AAAA, CNAME, MX, TXT, NS, SRV records
+- **DNS desired state** — plan/diff/apply provider DNS records from JSON with explicit delete opt-in and post-apply verification
+- **Sedo marketplace tools** — optional search, portfolio/listing management, blacklist checks, and recorded Sedo purchases
+- **AWS diagnostics** — sync Route 53 registered domains and hosted zones without printing secret values
+- **Credential diagnostics** — redacted checks for Route 53, Cloudflare, Namecheap, GoDaddy, Brandsight, and Sedo
 - **Expiry alerts** — set alerts for domain expiry and SSL certificate expiry
 - **WHOIS lookup** — query and store registrar/expiry info from WHOIS
 - **SSL certificate check** — verify SSL issuer and expiry
@@ -14,10 +21,10 @@ Domain portfolio and DNS management for AI agents — CLI + MCP server with SQLi
 - **Subdomain discovery** — via crt.sh certificate transparency logs
 - **DNS validation** — detect CNAME conflicts, missing MX, and more
 - **Portfolio export** — CSV or JSON with all domain data
-- **Registrar sync** — Namecheap and GoDaddy integration
-- **Brand monitoring** — typosquat/threat detection via Brandsight API
-- **MCP server** — full Model Context Protocol support for AI agents
-- **Interactive TUI** — browse your portfolio in the terminal with `domains interactive`
+- **Brand monitoring** — optional typosquat/threat detection via Brandsight API
+- **MCP server** — Model Context Protocol support for AI agents
+- **MCP safe mode** — expose read-only tools only with `DOMAINS_MCP_SAFE_MODE=1`
+- **Interactive TUI** — optional portfolio browser in the terminal with `domains interactive`
 
 ## Installation
 
@@ -25,36 +32,106 @@ Domain portfolio and DNS management for AI agents — CLI + MCP server with SQLi
 npm install -g @hasna/domains
 ```
 
-Data is stored at `~/.hasna/domains/domains.db`. Override with `HASNA_DOMAINS_DIR` or `DOMAINS_DIR` env var.
+Data is stored in the local domains data directory (`$XDG_DATA_HOME/open-domains` or `~/.local/share/open-domains` for new installs; existing legacy installs continue using their current directory). Override with `DOMAINS_DB_PATH`, `DOMAINS_DIR`, or the legacy `HASNA_DOMAINS_DB_PATH` / `HASNA_DOMAINS_DIR` names.
+
+## Optional Command Groups
+
+The default CLI keeps core portfolio, registrar, DNS, provider, Route 53, doctor, MCP, and server commands loaded. Optional groups are enabled per invocation:
+
+```bash
+domains extras
+DOMAINS_COMMAND_GROUPS=marketplace,storage domains --help
+DOMAINS_ENABLE_EXTRAS=1 domains --help
+```
+
+Available groups: `brandsight`, `events`, `history`, `interactive`, `marketplace`, `outreach`, `owner`, `provision`, `research`, `storage`, `wallet`.
+
+## Quick Start
+
+```bash
+# Set defaults used by availability, buy, setup, DNS, and doctor commands
+domains config set default-registrar route53
+domains config set default-dns cloudflare
+domains config set purchase-aws-profile production-domains
+
+# Add registrant contact defaults used by registrar purchase APIs
+domains config set contact.first_name Jane
+domains config set contact.last_name Example
+domains config set contact.email jane@example.com
+domains config set contact.phone +1.5555555555
+domains config set contact.address_line_1 "1 Main St"
+domains config set contact.city "New York"
+domains config set contact.state NY
+domains config set contact.country_code US
+domains config set contact.zip_code 10001
+
+# Check local health without printing secrets
+domains doctor
+```
+
+## Provider Matrix
+
+| Provider | Type | Availability | Buy/Register | Renew | Nameservers/DNS | Notes |
+|----------|------|--------------|--------------|-------|-----------------|-------|
+| `route53` | registrar + DNS | yes | yes | no | nameservers + Route 53 hosted zones | Primary self-serve registration path. Use `AWS_PROFILE` or AWS keys. |
+| `namecheap` | registrar + DNS | yes | yes | yes | nameservers + Namecheap DNS records | Requires Namecheap API access and whitelisted client IP. |
+| `godaddy` | registrar + DNS | gated | no direct CLI purchase | gated | DNS records when API access qualifies | Availability remains threshold-gated; DNS/domain management is available for qualifying accounts. |
+| `brandsight` | registrar + DNS | yes | gated by contract | yes when contract allows | nameservers + DNS records | GoDaddy Corporate Domains / Brandsight v2 API; enterprise-contract-only. |
+| `cloudflare` | DNS + inventory | no | no | no | DNS zones and records | Preferred DNS provider; zone inventory syncs domains but does not prove registrar ownership. |
+| `sedo` | marketplace | marketplace search/status | recorded purchase only | no | no | Sedo is marketplace/listing/portfolio, not registrar DNS in this CLI. |
 
 ## CLI Usage
 
 ```bash
-# Interactive portfolio browser (Ink TUI)
-domains interactive
-domains interactive --status active
-```
-domains add --name example.com --registrar Namecheap --expires-at 2025-01-01
-domains list
-domains list --status active --registrar Namecheap
-domains get <id>
-domains update <id> --notes "renewed"
-domains delete <id>
-domains search example
-domains stats
+# Portfolio management
+domains domain add --name example.com --registrar Namecheap --expires-at 2027-01-01
+domains domain list
+domains domain list --status active --registrar Namecheap
+domains domain get example.com
+domains domain update <id> --notes "renewed"
+domains domain delete <id>
+domains domain search example
+domains domain stats
 
 # Expiry monitoring
-domains expiring --days 30
-domains ssl --days 30
+domains domain expiring --days 30
+domains ssl expiring --days 30
 
 # WHOIS / SSL checks
-domains whois example.com
-domains ssl-check example.com
-domains check-all
+domains domain whois example.com
+domains ssl check example.com
+domains domain check example.com example.net
 
 # Portfolio export
-domains export --format csv --output portfolio.csv
-domains export --format json
+domains domain export --format csv > portfolio.csv
+domains domain export --format json
+
+# Provider registry and diagnostics
+domains providers
+domains provider list
+domains provider test route53
+domains provider test cloudflare
+domains doctor
+
+# Registrar sync
+domains sync --provider route53
+domains sync --provider cloudflare
+domains sync --provider namecheap
+domains sync --provider godaddy
+domains sync --provider brandsight
+domains sync --all
+
+# Availability and renewals
+domains check example.com
+domains check --provider route53 example.com
+domains check --provider namecheap example.com
+domains renew example.com --provider namecheap --years 1
+
+# Purchases and setup
+domains domain buy example.com --provider route53 --wait
+domains domain buy example.com --provider namecheap --wait
+domains domain buy premium.example --registrar sedo --price 2500 --expires 2027-01-01
+domains domain setup example.com --registrar route53 --dns cloudflare --wait
 
 # DNS record management
 domains dns list <domain-id>
@@ -66,37 +143,77 @@ domains dns export <domain-id>
 domains dns import <domain-id> --file zone.txt
 domains dns discover-subdomains example.com
 domains dns validate <domain-id>
+domains dns pull example.com --provider cloudflare
+domains dns push <domain-id> --provider cloudflare
 
-# Alerts
-domains alert set --domain <id> --type expiry --days-before 30
-domains alert list <domain-id>
-domains alert remove <alert-id>
+# Desired DNS state against a provider zone
+domains dns plan example.com --provider cloudflare --file dns.example.json
+domains dns diff example.com --provider cloudflare --file dns.example.json
+domains dns apply example.com --provider cloudflare --file dns.example.json --yes
+# Delete plans require --allow-delete and may still be refused before writes
+# when the provider path cannot guarantee safe convergence.
 
-# Registrar integration
-domains providers
-domains sync --provider namecheap
-domains sync --provider godaddy
-domains sync --all
-domains renew example.com --provider namecheap
+# Optional Sedo marketplace
+DOMAINS_COMMAND_GROUPS=marketplace domains sedo search example
+DOMAINS_COMMAND_GROUPS=marketplace domains sedo status example.com
+DOMAINS_COMMAND_GROUPS=marketplace domains sedo portfolio --limit 25
+DOMAINS_COMMAND_GROUPS=marketplace domains sedo add example.com --price 2500
+DOMAINS_COMMAND_GROUPS=marketplace domains sedo edit example.com --price 3000
+DOMAINS_COMMAND_GROUPS=marketplace domains sedo remove example.com
+DOMAINS_COMMAND_GROUPS=marketplace domains sedo buy example.com --price 2500 --order-id SEDO-ORDER-ID
 
-# Availability checks — pick the registrar with --provider
-domains check example.com                     # default registrar (config default-registrar, else namecheap)
-domains check --provider route53 example.com  # AWS Route 53 availability
-domains check --provider godaddy example.com
-domains r53 check example.com                  # Route 53-specific subcommand (same backend)
+# Optional brand monitoring
+DOMAINS_COMMAND_GROUPS=brandsight domains monitor watch mybrand
+DOMAINS_COMMAND_GROUPS=brandsight domains monitor similar example.com
+DOMAINS_COMMAND_GROUPS=brandsight domains monitor threats example.com
 
-# Brand monitoring
-domains monitor mybrand
-domains similar example.com
-domains threats example.com
+# Optional interactive portfolio browser
+DOMAINS_COMMAND_GROUPS=interactive domains interactive
+DOMAINS_COMMAND_GROUPS=interactive domains interactive --status active
 ```
 
-> **Prefer the `domains` CLI over raw `aws` commands.** For Route 53 availability,
-> registration status, and DNS, use `domains check --provider route53`,
-> `domains r53 status`, and `domains dns …` instead of `aws route53domains …` /
-> `aws route53 …`. The CLI applies the configured purchase profile, records the
-> result in the local portfolio DB, and works the same across registrars — raw
-> `aws` calls bypass all of that.
+Prefer the `domains` CLI over raw registrar CLIs for Route 53 availability, registration status, local portfolio updates, and DNS delegation. The CLI applies configured defaults, records outcomes in the local portfolio DB, and keeps behavior consistent across providers.
+
+Desired DNS state files are JSON:
+
+```json
+{
+  "domain": "example.com",
+  "records": [
+    { "type": "A", "name": "@", "value": "192.0.2.10", "ttl": 300 },
+    { "type": "MX", "name": "@", "value": "mail.example.com", "ttl": 300, "priority": 10 },
+    { "type": "TXT", "name": "@", "value": "v=spf1 -all", "ttl": 300 }
+  ]
+}
+```
+
+`dns apply` refuses to run without `--yes`. If the plan includes deletes, it also requires `--allow-delete`, then refuses before writing unless the provider path can guarantee delete convergence without partial mutation. Non-delete applies re-read provider records after writing and fail if the live zone still differs from the desired file.
+
+## AWS Domain Discovery
+
+```bash
+# Sync registered domains and hosted zones from specific AWS profiles
+AWS_PROFILE=production-domains domains sync --provider route53
+AWS_PROFILE=shared-dns domains sync --provider route53
+
+# Check all configured providers and redacted credential status
+domains providers --json
+domains doctor --json
+```
+
+Route 53 sync imports registered domains when the selected AWS account permits `route53domains:ListDomains`, and hosted zones when the account permits Route 53 hosted-zone reads. Domain-looking names from unrelated systems such as SSM parameters or Secrets Manager should only be imported after review because they do not prove registrar ownership.
+
+## Storage Sync
+
+Set one of these environment variables to sync with a remote PostgreSQL storage database:
+
+```bash
+export DOMAINS_DATABASE_URL="postgres://..."
+
+DOMAINS_COMMAND_GROUPS=storage domains storage status
+DOMAINS_COMMAND_GROUPS=storage domains storage push
+DOMAINS_COMMAND_GROUPS=storage domains storage pull
+```
 
 ## MCP Server
 
@@ -126,24 +243,51 @@ domains-mcp --http --port 8814
 MCP_HTTP=1 MCP_HTTP_PORT=8814 domains-mcp
 ```
 
-- `GET /health` → `{"status":"ok","name":"domains"}`
-- `POST /mcp` — Streamable HTTP MCP endpoint
+- `GET /health` returns `{"status":"ok","name":"domains"}`
+- `POST /mcp` is the Streamable HTTP MCP endpoint
 
 Stdio remains the default transport for gradual rollout.
+
+For read-only agent sessions:
+
+```bash
+DOMAINS_MCP_SAFE_MODE=1 domains-mcp
+DOMAINS_MCP_SAFE_MODE=1 domains-mcp --http
+```
+
+Safe mode registers only read-only/list/check/export tools. Mutating tools such as domain creation, DNS writes, provider sync, Route 53 registration, and storage push/pull are withheld.
 
 ## Environment Variables
 
 | Variable | Description |
 |----------|-------------|
+| `DOMAINS_DB_PATH` | Override database file path |
+| `HASNA_DOMAINS_DB_PATH` | Override database file path |
+| `DOMAINS_CONFIG_PATH` | Override config file path |
+| `DOMAINS_CONFIG_DIR` | Override config directory |
 | `HASNA_DOMAINS_DIR` | Override database directory |
-| `DOMAINS_DIR` | Override database directory (fallback) |
+| `DOMAINS_DIR` | Override database directory fallback |
+| `DOMAINS_COMMAND_GROUPS` | Comma-separated optional command groups to load, or `all` |
+| `DOMAINS_ENABLE_EXTRAS` | Set to `1` to load all optional command groups |
+| `DOMAINS_MCP_SAFE_MODE` | Set to `1` to expose only read-only MCP tools |
+| `DOMAINS_DATABASE_URL` | Remote storage PostgreSQL database URL |
+| `HASNA_DOMAINS_DATABASE_URL` | Legacy remote storage PostgreSQL database URL fallback |
+| `DOMAINS_STORAGE_MODE` | Storage mode: `local`, `remote`, or `hybrid` |
+| `HASNA_DOMAINS_STORAGE_MODE` | Legacy storage mode fallback |
+| `AWS_PROFILE` | AWS profile for Route 53 Domains and hosted zones |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | AWS credential fallback |
+| `DOMAINS_PURCHASE_AWS_PROFILE` | Purchase profile fallback when config has no `purchase_aws_profile` |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare API token |
+| `CLOUDFLARE_API_KEY`, `CLOUDFLARE_EMAIL` | Cloudflare global key fallback |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID for zone creation |
 | `NAMECHEAP_API_KEY` | Namecheap API key |
 | `NAMECHEAP_USERNAME` | Namecheap account username |
 | `NAMECHEAP_CLIENT_IP` | Namecheap whitelisted IP |
 | `NAMECHEAP_SANDBOX` | Use Namecheap sandbox API |
-| `GODADDY_API_KEY` | GoDaddy API key |
-| `GODADDY_API_SECRET` | GoDaddy API secret |
-| `BRANDSIGHT_API_KEY` | Brandsight API key |
+| `GODADDY_API_KEY`, `GODADDY_API_SECRET` | GoDaddy API credentials |
+| `BRANDSIGHT_API_KEY`, `BRANDSIGHT_API_SECRET`, `BRANDSIGHT_CUSTOMER_ID` | Brandsight / GoDaddy Corporate Domains credentials |
+| `BRANDSIGHT_DEMO_STUBS`, `BRANDSIGHT_ALLOW_STUBS` | Set either to `1` to allow demo stub responses when the Brandsight API is unreachable |
+| `SEDO_PARTNER_ID`, `SEDO_API_KEY`, `SEDO_USERNAME`, `SEDO_PASSWORD` | Sedo marketplace API credentials |
 
 ## License
 

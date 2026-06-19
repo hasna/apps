@@ -61,7 +61,7 @@ import {
   syncAll,
 } from "../lib/registrar.js";
 import { loadConfig, resolveContact } from "../lib/config.js";
-import { createZone as cfCreateZone } from "../lib/cloudflare.js";
+import { ensureZone as cfEnsureZone } from "../lib/cloudflare.js";
 import {
   monitorBrand,
   getSimilarDomains,
@@ -95,13 +95,18 @@ import {
   deleteRecord as r53DeleteRecord,
   upsertRecords as r53UpsertRecords,
   createRoute53Provider,
+  updateNameservers as r53UpdateNameservers,
 } from "../lib/route53.js";
+import { registerDomainsStorageTools } from "./storage-tools.js";
+import { applySafeModeToolFilter } from "./tool-filter.js";
 
 export function buildServer(): McpServer {
 const server = new McpServer({
   name: "domains",
   version: getPackageVersion(),
 });
+applySafeModeToolFilter(server);
+registerDomainsStorageTools(server);
 
 // --- Domains ---
 
@@ -326,7 +331,7 @@ server.registerTool(
     description: "Link an email or email thread to a tracked domain.",
     inputSchema: {
       domain: z.string().describe("Domain ID or name"),
-      email_id: z.string().describe("Email ID from @hasna/emails"),
+      email_id: z.string().describe("Email ID from the connected email system"),
       thread_id: z.string().optional().describe("Optional email thread ID"),
       type: z.enum(DOMAIN_EMAIL_TYPES),
     },
@@ -880,7 +885,7 @@ server.registerTool(
   "sync_all_providers",
   {
     title: "Sync All Providers",
-    description: "Sync domains from all configured registrar providers (Namecheap, GoDaddy, Route 53) to local database.",
+    description: "Sync domains from all configured domain inventory providers (Route 53, Cloudflare zones, Namecheap, GoDaddy, Brandsight) to local database.",
     inputSchema: {},
   },
   async () => {
@@ -1341,11 +1346,11 @@ server.registerTool(
   "domain_setup",
   {
     title: "Buy + Setup Domain",
-    description: "Full setup: buy domain via registrar, create DNS zone, return nameservers. Uses contact info from config.",
+    description: "Full setup: buy domain via registrar, create/reuse DNS zone, and delegate nameservers when registration is complete. Uses contact info from config.",
     inputSchema: {
       domain: z.string().describe("Domain to purchase and set up"),
       registrar: z.string().optional().describe("Registrar provider (default: config default-registrar or route53)"),
-      dns: z.string().optional().describe("DNS provider for zone creation (default: config default-dns or route53)"),
+      dns: z.string().optional().describe("DNS provider for zone creation (default: config default-dns or cloudflare)"),
       years: z.number().optional().describe("Registration years (default: 1)"),
       wait: z.boolean().optional().describe("Poll until registration completes before creating zone"),
     },
@@ -1354,39 +1359,69 @@ server.registerTool(
     try {
       const cfg = loadConfig();
       const registrarName = registrar ?? cfg.default_registrar ?? "route53";
-      const dnsName = dns ?? cfg.default_dns ?? registrarName;
+      const dnsName = dns ?? cfg.default_dns ?? "cloudflare";
 
       if (registrarName !== "route53") throw new Error("Direct purchase currently only supported via route53");
 
       const contact = resolveContact({});
-      const { registerDomain: r53Register, checkAvailability: r53Check, getRegistrationStatus: r53Status, createHostedZone } = await import("../lib/route53.js");
 
-      const avail = await r53Check(domain);
+      const avail = await r53CheckAvailability(domain);
       if (!avail.available) throw new Error(`${domain} is not available`);
 
-      const reg = await r53Register(domain, contact, years ?? 1);
+      const reg = await r53RegisterDomain(domain, contact, years ?? 1);
 
       if (wait) {
         let status = "IN_PROGRESS";
         while (status === "IN_PROGRESS" || status === "SUBMITTED") {
           await new Promise((r) => setTimeout(r, 10_000));
-          status = (await r53Status(reg.operationId)).status;
+          status = (await r53GetRegistrationStatus(reg.operationId)).status;
         }
         if (status !== "SUCCESSFUL") throw new Error(`Registration ${status}`);
       }
 
       let nameservers: string[] = [];
+      let zoneId: string | undefined;
       if (dnsName === "cloudflare") {
-        const zone = await cfCreateZone(domain);
+        const zone = await cfEnsureZone(domain);
+        zoneId = zone.id;
         nameservers = zone.nameservers ?? [];
       } else {
-        const zone = await createHostedZone(domain, "Managed by @hasna/domains");
+        const zone = await r53CreateHostedZone(domain, "Managed by domains MCP");
+        zoneId = zone.id;
         nameservers = zone.name_servers ?? [];
       }
 
-      createDomain({ name: domain, registrar: "AWS Route 53", status: "active", auto_renew: true, nameservers });
+      let delegationOperationId: string | undefined;
+      if (wait && nameservers.length > 0) {
+        const nsUpdate = await r53UpdateNameservers(domain, nameservers);
+        delegationOperationId = nsUpdate.operationId;
+      }
 
-      return { content: [{ type: "text", text: JSON.stringify({ domain, operationId: reg.operationId, nameservers, dns_provider: dnsName }, null, 2) }] };
+      const existing = getDomainByName(domain);
+      const dbInput = { registrar: "AWS Route 53", status: "active" as const, auto_renew: true, nameservers };
+      if (existing) updateDomain(existing.id, dbInput);
+      else createDomain({ name: domain, ...dbInput });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                domain,
+                operationId: reg.operationId,
+                nameservers,
+                dns_provider: dnsName,
+                zone_id: zoneId,
+                nameservers_delegated: Boolean(delegationOperationId),
+                delegation_operation_id: delegationOperationId,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
     } catch (error: unknown) {
       return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
     }

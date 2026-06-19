@@ -6,24 +6,116 @@ import { registerDnsCommands } from "./commands/dns.js";
 import { registerZoneCommand } from "./commands/zone.js";
 import { registerSslCommand } from "./commands/ssl.js";
 import { registerAlertCommands } from "./commands/alerts.js";
-import { registerMonitorCommand } from "./commands/monitor.js";
 import { registerProviderCommand } from "./commands/provider.js";
 import { registerProviderCommands } from "./commands/providers.js";
-import { registerBrandsightCommands } from "./commands/brandsight.js";
 import { registerConfigCommands } from "./commands/config.js";
 import { registerDoctorCommand } from "./commands/doctor.js";
 import { registerMcpCommand } from "./commands/mcp-install.js";
 import { registerServeCommand } from "./commands/serve.js";
 import { registerRoute53Commands } from "./commands/route53.js";
-import { registerOwnerCommand } from "./commands/owner.js";
-import { registerHistoryCommand } from "./commands/history.js";
-import { registerResearchCommand } from "./commands/research.js";
-import { registerOutreachCommand } from "./commands/outreach.js";
-import { registerSedoCommand } from "./commands/sedo.js";
-import { registerWalletCommand } from "./commands/wallet.js";
-import { registerProvisionCommand } from "./commands/provision.js";
-import { registerInteractiveCommand } from "./commands/interactive.js";
 import { getPackageVersion } from "../lib/version.js";
+
+const OPTIONAL_GROUPS = [
+  "brandsight",
+  "events",
+  "history",
+  "interactive",
+  "marketplace",
+  "outreach",
+  "owner",
+  "provision",
+  "research",
+  "storage",
+  "wallet",
+] as const;
+
+type OptionalGroup = (typeof OPTIONAL_GROUPS)[number];
+
+function enabledOptionalGroups(env: Record<string, string | undefined> = process.env as Record<string, string | undefined>): Set<OptionalGroup> {
+  const raw = env["DOMAINS_COMMAND_GROUPS"] ?? "";
+  if (env["DOMAINS_ENABLE_EXTRAS"] === "1" || raw === "all") return new Set(OPTIONAL_GROUPS);
+  return new Set(
+    raw
+      .split(",")
+      .map((part) => part.trim().toLowerCase())
+      .filter((part): part is OptionalGroup => (OPTIONAL_GROUPS as readonly string[]).includes(part))
+  );
+}
+
+async function registerOptionalCommands(program: Command, groups: Set<OptionalGroup>): Promise<void> {
+  if (groups.has("brandsight")) {
+    const { registerMonitorCommand } = await import("./commands/monitor.js");
+    registerMonitorCommand(program);
+  }
+  if (groups.has("marketplace")) {
+    const { registerSedoCommand } = await import("./commands/sedo.js");
+    registerSedoCommand(program);
+  }
+  if (groups.has("owner")) {
+    const { registerOwnerCommand } = await import("./commands/owner.js");
+    registerOwnerCommand(program);
+  }
+  if (groups.has("history")) {
+    const { registerHistoryCommand } = await import("./commands/history.js");
+    registerHistoryCommand(program);
+  }
+  if (groups.has("research")) {
+    const { registerResearchCommand } = await import("./commands/research.js");
+    registerResearchCommand(program);
+  }
+  if (groups.has("outreach")) {
+    const { registerOutreachCommand } = await import("./commands/outreach.js");
+    registerOutreachCommand(program);
+  }
+  if (groups.has("wallet")) {
+    const { registerWalletCommand } = await import("./commands/wallet.js");
+    registerWalletCommand(program);
+  }
+  if (groups.has("provision")) {
+    const { registerProvisionCommand } = await import("./commands/provision.js");
+    registerProvisionCommand(program);
+  }
+  if (groups.has("storage")) {
+    const { registerStorageCommand } = await import("./commands/storage.js");
+    registerStorageCommand(program);
+  }
+  if (groups.has("interactive")) {
+    const { registerInteractiveCommand } = await import("./commands/interactive.js");
+    registerInteractiveCommand(program);
+  }
+  if (groups.has("events")) {
+    try {
+      const { registerEventsCommands } = await import("@hasna/events/commander");
+      registerEventsCommands(program, { source: "domains" });
+    } catch (error) {
+      console.error(`Events command group is enabled but @hasna/events could not be loaded: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+}
+
+function registerOptionalHelp(program: Command): void {
+  program
+    .command("extras")
+    .description("List optional command groups and how to enable them")
+    .option("--json", "Output JSON", false)
+    .action((opts: { json?: boolean }) => {
+      const groups = enabledOptionalGroups();
+      const body = {
+        enabled: Array.from(groups),
+        available: [...OPTIONAL_GROUPS],
+        enable_all: "DOMAINS_ENABLE_EXTRAS=1 domains <command>",
+        enable_some: "DOMAINS_COMMAND_GROUPS=marketplace,storage domains <command>",
+      };
+      if (opts.json) {
+        console.log(JSON.stringify(body, null, 2));
+        return;
+      }
+      console.log("Optional command groups:");
+      for (const group of body.available) console.log(`  ${groups.has(group) ? "✓" : " "} ${group}`);
+      console.log("\nEnable all:  DOMAINS_ENABLE_EXTRAS=1 domains <command>");
+      console.log("Enable some: DOMAINS_COMMAND_GROUPS=marketplace,storage domains <command>");
+    });
+}
 
 const program = new Command();
 
@@ -38,7 +130,6 @@ registerDnsCommands(program);     // domains dns <list|add|update|remove|pull|pu
 registerZoneCommand(program);     // domains zone <list|create|info|delete>
 registerSslCommand(program);      // domains ssl <check|expiring>
 registerAlertCommands(program);   // domains alert <set|list>
-registerMonitorCommand(program);  // domains monitor <watch|similar|threats>
 registerProviderCommand(program); // domains provider <list|test>
 registerProviderCommands(program); // domains providers, sync, renew, check
 registerConfigCommands(program);  // domains config <show|set|unset>
@@ -49,26 +140,7 @@ registerServeCommand(program);    // domains serve
 // ── Legacy provider-specific namespace (kept for explicit Route 53 ops) ───
 registerRoute53Commands(program); // domains r53 <...>
 
-// ── Owner tracking (premium domain owners) ───────────────────────────────
-registerOwnerCommand(program);  // domains owner <list|get|add|update|delete|extract|link|whois|info>
+registerOptionalHelp(program);
 
-// ── Domain history tracking ──────────────────────────────────────────────
-registerHistoryCommand(program);  // domains history <list|timeline|range|delete|purge>
-
-// ── AI research & reputation ─────────────────────────────────────────────
-registerResearchCommand(program);  // domains research <exa|answer|reputation|blacklisted|threats>
-
-// ── Owner outreach (SMS/WhatsApp/email) ──────────────────────────────────
-registerOutreachCommand(program);  // domains outreach <sms|whatsapp|email>
-
-// ── Sedo marketplace integration ─────────────────────────────────────────
-registerSedoCommand(program);  // domains sedo <search|status|portfolio|add|edit|remove|blacklist|buy>
-
-// ── Wallet payment integration ───────────────────────────────────────────
-registerWalletCommand(program);  // domains wallet <cards|buy|renew>
-registerProvisionCommand(program);  // domains provision <status>
-
-// ── Interactive Ink TUI ────────────────────────────────────────────────────
-registerInteractiveCommand(program);  // domains interactive
-
+await registerOptionalCommands(program, enabledOptionalGroups());
 program.parse(process.argv);

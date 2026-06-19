@@ -5,17 +5,17 @@ afterEach(() => { delete process.env["AWS_PROFILE"]; delete process.env["AWS_ACC
 
 describe("purchase profile", () => {
   it("getPurchaseProfile reads env override", () => {
-    process.env["DOMAINS_PURCHASE_AWS_PROFILE"] = "hasna-xyz-infra";
-    expect(getPurchaseProfile()).toBe("hasna-xyz-infra");
+    process.env["DOMAINS_PURCHASE_AWS_PROFILE"] = "production-domains";
+    expect(getPurchaseProfile()).toBe("production-domains");
   });
   it("applyPurchaseProfile sets AWS_PROFILE when no creds present", () => {
-    process.env["DOMAINS_PURCHASE_AWS_PROFILE"] = "hasna-xyz-infra";
-    expect(applyPurchaseProfile()).toBe("hasna-xyz-infra");
-    expect(process.env["AWS_PROFILE"]).toBe("hasna-xyz-infra");
+    process.env["DOMAINS_PURCHASE_AWS_PROFILE"] = "production-domains";
+    expect(applyPurchaseProfile()).toBe("production-domains");
+    expect(process.env["AWS_PROFILE"]).toBe("production-domains");
   });
   it("applyPurchaseProfile does NOT override explicit AWS_ACCESS_KEY_ID", () => {
     process.env["AWS_ACCESS_KEY_ID"] = "fake-test-key-id";
-    process.env["DOMAINS_PURCHASE_AWS_PROFILE"] = "hasna-xyz-infra";
+    process.env["DOMAINS_PURCHASE_AWS_PROFILE"] = "production-domains";
     applyPurchaseProfile();
     expect(process.env["AWS_PROFILE"]).toBeUndefined();
   });

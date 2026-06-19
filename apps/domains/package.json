@@ -1,7 +1,7 @@
 {
   "name": "@hasna/domains",
-  "version": "0.0.19",
-  "description": "Domain portfolio and DNS management for AI agents — CLI + MCP server with SQLite",
+  "version": "0.0.25",
+  "description": "Domain portfolio, registrar, marketplace, and DNS management for AI agents — CLI + MCP server with SQLite",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -13,6 +13,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./storage": {
+      "types": "./dist/storage.d.ts",
+      "import": "./dist/storage.js"
     }
   },
   "files": [
@@ -21,13 +25,14 @@
     "README.md"
   ],
   "scripts": {
-    "build": "bun build src/cli/index.ts --outdir dist/cli --target bun --external ink --external react --external chalk --external ink-text-input --external @modelcontextprotocol/sdk --external @hasna/cloud && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @hasna/cloud && bun build src/index.ts --outdir dist --target bun --external @hasna/cloud && tsc --emitDeclarationOnly --outDir dist",
+    "clean": "rm -rf dist",
+    "build": "bun run clean && bun build src/cli/index.ts --outdir dist/cli --target bun --external ink --external react --external chalk --external ink-text-input --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/index.ts src/storage.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
     "prepublishOnly": "bun run build",
-    "postinstall": "mkdir -p $HOME/.hasna/domains 2>/dev/null || true"
+    "postinstall": "mkdir -p ${XDG_DATA_HOME:-$HOME/.local/share}/open-domains ${XDG_CONFIG_HOME:-$HOME/.config}/open-domains 2>/dev/null || true"
   },
   "keywords": [
     "domains",
@@ -47,7 +52,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/hasna/domains.git"
+    "url": "git+https://github.com/hasna/domains.git"
   },
   "homepage": "https://github.com/hasna/domains",
   "bugs": {
@@ -59,21 +64,24 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@aws-sdk/client-route-53": "^3.1017.0",
-    "@aws-sdk/client-route-53-domains": "^3.1017.0",
-    "@hasna/cloud": "^0.1.24",
-    "@hasna/contacts": "^0.6.16",
-    "@hasna/wallets": "^0.1.7",
-    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@aws-sdk/client-route-53": "^3.1067.0",
+    "@aws-sdk/client-route-53-domains": "^3.1067.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
     "ink": "^5.2.0",
     "ink-text-input": "^6.0.0",
+    "pg": "^8.21.0",
     "react": "^18.3.1",
     "zod": "^3.24.2"
   },
+  "optionalDependencies": {
+    "@hasna/contacts": "^0.6.19",
+    "@hasna/events": "^0.1.3"
+  },
   "devDependencies": {
-    "@types/bun": "^1.2.4",
+    "@types/bun": "^1.3.14",
+    "@types/pg": "^8.20.0",
     "@types/react": "^18.3.18",
     "ink-testing-library": "^4.0.0",
     "typescript": "^5.7.3"

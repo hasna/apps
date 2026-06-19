@@ -1,8 +1,8 @@
 /**
  * Wallet payment integration for domain purchases
  *
- * Uses @hasna/wallets virtual cards to pay for domain registrations,
- * renewals, and marketplace purchases (Sedo, etc.)
+ * Uses an optional wallet module to pay for domain registrations,
+ * renewals, and marketplace purchases (Sedo, etc.).
  */
 
 import type { Command } from "commander";
@@ -31,12 +31,25 @@ export interface WalletTransaction {
   description: string | null;
 }
 
-function getWalletsModule(): typeof import("@hasna/wallets") {
+interface WalletsModule {
+  listCards(options: { status: string }): Promise<unknown[]>;
+  getCard(id: string): any | null;
+}
+
+const WALLET_MODULE_ENV = "DOMAINS_WALLET_MODULE";
+
+function getWalletsModule(): WalletsModule {
+  const moduleName = process.env[WALLET_MODULE_ENV];
+  if (!moduleName) {
+    throw new Error(
+      `Wallet integration is optional. Set ${WALLET_MODULE_ENV} to an installed wallet module.`
+    );
+  }
   try {
-    return require("@hasna/wallets");
+    return require(moduleName) as WalletsModule;
   } catch {
     throw new Error(
-      "@hasna/wallets not installed. Run: bun add @hasna/wallets"
+      `Wallet module '${moduleName}' is not installed or could not be loaded.`
     );
   }
 }

@@ -515,7 +515,7 @@ export function registerRoute53Commands(program: Command): void {
             return { id: full.id, name_servers: full.name_servers };
           },
           createZone: async (d) => {
-            const z = await createHostedZone(d, `Managed by @hasna/domains`);
+            const z = await createHostedZone(d, "Managed by domains CLI");
             return { id: z.id, name_servers: z.name_servers ?? [] };
           },
           getRegistrarNs: async (d) => (await getDomainDetail(d)).nameservers,

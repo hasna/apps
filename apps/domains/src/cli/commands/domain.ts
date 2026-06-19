@@ -20,11 +20,12 @@ import {
   getDomainStats,
   exportPortfolio, checkAllDomains, whoisLookup,
 } from "../../db/domains.js";
-import { getAvailableProviders, getRegistrarProvider, getDnsProvider, autoDetectRegistrar } from "../../lib/registrar.js";
+import { getAvailableProviders, getRegistrarProvider, getDnsProvider, getDomainInventoryProvider, providerHasInventory, autoDetectRegistrar } from "../../lib/registrar.js";
 import { loadConfig, resolveContact, applyPurchaseProfile } from "../../lib/config.js";
 import { registerDomain, checkAvailability, getRegistrationStatus, createHostedZone, updateNameservers } from "../../lib/route53.js";
-import { createZone as cfCreateZone } from "../../lib/cloudflare.js";
+import { createZone as cfCreateZone, ensureZone as cfEnsureZone } from "../../lib/cloudflare.js";
 import { delegateDomainToCloudflare } from "../../lib/delegate.js";
+import { getCapability } from "../../lib/capability.js";
 
 const DOMAIN_STATUS_HELP = DOMAIN_STATUSES.join("/");
 const DOMAIN_OFFER_STATUS_HELP = DOMAIN_OFFER_STATUSES.join("/");
@@ -37,6 +38,18 @@ function parseOptionalNumber(value: string | undefined, flagName: string): numbe
     throw new Error(`${flagName} must be a non-negative number`);
   }
   return parsed;
+}
+
+async function createDnsZoneForProvider(domain: string, provider: string): Promise<{ zoneId: string; nameservers: string[] }> {
+  if (provider === "cloudflare") {
+    const zone = await cfEnsureZone(domain);
+    return { zoneId: zone.id, nameservers: zone.nameservers ?? [] };
+  }
+  if (provider === "route53") {
+    const zone = await createHostedZone(domain, "Managed by domains CLI");
+    return { zoneId: zone.id, nameservers: zone.name_servers ?? [] };
+  }
+  throw new Error(`DNS provider '${provider}' is not supported by domain purchase delegation yet`);
 }
 
 function requireDomain(identifier: string) {
@@ -448,11 +461,11 @@ export function registerDomainCommand(program: Command): void {
     .action(async (opts: { provider?: string }) => {
       const providers = opts.provider
         ? [opts.provider]
-        : getAvailableProviders().filter((p) => p.configured && p.type !== "dns" && p.name !== "brandsight").map((p) => p.name);
+        : getAvailableProviders().filter((p) => p.configured && providerHasInventory(p.name)).map((p) => p.name);
 
       for (const name of providers) {
         try {
-          const provider = getRegistrarProvider(name);
+          const provider = getDomainInventoryProvider(name);
           const result = await provider.syncToLocalDb({ getDomainByName, createDomain, updateDomain });
           console.log(`✓ [${name}] Synced ${result.synced} (${result.created} new, ${result.updated} updated)`);
           if (result.errors.length > 0) console.log(`  Errors: ${result.errors.join(", ")}`);
@@ -558,11 +571,12 @@ export function registerDomainCommand(program: Command): void {
     .command("renew <name>")
     .description("Renew a domain via its registrar provider")
     .option("--provider <name>", "Override provider")
-    .action(async (name: string, opts: { provider?: string }) => {
+    .option("--years <n>", "Number of years to renew", "1")
+    .action(async (name: string, opts: { provider?: string; years: string }) => {
       const providerName = opts.provider ?? autoDetectRegistrar(name, getDomainByName) ?? loadConfig().default_registrar;
       if (!providerName) { console.error("Could not detect provider. Use --provider."); process.exit(1); }
       const provider = getRegistrarProvider(providerName);
-      const result = await provider.renewDomain(name);
+      const result = await provider.renewDomain(name, parseInt(opts.years, 10));
       if (result.success) {
         console.log(`✓ Renewed: ${name}`);
         if (result.orderId) console.log(`  Order: ${result.orderId}`);
@@ -576,7 +590,7 @@ export function registerDomainCommand(program: Command): void {
 
   domain
     .command("buy <name>")
-    .description("Purchase a domain via Route 53 (contact defaults from: domains config set contact.*)")
+    .description("Purchase or record a domain via registrar provider (contact defaults from: domains config set contact.*)")
     .option("--provider <name>", "Registrar provider (default: config default-registrar or route53)")
     .option("--registrar <name>", "Registrar/seller for recorded purchases (alias of --provider)")
     .option("--email <email>", "Registrant email")
@@ -594,13 +608,14 @@ export function registerDomainCommand(program: Command): void {
     .option("--auto-renew <bool>", "Auto-renew for recorded purchases (true/false)")
     .option("--years <n>", "Years", "1")
     .option("--wait", "Poll until registration completes")
-    .option("--dns <provider>", "DNS provider to delegate to after purchase (always cloudflare)", "cloudflare")
-    .option("--no-delegate", "Skip delegating DNS to Cloudflare after purchase")
+    .option("--dns <provider>", "DNS provider to delegate to after purchase (default: config default-dns or cloudflare)")
+    .option("--no-delegate", "Skip nameserver delegation after purchase")
+    .option("--allow-gated", "Allow gated/contract-only registrar purchase path when the provider API supports it")
     .action(async (name: string, opts: {
       provider?: string; registrar?: string; email?: string; firstName?: string; lastName?: string;
       phone?: string; address?: string; city?: string; state?: string;
       country?: string; zip?: string; org?: string; price?: string; expires?: string; autoRenew?: string;
-      years: string; wait?: boolean; dns?: string; delegate?: boolean;
+      years: string; wait?: boolean; dns?: string; delegate?: boolean; allowGated?: boolean;
     }) => {
       const recordedPrice = parseOptionalNumber(opts.price, "--price");
       if (recordedPrice !== undefined) {
@@ -623,16 +638,78 @@ export function registerDomainCommand(program: Command): void {
 
       const cfg = loadConfig();
       const providerName = opts.registrar ?? opts.provider ?? cfg.default_registrar ?? "route53";
+      const dnsProvider = opts.dns ?? cfg.default_dns ?? "cloudflare";
 
-      // Use the configured purchase AWS account (hasna-xyz-infra) unless explicit
-      // AWS creds/profile are already set in the environment.
-      const purchaseProfile = applyPurchaseProfile();
+      // Use the configured purchase AWS profile unless explicit AWS
+      // creds/profile are already set in the environment.
+      const purchaseProfile = providerName === "route53" ? applyPurchaseProfile() : undefined;
       if (purchaseProfile) console.log(`Using purchase AWS profile: ${purchaseProfile}`);
 
-      // Only Route 53 supports direct purchase via this tool
       if (providerName !== "route53") {
-        console.error(`Direct domain purchase only supported via route53. Got: ${providerName}`);
-        process.exit(1);
+        try {
+          const capability = getCapability(providerName);
+          if (!capability.canBuy) {
+            console.error(`Direct domain purchase is not supported for ${providerName}. ${capability.notes} Use route53 or record a marketplace/manual purchase with --price.`);
+            process.exit(1);
+          }
+          if (capability.gated && !opts.allowGated) {
+            console.error(`Registrar '${providerName}' is gated/enterprise-only. Pass --allow-gated only when this account is contract-approved. ${capability.notes}`);
+            process.exit(1);
+          }
+
+          const provider = getRegistrarProvider(providerName);
+          if (!provider.registerDomain) {
+            console.error(`Direct domain purchase is not supported for ${providerName}. Use route53 or record a marketplace/manual purchase with --price.`);
+            process.exit(1);
+          }
+
+          const avail = await provider.checkAvailability(name);
+          if (!avail.available) { console.error(`✗ ${name} is not available`); process.exit(1); }
+          console.log(`✓ Available via ${providerName}`);
+
+          let contact;
+          try { contact = resolveContact(opts); } catch (e) { console.error(`Error: ${e instanceof Error ? e.message : String(e)}`); process.exit(1); }
+
+          console.log(`Registering ${name} via ${providerName}...`);
+          const reg = await provider.registerDomain(name, contact, {
+            years: parseInt(opts.years, 10),
+            premiumPrice: avail.premium_price,
+            autoRenew: opts.autoRenew ? opts.autoRenew === "true" : true,
+          });
+          if (!reg.success) { console.error(`✗ Registration failed via ${providerName}`); process.exit(1); }
+
+          const existing = getDomainByName(name);
+          const dbInput = {
+            registrar: providerName,
+            status: "active" as const,
+            auto_renew: opts.autoRenew ? opts.autoRenew === "true" : true,
+            purchase_price: reg.chargedAmount ? Number(reg.chargedAmount) : avail.standard_price,
+            purchase_date: new Date().toISOString(),
+            standard_price: avail.standard_price,
+            is_premium: avail.is_premium,
+            premium_price: avail.premium_price,
+          };
+          if (existing) updateDomain(existing.id, dbInput);
+          else createDomain({ name, ...dbInput });
+          console.log(`✓ Registered and added to portfolio`);
+          if (reg.orderId) console.log(`  Order: ${reg.orderId}`);
+
+          if (opts.delegate !== false) {
+            if (!provider.updateNameservers) {
+              console.log(`  DNS: ${providerName} registration succeeded, but nameserver updates are not implemented for this provider.`);
+            } else {
+              const zone = await createDnsZoneForProvider(name, dnsProvider);
+              const nsUpdate = await provider.updateNameservers(name, zone.nameservers);
+              const existing2 = getDomainByName(name);
+              if (existing2) updateDomain(existing2.id, { nameservers: zone.nameservers });
+              console.log(`✓ ${dnsProvider} zone ${zone.zoneId}; nameservers updated${nsUpdate.operationId ? ` (op ${nsUpdate.operationId})` : ""}`);
+            }
+          }
+          return;
+        } catch (e) {
+          console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+          process.exit(1);
+        }
       }
 
       try {
@@ -684,28 +761,33 @@ export function registerDomainCommand(program: Command): void {
         }
         console.log(`✓ Added to portfolio`);
 
-        // Always-Cloudflare-DNS rule: delegate DNS to Cloudflare after purchase.
-        // Requires registration to have completed, so only when --wait is set.
-        const dnsProvider = opts.dns ?? "cloudflare";
-        if (opts.delegate !== false && dnsProvider === "cloudflare") {
+        // Nameserver updates require registration to have completed, so only
+        // delegate in this flow when --wait is set.
+        if (opts.delegate !== false) {
           if (!opts.wait) {
             console.log(`  DNS: run 'domains domain buy ${name} --wait' or delegate later — registration must finish before NS can change.`);
           } else {
             try {
-              console.log(`Delegating DNS to Cloudflare...`);
-              const del = await delegateDomainToCloudflare(name, {
-                createCloudflareZone: async (d) => {
-                  const z = await cfCreateZone(d);
-                  return { id: z.id, nameservers: z.nameservers };
-                },
-                updateNameservers: (d, ns) => updateNameservers(d, ns),
-              });
+              console.log(`Delegating DNS to ${dnsProvider}...`);
+              const del = dnsProvider === "cloudflare"
+                ? await delegateDomainToCloudflare(name, {
+                    createCloudflareZone: async (d) => {
+                      const z = await cfEnsureZone(d);
+                      return { id: z.id, nameservers: z.nameservers };
+                    },
+                    updateNameservers: (d, ns) => updateNameservers(d, ns),
+                  })
+                : await (async () => {
+                    const zone = await createDnsZoneForProvider(name, dnsProvider);
+                    const nsUpdate = await updateNameservers(name, zone.nameservers);
+                    return { zoneId: zone.zoneId, nameservers: zone.nameservers, operationId: nsUpdate.operationId };
+                  })();
               const existing2 = getDomainByName(name);
               if (existing2) updateDomain(existing2.id, { nameservers: del.nameservers });
-              console.log(`✓ Cloudflare zone ${del.zoneId}; nameservers → ${del.nameservers.join(", ")} (op ${del.operationId})`);
+              console.log(`✓ ${dnsProvider} zone ${del.zoneId}; nameservers → ${del.nameservers.join(", ")} (op ${del.operationId})`);
             } catch (e) {
               console.error(`⚠ DNS delegation failed (domain is registered): ${e instanceof Error ? e.message : String(e)}`);
-              console.error(`  Retry: create the Cloudflare zone and point Route53 NS at it.`);
+              console.error(`  Retry: create the DNS zone and point Route53 NS at it.`);
             }
           }
         }
@@ -723,7 +805,7 @@ export function registerDomainCommand(program: Command): void {
     .command("setup <name>")
     .description("Full setup: buy domain + create DNS zone + point nameservers (contact defaults from config)")
     .option("--registrar <n>", "Registrar provider (default: config default-registrar or route53)")
-    .option("--dns <n>", "DNS provider (default: config default-dns or route53)")
+    .option("--dns <n>", "DNS provider (default: config default-dns or cloudflare)")
     .option("--email <e>", "Registrant email")
     .option("--first-name <n>", "First name")
     .option("--last-name <n>", "Last name")
@@ -743,14 +825,14 @@ export function registerDomainCommand(program: Command): void {
     }) => {
       const cfg = loadConfig();
       const registrarName = opts.registrar ?? cfg.default_registrar ?? "route53";
-      const dnsName = opts.dns ?? cfg.default_dns ?? registrarName;
+      const dnsName = opts.dns ?? cfg.default_dns ?? "cloudflare";
 
       console.log(`\nSetting up ${name}`);
       console.log(`  Registrar: ${registrarName}  |  DNS: ${dnsName}\n`);
 
       try {
         // 1. Check availability
-        process.stdout.write("[1/4] Checking availability... ");
+        process.stdout.write(opts.wait ? "[1/5] Checking availability... " : "[1/4] Checking availability... ");
         const avail = await checkAvailability(name);
         if (!avail.available) { console.log("not available"); console.error(`✗ ${name} is not available`); process.exit(1); }
         const price = avail.price ? `(USD ${avail.price}/yr)` : "";
@@ -764,7 +846,7 @@ export function registerDomainCommand(program: Command): void {
         let contact;
         try { contact = resolveContact(opts); } catch (e) { console.error(`Error: ${e instanceof Error ? e.message : String(e)}`); process.exit(1); }
 
-        process.stdout.write("[2/4] Registering domain... ");
+        process.stdout.write(opts.wait ? "[2/5] Registering domain... " : "[2/4] Registering domain... ");
         const reg = await registerDomain(name, contact, parseInt(opts.years));
         console.log(`submitted (${reg.operationId})`);
 
@@ -782,21 +864,39 @@ export function registerDomainCommand(program: Command): void {
         }
 
         // 3. Create DNS zone
-        process.stdout.write("[3/4] Creating DNS zone... ");
+        process.stdout.write(opts.wait ? "[3/5] Creating DNS zone... " : "[3/4] Creating DNS zone... ");
         let nameservers: string[] = [];
         if (dnsName === "cloudflare") {
-          const zone = await cfCreateZone(name);
+          const zone = await cfEnsureZone(name);
           nameservers = zone.nameservers ?? [];
-          console.log(`created (${zone.id})`);
+          console.log("ready (" + zone.id + ")");
         } else {
-          const zone = await createHostedZone(name, `Managed by @hasna/domains`);
+          const zone = await createHostedZone(name, "Managed by domains CLI");
           nameservers = zone.name_servers ?? [];
           console.log(`created (${zone.id})`);
         }
 
-        // 4. Sync to local DB (nameservers will be updated by nightly sync once registration completes)
-        process.stdout.write("[4/4] Adding to portfolio... ");
-        createDomain({ name, registrar: `AWS Route 53`, status: "active", auto_renew: true, nameservers });
+        if (nameservers.length > 0) {
+          if (opts.wait) {
+            process.stdout.write("[4/5] Updating registrar nameservers... ");
+            if (registrarName !== "route53") {
+              console.log("skipped");
+              console.error("Only Route53 nameserver delegation is currently implemented for setup.");
+              process.exit(1);
+            }
+            const nsUpdate = await updateNameservers(name, nameservers);
+            console.log("submitted (" + nsUpdate.operationId + ")");
+          } else {
+            console.log("  Nameserver delegation skipped until registration completes; re-run with --wait or use domains r53 domain-info/status first.");
+          }
+        }
+
+        // 5. Sync to local DB
+        process.stdout.write(opts.wait ? "[5/5] Adding to portfolio... " : "[4/4] Adding to portfolio... ");
+        const existing = getDomainByName(name);
+        const dbInput = { registrar: `AWS Route 53`, status: "active" as const, auto_renew: true, nameservers };
+        if (existing) updateDomain(existing.id, dbInput);
+        else createDomain({ name, ...dbInput });
         console.log("done");
 
         console.log(`\n✓ Setup complete for ${name}`);

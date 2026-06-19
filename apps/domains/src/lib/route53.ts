@@ -47,6 +47,7 @@ export interface Route53Config {
   region?: string;
   accessKeyId?: string;
   secretAccessKey?: string;
+  sessionToken?: string;
 }
 
 export interface DomainContactInfo {
@@ -84,6 +85,7 @@ export interface HostedZoneInfo {
   record_count: number;
   comment?: string;
   name_servers?: string[];
+  private_zone?: boolean;
 }
 
 export interface Route53Record {
@@ -118,6 +120,7 @@ export function getConfig(): Route53Config {
     region: process.env["AWS_REGION"] || "us-east-1",
     accessKeyId: process.env["AWS_ACCESS_KEY_ID"],
     secretAccessKey: process.env["AWS_SECRET_ACCESS_KEY"],
+    sessionToken: process.env["AWS_SESSION_TOKEN"],
   };
 }
 
@@ -139,7 +142,7 @@ function makeClients(config?: Route53Config) {
   checkCredentials(cfg);
   const region = cfg.region || "us-east-1";
   const credentials = cfg.accessKeyId && cfg.secretAccessKey
-    ? { accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey }
+    ? { accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey, sessionToken: cfg.sessionToken }
     : undefined;
 
   return {
@@ -264,9 +267,8 @@ type Route53DomainsSend = { send: (cmd: unknown) => Promise<{ OperationId?: stri
 /**
  * Point a domain's nameservers at a new set (the Cloudflare zone NS).
  *
- * Enforces the always-Cloudflare-DNS rule: after a domain is registered with
- * ANY registrar, delegate DNS to Cloudflare by calling this with the Cloudflare
- * zone's nameservers. Returns the async operation id (poll getOperationDetail).
+ * Point a Route 53-registered domain at the chosen DNS provider's nameservers.
+ * Returns the async operation id (poll getOperationDetail).
  */
 export async function updateNameservers(
   domain: string,
@@ -357,6 +359,7 @@ export async function listHostedZones(config?: Route53Config): Promise<HostedZon
         name: z.Name ?? "",
         record_count: z.ResourceRecordSetCount ?? 0,
         comment: z.Config?.Comment,
+        private_zone: z.Config?.PrivateZone,
       });
     }
     marker = result.IsTruncated ? result.NextMarker : undefined;
@@ -379,6 +382,7 @@ export async function getHostedZone(
     record_count: result.HostedZone?.ResourceRecordSetCount ?? 0,
     comment: result.HostedZone?.Config?.Comment,
     name_servers: result.DelegationSet?.NameServers ?? [],
+    private_zone: result.HostedZone?.Config?.PrivateZone,
   };
 }
 
@@ -390,7 +394,14 @@ export async function deleteHostedZone(hostedZoneId: string, config?: Route53Con
 export async function findHostedZoneByDomain(domain: string, config?: Route53Config): Promise<HostedZoneInfo | null> {
   const zones = await listHostedZones(config);
   const normalized = domain.endsWith(".") ? domain : `${domain}.`;
-  return zones.find((z) => z.name === normalized) ?? null;
+  const matches = zones.filter((z) => z.name === normalized);
+  if (matches.length === 0) return null;
+  const publicMatches = matches.filter((z) => !z.private_zone);
+  const candidates = publicMatches.length > 0 ? publicMatches : matches;
+  if (candidates.length > 1) {
+    throw new Error(`Multiple Route 53 hosted zones found for ${domain}; specify hosted zone id`);
+  }
+  return candidates[0] ?? null;
 }
 
 // ─── DNS Records ─────────────────────────────────────────────────────────────
@@ -520,21 +531,61 @@ export async function upsertRecords(
 
 export function createRoute53Provider(config?: Route53Config): FullProvider {
   const cfg = config ?? getConfig();
+  const registerWithRoute53 = registerDomain;
+  const updateRoute53Nameservers = updateNameservers;
+
+  async function listDomainInventory(): Promise<ProviderDomainInfo[]> {
+    const byDomain = new Map<string, ProviderDomainInfo>();
+
+    try {
+      const registered = await listRegisteredDomains(cfg);
+      for (const d of registered) {
+        byDomain.set(d.domain, {
+          domain: d.domain,
+          registrar: "AWS Route 53",
+          created: "",
+          expires: d.expiry,
+          nameservers: [],
+          status: "active",
+          auto_renew: d.auto_renew,
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes("route53domains:ListDomains") && !message.includes("AccessDenied")) {
+        throw error;
+      }
+    }
+
+    const zones = await listHostedZones(cfg);
+    for (const z of zones) {
+      const zone = z.name_servers?.length ? z : await getHostedZone(z.id, cfg).catch(() => z);
+      const domain = zone.name.replace(/\.$/, "");
+      const nameservers = zone.name_servers ?? [];
+      const existing = byDomain.get(domain);
+      if (existing) {
+        existing.nameservers = nameservers.length > 0 ? nameservers : existing.nameservers;
+        continue;
+      }
+      byDomain.set(domain, {
+        domain,
+        registrar: "AWS Route 53 DNS",
+        created: "",
+        expires: "",
+        nameservers,
+        status: "active",
+        auto_renew: false,
+      });
+    }
+
+    return Array.from(byDomain.values());
+  }
 
   return {
     name: "route53",
 
     async listDomains(): Promise<ProviderDomainInfo[]> {
-      const domains = await listRegisteredDomains(cfg);
-      return domains.map((d) => ({
-        domain: d.domain,
-        registrar: "AWS Route 53",
-        created: "",
-        expires: d.expiry,
-        nameservers: [],
-        status: "active",
-        auto_renew: d.auto_renew,
-      }));
+      return listDomainInventory();
     },
 
     async getDomainInfo(domain: string): Promise<ProviderDomainInfo> {
@@ -548,6 +599,22 @@ export function createRoute53Provider(config?: Route53Config): FullProvider {
         status: "active",
         auto_renew: detail.auto_renew,
       };
+    },
+
+    async registerDomain(domain, contact, options = {}) {
+      const result = await registerWithRoute53(
+        domain,
+        contact,
+        options.years ?? 1,
+        options.autoRenew ?? true,
+        cfg,
+      );
+      return { domain, success: !!result.operationId, operationId: result.operationId };
+    },
+
+    async updateNameservers(domain, nameservers) {
+      const result = await updateRoute53Nameservers(domain, nameservers, cfg);
+      return { domain, success: !!result.operationId, operationId: result.operationId };
     },
 
     async renewDomain(_domain: string): Promise<ProviderRenewResult> {
@@ -602,7 +669,7 @@ export function createRoute53Provider(config?: Route53Config): FullProvider {
     },
 
     async syncToLocalDb(dbFns: DbFunctions): Promise<ProviderSyncResult> {
-      const domains = await listRegisteredDomains(cfg);
+      const domains = await listDomainInventory();
       let synced = 0;
       let created = 0;
       let updated = 0;
@@ -612,20 +679,41 @@ export function createRoute53Provider(config?: Route53Config): FullProvider {
         try {
           const existing = dbFns.getDomainByName(d.domain);
           if (existing) {
+            const existingRoute53 = existing.metadata["route53"] as { source?: string } | undefined;
+            const staleDnsOnlyRegistrar = d.registrar !== "AWS Route 53"
+              && (existing.registrar === "AWS Route 53 DNS"
+                || (existing.registrar === "AWS Route 53" && existingRoute53?.source === "route53:hosted_zones"));
             dbFns.updateDomain(existing.id, {
-              registrar: "AWS Route 53",
-              expires_at: d.expiry || undefined,
+              ...(d.registrar === "AWS Route 53" ? { registrar: "AWS Route 53" } : {}),
+              ...(staleDnsOnlyRegistrar ? { registrar: null } : {}),
+              expires_at: d.expires || undefined,
               auto_renew: d.auto_renew,
+              nameservers: d.nameservers.length > 0 ? d.nameservers : existing.nameservers,
+              metadata: {
+                ...existing.metadata,
+                route53: {
+                  source: d.registrar === "AWS Route 53" ? "route53domains+hosted_zones" : "route53:hosted_zones",
+                  synced_at: new Date().toISOString(),
+                },
+              },
               status: "active",
             });
             updated++;
           } else {
             dbFns.createDomain({
               name: d.domain,
-              registrar: "AWS Route 53",
-              expires_at: d.expiry || undefined,
+              ...(d.registrar === "AWS Route 53" ? { registrar: "AWS Route 53" } : {}),
+              expires_at: d.expires || undefined,
               auto_renew: d.auto_renew,
+              nameservers: d.nameservers,
               status: "active",
+              notes: d.registrar === "AWS Route 53 DNS" ? "Discovered from Route 53 hosted zones; registrar ownership was not inferred." : undefined,
+              metadata: {
+                route53: {
+                  source: d.registrar === "AWS Route 53" ? "route53domains+hosted_zones" : "route53:hosted_zones",
+                  synced_at: new Date().toISOString(),
+                },
+              },
             });
             created++;
           }

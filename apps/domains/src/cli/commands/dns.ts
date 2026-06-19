@@ -17,11 +17,120 @@ import {
 import { readFileSync, writeFileSync } from "node:fs";
 import { getDnsProvider } from "../../lib/registrar.js";
 import { loadConfig } from "../../lib/config.js";
+import { createDnsPlan, getDnsApplyBlockReason, parseDesiredDnsState, planHasChanges, type DnsPlan } from "../../lib/dns-plan.js";
+
+function printDnsPlan(plan: DnsPlan): void {
+  console.log(`DNS plan for ${plan.domain}: ${plan.creates} create, ${plan.updates} update, ${plan.deletes} delete, ${plan.unchanged} unchanged`);
+  for (const op of plan.operations) {
+    if (op.op === "unchanged") continue;
+    const priority = op.record.priority == null ? "" : ` priority=${op.record.priority}`;
+    const currentTtl = op.current && op.current.ttl !== op.record.ttl ? ` ttl ${op.current.ttl}->${op.record.ttl}` : "";
+    console.log(`  ${op.op.toUpperCase()} ${op.record.type} ${op.record.name} ${op.record.value} ttl=${op.record.ttl}${priority}${currentTtl}`);
+  }
+}
+
+async function loadDnsPlan(domain: string, providerName: string, file: string): Promise<DnsPlan> {
+  const desired = parseDesiredDnsState(readFileSync(file, "utf-8"), domain);
+  const planDomain = desired.domain ?? domain;
+  const provider = getDnsProvider(providerName);
+  const current = await provider.getDnsRecords(planDomain);
+  return createDnsPlan(planDomain, current, desired.records);
+}
 
 export function registerDnsCommands(program: Command): void {
   const dnsCmd = program
     .command("dns")
     .description("DNS record management");
+
+  dnsCmd
+    .command("plan <domain>")
+    .description("Preview desired DNS state changes from a JSON file without mutating provider records")
+    .requiredOption("--file <path>", "Desired DNS state JSON file")
+    .option("--provider <name>", "DNS provider — defaults to config default-dns")
+    .option("--json", "Output as JSON", false)
+    .action(async (domain: string, opts: { file: string; provider?: string; json?: boolean }) => {
+      const providerName = opts.provider ?? loadConfig().default_dns ?? "route53";
+      try {
+        const plan = await loadDnsPlan(domain, providerName, opts.file);
+        if (opts.json) console.log(JSON.stringify(plan, null, 2));
+        else printDnsPlan(plan);
+      } catch (e) {
+        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        process.exit(1);
+      }
+    });
+
+  dnsCmd
+    .command("diff <domain>")
+    .description("Alias of dns plan: show live provider DNS drift against desired JSON state")
+    .requiredOption("--file <path>", "Desired DNS state JSON file")
+    .option("--provider <name>", "DNS provider — defaults to config default-dns")
+    .option("--json", "Output as JSON", false)
+    .action(async (domain: string, opts: { file: string; provider?: string; json?: boolean }) => {
+      const providerName = opts.provider ?? loadConfig().default_dns ?? "route53";
+      try {
+        const plan = await loadDnsPlan(domain, providerName, opts.file);
+        if (opts.json) console.log(JSON.stringify(plan, null, 2));
+        else printDnsPlan(plan);
+        if (planHasChanges(plan)) process.exitCode = 2;
+      } catch (e) {
+        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        process.exit(1);
+      }
+    });
+
+  dnsCmd
+    .command("apply <domain>")
+    .description("Apply desired DNS state from a JSON file to a live provider")
+    .requiredOption("--file <path>", "Desired DNS state JSON file")
+    .option("--provider <name>", "DNS provider — defaults to config default-dns")
+    .option("--yes", "Apply changes without interactive confirmation", false)
+    .option("--allow-delete", "Acknowledge delete plans; delete apply is refused unless the provider can converge without partial mutation", false)
+    .option("--json", "Output as JSON", false)
+    .action(async (domain: string, opts: { file: string; provider?: string; yes?: boolean; allowDelete?: boolean; json?: boolean }) => {
+      const providerName = opts.provider ?? loadConfig().default_dns ?? "route53";
+      try {
+        const desired = parseDesiredDnsState(readFileSync(opts.file, "utf-8"), domain);
+        const planDomain = desired.domain ?? domain;
+        const provider = getDnsProvider(providerName);
+        const current = await provider.getDnsRecords(planDomain);
+        const plan = createDnsPlan(planDomain, current, desired.records);
+        if (!planHasChanges(plan)) {
+          if (opts.json) console.log(JSON.stringify({ applied: false, reason: "no-changes", plan }, null, 2));
+          else printDnsPlan(plan);
+          return;
+        }
+        const blockReason = getDnsApplyBlockReason(plan, { yes: opts.yes, allowDelete: opts.allowDelete });
+        if (blockReason) {
+          if (opts.json) console.log(JSON.stringify({ applied: false, reason: blockReason, plan }, null, 2));
+          else {
+            printDnsPlan(plan);
+            if (blockReason === "confirmation-required") console.error("Refusing to apply without --yes.");
+            if (blockReason === "delete-confirmation-required") console.error("Refusing to delete DNS records without --allow-delete.");
+            if (blockReason === "delete-apply-unsupported") console.error(`Refusing to apply delete plan on ${providerName}: this provider path cannot guarantee delete convergence without partial mutation yet.`);
+          }
+          process.exit(1);
+        }
+        await provider.setDnsRecords(planDomain, desired.records);
+        const verified = createDnsPlan(planDomain, await provider.getDnsRecords(planDomain), desired.records);
+        if (planHasChanges(verified)) {
+          if (opts.json) console.log(JSON.stringify({ applied: false, provider: providerName, reason: "verification-failed", plan, verification: verified }, null, 2));
+          else {
+            printDnsPlan(verified);
+            console.error(`Provider ${providerName} did not converge to the desired DNS state for ${planDomain}.`);
+          }
+          process.exit(1);
+        }
+        if (opts.json) console.log(JSON.stringify({ applied: true, provider: providerName, plan, verification: verified }, null, 2));
+        else {
+          printDnsPlan(plan);
+          console.log(`✓ Applied and verified desired DNS state on ${providerName} for ${planDomain}`);
+        }
+      } catch (e) {
+        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        process.exit(1);
+      }
+    });
 
   dnsCmd
     .command("list")

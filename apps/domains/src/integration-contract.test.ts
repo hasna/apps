@@ -1,7 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import * as domains from "./index.js";
 
-describe("open-emails integration contract", () => {
+describe("public integration contract", () => {
   it("exports the buy/zone/NS/delegate/capability surface", () => {
     for (const name of [
       "r53CheckAvailability", "r53RegisterDomain", "r53GetRegistrationStatus", "r53UpdateNameservers",

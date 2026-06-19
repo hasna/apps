@@ -7,6 +7,8 @@
  *   NAMECHEAP_CLIENT_IP  — Whitelisted client IP address
  */
 
+import type { ProviderRegistrationContact } from "./registrar.js";
+
 // ============================================================
 // Types
 // ============================================================
@@ -50,6 +52,13 @@ export interface NamecheapAvailability {
 }
 
 export interface NamecheapRenewResult {
+  domain: string;
+  success: boolean;
+  orderId?: string;
+  chargedAmount?: string;
+}
+
+export interface NamecheapRegistrationResult {
   domain: string;
   success: boolean;
   orderId?: string;
@@ -194,6 +203,74 @@ export async function renewDomain(domain: string, years: number = 1, config?: Na
     orderId: orderId || undefined,
     chargedAmount: chargedAmount || undefined,
   };
+}
+
+function namecheapContactParams(contact: ProviderRegistrationContact): Record<string, string> {
+  const organization = contact.organization_name || "NA";
+  const base = {
+    FirstName: contact.first_name,
+    LastName: contact.last_name,
+    OrganizationName: organization,
+    Address1: contact.address_line_1,
+    City: contact.city,
+    StateProvince: contact.state,
+    PostalCode: contact.zip_code,
+    Country: contact.country_code,
+    Phone: contact.phone,
+    EmailAddress: contact.email,
+  };
+  const params: Record<string, string> = {};
+  for (const prefix of ["Registrant", "Tech", "Admin", "AuxBilling"]) {
+    for (const [key, value] of Object.entries(base)) {
+      params[prefix + key] = value;
+    }
+  }
+  return params;
+}
+
+export async function registerDomain(
+  domain: string,
+  contact: ProviderRegistrationContact,
+  options: { years?: number; premiumPrice?: number; whoisGuard?: boolean } = {},
+  config?: NamecheapConfig,
+): Promise<NamecheapRegistrationResult> {
+  const cfg = config || getConfig();
+  const params: Record<string, string> = {
+    DomainName: domain,
+    Years: String(options.years ?? 1),
+    AddFreeWhoisguard: options.whoisGuard === false ? "no" : "yes",
+    WGEnabled: options.whoisGuard === false ? "no" : "yes",
+    ...namecheapContactParams(contact),
+  };
+
+  if (options.premiumPrice !== undefined) {
+    params.IsPremiumDomain = "true";
+    params.PremiumPrice = String(options.premiumPrice);
+  }
+
+  const xml = await apiRequest(cfg, "namecheap.domains.create", params);
+  return {
+    domain,
+    success: xml.includes('Status="OK"') || xml.includes('Registered="true"'),
+    orderId: parseXmlValue(xml, "OrderId") || undefined,
+    chargedAmount: parseXmlValue(xml, "ChargedAmount") || undefined,
+  };
+}
+
+export async function updateNameservers(
+  domain: string,
+  nameservers: string[],
+  config?: NamecheapConfig,
+): Promise<boolean> {
+  if (nameservers.length === 0) throw new Error("updateNameservers requires at least one nameserver");
+  const cfg = config || getConfig();
+  const { sld, tld } = splitDomain(domain);
+  const xml = await apiRequest(cfg, "namecheap.domains.dns.setCustom", {
+    SLD: sld,
+    TLD: tld,
+    Nameservers: nameservers.join(","),
+  });
+  return xml.includes('Status="OK"') || xml.includes('Updated="true"');
 }
 
 export async function getDnsRecords(

@@ -280,10 +280,10 @@ export interface GodaddyCapability {
 }
 
 /**
- * GoDaddy retail Domains API capability. Since 2024 GoDaddy gated the Domains
- * API behind account thresholds (>=10 domains / Discount Domain Club): the
- * availability endpoint often still works, but production purchase and DNS
- * writes require a qualifying account. We therefore treat purchase/DNS as gated.
+ * GoDaddy retail Domains API capability. Current GoDaddy docs say DNS/domain
+ * management production API access is available with 1+ domain or qualifying
+ * plan/spend, while availability remains under a higher anti-abuse threshold.
+ * This CLI still does not expose direct automated purchase through GoDaddy.
  */
 export function godaddyCapability(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
@@ -293,7 +293,7 @@ export function godaddyCapability(
     configured,
     gated: true,
     notes: configured
-      ? "Credentials present; availability checks may work, but purchase + DNS writes require a qualifying account (>=10 domains / DDC). Prefer Route53."
-      : "Not configured; and retail Domains API is gated for purchase/DNS since 2024.",
+      ? "Credentials present; DNS/domain management may work with qualifying account access, but availability remains threshold-gated and direct automated purchase is not exposed here. Prefer Route53 for purchases."
+      : "Not configured; GoDaddy production availability remains threshold-gated and DNS/domain management requires qualifying account access.",
   };
 }

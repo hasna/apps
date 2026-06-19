@@ -1,8 +1,9 @@
 /**
- * Cloudflare auth resolution for open-domains — supports BOTH a scoped API
- * token and a Global API Key + email (our vault stores the latter:
- * HASNAXYZ_CLOUDFLARE_LIVE_API_KEY / _EMAIL). Pure + testable.
+ * Cloudflare auth resolution for open-domains. Supports a scoped API token
+ * and a Global API Key + email. Pure + testable.
  */
+
+import { CLOUDFLARE_ENV, firstEnv } from "./env-aliases.js";
 
 export interface CloudflareConfig {
   apiToken?: string;
@@ -14,25 +15,14 @@ export interface CloudflareConfig {
 export function resolveCloudflareConfig(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
 ): CloudflareConfig {
-  const accountId =
-    env["CLOUDFLARE_ACCOUNT_ID"] || env["HASNAXYZ_CLOUDFLARE_LIVE_ACCOUNT_ID"] || undefined;
+  const accountId = firstEnv(env, CLOUDFLARE_ENV.accountId)?.value;
+  const apiToken = firstEnv(env, CLOUDFLARE_ENV.apiToken)?.value;
+  if (apiToken) return { apiToken, accountId };
 
-  // 1. Scoped token (preferred).
-  if (env["CLOUDFLARE_API_TOKEN"]) {
-    return { apiToken: env["CLOUDFLARE_API_TOKEN"], accountId };
-  }
-  // 2. Global key + email (standard env).
-  if (env["CLOUDFLARE_API_KEY"] && env["CLOUDFLARE_EMAIL"]) {
-    return { apiKey: env["CLOUDFLARE_API_KEY"], email: env["CLOUDFLARE_EMAIL"], accountId };
-  }
-  // 3. Global key + email (HASNAXYZ vault names).
-  if (env["HASNAXYZ_CLOUDFLARE_LIVE_API_KEY"] && env["HASNAXYZ_CLOUDFLARE_LIVE_EMAIL"]) {
-    return {
-      apiKey: env["HASNAXYZ_CLOUDFLARE_LIVE_API_KEY"],
-      email: env["HASNAXYZ_CLOUDFLARE_LIVE_EMAIL"],
-      accountId,
-    };
-  }
+  const apiKey = firstEnv(env, CLOUDFLARE_ENV.apiKey)?.value;
+  const email = firstEnv(env, CLOUDFLARE_ENV.email)?.value;
+  if (apiKey && email) return { apiKey, email, accountId };
+
   return accountId ? { accountId } : {};
 }
 

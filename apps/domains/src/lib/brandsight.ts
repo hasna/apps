@@ -10,6 +10,7 @@
  *   BRANDSIGHT_ACCOUNT_ID — Account ID for corporate domain operations (optional)
  */
 
+import { BRANDSIGHT_ENV, firstEnv } from "./env-aliases.js";
 import { USER_AGENT } from "./version.js";
 
 // ============================================================
@@ -26,19 +27,24 @@ export interface BrandsightConfig {
 }
 
 /**
- * Resolve Brandsight (GoDaddy Corporate Domains) credentials from env, including
- * the HASNAXYZ vault names which carry the full GoDaddy-style credential set
- * (api_key + api_secret + customer_id + shopper_id). Pure / testable.
+ * Resolve Brandsight (GoDaddy Corporate Domains) credentials from standard
+ * BRANDSIGHT_* env vars. Pure / testable.
  */
 export function resolveBrandsightConfig(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
 ): BrandsightConfig {
+  const apiKey = firstEnv(env, BRANDSIGHT_ENV.apiKey)?.value ?? "";
+  const apiSecret = firstEnv(env, BRANDSIGHT_ENV.apiSecret)?.value;
+  const customerId = firstEnv(env, BRANDSIGHT_ENV.customerId)?.value;
+  const shopperId = firstEnv(env, BRANDSIGHT_ENV.shopperId)?.value;
+  const accountId = firstEnv(env, BRANDSIGHT_ENV.accountId)?.value;
   return {
-    apiKey: env["BRANDSIGHT_API_KEY"] ?? env["HASNAXYZ_BRANDSIGHT_LIVE_API_KEY"] ?? "",
-    apiSecret: env["BRANDSIGHT_API_SECRET"] ?? env["HASNAXYZ_BRANDSIGHT_LIVE_API_SECRET"],
-    customerId: env["BRANDSIGHT_CUSTOMER_ID"] ?? env["HASNAXYZ_BRANDSIGHT_LIVE_CUSTOMER_ID"],
-    shopperId: env["BRANDSIGHT_SHOPPER_ID"] ?? env["HASNAXYZ_BRANDSIGHT_LIVE_SHOPPER_ID"],
-    accountId: env["BRANDSIGHT_ACCOUNT_ID"] ?? env["HASNAXYZ_BRANDSIGHT_LIVE_CUSTOMER_ID"],
+    apiKey,
+    apiSecret,
+    customerId,
+    shopperId,
+    accountId,
+    baseUrl: env["BRANDSIGHT_BASE_URL"],
   };
 }
 
@@ -62,8 +68,8 @@ export function brandsightCapability(
     configured,
     gated: true,
     notes: configured
-      ? "Credentials present, but GoDaddy Corporate Domains (Brandsight) is enterprise/contract-only; use Route53 for automated purchase."
-      : "Not configured and enterprise/contract-only; not usable for automated purchase.",
+      ? "Credentials present, but GoDaddy Corporate Domains (Brandsight) registration and renewal are enterprise/contract-gated."
+      : "Not configured; GoDaddy Corporate Domains (Brandsight) is enterprise/contract-gated.",
   };
 }
 
@@ -71,9 +77,16 @@ export interface BrandsightDomain {
   domain: string;
   status: string;
   expires: string;
+  created?: string;
   auto_renew: boolean;
   locked: boolean;
   nameservers: string[];
+  domainId?: string;
+  createdAt?: string;
+  expiresAt?: string;
+  nameServers?: string[];
+  renewAuto?: boolean;
+  renewal?: { currency?: string; price?: number; renewable?: boolean };
 }
 
 export interface BrandsightAvailability {
@@ -81,6 +94,14 @@ export interface BrandsightAvailability {
   available: boolean;
   price?: number;
   currency?: string;
+  registryPremiumPricing?: boolean;
+}
+
+export interface BrandsightAgreement {
+  agreementKey: string;
+  content?: string;
+  title?: string;
+  url?: string;
 }
 
 export interface BrandsightAlert {
@@ -139,23 +160,25 @@ export function _setFetch(fn: FetchFn | null): void {
 }
 
 export function getApiKey(): string {
-  const key = process.env["BRANDSIGHT_API_KEY"];
+  const key = resolveBrandsightConfig().apiKey;
   if (!key) {
     throw new BrandsightApiError(
-      "BRANDSIGHT_API_KEY environment variable is not set"
+      "Brandsight API key is not set. Set BRANDSIGHT_API_KEY."
     );
   }
   return key;
 }
 
 export function getConfig(): BrandsightConfig {
-  return {
-    apiKey: process.env["BRANDSIGHT_API_KEY"] ?? "",
-    accountId: process.env["BRANDSIGHT_ACCOUNT_ID"],
-  };
+  return resolveBrandsightConfig();
 }
 
 const BRANDSIGHT_BASE = "https://api.brandsight.com/v1";
+const BRANDSIGHT_DOMAIN_BASE = "https://api.godaddy.com/v2";
+
+function allowDemoStubs(): boolean {
+  return process.env["BRANDSIGHT_DEMO_STUBS"] === "1" || process.env["BRANDSIGHT_ALLOW_STUBS"] === "1";
+}
 
 async function apiRequest<T>(
   method: string,
@@ -190,6 +213,11 @@ async function apiRequest<T>(
     return { data, stub: false };
   } catch (error) {
     if (error instanceof BrandsightApiError) throw error;
+    if (!allowDemoStubs()) {
+      throw new BrandsightApiError(
+        `Brandsight API ${method} ${path} failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
     return { data: null, stub: true };
   }
 }
@@ -227,8 +255,140 @@ async function apiGet<T>(
     return { data, stub: false };
   } catch (error) {
     if (error instanceof BrandsightApiError) throw error;
+    if (!allowDemoStubs()) {
+      throw new BrandsightApiError(
+        `Brandsight API GET ${path} failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
     return { data: null, stub: true };
   }
+}
+
+function requireDomainConfig(config?: BrandsightConfig): Required<Pick<BrandsightConfig, "apiKey" | "apiSecret" | "customerId">> & BrandsightConfig {
+  const cfg = config ?? getConfig();
+  if (!cfg.apiKey || !cfg.apiSecret || !cfg.customerId) {
+    throw new BrandsightApiError(
+      "Brandsight Domain API credentials are not configured. Set BRANDSIGHT_API_KEY, BRANDSIGHT_API_SECRET, and BRANDSIGHT_CUSTOMER_ID."
+    );
+  }
+  return cfg as Required<Pick<BrandsightConfig, "apiKey" | "apiSecret" | "customerId">> & BrandsightConfig;
+}
+
+function domainBaseUrl(cfg: BrandsightConfig): string {
+  return cfg.baseUrl ?? BRANDSIGHT_DOMAIN_BASE;
+}
+
+function domainHeaders(cfg: Required<Pick<BrandsightConfig, "apiKey" | "apiSecret">>): Record<string, string> {
+  return {
+    Authorization: `sso-key ${cfg.apiKey}:${cfg.apiSecret}`,
+    "Content-Type": "application/json",
+    Accept: "application/json",
+    "User-Agent": USER_AGENT,
+  };
+}
+
+async function domainApiRequest<T>(
+  method: string,
+  path: string,
+  config?: BrandsightConfig,
+  body?: unknown,
+): Promise<T> {
+  const cfg = requireDomainConfig(config);
+  const fetchFn = _fetchFn || globalThis.fetch;
+  const response = await fetchFn(`${domainBaseUrl(cfg)}${path}`, {
+    method,
+    headers: domainHeaders(cfg),
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(30000),
+  });
+
+  const text = await response.text();
+  if (!response.ok) {
+    throw new BrandsightApiError(
+      `Brandsight Domain API ${method} ${path} failed with status ${response.status}`,
+      response.status,
+      text
+    );
+  }
+  if (!text.trim()) return {} as T;
+  return JSON.parse(text) as T;
+}
+
+function normalizeBrandsightDomain(raw: Partial<BrandsightDomain> & Record<string, unknown>): BrandsightDomain {
+  const nameServers = (raw.nameServers as string[] | undefined) ?? raw.nameservers ?? [];
+  const expiresAt = (raw.expiresAt as string | undefined) ?? raw.expires ?? "";
+  const createdAt = (raw.createdAt as string | undefined) ?? raw.created ?? "";
+  const renewAuto = (raw.renewAuto as boolean | undefined) ?? raw.auto_renew ?? false;
+  return {
+    ...raw,
+    domain: String(raw.domain ?? ""),
+    status: String(raw.status ?? "UNKNOWN"),
+    created: createdAt,
+    expires: expiresAt,
+    auto_renew: renewAuto,
+    locked: Boolean(raw.locked),
+    nameservers: nameServers,
+    createdAt,
+    expiresAt,
+    nameServers,
+    renewAuto,
+  };
+}
+
+function customerPath(cfg: Required<Pick<BrandsightConfig, "customerId">>, path: string): string {
+  return `/customers/${encodeURIComponent(cfg.customerId)}${path}`;
+}
+
+function domainTld(domain: string): string {
+  const parts = domain.split(".").filter(Boolean);
+  if (parts.length < 2) throw new BrandsightApiError(`Invalid domain name: ${domain}`);
+  return parts.slice(1).join(".");
+}
+
+function brandsightContact(contact: import("./registrar.js").ProviderRegistrationContact): Record<string, unknown> {
+  return {
+    addressMailing: {
+      address1: contact.address_line_1,
+      city: contact.city,
+      country: contact.country_code,
+      postalCode: contact.zip_code,
+      state: contact.state,
+    },
+    email: contact.email,
+    encoding: "ASCII",
+    nameFirst: contact.first_name,
+    nameLast: contact.last_name,
+    organization: contact.organization_name,
+    phone: contact.phone,
+  };
+}
+
+async function domainAvailability(
+  domain: string,
+  cfg: Required<Pick<BrandsightConfig, "apiKey" | "apiSecret" | "customerId">> & BrandsightConfig,
+  type: "REGISTRATION" | "RENEWAL",
+  period = 1,
+): Promise<BrandsightAvailability> {
+  const params = new URLSearchParams({
+    domain,
+    period: String(period),
+    type,
+    optimizeFor: "ACCURACY",
+  });
+  const result = await domainApiRequest<{
+    domain: string;
+    available: boolean;
+    price?: number;
+    currency?: string;
+    registryPremiumPricing?: boolean;
+  }>("GET", `/domains/available?${params.toString()}`, cfg);
+  return {
+    domain: result.domain ?? domain,
+    available: Boolean(result.available),
+    price: result.price,
+    currency: result.currency,
+    registryPremiumPricing: result.registryPremiumPricing,
+  };
 }
 
 // ============================================================
@@ -346,33 +506,231 @@ export async function getThreatAssessment(domain: string): Promise<ThreatAssessm
 // ============================================================
 
 export async function listDomains(config?: BrandsightConfig): Promise<BrandsightDomain[]> {
-  const cfg = config ?? getConfig();
-  const result = await apiGet<{ domains: BrandsightDomain[] }>("/portfolio/domains", cfg.apiKey);
-  if (result.stub) return [];
-  return result.data!.domains ?? [];
+  const cfg = requireDomainConfig(config);
+  const domains: BrandsightDomain[] = [];
+  const seenMarkers = new Set<string>();
+  let marker: string | undefined;
+
+  while (true) {
+    const params = new URLSearchParams({ limit: "500" });
+    if (marker) params.set("marker", marker);
+    const batch = await domainApiRequest<Array<Partial<BrandsightDomain> & Record<string, unknown>>>(
+      "GET",
+      customerPath(cfg, `/domains?${params.toString()}`),
+      cfg,
+    );
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    domains.push(...batch.map(normalizeBrandsightDomain).filter((d) => d.domain));
+    if (batch.length < 500) break;
+    const nextMarker = String(batch[batch.length - 1]?.domain ?? "");
+    if (!nextMarker || seenMarkers.has(nextMarker)) break;
+    seenMarkers.add(nextMarker);
+    marker = nextMarker;
+  }
+
+  return domains;
 }
 
 export async function getDomainInfo(domain: string, config?: BrandsightConfig): Promise<BrandsightDomain | null> {
-  const cfg = config ?? getConfig();
-  const result = await apiGet<BrandsightDomain>(`/portfolio/domains/${encodeURIComponent(domain)}`, cfg.apiKey);
-  if (result.stub) return null;
-  return result.data;
+  const cfg = requireDomainConfig(config);
+  const result = await domainApiRequest<Partial<BrandsightDomain> & Record<string, unknown>>(
+    "GET",
+    customerPath(cfg, `/domains/${encodeURIComponent(domain)}`),
+    cfg,
+  );
+  return normalizeBrandsightDomain(result);
 }
 
 export async function checkAvailability(domain: string, config?: BrandsightConfig): Promise<BrandsightAvailability> {
-  const cfg = config ?? getConfig();
-  const result = await apiGet<BrandsightAvailability>(`/domains/check?domain=${encodeURIComponent(domain)}`, cfg.apiKey);
-  if (result.stub) return { domain, available: false };
-  return result.data!;
+  const cfg = requireDomainConfig(config);
+  return domainAvailability(domain, cfg, "REGISTRATION", 1);
 }
 
 export async function renewDomain(domain: string, years = 1, config?: BrandsightConfig): Promise<{ success: boolean; orderId?: string }> {
-  const cfg = config ?? getConfig();
-  const result = await apiRequest<{ orderId: string }>(
-    "POST", `/portfolio/domains/${encodeURIComponent(domain)}/renew`, cfg.apiKey, { years }
+  const cfg = requireDomainConfig(config);
+  const current = await getDomainInfo(domain, cfg);
+  if (!current?.expires) throw new BrandsightApiError(`Cannot renew ${domain}: current expiry is unavailable`);
+  const quote = await domainAvailability(domain, cfg, "RENEWAL", years);
+  const price = quote.price ?? current.renewal?.price;
+  const currency = quote.currency ?? current.renewal?.currency;
+  if (price == null || !currency) {
+    throw new BrandsightApiError(`Cannot renew ${domain}: renewal quote did not include an exact price and currency`);
+  }
+  const result = await domainApiRequest<{ orderId?: string; id?: string }>(
+    "POST",
+    customerPath(cfg, `/domains/${encodeURIComponent(domain)}/renew`),
+    cfg,
+    {
+      consent: {
+        agreedAt: new Date().toISOString(),
+        agreedBy: cfg.shopperId ?? "domains-cli",
+        currency,
+        price,
+        registryPremiumPricing: quote.registryPremiumPricing ?? false,
+      },
+      expires: current.expires,
+      period: years,
+    }
   );
-  if (result.stub) return { success: false };
-  return { success: true, orderId: result.data!.orderId };
+  return { success: true, orderId: result.orderId ?? result.id };
+}
+
+export async function getLegalAgreements(tld: string, privacy = false, config?: BrandsightConfig): Promise<BrandsightAgreement[]> {
+  const cfg = requireDomainConfig(config);
+  const params = new URLSearchParams({
+    privacy: String(privacy),
+    tlds: tld,
+  });
+  return domainApiRequest<BrandsightAgreement[]>(
+    "GET",
+    customerPath(cfg, `/domains/agreements?${params.toString()}`),
+    cfg,
+  );
+}
+
+export async function getRegistrationSchema(tld: string, config?: BrandsightConfig): Promise<Record<string, unknown>> {
+  const cfg = requireDomainConfig(config);
+  return domainApiRequest<Record<string, unknown>>(
+    "GET",
+    customerPath(cfg, `/domains/register/schema/${encodeURIComponent(tld)}`),
+    cfg,
+  );
+}
+
+export async function validateRegistrationRequest(payload: Record<string, unknown>, config?: BrandsightConfig): Promise<boolean> {
+  const cfg = requireDomainConfig(config);
+  await domainApiRequest(
+    "POST",
+    customerPath(cfg, "/domains/register/validate"),
+    cfg,
+    payload,
+  );
+  return true;
+}
+
+export async function registerBrandsightDomain(
+  domain: string,
+  contact: import("./registrar.js").ProviderRegistrationContact,
+  options: import("./registrar.js").ProviderRegistrationOptions = {},
+  config?: BrandsightConfig,
+): Promise<{ success: boolean; orderId?: string; operationId?: string; chargedAmount?: string }> {
+  const cfg = requireDomainConfig(config);
+  const period = options.years ?? 1;
+  const availability = await domainAvailability(domain, cfg, "REGISTRATION", period);
+  if (!availability.available) throw new BrandsightApiError(`${domain} is not available for registration`);
+  const price = options.premiumPrice ?? availability.price;
+  if (price == null || !availability.currency) {
+    throw new BrandsightApiError(`Cannot register ${domain}: availability quote did not include an exact price and currency`);
+  }
+
+  const tld = domainTld(domain);
+  const schema = await getRegistrationSchema(tld, cfg);
+  const required = Array.isArray(schema["required"]) ? schema["required"] as string[] : [];
+  if (required.includes("metadata") && !options.metadata) {
+    throw new BrandsightApiError(`Cannot register ${domain}: ${tld} requires TLD-specific metadata; pass registration metadata before validation`);
+  }
+  const privacy = options.privacy ?? false;
+  const agreements = await getLegalAgreements(tld, privacy, cfg);
+  const agreementKeys = agreements.map((a) => a.agreementKey).filter(Boolean);
+  const c = brandsightContact(contact);
+  const payload: Record<string, unknown> = {
+    consent: {
+      agreedAt: new Date().toISOString(),
+      agreedBy: contact.email || cfg.shopperId || "domains-cli",
+      agreementKeys,
+      currency: availability.currency,
+      price,
+      registryPremiumPricing: availability.registryPremiumPricing ?? !!options.premiumPrice,
+    },
+    contacts: {
+      admin: c,
+      billing: c,
+      registrant: c,
+      tech: c,
+    },
+    domain,
+    metadata: options.metadata ?? {},
+    nameServers: options.nameservers ?? [],
+    period,
+    privacy,
+    renewAuto: options.autoRenew ?? true,
+  };
+
+  await validateRegistrationRequest(payload, cfg);
+  const result = await domainApiRequest<{ orderId?: string; id?: string; operationId?: string }>(
+    "POST",
+    customerPath(cfg, "/domains/register"),
+    cfg,
+    payload,
+  );
+  return {
+    success: true,
+    orderId: result.orderId ?? result.id,
+    operationId: result.operationId ?? result.id,
+    chargedAmount: String(price),
+  };
+}
+
+export async function updateNameservers(domain: string, nameservers: string[], config?: BrandsightConfig): Promise<{ success: boolean; operationId?: string }> {
+  const cfg = requireDomainConfig(config);
+  const result = await domainApiRequest<{ id?: string; operationId?: string }>(
+    "PUT",
+    customerPath(cfg, `/domains/${encodeURIComponent(domain)}/nameServers`),
+    cfg,
+    { nameServers: nameservers }
+  );
+  return { success: true, operationId: result.operationId ?? result.id };
+}
+
+export interface BrandsightDnsRecord {
+  type: string;
+  name: string;
+  data: string;
+  ttl: number;
+  priority?: number;
+  port?: number;
+  protocol?: string;
+  service?: string;
+  weight?: number;
+}
+
+export async function getDnsRecords(domain: string, config?: BrandsightConfig): Promise<BrandsightDnsRecord[]> {
+  const cfg = requireDomainConfig(config);
+  const records: BrandsightDnsRecord[] = [];
+  let offset = 0;
+  const limit = 1000;
+
+  while (true) {
+    const batch = await domainApiRequest<BrandsightDnsRecord[]>(
+      "GET",
+      customerPath(cfg, `/domains/${encodeURIComponent(domain)}/records?offset=${offset}&limit=${limit}`),
+      cfg,
+    );
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    records.push(...batch);
+    if (batch.length < limit) break;
+    offset++;
+  }
+
+  return records;
+}
+
+function normalizeBrandsightDnsRecord(record: BrandsightDnsRecord): BrandsightDnsRecord {
+  return {
+    ...record,
+    ttl: Math.max(record.ttl || 600, 600),
+  };
+}
+
+export async function setDnsRecords(domain: string, records: BrandsightDnsRecord[], config?: BrandsightConfig): Promise<boolean> {
+  const cfg = requireDomainConfig(config);
+  await domainApiRequest(
+    "PUT",
+    customerPath(cfg, `/domains/${encodeURIComponent(domain)}/records`),
+    cfg,
+    records.map(normalizeBrandsightDnsRecord)
+  );
+  return true;
 }
 
 export async function syncToLocalDb(
@@ -419,9 +777,21 @@ export async function syncToLocalDb(
 // RegistrarProvider Adapter
 // ============================================================
 
-import type { RegistrarProvider, ProviderDomainInfo, ProviderRenewResult, ProviderAvailability, ProviderSyncResult, DbFunctions } from "./registrar.js";
+import type {
+  FullProvider,
+  ProviderAvailability,
+  ProviderDnsRecord,
+  ProviderDomainInfo,
+  ProviderNameserverUpdateResult,
+  ProviderRegistrationContact,
+  ProviderRegistrationOptions,
+  ProviderRegistrationResult,
+  ProviderRenewResult,
+  ProviderSyncResult,
+  DbFunctions,
+} from "./registrar.js";
 
-export function createBrandsightProvider(config?: BrandsightConfig): RegistrarProvider {
+export function createBrandsightProvider(config?: BrandsightConfig): FullProvider {
   const cfg = config ?? getConfig();
 
   return {
@@ -432,7 +802,7 @@ export function createBrandsightProvider(config?: BrandsightConfig): RegistrarPr
       return domains.map((d) => ({
         domain: d.domain,
         registrar: "Brandsight",
-        created: "",
+        created: d.created ?? "",
         expires: d.expires,
         nameservers: d.nameservers,
         status: d.status === "ACTIVE" ? "active" : d.status.toLowerCase(),
@@ -446,7 +816,7 @@ export function createBrandsightProvider(config?: BrandsightConfig): RegistrarPr
       return {
         domain: d.domain,
         registrar: "Brandsight",
-        created: "",
+        created: d.created ?? "",
         expires: d.expires,
         nameservers: d.nameservers,
         status: d.status === "ACTIVE" ? "active" : d.status.toLowerCase(),
@@ -454,9 +824,50 @@ export function createBrandsightProvider(config?: BrandsightConfig): RegistrarPr
       };
     },
 
-    async renewDomain(domain: string): Promise<ProviderRenewResult> {
-      const result = await renewDomain(domain, 1, cfg);
+    async renewDomain(domain: string, years = 1): Promise<ProviderRenewResult> {
+      const result = await renewDomain(domain, years, cfg);
       return { domain, success: result.success, orderId: result.orderId };
+    },
+
+    async registerDomain(domain: string, contact: ProviderRegistrationContact, options?: ProviderRegistrationOptions): Promise<ProviderRegistrationResult> {
+      const result = await registerBrandsightDomain(domain, contact, options, cfg);
+      return {
+        domain,
+        success: result.success,
+        orderId: result.orderId,
+        operationId: result.operationId,
+        chargedAmount: result.chargedAmount,
+      };
+    },
+
+    async updateNameservers(domain: string, nameservers: string[]): Promise<ProviderNameserverUpdateResult> {
+      const result = await updateNameservers(domain, nameservers, cfg);
+      return { domain, success: result.success, operationId: result.operationId };
+    },
+
+    async getDnsRecords(domain: string): Promise<ProviderDnsRecord[]> {
+      const records = await getDnsRecords(domain, cfg);
+      return records.map((r) => ({
+        type: r.type,
+        name: r.name,
+        value: r.data,
+        ttl: r.ttl,
+        priority: r.priority,
+      }));
+    },
+
+    async setDnsRecords(domain: string, records: ProviderDnsRecord[]): Promise<boolean> {
+      return setDnsRecords(
+        domain,
+        records.map((r) => ({
+          type: r.type,
+          name: r.name,
+          data: r.value,
+          ttl: r.ttl,
+          priority: r.priority,
+        })),
+        cfg
+      );
     },
 
     async checkAvailability(domain: string): Promise<ProviderAvailability> {
@@ -464,7 +875,9 @@ export function createBrandsightProvider(config?: BrandsightConfig): RegistrarPr
       return {
         domain: result.domain,
         available: result.available,
-        standard_price: result.price,
+        is_premium: result.registryPremiumPricing,
+        premium_price: result.registryPremiumPricing ? result.price : undefined,
+        standard_price: result.registryPremiumPricing ? undefined : result.price,
         currency: result.currency,
       };
     },

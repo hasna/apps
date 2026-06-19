@@ -14,14 +14,17 @@ describe("provider capability matrix", () => {
     expect(c.gated).toBe(false);
   });
 
-  it("godaddy is gated for purchase (2024+ API restriction)", () => {
+  it("godaddy is gated and not a direct CLI purchase path", () => {
     const c = getCapability("godaddy");
     expect(c.gated).toBe(true);
+    expect(c.canBuy).toBe(false);
   });
 
-  it("brandsight is enterprise-contract-only (gated)", () => {
+  it("brandsight has an enterprise-contract-only buy path (gated)", () => {
     const c = getCapability("brandsight");
     expect(c.gated).toBe(true);
+    expect(c.canBuy).toBe(true);
+    expect(c.canDns).toBe(true);
     expect(c.notes).toMatch(/enterprise|contract/i);
   });
 
@@ -29,6 +32,13 @@ describe("provider capability matrix", () => {
     const c = getCapability("cloudflare");
     expect(c.canDns).toBe(true);
     expect(c.canBuy).toBe(false);
+  });
+
+  it("sedo is marketplace-only, not registrar DNS", () => {
+    const c = getCapability("sedo");
+    expect(c.canBuy).toBe(false);
+    expect(c.canDns).toBe(false);
+    expect(c.notes).toMatch(/marketplace|recorded purchases/i);
   });
 
   it("every provider in the matrix has the required shape", () => {
@@ -51,11 +61,15 @@ describe("auto-select", () => {
   });
 
   it("selectBuyRegistrar rejects a gated preference with a clear error", () => {
-    expect(() => selectBuyRegistrar("brandsight")).toThrow(/gated|enterprise|not available/i);
+    expect(() => selectBuyRegistrar("brandsight")).toThrow(/cannot buy|gated|enterprise|not available/i);
   });
 
-  it("selectDnsProvider is always cloudflare (always-Cloudflare-DNS rule)", () => {
+  it("selectDnsProvider defaults to cloudflare", () => {
     expect(selectDnsProvider()).toBe("cloudflare");
+  });
+
+  it("selectDnsProvider honors non-gated DNS preferences", () => {
+    expect(selectDnsProvider("route53")).toBe("route53");
   });
 
   it("canBuy reflects the matrix", () => {

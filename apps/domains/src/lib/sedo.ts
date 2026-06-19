@@ -12,6 +12,7 @@
  */
 
 import { getDatabase } from "../db/database.js";
+import { firstEnv, SEDO_ENV } from "./env-aliases.js";
 import { createDomain, getDomainByName } from "../db/domains.js";
 import { createHistoryEntry } from "../db/domain-history.js";
 
@@ -63,11 +64,20 @@ export interface SedoPurchaseResult {
 // Config
 // ============================================================
 
+export function resolveSedoConfig(
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): Partial<SedoConfig> {
+  return {
+    partnerId: firstEnv(env, SEDO_ENV.partnerId)?.value,
+    signKey: firstEnv(env, SEDO_ENV.signKey)?.value,
+    username: firstEnv(env, SEDO_ENV.username)?.value,
+    password: firstEnv(env, SEDO_ENV.password)?.value,
+  };
+}
+
 export function getSedoConfig(): SedoConfig {
-  const partnerId = process.env.SEDO_PARTNER_ID;
-  const signKey = process.env.SEDO_API_KEY;
-  const username = process.env.SEDO_USERNAME;
-  const password = process.env.SEDO_PASSWORD;
+  const config = resolveSedoConfig();
+  const { partnerId, signKey, username, password } = config;
 
   if (!partnerId || !signKey || !username || !password) {
     throw new Error(
@@ -76,6 +86,26 @@ export function getSedoConfig(): SedoConfig {
   }
 
   return { partnerId, signKey, username, password };
+}
+
+export interface SedoCapability {
+  configured: boolean;
+  gated: boolean;
+  notes: string;
+}
+
+export function sedoCapability(
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): SedoCapability {
+  const cfg = resolveSedoConfig(env);
+  const configured = !!(cfg.partnerId && cfg.signKey && cfg.username && cfg.password);
+  return {
+    configured,
+    gated: true,
+    notes: configured
+      ? "Credentials present; Sedo supports marketplace search, portfolio listing, listing edits, and recorded purchases, but not registrar DNS or direct self-serve registration through this CLI."
+      : "Not configured; Sedo is marketplace-only here, not registrar DNS.",
+  };
 }
 
 // ============================================================

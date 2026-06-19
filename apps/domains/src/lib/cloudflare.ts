@@ -6,7 +6,14 @@
  *   CLOUDFLARE_ACCOUNT_ID  — Account ID (required for zone creation)
  */
 
-import type { DnsProvider, ProviderDnsRecord } from "./registrar.js";
+import type {
+  DbFunctions,
+  DnsProvider,
+  DomainInventoryProvider,
+  ProviderDnsRecord,
+  ProviderDomainInfo,
+  ProviderSyncResult,
+} from "./registrar.js";
 import {
   resolveCloudflareConfig,
   cloudflareAuthHeaders,
@@ -121,7 +128,8 @@ export async function createZone(domain: string, config?: CloudflareConfig): Pro
 /**
  * Find-or-create a Cloudflare zone and return its assigned nameservers.
  * Idempotent: reuses an existing zone for the domain if present. The returned
- * nameservers are what the registrar should be delegated to (always-Cloudflare).
+ * nameservers are what the registrar should be delegated to when Cloudflare is
+ * the selected DNS provider.
  *
  * `deps` is injectable for testing; defaults to the real getZone/createZone.
  */
@@ -169,12 +177,24 @@ export async function listRecords(zoneId: string, config?: CloudflareConfig): Pr
   return records;
 }
 
-export async function upsertRecord(zoneId: string, record: CloudflareRecord, config?: CloudflareConfig): Promise<void> {
-  // Check if record exists
-  const existing = await cfFetch<{ id: string }[]>(
-    `/zones/${zoneId}/dns_records?type=${record.type}&name=${encodeURIComponent(record.name)}`,
+async function listRecordsByNameType(zoneId: string, type: string, name: string, config?: CloudflareConfig): Promise<CloudflareRecord[]> {
+  const result = await cfFetch<{ id: string; type: string; name: string; content: string; ttl: number; priority?: number; proxied?: boolean }[]>(
+    `/zones/${zoneId}/dns_records?type=${encodeURIComponent(type)}&name=${encodeURIComponent(name)}`,
     { config }
   );
+  return (result ?? []).map((r) => ({
+    id: r.id,
+    type: r.type,
+    name: r.name,
+    content: r.content,
+    ttl: r.ttl,
+    priority: r.priority,
+    proxied: r.proxied,
+  }));
+}
+
+export async function upsertRecord(zoneId: string, record: CloudflareRecord, config?: CloudflareConfig): Promise<void> {
+  const existing = await listRecordsByNameType(zoneId, record.type, record.name, config);
 
   const body = {
     type: record.type,
@@ -185,10 +205,38 @@ export async function upsertRecord(zoneId: string, record: CloudflareRecord, con
     proxied: record.proxied ?? false,
   };
 
-  if (existing && existing.length > 0) {
-    await cfFetch(`/zones/${zoneId}/dns_records/${existing[0]!.id}`, { method: "PUT", body, config });
+  const sameRecord = existing.find((r) =>
+    r.content === record.content
+    && (r.priority ?? undefined) === (record.priority ?? undefined)
+    && (r.proxied ?? false) === (record.proxied ?? false)
+  );
+  if (sameRecord?.id) {
+    await cfFetch(`/zones/${zoneId}/dns_records/${sameRecord.id}`, { method: "PUT", body, config });
   } else {
     await cfFetch(`/zones/${zoneId}/dns_records`, { method: "POST", body, config });
+  }
+}
+
+async function replaceRecordsByNameType(zoneId: string, records: CloudflareRecord[], config?: CloudflareConfig): Promise<void> {
+  if (records.length === 0) return;
+  const { type, name } = records[0]!;
+  const existing = await listRecordsByNameType(zoneId, type, name, config);
+  for (const record of existing) {
+    if (record.id) await deleteRecord(zoneId, record.id, config);
+  }
+  for (const record of records) {
+    await cfFetch(`/zones/${zoneId}/dns_records`, {
+      method: "POST",
+      body: {
+        type: record.type,
+        name: record.name,
+        content: record.content,
+        ttl: record.ttl ?? 1,
+        priority: record.priority,
+        proxied: record.proxied ?? false,
+      },
+      config,
+    });
   }
 }
 
@@ -206,13 +254,81 @@ export async function deleteRecordByNameType(zoneId: string, name: string, type:
   }
 }
 
-// ─── DnsProvider Adapter ─────────────────────────────────────────────────────
+// ─── DnsProvider + DomainInventoryProvider Adapter ───────────────────────────
 
-export function createCloudflareProvider(config?: CloudflareConfig): DnsProvider {
+function zoneToDomainInfo(zone: CloudflareZone): ProviderDomainInfo {
+  return {
+    domain: zone.name,
+    registrar: "Cloudflare DNS",
+    created: "",
+    expires: "",
+    nameservers: zone.nameservers,
+    status: zone.status === "active" ? "active" : "discovered",
+    auto_renew: false,
+  };
+}
+
+function withCloudflareMetadata(existing: Record<string, unknown>, zone: CloudflareZone): Record<string, unknown> {
+  return {
+    ...existing,
+    cloudflare: {
+      zone_id: zone.id,
+      zone_status: zone.status,
+      source: "cloudflare:zones",
+      synced_at: new Date().toISOString(),
+    },
+  };
+}
+
+export function createCloudflareProvider(config?: CloudflareConfig): DnsProvider & DomainInventoryProvider {
   const cfg = config ?? getConfig();
 
   return {
     name: "cloudflare",
+
+    async listDomains(): Promise<ProviderDomainInfo[]> {
+      const zones = await listZones(cfg);
+      return zones.map(zoneToDomainInfo);
+    },
+
+    async syncToLocalDb(dbFns: DbFunctions): Promise<ProviderSyncResult> {
+      const zones = await listZones(cfg);
+      let synced = 0;
+      let created = 0;
+      let updated = 0;
+      const errors: string[] = [];
+
+      for (const zone of zones) {
+        try {
+          const info = zoneToDomainInfo(zone);
+          const existing = dbFns.getDomainByName(zone.name);
+          if (existing) {
+            dbFns.updateDomain(existing.id, {
+              ...(existing.registrar === "Cloudflare DNS" ? { registrar: null } : {}),
+              status: existing.status === "discovered" && info.status === "active" ? "active" : existing.status,
+              nameservers: zone.nameservers,
+              metadata: withCloudflareMetadata(existing.metadata, zone),
+            });
+            updated++;
+          } else {
+            dbFns.createDomain({
+              name: zone.name,
+              status: info.status === "active" ? "active" : "discovered",
+              auto_renew: false,
+              nameservers: zone.nameservers,
+              notes: "Discovered from Cloudflare zones; registrar ownership was not inferred.",
+              metadata: withCloudflareMetadata({}, zone),
+            });
+            created++;
+          }
+          synced++;
+        } catch (err) {
+          errors.push(`${zone.name}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+
+      return { synced, created, updated, errors };
+    },
 
     async getDnsRecords(domain: string): Promise<ProviderDnsRecord[]> {
       const zone = await getZone(domain, cfg);
@@ -230,8 +346,15 @@ export function createCloudflareProvider(config?: CloudflareConfig): DnsProvider
     async setDnsRecords(domain: string, records: ProviderDnsRecord[]): Promise<boolean> {
       const zone = await getZone(domain, cfg);
       if (!zone) throw new Error(`No Cloudflare zone found for ${domain}`);
+      const grouped = new Map<string, CloudflareRecord[]>();
       for (const r of records) {
-        await upsertRecord(zone.id, { type: r.type, name: r.name, content: r.value, ttl: r.ttl || 1, priority: r.priority }, cfg);
+        const key = `${r.type}|${r.name}`;
+        const existing = grouped.get(key) ?? [];
+        existing.push({ type: r.type, name: r.name, content: r.value, ttl: r.ttl || 1, priority: r.priority });
+        grouped.set(key, existing);
+      }
+      for (const group of grouped.values()) {
+        await replaceRecordsByNameType(zone.id, group, cfg);
       }
       return true;
     },

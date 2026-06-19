@@ -12,13 +12,13 @@ describe("resolveCloudflareConfig", () => {
     expect(c).toEqual({ apiKey: "gk", email: "a@b.com", accountId: "acct" });
   });
 
-  it("falls back to the HASNAXYZ vault env names", () => {
+  it("ignores org-scoped global key aliases", () => {
     const c = resolveCloudflareConfig({
-      HASNAXYZ_CLOUDFLARE_LIVE_API_KEY: "vk",
-      HASNAXYZ_CLOUDFLARE_LIVE_EMAIL: "ops@hasna.com",
+      ACME_CLOUDFLARE_API_KEY: "gk",
+      ACME_CLOUDFLARE_EMAIL: "a@b.com",
+      ACME_CLOUDFLARE_ACCOUNT_ID: "acct",
     });
-    expect(c.apiKey).toBe("vk");
-    expect(c.email).toBe("ops@hasna.com");
+    expect(c).toEqual({});
   });
 
   it("returns empty config when nothing set", () => {

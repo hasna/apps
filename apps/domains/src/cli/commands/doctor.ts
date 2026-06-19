@@ -42,7 +42,7 @@ export function registerDoctorCommand(program: Command): void {
         const count = countDomains();
         ok(`Local DB accessible (${count} domain${count !== 1 ? "s" : ""})`);
       } catch {
-        fail("Local DB not accessible", "Check ~/.hasna/domains/domains.db");
+        fail("Local DB not accessible", "Check DOMAINS_DB_PATH, DOMAINS_DIR, or the default local data directory");
       }
 
       section("Config");
@@ -65,7 +65,7 @@ export function registerDoctorCommand(program: Command): void {
       }
 
       section("Providers");
-      const providers = getAvailableProviders().filter((p) => p.name !== "brandsight");
+      const providers = getAvailableProviders().filter((p) => p.type !== "marketplace");
       for (const p of providers) {
         if (!p.configured) {
           fail(`${p.name}: not configured`, `Set: ${p.envVars.join(", ")}`);

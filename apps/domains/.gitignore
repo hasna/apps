@@ -6,5 +6,6 @@ dist/
 *.db-wal
 .takumi/
 .codewith/
+.hasna/
 .env
 .env.*

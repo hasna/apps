@@ -4,6 +4,7 @@ import { loadConfig, saveConfig, setConfigKey } from "../../lib/config.js";
 const VALID_KEYS = [
   "default-registrar",
   "default-dns",
+  "purchase-aws-profile",
   "contact.first-name",
   "contact.last-name",
   "contact.email",
@@ -29,9 +30,10 @@ export function registerConfigCommands(program: Command): void {
         console.log(JSON.stringify(cfg, null, 2));
         return;
       }
-      console.log("\nConfiguration (~/.hasna/domains/config.json):");
-      console.log(`  default-registrar: ${cfg.default_registrar ?? "(not set)"}`);
-      console.log(`  default-dns:       ${cfg.default_dns ?? "(not set)"}`);
+      console.log("\nConfiguration:");
+      console.log(`  default-registrar:    ${cfg.default_registrar ?? "(not set)"}`);
+      console.log(`  default-dns:          ${cfg.default_dns ?? "(not set)"}`);
+      console.log(`  purchase-aws-profile: ${cfg.purchase_aws_profile ?? "(not set)"}`);
       if (cfg.contact && Object.keys(cfg.contact).length > 0) {
         console.log("\n  contact:");
         for (const [k, v] of Object.entries(cfg.contact)) {

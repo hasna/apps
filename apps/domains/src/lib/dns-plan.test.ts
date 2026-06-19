@@ -1,0 +1,60 @@
+import { describe, expect, it } from "bun:test";
+import { createDnsPlan, getDnsApplyBlockReason, normalizeDnsRecord, parseDesiredDnsState, planHasChanges } from "./dns-plan.js";
+
+describe("dns desired-state planning", () => {
+  it("normalizes provider FQDN names to domain-relative names", () => {
+    expect(normalizeDnsRecord({
+      type: "a",
+      name: "www.example.com.",
+      value: "192.0.2.10",
+      ttl: 60,
+    }, "example.com")).toEqual({
+      type: "A",
+      name: "www",
+      value: "192.0.2.10",
+      ttl: 60,
+      priority: undefined,
+    });
+  });
+
+  it("parses JSON desired state", () => {
+    const state = parseDesiredDnsState(JSON.stringify({
+      domain: "example.com",
+      records: [{ type: "TXT", name: "@", value: "hello", ttl: 600 }],
+    }));
+    expect(state).toEqual({
+      domain: "example.com",
+      records: [{ type: "TXT", name: "@", value: "hello", ttl: 600, priority: undefined }],
+    });
+  });
+
+  it("creates create/update/delete/unchanged operations", () => {
+    const plan = createDnsPlan("example.com", [
+      { type: "A", name: "@", value: "192.0.2.1", ttl: 300 },
+      { type: "TXT", name: "@", value: "old", ttl: 300 },
+      { type: "CNAME", name: "keep", value: "target.example.com", ttl: 300 },
+    ], [
+      { type: "A", name: "example.com.", value: "192.0.2.1", ttl: 600 },
+      { type: "MX", name: "@", value: "mail.example.com", ttl: 300, priority: 10 },
+      { type: "CNAME", name: "keep.example.com.", value: "target.example.com", ttl: 300 },
+    ]);
+
+    expect(plan).toMatchObject({ creates: 1, updates: 1, deletes: 1, unchanged: 1 });
+    expect(plan.operations.map((op) => op.op).sort()).toEqual(["create", "delete", "unchanged", "update"]);
+    expect(planHasChanges(plan)).toBe(true);
+  });
+
+  it("blocks unconfirmed apply and refuses delete plans before provider writes", () => {
+    const createOnly = createDnsPlan("example.com", [], [
+      { type: "A", name: "@", value: "192.0.2.1", ttl: 300 },
+    ]);
+    expect(getDnsApplyBlockReason(createOnly, {})).toBe("confirmation-required");
+    expect(getDnsApplyBlockReason(createOnly, { yes: true })).toBeUndefined();
+
+    const deletePlan = createDnsPlan("example.com", [
+      { type: "TXT", name: "@", value: "old", ttl: 300 },
+    ], []);
+    expect(getDnsApplyBlockReason(deletePlan, { yes: true })).toBe("delete-confirmation-required");
+    expect(getDnsApplyBlockReason(deletePlan, { yes: true, allowDelete: true })).toBe("delete-apply-unsupported");
+  });
+});

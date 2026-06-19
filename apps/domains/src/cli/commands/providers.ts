@@ -1,18 +1,13 @@
 import type { Command } from "commander";
 import {
-  syncToLocalDb,
-  renewDomain as namecheapRenew,
-  checkAvailability as namecheapCheck,
-} from "../../lib/namecheap.js";
-import {
-  syncToLocalDb as godaddySyncToLocalDb,
-  renewDomain as godaddyRenewDomain,
-} from "../../lib/godaddy.js";
-import {
   getAvailableProviders,
   syncAll,
   autoDetectRegistrar,
   getRegistrarProvider,
+  getDomainInventoryProvider,
+  getProviderInfo,
+  providerHasRegistrar,
+  providerHasInventory,
 } from "../../lib/registrar.js";
 import { loadConfig } from "../../lib/config.js";
 import {
@@ -21,10 +16,44 @@ import {
   getDomainByName,
 } from "../../db/domains.js";
 
+function registrarProviderNames(): string {
+  return getAvailableProviders()
+    .filter((p) => providerHasRegistrar(p.name))
+    .map((p) => p.name)
+    .join(", ");
+}
+
+function inventoryProviderNames(): string {
+  return getAvailableProviders()
+    .filter((p) => providerHasInventory(p.name))
+    .map((p) => p.name)
+    .join(", ");
+}
+
+function requireInventoryProvider(name: string): void {
+  const info = getProviderInfo(name);
+  if (!info) {
+    throw new Error(`Unknown provider: ${name}. Supported domain inventory providers: ${inventoryProviderNames()}`);
+  }
+  if (!providerHasInventory(name)) {
+    throw new Error(`${name} is a ${info.type} provider without domain inventory sync. Supported domain inventory providers: ${inventoryProviderNames()}`);
+  }
+}
+
+function requireRegistrarProvider(name: string): void {
+  const info = getProviderInfo(name);
+  if (!info) {
+    throw new Error(`Unknown provider: ${name}. Supported registrars: ${registrarProviderNames()}`);
+  }
+  if (!providerHasRegistrar(name)) {
+    throw new Error(`${name} is a ${info.type} provider, not a registrar. Supported registrars: ${registrarProviderNames()}`);
+  }
+}
+
 export function registerProviderCommands(program: Command): void {
   program
     .command("providers")
-    .description("Show which registrar providers are configured")
+    .description("Show which providers are configured")
     .option("--json", "Output as JSON", false)
     .action((opts) => {
       const providers = getAvailableProviders();
@@ -32,12 +61,13 @@ export function registerProviderCommands(program: Command): void {
       if (opts.json) {
         console.log(JSON.stringify(providers, null, 2));
       } else {
-        console.log("Registrar Providers:");
+        console.log("Providers:");
         for (const p of providers) {
           const status = p.configured ? "CONFIGURED" : "not configured";
-          console.log(`  ${p.name}: ${status}`);
+          const capabilities = [p.type, p.inventory ? "inventory" : null].filter(Boolean).join(", ");
+          console.log(`  ${p.name} [${capabilities}]: ${status}`);
           if (!p.configured) {
-            console.log(`    Missing: ${p.envVars.join(", ")}`);
+            console.log(`    Accepted env: ${p.envVars.join(", ")}`);
           }
         }
       }
@@ -45,9 +75,9 @@ export function registerProviderCommands(program: Command): void {
 
   program
     .command("sync")
-    .description("Sync domains from a provider to local DB")
-    .option("--provider <provider>", "Provider name (namecheap, godaddy)")
-    .option("--all", "Sync from all configured providers")
+    .description("Sync domains from a domain inventory provider to local DB")
+    .option("--provider <provider>", "Provider name")
+    .option("--all", "Sync from all configured domain inventory providers")
     .option("--json", "Output as JSON", false)
     .action(async (opts) => {
       if (opts.all) {
@@ -63,7 +93,7 @@ export function registerProviderCommands(program: Command): void {
           } else {
             console.log(`Synced ${result.totalSynced} domain(s) from ${result.providers.length} provider(s)`);
             for (const p of result.providers) {
-              console.log(`  ${p.name}: ${p.result.synced} synced`);
+              console.log(`  ${p.name}: ${p.result.synced} synced (${p.result.created} new, ${p.result.updated} updated)`);
             }
             if (result.totalErrors.length > 0) {
               console.log("Errors:");
@@ -85,57 +115,25 @@ export function registerProviderCommands(program: Command): void {
         process.exit(1);
       }
 
-      if (provider === "namecheap") {
-        try {
-          const result = await syncToLocalDb({
-            getDomainByName,
-            createDomain,
-            updateDomain,
-          });
+      try {
+        requireInventoryProvider(provider);
+        const result = await getDomainInventoryProvider(provider).syncToLocalDb({
+          getDomainByName,
+          createDomain,
+          updateDomain,
+        });
 
-          if (opts.json) {
-            console.log(JSON.stringify(result, null, 2));
-          } else {
-            console.log(`Synced ${result.synced} domain(s) from Namecheap`);
-            for (const d of result.domains) {
-              console.log(`  ${d}`);
-            }
-            if (result.errors.length > 0) {
-              console.log("Errors:");
-              for (const e of result.errors) {
-                console.log(`  - ${e}`);
-              }
-            }
+        if (opts.json) {
+          console.log(JSON.stringify({ provider, ...result }, null, 2));
+        } else {
+          console.log(`Synced ${result.synced} domain(s) from ${provider} (${result.created} new, ${result.updated} updated)`);
+          if (result.errors.length > 0) {
+            console.log("Errors:");
+            for (const e of result.errors) console.log(`  - ${e}`);
           }
-        } catch (error: unknown) {
-          console.error(`Sync failed: ${error instanceof Error ? error.message : String(error)}`);
-          process.exit(1);
         }
-      } else if (provider === "godaddy") {
-        try {
-          const result = await godaddySyncToLocalDb({
-            getDomainByName,
-            createDomain,
-            updateDomain,
-          });
-
-          if (opts.json) {
-            console.log(JSON.stringify(result, null, 2));
-          } else {
-            console.log(`Synced ${result.synced} domain(s) from GoDaddy (created: ${result.created}, updated: ${result.updated})`);
-            if (result.errors.length > 0) {
-              console.log("Errors:");
-              for (const e of result.errors) {
-                console.log(`  - ${e}`);
-              }
-            }
-          }
-        } catch (error: unknown) {
-          console.error(`Sync failed: ${error instanceof Error ? error.message : String(error)}`);
-          process.exit(1);
-        }
-      } else {
-        console.error(`Unsupported provider: ${provider}. Supported: namecheap, godaddy`);
+      } catch (error: unknown) {
+        console.error(`Sync failed: ${error instanceof Error ? error.message : String(error)}`);
         process.exit(1);
       }
     });
@@ -144,7 +142,7 @@ export function registerProviderCommands(program: Command): void {
     .command("renew")
     .description("Renew a domain via provider (auto-detects registrar from DB if --provider not given)")
     .argument("<name>", "Domain name (e.g. example.com)")
-    .option("--provider <provider>", "Provider name (namecheap, godaddy)")
+    .option("--provider <provider>", "Provider name")
     .option("--years <n>", "Number of years to renew", "1")
     .option("--json", "Output as JSON", false)
     .action(async (name, opts) => {
@@ -157,63 +155,50 @@ export function registerProviderCommands(program: Command): void {
           process.exit(1);
         }
         provider = detected;
-        console.log(`Auto-detected registrar: ${provider}`);
+        if (!opts.json) console.log(`Auto-detected registrar: ${provider}`);
       }
 
-      if (provider === "namecheap") {
-        try {
-          const result = await namecheapRenew(name, parseInt(opts.years));
-          if (opts.json) {
-            console.log(JSON.stringify(result, null, 2));
-          } else {
-            console.log(`Renewed ${result.domain} successfully via Namecheap`);
-            if (result.chargedAmount) console.log(`  Charged: $${result.chargedAmount}`);
-            if (result.orderId) console.log(`  Order ID: ${result.orderId}`);
-          }
-        } catch (error: unknown) {
-          console.error(`Renewal failed: ${error instanceof Error ? error.message : String(error)}`);
-          process.exit(1);
+      try {
+        requireRegistrarProvider(provider);
+        const result = await getRegistrarProvider(provider).renewDomain(name, parseInt(opts.years, 10));
+        if (!result.success) {
+          throw new Error(`Renewal failed or is not supported for ${provider}`);
         }
-      } else if (provider === "godaddy") {
-        try {
-          const result = await godaddyRenewDomain(name);
-          if (opts.json) {
-            console.log(JSON.stringify(result, null, 2));
-          } else {
-            console.log(`Renewed ${name} successfully via GoDaddy`);
-            if (result.orderId) console.log(`  Order ID: ${result.orderId}`);
-            if (result.total) console.log(`  Total: $${(result.total / 100).toFixed(2)}`);
-          }
-        } catch (error: unknown) {
-          console.error(`Renewal failed: ${error instanceof Error ? error.message : String(error)}`);
-          process.exit(1);
+
+        if (opts.json) {
+          console.log(JSON.stringify({ provider, ...result }, null, 2));
+        } else {
+          console.log(`Renewed ${result.domain} successfully via ${provider}`);
+          if (result.chargedAmount) console.log(`  Charged: $${result.chargedAmount}`);
+          if (result.orderId) console.log(`  Order ID: ${result.orderId}`);
         }
-      } else {
-        console.error(`Unsupported provider: ${provider}. Supported: namecheap, godaddy`);
+      } catch (error: unknown) {
+        console.error(`Renewal failed: ${error instanceof Error ? error.message : String(error)}`);
         process.exit(1);
       }
     });
 
   program
     .command("check")
-    .description("Check domain availability via a registrar provider (route53, namecheap, godaddy)")
+    .description("Check domain availability via a registrar provider")
     .argument("<name>", "Domain name (e.g. example.com)")
-    .option("--provider <name>", "Registrar provider — defaults to config default-registrar, else namecheap")
+    .option("--provider <name>", "Registrar provider — defaults to config default-registrar, else route53")
     .option("--json", "Output as JSON", false)
     .action(async (name, opts: { provider?: string; json?: boolean }) => {
       try {
-        const providerName = opts.provider ?? loadConfig().default_registrar ?? "namecheap";
-        // Namecheap keeps its dedicated path; any other registrar (route53,
-        // godaddy, …) routes through the provider registry so this one command
-        // works against AWS Route 53 without dropping to the raw aws CLI.
-        const result = providerName === "namecheap"
-          ? await namecheapCheck(name)
-          : await getRegistrarProvider(providerName).checkAvailability(name);
+        const providerName = (opts.provider ?? loadConfig().default_registrar ?? "route53").toLowerCase();
+        requireRegistrarProvider(providerName);
+        const result = await getRegistrarProvider(providerName).checkAvailability(name);
 
         if (opts.json) {
           console.log(JSON.stringify({ provider: providerName, ...result }, null, 2));
         } else {
           console.log(`${result.domain} is ${result.available ? "AVAILABLE" : "NOT available"} (via ${providerName})`);
+          if (result.is_premium) console.log(`  Premium ask: ${result.premium_price ?? "unknown"}`);
+          if (result.standard_price !== undefined) {
+            const currency = result.currency ? ` ${result.currency}` : "";
+            console.log(`  Standard price: ${result.standard_price}${currency}`);
+          }
         }
       } catch (error: unknown) {
         console.error(`Availability check failed: ${error instanceof Error ? error.message : String(error)}`);

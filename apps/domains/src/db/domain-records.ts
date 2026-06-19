@@ -103,7 +103,7 @@ export function rowToDomain(row: DomainRow): Domain {
 
 export interface CreateDomainInput {
   name: string;
-  registrar?: string;
+  registrar?: string | null;
   status?: DomainStatus;
   registered_at?: string;
   expires_at?: string;
@@ -231,7 +231,7 @@ export function listDomains(options: ListDomainsOptions = {}): Domain[] {
 
 export interface UpdateDomainInput {
   name?: string;
-  registrar?: string;
+  registrar?: string | null;
   status?: DomainStatus;
   registered_at?: string;
   expires_at?: string;

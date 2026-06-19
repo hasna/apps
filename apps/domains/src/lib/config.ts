@@ -1,10 +1,10 @@
 /**
- * Persistent config stored at ~/.hasna/domains/config.json
+ * Persistent config stored in the domains config directory.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 export interface DomainContact {
   first_name?: string;
@@ -28,13 +28,13 @@ export interface DomainsConfig {
 }
 
 /**
- * AWS profile to use for domain purchases. For this app, domains are bought in
- * the hasna-xyz-infra account. Resolved from config, then env. Applying it sets
- * process.env.AWS_PROFILE when no explicit AWS creds are already present.
+ * AWS profile to use for Route 53 domain purchases. Resolved from config, then
+ * env. Applying it sets process.env.AWS_PROFILE when no explicit AWS creds are
+ * already present.
  */
 export function getPurchaseProfile(): string | undefined {
-  return loadConfig().purchase_aws_profile
-    ?? process.env["DOMAINS_PURCHASE_AWS_PROFILE"]
+  return process.env["DOMAINS_PURCHASE_AWS_PROFILE"]
+    ?? loadConfig().purchase_aws_profile
     ?? undefined;
 }
 
@@ -47,7 +47,13 @@ export function applyPurchaseProfile(): string | undefined {
 }
 
 function configPath(): string {
-  return join(homedir(), ".hasna", "domains", "config.json");
+  if (process.env["DOMAINS_CONFIG_PATH"]) return process.env["DOMAINS_CONFIG_PATH"];
+  const dir = process.env["DOMAINS_CONFIG_DIR"];
+  if (dir) return join(dir, "config.json");
+  const legacyDir = join(homedir(), ".hasna", "domains");
+  if (existsSync(legacyDir)) return join(legacyDir, "config.json");
+  const xdgConfig = process.env["XDG_CONFIG_HOME"] || join(homedir(), ".config");
+  return join(xdgConfig, "open-domains", "config.json");
 }
 
 export function loadConfig(): DomainsConfig {
@@ -62,7 +68,7 @@ export function loadConfig(): DomainsConfig {
 
 export function saveConfig(config: DomainsConfig): void {
   const path = configPath();
-  const dir = join(homedir(), ".hasna", "domains");
+  const dir = dirname(path);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   writeFileSync(path, JSON.stringify(config, null, 2), "utf-8");
 }
