@@ -283,12 +283,12 @@ export function mergeHostsContent(existing: string, block: string): string {
   return `${prefix}${block}\n`;
 }
 
-function loadTailscale(runner: HostsCommandRunner, warnings: string[]): RawTailscaleStatus | null {
-  if (runner("command -v tailscale >/dev/null 2>&1").exitCode !== 0) {
-    warnings.push("tailscale_not_available");
+function loadTailscaleStatus(runner: HostsCommandRunner, binary: string | null, warnings: string[]): RawTailscaleStatus | null {
+  if (!binary) {
+    if (!warnings.includes("tailscale_not_available")) warnings.push("tailscale_not_available");
     return null;
   }
-  const result = runner("tailscale status --json");
+  const result = runner(`"${binary}" status --json`);
   if (result.exitCode !== 0) {
     warnings.push("tailscale_status_failed");
     return null;
@@ -320,9 +320,29 @@ export function collectPingTargets(tailscale: RawTailscaleStatus | null, localSu
   return targets;
 }
 
-export function warmDirectPaths(runner: HostsCommandRunner, targets: string[], timeoutSeconds = 2): void {
+/**
+ * Tailscale binary locations. On macOS the CLI ships inside the app bundle and
+ * is frequently absent from a non-interactive shell's PATH, so probe the known
+ * install paths in addition to PATH.
+ */
+const TAILSCALE_CANDIDATES = [
+  "tailscale",
+  "/usr/local/bin/tailscale",
+  "/opt/homebrew/bin/tailscale",
+  "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+];
+
+export function resolveTailscaleBinary(runner: HostsCommandRunner): string | null {
+  for (const candidate of TAILSCALE_CANDIDATES) {
+    const check = candidate.includes("/") ? `test -x "${candidate}"` : `command -v ${candidate} >/dev/null 2>&1`;
+    if (runner(check).exitCode === 0) return candidate;
+  }
+  return null;
+}
+
+export function warmDirectPaths(runner: HostsCommandRunner, targets: string[], binary: string, timeoutSeconds = 2): void {
   for (const target of targets) {
-    runner(`tailscale ping --c 1 --timeout ${timeoutSeconds}s ${target} >/dev/null 2>&1 || true`);
+    runner(`"${binary}" ping --c 1 --timeout ${timeoutSeconds}s ${target} >/dev/null 2>&1 || true`);
   }
 }
 
@@ -334,15 +354,16 @@ function resolveLocalMachineId(tailscale: RawTailscaleStatus | null, explicit?: 
 export function planFleetHosts(options: FleetHostsOptions = {}): FleetHostsPlan {
   const runner = options.runner ?? defaultRunner;
   const warnings: string[] = [];
-  let tailscale = loadTailscale(runner, warnings);
+  const binary = resolveTailscaleBinary(runner);
+  let tailscale = loadTailscaleStatus(runner, binary, warnings);
   const manifest = readManifest();
   const localSubnets = options.localSubnets ?? localPrivateSubnets();
 
-  if (options.warm !== false && tailscale && localSubnets.length > 0) {
+  if (options.warm !== false && tailscale && binary && localSubnets.length > 0) {
     const targets = collectPingTargets(tailscale, localSubnets);
     if (targets.length > 0) {
-      warmDirectPaths(runner, targets, options.warmTimeoutSeconds);
-      tailscale = loadTailscale(runner, warnings) ?? tailscale;
+      warmDirectPaths(runner, targets, binary, options.warmTimeoutSeconds);
+      tailscale = loadTailscaleStatus(runner, binary, warnings) ?? tailscale;
     }
   }
 

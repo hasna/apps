@@ -12,6 +12,7 @@ import {
   mergeHostsContent,
   planFleetHosts,
   renderHostsBlock,
+  resolveTailscaleBinary,
 } from "../src/commands/hosts.js";
 
 const manifest: FleetManifest = {
@@ -87,6 +88,25 @@ describe("LAN detection via tailscale CurAddr", () => {
   });
 });
 
+describe("resolveTailscaleBinary", () => {
+  test("prefers a PATH-resolved tailscale", () => {
+    const binary = resolveTailscaleBinary((command) => ({ stdout: "", exitCode: command.includes("command -v tailscale") ? 0 : 1 }));
+    expect(binary).toBe("tailscale");
+  });
+
+  test("falls back to the macOS app bundle path when not on PATH", () => {
+    const binary = resolveTailscaleBinary((command) => ({
+      stdout: "",
+      exitCode: command.includes("/Applications/Tailscale.app/Contents/MacOS/Tailscale") ? 0 : 1,
+    }));
+    expect(binary).toBe("/Applications/Tailscale.app/Contents/MacOS/Tailscale");
+  });
+
+  test("returns null when tailscale is unavailable", () => {
+    expect(resolveTailscaleBinary(() => ({ stdout: "", exitCode: 1 }))).toBeNull();
+  });
+});
+
 describe("collectPingTargets", () => {
   test("targets online peers without a same-subnet LAN endpoint", () => {
     const targets = collectPingTargets(tailscale, ["192.168.50"]);
@@ -144,7 +164,7 @@ describe("planFleetHosts + applyFleetHosts", () => {
 
     const runner = (command: string) => {
       if (command.includes("command -v tailscale")) return { stdout: "", exitCode: 0 };
-      if (command.includes("tailscale status")) return { stdout: JSON.stringify(tailscale), exitCode: 0 };
+      if (command.includes("status --json")) return { stdout: JSON.stringify(tailscale), exitCode: 0 };
       return { stdout: "", exitCode: 0 };
     };
 
