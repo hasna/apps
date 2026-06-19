@@ -28,6 +28,7 @@ import { buildSetupPlan, runSetupPlan } from "../commands/setup.js";
 import { buildBackupPlan, resolveBackupTarget, runBackup } from "../commands/backup.js";
 import { buildCertPlan, runCertPlan } from "../commands/cert.js";
 import { addDomainMapping, listDomainMappings, renderDomainMapping } from "../commands/dns.js";
+import { applyFleetHosts, planFleetHosts } from "../commands/hosts.js";
 import { diffMachines } from "../commands/diff.js";
 import { buildAppsPlan, diffApps, getAppsStatus, listApps, runAppsPlan } from "../commands/apps.js";
 import {
@@ -1411,6 +1412,53 @@ dnsCommand
   .option("-j, --json", "Print JSON output", false)
   .action((domain: string) => {
     console.log(JSON.stringify(renderDomainMapping(domain), null, 2));
+  });
+
+const hostsCommand = program
+  .command("hosts")
+  .description("Sync fleet machine names into /etc/hosts so machine<NN>:port resolves on the LAN and tailnet");
+
+function printHostsResult(plan: ReturnType<typeof planFleetHosts>, applied: boolean, viaSudo = false): void {
+  console.log(`hosts file: ${plan.hostsPath}`);
+  console.log(`local subnets: ${plan.localSubnets.join(", ") || "none"}`);
+  for (const entry of plan.entries) {
+    console.log(`  ${entry.ip}\t${entry.names.join(" ")}\t(${entry.source})`);
+  }
+  if (plan.unresolved.length > 0) {
+    console.log(`unresolved: ${plan.unresolved.join(", ")}`);
+  }
+  if (plan.warnings.length > 0) {
+    console.log(`warnings: ${plan.warnings.join(", ")}`);
+  }
+  console.log(applied ? `applied ${plan.entries.length} entries${viaSudo ? " (via sudo)" : ""}` : "dry run — re-run `machines hosts apply` to write");
+}
+
+hostsCommand
+  .command("plan", { isDefault: true })
+  .description("Preview the managed /etc/hosts block for the fleet (dry run)")
+  .option("-j, --json", "Print JSON output", false)
+  .option("--no-warm", "Skip establishing direct Tailscale paths to discover LAN endpoints")
+  .action((options: { json?: boolean; warm?: boolean }) => {
+    const plan = planFleetHosts({ warm: options.warm });
+    if (options.json) {
+      console.log(JSON.stringify(plan, null, 2));
+      return;
+    }
+    printHostsResult(plan, false);
+  });
+
+hostsCommand
+  .command("apply")
+  .description("Write the managed fleet block into /etc/hosts (uses sudo when required)")
+  .option("-j, --json", "Print JSON output", false)
+  .option("--no-warm", "Skip establishing direct Tailscale paths to discover LAN endpoints")
+  .action((options: { json?: boolean; warm?: boolean }) => {
+    const result = applyFleetHosts({ warm: options.warm });
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    printHostsResult(result, true, result.viaSudo);
   });
 
 notificationsCommand

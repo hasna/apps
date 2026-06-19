@@ -418,6 +418,32 @@ to be scoped to a short-lived approval token, or pass
 `--trusted-local-mutation` to generate a process-local
 `HASNA_MACHINES_ALLOW_MUTATIONS=1` prefix for local event recording.
 
+## Fleet hostnames (`machines hosts`)
+
+Make every fleet machine reachable by its bare name from any other machine —
+`curl http://machine001:3000` works the same on every box — without depending on
+Tailscale MagicDNS being configured. `machines hosts` writes a managed block into
+`/etc/hosts` for each machine in the manifest, choosing the best address:
+
+1. `metadata.lanAddress` from the manifest, when it is on the local machine's `/24`
+2. the peer's live direct Tailscale LAN endpoint (`CurAddr`) on the local `/24`
+3. the peer's tailnet IP (`100.64.0.0/10`) — always routable, auto-routed over the
+   LAN when co-located
+
+```bash
+machines hosts            # dry-run plan (default)
+machines hosts plan -j    # JSON plan
+machines hosts apply      # write /etc/hosts (uses sudo when the file is root-owned)
+machines hosts plan --no-warm   # skip discovering LAN endpoints (faster, tailnet IPs)
+```
+
+By default the command first runs `tailscale ping` against online peers so their
+LAN endpoints become visible and same-LAN machines resolve to their `192.168.x.x`
+address (true LAN-direct) instead of the tailnet IP. Off-LAN or offline peers fall
+back to the tailnet IP. The local machine is skipped. The managed block is delimited
+by markers, so re-running `apply` only rewrites that block and leaves the rest of
+`/etc/hosts` untouched.
+
 ## Dashboard
 
 ```bash
