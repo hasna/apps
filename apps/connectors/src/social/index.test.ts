@@ -7,14 +7,17 @@ import {
 } from "./index";
 
 describe("social SDK dispatch", () => {
-  test("listSocialConnectors returns all 9 supported connectors", () => {
+  test("listSocialConnectors returns all 12 supported connectors", () => {
     expect(listSocialConnectors().sort()).toEqual([
       "bluesky",
+      "facebook",
       "googlebusinessprofile",
+      "instagram",
       "linkedin",
       "mastodon",
       "pinterest",
       "reddit",
+      "threads",
       "tiktok",
       "x",
       "youtube",
@@ -49,10 +52,25 @@ describe("social SDK dispatch", () => {
     expect(getSocialOperations("pinterest")).not.toContain("mentions.list");
     expect(getSocialOperations("reddit")).not.toContain("media.upload");
     expect(getSocialOperations("googlebusinessprofile")).not.toContain("analytics.post");
+    expect(getSocialOperations("facebook")).not.toContain("mentions.list");
+    expect(getSocialOperations("instagram")).not.toContain("post.delete");
+    expect(getSocialOperations("instagram")).not.toContain("mentions.list");
+    expect(getSocialOperations("threads")).toContain("mentions.list");
+    expect(getSocialOperations("threads")).toContain("post.delete");
   });
 
   test("dispatch reaches each new adapter (constructor enforces accessToken)", async () => {
-    for (const c of ["linkedin", "reddit", "tiktok", "youtube", "pinterest", "googlebusinessprofile"]) {
+    for (const c of [
+      "linkedin",
+      "reddit",
+      "tiktok",
+      "youtube",
+      "pinterest",
+      "googlebusinessprofile",
+      "facebook",
+      "instagram",
+      "threads",
+    ]) {
       await expect(
         runSocialOperation({ connector: c, operation: "account.me", input: {}, credentials: {} }),
       ).rejects.toThrow(/accessToken/);
@@ -71,12 +89,12 @@ describe("social SDK dispatch", () => {
   });
 
   test("getSocialOperations throws for unknown connector", () => {
-    expect(() => getSocialOperations("facebook")).toThrow(ConnectorOperationNotSupported);
+    expect(() => getSocialOperations("myspace")).toThrow(ConnectorOperationNotSupported);
   });
 
   test("unknown connector throws ConnectorOperationNotSupported", async () => {
     await expect(
-      runSocialOperation({ connector: "facebook", operation: "post.create", input: { text: "x" } }),
+      runSocialOperation({ connector: "myspace", operation: "post.create", input: { text: "x" } }),
     ).rejects.toBeInstanceOf(ConnectorOperationNotSupported);
   });
 

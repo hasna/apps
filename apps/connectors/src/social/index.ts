@@ -26,6 +26,9 @@ import {
   GoogleBusinessProfileAdapter,
   type GoogleBusinessProfileCredentials,
 } from "./googlebusinessprofile";
+import { FacebookAdapter, type FacebookCredentials } from "./facebook";
+import { InstagramAdapter, type InstagramCredentials } from "./instagram";
+import { ThreadsAdapter, type ThreadsCredentials } from "./threads";
 import type {
   AnalyticsPostInput,
   MediaUploadInput,
@@ -64,6 +67,9 @@ const SUPPORTED_CONNECTORS = [
   "youtube",
   "pinterest",
   "googlebusinessprofile",
+  "facebook",
+  "instagram",
+  "threads",
 ] as const;
 
 const ALL_OPS: SocialOperation[] = [
@@ -102,6 +108,14 @@ const SUPPORTED_OPERATIONS: Record<string, SocialOperation[]> = {
   pinterest: ["account.me", "post.create", "post.delete", "media.upload", "analytics.post"],
   // Google Business Profile localPosts: no mentions, no per-post analytics.
   googlebusinessprofile: ["account.me", "post.create", "post.delete", "media.upload"],
+  // Facebook Pages feed: no first-class Page mentions edge modeled here.
+  facebook: ["account.me", "post.create", "post.delete", "media.upload", "analytics.post"],
+  // Instagram Graph: container→publish (media required); the API cannot delete
+  // published media and has no mentions.list surface modeled here.
+  instagram: ["account.me", "post.create", "media.upload", "analytics.post"],
+  // Threads: text + reply chaining; mentions exposed but may throw at call time
+  // if the account lacks the mentions edge.
+  threads: ["account.me", "post.create", "post.delete", "media.upload", "mentions.list", "analytics.post"],
 };
 
 export interface RunSocialOperationArgs {
@@ -147,6 +161,12 @@ function buildAdapter(connector: string, credentials: Record<string, unknown>): 
       return GoogleBusinessProfileAdapter.fromCredentials(
         credentials as unknown as GoogleBusinessProfileCredentials,
       );
+    case "facebook":
+      return FacebookAdapter.fromCredentials(credentials as unknown as FacebookCredentials);
+    case "instagram":
+      return InstagramAdapter.fromCredentials(credentials as unknown as InstagramCredentials);
+    case "threads":
+      return ThreadsAdapter.fromCredentials(credentials as unknown as ThreadsCredentials);
     default:
       throw new ConnectorOperationNotSupported(connector, "*");
   }

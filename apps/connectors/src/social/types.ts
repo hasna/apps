@@ -16,7 +16,10 @@ export type SocialConnectorSlug =
   | "tiktok"
   | "youtube"
   | "pinterest"
-  | "googlebusinessprofile";
+  | "googlebusinessprofile"
+  | "facebook"
+  | "instagram"
+  | "threads";
 
 /** Normalized operation names. */
 export type SocialOperation =
