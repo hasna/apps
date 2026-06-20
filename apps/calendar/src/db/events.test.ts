@@ -114,6 +114,66 @@ describe("events", () => {
     expect(morning[0]!.title).toBe("Morning");
   });
 
+  test("list events compares offset timestamps by instant", () => {
+    createEvent({
+      title: "Offset Morning",
+      calendar_id: calendarId,
+      org_id: orgId,
+      start_at: "2026-04-15T10:00:00+02:00",
+      end_at: "2026-04-15T11:00:00+02:00",
+    });
+    createEvent({
+      title: "Later UTC",
+      calendar_id: calendarId,
+      org_id: orgId,
+      start_at: "2026-04-15T09:30:00Z",
+      end_at: "2026-04-15T10:30:00Z",
+    });
+
+    const events = listEvents({
+      calendar_id: calendarId,
+      after: "2026-04-15T07:30:00Z",
+      before: "2026-04-15T08:30:00Z",
+    });
+
+    expect(events.map((event) => event.title)).toEqual(["Offset Morning"]);
+  });
+
+  test("list events supports every timestamp offset accepted by create", () => {
+    createEvent({
+      title: "Large Offset Morning",
+      calendar_id: calendarId,
+      org_id: orgId,
+      start_at: "2026-04-15T10:00:00+15:00",
+      end_at: "2026-04-15T11:00:00+15:00",
+    });
+
+    const events = listEvents({
+      calendar_id: calendarId,
+      after: "2026-04-14T18:30:00Z",
+      before: "2026-04-14T19:30:00Z",
+    });
+
+    expect(events.map((event) => event.title)).toEqual(["Large Offset Morning"]);
+  });
+
+  test("list events compares sub-millisecond timestamps precisely", () => {
+    createEvent({
+      title: "Sub Millisecond",
+      calendar_id: calendarId,
+      org_id: orgId,
+      start_at: "2026-04-15T10:00:00.0005Z",
+      end_at: "2026-04-15T10:00:00.0014Z",
+    });
+
+    const events = listEvents({
+      calendar_id: calendarId,
+      after: "2026-04-15T10:00:00.0006Z",
+    });
+
+    expect(events).toHaveLength(0);
+  });
+
   test("update event", () => {
     const evt = createEvent({
       title: "Old",
@@ -212,6 +272,57 @@ describe("events", () => {
     expect(conflicts[0]!.title).toBe("Meeting A");
   });
 
+  test("find conflicts compares offset timestamps by instant", () => {
+    createEvent({
+      title: "Offset Meeting",
+      calendar_id: calendarId,
+      org_id: orgId,
+      start_at: "2026-04-15T10:00:00+02:00",
+      end_at: "2026-04-15T11:00:00+02:00",
+    });
+
+    const conflicts = findConflicts(calendarId, {
+      start: "2026-04-15T08:30:00Z",
+      end: "2026-04-15T09:30:00Z",
+    });
+
+    expect(conflicts.map((event) => event.title)).toEqual(["Offset Meeting"]);
+  });
+
+  test("find conflicts supports every timestamp offset accepted by create", () => {
+    createEvent({
+      title: "Large Offset Meeting",
+      calendar_id: calendarId,
+      org_id: orgId,
+      start_at: "2026-04-15T10:00:00+15:00",
+      end_at: "2026-04-15T11:00:00+15:00",
+    });
+
+    const conflicts = findConflicts(calendarId, {
+      start: "2026-04-14T19:30:00Z",
+      end: "2026-04-14T19:45:00Z",
+    });
+
+    expect(conflicts.map((event) => event.title)).toEqual(["Large Offset Meeting"]);
+  });
+
+  test("find conflicts compares sub-millisecond timestamps precisely", () => {
+    createEvent({
+      title: "Sub Millisecond Meeting",
+      calendar_id: calendarId,
+      org_id: orgId,
+      start_at: "2026-04-15T10:00:00.0005Z",
+      end_at: "2026-04-15T10:00:00.0014Z",
+    });
+
+    const conflicts = findConflicts(calendarId, {
+      start: "2026-04-15T10:00:00.0006Z",
+      end: "2026-04-15T10:00:00.0007Z",
+    });
+
+    expect(conflicts.map((event) => event.title)).toEqual(["Sub Millisecond Meeting"]);
+  });
+
   test("find conflicts — no overlap", () => {
     createEvent({
       title: "Morning",
@@ -222,6 +333,23 @@ describe("events", () => {
     });
     const conflicts = findConflicts(calendarId, { start: "2026-04-15T11:00:00Z", end: "2026-04-15T12:00:00Z" });
     expect(conflicts.length).toBe(0);
+  });
+
+  test("find conflicts rejects inverted ranges", () => {
+    createEvent({
+      title: "Long Meeting",
+      calendar_id: calendarId,
+      org_id: orgId,
+      start_at: "2026-04-15T08:00:00Z",
+      end_at: "2026-04-15T12:00:00Z",
+    });
+
+    expect(() =>
+      findConflicts(calendarId, {
+        start: "2026-04-15T11:00:00Z",
+        end: "2026-04-15T09:00:00Z",
+      }),
+    ).toThrow(RangeError);
   });
 
   test("find conflicts — excludes cancelled events", () => {
@@ -260,6 +388,44 @@ describe("events", () => {
     expect(conflicts.length).toBe(1);
   });
 
+  test("find agent conflicts compares offset timestamps by instant", () => {
+    const agentId = registerAgent({ name: "offset-agent" }).id;
+    const event = createEvent({
+      title: "Offset Agent Meeting",
+      calendar_id: calendarId,
+      org_id: orgId,
+      start_at: "2026-04-15T10:00:00+02:00",
+      end_at: "2026-04-15T11:00:00+02:00",
+    });
+    createAttendee({ event_id: event.id, agent_id: agentId, display_name: "Offset Agent" });
+
+    const conflicts = findAgentConflicts(agentId, {
+      start: "2026-04-15T08:30:00Z",
+      end: "2026-04-15T09:30:00Z",
+    });
+
+    expect(conflicts.map((conflict) => conflict.title)).toEqual(["Offset Agent Meeting"]);
+  });
+
+  test("find agent conflicts rejects inverted ranges", () => {
+    const agentId = registerAgent({ name: "inverted-agent" }).id;
+    const event = createEvent({
+      title: "Long Agent Meeting",
+      calendar_id: calendarId,
+      org_id: orgId,
+      start_at: "2026-04-15T08:00:00Z",
+      end_at: "2026-04-15T12:00:00Z",
+    });
+    createAttendee({ event_id: event.id, agent_id: agentId, display_name: "Inverted Agent" });
+
+    expect(() =>
+      findAgentConflicts(agentId, {
+        start: "2026-04-15T11:00:00Z",
+        end: "2026-04-15T09:00:00Z",
+      }),
+    ).toThrow(RangeError);
+  });
+
   test("search events by title", () => {
     createEvent({
       title: "Engineering Standup",
@@ -279,6 +445,30 @@ describe("events", () => {
     const results = searchEvents("standup");
     expect(results.length).toBe(1);
     expect(results[0]!.title).toBe("Engineering Standup");
+  });
+
+  test("search events orders offset timestamps by instant", () => {
+    createEvent({
+      title: "Shared Query Later",
+      description: "needle",
+      calendar_id: calendarId,
+      org_id: orgId,
+      start_at: "2026-04-15T09:30:00Z",
+      end_at: "2026-04-15T10:30:00Z",
+    });
+    createEvent({
+      title: "Shared Query Earlier",
+      description: "needle",
+      calendar_id: calendarId,
+      org_id: orgId,
+      start_at: "2026-04-15T10:00:00+02:00",
+      end_at: "2026-04-15T11:00:00+02:00",
+    });
+
+    expect(searchEvents("needle", orgId).map((event) => event.title)).toEqual([
+      "Shared Query Earlier",
+      "Shared Query Later",
+    ]);
   });
 
   test("all day event", () => {

@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { getDatabase } from "./database.js";
+import { compareEventTimestampStrings } from "./event-time.js";
 import type { EventAttendee, CreateAttendeeInput, UpdateAttendeeInput } from "../types/index.js";
 import { NotFoundError } from "../types/index.js";
 
@@ -45,12 +46,13 @@ export function getAttendeesForEvent(eventId: string, db?: Database): EventAtten
 export function getEventsForAgent(agentId: string, db?: Database): EventAttendee[] {
   db = db || getDatabase();
   const rows = db.query(
-    `SELECT a.* FROM event_attendees a
+    `SELECT a.*, e.start_at AS event_start_at FROM event_attendees a
      INNER JOIN events e ON e.id = a.event_id
-     WHERE a.agent_id = ? AND e.status != 'cancelled'
-     ORDER BY e.start_at`,
-  ).all(agentId);
-  return (rows as any[]).map(rowToAttendee);
+     WHERE a.agent_id = ? AND e.status != 'cancelled'`,
+  ).all(agentId) as any[];
+
+  rows.sort((a, b) => compareEventTimestampStrings(a.event_start_at, b.event_start_at));
+  return rows.map(rowToAttendee);
 }
 
 export function updateAttendee(id: string, input: UpdateAttendeeInput, db?: Database): EventAttendee {

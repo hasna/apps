@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { getDatabase } from "./database.js";
+import { assertEventEndsAfterStart, compareEventInstants, compareEventTimestampStrings, parseEventTimestamp, parseTimeRange } from "./event-time.js";
 import type { Event, CreateEventInput, UpdateEventInput } from "../types/index.js";
 import { NotFoundError } from "../types/index.js";
 
@@ -28,50 +29,8 @@ function rowToEvent(row: any): Event {
   };
 }
 
-const ISO_DATE_TIME_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
-
-function parseEventTimestamp(value: string): number {
-  const match = ISO_DATE_TIME_RE.exec(value);
-  if (!match) {
-    throw new RangeError("Event start_at and end_at must be valid ISO 8601 date-time strings");
-  }
-
-  const year = Number(match[1]!);
-  const month = Number(match[2]!);
-  const day = Number(match[3]!);
-  const hour = Number(match[4]!);
-  const minute = Number(match[5]!);
-  const second = Number(match[6]!);
-  const offset = match[7]!;
-  const maxDay = month >= 1 && month <= 12 ? new Date(Date.UTC(year, month, 0)).getUTCDate() : 0;
-
-  if (month < 1 || month > 12 || day < 1 || day > maxDay || hour > 23 || minute > 59 || second > 59) {
-    throw new RangeError("Event start_at and end_at must be valid ISO 8601 date-time strings");
-  }
-
-  if (offset !== "Z") {
-    const offsetHour = Number(offset.slice(1, 3));
-    const offsetMinute = Number(offset.slice(4, 6));
-    if (offsetHour > 23 || offsetMinute > 59) {
-      throw new RangeError("Event start_at and end_at must be valid ISO 8601 date-time strings");
-    }
-  }
-
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) {
-    throw new RangeError("Event start_at and end_at must be valid ISO 8601 date-time strings");
-  }
-
-  return timestamp;
-}
-
-function assertEventEndsAfterStart(startAt: string, endAt: string): void {
-  const start = parseEventTimestamp(startAt);
-  const end = parseEventTimestamp(endAt);
-
-  if (end <= start) {
-    throw new RangeError("Event end_at must be after start_at");
-  }
+function positiveInteger(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
 export function createEvent(input: CreateEventInput, db?: Database): Event {
@@ -110,21 +69,27 @@ export function listEvents(filter: ListEventsFilter = {}, db?: Database): Event[
   db = db || getDatabase();
   const conditions: string[] = [];
   const params: any[] = [];
+  const after = filter.after ? parseEventTimestamp(filter.after) : null;
+  const before = filter.before ? parseEventTimestamp(filter.before) : null;
 
   if (filter.calendar_id) { conditions.push("calendar_id = ?"); params.push(filter.calendar_id); }
   if (filter.org_id) { conditions.push("org_id = ?"); params.push(filter.org_id); }
   if (filter.status) { conditions.push("status = ?"); params.push(filter.status); }
-  if (filter.after) { conditions.push("start_at >= ?"); params.push(filter.after); }
-  if (filter.before) { conditions.push("start_at <= ?"); params.push(filter.before); }
   if (filter.created_by) { conditions.push("created_by = ?"); params.push(filter.created_by); }
   if (filter.source_task_id) { conditions.push("source_task_id = ?"); params.push(filter.source_task_id); }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-  const limit = filter.limit ? `LIMIT ${filter.limit}` : "";
-  const offset = filter.offset ? `OFFSET ${filter.offset}` : "";
+  const rows = db.query(`SELECT * FROM events ${where}`).all(...params);
+  const events = (rows as any[])
+    .map(rowToEvent)
+    .map((event) => ({ event, start: parseEventTimestamp(event.start_at) }))
+    .filter(({ start }) => (after === null || start >= after) && (before === null || start <= before))
+    .sort((a, b) => compareEventInstants(a.start, b.start) || a.event.start_at.localeCompare(b.event.start_at))
+    .map(({ event }) => event);
 
-  const rows = db.query(`SELECT * FROM events ${where} ORDER BY start_at ${limit} ${offset}`).all(...params);
-  return (rows as any[]).map(rowToEvent);
+  const offset = positiveInteger(filter.offset) || 0;
+  const limit = positiveInteger(filter.limit);
+  return limit ? events.slice(offset, offset + limit) : events.slice(offset);
 }
 
 export function updateEvent(id: string, input: UpdateEventInput, db?: Database): Event {
@@ -160,30 +125,41 @@ export interface TimeRange {
 export function findConflicts(calendarId: string, range: TimeRange, excludeEventId?: string, db?: Database): Event[] {
   db = db || getDatabase();
   const exclude = excludeEventId ? "AND id != ?" : "";
-  const params = excludeEventId ? [calendarId, range.end, range.start, excludeEventId] : [calendarId, range.end, range.start];
+  const params = excludeEventId ? [calendarId, excludeEventId] : [calendarId];
+  const { start: rangeStart, end: rangeEnd } = parseTimeRange(range.start, range.end);
 
   // Overlap: event.start < range.end AND event.end > range.start
   const rows = db.query(
-    `SELECT * FROM events WHERE calendar_id = ? AND start_at < ? AND end_at > ? AND status != 'cancelled' ${exclude} ORDER BY start_at`,
+    `SELECT * FROM events WHERE calendar_id = ? AND status != 'cancelled' ${exclude}`,
   ).all(...params);
 
-  return (rows as any[]).map(rowToEvent);
+  return (rows as any[])
+    .map(rowToEvent)
+    .map((event) => ({ event, start: parseEventTimestamp(event.start_at), end: parseEventTimestamp(event.end_at) }))
+    .filter(({ start, end }) => start < rangeEnd && end > rangeStart)
+    .sort((a, b) => compareEventInstants(a.start, b.start) || a.event.start_at.localeCompare(b.event.start_at))
+    .map(({ event }) => event);
 }
 
 /** Find conflicting events across all calendars for a specific agent in the time range */
 export function findAgentConflicts(agentId: string, range: TimeRange, excludeEventId?: string, db?: Database): Event[] {
   db = db || getDatabase();
   const exclude = excludeEventId ? "AND e.id != ?" : "";
-  const params = excludeEventId ? [agentId, range.end, range.start, excludeEventId] : [agentId, range.end, range.start];
+  const params = excludeEventId ? [agentId, excludeEventId] : [agentId];
+  const { start: rangeStart, end: rangeEnd } = parseTimeRange(range.start, range.end);
 
   const rows = db.query(
     `SELECT e.* FROM events e
      INNER JOIN event_attendees a ON a.event_id = e.id
-     WHERE a.agent_id = ? AND e.start_at < ? AND e.end_at > ? AND e.status != 'cancelled' ${exclude}
-     ORDER BY e.start_at`,
+     WHERE a.agent_id = ? AND e.status != 'cancelled' ${exclude}`,
   ).all(...params);
 
-  return (rows as any[]).map(rowToEvent);
+  return (rows as any[])
+    .map(rowToEvent)
+    .map((event) => ({ event, start: parseEventTimestamp(event.start_at), end: parseEventTimestamp(event.end_at) }))
+    .filter(({ start, end }) => start < rangeEnd && end > rangeStart)
+    .sort((a, b) => compareEventInstants(a.start, b.start) || a.event.start_at.localeCompare(b.event.start_at))
+    .map(({ event }) => event);
 }
 
 // ── FTS search ───────────────────────────────────────────────────────────────
@@ -194,9 +170,10 @@ export function searchEvents(query: string, orgId?: string, db?: Database): Even
     `SELECT e.* FROM events e
      INNER JOIN events_fts f ON f.rowid = e.rowid
      WHERE events_fts MATCH ?
-     ${orgId ? "AND e.org_id = ?" : ""}
-     ORDER BY e.start_at`,
+     ${orgId ? "AND e.org_id = ?" : ""}`,
   ).all(query, ...(orgId ? [orgId] : []));
 
-  return (rows as any[]).map(rowToEvent);
+  return (rows as any[])
+    .map(rowToEvent)
+    .sort((a, b) => compareEventTimestampStrings(a.start_at, b.start_at));
 }

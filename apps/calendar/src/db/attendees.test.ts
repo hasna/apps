@@ -74,6 +74,32 @@ describe("attendees", () => {
     expect(events.length).toBe(2);
   });
 
+  test("get events for agent orders offset timestamps by instant", () => {
+    const calendarId = (listCalendars(orgId)[0] as any).id;
+    const later = createEvent({
+      title: "Later Meeting",
+      calendar_id: calendarId,
+      org_id: orgId,
+      start_at: "2026-04-15T09:30:00Z",
+      end_at: "2026-04-15T10:30:00Z",
+    });
+    const earlier = createEvent({
+      title: "Earlier Meeting",
+      calendar_id: calendarId,
+      org_id: orgId,
+      start_at: "2026-04-15T10:00:00+02:00",
+      end_at: "2026-04-15T11:00:00+02:00",
+    });
+
+    createAttendee({ event_id: later.id, agent_id: agent1Id });
+    createAttendee({ event_id: earlier.id, agent_id: agent1Id });
+
+    expect(getEventsForAgent(agent1Id).map((attendee) => attendee.event_id)).toEqual([
+      earlier.id,
+      later.id,
+    ]);
+  });
+
   test("delete attendee", () => {
     const a = createAttendee({ event_id: eventId, agent_id: agent1Id });
     expect(deleteAttendee(a.id)).toBe(true);
