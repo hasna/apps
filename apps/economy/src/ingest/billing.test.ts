@@ -201,4 +201,50 @@ describe('syncGeminiBilling', () => {
     const summary = queryBillingSummary(db, 'all')
     expect(summary.by_provider.gemini).toBeCloseTo(3.5)
   })
+
+  it('skips malformed export dates instead of importing invalid billing days', async () => {
+    const exportPath = join(root, 'gemini-billing-invalid-dates.json')
+    writeFileSync(exportPath, JSON.stringify([
+      {
+        date: '2026-05-1x',
+        service: 'Google AI',
+        sku: 'malformed day',
+        cost_usd: 9,
+      },
+      {
+        date: '2026-05-08T10:30:00Z',
+        service: 'Google AI',
+        sku: 'valid usage',
+        cost_usd: 2,
+      },
+    ]))
+    process.env['HASNA_ECONOMY_GEMINI_BILLING_EXPORT_PATH'] = exportPath
+
+    const result = await syncGeminiBilling(db, { fromDate: '2026-05-01', toDate: '2026-05-31' })
+    expect(result.days).toBe(1)
+    expect(result.totalUsd).toBeCloseTo(2)
+
+    const rows = db.prepare(`SELECT date, cost_usd FROM billing_daily ORDER BY date`).all() as Array<{ date: string; cost_usd: number }>
+    expect(rows).toEqual([{ date: '2026-05-08', cost_usd: 2 }])
+  })
+
+  it('normalizes compact Google invoice months to the first day of the month', async () => {
+    const exportPath = join(root, 'gemini-billing-invoice-month.json')
+    writeFileSync(exportPath, JSON.stringify([
+      {
+        'invoice.month': '202605',
+        service: 'Google AI',
+        sku: 'monthly invoice',
+        cost_usd: 6.5,
+      },
+    ]))
+    process.env['HASNA_ECONOMY_GEMINI_BILLING_EXPORT_PATH'] = exportPath
+
+    const result = await syncGeminiBilling(db, { fromDate: '2026-05-01', toDate: '2026-05-31' })
+    expect(result.days).toBe(1)
+    expect(result.totalUsd).toBeCloseTo(6.5)
+
+    const rows = db.prepare(`SELECT date, cost_usd FROM billing_daily`).all() as Array<{ date: string; cost_usd: number }>
+    expect(rows).toEqual([{ date: '2026-05-01', cost_usd: 6.5 }])
+  })
 })

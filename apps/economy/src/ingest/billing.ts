@@ -25,10 +25,47 @@ function toISODate(d: Date): string {
   return d.toISOString().substring(0, 10)
 }
 
+function isValidDateParts(year: number, month: number, day: number): boolean {
+  const d = new Date(Date.UTC(year, month - 1, day))
+  return d.getUTCFullYear() === year && d.getUTCMonth() === month - 1 && d.getUTCDate() === day
+}
+
+function formatDateParts(year: number, month: number, day: number): string {
+  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+}
+
 function parseDate(value: unknown): string | null {
+  if (typeof value === 'number' && Number.isInteger(value)) {
+    return value >= 100001 && value <= 999912 ? parseDate(String(value)) : null
+  }
   if (typeof value !== 'string' || !value.trim()) return null
-  const d = new Date(value)
-  if (Number.isNaN(d.getTime())) return value.substring(0, 10)
+  const trimmed = value.trim()
+
+  const compactMonth = /^(\d{4})(\d{2})$/.exec(trimmed)
+  if (compactMonth) {
+    const year = Number(compactMonth[1])
+    const month = Number(compactMonth[2])
+    return isValidDateParts(year, month, 1) ? formatDateParts(year, month, 1) : null
+  }
+
+  const dashedMonth = /^(\d{4})-(\d{2})$/.exec(trimmed)
+  if (dashedMonth) {
+    const year = Number(dashedMonth[1])
+    const month = Number(dashedMonth[2])
+    return isValidDateParts(year, month, 1) ? formatDateParts(year, month, 1) : null
+  }
+
+  const isoDate = /^(\d{4})-(\d{2})-(\d{2})(?:$|[T\s])/.exec(trimmed)
+  if (isoDate) {
+    const year = Number(isoDate[1])
+    const month = Number(isoDate[2])
+    const day = Number(isoDate[3])
+    if (!isValidDateParts(year, month, day)) return null
+    if (trimmed.length === 10) return formatDateParts(year, month, day)
+  }
+
+  const d = new Date(trimmed)
+  if (Number.isNaN(d.getTime())) return null
   return toISODate(d)
 }
 
