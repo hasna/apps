@@ -29,6 +29,28 @@ describe("saveRun / getRun", () => {
     expect(fetched!.stats.passRate).toBe(0.8);
   });
 
+  test("redacts adapter apiKey before persisting run data", async () => {
+    const { saveRun, getRun } = await import("./store.js");
+    const run = makeRun("secret-run");
+    run.adapterConfig = {
+      type: "openai",
+      model: "gpt-4o",
+      baseURL: "https://gateway.example.com/v1",
+      apiKey: "provider-secret",
+    };
+
+    saveRun(run);
+    const fetched = getRun("secret-run");
+
+    expect(fetched).not.toBeNull();
+    expect(JSON.stringify(fetched)).not.toContain("provider-secret");
+    expect(fetched!.adapterConfig).toEqual({
+      type: "openai",
+      model: "gpt-4o",
+      baseURL: "https://gateway.example.com/v1",
+    });
+  });
+
   test("partial ID matching works", async () => {
     const { saveRun, getRun } = await import("./store.js");
     saveRun(makeRun("abcdef1234567890"));

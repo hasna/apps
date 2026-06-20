@@ -7,6 +7,7 @@ import { callOpenAIAdapter } from "../adapters/openai.js";
 import { callMcpAdapter } from "../adapters/mcp.js";
 import { callFunctionAdapter } from "../adapters/function.js";
 import { callCliAdapter } from "../adapters/cli.js";
+import { redactAdapterConfig } from "./redaction.js";
 import type {
   AdapterConfig,
   EvalCase,
@@ -185,7 +186,7 @@ export async function runEvals(
     id: randomUUID(),
     createdAt: new Date().toISOString(),
     dataset: options.dataset,
-    adapterConfig: options.adapter,
+    adapterConfig: redactAdapterConfig(options.adapter),
     results,
     stats,
   };

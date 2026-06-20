@@ -21,8 +21,14 @@ mock.module("@anthropic-ai/sdk", () => ({
 
 // ─── Mock OpenAI SDK ──────────────────────────────────────────────────────────
 
+const openAIConstructorOptions: Array<{ apiKey?: string; baseURL?: string }> = [];
+
 mock.module("openai", () => ({
   default: class MockOpenAI {
+    constructor(options: { apiKey?: string; baseURL?: string }) {
+      openAIConstructorOptions.push(options);
+    }
+
     chat = {
       completions: {
         create: mock(async (params: { messages: Array<{ content: string }> }) => {
@@ -95,6 +101,27 @@ describe("Anthropic adapter", () => {
 // ─── OpenAI adapter tests ─────────────────────────────────────────────────────
 
 describe("OpenAI adapter", () => {
+  test("uses ambient OPENAI_API_KEY for official OpenAI calls", async () => {
+    const savedKey = process.env["OPENAI_API_KEY"];
+    process.env["OPENAI_API_KEY"] = "official-openai-key";
+    openAIConstructorOptions.length = 0;
+
+    try {
+      await callOpenAIAdapter(
+        { type: "openai", model: "gpt-4o" },
+        "hello"
+      );
+
+      expect(openAIConstructorOptions.at(-1)).toEqual({
+        apiKey: "official-openai-key",
+        baseURL: undefined,
+      });
+    } finally {
+      if (savedKey) process.env["OPENAI_API_KEY"] = savedKey;
+      else delete process.env["OPENAI_API_KEY"];
+    }
+  });
+
   test("calls OpenAI API and returns output", async () => {
     const result = await callOpenAIAdapter(
       { type: "openai", model: "gpt-4o" },
@@ -138,11 +165,43 @@ describe("OpenAI adapter", () => {
   });
 
   test("works with custom baseURL (Ollama-style)", async () => {
+    const savedKey = process.env["OPENAI_API_KEY"];
+    process.env["OPENAI_API_KEY"] = "real-key-that-must-not-leak";
+    openAIConstructorOptions.length = 0;
+
     const result = await callOpenAIAdapter(
-      { type: "openai", model: "llama3", baseURL: "http://localhost:11434/v1" },
+      { type: "openai", model: "llama3", baseURL: "http://localhost:11434" },
       "hello"
     );
+
+    if (savedKey) process.env["OPENAI_API_KEY"] = savedKey;
+    else delete process.env["OPENAI_API_KEY"];
+
     expect(result.output).toBeTruthy();
+    expect(openAIConstructorOptions.at(-1)).toEqual({
+      apiKey: "ollama",
+      baseURL: "http://localhost:11434/v1",
+    });
+  });
+
+  test("uses explicit apiKey for authenticated custom baseURL", async () => {
+    openAIConstructorOptions.length = 0;
+
+    const result = await callOpenAIAdapter(
+      {
+        type: "openai",
+        model: "custom-model",
+        baseURL: "https://gateway.example.com/openai",
+        apiKey: "gateway-key",
+      },
+      "hello"
+    );
+
+    expect(result.output).toBeTruthy();
+    expect(openAIConstructorOptions.at(-1)).toEqual({
+      apiKey: "gateway-key",
+      baseURL: "https://gateway.example.com/openai",
+    });
   });
 });
 

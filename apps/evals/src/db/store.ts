@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
+import { redactRunSecrets } from "../core/redaction.js";
 import type { EvalRun } from "../types/index.js";
 
 let _db: Database | null = null;
@@ -56,16 +57,17 @@ function migrate(db: Database): void {
 
 export function saveRun(run: EvalRun): void {
   const db = getDatabase();
+  const safeRun = redactRunSecrets(run);
   db.prepare(`
     INSERT OR REPLACE INTO runs (id, created_at, dataset, stats, adapter, data)
     VALUES (?, ?, ?, ?, ?, ?)
   `).run(
-    run.id,
-    run.createdAt,
-    run.dataset,
-    JSON.stringify(run.stats),
-    run.adapterConfig ? JSON.stringify(run.adapterConfig) : null,
-    JSON.stringify(run)
+    safeRun.id,
+    safeRun.createdAt,
+    safeRun.dataset,
+    JSON.stringify(safeRun.stats),
+    safeRun.adapterConfig ? JSON.stringify(safeRun.adapterConfig) : null,
+    JSON.stringify(safeRun)
   );
 }
 

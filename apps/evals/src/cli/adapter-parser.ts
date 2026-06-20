@@ -2,6 +2,7 @@ import type { AdapterConfig } from "../types/index.js";
 
 export function parseAdapterConfig(opts: Record<string, string>): AdapterConfig {
   const type = opts["adapter"] ?? "http";
+  const apiKey = opts["apiKeyEnv"] ? process.env[opts["apiKeyEnv"]] : undefined;
 
   switch (type) {
     case "http":
@@ -9,10 +10,10 @@ export function parseAdapterConfig(opts: Record<string, string>): AdapterConfig 
       return { type: "http", url: opts["url"] };
     case "anthropic":
       if (!opts["model"]) throw new Error("--model is required for anthropic adapter");
-      return { type: "anthropic", model: opts["model"], systemPrompt: opts["system"] };
+      return { type: "anthropic", model: opts["model"], systemPrompt: opts["system"], ...(apiKey ? { apiKey } : {}) };
     case "openai":
       if (!opts["model"]) throw new Error("--model is required for openai adapter");
-      return { type: "openai", model: opts["model"], systemPrompt: opts["system"] };
+      return { type: "openai", model: opts["model"], systemPrompt: opts["system"], baseURL: opts["url"], ...(apiKey ? { apiKey } : {}) };
     case "function":
       if (!opts["module"]) throw new Error("--module is required for function adapter");
       return { type: "function", modulePath: opts["module"], exportName: opts["export"] };

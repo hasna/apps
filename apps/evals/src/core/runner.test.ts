@@ -95,6 +95,27 @@ describe("runEvals", () => {
     expect(run.stats.passRate).toBeLessThanOrEqual(1);
   });
 
+  test("redacts adapter apiKey from run metadata", async () => {
+    const secretAdapter: AdapterConfig = {
+      type: "openai",
+      model: "gpt-4o",
+      baseURL: "https://gateway.example.com/v1",
+      apiKey: "provider-secret",
+    };
+
+    const run = await runEvals(
+      [{ id: "secret-case", input: "hello" }],
+      { dataset: "test.jsonl", adapter: secretAdapter, skipJudge: true }
+    );
+
+    expect(run.adapterConfig).toEqual({
+      type: "openai",
+      model: "gpt-4o",
+      baseURL: "https://gateway.example.com/v1",
+    });
+    expect(JSON.stringify(run)).not.toContain("provider-secret");
+  });
+
   test("filters cases by tags", async () => {
     const cases: EvalCase[] = [
       { id: "tagged", input: "hello", tags: ["smoke"] },

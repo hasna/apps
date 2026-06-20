@@ -2,18 +2,40 @@ import OpenAI from "openai";
 import type { OpenAIAdapterConfig, ConversationTurn } from "../types/index.js";
 import type { AdapterResponse } from "./http.js";
 
+function normalizeBaseURL(baseURL: string | undefined): string | undefined {
+  if (!baseURL) return undefined;
+
+  try {
+    const url = new URL(baseURL);
+    if (url.pathname === "" || url.pathname === "/") {
+      url.pathname = "/v1";
+      return url.toString();
+    }
+  } catch {
+    return baseURL;
+  }
+
+  return baseURL;
+}
+
+function resolveApiKey(config: OpenAIAdapterConfig): string | undefined {
+  if (config.apiKey) return config.apiKey;
+  if (config.baseURL) return "ollama";
+  return process.env["OPENAI_API_KEY"];
+}
+
 export async function callOpenAIAdapter(
   config: OpenAIAdapterConfig,
   input: string,
   turns?: ConversationTurn[]
 ): Promise<AdapterResponse> {
   const start = Date.now();
-  const client = new OpenAI({
-    apiKey: config.apiKey ?? process.env["OPENAI_API_KEY"],
-    baseURL: config.baseURL,
-  });
 
   try {
+    const client = new OpenAI({
+      apiKey: resolveApiKey(config),
+      baseURL: normalizeBaseURL(config.baseURL),
+    });
     const messages: OpenAI.ChatCompletionMessageParam[] = [];
     if (config.systemPrompt) messages.push({ role: "system", content: config.systemPrompt });
 

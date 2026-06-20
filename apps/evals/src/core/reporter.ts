@@ -1,4 +1,5 @@
 import type { EvalRun, Verdict } from "../types/index.js";
+import { redactRunSecrets } from "./redaction.js";
 
 // ─── Terminal reporter ────────────────────────────────────────────────────────
 
@@ -55,7 +56,7 @@ export function printTerminalReport(run: EvalRun): void {
 // ─── JSON reporter ────────────────────────────────────────────────────────────
 
 export function toJson(run: EvalRun): string {
-  return JSON.stringify(run, null, 2);
+  return JSON.stringify(redactRunSecrets(run), null, 2);
 }
 
 // ─── Markdown reporter ────────────────────────────────────────────────────────
