@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connectors",
-  "version": "1.3.36",
+  "version": "1.3.37",
   "description": "Open source connector library - Install API connectors with a single command",
   "type": "module",
   "bin": {
@@ -19,16 +19,20 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./social": {
+      "import": "./dist/social/index.js",
+      "types": "./dist/.types/src/social/index.d.ts"
     }
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "cd dashboard && bun run build && cd .. && bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk --external conf && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build ./src/server/index.ts --outfile ./bin/serve.js --target bun && bun build ./src/index.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly --outDir ./dist",
+    "build": "cd dashboard && bun run build && cd .. && bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk --external conf && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build ./src/server/index.ts --outfile ./bin/serve.js --target bun && bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/social/index.ts --outfile ./dist/social/index.js --target bun && tsc --emitDeclarationOnly --outDir ./dist && tsc -p tsconfig.social.json",
     "build:dashboard": "cd dashboard && bun run build",
     "postinstall": "mkdir -p $HOME/.hasna/connectors 2>/dev/null || true; [ \"$SKIP_DASHBOARD\" = \"1\" ] || [ ! -f dashboard/package.json ] || [ -d dashboard/node_modules ] || (cd dashboard && bun install)",
     "dev": "bun run ./src/cli/index.tsx",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.social.json --noEmit",
     "test": "bun test",
     "sdk:build": "cd sdk && bun run build",
     "prepublishOnly": "bun run build && bun test"

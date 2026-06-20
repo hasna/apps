@@ -108,6 +108,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["social", "fediverse", "decentralized"],
   },
   {
+    name: "bluesky",
+    displayName: "Bluesky",
+    description: "AT Protocol social network - posts, threads, mentions",
+    category: "Social Media",
+    tags: ["social", "atproto", "decentralized"],
+  },
+  {
     name: "brandblast",
     displayName: "BrandBlast",
     description: "AI-powered social media content management",

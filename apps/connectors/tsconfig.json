@@ -13,5 +13,6 @@
     "types": ["bun-types", "react"]
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "bin", "connectors"]
+  "comment-social": "src/social is the stateless @hasna/connectors/social entry; it imports connector transports from connectors/* (outside rootDir) and is typechecked + built via tsconfig.social.json so the main rootDir-constrained declaration emit stays clean.",
+  "exclude": ["node_modules", "dist", "bin", "connectors", "src/social"]
 }
