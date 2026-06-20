@@ -54,8 +54,10 @@ function planBlockedReason(plan: DownloadPlan): string | null {
 }
 
 function parsePositiveInt(value: string): number {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed < 1) throw new Error(`Expected a positive integer, got ${value}`);
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) throw new Error(`Expected a positive integer, got ${value}`);
+  const parsed = Number(trimmed);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) throw new Error(`Expected a positive integer, got ${value}`);
   return parsed;
 }
 
