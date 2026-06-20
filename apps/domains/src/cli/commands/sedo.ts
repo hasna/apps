@@ -33,7 +33,9 @@ export function registerSedoCommand(program: Command): void {
         }
         console.log(`Sedo marketplace — "${keyword}" (${result.total} total):`);
         for (const d of result.domains) {
-          const price = d.price ? ` — $${d.price.toLocaleString()} ${d.currency || ""}` : "";
+          const price = d.price
+            ? ` — ${d.price.toLocaleString()} ${d.currency || ""}`.trimEnd()
+            : " — make offer";
           const premium = d.isPremium ? " [PREMIUM]" : "";
           console.log(`  ${d.domain}${price}${premium}`);
         }

@@ -114,24 +114,37 @@ export function sedoCapability(
 
 const BASE_URL = "https://api.sedo.com/api/v1/";
 
-function buildXmlParams(
-  params: Record<string, unknown>
-): Record<string, string> {
+/**
+ * Sedo encodes currency as an integer code in API responses
+ * (see DomainInsert / DomainSearch docs): 0 = EUR, 1 = USD, 2 = GBP.
+ */
+export const SEDO_CURRENCY_CODES: Record<string, string> = {
+  "0": "EUR",
+  "1": "USD",
+  "2": "GBP",
+};
+
+export interface SedoFault {
+  code: string;
+  message: string;
+}
+
+function buildAuthParams(config: SedoConfig): Record<string, string> {
   return {
-    partnerid: params.partnerId as string,
-    signkey: params.signKey as string,
-    username: params.username as string,
-    password: params.password as string,
+    partnerid: config.partnerId,
+    signkey: config.signKey,
+    username: config.username,
+    password: config.password,
   };
 }
 
-async function sedoRequest(
+async function sedoRequestRaw(
   action: string,
   config: SedoConfig,
   extraParams: Record<string, unknown> = {}
-): Promise<Record<string, unknown>> {
+): Promise<string> {
   const params = new URLSearchParams({
-    ...buildXmlParams(config),
+    ...buildAuthParams(config),
     output_method: "xml",
     ...Object.fromEntries(
       Object.entries(extraParams).map(([k, v]) => [k, String(v)])
@@ -144,8 +157,35 @@ async function sedoRequest(
     throw new Error(`Sedo API ${action} failed: ${resp.status} ${resp.statusText}`);
   }
 
-  const text = await resp.text();
+  return resp.text();
+}
+
+async function sedoRequest(
+  action: string,
+  config: SedoConfig,
+  extraParams: Record<string, unknown> = {}
+): Promise<Record<string, unknown>> {
+  const text = await sedoRequestRaw(action, config, extraParams);
+
+  // Surface API-level faults instead of silently returning empty results.
+  const fault = parseSedoFault(text);
+  if (fault) {
+    throw new Error(`Sedo API ${action} fault ${fault.code}: ${fault.message}`);
+  }
+
   return parseSedoXml(text);
+}
+
+/**
+ * Detect and parse a Sedo <SEDOFAULT> error envelope.
+ * Returns null when the response is not a fault.
+ */
+export function parseSedoFault(xml: string): SedoFault | null {
+  if (!/<SEDOFAULT\b/i.test(xml)) return null;
+  const code = xml.match(/<faultcode[^>]*>([^<]*)<\/faultcode>/i)?.[1]?.trim() || "UNKNOWN";
+  const message =
+    xml.match(/<faultstring[^>]*>([^<]*)<\/faultstring>/i)?.[1]?.trim() || code;
+  return { code, message };
 }
 
 function parseSedoXml(xml: string): Record<string, unknown> {
@@ -186,45 +226,88 @@ function parseSedoItemXml(itemXml: string): Record<string, unknown> {
 // Domain Search
 // ============================================================
 
-/**
- * Search for domains for sale on Sedo.
- */
-export async function searchSedoDomains(
-  query: string,
-  options: {
-    tld?: string;
-    limit?: number;
-    minPrice?: number;
-    maxPrice?: number;
-  } = {}
-): Promise<SedoSearchResult> {
-  const config = getSedoConfig();
+export interface SedoSearchOptions {
+  tld?: string;
+  limit?: number;
+  minPrice?: number;
+  maxPrice?: number;
+  /** Keyword match mode: B=begins with, C=contains, E=ends with. Default C. */
+  kwtype?: "B" | "C" | "E";
+  /** ISO 639-1 result language. Default "en". */
+  language?: string;
+}
 
+/**
+ * Build the Sedo DomainSearch request params using the documented
+ * parameter names. The marketplace search action is `keyword` based —
+ * `searchword`/`limit` are NOT recognized and yield an E1201 fault.
+ * See https://api.sedo.com/apidocs/v1/Basic/functions/sedoapi_DomainSearch.html
+ */
+export function buildSedoSearchParams(
+  query: string,
+  options: SedoSearchOptions = {}
+): Record<string, unknown> {
   const params: Record<string, unknown> = {
-    searchword: query,
-    limit: options.limit || 100,
+    keyword: query,
+    kwtype: options.kwtype || "C",
+    resultsize: options.limit || 100,
+    language: options.language || "en",
   };
 
   if (options.tld) params.tld = options.tld;
   if (options.minPrice) params.price_min = options.minPrice;
   if (options.maxPrice) params.price_max = options.maxPrice;
 
-  const response = await sedoRequest("DomainSearch", config, params);
+  return params;
+}
 
+/**
+ * Parse a Sedo <SEDOSEARCH> XML response into domain listings.
+ * Throws if the response is a <SEDOFAULT> error envelope.
+ */
+export function parseSedoSearchResponse(xml: string): SedoSearchResult {
+  const fault = parseSedoFault(xml);
+  if (fault) {
+    throw new Error(`Sedo DomainSearch fault ${fault.code}: ${fault.message}`);
+  }
+
+  const response = parseSedoXml(xml);
   const items = (response.items as Record<string, unknown>[]) || [];
-  const domains: SedoDomain[] = items.map((item) => ({
-    domain: (item.domain as string) || "",
-    forSale: item.for_sale === "1" || item.for_sale === "true",
-    price: item.price ? parseFloat(item.price as string) : undefined,
-    currency: (item.currency as string) || undefined,
-    status: (item.status as string) || undefined,
-    isPremium: item.premium === "1" || item.premium === "true",
-  }));
 
-  return {
-    domains,
-    total: parseInt((response.total as string) || "0") || items.length,
-  };
+  const domains: SedoDomain[] = items.map((item) => {
+    const rawPrice = item.price as string | undefined;
+    const price = rawPrice !== undefined ? parseFloat(rawPrice) : undefined;
+    const currencyCode = item.currency as string | undefined;
+    const currency =
+      currencyCode !== undefined
+        ? SEDO_CURRENCY_CODES[currencyCode] || currencyCode
+        : undefined;
+
+    return {
+      domain: (item.domain as string) || "",
+      // Every result from DomainSearch is a marketplace listing for sale.
+      forSale: true,
+      // price 0 means "make offer" (no fixed price) — keep it undefined.
+      price: price && price > 0 ? price : undefined,
+      currency: price && price > 0 ? currency : undefined,
+      status: (item.type as string) || undefined,
+    };
+  });
+
+  return { domains, total: domains.length };
+}
+
+/**
+ * Search for domains for sale on Sedo.
+ */
+export async function searchSedoDomains(
+  query: string,
+  options: SedoSearchOptions = {}
+): Promise<SedoSearchResult> {
+  const config = getSedoConfig();
+  const params = buildSedoSearchParams(query, options);
+  const xml = await sedoRequestRaw("DomainSearch", config, params);
+  return parseSedoSearchResponse(xml);
 }
 
 /**

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/domains",
-  "version": "0.0.25",
+  "version": "0.0.26",
   "description": "Domain portfolio, registrar, marketplace, and DNS management for AI agents — CLI + MCP server with SQLite",
   "type": "module",
   "main": "dist/index.js",
@@ -14,6 +14,30 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./capability": {
+      "types": "./dist/lib/capability.d.ts",
+      "import": "./dist/lib/capability.js"
+    },
+    "./cloudflare": {
+      "types": "./dist/lib/cloudflare.d.ts",
+      "import": "./dist/lib/cloudflare.js"
+    },
+    "./cloudflare-auth": {
+      "types": "./dist/lib/cloudflare-auth.d.ts",
+      "import": "./dist/lib/cloudflare-auth.js"
+    },
+    "./delegate": {
+      "types": "./dist/lib/delegate.d.ts",
+      "import": "./dist/lib/delegate.js"
+    },
+    "./registrar": {
+      "types": "./dist/lib/registrar.d.ts",
+      "import": "./dist/lib/registrar.js"
+    },
+    "./route53": {
+      "types": "./dist/lib/route53.d.ts",
+      "import": "./dist/lib/route53.js"
+    },
     "./storage": {
       "types": "./dist/storage.d.ts",
       "import": "./dist/storage.js"
@@ -26,7 +50,7 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && bun build src/cli/index.ts --outdir dist/cli --target bun --external ink --external react --external chalk --external ink-text-input --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/index.ts src/storage.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "build": "bun run clean && bun build src/cli/index.ts --outdir dist/cli --target bun --external ink --external react --external chalk --external ink-text-input --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/index.ts src/storage.ts --outdir dist --target bun && bun build src/lib/capability.ts src/lib/cloudflare.ts src/lib/cloudflare-auth.ts src/lib/delegate.ts src/lib/registrar.ts src/lib/route53.ts --outdir dist/lib --target node --packages external && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.ts",
@@ -66,6 +90,7 @@
   "dependencies": {
     "@aws-sdk/client-route-53": "^3.1067.0",
     "@aws-sdk/client-route-53-domains": "^3.1067.0",
+    "@aws-sdk/credential-provider-ini": "3.972.53",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
