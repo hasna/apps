@@ -17,6 +17,15 @@ import { ConnectorOperationNotSupported } from "./errors";
 import { XAdapter, type XCredentials } from "./x";
 import { MastodonAdapter, type MastodonCredentials } from "./mastodon";
 import { BlueskyAdapter, type BlueskyCredentials } from "./bluesky";
+import { LinkedInAdapter, type LinkedInCredentials } from "./linkedin";
+import { RedditAdapter, type RedditCredentials } from "./reddit";
+import { TikTokAdapter, type TikTokCredentials } from "./tiktok";
+import { YouTubeAdapter, type YouTubeCredentials } from "./youtube";
+import { PinterestAdapter, type PinterestCredentials } from "./pinterest";
+import {
+  GoogleBusinessProfileAdapter,
+  type GoogleBusinessProfileCredentials,
+} from "./googlebusinessprofile";
 import type {
   AnalyticsPostInput,
   MediaUploadInput,
@@ -45,17 +54,54 @@ export type {
   SocialOperation,
 } from "./types";
 
-const SUPPORTED_CONNECTORS = ["x", "mastodon", "bluesky"] as const;
+const SUPPORTED_CONNECTORS = [
+  "x",
+  "mastodon",
+  "bluesky",
+  "linkedin",
+  "reddit",
+  "tiktok",
+  "youtube",
+  "pinterest",
+  "googlebusinessprofile",
+] as const;
 
-/** Which normalized operations each connector implements. */
+const ALL_OPS: SocialOperation[] = [
+  "account.me",
+  "post.create",
+  "post.delete",
+  "media.upload",
+  "mentions.list",
+  "analytics.post",
+];
+
+/**
+ * Which normalized operations each connector EXPOSES. An op listed here may still
+ * throw `ConnectorOperationNotSupported` at call time when the underlying network
+ * genuinely cannot do it (e.g. X media.upload without OAuth 1.0a creds, TikTok
+ * post.create without a video). Adapters own that runtime check; this map is the
+ * coarse routing table.
+ */
 const SUPPORTED_OPERATIONS: Record<string, SocialOperation[]> = {
   // X media.upload requires OAuth 1.0a creds; it is exposed but throws
   // ConnectorOperationNotSupported at call time if those creds are absent.
-  x: ["account.me", "post.create", "post.delete", "media.upload", "mentions.list", "analytics.post"],
-  mastodon: ["account.me", "post.create", "post.delete", "media.upload", "mentions.list", "analytics.post"],
+  x: [...ALL_OPS],
+  mastodon: [...ALL_OPS],
   // Bluesky (AT Protocol) has no first-class post analytics endpoint with
   // per-post metrics guaranteed; we expose aggregate counts from getPosts.
-  bluesky: ["account.me", "post.create", "post.delete", "media.upload", "mentions.list", "analytics.post"],
+  bluesky: [...ALL_OPS],
+  // LinkedIn member shares: no public mentions/analytics surface.
+  linkedin: ["account.me", "post.create", "post.delete", "media.upload"],
+  // Reddit: image upload uses an asset-lease flow not modeled here.
+  reddit: ["account.me", "post.create", "post.delete", "mentions.list", "analytics.post"],
+  // TikTok is video-only via the Content Posting API (no delete/mentions/analytics).
+  tiktok: ["account.me", "post.create", "media.upload"],
+  // YouTube is video-only via the Data API (no mentions).
+  youtube: ["account.me", "post.create", "post.delete", "media.upload", "analytics.post"],
+  // Pinterest: no mentions endpoint.
+  pinterest: ["account.me", "post.create", "post.delete", "media.upload", "analytics.post"],
+  // Google Business Profile localPosts: no mentions, no per-post analytics.
+  googlebusinessprofile: ["account.me", "post.create", "post.delete", "media.upload"],
 };
 
 export interface RunSocialOperationArgs {
@@ -87,6 +133,20 @@ function buildAdapter(connector: string, credentials: Record<string, unknown>): 
       return MastodonAdapter.fromCredentials(credentials as unknown as MastodonCredentials);
     case "bluesky":
       return BlueskyAdapter.fromCredentials(credentials as unknown as BlueskyCredentials);
+    case "linkedin":
+      return LinkedInAdapter.fromCredentials(credentials as unknown as LinkedInCredentials);
+    case "reddit":
+      return RedditAdapter.fromCredentials(credentials as unknown as RedditCredentials);
+    case "tiktok":
+      return TikTokAdapter.fromCredentials(credentials as unknown as TikTokCredentials);
+    case "youtube":
+      return YouTubeAdapter.fromCredentials(credentials as unknown as YouTubeCredentials);
+    case "pinterest":
+      return PinterestAdapter.fromCredentials(credentials as unknown as PinterestCredentials);
+    case "googlebusinessprofile":
+      return GoogleBusinessProfileAdapter.fromCredentials(
+        credentials as unknown as GoogleBusinessProfileCredentials,
+      );
     default:
       throw new ConnectorOperationNotSupported(connector, "*");
   }

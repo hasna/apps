@@ -7,7 +7,16 @@
  */
 
 /** Slugs supported by this deliverable. */
-export type SocialConnectorSlug = "x" | "mastodon" | "bluesky";
+export type SocialConnectorSlug =
+  | "x"
+  | "mastodon"
+  | "bluesky"
+  | "linkedin"
+  | "reddit"
+  | "tiktok"
+  | "youtube"
+  | "pinterest"
+  | "googlebusinessprofile";
 
 /** Normalized operation names. */
 export type SocialOperation =
@@ -29,6 +38,12 @@ export interface PostCreateInput {
   text: string;
   replyToId?: string;
   mediaIds?: string[];
+  /**
+   * Network-specific extras (e.g. reddit `title`/`subreddit`, pinterest `boardId`,
+   * googlebusinessprofile `accountId`/`locationId`). Each adapter reads the ones it
+   * needs; see each adapter's `*PostExtras` interface.
+   */
+  [key: string]: unknown;
 }
 
 export interface PostCreateResult {

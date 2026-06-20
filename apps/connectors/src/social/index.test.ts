@@ -7,11 +7,21 @@ import {
 } from "./index";
 
 describe("social SDK dispatch", () => {
-  test("listSocialConnectors returns x, mastodon, bluesky", () => {
-    expect(listSocialConnectors().sort()).toEqual(["bluesky", "mastodon", "x"]);
+  test("listSocialConnectors returns all 9 supported connectors", () => {
+    expect(listSocialConnectors().sort()).toEqual([
+      "bluesky",
+      "googlebusinessprofile",
+      "linkedin",
+      "mastodon",
+      "pinterest",
+      "reddit",
+      "tiktok",
+      "x",
+      "youtube",
+    ]);
   });
 
-  test("getSocialOperations lists the normalized ops per connector", () => {
+  test("getSocialOperations lists the full op set for the original 3", () => {
     for (const c of ["x", "mastodon", "bluesky"]) {
       const ops = getSocialOperations(c);
       expect(ops).toContain("account.me");
@@ -21,6 +31,43 @@ describe("social SDK dispatch", () => {
       expect(ops).toContain("mentions.list");
       expect(ops).toContain("analytics.post");
     }
+  });
+
+  test("every supported connector exposes account.me + post.create", () => {
+    for (const c of listSocialConnectors()) {
+      const ops = getSocialOperations(c);
+      expect(ops).toContain("account.me");
+      expect(ops).toContain("post.create");
+    }
+  });
+
+  test("getSocialOperations reflects per-connector capability gaps", () => {
+    expect(getSocialOperations("linkedin")).not.toContain("mentions.list");
+    expect(getSocialOperations("linkedin")).not.toContain("analytics.post");
+    expect(getSocialOperations("tiktok")).not.toContain("post.delete");
+    expect(getSocialOperations("youtube")).not.toContain("mentions.list");
+    expect(getSocialOperations("pinterest")).not.toContain("mentions.list");
+    expect(getSocialOperations("reddit")).not.toContain("media.upload");
+    expect(getSocialOperations("googlebusinessprofile")).not.toContain("analytics.post");
+  });
+
+  test("dispatch reaches each new adapter (constructor enforces accessToken)", async () => {
+    for (const c of ["linkedin", "reddit", "tiktok", "youtube", "pinterest", "googlebusinessprofile"]) {
+      await expect(
+        runSocialOperation({ connector: c, operation: "account.me", input: {}, credentials: {} }),
+      ).rejects.toThrow(/accessToken/);
+    }
+  });
+
+  test("operation a connector doesn't expose throws (e.g. linkedin mentions.list)", async () => {
+    await expect(
+      runSocialOperation({
+        connector: "linkedin",
+        operation: "mentions.list",
+        input: {},
+        credentials: { accessToken: "t" },
+      }),
+    ).rejects.toBeInstanceOf(ConnectorOperationNotSupported);
   });
 
   test("getSocialOperations throws for unknown connector", () => {
