@@ -323,7 +323,7 @@ function remoteScript(spec: CommandSpec, metadata: ExecutionMetadata): string {
   }
 
   const invocation = spec.shell
-    ? `sh -lc ${shellQuote(commandForShell(spec))}${stdinRedirect}`
+    ? `sh -c ${shellQuote(commandForShell(spec))}${stdinRedirect}`
     : `${[spec.command, ...spec.args].map(shellQuote).join(" ")}${stdinRedirect}`;
   lines.push(invocation);
   return `${lines.join("\n")}\n`;

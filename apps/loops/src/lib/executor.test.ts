@@ -41,6 +41,7 @@ describe("executeLoop", () => {
     const store = new Store(":memory:");
     const root = mkdtempSync(join(tmpdir(), "loops-remote-command-"));
     const marker = join(root, "marker");
+    const scriptFile = join(root, "remote-script");
     try {
       const loop = store.createLoop({
         name: "remote-command",
@@ -50,9 +51,19 @@ describe("executeLoop", () => {
       });
       const claim = store.claimRun(loop, new Date().toISOString(), "test");
       expect(claim).toBeDefined();
-      const result = await executeLoop(loop, claim!.run, remoteHooks);
+      const result = await executeLoop(loop, claim!.run, {
+        ...remoteHooks,
+        machineCommandResolver: () => ({
+          command: "bash",
+          args: ["-c", `cat > ${JSON.stringify(scriptFile)}; bash ${JSON.stringify(scriptFile)}`],
+          source: "ssh",
+        }),
+      });
       expect(result.status).toBe("succeeded");
       expect(readFileSync(marker, "utf8")).toBe("remote-ok");
+      const script = readFileSync(scriptFile, "utf8");
+      expect(script).toContain("sh -c ");
+      expect(script).not.toContain("sh -lc ");
     } finally {
       store.close();
       rmSync(root, { recursive: true, force: true });

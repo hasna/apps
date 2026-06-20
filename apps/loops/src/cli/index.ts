@@ -26,7 +26,7 @@ import { listOpenMachines, resolveLoopMachine } from "../lib/machines.js";
 
 const program = new Command();
 
-program.name("loops").description("Persistent local loops for commands and headless coding agents").version("0.3.4");
+program.name("loops").description("Persistent local loops for commands and headless coding agents").version("0.3.5");
 program.option("-j, --json", "print JSON");
 
 function isJson(): boolean {
