@@ -37,6 +37,54 @@ describe("events", () => {
     expect(fetched!.title).toBe("Sprint Planning");
   });
 
+  test("create rejects events that do not end after they start", () => {
+    expect(() =>
+      createEvent({
+        title: "Zero Length",
+        calendar_id: calendarId,
+        org_id: orgId,
+        start_at: "2026-04-15T09:00:00Z",
+        end_at: "2026-04-15T09:00:00Z",
+      }),
+    ).toThrow(RangeError);
+
+    expect(() =>
+      createEvent({
+        title: "Inverted",
+        calendar_id: calendarId,
+        org_id: orgId,
+        start_at: "2026-04-15T10:00:00Z",
+        end_at: "2026-04-15T09:00:00Z",
+      }),
+    ).toThrow(RangeError);
+
+    expect(listEvents({ calendar_id: calendarId })).toHaveLength(0);
+  });
+
+  test("create rejects invalid event timestamp strings", () => {
+    expect(() =>
+      createEvent({
+        title: "Impossible Date",
+        calendar_id: calendarId,
+        org_id: orgId,
+        start_at: "2026-02-30T09:00:00Z",
+        end_at: "2026-03-02T10:00:00Z",
+      }),
+    ).toThrow(RangeError);
+
+    expect(() =>
+      createEvent({
+        title: "Not ISO",
+        calendar_id: calendarId,
+        org_id: orgId,
+        start_at: "1",
+        end_at: "2026-04-15T10:00:00Z",
+      }),
+    ).toThrow(RangeError);
+
+    expect(listEvents({ calendar_id: calendarId })).toHaveLength(0);
+  });
+
   test("default values", () => {
     const evt = createEvent({
       title: "Test",
@@ -77,6 +125,38 @@ describe("events", () => {
     const updated = updateEvent(evt.id, { title: "New", location: "Room 42" });
     expect(updated.title).toBe("New");
     expect(updated.location).toBe("Room 42");
+  });
+
+  test("update rejects event time ranges that do not end after they start", () => {
+    const evt = createEvent({
+      title: "Existing",
+      calendar_id: calendarId,
+      org_id: orgId,
+      start_at: "2026-04-15T09:00:00Z",
+      end_at: "2026-04-15T10:00:00Z",
+    });
+
+    expect(() => updateEvent(evt.id, { end_at: "2026-04-15T09:00:00Z" })).toThrow(RangeError);
+    expect(() => updateEvent(evt.id, { start_at: "2026-04-15T11:00:00Z" })).toThrow(RangeError);
+
+    expect(getEvent(evt.id)!.start_at).toBe("2026-04-15T09:00:00Z");
+    expect(getEvent(evt.id)!.end_at).toBe("2026-04-15T10:00:00Z");
+  });
+
+  test("update rejects invalid event timestamp strings", () => {
+    const evt = createEvent({
+      title: "Existing",
+      calendar_id: calendarId,
+      org_id: orgId,
+      start_at: "2026-04-15T09:00:00Z",
+      end_at: "2026-04-15T10:00:00Z",
+    });
+
+    expect(() => updateEvent(evt.id, { start_at: "2026-13-15T09:00:00Z" })).toThrow(RangeError);
+    expect(() => updateEvent(evt.id, { end_at: "tomorrow" })).toThrow(RangeError);
+
+    expect(getEvent(evt.id)!.start_at).toBe("2026-04-15T09:00:00Z");
+    expect(getEvent(evt.id)!.end_at).toBe("2026-04-15T10:00:00Z");
   });
 
   test("delete event", () => {

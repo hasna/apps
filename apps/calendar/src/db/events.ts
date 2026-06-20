@@ -28,9 +28,56 @@ function rowToEvent(row: any): Event {
   };
 }
 
+const ISO_DATE_TIME_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
+
+function parseEventTimestamp(value: string): number {
+  const match = ISO_DATE_TIME_RE.exec(value);
+  if (!match) {
+    throw new RangeError("Event start_at and end_at must be valid ISO 8601 date-time strings");
+  }
+
+  const year = Number(match[1]!);
+  const month = Number(match[2]!);
+  const day = Number(match[3]!);
+  const hour = Number(match[4]!);
+  const minute = Number(match[5]!);
+  const second = Number(match[6]!);
+  const offset = match[7]!;
+  const maxDay = month >= 1 && month <= 12 ? new Date(Date.UTC(year, month, 0)).getUTCDate() : 0;
+
+  if (month < 1 || month > 12 || day < 1 || day > maxDay || hour > 23 || minute > 59 || second > 59) {
+    throw new RangeError("Event start_at and end_at must be valid ISO 8601 date-time strings");
+  }
+
+  if (offset !== "Z") {
+    const offsetHour = Number(offset.slice(1, 3));
+    const offsetMinute = Number(offset.slice(4, 6));
+    if (offsetHour > 23 || offsetMinute > 59) {
+      throw new RangeError("Event start_at and end_at must be valid ISO 8601 date-time strings");
+    }
+  }
+
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) {
+    throw new RangeError("Event start_at and end_at must be valid ISO 8601 date-time strings");
+  }
+
+  return timestamp;
+}
+
+function assertEventEndsAfterStart(startAt: string, endAt: string): void {
+  const start = parseEventTimestamp(startAt);
+  const end = parseEventTimestamp(endAt);
+
+  if (end <= start) {
+    throw new RangeError("Event end_at must be after start_at");
+  }
+}
+
 export function createEvent(input: CreateEventInput, db?: Database): Event {
   db = db || getDatabase();
   const id = crypto.randomUUID().slice(0, 8);
+  assertEventEndsAfterStart(input.start_at, input.end_at);
 
   db.run(
     `INSERT INTO events (id, calendar_id, org_id, title, description, location, start_at, end_at, all_day, timezone, status, busy_type, visibility, recurrence_rule, recurrence_exception_dates, source_task_id, created_by, metadata)
@@ -84,6 +131,9 @@ export function updateEvent(id: string, input: UpdateEventInput, db?: Database):
   db = db || getDatabase();
   const existing = getEvent(id, db);
   if (!existing) throw new NotFoundError("Event", id);
+  const startAt = input.start_at ?? existing.start_at;
+  const endAt = input.end_at ?? existing.end_at;
+  assertEventEndsAfterStart(startAt, endAt);
 
   db.run(
     `UPDATE events SET title = ?, description = ?, location = ?, start_at = ?, end_at = ?, all_day = ?, timezone = ?, status = ?, busy_type = ?, visibility = ?, recurrence_rule = ?, recurrence_exception_dates = ?, source_task_id = ?, metadata = ?, updated_at = datetime('now') WHERE id = ?`,
