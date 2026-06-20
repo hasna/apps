@@ -4,6 +4,7 @@ export type { LoopsClientOptions } from "./sdk/index.js";
 export { Store } from "./lib/store.js";
 export { parseDuration, parseCron, nextCronRun, initialNextRun, computeNextAfter } from "./lib/schedule.js";
 export { executeLoop, executeTarget, preflightTarget } from "./lib/executor.js";
+export { listOpenMachines, refreshLoopMachine, resolveLoopMachine } from "./lib/machines.js";
 export { tick } from "./lib/scheduler.js";
 export { executeWorkflow, executeLoopTarget, preflightWorkflow } from "./lib/workflow-runner.js";
 export { workflowExecutionOrder, workflowBodyFromJson } from "./lib/workflow-spec.js";

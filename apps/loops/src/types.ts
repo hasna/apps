@@ -19,6 +19,22 @@ export interface AccountRef {
   tool?: string;
 }
 
+export type LoopMachineRoute = "local" | "lan" | "tailscale" | "ssh" | "unknown";
+
+export type LoopMachineConfidence = "exact" | "high" | "medium" | "low" | "none";
+
+export interface LoopMachineRef {
+  id: string;
+  requestedId?: string;
+  route?: LoopMachineRoute;
+  local?: boolean;
+  confidence?: LoopMachineConfidence;
+  workspacePath?: string;
+  resolvedAt?: string;
+  packageVersion?: string;
+  warnings?: string[];
+}
+
 export interface OnceSchedule {
   type: "once";
   at: string;
@@ -171,6 +187,7 @@ export interface Loop {
   status: LoopStatus;
   schedule: ScheduleSpec;
   target: LoopTarget;
+  machine?: LoopMachineRef;
   nextRunAt?: string;
   retryScheduledFor?: string;
   catchUp: CatchUpPolicy;
@@ -210,6 +227,7 @@ export interface CreateLoopInput {
   description?: string;
   schedule: ScheduleSpec;
   target: LoopTarget;
+  machine?: LoopMachineRef;
   catchUp?: CatchUpPolicy;
   catchUpLimit?: number;
   overlap?: OverlapPolicy;

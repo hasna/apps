@@ -76,6 +76,39 @@ describe("workflow runner", () => {
     }
   });
 
+  test("workflow loop steps inherit the loop machine assignment", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-workflow-machine-"));
+    const marker = join(root, "marker");
+    try {
+      const workflow = store.createWorkflow({
+        name: "machine-workflow",
+        steps: [{ id: "step", target: { type: "command", command: `printf workflow-remote > ${JSON.stringify(marker)}`, shell: true } }],
+      });
+      const loop = store.createLoop({
+        name: "machine-workflow-loop",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: { type: "workflow", workflowId: workflow.id },
+        machine: { id: "remote-test", local: false, route: "ssh" },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoopTarget(store, loop, claim!.run, {
+        machineResolver: (machine) => ({ ...machine, local: false, route: "ssh" }),
+        machineCommandResolver: () => ({
+          command: "bash",
+          args: ["-c", "bash -s"],
+          source: "ssh",
+        }),
+      });
+      expect(result.status).toBe("succeeded");
+      expect(readFileSync(marker, "utf8")).toBe("workflow-remote");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("validates command argv shape before storing workflows", () => {
     expect(() =>
       workflowBodyFromJson({

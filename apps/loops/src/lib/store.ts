@@ -33,6 +33,7 @@ interface LoopRow {
   status: string;
   schedule_json: string;
   target_json: string;
+  machine_json: string | null;
   next_run_at: string | null;
   retry_scheduled_for: string | null;
   catch_up: string;
@@ -153,6 +154,7 @@ function rowToLoop(row: LoopRow): Loop {
     status: row.status as LoopStatus,
     schedule: JSON.parse(row.schedule_json) as Loop["schedule"],
     target: JSON.parse(row.target_json) as Loop["target"],
+    machine: row.machine_json ? (JSON.parse(row.machine_json) as Loop["machine"]) : undefined,
     nextRunAt: row.next_run_at ?? undefined,
     retryScheduledFor: row.retry_scheduled_for ?? undefined,
     catchUp: row.catch_up as Loop["catchUp"],
@@ -317,6 +319,7 @@ export class Store {
         status TEXT NOT NULL,
         schedule_json TEXT NOT NULL,
         target_json TEXT NOT NULL,
+        machine_json TEXT,
         next_run_at TEXT,
         retry_scheduled_for TEXT,
         catch_up TEXT NOT NULL,
@@ -439,6 +442,11 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_workflow_events_run_sequence ON workflow_events(workflow_run_id, sequence);
     `);
     try {
+      this.db.query("ALTER TABLE loops ADD COLUMN machine_json TEXT").run();
+    } catch {
+      /* column already exists */
+    }
+    try {
       this.db.query("ALTER TABLE workflow_step_runs ADD COLUMN pid INTEGER").run();
     } catch {
       /* column already exists */
@@ -446,6 +454,9 @@ export class Store {
     this.db
       .query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)")
       .run("0001_initial_and_workflows", nowIso());
+    this.db
+      .query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)")
+      .run("0002_loop_machines", nowIso());
   }
 
   private assertDaemonLeaseFence(opts: DaemonLeaseFence = {}, now: string = nowIso()): void {
@@ -465,6 +476,7 @@ export class Store {
       status: "active",
       schedule: input.schedule,
       target: input.target,
+      machine: input.machine,
       nextRunAt: initialNextRun(input.schedule, from),
       catchUp: input.catchUp ?? "latest",
       catchUpLimit: input.catchUpLimit ?? 50,
@@ -478,9 +490,9 @@ export class Store {
     };
     this.db
       .query(
-        `INSERT INTO loops (id, name, description, status, schedule_json, target_json, next_run_at, retry_scheduled_for,
+        `INSERT INTO loops (id, name, description, status, schedule_json, target_json, machine_json, next_run_at, retry_scheduled_for,
           catch_up, catch_up_limit, overlap, max_attempts, retry_delay_ms, lease_ms, expires_at, created_at, updated_at)
-         VALUES ($id, $name, $description, $status, $schedule, $target, $nextRun, NULL, $catchUp, $catchUpLimit,
+         VALUES ($id, $name, $description, $status, $schedule, $target, $machine, $nextRun, NULL, $catchUp, $catchUpLimit,
           $overlap, $maxAttempts, $retryDelay, $leaseMs, $expiresAt, $created, $updated)`,
       )
       .run({
@@ -490,6 +502,7 @@ export class Store {
         $status: loop.status,
         $schedule: JSON.stringify(loop.schedule),
         $target: JSON.stringify(loop.target),
+        $machine: loop.machine ? JSON.stringify(loop.machine) : null,
         $nextRun: loop.nextRunAt ?? null,
         $catchUp: loop.catchUp,
         $catchUpLimit: loop.catchUpLimit,

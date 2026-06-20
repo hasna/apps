@@ -1,9 +1,22 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import type { AccountRef, AgentProvider, AgentTarget, CommandTarget, ExecutableTarget, ExecutorResult, Loop, LoopRun, PersistGuardOptions } from "../types.js";
+import { resolveMachineCommand } from "@hasna/machines/consumer";
+import type {
+  AccountRef,
+  AgentProvider,
+  AgentTarget,
+  CommandTarget,
+  ExecutableTarget,
+  ExecutorResult,
+  Loop,
+  LoopMachineRef,
+  LoopRun,
+  PersistGuardOptions,
+} from "../types.js";
 import { accountToolForProvider, resolveAccountEnv } from "./accounts.js";
 import { commandNotFoundMessage, executableExists, normalizeExecutionPath } from "./env.js";
 import { nowIso } from "./ids.js";
+import { refreshLoopMachine } from "./machines.js";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024;
@@ -14,6 +27,9 @@ export interface ExecuteOptions extends PersistGuardOptions {
   log?: (message: string) => void;
   signal?: AbortSignal;
   onSpawn?: (pid: number) => void;
+  machine?: LoopMachineRef;
+  machineResolver?: (machine: LoopMachineRef) => LoopMachineRef;
+  machineCommandResolver?: (machineId: string, command: string) => MachineCommandPlan;
 }
 
 export interface ExecutionMetadata {
@@ -45,6 +61,12 @@ interface CommandSpec {
   stdin?: string;
 }
 
+interface MachineCommandPlan {
+  command: string;
+  args: string[];
+  source: string;
+}
+
 const AUTH_ENV_KEYS = [
   "CLAUDE_CONFIG_DIR",
   "CODEWITH_HOME",
@@ -62,6 +84,24 @@ const AUTH_ENV_KEYS = [
   "XDG_STATE_HOME",
   "XDG_CACHE_HOME",
 ];
+
+const TRANSPORT_ENV_KEYS = new Set([
+  "BUN_INSTALL",
+  "HOME",
+  "LANG",
+  "LANGUAGE",
+  "LOGNAME",
+  "PATH",
+  "SHELL",
+  "SSH_AGENT_PID",
+  "SSH_AUTH_SOCK",
+  "TERM",
+  "TMP",
+  "TMPDIR",
+  "TEMP",
+  "USER",
+  "XDG_RUNTIME_DIR",
+]);
 
 function appendBounded(current: string, chunk: Buffer, maxBytes: number): string {
   const next = current + chunk.toString("utf8");
@@ -91,6 +131,23 @@ function killProcessGroup(pid: number): void {
       }
     }
   }, 2_000).unref();
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function metadataEnv(metadata: ExecutionMetadata): Record<string, string> {
+  const env: Record<string, string> = {};
+  if (metadata.loopId) env.LOOPS_LOOP_ID = metadata.loopId;
+  if (metadata.loopName) env.LOOPS_LOOP_NAME = metadata.loopName;
+  if (metadata.runId) env.LOOPS_RUN_ID = metadata.runId;
+  if (metadata.scheduledFor) env.LOOPS_SCHEDULED_FOR = metadata.scheduledFor;
+  if (metadata.workflowId) env.LOOPS_WORKFLOW_ID = metadata.workflowId;
+  if (metadata.workflowName) env.LOOPS_WORKFLOW_NAME = metadata.workflowName;
+  if (metadata.workflowRunId) env.LOOPS_WORKFLOW_RUN_ID = metadata.workflowRunId;
+  if (metadata.workflowStepId) env.LOOPS_WORKFLOW_STEP_ID = metadata.workflowStepId;
+  return env;
 }
 
 function providerCommand(provider: AgentProvider): string {
@@ -210,15 +267,220 @@ function executionEnv(
   }
   Object.assign(env, spec.env ?? {});
   env.PATH = normalizeExecutionPath(env);
-  if (metadata.loopId) env.LOOPS_LOOP_ID = metadata.loopId;
-  if (metadata.loopName) env.LOOPS_LOOP_NAME = metadata.loopName;
-  if (metadata.runId) env.LOOPS_RUN_ID = metadata.runId;
-  if (metadata.scheduledFor) env.LOOPS_SCHEDULED_FOR = metadata.scheduledFor;
-  if (metadata.workflowId) env.LOOPS_WORKFLOW_ID = metadata.workflowId;
-  if (metadata.workflowName) env.LOOPS_WORKFLOW_NAME = metadata.workflowName;
-  if (metadata.workflowRunId) env.LOOPS_WORKFLOW_RUN_ID = metadata.workflowRunId;
-  if (metadata.workflowStepId) env.LOOPS_WORKFLOW_STEP_ID = metadata.workflowStepId;
+  Object.assign(env, metadataEnv(metadata));
   return env;
+}
+
+function resolvedMachine(opts: ExecuteOptions): LoopMachineRef | undefined {
+  if (!opts.machine) return undefined;
+  return (opts.machineResolver ?? refreshLoopMachine)(opts.machine);
+}
+
+function commandForShell(spec: CommandSpec): string {
+  if (!spec.args.length) return spec.command;
+  return [spec.command, ...spec.args.map(shellQuote)].join(" ");
+}
+
+function hereDoc(value: string): string[] {
+  let delimiter = `__OPENLOOPS_STDIN_${Math.random().toString(36).slice(2).toUpperCase()}__`;
+  while (value.split(/\r?\n/).includes(delimiter)) {
+    delimiter = `__OPENLOOPS_STDIN_${Math.random().toString(36).slice(2).toUpperCase()}__`;
+  }
+  return [`cat > "$__OPENLOOPS_STDIN" <<'${delimiter}'`, value, delimiter];
+}
+
+function remoteBootstrapLines(spec: CommandSpec, metadata: ExecutionMetadata): string[] {
+  const lines: string[] = [
+    "set -e",
+    'export PATH="$HOME/.local/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/.npm-global/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin${PATH:+:$PATH}"',
+  ];
+  if (spec.cwd) lines.push(`cd ${shellQuote(spec.cwd)}`);
+  if (spec.account) {
+    if (!spec.accountTool) throw new Error("account.tool is required when no provider tool can be inferred");
+    lines.push(
+      "if ! command -v accounts >/dev/null 2>&1; then echo 'accounts CLI is not available on remote machine' >&2; exit 127; fi",
+      `unset ${AUTH_ENV_KEYS.join(" ")}`,
+      `eval "$(accounts env ${shellQuote(spec.account.profile)} --tool ${shellQuote(spec.accountTool)})"`,
+      `export LOOPS_ACCOUNT_PROFILE=${shellQuote(spec.account.profile)}`,
+      `export LOOPS_ACCOUNT_TOOL=${shellQuote(spec.accountTool)}`,
+    );
+  }
+  for (const [key, value] of Object.entries({ ...metadataEnv(metadata), ...(spec.env ?? {}) })) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    lines.push(`export ${key}=${shellQuote(value)}`);
+  }
+  return lines;
+}
+
+function remoteScript(spec: CommandSpec, metadata: ExecutionMetadata): string {
+  const lines = remoteBootstrapLines(spec, metadata);
+
+  let stdinRedirect = "";
+  if (spec.stdin !== undefined) {
+    lines.push('__OPENLOOPS_STDIN="$(mktemp -t openloops-stdin.XXXXXX)"', 'trap \'rm -f "$__OPENLOOPS_STDIN"\' EXIT');
+    lines.push(...hereDoc(spec.stdin));
+    stdinRedirect = ' < "$__OPENLOOPS_STDIN"';
+  }
+
+  const invocation = spec.shell
+    ? `sh -lc ${shellQuote(commandForShell(spec))}${stdinRedirect}`
+    : `${[spec.command, ...spec.args].map(shellQuote).join(" ")}${stdinRedirect}`;
+  lines.push(invocation);
+  return `${lines.join("\n")}\n`;
+}
+
+function remotePreflightScript(spec: CommandSpec, metadata: ExecutionMetadata): string {
+  return [
+    ...remoteBootstrapLines(spec, metadata),
+    "command -v bash >/dev/null 2>&1",
+    `command -v ${shellQuote(spec.shell ? "sh" : spec.command)} >/dev/null 2>&1`,
+  ].join("\n");
+}
+
+function transportEnv(opts: ExecuteOptions): NodeJS.ProcessEnv {
+  const source = opts.env ?? process.env;
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (value === undefined) continue;
+    if (TRANSPORT_ENV_KEYS.has(key) || key.startsWith("LC_")) env[key] = value;
+  }
+  env.PATH = normalizeExecutionPath(env);
+  return env;
+}
+
+function preflightRemoteSpec(
+  spec: CommandSpec,
+  machine: LoopMachineRef,
+  metadata: ExecutionMetadata,
+  opts: ExecuteOptions,
+): void {
+  const plan = (opts.machineCommandResolver ?? resolveMachineCommand)(machine.id, "bash -s");
+  const result = spawnSync(plan.command, plan.args, {
+    encoding: "utf8",
+    env: transportEnv(opts),
+    input: remotePreflightScript(spec, metadata),
+    stdio: ["pipe", "pipe", "pipe"],
+    timeout: 15_000,
+  });
+  if (result.error) throw new Error(`remote preflight failed on ${machine.id}: ${result.error.message}`);
+  if ((result.status ?? 1) !== 0) {
+    const detail = (result.stderr || result.stdout || `exit ${result.status ?? "unknown"}`).trim();
+    throw new Error(`remote preflight failed on ${machine.id}${detail ? `: ${detail}` : ""}`);
+  }
+}
+
+async function executeRemoteSpec(
+  spec: CommandSpec,
+  machine: LoopMachineRef,
+  metadata: ExecutionMetadata,
+  opts: ExecuteOptions,
+): Promise<ExecutorResult> {
+  const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
+  const startedAt = nowIso();
+  let stdout = "";
+  let stderr = "";
+  let timedOut = false;
+  let exitCode: number | undefined;
+  let error: string | undefined;
+  let plan: MachineCommandPlan;
+  let script: string;
+
+  try {
+    plan = (opts.machineCommandResolver ?? resolveMachineCommand)(machine.id, "bash -s");
+    script = remoteScript(spec, metadata);
+  } catch (err) {
+    return {
+      status: "failed",
+      stdout: "",
+      stderr: "",
+      error: err instanceof Error ? err.message : String(err),
+      startedAt,
+      finishedAt: nowIso(),
+      durationMs: 0,
+    };
+  }
+
+  const child = spawn(plan.command, plan.args, {
+    env: transportEnv(opts),
+    detached: true,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  if (child.pid) opts.onSpawn?.(child.pid);
+
+  child.stdin?.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code !== "EPIPE") error = err.message;
+  });
+  child.stdin?.end(script);
+
+  const abortHandler = (): void => {
+    error = "cancelled";
+    if (child.pid) killProcessGroup(child.pid);
+  };
+  if (opts.signal?.aborted) abortHandler();
+  opts.signal?.addEventListener("abort", abortHandler, { once: true });
+
+  child.stdout?.on("data", (chunk: Buffer) => {
+    stdout = appendBounded(stdout, chunk, maxOutputBytes);
+  });
+  child.stderr?.on("data", (chunk: Buffer) => {
+    stderr = appendBounded(stderr, chunk, maxOutputBytes);
+  });
+
+  const timer = setTimeout(() => {
+    timedOut = true;
+    if (child.pid) killProcessGroup(child.pid);
+  }, spec.timeoutMs);
+  timer.unref();
+
+  try {
+    const [code, signal] = (await once(child, "exit")) as [number | null, NodeJS.Signals | null];
+    if (typeof code === "number") exitCode = code;
+    if (signal) error = `terminated by ${signal}`;
+  } catch (err) {
+    error = err instanceof Error ? err.message : String(err);
+  } finally {
+    clearTimeout(timer);
+    opts.signal?.removeEventListener("abort", abortHandler);
+  }
+
+  const finishedAt = nowIso();
+  const durationMs = new Date(finishedAt).getTime() - new Date(startedAt).getTime();
+  if (timedOut) {
+    return {
+      status: "timed_out",
+      exitCode,
+      stdout,
+      stderr,
+      error: `timed out after ${spec.timeoutMs}ms`,
+      pid: child.pid,
+      startedAt,
+      finishedAt,
+      durationMs,
+    };
+  }
+  if (error || exitCode !== 0) {
+    return {
+      status: "failed",
+      exitCode,
+      stdout,
+      stderr,
+      error: error ?? `remote process on ${machine.id} exited with code ${exitCode ?? "unknown"}`,
+      pid: child.pid,
+      startedAt,
+      finishedAt,
+      durationMs,
+    };
+  }
+  return {
+    status: "succeeded",
+    exitCode,
+    stdout,
+    stderr,
+    pid: child.pid,
+    startedAt,
+    finishedAt,
+    durationMs,
+  };
 }
 
 export function preflightTarget(
@@ -227,6 +489,15 @@ export function preflightTarget(
   opts: ExecuteOptions = {},
 ): PreflightResult {
   const spec = commandSpec(target);
+  const machine = resolvedMachine(opts);
+  if (machine && !machine.local) {
+    preflightRemoteSpec(spec, machine, metadata, opts);
+    return {
+      command: spec.command,
+      accountProfile: spec.account?.profile,
+      accountTool: spec.accountTool,
+    };
+  }
   const env = executionEnv(spec, metadata, opts);
   if (!spec.shell && !executableExists(spec.command, env)) {
     throw new Error(commandNotFoundMessage(spec.command, env));
@@ -244,6 +515,8 @@ export async function executeTarget(
   opts: ExecuteOptions = {},
 ): Promise<ExecutorResult> {
   const spec = commandSpec(target);
+  const machine = resolvedMachine(opts);
+  if (machine && !machine.local) return executeRemoteSpec(spec, machine, metadata, opts);
   const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
   const startedAt = nowIso();
   let stdout = "";
@@ -364,6 +637,6 @@ export async function executeLoop(loop: Loop, run: LoopRun, opts: ExecuteOptions
       runId: run.id,
       scheduledFor: run.scheduledFor,
     },
-    opts,
+    { ...opts, machine: opts.machine ?? loop.machine },
   );
 }

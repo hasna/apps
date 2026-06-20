@@ -22,10 +22,11 @@ import { runDaemon, startDaemon } from "../daemon/daemon.js";
 import { enableStartup, installStartup } from "../daemon/install.js";
 import { workflowBodyFromJson } from "../lib/workflow-spec.js";
 import { runDoctor } from "../lib/doctor.js";
+import { listOpenMachines, resolveLoopMachine } from "../lib/machines.js";
 
 const program = new Command();
 
-program.name("loops").description("Persistent local loops for commands and headless coding agents").version("0.3.3");
+program.name("loops").description("Persistent local loops for commands and headless coding agents").version("0.3.4");
 program.option("-j, --json", "print JSON");
 
 function isJson(): boolean {
@@ -106,6 +107,7 @@ function baseCreateInput(name: string, opts: Record<string, string | boolean | u
     description: typeof opts.description === "string" ? opts.description : undefined,
     schedule,
     target,
+    machine: typeof opts.machine === "string" ? resolveLoopMachine(opts.machine) : undefined,
     ...policy,
     expiresAt: typeof opts.expiresAt === "string" ? new Date(opts.expiresAt).toISOString() : undefined,
   };
@@ -133,6 +135,10 @@ function addAccountOptions(command: Command): Command {
     .option("--account-tool <tool>", "OpenAccounts tool id; defaults from provider for agents");
 }
 
+function addMachineOptions(command: Command): Command {
+  return command.option("--machine <id>", "OpenMachines machine id to assign this loop to");
+}
+
 function accountFromOpts(opts: { account?: string; accountTool?: string }): AccountRef | undefined {
   if (!opts.account && opts.accountTool) throw new Error("--account-tool requires --account");
   return opts.account ? { profile: opts.account, tool: opts.accountTool } : undefined;
@@ -147,14 +153,16 @@ function providerAuthProfileFromOpts(opts: { authProfile?: string }, provider: A
 const create = program.command("create").description("create loops");
 
 addAccountOptions(
-  addScheduleOptions(
-    create
-      .command("command <name>")
-      .description("create a deterministic shell command loop")
-      .requiredOption("--cmd <command>", "command string to execute")
-      .option("--cwd <dir>", "working directory")
-      .option("--timeout <duration>", "run timeout")
-      .option("--no-shell", "execute without a shell"),
+  addMachineOptions(
+    addScheduleOptions(
+      create
+        .command("command <name>")
+        .description("create a deterministic shell command loop")
+        .requiredOption("--cmd <command>", "command string to execute")
+        .option("--cwd <dir>", "working directory")
+        .option("--timeout <duration>", "run timeout")
+        .option("--no-shell", "execute without a shell"),
+    ),
   ),
 ).action((name, opts) => {
   const store = new Store();
@@ -175,18 +183,20 @@ addAccountOptions(
 });
 
 addAccountOptions(
-  addScheduleOptions(
-    create
-      .command("agent <name>")
-      .description("create a headless coding-agent loop")
-      .requiredOption("--provider <provider>", "claude, cursor, codewith, aicopilot, opencode, or codex")
-      .requiredOption("--prompt <prompt>", "agent prompt")
-      .option("--cwd <dir>", "working directory")
-      .option("--model <model>", "model")
-      .option("--agent <agent>", "provider-specific agent")
-      .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
-      .option("--timeout <duration>", "run timeout")
-      .option("--config-isolation <mode>", "safe or none", "safe"),
+  addMachineOptions(
+    addScheduleOptions(
+      create
+        .command("agent <name>")
+        .description("create a headless coding-agent loop")
+        .requiredOption("--provider <provider>", "claude, cursor, codewith, aicopilot, opencode, or codex")
+        .requiredOption("--prompt <prompt>", "agent prompt")
+        .option("--cwd <dir>", "working directory")
+        .option("--model <model>", "model")
+        .option("--agent <agent>", "provider-specific agent")
+        .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
+        .option("--timeout <duration>", "run timeout")
+        .option("--config-isolation <mode>", "safe or none", "safe"),
+    ),
   ),
 ).action((name, opts) => {
   const provider = opts.provider as AgentProvider;
@@ -217,11 +227,13 @@ addAccountOptions(
   }
 });
 
-addScheduleOptions(
-  create
-    .command("workflow <name>")
-    .description("schedule a stored workflow")
-    .requiredOption("--workflow <idOrName>", "workflow id or name"),
+addMachineOptions(
+  addScheduleOptions(
+    create
+      .command("workflow <name>")
+      .description("schedule a stored workflow")
+      .requiredOption("--workflow <idOrName>", "workflow id or name"),
+  ),
 ).action((name, opts) => {
   const store = new Store();
   try {
@@ -238,6 +250,27 @@ addScheduleOptions(
 });
 
 const workflows = program.command("workflows").alias("workflow").description("manage workflow specs and runs");
+
+const machines = program.command("machines").description("inspect OpenMachines topology for loop assignment");
+
+machines
+  .command("list")
+  .alias("ls")
+  .description("list known machines")
+  .action(() => {
+    const values = listOpenMachines();
+    if (isJson()) print(values);
+    else {
+      for (const machine of values) {
+        const route = machine.local ? "local" : machine.route ?? "-";
+        console.log(`${machine.id.padEnd(12)}  ${route.padEnd(10)}  workspace=${machine.workspacePath ?? "-"}  host=${machine.hostname ?? "-"}`);
+      }
+    }
+  });
+
+machines.command("show <id>").description("resolve a machine assignment").action((id) => {
+  print(resolveLoopMachine(id));
+});
 
 workflows
   .command("validate <file>")
@@ -450,7 +483,8 @@ program
       if (isJson()) print(loops.map(publicLoop));
       else {
         for (const loop of loops) {
-          console.log(`${loop.id}  ${loop.status.padEnd(7)}  next=${loop.nextRunAt ?? "-"}  ${loop.name}`);
+          const machine = loop.machine ? `  machine=${loop.machine.id}` : "";
+          console.log(`${loop.id}  ${loop.status.padEnd(7)}  next=${loop.nextRunAt ?? "-"}  ${loop.name}${machine}`);
         }
       }
     } finally {
@@ -574,8 +608,8 @@ program.command("doctor").description("check local OpenLoops runtime dependencie
         const marker = check.status === "ok" ? "ok" : check.status === "warn" ? "warn" : "fail";
         console.log(`${marker.padEnd(4)} ${check.id.padEnd(22)} ${check.message}${check.detail ? ` (${check.detail})` : ""}`);
       }
-      if (!report.ok) process.exitCode = 1;
     }
+    if (!report.ok) process.exitCode = 1;
   } finally {
     store.close();
   }

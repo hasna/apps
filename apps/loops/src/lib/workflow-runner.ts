@@ -130,6 +130,7 @@ export async function executeWorkflow(
     try {
       result = await executeTarget(targetWithStepAccount(step), metadata, {
         ...opts,
+        machine: opts.machine ?? opts.loop?.machine,
         signal: controller.signal,
         onSpawn: (pid) => {
           opts.beforePersist?.();

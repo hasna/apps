@@ -23,6 +23,31 @@ describe("Store", () => {
     }
   });
 
+  test("persists loop machine assignments", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "machine-loop",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+          machine: {
+            id: "spark01",
+            route: "tailscale",
+            local: false,
+            workspacePath: "/home/hasna/workspace",
+            resolvedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      expect(store.getLoop(loop.id)?.machine).toEqual(loop.machine);
+      expect(store.listLoops()[0]?.machine?.id).toBe("spark01");
+    } finally {
+      store.close();
+    }
+  });
+
   test("recovers expired run leases as abandoned", () => {
     const store = new Store(":memory:");
     try {

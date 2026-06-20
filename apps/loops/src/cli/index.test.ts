@@ -93,6 +93,56 @@ describe("loops CLI", () => {
     expect(value.runNow.advancesLoop).toBe(false);
   });
 
+  test("create command stores an OpenMachines assignment", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-machine-"));
+    const create = runCli(dataDir, ["--json", "create", "command", "machine-local", "--at", futureAt(), "--cmd", "true", "--machine", "local"]);
+    expect(create.status).toBe(0);
+    const value = JSON.parse(create.stdout);
+    expect(value.machine.id).toBeTruthy();
+    expect(value.machine.local).toBe(true);
+
+    const show = runCli(dataDir, ["--json", "show", "machine-local"]);
+    expect(show.status).toBe(0);
+    const shown = JSON.parse(show.stdout);
+    expect(shown.machine.id).toBe(value.machine.id);
+  });
+
+  test("machines commands expose OpenMachines topology", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-machines-"));
+    const list = runCli(dataDir, ["--json", "machines", "list"]);
+    expect(list.status).toBe(0);
+    const machines = JSON.parse(list.stdout);
+    expect(Array.isArray(machines)).toBe(true);
+    expect(machines.length).toBeGreaterThan(0);
+
+    const show = runCli(dataDir, ["--json", "machines", "show", "local"]);
+    expect(show.status).toBe(0);
+    const local = JSON.parse(show.stdout);
+    expect(local.id).toBeTruthy();
+    expect(local.local).toBe(true);
+  });
+
+  test("doctor exits non-zero when an active loop cannot preflight", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-doctor-preflight-"));
+    const create = runCli(dataDir, [
+      "create",
+      "command",
+      "bad-preflight",
+      "--at",
+      futureAt(),
+      "--cmd",
+      "openloops-definitely-missing-binary",
+      "--no-shell",
+    ]);
+    expect(create.status).toBe(0);
+
+    const doctor = runCli(dataDir, ["--json", "doctor"]);
+    expect(doctor.status).toBe(1);
+    const value = JSON.parse(doctor.stdout);
+    expect(value.ok).toBe(false);
+    expect(value.checks.find((check: { id: string }) => check.id.includes(":preflight"))?.status).toBe("fail");
+  });
+
   test("workflow JSON run and inspect redact step output without show-output", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-workflow-redact-"));
     const secret = "SECRET_WORKFLOW_JSON_OUTPUT";

@@ -5,6 +5,7 @@ import type { Store } from "./store.js";
 import { ensureDataDir } from "./paths.js";
 import { preflightTarget } from "./executor.js";
 import { workflowExecutionOrder } from "./workflow-spec.js";
+import { listOpenMachines } from "./machines.js";
 
 export type DoctorSeverity = "ok" | "warn" | "fail";
 
@@ -72,6 +73,24 @@ export function runDoctor(store: Store): DoctorReport {
       : { id: "accounts", status: "warn", message: "accounts CLI is not available; account-routed steps will fail" },
   );
 
+  try {
+    const machines = listOpenMachines();
+    const local = machines.find((machine) => machine.local);
+    checks.push({
+      id: "machines",
+      status: "ok",
+      message: `OpenMachines topology available (${machines.length} machine(s))`,
+      detail: local ? `local=${local.id}` : undefined,
+    });
+  } catch (error) {
+    checks.push({
+      id: "machines",
+      status: "warn",
+      message: "OpenMachines topology is not available; machine-assigned loops will fail",
+      detail: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   for (const command of PROVIDER_COMMANDS) {
     checks.push(
       hasCommand(command)
@@ -102,16 +121,17 @@ export function runDoctor(store: Store): DoctorReport {
           preflightTarget(
             { ...step.target, account: step.account ?? step.target.account, timeoutMs: step.timeoutMs ?? step.target.timeoutMs },
             { loopId: loop.id, loopName: loop.name, workflowId: workflow.id, workflowName: workflow.name, workflowStepId: step.id },
+            { machine: loop.machine },
           );
         }
       } else {
-        preflightTarget(loop.target, { loopId: loop.id, loopName: loop.name });
+        preflightTarget(loop.target, { loopId: loop.id, loopName: loop.name }, { machine: loop.machine });
       }
       checks.push({ id: `loop:${loop.id}:preflight`, status: "ok", message: `active loop target is ready: ${loop.name}` });
     } catch (error) {
       checks.push({
         id: `loop:${loop.id}:preflight`,
-        status: "warn",
+        status: "fail",
         message: `active loop target preflight failed: ${loop.name}`,
         detail: error instanceof Error ? error.message : String(error),
       });
