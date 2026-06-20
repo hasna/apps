@@ -3,8 +3,6 @@
  * Uses OAuth 1.0a for authentication
  */
 
-import { readFileSync, statSync } from 'fs';
-import { basename } from 'path';
 import { OAuth1Client } from './oauth1';
 
 const UPLOAD_URL = 'https://upload.twitter.com/1.1/media/upload.json';
@@ -243,8 +241,11 @@ export class MediaApi {
     filePath: string,
     options: MediaUploadOptions = {}
   ): Promise<MediaUploadResult> {
+    // Lazy-load node:fs so this module stays bundle-safe (free of static fs
+    // imports) for consumers that only ever call uploadBuffer (e.g. the
+    // stateless @hasna/connectors/social entry point).
+    const { readFileSync } = await import('node:fs');
     const fileData = readFileSync(filePath);
-    const fileSize = statSync(filePath).size;
     const mimeType = getMimeType(filePath);
 
     return this.uploadBuffer(fileData, mimeType, {
