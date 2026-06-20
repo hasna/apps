@@ -175,4 +175,43 @@ describe("loops CLI", () => {
     const inspected = JSON.parse(inspect.stdout);
     expect(inspected.steps[0].stdout).toContain("[redacted");
   });
+
+  test("create --goal persists goal config and goal show renders it", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-goal-"));
+    const create = runCli(dataDir, [
+      "--json",
+      "create",
+      "command",
+      "goal-loop",
+      "--at",
+      futureAt(),
+      "--cmd",
+      "true",
+      "--goal",
+      "verify the command result",
+      "--goal-budget",
+      "50",
+      "--goal-model",
+      "openai/gpt-4o-mini",
+      "--goal-max-turns",
+      "2",
+    ]);
+    expect(create.status).toBe(0);
+    const value = JSON.parse(create.stdout);
+    expect(value.goal.objective).toBe("verify the command result");
+    expect(value.goal.tokenBudget).toBe(50);
+
+    const show = runCli(dataDir, ["--json", "goal", "show", "goal-loop"]);
+    expect(show.status).toBe(0);
+    const goal = JSON.parse(show.stdout);
+    expect(goal.config.objective).toBe("verify the command result");
+    expect(goal.config.model).toBe("openai/gpt-4o-mini");
+  });
+
+  test("--goal requires a non-empty objective", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-empty-goal-"));
+    const create = runCli(dataDir, ["create", "command", "bad-goal", "--at", futureAt(), "--cmd", "true", "--goal", " "]);
+    expect(create.status).not.toBe(0);
+    expect(create.stderr).toContain("goal.objective");
+  });
 });

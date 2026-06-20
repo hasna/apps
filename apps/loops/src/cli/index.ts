@@ -6,6 +6,8 @@ import { daemonLogPath } from "../lib/paths.js";
 import {
   publicLoop,
   publicExecutorResult,
+  publicGoal,
+  publicGoalRun,
   publicRun,
   publicWorkflow,
   publicWorkflowEvent,
@@ -21,12 +23,13 @@ import { daemonStatus, stopDaemon } from "../daemon/control.js";
 import { runDaemon, startDaemon } from "../daemon/daemon.js";
 import { enableStartup, installStartup } from "../daemon/install.js";
 import { workflowBodyFromJson } from "../lib/workflow-spec.js";
+import { normalizeGoalSpec } from "../lib/workflow-spec.js";
 import { runDoctor } from "../lib/doctor.js";
 import { listOpenMachines, resolveLoopMachine } from "../lib/machines.js";
 
 const program = new Command();
 
-program.name("loops").description("Persistent local loops for commands and headless coding agents").version("0.3.5");
+program.name("loops").description("Persistent local loops for commands and headless coding agents").version("0.3.6");
 program.option("-j, --json", "print JSON");
 
 function isJson(): boolean {
@@ -107,6 +110,7 @@ function baseCreateInput(name: string, opts: Record<string, string | boolean | u
     description: typeof opts.description === "string" ? opts.description : undefined,
     schedule,
     target,
+    goal: goalFromOpts(opts),
     machine: typeof opts.machine === "string" ? resolveLoopMachine(opts.machine) : undefined,
     ...policy,
     expiresAt: typeof opts.expiresAt === "string" ? new Date(opts.expiresAt).toISOString() : undefined,
@@ -139,6 +143,30 @@ function addMachineOptions(command: Command): Command {
   return command.option("--machine <id>", "OpenMachines machine id to assign this loop to");
 }
 
+function addGoalOptions(command: Command): Command {
+  return command
+    .option("--goal <objective>", "wrap this loop target in an AI-SDK goal objective")
+    .option("--goal-budget <tokens>", "maximum goal orchestration token budget")
+    .option("--goal-model <model>", "OpenRouter model id for goal planning and validation")
+    .option("--goal-max-turns <n>", "maximum goal orchestration turns");
+}
+
+function goalFromOpts(opts: Record<string, string | boolean | undefined>) {
+  const hasGoalOption = opts.goal !== undefined || opts.goalBudget !== undefined || opts.goalModel !== undefined || opts.goalMaxTurns !== undefined;
+  if (!hasGoalOption) return undefined;
+  if (typeof opts.goal !== "string") throw new Error("--goal is required when using goal options");
+  return normalizeGoalSpec(
+    {
+      objective: opts.goal,
+      tokenBudget: positiveInteger(typeof opts.goalBudget === "string" ? opts.goalBudget : undefined, "--goal-budget"),
+      model: typeof opts.goalModel === "string" ? opts.goalModel : undefined,
+      maxTurns: positiveInteger(typeof opts.goalMaxTurns === "string" ? opts.goalMaxTurns : undefined, "--goal-max-turns"),
+      autoExecute: "readyOnly",
+    },
+    "goal",
+  );
+}
+
 function accountFromOpts(opts: { account?: string; accountTool?: string }): AccountRef | undefined {
   if (!opts.account && opts.accountTool) throw new Error("--account-tool requires --account");
   return opts.account ? { profile: opts.account, tool: opts.accountTool } : undefined;
@@ -152,9 +180,10 @@ function providerAuthProfileFromOpts(opts: { authProfile?: string }, provider: A
 
 const create = program.command("create").description("create loops");
 
-addAccountOptions(
-  addMachineOptions(
-    addScheduleOptions(
+addGoalOptions(
+  addAccountOptions(
+    addMachineOptions(
+      addScheduleOptions(
       create
         .command("command <name>")
         .description("create a deterministic shell command loop")
@@ -162,6 +191,7 @@ addAccountOptions(
         .option("--cwd <dir>", "working directory")
         .option("--timeout <duration>", "run timeout")
         .option("--no-shell", "execute without a shell"),
+      ),
     ),
   ),
 ).action((name, opts) => {
@@ -182,9 +212,10 @@ addAccountOptions(
   }
 });
 
-addAccountOptions(
-  addMachineOptions(
-    addScheduleOptions(
+addGoalOptions(
+  addAccountOptions(
+    addMachineOptions(
+      addScheduleOptions(
       create
         .command("agent <name>")
         .description("create a headless coding-agent loop")
@@ -196,6 +227,7 @@ addAccountOptions(
         .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
         .option("--timeout <duration>", "run timeout")
         .option("--config-isolation <mode>", "safe or none", "safe"),
+      ),
     ),
   ),
 ).action((name, opts) => {
@@ -227,12 +259,14 @@ addAccountOptions(
   }
 });
 
-addMachineOptions(
-  addScheduleOptions(
+addGoalOptions(
+  addMachineOptions(
+    addScheduleOptions(
     create
       .command("workflow <name>")
       .description("schedule a stored workflow")
       .requiredOption("--workflow <idOrName>", "workflow id or name"),
+    ),
   ),
 ).action((name, opts) => {
   const store = new Store();
@@ -252,6 +286,53 @@ addMachineOptions(
 const workflows = program.command("workflows").alias("workflow").description("manage workflow specs and runs");
 
 const machines = program.command("machines").description("inspect OpenMachines topology for loop assignment");
+
+const goal = program.command("goal").description("inspect goal runs");
+
+goal.command("show <idOrName>").description("show a goal or configured loop/workflow goal").action((idOrName) => {
+  const store = new Store();
+  try {
+    const runtimeGoal = store.getGoal(idOrName) ?? store.findGoalByLoop(idOrName);
+    if (runtimeGoal) {
+      const value = {
+        goal: publicGoal(runtimeGoal),
+        nodes: store.listGoalPlanNodes(runtimeGoal.goalId),
+        runs: store.listGoalRuns({ goalId: runtimeGoal.goalId }).map(publicGoalRun),
+      };
+      print(value, `${runtimeGoal.goalId} ${runtimeGoal.status} ${runtimeGoal.objective}`);
+      return;
+    }
+    const loop = store.getLoop(idOrName) ?? store.findLoopByName(idOrName);
+    if (loop?.goal) {
+      print({ config: loop.goal, loop: publicLoop(loop) }, `configured goal for loop ${loop.name}: ${loop.goal.objective}`);
+      return;
+    }
+    const workflow = store.getWorkflow(idOrName) ?? store.findWorkflowByName(idOrName);
+    if (workflow?.goal) {
+      print({ config: workflow.goal, workflow: publicWorkflow(workflow) }, `configured goal for workflow ${workflow.name}: ${workflow.goal.objective}`);
+      return;
+    }
+    throw new Error(`goal not found: ${idOrName}`);
+  } finally {
+    store.close();
+  }
+});
+
+goal.command("status <runId>").description("show goal status for a goal, goal event, loop run, or workflow run").action((runId) => {
+  const store = new Store();
+  try {
+    const runtimeGoal = store.findGoalByRunId(runId);
+    if (!runtimeGoal) throw new Error(`goal run not found: ${runId}`);
+    const value = {
+      goal: publicGoal(runtimeGoal),
+      nodes: store.listGoalPlanNodes(runtimeGoal.goalId),
+      runs: store.listGoalRuns({ goalId: runtimeGoal.goalId }).map(publicGoalRun),
+    };
+    print(value, `${runtimeGoal.goalId} ${runtimeGoal.status} tokens=${runtimeGoal.tokensUsed}`);
+  } finally {
+    store.close();
+  }
+});
 
 machines
   .command("list")
@@ -286,6 +367,7 @@ workflows
       description: body.description,
       version: body.version ?? 1,
       status: "active" as const,
+      goal: body.goal,
       steps: body.steps,
       createdAt: now,
       updatedAt: now,

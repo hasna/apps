@@ -358,4 +358,64 @@ describe("Store", () => {
       store.close();
     }
   });
+
+  test("persists goal state and fences goal mutators with the daemon lease", () => {
+    const store = new Store(":memory:");
+    try {
+      expect(
+        store.acquireDaemonLease({
+          id: "daemon",
+          pid: 1,
+          hostname: "host",
+          ttlMs: 60_000,
+        })?.id,
+      ).toBe("daemon");
+
+      const goal = store.createGoal(
+        {
+          objective: "ship goal support",
+          tokenBudget: 100,
+          autoExecute: "readyOnly",
+          maxTokens: 100,
+        },
+        { daemonLeaseId: "daemon" },
+      );
+      store.createGoalPlanNodes(
+        goal.goalId,
+        [
+          { key: "plan", objective: "write a plan" },
+          { key: "verify", objective: "verify the plan", dependsOn: ["plan"], priority: 10 },
+        ],
+        { daemonLeaseId: "daemon" },
+      );
+      store.recordGoalEvent(
+        {
+          goalId: goal.goalId,
+          phase: "plan",
+          status: "active",
+          tokensUsed: 10,
+          evidence: { planned: true },
+        },
+        { daemonLeaseId: "daemon" },
+      );
+
+      expect(store.getGoal(goal.goalId)?.objective).toBe("ship goal support");
+      expect(store.listGoalPlanNodes(goal.goalId).map((node) => node.key)).toEqual(["plan", "verify"]);
+      expect(store.listGoalRuns({ goalId: goal.goalId })[0]?.phase).toBe("plan");
+
+      store.releaseDaemonLease("daemon");
+      expect(() =>
+        store.recordGoalEvent(
+          {
+            goalId: goal.goalId,
+            phase: "validate",
+            status: "complete",
+          },
+          { daemonLeaseId: "daemon" },
+        ),
+      ).toThrow("daemon lease lost");
+    } finally {
+      store.close();
+    }
+  });
 });

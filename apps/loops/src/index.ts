@@ -9,3 +9,6 @@ export { tick } from "./lib/scheduler.js";
 export { executeWorkflow, executeLoopTarget, preflightWorkflow } from "./lib/workflow-runner.js";
 export { workflowExecutionOrder, workflowBodyFromJson } from "./lib/workflow-spec.js";
 export { runDoctor } from "./lib/doctor.js";
+export { runGoal } from "./lib/goal/runner.js";
+export { resolveGoalModel } from "./lib/goal/model-factory.js";
+export { isTerminal as isGoalTerminal, readyNodeKeys, rollupSummary } from "./lib/goal/status.js";

@@ -94,6 +94,49 @@ accounts tools add codewith --label "Codewith" --env-var CODEWITH_HOME --bin cod
 accounts tools add aicopilot --label "AI Copilot" --env-var AICOPILOT_CONFIG_DIR --bin aicopilot
 ```
 
+## Goals
+
+Add `--goal` to wrap a command, agent, or workflow loop in an AI-SDK orchestration layer. OpenLoops asks the configured model to create a flat DAG plan, executes ready nodes by calling the underlying target, then runs an adversarial achievement audit before marking the goal complete.
+
+```bash
+export OPENROUTER_API_KEY=...
+
+loops create agent repo-fixer \
+  --provider codex \
+  --at "$(date -u -d '+1 minute' +%Y-%m-%dT%H:%M:%SZ)" \
+  --cwd /path/to/repo \
+  --prompt "Work only on the requested repository task." \
+  --goal "Fix the failing lint check and prove it with a passing lint run." \
+  --goal-budget 2000 \
+  --goal-model openai/gpt-4o-mini \
+  --goal-max-turns 5
+```
+
+Goal planning and validation use the Vercel AI SDK with `@openrouter/ai-sdk-provider`. Set `OPENROUTER_API_KEY`; optionally set `LOOPS_GOAL_BASE_URL` to point at a local gateway compatible with OpenRouter. Goal context is passed to wrapped commands and agents as `LOOPS_GOAL_ID`, `LOOPS_GOAL_OBJECTIVE`, and `LOOPS_GOAL_NODE_KEY`.
+
+Inspect configured and runtime goal state:
+
+```bash
+loops goal show <loop-or-goal-id>
+loops goal status <goal-run-id-or-loop-run-id>
+```
+
+Workflow JSON can also embed goals at the workflow or step level:
+
+```json
+{
+  "name": "goal-workflow",
+  "goal": { "objective": "Complete the workflow and verify the evidence.", "maxTurns": 3 },
+  "steps": [
+    {
+      "id": "fix",
+      "goal": { "objective": "Finish this step and prove it with output evidence." },
+      "target": { "type": "command", "command": "bun test", "shell": true }
+    }
+  ]
+}
+```
+
 ## Workflows
 
 Create a workflow JSON file:

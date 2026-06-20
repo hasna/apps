@@ -1,6 +1,6 @@
 {
   "name": "@hasna/loops",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "Persistent local loop and workflow runner for deterministic commands and headless AI coding agents",
   "type": "module",
   "main": "dist/index.js",
@@ -65,7 +65,10 @@
   },
   "dependencies": {
     "@hasna/machines": "0.0.49",
-    "commander": "^13.1.0"
+    "@openrouter/ai-sdk-provider": "2.9.1",
+    "ai": "6.0.204",
+    "commander": "^13.1.0",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/bun": "latest",

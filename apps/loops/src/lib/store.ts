@@ -5,6 +5,12 @@ import type {
   CatchUpPolicy,
   CreateLoopInput,
   CreateWorkflowInput,
+  Goal,
+  GoalAutoExecute,
+  GoalPlanNode,
+  GoalPlanNodeStatus,
+  GoalRun,
+  GoalStatus,
   Loop,
   LoopRun,
   LoopStatus,
@@ -19,6 +25,7 @@ import type {
 import { genId, nowIso } from "./ids.js";
 import { dbPath } from "./paths.js";
 import { initialNextRun } from "./schedule.js";
+import { assertGoalTransition, rollupSummary, updateReadyFlags } from "./goal/status.js";
 import { normalizeCreateWorkflowInput } from "./workflow-spec.js";
 
 interface DaemonLeaseFence {
@@ -33,6 +40,7 @@ interface LoopRow {
   status: string;
   schedule_json: string;
   target_json: string;
+  goal_json: string | null;
   machine_json: string | null;
   next_run_at: string | null;
   retry_scheduled_for: string | null;
@@ -64,6 +72,7 @@ interface RunRow {
   stdout: string | null;
   stderr: string | null;
   error: string | null;
+  goal_run_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -74,6 +83,7 @@ interface WorkflowRow {
   description: string | null;
   version: number;
   status: string;
+  goal_json: string | null;
   steps_json: string;
   created_at: string;
   updated_at: string;
@@ -92,6 +102,7 @@ interface WorkflowRunRow {
   finished_at: string | null;
   duration_ms: number | null;
   error: string | null;
+  goal_run_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -112,6 +123,7 @@ interface WorkflowStepRunRow {
   error: string | null;
   account_profile: string | null;
   account_tool: string | null;
+  goal_run_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -124,6 +136,65 @@ interface WorkflowEventRow {
   step_id: string | null;
   payload_json: string | null;
   created_at: string;
+}
+
+interface GoalRow {
+  id: string;
+  plan_id: string;
+  objective: string;
+  status: string;
+  token_budget: number | null;
+  tokens_used: number;
+  time_used_seconds: number;
+  auto_execute: string;
+  max_tokens: number | null;
+  source_type: string | null;
+  source_id: string | null;
+  loop_id: string | null;
+  loop_run_id: string | null;
+  workflow_id: string | null;
+  workflow_run_id: string | null;
+  workflow_step_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface GoalPlanNodeRow {
+  id: string;
+  goal_id: string;
+  plan_id: string;
+  key: string;
+  sequence: number;
+  priority: number;
+  objective: string;
+  status: string;
+  ready: number;
+  token_budget: number | null;
+  tokens_used: number;
+  time_used_seconds: number;
+  depends_on_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface GoalRunRow {
+  id: string;
+  goal_id: string;
+  plan_id: string;
+  loop_id: string | null;
+  loop_run_id: string | null;
+  workflow_id: string | null;
+  workflow_run_id: string | null;
+  workflow_step_id: string | null;
+  turn: number;
+  phase: string;
+  status: string;
+  node_key: string | null;
+  tokens_used: number;
+  evidence_json: string | null;
+  raw_response_json: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface DaemonLease {
@@ -154,6 +225,7 @@ function rowToLoop(row: LoopRow): Loop {
     status: row.status as LoopStatus,
     schedule: JSON.parse(row.schedule_json) as Loop["schedule"],
     target: JSON.parse(row.target_json) as Loop["target"],
+    goal: row.goal_json ? (JSON.parse(row.goal_json) as Loop["goal"]) : undefined,
     machine: row.machine_json ? (JSON.parse(row.machine_json) as Loop["machine"]) : undefined,
     nextRunAt: row.next_run_at ?? undefined,
     retryScheduledFor: row.retry_scheduled_for ?? undefined,
@@ -187,6 +259,7 @@ function rowToRun(row: RunRow): LoopRun {
     stdout: row.stdout ?? undefined,
     stderr: row.stderr ?? undefined,
     error: row.error ?? undefined,
+    goalRunId: row.goal_run_id ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -199,6 +272,7 @@ function rowToWorkflow(row: WorkflowRow): WorkflowSpec {
     description: row.description ?? undefined,
     version: row.version,
     status: row.status as WorkflowSpec["status"],
+    goal: row.goal_json ? (JSON.parse(row.goal_json) as WorkflowSpec["goal"]) : undefined,
     steps: JSON.parse(row.steps_json) as WorkflowSpec["steps"],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -219,6 +293,7 @@ function rowToWorkflowRun(row: WorkflowRunRow): WorkflowRun {
     finishedAt: row.finished_at ?? undefined,
     durationMs: row.duration_ms ?? undefined,
     error: row.error ?? undefined,
+    goalRunId: row.goal_run_id ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -241,6 +316,71 @@ function rowToWorkflowStepRun(row: WorkflowStepRunRow): WorkflowStepRun {
     error: row.error ?? undefined,
     accountProfile: row.account_profile ?? undefined,
     accountTool: row.account_tool ?? undefined,
+    goalRunId: row.goal_run_id ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToGoal(row: GoalRow): Goal {
+  return {
+    goalId: row.id,
+    planId: row.plan_id,
+    objective: row.objective,
+    status: row.status as GoalStatus,
+    tokenBudget: row.token_budget ?? undefined,
+    tokensUsed: row.tokens_used,
+    timeUsedSeconds: row.time_used_seconds,
+    autoExecute: row.auto_execute as GoalAutoExecute,
+    maxTokens: row.max_tokens ?? undefined,
+    sourceType: row.source_type ?? undefined,
+    sourceId: row.source_id ?? undefined,
+    loopId: row.loop_id ?? undefined,
+    loopRunId: row.loop_run_id ?? undefined,
+    workflowId: row.workflow_id ?? undefined,
+    workflowRunId: row.workflow_run_id ?? undefined,
+    workflowStepId: row.workflow_step_id ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToGoalPlanNode(row: GoalPlanNodeRow): GoalPlanNode {
+  return {
+    nodeId: row.id,
+    planId: row.plan_id,
+    key: row.key,
+    sequence: row.sequence,
+    priority: row.priority,
+    objective: row.objective,
+    status: row.status as GoalPlanNodeStatus,
+    ready: row.ready === 1,
+    tokenBudget: row.token_budget ?? undefined,
+    tokensUsed: row.tokens_used,
+    timeUsedSeconds: row.time_used_seconds,
+    dependsOn: JSON.parse(row.depends_on_json) as string[],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToGoalRun(row: GoalRunRow): GoalRun {
+  return {
+    runId: row.id,
+    goalId: row.goal_id,
+    planId: row.plan_id,
+    loopId: row.loop_id ?? undefined,
+    loopRunId: row.loop_run_id ?? undefined,
+    workflowId: row.workflow_id ?? undefined,
+    workflowRunId: row.workflow_run_id ?? undefined,
+    workflowStepId: row.workflow_step_id ?? undefined,
+    turn: row.turn,
+    phase: row.phase as GoalRun["phase"],
+    status: row.status as GoalRun["status"],
+    nodeKey: row.node_key ?? undefined,
+    tokensUsed: row.tokens_used,
+    evidence: row.evidence_json ? (JSON.parse(row.evidence_json) as Record<string, unknown>) : undefined,
+    rawResponse: row.raw_response_json ? (JSON.parse(row.raw_response_json) as unknown) : undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -293,6 +433,39 @@ export interface CreateWorkflowRunInput {
   daemonLeaseId?: string;
 }
 
+export interface CreateGoalInput {
+  objective: string;
+  tokenBudget?: number;
+  autoExecute?: GoalAutoExecute;
+  maxTokens?: number;
+  sourceType?: string;
+  sourceId?: string;
+  loopId?: string;
+  loopRunId?: string;
+  workflowId?: string;
+  workflowRunId?: string;
+  workflowStepId?: string;
+}
+
+export interface CreateGoalPlanNodeInput {
+  key: string;
+  objective: string;
+  dependsOn?: string[];
+  priority?: number;
+  tokenBudget?: number;
+}
+
+export interface RecordGoalEventInput {
+  goalId: string;
+  turn?: number;
+  phase: GoalRun["phase"];
+  status: GoalRun["status"];
+  nodeKey?: string;
+  tokensUsed?: number;
+  evidence?: Record<string, unknown>;
+  rawResponse?: unknown;
+}
+
 export class Store {
   private db: Database;
 
@@ -319,6 +492,7 @@ export class Store {
         status TEXT NOT NULL,
         schedule_json TEXT NOT NULL,
         target_json TEXT NOT NULL,
+        goal_json TEXT,
         machine_json TEXT,
         next_run_at TEXT,
         retry_scheduled_for TEXT,
@@ -352,6 +526,7 @@ export class Store {
         stdout TEXT,
         stderr TEXT,
         error TEXT,
+        goal_run_id TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         UNIQUE(loop_id, scheduled_for)
@@ -376,6 +551,7 @@ export class Store {
         description TEXT,
         version INTEGER NOT NULL,
         status TEXT NOT NULL,
+        goal_json TEXT,
         steps_json TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -396,6 +572,7 @@ export class Store {
         finished_at TEXT,
         duration_ms INTEGER,
         error TEXT,
+        goal_run_id TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -422,6 +599,7 @@ export class Store {
         error TEXT,
         account_profile TEXT,
         account_tool TEXT,
+        goal_run_id TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         UNIQUE(workflow_run_id, step_id)
@@ -440,6 +618,75 @@ export class Store {
         UNIQUE(workflow_run_id, sequence)
       );
       CREATE INDEX IF NOT EXISTS idx_workflow_events_run_sequence ON workflow_events(workflow_run_id, sequence);
+
+      CREATE TABLE IF NOT EXISTS goals (
+        id TEXT PRIMARY KEY,
+        plan_id TEXT NOT NULL,
+        objective TEXT NOT NULL,
+        status TEXT NOT NULL,
+        token_budget INTEGER,
+        tokens_used INTEGER NOT NULL,
+        time_used_seconds INTEGER NOT NULL,
+        auto_execute TEXT NOT NULL,
+        max_tokens INTEGER,
+        source_type TEXT,
+        source_id TEXT,
+        loop_id TEXT,
+        loop_run_id TEXT,
+        workflow_id TEXT,
+        workflow_run_id TEXT,
+        workflow_step_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_goals_status_updated ON goals(status, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_goals_loop_run ON goals(loop_run_id);
+      CREATE INDEX IF NOT EXISTS idx_goals_workflow_run ON goals(workflow_run_id);
+      CREATE INDEX IF NOT EXISTS idx_goals_source ON goals(source_type, source_id);
+
+      CREATE TABLE IF NOT EXISTS goal_plan_nodes (
+        id TEXT PRIMARY KEY,
+        goal_id TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+        plan_id TEXT NOT NULL,
+        key TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        priority INTEGER NOT NULL,
+        objective TEXT NOT NULL,
+        status TEXT NOT NULL,
+        ready INTEGER NOT NULL,
+        token_budget INTEGER,
+        tokens_used INTEGER NOT NULL,
+        time_used_seconds INTEGER NOT NULL,
+        depends_on_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(plan_id, key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_goal_plan_nodes_goal_sequence ON goal_plan_nodes(goal_id, sequence);
+      CREATE INDEX IF NOT EXISTS idx_goal_plan_nodes_status ON goal_plan_nodes(status);
+
+      CREATE TABLE IF NOT EXISTS goal_runs (
+        id TEXT PRIMARY KEY,
+        goal_id TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+        plan_id TEXT NOT NULL,
+        loop_id TEXT,
+        loop_run_id TEXT,
+        workflow_id TEXT,
+        workflow_run_id TEXT,
+        workflow_step_id TEXT,
+        turn INTEGER NOT NULL,
+        phase TEXT NOT NULL,
+        status TEXT NOT NULL,
+        node_key TEXT,
+        tokens_used INTEGER NOT NULL,
+        evidence_json TEXT,
+        raw_response_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_goal_runs_goal_created ON goal_runs(goal_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_goal_runs_loop_run ON goal_runs(loop_run_id);
+      CREATE INDEX IF NOT EXISTS idx_goal_runs_workflow_run ON goal_runs(workflow_run_id);
     `);
     try {
       this.db.query("ALTER TABLE loops ADD COLUMN machine_json TEXT").run();
@@ -447,7 +694,32 @@ export class Store {
       /* column already exists */
     }
     try {
+      this.db.query("ALTER TABLE loops ADD COLUMN goal_json TEXT").run();
+    } catch {
+      /* column already exists */
+    }
+    try {
+      this.db.query("ALTER TABLE loop_runs ADD COLUMN goal_run_id TEXT").run();
+    } catch {
+      /* column already exists */
+    }
+    try {
+      this.db.query("ALTER TABLE workflow_specs ADD COLUMN goal_json TEXT").run();
+    } catch {
+      /* column already exists */
+    }
+    try {
+      this.db.query("ALTER TABLE workflow_runs ADD COLUMN goal_run_id TEXT").run();
+    } catch {
+      /* column already exists */
+    }
+    try {
       this.db.query("ALTER TABLE workflow_step_runs ADD COLUMN pid INTEGER").run();
+    } catch {
+      /* column already exists */
+    }
+    try {
+      this.db.query("ALTER TABLE workflow_step_runs ADD COLUMN goal_run_id TEXT").run();
     } catch {
       /* column already exists */
     }
@@ -457,6 +729,9 @@ export class Store {
     this.db
       .query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)")
       .run("0002_loop_machines", nowIso());
+    this.db
+      .query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)")
+      .run("0003_goals", nowIso());
   }
 
   private assertDaemonLeaseFence(opts: DaemonLeaseFence = {}, now: string = nowIso()): void {
@@ -476,6 +751,7 @@ export class Store {
       status: "active",
       schedule: input.schedule,
       target: input.target,
+      goal: input.goal,
       machine: input.machine,
       nextRunAt: initialNextRun(input.schedule, from),
       catchUp: input.catchUp ?? "latest",
@@ -491,8 +767,8 @@ export class Store {
     this.db
       .query(
         `INSERT INTO loops (id, name, description, status, schedule_json, target_json, machine_json, next_run_at, retry_scheduled_for,
-          catch_up, catch_up_limit, overlap, max_attempts, retry_delay_ms, lease_ms, expires_at, created_at, updated_at)
-         VALUES ($id, $name, $description, $status, $schedule, $target, $machine, $nextRun, NULL, $catchUp, $catchUpLimit,
+          goal_json, catch_up, catch_up_limit, overlap, max_attempts, retry_delay_ms, lease_ms, expires_at, created_at, updated_at)
+         VALUES ($id, $name, $description, $status, $schedule, $target, $machine, $nextRun, NULL, $goal, $catchUp, $catchUpLimit,
           $overlap, $maxAttempts, $retryDelay, $leaseMs, $expiresAt, $created, $updated)`,
       )
       .run({
@@ -503,6 +779,7 @@ export class Store {
         $schedule: JSON.stringify(loop.schedule),
         $target: JSON.stringify(loop.target),
         $machine: loop.machine ? JSON.stringify(loop.machine) : null,
+        $goal: loop.goal ? JSON.stringify(loop.goal) : null,
         $nextRun: loop.nextRunAt ?? null,
         $catchUp: loop.catchUp,
         $catchUpLimit: loop.catchUpLimit,
@@ -604,14 +881,15 @@ export class Store {
       description: normalized.description,
       version: normalized.version ?? 1,
       status: "active",
+      goal: normalized.goal,
       steps: normalized.steps,
       createdAt: now,
       updatedAt: now,
     };
     this.db
       .query(
-        `INSERT INTO workflow_specs (id, name, description, version, status, steps_json, created_at, updated_at)
-         VALUES ($id, $name, $description, $version, $status, $steps, $created, $updated)`,
+        `INSERT INTO workflow_specs (id, name, description, version, status, goal_json, steps_json, created_at, updated_at)
+         VALUES ($id, $name, $description, $version, $status, $goal, $steps, $created, $updated)`,
       )
       .run({
         $id: workflow.id,
@@ -619,6 +897,7 @@ export class Store {
         $description: workflow.description ?? null,
         $version: workflow.version,
         $status: workflow.status,
+        $goal: workflow.goal ? JSON.stringify(workflow.goal) : null,
         $steps: JSON.stringify(workflow.steps),
         $created: workflow.createdAt,
         $updated: workflow.updatedAt,
@@ -665,6 +944,359 @@ export class Store {
     const archived = this.getWorkflow(workflow.id);
     if (!archived) throw new Error(`workflow not found after archive: ${workflow.id}`);
     return archived;
+  }
+
+  createGoal(input: CreateGoalInput, opts: DaemonLeaseFence = {}): Goal {
+    const now = nowIso();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.assertDaemonLeaseFence(opts, now);
+      const id = genId();
+      this.db
+        .query(
+          `INSERT INTO goals (id, plan_id, objective, status, token_budget, tokens_used, time_used_seconds, auto_execute,
+            max_tokens, source_type, source_id, loop_id, loop_run_id, workflow_id, workflow_run_id, workflow_step_id,
+            created_at, updated_at)
+           VALUES ($id, $planId, $objective, 'active', $tokenBudget, 0, 0, $autoExecute, $maxTokens, $sourceType,
+            $sourceId, $loopId, $loopRunId, $workflowId, $workflowRunId, $workflowStepId, $created, $updated)`,
+        )
+        .run({
+          $id: id,
+          $planId: id,
+          $objective: input.objective,
+          $tokenBudget: input.tokenBudget ?? null,
+          $autoExecute: input.autoExecute ?? "readyOnly",
+          $maxTokens: input.maxTokens ?? input.tokenBudget ?? null,
+          $sourceType: input.sourceType ?? null,
+          $sourceId: input.sourceId ?? null,
+          $loopId: input.loopId ?? null,
+          $loopRunId: input.loopRunId ?? null,
+          $workflowId: input.workflowId ?? null,
+          $workflowRunId: input.workflowRunId ?? null,
+          $workflowStepId: input.workflowStepId ?? null,
+          $created: now,
+          $updated: now,
+        });
+      this.db.exec("COMMIT");
+      return this.requireGoal(id);
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* transaction may already be closed */
+      }
+      throw error;
+    }
+  }
+
+  getGoal(id: string): Goal | undefined {
+    const row = this.db.query<GoalRow, [string]>("SELECT * FROM goals WHERE id = ?").get(id);
+    return row ? rowToGoal(row) : undefined;
+  }
+
+  requireGoal(id: string): Goal {
+    const goal = this.getGoal(id);
+    if (!goal) throw new Error(`goal not found: ${id}`);
+    return goal;
+  }
+
+  findGoalByLoop(idOrName: string): Goal | undefined {
+    const loop = this.getLoop(idOrName) ?? this.findLoopByName(idOrName);
+    if (!loop) return undefined;
+    const row = this.db
+      .query<GoalRow, [string]>("SELECT * FROM goals WHERE loop_id = ? ORDER BY created_at DESC LIMIT 1")
+      .get(loop.id);
+    return row ? rowToGoal(row) : undefined;
+  }
+
+  findGoalByRunId(id: string): Goal | undefined {
+    const direct = this.getGoal(id);
+    if (direct) return direct;
+    const event = this.db.query<GoalRunRow, [string]>("SELECT * FROM goal_runs WHERE id = ?").get(id);
+    if (event) return this.getGoal(event.goal_id);
+    const row = this.db
+      .query<GoalRow, [string, string, string]>(
+        `SELECT * FROM goals
+         WHERE loop_run_id = ? OR workflow_run_id = ? OR workflow_step_id = ?
+         ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get(id, id, id);
+    return row ? rowToGoal(row) : undefined;
+  }
+
+  findGoalByContext(context: {
+    loopRunId?: string;
+    workflowRunId?: string;
+    workflowStepId?: string;
+    sourceType?: string;
+    sourceId?: string;
+  }): Goal | undefined {
+    if (context.loopRunId) {
+      const row = this.db
+        .query<GoalRow, [string, string | null, string | null]>(
+          `SELECT * FROM goals
+           WHERE loop_run_id = ? AND (? IS NULL OR workflow_step_id = ?)
+           ORDER BY created_at DESC LIMIT 1`,
+        )
+        .get(context.loopRunId, context.workflowStepId ?? null, context.workflowStepId ?? null);
+      if (row) return rowToGoal(row);
+    }
+    if (context.workflowRunId) {
+      const row = this.db
+        .query<GoalRow, [string, string | null, string | null]>(
+          `SELECT * FROM goals
+           WHERE workflow_run_id = ? AND (? IS NULL OR workflow_step_id = ?)
+           ORDER BY created_at DESC LIMIT 1`,
+        )
+        .get(context.workflowRunId, context.workflowStepId ?? null, context.workflowStepId ?? null);
+      if (row) return rowToGoal(row);
+    }
+    if (context.sourceType && context.sourceId) {
+      const row = this.db
+        .query<GoalRow, [string, string]>(
+          "SELECT * FROM goals WHERE source_type = ? AND source_id = ? ORDER BY created_at DESC LIMIT 1",
+        )
+        .get(context.sourceType, context.sourceId);
+      if (row) return rowToGoal(row);
+    }
+    return undefined;
+  }
+
+  listGoals(opts: { status?: GoalStatus; limit?: number } = {}): Goal[] {
+    const limit = opts.limit ?? 100;
+    const rows = opts.status
+      ? this.db
+          .query<GoalRow, [string, number]>("SELECT * FROM goals WHERE status = ? ORDER BY created_at DESC LIMIT ?")
+          .all(opts.status, limit)
+      : this.db.query<GoalRow, [number]>("SELECT * FROM goals ORDER BY created_at DESC LIMIT ?").all(limit);
+    return rows.map(rowToGoal);
+  }
+
+  createGoalPlanNodes(goalId: string, nodes: CreateGoalPlanNodeInput[], opts: DaemonLeaseFence = {}): GoalPlanNode[] {
+    const goal = this.requireGoal(goalId);
+    const now = nowIso();
+    const materialized: GoalPlanNode[] = nodes.map((node, sequence) => ({
+      nodeId: genId(),
+      planId: goal.planId,
+      key: node.key,
+      sequence,
+      priority: node.priority ?? 0,
+      objective: node.objective,
+      status: "pending",
+      ready: false,
+      tokenBudget: node.tokenBudget,
+      tokensUsed: 0,
+      timeUsedSeconds: 0,
+      dependsOn: node.dependsOn ?? [],
+      createdAt: now,
+      updatedAt: now,
+    }));
+    const withReady = updateReadyFlags(materialized, "active");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.assertDaemonLeaseFence(opts, now);
+      for (const node of withReady) {
+        this.db
+          .query(
+            `INSERT OR IGNORE INTO goal_plan_nodes (id, goal_id, plan_id, key, sequence, priority, objective, status, ready,
+              token_budget, tokens_used, time_used_seconds, depends_on_json, created_at, updated_at)
+             VALUES ($id, $goalId, $planId, $key, $sequence, $priority, $objective, $status, $ready, $tokenBudget,
+              $tokensUsed, $timeUsedSeconds, $dependsOn, $created, $updated)`,
+          )
+          .run({
+            $id: node.nodeId,
+            $goalId: goal.goalId,
+            $planId: goal.planId,
+            $key: node.key,
+            $sequence: node.sequence,
+            $priority: node.priority,
+            $objective: node.objective,
+            $status: node.status,
+            $ready: node.ready ? 1 : 0,
+            $tokenBudget: node.tokenBudget ?? null,
+            $tokensUsed: node.tokensUsed,
+            $timeUsedSeconds: node.timeUsedSeconds,
+            $dependsOn: JSON.stringify(node.dependsOn),
+            $created: node.createdAt,
+            $updated: node.updatedAt,
+          });
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* transaction may already be closed */
+      }
+      throw error;
+    }
+    return this.listGoalPlanNodes(goalId);
+  }
+
+  listGoalPlanNodes(goalIdOrPlanId: string): GoalPlanNode[] {
+    const rows = this.db
+      .query<GoalPlanNodeRow, [string, string]>(
+        "SELECT * FROM goal_plan_nodes WHERE goal_id = ? OR plan_id = ? ORDER BY sequence ASC",
+      )
+      .all(goalIdOrPlanId, goalIdOrPlanId);
+    return rows.map(rowToGoalPlanNode);
+  }
+
+  updateGoalStatus(goalId: string, status: GoalStatus, opts: DaemonLeaseFence = {}): Goal {
+    const current = this.requireGoal(goalId);
+    assertGoalTransition(current.status, status);
+    const now = (opts.now ?? new Date()).toISOString();
+    this.db
+      .query(
+        `UPDATE goals SET status=$status, updated_at=$updated
+         WHERE id=$id
+           AND ($daemonLeaseId IS NULL OR EXISTS (
+             SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+           ))`,
+      )
+      .run({
+        $id: goalId,
+        $status: status,
+        $updated: now,
+        $daemonLeaseId: opts.daemonLeaseId ?? null,
+        $now: now,
+      });
+    return this.requireGoal(goalId);
+  }
+
+  addGoalUsage(goalId: string, tokens: number, timeUsedSeconds = 0, opts: DaemonLeaseFence = {}): Goal {
+    const now = (opts.now ?? new Date()).toISOString();
+    this.db
+      .query(
+        `UPDATE goals
+         SET tokens_used=tokens_used + $tokens, time_used_seconds=time_used_seconds + $seconds, updated_at=$updated
+         WHERE id=$id
+           AND ($daemonLeaseId IS NULL OR EXISTS (
+             SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+           ))`,
+      )
+      .run({
+        $id: goalId,
+        $tokens: tokens,
+        $seconds: timeUsedSeconds,
+        $updated: now,
+        $daemonLeaseId: opts.daemonLeaseId ?? null,
+        $now: now,
+      });
+    return this.requireGoal(goalId);
+  }
+
+  updateGoalPlanNode(
+    goalId: string,
+    key: string,
+    patch: Partial<Pick<GoalPlanNode, "status" | "tokensUsed" | "timeUsedSeconds" | "ready">>,
+    opts: DaemonLeaseFence = {},
+  ): GoalPlanNode {
+    const now = (opts.now ?? new Date()).toISOString();
+    this.db
+      .query(
+        `UPDATE goal_plan_nodes
+         SET status=COALESCE($status, status),
+          tokens_used=COALESCE($tokensUsed, tokens_used),
+          time_used_seconds=COALESCE($timeUsedSeconds, time_used_seconds),
+          ready=COALESCE($ready, ready),
+          updated_at=$updated
+         WHERE goal_id=$goalId AND key=$key
+           AND ($daemonLeaseId IS NULL OR EXISTS (
+             SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+           ))`,
+      )
+      .run({
+        $goalId: goalId,
+        $key: key,
+        $status: patch.status ?? null,
+        $tokensUsed: patch.tokensUsed ?? null,
+        $timeUsedSeconds: patch.timeUsedSeconds ?? null,
+        $ready: patch.ready === undefined ? null : patch.ready ? 1 : 0,
+        $updated: now,
+        $daemonLeaseId: opts.daemonLeaseId ?? null,
+        $now: now,
+      });
+    const node = this.listGoalPlanNodes(goalId).find((entry) => entry.key === key);
+    if (!node) throw new Error(`goal node not found: ${goalId}/${key}`);
+    return node;
+  }
+
+  recordGoalEvent(input: RecordGoalEventInput, opts: DaemonLeaseFence = {}): GoalRun {
+    const goal = this.requireGoal(input.goalId);
+    const now = nowIso();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.assertDaemonLeaseFence(opts, now);
+      const previous = this.db
+        .query<{ turn: number | null }, [string]>("SELECT MAX(turn) AS turn FROM goal_runs WHERE goal_id = ?")
+        .get(goal.goalId);
+      const turn = input.turn ?? (previous?.turn ?? 0) + 1;
+      const id = genId();
+      this.db
+        .query(
+          `INSERT INTO goal_runs (id, goal_id, plan_id, loop_id, loop_run_id, workflow_id, workflow_run_id, workflow_step_id,
+            turn, phase, status, node_key, tokens_used, evidence_json, raw_response_json, created_at, updated_at)
+           VALUES ($id, $goalId, $planId, $loopId, $loopRunId, $workflowId, $workflowRunId, $workflowStepId,
+            $turn, $phase, $status, $nodeKey, $tokensUsed, $evidence, $rawResponse, $created, $updated)`,
+        )
+        .run({
+          $id: id,
+          $goalId: goal.goalId,
+          $planId: goal.planId,
+          $loopId: goal.loopId ?? null,
+          $loopRunId: goal.loopRunId ?? null,
+          $workflowId: goal.workflowId ?? null,
+          $workflowRunId: goal.workflowRunId ?? null,
+          $workflowStepId: goal.workflowStepId ?? null,
+          $turn: turn,
+          $phase: input.phase,
+          $status: input.status,
+          $nodeKey: input.nodeKey ?? null,
+          $tokensUsed: input.tokensUsed ?? 0,
+          $evidence: input.evidence ? JSON.stringify(input.evidence) : null,
+          $rawResponse: input.rawResponse === undefined ? null : JSON.stringify(input.rawResponse),
+          $created: now,
+          $updated: now,
+        });
+      if (input.tokensUsed && input.tokensUsed > 0) {
+        this.db
+          .query("UPDATE goals SET tokens_used=tokens_used + ?, updated_at=? WHERE id=?")
+          .run(input.tokensUsed, now, goal.goalId);
+      }
+      this.db.exec("COMMIT");
+      const event = this.db.query<GoalRunRow, [string]>("SELECT * FROM goal_runs WHERE id = ?").get(id);
+      if (!event) throw new Error(`goal run not found after record: ${id}`);
+      return rowToGoalRun(event);
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* transaction may already be closed */
+      }
+      throw error;
+    }
+  }
+
+  listGoalRuns(opts: { goalId?: string; runId?: string; limit?: number } = {}): GoalRun[] {
+    const limit = opts.limit ?? 200;
+    let rows: GoalRunRow[];
+    if (opts.goalId) {
+      rows = this.db
+        .query<GoalRunRow, [string, number]>("SELECT * FROM goal_runs WHERE goal_id = ? ORDER BY created_at ASC LIMIT ?")
+        .all(opts.goalId, limit);
+    } else if (opts.runId) {
+      rows = this.db
+        .query<GoalRunRow, [string, string, string, number]>(
+          `SELECT * FROM goal_runs
+           WHERE id = ? OR loop_run_id = ? OR workflow_run_id = ?
+           ORDER BY created_at ASC LIMIT ?`,
+        )
+        .all(opts.runId, opts.runId, opts.runId, limit);
+    } else {
+      rows = this.db.query<GoalRunRow, [number]>("SELECT * FROM goal_runs ORDER BY created_at DESC LIMIT ?").all(limit);
+    }
+    return rows.map(rowToGoalRun);
   }
 
   createWorkflowRun(input: CreateWorkflowRunInput): WorkflowRun {

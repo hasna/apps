@@ -1,4 +1,5 @@
-import type { CreateWorkflowInput, ExecutableTarget, WorkflowSpec, WorkflowStep } from "../types.js";
+import type { CreateWorkflowInput, ExecutableTarget, GoalSpec, WorkflowSpec, WorkflowStep } from "../types.js";
+import { GOAL_OBJECTIVE_MAX_CHARS } from "./goal/types.js";
 
 export type WorkflowSpecBody = Pick<WorkflowSpec, "name" | "description" | "version" | "steps">;
 
@@ -8,6 +9,34 @@ function assertObject(value: unknown, label: string): asserts value is Record<st
 
 function assertString(value: unknown, label: string): asserts value is string {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`${label} must be a non-empty string`);
+}
+
+function optionalPositiveInteger(value: unknown, label: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isInteger(value) || (value as number) <= 0) throw new Error(`${label} must be a positive integer`);
+  return value as number;
+}
+
+export function normalizeGoalSpec(value: unknown, label = "goal"): GoalSpec | undefined {
+  if (value === undefined) return undefined;
+  assertObject(value, label);
+  assertString(value.objective, `${label}.objective`);
+  const objective = value.objective.trim();
+  if (objective.length > GOAL_OBJECTIVE_MAX_CHARS) {
+    throw new Error(`${label}.objective must be ${GOAL_OBJECTIVE_MAX_CHARS} characters or fewer`);
+  }
+  const autoExecute = value.autoExecute === undefined ? undefined : String(value.autoExecute);
+  if (autoExecute !== undefined && !["off", "readyOnly", "aiDirected"].includes(autoExecute)) {
+    throw new Error(`${label}.autoExecute must be off, readyOnly, or aiDirected`);
+  }
+  return {
+    objective,
+    tokenBudget: optionalPositiveInteger(value.tokenBudget, `${label}.tokenBudget`),
+    maxTurns: optionalPositiveInteger(value.maxTurns, `${label}.maxTurns`),
+    maxTokens: optionalPositiveInteger(value.maxTokens, `${label}.maxTokens`),
+    model: typeof value.model === "string" && value.model.trim() ? value.model.trim() : undefined,
+    autoExecute: autoExecute as GoalSpec["autoExecute"],
+  };
 }
 
 function validateTarget(value: unknown, label: string): ExecutableTarget {
@@ -35,6 +64,7 @@ function validateTarget(value: unknown, label: string): ExecutableTarget {
 
 export function normalizeCreateWorkflowInput(input: CreateWorkflowInput): CreateWorkflowInput {
   assertString(input.name, "workflow.name");
+  const goal = normalizeGoalSpec(input.goal, "goal");
   if (!Array.isArray(input.steps) || input.steps.length === 0) throw new Error("workflow.steps must contain at least one step");
   const seen = new Set<string>();
   const steps: WorkflowStep[] = input.steps.map((step, index) => {
@@ -45,6 +75,7 @@ export function normalizeCreateWorkflowInput(input: CreateWorkflowInput): Create
     return {
       ...step,
       id: step.id,
+      goal: normalizeGoalSpec(step.goal, `workflow.steps[${index}].goal`),
       target: validateTarget(step.target, `workflow.steps[${index}].target`),
       dependsOn: step.dependsOn ?? [],
       continueOnFailure: step.continueOnFailure ?? false,
@@ -57,7 +88,7 @@ export function normalizeCreateWorkflowInput(input: CreateWorkflowInput): Create
     }
   }
   workflowExecutionOrder({ steps });
-  return { ...input, name: input.name.trim(), version: input.version ?? 1, steps };
+  return { ...input, name: input.name.trim(), goal, version: input.version ?? 1, steps };
 }
 
 export function workflowExecutionOrder(workflow: Pick<WorkflowSpec, "steps">): WorkflowStep[] {
@@ -92,6 +123,7 @@ export function workflowBodyFromJson(value: unknown, fallbackName?: string): Cre
   return normalizeCreateWorkflowInput({
     name: rawName,
     description: typeof value.description === "string" ? value.description : undefined,
+    goal: normalizeGoalSpec(value.goal, "goal"),
     version: typeof value.version === "number" ? value.version : undefined,
     steps: value.steps as WorkflowStep[],
   });

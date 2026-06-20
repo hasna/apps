@@ -1,5 +1,6 @@
 import type { ExecutableTarget, ExecutorResult, Loop, LoopRun, WorkflowRun, WorkflowRunStatus, WorkflowSpec, WorkflowStep } from "../types.js";
 import { executeLoop, executeTarget, preflightTarget, type ExecuteOptions } from "./executor.js";
+import { runGoal } from "./goal/runner.js";
 import { nowIso } from "./ids.js";
 import type { Store } from "./store.js";
 import { workflowExecutionOrder } from "./workflow-spec.js";
@@ -47,6 +48,25 @@ export async function executeWorkflow(
   workflow: WorkflowSpec,
   opts: ExecuteWorkflowOptions = {},
 ): Promise<ExecutorResult> {
+  if (workflow.goal) {
+    const workflowWithoutGoal: WorkflowSpec = { ...workflow, goal: undefined };
+    return runGoal(store, workflow.goal, {
+      ...opts,
+      context: {
+        loopId: opts.loop?.id,
+        loopName: opts.loop?.name,
+        loopRunId: opts.loopRun?.id,
+        scheduledFor: opts.loopRun?.scheduledFor ?? opts.scheduledFor,
+        workflowId: workflow.id,
+        workflowName: workflow.name,
+      },
+      executeNode: async (node) =>
+        executeWorkflow(store, workflowWithoutGoal, {
+          ...opts,
+          idempotencyKey: `${opts.idempotencyKey ?? workflow.id}:goal:${node.key}`,
+        }),
+    });
+  }
   const run = store.createWorkflowRun({
     workflow,
     loop: opts.loop,
@@ -128,16 +148,34 @@ export async function executeWorkflow(
     }, opts.cancelPollMs ?? 500);
     cancelTimer.unref();
     try {
-      result = await executeTarget(targetWithStepAccount(step), metadata, {
-        ...opts,
-        machine: opts.machine ?? opts.loop?.machine,
-        signal: controller.signal,
-        onSpawn: (pid) => {
-          opts.beforePersist?.();
-          store.markWorkflowStepPid(run.id, step.id, pid, { daemonLeaseId: opts.daemonLeaseId });
-          opts.onSpawn?.(pid);
-        },
-      });
+      if (step.goal) {
+        result = await runGoal(store, step.goal, {
+          ...opts,
+          target: targetWithStepAccount(step),
+          signal: controller.signal,
+          context: {
+            loopId: opts.loop?.id,
+            loopName: opts.loop?.name,
+            loopRunId: opts.loopRun?.id,
+            scheduledFor: opts.loopRun?.scheduledFor ?? opts.scheduledFor,
+            workflowId: workflow.id,
+            workflowName: workflow.name,
+            workflowRunId: run.id,
+            workflowStepId: step.id,
+          },
+        });
+      } else {
+        result = await executeTarget(targetWithStepAccount(step), metadata, {
+          ...opts,
+          machine: opts.machine ?? opts.loop?.machine,
+          signal: controller.signal,
+          onSpawn: (pid) => {
+            opts.beforePersist?.();
+            store.markWorkflowStepPid(run.id, step.id, pid, { daemonLeaseId: opts.daemonLeaseId });
+            opts.onSpawn?.(pid);
+          },
+        });
+      }
     } catch (error) {
       const finishedAt = nowIso();
       result = {
@@ -244,8 +282,43 @@ export async function executeLoopTarget(
   run: LoopRun,
   opts: ExecuteOptions = {},
 ): Promise<ExecutorResult> {
-  if (loop.target.type !== "workflow") return executeLoop(loop, run, opts);
+  if (loop.target.type !== "workflow") {
+    if (loop.goal) {
+      return runGoal(store, loop.goal, {
+        ...opts,
+        target: loop.target,
+        context: {
+          loopId: loop.id,
+          loopName: loop.name,
+          loopRunId: run.id,
+          scheduledFor: run.scheduledFor,
+        },
+      });
+    }
+    return executeLoop(loop, run, opts);
+  }
   const workflow = store.requireWorkflow(loop.target.workflowId);
+  if (loop.goal) {
+    return runGoal(store, loop.goal, {
+      ...opts,
+      context: {
+        loopId: loop.id,
+        loopName: loop.name,
+        loopRunId: run.id,
+        scheduledFor: run.scheduledFor,
+        workflowId: workflow.id,
+        workflowName: workflow.name,
+      },
+      executeNode: async (node) =>
+        executeWorkflow(store, workflow, {
+          ...opts,
+          loop,
+          loopRun: run,
+          scheduledFor: run.scheduledFor,
+          idempotencyKey: `${loop.id}:${run.scheduledFor}:attempt:${run.attempt}:goal:${node.key}`,
+        }),
+    });
+  }
   const controller = loop.target.timeoutMs ? new AbortController() : undefined;
   let workflowTimedOut = false;
   const externalAbort = (): void => controller?.abort();

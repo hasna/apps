@@ -1,3 +1,18 @@
+import type { GoalSpec } from "./lib/goal/types.js";
+export type {
+  Goal,
+  GoalAutoExecute,
+  GoalExecutorResult,
+  GoalPlan,
+  GoalPlanNode,
+  GoalPlanNodeStatus,
+  GoalPlanStatus,
+  GoalRollup,
+  GoalRun,
+  GoalSpec,
+  GoalStatus,
+} from "./lib/goal/types.js";
+
 export type LoopStatus = "active" | "paused" | "stopped" | "expired";
 
 export type RunStatus =
@@ -109,6 +124,7 @@ export interface WorkflowStep {
   name?: string;
   description?: string;
   target: ExecutableTarget;
+  goal?: GoalSpec;
   dependsOn?: string[];
   continueOnFailure?: boolean;
   timeoutMs?: number;
@@ -121,6 +137,7 @@ export interface WorkflowSpec {
   description?: string;
   version: number;
   status: WorkflowStatus;
+  goal?: GoalSpec;
   steps: WorkflowStep[];
   createdAt: string;
   updatedAt: string;
@@ -129,6 +146,7 @@ export interface WorkflowSpec {
 export interface CreateWorkflowInput {
   name: string;
   description?: string;
+  goal?: GoalSpec;
   steps: WorkflowStep[];
   version?: number;
 }
@@ -141,6 +159,7 @@ export interface WorkflowRun {
   loopRunId?: string;
   scheduledFor?: string;
   idempotencyKey?: string;
+  goalRunId?: string;
   status: WorkflowRunStatus;
   startedAt?: string;
   finishedAt?: string;
@@ -166,6 +185,7 @@ export interface WorkflowStepRun {
   error?: string;
   accountProfile?: string;
   accountTool?: string;
+  goalRunId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -187,6 +207,7 @@ export interface Loop {
   status: LoopStatus;
   schedule: ScheduleSpec;
   target: LoopTarget;
+  goal?: GoalSpec;
   machine?: LoopMachineRef;
   nextRunAt?: string;
   retryScheduledFor?: string;
@@ -218,6 +239,7 @@ export interface LoopRun {
   stdout?: string;
   stderr?: string;
   error?: string;
+  goalRunId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -227,6 +249,7 @@ export interface CreateLoopInput {
   description?: string;
   schedule: ScheduleSpec;
   target: LoopTarget;
+  goal?: GoalSpec;
   machine?: LoopMachineRef;
   catchUp?: CatchUpPolicy;
   catchUpLimit?: number;

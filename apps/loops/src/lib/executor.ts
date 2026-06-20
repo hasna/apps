@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { resolveMachineCommand } from "@hasna/machines/consumer";
 import type {
@@ -41,6 +42,9 @@ export interface ExecutionMetadata {
   workflowName?: string;
   workflowRunId?: string;
   workflowStepId?: string;
+  goalId?: string;
+  goalObjective?: string;
+  goalNodeKey?: string;
 }
 
 export interface PreflightResult {
@@ -147,6 +151,9 @@ function metadataEnv(metadata: ExecutionMetadata): Record<string, string> {
   if (metadata.workflowName) env.LOOPS_WORKFLOW_NAME = metadata.workflowName;
   if (metadata.workflowRunId) env.LOOPS_WORKFLOW_RUN_ID = metadata.workflowRunId;
   if (metadata.workflowStepId) env.LOOPS_WORKFLOW_STEP_ID = metadata.workflowStepId;
+  if (metadata.goalId) env.LOOPS_GOAL_ID = metadata.goalId;
+  if (metadata.goalObjective) env.LOOPS_GOAL_OBJECTIVE = metadata.goalObjective;
+  if (metadata.goalNodeKey) env.LOOPS_GOAL_NODE_KEY = metadata.goalNodeKey;
   return env;
 }
 
@@ -282,9 +289,9 @@ function commandForShell(spec: CommandSpec): string {
 }
 
 function hereDoc(value: string): string[] {
-  let delimiter = `__OPENLOOPS_STDIN_${Math.random().toString(36).slice(2).toUpperCase()}__`;
+  let delimiter = `__OPENLOOPS_STDIN_${randomBytes(8).toString("hex").toUpperCase()}__`;
   while (value.split(/\r?\n/).includes(delimiter)) {
-    delimiter = `__OPENLOOPS_STDIN_${Math.random().toString(36).slice(2).toUpperCase()}__`;
+    delimiter = `__OPENLOOPS_STDIN_${randomBytes(8).toString("hex").toUpperCase()}__`;
   }
   return [`cat > "$__OPENLOOPS_STDIN" <<'${delimiter}'`, value, delimiter];
 }

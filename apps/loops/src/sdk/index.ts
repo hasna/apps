@@ -1,6 +1,7 @@
-import type { CreateLoopInput, Loop, LoopRun } from "../types.js";
+import type { CreateLoopInput, Goal, GoalRun, Loop, LoopRun } from "../types.js";
 import { advanceLoop, executeClaimedRun, manualRunScheduledFor, shouldAdvanceManualRun, tick } from "../lib/scheduler.js";
 import { Store } from "../lib/store.js";
+export { runGoal } from "../lib/goal/runner.js";
 
 export interface LoopsClientOptions {
   store?: Store;
@@ -51,6 +52,14 @@ export class LoopsClient {
 
   runs(loopId?: string): LoopRun[] {
     return this.store.listRuns({ loopId });
+  }
+
+  goal(idOrName: string): { goal?: Goal; runs: GoalRun[] } {
+    const goal = this.store.getGoal(idOrName) ?? this.store.findGoalByLoop(idOrName) ?? this.store.findGoalByRunId(idOrName);
+    return {
+      goal,
+      runs: goal ? this.store.listGoalRuns({ goalId: goal.goalId }) : [],
+    };
   }
 
   async tick(): Promise<Awaited<ReturnType<typeof tick>>> {
