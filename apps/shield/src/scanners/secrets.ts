@@ -126,7 +126,7 @@ export const SECRET_PATTERNS: SecretPattern[] = [
   {
     id: "generic-api-key",
     name: "Generic API Key",
-    pattern: /(?:api_key|apikey|api[-_]?key)\s*[=:]\s*['"]([A-Za-z0-9_\-]{16,})['"/]/gi,
+    pattern: /(?:api_key|apikey|api[-_]?key)\s*[=:]\s*['"]([A-Za-z0-9_\-]{16,})['"]/gi,
     severity: Severity.High,
   },
   {
@@ -178,6 +178,34 @@ export function shannonEntropy(str: string): number {
 
 const HEX_RE = /\b[0-9a-fA-F]{16,}\b/g;
 const BASE64_RE = /\b[A-Za-z0-9+/=]{20,}\b/g;
+const UNQUOTED_ENV_API_KEY_RE = /(?:api_key|apikey|api[-_]?key)\s*=\s*([A-Za-z0-9_\-]{16,})(?=\s|$|[;,#])/gi;
+
+function isEnvLikeFile(filePath: string): boolean {
+  const base = path.basename(filePath.replace(/\\/g, "/")).toLowerCase();
+  return base === ".env" || base.startsWith(".env.") || base.endsWith(".env");
+}
+
+function detectUnquotedEnvApiKeys(content: string, filePath: string, line: number, lineText: string): FindingInput[] {
+  if (!isEnvLikeFile(filePath)) return [];
+
+  const findings: FindingInput[] = [];
+  let match: RegExpExecArray | null;
+  UNQUOTED_ENV_API_KEY_RE.lastIndex = 0;
+  while ((match = UNQUOTED_ENV_API_KEY_RE.exec(lineText)) !== null) {
+    findings.push({
+      rule_id: "generic-api-key",
+      scanner_type: ScannerType.Secrets,
+      severity: Severity.High,
+      file: filePath,
+      line,
+      column: match.index + 1,
+      message: "Generic API Key detected",
+      code_snippet: getCodeSnippet(content, line),
+    });
+  }
+
+  return findings;
+}
 
 function detectHighEntropyStrings(content: string, filePath: string, line: number, lineText: string): FindingInput[] {
   const findings: FindingInput[] = [];
@@ -249,6 +277,7 @@ export function scanFile(filePath: string, content: string): FindingInput[] {
       }
     }
 
+    findings.push(...detectUnquotedEnvApiKeys(content, filePath, lineNum, lineText));
     findings.push(...detectHighEntropyStrings(content, filePath, lineNum, lineText));
   }
 
