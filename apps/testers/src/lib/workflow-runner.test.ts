@@ -87,6 +87,37 @@ describe("workflow runner", () => {
     );
   });
 
+  test("creates sandbox database bundles under temp paths with quotes", () => {
+    const originalTmpdir = process.env.TMPDIR;
+    const parentDir = mkdtempSync(join(tmpdir(), "testers-quoted-tmp-"));
+    const quotedTmpdir = join(parentDir, "tmp'quoted");
+    cleanupPaths.push(parentDir);
+    mkdirSync(quotedTmpdir, { recursive: true });
+    process.env.TMPDIR = quotedTmpdir;
+
+    try {
+      const workflow = createTestingWorkflow({
+        name: "quoted temp bundle",
+        scenarioFilter: { scenarioIds: ["S1"] },
+        execution: {
+          target: "sandbox",
+          provider: "e2b",
+          sandboxRemoteDir: "/workspace/testers",
+        },
+      });
+      const plan = buildWorkflowRunPlan(workflow, { url: "https://preview.example" });
+
+      const bundle = createWorkflowDatabaseBundle(workflow, plan);
+      cleanupPaths.push(bundle.localDir);
+
+      expect(bundle.localDir).toContain("'");
+      expect(existsSync(join(bundle.localDir, ".testers-state", "testers.db"))).toBe(true);
+    } finally {
+      if (originalTmpdir === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = originalTmpdir;
+    }
+  });
+
   test("runs sandbox workflows through the sandboxes SDK with a portable DB bundle", async () => {
     const originalSmokePassword = process.env.SMOKE_TEST_PASSWORD;
     const originalOpenAIKey = process.env.OPENAI_API_KEY;
@@ -106,8 +137,8 @@ describe("workflow runner", () => {
         timeoutMs: 120000,
         env: {
           APP_ENV: "preview",
-          SMOKE_TEST_PASSWORD: "$SMOKE_TEST_PASSWORD",
-          OPENAI_API_KEY: "$?OPENAI_API_KEY",
+          SMOKE_TEST_PASSWORD: "${SMOKE_TEST_PASSWORD}",
+          OPENAI_API_KEY: "$?{OPENAI_API_KEY}",
         },
       },
     });

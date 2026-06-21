@@ -4,6 +4,7 @@
  * Supports three value formats in persona/auth-preset credential fields:
  *   @secrets:<key>   — look up from the @hasna/secrets vault (~/.hasna/secrets/vault.db)
  *   $ENV_VAR_NAME    — resolve from the current process environment
+ *   ${ENV_VAR_NAME}  — resolve from the current process environment
  *   <plain text>     — used as-is
  *
  * No dependency on @hasna/secrets package — reads the vault SQLite directly,
@@ -48,6 +49,7 @@ function lookupFromVault(key: string): string | null {
  *   → looks up the key in the hasna secrets vault
  *
  * - `$ANTHROPIC_API_KEY`
+ * - `${ANTHROPIC_API_KEY}`
  *   → resolves from process.env
  *
  * - `myplaintextpassword`
@@ -67,14 +69,48 @@ export function resolveCredential(value: string | null | undefined): string | nu
   }
 
   // $ENV_VAR reference
-  if (value.startsWith("$")) {
-    const varName = value.slice(1).trim();
-    if (!varName) return null;
-    return process.env[varName] ?? null;
+  const envReference = parseCredentialEnvReference(value);
+  if (envReference) {
+    return envReference.name ? process.env[envReference.name] ?? null : null;
   }
 
   // Plain text
   return value;
+}
+
+export interface CredentialEnvReference {
+  name: string | null;
+  optional: boolean;
+}
+
+export function parseCredentialEnvReference(
+  value: string,
+  options: { allowOptional?: boolean } = {},
+): CredentialEnvReference | null {
+  if (options.allowOptional && value.startsWith("$?")) {
+    return {
+      name: parseEnvReferenceName(value.slice(2)),
+      optional: true,
+    };
+  }
+
+  if (!value.startsWith("$")) return null;
+  return {
+    name: parseEnvReferenceName(value.slice(1)),
+    optional: false,
+  };
+}
+
+function parseEnvReferenceName(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+    const name = trimmed.slice(1, -1).trim();
+    return name || null;
+  }
+
+  return trimmed;
 }
 
 /**

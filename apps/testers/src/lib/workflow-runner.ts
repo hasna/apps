@@ -6,7 +6,7 @@ import { getDatabase } from "../db/database.js";
 import { getTestingWorkflow } from "../db/workflows.js";
 import { getPersona } from "../db/personas.js";
 import { runByFilter, type RunOptions } from "./runner.js";
-import { resolveCredential } from "./secrets-resolver.js";
+import { parseCredentialEnvReference, resolveCredential } from "./secrets-resolver.js";
 import type {
   Result,
   Run,
@@ -245,11 +245,7 @@ function copyAppSource(sourceDir: string, targetDir: string): void {
 }
 
 function writeDatabaseSnapshot(targetPath: string): void {
-  getDatabase().exec(`VACUUM INTO ${sqlString(targetPath)}`);
-}
-
-function sqlString(value: string): string {
-  return `'${value.replaceAll("'", "''")}'`;
+  getDatabase().query("VACUUM INTO ?").run(targetPath);
 }
 
 function buildSandboxPlan(
@@ -490,9 +486,9 @@ function resolveSandboxEnv(env: Record<string, string> | undefined): Record<stri
 
   const resolved: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
-    if (value.startsWith("$?")) {
-      const optionalName = value.slice(2).trim();
-      const optionalValue = optionalName ? process.env[optionalName] : undefined;
+    const envReference = parseCredentialEnvReference(value, { allowOptional: true });
+    if (envReference?.optional) {
+      const optionalValue = envReference.name ? process.env[envReference.name] : undefined;
       if (optionalValue !== undefined) resolved[key] = optionalValue;
       continue;
     }

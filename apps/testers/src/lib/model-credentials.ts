@@ -1,6 +1,6 @@
 import { detectProvider, resolveModel, type AIProvider } from "./ai-client.js";
 import { loadConfig } from "./config.js";
-import { resolveCredential } from "./secrets-resolver.js";
+import { parseCredentialEnvReference, resolveCredential } from "./secrets-resolver.js";
 
 export const MODEL_PROVIDER_ENV_KEYS: Record<AIProvider, string> = {
   anthropic: "ANTHROPIC_API_KEY",
@@ -47,13 +47,12 @@ export function resolveModelCredentialReference(
   env: Record<string, string | undefined> = process.env,
   credentialResolver: (value: string) => string | null = resolveCredential,
 ): Pick<ModelCredentialResolution, "source" | "apiKey"> {
-  if (reference.startsWith("$?")) {
-    const varName = reference.slice(2).trim();
-    return { source: "optional-env", apiKey: varName ? env[varName] ?? null : null };
-  }
-  if (reference.startsWith("$")) {
-    const varName = reference.slice(1).trim();
-    return { source: "env", apiKey: varName ? env[varName] ?? null : null };
+  const envReference = parseCredentialEnvReference(reference, { allowOptional: true });
+  if (envReference) {
+    return {
+      source: envReference.optional ? "optional-env" : "env",
+      apiKey: envReference.name ? env[envReference.name] ?? null : null,
+    };
   }
   if (reference.startsWith("@secrets:")) {
     return { source: "secret", apiKey: credentialResolver(reference) };

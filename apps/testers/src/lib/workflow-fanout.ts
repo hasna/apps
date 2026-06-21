@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { getTestingWorkflow, listTestingWorkflows } from "../db/workflows.js";
 import { runTestingWorkflow, type WorkflowRunOptions, type WorkflowRunnerDependencies } from "./workflow-runner.js";
-import { resolveCredential } from "./secrets-resolver.js";
+import { parseCredentialEnvReference, resolveCredential } from "./secrets-resolver.js";
 import { detectProvider, resolveModel, type AIProvider } from "./ai-client.js";
 import { loadConfig } from "./config.js";
 import {
@@ -628,9 +628,9 @@ function collectMissingSandboxEnvRefs(
 
   for (const workflow of workflows) {
     for (const [key, value] of Object.entries(workflow.execution.env ?? {})) {
-      if (value.startsWith("$?")) {
-        const name = value.slice(2).trim();
-        if (name && env[name] === undefined) {
+      const envReference = parseCredentialEnvReference(value, { allowOptional: true });
+      if (envReference?.optional) {
+        if (envReference.name && env[envReference.name] === undefined) {
           optionalMissing.push({ workflowId: workflow.id, workflowName: workflow.name, key, reference: value });
         }
         continue;
@@ -692,9 +692,9 @@ function resolveSandboxEnvReference(
   env: Record<string, string | undefined>,
   credentialResolver: WorkflowFanoutPreflightDependencies["credentialResolver"],
 ): string | null {
-  if (value.startsWith("$")) {
-    const varName = value.slice(1).trim();
-    return varName ? env[varName] ?? null : null;
+  const envReference = parseCredentialEnvReference(value);
+  if (envReference) {
+    return envReference.name ? env[envReference.name] ?? null : null;
   }
 
   return (credentialResolver ?? resolveCredential)(value);

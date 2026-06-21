@@ -15,7 +15,15 @@ describe("model credentials", () => {
       source: "env",
       apiKey: "anthropic-key",
     });
+    expect(resolveModelCredentialReference("${ANTHROPIC_API_KEY}", env, resolver)).toEqual({
+      source: "env",
+      apiKey: "anthropic-key",
+    });
     expect(resolveModelCredentialReference("$?OPENAI_API_KEY", env, resolver)).toEqual({
+      source: "optional-env",
+      apiKey: null,
+    });
+    expect(resolveModelCredentialReference("$?{OPENAI_API_KEY}", env, resolver)).toEqual({
       source: "optional-env",
       apiKey: null,
     });

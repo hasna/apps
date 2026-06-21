@@ -378,9 +378,9 @@ describe("workflow fanout", () => {
         target: "sandbox",
         provider: "e2b",
         env: {
-          ANTHROPIC_API_KEY: "$ANTHROPIC_API_KEY",
-          REQUIRED_TOKEN: "$MISSING_REQUIRED",
-          OPTIONAL_TOKEN: "$?MISSING_OPTIONAL",
+          ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}",
+          REQUIRED_TOKEN: "${MISSING_REQUIRED}",
+          OPTIONAL_TOKEN: "$?{MISSING_OPTIONAL}",
           LITERAL: "plain-value",
         },
       },
