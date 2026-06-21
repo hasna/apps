@@ -1,10 +1,55 @@
+import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "fs";
+import { existsSync, mkdirSync, rmSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
+import { homedir, tmpdir } from "os";
 
 const todosDb = join(homedir(), ".todos", "todos.db");
 const hasDb = existsSync(todosDb);
+
+function createTodosDb(homeDir: string): void {
+  const dbDir = join(homeDir, ".todos");
+  mkdirSync(dbDir, { recursive: true });
+  const db = new Database(join(dbDir, "todos.db"));
+  try {
+    db.run(`
+      CREATE TABLE tasks (
+        id TEXT PRIMARY KEY,
+        short_id TEXT,
+        title TEXT NOT NULL,
+        description TEXT,
+        status TEXT NOT NULL,
+        priority TEXT NOT NULL,
+        tags TEXT,
+        assigned_to TEXT,
+        created_at TEXT NOT NULL,
+        completed_at TEXT,
+        task_list_id TEXT,
+        plan_id TEXT
+      )
+    `);
+    db.run(
+      `INSERT INTO tasks (
+        id, short_id, title, description, status, priority, tags,
+        assigned_to, created_at, completed_at, task_list_id, plan_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      "task-1",
+      "T-1",
+      "Handle malformed tags",
+      "Regression coverage for bad local data",
+      "pending",
+      "medium",
+      "{not-json",
+      null,
+      "2026-01-01T00:00:00.000Z",
+      null,
+      null,
+      null
+    );
+  } finally {
+    db.close();
+  }
+}
 
 describe("gatherFromTodos", () => {
   test.skipIf(!hasDb)("returns GatherResult shape", async () => {
@@ -49,6 +94,23 @@ describe("gatherFromTodos", () => {
       expect(roles[0]).toBe("system");
       expect(roles).toContain("user");
       expect(roles).toContain("assistant");
+    }
+  });
+
+  test("uses supplied homeDir and treats malformed task tags as empty", async () => {
+    const homeDir = join(tmpdir(), `brains-todos-gatherer-${Date.now()}`);
+    createTodosDb(homeDir);
+
+    try {
+      const { gatherFromTodos } = await import("./todos.js");
+      const result = await gatherFromTodos({ limit: 1, homeDir });
+
+      expect(result.source).toBe("todos");
+      expect(result.count).toBe(1);
+      expect(result.examples[0]?.messages[1]?.content).toContain("Handle malformed tags");
+      expect(result.examples[0]?.messages[2]?.content).toContain('"tags": []');
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
     }
   });
 });

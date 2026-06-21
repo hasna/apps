@@ -16,4 +16,5 @@ export interface GathererOptions {
   limit?: number
   since?: Date
   outputDir?: string  // where to write JSONL files, default ~/.hasna/brains/datasets/
+  homeDir?: string  // override the user home directory for local source databases
 }
