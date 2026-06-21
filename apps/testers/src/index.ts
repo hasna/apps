@@ -1,5 +1,38 @@
 // ─── Types ───────────────────────────────────────────────────────────────────
 export type {
+  ExecutionSubjectKind,
+  TestSpecKind,
+  RunAttemptStatus,
+  RunEventLevel,
+  RunArtifactKind,
+  TestGoalStatus,
+  LoopRunStatus,
+  TestSpecStep,
+  ExecutionSubject,
+  TestSpec,
+  TestGoal,
+  LoopRun,
+  RunAttempt,
+  ExecutionRunEvent,
+  RunArtifact,
+  CreateExecutionSubjectInput,
+  UpdateExecutionSubjectInput,
+  ExecutionSubjectFilter,
+  CreateTestSpecInput,
+  UpdateTestSpecInput,
+  TestSpecFilter,
+  CreateRunAttemptInput,
+  UpdateRunAttemptInput,
+  RunAttemptFilter,
+  CreateRunEventInput,
+  CreateRunArtifactInput,
+  CreateTestGoalInput,
+  UpdateTestGoalInput,
+  CreateLoopRunInput,
+  UpdateLoopRunInput,
+} from "./db/execution.js";
+
+export type {
   ScenarioPriority,
   RunStatus,
   ResultStatus,
@@ -148,6 +181,37 @@ export {
 } from "./db/workflows.js";
 
 export {
+  createExecutionSubject,
+  getExecutionSubject,
+  listExecutionSubjects,
+  updateExecutionSubject,
+  createTestSpec,
+  getTestSpec,
+  listTestSpecs,
+  updateTestSpec,
+  ensureTestSpecForScenario,
+  createRunAttempt,
+  getRunAttempt,
+  listRunAttempts,
+  updateRunAttempt,
+  ensureRunAttemptForResult,
+  recordRunEvent,
+  getRunEvent,
+  listRunEvents,
+  createRunArtifact,
+  getRunArtifact,
+  listRunArtifacts,
+  createTestGoal,
+  getTestGoal,
+  listTestGoals,
+  updateTestGoal,
+  createLoopRun,
+  getLoopRun,
+  listLoopRuns,
+  updateLoopRun,
+} from "./db/execution.js";
+
+export {
   addDependency,
   removeDependency,
   getDependencies,
@@ -239,6 +303,20 @@ export {
   taskToScenarioInput,
   importFromTodos,
   markTodoDone,
+  createTodoTask,
+  reportTesterIssueReportsToTodos,
+  TESTERS_ISSUE_REPORT_SCHEMA_VERSION,
+} from "./lib/todos-connector.js";
+export type {
+  TesterIssueReportV1,
+  TesterIssueSeverity,
+  TesterIssueKind,
+  TodosIssueReportCliItem,
+  ReportTesterIssueReportsResult,
+  ReportTesterIssueReportsOptions,
+  TodosCliRunner,
+  TodosCliRunInput,
+  TodosCliRunResult,
 } from "./lib/todos-connector.js";
 
 export {

@@ -4,6 +4,7 @@ import { getScenario, listScenarios } from "../db/scenarios.js";
 import { listPersonas } from "../db/personas.js";
 import { createTodoTask } from "./todos-connector.js";
 import { runByFilter } from "./runner.js";
+import { loadAiSdkToolLoopHelpers, runAiSdkToolLoop } from "./ai-sdk-runtime.js";
 import type { Result, Run, TestingWorkflow } from "../types/index.js";
 
 export interface WorkflowGoalAction {
@@ -114,7 +115,7 @@ export async function generateWorkflowActionsWithAi(input: {
   results: Result[];
   model?: string;
 }): Promise<WorkflowGoalAction[]> {
-  const { generateText, hasToolCall, jsonSchema, tool } = await import("ai");
+  const { jsonSchema, tool } = await loadAiSdkToolLoopHelpers();
   const actions: WorkflowGoalAction[] = [];
   const scenarios = listScenarios({ projectId: input.workflow.projectId ?? undefined });
   const personas = listPersonas({ projectId: input.workflow.projectId ?? undefined });
@@ -200,10 +201,10 @@ export async function generateWorkflowActionsWithAi(input: {
     `Create todos only for concrete next actions that would help satisfy the workflow goal. Finish with finish_workflow_review.`,
   ].join("\n");
 
-  await generateText({
-    model: (input.model ?? "openai/gpt-4.1-mini") as never,
+  await runAiSdkToolLoop({
+    model: input.model,
     tools,
-    stopWhen: hasToolCall("finish_workflow_review"),
+    finishToolName: "finish_workflow_review",
     prompt,
     maxRetries: 1,
   });

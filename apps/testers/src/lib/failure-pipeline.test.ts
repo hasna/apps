@@ -2,6 +2,7 @@ process.env.TESTERS_DB_PATH = ":memory:";
 
 import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import { createFailureTasks, notifyFailureToConversations } from "./failure-pipeline.js";
+import type { TodosCliRunInput } from "./todos-connector.js";
 import type { Run, Result, Scenario } from "../types/index.js";
 
 function makeRun(overrides: Partial<Run> = {}): Run {
@@ -93,6 +94,47 @@ describe("createFailureTasks", () => {
     expect(result.created + result.skipped).toBe(result.created + result.skipped); // no throw
     expect(typeof result.created).toBe("number");
     expect(typeof result.skipped).toBe("number");
+  });
+
+  it("reports failures through the todos issue-report CLI contract", async () => {
+    process.env["TESTERS_TODOS_PROJECT_ID"] = "proj-123";
+    const calls: TodosCliRunInput[] = [];
+    const result = await createFailureTasks(
+      makeRun(),
+      [makeResult()],
+      [makeScenario({ tags: ["checkout"] })],
+      {
+        todosCli: "todos",
+        todosCliRunner: (input) => {
+          calls.push(input);
+          const payload = JSON.parse(input.stdin) as { reports: Array<{ schema_version: string; title: string; labels?: string[] }> };
+          expect(payload.reports[0]?.schema_version).toBe("testers.issue_report.v1");
+          expect(payload.reports[0]?.title).toBe("Login flow failed");
+          expect(payload.reports[0]?.labels).toContain("checkout");
+          return {
+            status: 0,
+            stdout: JSON.stringify({
+              dry_run: false,
+              results: [{
+                action: "created",
+                task: { id: "task-1", short_id: "BUG-1" },
+                report: payload.reports[0],
+              }],
+            }),
+            stderr: "",
+          };
+        },
+      },
+    );
+
+    expect(result).toEqual({ created: 1, skipped: 0 });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.command).toBe("todos");
+    expect(calls[0]!.args).toContain("issues");
+    expect(calls[0]!.args).toContain("report");
+    expect(calls[0]!.args).toContain("--apply");
+    expect(calls[0]!.args).toContain("--json");
+    expect(calls[0]!.args).toContain("proj-123");
   });
 });
 

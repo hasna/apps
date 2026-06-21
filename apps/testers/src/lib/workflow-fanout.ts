@@ -20,6 +20,7 @@ export interface WorkflowFanoutOptions extends WorkflowRunOptions {
   tags?: string[];
   includeDisabled?: boolean;
   workers?: number;
+  maxQueuedLeases?: number;
   batchSize?: number;
   batch?: number;
   offset?: number;
@@ -46,6 +47,7 @@ export interface WorkflowFanoutResult {
   status: "passed" | "failed" | "dry-run";
   workers: number;
   selection: WorkflowFanoutSelection;
+  leases: WorkflowFanoutLeasePlan;
   total: number;
   passed: number;
   failed: number;
@@ -101,6 +103,15 @@ export interface WorkflowFanoutSelection {
   totalBatches?: number;
 }
 
+export interface WorkflowFanoutLeasePlan {
+  selected: number;
+  workers: number;
+  activeLeases: number;
+  queuedLeases: number;
+  maxQueuedLeases: number;
+  withinLimit: boolean;
+}
+
 interface WorkflowFanoutPreflightDependencies {
   providerApiKeyResolver?: WorkflowFanoutDependencies["providerApiKeyResolver"];
   model?: string;
@@ -115,7 +126,9 @@ const PROVIDER_ENV_KEYS: Record<string, string> = {
   e2b: "E2B_API_KEY",
   daytona: "DAYTONA_API_KEY",
   modal: "MODAL_TOKEN_ID",
+  kernel: "KERNEL_API_KEY",
 };
+const DEFAULT_MAX_QUEUED_FANOUT_LEASES_PER_WORKER = 4;
 
 export type WorkflowFanoutModelCredentialValidationInput = ModelCredentialValidationInput;
 export type WorkflowFanoutModelCredentialValidationResult = ModelCredentialValidationResult;
@@ -133,6 +146,41 @@ export function normalizeFanoutWorkerCount(value: number | undefined): number {
     throw new Error("workflow fanout workers must be between 1 and 12");
   }
   return workers;
+}
+
+export function buildWorkflowFanoutLeasePlan(
+  selected: number,
+  workers: number,
+  options: Pick<WorkflowFanoutOptions, "maxQueuedLeases"> = {},
+): WorkflowFanoutLeasePlan {
+  const selectedCount = Math.floor(selected);
+  if (!Number.isFinite(selectedCount) || selectedCount < 1) {
+    throw new Error("workflow fanout lease plan requires at least one selected workflow");
+  }
+
+  const workerCount = normalizeFanoutWorkerCount(workers);
+  const activeLeases = Math.min(selectedCount, workerCount);
+  const queuedLeases = Math.max(0, selectedCount - activeLeases);
+  const maxQueuedLeases = options.maxQueuedLeases === undefined
+    ? workerCount * DEFAULT_MAX_QUEUED_FANOUT_LEASES_PER_WORKER
+    : normalizeOptionalNonNegativeInteger(options.maxQueuedLeases, "workflow fanout max queued leases")!;
+
+  return {
+    selected: selectedCount,
+    workers: workerCount,
+    activeLeases,
+    queuedLeases,
+    maxQueuedLeases,
+    withinLimit: queuedLeases <= maxQueuedLeases,
+  };
+}
+
+export function assertWorkflowFanoutLeasePlan(plan: WorkflowFanoutLeasePlan): void {
+  if (plan.withinLimit) return;
+
+  throw new Error(
+    `workflow fanout selected ${plan.selected} workflow(s), which would queue ${plan.queuedLeases} lease(s) behind ${plan.activeLeases} active worker(s); max queued leases is ${plan.maxQueuedLeases}. Use --batch-size ${plan.activeLeases + plan.maxQueuedLeases} with --batch or --all-batches to stage the fanout.`
+  );
 }
 
 export function resolveWorkflowFanoutBatch(
@@ -411,6 +459,11 @@ export async function runWorkflowFanout(
   const workers = normalizeFanoutWorkerCount(options.workers);
   const matchedWorkflows = resolveWorkflowFanoutSelection(options);
   const { workflows, selection } = resolveWorkflowFanoutBatch(matchedWorkflows, options);
+  const leases = buildWorkflowFanoutLeasePlan(workflows.length, workers, options);
+  if (!options.dryRun) {
+    assertWorkflowFanoutLeasePlan(leases);
+  }
+
   const {
     runTestingWorkflow: runOne = runTestingWorkflow,
     preflight: preflightOverride,
@@ -438,6 +491,7 @@ export async function runWorkflowFanout(
       status: "failed",
       workers,
       selection,
+      leases,
       total: workflows.length,
       passed: 0,
       failed: workflows.length,
@@ -499,6 +553,7 @@ export async function runWorkflowFanout(
     status: dryRun ? "dry-run" : failed > 0 ? "failed" : "passed",
     workers,
     selection,
+    leases,
     total: items.length,
     passed,
     failed,
@@ -580,9 +635,9 @@ async function resolveProviderApiKey(
 
   try {
     const mod = await import("@hasna/sandboxes") as unknown as {
-      getProviderApiKey?: (provider: "e2b" | "daytona" | "modal") => string | undefined;
+      getProviderApiKey?: (provider: "e2b" | "daytona" | "modal" | "kernel") => string | undefined;
     };
-    if (provider === "e2b" || provider === "daytona" || provider === "modal") {
+    if (provider === "e2b" || provider === "daytona" || provider === "modal" || provider === "kernel") {
       return mod.getProviderApiKey?.(provider);
     }
   } catch {

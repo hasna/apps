@@ -9,22 +9,55 @@ import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { dirname, join, resolve } from "node:path";
 
-import { createScenario, getScenario, getScenarioByShortId, listScenarios, updateScenario, deleteScenario } from "../db/scenarios.js";
+import {
+  createScenario,
+  getScenario,
+  getScenarioByShortId,
+  listScenarios,
+  updateScenario,
+  deleteScenario,
+} from "../db/scenarios.js";
 import { getRun, listRuns } from "../db/runs.js";
 import { getResultsByRun } from "../db/results.js";
 import { listScreenshots } from "../db/screenshots.js";
 import { runByFilter, startRunAsync, onRunEvent } from "../lib/runner.js";
-import { formatTerminal, formatJSON, getExitCode, formatRunList, formatScenarioList } from "../lib/reporter.js";
+import {
+  formatTerminal,
+  formatJSON,
+  getExitCode,
+  formatRunList,
+  formatScenarioList,
+} from "../lib/reporter.js";
 import { loadConfig } from "../lib/config.js";
 import { importFromTodos } from "../lib/todos-connector.js";
 import { installBrowser } from "../lib/browser.js";
 import { initProject } from "../lib/init.js";
 import { runSmoke, formatSmokeReport } from "../lib/smoke.js";
-import { DEFAULT_QUICK_QA_OVERALL_TIMEOUT_MS, runQuickQa, formatQuickQaReport, getQuickQaExitCode, normalizeQuickQaWcagLevel, resolveQuickQaSelection } from "../lib/quick-qa.js";
+import {
+  DEFAULT_QUICK_QA_OVERALL_TIMEOUT_MS,
+  runQuickQa,
+  formatQuickQaReport,
+  getQuickQaExitCode,
+  normalizeQuickQaWcagLevel,
+  resolveQuickQaSelection,
+} from "../lib/quick-qa.js";
 import { diffRuns, formatDiffTerminal, formatDiffJSON } from "../lib/diff.js";
-import { setBaseline, getBaseline, compareRunScreenshots, formatVisualDiffTerminal } from "../lib/visual-diff.js";
+import {
+  setBaseline,
+  getBaseline,
+  compareRunScreenshots,
+  formatVisualDiffTerminal,
+} from "../lib/visual-diff.js";
 import { generateHtmlReport, generateLatestReport } from "../lib/report.js";
-import { getCostSummary, formatCostsTerminal, formatCostsJSON, formatCostsCsv, checkBudget, getCostsByScenario, formatCostsByScenarioTerminal } from "../lib/costs.js";
+import {
+  getCostSummary,
+  formatCostsTerminal,
+  formatCostsJSON,
+  formatCostsCsv,
+  checkBudget,
+  getCostsByScenario,
+  formatCostsByScenarioTerminal,
+} from "../lib/costs.js";
 import { createProdDebugPlan, formatProdDebugPlan } from "../lib/prod-debug.js";
 import { redactPersonas } from "../lib/persona-redaction.js";
 import {
@@ -35,25 +68,93 @@ import {
 } from "../lib/model-credentials.js";
 import type { AIProvider } from "../lib/ai-client.js";
 
-import { createProject, getProject, listProjects, ensureProject } from "../db/projects.js";
-import { createPersona, getPersona, listPersonas, deletePersona } from "../db/personas.js";
-import { createApiCheck, getApiCheck, listApiChecks, deleteApiCheck } from "../db/api-checks.js";
+import {
+  createProject,
+  getProject,
+  listProjects,
+  ensureProject,
+} from "../db/projects.js";
+import {
+  createPersona,
+  getPersona,
+  listPersonas,
+  deletePersona,
+} from "../db/personas.js";
+import {
+  createApiCheck,
+  getApiCheck,
+  listApiChecks,
+  deleteApiCheck,
+} from "../db/api-checks.js";
 import { runApiCheck, runApiChecksByFilter } from "../lib/api-runner.js";
-import { createSchedule, getSchedule, listSchedules, updateSchedule, deleteSchedule } from "../db/schedules.js";
+import {
+  createSchedule,
+  getSchedule,
+  listSchedules,
+  updateSchedule,
+  deleteSchedule,
+} from "../db/schedules.js";
 import { getTemplate, listTemplateNames } from "../lib/templates.js";
-import { createAuthPreset, getAuthPreset, listAuthPresets, deleteAuthPreset } from "../db/auth-presets.js";
-import { addDependency, removeDependency, getDependencies, getDependents, createFlow, getFlow, listFlows, deleteFlow } from "../db/flows.js";
-import { createTestingWorkflow, deleteTestingWorkflow, getTestingWorkflow, listTestingWorkflows, updateTestingWorkflow } from "../db/workflows.js";
+import {
+  createAuthPreset,
+  getAuthPreset,
+  listAuthPresets,
+  deleteAuthPreset,
+} from "../db/auth-presets.js";
+import {
+  addDependency,
+  removeDependency,
+  getDependencies,
+  getDependents,
+  createFlow,
+  getFlow,
+  listFlows,
+  deleteFlow,
+} from "../db/flows.js";
+import {
+  createTestingWorkflow,
+  deleteTestingWorkflow,
+  getTestingWorkflow,
+  listTestingWorkflows,
+  updateTestingWorkflow,
+} from "../db/workflows.js";
 import { runTestingWorkflow } from "../lib/workflow-runner.js";
-import { createEnvironment, getEnvironment, listEnvironments, deleteEnvironment, setDefaultEnvironment, getDefaultEnvironment } from "../db/environments.js";
+import {
+  createEnvironment,
+  getEnvironment,
+  listEnvironments,
+  deleteEnvironment,
+  setDefaultEnvironment,
+  getDefaultEnvironment,
+} from "../db/environments.js";
 import { generateGitHubActionsWorkflow } from "../lib/ci.js";
 import type { ScenarioPriority } from "../types/index.js";
 import { parseAssertionString } from "../lib/assertions.js";
 import { existsSync, mkdirSync } from "node:fs";
 import { getTestersDir } from "../lib/paths.js";
-import { listSessions, getSession, deleteSession, countSessions, searchSessions } from "../db/sessions.js";
-import { discoverRepo, clearDiscoveryCache, getDiscoveryCacheInfo } from "../lib/repo-discovery.js";
+import {
+  listSessions,
+  getSession,
+  deleteSession,
+  countSessions,
+  searchSessions,
+} from "../db/sessions.js";
+import {
+  discoverRepo,
+  clearDiscoveryCache,
+  getDiscoveryCacheInfo,
+} from "../lib/repo-discovery.js";
 import { runRepoTests, runPrep } from "../lib/repo-executor.js";
+import {
+  launchSandboxApp,
+  listSandboxAppLaunches,
+  parseDurationSeconds,
+  parseSandboxAppEnvAssignments,
+  readSandboxAppLogs,
+  stopSandboxAppLaunch,
+  type SandboxAppLaunchResult,
+  type SandboxAppLaunchPlan,
+} from "../lib/sandbox-app.js";
 
 // ─── Interactive Add Prompt (Ink) ────────────────────────────────────────────
 
@@ -70,7 +171,11 @@ type AddFormState = {
 const PRIORITIES = ["low", "medium", "high", "critical"];
 
 function splitCsvOption(value: string | undefined): string[] | undefined {
-  const items = value?.split(",").map((item) => item.trim()).filter(Boolean) ?? [];
+  const items =
+    value
+      ?.split(",")
+      .map((item) => item.trim())
+      .filter(Boolean) ?? [];
   return items.length > 0 ? items : undefined;
 }
 
@@ -95,7 +200,10 @@ function modelCredentialProviderFromTarget(target: string): AIProvider | null {
   const envName = normalized.toUpperCase();
 
   for (const provider of Object.keys(MODEL_PROVIDER_ENV_KEYS) as AIProvider[]) {
-    if (provider === providerName || MODEL_PROVIDER_ENV_KEYS[provider] === envName) {
+    if (
+      provider === providerName ||
+      MODEL_PROVIDER_ENV_KEYS[provider] === envName
+    ) {
       return provider;
     }
   }
@@ -103,19 +211,25 @@ function modelCredentialProviderFromTarget(target: string): AIProvider | null {
   return null;
 }
 
-function parseModelCredentialAssignments(values: string[] | undefined): Partial<Record<AIProvider, string>> {
+function parseModelCredentialAssignments(
+  values: string[] | undefined,
+): Partial<Record<AIProvider, string>> {
   const assignments: Partial<Record<AIProvider, string>> = {};
 
   for (const value of values ?? []) {
     const separator = value.indexOf("=");
     if (separator < 0) {
-      throw new Error(`Invalid credential assignment: ${value}. Use provider=reference or ENV_KEY=reference.`);
+      throw new Error(
+        `Invalid credential assignment: ${value}. Use provider=reference or ENV_KEY=reference.`,
+      );
     }
 
     const target = value.slice(0, separator).trim();
     const reference = value.slice(separator + 1).trim();
     if (!reference) {
-      throw new Error(`Invalid credential assignment: ${value}. Reference cannot be empty.`);
+      throw new Error(
+        `Invalid credential assignment: ${value}. Reference cannot be empty.`,
+      );
     }
 
     const provider = modelCredentialProviderFromTarget(target);
@@ -129,7 +243,10 @@ function parseModelCredentialAssignments(values: string[] | undefined): Partial<
   return assignments;
 }
 
-function sanitizeCredentialReference(reference: string, source: ModelCredentialCheck["source"]): string {
+function sanitizeCredentialReference(
+  reference: string,
+  source: ModelCredentialCheck["source"],
+): string {
   if (source === "literal") return "[literal]";
   return reference;
 }
@@ -147,7 +264,10 @@ function toModelCredentialCliItem(check: ModelCredentialCheck) {
   };
 }
 
-function writeJsonOutputFile(filePath: string | undefined, value: unknown): string | null {
+function writeJsonOutputFile(
+  filePath: string | undefined,
+  value: unknown,
+): string | null {
   if (!filePath) return null;
   const resolved = resolve(filePath);
   const dir = dirname(resolved);
@@ -175,7 +295,11 @@ function validateStoredAssertion(value: unknown): string | null {
     }
   }
 
-  if (value && typeof value === "object" && typeof (value as { type?: unknown }).type === "string") {
+  if (
+    value &&
+    typeof value === "object" &&
+    typeof (value as { type?: unknown }).type === "string"
+  ) {
     return null;
   }
 
@@ -220,7 +344,126 @@ function parseSandboxEnv(
   return Object.keys(env).length > 0 ? env : undefined;
 }
 
-function AddForm({ onComplete }: { onComplete: (data: AddFormState | null) => void }) {
+type SandboxAppCliOutput = Omit<SandboxAppLaunchResult, "phases"> & {
+  phases: Array<{
+    name: string;
+    cwd: string;
+    timeoutMs?: number;
+    command?: string;
+  }>;
+};
+
+function toSandboxAppCliOutput(
+  result: SandboxAppLaunchResult,
+  options: { showCommands?: boolean } = {},
+): SandboxAppCliOutput {
+  return {
+    ...result,
+    phases: result.phases.map((phase) => ({
+      name: phase.name,
+      cwd: phase.cwd,
+      ...(phase.timeoutMs !== undefined ? { timeoutMs: phase.timeoutMs } : {}),
+      ...(options.showCommands ? { command: phase.command } : {}),
+    })),
+  };
+}
+
+function summarizeSandboxAppPlan(plan: SandboxAppLaunchPlan): string[] {
+  return plan.phases.map((phase) => phase.name);
+}
+
+function formatSandboxAppLaunch(result: SandboxAppLaunchResult): string {
+  const status = result.dryRun ? chalk.yellow("dry run") : chalk.green("ready");
+  const lines = [
+    "",
+    chalk.bold(`  Sandbox app ${status}: ${result.publicUrl}`),
+    "",
+    `  Sandbox:   ${chalk.dim(result.sandboxId)} (${result.provider})`,
+    `  Mode:      ${result.mode}`,
+    `  Port:      ${result.port}`,
+    `  Source:    ${result.sourceDir}`,
+    `  Workdir:   ${result.workingDir}`,
+    `  Remote:    ${result.remoteDir}`,
+    `  Expires:   ${result.expiresAt}`,
+    `  Phases:    ${summarizeSandboxAppPlan(result).join(", ")}`,
+  ];
+  if (result.scannedRequiredEnvKeys.length > 0) {
+    lines.push(
+      `  Env scan:  ${result.scannedRequiredEnvKeys.length} required key${result.scannedRequiredEnvKeys.length === 1 ? "" : "s"}`,
+    );
+  }
+  if (result.generatedEnvKeys.length > 0) {
+    lines.push(`  Generated: ${result.generatedEnvKeys.join(", ")}`);
+  }
+  lines.push("");
+  if (!result.dryRun) {
+    lines.push(
+      chalk.dim(`  Stop:      testers sandbox stop ${result.sandboxId}`),
+    );
+    lines.push(
+      chalk.dim(`  Logs:      testers sandbox logs ${result.sandboxId}`),
+    );
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+
+function parsePositiveIntOption(
+  value: string | undefined,
+  label: string,
+): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0)
+    throw new Error(`${label} must be a positive integer`);
+  return parsed;
+}
+
+function repeatOption(value: string, acc: string[]): string[] {
+  acc.push(value);
+  return acc;
+}
+
+function parseSandboxProviderEnvOptions(opts: {
+  providerEnv?: string[];
+  providerEnvFile?: string[];
+  allowLiteralSecretEnv?: boolean;
+}): {
+  providerEnv: Record<string, string>;
+  providerEnvFiles: string[];
+  providerEnvBaseDir: string;
+} {
+  return {
+    providerEnv: parseSandboxAppEnvAssignments(opts.providerEnv, [], {
+      allowLiteralSecretValues: opts.allowLiteralSecretEnv,
+    }),
+    providerEnvFiles: opts.providerEnvFile ?? [],
+    providerEnvBaseDir: process.cwd(),
+  };
+}
+
+function gitDirtySummary(repoPath: string): string | null {
+  try {
+    const proc = Bun.spawnSync({
+      cmd: ["git", "-C", repoPath, "status", "--short"],
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) return null;
+    const output = new TextDecoder().decode(proc.stdout).trim();
+    if (!output) return null;
+    const count = output.split(/\r?\n/).filter(Boolean).length;
+    return `${count} changed file${count === 1 ? "" : "s"} will be synced from the working tree`;
+  } catch {
+    return null;
+  }
+}
+
+function AddForm({
+  onComplete,
+}: {
+  onComplete: (data: AddFormState | null) => void;
+}) {
   const { exit } = useApp();
   const [state, setState] = useState<AddFormState>({
     name: "",
@@ -245,13 +488,28 @@ function AddForm({ onComplete }: { onComplete: (data: AddFormState | null) => vo
         if (!val) return;
         setState((s) => ({ ...s, name: val, buffer: "", field: "url" }));
       } else if (state.field === "url") {
-        setState((s) => ({ ...s, url: s.buffer.trim(), buffer: "", field: "description" }));
+        setState((s) => ({
+          ...s,
+          url: s.buffer.trim(),
+          buffer: "",
+          field: "description",
+        }));
       } else if (state.field === "description") {
-        setState((s) => ({ ...s, description: s.buffer.trim(), buffer: "", field: "priority" }));
+        setState((s) => ({
+          ...s,
+          description: s.buffer.trim(),
+          buffer: "",
+          field: "priority",
+        }));
       } else if (state.field === "priority") {
         setState((s) => ({ ...s, buffer: "", field: "tags" }));
       } else if (state.field === "tags") {
-        setState((s) => ({ ...s, tags: s.buffer.trim(), buffer: "", field: "confirm" }));
+        setState((s) => ({
+          ...s,
+          tags: s.buffer.trim(),
+          buffer: "",
+          field: "confirm",
+        }));
       } else if (state.field === "confirm") {
         onComplete(state);
         exit();
@@ -281,14 +539,23 @@ function AddForm({ onComplete }: { onComplete: (data: AddFormState | null) => vo
     }
   });
 
-  const fieldLabel = (label: string, field: AddFormState["field"], value: string, hint?: string) => {
+  const fieldLabel = (
+    label: string,
+    field: AddFormState["field"],
+    value: string,
+    hint?: string,
+  ) => {
     const active = state.field === field;
     const displayValue = active ? state.buffer + (active ? "█" : "") : value;
     return (
       <Box key={field} flexDirection="row" gap={1}>
         <Text color={active ? "cyan" : "gray"}>{active ? "→" : " "}</Text>
-        <Text color={active ? "white" : "gray"} bold={active}>{label}:</Text>
-        <Text color={active ? "white" : "gray"}>{displayValue || (hint ? hint : "")}</Text>
+        <Text color={active ? "white" : "gray"} bold={active}>
+          {label}:
+        </Text>
+        <Text color={active ? "white" : "gray"}>
+          {displayValue || (hint ? hint : "")}
+        </Text>
         {!displayValue && hint && <Text color="gray"> </Text>}
       </Box>
     );
@@ -296,37 +563,91 @@ function AddForm({ onComplete }: { onComplete: (data: AddFormState | null) => vo
 
   return (
     <Box flexDirection="column" gap={0} paddingY={1}>
-      <Text bold color="cyan"> New Test Scenario</Text>
+      <Text bold color="cyan">
+        {" "}
+        New Test Scenario
+      </Text>
       <Text color="gray"> ─────────────────────────────</Text>
       {fieldLabel("  Name       ", "name", state.name)}
       {fieldLabel("  URL        ", "url", state.url, "(optional)")}
-      {fieldLabel("  Description", "description", state.description, "(optional)")}
+      {fieldLabel(
+        "  Description",
+        "description",
+        state.description,
+        "(optional)",
+      )}
       <Box flexDirection="row" gap={1}>
-        <Text color={state.field === "priority" ? "cyan" : "gray"}>{state.field === "priority" ? "→" : " "}</Text>
-        <Text color={state.field === "priority" ? "white" : "gray"} bold={state.field === "priority"}>  Priority   :</Text>
+        <Text color={state.field === "priority" ? "cyan" : "gray"}>
+          {state.field === "priority" ? "→" : " "}
+        </Text>
+        <Text
+          color={state.field === "priority" ? "white" : "gray"}
+          bold={state.field === "priority"}
+        >
+          {" "}
+          Priority :
+        </Text>
         {PRIORITIES.map((p) => (
-          <Text key={p} color={p === state.priority ? "cyan" : "gray"} bold={p === state.priority}>{p === state.priority ? `[${p}]` : ` ${p} `}</Text>
+          <Text
+            key={p}
+            color={p === state.priority ? "cyan" : "gray"}
+            bold={p === state.priority}
+          >
+            {p === state.priority ? `[${p}]` : ` ${p} `}
+          </Text>
         ))}
         {state.field === "priority" && <Text color="gray"> ← →</Text>}
       </Box>
-      {fieldLabel("  Tags       ", "tags", state.tags, "comma-separated, optional")}
+      {fieldLabel(
+        "  Tags       ",
+        "tags",
+        state.tags,
+        "comma-separated, optional",
+      )}
 
       {state.field === "confirm" && (
         <Box flexDirection="column" marginTop={1}>
           <Text color="gray"> ─────────────────────────────</Text>
-          <Text bold color="white"> Preview:</Text>
-          <Text color="gray">   name:        <Text color="white">{state.name}</Text></Text>
-          {state.url && <Text color="gray">   url:         <Text color="white">{state.url}</Text></Text>}
-          {state.description && <Text color="gray">   description: <Text color="white">{state.description}</Text></Text>}
-          <Text color="gray">   priority:    <Text color="cyan">{state.priority}</Text></Text>
-          {state.tags && <Text color="gray">   tags:        <Text color="white">{state.tags}</Text></Text>}
+          <Text bold color="white">
+            {" "}
+            Preview:
+          </Text>
+          <Text color="gray">
+            {" "}
+            name: <Text color="white">{state.name}</Text>
+          </Text>
+          {state.url && (
+            <Text color="gray">
+              {" "}
+              url: <Text color="white">{state.url}</Text>
+            </Text>
+          )}
+          {state.description && (
+            <Text color="gray">
+              {" "}
+              description: <Text color="white">{state.description}</Text>
+            </Text>
+          )}
+          <Text color="gray">
+            {" "}
+            priority: <Text color="cyan">{state.priority}</Text>
+          </Text>
+          {state.tags && (
+            <Text color="gray">
+              {" "}
+              tags: <Text color="white">{state.tags}</Text>
+            </Text>
+          )}
           <Text> </Text>
           <Text color="green"> Press Enter to save, Escape to cancel</Text>
         </Box>
       )}
 
       {state.field !== "confirm" && (
-        <Text color="gray" dimColor> Tab/Enter to advance · Escape to cancel</Text>
+        <Text color="gray" dimColor>
+          {" "}
+          Tab/Enter to advance · Escape to cancel
+        </Text>
       )}
     </Box>
   );
@@ -340,14 +661,19 @@ async function runInteractiveAdd(projectId: string | undefined): Promise<void> {
       onComplete: (data) => {
         savedResult = data;
       },
-    })
+    }),
   );
 
   await waitUntilExit();
 
   if (savedResult) {
     const result = savedResult as AddFormState;
-    const tags = result.tags ? result.tags.split(",").map((t) => t.trim()).filter(Boolean) : [];
+    const tags = result.tags
+      ? result.tags
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean)
+      : [];
     const scenario = createScenario({
       name: result.name,
       description: result.description || result.name,
@@ -356,7 +682,11 @@ async function runInteractiveAdd(projectId: string | undefined): Promise<void> {
       priority: result.priority as ScenarioPriority,
       projectId,
     });
-    log(chalk.green(`\nCreated scenario ${chalk.bold(scenario.shortId)}: ${scenario.name}`));
+    log(
+      chalk.green(
+        `\nCreated scenario ${chalk.bold(scenario.shortId)}: ${scenario.name}`,
+      ),
+    );
   } else {
     log(chalk.dim("\nCancelled."));
   }
@@ -396,7 +726,6 @@ function stripAnsi(str: string): string {
   return str.replace(/\x1B\[[0-9;]*m/g, "");
 }
 
-
 program
   .name("testers")
   .version(pkg.version)
@@ -408,35 +737,53 @@ registerEventsCommands(program, { source: "testers" });
 
 program
   .command("prod-debug <target>")
-  .description("Create a safe production debug plan for a URL/session/request without leaking secrets")
+  .description(
+    "Create a safe production debug plan for a URL/session/request without leaking secrets",
+  )
   .option("--app <name>", "App name for reporting")
   .option("--profile <name>", "prodDebug app profile from testers config")
   .option("--actor <name>", "Operator/agent identity for support audit context")
   .option("--reason <text>", "Debug reason or support context")
-  .option("--support-url <url>", "Audited support browser/session URL minted by the target app")
+  .option(
+    "--support-url <url>",
+    "Audited support browser/session URL minted by the target app",
+  )
   .option("--support-grant <id>", "Audited support access grant ID")
-  .option("--ttl <minutes>", "Support access TTL in minutes, capped at 60", "15")
+  .option(
+    "--ttl <minutes>",
+    "Support access TTL in minutes, capped at 60",
+    "15",
+  )
   .option("--no-browser", "Do not include user-scoped browser reproduction")
   .option("--logs", "Include log timeline adapter requirement", false)
-  .option("--allow-writes", "Document that a separate explicit approval is required for writes", false)
+  .option(
+    "--allow-writes",
+    "Document that a separate explicit approval is required for writes",
+    false,
+  )
   .option("--json", "Output JSON", false)
   .option("-o, --output <filepath>", "Write plan to file")
   .action((target: string, opts) => {
     const config = loadConfig();
-    const plan = createProdDebugPlan({
-      target,
-      app: opts.app,
-      profile: opts.profile,
-      actor: opts.actor,
-      reason: opts.reason,
-      supportUrl: opts.supportUrl,
-      supportGrantId: opts.supportGrant,
-      ttlMinutes: parseInt(opts.ttl, 10),
-      includeBrowser: opts.browser,
-      includeLogs: opts.logs,
-      allowWrites: opts.allowWrites,
-    }, config.prodDebug);
-    const output = opts.json ? JSON.stringify(plan, null, 2) : formatProdDebugPlan(plan);
+    const plan = createProdDebugPlan(
+      {
+        target,
+        app: opts.app,
+        profile: opts.profile,
+        actor: opts.actor,
+        reason: opts.reason,
+        supportUrl: opts.supportUrl,
+        supportGrantId: opts.supportGrant,
+        ttlMinutes: parseInt(opts.ttl, 10),
+        includeBrowser: opts.browser,
+        includeLogs: opts.logs,
+        allowWrites: opts.allowWrites,
+      },
+      config.prodDebug,
+    );
+    const output = opts.json
+      ? JSON.stringify(plan, null, 2)
+      : formatProdDebugPlan(plan);
     if (opts.output) {
       writeFileSync(resolve(opts.output), output + "\n");
     } else {
@@ -473,23 +820,65 @@ function resolveProject(optProject?: string): string | undefined {
 program
   .command("add [name]")
   .alias("create")
-  .description("Create a new test scenario (interactive if no name/flags given)")
+  .description(
+    "Create a new test scenario (interactive if no name/flags given)",
+  )
   .option("-d, --description <text>", "Scenario description", "")
-  .option("-s, --steps <step>", "Test step (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
-  .option("-t, --tag <tag>", "Tag (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
+  .option(
+    "-s, --steps <step>",
+    "Test step (repeatable)",
+    (val: string, acc: string[]) => {
+      acc.push(val);
+      return acc;
+    },
+    [] as string[],
+  )
+  .option(
+    "-t, --tag <tag>",
+    "Tag (repeatable)",
+    (val: string, acc: string[]) => {
+      acc.push(val);
+      return acc;
+    },
+    [] as string[],
+  )
   .option("-p, --priority <level>", "Priority level", "medium")
   .option("-m, --model <model>", "AI model to use")
   .option("--path <path>", "Target path on the URL")
   .option("--auth", "Requires authentication", false)
-  .option("--auth-preset <name>", "Attach email/password/loginPath from a named auth preset")
+  .option(
+    "--auth-preset <name>",
+    "Attach email/password/loginPath from a named auth preset",
+  )
   .option("--timeout <ms>", "Timeout in milliseconds")
   .option("--project <id>", "Project ID")
-  .option("--template <name>", "Seed scenarios from a template (auth, crud, forms, nav, a11y)")
-  .option("--assert <assertion>", "Structured assertion (repeatable). Formats: selector:<sel> visible, text:<sel> contains:<text>, no-console-errors, url:contains:<path>, title:contains:<text>, count:<sel> eq:<n>", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
+  .option(
+    "--template <name>",
+    "Seed scenarios from a template (auth, crud, forms, nav, a11y)",
+  )
+  .option(
+    "--assert <assertion>",
+    "Structured assertion (repeatable). Formats: selector:<sel> visible, text:<sel> contains:<text>, no-console-errors, url:contains:<path>, title:contains:<text>, count:<sel> eq:<n>",
+    (val: string, acc: string[]) => {
+      acc.push(val);
+      return acc;
+    },
+    [] as string[],
+  )
   .action(async (name: string | undefined, opts) => {
     try {
       // Interactive mode: no name and no meaningful flags provided
-      const hasFlags = opts.description || opts.steps?.length || opts.tag?.length || opts.model || opts.path || opts.auth || opts.authPreset || opts.timeout || opts.template || opts.assert?.length;
+      const hasFlags =
+        opts.description ||
+        opts.steps?.length ||
+        opts.tag?.length ||
+        opts.model ||
+        opts.path ||
+        opts.auth ||
+        opts.authPreset ||
+        opts.timeout ||
+        opts.template ||
+        opts.assert?.length;
       if (!name && !hasFlags) {
         const projectId = resolveProject(opts.project);
         await runInteractiveAdd(projectId);
@@ -504,7 +893,11 @@ program
       if (opts.template) {
         const template = getTemplate(opts.template);
         if (!template) {
-          logError(chalk.red(`Unknown template: ${opts.template}. Available: ${listTemplateNames().join(", ")}`));
+          logError(
+            chalk.red(
+              `Unknown template: ${opts.template}. Available: ${listTemplateNames().join(", ")}`,
+            ),
+          );
           process.exit(1);
         }
         const projectId = resolveProject(opts.project);
@@ -517,7 +910,9 @@ program
 
       const assertions = (opts.assert as string[]).map(parseAssertionString);
       const projectId = resolveProject(opts.project);
-      const authPreset = opts.authPreset ? getAuthPreset(opts.authPreset) : null;
+      const authPreset = opts.authPreset
+        ? getAuthPreset(opts.authPreset)
+        : null;
       if (opts.authPreset && !authPreset) {
         logError(chalk.red(`Auth preset not found: ${opts.authPreset}`));
         process.exit(1);
@@ -531,18 +926,28 @@ program
         model: opts.model,
         targetPath: opts.path,
         requiresAuth: opts.auth || Boolean(authPreset),
-        authConfig: authPreset ? {
-          email: authPreset.email,
-          password: authPreset.password,
-          loginPath: authPreset.loginPath,
-        } : undefined,
+        authConfig: authPreset
+          ? {
+              email: authPreset.email,
+              password: authPreset.password,
+              loginPath: authPreset.loginPath,
+            }
+          : undefined,
         timeoutMs: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
         assertions: assertions.length > 0 ? assertions : undefined,
         projectId,
       });
-      log(chalk.green(`Created scenario ${chalk.bold(scenario.shortId)}: ${scenario.name}`));
+      log(
+        chalk.green(
+          `Created scenario ${chalk.bold(scenario.shortId)}: ${scenario.name}`,
+        ),
+      );
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -556,7 +961,10 @@ program
   .option("-t, --tag <tag>", "Filter by tag")
   .option("-p, --priority <level>", "Filter by priority")
   .option("--project <id>", "Filter by project ID")
-  .option("--search <text>", "Filter by name or description (case-insensitive substring match)")
+  .option(
+    "--search <text>",
+    "Filter by name or description (case-insensitive substring match)",
+  )
   .option("--sort <field>", "Sort field: date, priority, name (default: date)")
   .option("--asc", "Sort ascending instead of descending", false)
   .option("-l, --limit <n>", "Limit results", "50")
@@ -594,7 +1002,11 @@ program
         log(formatScenarioList(scenarios));
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -625,10 +1037,14 @@ program
       log(`  Description: ${scenario.description}`);
       log(`  Priority:    ${scenario.priority}`);
       log(`  Model:       ${scenario.model ?? chalk.dim("default")}`);
-      log(`  Tags:        ${scenario.tags.length > 0 ? scenario.tags.join(", ") : chalk.dim("none")}`);
+      log(
+        `  Tags:        ${scenario.tags.length > 0 ? scenario.tags.join(", ") : chalk.dim("none")}`,
+      );
       log(`  Path:        ${scenario.targetPath ?? chalk.dim("none")}`);
       log(`  Auth:        ${scenario.requiresAuth ? "yes" : "no"}`);
-      log(`  Timeout:     ${scenario.timeoutMs ? `${scenario.timeoutMs}ms` : chalk.dim("default")}`);
+      log(
+        `  Timeout:     ${scenario.timeoutMs ? `${scenario.timeoutMs}ms` : chalk.dim("default")}`,
+      );
       log(`  Version:     ${scenario.version}`);
       log(`  Created:     ${scenario.createdAt}`);
       log(`  Updated:     ${scenario.updatedAt}`);
@@ -643,7 +1059,11 @@ program
 
       log("");
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -655,10 +1075,42 @@ program
   .description("Update a scenario")
   .option("-n, --name <name>", "New name")
   .option("-d, --description <text>", "New description")
-  .option("-s, --steps <step>", "Replace steps (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
-  .option("-t, --tag <tag>", "Replace all tags (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
-  .option("--tag-add <tag>", "Add a tag to existing tags (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
-  .option("--tag-remove <tag>", "Remove a tag from existing tags (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
+  .option(
+    "-s, --steps <step>",
+    "Replace steps (repeatable)",
+    (val: string, acc: string[]) => {
+      acc.push(val);
+      return acc;
+    },
+    [] as string[],
+  )
+  .option(
+    "-t, --tag <tag>",
+    "Replace all tags (repeatable)",
+    (val: string, acc: string[]) => {
+      acc.push(val);
+      return acc;
+    },
+    [] as string[],
+  )
+  .option(
+    "--tag-add <tag>",
+    "Add a tag to existing tags (repeatable)",
+    (val: string, acc: string[]) => {
+      acc.push(val);
+      return acc;
+    },
+    [] as string[],
+  )
+  .option(
+    "--tag-remove <tag>",
+    "Remove a tag from existing tags (repeatable)",
+    (val: string, acc: string[]) => {
+      acc.push(val);
+      return acc;
+    },
+    [] as string[],
+  )
   .option("-p, --priority <level>", "New priority")
   .option("-m, --model <model>", "New model")
   .action((id: string, opts) => {
@@ -694,12 +1146,20 @@ program
         scenario.version,
       );
 
-      log(chalk.green(`Updated scenario ${chalk.bold(updated.shortId)}: ${updated.name}`));
+      log(
+        chalk.green(
+          `Updated scenario ${chalk.bold(updated.shortId)}: ${updated.name}`,
+        ),
+      );
       if (newTags !== undefined) {
         log(chalk.dim(`  Tags: [${updated.tags.join(", ")}]`));
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -720,7 +1180,11 @@ program
 
       if (!opts.yes) {
         // Prompt for confirmation
-        process.stdout.write(chalk.yellow(`Delete scenario ${scenario.shortId} "${scenario.name}"? [y/N] `));
+        process.stdout.write(
+          chalk.yellow(
+            `Delete scenario ${scenario.shortId} "${scenario.name}"? [y/N] `,
+          ),
+        );
         const answer = await new Promise<string>((resolve) => {
           let buf = "";
           process.stdin.setRawMode?.(true);
@@ -741,13 +1205,19 @@ program
 
       const deleted = deleteScenario(scenario.id);
       if (deleted) {
-        log(chalk.green(`Deleted scenario ${scenario.shortId}: ${scenario.name}`));
+        log(
+          chalk.green(`Deleted scenario ${scenario.shortId}: ${scenario.name}`),
+        );
       } else {
         logError(chalk.red(`Failed to delete scenario: ${id}`));
         process.exit(1);
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -768,7 +1238,11 @@ program
       }
 
       if (!opts.yes) {
-        process.stdout.write(chalk.yellow(`Remove scenario ${scenario.shortId} "${scenario.name}"? [y/N] `));
+        process.stdout.write(
+          chalk.yellow(
+            `Remove scenario ${scenario.shortId} "${scenario.name}"? [y/N] `,
+          ),
+        );
         const answer = await new Promise<string>((resolve) => {
           let buf = "";
           process.stdin.setRawMode?.(true);
@@ -789,13 +1263,19 @@ program
 
       const deleted = deleteScenario(scenario.id);
       if (deleted) {
-        log(chalk.green(`Removed scenario ${scenario.shortId}: ${scenario.name}`));
+        log(
+          chalk.green(`Removed scenario ${scenario.shortId}: ${scenario.name}`),
+        );
       } else {
         logError(chalk.red(`Failed to remove scenario: ${id}`));
         process.exit(1);
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -806,7 +1286,15 @@ program
   .command("run [url] [description]")
   .alias("test")
   .description("Run test scenarios against a URL")
-  .option("-t, --tag <tag>", "Filter by tag (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
+  .option(
+    "-t, --tag <tag>",
+    "Filter by tag (repeatable)",
+    (val: string, acc: string[]) => {
+      acc.push(val);
+      return acc;
+    },
+    [] as string[],
+  )
   .option("-s, --scenario <id>", "Run specific scenario ID")
   .option("-p, --priority <level>", "Filter by priority")
   .option("--headed", "Run browser in headed mode", false)
@@ -817,356 +1305,732 @@ program
   .option("--timeout <ms>", "Timeout in milliseconds")
   .option("--from-todos", "Import scenarios from todos before running", false)
   .option("--project <id>", "Project ID")
-  .option("-b, --background", "Start run in background and return immediately", false)
-  .option("--browser <engine>", "Browser engine: playwright (default), lightpanda (9x faster, no screenshots), or bun (native WKWebView, 11x faster, Bun canary required)", "playwright")
+  .option(
+    "-b, --background",
+    "Start run in background and return immediately",
+    false,
+  )
+  .option(
+    "--browser <engine>",
+    "Browser engine: playwright (default), lightpanda (9x faster, no screenshots), or bun (native WKWebView, 11x faster, Bun canary required)",
+    "playwright",
+  )
   .option("--env <name>", "Use a named environment for the URL")
   .option("--dry-run", "Print what would run without launching browser", false)
   .option("--retry <n>", "Retry failed scenarios up to n times", "0")
-  .option("--samples <n>", "Run each scenario N times and report flakiness (pass rate)", "1")
-  .option("--flakiness-threshold <n>", "Pass rate threshold below which a scenario is marked flaky (0-1)", "0.95")
-  .option("--a11y [level]", "Run axe-core WCAG accessibility scan after each navigation (level: A, AA, AAA — default AA)")
-  .option("--self-heal", "Enable AI-powered selector repair when elements can't be found (requires judgeModel or ANTHROPIC_API_KEY)", false)
+  .option(
+    "--samples <n>",
+    "Run each scenario N times and report flakiness (pass rate)",
+    "1",
+  )
+  .option(
+    "--flakiness-threshold <n>",
+    "Pass rate threshold below which a scenario is marked flaky (0-1)",
+    "0.95",
+  )
+  .option(
+    "--a11y [level]",
+    "Run axe-core WCAG accessibility scan after each navigation (level: A, AA, AAA — default AA)",
+  )
+  .option(
+    "--self-heal",
+    "Enable AI-powered selector repair when elements can't be found (requires judgeModel or ANTHROPIC_API_KEY)",
+    false,
+  )
   .option("--verbose", "Show per-step timing and full tool results", false)
-  .option("--watch-results", "When used with --background, poll and display live results table until run completes", false)
-  .option("--failed-only", "Only show failed/error scenarios in output (passed count shown as summary)", false)
-  .option("--smoke", "Run only smoke-tagged scenarios (fast validation suite, <2 min)", false)
-  .option("--minimal", "Fastest possible run: cheapest model, max parallelism, min turns (ideal for CI)", false)
-  .option("--max-turns <n>", "Maximum AI browser-agent turns before reporting an error")
-  .option("--github-comment", "Post pass/fail summary as a GitHub PR comment (requires GITHUB_TOKEN env var)", false)
-  .option("--pr <number>", "GitHub PR number (auto-detected from GITHUB_REF if not provided)")
-  .option("--persona <id>", "Override persona for this run (comma-separated IDs for divergence testing)")
-  .option("--max-cost <dollars>", "Hard budget cap in dollars — abort if estimated cost exceeds this (e.g. 0.50 for 50 cents)")
-  .option("--cache-max-age <seconds>", "Skip scenarios that passed at the same URL within this many seconds (0 = disabled)", "0")
-  .option("--diff", "Auto-detect changed files from git diff and run only relevant scenarios", false)
-  .option("--auto-generate", "If no scenarios exist, crawl the URL and generate scenarios automatically (enabled by default when a URL is given as the first arg)")
-  .option("--no-auto-generate", "Disable automatic scenario generation when no scenarios exist")
-  .option("--overall-timeout <ms>", "Hard overall timeout for the whole run in milliseconds (default 10 minutes)")
-  .option("-y, --yes", "Skip confirmation prompts (e.g. proceed past budget warnings)", false)
-  .action(async (urlArg: string | undefined, description: string | undefined, opts) => {
-    try {
-      const projectId = resolveProject(opts.project);
+  .option(
+    "--watch-results",
+    "When used with --background, poll and display live results table until run completes",
+    false,
+  )
+  .option(
+    "--failed-only",
+    "Only show failed/error scenarios in output (passed count shown as summary)",
+    false,
+  )
+  .option(
+    "--smoke",
+    "Run only smoke-tagged scenarios (fast validation suite, <2 min)",
+    false,
+  )
+  .option(
+    "--minimal",
+    "Fastest possible run: cheapest model, max parallelism, min turns (ideal for CI)",
+    false,
+  )
+  .option(
+    "--max-turns <n>",
+    "Maximum AI browser-agent turns before reporting an error",
+  )
+  .option(
+    "--github-comment",
+    "Post pass/fail summary as a GitHub PR comment (requires GITHUB_TOKEN env var)",
+    false,
+  )
+  .option(
+    "--pr <number>",
+    "GitHub PR number (auto-detected from GITHUB_REF if not provided)",
+  )
+  .option(
+    "--persona <id>",
+    "Override persona for this run (comma-separated IDs for divergence testing)",
+  )
+  .option(
+    "--max-cost <dollars>",
+    "Hard budget cap in dollars — abort if estimated cost exceeds this (e.g. 0.50 for 50 cents)",
+  )
+  .option(
+    "--cache-max-age <seconds>",
+    "Skip scenarios that passed at the same URL within this many seconds (0 = disabled)",
+    "0",
+  )
+  .option(
+    "--diff",
+    "Auto-detect changed files from git diff and run only relevant scenarios",
+    false,
+  )
+  .option(
+    "--auto-generate",
+    "If no scenarios exist, crawl the URL and generate scenarios automatically (enabled by default when a URL is given as the first arg)",
+  )
+  .option(
+    "--no-auto-generate",
+    "Disable automatic scenario generation when no scenarios exist",
+  )
+  .option(
+    "--overall-timeout <ms>",
+    "Hard overall timeout for the whole run in milliseconds (default 10 minutes)",
+  )
+  .option(
+    "-y, --yes",
+    "Skip confirmation prompts (e.g. proceed past budget warnings)",
+    false,
+  )
+  .action(
+    async (
+      urlArg: string | undefined,
+      description: string | undefined,
+      opts,
+    ) => {
+      try {
+        const projectId = resolveProject(opts.project);
 
-      // Resolve URL: explicit arg > --env > default environment
-      let url = urlArg;
-      if (!url && opts.env) {
-        const env = getEnvironment(opts.env);
-        if (!env) {
-          logError(chalk.red(`Environment not found: ${opts.env}`));
-          process.exit(1);
+        // Resolve URL: explicit arg > --env > default environment
+        let url = urlArg;
+        if (!url && opts.env) {
+          const env = getEnvironment(opts.env);
+          if (!env) {
+            logError(chalk.red(`Environment not found: ${opts.env}`));
+            process.exit(1);
+          }
+          url = env.url;
         }
-        url = env.url;
-      }
-      if (!url) {
-        const defaultEnv = getDefaultEnvironment();
-        if (defaultEnv) {
-          url = defaultEnv.url;
-          log(chalk.dim(`Using default environment: ${defaultEnv.name} (${defaultEnv.url})`));
+        if (!url) {
+          const defaultEnv = getDefaultEnvironment();
+          if (defaultEnv) {
+            url = defaultEnv.url;
+            log(
+              chalk.dim(
+                `Using default environment: ${defaultEnv.name} (${defaultEnv.url})`,
+              ),
+            );
+          }
         }
-      }
-      if (!url) {
-        logError(chalk.red("No URL provided. Pass a URL argument, use --env <name>, or set a default environment with 'testers env use <name>'."));
-        process.exit(2);
-      }
-      const scenarioIds = splitCsvOption(opts.scenario);
-
-      // Preflight: API key must be present for any non-dry-run. Fail fast with a clear
-      // message and exit code 2 so CI can distinguish config errors from test failures.
-      if (!opts.dryRun) {
-        const hasAnthropic = Boolean(process.env["ANTHROPIC_API_KEY"]);
-        const hasOpenAI = Boolean(process.env["OPENAI_API_KEY"]);
-        const hasGoogle = Boolean(process.env["GOOGLE_API_KEY"]);
-        const hasCerebras = Boolean(process.env["CEREBRAS_API_KEY"]);
-        const hasZai = Boolean(process.env["ZAI_API_KEY"]);
-        if (!hasAnthropic && !hasOpenAI && !hasGoogle && !hasCerebras && !hasZai) {
+        if (!url) {
           logError(
             chalk.red(
-              "No AI API key found. Set ANTHROPIC_API_KEY (recommended), or OPENAI_API_KEY / GOOGLE_API_KEY / CEREBRAS_API_KEY / ZAI_API_KEY.",
-            ),
-          );
-          logError(
-            chalk.red(
-              "For GitHub Actions, add ANTHROPIC_API_KEY to your repo secrets and pass it via: env: ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}",
+              "No URL provided. Pass a URL argument, use --env <name>, or set a default environment with 'testers env use <name>'.",
             ),
           );
           process.exit(2);
         }
-      }
+        const scenarioIds = splitCsvOption(opts.scenario);
 
-      // Preflight: URL reachability. A 1-shot HEAD (with GET fallback) tells us fast if the
-      // target URL is dead, so we don't burn an agent run on an unreachable host.
-      if (!opts.dryRun && !opts.background) {
-        const reachable = await (async (): Promise<{ ok: boolean; reason?: string }> => {
-          try {
-            const ctrl = new AbortController();
-            const t = setTimeout(() => ctrl.abort(), 10_000);
-            let res: Response;
+        // Preflight: API key must be present for any non-dry-run. Fail fast with a clear
+        // message and exit code 2 so CI can distinguish config errors from test failures.
+        if (!opts.dryRun) {
+          const hasAnthropic = Boolean(process.env["ANTHROPIC_API_KEY"]);
+          const hasOpenAI = Boolean(process.env["OPENAI_API_KEY"]);
+          const hasGoogle = Boolean(process.env["GOOGLE_API_KEY"]);
+          const hasCerebras = Boolean(process.env["CEREBRAS_API_KEY"]);
+          const hasZai = Boolean(process.env["ZAI_API_KEY"]);
+          if (
+            !hasAnthropic &&
+            !hasOpenAI &&
+            !hasGoogle &&
+            !hasCerebras &&
+            !hasZai
+          ) {
+            logError(
+              chalk.red(
+                "No AI API key found. Set ANTHROPIC_API_KEY (recommended), or OPENAI_API_KEY / GOOGLE_API_KEY / CEREBRAS_API_KEY / ZAI_API_KEY.",
+              ),
+            );
+            logError(
+              chalk.red(
+                "For GitHub Actions, add ANTHROPIC_API_KEY to your repo secrets and pass it via: env: ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}",
+              ),
+            );
+            process.exit(2);
+          }
+        }
+
+        // Preflight: URL reachability. A 1-shot HEAD (with GET fallback) tells us fast if the
+        // target URL is dead, so we don't burn an agent run on an unreachable host.
+        if (!opts.dryRun && !opts.background) {
+          const reachable = await (async (): Promise<{
+            ok: boolean;
+            reason?: string;
+          }> => {
             try {
-              res = await fetch(url, { method: "HEAD", signal: ctrl.signal, redirect: "follow" });
-            } catch {
-              res = await fetch(url, { method: "GET", signal: ctrl.signal, redirect: "follow" });
-            }
-            clearTimeout(t);
-            // 2xx, 3xx, and even 4xx (e.g. 401 for authenticated endpoints) count as "reachable"
-            // because the server responded. Only network failure or 5xx is treated as unreachable.
-            if (res.status >= 500) return { ok: false, reason: `HTTP ${res.status}` };
-            return { ok: true };
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            return { ok: false, reason: msg };
-          }
-        })();
-        if (!reachable.ok) {
-          logError(chalk.red(`URL unreachable: ${url}${reachable.reason ? ` (${reachable.reason})` : ""}`));
-          logError(chalk.red("Check that your preview deployment is up and the URL is correct."));
-          process.exit(2);
-        }
-      }
-
-      // Overall timeout guard (CI safety net): if the run wedges for more than the overall
-      // budget, force-exit. Default 10 minutes — override with --overall-timeout.
-      const overallTimeoutMs = opts.overallTimeout
-        ? parseInt(opts.overallTimeout, 10)
-        : 10 * 60 * 1000;
-      if (!opts.dryRun && !opts.background && overallTimeoutMs > 0) {
-        setTimeout(() => {
-          logError(chalk.red(`Overall timeout reached (${Math.round(overallTimeoutMs / 1000)}s). Aborting.`));
-          process.exit(2);
-        }, overallTimeoutMs).unref();
-      }
-
-      // Parse persona IDs early so ad-hoc, background, and filtered runs all
-      // honor the same --persona option.
-      const personaIdList: string[] | undefined = opts.persona
-        ? opts.persona.split(",").map((s: string) => s.trim()).filter(Boolean)
-        : undefined;
-
-      // Budget warning check (OPE9-00080)
-      if (!opts.dryRun && !opts.background) {
-        const budgetResult = checkBudget(0); // 0 = just check daily threshold
-        if (budgetResult.warning) {
-          log(chalk.yellow(`  ⚠️  Budget warning: ${budgetResult.warning}`));
-          if (!budgetResult.allowed) {
-            if (!opts.yes) {
-              log(chalk.yellow("  Use --yes to run anyway, or check your budget config."));
-              process.exit(1);
-            }
-            log(chalk.yellow("  --yes passed, proceeding despite budget limit."));
-          }
-        }
-      }
-
-      // --smoke is shorthand for --tag smoke
-      if (opts.smoke && !opts.tag.includes("smoke")) {
-        opts.tag.push("smoke");
-        log(chalk.dim("  Running smoke suite (scenarios tagged 'smoke')..."));
-      }
-
-      // If --from-todos, import scenarios first
-      if (opts.fromTodos) {
-        const result = importFromTodos({ projectId });
-        log(chalk.blue(`Imported ${result.imported} scenarios from todos (${result.skipped} skipped)`));
-      }
-
-      // Dry-run mode — validate and print what would run, no browser
-      if (opts.dryRun) {
-        const dryScenarios = listScenarios({
-          tags: opts.tag.length > 0 ? opts.tag : undefined,
-          projectId,
-        }).filter((s) => {
-          if (scenarioIds && !scenarioIds.includes(s.id) && !scenarioIds.includes(s.shortId)) return false;
-          if (opts.priority && s.priority !== opts.priority) return false;
-          return true;
-        });
-
-        log("");
-        log(chalk.bold("  Dry Run — scenarios that would execute:"));
-        log("");
-        if (dryScenarios.length === 0) {
-          log(chalk.yellow("  No matching scenarios found."));
-        } else {
-          for (const s of dryScenarios) {
-            // Validate assertion syntax
-            const assertionErrors: string[] = [];
-            for (const a of (s.assertions ?? [])) {
-              const error = validateStoredAssertion(a);
-              if (error) assertionErrors.push(error);
-            }
-            // Check auth preset exists if required
-            let authOk = true;
-            if (s.authPreset) {
-              const presets = listAuthPresets();
-              authOk = presets.some((p) => p.name === s.authPreset);
-            }
-            const statusIcon = (assertionErrors.length === 0 && authOk) ? chalk.green("✓") : chalk.red("✗");
-            log(`  ${statusIcon} ${chalk.cyan(s.shortId)} ${s.name} ${chalk.dim(`[${s.tags.join(", ")}]`)}`);
-            if (assertionErrors.length > 0) {
-              log(chalk.red(`      Invalid assertions: ${assertionErrors.join(", ")}`));
-            }
-            if (!authOk) {
-              log(chalk.red(`      Auth preset not found: ${s.authPreset}`));
-            }
-          }
-        }
-        log("");
-        log(chalk.dim(`  URL: ${url}`));
-        log(chalk.dim(`  Total: ${dryScenarios.length} scenarios`));
-        log("");
-        process.exit(0);
-      }
-
-      // Background mode — start async and return immediately
-      if (opts.background) {
-        if (description) {
-          createScenario({ name: description, description, tags: ["ad-hoc"], projectId });
-        }
-        const { runId, scenarioCount } = startRunAsync({
-          url,
-          tags: opts.tag.length > 0 ? opts.tag : undefined,
-          scenarioIds,
-          priority: opts.priority,
-          model: opts.model,
-          headed: opts.headed,
-          parallel: parseInt(opts.parallel, 10),
-          timeout: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
-          maxTurns: opts.maxTurns ? parseInt(opts.maxTurns, 10) : undefined,
-          projectId,
-          engine: opts.browser,
-          personaId: personaIdList?.[0],
-          personaIds: personaIdList && personaIdList.length > 1 ? personaIdList : undefined,
-        });
-        log(chalk.green(`Run started in background: ${chalk.bold(runId.slice(0, 8))}`));
-        log(chalk.dim(`  Scenarios: ${scenarioCount}`));
-        log(chalk.dim(`  URL: ${url}`));
-
-        if (opts.watchResults) {
-          // Poll every 3 seconds and render a live table until the run completes
-          log(chalk.dim(`  Watching results (polling every 3s)...`));
-          log("");
-          const POLL_INTERVAL = 3000;
-          const DONE_STATUSES = new Set(["passed", "failed", "cancelled"]);
-
-          const renderTable = () => {
-            const run = getRun(runId);
-            if (!run) return;
-            const results = getResultsByRun(runId);
-
-            // Clear previous table by moving cursor up (rough approach: reprint header)
-            const statusIcon = run.status === "passed"
-              ? chalk.green("PASS")
-              : run.status === "failed"
-                ? chalk.red("FAIL")
-                : chalk.blue("RUN ");
-
-            process.stdout.write(`\r  ${statusIcon}  ${run.passed} passed  ${run.failed} failed  ${run.total - run.passed - run.failed} running  (${results.length}/${run.total})\n`);
-
-            for (const r of results) {
-              const scenario = getScenario(r.scenarioId);
-              const name = scenario ? scenario.name : r.scenarioId.slice(0, 8);
-              const icon = r.status === "passed"
-                ? chalk.green("✓")
-                : r.status === "failed"
-                  ? chalk.red("✗")
-                  : r.status === "error"
-                    ? chalk.yellow("!")
-                    : chalk.blue("…");
-              const dur = r.durationMs > 0 ? chalk.dim(` ${(r.durationMs / 1000).toFixed(1)}s`) : "";
-              process.stdout.write(`    ${icon} ${name}${dur}\n`);
-            }
-          };
-
-          await new Promise<void>((resolve) => {
-            const poll = setInterval(() => {
-              const run = getRun(runId);
-              if (!run) return;
-              renderTable();
-              if (DONE_STATUSES.has(run.status)) {
-                clearInterval(poll);
-                resolve();
+              const ctrl = new AbortController();
+              const t = setTimeout(() => ctrl.abort(), 10_000);
+              let res: Response;
+              try {
+                res = await fetch(url, {
+                  method: "HEAD",
+                  signal: ctrl.signal,
+                  redirect: "follow",
+                });
+              } catch {
+                res = await fetch(url, {
+                  method: "GET",
+                  signal: ctrl.signal,
+                  redirect: "follow",
+                });
               }
-            }, POLL_INTERVAL);
+              clearTimeout(t);
+              // 2xx, 3xx, and even 4xx (e.g. 401 for authenticated endpoints) count as "reachable"
+              // because the server responded. Only network failure or 5xx is treated as unreachable.
+              if (res.status >= 500)
+                return { ok: false, reason: `HTTP ${res.status}` };
+              return { ok: true };
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              return { ok: false, reason: msg };
+            }
+          })();
+          if (!reachable.ok) {
+            logError(
+              chalk.red(
+                `URL unreachable: ${url}${reachable.reason ? ` (${reachable.reason})` : ""}`,
+              ),
+            );
+            logError(
+              chalk.red(
+                "Check that your preview deployment is up and the URL is correct.",
+              ),
+            );
+            process.exit(2);
+          }
+        }
+
+        // Overall timeout guard (CI safety net): if the run wedges for more than the overall
+        // budget, force-exit. Default 10 minutes — override with --overall-timeout.
+        const overallTimeoutMs = opts.overallTimeout
+          ? parseInt(opts.overallTimeout, 10)
+          : 10 * 60 * 1000;
+        if (!opts.dryRun && !opts.background && overallTimeoutMs > 0) {
+          setTimeout(() => {
+            logError(
+              chalk.red(
+                `Overall timeout reached (${Math.round(overallTimeoutMs / 1000)}s). Aborting.`,
+              ),
+            );
+            process.exit(2);
+          }, overallTimeoutMs).unref();
+        }
+
+        // Parse persona IDs early so ad-hoc, background, and filtered runs all
+        // honor the same --persona option.
+        const personaIdList: string[] | undefined = opts.persona
+          ? opts.persona
+              .split(",")
+              .map((s: string) => s.trim())
+              .filter(Boolean)
+          : undefined;
+
+        // Budget warning check (OPE9-00080)
+        if (!opts.dryRun && !opts.background) {
+          const budgetResult = checkBudget(0); // 0 = just check daily threshold
+          if (budgetResult.warning) {
+            log(chalk.yellow(`  ⚠️  Budget warning: ${budgetResult.warning}`));
+            if (!budgetResult.allowed) {
+              if (!opts.yes) {
+                log(
+                  chalk.yellow(
+                    "  Use --yes to run anyway, or check your budget config.",
+                  ),
+                );
+                process.exit(1);
+              }
+              log(
+                chalk.yellow(
+                  "  --yes passed, proceeding despite budget limit.",
+                ),
+              );
+            }
+          }
+        }
+
+        // --smoke is shorthand for --tag smoke
+        if (opts.smoke && !opts.tag.includes("smoke")) {
+          opts.tag.push("smoke");
+          log(chalk.dim("  Running smoke suite (scenarios tagged 'smoke')..."));
+        }
+
+        // If --from-todos, import scenarios first
+        if (opts.fromTodos) {
+          const result = importFromTodos({ projectId });
+          log(
+            chalk.blue(
+              `Imported ${result.imported} scenarios from todos (${result.skipped} skipped)`,
+            ),
+          );
+        }
+
+        // Dry-run mode — validate and print what would run, no browser
+        if (opts.dryRun) {
+          const dryScenarios = listScenarios({
+            tags: opts.tag.length > 0 ? opts.tag : undefined,
+            projectId,
+          }).filter((s) => {
+            if (
+              scenarioIds &&
+              !scenarioIds.includes(s.id) &&
+              !scenarioIds.includes(s.shortId)
+            )
+              return false;
+            if (opts.priority && s.priority !== opts.priority) return false;
+            return true;
           });
 
-          const finalRun = getRun(runId);
-          if (finalRun) {
-            log("");
-            const results = getResultsByRun(runId);
-            log(formatTerminal(finalRun, results));
+          log("");
+          log(chalk.bold("  Dry Run — scenarios that would execute:"));
+          log("");
+          if (dryScenarios.length === 0) {
+            log(chalk.yellow("  No matching scenarios found."));
+          } else {
+            for (const s of dryScenarios) {
+              // Validate assertion syntax
+              const assertionErrors: string[] = [];
+              for (const a of s.assertions ?? []) {
+                const error = validateStoredAssertion(a);
+                if (error) assertionErrors.push(error);
+              }
+              // Check auth preset exists if required
+              let authOk = true;
+              if (s.authPreset) {
+                const presets = listAuthPresets();
+                authOk = presets.some((p) => p.name === s.authPreset);
+              }
+              const statusIcon =
+                assertionErrors.length === 0 && authOk
+                  ? chalk.green("✓")
+                  : chalk.red("✗");
+              log(
+                `  ${statusIcon} ${chalk.cyan(s.shortId)} ${s.name} ${chalk.dim(`[${s.tags.join(", ")}]`)}`,
+              );
+              if (assertionErrors.length > 0) {
+                log(
+                  chalk.red(
+                    `      Invalid assertions: ${assertionErrors.join(", ")}`,
+                  ),
+                );
+              }
+              if (!authOk) {
+                log(chalk.red(`      Auth preset not found: ${s.authPreset}`));
+              }
+            }
           }
-          process.exit(finalRun ? getExitCode(finalRun) : 0);
+          log("");
+          log(chalk.dim(`  URL: ${url}`));
+          log(chalk.dim(`  Total: ${dryScenarios.length} scenarios`));
+          log("");
+          process.exit(0);
         }
 
-        log(chalk.dim(`  Check progress: testers results ${runId.slice(0, 8)}`));
-        process.exit(0);
-      }
-
-      // Register live progress handler for foreground runs
-      if (!opts.json && !opts.output) {
-        const verbose = !!opts.verbose;
-        onRunEvent((event) => {
-          switch (event.type) {
-            case "scenario:start":
-              if (event.retryAttempt) {
-                log(chalk.yellow(`  [retry] Retrying scenario ${event.scenarioName ?? event.scenarioId} (attempt ${event.retryAttempt}/${event.maxRetries})...`));
-              } else {
-                log(chalk.blue(`  [start] ${event.scenarioName ?? event.scenarioId}`));
-              }
-              break;
-            case "scenario:timeout_warning": {
-              const elapsedS = ((event.elapsedMs ?? 0) / 1000).toFixed(0);
-              const totalS = ((event.timeoutMs ?? 0) / 1000).toFixed(0);
-              log(chalk.yellow(`  ⚠️  Scenario '${event.scenarioName}' at 80% timeout (${elapsedS}s/${totalS}s) — still running`));
-              break;
-            }
-            case "step:thinking":
-              if (event.thinking) {
-                const preview = event.thinking.length > 120 ? event.thinking.slice(0, 120) + "..." : event.thinking;
-                log(chalk.dim(`    [think] ${preview}`));
-              }
-              break;
-            case "step:tool_call":
-              log(chalk.cyan(`    [step ${event.stepNumber}] ${event.toolName}${event.toolInput ? ` ${formatToolInput(event.toolInput)}` : ""}`));
-              break;
-            case "step:tool_result":
-              if (event.toolName === "report_result") {
-                log(chalk.bold(`    [result] ${event.toolResult}`));
-              } else {
-                const durationStr = verbose && event.stepDurationMs !== undefined
-                  ? chalk.dim(`[${(event.stepDurationMs / 1000).toFixed(1)}s] `)
-                  : "";
-                const resultPreview = (event.toolResult ?? "").length > 100 ? (event.toolResult ?? "").slice(0, 100) + "..." : (event.toolResult ?? "");
-                log(chalk.dim(`    [done]  ${durationStr}${resultPreview}`));
-              }
-              break;
-            case "screenshot:captured":
-              log(chalk.dim(`    [screenshot] ${event.screenshotPath}`));
-              break;
-            case "scenario:pass":
-              log(chalk.green(`  [PASS] ${event.scenarioName}`));
-              break;
-            case "scenario:fail":
-              log(chalk.red(`  [FAIL] ${event.scenarioName}`));
-              break;
-            case "scenario:error":
-              log(chalk.yellow(`  [ERR]  ${event.scenarioName}: ${event.error}`));
-              break;
+        // Background mode — start async and return immediately
+        if (opts.background) {
+          if (description) {
+            createScenario({
+              name: description,
+              description,
+              tags: ["ad-hoc"],
+              projectId,
+            });
           }
-        });
-        log("");
-        log(chalk.bold(`  Running tests against ${url}`));
-        log("");
-      }
+          const { runId, scenarioCount } = startRunAsync({
+            url,
+            tags: opts.tag.length > 0 ? opts.tag : undefined,
+            scenarioIds,
+            priority: opts.priority,
+            model: opts.model,
+            headed: opts.headed,
+            parallel: parseInt(opts.parallel, 10),
+            timeout: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
+            maxTurns: opts.maxTurns ? parseInt(opts.maxTurns, 10) : undefined,
+            projectId,
+            engine: opts.browser,
+            personaId: personaIdList?.[0],
+            personaIds:
+              personaIdList && personaIdList.length > 1
+                ? personaIdList
+                : undefined,
+          });
+          log(
+            chalk.green(
+              `Run started in background: ${chalk.bold(runId.slice(0, 8))}`,
+            ),
+          );
+          log(chalk.dim(`  Scenarios: ${scenarioCount}`));
+          log(chalk.dim(`  URL: ${url}`));
 
-      // If description provided, create an ad-hoc scenario and run it
-      if (description) {
-        const scenario = createScenario({
-          name: description,
-          description,
-          tags: ["ad-hoc"],
-          projectId,
-        });
+          if (opts.watchResults) {
+            // Poll every 3 seconds and render a live table until the run completes
+            log(chalk.dim(`  Watching results (polling every 3s)...`));
+            log("");
+            const POLL_INTERVAL = 3000;
+            const DONE_STATUSES = new Set(["passed", "failed", "cancelled"]);
+
+            const renderTable = () => {
+              const run = getRun(runId);
+              if (!run) return;
+              const results = getResultsByRun(runId);
+
+              // Clear previous table by moving cursor up (rough approach: reprint header)
+              const statusIcon =
+                run.status === "passed"
+                  ? chalk.green("PASS")
+                  : run.status === "failed"
+                    ? chalk.red("FAIL")
+                    : chalk.blue("RUN ");
+
+              process.stdout.write(
+                `\r  ${statusIcon}  ${run.passed} passed  ${run.failed} failed  ${run.total - run.passed - run.failed} running  (${results.length}/${run.total})\n`,
+              );
+
+              for (const r of results) {
+                const scenario = getScenario(r.scenarioId);
+                const name = scenario
+                  ? scenario.name
+                  : r.scenarioId.slice(0, 8);
+                const icon =
+                  r.status === "passed"
+                    ? chalk.green("✓")
+                    : r.status === "failed"
+                      ? chalk.red("✗")
+                      : r.status === "error"
+                        ? chalk.yellow("!")
+                        : chalk.blue("…");
+                const dur =
+                  r.durationMs > 0
+                    ? chalk.dim(` ${(r.durationMs / 1000).toFixed(1)}s`)
+                    : "";
+                process.stdout.write(`    ${icon} ${name}${dur}\n`);
+              }
+            };
+
+            await new Promise<void>((resolve) => {
+              const poll = setInterval(() => {
+                const run = getRun(runId);
+                if (!run) return;
+                renderTable();
+                if (DONE_STATUSES.has(run.status)) {
+                  clearInterval(poll);
+                  resolve();
+                }
+              }, POLL_INTERVAL);
+            });
+
+            const finalRun = getRun(runId);
+            if (finalRun) {
+              log("");
+              const results = getResultsByRun(runId);
+              log(formatTerminal(finalRun, results));
+            }
+            process.exit(finalRun ? getExitCode(finalRun) : 0);
+          }
+
+          log(
+            chalk.dim(`  Check progress: testers results ${runId.slice(0, 8)}`),
+          );
+          process.exit(0);
+        }
+
+        // Register live progress handler for foreground runs
+        if (!opts.json && !opts.output) {
+          const verbose = !!opts.verbose;
+          onRunEvent((event) => {
+            switch (event.type) {
+              case "scenario:start":
+                if (event.retryAttempt) {
+                  log(
+                    chalk.yellow(
+                      `  [retry] Retrying scenario ${event.scenarioName ?? event.scenarioId} (attempt ${event.retryAttempt}/${event.maxRetries})...`,
+                    ),
+                  );
+                } else {
+                  log(
+                    chalk.blue(
+                      `  [start] ${event.scenarioName ?? event.scenarioId}`,
+                    ),
+                  );
+                }
+                break;
+              case "scenario:timeout_warning": {
+                const elapsedS = ((event.elapsedMs ?? 0) / 1000).toFixed(0);
+                const totalS = ((event.timeoutMs ?? 0) / 1000).toFixed(0);
+                log(
+                  chalk.yellow(
+                    `  ⚠️  Scenario '${event.scenarioName}' at 80% timeout (${elapsedS}s/${totalS}s) — still running`,
+                  ),
+                );
+                break;
+              }
+              case "step:thinking":
+                if (event.thinking) {
+                  const preview =
+                    event.thinking.length > 120
+                      ? event.thinking.slice(0, 120) + "..."
+                      : event.thinking;
+                  log(chalk.dim(`    [think] ${preview}`));
+                }
+                break;
+              case "step:tool_call":
+                log(
+                  chalk.cyan(
+                    `    [step ${event.stepNumber}] ${event.toolName}${event.toolInput ? ` ${formatToolInput(event.toolInput)}` : ""}`,
+                  ),
+                );
+                break;
+              case "step:tool_result":
+                if (event.toolName === "report_result") {
+                  log(chalk.bold(`    [result] ${event.toolResult}`));
+                } else {
+                  const durationStr =
+                    verbose && event.stepDurationMs !== undefined
+                      ? chalk.dim(
+                          `[${(event.stepDurationMs / 1000).toFixed(1)}s] `,
+                        )
+                      : "";
+                  const resultPreview =
+                    (event.toolResult ?? "").length > 100
+                      ? (event.toolResult ?? "").slice(0, 100) + "..."
+                      : (event.toolResult ?? "");
+                  log(chalk.dim(`    [done]  ${durationStr}${resultPreview}`));
+                }
+                break;
+              case "screenshot:captured":
+                log(chalk.dim(`    [screenshot] ${event.screenshotPath}`));
+                break;
+              case "scenario:pass":
+                log(chalk.green(`  [PASS] ${event.scenarioName}`));
+                break;
+              case "scenario:fail":
+                log(chalk.red(`  [FAIL] ${event.scenarioName}`));
+                break;
+              case "scenario:error":
+                log(
+                  chalk.yellow(
+                    `  [ERR]  ${event.scenarioName}: ${event.error}`,
+                  ),
+                );
+                break;
+            }
+          });
+          log("");
+          log(chalk.bold(`  Running tests against ${url}`));
+          log("");
+        }
+
+        // If description provided, create an ad-hoc scenario and run it
+        if (description) {
+          const scenario = createScenario({
+            name: description,
+            description,
+            tags: ["ad-hoc"],
+            projectId,
+          });
+          const { run, results } = await runByFilter({
+            url,
+            scenarioIds: [scenario.id],
+            model: opts.model,
+            headed: opts.headed,
+            parallel: parseInt(opts.parallel, 10),
+            timeout: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
+            maxTurns: opts.maxTurns ? parseInt(opts.maxTurns, 10) : undefined,
+            retry: parseInt(opts.retry ?? "0", 10),
+            projectId,
+            engine: opts.browser,
+            samples: parseInt(opts.samples ?? "1", 10),
+            flakinessThreshold: parseFloat(opts.flakinessThreshold ?? "0.95"),
+            a11y: opts.a11y
+              ? typeof opts.a11y === "string"
+                ? { level: opts.a11y as "A" | "AA" | "AAA" }
+                : true
+              : undefined,
+            selfHeal: opts.selfHeal || undefined,
+            personaId: personaIdList?.[0],
+            personaIds:
+              personaIdList && personaIdList.length > 1
+                ? personaIdList
+                : undefined,
+          });
+
+          if (opts.json || opts.output) {
+            const jsonOutput = formatJSON(run, results);
+            if (opts.output) {
+              writeFileSync(opts.output, jsonOutput, "utf-8");
+              log(chalk.green(`Results written to ${opts.output}`));
+            }
+            if (opts.json) {
+              log(jsonOutput);
+            }
+          } else {
+            log(formatTerminal(run, results, { failedOnly: opts.failedOnly }));
+          }
+
+          // Post GitHub PR comment if requested
+          if (opts.githubComment) {
+            const { postGitHubComment } = await import("../lib/ci.js");
+            const prNumber = opts.pr ? parseInt(opts.pr, 10) : undefined;
+            const posted = await postGitHubComment(run, results, { prNumber });
+            if (posted) {
+              log(chalk.green("  GitHub PR comment posted."));
+            } else if (!process.env["GITHUB_TOKEN"]) {
+              log(
+                chalk.yellow(
+                  "  --github-comment: GITHUB_TOKEN not set, skipping PR comment.",
+                ),
+              );
+            } else {
+              log(
+                chalk.yellow(
+                  "  --github-comment: could not post PR comment (check GITHUB_PR_NUMBER / GITHUB_REF / GITHUB_REPOSITORY env).",
+                ),
+              );
+            }
+          }
+
+          process.exit(getExitCode(run));
+        }
+
+        // If no filters provided, run all active scenarios
+        const noFilters =
+          !scenarioIds && opts.tag.length === 0 && !opts.priority;
+        if (noFilters && !opts.json && !opts.output) {
+          const allScenarios = listScenarios({ projectId });
+          log(chalk.bold(`  Running all ${allScenarios.length} scenarios...`));
+          log("");
+        }
+
+        // --auto-generate: when a URL was provided as the first arg AND no scenarios exist
+        // for the current filter, crawl the URL and generate scenarios before running.
+        // Enabled by default when a URL is given as the first arg; opt out via --no-auto-generate.
+        // Commander stores --no-auto-generate as opts.autoGenerate = false.
+        const shouldAutoGenerate =
+          urlArg !== undefined && opts.autoGenerate !== false && noFilters;
+        if (shouldAutoGenerate) {
+          const existingScenarios = listScenarios({ projectId });
+          if (existingScenarios.length === 0) {
+            log(
+              chalk.blue(
+                "  No scenarios found — crawling URL to auto-generate scenarios...",
+              ),
+            );
+            log(chalk.dim(`  (disable with --no-auto-generate)`));
+            try {
+              const { crawlAndGenerate } =
+                await import("../lib/crawl-and-generate.js");
+              const crawlResult = await crawlAndGenerate({
+                url,
+                projectId,
+                maxPages: 5,
+                scenariosPerPage: 2,
+                model: opts.model,
+                apiKey: process.env["ANTHROPIC_API_KEY"],
+                headed: opts.headed,
+                tags: ["auto-generated"],
+              });
+              log(
+                chalk.green(
+                  `  Generated ${crawlResult.totalScenariosCreated} scenarios from ${crawlResult.pagesGenerated} page(s).`,
+                ),
+              );
+              log("");
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              log(chalk.yellow(`  Auto-generate failed: ${msg}`));
+              log(
+                chalk.yellow(
+                  `  Continuing with 0 scenarios — the run will exit cleanly (0 passed, 0 failed).`,
+                ),
+              );
+            }
+          }
+        }
+
+        // --diff mode: detect changed files from git and filter to relevant scenarios
+        let diffScenarioIds: string[] | undefined;
+        if (opts.diff) {
+          try {
+            const { execSync } = await import("child_process");
+            const staged = execSync("git diff --cached --name-only", {
+              cwd: process.cwd(),
+              encoding: "utf-8",
+            }).trim();
+            const unstaged = execSync("git diff --name-only HEAD", {
+              cwd: process.cwd(),
+              encoding: "utf-8",
+            }).trim();
+            const diffOutput = [staged, unstaged].filter(Boolean).join("\n");
+            if (!diffOutput.trim()) {
+              log(
+                chalk.yellow(
+                  "  --diff: No changed files detected. Running all scenarios.",
+                ),
+              );
+            } else {
+              const filePaths = [
+                ...new Set(diffOutput.split("\n").filter(Boolean)),
+              ];
+              const { matchFilesToScenarios } =
+                await import("../lib/affected.js");
+              const allScenarios = listScenarios({ projectId });
+              const matched = matchFilesToScenarios(
+                filePaths,
+                allScenarios,
+                [],
+              );
+              if (matched.length === 0) {
+                log(
+                  chalk.yellow(
+                    `  --diff: No scenarios match changed files (${filePaths.length} files changed). Exiting.`,
+                  ),
+                );
+                process.exit(0);
+              }
+              diffScenarioIds = matched.map((s) => s.id);
+              log(
+                chalk.dim(
+                  `  --diff: ${filePaths.length} files changed → ${matched.length} matching scenario(s)`,
+                ),
+              );
+            }
+          } catch {
+            log(
+              chalk.yellow("  --diff: git diff failed. Running all scenarios."),
+            );
+          }
+        }
+
+        // Run by filter
         const { run, results } = await runByFilter({
           url,
-          scenarioIds: [scenario.id],
+          tags: opts.tag.length > 0 ? opts.tag : undefined,
+          scenarioIds: diffScenarioIds ?? scenarioIds,
+          priority: opts.priority,
           model: opts.model,
           headed: opts.headed,
           parallel: parseInt(opts.parallel, 10),
@@ -1177,10 +2041,24 @@ program
           engine: opts.browser,
           samples: parseInt(opts.samples ?? "1", 10),
           flakinessThreshold: parseFloat(opts.flakinessThreshold ?? "0.95"),
-          a11y: opts.a11y ? (typeof opts.a11y === "string" ? { level: opts.a11y as "A" | "AA" | "AAA" } : true) : undefined,
+          a11y: opts.a11y
+            ? typeof opts.a11y === "string"
+              ? { level: opts.a11y as "A" | "AA" | "AAA" }
+              : true
+            : undefined,
           selfHeal: opts.selfHeal || undefined,
           personaId: personaIdList?.[0],
-          personaIds: personaIdList && personaIdList.length > 1 ? personaIdList : undefined,
+          personaIds:
+            personaIdList && personaIdList.length > 1
+              ? personaIdList
+              : undefined,
+          maxCostCents: opts.maxCost
+            ? Math.round(parseFloat(opts.maxCost) * 100)
+            : undefined,
+          cacheMaxAgeMs: opts.cacheMaxAge
+            ? parseInt(opts.cacheMaxAge, 10) * 1000
+            : undefined,
+          minimal: opts.minimal || undefined,
         });
 
         if (opts.json || opts.output) {
@@ -1196,7 +2074,7 @@ program
           log(formatTerminal(run, results, { failedOnly: opts.failedOnly }));
         }
 
-        // Post GitHub PR comment if requested
+        // Post GitHub PR comment if requested (works for the main run path too, not just ad-hoc)
         if (opts.githubComment) {
           const { postGitHubComment } = await import("../lib/ci.js");
           const prNumber = opts.pr ? parseInt(opts.pr, 10) : undefined;
@@ -1204,144 +2082,31 @@ program
           if (posted) {
             log(chalk.green("  GitHub PR comment posted."));
           } else if (!process.env["GITHUB_TOKEN"]) {
-            log(chalk.yellow("  --github-comment: GITHUB_TOKEN not set, skipping PR comment."));
+            log(
+              chalk.yellow(
+                "  --github-comment: GITHUB_TOKEN not set, skipping PR comment.",
+              ),
+            );
           } else {
-            log(chalk.yellow("  --github-comment: could not post PR comment (check GITHUB_PR_NUMBER / GITHUB_REF / GITHUB_REPOSITORY env)."));
+            log(
+              chalk.yellow(
+                "  --github-comment: could not post PR comment (check GITHUB_PR_NUMBER / GITHUB_REF / GITHUB_REPOSITORY env).",
+              ),
+            );
           }
         }
 
         process.exit(getExitCode(run));
+      } catch (error) {
+        logError(
+          chalk.red(
+            `Error: ${error instanceof Error ? error.message : String(error)}`,
+          ),
+        );
+        process.exit(1);
       }
-
-      // If no filters provided, run all active scenarios
-      const noFilters = !scenarioIds && opts.tag.length === 0 && !opts.priority;
-      if (noFilters && !opts.json && !opts.output) {
-        const allScenarios = listScenarios({ projectId });
-        log(chalk.bold(`  Running all ${allScenarios.length} scenarios...`));
-        log("");
-      }
-
-      // --auto-generate: when a URL was provided as the first arg AND no scenarios exist
-      // for the current filter, crawl the URL and generate scenarios before running.
-      // Enabled by default when a URL is given as the first arg; opt out via --no-auto-generate.
-      // Commander stores --no-auto-generate as opts.autoGenerate = false.
-      const shouldAutoGenerate = (
-        urlArg !== undefined &&
-        opts.autoGenerate !== false &&
-        noFilters
-      );
-      if (shouldAutoGenerate) {
-        const existingScenarios = listScenarios({ projectId });
-        if (existingScenarios.length === 0) {
-          log(chalk.blue("  No scenarios found — crawling URL to auto-generate scenarios..."));
-          log(chalk.dim(`  (disable with --no-auto-generate)`));
-          try {
-            const { crawlAndGenerate } = await import("../lib/crawl-and-generate.js");
-            const crawlResult = await crawlAndGenerate({
-              url,
-              projectId,
-              maxPages: 5,
-              scenariosPerPage: 2,
-              model: opts.model,
-              apiKey: process.env["ANTHROPIC_API_KEY"],
-              headed: opts.headed,
-              tags: ["auto-generated"],
-            });
-            log(chalk.green(`  Generated ${crawlResult.totalScenariosCreated} scenarios from ${crawlResult.pagesGenerated} page(s).`));
-            log("");
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            log(chalk.yellow(`  Auto-generate failed: ${msg}`));
-            log(chalk.yellow(`  Continuing with 0 scenarios — the run will exit cleanly (0 passed, 0 failed).`));
-          }
-        }
-      }
-
-      // --diff mode: detect changed files from git and filter to relevant scenarios
-      let diffScenarioIds: string[] | undefined;
-      if (opts.diff) {
-        try {
-          const { execSync } = await import("child_process");
-          const staged = execSync("git diff --cached --name-only", { cwd: process.cwd(), encoding: "utf-8" }).trim();
-          const unstaged = execSync("git diff --name-only HEAD", { cwd: process.cwd(), encoding: "utf-8" }).trim();
-          const diffOutput = [staged, unstaged].filter(Boolean).join("\n");
-          if (!diffOutput.trim()) {
-            log(chalk.yellow("  --diff: No changed files detected. Running all scenarios."));
-          } else {
-            const filePaths = [...new Set(diffOutput.split("\n").filter(Boolean))];
-            const { matchFilesToScenarios } = await import("../lib/affected.js");
-            const allScenarios = listScenarios({ projectId });
-            const matched = matchFilesToScenarios(filePaths, allScenarios, []);
-            if (matched.length === 0) {
-              log(chalk.yellow(`  --diff: No scenarios match changed files (${filePaths.length} files changed). Exiting.`));
-              process.exit(0);
-            }
-            diffScenarioIds = matched.map((s) => s.id);
-            log(chalk.dim(`  --diff: ${filePaths.length} files changed → ${matched.length} matching scenario(s)`));
-          }
-        } catch {
-          log(chalk.yellow("  --diff: git diff failed. Running all scenarios."));
-        }
-      }
-
-      // Run by filter
-      const { run, results } = await runByFilter({
-        url,
-        tags: opts.tag.length > 0 ? opts.tag : undefined,
-        scenarioIds: diffScenarioIds ?? scenarioIds,
-        priority: opts.priority,
-        model: opts.model,
-        headed: opts.headed,
-        parallel: parseInt(opts.parallel, 10),
-        timeout: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
-        maxTurns: opts.maxTurns ? parseInt(opts.maxTurns, 10) : undefined,
-        retry: parseInt(opts.retry ?? "0", 10),
-        projectId,
-        engine: opts.browser,
-        samples: parseInt(opts.samples ?? "1", 10),
-        flakinessThreshold: parseFloat(opts.flakinessThreshold ?? "0.95"),
-        a11y: opts.a11y ? (typeof opts.a11y === "string" ? { level: opts.a11y as "A" | "AA" | "AAA" } : true) : undefined,
-        selfHeal: opts.selfHeal || undefined,
-        personaId: personaIdList?.[0],
-        personaIds: personaIdList && personaIdList.length > 1 ? personaIdList : undefined,
-        maxCostCents: opts.maxCost ? Math.round(parseFloat(opts.maxCost) * 100) : undefined,
-        cacheMaxAgeMs: opts.cacheMaxAge ? parseInt(opts.cacheMaxAge, 10) * 1000 : undefined,
-        minimal: opts.minimal || undefined,
-      });
-
-      if (opts.json || opts.output) {
-        const jsonOutput = formatJSON(run, results);
-        if (opts.output) {
-          writeFileSync(opts.output, jsonOutput, "utf-8");
-          log(chalk.green(`Results written to ${opts.output}`));
-        }
-        if (opts.json) {
-          log(jsonOutput);
-        }
-      } else {
-        log(formatTerminal(run, results, { failedOnly: opts.failedOnly }));
-      }
-
-      // Post GitHub PR comment if requested (works for the main run path too, not just ad-hoc)
-      if (opts.githubComment) {
-        const { postGitHubComment } = await import("../lib/ci.js");
-        const prNumber = opts.pr ? parseInt(opts.pr, 10) : undefined;
-        const posted = await postGitHubComment(run, results, { prNumber });
-        if (posted) {
-          log(chalk.green("  GitHub PR comment posted."));
-        } else if (!process.env["GITHUB_TOKEN"]) {
-          log(chalk.yellow("  --github-comment: GITHUB_TOKEN not set, skipping PR comment."));
-        } else {
-          log(chalk.yellow("  --github-comment: could not post PR comment (check GITHUB_PR_NUMBER / GITHUB_REF / GITHUB_REPOSITORY env)."));
-        }
-      }
-
-      process.exit(getExitCode(run));
-    } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
-      process.exit(1);
-    }
-  });
+    },
+  );
 
 // ─── testers runs ───────────────────────────────────────────────────────────
 
@@ -1357,7 +2122,13 @@ program
   .action((opts) => {
     try {
       const runs = listRuns({
-        status: opts.status as "pending" | "running" | "passed" | "failed" | "cancelled" | undefined,
+        status: opts.status as
+          | "pending"
+          | "running"
+          | "passed"
+          | "failed"
+          | "cancelled"
+          | undefined,
         sort: opts.sort as "date" | "duration" | "cost" | undefined,
         desc: !opts.asc,
         limit: parseInt(opts.limit, 10),
@@ -1369,7 +2140,11 @@ program
         log(formatRunList(runs));
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -1395,7 +2170,11 @@ program
         log(formatTerminal(run, results));
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -1453,15 +2232,21 @@ program
 
         const paged = flattened.slice(offset, offset + limit);
         if (opts.json) {
-          log(JSON.stringify({
-            input: id,
-            type: "run",
-            runId: run.id,
-            total: flattened.length,
-            limit,
-            offset,
-            items: paged,
-          }, null, 2));
+          log(
+            JSON.stringify(
+              {
+                input: id,
+                type: "run",
+                runId: run.id,
+                total: flattened.length,
+                limit,
+                offset,
+                items: paged,
+              },
+              null,
+              2,
+            ),
+          );
           return;
         }
 
@@ -1475,7 +2260,9 @@ program
           const screenshots = listScreenshots(result.id);
           if (screenshots.length > 0) {
             const scenario = getScenario(result.scenarioId);
-            const label = scenario ? `${scenario.shortId}: ${scenario.name}` : result.scenarioId.slice(0, 8);
+            const label = scenario
+              ? `${scenario.shortId}: ${scenario.name}`
+              : result.scenarioId.slice(0, 8);
             let sectionPrinted = false;
             for (const ss of screenshots) {
               if (seen < offset) {
@@ -1487,7 +2274,9 @@ program
                 log(chalk.bold(`  ${label}`));
                 sectionPrinted = true;
               }
-              log(`    ${chalk.dim(String(ss.stepNumber).padStart(3, "0"))} ${ss.action} — ${chalk.dim(ss.filePath)}`);
+              log(
+                `    ${chalk.dim(String(ss.stepNumber).padStart(3, "0"))} ${ss.action} — ${chalk.dim(ss.filePath)}`,
+              );
               seen++;
               shown++;
             }
@@ -1500,7 +2289,11 @@ program
           log(chalk.dim("  No screenshots found."));
           log("");
         } else if (offset + shown < flattened.length) {
-          log(chalk.dim(`  Showing ${shown} of ${flattened.length} screenshots (use --limit/--offset to paginate)`));
+          log(
+            chalk.dim(
+              `  Showing ${shown} of ${flattened.length} screenshots (use --limit/--offset to paginate)`,
+            ),
+          );
           log("");
         }
         return;
@@ -1510,23 +2303,29 @@ program
       const screenshots = listScreenshots(id);
       const paged = screenshots.slice(offset, offset + limit);
       if (opts.json) {
-        log(JSON.stringify({
-          input: id,
-          type: "result",
-          resultId: id,
-          total: screenshots.length,
-          limit,
-          offset,
-          items: paged.map((ss) => ({
-            screenshotId: ss.id,
-            stepNumber: ss.stepNumber,
-            action: ss.action,
-            filePath: ss.filePath,
-            timestamp: ss.timestamp,
-            width: ss.width,
-            height: ss.height,
-          })),
-        }, null, 2));
+        log(
+          JSON.stringify(
+            {
+              input: id,
+              type: "result",
+              resultId: id,
+              total: screenshots.length,
+              limit,
+              offset,
+              items: paged.map((ss) => ({
+                screenshotId: ss.id,
+                stepNumber: ss.stepNumber,
+                action: ss.action,
+                filePath: ss.filePath,
+                timestamp: ss.timestamp,
+                width: ss.width,
+                height: ss.height,
+              })),
+            },
+            null,
+            2,
+          ),
+        );
         return;
       }
 
@@ -1535,11 +2334,17 @@ program
         log(chalk.bold(`  Screenshots for result ${id.slice(0, 8)}`));
         log("");
         for (const ss of paged) {
-          log(`  ${chalk.dim(String(ss.stepNumber).padStart(3, "0"))} ${ss.action} — ${chalk.dim(ss.filePath)}`);
+          log(
+            `  ${chalk.dim(String(ss.stepNumber).padStart(3, "0"))} ${ss.action} — ${chalk.dim(ss.filePath)}`,
+          );
         }
         if (paged.length < screenshots.length) {
           log("");
-          log(chalk.dim(`  Showing ${paged.length} of ${screenshots.length} screenshots (use --limit/--offset to paginate)`));
+          log(
+            chalk.dim(
+              `  Showing ${paged.length} of ${screenshots.length} screenshots (use --limit/--offset to paginate)`,
+            ),
+          );
         }
         log("");
         return;
@@ -1548,7 +2353,11 @@ program
       logError(chalk.red(`No screenshots found for: ${id}`));
       process.exit(1);
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -1600,14 +2409,22 @@ program
           steps,
         });
 
-        log(chalk.green(`  Imported ${chalk.bold(scenario.shortId)}: ${scenario.name}`));
+        log(
+          chalk.green(
+            `  Imported ${chalk.bold(scenario.shortId)}: ${scenario.name}`,
+          ),
+        );
         imported++;
       }
 
       log("");
       log(chalk.green(`Imported ${imported} scenario(s) from ${absDir}`));
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -1625,7 +2442,9 @@ program
     try {
       const fmt = (format ?? "json").toLowerCase();
       if (fmt !== "json" && fmt !== "markdown") {
-        logError(chalk.red(`Unknown format: ${fmt}. Supported: json, markdown`));
+        logError(
+          chalk.red(`Unknown format: ${fmt}. Supported: json, markdown`),
+        );
         process.exit(1);
       }
 
@@ -1645,7 +2464,11 @@ program
         const outputPath = opts.output ?? "testers-export.json";
         const data = JSON.stringify(scenarios, null, 2);
         writeFileSync(outputPath, data, "utf-8");
-        log(chalk.green(`Exported ${scenarios.length} scenario(s) to ${resolve(outputPath)}`));
+        log(
+          chalk.green(
+            `Exported ${scenarios.length} scenario(s) to ${resolve(outputPath)}`,
+          ),
+        );
         return;
       }
 
@@ -1690,9 +2513,17 @@ program
         log(chalk.dim(`  ${s.shortId}: ${s.name} → ${filePath}`));
       }
 
-      log(chalk.green(`\nExported ${scenarios.length} scenario(s) as markdown to ${resolve(outputDir)}`));
+      log(
+        chalk.green(
+          `\nExported ${scenarios.length} scenario(s) as markdown to ${resolve(outputDir)}`,
+        ),
+      );
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -1707,7 +2538,11 @@ program
       const config = loadConfig();
       log(JSON.stringify(config, null, 2));
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -1720,20 +2555,27 @@ program
   .action(() => {
     try {
       const config = loadConfig();
-      const hasApiKey = !!config.anthropicApiKey || !!process.env["ANTHROPIC_API_KEY"];
+      const hasApiKey =
+        !!config.anthropicApiKey || !!process.env["ANTHROPIC_API_KEY"];
       const dbPath = join(getTestersDir(), "testers.db");
 
       log("");
       log(chalk.bold("  Open Testers Status"));
       log("");
-      log(`  ANTHROPIC_API_KEY: ${hasApiKey ? chalk.green("set") : chalk.red("not set")}`);
+      log(
+        `  ANTHROPIC_API_KEY: ${hasApiKey ? chalk.green("set") : chalk.red("not set")}`,
+      );
       log(`  Database:          ${dbPath}`);
       log(`  Default model:     ${config.defaultModel}`);
       log(`  Image model:       ${config.defaultImageModel}`);
       log(`  Screenshots dir:   ${config.screenshots.dir}`);
       log("");
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -1743,8 +2585,16 @@ program
 program
   .command("install-browser")
   .description("Install browser engine")
-  .option("--engine <engine>", "Engine to install: playwright, lightpanda, or all", "playwright")
-  .option("--with-deps", "Install Playwright OS dependencies for fresh Linux sandboxes", false)
+  .option(
+    "--engine <engine>",
+    "Engine to install: playwright, lightpanda, or all",
+    "playwright",
+  )
+  .option(
+    "--with-deps",
+    "Install Playwright OS dependencies for fresh Linux sandboxes",
+    false,
+  )
   .action(async (opts) => {
     try {
       if (opts.engine === "all" || opts.engine === "playwright") {
@@ -1758,14 +2608,20 @@ program
         log(chalk.green("Lightpanda installed."));
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
 
 // ─── testers project ──────────────────────────────────────────────────────
 
-const projectCmd = program.command("project").description("Manage test projects");
+const projectCmd = program
+  .command("project")
+  .description("Manage test projects");
 
 projectCmd
   .command("create <name>")
@@ -1781,9 +2637,17 @@ projectCmd
         description: opts.description,
         scenarioPrefix: opts.prefix,
       });
-      log(chalk.green(`Created project ${chalk.bold(project.name)} (${project.id})`));
+      log(
+        chalk.green(
+          `Created project ${chalk.bold(project.name)} (${project.id})`,
+        ),
+      );
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -1792,14 +2656,20 @@ projectCmd
   .command("list")
   .description("List all projects")
   .option("--json", "Output as JSON", false)
-  .option("--search <text>", "Filter by project name/path (case-insensitive substring)")
+  .option(
+    "--search <text>",
+    "Filter by project name/path (case-insensitive substring)",
+  )
   .option("-l, --limit <n>", "Limit results", "100")
   .option("--offset <n>", "Skip first N results", "0")
   .action((opts) => {
     try {
       const limit = Math.max(1, parseInt(opts.limit, 10) || 100);
       const offset = Math.max(0, parseInt(opts.offset, 10) || 0);
-      const search = typeof opts.search === "string" && opts.search.trim().length > 0 ? opts.search.trim().toLowerCase() : null;
+      const search =
+        typeof opts.search === "string" && opts.search.trim().length > 0
+          ? opts.search.trim().toLowerCase()
+          : null;
 
       const allProjects = listProjects();
       const filtered = search
@@ -1813,12 +2683,18 @@ projectCmd
       const paged = filtered.slice(offset, offset + limit);
 
       if (opts.json) {
-        log(JSON.stringify({
-          total: filtered.length,
-          limit,
-          offset,
-          items: paged,
-        }, null, 2));
+        log(
+          JSON.stringify(
+            {
+              total: filtered.length,
+              limit,
+              offset,
+              items: paged,
+            },
+            null,
+            2,
+          ),
+        );
         return;
       }
 
@@ -1830,18 +2706,32 @@ projectCmd
       log("");
       log(chalk.bold("  Projects"));
       log("");
-      log(`  ${"ID".padEnd(38)} ${"Name".padEnd(24)} ${"Path".padEnd(30)} Created`);
-      log(`  ${"─".repeat(38)} ${"─".repeat(24)} ${"─".repeat(30)} ${"─".repeat(20)}`);
+      log(
+        `  ${"ID".padEnd(38)} ${"Name".padEnd(24)} ${"Path".padEnd(30)} Created`,
+      );
+      log(
+        `  ${"─".repeat(38)} ${"─".repeat(24)} ${"─".repeat(30)} ${"─".repeat(20)}`,
+      );
       for (const p of paged) {
-        log(`  ${p.id.padEnd(38)} ${p.name.padEnd(24)} ${(p.path ?? chalk.dim("—")).toString().padEnd(30)} ${p.createdAt}`);
+        log(
+          `  ${p.id.padEnd(38)} ${p.name.padEnd(24)} ${(p.path ?? chalk.dim("—")).toString().padEnd(30)} ${p.createdAt}`,
+        );
       }
       if (offset + paged.length < filtered.length) {
         log("");
-        log(chalk.dim(`  Showing ${paged.length} of ${filtered.length} projects (use --limit/--offset to paginate)`));
+        log(
+          chalk.dim(
+            `  Showing ${paged.length} of ${filtered.length} projects (use --limit/--offset to paginate)`,
+          ),
+        );
       }
       log("");
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -1877,27 +2767,44 @@ projectCmd
       log(`  Updated:     ${project.updatedAt}`);
       log("");
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
 
 projectCmd
   .command("import-open <ref>")
-  .description("Import an app/project from the open-projects SDK by ID, slug, name, or path")
+  .description(
+    "Import an app/project from the open-projects SDK by ID, slug, name, or path",
+  )
   .option("--json", "Output as JSON", false)
   .action(async (ref: string, opts) => {
     try {
-      const { importFromOpenProjects } = await import("../lib/open-projects.js");
+      const { importFromOpenProjects } =
+        await import("../lib/open-projects.js");
       const result = await importFromOpenProjects(ref);
       if (opts.json) {
         log(JSON.stringify(result, null, 2));
         return;
       }
-      log(chalk.green(`${result.created ? "Imported" : "Linked existing"} project ${chalk.bold(result.project.name)} from open-projects ${result.openProject.slug}`));
-      log(chalk.dim(`  Path: ${result.project.path ?? result.openProject.path}`));
+      log(
+        chalk.green(
+          `${result.created ? "Imported" : "Linked existing"} project ${chalk.bold(result.project.name)} from open-projects ${result.openProject.slug}`,
+        ),
+      );
+      log(
+        chalk.dim(`  Path: ${result.project.path ?? result.openProject.path}`),
+      );
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -1914,9 +2821,17 @@ projectCmd
         log(JSON.stringify(result, null, 2));
         return;
       }
-      log(chalk.green(`${result.created ? "Created" : "Found"} open-projects record ${chalk.bold(result.openProject.slug)} for ${result.project.name}`));
+      log(
+        chalk.green(
+          `${result.created ? "Created" : "Found"} open-projects record ${chalk.bold(result.openProject.slug)} for ${result.project.name}`,
+        ),
+      );
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -1947,16 +2862,26 @@ projectCmd
         return;
       }
 
-      log(chalk.green(`Active project set to ${chalk.bold(project.name)} (${project.id})`));
+      log(
+        chalk.green(
+          `Active project set to ${chalk.bold(project.name)} (${project.id})`,
+        ),
+      );
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
 
 // ─── testers repo ─────────────────────────────────────────────────────────
 
-const repoCmd = program.command("repo").description("Discover and run repo-native Playwright tests");
+const repoCmd = program
+  .command("repo")
+  .description("Discover and run repo-native Playwright tests");
 
 repoCmd
   .command("discover [path]")
@@ -1983,9 +2908,15 @@ repoCmd
       log(chalk.bold("  Repo Discovery"));
       log("");
       log(`  Path:       ${chalk.cyan(snapshot.repoPath)}`);
-      log(`  Config:     ${snapshot.configPath ? chalk.green(snapshot.configPath) : chalk.red("not found")}`);
-      log(`  Specs:      ${chalk.cyan(snapshot.specs.length.toString())} files`);
-      log(`  Tests:      ~${chalk.cyan(snapshot.totalTests.toString())} tests detected`);
+      log(
+        `  Config:     ${snapshot.configPath ? chalk.green(snapshot.configPath) : chalk.red("not found")}`,
+      );
+      log(
+        `  Specs:      ${chalk.cyan(snapshot.specs.length.toString())} files`,
+      );
+      log(
+        `  Tests:      ~${chalk.cyan(snapshot.totalTests.toString())} tests detected`,
+      );
       log(`  Package Mgr: ${chalk.yellow(snapshot.packageManager.preferred)}`);
       if (snapshot.suggestedUrl) {
         log(`  Base URL:   ${snapshot.suggestedUrl}`);
@@ -2004,14 +2935,19 @@ repoCmd
       log("");
 
       // Prep suggestions
-      const hasPrep = snapshot.prep.installCmd || snapshot.prep.installBrowsersCmd;
+      const hasPrep =
+        snapshot.prep.installCmd || snapshot.prep.installBrowsersCmd;
       if (hasPrep) {
         log(chalk.dim("  Prerequisites:"));
         if (snapshot.prep.installCmd) {
           log(chalk.dim(`    Install deps:     ${snapshot.prep.installCmd}`));
         }
         if (snapshot.prep.installBrowsersCmd) {
-          log(chalk.dim(`    Install browsers: ${snapshot.prep.installBrowsersCmd}`));
+          log(
+            chalk.dim(
+              `    Install browsers: ${snapshot.prep.installBrowsersCmd}`,
+            ),
+          );
         }
         log("");
       }
@@ -2031,11 +2967,19 @@ repoCmd
         }
         log("");
       } else {
-        log(chalk.yellow("  No spec files found. Make sure Playwright is configured."));
+        log(
+          chalk.yellow(
+            "  No spec files found. Make sure Playwright is configured.",
+          ),
+        );
         log("");
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -2077,8 +3021,10 @@ repoCmd
           return;
         }
         log(chalk.red("Not ready. Run with flags:"));
-        if (!snapshot.readiness.playwrightInstalled) log(chalk.red("  --install  (install dependencies)"));
-        if (!snapshot.readiness.browsersInstalled) log(chalk.red("  --browsers (install Playwright browsers)"));
+        if (!snapshot.readiness.playwrightInstalled)
+          log(chalk.red("  --install  (install dependencies)"));
+        if (!snapshot.readiness.browsersInstalled)
+          log(chalk.red("  --browsers (install Playwright browsers)"));
         return;
       }
 
@@ -2117,7 +3063,11 @@ repoCmd
         log(JSON.stringify(prepResult, null, 2));
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -2126,8 +3076,24 @@ repoCmd
   .command("run [path]")
   .description("Run discovered Playwright tests natively")
   .option("--refresh", "Force fresh discovery scan", false)
-  .option("--spec <file>", "Run specific spec file(s) (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
-  .option("--extra <arg>", "Extra args to pass to Playwright (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
+  .option(
+    "--spec <file>",
+    "Run specific spec file(s) (repeatable)",
+    (val: string, acc: string[]) => {
+      acc.push(val);
+      return acc;
+    },
+    [] as string[],
+  )
+  .option(
+    "--extra <arg>",
+    "Extra args to pass to Playwright (repeatable)",
+    (val: string, acc: string[]) => {
+      acc.push(val);
+      return acc;
+    },
+    [] as string[],
+  )
   .option("--timeout <ms>", "Timeout per spec file", "300000")
   .option("--url <url>", "Dev server URL")
   .option("--project <id>", "Project ID for result storage")
@@ -2143,11 +3109,14 @@ repoCmd
       });
 
       if (snapshot.specs.length === 0) {
-        logError(chalk.red("No spec files found. Run 'testers repo discover' first."));
+        logError(
+          chalk.red("No spec files found. Run 'testers repo discover' first."),
+        );
         process.exit(1);
       }
 
-      const specFiles = opts.spec.length > 0 ? opts.spec : snapshot.specs.map((s) => s.file);
+      const specFiles =
+        opts.spec.length > 0 ? opts.spec : snapshot.specs.map((s) => s.file);
 
       if (!opts.json) {
         log("");
@@ -2178,22 +3147,40 @@ repoCmd
       log("");
       log(`  Total:   ${result.total}`);
       log(`  Passed:  ${chalk.green(result.passed.toString())}`);
-      log(`  Failed:  ${result.failed > 0 ? chalk.red(result.failed.toString()) : "0"}`);
-      log(`  Skipped: ${result.skipped > 0 ? chalk.yellow(result.skipped.toString()) : "0"}`);
-      log(`  Errors:  ${result.errored > 0 ? chalk.red(result.errored.toString()) : "0"}`);
+      log(
+        `  Failed:  ${result.failed > 0 ? chalk.red(result.failed.toString()) : "0"}`,
+      );
+      log(
+        `  Skipped: ${result.skipped > 0 ? chalk.yellow(result.skipped.toString()) : "0"}`,
+      );
+      log(
+        `  Errors:  ${result.errored > 0 ? chalk.red(result.errored.toString()) : "0"}`,
+      );
       log(`  Time:    ${(result.durationMs / 1000).toFixed(1)}s`);
       log("");
 
       // Per-spec detail
       for (const sr of result.specResults) {
-        const statusIcon = sr.status === "passed" ? chalk.green("✓") : sr.status === "failed" ? chalk.red("✗") : chalk.yellow("⚠");
+        const statusIcon =
+          sr.status === "passed"
+            ? chalk.green("✓")
+            : sr.status === "failed"
+              ? chalk.red("✗")
+              : chalk.yellow("⚠");
         log(`  ${statusIcon} ${sr.specFile}`);
         if (sr.exitCode !== 0 && sr.exitCode !== null) {
           log(chalk.dim(`    exit code: ${sr.exitCode}`));
         }
         if (sr.testResults.length > 0) {
-          const names = sr.testResults.slice(0, 3).map((t) => t.name).join(", ");
-          log(chalk.dim(`    ${names}${sr.testResults.length > 3 ? ` (+${sr.testResults.length - 3} more)` : ""}`));
+          const names = sr.testResults
+            .slice(0, 3)
+            .map((t) => t.name)
+            .join(", ");
+          log(
+            chalk.dim(
+              `    ${names}${sr.testResults.length > 3 ? ` (+${sr.testResults.length - 3} more)` : ""}`,
+            ),
+          );
         }
       }
       log("");
@@ -2202,7 +3189,11 @@ repoCmd
         process.exit(1);
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -2236,7 +3227,9 @@ repoCmd
         log(chalk.bold("  Discovery Cache"));
         log(`  Path:     ${info.path}`);
         log(`  Cached:   ${chalk.green("yes")}`);
-        log(`  Stale:    ${info.stale ? chalk.yellow("yes") : chalk.green("no")}`);
+        log(
+          `  Stale:    ${info.stale ? chalk.yellow("yes") : chalk.green("no")}`,
+        );
         log("");
         return;
       }
@@ -2245,23 +3238,435 @@ repoCmd
       const repoPath = resolve(path ?? process.cwd());
       const info = getDiscoveryCacheInfo(repoPath);
       if (!info) {
-        log(chalk.dim("No discovery cache. Run 'testers repo discover' to create one."));
+        log(
+          chalk.dim(
+            "No discovery cache. Run 'testers repo discover' to create one.",
+          ),
+        );
         return;
       }
       log(chalk.bold("  Discovery Cache"));
       log(`  Path:  ${info.path}`);
       log(`  Stale: ${info.stale ? chalk.yellow("yes") : chalk.green("no")}`);
-      log(chalk.dim("  Run with --clear to clear, --refresh on discover to rebuild."));
+      log(
+        chalk.dim(
+          "  Run with --clear to clear, --refresh on discover to rebuild.",
+        ),
+      );
       log("");
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
+      process.exit(1);
+    }
+  });
+
+// ─── testers sandbox ─────────────────────────────────────────────────────
+
+const sandboxCmd = program
+  .command("sandbox")
+  .description("Launch and manage remote app sandboxes");
+
+sandboxCmd
+  .command("launch [path]")
+  .description(
+    "Sync an app repo into a remote sandbox, start it, and print a public URL",
+  )
+  .option(
+    "--provider <provider>",
+    "Sandbox provider. E2B supports public app URLs today",
+  )
+  .option("--image <image>", "Sandbox image/template")
+  .option("--name <name>", "Sandbox display name")
+  .option("--remote-dir <path>", "Remote upload directory")
+  .option("--working-dir <path>", "App working directory inside the repo", ".")
+  .option("--mode <mode>", "App mode: dev or prod", "dev")
+  .option("--port <n>", "Port the app listens on", "3000")
+  .option(
+    "--protocol <protocol>",
+    "Public URL protocol hint; internal readiness probes use HTTP unless --wait-url is absolute",
+    "http",
+  )
+  .option(
+    "--sync <strategy>",
+    "Upload sync strategy: rsync or archive",
+    "rsync",
+  )
+  .option(
+    "--include-build-output",
+    "Upload common build output directories such as .next, dist, build, and out",
+    false,
+  )
+  .option(
+    "--exclude <pattern>",
+    "Additional upload exclude pattern (repeatable)",
+    repeatOption,
+    [] as string[],
+  )
+  .option(
+    "--env <assignment>",
+    "Env var; KEY forwards host KEY, KEY=value stores value, @secrets supported (repeatable)",
+    repeatOption,
+    [] as string[],
+  )
+  .option(
+    "--env-optional <name>",
+    "Optional env var; forwards host NAME only when set (repeatable)",
+    repeatOption,
+    [] as string[],
+  )
+  .option(
+    "--allow-literal-secret-env",
+    "Allow KEY=value for secret-like env names",
+    false,
+  )
+  .option(
+    "--env-file <path>",
+    "Load env vars from a local file without uploading the file (repeatable)",
+    repeatOption,
+    [] as string[],
+  )
+  .option(
+    "--scan-required-env",
+    "Scan source for strongly required env helpers such as requireEnv('KEY') and fail when values are missing",
+    false,
+  )
+  .option(
+    "--generate-missing-secret-env",
+    "Generate random sandbox-only values for missing secret-like env vars found by --scan-required-env",
+    false,
+  )
+  .option(
+    "--provider-env <assignment>",
+    "Provider credential env; KEY forwards host KEY, KEY=value stores value, @secrets supported (repeatable)",
+    repeatOption,
+    [] as string[],
+  )
+  .option(
+    "--provider-env-file <path>",
+    "Load provider credentials from a local env file without injecting all values into the app (repeatable)",
+    repeatOption,
+    [] as string[],
+  )
+  .option(
+    "--url-env <name>",
+    "Set env var to the resolved public URL after the sandbox is created (repeatable)",
+    repeatOption,
+    [] as string[],
+  )
+  .option(
+    "--no-infer-url-env",
+    "Do not automatically rewrite APP_URL/NEXT_PUBLIC_URL-style env vars",
+  )
+  .option(
+    "--host-env <name>",
+    "Set env var to the resolved public hostname after the sandbox is created (repeatable)",
+    repeatOption,
+    [] as string[],
+  )
+  .option(
+    "--no-infer-host-env",
+    "Do not automatically set framework host-style env vars",
+  )
+  .option(
+    "--setup <command>",
+    "Setup command to run before install/db/build (repeatable)",
+    repeatOption,
+    [] as string[],
+  )
+  .option(
+    "--db-setup <command>",
+    "Database setup command to run from the app working directory (repeatable)",
+    repeatOption,
+    [] as string[],
+  )
+  .option("--install <command>", "Install command, or auto/none", "auto")
+  .option("--build <command>", "Build command, or auto/none", "auto")
+  .option(
+    "--start <command>",
+    "Start command. Auto-detected from package scripts when omitted",
+  )
+  .option(
+    "--wait-url <url-or-path>",
+    "Readiness URL or path; defaults to the app root",
+  )
+  .option("--wait-timeout <ms>", "Readiness wait timeout", "180000")
+  .option("--ttl <duration>", "Sandbox keep-alive duration, e.g. 45m, 2h", "1h")
+  .option(
+    "--min-memory-mb <mb>",
+    "Require the created sandbox to report at least this much RAM before syncing/setup",
+  )
+  .option(
+    "--postgres",
+    "Create a local PostgreSQL database in the sandbox and set DATABASE_URL/DATABASE_DIRECT_URL",
+    false,
+  )
+  .option(
+    "--postgres-db <name>",
+    "Local PostgreSQL database name",
+    "testers_app",
+  )
+  .option("--postgres-user <name>", "Local PostgreSQL user", "testers")
+  .option("--postgres-password <value>", "Local PostgreSQL password", "testers")
+  .option("--postgres-port <n>", "Local PostgreSQL port", "5432")
+  .option(
+    "--no-postgres-grant-created-roles",
+    "Do not grant non-system NOLOGIN roles created by migrations to the sandbox PostgreSQL user",
+  )
+  .option("--keep-on-failure", "Keep the sandbox if setup fails", false)
+  .option(
+    "--ignore-dirty",
+    "Do not warn when syncing a dirty git working tree",
+    false,
+  )
+  .option(
+    "--dry-run",
+    "Print the resolved launch plan without creating a sandbox",
+    false,
+  )
+  .option(
+    "--show-commands",
+    "Include raw phase commands in JSON output; do not use with literal secrets",
+    false,
+  )
+  .option("--json", "Output as JSON", false)
+  .option("-o, --output <file>", "Write the JSON result to a file")
+  .action(async (path: string | undefined, opts) => {
+    try {
+      const sourceDir = resolve(path ?? process.cwd());
+      const mode =
+        opts.mode === "prod" || opts.mode === "production"
+          ? "prod"
+          : opts.mode === "dev"
+            ? "dev"
+            : null;
+      if (!mode) throw new Error("sandbox launch mode must be dev or prod");
+      const dirty = opts.ignoreDirty ? null : gitDirtySummary(sourceDir);
+      if (dirty && !opts.json) {
+        log(
+          chalk.yellow(
+            `Warning: ${dirty}. Use --ignore-dirty to suppress this warning.`,
+          ),
+        );
+      }
+
+      const env = parseSandboxAppEnvAssignments(opts.env, opts.envOptional, {
+        allowLiteralSecretValues: opts.allowLiteralSecretEnv,
+      });
+      const providerEnvOptions = parseSandboxProviderEnvOptions(opts);
+      const result = await launchSandboxApp({
+        sourceDir,
+        workingDir: opts.workingDir,
+        provider: opts.provider,
+        image: opts.image,
+        name: opts.name,
+        remoteDir: opts.remoteDir,
+        mode,
+        port: parsePositiveIntOption(opts.port, "sandbox app port"),
+        protocol: opts.protocol,
+        syncStrategy: opts.sync,
+        includeBuildOutput: opts.includeBuildOutput,
+        exclude: opts.exclude,
+        env,
+        envFiles: opts.envFile,
+        providerEnv: providerEnvOptions.providerEnv,
+        providerEnvFiles: providerEnvOptions.providerEnvFiles,
+        providerEnvBaseDir: providerEnvOptions.providerEnvBaseDir,
+        scanRequiredEnv: opts.scanRequiredEnv,
+        generateMissingSecretEnv: opts.generateMissingSecretEnv,
+        urlEnvNames: opts.urlEnv,
+        inferUrlEnv: opts.inferUrlEnv,
+        hostEnvNames: opts.hostEnv,
+        inferHostEnv: opts.inferHostEnv,
+        setupCommands: opts.setup,
+        dbCommands: opts.dbSetup,
+        installCommand: opts.install,
+        buildCommand: opts.build,
+        startCommand: opts.start,
+        waitUrl: opts.waitUrl,
+        waitTimeoutMs: parsePositiveIntOption(
+          opts.waitTimeout,
+          "sandbox app wait timeout",
+        ),
+        ttlSeconds: parseDurationSeconds(opts.ttl),
+        minMemoryMb: parsePositiveIntOption(
+          opts.minMemoryMb,
+          "sandbox minimum memory",
+        ),
+        postgres: {
+          enabled: Boolean(opts.postgres),
+          database: opts.postgresDb,
+          user: opts.postgresUser,
+          password: opts.postgresPassword,
+          port:
+            parsePositiveIntOption(
+              opts.postgresPort,
+              "sandbox postgres port",
+            ) ?? 5432,
+          grantCreatedRoles: opts.postgresGrantCreatedRoles,
+        },
+        keepOnFailure: opts.keepOnFailure,
+        dryRun: opts.dryRun,
+      });
+      const cliOutput = toSandboxAppCliOutput(result, {
+        showCommands: opts.showCommands,
+      });
+      const outputPath = writeJsonOutputFile(opts.output, cliOutput);
+
+      if (opts.json || opts.dryRun) {
+        log(JSON.stringify(cliOutput, null, 2));
+      } else {
+        if (outputPath)
+          log(chalk.green(`Sandbox launch result written to ${outputPath}`));
+        log(formatSandboxAppLaunch(result));
+      }
+    } catch (error) {
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
+      process.exit(1);
+    }
+  });
+
+sandboxCmd
+  .command("list")
+  .description("List app sandboxes launched by testers")
+  .option("--json", "Output as JSON", false)
+  .action((opts) => {
+    const launches = listSandboxAppLaunches();
+    if (opts.json) {
+      log(JSON.stringify(launches, null, 2));
+      return;
+    }
+    if (launches.length === 0) {
+      log(chalk.dim("\n  No testers app sandboxes found.\n"));
+      return;
+    }
+    log("");
+    log(chalk.bold("  App Sandboxes"));
+    log("");
+    for (const item of launches) {
+      log(
+        `  ${chalk.dim(item.sandboxId.slice(0, 8))}  ${item.provider.padEnd(8)} ${item.mode.padEnd(4)} ${item.publicUrl}`,
+      );
+      log(
+        chalk.dim(
+          `            ${item.sourceDir} (${item.workingDir}) expires ${item.expiresAt}`,
+        ),
+      );
+    }
+    log("");
+  });
+
+sandboxCmd
+  .command("logs <id>")
+  .description("Show app logs for a launched sandbox")
+  .option("--lines <n>", "Number of log lines to show")
+  .option(
+    "--provider-env <assignment>",
+    "Provider credential env; KEY forwards host KEY, KEY=value stores value, @secrets supported (repeatable)",
+    repeatOption,
+    [] as string[],
+  )
+  .option(
+    "--provider-env-file <path>",
+    "Load provider credentials from a local env file without injecting all values into the app (repeatable)",
+    repeatOption,
+    [] as string[],
+  )
+  .option(
+    "--allow-literal-secret-env",
+    "Allow KEY=value for secret-like provider env names",
+    false,
+  )
+  .option("--json", "Output as JSON", false)
+  .action(async (id: string, opts) => {
+    try {
+      const providerEnvOptions = parseSandboxProviderEnvOptions(opts);
+      const result = await readSandboxAppLogs(id, {
+        lines: opts.lines ? parseInt(opts.lines, 10) : undefined,
+        ...providerEnvOptions,
+      });
+      if (opts.json) {
+        log(JSON.stringify(result, null, 2));
+        return;
+      }
+      log(result.logs || chalk.dim("No logs found."));
+    } catch (error) {
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
+      process.exit(1);
+    }
+  });
+
+sandboxCmd
+  .command("stop <id>")
+  .description("Stop or delete an app sandbox launched by testers")
+  .option("--cleanup <mode>", "Cleanup mode: delete or stop", "delete")
+  .option(
+    "--provider-env <assignment>",
+    "Provider credential env; KEY forwards host KEY, KEY=value stores value, @secrets supported (repeatable)",
+    repeatOption,
+    [] as string[],
+  )
+  .option(
+    "--provider-env-file <path>",
+    "Load provider credentials from a local env file without injecting all values into the app (repeatable)",
+    repeatOption,
+    [] as string[],
+  )
+  .option(
+    "--allow-literal-secret-env",
+    "Allow KEY=value for secret-like provider env names",
+    false,
+  )
+  .option("--json", "Output as JSON", false)
+  .action(async (id: string, opts) => {
+    try {
+      const cleanup =
+        opts.cleanup === "stop"
+          ? "stop"
+          : opts.cleanup === "delete"
+            ? "delete"
+            : null;
+      if (!cleanup)
+        throw new Error("sandbox stop cleanup must be delete or stop");
+      const result = await stopSandboxAppLaunch(id, {
+        cleanup,
+        ...parseSandboxProviderEnvOptions(opts),
+      });
+      if (opts.json) {
+        log(JSON.stringify(result, null, 2));
+        return;
+      }
+      log(
+        chalk.green(
+          `Sandbox ${cleanup === "delete" ? "deleted" : "stopped"}: ${result.sandboxId}`,
+        ),
+      );
+    } catch (error) {
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
 
 // ─── testers sessions ─────────────────────────────────────────────────────
 
-const sessionCmd = program.command("sessions").description("Manage recorded browser sessions from the Chrome extension");
+const sessionCmd = program
+  .command("sessions")
+  .description("Manage recorded browser sessions from the Chrome extension");
 
 sessionCmd
   .command("list")
@@ -2283,7 +3688,11 @@ sessionCmd
 
       const total = countSessions();
       if (sessions.length === 0) {
-        log(chalk.dim("No recorded sessions. Export from the Chrome extension or import a JSON file."));
+        log(
+          chalk.dim(
+            "No recorded sessions. Export from the Chrome extension or import a JSON file.",
+          ),
+        );
         return;
       }
 
@@ -2293,14 +3702,34 @@ sessionCmd
       log("");
 
       for (const s of sessions) {
-        const statusColor = s.status === "live" ? chalk.green : s.status === "saved" ? chalk.yellow : chalk.dim;
-        const url = s.url ? (s.url.length > 60 ? s.url.slice(0, 57) + "..." : s.url) : "about:blank";
-        log(chalk.bold(`  ${s.id.slice(0, 8)}`) + `  ${statusColor(s.status)}  ${url}`);
-        log(chalk.dim(`         ${s.title ?? "Untitled"} | ${s.entryCount} entries | ${s.errorCount} errors | ${s.startTime}`));
+        const statusColor =
+          s.status === "live"
+            ? chalk.green
+            : s.status === "saved"
+              ? chalk.yellow
+              : chalk.dim;
+        const url = s.url
+          ? s.url.length > 60
+            ? s.url.slice(0, 57) + "..."
+            : s.url
+          : "about:blank";
+        log(
+          chalk.bold(`  ${s.id.slice(0, 8)}`) +
+            `  ${statusColor(s.status)}  ${url}`,
+        );
+        log(
+          chalk.dim(
+            `         ${s.title ?? "Untitled"} | ${s.entryCount} entries | ${s.errorCount} errors | ${s.startTime}`,
+          ),
+        );
       }
       log("");
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -2339,17 +3768,28 @@ sessionCmd
       log("");
 
       // Show error entries if any
-      const errors = session.entries.filter((e: any) => e && e.type === "error");
+      const errors = session.entries.filter(
+        (e: any) => e && e.type === "error",
+      );
       if (errors.length > 0) {
         log(chalk.bold.red("  Errors:"));
         for (const err of errors.slice(0, 10)) {
-          log(chalk.red(`  - [${err.timestamp ?? "?"}] ${err.message ?? err.text ?? JSON.stringify(err).slice(0, 100)}`));
+          log(
+            chalk.red(
+              `  - [${err.timestamp ?? "?"}] ${err.message ?? err.text ?? JSON.stringify(err).slice(0, 100)}`,
+            ),
+          );
         }
-        if (errors.length > 10) log(chalk.dim(`  ... and ${errors.length - 10} more`));
+        if (errors.length > 10)
+          log(chalk.dim(`  ... and ${errors.length - 10} more`));
       }
       log("");
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -2373,9 +3813,18 @@ sessionCmd
         const sessionId = item.sessionId ?? item.id ?? crypto.randomUUID();
         const entries = item.entries ?? item.sessionEntries ?? [];
         const entryCount = entries.length;
-        const errorCount = entries.filter((e: any) => e && (e.type === "error" || e.type === "console" && e.level === "error")).length;
-        const consoleCount = entries.filter((e: any) => e && e.type === "console").length;
-        const navCount = entries.filter((e: any) => e && e.type === "navigation").length;
+        const errorCount = entries.filter(
+          (e: any) =>
+            e &&
+            (e.type === "error" ||
+              (e.type === "console" && e.level === "error")),
+        ).length;
+        const consoleCount = entries.filter(
+          (e: any) => e && e.type === "console",
+        ).length;
+        const navCount = entries.filter(
+          (e: any) => e && e.type === "navigation",
+        ).length;
 
         createSession({
           sessionId,
@@ -2388,7 +3837,8 @@ sessionCmd
           consoleCount,
           navCount,
           status: "exported",
-          startTime: item.startTime ?? item.recordingStarted ?? new Date().toISOString(),
+          startTime:
+            item.startTime ?? item.recordingStarted ?? new Date().toISOString(),
           endTime: item.endTime ?? item.recordingEnded ?? null,
         });
         imported++;
@@ -2396,7 +3846,11 @@ sessionCmd
 
       log(chalk.green(`Imported ${imported} session(s) from ${file}.`));
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -2414,21 +3868,35 @@ sessionCmd
         process.exit(1);
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
 
 // ─── testers schedule ─────────────────────────────────────────────────────
 
-const scheduleCmd = program.command("schedule").description("Manage recurring test schedules");
+const scheduleCmd = program
+  .command("schedule")
+  .description("Manage recurring test schedules");
 
 scheduleCmd
   .command("create <name>")
   .description("Create a new schedule")
   .requiredOption("--cron <expression>", "Cron expression")
   .requiredOption("--url <url>", "Target URL")
-  .option("-t, --tag <tag>", "Tag filter (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
+  .option(
+    "-t, --tag <tag>",
+    "Tag filter (repeatable)",
+    (val: string, acc: string[]) => {
+      acc.push(val);
+      return acc;
+    },
+    [] as string[],
+  )
   .option("-p, --priority <level>", "Priority filter")
   .option("-m, --model <model>", "AI model to use")
   .option("--parallel <n>", "Parallel browsers", "1")
@@ -2452,12 +3920,20 @@ scheduleCmd
         timeoutMs: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
         projectId,
       });
-      log(chalk.green(`Created schedule ${chalk.bold(schedule.name)} (${schedule.id})`));
+      log(
+        chalk.green(
+          `Created schedule ${chalk.bold(schedule.name)} (${schedule.id})`,
+        ),
+      );
       if (schedule.nextRunAt) {
         log(chalk.dim(`  Next run at: ${schedule.nextRunAt}`));
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -2486,17 +3962,27 @@ scheduleCmd
       log("");
       log(chalk.bold("  Schedules"));
       log("");
-      log(`  ${"Name".padEnd(20)} ${"Cron".padEnd(18)} ${"URL".padEnd(30)} ${"Enabled".padEnd(9)} ${"Next Run".padEnd(22)} Last Run`);
-      log(`  ${"─".repeat(20)} ${"─".repeat(18)} ${"─".repeat(30)} ${"─".repeat(9)} ${"─".repeat(22)} ${"─".repeat(22)}`);
+      log(
+        `  ${"Name".padEnd(20)} ${"Cron".padEnd(18)} ${"URL".padEnd(30)} ${"Enabled".padEnd(9)} ${"Next Run".padEnd(22)} Last Run`,
+      );
+      log(
+        `  ${"─".repeat(20)} ${"─".repeat(18)} ${"─".repeat(30)} ${"─".repeat(9)} ${"─".repeat(22)} ${"─".repeat(22)}`,
+      );
       for (const s of schedules) {
         const enabled = s.enabled ? chalk.green("yes") : chalk.red("no");
         const nextRun = s.nextRunAt ?? chalk.dim("—");
         const lastRun = s.lastRunAt ?? chalk.dim("—");
-        log(`  ${s.name.padEnd(20)} ${s.cronExpression.padEnd(18)} ${s.url.padEnd(30)} ${enabled.toString().padEnd(9)} ${nextRun.toString().padEnd(22)} ${lastRun}`);
+        log(
+          `  ${s.name.padEnd(20)} ${s.cronExpression.padEnd(18)} ${s.url.padEnd(30)} ${enabled.toString().padEnd(9)} ${nextRun.toString().padEnd(22)} ${lastRun}`,
+        );
       }
       log("");
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -2516,11 +4002,15 @@ scheduleCmd
       log(`  ID:          ${schedule.id}`);
       log(`  Cron:        ${schedule.cronExpression}`);
       log(`  URL:         ${schedule.url}`);
-      log(`  Enabled:     ${schedule.enabled ? chalk.green("yes") : chalk.red("no")}`);
+      log(
+        `  Enabled:     ${schedule.enabled ? chalk.green("yes") : chalk.red("no")}`,
+      );
       log(`  Model:       ${schedule.model ?? chalk.dim("default")}`);
       log(`  Headed:      ${schedule.headed ? "yes" : "no"}`);
       log(`  Parallel:    ${schedule.parallel}`);
-      log(`  Timeout:     ${schedule.timeoutMs ? `${schedule.timeoutMs}ms` : chalk.dim("default")}`);
+      log(
+        `  Timeout:     ${schedule.timeoutMs ? `${schedule.timeoutMs}ms` : chalk.dim("default")}`,
+      );
       log(`  Project:     ${schedule.projectId ?? chalk.dim("none")}`);
       log(`  Filter:      ${JSON.stringify(schedule.scenarioFilter)}`);
       log(`  Next run:    ${schedule.nextRunAt ?? chalk.dim("not scheduled")}`);
@@ -2530,7 +4020,11 @@ scheduleCmd
       log(`  Updated:     ${schedule.updatedAt}`);
       log("");
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -2543,7 +4037,11 @@ scheduleCmd
       const schedule = updateSchedule(id, { enabled: true });
       log(chalk.green(`Enabled schedule ${chalk.bold(schedule.name)}`));
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -2556,7 +4054,11 @@ scheduleCmd
       const schedule = updateSchedule(id, { enabled: false });
       log(chalk.green(`Disabled schedule ${chalk.bold(schedule.name)}`));
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -2574,7 +4076,11 @@ scheduleCmd
         process.exit(1);
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -2592,7 +4098,11 @@ scheduleCmd
         return;
       }
 
-      log(chalk.blue(`Running schedule ${chalk.bold(schedule.name)} against ${schedule.url}...`));
+      log(
+        chalk.blue(
+          `Running schedule ${chalk.bold(schedule.name)} against ${schedule.url}...`,
+        ),
+      );
 
       const { run, results } = await runByFilter({
         url: schedule.url,
@@ -2614,7 +4124,11 @@ scheduleCmd
 
       process.exit(getExitCode(run));
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -2642,7 +4156,11 @@ program
 
             for (const schedule of schedules) {
               if (schedule.nextRunAt && schedule.nextRunAt <= now) {
-                log(chalk.blue(`[${new Date().toISOString()}] Triggering schedule: ${schedule.name}`));
+                log(
+                  chalk.blue(
+                    `[${new Date().toISOString()}] Triggering schedule: ${schedule.name}`,
+                  ),
+                );
                 try {
                   const { run } = await runByFilter({
                     url: schedule.url,
@@ -2656,18 +4174,29 @@ program
                     projectId: schedule.projectId ?? undefined,
                   });
 
-                  const statusColor = run.status === "passed" ? chalk.green : chalk.red;
-                  log(`  ${statusColor(run.status)} — ${run.passed}/${run.total} passed`);
+                  const statusColor =
+                    run.status === "passed" ? chalk.green : chalk.red;
+                  log(
+                    `  ${statusColor(run.status)} — ${run.passed}/${run.total} passed`,
+                  );
 
                   // Update schedule with last run info
                   updateSchedule(schedule.id, {});
                 } catch (err) {
-                  logError(chalk.red(`  Error running schedule ${schedule.name}: ${err instanceof Error ? err.message : String(err)}`));
+                  logError(
+                    chalk.red(
+                      `  Error running schedule ${schedule.name}: ${err instanceof Error ? err.message : String(err)}`,
+                    ),
+                  );
                 }
               }
             }
           } catch (err) {
-            logError(chalk.red(`Daemon error: ${err instanceof Error ? err.message : String(err)}`));
+            logError(
+              chalk.red(
+                `Daemon error: ${err instanceof Error ? err.message : String(err)}`,
+              ),
+            );
           }
 
           // Wait for next check
@@ -2689,7 +4218,11 @@ program
 
       await checkAndRun();
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -2699,27 +4232,34 @@ program
 program
   .command("ci [provider]")
   .description("Print or write a CI workflow (default provider: github)")
-  .option("-o, --output <path>", "Write the workflow to a file (e.g. .github/workflows/qa.yml)")
-  .action(async (providerArg: string | undefined, opts: { output?: string }) => {
-    const provider = (providerArg ?? "github").toLowerCase();
-    if (provider !== "github") {
-      logError(chalk.red(`Unknown CI provider: ${provider}. Supported: github`));
-      process.exit(2);
-    }
-    const workflow = generateGitHubActionsWorkflow();
-    if (opts.output) {
-      const outPath = resolve(opts.output);
-      const outDir = outPath.replace(/\/[^/]*$/, "");
-      if (outDir && !existsSync(outDir)) {
-        mkdirSync(outDir, { recursive: true });
+  .option(
+    "-o, --output <path>",
+    "Write the workflow to a file (e.g. .github/workflows/qa.yml)",
+  )
+  .action(
+    async (providerArg: string | undefined, opts: { output?: string }) => {
+      const provider = (providerArg ?? "github").toLowerCase();
+      if (provider !== "github") {
+        logError(
+          chalk.red(`Unknown CI provider: ${provider}. Supported: github`),
+        );
+        process.exit(2);
       }
-      writeFileSync(outPath, workflow, "utf-8");
-      log(chalk.green(`Workflow written to ${outPath}`));
-      return;
-    }
-    // Default: print to stdout so users can `testers ci > .github/workflows/qa.yml`
-    process.stdout.write(workflow);
-  });
+      const workflow = generateGitHubActionsWorkflow();
+      if (opts.output) {
+        const outPath = resolve(opts.output);
+        const outDir = outPath.replace(/\/[^/]*$/, "");
+        if (outDir && !existsSync(outDir)) {
+          mkdirSync(outDir, { recursive: true });
+        }
+        writeFileSync(outPath, workflow, "utf-8");
+        log(chalk.green(`Workflow written to ${outPath}`));
+        return;
+      }
+      // Default: print to stdout so users can `testers ci > .github/workflows/qa.yml`
+      process.stdout.write(workflow);
+    },
+  );
 
 // ─── testers init ──────────────────────────────────────────────────────────
 
@@ -2752,12 +4292,18 @@ program
         log(`  Framework:  ${chalk.dim("not detected")}`);
       }
 
-      log(`  Project:    ${chalk.green(project.name)} ${chalk.dim(`(${project.id})`)}`);
-      log(`  Scenarios:  ${chalk.green(String(scenarios.length))} starter scenarios created`);
+      log(
+        `  Project:    ${chalk.green(project.name)} ${chalk.dim(`(${project.id})`)}`,
+      );
+      log(
+        `  Scenarios:  ${chalk.green(String(scenarios.length))} starter scenarios created`,
+      );
       log("");
 
       for (const s of scenarios) {
-        log(`    ${chalk.dim(s.shortId)} ${s.name} ${chalk.dim(`[${s.tags.join(", ")}]`)}`);
+        log(
+          `    ${chalk.dim(s.shortId)} ${s.name} ${chalk.dim(`[${s.tags.join(", ")}]`)}`,
+        );
       }
 
       // Generate CI workflow if requested
@@ -2768,9 +4314,13 @@ program
         }
         const workflowPath = join(workflowDir, "testers.yml");
         writeFileSync(workflowPath, generateGitHubActionsWorkflow(), "utf-8");
-        log(`  CI:         ${chalk.green("GitHub Actions workflow written to .github/workflows/testers.yml")}`);
+        log(
+          `  CI:         ${chalk.green("GitHub Actions workflow written to .github/workflows/testers.yml")}`,
+        );
       } else if (opts.ci) {
-        log(chalk.yellow(`  Unknown CI provider: ${opts.ci}. Supported: github`));
+        log(
+          chalk.yellow(`  Unknown CI provider: ${opts.ci}. Supported: github`),
+        );
       }
 
       log("");
@@ -2778,28 +4328,46 @@ program
       // ── Interactive post-init wizard ───────────────────────────────────
       if (opts.yes) return; // skip wizard in non-interactive mode
 
-      const rl = createInterface({ input: process.stdin, output: process.stdout });
-      const ask = (q: string): Promise<string> => new Promise((resolve) => rl.question(q, resolve));
+      const rl = createInterface({
+        input: process.stdin,
+        output: process.stdout,
+      });
+      const ask = (q: string): Promise<string> =>
+        new Promise((resolve) => rl.question(q, resolve));
 
       try {
         // Step: configure environments
-        const envAnswer = await ask("  Would you like to configure environments? [y/N] ");
+        const envAnswer = await ask(
+          "  Would you like to configure environments? [y/N] ",
+        );
         if (envAnswer.trim().toLowerCase() === "y") {
           const envName = await ask("  Environment name (default: staging): ");
           const envUrl = await ask(`  Base URL (default: ${url}): `);
           const resolvedEnvName = envName.trim() || "staging";
           const resolvedEnvUrl = envUrl.trim() || url;
-          createEnvironment({ name: resolvedEnvName, url: resolvedEnvUrl, projectId: project.id, isDefault: true });
-          log(chalk.green(`  ✓ Environment '${resolvedEnvName}' created (${resolvedEnvUrl})`));
+          createEnvironment({
+            name: resolvedEnvName,
+            url: resolvedEnvUrl,
+            projectId: project.id,
+            isDefault: true,
+          });
+          log(
+            chalk.green(
+              `  ✓ Environment '${resolvedEnvName}' created (${resolvedEnvUrl})`,
+            ),
+          );
           log("");
         }
 
         // Step: create first scenario
-        const scenarioAnswer = await ask("  Would you like to create your first test scenario? [y/N] ");
+        const scenarioAnswer = await ask(
+          "  Would you like to create your first test scenario? [y/N] ",
+        );
         if (scenarioAnswer.trim().toLowerCase() === "y") {
           const scenarioName = await ask("  Scenario name: ");
           const scenarioUrl = await ask(`  URL to test (default: ${url}): `);
-          const resolvedScenarioName = scenarioName.trim() || "My first scenario";
+          const resolvedScenarioName =
+            scenarioName.trim() || "My first scenario";
           const resolvedScenarioUrl = scenarioUrl.trim() || url;
           const newScenario = createScenario({
             name: resolvedScenarioName,
@@ -2809,7 +4377,11 @@ program
             tags: ["smoke"],
             priority: "high",
           });
-          log(chalk.green(`  ✓ Scenario '${newScenario.name}' created ${chalk.dim(`(${newScenario.shortId})`)}`));
+          log(
+            chalk.green(
+              `  ✓ Scenario '${newScenario.name}' created ${chalk.dim(`(${newScenario.shortId})`)}`,
+            ),
+          );
           log("");
         }
       } finally {
@@ -2822,7 +4394,11 @@ program
       log(`    3. Add more scenarios with ${chalk.cyan("testers add <name>")}`);
       log("");
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -2846,14 +4422,18 @@ program
       }
 
       const originalResults = getResultsByRun(originalRun.id);
-      const scenarioIds = originalResults.map(r => r.scenarioId);
+      const scenarioIds = originalResults.map((r) => r.scenarioId);
 
       if (scenarioIds.length === 0) {
         log(chalk.dim("No scenarios to replay."));
         return;
       }
 
-      log(chalk.blue(`Replaying ${scenarioIds.length} scenarios from run ${originalRun.id.slice(0, 8)}...`));
+      log(
+        chalk.blue(
+          `Replaying ${scenarioIds.length} scenarios from run ${originalRun.id.slice(0, 8)}...`,
+        ),
+      );
 
       const { run, results } = await runByFilter({
         url: opts.url ?? originalRun.url,
@@ -2870,7 +4450,11 @@ program
       }
       process.exit(getExitCode(run));
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -2895,15 +4479,19 @@ program
 
       const originalResults = getResultsByRun(originalRun.id);
       const failedScenarioIds = originalResults
-        .filter(r => r.status === "failed" || r.status === "error")
-        .map(r => r.scenarioId);
+        .filter((r) => r.status === "failed" || r.status === "error")
+        .map((r) => r.scenarioId);
 
       if (failedScenarioIds.length === 0) {
         log(chalk.green("No failed scenarios to retry. All passed!"));
         return;
       }
 
-      log(chalk.blue(`Retrying ${failedScenarioIds.length} failed scenarios from run ${originalRun.id.slice(0, 8)}...`));
+      log(
+        chalk.blue(
+          `Retrying ${failedScenarioIds.length} failed scenarios from run ${originalRun.id.slice(0, 8)}...`,
+        ),
+      );
 
       const { run, results } = await runByFilter({
         url: opts.url ?? originalRun.url,
@@ -2918,13 +4506,16 @@ program
         log("");
         log(chalk.bold("  Comparison with original run:"));
         for (const result of results) {
-          const original = originalResults.find(r => r.scenarioId === result.scenarioId);
+          const original = originalResults.find(
+            (r) => r.scenarioId === result.scenarioId,
+          );
           if (original) {
             const changed = original.status !== result.status;
             const arrow = changed
               ? chalk.yellow(`${original.status} → ${result.status}`)
               : chalk.dim(`${result.status} (unchanged)`);
-            const icon = result.status === "passed" ? chalk.green("✓") : chalk.red("✗");
+            const icon =
+              result.status === "passed" ? chalk.green("✓") : chalk.red("✗");
             // Get scenario name from the getScenario import
             log(`  ${icon} ${result.scenarioId.slice(0, 8)}: ${arrow}`);
           }
@@ -2939,7 +4530,11 @@ program
       }
       process.exit(getExitCode(run));
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -2970,23 +4565,33 @@ program
       });
 
       if (opts.json) {
-        log(JSON.stringify({
-          run: smokeResult.run,
-          result: smokeResult.result,
-          pagesVisited: smokeResult.pagesVisited,
-          issues: smokeResult.issuesFound,
-        }, null, 2));
+        log(
+          JSON.stringify(
+            {
+              run: smokeResult.run,
+              result: smokeResult.result,
+              pagesVisited: smokeResult.pagesVisited,
+              issues: smokeResult.issuesFound,
+            },
+            null,
+            2,
+          ),
+        );
       } else {
         log(formatSmokeReport(smokeResult));
       }
 
       // Exit with non-zero if critical/high issues found
       const hasCritical = smokeResult.issuesFound.some(
-        (i) => i.severity === "critical" || i.severity === "high"
+        (i) => i.severity === "critical" || i.severity === "high",
       );
       process.exit(hasCritical ? 1 : 0);
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -2997,15 +4602,38 @@ program
   .command("quick-qa <url>")
   .alias("quick-check")
   .description("Run a fast QA pass: health scan plus optional autonomous smoke")
-  .option("-p, --page <path>", "Page path to visit during page-based checks (repeatable)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
+  .option(
+    "-p, --page <path>",
+    "Page path to visit during page-based checks (repeatable)",
+    (v: string, acc: string[]) => {
+      acc.push(v);
+      return acc;
+    },
+    [] as string[],
+  )
   .option("--max-pages <n>", "Max pages to crawl for link checks", "20")
-  .option("--skip <check>", "Skip a check: console|network|links|perf|smoke|a11y (repeatable)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
-  .option("--a11y [level]", "Include WCAG accessibility scan at A, AA, or AAA (default AA)")
+  .option(
+    "--skip <check>",
+    "Skip a check: console|network|links|perf|smoke|a11y (repeatable)",
+    (v: string, acc: string[]) => {
+      acc.push(v);
+      return acc;
+    },
+    [] as string[],
+  )
+  .option(
+    "--a11y [level]",
+    "Include WCAG accessibility scan at A, AA, or AAA (default AA)",
+  )
   .option("--no-smoke", "Skip autonomous smoke exploration")
   .option("-m, --model <model>", "AI model for autonomous smoke", "quick")
   .option("--headed", "Run browser checks in headed mode", false)
   .option("--timeout <ms>", "Navigation timeout per page in ms", "15000")
-  .option("--overall-timeout <ms>", "Hard overall timeout for the quick QA run in milliseconds", String(DEFAULT_QUICK_QA_OVERALL_TIMEOUT_MS))
+  .option(
+    "--overall-timeout <ms>",
+    "Hard overall timeout for the quick QA run in milliseconds",
+    String(DEFAULT_QUICK_QA_OVERALL_TIMEOUT_MS),
+  )
   .option("--project <id>", "Project ID for issue tracking")
   .option("--json", "Output results as JSON", false)
   .option("-o, --output <file>", "Write JSON results to a file")
@@ -3013,7 +4641,9 @@ program
     try {
       const projectId = resolveProject(opts.project);
       const includeA11y = opts.a11y !== undefined;
-      const wcagLevel = includeA11y ? normalizeQuickQaWcagLevel(opts.a11y) : undefined;
+      const wcagLevel = includeA11y
+        ? normalizeQuickQaWcagLevel(opts.a11y)
+        : undefined;
       const selection = resolveQuickQaSelection({
         skip: opts.skip as string[],
         includeA11y,
@@ -3022,7 +4652,11 @@ program
 
       if (!opts.json) {
         log(chalk.blue(`Running quick QA against ${chalk.bold(url)}...`));
-        log(chalk.dim(`  Checks: ${selection.scanners.join(", ")}${selection.includeSmoke ? ", smoke" : ""}`));
+        log(
+          chalk.dim(
+            `  Checks: ${selection.scanners.join(", ")}${selection.includeSmoke ? ", smoke" : ""}`,
+          ),
+        );
         log("");
       }
 
@@ -3048,12 +4682,17 @@ program
         log(JSON.stringify(result, null, 2));
       } else {
         log(formatQuickQaReport(result));
-        if (opts.output) log(chalk.dim(`Wrote JSON results to ${resolve(opts.output)}`));
+        if (opts.output)
+          log(chalk.dim(`Wrote JSON results to ${resolve(opts.output)}`));
       }
 
       process.exit(getQuickQaExitCode(result));
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -3089,7 +4728,11 @@ program
       const hasVisualRegressions = visualResults.some((r) => r.isRegression);
       process.exit(diff.regressions.length > 0 || hasVisualRegressions ? 1 : 0);
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -3102,17 +4745,28 @@ program
   .option("--latest", "Use most recent run", false)
   .option("-o, --output <file>", "Output file path", "report.html")
   .option("--open", "Open the report in the browser after generating", false)
-  .option("--compliance", "Generate a compliance snapshot (EU AI Act / SOC2 style)", false)
+  .option(
+    "--compliance",
+    "Generate a compliance snapshot (EU AI Act / SOC2 style)",
+    false,
+  )
   .option("--days <n>", "Days to cover in compliance report", "30")
   .option("--project <id>", "Project ID for compliance report")
-  .option("--format <fmt>", "Compliance report format: json or markdown", "markdown")
+  .option(
+    "--format <fmt>",
+    "Compliance report format: json or markdown",
+    "markdown",
+  )
   .action(async (runId: string | undefined, opts) => {
     try {
       // Compliance report mode
       if (opts.compliance) {
-        const { generateComplianceReport } = await import("../lib/compliance-report.js");
+        const { generateComplianceReport } =
+          await import("../lib/compliance-report.js");
         const projectId = resolveProject(opts.project);
-        const format = (opts.format === "json" ? "json" : "markdown") as "json" | "markdown";
+        const format = (opts.format === "json" ? "json" : "markdown") as
+          | "json"
+          | "markdown";
         const content = await generateComplianceReport({
           projectId,
           days: parseInt(opts.days, 10),
@@ -3144,7 +4798,11 @@ program
         Bun.spawn([openCmd, absPath]);
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -3159,7 +4817,10 @@ authCmd
   .option("--email <email>", "Login email or credential reference")
   .option("--password <password>", "Login password or credential reference")
   .option("--email-env <name>", "Environment variable name for the login email")
-  .option("--password-env <name>", "Environment variable name for the login password")
+  .option(
+    "--password-env <name>",
+    "Environment variable name for the login password",
+  )
   .option("--login-path <path>", "Login page path", "/login")
   .action((name: string, opts) => {
     try {
@@ -3179,9 +4840,17 @@ authCmd
         password,
         loginPath: opts.loginPath,
       });
-      log(chalk.green(`Created auth preset ${chalk.bold(preset.name)} (${preset.email})`));
+      log(
+        chalk.green(
+          `Created auth preset ${chalk.bold(preset.name)} (${preset.email})`,
+        ),
+      );
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -3199,14 +4868,24 @@ authCmd
       log("");
       log(chalk.bold("  Auth Presets"));
       log("");
-      log(`  ${"Name".padEnd(20)} ${"Email".padEnd(30)} ${"Login Path".padEnd(15)} Created`);
-      log(`  ${"─".repeat(20)} ${"─".repeat(30)} ${"─".repeat(15)} ${"─".repeat(22)}`);
+      log(
+        `  ${"Name".padEnd(20)} ${"Email".padEnd(30)} ${"Login Path".padEnd(15)} Created`,
+      );
+      log(
+        `  ${"─".repeat(20)} ${"─".repeat(30)} ${"─".repeat(15)} ${"─".repeat(22)}`,
+      );
       for (const p of presets) {
-        log(`  ${p.name.padEnd(20)} ${p.email.padEnd(30)} ${p.loginPath.padEnd(15)} ${p.createdAt}`);
+        log(
+          `  ${p.name.padEnd(20)} ${p.email.padEnd(30)} ${p.loginPath.padEnd(15)} ${p.createdAt}`,
+        );
       }
       log("");
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -3224,7 +4903,11 @@ authCmd
         process.exit(1);
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -3235,8 +4918,16 @@ program
   .command("costs")
   .description("Show cost tracking and budget status")
   .option("--project <id>", "Project ID")
-  .option("--period <period>", "Time period: day, week, month, all (default: month)", "month")
-  .option("--by-scenario", "Group cost breakdown by scenario, sorted by total cost", false)
+  .option(
+    "--period <period>",
+    "Time period: day, week, month, all (default: month)",
+    "month",
+  )
+  .option(
+    "--by-scenario",
+    "Group cost breakdown by scenario, sorted by total cost",
+    false,
+  )
   .option("--json", "JSON output", false)
   .option("--csv", "CSV output", false)
   .action((opts) => {
@@ -3263,7 +4954,11 @@ program
         log(formatCostsTerminal(summary));
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -3276,16 +4971,28 @@ program
   .requiredOption("--depends-on <id>", "Scenario ID that must run first")
   .action((scenarioId: string, opts) => {
     try {
-      const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
-      if (!scenario) { logError(chalk.red(`Scenario not found: ${scenarioId}`)); process.exit(1); }
+      const scenario =
+        getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+      if (!scenario) {
+        logError(chalk.red(`Scenario not found: ${scenarioId}`));
+        process.exit(1);
+      }
 
-      const dep = getScenario(opts.dependsOn) ?? getScenarioByShortId(opts.dependsOn);
-      if (!dep) { logError(chalk.red(`Dependency scenario not found: ${opts.dependsOn}`)); process.exit(1); }
+      const dep =
+        getScenario(opts.dependsOn) ?? getScenarioByShortId(opts.dependsOn);
+      if (!dep) {
+        logError(chalk.red(`Dependency scenario not found: ${opts.dependsOn}`));
+        process.exit(1);
+      }
 
       addDependency(scenario.id, dep.id);
       log(chalk.green(`${scenario.shortId} now depends on ${dep.shortId}`));
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -3297,18 +5004,38 @@ program
   .option("--from <id>", "Dependency to remove (alias for --depends-on)")
   .action((scenarioId: string, opts) => {
     try {
-      const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
-      if (!scenario) { logError(chalk.red(`Scenario not found: ${scenarioId}`)); process.exit(1); }
+      const scenario =
+        getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+      if (!scenario) {
+        logError(chalk.red(`Scenario not found: ${scenarioId}`));
+        process.exit(1);
+      }
 
       const depId = opts.dependsOn ?? opts.from;
-      if (!depId) { logError(chalk.red("Specify the dependency to remove with --depends-on <id>")); process.exit(1); }
+      if (!depId) {
+        logError(
+          chalk.red("Specify the dependency to remove with --depends-on <id>"),
+        );
+        process.exit(1);
+      }
       const dep = getScenario(depId) ?? getScenarioByShortId(depId);
-      if (!dep) { logError(chalk.red(`Dependency not found: ${depId}`)); process.exit(1); }
+      if (!dep) {
+        logError(chalk.red(`Dependency not found: ${depId}`));
+        process.exit(1);
+      }
 
       removeDependency(scenario.id, dep.id);
-      log(chalk.green(`Removed dependency: ${scenario.shortId} no longer depends on ${dep.shortId}`));
+      log(
+        chalk.green(
+          `Removed dependency: ${scenario.shortId} no longer depends on ${dep.shortId}`,
+        ),
+      );
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -3318,14 +5045,20 @@ program
   .description("Show dependencies for a scenario")
   .action((scenarioId: string) => {
     try {
-      const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
-      if (!scenario) { logError(chalk.red(`Scenario not found: ${scenarioId}`)); process.exit(1); }
+      const scenario =
+        getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+      if (!scenario) {
+        logError(chalk.red(`Scenario not found: ${scenarioId}`));
+        process.exit(1);
+      }
 
       const deps = getDependencies(scenario.id);
       const dependents = getDependents(scenario.id);
 
       log("");
-      log(chalk.bold(`  Dependencies for ${scenario.shortId}: ${scenario.name}`));
+      log(
+        chalk.bold(`  Dependencies for ${scenario.shortId}: ${scenario.name}`),
+      );
       log("");
 
       if (deps.length > 0) {
@@ -3348,14 +5081,20 @@ program
       }
       log("");
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
 
 // --- Flow subcommands ---
 
-const flowCmd = program.command("flow").description("Manage test flows (ordered scenario chains)");
+const flowCmd = program
+  .command("flow")
+  .description("Manage test flows (ordered scenario chains)");
 
 flowCmd
   .command("create <name>")
@@ -3366,19 +5105,38 @@ flowCmd
     try {
       const ids = opts.chain.split(",").map((id: string) => {
         const s = getScenario(id.trim()) ?? getScenarioByShortId(id.trim());
-        if (!s) { logError(chalk.red(`Scenario not found: ${id.trim()}`)); process.exit(1); }
+        if (!s) {
+          logError(chalk.red(`Scenario not found: ${id.trim()}`));
+          process.exit(1);
+        }
         return s.id;
       });
 
       // Auto-create dependencies: each scenario depends on the previous
       for (let i = 1; i < ids.length; i++) {
-        try { addDependency(ids[i], ids[i - 1]); } catch { /* already exists */ }
+        try {
+          addDependency(ids[i], ids[i - 1]);
+        } catch {
+          /* already exists */
+        }
       }
 
-      const flow = createFlow({ name, scenarioIds: ids, projectId: resolveProject(opts.project) });
-      log(chalk.green(`Flow created: ${flow.id.slice(0, 8)} — ${flow.name} (${ids.length} scenarios)`));
+      const flow = createFlow({
+        name,
+        scenarioIds: ids,
+        projectId: resolveProject(opts.project),
+      });
+      log(
+        chalk.green(
+          `Flow created: ${flow.id.slice(0, 8)} — ${flow.name} (${ids.length} scenarios)`,
+        ),
+      );
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -3390,7 +5148,10 @@ flowCmd
   .option("--json", "Output as JSON", false)
   .action((opts) => {
     const flows = listFlows(resolveProject(opts.project) ?? undefined);
-    if (opts.json) { log(JSON.stringify(flows, null, 2)); return; }
+    if (opts.json) {
+      log(JSON.stringify(flows, null, 2));
+      return;
+    }
     if (flows.length === 0) {
       log(chalk.dim("\n  No flows found.\n"));
       return;
@@ -3399,7 +5160,9 @@ flowCmd
     log(chalk.bold("  Flows"));
     log("");
     for (const f of flows) {
-      log(`  ${chalk.dim(f.id.slice(0, 8))}  ${f.name}  ${chalk.dim(`(${f.scenarioIds.length} scenarios)`)}`);
+      log(
+        `  ${chalk.dim(f.id.slice(0, 8))}  ${f.name}  ${chalk.dim(`(${f.scenarioIds.length} scenarios)`)}`,
+      );
     }
     log("");
   });
@@ -3409,14 +5172,19 @@ flowCmd
   .description("Show flow details")
   .action((id: string) => {
     const flow = getFlow(id);
-    if (!flow) { logError(chalk.red(`Flow not found: ${id}`)); process.exit(1); }
+    if (!flow) {
+      logError(chalk.red(`Flow not found: ${id}`));
+      process.exit(1);
+    }
     log("");
     log(chalk.bold(`  Flow: ${flow.name}`));
     log(`  ID: ${chalk.dim(flow.id)}`);
     log(`  Scenarios (in order):`);
     for (let i = 0; i < flow.scenarioIds.length; i++) {
       const s = getScenario(flow.scenarioIds[i]);
-      log(`    ${i + 1}. ${s ? `${s.shortId}: ${s.name}` : flow.scenarioIds[i].slice(0, 8)}`);
+      log(
+        `    ${i + 1}. ${s ? `${s.shortId}: ${s.name}` : flow.scenarioIds[i].slice(0, 8)}`,
+      );
     }
     log("");
   });
@@ -3426,7 +5194,10 @@ flowCmd
   .description("Delete a flow")
   .action((id: string) => {
     if (deleteFlow(id)) log(chalk.green("Flow deleted."));
-    else { logError(chalk.red("Flow not found.")); process.exit(1); }
+    else {
+      logError(chalk.red("Flow not found."));
+      process.exit(1);
+    }
   });
 
 flowCmd
@@ -3439,10 +5210,20 @@ flowCmd
   .action(async (id: string, opts) => {
     try {
       const flow = getFlow(id);
-      if (!flow) { logError(chalk.red(`Flow not found: ${id}`)); process.exit(1); }
-      if (!opts.url) { logError(chalk.red("--url is required for flow run")); process.exit(1); }
+      if (!flow) {
+        logError(chalk.red(`Flow not found: ${id}`));
+        process.exit(1);
+      }
+      if (!opts.url) {
+        logError(chalk.red("--url is required for flow run"));
+        process.exit(1);
+      }
 
-      log(chalk.blue(`Running flow: ${flow.name} (${flow.scenarioIds.length} scenarios)`));
+      log(
+        chalk.blue(
+          `Running flow: ${flow.name} (${flow.scenarioIds.length} scenarios)`,
+        ),
+      );
 
       const { run, results } = await runByFilter({
         url: opts.url,
@@ -3456,16 +5237,18 @@ flowCmd
       else log(formatTerminal(run, results));
       process.exit(getExitCode(run));
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
 
 // ─── testers env ─────────────────────────────────────────────────────────────
 
-const envCmd = program
-  .command("env")
-  .description("Manage environments");
+const envCmd = program.command("env").description("Manage environments");
 
 envCmd
   .command("add <name>")
@@ -3483,9 +5266,17 @@ envCmd
         projectId: opts.project,
         isDefault: opts.default,
       });
-      log(chalk.green(`Environment added: ${env.name} → ${env.url}${env.isDefault ? " (default)" : ""}`));
+      log(
+        chalk.green(
+          `Environment added: ${env.name} → ${env.url}${env.isDefault ? " (default)" : ""}`,
+        ),
+      );
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -3503,26 +5294,58 @@ envCmd
         return;
       }
       if (envs.length === 0) {
-        log(chalk.dim("No environments configured. Add one with: testers env add <name> --url <url>"));
+        log(
+          chalk.dim(
+            "No environments configured. Add one with: testers env add <name> --url <url>",
+          ),
+        );
         return;
       }
       for (const env of envs) {
         const marker = env.isDefault ? chalk.green(" ★ default") : "";
-        const auth = env.authPresetName ? chalk.dim(` (auth: ${env.authPresetName})`) : "";
+        const auth = env.authPresetName
+          ? chalk.dim(` (auth: ${env.authPresetName})`)
+          : "";
         log(`  ${chalk.bold(env.name)}  ${env.url}${auth}${marker}`);
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
 
 envCmd
   .command("validate-models [models...]")
-  .description("Validate model provider credentials without launching browser or sandbox runs")
-  .option("--model <model>", "Model or preset to validate (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
-  .option("--credential <assignment>", "Credential reference override, e.g. anthropic=@secrets:path or OPENAI_API_KEY=$OPENAI_API_KEY (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
-  .option("--all-providers", "Validate representative models for every supported model provider", false)
+  .description(
+    "Validate model provider credentials without launching browser or sandbox runs",
+  )
+  .option(
+    "--model <model>",
+    "Model or preset to validate (repeatable)",
+    (val: string, acc: string[]) => {
+      acc.push(val);
+      return acc;
+    },
+    [] as string[],
+  )
+  .option(
+    "--credential <assignment>",
+    "Credential reference override, e.g. anthropic=@secrets:path or OPENAI_API_KEY=$OPENAI_API_KEY (repeatable)",
+    (val: string, acc: string[]) => {
+      acc.push(val);
+      return acc;
+    },
+    [] as string[],
+  )
+  .option(
+    "--all-providers",
+    "Validate representative models for every supported model provider",
+    false,
+  )
   .option("--json", "Output as JSON", false)
   .action(async (models: string[] = [], opts) => {
     try {
@@ -3533,14 +5356,20 @@ envCmd
       const providerSamples = opts.allProviders
         ? Object.values(MODEL_CREDENTIAL_SAMPLE_MODELS)
         : [];
-      const modelsToCheck = [...new Set([...providerSamples, ...requestedModels])];
-      const inputs: Array<string | undefined> = modelsToCheck.length > 0 ? modelsToCheck : [undefined];
-      const credentialAssignments = parseModelCredentialAssignments(opts.credential);
+      const modelsToCheck = [
+        ...new Set([...providerSamples, ...requestedModels]),
+      ];
+      const inputs: Array<string | undefined> =
+        modelsToCheck.length > 0 ? modelsToCheck : [undefined];
+      const credentialAssignments = parseModelCredentialAssignments(
+        opts.credential,
+      );
       const checks: ModelCredentialCheck[] = [];
 
       for (const modelInput of inputs) {
         const resolution = resolveModelCredential(modelInput);
-        const reference = credentialAssignments[resolution.provider] ?? `$${resolution.envKey}`;
+        const reference =
+          credentialAssignments[resolution.provider] ?? `$${resolution.envKey}`;
         checks.push(await checkModelCredential(modelInput, { reference }));
       }
 
@@ -3559,14 +5388,21 @@ envCmd
         log(JSON.stringify(result, null, 2));
       } else {
         const heading = result.ok
-          ? chalk.green(`Model credential validation passed: ${passed}/${items.length}`)
-          : chalk.red(`Model credential validation failed: ${passed}/${items.length}`);
+          ? chalk.green(
+              `Model credential validation passed: ${passed}/${items.length}`,
+            )
+          : chalk.red(
+              `Model credential validation failed: ${passed}/${items.length}`,
+            );
         log(chalk.bold(heading));
         for (const item of items) {
-          const status = item.status !== undefined ? ` status=${item.status}` : "";
+          const status =
+            item.status !== undefined ? ` status=${item.status}` : "";
           const message = item.message ? ` ${item.message}` : "";
           const state = item.ok ? chalk.green("OK") : chalk.red("FAIL");
-          log(`  ${state} ${item.model} (${item.provider}, ${item.envKey})${status}${message}`);
+          log(
+            `  ${state} ${item.model} (${item.provider}, ${item.envKey})${status}${message}`,
+          );
           log(chalk.dim(`     reference: ${item.reference} (${item.source})`));
         }
       }
@@ -3575,7 +5411,11 @@ envCmd
         process.exit(1);
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -3589,7 +5429,11 @@ envCmd
       const env = getEnvironment(name)!;
       log(chalk.green(`Default environment set: ${env.name} → ${env.url}`));
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -3607,7 +5451,11 @@ envCmd
         process.exit(1);
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -3621,9 +5469,17 @@ program
     try {
       setBaseline(runId);
       const run = getRun(runId);
-      log(chalk.green(`Baseline set: ${chalk.bold(runId.slice(0, 8))}${run ? ` (${run.status}, ${run.total} scenarios)` : ""}`));
+      log(
+        chalk.green(
+          `Baseline set: ${chalk.bold(runId.slice(0, 8))}${run ? ` (${run.status}, ${run.total} scenarios)` : ""}`,
+        ),
+      );
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -3637,60 +5493,164 @@ program
   .action(async (spec: string, opts) => {
     try {
       const { importFromOpenAPI } = await import("../lib/openapi-import.js");
-      const { imported, scenarios } = importFromOpenAPI(spec, resolveProject(opts.project) ?? undefined);
+      const { imported, scenarios } = importFromOpenAPI(
+        spec,
+        resolveProject(opts.project) ?? undefined,
+      );
       log(chalk.green(`\nImported ${imported} scenarios from API spec:`));
       for (const s of scenarios) {
-        log(`  ${chalk.cyan(s.shortId)} ${s.name} ${chalk.dim(`[${s.tags.join(", ")}]`)}`);
+        log(
+          `  ${chalk.cyan(s.shortId)} ${s.name} ${chalk.dim(`[${s.tags.join(", ")}]`)}`,
+        );
       }
       log("");
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
 
 // ─── testers inventory next <root> ─────────────────────────────────────────
 
-const inventoryCmd = program.command("inventory").description("Discover source-derived app route/action inventories");
+const inventoryCmd = program
+  .command("inventory")
+  .description("Discover source-derived app route/action inventories");
 
 inventoryCmd
   .command("next [root]")
-  .description("Discover Next.js app routes and optionally import route coverage scenarios")
-  .option("--app-dir <path>", "Next.js app directory relative to root (default: packages/web/app or app)")
+  .description(
+    "Discover Next.js app routes and optionally import route coverage scenarios",
+  )
+  .option(
+    "--app-dir <path>",
+    "Next.js app directory relative to root (default: packages/web/app or app)",
+  )
   .option("--project <id>", "Project ID")
   .option("--no-pages", "Do not include page.tsx/page.ts routes")
   .option("--no-api", "Do not include route.ts/route.js API routes")
   .option("--limit <n>", "Limit discovered routes")
-  .option("--create-scenarios", "Upsert source-derived route coverage scenarios", false)
-  .option("--create-action-scenarios", "Upsert one source-derived scenario per discovered page/API action", false)
-  .option("--create-workflows", "Upsert grouped workflows by area and route kind", false)
-  .option("--create-action-workflows", "Upsert action-focused workflows for discovered action scenarios", false)
-  .option("--action-workflow-grouping <mode>", "Action workflow grouping: route, area-kind, or action", "route")
-  .option("--workflow-target <target>", "Workflow execution target: local or sandbox", "sandbox")
-  .option("--sandbox-provider <provider>", "Sandbox provider for created workflows", "e2b")
-  .option("--sandbox-image <image>", "Sandbox image/template for created workflows")
-  .option("--sandbox-remote-dir <path>", "Remote working directory for sandbox runs")
-  .option("--sandbox-cleanup <mode>", "Sandbox cleanup mode: delete, stop, or keep", "delete")
-  .option("--sandbox-sync <strategy>", "Sandbox upload sync strategy: rsync or archive", "rsync")
-  .option("--sandbox-setup-command <command>", "Shell command to run before testers in the sandbox")
-  .option("--sandbox-package <spec>", "Package spec to execute in the sandbox", "@hasna/testers")
-  .option("--sandbox-env <assignment>", "Sandbox env var; KEY forwards host KEY, KEY=value stores value (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
-  .option("--sandbox-env-optional <name>", "Optional sandbox env var; forwards host NAME only when set (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
-  .option("--sandbox-app-source <path>", "Local app source directory to upload into the sandbox")
-  .option("--sandbox-app-remote-dir <path>", "Remote app directory inside the sandbox (default: <sandbox-remote-dir>/app)")
-  .option("--sandbox-app-start-command <command>", "Shell command to start the app before testers runs")
-  .option("--sandbox-app-url <url>", "URL testers should target inside the sandbox after the app starts")
-  .option("--sandbox-app-wait-url <url>", "URL to poll before starting testers (defaults to --sandbox-app-url)")
-  .option("--sandbox-app-wait-timeout <ms>", "App readiness wait timeout in milliseconds")
+  .option(
+    "--create-scenarios",
+    "Upsert source-derived route coverage scenarios",
+    false,
+  )
+  .option(
+    "--create-action-scenarios",
+    "Upsert one source-derived scenario per discovered page/API action",
+    false,
+  )
+  .option(
+    "--create-workflows",
+    "Upsert grouped workflows by area and route kind",
+    false,
+  )
+  .option(
+    "--create-action-workflows",
+    "Upsert action-focused workflows for discovered action scenarios",
+    false,
+  )
+  .option(
+    "--action-workflow-grouping <mode>",
+    "Action workflow grouping: route, area-kind, or action",
+    "route",
+  )
+  .option(
+    "--workflow-target <target>",
+    "Workflow execution target: local or sandbox",
+    "sandbox",
+  )
+  .option(
+    "--sandbox-provider <provider>",
+    "Sandbox provider for created workflows",
+    "e2b",
+  )
+  .option(
+    "--sandbox-image <image>",
+    "Sandbox image/template for created workflows",
+  )
+  .option(
+    "--sandbox-remote-dir <path>",
+    "Remote working directory for sandbox runs",
+  )
+  .option(
+    "--sandbox-cleanup <mode>",
+    "Sandbox cleanup mode: delete, stop, or keep",
+    "delete",
+  )
+  .option(
+    "--sandbox-sync <strategy>",
+    "Sandbox upload sync strategy: rsync or archive",
+    "rsync",
+  )
+  .option(
+    "--sandbox-setup-command <command>",
+    "Shell command to run before testers in the sandbox",
+  )
+  .option(
+    "--sandbox-package <spec>",
+    "Package spec to execute in the sandbox",
+    "@hasna/testers",
+  )
+  .option(
+    "--sandbox-env <assignment>",
+    "Sandbox env var; KEY forwards host KEY, KEY=value stores value (repeatable)",
+    (val: string, acc: string[]) => {
+      acc.push(val);
+      return acc;
+    },
+    [] as string[],
+  )
+  .option(
+    "--sandbox-env-optional <name>",
+    "Optional sandbox env var; forwards host NAME only when set (repeatable)",
+    (val: string, acc: string[]) => {
+      acc.push(val);
+      return acc;
+    },
+    [] as string[],
+  )
+  .option(
+    "--sandbox-app-source <path>",
+    "Local app source directory to upload into the sandbox",
+  )
+  .option(
+    "--sandbox-app-remote-dir <path>",
+    "Remote app directory inside the sandbox (default: <sandbox-remote-dir>/app)",
+  )
+  .option(
+    "--sandbox-app-start-command <command>",
+    "Shell command to start the app before testers runs",
+  )
+  .option(
+    "--sandbox-app-url <url>",
+    "URL testers should target inside the sandbox after the app starts",
+  )
+  .option(
+    "--sandbox-app-wait-url <url>",
+    "URL to poll before starting testers (defaults to --sandbox-app-url)",
+  )
+  .option(
+    "--sandbox-app-wait-timeout <ms>",
+    "App readiness wait timeout in milliseconds",
+  )
   .option("--timeout <ms>", "Workflow timeout in milliseconds")
   .option("--json", "Output as JSON", false)
   .action(async (root: string | undefined, opts) => {
     try {
-      const { importNextRouteInventory } = await import("../lib/next-route-inventory.js");
+      const { importNextRouteInventory } =
+        await import("../lib/next-route-inventory.js");
       const projectId = resolveProject(opts.project) ?? undefined;
       const env = parseSandboxEnv(opts.sandboxEnv, opts.sandboxEnvOptional);
-      if (!["route", "area-kind", "action"].includes(opts.actionWorkflowGrouping)) {
-        throw new Error("--action-workflow-grouping must be route, area-kind, or action");
+      if (
+        !["route", "area-kind", "action"].includes(opts.actionWorkflowGrouping)
+      ) {
+        throw new Error(
+          "--action-workflow-grouping must be route, area-kind, or action",
+        );
       }
       const result = importNextRouteInventory({
         rootDir: root ?? process.cwd(),
@@ -3705,10 +5665,14 @@ inventoryCmd
         createActionWorkflows: opts.createActionWorkflows,
         actionWorkflowGrouping: opts.actionWorkflowGrouping,
         workflowTarget: opts.workflowTarget,
-        workflowProvider: opts.workflowTarget === "sandbox" ? opts.sandboxProvider : undefined,
+        workflowProvider:
+          opts.workflowTarget === "sandbox" ? opts.sandboxProvider : undefined,
         workflowExecution: {
           target: opts.workflowTarget,
-          provider: opts.workflowTarget === "sandbox" ? opts.sandboxProvider : undefined,
+          provider:
+            opts.workflowTarget === "sandbox"
+              ? opts.sandboxProvider
+              : undefined,
           sandboxImage: opts.sandboxImage,
           sandboxRemoteDir: opts.sandboxRemoteDir,
           sandboxCleanup: opts.sandboxCleanup,
@@ -3722,7 +5686,9 @@ inventoryCmd
           appStartCommand: opts.sandboxAppStartCommand,
           appUrl: opts.sandboxAppUrl,
           appWaitUrl: opts.sandboxAppWaitUrl,
-          appWaitTimeoutMs: opts.sandboxAppWaitTimeout ? parseInt(opts.sandboxAppWaitTimeout, 10) : undefined,
+          appWaitTimeoutMs: opts.sandboxAppWaitTimeout
+            ? parseInt(opts.sandboxAppWaitTimeout, 10)
+            : undefined,
         },
       });
 
@@ -3736,22 +5702,44 @@ inventoryCmd
       log(chalk.dim(`  Root: ${result.inventory.rootDir}`));
       log(chalk.dim(`  App:  ${result.inventory.appDir}`));
       log("");
-      log(`  Routes: ${chalk.cyan(String(result.inventory.total))} (${result.inventory.pages} pages, ${result.inventory.apiRoutes} API, ${result.inventory.dynamic} dynamic)`);
+      log(
+        `  Routes: ${chalk.cyan(String(result.inventory.total))} (${result.inventory.pages} pages, ${result.inventory.apiRoutes} API, ${result.inventory.dynamic} dynamic)`,
+      );
       log(`  Actions: ${chalk.cyan(String(result.inventory.actions))}`);
-      log(`  Scenarios: ${chalk.green(String(result.created))} created, ${chalk.yellow(String(result.updated))} updated, ${chalk.dim(String(result.deduped))} deduped`);
+      log(
+        `  Scenarios: ${chalk.green(String(result.created))} created, ${chalk.yellow(String(result.updated))} updated, ${chalk.dim(String(result.deduped))} deduped`,
+      );
       log(`  Workflows: ${result.workflows.length}`);
       log("");
-      for (const [category, count] of Object.entries(result.inventory.categories).sort()) {
+      for (const [category, count] of Object.entries(
+        result.inventory.categories,
+      ).sort()) {
         log(`  ${category.padEnd(18)} ${count}`);
       }
       log("");
-      if (!opts.createScenarios) log(chalk.dim("  Add --create-scenarios to upsert route scenarios."));
-      if (!opts.createActionScenarios) log(chalk.dim("  Add --create-action-scenarios to upsert one scenario per discovered action."));
-      if (!opts.createWorkflows) log(chalk.dim("  Add --create-workflows to upsert grouped workflows."));
-      if (!opts.createActionWorkflows) log(chalk.dim("  Add --create-action-workflows to upsert action-focused workflows."));
+      if (!opts.createScenarios)
+        log(chalk.dim("  Add --create-scenarios to upsert route scenarios."));
+      if (!opts.createActionScenarios)
+        log(
+          chalk.dim(
+            "  Add --create-action-scenarios to upsert one scenario per discovered action.",
+          ),
+        );
+      if (!opts.createWorkflows)
+        log(chalk.dim("  Add --create-workflows to upsert grouped workflows."));
+      if (!opts.createActionWorkflows)
+        log(
+          chalk.dim(
+            "  Add --create-action-workflows to upsert action-focused workflows.",
+          ),
+        );
       log("");
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -3760,12 +5748,20 @@ inventoryCmd
 
 program
   .command("generate <url>")
-  .description("Crawl app and synthesize test scenarios using AI (any provider)")
+  .description(
+    "Crawl app and synthesize test scenarios using AI (any provider)",
+  )
   .option("--max <n>", "Max scenarios to generate", "10")
   .option("--max-pages <n>", "Max pages to crawl", "10")
-  .option("--focus <topic>", "Focus on specific area e.g. 'auth flows', 'checkout'")
+  .option(
+    "--focus <topic>",
+    "Focus on specific area e.g. 'auth flows', 'checkout'",
+  )
   .option("--persona <desc>", "Persona perspective e.g. 'first-time user'")
-  .option("--model <model>", "AI model (claude-haiku, gpt-4o-mini, gemini-2.0-flash, etc.)")
+  .option(
+    "--model <model>",
+    "AI model (claude-haiku, gpt-4o-mini, gemini-2.0-flash, etc.)",
+  )
   .option("--save", "Persist generated scenarios to DB", false)
   .option("--project <id>", "Project ID")
   .option("--headed", "Run browser in headed mode", false)
@@ -3795,23 +5791,49 @@ program
       }
 
       log("");
-      log(chalk.bold(`  Generated ${result.scenarios.length} scenarios`) + chalk.dim(` via ${result.provider}/${result.model} — ${result.pagesDiscovered} pages crawled`));
+      log(
+        chalk.bold(`  Generated ${result.scenarios.length} scenarios`) +
+          chalk.dim(
+            ` via ${result.provider}/${result.model} — ${result.pagesDiscovered} pages crawled`,
+          ),
+      );
       log("");
-      log(`  ${"Priority".padEnd(10)} ${"Name".padEnd(40)} ${"Steps".padEnd(7)} Tags`);
-      log(`  ${"─".repeat(10)} ${"─".repeat(40)} ${"─".repeat(7)} ${"─".repeat(20)}`);
+      log(
+        `  ${"Priority".padEnd(10)} ${"Name".padEnd(40)} ${"Steps".padEnd(7)} Tags`,
+      );
+      log(
+        `  ${"─".repeat(10)} ${"─".repeat(40)} ${"─".repeat(7)} ${"─".repeat(20)}`,
+      );
       for (const s of result.scenarios) {
         const priority = s.priority ?? "medium";
-        const priorityColor = priority === "critical" ? chalk.red : priority === "high" ? chalk.yellow : chalk.dim;
-        log(`  ${priorityColor(priority.padEnd(10))} ${s.name.slice(0, 39).padEnd(40)} ${String(s.steps?.length ?? 0).padEnd(7)} ${(s.tags ?? []).join(", ")}`);
+        const priorityColor =
+          priority === "critical"
+            ? chalk.red
+            : priority === "high"
+              ? chalk.yellow
+              : chalk.dim;
+        log(
+          `  ${priorityColor(priority.padEnd(10))} ${s.name.slice(0, 39).padEnd(40)} ${String(s.steps?.length ?? 0).padEnd(7)} ${(s.tags ?? []).join(", ")}`,
+        );
       }
       log("");
       if (opts.save) {
-        log(chalk.green(`  ✓ ${result.scenarios.length} scenarios saved to database`));
+        log(
+          chalk.green(
+            `  ✓ ${result.scenarios.length} scenarios saved to database`,
+          ),
+        );
       } else {
-        log(chalk.dim(`  Use --save to persist to database, or --json to export`));
+        log(
+          chalk.dim(`  Use --save to persist to database, or --json to export`),
+        );
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -3827,13 +5849,29 @@ program
     try {
       const { recordAndSave } = await import("../lib/recorder.js");
       log(chalk.blue("Opening browser for recording..."));
-      const { recording, scenario } = await recordAndSave(url, opts.name, resolveProject(opts.project) ?? undefined);
+      const { recording, scenario } = await recordAndSave(
+        url,
+        opts.name,
+        resolveProject(opts.project) ?? undefined,
+      );
       log("");
-      log(chalk.green(`Recording saved as scenario ${chalk.bold(scenario.shortId)}: ${scenario.name}`));
-      log(chalk.dim(`  ${recording.actions.length} actions recorded in ${(recording.duration / 1000).toFixed(0)}s`));
+      log(
+        chalk.green(
+          `Recording saved as scenario ${chalk.bold(scenario.shortId)}: ${scenario.name}`,
+        ),
+      );
+      log(
+        chalk.dim(
+          `  ${recording.actions.length} actions recorded in ${(recording.duration / 1000).toFixed(0)}s`,
+        ),
+      );
       log(chalk.dim(`  ${scenario.steps.length} steps generated`));
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -3842,9 +5880,27 @@ program
 
 program
   .command("run-affected <url>")
-  .description("Run only scenarios relevant to changed files (diff-aware testing)")
-  .option("-f, --file <path>", "Changed file path (repeatable)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
-  .option("--map <glob:tags>", "Glob→tag mapping, e.g. 'src/chat*:chat,messaging' (repeatable)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
+  .description(
+    "Run only scenarios relevant to changed files (diff-aware testing)",
+  )
+  .option(
+    "-f, --file <path>",
+    "Changed file path (repeatable)",
+    (v: string, acc: string[]) => {
+      acc.push(v);
+      return acc;
+    },
+    [] as string[],
+  )
+  .option(
+    "--map <glob:tags>",
+    "Glob→tag mapping, e.g. 'src/chat*:chat,messaging' (repeatable)",
+    (v: string, acc: string[]) => {
+      acc.push(v);
+      return acc;
+    },
+    [] as string[],
+  )
   .option("--project <id>", "Project ID")
   .option("-m, --model <model>", "AI model to use")
   .option("--headed", "Run browser in headed mode", false)
@@ -3858,23 +5914,47 @@ program
       const projectId = resolveProject(opts.project);
 
       // Parse --map glob:tags options
-      const mappings = (opts.map as string[]).map((m) => {
-        const sep = m.lastIndexOf(":");
-        if (sep < 1) return null;
-        return { glob: m.slice(0, sep), tags: m.slice(sep + 1).split(",").map((t: string) => t.trim()) };
-      }).filter(Boolean) as { glob: string; tags: string[] }[];
+      const mappings = (opts.map as string[])
+        .map((m) => {
+          const sep = m.lastIndexOf(":");
+          if (sep < 1) return null;
+          return {
+            glob: m.slice(0, sep),
+            tags: m
+              .slice(sep + 1)
+              .split(",")
+              .map((t: string) => t.trim()),
+          };
+        })
+        .filter(Boolean) as { glob: string; tags: string[] }[];
 
       const allScenarios = listScenarios({ projectId });
-      const matched = matchFilesToScenarios(opts.file as string[], allScenarios, mappings);
+      const matched = matchFilesToScenarios(
+        opts.file as string[],
+        allScenarios,
+        mappings,
+      );
 
       if (matched.length === 0) {
         log(chalk.yellow("  No scenarios matched the provided file paths."));
-        log(chalk.dim("  Tip: use --map 'src/chat*:chat' to add explicit mappings."));
+        log(
+          chalk.dim(
+            "  Tip: use --map 'src/chat*:chat' to add explicit mappings.",
+          ),
+        );
         process.exit(0);
       }
 
-      log(chalk.blue(`  Running ${matched.length} affected scenario(s) against ${url}...`));
-      log(chalk.dim(`  Files: ${(opts.file as string[]).slice(0, 5).join(", ")}${(opts.file as string[]).length > 5 ? "…" : ""}`));
+      log(
+        chalk.blue(
+          `  Running ${matched.length} affected scenario(s) against ${url}...`,
+        ),
+      );
+      log(
+        chalk.dim(
+          `  Files: ${(opts.file as string[]).slice(0, 5).join(", ")}${(opts.file as string[]).length > 5 ? "…" : ""}`,
+        ),
+      );
       log("");
 
       const { run, results } = await runBatch(matched, {
@@ -3895,7 +5975,11 @@ program
       const { getExitCode } = await import("../lib/reporter.js");
       process.exit(getExitCode(run));
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -3907,7 +5991,15 @@ program
   .description("Watch for git commits and auto-run affected scenarios")
   .option("--dir <path>", "Git repository directory to watch", process.cwd())
   .option("--poll <ms>", "Poll interval in milliseconds", "10000")
-  .option("--map <glob:tags>", "Glob→tag mapping (repeatable)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
+  .option(
+    "--map <glob:tags>",
+    "Glob→tag mapping (repeatable)",
+    (v: string, acc: string[]) => {
+      acc.push(v);
+      return acc;
+    },
+    [] as string[],
+  )
   .option("--project <id>", "Project ID")
   .option("-m, --model <model>", "AI model to use")
   .option("--headed", "Run browser in headed mode", false)
@@ -3915,11 +6007,19 @@ program
   .action(async (url: string, opts) => {
     try {
       const { startGitWatcher } = await import("../lib/git-watch.js");
-      const mappings = (opts.map as string[]).map((m) => {
-        const sep = m.lastIndexOf(":");
-        if (sep < 1) return null;
-        return { glob: m.slice(0, sep), tags: m.slice(sep + 1).split(",").map((t: string) => t.trim()) };
-      }).filter(Boolean) as { glob: string; tags: string[] }[];
+      const mappings = (opts.map as string[])
+        .map((m) => {
+          const sep = m.lastIndexOf(":");
+          if (sep < 1) return null;
+          return {
+            glob: m.slice(0, sep),
+            tags: m
+              .slice(sep + 1)
+              .split(",")
+              .map((t: string) => t.trim()),
+          };
+        })
+        .filter(Boolean) as { glob: string; tags: string[] }[];
 
       await startGitWatcher({
         url,
@@ -3932,14 +6032,20 @@ program
         parallel: parseInt(opts.parallel, 10),
       });
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
 
 // ─── testers agent ──────────────────────────────────────────────────────────
 
-const agentCmd = program.command("agent").description("Manage registered agents");
+const agentCmd = program
+  .command("agent")
+  .description("Manage registered agents");
 
 agentCmd
   .command("register <name>")
@@ -3949,10 +6055,22 @@ agentCmd
   .action((name: string, opts) => {
     try {
       const { registerAgent } = require("../db/agents.js");
-      const agent = registerAgent({ name, description: opts.description, role: opts.role });
-      log(chalk.green(`Registered agent: ${agent.name} (${agent.id.slice(0, 8)})`));
+      const agent = registerAgent({
+        name,
+        description: opts.description,
+        role: opts.role,
+      });
+      log(
+        chalk.green(
+          `Registered agent: ${agent.name} (${agent.id.slice(0, 8)})`,
+        ),
+      );
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -3964,10 +6082,19 @@ agentCmd
     try {
       const { heartbeatAgent } = require("../db/agents.js");
       const agent = heartbeatAgent(id);
-      if (!agent) { logError(chalk.red(`Agent not found: ${id}`)); process.exit(1); }
-      log(chalk.green(`Heartbeat sent for ${agent.name} — ${agent.lastSeenAt}`));
+      if (!agent) {
+        logError(chalk.red(`Agent not found: ${id}`));
+        process.exit(1);
+      }
+      log(
+        chalk.green(`Heartbeat sent for ${agent.name} — ${agent.lastSeenAt}`),
+      );
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -3979,11 +6106,23 @@ agentCmd
     try {
       const { setAgentFocus } = require("../db/agents.js");
       const agent = setAgentFocus(agentId, scenarioId ?? null);
-      if (!agent) { logError(chalk.red(`Agent not found: ${agentId}`)); process.exit(1); }
-      const focus = (agent.metadata as Record<string, unknown> | null)?.focus ?? null;
-      log(focus ? chalk.green(`Agent ${agent.name} focus set to: ${focus}`) : chalk.dim(`Agent ${agent.name} focus cleared`));
+      if (!agent) {
+        logError(chalk.red(`Agent not found: ${agentId}`));
+        process.exit(1);
+      }
+      const focus =
+        (agent.metadata as Record<string, unknown> | null)?.focus ?? null;
+      log(
+        focus
+          ? chalk.green(`Agent ${agent.name} focus set to: ${focus}`)
+          : chalk.dim(`Agent ${agent.name} focus cleared`),
+      );
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -4001,17 +6140,25 @@ agentCmd
       }
       for (const a of agents) {
         const focus = (a.metadata as Record<string, unknown> | null)?.focus;
-        log(`  ${chalk.cyan(a.id.slice(0, 8))}  ${chalk.bold(a.name)}${a.role ? chalk.dim(` [${a.role}]`) : ""}${focus ? chalk.yellow(` → ${focus}`) : ""}  ${chalk.dim(a.lastSeenAt)}`);
+        log(
+          `  ${chalk.cyan(a.id.slice(0, 8))}  ${chalk.bold(a.name)}${a.role ? chalk.dim(` [${a.role}]`) : ""}${focus ? chalk.yellow(` → ${focus}`) : ""}  ${chalk.dim(a.lastSeenAt)}`,
+        );
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
 
 // ─── testers scan ───────────────────────────────────────────────────────────
 
-const scanCmd = program.command("scan").description("Scan a running app for runtime issues");
+const scanCmd = program
+  .command("scan")
+  .description("Scan a running app for runtime issues");
 
 const SCAN_COMMON_OPTIONS = (cmd: ReturnType<typeof scanCmd.command>) =>
   cmd
@@ -4024,95 +6171,189 @@ SCAN_COMMON_OPTIONS(
   scanCmd
     .command("console <url>")
     .description("Collect JS/React console errors and uncaught exceptions")
-    .option("-p, --page <path>", "Page path to visit (repeatable)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
+    .option(
+      "-p, --page <path>",
+      "Page path to visit (repeatable)",
+      (v: string, acc: string[]) => {
+        acc.push(v);
+        return acc;
+      },
+      [] as string[],
+    ),
 ).action(async (url: string, opts) => {
   try {
     const { scanConsoleErrors } = await import("../lib/scanners/console.js");
     const { upsertScanIssue } = await import("../db/scan-issues.js");
-    const result = await scanConsoleErrors({ url, pages: opts.page, headed: opts.headed, timeoutMs: parseInt(opts.timeout) });
+    const result = await scanConsoleErrors({
+      url,
+      pages: opts.page,
+      headed: opts.headed,
+      timeoutMs: parseInt(opts.timeout),
+    });
     result.issues.forEach((i) => upsertScanIssue(i, opts.project));
     printScanResult(result, opts.json);
-  } catch (e) { logError(chalk.red(e instanceof Error ? e.message : String(e))); process.exit(1); }
+  } catch (e) {
+    logError(chalk.red(e instanceof Error ? e.message : String(e)));
+    process.exit(1);
+  }
 });
 
 SCAN_COMMON_OPTIONS(
   scanCmd
     .command("network <url>")
     .description("Detect failed API calls, 5xx, 404s, CORS errors")
-    .option("-p, --page <path>", "Page path to visit (repeatable)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
+    .option(
+      "-p, --page <path>",
+      "Page path to visit (repeatable)",
+      (v: string, acc: string[]) => {
+        acc.push(v);
+        return acc;
+      },
+      [] as string[],
+    ),
 ).action(async (url: string, opts) => {
   try {
     const { scanNetworkErrors } = await import("../lib/scanners/network.js");
     const { upsertScanIssue } = await import("../db/scan-issues.js");
-    const result = await scanNetworkErrors({ url, pages: opts.page, headed: opts.headed, timeoutMs: parseInt(opts.timeout) });
+    const result = await scanNetworkErrors({
+      url,
+      pages: opts.page,
+      headed: opts.headed,
+      timeoutMs: parseInt(opts.timeout),
+    });
     result.issues.forEach((i) => upsertScanIssue(i, opts.project));
     printScanResult(result, opts.json);
-  } catch (e) { logError(chalk.red(e instanceof Error ? e.message : String(e))); process.exit(1); }
+  } catch (e) {
+    logError(chalk.red(e instanceof Error ? e.message : String(e)));
+    process.exit(1);
+  }
 });
 
 SCAN_COMMON_OPTIONS(
   scanCmd
     .command("links <url>")
     .description("Crawl app and find broken links / 404s")
-    .option("--max-pages <n>", "Max pages to crawl", "30")
+    .option("--max-pages <n>", "Max pages to crawl", "30"),
 ).action(async (url: string, opts) => {
   try {
     const { scanBrokenLinks } = await import("../lib/scanners/links.js");
     const { upsertScanIssue } = await import("../db/scan-issues.js");
-    const result = await scanBrokenLinks({ url, maxPages: parseInt(opts.maxPages), headed: opts.headed, timeoutMs: parseInt(opts.timeout) });
+    const result = await scanBrokenLinks({
+      url,
+      maxPages: parseInt(opts.maxPages),
+      headed: opts.headed,
+      timeoutMs: parseInt(opts.timeout),
+    });
     result.issues.forEach((i) => upsertScanIssue(i, opts.project));
     printScanResult(result, opts.json);
-  } catch (e) { logError(chalk.red(e instanceof Error ? e.message : String(e))); process.exit(1); }
+  } catch (e) {
+    logError(chalk.red(e instanceof Error ? e.message : String(e)));
+    process.exit(1);
+  }
 });
 
 SCAN_COMMON_OPTIONS(
   scanCmd
     .command("perf <url>")
     .description("Measure page load time, LCP, DOMContentLoaded")
-    .option("-p, --page <path>", "Page path to visit (repeatable)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
-    .option("--lcp-threshold <ms>", "LCP threshold in ms (default 2500)", "2500")
-    .option("--load-threshold <ms>", "Load time threshold in ms (default 5000)", "5000")
+    .option(
+      "-p, --page <path>",
+      "Page path to visit (repeatable)",
+      (v: string, acc: string[]) => {
+        acc.push(v);
+        return acc;
+      },
+      [] as string[],
+    )
+    .option(
+      "--lcp-threshold <ms>",
+      "LCP threshold in ms (default 2500)",
+      "2500",
+    )
+    .option(
+      "--load-threshold <ms>",
+      "Load time threshold in ms (default 5000)",
+      "5000",
+    ),
 ).action(async (url: string, opts) => {
   try {
     const { scanPerformance } = await import("../lib/scanners/performance.js");
     const { upsertScanIssue } = await import("../db/scan-issues.js");
     const result = await scanPerformance({
-      url, pages: opts.page, headed: opts.headed, timeoutMs: parseInt(opts.timeout),
-      thresholds: { lcpMs: parseInt(opts.lcpThreshold), loadTimeMs: parseInt(opts.loadThreshold) },
+      url,
+      pages: opts.page,
+      headed: opts.headed,
+      timeoutMs: parseInt(opts.timeout),
+      thresholds: {
+        lcpMs: parseInt(opts.lcpThreshold),
+        loadTimeMs: parseInt(opts.loadThreshold),
+      },
     });
     result.issues.forEach((i) => upsertScanIssue(i, opts.project));
     printScanResult(result, opts.json);
-  } catch (e) { logError(chalk.red(e instanceof Error ? e.message : String(e))); process.exit(1); }
+  } catch (e) {
+    logError(chalk.red(e instanceof Error ? e.message : String(e)));
+    process.exit(1);
+  }
 });
 
 SCAN_COMMON_OPTIONS(
   scanCmd
     .command("all <url>")
     .description("Run all scanners: console, network, links, performance")
-    .option("-p, --page <path>", "Page path to visit (repeatable)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
+    .option(
+      "-p, --page <path>",
+      "Page path to visit (repeatable)",
+      (v: string, acc: string[]) => {
+        acc.push(v);
+        return acc;
+      },
+      [] as string[],
+    )
     .option("--max-pages <n>", "Max pages for link crawl", "20")
-    .option("--skip <scanner>", "Skip a scanner: console|network|links|perf (repeatable)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
+    .option(
+      "--skip <scanner>",
+      "Skip a scanner: console|network|links|perf (repeatable)",
+      (v: string, acc: string[]) => {
+        acc.push(v);
+        return acc;
+      },
+      [] as string[],
+    ),
 ).action(async (url: string, opts) => {
   try {
     const { runHealthScan } = await import("../lib/health-scan.js");
     const skip = new Set(opts.skip as string[]);
-    const scanners = (["console", "network", "links", "performance"] as const).filter(
-      (s) => !skip.has(s) && !skip.has(s === "performance" ? "perf" : s)
+    const scanners = (
+      ["console", "network", "links", "performance"] as const
+    ).filter(
+      (s) => !skip.has(s) && !skip.has(s === "performance" ? "perf" : s),
     );
     log(chalk.bold(`  Health scan: ${url}`));
     log(chalk.dim(`  Scanners: ${scanners.join(", ")}`));
     log("");
     const summary = await runHealthScan({
-      url, pages: opts.page, projectId: opts.project,
-      scanners, maxPages: parseInt(opts.maxPages),
-      headed: opts.headed, timeoutMs: parseInt(opts.timeout),
+      url,
+      pages: opts.page,
+      projectId: opts.project,
+      scanners,
+      maxPages: parseInt(opts.maxPages),
+      headed: opts.headed,
+      timeoutMs: parseInt(opts.timeout),
     });
-    if (opts.json) { log(JSON.stringify(summary, null, 2)); return; }
+    if (opts.json) {
+      log(JSON.stringify(summary, null, 2));
+      return;
+    }
     log(chalk.bold("  Results"));
     log(chalk.dim(`  ${"─".repeat(50)}`));
     log(`  Total issues:    ${chalk.bold(String(summary.totalIssues))}`);
-    log(`  New issues:      ${summary.newIssues > 0 ? chalk.red(String(summary.newIssues)) : chalk.green("0")}`);
-    log(`  Regressed:       ${summary.regressedIssues > 0 ? chalk.yellow(String(summary.regressedIssues)) : chalk.green("0")}`);
+    log(
+      `  New issues:      ${summary.newIssues > 0 ? chalk.red(String(summary.newIssues)) : chalk.green("0")}`,
+    );
+    log(
+      `  Regressed:       ${summary.regressedIssues > 0 ? chalk.yellow(String(summary.regressedIssues)) : chalk.green("0")}`,
+    );
     log(`  Known (skipped): ${chalk.dim(String(summary.existingIssues))}`);
     log(`  Duration:        ${(summary.durationMs / 1000).toFixed(1)}s`);
     log("");
@@ -4120,28 +6361,55 @@ SCAN_COMMON_OPTIONS(
       if (result.issues.length > 0) printScanResult(result, false);
     }
     if (summary.newIssues + summary.regressedIssues > 0) process.exit(1);
-  } catch (e) { logError(chalk.red(e instanceof Error ? e.message : String(e))); process.exit(1); }
+  } catch (e) {
+    logError(chalk.red(e instanceof Error ? e.message : String(e)));
+    process.exit(1);
+  }
 });
 
 scanCmd
   .command("issues")
   .description("List tracked scan issues")
   .option("--status <status>", "Filter by status: open|resolved|regressed")
-  .option("--type <type>", "Filter by type: console_error|network_error|broken_link|performance")
+  .option(
+    "--type <type>",
+    "Filter by type: console_error|network_error|broken_link|performance",
+  )
   .option("--project <id>", "Filter by project ID")
   .option("--limit <n>", "Max results", "50")
   .option("--json", "Output as JSON", false)
   .action((opts) => {
     try {
       const { listScanIssues } = require("../db/scan-issues.js");
-      const issues = listScanIssues({ status: opts.status, type: opts.type, projectId: opts.project, limit: parseInt(opts.limit) });
-      if (opts.json) { log(JSON.stringify(issues, null, 2)); return; }
-      if (issues.length === 0) { log(chalk.dim("No scan issues found.")); return; }
-      for (const i of issues) {
-        const statusColor = i.status === "open" ? chalk.red : i.status === "regressed" ? chalk.yellow : chalk.green;
-        log(`  ${statusColor(i.status.padEnd(10))} ${chalk.cyan(i.type.padEnd(16))} ${chalk.bold(i.severity.padEnd(8))} ${i.message.slice(0, 60)} ${chalk.dim(i.pageUrl)}`);
+      const issues = listScanIssues({
+        status: opts.status,
+        type: opts.type,
+        projectId: opts.project,
+        limit: parseInt(opts.limit),
+      });
+      if (opts.json) {
+        log(JSON.stringify(issues, null, 2));
+        return;
       }
-    } catch (e) { logError(chalk.red(e instanceof Error ? e.message : String(e))); process.exit(1); }
+      if (issues.length === 0) {
+        log(chalk.dim("No scan issues found."));
+        return;
+      }
+      for (const i of issues) {
+        const statusColor =
+          i.status === "open"
+            ? chalk.red
+            : i.status === "regressed"
+              ? chalk.yellow
+              : chalk.green;
+        log(
+          `  ${statusColor(i.status.padEnd(10))} ${chalk.cyan(i.type.padEnd(16))} ${chalk.bold(i.severity.padEnd(8))} ${i.message.slice(0, 60)} ${chalk.dim(i.pageUrl)}`,
+        );
+      }
+    } catch (e) {
+      logError(chalk.red(e instanceof Error ? e.message : String(e)));
+      process.exit(1);
+    }
   });
 
 scanCmd
@@ -4151,42 +6419,89 @@ scanCmd
     try {
       const { resolveScanIssue } = require("../db/scan-issues.js");
       const ok = resolveScanIssue(id);
-      if (!ok) { logError(chalk.red(`Scan issue not found: ${id}`)); process.exit(1); }
+      if (!ok) {
+        logError(chalk.red(`Scan issue not found: ${id}`));
+        process.exit(1);
+      }
       log(chalk.green(`Resolved scan issue: ${id}`));
-    } catch (e) { logError(chalk.red(e instanceof Error ? e.message : String(e))); process.exit(1); }
+    } catch (e) {
+      logError(chalk.red(e instanceof Error ? e.message : String(e)));
+      process.exit(1);
+    }
   });
 
 SCAN_COMMON_OPTIONS(
   scanCmd
     .command("a11y <url>")
-    .description("WCAG accessibility scan — catches violations in authenticated/dynamic states")
-    .option("-p, --page <path>", "Page path to visit (repeatable)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
-    .option("--level <level>", "WCAG level: A, AA, or AAA (default AA)", "AA")
+    .description(
+      "WCAG accessibility scan — catches violations in authenticated/dynamic states",
+    )
+    .option(
+      "-p, --page <path>",
+      "Page path to visit (repeatable)",
+      (v: string, acc: string[]) => {
+        acc.push(v);
+        return acc;
+      },
+      [] as string[],
+    )
+    .option("--level <level>", "WCAG level: A, AA, or AAA (default AA)", "AA"),
 ).action(async (url: string, opts) => {
   try {
     const { scanA11y } = await import("../lib/scanners/a11y.js");
     const { upsertScanIssue } = await import("../db/scan-issues.js");
-    const result = await scanA11y({ url, pages: opts.page, wcagLevel: opts.level as "A" | "AA" | "AAA", headed: opts.headed, timeoutMs: parseInt(opts.timeout ?? "15000") });
+    const result = await scanA11y({
+      url,
+      pages: opts.page,
+      wcagLevel: opts.level as "A" | "AA" | "AAA",
+      headed: opts.headed,
+      timeoutMs: parseInt(opts.timeout ?? "15000"),
+    });
     result.issues.forEach((i) => upsertScanIssue(i, opts.project));
     printScanResult(result, opts.json);
-  } catch (e) { logError(chalk.red(e instanceof Error ? e.message : String(e))); process.exit(1); }
+  } catch (e) {
+    logError(chalk.red(e instanceof Error ? e.message : String(e)));
+    process.exit(1);
+  }
 });
 
 SCAN_COMMON_OPTIONS(
   scanCmd
     .command("injection <url>")
-    .description("Probe AI endpoints for prompt injection vulnerabilities (OWASP LLM Top 10 #1)")
-    .option("--endpoint <path>", "AI endpoint path to probe (default: /api/chat)", "/api/chat")
-    .option("--input-field <path>", "JSON path for input field (default: messages[0].content)", "messages[0].content")
+    .description(
+      "Probe AI endpoints for prompt injection vulnerabilities (OWASP LLM Top 10 #1)",
+    )
+    .option(
+      "--endpoint <path>",
+      "AI endpoint path to probe (default: /api/chat)",
+      "/api/chat",
+    )
+    .option(
+      "--input-field <path>",
+      "JSON path for input field (default: messages[0].content)",
+      "messages[0].content",
+    )
     .option("--output-field <path>", "JSON path for response extraction")
-    .option("--category <cat>", "Payload category filter: extraction|role_override|jailbreak|data_exfil|indirect (repeatable)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
+    .option(
+      "--category <cat>",
+      "Payload category filter: extraction|role_override|jailbreak|data_exfil|indirect (repeatable)",
+      (v: string, acc: string[]) => {
+        acc.push(v);
+        return acc;
+      },
+      [] as string[],
+    ),
 ).action(async (url: string, opts) => {
   try {
     const { scanInjection } = await import("../lib/scanners/injection.js");
     const { upsertScanIssue } = await import("../db/scan-issues.js");
 
     log(chalk.bold(`  Injection probe: ${url}`));
-    log(chalk.dim(`  Endpoint: ${opts.endpoint}  |  Payload categories: ${opts.category.length > 0 ? opts.category.join(", ") : "all"}`));
+    log(
+      chalk.dim(
+        `  Endpoint: ${opts.endpoint}  |  Payload categories: ${opts.category.length > 0 ? opts.category.join(", ") : "all"}`,
+      ),
+    );
     log("");
 
     const result = await scanInjection({
@@ -4194,20 +6509,38 @@ SCAN_COMMON_OPTIONS(
       endpoint: opts.endpoint,
       inputField: opts.inputField,
       outputField: opts.outputField,
-      payloadCategories: opts.category.length > 0 ? opts.category as ("extraction" | "role_override" | "jailbreak" | "data_exfil" | "indirect")[] : undefined,
+      payloadCategories:
+        opts.category.length > 0
+          ? (opts.category as (
+              | "extraction"
+              | "role_override"
+              | "jailbreak"
+              | "data_exfil"
+              | "indirect"
+            )[])
+          : undefined,
       timeoutMs: parseInt(opts.timeout ?? "15000"),
       headed: opts.headed,
     });
 
     result.issues.forEach((i) => upsertScanIssue(i, opts.project));
 
-    if (opts.json) { log(JSON.stringify(result, null, 2)); return; }
+    if (opts.json) {
+      log(JSON.stringify(result, null, 2));
+      return;
+    }
 
-    log(chalk.bold(`  Results: ${result.payloadsTested} payloads tested in ${(result.durationMs / 1000).toFixed(1)}s`));
+    log(
+      chalk.bold(
+        `  Results: ${result.payloadsTested} payloads tested in ${(result.durationMs / 1000).toFixed(1)}s`,
+      ),
+    );
     log("");
     for (const f of result.findings) {
       const icon = f.vulnerabilityDetected
-        ? (f.severity === "critical" ? chalk.bgRed.white(` ${f.severity.toUpperCase()} `) : chalk.red(`[${f.severity}]`))
+        ? f.severity === "critical"
+          ? chalk.bgRed.white(` ${f.severity.toUpperCase()} `)
+          : chalk.red(`[${f.severity}]`)
         : chalk.green("  ✓  ");
       log(`  ${icon} ${f.description} (${f.category})`);
       if (f.vulnerabilityDetected) {
@@ -4217,26 +6550,48 @@ SCAN_COMMON_OPTIONS(
     }
     log("");
     if (result.vulnerableCount > 0) {
-      log(chalk.red(`  ⚠ ${result.vulnerableCount} potential vulnerabilities detected`));
+      log(
+        chalk.red(
+          `  ⚠ ${result.vulnerableCount} potential vulnerabilities detected`,
+        ),
+      );
       process.exit(1);
     } else {
       log(chalk.green(`  ✓ No injection vulnerabilities detected`));
     }
-  } catch (e) { logError(chalk.red(e instanceof Error ? e.message : String(e))); process.exit(1); }
+  } catch (e) {
+    logError(chalk.red(e instanceof Error ? e.message : String(e)));
+    process.exit(1);
+  }
 });
 
 SCAN_COMMON_OPTIONS(
   scanCmd
     .command("pii <url>")
     .description("Scan AI API endpoint responses for PII and data leaks")
-    .option("--endpoint <path>", "API endpoint path (default: /api/chat)", "/api/chat")
-    .option("--seed <values>", "Comma-separated known PII values to watch for (e.g. 'user@example.com,555-1234')")
-    .option("--input-field <path>", "JSON path to inject prompt (e.g. messages[0].content)")
+    .option(
+      "--endpoint <path>",
+      "API endpoint path (default: /api/chat)",
+      "/api/chat",
+    )
+    .option(
+      "--seed <values>",
+      "Comma-separated known PII values to watch for (e.g. 'user@example.com,555-1234')",
+    )
+    .option(
+      "--input-field <path>",
+      "JSON path to inject prompt (e.g. messages[0].content)",
+    ),
 ).action(async (url: string, opts) => {
   try {
     const { scanPiiEndpoint } = await import("../lib/scanners/pii-scanner.js");
     const { upsertScanIssue } = await import("../db/scan-issues.js");
-    const seedPii = opts.seed ? (opts.seed as string).split(",").map((s: string) => s.trim()).filter(Boolean) : undefined;
+    const seedPii = opts.seed
+      ? (opts.seed as string)
+          .split(",")
+          .map((s: string) => s.trim())
+          .filter(Boolean)
+      : undefined;
 
     log(chalk.dim(`Scanning ${url}${opts.endpoint} for PII leaks...`));
     const result = await scanPiiEndpoint({
@@ -4249,7 +6604,10 @@ SCAN_COMMON_OPTIONS(
 
     result.issues.forEach((i) => upsertScanIssue(i, opts.project));
 
-    if (opts.json) { log(JSON.stringify(result, null, 2)); return; }
+    if (opts.json) {
+      log(JSON.stringify(result, null, 2));
+      return;
+    }
 
     log("");
     log(chalk.bold("  PII Leak Scan Results"));
@@ -4261,31 +6619,78 @@ SCAN_COMMON_OPTIONS(
       log(chalk.red(`  ${result.issues.length} PII issue(s) detected:`));
       log("");
       for (const issue of result.issues) {
-        const sev = issue.severity === "critical" ? chalk.bgRed.white(` ${issue.severity} `) :
-                    issue.severity === "high"     ? chalk.red(issue.severity) :
-                    issue.severity === "medium"   ? chalk.yellow(issue.severity) : chalk.dim(issue.severity);
+        const sev =
+          issue.severity === "critical"
+            ? chalk.bgRed.white(` ${issue.severity} `)
+            : issue.severity === "high"
+              ? chalk.red(issue.severity)
+              : issue.severity === "medium"
+                ? chalk.yellow(issue.severity)
+                : chalk.dim(issue.severity);
         log(`  ${sev}  ${issue.message}`);
-        if (issue.detail && typeof issue.detail === "object" && (issue.detail as Record<string,unknown>)["context"]) {
-          log(chalk.dim(`          Context: ${(issue.detail as Record<string,unknown>)["context"]}`));
+        if (
+          issue.detail &&
+          typeof issue.detail === "object" &&
+          (issue.detail as Record<string, unknown>)["context"]
+        ) {
+          log(
+            chalk.dim(
+              `          Context: ${(issue.detail as Record<string, unknown>)["context"]}`,
+            ),
+          );
         }
       }
       log("");
-      if (result.issues.some((i) => i.severity === "critical" || i.severity === "high")) process.exit(1);
+      if (
+        result.issues.some(
+          (i) => i.severity === "critical" || i.severity === "high",
+        )
+      )
+        process.exit(1);
     }
     log("");
-  } catch (e) { logError(chalk.red(e instanceof Error ? e.message : String(e))); process.exit(1); }
+  } catch (e) {
+    logError(chalk.red(e instanceof Error ? e.message : String(e)));
+    process.exit(1);
+  }
 });
 
-function printScanResult(result: { url: string; pages: string[]; issues: { type: string; severity: string; pageUrl: string; message: string }[]; durationMs: number }, asJson: boolean) {
-  if (asJson) { log(JSON.stringify(result, null, 2)); return; }
-  log(chalk.bold(`  ${result.url}`) + chalk.dim(` — ${result.pages.length} page(s) scanned in ${(result.durationMs / 1000).toFixed(1)}s`));
+function printScanResult(
+  result: {
+    url: string;
+    pages: string[];
+    issues: {
+      type: string;
+      severity: string;
+      pageUrl: string;
+      message: string;
+    }[];
+    durationMs: number;
+  },
+  asJson: boolean,
+) {
+  if (asJson) {
+    log(JSON.stringify(result, null, 2));
+    return;
+  }
+  log(
+    chalk.bold(`  ${result.url}`) +
+      chalk.dim(
+        ` — ${result.pages.length} page(s) scanned in ${(result.durationMs / 1000).toFixed(1)}s`,
+      ),
+  );
   if (result.issues.length === 0) {
     log(chalk.green("  ✓ No issues found"));
   } else {
     for (const issue of result.issues) {
-      const sev = issue.severity === "critical" ? chalk.bgRed.white(` ${issue.severity} `) :
-                  issue.severity === "high"     ? chalk.red(issue.severity) :
-                  issue.severity === "medium"   ? chalk.yellow(issue.severity) : chalk.dim(issue.severity);
+      const sev =
+        issue.severity === "critical"
+          ? chalk.bgRed.white(` ${issue.severity} `)
+          : issue.severity === "high"
+            ? chalk.red(issue.severity)
+            : issue.severity === "medium"
+              ? chalk.yellow(issue.severity)
+              : chalk.dim(issue.severity);
       log(`  ${sev}  ${issue.message.slice(0, 80)}`);
       log(chalk.dim(`          ${issue.pageUrl}`));
     }
@@ -4306,7 +6711,10 @@ program
     if (hasApiKey) {
       log(chalk.green("✓") + " ANTHROPIC_API_KEY is set");
     } else {
-      log(chalk.red("✗") + " ANTHROPIC_API_KEY is not set (required for AI-powered tests)");
+      log(
+        chalk.red("✗") +
+          " ANTHROPIC_API_KEY is not set (required for AI-powered tests)",
+      );
       allPassed = false;
     }
 
@@ -4318,7 +6726,10 @@ program
       db.close();
       log(chalk.green("✓") + ` Database accessible: ${dbPath}`);
     } catch (err) {
-      log(chalk.red("✗") + ` Database not accessible at ${dbPath}: ${err instanceof Error ? err.message : String(err)}`);
+      log(
+        chalk.red("✗") +
+          ` Database not accessible at ${dbPath}: ${err instanceof Error ? err.message : String(err)}`,
+      );
       allPassed = false;
     }
 
@@ -4330,22 +6741,34 @@ program
       if (fsExists(execPath)) {
         log(chalk.green("✓") + " Playwright chromium is installed");
       } else {
-        log(chalk.red("✗") + ` Playwright chromium executable not found at ${execPath}. Run: testers install`);
+        log(
+          chalk.red("✗") +
+            ` Playwright chromium executable not found at ${execPath}. Run: testers install`,
+        );
         allPassed = false;
       }
     } catch {
-      log(chalk.red("✗") + " Playwright is not installed. Run: testers install");
+      log(
+        chalk.red("✗") + " Playwright is not installed. Run: testers install",
+      );
       allPassed = false;
     }
 
     // 4. Check Lightpanda (optional)
-    const { isLightpandaAvailable } = await import("../lib/browser-lightpanda.js");
+    const { isLightpandaAvailable } =
+      await import("../lib/browser-lightpanda.js");
     const lightpandaAvailable = isLightpandaAvailable();
-    log((lightpandaAvailable ? chalk.green("✓") : chalk.dim("○")) + ` Lightpanda: ${lightpandaAvailable ? "installed" : "not installed (optional)"}`);
+    log(
+      (lightpandaAvailable ? chalk.green("✓") : chalk.dim("○")) +
+        ` Lightpanda: ${lightpandaAvailable ? "installed" : "not installed (optional)"}`,
+    );
 
     const { isBunWebViewAvailable } = await import("../lib/browser-bun.js");
     const bunAvailable = isBunWebViewAvailable();
-    log((bunAvailable ? chalk.green("✓") : chalk.dim("○")) + ` Bun.WebView: ${bunAvailable ? "available (native, ~11x faster)" : "not available — upgrade to Bun canary: bun upgrade --canary (optional)"}`);
+    log(
+      (bunAvailable ? chalk.green("✓") : chalk.dim("○")) +
+        ` Bun.WebView: ${bunAvailable ? "available (native, ~11x faster)" : "not available — upgrade to Bun canary: bun upgrade --canary (optional)"}`,
+    );
 
     // 5. Check AI provider API keys
     log("");
@@ -4355,13 +6778,31 @@ program
     const googleKey = !!process.env["GOOGLE_API_KEY"];
     const cerebrasKey = !!process.env["CEREBRAS_API_KEY"];
     const zaiKey = !!process.env["ZAI_API_KEY"];
-    log((anthropicKey ? chalk.green("  ✓") : chalk.red("  ✗")) + ` Anthropic (ANTHROPIC_API_KEY)${!anthropicKey ? " — required for default model" : ""}`);
-    log((openaiKey ? chalk.green("  ✓") : chalk.dim("  ○")) + ` OpenAI (OPENAI_API_KEY) — optional, enables gpt-* models`);
-    log((googleKey ? chalk.green("  ✓") : chalk.dim("  ○")) + ` Google Gemini (GOOGLE_API_KEY) — optional, enables gemini-* models`);
-    log((cerebrasKey ? chalk.green("  ✓") : chalk.dim("  ○")) + ` Cerebras (CEREBRAS_API_KEY) — optional, enables llama-*/qwen-* at ~20x faster inference`);
-    log((zaiKey ? chalk.green("  ✓") : chalk.dim("  ○")) + ` Z.AI (ZAI_API_KEY) — optional, enables glm-* models such as glm-5.1`);
+    log(
+      (anthropicKey ? chalk.green("  ✓") : chalk.red("  ✗")) +
+        ` Anthropic (ANTHROPIC_API_KEY)${!anthropicKey ? " — required for default model" : ""}`,
+    );
+    log(
+      (openaiKey ? chalk.green("  ✓") : chalk.dim("  ○")) +
+        ` OpenAI (OPENAI_API_KEY) — optional, enables gpt-* models`,
+    );
+    log(
+      (googleKey ? chalk.green("  ✓") : chalk.dim("  ○")) +
+        ` Google Gemini (GOOGLE_API_KEY) — optional, enables gemini-* models`,
+    );
+    log(
+      (cerebrasKey ? chalk.green("  ✓") : chalk.dim("  ○")) +
+        ` Cerebras (CEREBRAS_API_KEY) — optional, enables llama-*/qwen-* at ~20x faster inference`,
+    );
+    log(
+      (zaiKey ? chalk.green("  ✓") : chalk.dim("  ○")) +
+        ` Z.AI (ZAI_API_KEY) — optional, enables glm-* models such as glm-5.1`,
+    );
     if (!anthropicKey && !openaiKey && !googleKey && !cerebrasKey && !zaiKey) {
-      log(chalk.red("  ✗") + " No AI provider API keys found — at least one is required");
+      log(
+        chalk.red("  ✗") +
+          " No AI provider API keys found — at least one is required",
+      );
       allPassed = false;
     }
 
@@ -4383,11 +6824,26 @@ program
       const url = `http://localhost:${port}`;
 
       // Spawn the server process
-      const serverBin = join(resolve(process.execPath, ".."), "..", "dist", "server", "index.js");
+      const serverBin = join(
+        resolve(process.execPath, ".."),
+        "..",
+        "dist",
+        "server",
+        "index.js",
+      );
       // Fallback: try to run directly via bun
-      const { join: pathJoin, resolve: pathResolve, dirname } = await import("node:path");
+      const {
+        join: pathJoin,
+        resolve: pathResolve,
+        dirname,
+      } = await import("node:path");
       const { fileURLToPath } = await import("node:url");
-      const serverPath = pathJoin(dirname(fileURLToPath(import.meta.url)), "..", "server", "index.js");
+      const serverPath = pathJoin(
+        dirname(fileURLToPath(import.meta.url)),
+        "..",
+        "server",
+        "index.js",
+      );
 
       const proc = Bun.spawn(["bun", "run", serverPath], {
         env: { ...process.env, TESTERS_PORT: String(port) },
@@ -4407,14 +6863,20 @@ program
       // Keep process alive until child exits
       await proc.exited;
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
 
 // ─── testers api ────────────────────────────────────────────────────────────
 
-const apiCmd = program.command("api").description("Manage and run API health checks");
+const apiCmd = program
+  .command("api")
+  .description("Manage and run API health checks");
 
 apiCmd
   .command("list")
@@ -4425,22 +6887,41 @@ apiCmd
   .action((opts) => {
     try {
       const projectId = resolveProject(opts.project);
-      const checks = listApiChecks({ projectId, enabled: opts.enabled ? true : undefined });
-      if (opts.json) { log(JSON.stringify(checks, null, 2)); return; }
-      if (checks.length === 0) { log(chalk.dim("No API checks found.")); return; }
+      const checks = listApiChecks({
+        projectId,
+        enabled: opts.enabled ? true : undefined,
+      });
+      if (opts.json) {
+        log(JSON.stringify(checks, null, 2));
+        return;
+      }
+      if (checks.length === 0) {
+        log(chalk.dim("No API checks found."));
+        return;
+      }
       log("");
       log(chalk.bold("  API Checks"));
       log("");
-      log(`  ${"ID".padEnd(10)} ${"Method".padEnd(8)} ${"Name".padEnd(25)} ${"URL".padEnd(35)} ${"Status".padEnd(8)} Tags`);
-      log(`  ${"─".repeat(10)} ${"─".repeat(8)} ${"─".repeat(25)} ${"─".repeat(35)} ${"─".repeat(8)} ${"─".repeat(20)}`);
+      log(
+        `  ${"ID".padEnd(10)} ${"Method".padEnd(8)} ${"Name".padEnd(25)} ${"URL".padEnd(35)} ${"Status".padEnd(8)} Tags`,
+      );
+      log(
+        `  ${"─".repeat(10)} ${"─".repeat(8)} ${"─".repeat(25)} ${"─".repeat(35)} ${"─".repeat(8)} ${"─".repeat(20)}`,
+      );
       for (const c of checks) {
         const enabled = c.enabled ? chalk.green("on") : chalk.red("off");
         const method = c.method.padEnd(6);
-        log(`  ${c.shortId.padEnd(10)} ${method.padEnd(8)} ${c.name.slice(0, 24).padEnd(25)} ${c.url.slice(0, 34).padEnd(35)} ${enabled.toString().padEnd(8)} ${c.tags.join(", ")}`);
+        log(
+          `  ${c.shortId.padEnd(10)} ${method.padEnd(8)} ${c.name.slice(0, 24).padEnd(25)} ${c.url.slice(0, 34).padEnd(35)} ${enabled.toString().padEnd(8)} ${c.tags.join(", ")}`,
+        );
       }
       log("");
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -4463,34 +6944,64 @@ apiCmd
         const projectId = resolveProject(opts.project);
         const check = createApiCheck({
           name: opts.name?.trim() || opts.url,
-          method: (opts.method?.toUpperCase() ?? "GET") as "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD",
+          method: (opts.method?.toUpperCase() ?? "GET") as
+            | "GET"
+            | "POST"
+            | "PUT"
+            | "PATCH"
+            | "DELETE"
+            | "HEAD",
           url: opts.url.trim(),
           expectedStatus: opts.status ? parseInt(opts.status, 10) : 200,
           expectedBodyContains: opts.contains || undefined,
-          expectedResponseTimeMs: opts.responseTime ? parseInt(opts.responseTime, 10) : undefined,
+          expectedResponseTimeMs: opts.responseTime
+            ? parseInt(opts.responseTime, 10)
+            : undefined,
           tags: opts.tag ?? [],
           projectId,
         });
         log("");
-        log(chalk.green(`✓ Created API check ${chalk.bold(check.name)} (${check.shortId})`));
-        log(chalk.dim(`  ${check.method} ${check.url} → expect ${check.expectedStatus}`));
+        log(
+          chalk.green(
+            `✓ Created API check ${chalk.bold(check.name)} (${check.shortId})`,
+          ),
+        );
+        log(
+          chalk.dim(
+            `  ${check.method} ${check.url} → expect ${check.expectedStatus}`,
+          ),
+        );
         return;
       }
 
       // Interactive mode
-      const rl = createInterface({ input: process.stdin, output: process.stdout });
-      const ask = (q: string): Promise<string> => new Promise((res) => rl.question(q, res));
+      const rl = createInterface({
+        input: process.stdin,
+        output: process.stdout,
+      });
+      const ask = (q: string): Promise<string> =>
+        new Promise((res) => rl.question(q, res));
       const name = await ask("Name: ");
-      if (!name.trim()) { logError(chalk.red("Name is required")); process.exit(1); }
+      if (!name.trim()) {
+        logError(chalk.red("Name is required"));
+        process.exit(1);
+      }
       const methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"];
       log(`Method [${methods.join("/")}] (default: GET): `);
       const methodInput = (await ask("")).trim().toUpperCase() || "GET";
       const method = methods.includes(methodInput) ? methodInput : "GET";
       const url = await ask("URL (full or path like /api/health): ");
-      if (!url.trim()) { logError(chalk.red("URL is required")); process.exit(1); }
+      if (!url.trim()) {
+        logError(chalk.red("URL is required"));
+        process.exit(1);
+      }
       const statusInput = await ask("Expected status (default 200): ");
-      const expectedStatus = statusInput.trim() ? parseInt(statusInput.trim(), 10) : 200;
-      const bodyContains = await ask("Body must contain (optional, press enter to skip): ");
+      const expectedStatus = statusInput.trim()
+        ? parseInt(statusInput.trim(), 10)
+        : 200;
+      const bodyContains = await ask(
+        "Body must contain (optional, press enter to skip): ",
+      );
       const tagsInput = await ask("Tags (comma-separated, optional): ");
       rl.close();
       const projectId = resolveProject(opts.project);
@@ -4500,14 +7011,31 @@ apiCmd
         url: url.trim(),
         expectedStatus,
         expectedBodyContains: bodyContains.trim() || undefined,
-        tags: tagsInput.trim() ? tagsInput.split(",").map((t) => t.trim()).filter(Boolean) : [],
+        tags: tagsInput.trim()
+          ? tagsInput
+              .split(",")
+              .map((t) => t.trim())
+              .filter(Boolean)
+          : [],
         projectId,
       });
       log("");
-      log(chalk.green(`✓ Created API check ${chalk.bold(check.name)} (${check.shortId})`));
-      log(chalk.dim(`  ${check.method} ${check.url} → expect ${check.expectedStatus}`));
+      log(
+        chalk.green(
+          `✓ Created API check ${chalk.bold(check.name)} (${check.shortId})`,
+        ),
+      );
+      log(
+        chalk.dim(
+          `  ${check.method} ${check.url} → expect ${check.expectedStatus}`,
+        ),
+      );
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -4518,21 +7046,34 @@ apiCmd
   .action((id: string) => {
     try {
       const check = getApiCheck(id);
-      if (!check) { logError(chalk.red(`API check not found: ${id}`)); process.exit(1); }
+      if (!check) {
+        logError(chalk.red(`API check not found: ${id}`));
+        process.exit(1);
+      }
       log("");
       log(chalk.bold(`  API Check: ${check.name}`));
       log(`  ID:            ${check.id}`);
       log(`  Short ID:      ${check.shortId}`);
       log(`  Method:        ${check.method}`);
       log(`  URL:           ${check.url}`);
-      log(`  Expected:      ${check.expectedStatus}${check.expectedBodyContains ? ` + body contains "${check.expectedBodyContains}"` : ""}`);
+      log(
+        `  Expected:      ${check.expectedStatus}${check.expectedBodyContains ? ` + body contains "${check.expectedBodyContains}"` : ""}`,
+      );
       log(`  Timeout:       ${check.timeoutMs}ms`);
-      log(`  Enabled:       ${check.enabled ? chalk.green("yes") : chalk.red("no")}`);
-      log(`  Tags:          ${check.tags.length > 0 ? check.tags.join(", ") : chalk.dim("none")}`);
+      log(
+        `  Enabled:       ${check.enabled ? chalk.green("yes") : chalk.red("no")}`,
+      );
+      log(
+        `  Tags:          ${check.tags.length > 0 ? check.tags.join(", ") : chalk.dim("none")}`,
+      );
       log(`  Created:       ${check.createdAt}`);
       log("");
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -4551,7 +7092,10 @@ apiCmd
       let baseUrl = baseUrlArg;
       if (!baseUrl && opts.env) {
         const env = getEnvironment(opts.env);
-        if (!env) { logError(chalk.red(`Environment not found: ${opts.env}`)); process.exit(1); }
+        if (!env) {
+          logError(chalk.red(`Environment not found: ${opts.env}`));
+          process.exit(1);
+        }
         baseUrl = env.url;
         log(chalk.dim(`Using environment: ${env.name} (${env.url})`));
       }
@@ -4559,21 +7103,42 @@ apiCmd
         const defaultEnv = getDefaultEnvironment();
         if (defaultEnv) {
           baseUrl = defaultEnv.url;
-          log(chalk.dim(`Using default environment: ${defaultEnv.name} (${defaultEnv.url})`));
+          log(
+            chalk.dim(
+              `Using default environment: ${defaultEnv.name} (${defaultEnv.url})`,
+            ),
+          );
         }
       }
       if (!baseUrl) {
-        logError(chalk.red("No base URL provided. Pass a URL argument, use --env <name>, or set a default environment."));
+        logError(
+          chalk.red(
+            "No base URL provided. Pass a URL argument, use --env <name>, or set a default environment.",
+          ),
+        );
         process.exit(1);
       }
       if (opts.check) {
         const check = getApiCheck(opts.check);
-        if (!check) { logError(chalk.red(`API check not found: ${opts.check}`)); process.exit(1); }
+        if (!check) {
+          logError(chalk.red(`API check not found: ${opts.check}`));
+          process.exit(1);
+        }
         log(chalk.dim(`Running ${check.method} ${check.url}...`));
         const result = await runApiCheck(check, { baseUrl });
-        if (opts.json) { log(JSON.stringify(result, null, 2)); return; }
-        const icon = result.status === "passed" ? chalk.green("✓") : result.status === "failed" ? chalk.red("✗") : chalk.yellow("!");
-        log(`${icon} ${check.name} — ${result.status} (${result.responseTimeMs ?? "?"}ms, HTTP ${result.statusCode ?? "?"})`);
+        if (opts.json) {
+          log(JSON.stringify(result, null, 2));
+          return;
+        }
+        const icon =
+          result.status === "passed"
+            ? chalk.green("✓")
+            : result.status === "failed"
+              ? chalk.red("✗")
+              : chalk.yellow("!");
+        log(
+          `${icon} ${check.name} — ${result.status} (${result.responseTimeMs ?? "?"}ms, HTTP ${result.statusCode ?? "?"})`,
+        );
         if (result.assertionsFailed.length > 0) {
           for (const f of result.assertionsFailed) log(chalk.red(`  ✗ ${f}`));
         }
@@ -4581,26 +7146,47 @@ apiCmd
       } else {
         const parallel = parseInt(opts.parallel, 10);
         log(chalk.dim(`Running all enabled API checks against ${baseUrl}...`));
-        const { results, passed, failed, errors } = await runApiChecksByFilter({ baseUrl, projectId, parallel });
-        if (opts.json) { log(JSON.stringify({ results, passed, failed, errors }, null, 2)); return; }
+        const { results, passed, failed, errors } = await runApiChecksByFilter({
+          baseUrl,
+          projectId,
+          parallel,
+        });
+        if (opts.json) {
+          log(JSON.stringify({ results, passed, failed, errors }, null, 2));
+          return;
+        }
         log("");
         for (const r of results) {
           const check = getApiCheck(r.checkId);
           const name = check?.name ?? r.checkId;
-          const icon = r.status === "passed" ? chalk.green("✓") : r.status === "failed" ? chalk.red("✗") : chalk.yellow("!");
-          log(`  ${icon} ${name} (${r.responseTimeMs ?? "?"}ms, HTTP ${r.statusCode ?? "?"})`);
-          if (r.assertionsFailed.length > 0) for (const f of r.assertionsFailed) log(chalk.red(`      ✗ ${f}`));
+          const icon =
+            r.status === "passed"
+              ? chalk.green("✓")
+              : r.status === "failed"
+                ? chalk.red("✗")
+                : chalk.yellow("!");
+          log(
+            `  ${icon} ${name} (${r.responseTimeMs ?? "?"}ms, HTTP ${r.statusCode ?? "?"})`,
+          );
+          if (r.assertionsFailed.length > 0)
+            for (const f of r.assertionsFailed) log(chalk.red(`      ✗ ${f}`));
           if (r.error) log(chalk.red(`      Error: ${r.error}`));
         }
         log("");
         const passColor = passed > 0 ? chalk.green : chalk.dim;
         const failColor = failed + errors > 0 ? chalk.red : chalk.dim;
-        log(`  ${passColor(`${passed} passed`)}  ${failColor(`${failed + errors} failed`)}  ${results.length} total`);
+        log(
+          `  ${passColor(`${passed} passed`)}  ${failColor(`${failed + errors} failed`)}  ${results.length} total`,
+        );
         log("");
         if (failed + errors > 0) process.exit(1);
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -4612,17 +7198,32 @@ apiCmd
   .action(async (id: string, opts) => {
     try {
       const check = getApiCheck(id);
-      if (!check) { logError(chalk.red(`API check not found: ${id}`)); process.exit(1); }
+      if (!check) {
+        logError(chalk.red(`API check not found: ${id}`));
+        process.exit(1);
+      }
       if (!opts.yes) {
-        const rl = createInterface({ input: process.stdin, output: process.stdout });
-        const answer = await new Promise<string>((res) => rl.question(`Delete "${check.name}" (${check.shortId})? [y/N] `, res));
+        const rl = createInterface({
+          input: process.stdin,
+          output: process.stdout,
+        });
+        const answer = await new Promise<string>((res) =>
+          rl.question(`Delete "${check.name}" (${check.shortId})? [y/N] `, res),
+        );
         rl.close();
-        if (answer.toLowerCase() !== "y") { log(chalk.dim("Cancelled.")); return; }
+        if (answer.toLowerCase() !== "y") {
+          log(chalk.dim("Cancelled."));
+          return;
+        }
       }
       deleteApiCheck(id);
       log(chalk.green(`✓ Deleted API check ${chalk.bold(check.name)}`));
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -4634,7 +7235,8 @@ apiCmd
   .option("--dry-run", "Preview what would be created without saving", false)
   .action(async (spec: string, opts) => {
     try {
-      const { parseOpenAPISpecAsChecks, importApiChecksFromOpenAPI } = await import("../lib/openapi-import.js");
+      const { parseOpenAPISpecAsChecks, importApiChecksFromOpenAPI } =
+        await import("../lib/openapi-import.js");
       const projectId = resolveProject(opts.project) ?? undefined;
 
       if (opts.dryRun) {
@@ -4642,10 +7244,16 @@ apiCmd
         log("");
         log(chalk.bold(`  Would create ${inputs.length} API checks:`));
         log("");
-        log(`  ${"Method".padEnd(8)} ${"URL".padEnd(40)} ${"Expected".padEnd(10)} Tags`);
-        log(`  ${"─".repeat(8)} ${"─".repeat(40)} ${"─".repeat(10)} ${"─".repeat(20)}`);
+        log(
+          `  ${"Method".padEnd(8)} ${"URL".padEnd(40)} ${"Expected".padEnd(10)} Tags`,
+        );
+        log(
+          `  ${"─".repeat(8)} ${"─".repeat(40)} ${"─".repeat(10)} ${"─".repeat(20)}`,
+        );
         for (const c of inputs) {
-          log(`  ${(c.method ?? "GET").padEnd(8)} ${(c.url ?? "").slice(0, 39).padEnd(40)} ${String(c.expectedStatus ?? 200).padEnd(10)} ${(c.tags ?? []).join(", ")}`);
+          log(
+            `  ${(c.method ?? "GET").padEnd(8)} ${(c.url ?? "").slice(0, 39).padEnd(40)} ${String(c.expectedStatus ?? 200).padEnd(10)} ${(c.tags ?? []).join(", ")}`,
+          );
         }
         log("");
         return;
@@ -4655,31 +7263,52 @@ apiCmd
       log("");
       log(chalk.green(`✓ Imported ${imported} API checks from spec:`));
       log("");
-      log(`  ${"ID".padEnd(10)} ${"Method".padEnd(8)} ${"URL".padEnd(40)} Status`);
-      log(`  ${"─".repeat(10)} ${"─".repeat(8)} ${"─".repeat(40)} ${"─".repeat(6)}`);
+      log(
+        `  ${"ID".padEnd(10)} ${"Method".padEnd(8)} ${"URL".padEnd(40)} Status`,
+      );
+      log(
+        `  ${"─".repeat(10)} ${"─".repeat(8)} ${"─".repeat(40)} ${"─".repeat(6)}`,
+      );
       for (const c of checks) {
-        log(`  ${c.shortId.padEnd(10)} ${c.method.padEnd(8)} ${c.url.slice(0, 39).padEnd(40)} ${c.expectedStatus}`);
+        log(
+          `  ${c.shortId.padEnd(10)} ${c.method.padEnd(8)} ${c.url.slice(0, 39).padEnd(40)} ${c.expectedStatus}`,
+        );
       }
       log("");
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
 
 apiCmd
   .command("profile <url>")
-  .description("Hit an AI endpoint and display its LLM latency and cost profile")
+  .description(
+    "Hit an AI endpoint and display its LLM latency and cost profile",
+  )
   .option("--method <method>", "HTTP method", "POST")
-  .option("--header <header>", "Request header (repeatable, format: 'Key: Value')", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
+  .option(
+    "--header <header>",
+    "Request header (repeatable, format: 'Key: Value')",
+    (v: string, acc: string[]) => {
+      acc.push(v);
+      return acc;
+    },
+    [] as string[],
+  )
   .option("--body <json>", "Request body (JSON string)")
   .option("--timeout <ms>", "Request timeout in ms", "30000")
   .option("--json", "Output as JSON", false)
   .action(async (url: string, opts) => {
     try {
-      const { profileAIEndpoint, isAIEndpoint } = await import("../lib/ai-profiler.js");
+      const { profileAIEndpoint, isAIEndpoint } =
+        await import("../lib/ai-profiler.js");
       const headers: Record<string, string> = {};
-      for (const h of (opts.header as string[])) {
+      for (const h of opts.header as string[]) {
         const colonIdx = h.indexOf(":");
         if (colonIdx > 0) {
           headers[h.slice(0, colonIdx).trim()] = h.slice(colonIdx + 1).trim();
@@ -4692,7 +7321,10 @@ apiCmd
         body: opts.body,
         timeoutMs: parseInt(opts.timeout, 10),
       });
-      if (opts.json) { log(JSON.stringify(profile, null, 2)); return; }
+      if (opts.json) {
+        log(JSON.stringify(profile, null, 2));
+        return;
+      }
       const isAI = isAIEndpoint(url);
       log("");
       log(chalk.bold("  LLM Endpoint Profile"));
@@ -4700,27 +7332,42 @@ apiCmd
       log(`  Endpoint:       ${profile.endpoint}`);
       log(`  Status code:    ${profile.statusCode}`);
       log(`  Total time:     ${chalk.cyan(`${profile.totalMs}ms`)}`);
-      if (profile.ttftMs !== null) log(`  TTFT:           ${chalk.cyan(`${profile.ttftMs}ms`)} (time to first token)`);
-      log(`  AI endpoint:    ${isAI ? chalk.green("yes") : chalk.yellow("no (not detected as AI)")}`);
+      if (profile.ttftMs !== null)
+        log(
+          `  TTFT:           ${chalk.cyan(`${profile.ttftMs}ms`)} (time to first token)`,
+        );
+      log(
+        `  AI endpoint:    ${isAI ? chalk.green("yes") : chalk.yellow("no (not detected as AI)")}`,
+      );
       log(`  Model:          ${profile.model ?? chalk.dim("unknown")}`);
       log(`  Provider:       ${profile.provider ?? chalk.dim("unknown")}`);
       log(`  Input tokens:   ${profile.inputTokens ?? chalk.dim("unknown")}`);
       log(`  Output tokens:  ${profile.outputTokens ?? chalk.dim("unknown")}`);
       if (profile.estimatedCostCents !== null) {
-        log(`  Est. cost:      ${chalk.yellow(`$${(profile.estimatedCostCents / 100).toFixed(6)}`)} (${profile.estimatedCostCents.toFixed(4)} cents)`);
+        log(
+          `  Est. cost:      ${chalk.yellow(`$${(profile.estimatedCostCents / 100).toFixed(6)}`)} (${profile.estimatedCostCents.toFixed(4)} cents)`,
+        );
       } else {
-        log(`  Est. cost:      ${chalk.dim("unknown (model not in pricing table)")}`);
+        log(
+          `  Est. cost:      ${chalk.dim("unknown (model not in pricing table)")}`,
+        );
       }
       log("");
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
 
 apiCmd
   .command("monitor [base-url]")
-  .description("Continuously run API checks and report only changes (new failures/recoveries)")
+  .description(
+    "Continuously run API checks and report only changes (new failures/recoveries)",
+  )
   .option("--interval <seconds>", "Poll interval in seconds", "30")
   .option("--project <id>", "Filter by project ID")
   .option("--env <name>", "Use a named environment's URL")
@@ -4730,17 +7377,31 @@ apiCmd
       let baseUrl = baseUrlArg;
       if (!baseUrl && opts.env) {
         const env = getEnvironment(opts.env);
-        if (!env) { logError(chalk.red(`Environment not found: ${opts.env}`)); process.exit(1); }
+        if (!env) {
+          logError(chalk.red(`Environment not found: ${opts.env}`));
+          process.exit(1);
+        }
         baseUrl = env.url;
       }
       if (!baseUrl) {
         const defaultEnv = getDefaultEnvironment();
         if (defaultEnv) {
           baseUrl = defaultEnv.url;
-          log(chalk.dim(`Using default environment: ${defaultEnv.name} (${defaultEnv.url})`));
+          log(
+            chalk.dim(
+              `Using default environment: ${defaultEnv.name} (${defaultEnv.url})`,
+            ),
+          );
         }
       }
-      if (!baseUrl) { logError(chalk.red("No base URL. Pass a URL, --env, or set a default environment.")); process.exit(1); }
+      if (!baseUrl) {
+        logError(
+          chalk.red(
+            "No base URL. Pass a URL, --env, or set a default environment.",
+          ),
+        );
+        process.exit(1);
+      }
 
       const intervalMs = parseInt(opts.interval, 10) * 1000;
       const lastStatus = new Map<string, string>(); // checkId → last status
@@ -4748,7 +7409,9 @@ apiCmd
 
       log("");
       log(chalk.bold(`  Monitoring API checks against ${chalk.cyan(baseUrl)}`));
-      log(chalk.dim(`  Polling every ${opts.interval}s — press Ctrl+C to stop`));
+      log(
+        chalk.dim(`  Polling every ${opts.interval}s — press Ctrl+C to stop`),
+      );
       log("");
 
       const poll = async () => {
@@ -4758,7 +7421,11 @@ apiCmd
           return;
         }
         runCount++;
-        const { results } = await runApiChecksByFilter({ baseUrl: baseUrl!, projectId, parallel: 5 });
+        const { results } = await runApiChecksByFilter({
+          baseUrl: baseUrl!,
+          projectId,
+          parallel: 5,
+        });
 
         let changed = 0;
         const now = new Date().toLocaleTimeString();
@@ -4773,25 +7440,38 @@ apiCmd
             if (!prev) {
               // First run — only log failures
               if (curr !== "passed") {
-                const icon = curr === "failed" ? chalk.red("✗") : chalk.yellow("!");
-                log(`  [${now}] ${icon} ${chalk.bold(name)} — ${curr} (${result.responseTimeMs ?? "?"}ms, HTTP ${result.statusCode ?? "?"})`);
+                const icon =
+                  curr === "failed" ? chalk.red("✗") : chalk.yellow("!");
+                log(
+                  `  [${now}] ${icon} ${chalk.bold(name)} — ${curr} (${result.responseTimeMs ?? "?"}ms, HTTP ${result.statusCode ?? "?"})`,
+                );
                 if (result.assertionsFailed.length > 0) {
-                  for (const f of result.assertionsFailed) log(chalk.red(`      ✗ ${f}`));
+                  for (const f of result.assertionsFailed)
+                    log(chalk.red(`      ✗ ${f}`));
                 }
-                if (result.error) log(chalk.red(`      Error: ${result.error}`));
+                if (result.error)
+                  log(chalk.red(`      Error: ${result.error}`));
               }
             } else if (prev !== "passed" && curr === "passed") {
-              log(`  [${now}] ${chalk.green("✓")} ${chalk.bold(name)} — ${chalk.green("recovered")} (was ${prev})`);
+              log(
+                `  [${now}] ${chalk.green("✓")} ${chalk.bold(name)} — ${chalk.green("recovered")} (was ${prev})`,
+              );
             } else if (prev === "passed" && curr !== "passed") {
-              const icon = curr === "failed" ? chalk.red("✗") : chalk.yellow("!");
-              log(`  [${now}] ${icon} ${chalk.bold(name)} — ${chalk.red(curr)} (was passing, HTTP ${result.statusCode ?? "?"})`);
+              const icon =
+                curr === "failed" ? chalk.red("✗") : chalk.yellow("!");
+              log(
+                `  [${now}] ${icon} ${chalk.bold(name)} — ${chalk.red(curr)} (was passing, HTTP ${result.statusCode ?? "?"})`,
+              );
               if (result.assertionsFailed.length > 0) {
-                for (const f of result.assertionsFailed) log(chalk.red(`      ✗ ${f}`));
+                for (const f of result.assertionsFailed)
+                  log(chalk.red(`      ✗ ${f}`));
               }
               if (result.error) log(chalk.red(`      Error: ${result.error}`));
             } else {
               // status changed between two non-passing states
-              log(`  [${now}] ${chalk.yellow("!")} ${chalk.bold(name)} — ${curr} (was ${prev})`);
+              log(
+                `  [${now}] ${chalk.yellow("!")} ${chalk.bold(name)} — ${curr} (was ${prev})`,
+              );
             }
             lastStatus.set(result.checkId, curr);
           } else if (!prev) {
@@ -4801,7 +7481,11 @@ apiCmd
 
         if (runCount === 1 && changed === 0) {
           const passing = results.filter((r) => r.status === "passed").length;
-          log(chalk.dim(`  [${now}] Initial run — ${passing}/${results.length} passing, watching for changes…`));
+          log(
+            chalk.dim(
+              `  [${now}] Initial run — ${passing}/${results.length} passing, watching for changes…`,
+            ),
+          );
         } else if (changed === 0 && runCount > 1) {
           // Silence — no changes
         }
@@ -4821,14 +7505,20 @@ apiCmd
       // Prevent process from exiting
       await new Promise(() => {});
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
 
 // --- Saved workflow subcommands ---
 
-const workflowCmd = program.command("workflow").description("Manage saved testing workflows");
+const workflowCmd = program
+  .command("workflow")
+  .description("Manage saved testing workflows");
 
 workflowCmd
   .command("create <name>")
@@ -4836,28 +7526,99 @@ workflowCmd
   .option("--project <id>", "Project ID")
   .option("-d, --description <text>", "Workflow description")
   .option("--scenario <ids>", "Comma-separated scenario IDs")
-  .option("--tag <tag>", "Scenario tag (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
+  .option(
+    "--tag <tag>",
+    "Scenario tag (repeatable)",
+    (val: string, acc: string[]) => {
+      acc.push(val);
+      return acc;
+    },
+    [] as string[],
+  )
   .option("--priority <level>", "Scenario priority")
   .option("--persona <ids>", "Comma-separated persona IDs")
   .option("--goal <prompt>", "Goal prompt for the agentic testing loop")
-  .option("--success <criteria>", "Success criteria (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
+  .option(
+    "--success <criteria>",
+    "Success criteria (repeatable)",
+    (val: string, acc: string[]) => {
+      acc.push(val);
+      return acc;
+    },
+    [] as string[],
+  )
   .option("--max-iterations <n>", "Goal-loop iteration cap", "10")
   .option("--target <target>", "Execution target: local or sandbox", "local")
-  .option("--sandbox-provider <provider>", "Sandbox provider: e2b, daytona, or modal")
+  .option(
+    "--sandbox-provider <provider>",
+    "Sandbox provider: e2b, daytona, modal, or kernel",
+  )
   .option("--sandbox-image <image>", "Sandbox image/template")
-  .option("--sandbox-remote-dir <path>", "Remote working directory for sandbox runs")
-  .option("--sandbox-cleanup <mode>", "Sandbox cleanup mode: delete, stop, or keep", "delete")
-  .option("--sandbox-sync <strategy>", "Sandbox upload sync strategy: rsync or archive", "rsync")
-  .option("--sandbox-setup-command <command>", "Shell command to run before testers in the sandbox")
-  .option("--sandbox-package <spec>", "Package spec to execute in the sandbox", "@hasna/testers")
-  .option("--sandbox-env <assignment>", "Sandbox env var; KEY forwards host KEY, KEY=value stores value (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
-  .option("--sandbox-env-optional <name>", "Optional sandbox env var; forwards host NAME only when set (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
-  .option("--sandbox-app-source <path>", "Local app source directory to upload into the sandbox")
-  .option("--sandbox-app-remote-dir <path>", "Remote app directory inside the sandbox (default: <sandbox-remote-dir>/app)")
-  .option("--sandbox-app-start-command <command>", "Shell command to start the app before testers runs")
-  .option("--sandbox-app-url <url>", "URL testers should target inside the sandbox after the app starts")
-  .option("--sandbox-app-wait-url <url>", "URL to poll before starting testers (defaults to --sandbox-app-url)")
-  .option("--sandbox-app-wait-timeout <ms>", "App readiness wait timeout in milliseconds")
+  .option(
+    "--sandbox-remote-dir <path>",
+    "Remote working directory for sandbox runs",
+  )
+  .option(
+    "--sandbox-cleanup <mode>",
+    "Sandbox cleanup mode: delete, stop, or keep",
+    "delete",
+  )
+  .option(
+    "--sandbox-sync <strategy>",
+    "Sandbox upload sync strategy: rsync or archive",
+    "rsync",
+  )
+  .option(
+    "--sandbox-setup-command <command>",
+    "Shell command to run before testers in the sandbox",
+  )
+  .option(
+    "--sandbox-package <spec>",
+    "Package spec to execute in the sandbox",
+    "@hasna/testers",
+  )
+  .option(
+    "--sandbox-env <assignment>",
+    "Sandbox env var; KEY forwards host KEY, KEY=value stores value (repeatable)",
+    (val: string, acc: string[]) => {
+      acc.push(val);
+      return acc;
+    },
+    [] as string[],
+  )
+  .option(
+    "--sandbox-env-optional <name>",
+    "Optional sandbox env var; forwards host NAME only when set (repeatable)",
+    (val: string, acc: string[]) => {
+      acc.push(val);
+      return acc;
+    },
+    [] as string[],
+  )
+  .option(
+    "--sandbox-app-source <path>",
+    "Local app source directory to upload into the sandbox",
+  )
+  .option(
+    "--sandbox-app-remote-dir <path>",
+    "Remote app directory inside the sandbox (default: <sandbox-remote-dir>/app)",
+  )
+  .option(
+    "--sandbox-app-start-command <command>",
+    "Shell command to start the app before testers runs",
+  )
+  .option(
+    "--sandbox-app-url <url>",
+    "URL testers should target inside the sandbox after the app starts",
+  )
+  .option(
+    "--sandbox-app-wait-url <url>",
+    "URL to poll before starting testers (defaults to --sandbox-app-url)",
+  )
+  .option(
+    "--sandbox-app-wait-timeout <ms>",
+    "App readiness wait timeout in milliseconds",
+  )
   .option("--e2b-template <name>", "Legacy alias for --sandbox-image")
   .option("--timeout <ms>", "Workflow timeout")
   .option("--json", "Output as JSON", false)
@@ -4868,19 +7629,33 @@ workflowCmd
         description: opts.description,
         projectId: opts.project ? resolveProject(opts.project) : undefined,
         scenarioFilter: {
-          scenarioIds: opts.scenario ? opts.scenario.split(",").map((id: string) => id.trim()).filter(Boolean) : undefined,
+          scenarioIds: opts.scenario
+            ? opts.scenario
+                .split(",")
+                .map((id: string) => id.trim())
+                .filter(Boolean)
+            : undefined,
           tags: opts.tag,
           priority: opts.priority,
         },
-        personaIds: opts.persona ? opts.persona.split(",").map((id: string) => id.trim()).filter(Boolean) : [],
-        goal: opts.goal ? {
-          prompt: opts.goal,
-          successCriteria: opts.success,
-          maxIterations: parseInt(opts.maxIterations, 10) || 10,
-        } : null,
+        personaIds: opts.persona
+          ? opts.persona
+              .split(",")
+              .map((id: string) => id.trim())
+              .filter(Boolean)
+          : [],
+        goal: opts.goal
+          ? {
+              prompt: opts.goal,
+              successCriteria: opts.success,
+              maxIterations: parseInt(opts.maxIterations, 10) || 10,
+            }
+          : null,
         execution: {
           target: opts.target,
-          provider: opts.sandboxProvider ?? (opts.target === "connector:e2b" ? "e2b" : undefined),
+          provider:
+            opts.sandboxProvider ??
+            (opts.target === "connector:e2b" ? "e2b" : undefined),
           sandboxImage: opts.sandboxImage ?? opts.e2bTemplate,
           sandboxRemoteDir: opts.sandboxRemoteDir,
           sandboxCleanup: opts.sandboxCleanup,
@@ -4893,14 +7668,25 @@ workflowCmd
           appStartCommand: opts.sandboxAppStartCommand,
           appUrl: opts.sandboxAppUrl,
           appWaitUrl: opts.sandboxAppWaitUrl,
-          appWaitTimeoutMs: opts.sandboxAppWaitTimeout ? parseInt(opts.sandboxAppWaitTimeout, 10) : undefined,
+          appWaitTimeoutMs: opts.sandboxAppWaitTimeout
+            ? parseInt(opts.sandboxAppWaitTimeout, 10)
+            : undefined,
           timeoutMs: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
         },
       });
       if (opts.json) log(JSON.stringify(workflow, null, 2));
-      else log(chalk.green(`Workflow saved: ${chalk.bold(workflow.id.slice(0, 8))} — ${workflow.name}`));
+      else
+        log(
+          chalk.green(
+            `Workflow saved: ${chalk.bold(workflow.id.slice(0, 8))} — ${workflow.name}`,
+          ),
+        );
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -4908,16 +7694,42 @@ workflowCmd
 workflowCmd
   .command("update <id>")
   .description("Update a saved testing workflow")
-  .option("--sandbox-env <assignment>", "Sandbox env var; KEY forwards host KEY, KEY=value stores value (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
-  .option("--sandbox-env-optional <name>", "Optional sandbox env var; forwards host NAME only when set (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
-  .option("--clear-sandbox-env", "Replace existing sandbox env vars instead of merging", false)
+  .option(
+    "--sandbox-env <assignment>",
+    "Sandbox env var; KEY forwards host KEY, KEY=value stores value (repeatable)",
+    (val: string, acc: string[]) => {
+      acc.push(val);
+      return acc;
+    },
+    [] as string[],
+  )
+  .option(
+    "--sandbox-env-optional <name>",
+    "Optional sandbox env var; forwards host NAME only when set (repeatable)",
+    (val: string, acc: string[]) => {
+      acc.push(val);
+      return acc;
+    },
+    [] as string[],
+  )
+  .option(
+    "--clear-sandbox-env",
+    "Replace existing sandbox env vars instead of merging",
+    false,
+  )
   .option("--json", "Output as JSON", false)
   .action((id: string, opts) => {
     try {
       const workflow = getTestingWorkflow(id);
-      if (!workflow) { logError(chalk.red(`Workflow not found: ${id}`)); process.exit(1); }
+      if (!workflow) {
+        logError(chalk.red(`Workflow not found: ${id}`));
+        process.exit(1);
+      }
 
-      const envPatch = parseSandboxEnv(opts.sandboxEnv, opts.sandboxEnvOptional);
+      const envPatch = parseSandboxEnv(
+        opts.sandboxEnv,
+        opts.sandboxEnvOptional,
+      );
       const execution = {
         ...workflow.execution,
         env: opts.clearSandboxEnv
@@ -4928,9 +7740,18 @@ workflowCmd
 
       const updated = updateTestingWorkflow(workflow.id, { execution });
       if (opts.json) log(JSON.stringify(updated, null, 2));
-      else log(chalk.green(`Workflow updated: ${chalk.bold(updated.id.slice(0, 8))} — ${updated.name}`));
+      else
+        log(
+          chalk.green(
+            `Workflow updated: ${chalk.bold(updated.id.slice(0, 8))} — ${updated.name}`,
+          ),
+        );
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -4946,16 +7767,27 @@ workflowCmd
       projectId: opts.project ? resolveProject(opts.project) : undefined,
       enabled: opts.all ? undefined : true,
     });
-    if (opts.json) { log(JSON.stringify(workflows, null, 2)); return; }
-    if (workflows.length === 0) { log(chalk.dim("\n  No workflows found.\n")); return; }
+    if (opts.json) {
+      log(JSON.stringify(workflows, null, 2));
+      return;
+    }
+    if (workflows.length === 0) {
+      log(chalk.dim("\n  No workflows found.\n"));
+      return;
+    }
     log("");
     log(chalk.bold("  Testing Workflows"));
     log("");
     for (const workflow of workflows) {
-      const target = workflow.execution.target === "sandbox"
-        ? chalk.cyan(`sandbox${workflow.execution.provider ? `:${workflow.execution.provider}` : ""}`)
-        : chalk.green("local");
-      log(`  ${chalk.dim(workflow.id.slice(0, 8))}  ${workflow.name}  ${target}  ${chalk.dim(workflow.personaIds.length ? `${workflow.personaIds.length} personas` : "no personas")}`);
+      const target =
+        workflow.execution.target === "sandbox"
+          ? chalk.cyan(
+              `sandbox${workflow.execution.provider ? `:${workflow.execution.provider}` : ""}`,
+            )
+          : chalk.green("local");
+      log(
+        `  ${chalk.dim(workflow.id.slice(0, 8))}  ${workflow.name}  ${target}  ${chalk.dim(workflow.personaIds.length ? `${workflow.personaIds.length} personas` : "no personas")}`,
+      );
     }
     log("");
   });
@@ -4966,15 +7798,23 @@ workflowCmd
   .option("--json", "Output as JSON", false)
   .action((id: string, opts) => {
     const workflow = getTestingWorkflow(id);
-    if (!workflow) { logError(chalk.red(`Workflow not found: ${id}`)); process.exit(1); }
-    if (opts.json) { log(JSON.stringify(workflow, null, 2)); return; }
+    if (!workflow) {
+      logError(chalk.red(`Workflow not found: ${id}`));
+      process.exit(1);
+    }
+    if (opts.json) {
+      log(JSON.stringify(workflow, null, 2));
+      return;
+    }
     log("");
     log(chalk.bold(`  Workflow: ${workflow.name}`));
     log(`  ID:       ${chalk.dim(workflow.id)}`);
     log(`  Project:  ${workflow.projectId ?? chalk.dim("global")}`);
     log(`  Target:   ${workflow.execution.target}`);
     log(`  Filter:   ${JSON.stringify(workflow.scenarioFilter)}`);
-    log(`  Personas: ${workflow.personaIds.length > 0 ? workflow.personaIds.join(", ") : chalk.dim("none")}`);
+    log(
+      `  Personas: ${workflow.personaIds.length > 0 ? workflow.personaIds.join(", ") : chalk.dim("none")}`,
+    );
     log(`  Goal:     ${workflow.goal?.prompt ?? chalk.dim("none")}`);
     log("");
   });
@@ -5006,7 +7846,11 @@ workflowCmd
       log(formatTerminal(output.run!, output.results));
       process.exit(getExitCode(output.run!));
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -5016,22 +7860,50 @@ workflowCmd
   .description("Run multiple saved sandbox workflows concurrently")
   .requiredOption("-u, --url <url>", "Target URL")
   .option("--project <id>", "Project ID")
-  .option("--tag <tag>", "Workflow scenario tag filter (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
-  .option("--all", "Include disabled workflows when selecting by project/tag", false)
+  .option(
+    "--tag <tag>",
+    "Workflow scenario tag filter (repeatable)",
+    (val: string, acc: string[]) => {
+      acc.push(val);
+      return acc;
+    },
+    [] as string[],
+  )
+  .option(
+    "--all",
+    "Include disabled workflows when selecting by project/tag",
+    false,
+  )
   .option("--workers <n>", "Concurrent sandboxes, 1-12 (default: 6)", "6")
   .option("--batch-size <n>", "Limit this run to a batch of selected workflows")
   .option("--batch <n>", "1-based batch number to run with --batch-size")
   .option("--offset <n>", "0-based selected-workflow offset for staged fanout")
-  .option("--all-batches", "Run all selected workflow batches sequentially with --batch-size", false)
+  .option(
+    "--all-batches",
+    "Run all selected workflow batches sequentially with --batch-size",
+    false,
+  )
   .option("--from-batch <n>", "First batch to run when using --all-batches")
   .option("--to-batch <n>", "Last batch to run when using --all-batches")
-  .option("--continue-on-failure", "Continue later batches after a failed batch", false)
+  .option(
+    "--continue-on-failure",
+    "Continue later batches after a failed batch",
+    false,
+  )
   .option("-m, --model <model>", "AI model")
   .option("--headed", "Run headed", false)
   .option("--parallel <n>", "Parallel browser workers inside each sandbox")
   .option("--timeout <ms>", "Override workflow timeout")
-  .option("--validate-model-credentials", "Call model provider auth endpoints during fanout preflight", false)
-  .option("--dry-run", "Print resolved sandbox plans without spawning sandboxes", false)
+  .option(
+    "--validate-model-credentials",
+    "Call model provider auth endpoints during fanout preflight",
+    false,
+  )
+  .option(
+    "--dry-run",
+    "Print resolved sandbox plans without spawning sandboxes",
+    false,
+  )
   .option("--json", "Output as JSON", false)
   .option("-o, --output <file>", "Write the fanout JSON result to a file")
   .action(async (ids: string[] | undefined, opts) => {
@@ -5056,32 +7928,66 @@ workflowCmd
         validateModelCredentials: opts.validateModelCredentials,
         dryRun: opts.dryRun,
       };
-      const runAllBatches = opts.allBatches || opts.fromBatch !== undefined || opts.toBatch !== undefined;
+      const runAllBatches =
+        opts.allBatches ||
+        opts.fromBatch !== undefined ||
+        opts.toBatch !== undefined;
 
       if (runAllBatches) {
-        const { runWorkflowFanoutBatches } = await import("../lib/workflow-fanout.js");
+        const { runWorkflowFanoutBatches } =
+          await import("../lib/workflow-fanout.js");
         const result = await runWorkflowFanoutBatches(fanoutOptions);
         const outputPath = writeJsonOutputFile(opts.output, result);
 
         if (opts.json || opts.dryRun) {
           log(JSON.stringify(result, null, 2));
         } else {
-          if (outputPath) log(chalk.green(`Fanout result written to ${outputPath}`));
-          const status = result.status === "passed" ? chalk.green("passed") : chalk.red("failed");
-          const stop = result.stoppedEarly ? chalk.yellow(" stopped early") : "";
-          log(chalk.bold(`Sandbox workflow fanout batches ${status}: ${result.passed}/${result.total} passed across ${result.batches.length} batch(es)${stop}`));
-          log(chalk.dim(`Selected ${result.matched} workflow(s), batch size ${result.batchSize}, running batch ${result.batchStart}-${result.batchEnd}/${result.totalBatches} with ${result.workers} worker(s).`));
+          if (outputPath)
+            log(chalk.green(`Fanout result written to ${outputPath}`));
+          const status =
+            result.status === "passed"
+              ? chalk.green("passed")
+              : chalk.red("failed");
+          const stop = result.stoppedEarly
+            ? chalk.yellow(" stopped early")
+            : "";
+          log(
+            chalk.bold(
+              `Sandbox workflow fanout batches ${status}: ${result.passed}/${result.total} passed across ${result.batches.length} batch(es)${stop}`,
+            ),
+          );
+          log(
+            chalk.dim(
+              `Selected ${result.matched} workflow(s), batch size ${result.batchSize}, running batch ${result.batchStart}-${result.batchEnd}/${result.totalBatches} with ${result.workers} worker(s).`,
+            ),
+          );
           for (const batch of result.batches) {
-            const batchStatus = batch.status === "passed" ? chalk.green(batch.status) : batch.status === "dry-run" ? chalk.yellow(batch.status) : chalk.red(batch.status);
+            const batchStatus =
+              batch.status === "passed"
+                ? chalk.green(batch.status)
+                : batch.status === "dry-run"
+                  ? chalk.yellow(batch.status)
+                  : chalk.red(batch.status);
             const batchNumber = batch.selection.batch ?? "?";
-            log(`  ${batchStatus}  batch ${batchNumber}/${batch.selection.totalBatches ?? result.totalBatches}: ${batch.passed}/${batch.total} passed`);
-            const failedItems = batch.items.filter((item) => item.status === "failed").slice(0, 5);
+            log(
+              `  ${batchStatus}  batch ${batchNumber}/${batch.selection.totalBatches ?? result.totalBatches}: ${batch.passed}/${batch.total} passed`,
+            );
+            const failedItems = batch.items
+              .filter((item) => item.status === "failed")
+              .slice(0, 5);
             for (const item of failedItems) {
               const error = item.error ? chalk.dim(` ${item.error}`) : "";
               log(`    ${chalk.red("failed")}  ${item.workflowName}${error}`);
             }
-            if (batch.items.filter((item) => item.status === "failed").length > failedItems.length) {
-              log(chalk.dim(`    ... ${batch.items.filter((item) => item.status === "failed").length - failedItems.length} more failure(s)`));
+            if (
+              batch.items.filter((item) => item.status === "failed").length >
+              failedItems.length
+            ) {
+              log(
+                chalk.dim(
+                  `    ... ${batch.items.filter((item) => item.status === "failed").length - failedItems.length} more failure(s)`,
+                ),
+              );
             }
           }
         }
@@ -5097,12 +8003,20 @@ workflowCmd
       if (opts.json || opts.dryRun) {
         log(JSON.stringify(result, null, 2));
       } else {
-        if (outputPath) log(chalk.green(`Fanout result written to ${outputPath}`));
+        if (outputPath)
+          log(chalk.green(`Fanout result written to ${outputPath}`));
         const preflightChecks = result.preflight?.checks ?? [];
-        const failedRequiredChecks = preflightChecks.filter((check) => !check.ok && check.required);
-        const warnings = preflightChecks.filter((check) => !check.ok && !check.required);
+        const failedRequiredChecks = preflightChecks.filter(
+          (check) => !check.ok && check.required,
+        );
+        const warnings = preflightChecks.filter(
+          (check) => !check.ok && !check.required,
+        );
         if (failedRequiredChecks.length > 0 || warnings.length > 0) {
-          const label = failedRequiredChecks.length > 0 ? chalk.red("failed") : chalk.yellow("warnings");
+          const label =
+            failedRequiredChecks.length > 0
+              ? chalk.red("failed")
+              : chalk.yellow("warnings");
           log(chalk.bold(`Preflight ${label}:`));
           for (const check of failedRequiredChecks) {
             log(`  ${chalk.red("failed")}  ${check.message}`);
@@ -5113,17 +8027,35 @@ workflowCmd
         }
 
         if (result.selection.matched !== result.total) {
-          const batch = result.selection.batch !== undefined && result.selection.totalBatches !== undefined
-            ? ` batch ${result.selection.batch}/${result.selection.totalBatches}`
-            : "";
-          log(chalk.dim(`Selected ${result.total}/${result.selection.matched} workflow(s) from offset ${result.selection.offset}${batch}.`));
+          const batch =
+            result.selection.batch !== undefined &&
+            result.selection.totalBatches !== undefined
+              ? ` batch ${result.selection.batch}/${result.selection.totalBatches}`
+              : "";
+          log(
+            chalk.dim(
+              `Selected ${result.total}/${result.selection.matched} workflow(s) from offset ${result.selection.offset}${batch}.`,
+            ),
+          );
         }
 
-        const status = result.status === "passed" ? chalk.green("passed") : chalk.red("failed");
-        log(chalk.bold(`Sandbox workflow fanout ${status}: ${result.passed}/${result.total} passed with ${result.workers} worker(s)`));
+        const status =
+          result.status === "passed"
+            ? chalk.green("passed")
+            : chalk.red("failed");
+        log(
+          chalk.bold(
+            `Sandbox workflow fanout ${status}: ${result.passed}/${result.total} passed with ${result.workers} worker(s)`,
+          ),
+        );
         for (const item of result.items) {
-          const itemStatus = item.status === "passed" ? chalk.green(item.status) : chalk.red(item.status);
-          const sandbox = item.sandboxId ? chalk.dim(` sandbox=${item.sandboxId.slice(0, 8)}`) : "";
+          const itemStatus =
+            item.status === "passed"
+              ? chalk.green(item.status)
+              : chalk.red(item.status);
+          const sandbox = item.sandboxId
+            ? chalk.dim(` sandbox=${item.sandboxId.slice(0, 8)}`)
+            : "";
           const error = item.error ? chalk.dim(` ${item.error}`) : "";
           log(`  ${itemStatus}  ${item.workflowName}${sandbox}${error}`);
         }
@@ -5131,14 +8063,20 @@ workflowCmd
 
       if (result.status === "failed") process.exit(1);
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
 
 workflowCmd
   .command("agent <id>")
-  .description("Run a saved workflow as a goal loop and ask the app AI to create open-todos next actions")
+  .description(
+    "Run a saved workflow as a goal loop and ask the app AI to create open-todos next actions",
+  )
   .requiredOption("-u, --url <url>", "Target URL")
   .option("-m, --model <model>", "AI SDK model ID for planning")
   .option("--headed", "Run headed", false)
@@ -5159,14 +8097,27 @@ workflowCmd
         log(JSON.stringify(result, null, 2));
         return;
       }
-      const status = result.status === "passed" ? chalk.green("passed") : chalk.red("failed");
-      log(chalk.bold(`Workflow goal ${status} after ${result.iterations} iteration${result.iterations === 1 ? "" : "s"}`));
+      const status =
+        result.status === "passed"
+          ? chalk.green("passed")
+          : chalk.red("failed");
+      log(
+        chalk.bold(
+          `Workflow goal ${status} after ${result.iterations} iteration${result.iterations === 1 ? "" : "s"}`,
+        ),
+      );
       for (const action of result.actions) {
-        log(`  - ${action.type}: ${action.title}${action.todoTaskId ? ` (${action.todoTaskId.slice(0, 8)})` : ""}`);
+        log(
+          `  - ${action.type}: ${action.title}${action.todoTaskId ? ` (${action.todoTaskId.slice(0, 8)})` : ""}`,
+        );
       }
       if (result.status === "failed") process.exit(1);
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -5176,11 +8127,16 @@ workflowCmd
   .description("Delete a saved workflow")
   .action((id: string) => {
     if (deleteTestingWorkflow(id)) log(chalk.green("Workflow deleted."));
-    else { logError(chalk.red("Workflow not found.")); process.exit(1); }
+    else {
+      logError(chalk.red("Workflow not found."));
+      process.exit(1);
+    }
   });
 
 // ─── testers persona ─────────────────────────────────────────────────────────
-const personaCmd = program.command("persona").description("Manage test personas");
+const personaCmd = program
+  .command("persona")
+  .description("Manage test personas");
 
 personaCmd
   .command("list")
@@ -5206,15 +8162,25 @@ personaCmd
       log("");
       log(chalk.bold("  Personas"));
       log("");
-      log(`  ${"ID".padEnd(10)} ${"Name".padEnd(22)} ${"Role".padEnd(22)} ${"Scope".padEnd(18)} Traits`);
-      log(`  ${"─".repeat(10)} ${"─".repeat(22)} ${"─".repeat(22)} ${"─".repeat(18)} ${"─".repeat(10)}`);
+      log(
+        `  ${"ID".padEnd(10)} ${"Name".padEnd(22)} ${"Role".padEnd(22)} ${"Scope".padEnd(18)} Traits`,
+      );
+      log(
+        `  ${"─".repeat(10)} ${"─".repeat(22)} ${"─".repeat(22)} ${"─".repeat(18)} ${"─".repeat(10)}`,
+      );
       for (const p of personas) {
         const scope = p.projectId ? chalk.dim(`project`) : chalk.blue("Global");
-        log(`  ${p.shortId.padEnd(10)} ${p.name.slice(0, 21).padEnd(22)} ${p.role.slice(0, 21).padEnd(22)} ${scope.toString().padEnd(18)} ${p.traits.length} traits`);
+        log(
+          `  ${p.shortId.padEnd(10)} ${p.name.slice(0, 21).padEnd(22)} ${p.role.slice(0, 21).padEnd(22)} ${scope.toString().padEnd(18)} ${p.traits.length} traits`,
+        );
       }
       log("");
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -5237,9 +8203,21 @@ personaCmd
     try {
       // Non-interactive mode: --name and --role provided
       if (opts.name && opts.role) {
-        const projectId = opts.global ? undefined : resolveProject(opts.project);
-        const traits = opts.traits ? opts.traits.split(",").map((t: string) => t.trim()).filter(Boolean) : [];
-        const goals = opts.goals ? opts.goals.split(",").map((g: string) => g.trim()).filter(Boolean) : [];
+        const projectId = opts.global
+          ? undefined
+          : resolveProject(opts.project);
+        const traits = opts.traits
+          ? opts.traits
+              .split(",")
+              .map((t: string) => t.trim())
+              .filter(Boolean)
+          : [];
+        const goals = opts.goals
+          ? opts.goals
+              .split(",")
+              .map((g: string) => g.trim())
+              .filter(Boolean)
+          : [];
         const persona = createPersona({
           name: opts.name.trim(),
           role: opts.role.trim(),
@@ -5253,28 +8231,60 @@ personaCmd
           authLoginPath: opts.authLoginPath,
         });
         log("");
-        log(chalk.green(`Created persona ${chalk.bold(persona.shortId)}: ${persona.name}`));
+        log(
+          chalk.green(
+            `Created persona ${chalk.bold(persona.shortId)}: ${persona.name}`,
+          ),
+        );
         log(chalk.dim(`  Role: ${persona.role}`));
         log(chalk.dim(`  Scope: ${persona.projectId ? "project" : "global"}`));
         return;
       }
 
       // Interactive mode
-      const rl = createInterface({ input: process.stdin, output: process.stdout });
-      const ask = (q: string): Promise<string> => new Promise((res) => rl.question(q, res));
+      const rl = createInterface({
+        input: process.stdin,
+        output: process.stdout,
+      });
+      const ask = (q: string): Promise<string> =>
+        new Promise((res) => rl.question(q, res));
       const name = await ask("Name: ");
-      if (!name.trim()) { logError(chalk.red("Name is required")); rl.close(); process.exit(1); }
-      const role = await ask("Role (e.g. first-time user, admin, power user): ");
-      if (!role.trim()) { logError(chalk.red("Role is required")); rl.close(); process.exit(1); }
+      if (!name.trim()) {
+        logError(chalk.red("Name is required"));
+        rl.close();
+        process.exit(1);
+      }
+      const role = await ask(
+        "Role (e.g. first-time user, admin, power user): ",
+      );
+      if (!role.trim()) {
+        logError(chalk.red("Role is required"));
+        rl.close();
+        process.exit(1);
+      }
       const description = await ask("Description (optional): ");
-      const instructions = await ask("Instructions — how should this persona behave? (optional): ");
-      const traitsInput = await ask("Traits (comma-separated, e.g. impatient,curious): ");
+      const instructions = await ask(
+        "Instructions — how should this persona behave? (optional): ",
+      );
+      const traitsInput = await ask(
+        "Traits (comma-separated, e.g. impatient,curious): ",
+      );
       const goalsInput = await ask("Goals (comma-separated): ");
       rl.close();
 
       const projectId = opts.global ? undefined : resolveProject(opts.project);
-      const traits = traitsInput.trim() ? traitsInput.split(",").map((t) => t.trim()).filter(Boolean) : [];
-      const goals = goalsInput.trim() ? goalsInput.split(",").map((g) => g.trim()).filter(Boolean) : [];
+      const traits = traitsInput.trim()
+        ? traitsInput
+            .split(",")
+            .map((t) => t.trim())
+            .filter(Boolean)
+        : [];
+      const goals = goalsInput.trim()
+        ? goalsInput
+            .split(",")
+            .map((g) => g.trim())
+            .filter(Boolean)
+        : [];
 
       const persona = createPersona({
         name: name.trim(),
@@ -5286,12 +8296,20 @@ personaCmd
         projectId,
       });
       log("");
-      log(chalk.green(`Created persona ${chalk.bold(persona.shortId)}: ${persona.name}`));
+      log(
+        chalk.green(
+          `Created persona ${chalk.bold(persona.shortId)}: ${persona.name}`,
+        ),
+      );
       log(chalk.dim(`  Role: ${persona.role}`));
       log(chalk.dim(`  Scope: ${persona.projectId ? "project" : "global"}`));
     } catch (error) {
       rl.close();
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -5302,24 +8320,39 @@ personaCmd
   .action((id: string) => {
     try {
       const persona = getPersona(id);
-      if (!persona) { logError(chalk.red(`Persona not found: ${id}`)); process.exit(1); }
+      if (!persona) {
+        logError(chalk.red(`Persona not found: ${id}`));
+        process.exit(1);
+      }
       log("");
       log(chalk.bold(`  Persona: ${persona.name}`));
       log(`  ID:           ${chalk.dim(persona.id)}`);
       log(`  Short ID:     ${persona.shortId}`);
       log(`  Role:         ${persona.role}`);
-      log(`  Scope:        ${persona.projectId ? `project (${persona.projectId})` : chalk.blue("Global")}`);
-      log(`  Enabled:      ${persona.enabled ? chalk.green("yes") : chalk.red("no")}`);
+      log(
+        `  Scope:        ${persona.projectId ? `project (${persona.projectId})` : chalk.blue("Global")}`,
+      );
+      log(
+        `  Enabled:      ${persona.enabled ? chalk.green("yes") : chalk.red("no")}`,
+      );
       log(`  Description:  ${persona.description || chalk.dim("none")}`);
       log(`  Instructions: ${persona.instructions || chalk.dim("none")}`);
-      log(`  Traits:       ${persona.traits.length > 0 ? persona.traits.join(", ") : chalk.dim("none")}`);
-      log(`  Goals:        ${persona.goals.length > 0 ? persona.goals.join(", ") : chalk.dim("none")}`);
+      log(
+        `  Traits:       ${persona.traits.length > 0 ? persona.traits.join(", ") : chalk.dim("none")}`,
+      );
+      log(
+        `  Goals:        ${persona.goals.length > 0 ? persona.goals.join(", ") : chalk.dim("none")}`,
+      );
       log(`  Version:      ${persona.version}`);
       log(`  Created:      ${persona.createdAt}`);
       log(`  Updated:      ${persona.updatedAt}`);
       log("");
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -5331,9 +8364,16 @@ personaCmd
   .action(async (id: string, opts) => {
     try {
       const persona = getPersona(id);
-      if (!persona) { logError(chalk.red(`Persona not found: ${id}`)); process.exit(1); }
+      if (!persona) {
+        logError(chalk.red(`Persona not found: ${id}`));
+        process.exit(1);
+      }
       if (!opts.yes) {
-        process.stdout.write(chalk.yellow(`Delete persona ${persona.shortId} "${persona.name}"? [y/N] `));
+        process.stdout.write(
+          chalk.yellow(
+            `Delete persona ${persona.shortId} "${persona.name}"? [y/N] `,
+          ),
+        );
         const answer = await new Promise<string>((resolve) => {
           let buf = "";
           process.stdin.setRawMode?.(true);
@@ -5346,7 +8386,10 @@ personaCmd
             resolve(buf);
           });
         });
-        if (answer !== "y" && answer !== "yes") { log(chalk.dim("Cancelled.")); return; }
+        if (answer !== "y" && answer !== "yes") {
+          log(chalk.dim("Cancelled."));
+          return;
+        }
       }
       const deleted = deletePersona(persona.id);
       if (deleted) {
@@ -5356,7 +8399,11 @@ personaCmd
         process.exit(1);
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -5367,13 +8414,32 @@ personaCmd
   .action(async (personaId: string, scenarioId: string) => {
     try {
       const persona = getPersona(personaId);
-      if (!persona) { logError(chalk.red(`Persona not found: ${personaId}`)); process.exit(1); }
-      const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
-      if (!scenario) { logError(chalk.red(`Scenario not found: ${scenarioId}`)); process.exit(1); }
-      updateScenario(scenario.id, { personaId: persona.id } as Parameters<typeof updateScenario>[1], scenario.version);
-      log(chalk.green(`Attached persona '${persona.name}' to scenario ${scenario.shortId}`));
+      if (!persona) {
+        logError(chalk.red(`Persona not found: ${personaId}`));
+        process.exit(1);
+      }
+      const scenario =
+        getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+      if (!scenario) {
+        logError(chalk.red(`Scenario not found: ${scenarioId}`));
+        process.exit(1);
+      }
+      updateScenario(
+        scenario.id,
+        { personaId: persona.id } as Parameters<typeof updateScenario>[1],
+        scenario.version,
+      );
+      log(
+        chalk.green(
+          `Attached persona '${persona.name}' to scenario ${scenario.shortId}`,
+        ),
+      );
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -5392,11 +8458,19 @@ personaCmd
         if (result.seeded > 0) {
           log(chalk.green(`Seeded ${result.seeded} default personas.`));
         } else {
-          log(chalk.dim(`Default personas already present (${result.skipped} skipped).`));
+          log(
+            chalk.dim(
+              `Default personas already present (${result.skipped} skipped).`,
+            ),
+          );
         }
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -5406,12 +8480,24 @@ personaCmd
   .description("Detach persona from a scenario")
   .action(async (scenarioId: string) => {
     try {
-      const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
-      if (!scenario) { logError(chalk.red(`Scenario not found: ${scenarioId}`)); process.exit(1); }
-      updateScenario(scenario.id, { personaId: null } as Parameters<typeof updateScenario>[1], scenario.version);
+      const scenario =
+        getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+      if (!scenario) {
+        logError(chalk.red(`Scenario not found: ${scenarioId}`));
+        process.exit(1);
+      }
+      updateScenario(
+        scenario.id,
+        { personaId: null } as Parameters<typeof updateScenario>[1],
+        scenario.version,
+      );
       log(chalk.green(`Detached persona from scenario ${scenario.shortId}`));
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -5420,7 +8506,9 @@ personaCmd
 
 personaCmd
   .command("diff <persona1> <persona2>")
-  .description("Run a scenario under 2 personas and show behavioral differences")
+  .description(
+    "Run a scenario under 2 personas and show behavioral differences",
+  )
   .requiredOption("--url <url>", "Base URL to run against")
   .option("--scenario <id>", "Scenario ID (runs all scenarios if omitted)")
   .option("--model <model>", "AI model to use")
@@ -5428,14 +8516,25 @@ personaCmd
   .action(async (persona1: string, persona2: string, opts) => {
     try {
       const p1 = getPersona(persona1);
-      if (!p1) { logError(chalk.red(`Persona not found: ${persona1}`)); process.exit(1); }
+      if (!p1) {
+        logError(chalk.red(`Persona not found: ${persona1}`));
+        process.exit(1);
+      }
       const p2 = getPersona(persona2);
-      if (!p2) { logError(chalk.red(`Persona not found: ${persona2}`)); process.exit(1); }
+      if (!p2) {
+        logError(chalk.red(`Persona not found: ${persona2}`));
+        process.exit(1);
+      }
 
-      log(chalk.dim(`Running scenarios under personas: ${p1.name} vs ${p2.name} ...`));
+      log(
+        chalk.dim(
+          `Running scenarios under personas: ${p1.name} vs ${p2.name} ...`,
+        ),
+      );
 
       const { runByFilter } = await import("../lib/runner.js");
-      const { diffPersonaResults, formatDivergenceTerminal } = await import("../lib/persona-diff.js");
+      const { diffPersonaResults, formatDivergenceTerminal } =
+        await import("../lib/persona-diff.js");
 
       // Run under persona 1
       const result1 = await runByFilter({
@@ -5456,7 +8555,10 @@ personaCmd
       const allResults = [...result1.results, ...result2.results];
       const scenarios = listScenarios({});
 
-      const divergences = diffPersonaResults(allResults, scenarios.map((s) => ({ id: s.id, name: s.name })));
+      const divergences = diffPersonaResults(
+        allResults,
+        scenarios.map((s) => ({ id: s.id, name: s.name })),
+      );
 
       if (opts.json) {
         log(JSON.stringify(divergences, null, 2));
@@ -5465,7 +8567,11 @@ personaCmd
 
       log(formatDivergenceTerminal(divergences));
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -5474,8 +8580,13 @@ personaCmd
 
 program
   .command("convert <file>")
-  .description("Convert a recorded browser session (rrweb/HAR) into a test scenario")
-  .option("--format <format>", "Session format: rrweb, har, or testers (auto-detected if omitted)")
+  .description(
+    "Convert a recorded browser session (rrweb/HAR) into a test scenario",
+  )
+  .option(
+    "--format <format>",
+    "Session format: rrweb, har, or testers (auto-detected if omitted)",
+  )
   .option("--name <name>", "Scenario name")
   .option("--model <model>", "AI model for step synthesis")
   .option("--save", "Save the scenario to the database", false)
@@ -5483,7 +8594,8 @@ program
   .option("--json", "Output as JSON", false)
   .action(async (file: string, opts) => {
     try {
-      const { convertSessionFile, detectSessionFormat } = await import("../lib/session-converter.js");
+      const { convertSessionFile, detectSessionFormat } =
+        await import("../lib/session-converter.js");
       const format = opts.format ?? detectSessionFormat(file);
       const scenario = await convertSessionFile(file, format, {
         name: opts.name,
@@ -5516,26 +8628,53 @@ program
           priority: "medium" as ScenarioPriority,
           projectId,
         });
-        log(chalk.green(`\nSaved as scenario ${chalk.bold(saved.shortId)}: ${saved.name}`));
+        log(
+          chalk.green(
+            `\nSaved as scenario ${chalk.bold(saved.shortId)}: ${saved.name}`,
+          ),
+        );
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
 
 // ─── testers eval ────────────────────────────────────────────────────────────
 
-const evalCmd = program.command("eval").description("Run AI evaluation pipelines (RAG quality, factual, faithfulness)");
+const evalCmd = program
+  .command("eval")
+  .description(
+    "Run AI evaluation pipelines (RAG quality, factual, faithfulness)",
+  );
 
 evalCmd
   .command("rag <url>")
-  .description("Run RAG quality evaluation — faithfulness, factual completeness, and hallucination detection")
-  .option("--endpoint <path>", "API endpoint path to query (default: /api/chat)", "/api/chat")
-  .option("--docs <path>", "Path to JSON file with RAG test cases [{question, sourceDocs, expectedFacts?, forbiddenClaims?}]")
+  .description(
+    "Run RAG quality evaluation — faithfulness, factual completeness, and hallucination detection",
+  )
+  .option(
+    "--endpoint <path>",
+    "API endpoint path to query (default: /api/chat)",
+    "/api/chat",
+  )
+  .option(
+    "--docs <path>",
+    "Path to JSON file with RAG test cases [{question, sourceDocs, expectedFacts?, forbiddenClaims?}]",
+  )
   .option("--method <method>", "HTTP method", "POST")
-  .option("--input-field <path>", "JSON path to inject question, e.g. messages[0].content")
-  .option("--output-field <path>", "JSON path to extract answer, e.g. choices[0].message.content")
+  .option(
+    "--input-field <path>",
+    "JSON path to inject question, e.g. messages[0].content",
+  )
+  .option(
+    "--output-field <path>",
+    "JSON path to extract answer, e.g. choices[0].message.content",
+  )
   .option("--json", "Output results as JSON", false)
   .action(async (url: string, opts) => {
     try {
@@ -5554,11 +8693,19 @@ evalCmd
       }
 
       if (ragTestCases.length === 0) {
-        logError(chalk.red("No RAG test cases provided. Use --docs <path.json> to load test cases."));
+        logError(
+          chalk.red(
+            "No RAG test cases provided. Use --docs <path.json> to load test cases.",
+          ),
+        );
         process.exit(1);
       }
 
-      log(chalk.dim(`Running RAG eval against ${url}${opts.endpoint} with ${ragTestCases.length} test case(s)...`));
+      log(
+        chalk.dim(
+          `Running RAG eval against ${url}${opts.endpoint} with ${ragTestCases.length} test case(s)...`,
+        ),
+      );
 
       // Create a temporary scenario and run
       const scenario = createScenario({
@@ -5581,51 +8728,85 @@ evalCmd
       const run = createRun({ scenarioId: scenario.id, model: "rag-eval" });
       await updateRun(run.id, { status: "running" });
 
-      const result = await runRagEval(scenario, { runId: run.id, baseUrl: url });
-      await updateRun(run.id, { status: result.status === "passed" ? "passed" : "failed" });
+      const result = await runRagEval(scenario, {
+        runId: run.id,
+        baseUrl: url,
+      });
+      await updateRun(run.id, {
+        status: result.status === "passed" ? "passed" : "failed",
+      });
 
       if (opts.json) {
         log(JSON.stringify(result, null, 2));
         return;
       }
 
-      const ragResult = result.metadata as import("../lib/eval-runner.js").RagEvalResult | null;
-      if (!ragResult) { logError(chalk.red("No RAG result data")); process.exit(1); }
+      const ragResult = result.metadata as
+        | import("../lib/eval-runner.js").RagEvalResult
+        | null;
+      if (!ragResult) {
+        logError(chalk.red("No RAG result data"));
+        process.exit(1);
+      }
 
       log("");
       log(chalk.bold("  RAG Quality Evaluation Results"));
       log(chalk.dim("  ─────────────────────────────────────────────────────"));
-      log(`  Total cases:          ${chalk.bold(String(ragResult.totalCases))}`);
-      log(`  Passed:               ${ragResult.passedCases === ragResult.totalCases ? chalk.green(String(ragResult.passedCases)) : chalk.red(String(ragResult.passedCases))}`);
-      log(`  Avg faithfulness:     ${chalk.cyan(`${(ragResult.avgFaithfulnessScore * 100).toFixed(0)}%`)}`);
-      log(`  Avg factual score:    ${chalk.cyan(`${(ragResult.avgFactualCompletenessScore * 100).toFixed(0)}%`)}`);
-      log(`  Forbidden violations: ${ragResult.totalForbiddenViolations > 0 ? chalk.red(String(ragResult.totalForbiddenViolations)) : chalk.green("0")}`);
+      log(
+        `  Total cases:          ${chalk.bold(String(ragResult.totalCases))}`,
+      );
+      log(
+        `  Passed:               ${ragResult.passedCases === ragResult.totalCases ? chalk.green(String(ragResult.passedCases)) : chalk.red(String(ragResult.passedCases))}`,
+      );
+      log(
+        `  Avg faithfulness:     ${chalk.cyan(`${(ragResult.avgFaithfulnessScore * 100).toFixed(0)}%`)}`,
+      );
+      log(
+        `  Avg factual score:    ${chalk.cyan(`${(ragResult.avgFactualCompletenessScore * 100).toFixed(0)}%`)}`,
+      );
+      log(
+        `  Forbidden violations: ${ragResult.totalForbiddenViolations > 0 ? chalk.red(String(ragResult.totalForbiddenViolations)) : chalk.green("0")}`,
+      );
       log(`  Duration:             ${ragResult.durationMs}ms`);
       log(`  Tokens used:          ${ragResult.tokensUsed}`);
       log("");
       for (const [i, c] of ragResult.caseResults.entries()) {
         const icon = c.passed ? chalk.green("✓") : chalk.red("✗");
         log(`  ${icon} Case ${i + 1}: ${c.question.slice(0, 60)}`);
-        if (c.error) { log(chalk.red(`      Error: ${c.error}`)); continue; }
-        log(`    Faithfulness: ${(c.faithfulnessScore * 100).toFixed(0)}%  Factual: ${(c.factualCompletenessScore * 100).toFixed(0)}%${c.forbiddenClaimViolations.length > 0 ? chalk.red(`  Violations: ${c.forbiddenClaimViolations.join(", ")}`) : ""}`);
+        if (c.error) {
+          log(chalk.red(`      Error: ${c.error}`));
+          continue;
+        }
+        log(
+          `    Faithfulness: ${(c.faithfulnessScore * 100).toFixed(0)}%  Factual: ${(c.factualCompletenessScore * 100).toFixed(0)}%${c.forbiddenClaimViolations.length > 0 ? chalk.red(`  Violations: ${c.forbiddenClaimViolations.join(", ")}`) : ""}`,
+        );
       }
       log("");
       if (!ragResult.passed) process.exit(1);
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
 
 // ─── testers golden ──────────────────────────────────────────────────────────
 
-const goldenCmd = program.command("golden").description("Manage golden answer checks for hallucination detection");
+const goldenCmd = program
+  .command("golden")
+  .description("Manage golden answer checks for hallucination detection");
 
 goldenCmd
   .command("add")
   .description("Add a golden answer check (interactive if no --question given)")
   .option("--project <id>", "Project ID")
-  .option("-q, --question <text>", "Question the endpoint should answer (non-interactive)")
+  .option(
+    "-q, --question <text>",
+    "Question the endpoint should answer (non-interactive)",
+  )
   .option("-a, --answer <text>", "Expected golden answer (non-interactive)")
   .option("-e, --endpoint <path>", "Endpoint path or URL (non-interactive)")
   .option("--judge-model <model>", "Model to use as judge")
@@ -5643,7 +8824,11 @@ goldenCmd
           judgeModel: opts.judgeModel || undefined,
           projectId,
         });
-        log(chalk.green(`\nCreated golden answer check ${chalk.bold(golden.shortId)}`));
+        log(
+          chalk.green(
+            `\nCreated golden answer check ${chalk.bold(golden.shortId)}`,
+          ),
+        );
         log(`  Endpoint: ${golden.endpoint}`);
         log(`  Question: ${golden.question.slice(0, 60)}`);
         return;
@@ -5651,18 +8836,37 @@ goldenCmd
 
       // Interactive mode
       const ask = (prompt: string): Promise<string> => {
-        const rl = createInterface({ input: process.stdin, output: process.stdout });
-        return new Promise((resolve) => rl.question(prompt, (ans) => { rl.close(); resolve(ans.trim()); }));
+        const rl = createInterface({
+          input: process.stdin,
+          output: process.stdout,
+        });
+        return new Promise((resolve) =>
+          rl.question(prompt, (ans) => {
+            rl.close();
+            resolve(ans.trim());
+          }),
+        );
       };
 
-      const question = await ask("Question (what this endpoint should answer): ");
-      if (!question) { logError(chalk.red("Question is required")); process.exit(1); }
+      const question = await ask(
+        "Question (what this endpoint should answer): ",
+      );
+      if (!question) {
+        logError(chalk.red("Question is required"));
+        process.exit(1);
+      }
 
       const goldenAnswer = await ask("Expected / golden answer: ");
-      if (!goldenAnswer) { logError(chalk.red("Golden answer is required")); process.exit(1); }
+      if (!goldenAnswer) {
+        logError(chalk.red("Golden answer is required"));
+        process.exit(1);
+      }
 
       const endpoint = await ask("Endpoint (path or full URL): ");
-      if (!endpoint) { logError(chalk.red("Endpoint is required")); process.exit(1); }
+      if (!endpoint) {
+        logError(chalk.red("Endpoint is required"));
+        process.exit(1);
+      }
 
       const judgeModel = await ask("Judge model (leave blank for auto): ");
       const projectId = resolveProject(opts.project);
@@ -5675,11 +8879,19 @@ goldenCmd
         projectId,
       });
 
-      log(chalk.green(`\nCreated golden answer check ${chalk.bold(golden.shortId)}`));
+      log(
+        chalk.green(
+          `\nCreated golden answer check ${chalk.bold(golden.shortId)}`,
+        ),
+      );
       log(`  Endpoint: ${golden.endpoint}`);
       log(`  Question: ${golden.question.slice(0, 60)}`);
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -5695,19 +8907,33 @@ goldenCmd
       const projectId = resolveProject(opts.project);
       const goldens = listGoldenAnswers({ projectId });
 
-      if (opts.json) { log(JSON.stringify(goldens, null, 2)); return; }
+      if (opts.json) {
+        log(JSON.stringify(goldens, null, 2));
+        return;
+      }
 
-      if (goldens.length === 0) { log(chalk.dim("No golden answer checks found.")); return; }
+      if (goldens.length === 0) {
+        log(chalk.dim("No golden answer checks found."));
+        return;
+      }
 
       log(chalk.bold(`\n  Golden Answer Checks (${goldens.length})`));
       log(chalk.dim("  ─────────────────────────────────────────────────────"));
       for (const g of goldens) {
-        const status = g.enabled ? chalk.green("enabled") : chalk.dim("disabled");
-        log(`  ${g.shortId}  ${status}  ${chalk.bold(g.endpoint)}  ${g.question.slice(0, 50)}`);
+        const status = g.enabled
+          ? chalk.green("enabled")
+          : chalk.dim("disabled");
+        log(
+          `  ${g.shortId}  ${status}  ${chalk.bold(g.endpoint)}  ${g.question.slice(0, 50)}`,
+        );
       }
       log("");
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -5731,21 +8957,40 @@ goldenCmd
         judgeModel: opts.model,
       });
 
-      if (opts.json) { log(JSON.stringify(result, null, 2)); return; }
+      if (opts.json) {
+        log(JSON.stringify(result, null, 2));
+        return;
+      }
 
       log(chalk.bold("\n  Golden Answer Monitor Results"));
       log(chalk.dim("  ─────────────────────────────────────────"));
       log(`  Checked: ${result.checked}`);
-      log(`  Passed:  ${result.passed === result.checked ? chalk.green(String(result.passed)) : chalk.yellow(String(result.passed))}`);
-      log(`  Drifted: ${result.drifted > 0 ? chalk.red(String(result.drifted)) : chalk.green("0")}`);
+      log(
+        `  Passed:  ${result.passed === result.checked ? chalk.green(String(result.passed)) : chalk.yellow(String(result.passed))}`,
+      );
+      log(
+        `  Drifted: ${result.drifted > 0 ? chalk.red(String(result.drifted)) : chalk.green("0")}`,
+      );
       log("");
       if (result.drifted > 0) {
-        log(chalk.yellow("  Warning: Drift detected in one or more golden checks."));
-        log(chalk.yellow("  This may indicate hallucination or response degradation."));
+        log(
+          chalk.yellow(
+            "  Warning: Drift detected in one or more golden checks.",
+          ),
+        );
+        log(
+          chalk.yellow(
+            "  This may indicate hallucination or response degradation.",
+          ),
+        );
         log("");
       }
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -5754,8 +8999,14 @@ goldenCmd
 
 program
   .command("run-many <url>")
-  .description("Run scenarios × personas matrix — test each scenario under multiple personas")
-  .option("--personas <ids>", "Comma-separated persona IDs, or 'all' for all global personas", "all")
+  .description(
+    "Run scenarios × personas matrix — test each scenario under multiple personas",
+  )
+  .option(
+    "--personas <ids>",
+    "Comma-separated persona IDs, or 'all' for all global personas",
+    "all",
+  )
   .option("--scenarios <ids>", "Comma-separated scenario IDs, or 'all'", "all")
   .option("--parallel <n>", "Parallel workers per run", "2")
   .option("--model <model>", "AI model to use")
@@ -5770,7 +9021,10 @@ program
       if (opts.personas === "all") {
         personas = listPersonas({ globalOnly: true, enabled: true });
       } else {
-        const ids = opts.personas.split(",").map((s: string) => s.trim()).filter(Boolean);
+        const ids = opts.personas
+          .split(",")
+          .map((s: string) => s.trim())
+          .filter(Boolean);
         personas = ids.map((id: string) => getPersona(id)).filter(Boolean);
       }
       if (personas.length === 0) {
@@ -5783,9 +9037,14 @@ program
       if (opts.scenarios === "all") {
         scenarios = listScenarios({ projectId, limit: 20 });
       } else {
-        const ids = opts.scenarios.split(",").map((s: string) => s.trim()).filter(Boolean);
+        const ids = opts.scenarios
+          .split(",")
+          .map((s: string) => s.trim())
+          .filter(Boolean);
         const all = listScenarios({ projectId });
-        scenarios = all.filter((s) => ids.includes(s.id) || ids.includes(s.shortId));
+        scenarios = all.filter(
+          (s) => ids.includes(s.id) || ids.includes(s.shortId),
+        );
       }
       if (scenarios.length === 0) {
         logError(chalk.red("No scenarios found."));
@@ -5793,10 +9052,18 @@ program
       }
 
       log("");
-      log(chalk.bold(`  Running ${scenarios.length} scenarios × ${personas.length} personas (${scenarios.length * personas.length} total runs)`));
+      log(
+        chalk.bold(
+          `  Running ${scenarios.length} scenarios × ${personas.length} personas (${scenarios.length * personas.length} total runs)`,
+        ),
+      );
       log("");
 
-      const matrixResults: Array<{ personaName: string; runId: string; run?: import("../types/index.js").Run }> = [];
+      const matrixResults: Array<{
+        personaName: string;
+        runId: string;
+        run?: import("../types/index.js").Run;
+      }> = [];
 
       for (const persona of personas) {
         if (!persona) continue;
@@ -5810,12 +9077,25 @@ program
           personaId: persona.id,
         });
         matrixResults.push({ personaName: persona.name, runId: run.id, run });
-        const status = run.status === "passed" ? chalk.green("PASS") : chalk.red("FAIL");
-        log(`  ${status}  ${persona.name.padEnd(24)} ${run.passed}/${run.total} passed`);
+        const status =
+          run.status === "passed" ? chalk.green("PASS") : chalk.red("FAIL");
+        log(
+          `  ${status}  ${persona.name.padEnd(24)} ${run.passed}/${run.total} passed`,
+        );
       }
 
       if (opts.json) {
-        log(JSON.stringify(matrixResults.map((r) => ({ personaName: r.personaName, runId: r.runId, run: r.run })), null, 2));
+        log(
+          JSON.stringify(
+            matrixResults.map((r) => ({
+              personaName: r.personaName,
+              runId: r.runId,
+              run: r.run,
+            })),
+            null,
+            2,
+          ),
+        );
       } else {
         log("");
         log(chalk.bold("  Summary"));
@@ -5823,14 +9103,24 @@ program
         for (const r of matrixResults) {
           if (r.run && r.run.failed > 0) allPassed = false;
         }
-        log(allPassed ? chalk.green("  All personas passed!") : chalk.yellow("  Some personas had failures — review per-persona results above."));
+        log(
+          allPassed
+            ? chalk.green("  All personas passed!")
+            : chalk.yellow(
+                "  Some personas had failures — review per-persona results above.",
+              ),
+        );
         log("");
       }
 
       const anyFailed = matrixResults.some((r) => r.run && r.run.failed > 0);
       process.exit(anyFailed ? 1 : 0);
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -5839,7 +9129,9 @@ program
 
 program
   .command("run-script <file>")
-  .description("Run a hybrid test script (.ts) that exports an array of HybridScenario objects")
+  .description(
+    "Run a hybrid test script (.ts) that exports an array of HybridScenario objects",
+  )
   .option("--url <url>", "Base URL to run against")
   .option("--json", "Output as JSON", false)
   .action(async (file: string, opts) => {
@@ -5850,7 +9142,11 @@ program
       const mod = await import(scriptPath);
       const scenarios = mod.scenarios ?? mod.default ?? [];
       if (!Array.isArray(scenarios) || scenarios.length === 0) {
-        logError(chalk.red(`No scenarios exported from ${file}. Export an array as 'export const scenarios = [...]'`));
+        logError(
+          chalk.red(
+            `No scenarios exported from ${file}. Export an array as 'export const scenarios = [...]'`,
+          ),
+        );
         process.exit(1);
       }
       const results = [];
@@ -5858,8 +9154,11 @@ program
         log(chalk.dim(`Running: ${scenario.name} ...`));
         const result = await runHybridScenario(scenario, { baseUrl: opts.url });
         results.push(result);
-        const icon = result.status === "passed" ? chalk.green("PASS") : chalk.red("FAIL");
-        log(`${icon}  ${result.name ?? scenario.name} (${result.durationMs}ms)`);
+        const icon =
+          result.status === "passed" ? chalk.green("PASS") : chalk.red("FAIL");
+        log(
+          `${icon}  ${result.name ?? scenario.name} (${result.durationMs}ms)`,
+        );
         if (result.status !== "passed" && result.error) {
           log(chalk.dim(`     ${result.error}`));
         }
@@ -5870,10 +9169,18 @@ program
       const passed = results.filter((r) => r.status === "passed").length;
       const failed = results.length - passed;
       log("");
-      log(chalk.bold(`Results: ${passed}/${results.length} passed${failed > 0 ? `, ${failed} failed` : ""}`));
+      log(
+        chalk.bold(
+          `Results: ${passed}/${results.length} passed${failed > 0 ? `, ${failed} failed` : ""}`,
+        ),
+      );
       process.exit(failed > 0 ? 1 : 0);
     } catch (error) {
-      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(
+        chalk.red(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
       process.exit(1);
     }
   });
@@ -5882,7 +9189,10 @@ program
 program.hook("preAction", () => {
   const opts = program.opts();
   QUIET = opts.quiet === true;
-  NO_COLOR = opts.color === false || process.env["NO_COLOR"] !== undefined || process.env["FORCE_COLOR"] === "0";
+  NO_COLOR =
+    opts.color === false ||
+    process.env["NO_COLOR"] !== undefined ||
+    process.env["FORCE_COLOR"] === "0";
   if (NO_COLOR) {
     // Disable chalk colors globally
     process.env["FORCE_COLOR"] = "0";

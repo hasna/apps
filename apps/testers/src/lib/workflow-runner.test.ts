@@ -87,6 +87,25 @@ describe("workflow runner", () => {
     );
   });
 
+  test("uses unique default sandbox remote directories per workflow launch plan", () => {
+    const workflow = createTestingWorkflow({
+      name: "sandbox unique remote",
+      scenarioFilter: { scenarioIds: ["S1"] },
+      execution: { target: "sandbox", provider: "e2b" },
+    });
+
+    const first = buildWorkflowRunPlan(workflow, { url: "https://preview.example" });
+    const second = buildWorkflowRunPlan(workflow, { url: "https://preview.example" });
+    const prefix = `/tmp/testers-workflow-${workflow.id.slice(0, 8)}-`;
+
+    expect(first.sandbox?.remoteDir).toStartWith(prefix);
+    expect(second.sandbox?.remoteDir).toStartWith(prefix);
+    expect(first.sandbox?.remoteDir).toMatch(/-[0-9a-f]{8}$/);
+    expect(second.sandbox?.remoteDir).toMatch(/-[0-9a-f]{8}$/);
+    expect(first.sandbox?.remoteDir).not.toBe(second.sandbox?.remoteDir);
+    expect(first.sandbox?.stateRemoteDir).toBe(`${first.sandbox?.remoteDir}/.testers-state`);
+  });
+
   test("creates sandbox database bundles under temp paths with quotes", () => {
     const originalTmpdir = process.env.TMPDIR;
     const parentDir = mkdtempSync(join(tmpdir(), "testers-quoted-tmp-"));
@@ -248,6 +267,9 @@ describe("workflow runner", () => {
     cleanupPaths.push(sourceDir);
     writeFileSync(join(sourceDir, "package.json"), JSON.stringify({ scripts: { dev: "next dev" } }));
     writeFileSync(join(sourceDir, ".env.local"), "SECRET_SHOULD_NOT_UPLOAD=1\n");
+    writeFileSync(join(sourceDir, ".npmrc"), "//registry.example/:_authToken=secret\n");
+    mkdirSync(join(sourceDir, ".aws"), { recursive: true });
+    writeFileSync(join(sourceDir, ".aws", "credentials"), "[default]\naws_secret_access_key=secret\n");
     mkdirSync(join(sourceDir, "src"), { recursive: true });
     writeFileSync(join(sourceDir, "src", "index.ts"), "export const ok = true;\n");
     mkdirSync(join(sourceDir, "node_modules", "skip"), { recursive: true });
@@ -295,6 +317,8 @@ describe("workflow runner", () => {
     expect(existsSync(join(bundle.localDir, ".testers-state", "testers.db"))).toBe(true);
     expect(readFileSync(join(bundle.localDir, "app", "src", "index.ts"), "utf8")).toContain("ok = true");
     expect(existsSync(join(bundle.localDir, "app", ".env.local"))).toBe(false);
+    expect(existsSync(join(bundle.localDir, "app", ".npmrc"))).toBe(false);
+    expect(existsSync(join(bundle.localDir, "app", ".aws"))).toBe(false);
     expect(existsSync(join(bundle.localDir, "app", "node_modules"))).toBe(false);
   });
 });

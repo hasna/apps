@@ -5,6 +5,8 @@ import { closeDatabase, resetDatabase } from "../db/database.js";
 import { createProject } from "../db/projects.js";
 import { createTestingWorkflow } from "../db/workflows.js";
 import {
+  assertWorkflowFanoutLeasePlan,
+  buildWorkflowFanoutLeasePlan,
   checkWorkflowFanoutReadiness,
   normalizeFanoutWorkerCount,
   resolveWorkflowFanoutBatch,
@@ -57,6 +59,27 @@ describe("workflow fanout", () => {
     expect(normalizeFanoutWorkerCount(12)).toBe(12);
     expect(() => normalizeFanoutWorkerCount(0)).toThrow("between 1 and 12");
     expect(() => normalizeFanoutWorkerCount(13)).toThrow("between 1 and 12");
+  });
+
+  test("models active and queued fanout leases", () => {
+    expect(buildWorkflowFanoutLeasePlan(5, 3)).toEqual({
+      selected: 5,
+      workers: 3,
+      activeLeases: 3,
+      queuedLeases: 2,
+      maxQueuedLeases: 12,
+      withinLimit: true,
+    });
+
+    const overloaded = buildWorkflowFanoutLeasePlan(31, 6);
+    expect(overloaded).toMatchObject({
+      activeLeases: 6,
+      queuedLeases: 25,
+      maxQueuedLeases: 24,
+      withinLimit: false,
+    });
+    expect(() => assertWorkflowFanoutLeasePlan(overloaded)).toThrow("max queued leases");
+    expect(buildWorkflowFanoutLeasePlan(31, 6, { maxQueuedLeases: 25 }).withinLimit).toBe(true);
   });
 
   test("resolves deterministic fanout batches and offsets", () => {
@@ -157,6 +180,33 @@ describe("workflow fanout", () => {
     expect(maxActive).toBeLessThanOrEqual(3);
   });
 
+  test("refuses oversized real fanout before preflight or worker launch", async () => {
+    const workflows = Array.from({ length: 31 }, (_, index) => createTestingWorkflow({
+      name: `workflow-${index + 1}`,
+      execution: { target: "sandbox", provider: "e2b" },
+    }));
+    let preflightCalls = 0;
+    let launched = 0;
+
+    await expect(runWorkflowFanout({
+      workflowIds: workflows.map((workflow) => workflow.id),
+      url: "https://preview.example",
+      workers: 6,
+    }, {
+      async preflight() {
+        preflightCalls++;
+        return { ok: true, checks: [] };
+      },
+      async runTestingWorkflow() {
+        launched++;
+        throw new Error("should not run");
+      },
+    })).rejects.toThrow("max queued leases");
+
+    expect(preflightCalls).toBe(0);
+    expect(launched).toBe(0);
+  });
+
   test("runs only the selected workflow fanout batch", async () => {
     const workflows = Array.from({ length: 5 }, (_, index) => createTestingWorkflow({
       name: `workflow-${index + 1}`,
@@ -190,6 +240,12 @@ describe("workflow fanout", () => {
 
     expect(result.status).toBe("dry-run");
     expect(result.total).toBe(2);
+    expect(result.leases).toMatchObject({
+      selected: 2,
+      activeLeases: 1,
+      queuedLeases: 1,
+      withinLimit: true,
+    });
     expect(result.items.map((item) => item.workflowName)).toEqual(["workflow-3", "workflow-4"]);
     expect(result.selection).toEqual({
       matched: 5,

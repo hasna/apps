@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { spawnSync } from "node:child_process";
 import { existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
@@ -231,5 +232,243 @@ export function createTodoTask(input: {
     return { created: false, skippedReason: error instanceof Error ? error.message : String(error) };
   } finally {
     db.close();
+  }
+}
+
+export const TESTERS_ISSUE_REPORT_SCHEMA_VERSION = "testers.issue_report.v1";
+
+export type TesterIssueSeverity = "low" | "medium" | "high" | "critical";
+export type TesterIssueKind =
+  | "assertion_failure"
+  | "runtime_error"
+  | "console_error"
+  | "network_error"
+  | "visual_regression"
+  | "accessibility"
+  | "performance"
+  | "broken_link"
+  | "security"
+  | "unknown";
+
+export interface TesterIssueReportV1 {
+  schema_version: typeof TESTERS_ISSUE_REPORT_SCHEMA_VERSION;
+  id?: string;
+  fingerprint?: string;
+  title: string;
+  summary?: string | null;
+  kind?: TesterIssueKind | string;
+  severity?: TesterIssueSeverity | string;
+  source?: {
+    tool?: string;
+    run_id?: string;
+    result_id?: string;
+    scenario_id?: string;
+    scenario_name?: string;
+    project_id?: string;
+    url?: string;
+    page_url?: string;
+    artifact_url?: string;
+    screenshot_url?: string;
+    commit?: string;
+    branch?: string;
+  };
+  target?: {
+    url?: string;
+    route?: string;
+    selector?: string;
+    component?: string;
+    browser?: string;
+    viewport?: string;
+  };
+  failure?: {
+    message?: string;
+    expected?: string;
+    actual?: string;
+    stack?: string;
+    reasoning?: string;
+    steps?: string[];
+  };
+  evidence?: {
+    logs?: string[];
+    screenshots?: Array<{ kind?: string; label?: string; path?: string; url?: string }>;
+    artifacts?: Array<{ kind?: string; label?: string; path?: string; url?: string }>;
+  };
+  labels?: string[];
+  metadata?: Record<string, unknown>;
+  occurred_at?: string;
+}
+
+export interface TodosIssueReportCliItem {
+  action?: "preview" | "matched" | "created" | "updated" | "regressed" | string;
+  fingerprint?: string;
+  report?: TesterIssueReportV1;
+  task?: { id?: string; short_id?: string | null; title?: string } | null;
+  warnings?: string[];
+}
+
+export interface ReportTesterIssueReportsResult {
+  total: number;
+  preview: number;
+  matched: number;
+  created: number;
+  updated: number;
+  regressed: number;
+  failed: number;
+  skipped: number;
+  dryRun: boolean;
+  taskIds: string[];
+  items: TodosIssueReportCliItem[];
+  error?: string;
+  stdout?: string;
+  stderr?: string;
+}
+
+export interface TodosCliRunInput {
+  command: string;
+  args: string[];
+  stdin: string;
+  env: NodeJS.ProcessEnv;
+}
+
+export interface TodosCliRunResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  error?: Error;
+}
+
+export type TodosCliRunner = (input: TodosCliRunInput) => TodosCliRunResult;
+
+export interface ReportTesterIssueReportsOptions {
+  reports: TesterIssueReportV1[];
+  projectId?: string;
+  taskListId?: string;
+  assign?: string;
+  defaultPriority?: ScenarioPriority;
+  apply?: boolean;
+  updateExisting?: boolean;
+  todosCli?: string;
+  runner?: TodosCliRunner;
+  env?: NodeJS.ProcessEnv;
+}
+
+function emptyReportResult(total = 0, overrides: Partial<ReportTesterIssueReportsResult> = {}): ReportTesterIssueReportsResult {
+  return {
+    total,
+    preview: 0,
+    matched: 0,
+    created: 0,
+    updated: 0,
+    regressed: 0,
+    failed: 0,
+    skipped: 0,
+    dryRun: false,
+    taskIds: [],
+    items: [],
+    ...overrides,
+  };
+}
+
+function defaultTodosCliRunner(input: TodosCliRunInput): TodosCliRunResult {
+  const result = spawnSync(input.command, input.args, {
+    input: input.stdin,
+    encoding: "utf8",
+    env: input.env,
+  });
+  return {
+    status: result.status,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+    error: result.error,
+  };
+}
+
+function parseActionSummary(items: TodosIssueReportCliItem[]): Pick<
+  ReportTesterIssueReportsResult,
+  "preview" | "matched" | "created" | "updated" | "regressed"
+> {
+  const summary = { preview: 0, matched: 0, created: 0, updated: 0, regressed: 0 };
+  for (const item of items) {
+    if (item.action === "preview") summary.preview++;
+    else if (item.action === "matched") summary.matched++;
+    else if (item.action === "created") summary.created++;
+    else if (item.action === "updated") summary.updated++;
+    else if (item.action === "regressed") summary.regressed++;
+  }
+  return summary;
+}
+
+export function reportTesterIssueReportsToTodos(
+  options: ReportTesterIssueReportsOptions,
+): ReportTesterIssueReportsResult {
+  const reports = options.reports.filter(Boolean);
+  if (reports.length === 0) return emptyReportResult(0);
+
+  const projectId = options.projectId ?? process.env["TESTERS_TODOS_PROJECT_ID"];
+  if (!projectId) {
+    return emptyReportResult(reports.length, {
+      skipped: reports.length,
+      error: "TESTERS_TODOS_PROJECT_ID is not set",
+    });
+  }
+
+  const args = [
+    "issues",
+    "report",
+    "--project",
+    projectId,
+    "--priority",
+    options.defaultPriority ?? "medium",
+    "--json",
+  ];
+  if (options.apply !== false) args.push("--apply");
+  if (options.taskListId) args.push("--list", options.taskListId);
+  if (options.assign) args.push("--assign", options.assign);
+  if (options.updateExisting === false) args.push("--no-update-existing");
+
+  const runner = options.runner ?? defaultTodosCliRunner;
+  const cliResult = runner({
+    command: options.todosCli ?? process.env["TESTERS_TODOS_CLI"] ?? "todos",
+    args,
+    stdin: JSON.stringify({ reports }),
+    env: options.env ?? process.env,
+  });
+
+  if (cliResult.error || cliResult.status !== 0) {
+    return emptyReportResult(reports.length, {
+      failed: reports.length,
+      skipped: reports.length,
+      error: cliResult.error?.message || cliResult.stderr || `todos exited with status ${cliResult.status}`,
+      stdout: cliResult.stdout,
+      stderr: cliResult.stderr,
+    });
+  }
+
+  try {
+    const parsed = JSON.parse(cliResult.stdout) as {
+      dry_run?: boolean;
+      results?: TodosIssueReportCliItem[];
+    };
+    const items = Array.isArray(parsed.results) ? parsed.results : [];
+    const counts = parseActionSummary(items);
+    return {
+      total: reports.length,
+      ...counts,
+      failed: 0,
+      skipped: Math.max(0, reports.length - items.length),
+      dryRun: Boolean(parsed.dry_run),
+      taskIds: items.map((item) => item.task?.id).filter((id): id is string => Boolean(id)),
+      items,
+      stdout: cliResult.stdout,
+      stderr: cliResult.stderr,
+    };
+  } catch (error) {
+    return emptyReportResult(reports.length, {
+      failed: reports.length,
+      skipped: reports.length,
+      error: error instanceof Error ? error.message : String(error),
+      stdout: cliResult.stdout,
+      stderr: cliResult.stderr,
+    });
   }
 }

@@ -639,7 +639,7 @@ server.tool(
     successCriteria: z.array(z.string()).optional().describe("Goal success criteria"),
     maxIterations: z.number().int().min(1).max(20).optional().describe("Max goal loop iterations"),
     executionTarget: z.enum(["local", "sandbox", "connector:e2b"]).optional().describe("Run locally or through the sandboxes SDK"),
-    sandboxProvider: z.string().optional().describe("Sandbox provider: e2b, daytona, or modal"),
+    sandboxProvider: z.string().optional().describe("Sandbox provider: e2b, daytona, modal, or kernel"),
     sandboxImage: z.string().optional().describe("Sandbox image/template"),
     sandboxRemoteDir: z.string().optional().describe("Remote working directory for sandbox runs"),
     sandboxCleanup: z.enum(["delete", "stop", "keep"]).optional().describe("Sandbox cleanup mode"),

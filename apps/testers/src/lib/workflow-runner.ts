@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix as pathPosix } from "node:path";
@@ -7,6 +8,7 @@ import { getTestingWorkflow } from "../db/workflows.js";
 import { getPersona } from "../db/personas.js";
 import { runByFilter, type RunOptions } from "./runner.js";
 import { parseCredentialEnvReference, resolveCredential } from "./secrets-resolver.js";
+import { buildSandboxAppUploadExcludes } from "./sandbox-app.js";
 import type {
   Result,
   Run,
@@ -106,19 +108,6 @@ export interface WorkflowRunnerDependencies {
   createSandboxesSDK?: () => WorkflowSandboxesRuntime | Promise<WorkflowSandboxesRuntime>;
   createDatabaseBundle?: (workflow: TestingWorkflow, plan: WorkflowRunPlan) => WorkflowDatabaseBundle;
 }
-
-const APP_SOURCE_EXCLUDES = [
-  "node_modules",
-  ".git",
-  "dist",
-  ".next",
-  ".turbo",
-  ".cache",
-  ".env",
-  ".env.*",
-  ".venv",
-  "__pycache__",
-];
 
 const MAX_CAPTURED_SANDBOX_OUTPUT = 120_000;
 
@@ -228,10 +217,11 @@ function copyAppSource(sourceDir: string, targetDir: string): void {
     throw new Error(`Sandbox app source directory does not exist or is not a directory: ${sourceDir}`);
   }
   mkdirSync(targetDir, { recursive: true });
+  const excludes = buildSandboxAppUploadExcludes();
   const result = spawnSync("rsync", [
     "-a",
     "--delete",
-    ...APP_SOURCE_EXCLUDES.flatMap((item) => ["--exclude", item]),
+    ...excludes.flatMap((item) => ["--exclude", item]),
     `${sourceDir.replace(/\/+$/, "")}/`,
     `${targetDir.replace(/\/+$/, "")}/`,
   ], { encoding: "utf8" });
@@ -253,7 +243,7 @@ function buildSandboxPlan(
   execution: WorkflowExecutionConfig,
   runOptions: RunOptions & { tags?: string[]; priority?: string; scenarioIds?: string[] },
 ): WorkflowSandboxPlan {
-  const remoteDir = execution.sandboxRemoteDir ?? `/tmp/testers-workflow-${workflow.id.slice(0, 8)}`;
+  const remoteDir = execution.sandboxRemoteDir ?? defaultWorkflowSandboxRemoteDir(workflow);
   const stateRemoteDir = `${remoteDir.replace(/\/+$/, "")}/.testers-state`;
   const appRemoteDir = execution.appSourceDir
     ? execution.appRemoteDir ?? `${remoteDir.replace(/\/+$/, "")}/app`
@@ -288,6 +278,10 @@ function buildSandboxPlan(
       packageSpec: execution.packageSpec ?? "@hasna/testers",
     }),
   };
+}
+
+function defaultWorkflowSandboxRemoteDir(workflow: TestingWorkflow): string {
+  return `/tmp/testers-workflow-${workflow.id.slice(0, 8)}-${randomBytes(4).toString("hex")}`;
 }
 
 function buildSandboxCommand(input: {

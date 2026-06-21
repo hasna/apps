@@ -6,7 +6,12 @@ import { scanInjection } from "./scanners/injection.js";
 import { scanPiiEndpoint } from "./scanners/pii-scanner.js";
 import { scanA11y } from "./scanners/a11y.js";
 import { upsertScanIssue, setScanIssueTodoTaskId } from "../db/scan-issues.js";
-import { connectToTodos } from "./todos-connector.js";
+import {
+  reportTesterIssueReportsToTodos,
+  TESTERS_ISSUE_REPORT_SCHEMA_VERSION,
+  type TesterIssueKind,
+  type TesterIssueReportV1,
+} from "./todos-connector.js";
 import type { ScanResult, ScanIssue } from "../types/index.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -136,49 +141,70 @@ export async function runHealthScan(options: HealthScanOptions): Promise<HealthS
 async function createTodoTasksForIssues(
   items: Array<{ issue: ScanIssue; persistedId: string }>,
   url: string,
-  _projectId?: string,
+  projectId?: string,
 ): Promise<void> {
   const todosProjectId = process.env["TESTERS_TODOS_PROJECT_ID"];
   if (!todosProjectId || items.length === 0) return;
 
-  let db: ReturnType<typeof connectToTodos> | null = null;
-  try {
-    db = connectToTodos();
-  } catch {
-    return;
-  }
+  const reports = items.map(({ issue, persistedId }) => scanIssueToTesterIssueReport(issue, persistedId, url, projectId));
+  const result = reportTesterIssueReportsToTodos({
+    reports,
+    projectId: todosProjectId,
+    defaultPriority: "medium",
+    apply: true,
+  });
 
-  try {
-    for (const { issue, persistedId } of items) {
-      const title = `BUG: [scan] ${issue.type.replace(/_/g, " ")}: ${issue.message.slice(0, 80)}`;
-      const id = crypto.randomUUID();
-      const now = new Date().toISOString();
-      const description = [
-        `Health scan detected a ${issue.type.replace(/_/g, " ")} issue.`,
-        ``,
-        `**URL:** ${url}`,
-        `**Page:** ${issue.pageUrl}`,
-        `**Severity:** ${issue.severity}`,
-        `**Message:** ${issue.message}`,
-        issue.detail ? `**Detail:**\n\`\`\`json\n${JSON.stringify(issue.detail, null, 2)}\n\`\`\`` : null,
-      ].filter(Boolean).join("\n");
-
-      try {
-        db.query(`
-          INSERT INTO tasks (id, short_id, title, description, status, priority, tags, project_id, version, created_at, updated_at)
-          VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, 1, ?, ?)
-        `).run(
-          id, `SCAN-${id.slice(0, 6)}`,
-          title, description, issue.severity,
-          JSON.stringify(["bug", "scan", issue.type, "auto-created"]),
-          todosProjectId, now, now,
-        );
-        setScanIssueTodoTaskId(persistedId, id);
-      } catch { /* skip duplicates */ }
+  for (const item of result.items) {
+    const persistedId = typeof item.report?.metadata?.["scan_issue_id"] === "string"
+      ? item.report.metadata["scan_issue_id"]
+      : null;
+    if (persistedId && item.task?.id) {
+      setScanIssueTodoTaskId(persistedId, item.task.id);
     }
-  } finally {
-    db.close();
   }
+}
+
+function scanKind(issueType: string): TesterIssueKind {
+  if (issueType.includes("console")) return "console_error";
+  if (issueType.includes("network")) return "network_error";
+  if (issueType.includes("link")) return "broken_link";
+  if (issueType.includes("a11y") || issueType.includes("accessibility")) return "accessibility";
+  if (issueType.includes("performance")) return "performance";
+  if (issueType.includes("injection") || issueType.includes("pii")) return "security";
+  return "unknown";
+}
+
+function scanIssueToTesterIssueReport(
+  issue: ScanIssue,
+  persistedId: string,
+  url: string,
+  projectId?: string,
+): TesterIssueReportV1 {
+  return {
+    schema_version: TESTERS_ISSUE_REPORT_SCHEMA_VERSION,
+    fingerprint: `scan:${persistedId}`,
+    title: `[scan] ${issue.type.replace(/_/g, " ")}: ${issue.message.slice(0, 100)}`,
+    summary: `Health scan detected a ${issue.type.replace(/_/g, " ")} issue.`,
+    kind: scanKind(issue.type),
+    severity: issue.severity,
+    source: {
+      tool: "testers",
+      project_id: projectId,
+      url,
+      page_url: issue.pageUrl,
+    },
+    target: { url: issue.pageUrl },
+    failure: {
+      message: issue.message,
+      reasoning: issue.detail ? JSON.stringify(issue.detail).slice(0, 1500) : undefined,
+    },
+    labels: ["scan", issue.type, "auto-created"],
+    metadata: {
+      scan_issue_id: persistedId,
+      scan_issue_type: issue.type,
+    },
+    occurred_at: new Date().toISOString(),
+  };
 }
 
 // ─── Conversations notification ───────────────────────────────────────────────

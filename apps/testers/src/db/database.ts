@@ -543,6 +543,134 @@ CREATE TABLE IF NOT EXISTS testing_workflows (
 CREATE INDEX IF NOT EXISTS idx_testing_workflows_project ON testing_workflows(project_id);
 CREATE INDEX IF NOT EXISTS idx_testing_workflows_enabled ON testing_workflows(enabled);
   `,
+
+  // Migration 34: App-agnostic execution model
+  `
+CREATE TABLE IF NOT EXISTS execution_subjects (
+  id TEXT PRIMARY KEY,
+  project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+  kind TEXT NOT NULL DEFAULT 'custom' CHECK(kind IN ('web_app','api','cli','repo','service','dataset','custom')),
+  name TEXT NOT NULL,
+  uri TEXT,
+  external_ref TEXT,
+  metadata TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS test_specs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+  subject_id TEXT REFERENCES execution_subjects(id) ON DELETE SET NULL,
+  legacy_scenario_id TEXT UNIQUE REFERENCES scenarios(id) ON DELETE SET NULL,
+  kind TEXT NOT NULL DEFAULT 'custom' CHECK(kind IN ('browser','api','eval','pipeline','agentic','manual','custom')),
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  objective TEXT,
+  steps TEXT NOT NULL DEFAULT '[]',
+  assertions TEXT NOT NULL DEFAULT '[]',
+  tags TEXT NOT NULL DEFAULT '[]',
+  priority TEXT NOT NULL DEFAULT 'medium' CHECK(priority IN ('low','medium','high','critical')),
+  config TEXT NOT NULL DEFAULT '{}',
+  metadata TEXT NOT NULL DEFAULT '{}',
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS test_goals (
+  id TEXT PRIMARY KEY,
+  project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+  subject_id TEXT REFERENCES execution_subjects(id) ON DELETE SET NULL,
+  spec_id TEXT REFERENCES test_specs(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  success_criteria TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'planned' CHECK(status IN ('planned','active','satisfied','failed','cancelled')),
+  metadata TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS loop_runs (
+  id TEXT PRIMARY KEY,
+  goal_id TEXT REFERENCES test_goals(id) ON DELETE SET NULL,
+  spec_id TEXT REFERENCES test_specs(id) ON DELETE SET NULL,
+  subject_id TEXT REFERENCES execution_subjects(id) ON DELETE SET NULL,
+  run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','running','succeeded','failed','cancelled','exhausted')),
+  iteration INTEGER NOT NULL DEFAULT 0,
+  max_iterations INTEGER,
+  started_at TEXT NOT NULL DEFAULT (datetime('now')),
+  finished_at TEXT,
+  result_summary TEXT,
+  metadata TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS run_attempts (
+  id TEXT PRIMARY KEY,
+  loop_run_id TEXT REFERENCES loop_runs(id) ON DELETE SET NULL,
+  run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+  spec_id TEXT REFERENCES test_specs(id) ON DELETE SET NULL,
+  subject_id TEXT REFERENCES execution_subjects(id) ON DELETE SET NULL,
+  legacy_result_id TEXT UNIQUE REFERENCES results(id) ON DELETE SET NULL,
+  attempt_number INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','passed','failed','error','skipped','cancelled','flaky')),
+  executor TEXT NOT NULL DEFAULT 'manual',
+  model TEXT,
+  started_at TEXT NOT NULL DEFAULT (datetime('now')),
+  finished_at TEXT,
+  duration_ms INTEGER,
+  summary TEXT,
+  error TEXT,
+  metadata TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS run_events (
+  id TEXT PRIMARY KEY,
+  attempt_id TEXT NOT NULL REFERENCES run_attempts(id) ON DELETE CASCADE,
+  run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+  loop_run_id TEXT REFERENCES loop_runs(id) ON DELETE SET NULL,
+  sequence INTEGER NOT NULL,
+  level TEXT NOT NULL DEFAULT 'info' CHECK(level IN ('debug','info','warn','error')),
+  type TEXT NOT NULL,
+  message TEXT,
+  data TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(attempt_id, sequence)
+);
+
+CREATE TABLE IF NOT EXISTS run_artifacts (
+  id TEXT PRIMARY KEY,
+  attempt_id TEXT NOT NULL REFERENCES run_attempts(id) ON DELETE CASCADE,
+  run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+  loop_run_id TEXT REFERENCES loop_runs(id) ON DELETE SET NULL,
+  legacy_screenshot_id TEXT REFERENCES screenshots(id) ON DELETE SET NULL,
+  kind TEXT NOT NULL DEFAULT 'file' CHECK(kind IN ('screenshot','har','log','trace','video','json','text','file','report','custom')),
+  name TEXT NOT NULL,
+  uri TEXT NOT NULL,
+  mime_type TEXT,
+  size_bytes INTEGER,
+  metadata TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_execution_subjects_project ON execution_subjects(project_id);
+CREATE INDEX IF NOT EXISTS idx_execution_subjects_kind ON execution_subjects(kind);
+CREATE INDEX IF NOT EXISTS idx_test_specs_project ON test_specs(project_id);
+CREATE INDEX IF NOT EXISTS idx_test_specs_subject ON test_specs(subject_id);
+CREATE INDEX IF NOT EXISTS idx_test_specs_legacy_scenario ON test_specs(legacy_scenario_id);
+CREATE INDEX IF NOT EXISTS idx_test_goals_status ON test_goals(status);
+CREATE INDEX IF NOT EXISTS idx_test_goals_subject ON test_goals(subject_id);
+CREATE INDEX IF NOT EXISTS idx_loop_runs_goal ON loop_runs(goal_id);
+CREATE INDEX IF NOT EXISTS idx_loop_runs_status ON loop_runs(status);
+CREATE INDEX IF NOT EXISTS idx_run_attempts_run ON run_attempts(run_id);
+CREATE INDEX IF NOT EXISTS idx_run_attempts_spec ON run_attempts(spec_id);
+CREATE INDEX IF NOT EXISTS idx_run_attempts_status ON run_attempts(status);
+CREATE INDEX IF NOT EXISTS idx_run_attempts_legacy_result ON run_attempts(legacy_result_id);
+CREATE INDEX IF NOT EXISTS idx_run_events_attempt ON run_events(attempt_id);
+CREATE INDEX IF NOT EXISTS idx_run_artifacts_attempt ON run_artifacts(attempt_id);
+  `,
 ];
 
 function applyMigrations(database: Database): void {
@@ -599,6 +727,13 @@ export function closeDatabase(): void {
 export function resetDatabase(): void {
   closeDatabase();
   const database = getDatabase();
+  database.exec("DELETE FROM run_artifacts");
+  database.exec("DELETE FROM run_events");
+  database.exec("DELETE FROM run_attempts");
+  database.exec("DELETE FROM loop_runs");
+  database.exec("DELETE FROM test_goals");
+  database.exec("DELETE FROM test_specs");
+  database.exec("DELETE FROM execution_subjects");
   database.exec("DELETE FROM screenshots");
   database.exec("DELETE FROM results");
   database.exec("DELETE FROM scenario_dependencies");

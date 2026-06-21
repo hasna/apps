@@ -1,5 +1,10 @@
 import type { Run, Result, Scenario } from "../types/index.js";
-import { connectToTodos } from "./todos-connector.js";
+import {
+  reportTesterIssueReportsToTodos,
+  TESTERS_ISSUE_REPORT_SCHEMA_VERSION,
+  type TesterIssueReportV1,
+  type TodosCliRunner,
+} from "./todos-connector.js";
 
 // ─── Todos Integration ────────────────────────────────────────────────────────
 
@@ -13,79 +18,64 @@ export async function createFailureTasks(
   run: Run,
   failedResults: Result[],
   scenarios: Scenario[],
+  options: { todosCliRunner?: TodosCliRunner; todosCli?: string } = {},
 ): Promise<{ created: number; skipped: number }> {
   if (failedResults.length === 0) return { created: 0, skipped: 0 };
 
   const projectId = process.env["TESTERS_TODOS_PROJECT_ID"];
   if (!projectId) return { created: 0, skipped: 0 };
 
-  let db: ReturnType<typeof connectToTodos> | null = null;
-  try {
-    db = connectToTodos({ readonly: false });
-  } catch {
-    return { created: 0, skipped: 0 };
-  }
-
   const scenarioMap = new Map(scenarios.map((s) => [s.id, s]));
-  let created = 0;
-  let skipped = 0;
+  const reports: TesterIssueReportV1[] = failedResults.map((result) => {
+    const scenario = scenarioMap.get(result.scenarioId);
+    return {
+      schema_version: TESTERS_ISSUE_REPORT_SCHEMA_VERSION,
+      title: `${scenario?.name ?? result.scenarioId} failed`,
+      summary: "Test failure detected by open-testers.",
+      kind: result.status === "error" ? "runtime_error" : "assertion_failure",
+      severity: scenario?.priority ?? "high",
+      source: {
+        tool: "testers",
+        run_id: run.id,
+        result_id: result.id,
+        scenario_id: result.scenarioId,
+        scenario_name: scenario?.name,
+        project_id: run.projectId ?? undefined,
+        url: run.url,
+      },
+      target: { url: run.url },
+      failure: {
+        message: result.error ?? undefined,
+        reasoning: result.reasoning ?? undefined,
+        steps: scenario?.steps,
+      },
+      evidence: {
+        artifacts: result.harPath ? [{ kind: "har", path: result.harPath }] : undefined,
+      },
+      labels: ["auto-created", ...(scenario?.tags ?? [])],
+      metadata: {
+        run_status: run.status,
+        result_status: result.status,
+        duration_ms: result.durationMs,
+        tokens_used: result.tokensUsed,
+      },
+      occurred_at: result.createdAt,
+    };
+  });
 
-  try {
-    for (const result of failedResults) {
-      const scenario = scenarioMap.get(result.scenarioId);
-      const title = `BUG: [testers] ${scenario?.name ?? result.scenarioId} failed`;
+  const reported = reportTesterIssueReportsToTodos({
+    reports,
+    projectId,
+    defaultPriority: "high",
+    apply: true,
+    runner: options.todosCliRunner,
+    todosCli: options.todosCli,
+  });
 
-      // Check for existing open task with same title to avoid duplicates
-      const existing = db
-        .query("SELECT id FROM tasks WHERE title = ? AND status NOT IN ('completed', 'cancelled') LIMIT 1")
-        .get(title) as { id: string } | null;
-
-      if (existing) {
-        skipped++;
-        continue;
-      }
-
-      const id = crypto.randomUUID();
-      const now = new Date().toISOString();
-      const description = [
-        `Test failure detected by open-testers.`,
-        ``,
-        `**Run:** ${run.id}`,
-        `**URL:** ${run.url}`,
-        `**Scenario:** ${scenario?.name ?? result.scenarioId}`,
-        `**Status:** ${result.status}`,
-        result.error ? `**Error:** ${result.error}` : null,
-        result.reasoning ? `**Reasoning:** ${result.reasoning.slice(0, 500)}` : null,
-        `**Duration:** ${result.durationMs ? `${(result.durationMs / 1000).toFixed(1)}s` : "N/A"}`,
-        `**Tokens:** ${result.tokensUsed ?? 0}`,
-      ]
-        .filter(Boolean)
-        .join("\n");
-
-      try {
-        db.query(`
-          INSERT INTO tasks (id, short_id, title, description, status, priority, tags, project_id, version, created_at, updated_at)
-          VALUES (?, ?, ?, ?, 'pending', 'high', ?, ?, 1, ?, ?)
-        `).run(
-          id,
-          `BUG-${id.slice(0, 6)}`,
-          title,
-          description,
-          JSON.stringify(["bug", "testers", "auto-created"]),
-          projectId,
-          now,
-          now,
-        );
-        created++;
-      } catch {
-        skipped++;
-      }
-    }
-  } finally {
-    db.close();
-  }
-
-  return { created, skipped };
+  return {
+    created: reported.created,
+    skipped: reported.skipped + reported.matched + reported.updated + reported.regressed + reported.preview + reported.failed,
+  };
 }
 
 // ─── Conversations Integration ────────────────────────────────────────────────

@@ -70,6 +70,62 @@ testers workflow fanout --project alumia --tag action-specific --workers 6 --bat
 
 Use `--action-workflow-grouping action` for one workflow per discovered action, `route` for route-specific workflows, or `area-kind` for broader workflows such as commerce buttons or admin API methods. Add the `--sandbox-app-*` flags when the sandbox should rsync, install, start, and test the app source instead of only testing an already-running URL.
 
+### App Sandbox URL
+
+Use `testers sandbox launch` when you want a long-lived remote app URL before running tests. It uploads the working tree with safe excludes (`.git`, `.env*`, `.npmrc`, `node_modules`, build output, private key files), resolves env values from host env or `@secrets:` references, starts the app in dev or production mode, waits for internal readiness, verifies the public routed URL, and prints the public URL.
+
+```bash
+export E2B_API_KEY=...
+export ANTHROPIC_API_KEY=...
+
+testers sandbox launch /path/to/app \
+  --provider e2b \
+  --mode dev \
+  --port 3000 \
+  --env ANTHROPIC_API_KEY \
+  --url-env APP_URL \
+  --url-env NEXT_PUBLIC_APP_URL \
+  --host-env NEXT_ALLOWED_DEV_ORIGINS \
+  --wait-url /health \
+  --ttl 2h
+
+testers run "$(testers sandbox launch /path/to/app --provider e2b --json | jq -r .publicUrl)"
+```
+
+For monorepos and database-backed apps, set a working directory and setup commands explicitly:
+
+```bash
+testers sandbox launch /path/to/alumia \
+  --provider e2b \
+  --image node-22-heavy \
+  --working-dir packages/web \
+  --mode dev \
+  --port 3325 \
+  --provider-env-file packages/web/.env.local \
+  --min-memory-mb 7500 \
+  --scan-required-env \
+  --generate-missing-secret-env \
+  --postgres \
+  --db-setup "pnpm run db:migrate:run" \
+  --db-setup "pnpm run db:seed" \
+  --env ANTHROPIC_API_KEY \
+  --url-env APP_URL \
+  --url-env NEXT_PUBLIC_APP_URL \
+  --url-env NEXT_PUBLIC_URL \
+  --host-env NEXT_ALLOWED_DEV_ORIGINS \
+  --url-env WEBAUTHN_ORIGIN \
+  --wait-url /api/v1/health \
+  --ttl 2h
+```
+
+Use `testers sandbox list`, `testers sandbox logs <id>`, and `testers sandbox stop <id>` to inspect and clean up launched app sandboxes. Providers that cannot expose a public port fail fast with a provider capability error. Sandbox commands also receive `TESTERS_PUBLIC_URL`, `TESTERS_PUBLIC_HOST`, and `TESTERS_INTERNAL_URL`; URL envs receive the full public origin, while host envs receive the bare public hostname.
+
+Pass `--scan-required-env` when a repo centralizes production env access through helpers such as `requireEnv("KEY")`. The launcher scans source files for those strongly required keys before upload, treats common public origin keys such as `APP_URL` and `NEXT_PUBLIC_APP_URL` as dynamic sandbox URL envs, and fails before creating a misleading URL when a non-secret value is missing. Add `--generate-missing-secret-env` to create random sandbox-only values for missing internal secret-like keys such as JWT/HMAC/signing/encryption secrets; external service API keys still need to be supplied with `--env`, `--env-file`, or a secret reference.
+
+For E2B CPU/RAM sizing, create or choose an E2B template with the required resources and pass it with `--image <template-alias-or-id>`. The current E2B sandbox create API makes memory a template setting, not a per-launch flag. Use `--min-memory-mb <mb>` to verify the created sandbox before upload/setup; this catches template/account-limit mismatches early instead of returning a URL that dies under load. When `--postgres` is enabled, `testers` uses the sandbox-local `DATABASE_URL` and `DATABASE_DIRECT_URL` so migration and seed commands cannot accidentally target a host or production database from an env file. After each database setup command, `testers` reapplies schema/table/function grants and grants non-system NOLOGIN roles held by the migration role to the sandbox PostgreSQL user; pass `--no-postgres-grant-created-roles` when you need strict role-membership modeling.
+
+For apps that cannot build inside the sandbox resource limit, build locally first, then pass `--include-build-output --build none`. This explicitly allows common artifact directories like `.next`, `dist`, `build`, and `out` through the upload filter while still excluding `.env*`, `.npmrc`, private keys, and `node_modules`. Next.js apps configured with `output: "standalone"` automatically start with `.next/standalone/server.js`; pass `--start` only when your app needs a custom production server command.
+
 ### Common Flags
 
 - `--json --output results.json` — write structured results to a file for downstream tooling.
@@ -111,10 +167,10 @@ Credential-bearing profile values can point at environment variables (`$APP_SUPP
 
 ### Exit Codes
 
-| Code | Meaning |
-|------|---------|
-| `0`  | All tests passed |
-| `1`  | One or more tests failed |
+| Code | Meaning                                                                           |
+| ---- | --------------------------------------------------------------------------------- |
+| `0`  | All tests passed                                                                  |
+| `1`  | One or more tests failed                                                          |
 | `2`  | Configuration error (missing API key, unreachable URL, overall-timeout hit, etc.) |
 
 ## GitHub Actions / PR Preview Testing
@@ -147,6 +203,7 @@ jobs:
 ```
 
 The `--github-comment` flag automatically:
+
 - reads the PR number from `GITHUB_REF` (or `GITHUB_PR_NUMBER` for custom workflows),
 - reads the repo from `GITHUB_REPOSITORY`,
 - uses `GITHUB_TOKEN` to post a Markdown summary with a pass/fail table.
