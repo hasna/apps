@@ -8,6 +8,7 @@ import { invalidateBootCache } from "../../session-boot.js";
 import { logInteraction } from "../../sessions-db.js";
 import { join } from "path";
 import { getShell } from "../../shell.js";
+import { expandHomePath } from "../../shell-quote.js";
 
 export { z } from "zod";
 
@@ -44,7 +45,7 @@ export function createHelpers(sessionId: string): ToolHelpers {
     return new Promise((resolve) => {
       const start = Date.now();
       const proc = spawn(getShell(), ["-c", actualCommand], {
-        cwd: cwd ?? process.cwd(),
+        cwd: expandHomePath(cwd ?? process.cwd()),
         stdio: ["ignore", "pipe", "pipe"],
       });
 
@@ -69,9 +70,11 @@ export function createHelpers(sessionId: string): ToolHelpers {
   }
 
   function resolvePath(p: string, cwd?: string): string {
-    if (!p) return cwd ?? process.cwd();
-    if (p.startsWith("/") || p.startsWith("~")) return p;
-    return join(cwd ?? process.cwd(), p);
+    const base = expandHomePath(cwd ?? process.cwd());
+    if (!p) return base;
+    const expandedPath = expandHomePath(p);
+    if (expandedPath.startsWith("/") || p.startsWith("~")) return expandedPath;
+    return join(base, expandedPath);
   }
 
   function logCall(tool: string, data: LogCallData) {
