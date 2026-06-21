@@ -76,7 +76,15 @@ export function normalizeHostname(input: string): string {
     throw new Error(`Invalid domain: ${input}`);
   }
   hostname = hostname.replace(/\.$/, "");
-  if (!/^[a-z0-9.-]+$/.test(hostname) || hostname.includes("..")) {
+  const labels = hostname.split(".");
+  const labelsAreValid = labels.every((label) => (
+    label.length >= 1 &&
+    label.length <= 63 &&
+    /^[a-z0-9-]+$/.test(label) &&
+    !label.startsWith("-") &&
+    !label.endsWith("-")
+  ));
+  if (hostname.length > 253 || !labelsAreValid) {
     throw new Error(`Invalid domain: ${input}`);
   }
   return hostname;
