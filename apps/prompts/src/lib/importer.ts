@@ -65,17 +65,57 @@ export function exportToJson(collection?: string): {
 //   <body>
 
 export function promptToMarkdown(prompt: Prompt): string {
-  const tags = prompt.tags.length > 0 ? `[${prompt.tags.join(", ")}]` : "[]"
-  const desc = prompt.description ? `\ndescription: ${prompt.description}` : ""
+  const tags = prompt.tags.length > 0
+    ? `[${prompt.tags.map((tag) => formatFrontmatterScalar(tag)).join(", ")}]`
+    : "[]"
+  const desc = prompt.description ? `\ndescription: ${formatFrontmatterScalar(prompt.description)}` : ""
   return `---
-title: ${prompt.title}
-slug: ${prompt.slug}
-collection: ${prompt.collection}
+title: ${formatFrontmatterScalar(prompt.title)}
+slug: ${formatFrontmatterScalar(prompt.slug)}
+collection: ${formatFrontmatterScalar(prompt.collection)}
 tags: ${tags}${desc}
 ---
 
 ${prompt.body}
 `
+}
+
+const SAFE_PLAIN_FRONTMATTER_SCALAR = /^[A-Za-z0-9][A-Za-z0-9 _./-]*$/
+const YAML_IMPLICIT_PLAIN_SCALAR = /^(?:~|null|true|false|yes|no|on|off|0b[0-1_]+|0x[0-9a-f_]+|[0-9][0-9_]*(?:\.[0-9_]*)?(?:e[-+]?[0-9_]+)?|\d{4}-\d{2}-\d{2})$/i
+
+function formatFrontmatterScalar(value: string): string {
+  if (!needsQuotedFrontmatterScalar(value)) return value
+  return `"${escapeDoubleQuotedFrontmatterScalar(value)}"`
+}
+
+function needsQuotedFrontmatterScalar(value: string): boolean {
+  return !SAFE_PLAIN_FRONTMATTER_SCALAR.test(value)
+    || YAML_IMPLICIT_PLAIN_SCALAR.test(value)
+}
+
+function escapeDoubleQuotedFrontmatterScalar(value: string): string {
+  let escaped = ""
+  for (const char of value) {
+    if (char === "\\") escaped += "\\\\"
+    else if (char === "\"") escaped += "\\\""
+    else if (char === "\0") escaped += "\\0"
+    else if (char === "\b") escaped += "\\b"
+    else if (char === "\t") escaped += "\\t"
+    else if (char === "\n") escaped += "\\n"
+    else if (char === "\f") escaped += "\\f"
+    else if (char === "\r") escaped += "\\r"
+    else {
+      const code = char.charCodeAt(0)
+      if (code === 0x2028 || code === 0x2029) {
+        escaped += `\\u${code.toString(16).toUpperCase()}`
+      } else {
+        escaped += code < 0x20 || (code >= 0x7F && code <= 0x9F)
+          ? `\\x${code.toString(16).toUpperCase().padStart(2, "0")}`
+          : char
+      }
+    }
+  }
+  return escaped
 }
 
 export function exportToMarkdownFiles(collection?: string): Array<{ filename: string; content: string }> {
@@ -146,11 +186,49 @@ function parseDoubleQuotedScalar(value: string): string {
     if (escaped === "n") parsed += "\n"
     else if (escaped === "r") parsed += "\r"
     else if (escaped === "t") parsed += "\t"
+    else if (escaped === "0") parsed += "\0"
+    else if (escaped === "b") parsed += "\b"
+    else if (escaped === "f") parsed += "\f"
+    else if (escaped === "e") parsed += "\x1B"
     else if (escaped === "\"") parsed += "\""
     else if (escaped === "\\") parsed += "\\"
+    else if (escaped === "x") {
+      const hex = parseHexEscape(value, i + 1, 2)
+      if (!hex) parsed += "\\x"
+      else {
+        parsed += hex.char
+        i += 2
+      }
+    }
+    else if (escaped === "u") {
+      const hex = parseHexEscape(value, i + 1, 4)
+      if (!hex) parsed += "\\u"
+      else {
+        parsed += hex.char
+        i += 4
+      }
+    }
+    else if (escaped === "U") {
+      const hex = parseHexEscape(value, i + 1, 8)
+      if (!hex) parsed += "\\U"
+      else {
+        parsed += hex.char
+        i += 8
+      }
+    }
     else parsed += `\\${escaped}`
   }
   return parsed
+}
+
+function parseHexEscape(value: string, start: number, length: number): { char: string } | null {
+  const hex = value.slice(start, start + length)
+  if (hex.length !== length || !/^[0-9a-fA-F]+$/.test(hex)) return null
+  try {
+    return { char: String.fromCodePoint(Number.parseInt(hex, 16)) }
+  } catch {
+    return null
+  }
 }
 
 function parseFrontmatterList(value: string): string[] {
