@@ -87,6 +87,12 @@ function guessMimeType(name: string): string {
 /** Maximum allowed message content size in bytes (64 KB). */
 export const MAX_MESSAGE_BYTES = 65536;
 
+function assertMessageSize(content: string): void {
+  if (Buffer.byteLength(content, "utf8") > MAX_MESSAGE_BYTES) {
+    throw new Error(`Message content exceeds maximum size of ${MAX_MESSAGE_BYTES} bytes (64 KB).`);
+  }
+}
+
 /** Per-agent rate limit: max messages per window. */
 const RATE_LIMIT_MAX = 60;
 const RATE_LIMIT_WINDOW_MS = 60_000;
@@ -111,9 +117,7 @@ function checkRateLimit(agentId: string): void {
 }
 
 export function sendMessage(opts: SendMessageOptions): Message {
-  if (Buffer.byteLength(opts.content, "utf8") > MAX_MESSAGE_BYTES) {
-    throw new Error(`Message content exceeds maximum size of ${MAX_MESSAGE_BYTES} bytes (64 KB).`);
-  }
+  assertMessageSize(opts.content);
 
   checkRateLimit(opts.from);
 
@@ -507,6 +511,8 @@ export function deleteMessage(id: number, agent: string): boolean {
 }
 
 export function editMessage(id: number, agent: string, newContent: string): Message | null {
+  assertMessageSize(newContent);
+
   const db = getDb();
   const stmt = db.prepare(
     `UPDATE messages SET content = ?, edited_at = strftime('%Y-%m-%dT%H:%M:%f', 'now') WHERE id = ? AND from_agent = ? RETURNING *`
