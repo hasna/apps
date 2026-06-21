@@ -3,8 +3,9 @@ import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { setupTestDb } from "../db/test-helpers.js";
+import { createAdvisory } from "../db/advisories.js";
 import { iocScanner } from "./ioc.js";
-import { ScannerType, Severity } from "../types/index.js";
+import { AttackType, Ecosystem, ScannerType, Severity } from "../types/index.js";
 
 describe("IOC scanner", () => {
   let tempDir: string;
@@ -114,6 +115,33 @@ describe("IOC scanner", () => {
     expect(bad).toBeDefined();
   });
 
+  test("detects known-bad scoped package in yarn.lock", async () => {
+    createAdvisory({
+      package_name: "@scope/malware",
+      ecosystem: Ecosystem.Npm,
+      affected_versions: ["1.2.3"],
+      safe_versions: ["1.2.4"],
+      attack_type: AttackType.MaliciousPackage,
+      severity: Severity.Critical,
+      title: "Scoped malware test advisory",
+      description: "Test advisory for scoped package IOC parsing",
+      source: "https://example.com/advisory",
+    });
+    writeFileSync(join(tempDir, "yarn.lock"), `
+# yarn lockfile v1
+"@scope/malware@1.2.3":
+  version "1.2.3"
+  resolved "https://registry.yarnpkg.com/@scope/malware/-/malware-1.2.3.tgz"
+`);
+
+    const findings = await iocScanner.scan(tempDir);
+    const bad = findings.find((f) =>
+      f.message.includes("COMPROMISED PACKAGE") && f.message.includes("@scope/malware@1.2.3")
+    );
+    expect(bad).toBeDefined();
+    expect(bad!.severity).toBe(Severity.Critical);
+  });
+
   test("detects known-bad package in package-lock.json v3", async () => {
     writeFileSync(join(tempDir, "package-lock.json"), JSON.stringify({
       lockfileVersion: 3,
@@ -125,6 +153,33 @@ describe("IOC scanner", () => {
     const findings = await iocScanner.scan(tempDir);
     const bad = findings.find((f) => f.message.includes("COMPROMISED PACKAGE") && f.message.includes("axios"));
     expect(bad).toBeDefined();
+  });
+
+  test("detects known-bad scoped package in pnpm-lock.yaml", async () => {
+    createAdvisory({
+      package_name: "@scope/malware",
+      ecosystem: Ecosystem.Npm,
+      affected_versions: ["1.2.3"],
+      safe_versions: ["1.2.4"],
+      attack_type: AttackType.MaliciousPackage,
+      severity: Severity.Critical,
+      title: "Scoped malware test advisory",
+      description: "Test advisory for scoped package IOC parsing",
+      source: "https://example.com/advisory",
+    });
+    writeFileSync(join(tempDir, "pnpm-lock.yaml"), `
+lockfileVersion: '6.0'
+packages:
+  /@scope/malware@1.2.3:
+    resolution: {integrity: sha512-abc}
+`);
+
+    const findings = await iocScanner.scan(tempDir);
+    const bad = findings.find((f) =>
+      f.message.includes("COMPROMISED PACKAGE") && f.message.includes("@scope/malware@1.2.3")
+    );
+    expect(bad).toBeDefined();
+    expect(bad!.severity).toBe(Severity.Critical);
   });
 
   test("detects suspicious postinstall script in node_modules", async () => {

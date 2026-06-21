@@ -90,15 +90,36 @@ function parsePackageLockJson(content: string): LockedDep[] {
   return deps;
 }
 
+function extractYarnPackageName(header: string): string | null {
+  const firstDescriptor = header
+    .replace(/:\s*$/, "")
+    .split(/,\s*/)[0]
+    .trim()
+    .replace(/^["']|["']$/g, "");
+
+  if (!firstDescriptor) return null;
+
+  if (firstDescriptor.startsWith("@")) {
+    const slashIndex = firstDescriptor.indexOf("/");
+    if (slashIndex === -1) return null;
+    const rangeIndex = firstDescriptor.indexOf("@", slashIndex + 1);
+    return rangeIndex === -1 ? null : firstDescriptor.slice(0, rangeIndex);
+  }
+
+  const rangeIndex = firstDescriptor.indexOf("@");
+  return rangeIndex <= 0 ? null : firstDescriptor.slice(0, rangeIndex);
+}
+
 function parseYarnLock(content: string): LockedDep[] {
   const deps: LockedDep[] = [];
   const blocks = content.split(/\n(?=\S)/);
   for (const block of blocks) {
-    const nameMatch = block.match(/^"?([^@\s]+)@/);
+    const header = block.split("\n", 1)[0]?.trim() ?? "";
+    const name = extractYarnPackageName(header);
     const versionMatch = block.match(/\n\s+version\s+"([^"]+)"/);
     const integrityMatch = block.match(/\n\s+integrity\s+(\S+)/);
-    if (nameMatch && versionMatch) {
-      deps.push({ name: nameMatch[1], version: versionMatch[1], integrity: integrityMatch?.[1] });
+    if (name && versionMatch) {
+      deps.push({ name, version: versionMatch[1], integrity: integrityMatch?.[1] });
     }
   }
   return deps;
@@ -106,10 +127,10 @@ function parseYarnLock(content: string): LockedDep[] {
 
 function parsePnpmLock(content: string): LockedDep[] {
   const deps: LockedDep[] = [];
-  const re = /['\/]([^@\s'\/]+)@([^:\s']+)/g;
+  const re = /(?:^|\n)\s*(?:["'])?\/?((?:@[^/\s'":]+\/)?[^@\s'":]+)@([^:\s'"]+)(?:["'])?:/g;
   let match;
   while ((match = re.exec(content)) !== null) {
-    deps.push({ name: match[1], version: match[2] });
+    deps.push({ name: match[1], version: match[2].split("(")[0] });
   }
   return deps;
 }

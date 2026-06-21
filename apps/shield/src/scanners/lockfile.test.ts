@@ -3,8 +3,9 @@ import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { setupTestDb } from "../db/test-helpers.js";
+import { createAdvisory } from "../db/advisories.js";
 import { lockfileScanner } from "./lockfile.js";
-import { ScannerType, Severity } from "../types/index.js";
+import { AttackType, Ecosystem, ScannerType, Severity } from "../types/index.js";
 
 describe("lockfile forensics scanner", () => {
   let tempDir: string;
@@ -142,6 +143,35 @@ describe("lockfile forensics scanner", () => {
     expect(compromised!.severity).toBe(Severity.Critical);
   });
 
+  test("detects compromised scoped package in yarn.lock", async () => {
+    createAdvisory({
+      package_name: "@scope/malware",
+      ecosystem: Ecosystem.Npm,
+      affected_versions: ["1.2.3"],
+      safe_versions: ["1.2.4"],
+      attack_type: AttackType.MaliciousPackage,
+      severity: Severity.Critical,
+      title: "Scoped malware test advisory",
+      description: "Test advisory for scoped package lockfile parsing",
+      source: "https://example.com/advisory",
+    });
+    writeFileSync(join(tempDir, "package.json"), JSON.stringify({ dependencies: { "@scope/malware": "1.2.3" } }));
+    writeFileSync(join(tempDir, "yarn.lock"), `
+# yarn lockfile v1
+"@scope/malware@1.2.3":
+  version "1.2.3"
+  resolved "https://registry.yarnpkg.com/@scope/malware/-/malware-1.2.3.tgz#abc"
+  integrity sha512-abc==
+`);
+
+    const findings = await lockfileScanner.scan(tempDir);
+    const compromised = findings.find((f) =>
+      f.rule_id.startsWith("lockfile-compromised") && f.message.includes("@scope/malware@1.2.3")
+    );
+    expect(compromised).toBeDefined();
+    expect(compromised!.severity).toBe(Severity.Critical);
+  });
+
   test("detects compromised version in pnpm-lock.yaml", async () => {
     writeFileSync(join(tempDir, "package.json"), JSON.stringify({ dependencies: { "axios": "1.14.1" } }));
     writeFileSync(join(tempDir, "pnpm-lock.yaml"), `
@@ -155,6 +185,34 @@ packages:
     const findings = await lockfileScanner.scan(tempDir);
     const compromised = findings.find((f) => f.rule_id.startsWith("lockfile-compromised") && f.message.includes("axios"));
     expect(compromised).toBeDefined();
+  });
+
+  test("detects compromised scoped package in pnpm-lock.yaml", async () => {
+    createAdvisory({
+      package_name: "@scope/malware",
+      ecosystem: Ecosystem.Npm,
+      affected_versions: ["1.2.3"],
+      safe_versions: ["1.2.4"],
+      attack_type: AttackType.MaliciousPackage,
+      severity: Severity.Critical,
+      title: "Scoped malware test advisory",
+      description: "Test advisory for scoped package lockfile parsing",
+      source: "https://example.com/advisory",
+    });
+    writeFileSync(join(tempDir, "package.json"), JSON.stringify({ dependencies: { "@scope/malware": "1.2.3" } }));
+    writeFileSync(join(tempDir, "pnpm-lock.yaml"), `
+lockfileVersion: '6.0'
+packages:
+  /@scope/malware@1.2.3:
+    resolution: {integrity: sha512-abc}
+`);
+
+    const findings = await lockfileScanner.scan(tempDir);
+    const compromised = findings.find((f) =>
+      f.rule_id.startsWith("lockfile-compromised") && f.message.includes("@scope/malware@1.2.3")
+    );
+    expect(compromised).toBeDefined();
+    expect(compromised!.severity).toBe(Severity.Critical);
   });
 
   test("detects compromised in package-lock.json v1/v2 format (dependencies key)", async () => {

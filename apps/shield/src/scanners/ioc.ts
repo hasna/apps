@@ -126,24 +126,47 @@ function parsePackageLockJson(filePath: string, content: string): ParsedDep[] {
   return deps;
 }
 
+function extractYarnPackageName(header: string): string | null {
+  const firstDescriptor = header
+    .replace(/:\s*$/, "")
+    .split(/,\s*/)[0]
+    .trim()
+    .replace(/^["']|["']$/g, "");
+
+  if (!firstDescriptor) return null;
+
+  if (firstDescriptor.startsWith("@")) {
+    const slashIndex = firstDescriptor.indexOf("/");
+    if (slashIndex === -1) return null;
+    const rangeIndex = firstDescriptor.indexOf("@", slashIndex + 1);
+    return rangeIndex === -1 ? null : firstDescriptor.slice(0, rangeIndex);
+  }
+
+  const rangeIndex = firstDescriptor.indexOf("@");
+  return rangeIndex <= 0 ? null : firstDescriptor.slice(0, rangeIndex);
+}
+
 function parseYarnLock(filePath: string, content: string): ParsedDep[] {
   const deps: ParsedDep[] = [];
-  // yarn.lock format: "name@range":\n  version "x.y.z"
-  const versionRe = /^"?([^@\s]+)@[^"]*"?:\s*\n\s+version\s+"([^"]+)"/gm;
-  let match;
-  while ((match = versionRe.exec(content)) !== null) {
-    deps.push({ name: match[1], version: match[2], sourceFile: filePath });
+  const blocks = content.split(/\n(?=\S)/);
+  for (const block of blocks) {
+    const header = block.split("\n", 1)[0]?.trim() ?? "";
+    const name = extractYarnPackageName(header);
+    const versionMatch = block.match(/\n\s+version\s+"([^"]+)"/);
+    if (name && versionMatch) {
+      deps.push({ name, version: versionMatch[1], sourceFile: filePath });
+    }
   }
   return deps;
 }
 
 function parsePnpmLock(filePath: string, content: string): ParsedDep[] {
   const deps: ParsedDep[] = [];
-  // pnpm-lock.yaml: /package@version: or 'package@version':
-  const re = /['\/]([^@\s'\/]+)@([^:\s']+)/g;
+  // pnpm-lock.yaml: /package@version:, /@scope/package@version:, or quoted forms.
+  const re = /(?:^|\n)\s*(?:["'])?\/?((?:@[^/\s'":]+\/)?[^@\s'":]+)@([^:\s'"]+)(?:["'])?:/g;
   let match;
   while ((match = re.exec(content)) !== null) {
-    deps.push({ name: match[1], version: match[2], sourceFile: filePath });
+    deps.push({ name: match[1], version: match[2].split("(")[0], sourceFile: filePath });
   }
   return deps;
 }
