@@ -18,6 +18,7 @@ export interface ExecResult {
   stderr: string;
   duration: number;
   rewritten?: string;
+  timedOut?: boolean;
 }
 
 export interface LogCallData {
@@ -44,27 +45,78 @@ export function createHelpers(sessionId: string): ToolHelpers {
     const actualCommand = rw.changed ? rw.rewritten : command;
     return new Promise((resolve) => {
       const start = Date.now();
+      const useProcessGroup = !!timeout && process.platform !== "win32";
       const proc = spawn(getShell(), ["-c", actualCommand], {
         cwd: expandHomePath(cwd ?? process.cwd()),
         stdio: ["ignore", "pipe", "pipe"],
+        detached: useProcessGroup,
       });
 
       let stdout = "";
       let stderr = "";
+      let timedOut = false;
+      let killTimer: ReturnType<typeof setTimeout> | null = null;
+
+      const killWindowsProcessTree = () => {
+        if (!proc.pid) return;
+        const killer = spawn("taskkill", ["/pid", String(proc.pid), "/t", "/f"], {
+          stdio: "ignore",
+          windowsHide: true,
+        });
+        const fallback = () => { try { proc.kill("SIGKILL"); } catch {} };
+        killer.on("error", fallback);
+        killer.on("exit", (code) => { if (code !== 0) fallback(); });
+      };
+
+      const killProcess = (signal: NodeJS.Signals) => {
+        if (!proc.pid) return;
+        if (process.platform === "win32") {
+          if (signal === "SIGKILL") killWindowsProcessTree();
+          else {
+            try { proc.kill(signal); } catch {}
+          }
+          return;
+        }
+        try {
+          if (useProcessGroup) process.kill(-proc.pid, signal);
+          else proc.kill(signal);
+        } catch {
+          try { proc.kill(signal); } catch {}
+        }
+      };
 
       proc.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
       proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
 
-      const timer = timeout ? setTimeout(() => { try { proc.kill("SIGTERM"); } catch {} }, timeout) : null;
+      const timer = timeout ? setTimeout(() => {
+        timedOut = true;
+        if (process.platform === "win32") {
+          killWindowsProcessTree();
+        } else {
+          killProcess("SIGTERM");
+          killTimer = setTimeout(() => killProcess("SIGKILL"), 250);
+        }
+      }, timeout) : null;
 
       proc.on("close", (code) => {
         if (timer) clearTimeout(timer);
+        if (killTimer) clearTimeout(killTimer);
+        if (timedOut) {
+          stderr += `${stderr.endsWith("\n") || stderr.length === 0 ? "" : "\n"}Command timed out after ${timeout}ms`;
+        }
         const cleanStdout = stripNoise(stdout).cleaned;
         const cleanStderr = stripNoise(stderr).cleaned;
         if (/\bgit\s+(commit|checkout|branch|merge|reset|push|pull|rebase|stash)\b/.test(actualCommand)) {
           invalidateBootCache();
         }
-        resolve({ exitCode: code ?? 0, stdout: cleanStdout, stderr: cleanStderr, duration: Date.now() - start, rewritten: rw.changed ? rw.rewritten : undefined });
+        resolve({
+          exitCode: timedOut ? 124 : code ?? 0,
+          stdout: cleanStdout,
+          stderr: cleanStderr,
+          duration: Date.now() - start,
+          rewritten: rw.changed ? rw.rewritten : undefined,
+          ...(timedOut ? { timedOut: true } : {}),
+        });
       });
     });
   }
