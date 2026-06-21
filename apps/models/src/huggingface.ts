@@ -10,6 +10,16 @@ import type { CatalogEntry, DownloadPlan, EntityKind, RemoteFileEntry, SearchInp
 
 const HF_ENDPOINT = process.env["HF_ENDPOINT"] || "https://huggingface.co";
 
+class HuggingFaceApiError extends Error {
+  readonly status: number;
+
+  constructor(response: Response, body: string) {
+    super(`Hugging Face request failed ${response.status} ${response.statusText}: ${body.slice(0, 300)}`);
+    this.name = "HuggingFaceApiError";
+    this.status = response.status;
+  }
+}
+
 function apiBase(): string {
   return HF_ENDPOINT.replace(/\/+$/, "");
 }
@@ -29,7 +39,7 @@ async function hfJson<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw new Error(`Hugging Face request failed ${response.status} ${response.statusText}: ${text.slice(0, 300)}`);
+    throw new HuggingFaceApiError(response, text);
   }
   return response.json() as Promise<T>;
 }
@@ -191,12 +201,16 @@ export async function getHuggingFaceInfo(refOrInput: ProviderRef | string, defau
 
 export async function listHuggingFaceFiles(refOrInput: ProviderRef | string, defaultKind: EntityKind = "model"): Promise<RemoteFileEntry[]> {
   const ref = typeof refOrInput === "string" ? parseProviderRef(refOrInput, defaultKind) : refOrInput;
-  const treePath = `/api/${apiKind(ref.entityKind)}/${encodeRepoId(ref.repoId)}/tree/${encodeURIComponent(ref.revision)}?recursive=1&expand=1`;
+  const revision = ref.revision || "main";
+  const treePath = `/api/${apiKind(ref.entityKind)}/${encodeRepoId(ref.repoId)}/tree/${encodeURIComponent(revision)}?recursive=1&expand=1`;
   try {
     const raw = await hfJson<Record<string, unknown>[]>(treePath);
     return raw.map((entry) => normalizeTreeFile(entry, ref)).filter((entry): entry is RemoteFileEntry => Boolean(entry));
-  } catch {
-    const info = await hfJson<Record<string, unknown>>(`/api/${apiKind(ref.entityKind)}/${encodeRepoId(ref.repoId)}`);
+  } catch (error) {
+    if (!(error instanceof HuggingFaceApiError) || error.status !== 404) throw error;
+    const info = await hfJson<Record<string, unknown>>(
+      `/api/${apiKind(ref.entityKind)}/${encodeRepoId(ref.repoId)}/revision/${encodeURIComponent(revision)}`,
+    );
     const siblings = Array.isArray(info.siblings) ? info.siblings as Record<string, unknown>[] : [];
     return siblings.map((entry) => normalizeSibling(entry, ref)).filter((entry): entry is RemoteFileEntry => Boolean(entry));
   }
