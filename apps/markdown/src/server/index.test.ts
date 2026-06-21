@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseServerCliArgs, getServerHelpText } from "./index.js";
+import { parseServerCliArgs, getServerHelpText, resolveServerPort } from "./index.js";
 
 describe("server CLI flags", () => {
   test("prints help and exits when --help is used", () => {
@@ -34,9 +34,31 @@ describe("server CLI flags", () => {
     expect(parsed.port).toBe(9090);
   });
 
+  test("resolves default server port", () => {
+    expect(resolveServerPort([], {})).toBe(7070);
+  });
+
+  test("resolves OMP_PORT when CLI port is omitted", () => {
+    expect(resolveServerPort([], { OMP_PORT: "9091" })).toBe(9091);
+  });
+
+  test("CLI port takes precedence over OMP_PORT", () => {
+    expect(resolveServerPort(["--port", "8080"], { OMP_PORT: "9091" })).toBe(8080);
+  });
+
   test("throws on invalid port", () => {
     expect(() => parseServerCliArgs(["--port", "abc"]))
       .toThrow("Invalid port: abc");
+  });
+
+  test("throws on invalid OMP_PORT", () => {
+    expect(() => resolveServerPort([], { OMP_PORT: "123abc" }))
+      .toThrow("Invalid port: 123abc");
+  });
+
+  test("throws on empty OMP_PORT", () => {
+    expect(() => resolveServerPort([], { OMP_PORT: "" }))
+      .toThrow("Invalid port:");
   });
 
   test("throws on missing port value", () => {

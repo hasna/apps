@@ -5,7 +5,9 @@ import { parseFromFile, parseFromString, validate, compile, run } from "../lib/p
 import { validateAndLint } from "../validator/validate.js";
 
 const VERSION = "0.1.3";
-const DEFAULT_PORT = parseInt(process.env.OMP_PORT ?? "7070", 10);
+export const DEFAULT_PORT = 7070;
+
+type PortEnv = Record<string, string | undefined>;
 
 export function getServerHelpText(): string {
   return [
@@ -20,7 +22,11 @@ export function getServerHelpText(): string {
   ].join("\n");
 }
 
-export function parseServerCliArgs(args: string[], log: (msg: string) => void = console.log): { handled: boolean; port?: number } {
+export function parseServerCliArgs(
+  args: string[],
+  log: (msg: string) => void = console.log,
+  env: PortEnv = process.env
+): { handled: boolean; port?: number } {
   if (args.includes("-h") || args.includes("--help")) {
     log(getServerHelpText());
     return { handled: true };
@@ -31,8 +37,24 @@ export function parseServerCliArgs(args: string[], log: (msg: string) => void = 
     return { handled: true };
   }
 
-  const port = parsePortArg(args);
+  const port = resolveServerPort(args, env);
   return { handled: false, port };
+}
+
+export function resolveServerPort(
+  args: string[] = process.argv.slice(2),
+  env: PortEnv = process.env
+): number {
+  const cliPort = parsePortArg(args);
+  if (cliPort !== undefined) {
+    return cliPort;
+  }
+
+  if (env.OMP_PORT !== undefined) {
+    return parseAndValidatePort(env.OMP_PORT);
+  }
+
+  return DEFAULT_PORT;
 }
 
 function parsePortArg(args: string[]): number | undefined {
@@ -72,7 +94,7 @@ function parseAndValidatePort(raw: string): number {
   return port;
 }
 
-export function createServer(port: number = DEFAULT_PORT) {
+export function createServer(port: number = resolveServerPort()) {
   return Bun.serve({
     port,
 
@@ -184,7 +206,7 @@ export function main(args: string[] = process.argv.slice(2)) {
 
   if (parsed.handled) return null;
 
-  const server = createServer(parsed.port ?? DEFAULT_PORT);
+  const server = createServer(parsed.port);
   console.log(`OMP server running on http://localhost:${server.port}`);
   return server;
 }
