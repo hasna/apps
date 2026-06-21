@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createShortlinksHandler } from "./server.js";
 import { ShortlinksStore } from "./store.js";
+import type { Link } from "./types.js";
 
 let tempHome = "";
 let dbPath = "";
@@ -19,7 +20,89 @@ afterEach(() => {
   rmSync(tempHome, { recursive: true, force: true });
 });
 
+function createTestLink(): Link {
+  return {
+    id: "lnk_test",
+    domain_id: "dom_test",
+    hostname: "has.na",
+    slug: "abc",
+    destination_url: "https://example.com/landing",
+    title: null,
+    active: true,
+    expires_at: null,
+    metadata: {},
+    machine_id: "machine_test",
+    synced_at: null,
+    created_at: new Date(0).toISOString(),
+    updated_at: new Date(0).toISOString(),
+    short_url: "https://has.na/abc",
+  };
+}
+
 describe("redirect handler", () => {
+  test("logs analytics failures by default while still redirecting", async () => {
+    const originalError = console.error;
+    const errors: unknown[][] = [];
+    console.error = (...args: unknown[]) => {
+      errors.push(args);
+    };
+
+    try {
+      const link = createTestLink();
+      const handler = createShortlinksHandler({
+        store: {
+          totalStats: () => ({ domains: 1, links: 1, clicks: 0 }),
+          resolve: () => link,
+          recordClick: () => {
+            throw new Error("analytics unavailable");
+          },
+        },
+      });
+
+      const response = await handler(new Request("https://has.na/abc", {
+        headers: { host: "has.na" },
+      }));
+
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toBe("https://example.com/landing");
+      expect(errors).toEqual([["[shortlinks] Click analytics recording failed for has.na/abc."]]);
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  test("redirects and reports analytics failures when click recording fails", async () => {
+    const link = createTestLink();
+    const failures: Array<{ error: unknown; slug: string; method: string }> = [];
+    const handler = createShortlinksHandler({
+      store: {
+        totalStats: () => ({ domains: 1, links: 1, clicks: 0 }),
+        resolve: () => link,
+        recordClick: () => {
+          throw new Error("analytics unavailable");
+        },
+      },
+      onRecordClickError: (error, context) => {
+        failures.push({
+          error,
+          slug: context.link.slug,
+          method: context.request.method,
+        });
+      },
+    });
+
+    const response = await handler(new Request("https://has.na/abc", {
+      headers: { host: "has.na" },
+    }));
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("https://example.com/landing");
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.error).toBeInstanceOf(Error);
+    expect(failures[0]?.slug).toBe("abc");
+    expect(failures[0]?.method).toBe("GET");
+  });
+
   test("redirects and tracks a click for the request host", async () => {
     const store = new ShortlinksStore(dbPath);
     store.addDomain({ hostname: "has.na", defaultDomain: true });

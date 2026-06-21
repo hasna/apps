@@ -7,11 +7,17 @@ export interface ShortlinksRuntimeStore {
   recordClick(link: Link, input?: ClickInput): unknown | Promise<unknown>;
 }
 
+export interface RecordClickErrorContext {
+  link: Link;
+  request: Request;
+}
+
 export interface ShortlinksHandlerOptions {
   store?: ShortlinksRuntimeStore;
   dbPath?: string;
   defaultHost?: string;
   redirectStatus?: 301 | 302 | 307 | 308;
+  onRecordClickError?: (error: unknown, context: RecordClickErrorContext) => void | Promise<void>;
 }
 
 const REDIRECT_ALLOW_HEADER = "GET, HEAD";
@@ -39,6 +45,10 @@ function getClientIp(request: Request): string | null {
 
 function isExpired(link: Link): boolean {
   return Boolean(link.expires_at && new Date(link.expires_at).getTime() <= Date.now());
+}
+
+function logRecordClickError(link: Link): void {
+  console.error(`[shortlinks] Click analytics recording failed for ${link.hostname}/${link.slug}.`);
 }
 
 export function createShortlinksHandler(options: ShortlinksHandlerOptions = {}): (request: Request) => Response | Promise<Response> {
@@ -81,16 +91,28 @@ export function createShortlinksHandler(options: ShortlinksHandlerOptions = {}):
     if (isExpired(link)) return json({ error: "Shortlink is expired.", slug, host }, 410);
 
     if (request.method === "GET") {
-      await store.recordClick(link, {
-        ip: getClientIp(request),
-        userAgent: request.headers.get("user-agent"),
-        referer: request.headers.get("referer"),
-        country: request.headers.get("cf-ipcountry"),
-        metadata: {
-          path: url.pathname,
-          query: url.search,
-        },
-      });
+      try {
+        await store.recordClick(link, {
+          ip: getClientIp(request),
+          userAgent: request.headers.get("user-agent"),
+          referer: request.headers.get("referer"),
+          country: request.headers.get("cf-ipcountry"),
+          metadata: {
+            path: url.pathname,
+            query: url.search,
+          },
+        });
+      } catch (error) {
+        if (options.onRecordClickError) {
+          try {
+            await options.onRecordClickError(error, { link, request });
+          } catch {
+            logRecordClickError(link);
+          }
+        } else {
+          logRecordClickError(link);
+        }
+      }
     }
 
     return Response.redirect(link.destination_url, redirectStatus);
