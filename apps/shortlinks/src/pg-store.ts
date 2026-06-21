@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { formatShortUrl, normalizeHostname } from "./config.js";
+import { formatShortUrl, getClickSalt, normalizeHostname } from "./config.js";
 import { makeId, now } from "./database.js";
 import { getMachineId } from "./machine.js";
 import { DEFAULT_SLUG_LENGTH, normalizeSlug, randomToken } from "./slug.js";
@@ -391,8 +391,7 @@ export class PgShortlinksStore {
   }
 
   private hashIp(ip: string): string {
-    const salt = process.env.SHORTLINKS_CLICK_SALT || "shortlinks-cloud";
-    return createHash("sha256").update(`${salt}:${ip}`).digest("hex");
+    return createHash("sha256").update(`${getClickSalt()}:${ip}`).digest("hex");
   }
 
   private async generateAvailableSlug(domainId: string, length: number): Promise<string> {

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { ShortlinksDatabase, makeId, now } from "./database.js";
-import { formatShortUrl, loadConfig, normalizeHostname, updateConfig } from "./config.js";
+import { formatShortUrl, getClickSalt, loadConfig, normalizeHostname, updateConfig } from "./config.js";
 import { getMachineId } from "./machine.js";
 import { DEFAULT_SLUG_LENGTH, normalizeSlug, randomToken } from "./slug.js";
 import type { AddDomainInput, Click, ClickInput, CreateLinkInput, Domain, Link, LinkStats } from "./types.js";
@@ -371,7 +371,6 @@ export class ShortlinksStore {
   }
 
   private hashIp(ip: string): string {
-    const salt = process.env.SHORTLINKS_CLICK_SALT || "shortlinks-local";
-    return createHash("sha256").update(`${salt}:${ip}`).digest("hex");
+    return createHash("sha256").update(`${getClickSalt()}:${ip}`).digest("hex");
   }
 }

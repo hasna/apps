@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -29,10 +30,61 @@ export function getConfigPath(): string {
   return join(ensureDataDir(), "config.json");
 }
 
+export function getClickSaltPath(): string {
+  return join(ensureDataDir(), "click-salt");
+}
+
 export function getDatabasePath(explicitPath?: string): string {
   if (explicitPath) return resolve(explicitPath);
   if (process.env.SHORTLINKS_DB) return resolve(process.env.SHORTLINKS_DB);
   return join(ensureDataDir(), `${SERVICE_NAME}.db`);
+}
+
+function readClickSaltFile(path: string): string | null {
+  try {
+    const saved = readFileSync(path, "utf-8").trim();
+    return saved || null;
+  } catch {
+    return null;
+  }
+}
+
+function clickSaltError(path: string, error: unknown): Error {
+  const detail = error instanceof Error ? error.message : String(error);
+  return new Error(`Could not initialize click salt at ${path}. Set SHORTLINKS_CLICK_SALT or fix data directory permissions. ${detail}`);
+}
+
+export function getClickSalt(): string {
+  const explicit = process.env.SHORTLINKS_CLICK_SALT?.trim();
+  if (explicit) return explicit;
+
+  const path = getClickSaltPath();
+  const saved = readClickSaltFile(path);
+  if (saved) return saved;
+
+  const generated = randomBytes(32).toString("hex");
+  const tempPath = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    writeFileSync(tempPath, `${generated}\n`, { flag: "wx", mode: 0o600 });
+    try {
+      linkSync(tempPath, path);
+      return generated;
+    } catch (error) {
+      const winner = readClickSaltFile(path);
+      if (winner) return winner;
+      throw clickSaltError(path, error);
+    } finally {
+      try {
+        unlinkSync(tempPath);
+      } catch {
+        // Best-effort cleanup; the canonical salt remains at path.
+      }
+    }
+  } catch (error) {
+    const winner = readClickSaltFile(path);
+    if (winner) return winner;
+    throw clickSaltError(path, error);
+  }
 }
 
 export function loadConfig(): ShortlinksConfig {
