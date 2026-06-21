@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { getDatabase } from "../db/database.ts";
 import { verifyApiKey } from "../lib/auth.ts";
 import { AuthError } from "../types/index.ts";
-import { createTicket, getTicketById, updateTicket, closeTicket, reopenTicket, assignTicket, listTickets, deleteTicket, bulkCreateTickets, bulkUpdateTickets, transitionTicket } from "../db/tickets.ts";
+import { createTicket, getTicketById, updateTicket, closeTicket, reopenTicket, assignTicket, listTickets, deleteTicket, bulkCreateTickets, bulkUpdateTickets, transitionTicket, normalizeTicketPagination } from "../db/tickets.ts";
 import { searchTickets, getSimilarTickets } from "../db/search.ts";
 import { createComment, listComments, updateComment, deleteComment } from "../db/comments.ts";
 import { createRelation, listRelations, deleteRelation } from "../db/relations.ts";
@@ -25,6 +25,10 @@ import { createApiKey, listApiKeys, revokeApiKey } from "../lib/auth.ts";
 import type { TicketType, TicketStatus, Resolution, Priority, Severity, TicketSource, RelationType, WebhookEvent, AgentType } from "../types/index.ts";
 
 const PORT = parseInt(process.env["PORT"] ?? "19428", 10);
+
+function parsePaginationQuery(value: string | undefined): number | undefined {
+  return value === undefined ? undefined : Number(value);
+}
 
 export function createApp() {
   const app = new Hono();
@@ -57,6 +61,10 @@ export function createApp() {
   // ── Tickets ──────────────────────────────────────────────────────────────
   app.get("/api/tickets", (c) => {
     const q = c.req.query();
+    const pagination = normalizeTicketPagination({
+      page: parsePaginationQuery(q["page"]),
+      per_page: parsePaginationQuery(q["per_page"]),
+    });
     const result = listTickets({
       project_id: q["project_id"], workspace_id: q["workspace_id"],
       status: q["status"] as TicketStatus | undefined,
@@ -69,12 +77,12 @@ export function createApp() {
       source: q["source"] as TicketSource | undefined,
       created_after: q["created_after"], created_before: q["created_before"],
       search: q["search"] ?? q["q"],
-      page: q["page"] ? parseInt(q["page"]) : undefined,
-      per_page: q["per_page"] ? parseInt(q["per_page"]) : undefined,
+      page: pagination.page,
+      per_page: pagination.per_page,
       sort: q["sort"] as "created_at" | "updated_at" | "priority" | "status" | undefined,
       order: q["order"] as "asc" | "desc" | undefined,
     });
-    return c.json({ data: result.tickets, meta: { total: result.total, page: parseInt(q["page"] ?? "1"), per_page: parseInt(q["per_page"] ?? "25") }, error: null });
+    return c.json({ data: result.tickets, meta: { total: result.total, page: pagination.page, per_page: pagination.per_page }, error: null });
   });
 
   app.post("/api/tickets", async (c) => {

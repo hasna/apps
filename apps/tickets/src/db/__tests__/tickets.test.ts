@@ -161,6 +161,27 @@ describe("listTickets", () => {
     expect(page1.total).toBe(5);
   });
 
+  it("normalizes invalid pagination values", () => {
+    for (let i = 0; i < 30; i++) createTicket({ project_id: projectId, title: `Ticket ${i}` });
+
+    const negative = listTickets({ page: -2, per_page: -5 });
+    const notNumbers = listTickets({ page: Number.NaN, per_page: Number.NaN });
+
+    expect(negative.tickets.length).toBe(25);
+    expect(negative.total).toBe(30);
+    expect(notNumbers.tickets.length).toBe(25);
+    expect(notNumbers.total).toBe(30);
+  });
+
+  it("normalizes unsafe pagination values before querying SQLite", () => {
+    createTicket({ project_id: projectId, title: "One" });
+
+    const result = listTickets({ page: 1e20, per_page: 100 });
+
+    expect(result.tickets.length).toBe(1);
+    expect(result.total).toBe(1);
+  });
+
   it("falls back to descending order for invalid order values", () => {
     createTicket({ project_id: projectId, title: "First" });
     createTicket({ project_id: projectId, title: "Second" });

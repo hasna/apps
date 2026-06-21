@@ -87,6 +87,24 @@ function normalizeSortOrder(order: TicketFilters["order"]): "ASC" | "DESC" {
   return typeof order === "string" && order.toLowerCase() === "asc" ? "ASC" : "DESC";
 }
 
+const DEFAULT_PAGE = 1;
+const DEFAULT_PER_PAGE = 25;
+const MAX_PAGE = 1_000_000;
+const MAX_PER_PAGE = 100;
+
+function normalizePositiveInteger(value: number | undefined, fallback: number, max: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  const integer = Math.trunc(value);
+  if (integer < 1 || !Number.isSafeInteger(integer)) return fallback;
+  return Math.min(integer, max);
+}
+
+export function normalizeTicketPagination(filters: Pick<TicketFilters, "page" | "per_page"> = {}): { page: number; per_page: number; offset: number } {
+  const page = normalizePositiveInteger(filters.page, DEFAULT_PAGE, MAX_PAGE);
+  const per_page = normalizePositiveInteger(filters.per_page, DEFAULT_PER_PAGE, MAX_PER_PAGE);
+  return { page, per_page, offset: (page - 1) * per_page };
+}
+
 // ── Create ───────────────────────────────────────────────────────────────────
 
 export interface CreateTicketOptions {
@@ -234,14 +252,13 @@ export function listTickets(filters: TicketFilters = {}, db?: Database): { ticke
   ).get(...params);
   const total = countRow?.count ?? 0;
 
-  const page = filters.page ?? 1;
-  const per_page = Math.min(filters.per_page ?? 25, 100);
-  const offset = (page - 1) * per_page;
+  const { per_page, offset } = normalizeTicketPagination(filters);
   const safeOrder = normalizeSortOrder(filters.order);
+  const pageParams: (string | number | null)[] = [...params, per_page, offset];
 
-  const rows = database.query<RawTicket, typeof params>(
-    `SELECT t.* FROM tickets t ${where} ORDER BY t.${safeSort} ${safeOrder} LIMIT ${per_page} OFFSET ${offset}`
-  ).all(...params);
+  const rows = database.query<RawTicket, typeof pageParams>(
+    `SELECT t.* FROM tickets t ${where} ORDER BY t.${safeSort} ${safeOrder} LIMIT ? OFFSET ?`
+  ).all(...pageParams);
 
   return { tickets: rows.map(rowToTicket), total };
 }

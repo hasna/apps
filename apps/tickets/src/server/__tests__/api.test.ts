@@ -130,6 +130,28 @@ describe("GET /api/tickets", () => {
     const body = await res.json() as { meta: { total: number } };
     expect(body.meta.total).toBe(1);
   });
+
+  it("normalizes invalid pagination query values", async () => {
+    await req("POST", "/api/tickets", { project_id: projectId, title: "Project ticket" });
+
+    const res = await req("GET", "/api/tickets?page=not-a-number&per_page=-5");
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { data: unknown[]; meta: { total: number; page: number; per_page: number } };
+    expect(body.data.length).toBe(1);
+    expect(body.meta).toEqual({ total: 1, page: 1, per_page: 25 });
+  });
+
+  it("normalizes unsafe pagination query values", async () => {
+    await req("POST", "/api/tickets", { project_id: projectId, title: "Project ticket" });
+
+    const res = await req("GET", "/api/tickets?page=1e20&per_page=100");
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { data: unknown[]; meta: { total: number; page: number; per_page: number } };
+    expect(body.data.length).toBe(1);
+    expect(body.meta).toEqual({ total: 1, page: 1, per_page: 100 });
+  });
 });
 
 describe("GET /api/tickets/:id", () => {
