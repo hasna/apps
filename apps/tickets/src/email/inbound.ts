@@ -29,7 +29,7 @@ export function parseToAddress(to: string): { type: "new" } | { type: "reply"; t
   return { type: "new" };
 }
 
-const getReplySecret = () => process.env["TICKETS_getReplySecret()"] ?? "dev-secret-change-in-production";
+const getReplySecret = () => process.env["TICKETS_REPLY_SECRET"] ?? "dev-secret-change-in-production";
 
 /**
  * Process an inbound email — either creates a new ticket or appends a comment.

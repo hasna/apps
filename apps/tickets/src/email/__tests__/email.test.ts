@@ -258,4 +258,25 @@ describe("buildReplyToAddress", () => {
       expect(valid).toBe(true);
     }
   });
+
+  it("uses TICKETS_REPLY_SECRET when no explicit secret is provided", () => {
+    const originalSecret = process.env["TICKETS_REPLY_SECRET"];
+    process.env["TICKETS_REPLY_SECRET"] = "env-configured-reply-secret";
+
+    try {
+      const addr = buildReplyToAddress("API-0042", "reporter@test.com", "tickets.acme.com");
+      const parsed = parseToAddress(addr);
+      expect(parsed.type).toBe("reply");
+      if (parsed.type === "reply") {
+        expect(verifyReplyToken("API-0042", "reporter@test.com", parsed.token, "env-configured-reply-secret")).toBe(true);
+        expect(verifyReplyToken("API-0042", "reporter@test.com", parsed.token, "dev-secret-change-in-production")).toBe(false);
+      }
+    } finally {
+      if (originalSecret === undefined) {
+        delete process.env["TICKETS_REPLY_SECRET"];
+      } else {
+        process.env["TICKETS_REPLY_SECRET"] = originalSecret;
+      }
+    }
+  });
 });
