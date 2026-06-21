@@ -120,6 +120,16 @@ describe("GET /api/tickets", () => {
     const body = await res.json() as { meta: { total: number } };
     expect(body.meta.total).toBe(1);
   });
+
+  it("falls back for invalid order query values", async () => {
+    await req("POST", "/api/tickets", { project_id: projectId, title: "Project ticket" });
+
+    const res = await req("GET", "/api/tickets?order=sideways");
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { meta: { total: number } };
+    expect(body.meta.total).toBe(1);
+  });
 });
 
 describe("GET /api/tickets/:id", () => {

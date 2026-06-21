@@ -160,6 +160,16 @@ describe("listTickets", () => {
     expect(page2.tickets.length).toBe(2);
     expect(page1.total).toBe(5);
   });
+
+  it("falls back to descending order for invalid order values", () => {
+    createTicket({ project_id: projectId, title: "First" });
+    createTicket({ project_id: projectId, title: "Second" });
+
+    const result = listTickets({ order: "sideways" as never });
+
+    expect(result.total).toBe(2);
+    expect(listTickets().total).toBe(2);
+  });
 });
 
 describe("assignTicket", () => {

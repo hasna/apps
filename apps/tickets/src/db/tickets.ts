@@ -83,6 +83,10 @@ function rowToTicket(row: RawTicket): Ticket {
   };
 }
 
+function normalizeSortOrder(order: TicketFilters["order"]): "ASC" | "DESC" {
+  return typeof order === "string" && order.toLowerCase() === "asc" ? "ASC" : "DESC";
+}
+
 // ── Create ───────────────────────────────────────────────────────────────────
 
 export interface CreateTicketOptions {
@@ -222,7 +226,6 @@ export function listTickets(filters: TicketFilters = {}, db?: Database): { ticke
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   const sort = filters.sort ?? "created_at";
-  const order = filters.order ?? "desc";
   const allowedSorts = ["created_at", "updated_at", "priority", "status"];
   const safeSort = allowedSorts.includes(sort) ? sort : "created_at";
 
@@ -234,9 +237,10 @@ export function listTickets(filters: TicketFilters = {}, db?: Database): { ticke
   const page = filters.page ?? 1;
   const per_page = Math.min(filters.per_page ?? 25, 100);
   const offset = (page - 1) * per_page;
+  const safeOrder = normalizeSortOrder(filters.order);
 
   const rows = database.query<RawTicket, typeof params>(
-    `SELECT t.* FROM tickets t ${where} ORDER BY t.${safeSort} ${order.toUpperCase()} LIMIT ${per_page} OFFSET ${offset}`
+    `SELECT t.* FROM tickets t ${where} ORDER BY t.${safeSort} ${safeOrder} LIMIT ${per_page} OFFSET ${offset}`
   ).all(...params);
 
   return { tickets: rows.map(rowToTicket), total };
