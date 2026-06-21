@@ -7,7 +7,7 @@ import { resolveCloudflareConfig } from "./cloudflare-auth.js";
 import { brandsightCapability } from "./brandsight.js";
 import { godaddyCapability } from "./godaddy.js";
 import { sedoCapability } from "./sedo.js";
-import { firstEnv, hasProviderCredentials } from "./env-aliases.js";
+import { ROUTE53_ENV, firstEnv, hasProviderCredentials } from "./env-aliases.js";
 
 export interface CredStatus {
   provider: string;
@@ -30,16 +30,32 @@ export function checkProvisioningCredentials(
   const out: CredStatus[] = [];
 
   // Route53 / AWS default credentials used by the live provider.
-  const hasAwsKeys = !!(env["AWS_ACCESS_KEY_ID"] && env["AWS_SECRET_ACCESS_KEY"]);
-  const hasAwsProfile = !!env["AWS_PROFILE"];
-  if (hasAwsProfile || hasAwsKeys) {
+  const awsProfile = firstEnv(env, ROUTE53_ENV.profile);
+  const awsAccessKey = firstEnv(env, ROUTE53_ENV.accessKeyId);
+  const awsSecretKey = firstEnv(env, ROUTE53_ENV.secretAccessKey);
+  const hasAwsKeys = !!(awsAccessKey && awsSecretKey);
+  const hasWebIdentity = !!(
+    firstEnv(env, ROUTE53_ENV.webIdentityTokenFile) &&
+    firstEnv(env, ROUTE53_ENV.roleArn)
+  );
+  const hasContainerCredentials = !!firstEnv(env, ROUTE53_ENV.containerCredentials);
+  if (awsProfile || hasAwsKeys || hasWebIdentity || hasContainerCredentials) {
     out.push(configuredStatus(
       "route53",
-      hasAwsProfile ? `profile:${env["AWS_PROFILE"]}` : "access-keys",
+      awsProfile
+        ? `profile:${awsProfile.value}`
+        : hasAwsKeys
+          ? "access-keys"
+          : hasWebIdentity
+            ? "web-identity"
+            : "container-credentials",
       "AWS credentials present (Route 53 Domains API uses us-east-1)",
     ));
   } else {
-    out.push(missingStatus("route53", "Set AWS_PROFILE or AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY"));
+    out.push(missingStatus(
+      "route53",
+      "Set ROUTE53_AWS_PROFILE/AWS_PROFILE, ROUTE53_ACCESS_KEY_ID+ROUTE53_SECRET_ACCESS_KEY, or AWS provider-chain credentials",
+    ));
   }
 
   // Cloudflare.

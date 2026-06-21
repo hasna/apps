@@ -54,6 +54,20 @@ export const CLOUDFLARE_ENV = {
   accountId: ["CLOUDFLARE_ACCOUNT_ID"],
 } as const;
 
+export const ROUTE53_ENV = {
+  accessKeyId: ["ROUTE53_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID"],
+  secretAccessKey: ["ROUTE53_SECRET_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY"],
+  sessionToken: ["ROUTE53_SESSION_TOKEN", "AWS_SESSION_TOKEN"],
+  profile: ["ROUTE53_AWS_PROFILE", "AWS_PROFILE"],
+  region: ["ROUTE53_REGION", "ROUTE53_AWS_REGION", "AWS_REGION"],
+  webIdentityTokenFile: ["AWS_WEB_IDENTITY_TOKEN_FILE"],
+  roleArn: ["AWS_ROLE_ARN"],
+  containerCredentials: [
+    "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+    "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+  ],
+} as const;
+
 export function providerEnvNames(provider: string): string[] {
   switch (provider.toLowerCase()) {
     case "namecheap":
@@ -73,7 +87,16 @@ export function providerEnvNames(provider: string): string[] {
     case "cloudflare":
       return flattenEnvNames([CLOUDFLARE_ENV.apiToken, CLOUDFLARE_ENV.apiKey, CLOUDFLARE_ENV.email, CLOUDFLARE_ENV.accountId]);
     case "route53":
-      return ["AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"];
+      return flattenEnvNames([
+        ROUTE53_ENV.profile,
+        ROUTE53_ENV.accessKeyId,
+        ROUTE53_ENV.secretAccessKey,
+        ROUTE53_ENV.sessionToken,
+        ROUTE53_ENV.region,
+        ROUTE53_ENV.webIdentityTokenFile,
+        ROUTE53_ENV.roleArn,
+        ROUTE53_ENV.containerCredentials,
+      ]);
     default:
       return [];
   }
@@ -97,8 +120,13 @@ export function hasProviderCredentials(
       const keyMode = hasEveryEnv(env, [CLOUDFLARE_ENV.apiKey, CLOUDFLARE_ENV.email]);
       return tokenMode || keyMode;
     }
-    case "route53":
-      return !!env["AWS_PROFILE"] || hasEveryEnv(env, [["AWS_ACCESS_KEY_ID"], ["AWS_SECRET_ACCESS_KEY"]]);
+    case "route53": {
+      const profileMode = !!firstEnv(env, ROUTE53_ENV.profile);
+      const keyMode = hasEveryEnv(env, [ROUTE53_ENV.accessKeyId, ROUTE53_ENV.secretAccessKey]);
+      const webIdentityMode = hasEveryEnv(env, [ROUTE53_ENV.webIdentityTokenFile, ROUTE53_ENV.roleArn]);
+      const containerMode = !!firstEnv(env, ROUTE53_ENV.containerCredentials);
+      return profileMode || keyMode || webIdentityMode || containerMode;
+    }
     default:
       return false;
   }

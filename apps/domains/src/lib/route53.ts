@@ -18,19 +18,25 @@ import {
   DeleteHostedZoneCommand,
   ChangeResourceRecordSetsCommand,
   ListResourceRecordSetsCommand,
+  ListHostedZonesByNameCommand,
   type ResourceRecordSet,
 } from "@aws-sdk/client-route-53";
 import {
   Route53DomainsClient,
   CheckDomainAvailabilityCommand,
-  RegisterDomainCommand,
-  GetOperationDetailCommand,
+  DisableDomainTransferLockCommand,
   GetDomainDetailCommand,
+  GetOperationDetailCommand,
   ListDomainsCommand,
   ListPricesCommand,
+  RegisterDomainCommand,
+  RetrieveDomainAuthCodeCommand,
+  TransferDomainCommand,
   UpdateDomainNameserversCommand,
   type CountryCode,
+  type DomainPrice,
 } from "@aws-sdk/client-route-53-domains";
+import { fromIni } from "@aws-sdk/credential-provider-ini";
 import type {
   FullProvider,
   ProviderDomainInfo,
@@ -48,6 +54,7 @@ export interface Route53Config {
   accessKeyId?: string;
   secretAccessKey?: string;
   sessionToken?: string;
+  profile?: string;
 }
 
 export interface DomainContactInfo {
@@ -56,8 +63,9 @@ export interface DomainContactInfo {
   email: string;
   phone: string;
   address_line_1: string;
+  address_line_2?: string;
   city: string;
-  state: string;
+  state?: string;
   country_code: string;
   zip_code: string;
   organization_name?: string;
@@ -66,7 +74,16 @@ export interface DomainContactInfo {
 export interface DomainAvailability {
   domain: string;
   available: boolean;
+  availability: string;
   price?: string;
+  renewal_price?: string;
+  transfer_price?: string;
+  currency?: string;
+}
+
+export interface Route53TldPrice {
+  tld: string;
+  registration_price?: string;
   renewal_price?: string;
   transfer_price?: string;
   currency?: string;
@@ -77,6 +94,23 @@ export interface RegisteredDomain {
   expiry: string;
   auto_renew: boolean;
   transfer_lock: boolean;
+}
+
+export interface Route53RegistrarOptions {
+  privacy_protected?: boolean;
+  nameservers?: string[];
+}
+
+export interface Route53OperationStatus {
+  status: string;
+  domain?: string;
+  message?: string;
+}
+
+export interface Route53TransferOutAuthCode {
+  auth_code: string;
+  transfer_lock_disabled: boolean;
+  transfer_lock_operation_id: string | null;
 }
 
 export interface HostedZoneInfo {
@@ -113,37 +147,34 @@ export interface Route53RecordInput {
   alias_target?: Route53AliasTarget;
 }
 
+export interface Route53ChangeResult {
+  changeId: string | null;
+}
+
+export interface Route53ChangeOptions {
+  comment?: string;
+}
+
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 export function getConfig(): Route53Config {
   return {
-    region: process.env["AWS_REGION"] || "us-east-1",
-    accessKeyId: process.env["AWS_ACCESS_KEY_ID"],
-    secretAccessKey: process.env["AWS_SECRET_ACCESS_KEY"],
-    sessionToken: process.env["AWS_SESSION_TOKEN"],
+    region: process.env["ROUTE53_REGION"] || process.env["ROUTE53_AWS_REGION"] || process.env["AWS_REGION"] || "us-east-1",
+    accessKeyId: process.env["ROUTE53_ACCESS_KEY_ID"] || process.env["AWS_ACCESS_KEY_ID"],
+    secretAccessKey: process.env["ROUTE53_SECRET_ACCESS_KEY"] || process.env["AWS_SECRET_ACCESS_KEY"],
+    sessionToken: process.env["ROUTE53_SESSION_TOKEN"] || process.env["AWS_SESSION_TOKEN"],
+    profile: process.env["ROUTE53_AWS_PROFILE"] || process.env["AWS_PROFILE"],
   };
-}
-
-function checkCredentials(cfg: Route53Config): void {
-  // When explicit keys are provided in config, always accept them.
-  if (cfg.accessKeyId && cfg.secretAccessKey) return;
-  // Otherwise fall back to env vars — if neither source has both keys, fail early.
-  const hasEnv = !!(process.env["AWS_ACCESS_KEY_ID"] && process.env["AWS_SECRET_ACCESS_KEY"]);
-  const hasProfile = !!process.env["AWS_PROFILE"];
-  if (!hasEnv && !hasProfile) {
-    throw new Error(
-      "AWS credentials not configured. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (or AWS_PROFILE) environment variables.",
-    );
-  }
 }
 
 function makeClients(config?: Route53Config) {
   const cfg = config ?? getConfig();
-  checkCredentials(cfg);
   const region = cfg.region || "us-east-1";
   const credentials = cfg.accessKeyId && cfg.secretAccessKey
     ? { accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey, sessionToken: cfg.sessionToken }
-    : undefined;
+    : cfg.profile
+      ? fromIni({ profile: cfg.profile })
+      : undefined;
 
   return {
     route53: new Route53Client({ region, credentials }),
@@ -164,28 +195,82 @@ export async function checkAvailability(domain: string, config?: Route53Config):
   const availability: DomainAvailability = {
     domain,
     available: result.Availability === "AVAILABLE",
+    availability: result.Availability ?? "UNKNOWN",
   };
 
-  try {
-    const tld = domain.split(".").slice(1).join(".");
-    const prices = await domains.send(new ListPricesCommand({ Tld: tld, MaxItems: 1 }));
-    const price = prices.Prices?.[0];
-    if (price) {
-      availability.currency = price.RegistrationPrice?.Currency
-        ?? price.RenewalPrice?.Currency
-        ?? price.TransferPrice?.Currency;
-      if (price.RegistrationPrice?.Price != null)
-        availability.price = price.RegistrationPrice.Price.toString();
-      if (price.RenewalPrice?.Price != null)
-        availability.renewal_price = price.RenewalPrice.Price.toString();
-      if (price.TransferPrice?.Price != null)
-        availability.transfer_price = price.TransferPrice.Price.toString();
+  if (availability.available) {
+    try {
+      const tld = domain.split(".").slice(1).join(".");
+      const price = await getTldPrice(tld, config);
+      if (price) {
+        availability.currency = price.currency;
+        availability.price = price.registration_price;
+        availability.renewal_price = price.renewal_price;
+        availability.transfer_price = price.transfer_price;
+      }
+    } catch {
+      // Pricing not critical
     }
-  } catch {
-    // Pricing not critical
   }
 
   return availability;
+}
+
+function normalizeTld(tld: string): string {
+  return tld.trim().replace(/^\./, "");
+}
+
+function priceString(value?: number): string | undefined {
+  return value == null ? undefined : value.toString();
+}
+
+function tldPriceFromRoute53Price(
+  tld: string,
+  price: DomainPrice,
+): Route53TldPrice {
+  return {
+    tld: price.Name || tld,
+    registration_price: priceString(price.RegistrationPrice?.Price),
+    renewal_price: priceString(price.RenewalPrice?.Price),
+    transfer_price: priceString(price.TransferPrice?.Price),
+    currency:
+      price.RegistrationPrice?.Currency ??
+      price.RenewalPrice?.Currency ??
+      price.TransferPrice?.Currency,
+  };
+}
+
+export async function getTldPrice(
+  tld: string,
+  config?: Route53Config,
+): Promise<Route53TldPrice | null> {
+  const { domains } = makeClients(config);
+  const normalized = normalizeTld(tld);
+  const prices = await domains.send(
+    new ListPricesCommand({ Tld: normalized, MaxItems: 1 }),
+  );
+  const price = prices.Prices?.[0];
+  return price ? tldPriceFromRoute53Price(normalized, price) : null;
+}
+
+export async function listTldPrices(
+  config?: Route53Config,
+): Promise<Route53TldPrice[]> {
+  const { domains } = makeClients(config);
+  const prices: Route53TldPrice[] = [];
+  let marker: string | undefined;
+
+  do {
+    const result = await domains.send(
+      new ListPricesCommand({ Marker: marker, MaxItems: 100 }),
+    );
+    for (const price of result.Prices ?? []) {
+      prices.push(tldPriceFromRoute53Price(price.Name || "", price));
+    }
+    marker = result.NextPageMarker;
+  } while (marker);
+
+  return prices;
 }
 
 export async function registerDomain(
@@ -194,22 +279,10 @@ export async function registerDomain(
   durationYears = 1,
   autoRenew = true,
   config?: Route53Config,
+  options: Route53RegistrarOptions = {},
 ): Promise<{ operationId: string }> {
   const { domains } = makeClients(config);
-
-  const contactDetail = {
-    FirstName: contact.first_name,
-    LastName: contact.last_name,
-    Email: contact.email,
-    PhoneNumber: contact.phone,
-    AddressLine1: contact.address_line_1,
-    City: contact.city,
-    State: contact.state,
-    CountryCode: contact.country_code as CountryCode,
-    ZipCode: contact.zip_code,
-    ContactType: contact.organization_name ? "COMPANY" as const : "PERSON" as const,
-    ...(contact.organization_name ? { OrganizationName: contact.organization_name } : {}),
-  };
+  const contactDetail = contactToRoute53Contact(contact);
 
   const result = await domains.send(
     new RegisterDomainCommand({
@@ -219,9 +292,62 @@ export async function registerDomain(
       AdminContact: contactDetail,
       RegistrantContact: contactDetail,
       TechContact: contactDetail,
-      PrivacyProtectAdminContact: true,
-      PrivacyProtectRegistrantContact: true,
-      PrivacyProtectTechContact: true,
+      PrivacyProtectAdminContact: options.privacy_protected ?? true,
+      PrivacyProtectRegistrantContact: options.privacy_protected ?? true,
+      PrivacyProtectTechContact: options.privacy_protected ?? true,
+      ...(options.nameservers?.length
+        ? { Nameservers: options.nameservers.map((Name) => ({ Name })) }
+        : {}),
+    }),
+  );
+
+  return { operationId: result.OperationId ?? "" };
+}
+
+function contactToRoute53Contact(contact: DomainContactInfo) {
+  return {
+    FirstName: contact.first_name,
+    LastName: contact.last_name,
+    Email: contact.email,
+    PhoneNumber: contact.phone,
+    AddressLine1: contact.address_line_1,
+    ...(contact.address_line_2 ? { AddressLine2: contact.address_line_2 } : {}),
+    City: contact.city,
+    ...(contact.state ? { State: contact.state } : {}),
+    CountryCode: contact.country_code.toUpperCase() as CountryCode,
+    ZipCode: contact.zip_code,
+    ContactType: contact.organization_name ? "COMPANY" as const : "PERSON" as const,
+    ...(contact.organization_name ? { OrganizationName: contact.organization_name } : {}),
+  };
+}
+
+export async function transferDomain(
+  domain: string,
+  authCode: string,
+  contact: DomainContactInfo,
+  durationYears = 1,
+  autoRenew = true,
+  config?: Route53Config,
+  options: Route53RegistrarOptions = {},
+): Promise<{ operationId: string }> {
+  const { domains } = makeClients(config);
+  const contactDetail = contactToRoute53Contact(contact);
+
+  const result = await domains.send(
+    new TransferDomainCommand({
+      DomainName: domain,
+      AuthCode: authCode,
+      DurationInYears: durationYears,
+      AutoRenew: autoRenew,
+      AdminContact: contactDetail,
+      RegistrantContact: contactDetail,
+      TechContact: contactDetail,
+      PrivacyProtectAdminContact: options.privacy_protected ?? true,
+      PrivacyProtectRegistrantContact: options.privacy_protected ?? true,
+      PrivacyProtectTechContact: options.privacy_protected ?? true,
+      ...(options.nameservers?.length
+        ? { Nameservers: options.nameservers.map((Name) => ({ Name })) }
+        : {}),
     }),
   );
 
@@ -231,7 +357,7 @@ export async function registerDomain(
 export async function getRegistrationStatus(
   operationId: string,
   config?: Route53Config,
-): Promise<{ status: string; domain?: string; message?: string }> {
+): Promise<Route53OperationStatus> {
   const { domains } = makeClients(config);
   const result = await domains.send(
     new GetOperationDetailCommand({ OperationId: operationId }),
@@ -243,21 +369,104 @@ export async function getRegistrationStatus(
   };
 }
 
-export interface DomainDetail extends RegisteredDomain {
+export interface DomainDetail {
+  domain: string;
+  expiry: string;
+  auto_renew: boolean | null;
+  transfer_lock: boolean | null;
   created: string;
+  updated: string;
   nameservers: string[];
+  status_list: string[];
+  registrar_name?: string;
+  privacy_protected: boolean | null;
 }
 
 export async function getDomainDetail(domain: string, config?: Route53Config): Promise<DomainDetail> {
   const { domains } = makeClients(config);
-  const result = await domains.send(new GetDomainDetailCommand({ DomainName: domain }));
+  const [result, summary] = await Promise.all([
+    domains.send(new GetDomainDetailCommand({ DomainName: domain })),
+    getDomainSummary(domain, config),
+  ]);
+  const privacy = result as {
+    AdminPrivacy?: boolean;
+    RegistrantPrivacy?: boolean;
+    TechPrivacy?: boolean;
+  };
   return {
     domain: result.DomainName ?? domain,
-    expiry: result.ExpirationDate?.toISOString() ?? "",
-    auto_renew: result.AutoRenew ?? false,
-    transfer_lock: result.StatusList?.includes("TRANSFER_LOCK") ?? false,
+    expiry: result.ExpirationDate?.toISOString() ?? summary?.expiry ?? "",
+    auto_renew: result.AutoRenew ?? summary?.auto_renew ?? null,
+    transfer_lock:
+      summary?.transfer_lock ??
+      (result.StatusList?.includes("TRANSFER_LOCK") ? true : null),
     created: result.CreationDate?.toISOString() ?? "",
+    updated: result.UpdatedDate?.toISOString() ?? "",
     nameservers: (result.Nameservers ?? []).map((ns) => ns.Name ?? "").filter(Boolean),
+    status_list: result.StatusList ?? [],
+    registrar_name: result.RegistrarName,
+    privacy_protected:
+      privacy.RegistrantPrivacy ??
+      privacy.AdminPrivacy ??
+      privacy.TechPrivacy ??
+      null,
+  };
+}
+
+async function getDomainSummary(
+  domain: string,
+  config?: Route53Config,
+): Promise<RegisteredDomain | null> {
+  let marker: string | undefined;
+
+  do {
+    const { domains } = makeClients(config);
+    const result = await domains.send(
+      new ListDomainsCommand({ Marker: marker, MaxItems: 100 }),
+    );
+    const summary = (result.Domains ?? []).find((item) => item.DomainName === domain);
+    if (summary) {
+      return {
+        domain: summary.DomainName ?? domain,
+        expiry: summary.Expiry?.toISOString() ?? "",
+        auto_renew: summary.AutoRenew ?? false,
+        transfer_lock: summary.TransferLock ?? false,
+      };
+    }
+    marker = result.NextPageMarker;
+  } while (marker);
+
+  return null;
+}
+
+export async function requestTransferOutAuthCode(
+  domain: string,
+  config?: Route53Config,
+): Promise<Route53TransferOutAuthCode> {
+  const { domains } = makeClients(config);
+  const detail = await getDomainDetail(domain, config);
+  let transferLockDisabled = false;
+  let transferLockOperationId: string | null = null;
+
+  if (detail.transfer_lock) {
+    const result = await domains.send(
+      new DisableDomainTransferLockCommand({ DomainName: domain }),
+    );
+    transferLockDisabled = true;
+    transferLockOperationId = result.OperationId ?? null;
+  }
+
+  const authCodeResult = await domains.send(
+    new RetrieveDomainAuthCodeCommand({ DomainName: domain }),
+  );
+  if (!authCodeResult.AuthCode) {
+    throw new Error("Route53 did not return a domain transfer authorization code");
+  }
+
+  return {
+    auth_code: authCodeResult.AuthCode,
+    transfer_lock_disabled: transferLockDisabled,
+    transfer_lock_operation_id: transferLockOperationId,
   };
 }
 
@@ -321,13 +530,29 @@ function normalizeZoneId(id: string): string {
   return cleanZoneId(id.trim());
 }
 
+function normalizeNameserver(value: string): string {
+  return value.trim().toLowerCase().replace(/\.$/, "");
+}
+
+function nameserversMatch(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const left = [...new Set(a.map(normalizeNameserver))].sort();
+  const right = [...new Set(b.map(normalizeNameserver))].sort();
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function cleanChangeId(id?: string): string | null {
+  return id?.replace("/change/", "") || null;
+}
+
 export async function createHostedZone(
   domain: string,
   comment?: string,
   config?: Route53Config,
+  options?: { callerReference?: string },
 ): Promise<HostedZoneInfo> {
   const { route53 } = makeClients(config);
-  const callerRef = `domains-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const callerRef = options?.callerReference ?? `domains-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   const result = await route53.send(
     new CreateHostedZoneCommand({
@@ -388,7 +613,50 @@ export async function getHostedZone(
 
 export async function deleteHostedZone(hostedZoneId: string, config?: Route53Config): Promise<void> {
   const { route53 } = makeClients(config);
-  await route53.send(new DeleteHostedZoneCommand({ Id: normalizeZoneId(hostedZoneId) }));
+  const zoneId = normalizeZoneId(hostedZoneId);
+  const managedRecords: ResourceRecordSet[] = [];
+  let nextName: string | undefined;
+  let nextType: ResourceRecordSet["Type"] | undefined;
+  let nextIdentifier: string | undefined;
+
+  do {
+    const result = await route53.send(
+      new ListResourceRecordSetsCommand({
+        HostedZoneId: zoneId,
+        StartRecordName: nextName,
+        StartRecordType: nextType,
+        StartRecordIdentifier: nextIdentifier,
+      }),
+    );
+    managedRecords.push(
+      ...(result.ResourceRecordSets?.filter(
+        (record) => record.Type !== "NS" && record.Type !== "SOA",
+      ) ?? []),
+    );
+    nextName = result.IsTruncated ? result.NextRecordName : undefined;
+    nextType = result.IsTruncated
+      ? (result.NextRecordType as ResourceRecordSet["Type"] | undefined)
+      : undefined;
+    nextIdentifier = result.IsTruncated ? result.NextRecordIdentifier : undefined;
+  } while (nextName && nextType);
+
+  for (let index = 0; index < managedRecords.length; index += 100) {
+    const batch = managedRecords.slice(index, index + 100);
+    if (batch.length === 0) continue;
+    await route53.send(
+      new ChangeResourceRecordSetsCommand({
+        HostedZoneId: zoneId,
+        ChangeBatch: {
+          Changes: batch.map((record) => ({
+            Action: "DELETE",
+            ResourceRecordSet: record,
+          })),
+        },
+      }),
+    );
+  }
+
+  await route53.send(new DeleteHostedZoneCommand({ Id: zoneId }));
 }
 
 export async function findHostedZoneByDomain(domain: string, config?: Route53Config): Promise<HostedZoneInfo | null> {
@@ -402,6 +670,33 @@ export async function findHostedZoneByDomain(domain: string, config?: Route53Con
     throw new Error(`Multiple Route 53 hosted zones found for ${domain}; specify hosted zone id`);
   }
   return candidates[0] ?? null;
+}
+
+export async function findHostedZoneByNameservers(
+  domain: string,
+  nameservers: string[],
+  config?: Route53Config,
+): Promise<HostedZoneInfo | null> {
+  if (!nameservers.length) return null;
+  const { route53 } = makeClients(config);
+  const result = await route53.send(
+    new ListHostedZonesByNameCommand({ DNSName: domain }),
+  );
+  const zones = (result.HostedZones ?? []).filter(
+    (zone) => zone.Name?.replace(/\.$/, "") === domain && !zone.Config?.PrivateZone,
+  );
+
+  for (const zone of zones) {
+    const id = cleanZoneId(zone.Id ?? "");
+    if (!id) continue;
+    const detail = await getHostedZone(id, config);
+    const delegatedNameservers = detail.name_servers ?? [];
+    if (nameserversMatch(delegatedNameservers, nameservers)) {
+      return { ...detail, id, name_servers: delegatedNameservers };
+    }
+  }
+
+  return null;
 }
 
 // ─── DNS Records ─────────────────────────────────────────────────────────────
@@ -480,51 +775,62 @@ export async function upsertRecord(
   hostedZoneId: string,
   record: Route53RecordInput,
   config?: Route53Config,
-): Promise<void> {
+  options?: Route53ChangeOptions,
+): Promise<Route53ChangeResult> {
   const { route53 } = makeClients(config);
-  await route53.send(
+  const result = await route53.send(
     new ChangeResourceRecordSetsCommand({
       HostedZoneId: normalizeZoneId(hostedZoneId),
       ChangeBatch: {
+        ...(options?.comment ? { Comment: options.comment } : {}),
         Changes: [{ Action: "UPSERT", ResourceRecordSet: recordToRrs(record) }],
       },
     }),
   );
+  return { changeId: cleanChangeId(result.ChangeInfo?.Id) };
 }
 
 export async function deleteRecord(
   hostedZoneId: string,
   record: Route53RecordInput,
   config?: Route53Config,
-): Promise<void> {
+  options?: Route53ChangeOptions,
+): Promise<Route53ChangeResult> {
   const { route53 } = makeClients(config);
-  await route53.send(
+  const result = await route53.send(
     new ChangeResourceRecordSetsCommand({
       HostedZoneId: normalizeZoneId(hostedZoneId),
       ChangeBatch: {
+        ...(options?.comment ? { Comment: options.comment } : {}),
         Changes: [{ Action: "DELETE", ResourceRecordSet: recordToRrs(record) }],
       },
     }),
   );
+  return { changeId: cleanChangeId(result.ChangeInfo?.Id) };
 }
 
 export async function upsertRecords(
   hostedZoneId: string,
   records: Route53RecordInput[],
   config?: Route53Config,
-): Promise<void> {
-  if (records.length === 0) return;
+  options?: Route53ChangeOptions,
+): Promise<Route53ChangeResult> {
+  if (records.length === 0) return { changeId: null };
   const { route53 } = makeClients(config);
   const changes = records.map((r) => ({
     Action: "UPSERT" as const,
     ResourceRecordSet: recordToRrs(r),
   }));
-  await route53.send(
+  const result = await route53.send(
     new ChangeResourceRecordSetsCommand({
       HostedZoneId: normalizeZoneId(hostedZoneId),
-      ChangeBatch: { Changes: changes },
+      ChangeBatch: {
+        ...(options?.comment ? { Comment: options.comment } : {}),
+        Changes: changes,
+      },
     }),
   );
+  return { changeId: cleanChangeId(result.ChangeInfo?.Id) };
 }
 
 // ─── RegistrarProvider Adapter ───────────────────────────────────────────────
@@ -597,7 +903,7 @@ export function createRoute53Provider(config?: Route53Config): FullProvider {
         expires: detail.expiry,
         nameservers: detail.nameservers,
         status: "active",
-        auto_renew: detail.auto_renew,
+        auto_renew: detail.auto_renew ?? false,
       };
     },
 

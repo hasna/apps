@@ -16,6 +16,34 @@ describe("checkProvisioningCredentials", () => {
     expect(cf.mode).toContain("account");
   });
 
+  it("detects Route53 aliases and AWS provider-chain credential modes", () => {
+    const aliases = checkProvisioningCredentials({
+      ROUTE53_ACCESS_KEY_ID: "ak",
+      ROUTE53_SECRET_ACCESS_KEY: "sk",
+    });
+    expect(aliases.find((x) => x.provider === "route53")!).toMatchObject({
+      configured: true,
+      mode: "access-keys",
+    });
+
+    const webIdentity = checkProvisioningCredentials({
+      AWS_ROLE_ARN: "arn:aws:iam::123456789012:role/domain-role",
+      AWS_WEB_IDENTITY_TOKEN_FILE: "/var/run/secrets/token",
+    });
+    expect(webIdentity.find((x) => x.provider === "route53")!).toMatchObject({
+      configured: true,
+      mode: "web-identity",
+    });
+
+    const container = checkProvisioningCredentials({
+      AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: "/v2/credentials/test",
+    });
+    expect(container.find((x) => x.provider === "route53")!).toMatchObject({
+      configured: true,
+      mode: "container-credentials",
+    });
+  });
+
   it("flags missing cloudflare account id", () => {
     const s = checkProvisioningCredentials({ CLOUDFLARE_API_TOKEN: "t" });
     const cf = s.find((x) => x.provider === "cloudflare")!;
