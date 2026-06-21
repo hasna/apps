@@ -9,6 +9,15 @@ import { getMcpHelpText, handleMcpCliArgs } from "./index.js";
 let httpServer: ReturnType<typeof startHttpServer> | undefined;
 let httpPort = 0;
 
+function runMcp(args: string[]) {
+  return Bun.spawnSync({
+    cmd: ["bun", "run", "src/mcp/index.ts", ...args],
+    cwd: process.cwd(),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+}
+
 describe("mcp CLI flags", () => {
   test("prints help and exits when --help is used", () => {
     const out: string[] = [];
@@ -36,6 +45,14 @@ describe("mcp CLI flags", () => {
     expect(handled).toBe(false);
     expect(out).toHaveLength(0);
   });
+
+  test("exits nonzero when startup args are invalid", () => {
+    const result = runMcp(["--port", "123abc"]);
+    const stderr = Buffer.from(result.stderr).toString("utf8");
+
+    expect(result.exitCode).not.toBe(0);
+    expect(stderr).toContain("Invalid port: 123abc");
+  });
 });
 
 describe("MCP HTTP transport", () => {
@@ -59,6 +76,11 @@ describe("MCP HTTP transport", () => {
     expect(isHttpMode(["--http"])).toBe(true);
     expect(resolveHttpPort([])).toBe(DEFAULT_HTTP_PORT);
     expect(HTTP_NAME).toBe("markdown");
+  });
+
+  test("rejects malformed HTTP port values", () => {
+    expect(() => resolveHttpPort(["--port", "123abc"])).toThrow("Invalid port: 123abc");
+    expect(() => resolveHttpPort(["--port=3.5"])).toThrow("Invalid port: 3.5");
   });
 
   test("GET /health returns ok", async () => {

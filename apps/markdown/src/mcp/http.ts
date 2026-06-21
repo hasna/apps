@@ -39,7 +39,11 @@ export function resolveHttpPort(args: string[] = process.argv.slice(2)): number 
 }
 
 function parsePort(raw: string): number {
-  const port = Number.parseInt(raw, 10);
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`Invalid port: ${raw}`);
+  }
+
+  const port = Number(raw);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error(`Invalid port: ${raw}`);
   }
