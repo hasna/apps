@@ -1,9 +1,31 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
-import { registerEventsCommands } from "@hasna/events/commander";
 import { getPackageVersion } from "../lib/package-version.js";
 
 const program = new Command();
+
+type RegisterEventsCommands = (
+  program: Command,
+  options: { source: string },
+) => void;
+
+async function registerOptionalEventsCommands(program: Command): Promise<void> {
+  const specifier = "@hasna/events/commander";
+  try {
+    const module = (await import(specifier)) as {
+      registerEventsCommands?: RegisterEventsCommands;
+    };
+    module.registerEventsCommands?.(program, { source: "todos" });
+  } catch (error) {
+    if (process.env["TODOS_DEBUG_EVENTS_IMPORT"] === "1") {
+      console.warn(
+        `Skipping optional @hasna/events CLI commands: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+}
 
 // Global options
 program
@@ -102,7 +124,7 @@ registerUsageLedgerCommands(program);
 registerLocalBackupCommands(program);
 registerStorageCommands(program);
 registerScaleHardeningCommands(program);
-registerEventsCommands(program, { source: "todos" });
+await registerOptionalEventsCommands(program);
 registerHelpCommands(program);
 
 program.parse();

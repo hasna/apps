@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
 import { createProject } from "../db/projects.js";
-import { updateTask } from "../db/tasks.js";
+import { listTasks, updateTask } from "../db/tasks.js";
 import {
   TESTERS_ISSUE_REPORT_SCHEMA_VERSION,
   fingerprintTesterIssueReport,
@@ -95,6 +95,53 @@ describe("tester issue reports", () => {
     expect(second.task?.description).toContain("after card entry");
   });
 
+  test("scopes matching by project when the same tester fingerprint appears in separate projects", () => {
+    const db = getDatabase();
+    const firstProject = createProject({ name: "Project A", path: "/tmp/project-a" }, db);
+    const secondProject = createProject({ name: "Project B", path: "/tmp/project-b" }, db);
+
+    const first = upsertTesterIssueReport({
+      report: issue({ fingerprint: "shared-fingerprint" }),
+      project_id: firstProject.id,
+      apply: true,
+    }, db);
+    const second = upsertTesterIssueReport({
+      report: issue({ fingerprint: "shared-fingerprint" }),
+      project_id: secondProject.id,
+      apply: true,
+    }, db);
+    const repeatedSecond = upsertTesterIssueReport({
+      report: issue({ fingerprint: "shared-fingerprint", failure: { message: "Still failing in B" } }),
+      project_id: secondProject.id,
+      apply: true,
+    }, db);
+
+    expect(first.action).toBe("created");
+    expect(second.action).toBe("created");
+    expect(first.task?.id).not.toBe(second.task?.id);
+    expect(repeatedSecond.action).toBe("updated");
+    expect(repeatedSecond.task?.id).toBe(second.task?.id);
+    expect(listTasks({ include_archived: true }, db).filter((task) => task.metadata["tester_issue_fingerprint"] === "testers:shared-fingerprint")).toHaveLength(2);
+  });
+
+  test("updates assignment on repeated reports when requested", () => {
+    const db = getDatabase();
+    const first = upsertTesterIssueReport({
+      report: issue({ fingerprint: "assign-me" }),
+      assigned_to: "tester-a",
+      apply: true,
+    }, db);
+    const second = upsertTesterIssueReport({
+      report: issue({ fingerprint: "assign-me" }),
+      assigned_to: "tester-b",
+      apply: true,
+    }, db);
+
+    expect(first.task?.assigned_to).toBe("tester-a");
+    expect(second.action).toBe("updated");
+    expect(second.task?.assigned_to).toBe("tester-b");
+  });
+
   test("reopens completed matches as regressions", () => {
     const db = getDatabase();
     const first = upsertTesterIssueReport({
@@ -121,7 +168,19 @@ describe("tester issue reports", () => {
       apply: true,
     }, db);
 
+    expect(result.schema_version).toBe("todos.tester_issue_report_batch_result.v1");
     expect(result.summary).toMatchObject({ total: 2, created: 2 });
     expect(result.results.map((item) => item.task?.priority)).toEqual(["high", "critical"]);
+  });
+
+  test("rolls back applied batches when one report is invalid", () => {
+    const db = getDatabase();
+
+    expect(() => upsertTesterIssueReports({
+      reports: [issue({ fingerprint: "will-roll-back" }), { schema_version: "wrong", title: "Invalid" }],
+      apply: true,
+    }, db)).toThrow("Expected schema_version testers.issue_report.v1");
+
+    expect(listTasks({ include_archived: true }, db).filter((task) => task.metadata["tester_issue_fingerprint"] === "testers:will-roll-back")).toHaveLength(0);
   });
 });

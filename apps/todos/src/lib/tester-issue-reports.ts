@@ -7,6 +7,7 @@ import { redactEvidenceText, redactValue } from "./redaction.js";
 
 export const TESTERS_ISSUE_REPORT_SCHEMA_VERSION = "testers.issue_report.v1";
 export const TESTERS_ISSUE_REPORT_RESULT_SCHEMA_VERSION = "todos.tester_issue_report_result.v1";
+export const TESTERS_ISSUE_REPORT_BATCH_RESULT_SCHEMA_VERSION = "todos.tester_issue_report_batch_result.v1";
 
 export type TesterIssueSeverity = "low" | "medium" | "high" | "critical";
 export type TesterIssueKind =
@@ -111,7 +112,7 @@ export interface UpsertTesterIssueReportResult {
 }
 
 export interface UpsertTesterIssueReportsResult {
-  schema_version: typeof TESTERS_ISSUE_REPORT_RESULT_SCHEMA_VERSION;
+  schema_version: typeof TESTERS_ISSUE_REPORT_BATCH_RESULT_SCHEMA_VERSION;
   local_only: true;
   dry_run: boolean;
   processed_at: string;
@@ -445,8 +446,16 @@ function sourceMetadata(report: TesterIssueReportV1): Record<string, unknown> {
   };
 }
 
-function findExistingTask(fingerprint: string, db: Database): Task | null {
-  for (const task of listTasks({ include_archived: true, limit: 5000 }, db)) {
+function findExistingTask(
+  fingerprint: string,
+  input: Pick<UpsertTesterIssueReportInput, "project_id" | "task_list_id">,
+  db: Database,
+): Task | null {
+  for (const task of listTasks({
+    include_archived: true,
+    project_id: input.project_id,
+    task_list_id: input.task_list_id,
+  }, db)) {
     const metadata = task.metadata || {};
     const tester = asObject(metadata["tester_issue_report"]);
     if (tester["fingerprint"] === fingerprint) return task;
@@ -493,6 +502,7 @@ function updateExistingTask(
       tester_issue_fingerprint: fingerprint,
       tester_issue_report: testerMetadata(report, fingerprint, previous, timestamp),
     },
+    ...(input.assigned_to !== undefined ? { assigned_to: input.assigned_to } : {}),
     task_type: task.task_type || "bug",
   }, db);
   return { action, task: updated };
@@ -507,7 +517,7 @@ export function upsertTesterIssueReport(
   const warnings: string[] = [];
   const report = normalizeTesterIssueReport(input.report, input.default_priority || "medium");
   const fingerprint = fingerprintTesterIssueReport(report);
-  const existing = findExistingTask(fingerprint, d);
+  const existing = findExistingTask(fingerprint, input, d);
 
   if (!input.apply) {
     const action: TesterIssueReportAction = existing ? "matched" : "preview";
@@ -587,7 +597,8 @@ export function upsertTesterIssueReports(
   db?: Database,
 ): UpsertTesterIssueReportsResult {
   const d = db || getDatabase();
-  const results = input.reports.map((report) => upsertTesterIssueReport({ ...input, report }, d));
+  const run = () => input.reports.map((report) => upsertTesterIssueReport({ ...input, report }, d));
+  const results = input.apply ? d.transaction(run)() : run();
   const summary: UpsertTesterIssueReportsResult["summary"] = {
     total: results.length,
     preview: 0,
@@ -598,7 +609,7 @@ export function upsertTesterIssueReports(
   };
   for (const result of results) summary[result.action]++;
   return {
-    schema_version: TESTERS_ISSUE_REPORT_RESULT_SCHEMA_VERSION,
+    schema_version: TESTERS_ISSUE_REPORT_BATCH_RESULT_SCHEMA_VERSION,
     local_only: true,
     dry_run: !input.apply,
     processed_at: now(),

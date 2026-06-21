@@ -17,6 +17,8 @@ export const SCHEMA_ENTITIES = [
   "import_export_bundle",
   "mcp_response",
   "tester_issue_report",
+  "tester_issue_report_result",
+  "tester_issue_report_batch_result",
 ] as const;
 
 export type SchemaEntity = (typeof SCHEMA_ENTITIES)[number];
@@ -222,7 +224,7 @@ export const JSON_SCHEMAS: Record<SchemaEntity, JsonSchemaDefinition> = {
     is_error: { type: "boolean" },
   }),
 
-  tester_issue_report: def("tester_issue_report", "testers.issue_report.v1", "TesterIssueReport", ["schema_version", "title", "kind", "severity"], {
+  tester_issue_report: def("tester_issue_report", "testers.issue_report.v1", "TesterIssueReport", ["schema_version", "title"], {
     schema_version: { type: "string", enum: ["testers.issue_report.v1"] },
     id: { type: "string" },
     fingerprint: { type: "string" },
@@ -276,6 +278,28 @@ export const JSON_SCHEMAS: Record<SchemaEntity, JsonSchemaDefinition> = {
     labels: { type: "array", items: { type: "string" } },
     metadata: { type: "object", additionalProperties: true },
     occurred_at: ISO_DATE,
+  }),
+
+  tester_issue_report_result: def("tester_issue_report_result", "todos.tester_issue_report_result.v1", "TesterIssueReportResult", ["schema_version", "local_only", "dry_run", "processed_at", "action", "fingerprint", "report", "task", "warnings", "commands"], {
+    schema_version: { type: "string", enum: ["todos.tester_issue_report_result.v1"] },
+    local_only: { type: "boolean" },
+    dry_run: { type: "boolean" },
+    processed_at: ISO_DATE,
+    action: { type: "string", enum: ["preview", "matched", "created", "updated", "regressed"] },
+    fingerprint: { type: "string" },
+    report: { type: "object", additionalProperties: true },
+    task: { type: ["object", "null"], additionalProperties: true },
+    warnings: { type: "array", items: { type: "string" } },
+    commands: { type: "array", items: { type: "string" } },
+  }),
+
+  tester_issue_report_batch_result: def("tester_issue_report_batch_result", "todos.tester_issue_report_batch_result.v1", "TesterIssueReportBatchResult", ["schema_version", "local_only", "dry_run", "processed_at", "results", "summary"], {
+    schema_version: { type: "string", enum: ["todos.tester_issue_report_batch_result.v1"] },
+    local_only: { type: "boolean" },
+    dry_run: { type: "boolean" },
+    processed_at: ISO_DATE,
+    results: { type: "array", items: { type: "object", additionalProperties: true } },
+    summary: { type: "object", additionalProperties: true },
   }),
 };
 
@@ -376,6 +400,29 @@ export const SCHEMA_CONTRACT_FIXTURES: Record<SchemaEntity, Record<string, unkno
       steps: ["Open checkout", "Fill required fields"],
     },
     labels: ["checkout", "regression"],
+  },
+  tester_issue_report_result: {
+    schema_version: "todos.tester_issue_report_result.v1",
+    local_only: true,
+    dry_run: false,
+    processed_at: "2026-01-01T00:00:00.000Z",
+    action: "created",
+    fingerprint: "testers:checkout-button-1234",
+    report: {
+      schema_version: "testers.issue_report.v1",
+      title: "Checkout button fails",
+    },
+    task: null,
+    warnings: [],
+    commands: [],
+  },
+  tester_issue_report_batch_result: {
+    schema_version: "todos.tester_issue_report_batch_result.v1",
+    local_only: true,
+    dry_run: false,
+    processed_at: "2026-01-01T00:00:00.000Z",
+    results: [],
+    summary: { total: 0, preview: 0, matched: 0, created: 0, updated: 0, regressed: 0 },
   },
 };
 

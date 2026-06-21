@@ -57,6 +57,7 @@ The stable contracts cover these object IDs:
 - `external_issue_import_report`
 - `tester_issue_report`
 - `tester_issue_report_result`
+- `tester_issue_report_batch_result`
 - `verification_provider`
 - `verification_provider_result`
 - `local_extension_compatibility`
@@ -379,11 +380,14 @@ issue kind, severity, optional tester fingerprint, run/scenario/source metadata,
 target URL or selector metadata, failure details, labels, and evidence
 references.
 
-`tester_issue_report_result` is returned by `todos issues report --json` and
-`upsertTesterIssueReport` helpers. It records dry-run/apply mode, the
-computed tester fingerprint, the normalized report, the matched or changed task,
-the action (`preview`, `matched`, `created`, `updated`, or `regressed`), warnings,
-and follow-up local commands.
+`tester_issue_report_result` is returned by `upsertTesterIssueReport`. It records
+dry-run/apply mode, the computed tester fingerprint, the normalized report, the
+matched or changed task, the action (`preview`, `matched`, `created`, `updated`,
+or `regressed`), warnings, and follow-up local commands.
+
+`tester_issue_report_batch_result` is returned by `todos issues report --json`
+and `upsertTesterIssueReports`. It wraps single report results and summary
+counts for `preview`, `matched`, `created`, `updated`, and `regressed` actions.
 
 ## Verification Providers
 

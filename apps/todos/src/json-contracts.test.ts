@@ -39,7 +39,7 @@ import { previewRetentionCleanup } from "./lib/retention-cleanup.js";
 import { resolveMentions } from "./lib/mention-resolver.js";
 import { findDuplicateTasks, mergeDuplicateTask } from "./lib/task-dedupe.js";
 import { importExternalIssues } from "./lib/external-issue-importers.js";
-import { TESTERS_ISSUE_REPORT_SCHEMA_VERSION, upsertTesterIssueReport } from "./lib/tester-issue-reports.js";
+import { TESTERS_ISSUE_REPORT_SCHEMA_VERSION, upsertTesterIssueReport, upsertTesterIssueReports } from "./lib/tester-issue-reports.js";
 import { checkLocalNotifications } from "./lib/local-notifications.js";
 import { runVerificationProvider, upsertVerificationProvider } from "./lib/verification-providers.js";
 import { createHandoff } from "./db/handoffs.js";
@@ -146,6 +146,7 @@ describe("stable JSON contracts", () => {
       "external_issue_import_report",
       "tester_issue_report",
       "tester_issue_report_result",
+      "tester_issue_report_batch_result",
       "verification_provider",
       "verification_provider_result",
       "local_extension_compatibility",
@@ -313,6 +314,14 @@ describe("stable JSON contracts", () => {
     };
     const testerIssueResult = upsertTesterIssueReport({
       report: testerIssueReport,
+      project_id: project.id,
+      apply: true,
+    }, db);
+    const testerIssueBatchResult = upsertTesterIssueReports({
+      reports: [{
+        ...testerIssueReport,
+        fingerprint: "tester-contract-issue-batch",
+      }],
       project_id: project.id,
       apply: true,
     }, db);
@@ -537,6 +546,7 @@ describe("stable JSON contracts", () => {
     expectValid("external_issue_import_report", externalIssueImport);
     expectValid("tester_issue_report", testerIssueReport);
     expectValid("tester_issue_report_result", testerIssueResult);
+    expectValid("tester_issue_report_batch_result", testerIssueBatchResult);
     expectValid("verification_provider", verificationProvider);
     expectValid("verification_provider_result", verificationProviderResult);
     expectValid("local_extension_compatibility", extensionCompatibility);

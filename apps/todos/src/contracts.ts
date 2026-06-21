@@ -99,6 +99,7 @@ export {
   importExternalIssues,
 } from "./lib/external-issue-importers.js";
 export {
+  TESTERS_ISSUE_REPORT_BATCH_RESULT_SCHEMA_VERSION,
   TESTERS_ISSUE_REPORT_RESULT_SCHEMA_VERSION,
   TESTERS_ISSUE_REPORT_SCHEMA_VERSION,
   fingerprintTesterIssueReport,
