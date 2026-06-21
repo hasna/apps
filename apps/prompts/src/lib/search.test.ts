@@ -1,15 +1,25 @@
 import { describe, expect, test, beforeEach } from "bun:test"
-import { closeDatabase, resetDatabase } from "../db/database.js"
+import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js"
 
 process.env["PROMPTS_DB_PATH"] = ":memory:"
 
 import { createPrompt } from "../db/prompts.js"
-import { searchPrompts, findSimilar } from "./search.js"
+import { searchPrompts, searchPromptsSlim, findSimilar } from "./search.js"
 
 beforeEach(() => {
   closeDatabase()
   resetDatabase()
 })
+
+function disableFts(): void {
+  const db = getDatabase()
+  db.exec(`
+    DROP TRIGGER IF EXISTS prompts_fts_insert;
+    DROP TRIGGER IF EXISTS prompts_fts_update;
+    DROP TRIGGER IF EXISTS prompts_fts_delete;
+    DROP TABLE IF EXISTS prompts_fts;
+  `)
+}
 
 describe("searchPrompts", () => {
   test("returns all prompts for empty query", () => {
@@ -37,6 +47,26 @@ describe("searchPrompts", () => {
     createPrompt({ title: "C2", body: "body", collection: "beta" })
     const results = searchPrompts("body", { collection: "alpha" })
     expect(results.every((r) => r.prompt.collection === "alpha")).toBe(true)
+  })
+
+  test("applies collection and tag filters when falling back to LIKE search", () => {
+    createPrompt({ title: "Alpha Tagged", body: "shared fallback target", collection: "alpha", tags: ["keep"] })
+    createPrompt({ title: "Alpha Other Tag", body: "shared fallback target", collection: "alpha", tags: ["drop"] })
+    createPrompt({ title: "Beta Tagged", body: "shared fallback target", collection: "beta", tags: ["keep"] })
+    disableFts()
+
+    const results = searchPrompts("shared fallback", { collection: "alpha", tags: ["keep"] })
+    expect(results.map((r) => r.prompt.slug)).toEqual(["alpha-tagged"])
+  })
+
+  test("applies collection and tag filters in slim LIKE search", () => {
+    createPrompt({ title: "Alpha Slim Tagged", body: "shared slim fallback target", collection: "alpha", tags: ["keep"] })
+    createPrompt({ title: "Alpha Slim Other Tag", body: "shared slim fallback target", collection: "alpha", tags: ["drop"] })
+    createPrompt({ title: "Beta Slim Tagged", body: "shared slim fallback target", collection: "beta", tags: ["keep"] })
+    disableFts()
+
+    const results = searchPromptsSlim("shared slim fallback", { collection: "alpha", tags: ["keep"] })
+    expect(results.map((r) => r.slug)).toEqual(["alpha-slim-tagged"])
   })
 })
 

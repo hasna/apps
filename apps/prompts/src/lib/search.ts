@@ -59,6 +59,41 @@ function escapeFtsQuery(q: string): string {
     .join(" ")
 }
 
+type SqlParam = string | number
+
+function buildPromptFilterConditions(
+  filter: Omit<ListPromptsFilter, "q">,
+  columnPrefix = ""
+): { conditions: string[]; params: SqlParam[] } {
+  const conditions: string[] = []
+  const params: SqlParam[] = []
+  const column = (name: string) => `${columnPrefix}${name}`
+
+  if (filter.collection) {
+    conditions.push(`${column("collection")} = ?`)
+    params.push(filter.collection)
+  }
+  if (filter.is_template !== undefined) {
+    conditions.push(`${column("is_template")} = ?`)
+    params.push(filter.is_template ? 1 : 0)
+  }
+  if (filter.source) {
+    conditions.push(`${column("source")} = ?`)
+    params.push(filter.source)
+  }
+  if (filter.tags && filter.tags.length > 0) {
+    const tagConds = filter.tags.map(() => `${column("tags")} LIKE ?`)
+    conditions.push(`(${tagConds.join(" OR ")})`)
+    for (const tag of filter.tags) params.push(`%"${tag}"%`)
+  }
+  if (filter.project_id !== undefined && filter.project_id !== null) {
+    conditions.push(`(${column("project_id")} = ? OR ${column("project_id")} IS NULL)`)
+    params.push(filter.project_id)
+  }
+
+  return { conditions, params }
+}
+
 export function searchPrompts(
   query: string,
   filter: Omit<ListPromptsFilter, "q"> = {}
@@ -73,30 +108,7 @@ export function searchPrompts(
   if (hasFts(db)) {
     const ftsQuery = escapeFtsQuery(query)
 
-    const conditions: string[] = []
-    const params: (string | number)[] = []
-
-    if (filter.collection) {
-      conditions.push("p.collection = ?")
-      params.push(filter.collection)
-    }
-    if (filter.is_template !== undefined) {
-      conditions.push("p.is_template = ?")
-      params.push(filter.is_template ? 1 : 0)
-    }
-    if (filter.source) {
-      conditions.push("p.source = ?")
-      params.push(filter.source)
-    }
-    if (filter.tags && filter.tags.length > 0) {
-      const tagConds = filter.tags.map(() => "p.tags LIKE ?")
-      conditions.push(`(${tagConds.join(" OR ")})`)
-      for (const tag of filter.tags) params.push(`%"${tag}"%`)
-    }
-    if (filter.project_id !== undefined && filter.project_id !== null) {
-      conditions.push("(p.project_id = ? OR p.project_id IS NULL)")
-      params.push(filter.project_id)
-    }
+    const { conditions, params } = buildPromptFilterConditions(filter, "p.")
 
     const where = conditions.length > 0 ? `AND ${conditions.join(" AND ")}` : ""
     const limit = filter.limit ?? 50
@@ -124,14 +136,17 @@ export function searchPrompts(
 
   // Fallback: LIKE search
   const like = `%${query}%`
+  const { conditions, params } = buildPromptFilterConditions(filter)
+  const filterWhere = conditions.length > 0 ? `AND ${conditions.join(" AND ")}` : ""
   const rows = db
     .query(
       `SELECT *, 1 as score FROM prompts
        WHERE (name LIKE ? OR slug LIKE ? OR title LIKE ? OR body LIKE ? OR description LIKE ? OR tags LIKE ?)
+       ${filterWhere}
        ORDER BY use_count DESC, updated_at DESC
        LIMIT ? OFFSET ?`
     )
-    .all(like, like, like, like, like, like, filter.limit ?? 10, filter.offset ?? 0) as Array<Record<string, unknown>>
+    .all(like, like, like, like, like, like, ...params, filter.limit ?? 10, filter.offset ?? 0) as Array<Record<string, unknown>>
 
   return rows.map((r) => rowToSearchResult(r))
 }
@@ -153,18 +168,7 @@ export function searchPromptsSlim(
 
   if (hasFts(db)) {
     const ftsQuery = escapeFtsQuery(query)
-    const conditions: string[] = []
-    const params: (string | number)[] = []
-
-    if (filter.collection) { conditions.push("p.collection = ?"); params.push(filter.collection) }
-    if (filter.is_template !== undefined) { conditions.push("p.is_template = ?"); params.push(filter.is_template ? 1 : 0) }
-    if (filter.source) { conditions.push("p.source = ?"); params.push(filter.source) }
-    if (filter.tags && filter.tags.length > 0) {
-      const tagConds = filter.tags.map(() => "p.tags LIKE ?")
-      conditions.push(`(${tagConds.join(" OR ")})`)
-      for (const tag of filter.tags) params.push(`%"${tag}"%`)
-    }
-    if (filter.project_id) { conditions.push("(p.project_id = ? OR p.project_id IS NULL)"); params.push(filter.project_id) }
+    const { conditions, params } = buildPromptFilterConditions(filter, "p.")
 
     const where = conditions.length > 0 ? `AND ${conditions.join(" AND ")}` : ""
     const limit = filter.limit ?? 10
@@ -190,13 +194,16 @@ export function searchPromptsSlim(
 
   // Fallback LIKE
   const like = `%${query}%`
+  const { conditions, params } = buildPromptFilterConditions(filter)
+  const filterWhere = conditions.length > 0 ? `AND ${conditions.join(" AND ")}` : ""
   const rows = db.query(
     `SELECT id, slug, name, title, description, collection, tags, variables, is_template, use_count, 1 as score
      FROM prompts
      WHERE (name LIKE ? OR slug LIKE ? OR title LIKE ? OR body LIKE ? OR description LIKE ? OR tags LIKE ?)
+     ${filterWhere}
      ORDER BY use_count DESC, updated_at DESC
      LIMIT ? OFFSET ?`
-  ).all(like, like, like, like, like, like, filter.limit ?? 10, filter.offset ?? 0) as Array<Record<string, unknown>>
+  ).all(like, like, like, like, like, like, ...params, filter.limit ?? 10, filter.offset ?? 0) as Array<Record<string, unknown>>
 
   return rows.map((r) => rowToSlimSearchResult(r))
 }
