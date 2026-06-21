@@ -6,6 +6,7 @@ import chalk from "chalk";
 import { parseFromFile, validate, compile, run } from "../lib/pipeline.js";
 import { validateAndLint } from "../validator/validate.js";
 import { createLLMClient } from "../lib/llm-client.js";
+import { getPackageVersion } from "../lib/package-version.js";
 import { writeFileSync, existsSync } from "fs";
 import type { OmpError, LLMClientOptions } from "../types/index.js";
 
@@ -14,7 +15,7 @@ const program = new Command();
 program
   .name("omp")
   .description("Open Markdown Protocol — parse, validate, and execute .omp.md files")
-  .version("0.1.3");
+  .version(getPackageVersion());
 
 // ─── validate ────────────────────────────────────────────────
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 
 const fixtureDir = join(process.cwd(), ".tmp", "cli-tests");
@@ -29,6 +29,17 @@ function runCli(args: string[]) {
     stderr: "pipe",
   });
 }
+
+describe("omp CLI metadata", () => {
+  test("prints the package version", () => {
+    const pkg = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")) as { version: string };
+    const result = runCli(["--version"]);
+    const stdout = Buffer.from(result.stdout).toString("utf8").trim();
+
+    expect(result.exitCode).toBe(0);
+    expect(stdout).toBe(pkg.version);
+  });
+});
 
 describe("omp CLI JSON output", () => {
   test("validate --json outputs machine-readable payload", () => {

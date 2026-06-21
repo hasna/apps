@@ -1,12 +1,11 @@
-import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { parseFromFile, parseFromString, validate, compile, run } from "../lib/pipeline.js";
+import { getPackageVersion } from "../lib/package-version.js";
 import { validateAndLint } from "../validator/validate.js";
 import { existsSync, mkdirSync } from "fs";
 import { homedir } from "os";
@@ -14,14 +13,7 @@ import { createRequire } from "module";
 
 const require = createRequire(import.meta.url);
 
-export function getPackageVersion(): string {
-  try {
-    const pkgPath = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json");
-    return (JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: string }).version || "0.0.0";
-  } catch {
-    return "0.0.0";
-  }
-}
+export { getPackageVersion };
 
 const _agentReg = new Map<string, { id: string; name: string; last_seen_at: string; project_id?: string }>();
 
