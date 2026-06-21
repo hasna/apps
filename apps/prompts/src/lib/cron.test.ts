@@ -14,6 +14,9 @@ describe("validateCron", () => {
     expect(validateCron("* * * *")).not.toBeNull()
     expect(validateCron("invalid")).not.toBeNull()
     expect(validateCron("")).not.toBeNull()
+    expect(validateCron("*/0 * * * *")).not.toBeNull()
+    expect(validateCron("10-5 * * * *")).not.toBeNull()
+    expect(validateCron("60 * * * *")).not.toBeNull()
   })
 })
 
@@ -61,6 +64,14 @@ describe("getNextRunTime", () => {
     const next = getNextRunTime("0 9-17 * * *", from)
     expect(next.getHours()).toBeGreaterThanOrEqual(9)
     expect(next.getHours()).toBeLessThanOrEqual(17)
+  })
+
+  test("range step expressions stay within the range", () => {
+    const from = new Date(2024, 0, 15, 10, 10, 0)
+    const next = getNextRunTime("5-10/2 * * * *", from)
+
+    expect(next.getHours()).toBe(11)
+    expect(next.getMinutes()).toBe(5)
   })
 
   test("specific day of week", () => {

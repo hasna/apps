@@ -3,32 +3,59 @@
 // Each field can be: * | number | star/step | a-b | a,b,...
 
 function parseField(field: string, min: number, max: number): number[] {
-  if (field === "*") {
-    return range(min, max)
-  }
   const result: number[] = []
-  for (const part of field.split(",")) {
-    if (part.includes("/")) {
-      const [rangeOrStar, stepStr] = part.split("/")
-      const step = parseInt(stepStr ?? "1", 10)
-      const start = rangeOrStar === "*" ? min : parseInt(rangeOrStar ?? String(min), 10)
-      for (let v = start; v <= max; v += step) result.push(v)
-    } else if (part.includes("-")) {
-      const [fromStr, toStr] = part.split("-")
-      const from = parseInt(fromStr ?? String(min), 10)
-      const to = parseInt(toStr ?? String(max), 10)
-      for (let v = from; v <= to; v++) result.push(v)
-    } else {
-      result.push(parseInt(part, 10))
-    }
+
+  for (const rawPart of field.split(",")) {
+    const part = rawPart.trim()
+    if (!part) throw new Error(`Invalid cron field: ${field}`)
+
+    const [rangePart, stepPart, extra] = part.split("/")
+    if (extra !== undefined || !rangePart) throw new Error(`Invalid cron field: ${field}`)
+
+    const hasStep = stepPart !== undefined
+    const step = hasStep ? parseCronNumber(stepPart, field) : 1
+    if (step < 1) throw new Error(`Invalid cron step in field: ${field}`)
+
+    const { from, to } = parseFieldRange(rangePart, min, max, field, hasStep)
+    for (let v = from; v <= to; v += step) result.push(v)
   }
-  return [...new Set(result)].sort((a, b) => a - b).filter(v => v >= min && v <= max)
+
+  return [...new Set(result)].sort((a, b) => a - b)
 }
 
-function range(min: number, max: number): number[] {
-  const r: number[] = []
-  for (let i = min; i <= max; i++) r.push(i)
-  return r
+function parseFieldRange(
+  rangePart: string,
+  min: number,
+  max: number,
+  field: string,
+  hasStep: boolean
+): { from: number; to: number } {
+  if (rangePart === "*") return { from: min, to: max }
+
+  if (rangePart.includes("-")) {
+    const [fromPart, toPart, extra] = rangePart.split("-")
+    if (extra !== undefined || !fromPart || !toPart) throw new Error(`Invalid cron field: ${field}`)
+    const from = parseCronNumber(fromPart, field)
+    const to = parseCronNumber(toPart, field)
+    validateRange(from, to, min, max, field)
+    return { from, to }
+  }
+
+  const from = parseCronNumber(rangePart, field)
+  const to = hasStep ? max : from
+  validateRange(from, to, min, max, field)
+  return { from, to }
+}
+
+function parseCronNumber(value: string, field: string): number {
+  if (!/^\d+$/.test(value)) throw new Error(`Invalid cron field: ${field}`)
+  return Number.parseInt(value, 10)
+}
+
+function validateRange(from: number, to: number, min: number, max: number, field: string): void {
+  if (from < min || from > max || to < min || to > max || from > to) {
+    throw new Error(`Invalid cron field range: ${field}`)
+  }
 }
 
 export function getNextRunTime(cronExpr: string, from: Date = new Date()): Date {
