@@ -1,4 +1,4 @@
-import { createWriteStream, mkdirSync, renameSync, unlinkSync } from "node:fs";
+import { createWriteStream, mkdirSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
@@ -275,8 +275,11 @@ export async function downloadPlannedFiles(plan: DownloadPlan): Promise<Array<{ 
     }
     try {
       await pipeline(Readable.fromWeb(response.body as never), createWriteStream(tempDestination));
+      const bytes = statSync(tempDestination).size;
+      if (file.size != null && bytes !== file.size) {
+        throw new Error(`Downloaded size mismatch for ${file.path}: expected ${file.size} bytes, got ${bytes}`);
+      }
       renameSync(tempDestination, destination);
-      const bytes = file.size ?? Bun.file(destination).size;
       downloaded.push({ path: file.path, bytes, destination });
     } catch (error) {
       try {
