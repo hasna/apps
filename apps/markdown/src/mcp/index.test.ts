@@ -94,6 +94,30 @@ describe("MCP HTTP transport", () => {
     expect(await res.json()).toEqual({ status: "ok", name: "markdown" });
   });
 
+  test("returns 400 for malformed MCP HTTP JSON bodies", async () => {
+    const server = startHttpServer({ port: 0, host: "127.0.0.1" });
+    await Bun.sleep(100);
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{",
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        jsonrpc: "2.0",
+        error: { code: -32700, message: "Parse error: Invalid JSON" },
+        id: null,
+      });
+    } finally {
+      server.close();
+    }
+  });
+
   test("handles MCP initialize and tool call over Streamable HTTP", async () => {
     const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${httpPort}/mcp`));
     const client = new Client({ name: "http-test", version: "0.0.1" });

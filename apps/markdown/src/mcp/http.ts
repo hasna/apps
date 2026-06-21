@@ -11,6 +11,13 @@ export interface StartHttpServerOptions {
   name?: string;
 }
 
+class InvalidJsonBodyError extends Error {
+  constructor() {
+    super("Parse error: Invalid JSON");
+    this.name = "InvalidJsonBodyError";
+  }
+}
+
 export function isHttpMode(args: string[] = process.argv.slice(2)): boolean {
   return args.includes("--http") || process.env.MCP_HTTP === "1";
 }
@@ -69,10 +76,30 @@ async function readRequestBody(req: IncomingMessage): Promise<unknown> {
     return undefined;
   }
 
-  return JSON.parse(text);
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new InvalidJsonBodyError();
+  }
 }
 
 async function handleMcpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let body: unknown;
+  try {
+    body = await readRequestBody(req);
+  } catch (error) {
+    if (error instanceof InvalidJsonBodyError) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        jsonrpc: "2.0",
+        error: { code: -32700, message: error.message },
+        id: null,
+      }));
+      return;
+    }
+    throw error;
+  }
+
   const server = buildServer();
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
@@ -81,7 +108,6 @@ async function handleMcpRequest(req: IncomingMessage, res: ServerResponse): Prom
   await server.connect(transport);
 
   try {
-    const body = await readRequestBody(req);
     await transport.handleRequest(req, res, body);
   } finally {
     res.on("close", () => {
