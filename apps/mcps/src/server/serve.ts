@@ -427,7 +427,16 @@ export async function startServer(
           const fields: Parameters<typeof updateServer>[1] = {};
           if (body.name !== undefined) fields.name = body.name;
           if (body.description !== undefined) fields.description = body.description;
-          if (body.command !== undefined) fields.command = body.command;
+          if (body.command !== undefined) {
+            if (typeof body.command !== "string") {
+              return json({ error: "Invalid 'command' format" }, 400, port);
+            }
+            const command = body.command.trim();
+            if (!command) {
+              return json({ error: "Command is required" }, 400, port);
+            }
+            fields.command = command;
+          }
           if (body.env !== undefined) fields.env = body.env;
           if (body.credential_refs !== undefined || body.credentialRefs !== undefined) {
             fields.credentialRefs = normalizeCredentialRefs(body.credential_refs ?? body.credentialRefs);

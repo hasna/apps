@@ -143,8 +143,12 @@ export function updateServer(
     values.push(updates.description);
   }
   if (updates.command !== undefined) {
+    const command = normalizeCandidate(updates.command);
+    if (!command) {
+      throw new Error("Command is required");
+    }
     sets.push("command = ?");
-    values.push(updates.command);
+    values.push(command);
   }
   if (updates.args !== undefined) {
     sets.push("args = ?");

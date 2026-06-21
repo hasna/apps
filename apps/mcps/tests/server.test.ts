@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "bun:test";
 import "./setup";
 import { getDb, closeDb } from "../src/lib/db";
-import { addServer, cacheTools } from "../src/lib/registry";
+import { addServer, cacheTools, getServer } from "../src/lib/registry";
 
 const PORT = 19499;
 let serverProcess: ReturnType<typeof Bun.serve>;
@@ -232,6 +232,24 @@ describe("server API", () => {
 
       const { data: detail } = await api("/api/servers/disab");
       expect(detail.enabled).toBe(false);
+    });
+  });
+
+  // ── PATCH /api/servers/:id ──
+
+  describe("PATCH /api/servers/:id", () => {
+    it("returns 400 for blank command updates without changing the existing command", async () => {
+      addServer({ command: "npx", name: "patch-cmd" });
+
+      const { status, data } = await api("/api/servers/patch-cmd", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: "   ", allow_local_stdio: true }),
+      });
+
+      expect(status).toBe(400);
+      expect(data.error).toBe("Command is required");
+      expect(getServer("patch-cmd")!.command).toBe("npx");
     });
   });
 

@@ -174,6 +174,13 @@ describe("registry", () => {
       expect(updated.command).toBe("bunx");
     });
 
+    it("rejects empty command updates without changing the existing command", () => {
+      addServer({ command: "npx", name: "upd-empty-cmd" });
+
+      expect(() => updateServer("upd-empty-cmd", { command: "   " })).toThrow("Command is required");
+      expect(getServer("upd-empty-cmd")!.command).toBe("npx");
+    });
+
     it("updates args", () => {
       addServer({ command: "npx", name: "upd-args" });
       const updated = updateServer("upd-args", { args: ["--flag"] });
