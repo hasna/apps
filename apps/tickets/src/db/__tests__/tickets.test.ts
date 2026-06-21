@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { getDatabase, resetDatabase, closeDatabase } from "../database.ts";
 import { createProject } from "../projects.ts";
 import { createTicket, getTicketById, updateTicket, closeTicket, reopenTicket, listTickets, deleteTicket, assignTicket } from "../tickets.ts";
-import { VersionConflictError, InvalidTransitionError, NotFoundError } from "../../types/index.ts";
+import { VersionConflictError, InvalidTransitionError, NotFoundError, ValidationError } from "../../types/index.ts";
 
 process.env["TICKETS_DB_PATH"] = ":memory:";
 
@@ -80,6 +80,18 @@ describe("updateTicket", () => {
     const t = createTicket({ project_id: projectId, title: "Labeled" });
     const updated = updateTicket(t.id, { labels: ["bug", "urgent"] });
     expect(updated.labels).toEqual(["bug", "urgent"]);
+  });
+
+  it("throws ValidationError on empty title", () => {
+    const t = createTicket({ project_id: projectId, title: "Ticket" });
+
+    expect(() => updateTicket(t.id, { title: "   " })).toThrow(ValidationError);
+  });
+
+  it("throws ValidationError on title > 255 chars", () => {
+    const t = createTicket({ project_id: projectId, title: "Ticket" });
+
+    expect(() => updateTicket(t.id, { title: "x".repeat(256) })).toThrow(ValidationError);
   });
 });
 

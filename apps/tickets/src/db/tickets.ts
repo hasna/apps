@@ -87,6 +87,13 @@ function normalizeSortOrder(order: TicketFilters["order"]): "ASC" | "DESC" {
   return typeof order === "string" && order.toLowerCase() === "asc" ? "ASC" : "DESC";
 }
 
+function normalizeTicketTitle(title: string): string {
+  const trimmed = title.trim();
+  if (!trimmed) throw new ValidationError("Ticket title is required");
+  if (title.length > 255) throw new ValidationError("Title must be 255 characters or less");
+  return trimmed;
+}
+
 const DEFAULT_PAGE = 1;
 const DEFAULT_PER_PAGE = 25;
 const MAX_PAGE = 1_000_000;
@@ -133,8 +140,7 @@ export interface CreateTicketOptions {
 export function createTicket(options: CreateTicketOptions, db?: Database): Ticket {
   const database = db ?? getDatabase();
 
-  if (!options.title.trim()) throw new ValidationError("Ticket title is required");
-  if (options.title.length > 255) throw new ValidationError("Title must be 255 characters or less");
+  const title = normalizeTicketTitle(options.title);
 
   const counter = incrementTicketCounter(options.project_id, database);
 
@@ -158,7 +164,7 @@ export function createTicket(options: CreateTicketOptions, db?: Database): Ticke
     [
       id, short_id, options.project_id,
       options.workspace_id ?? proj.workspace_id ?? null,
-      options.title.trim(),
+      title,
       options.description ?? null,
       options.type ?? "bug",
       options.priority ?? "none",
@@ -294,7 +300,7 @@ export function updateTicket(idOrShortId: string, options: UpdateTicketOptions, 
   const sets: string[] = [];
   const params: (string | number | null)[] = [];
 
-  if (options.title !== undefined) { sets.push("title = ?"); params.push(options.title.trim()); }
+  if (options.title !== undefined) { sets.push("title = ?"); params.push(normalizeTicketTitle(options.title)); }
   if (options.description !== undefined) { sets.push("description = ?"); params.push(options.description); }
   if (options.type !== undefined) { sets.push("type = ?"); params.push(options.type); }
   if (options.priority !== undefined) { sets.push("priority = ?"); params.push(options.priority); }

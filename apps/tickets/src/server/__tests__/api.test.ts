@@ -183,6 +183,17 @@ describe("PATCH /api/tickets/:id", () => {
     expect(body.data.priority).toBe("critical");
     expect(body.data.version).toBe(2);
   });
+
+  it("returns 400 when title is empty", async () => {
+    const createRes = await req("POST", "/api/tickets", { project_id: projectId, title: "Original" });
+    const created = await createRes.json() as { data: { short_id: string } };
+
+    const res = await req("PATCH", `/api/tickets/${created.data.short_id}`, { title: "   " });
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+  });
 });
 
 describe("POST /api/tickets/:id/close", () => {
