@@ -42,6 +42,43 @@ describe("redirect handler", () => {
     store.close();
   });
 
+  test("allows head checks without recording a click", async () => {
+    const store = new ShortlinksStore(dbPath);
+    store.addDomain({ hostname: "has.na", defaultDomain: true });
+    store.createLink({ destinationUrl: "https://example.com/landing", slug: "abc" });
+
+    const handler = createShortlinksHandler({ store });
+    const response = await handler(new Request("https://has.na/abc", {
+      method: "HEAD",
+      headers: { host: "has.na" },
+    }));
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("https://example.com/landing");
+    expect(store.getStats("has.na", "abc").clicks).toBe(0);
+
+    store.close();
+  });
+
+  test("rejects unsupported redirect methods without recording a click", async () => {
+    const store = new ShortlinksStore(dbPath);
+    store.addDomain({ hostname: "has.na", defaultDomain: true });
+    store.createLink({ destinationUrl: "https://example.com/landing", slug: "abc" });
+
+    const handler = createShortlinksHandler({ store });
+    const response = await handler(new Request("https://has.na/abc", {
+      method: "POST",
+      headers: { host: "has.na" },
+    }));
+
+    expect(response.status).toBe(405);
+    expect(response.headers.get("allow")).toBe("GET, HEAD");
+    expect(await response.json()).toEqual({ error: "Method not allowed." });
+    expect(store.getStats("has.na", "abc").clicks).toBe(0);
+
+    store.close();
+  });
+
   test("returns gone for disabled links", async () => {
     const store = new ShortlinksStore(dbPath);
     store.addDomain({ hostname: "has.na", defaultDomain: true });

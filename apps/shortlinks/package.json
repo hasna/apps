@@ -1,6 +1,6 @@
 {
   "name": "@hasna/shortlinks",
-  "version": "0.1.12",
+  "version": "0.1.19",
   "description": "CLI-only shortlink manager for custom domains, click tracking, Cloudflare setup, and @hasna cloud sync",
   "type": "module",
   "main": "dist/index.js",

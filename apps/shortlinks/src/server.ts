@@ -14,10 +14,14 @@ export interface ShortlinksHandlerOptions {
   redirectStatus?: 301 | 302 | 307 | 308;
 }
 
-function json(data: unknown, status = 200): Response {
+const REDIRECT_ALLOW_HEADER = "GET, HEAD";
+
+function json(data: unknown, status = 200, headers?: HeadersInit): Response {
+  const responseHeaders = new Headers(headers);
+  responseHeaders.set("content-type", "application/json; charset=utf-8");
   return new Response(JSON.stringify(data, null, 2), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8" },
+    headers: responseHeaders,
   });
 }
 
@@ -59,6 +63,10 @@ export function createShortlinksHandler(options: ShortlinksHandlerOptions = {}):
     }
     if (!slug) return json({ error: "Missing slug." }, 404);
 
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      return json({ error: "Method not allowed." }, 405, { allow: REDIRECT_ALLOW_HEADER });
+    }
+
     const host = getHost(request, options.defaultHost);
     if (!host) return json({ error: "Missing Host header." }, 400);
 
@@ -72,16 +80,18 @@ export function createShortlinksHandler(options: ShortlinksHandlerOptions = {}):
     if (!link.active) return json({ error: "Shortlink is disabled.", slug, host }, 410);
     if (isExpired(link)) return json({ error: "Shortlink is expired.", slug, host }, 410);
 
-    await store.recordClick(link, {
-      ip: getClientIp(request),
-      userAgent: request.headers.get("user-agent"),
-      referer: request.headers.get("referer"),
-      country: request.headers.get("cf-ipcountry"),
-      metadata: {
-        path: url.pathname,
-        query: url.search,
-      },
-    });
+    if (request.method === "GET") {
+      await store.recordClick(link, {
+        ip: getClientIp(request),
+        userAgent: request.headers.get("user-agent"),
+        referer: request.headers.get("referer"),
+        country: request.headers.get("cf-ipcountry"),
+        metadata: {
+          path: url.pathname,
+          query: url.search,
+        },
+      });
+    }
 
     return Response.redirect(link.destination_url, redirectStatus);
   };
