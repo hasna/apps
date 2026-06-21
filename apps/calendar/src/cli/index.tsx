@@ -10,12 +10,13 @@ import { createAttendee, getAttendeesForEvent, updateAttendee, deleteAttendee } 
 import { getAvailabilityForAgent, upsertAgentAvailability, deleteAvailability } from "../db/availability.js";
 import { createMembership, getMembershipsForOrg, getOrgsForAgent, deleteMembershipByAgentAndOrg } from "../db/memberships.js";
 
+const packageJson = await Bun.file(new URL("../../package.json", import.meta.url)).json() as { version: string };
 const program = new Command();
 
 program
   .name("calendar")
   .description("Universal calendar management for AI coding agents")
-  .version("0.1.0");
+  .version(packageJson.version);
 
 program.enablePositionalOptions();
 program.exitOverride();

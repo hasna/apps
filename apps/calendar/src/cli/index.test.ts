@@ -29,6 +29,20 @@ async function runCalendar(args: string[], dbPath: string) {
 }
 
 describe("calendar CLI", () => {
+  test("root --version matches package.json", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "calendar-cli-"));
+    try {
+      const packageJson = await Bun.file(new URL("../../package.json", import.meta.url)).json() as { version: string };
+      const result = await runCalendar(["--version"], join(tempDir, "calendar.db"));
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout.trim()).toBe(packageJson.version);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test("global --json emits parseable JSON output", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "calendar-cli-"));
     try {
