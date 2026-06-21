@@ -89,6 +89,25 @@ const SENSITIVE_PARAM_RE = /token|secret|key|password|code|state|cookie|session|
 const SENSITIVE_TEXT_RE =
   /\b(Bearer\s+[A-Za-z0-9._-]{12,}|sk-[A-Za-z0-9]{12,}|pk_[A-Za-z0-9]{12,}|eyJ[A-Za-z0-9._-]{12,})\b/g;
 const URL_TEXT_RE = /https?:\/\/[^\s"'<>]+/g;
+const SENSITIVE_FIELD_NAME = String.raw`(?:bearer[_-]?token|bearer|api[_-]?key|client[_-]?secret|authorization[_-]?code|oauth[_-]?code|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|token|secret|password|passwd|pwd|cookie|session|grant|credential|jwt|code|state|auth|access)`;
+const SENSITIVE_PATH_SEGMENT_RE = new RegExp(
+  String.raw`(?:^|[-_.])(?:api[_-]?key|client[_-]?secret|authorization[_-]?code|oauth[_-]?code|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|token|secret|password|passwd|pwd|cookie|grant|credential|jwt)(?:[-_.]|$)`,
+  "i",
+);
+const SENSITIVE_PATH_LABEL_RE = /^(?:api[_-]?key|client[_-]?secret|authorization[_-]?code|oauth[_-]?code|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|token|secret|password|passwd|pwd|cookie|grant|credential|jwt|code|state|auth|access)$/i;
+const SESSION_COLLECTION_PATH_LABEL_RE = /^sessions$/i;
+const COMPOUND_GRANT_PATH_LABEL_RE = /[-_.]grant$/i;
+const SECRET_LIKE_VALUE_RE = /^(?:Bearer\s+[A-Za-z0-9._-]{12,}|sk-[A-Za-z0-9._-]{12,}|pk_[A-Za-z0-9._-]{12,}|eyJ[A-Za-z0-9._-]{12,})[.!?),;:]*$/i;
+const SECRET_VALUE_PATTERN = String.raw`(?:Bearer\s+[A-Za-z0-9._-]{12,}|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}&]+)`;
+const SENSITIVE_ASSIGNMENT_RE = new RegExp(
+  String.raw`(["']?\b${SENSITIVE_FIELD_NAME}\b["']?\s*[:=]\s*)(${SECRET_VALUE_PATTERN})`,
+  "gi",
+);
+const SENSITIVE_OPTION_RE = new RegExp(
+  String.raw`(^|\s)(--${SENSITIVE_FIELD_NAME}\s+)(${SECRET_VALUE_PATTERN})`,
+  "gi",
+);
+const URL_PLACEHOLDER_RE = /__TESTERS_PROD_DEBUG_URL_(\d+)__/g;
 
 function safeUrl(raw: string): URL | null {
   try {
@@ -108,23 +127,142 @@ function normalizeOrigin(raw: string): string | null {
 }
 
 export function redactProdDebugText(value: string): string {
-  return value.replace(URL_TEXT_RE, (match) => {
+  const urls: string[] = [];
+  const textWithoutUrls = value.replace(URL_TEXT_RE, (match) => {
     const url = safeUrl(match);
-    return url ? redactUrl(url) : match;
-  }).replace(SENSITIVE_TEXT_RE, (match) => {
-    if (match.startsWith("Bearer ")) return "Bearer [redacted]";
-    return "[redacted]";
+    if (!url) return match;
+
+    const placeholder = `__TESTERS_PROD_DEBUG_URL_${urls.length}__`;
+    urls.push(redactUrl(url));
+    return placeholder;
   });
+
+  return redactPlainProdDebugText(textWithoutUrls)
+    .replace(URL_PLACEHOLDER_RE, (match, index: string) => urls[Number(index)] ?? match);
+}
+
+function redactPlainProdDebugText(value: string): string {
+  return value
+    .replace(SENSITIVE_ASSIGNMENT_RE, (_match, prefix: string, secret: string) => {
+      return `${prefix}${redactedSecretValue(secret)}`;
+    })
+    .replace(SENSITIVE_OPTION_RE, (_match, leading: string, option: string, secret: string) => {
+      return `${leading}${option}${redactedSecretValue(secret)}`;
+    })
+    .replace(SENSITIVE_TEXT_RE, (match) => {
+      if (match.startsWith("Bearer ")) return "Bearer [redacted]";
+      return "[redacted]";
+    });
+}
+
+function redactedSecretValue(value: string): string {
+  if (value.startsWith('"') && value.endsWith('"')) return '"[redacted]"';
+  if (value.startsWith("'") && value.endsWith("'")) return "'[redacted]'";
+  return "[redacted]";
 }
 
 function redactUrl(url: URL): string {
   const clone = new URL(url.toString());
+  clone.pathname = redactPathname(clone.pathname);
   for (const key of Array.from(clone.searchParams.keys())) {
-    if (SENSITIVE_PARAM_RE.test(key)) {
+    const value = clone.searchParams.get(key) ?? "";
+    if (shouldRedactUrlParam(key, value)) {
       clone.searchParams.set(key, "[redacted]");
     }
   }
+  if (clone.hash) {
+    clone.hash = redactUrlFragment(clone.hash.slice(1));
+  }
   return clone.toString();
+}
+
+function redactUrlFragment(fragment: string): string {
+  if (!fragment) return fragment;
+
+  const queryIndex = fragment.indexOf("?");
+  if (queryIndex >= 0) {
+    const prefix = fragment.slice(0, queryIndex);
+    const query = fragment.slice(queryIndex + 1);
+    return looksLikeParamString(query)
+      ? `${redactFragmentPath(prefix)}?${redactParamString(query)}`
+      : redactPlainProdDebugText(fragment);
+  }
+
+  if (fragment.startsWith("/")) return redactFragmentPath(fragment);
+
+  const paramText = fragment.startsWith("?") ? fragment.slice(1) : fragment;
+  if (!looksLikeParamString(paramText)) return redactPlainProdDebugText(fragment);
+
+  const redacted = redactParamString(paramText);
+  return fragment.startsWith("?") ? `?${redacted}` : redacted;
+}
+
+function redactFragmentPath(path: string): string {
+  return fragmentPathNeedsRedaction(path)
+    ? redactPathname(path)
+    : redactPlainProdDebugText(path);
+}
+
+function fragmentPathNeedsRedaction(path: string): boolean {
+  return path
+    .split("/")
+    .some((segment) => segment && isSensitivePathSegment(safeDecodeURIComponent(segment)));
+}
+
+function redactParamString(value: string): string {
+  const params = new URLSearchParams(value);
+  let redacted = false;
+  for (const key of Array.from(params.keys())) {
+    const paramValue = params.get(key) ?? "";
+    if (shouldRedactUrlParam(key, paramValue)) {
+      params.set(key, "[redacted]");
+      redacted = true;
+    }
+  }
+
+  return redacted ? params.toString() : value;
+}
+
+function looksLikeParamString(value: string): boolean {
+  return /^[A-Za-z0-9_.-]+=/.test(value);
+}
+
+function shouldRedactUrlParam(key: string, value: string): boolean {
+  return SENSITIVE_PARAM_RE.test(key) || SECRET_LIKE_VALUE_RE.test(value);
+}
+
+function redactPathname(pathname: string): string {
+  let redactNextSegment = false;
+  return pathname
+    .split("/")
+    .map((segment) => {
+      if (!segment) return segment;
+      const decoded = safeDecodeURIComponent(segment);
+      const shouldRedact = redactNextSegment || isSensitivePathSegment(decoded);
+      redactNextSegment = isSensitivePathLabel(decoded);
+      return shouldRedact ? encodeURIComponent("[redacted]") : segment;
+    })
+    .join("/");
+}
+
+function isSensitivePathLabel(segment: string): boolean {
+  return (
+    SENSITIVE_PATH_LABEL_RE.test(segment) ||
+    SESSION_COLLECTION_PATH_LABEL_RE.test(segment) ||
+    COMPOUND_GRANT_PATH_LABEL_RE.test(segment)
+  );
+}
+
+function isSensitivePathSegment(segment: string): boolean {
+  return SENSITIVE_PATH_SEGMENT_RE.test(segment) || SECRET_LIKE_VALUE_RE.test(segment);
+}
+
+function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 function redactUrlString(value: string): string {
@@ -154,9 +292,10 @@ export function parseProdDebugTarget(target: string): ProdDebugIdentifiers {
   const sessionsIndex = parts.indexOf("sessions");
   const orgSlug = projectsIndex > 0 ? parts[0] ?? null : null;
   const projectRef = projectsIndex >= 0 ? parts[projectsIndex + 1] ?? null : null;
-  const sessionId =
+  const sessionId = redactedSessionId(
     url.searchParams.get("session") ??
-    (sessionsIndex >= 0 ? parts[sessionsIndex + 1] ?? null : null);
+    (sessionsIndex >= 0 ? parts[sessionsIndex + 1] ?? null : null),
+  );
 
   return {
     url: redactUrl(url),
@@ -232,10 +371,16 @@ function firstResolvedCredential(...values: Array<string | undefined>): string |
   return null;
 }
 
-function displayCredential(value: string | null, source?: string): string | null {
+function displaySupportGrant(value: string | null, source?: string): string | null {
   if (!value) return null;
   if (source && isCredentialReference(source)) return "[configured]";
-  return redactProdDebugText(value);
+  return "[redacted]";
+}
+
+function redactedSessionId(value: string | null): string | null {
+  if (!value) return null;
+  if (UUID_RE.test(value)) return value;
+  return "[redacted]";
 }
 
 function replacementValues(
@@ -253,7 +398,7 @@ function replacementValues(
     request: target.requestId ?? "",
     rawId: target.rawId ?? "",
     reason: input.reason ?? "",
-    supportGrant: supportGrant ?? "",
+    supportGrant: supportGrant ? "[redacted]" : "",
   };
 
   for (const [key, value] of Object.entries({ ...values })) {
@@ -275,14 +420,14 @@ function resolveSupportGrant(input: ProdDebugInput, profile: ProdDebugAppProfile
   if (input.supportGrantId?.trim()) {
     return {
       value: input.supportGrantId.trim(),
-      display: displayCredential(input.supportGrantId.trim()),
+      display: displaySupportGrant(input.supportGrantId.trim()),
       source: "input",
     };
   }
 
   const source = profile?.supportGrantRef ?? profile?.supportGrantId ?? null;
   const value = firstResolvedCredential(profile?.supportGrantRef, profile?.supportGrantId);
-  return { value, display: displayCredential(value, source ?? undefined), source };
+  return { value, display: displaySupportGrant(value, source ?? undefined), source };
 }
 
 function resolveSupportUrl(
@@ -348,21 +493,24 @@ export function createProdDebugPlan(input: ProdDebugInput, config?: ProdDebugCon
   const browserRequested = input.includeBrowser !== false;
   const resolvedProfile = resolveProfile(input, target, config);
   const supportGrant = resolveSupportGrant(input, resolvedProfile.profile);
-  const supportUrl = resolveSupportUrl(input, target, resolvedProfile.profile, supportGrant.value);
-  const supportBrowserReady = Boolean(supportUrl);
   const app =
     input.app?.trim() ||
     resolvedProfile.profile?.name ||
     resolvedProfile.key ||
     (target.origin ? new URL(target.origin).hostname : "app");
-  const reason = input.reason?.trim() || "production debug requested";
+  const reason = input.reason?.trim()
+    ? redactProdDebugText(input.reason.trim())
+    : "production debug requested";
+  const sanitizedInput = { ...input, reason };
+  const supportUrl = resolveSupportUrl(sanitizedInput, target, resolvedProfile.profile, supportGrant.value);
+  const supportBrowserReady = Boolean(supportUrl);
   const actor = input.actor?.trim() || process.env["USER"] || "agent";
   const ttlMinutes = boundedTtl(input.ttlMinutes);
   const piiOrigin = resolvePiiOrigin(resolvedProfile.profile, target);
   const logCommand = resolvedProfile.profile?.logCommand
     ? redactUrlString(renderTemplate(
       resolvedProfile.profile.logCommand,
-      replacementValues(target, { ...input, reason }, supportGrant.value),
+      replacementValues(target, sanitizedInput, supportGrant.value),
     ))
     : null;
 
