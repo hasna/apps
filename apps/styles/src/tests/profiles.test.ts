@@ -135,12 +135,51 @@ describe("active profile", () => {
     expect(active!.id).toBe(profile.id);
   });
 
+  test("resolves project-scoped built-in profile ids", () => {
+    const builtin = getBuiltinStyleProfile("brutalist");
+    setActiveProfile("/my/project", builtin.id);
+
+    const active = getActiveProfile("/my/project");
+
+    expect(active).not.toBeNull();
+    expect(active!.id).toBe("builtin:brutalist");
+    expect(active!.name).toBe("brutalist");
+    expect(active!.builtin).toBe(true);
+  });
+
+  test("treats builtin-prefixed refs as reserved ids", () => {
+    createProfile({
+      ...FIXTURE_INPUT,
+      name: "builtin:brutalist",
+      displayName: "Shadow Profile",
+    });
+    setActiveProfile("/my/project", "builtin:brutalist");
+
+    const active = getActiveProfile("/my/project");
+
+    expect(active).not.toBeNull();
+    expect(active!.id).toBe("builtin:brutalist");
+    expect(active!.name).toBe("brutalist");
+    expect(active!.builtin).toBe(true);
+  });
+
   test("falls back to global preference", () => {
     const profile = createProfile(FIXTURE_INPUT);
     setPref("active_profile", profile.id, "global");
     const active = getActiveProfile("/some/other/project");
     expect(active).not.toBeNull();
     expect(active!.name).toBe("test-style");
+  });
+
+  test("resolves global built-in profile ids", () => {
+    setPref("active_profile", "builtin:corporate", "global");
+
+    const active = getActiveProfile("/some/other/project");
+
+    expect(active).not.toBeNull();
+    expect(active!.id).toBe("builtin:corporate");
+    expect(active!.name).toBe("corporate");
+    expect(active!.builtin).toBe(true);
   });
 
   test("setActiveProfile updates existing config", () => {

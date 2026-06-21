@@ -105,6 +105,18 @@ export function listProfiles(): StyleProfile[] {
   return rows.map((r) => rowToProfile(r));
 }
 
+function resolveProfileRef(ref: string): StyleProfile | null {
+  if (ref.startsWith("builtin:")) {
+    const builtinName = ref.slice("builtin:".length);
+    return getStyle(builtinName) ? getBuiltinStyleProfile(builtinName) : null;
+  }
+
+  const custom = getProfile(ref) ?? getProfileByName(ref);
+  if (custom) return custom;
+
+  return getStyle(ref) ? getBuiltinStyleProfile(ref) : null;
+}
+
 export function updateProfile(
   id: string,
   changes: Partial<CreateProfileInput>
@@ -180,7 +192,7 @@ export function getActiveProfile(
     .get(projectPath) as { profile_id: string | null } | null;
 
   if (config?.profile_id) {
-    const profile = getProfile(config.profile_id);
+    const profile = resolveProfileRef(config.profile_id);
     if (profile) return profile;
   }
 
@@ -192,7 +204,7 @@ export function getActiveProfile(
     .get() as { value: string } | null;
 
   if (pref?.value) {
-    const profile = getProfile(pref.value) ?? getProfileByName(pref.value);
+    const profile = resolveProfileRef(pref.value);
     if (profile) return profile;
   }
 
