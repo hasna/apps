@@ -142,8 +142,6 @@ export async function fetchPage(
         }
       }
 
-      clearTimeout(timeoutId);
-
       const contentType = response.headers.get("content-type") ?? "";
       const responseHeaders = headersToRecord(response.headers);
 
@@ -154,7 +152,8 @@ export async function fetchPage(
         const buffer = await response.arrayBuffer();
         byteSize = buffer.byteLength;
         html = new TextDecoder("utf-8", { fatal: false }).decode(buffer);
-      } catch {
+      } catch (err) {
+        if (controller.signal.aborted) throw err;
         html = "";
         byteSize = 0;
       }
@@ -169,11 +168,12 @@ export async function fetchPage(
         byteSize,
       };
     } catch (err) {
-      clearTimeout(timeoutId);
       lastError = err instanceof Error ? err : new Error(String(err));
 
       // Don't retry on abort (timeout)
-      if (lastError.name === "AbortError") break;
+      if (controller.signal.aborted || lastError.name === "AbortError") break;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/crawl",
-  "version": "0.4.12",
+  "version": "0.4.13",
   "description": "AI-powered web crawler — self-hosted Firecrawl alternative. Crawl, extract, render JS, search. CLI + MCP + REST API + Dashboard.",
   "type": "module",
   "main": "dist/index.js",
