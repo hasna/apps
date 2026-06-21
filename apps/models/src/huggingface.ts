@@ -101,7 +101,7 @@ function safeDestinationPath(root: string, filePath: string): string {
   return destination;
 }
 
-function normalizeEntry(raw: Record<string, unknown>, kind: EntityKind): CatalogEntry {
+function normalizeEntry(raw: Record<string, unknown>, kind: EntityKind, fallbackRevision = "main"): CatalogEntry {
   const repoId = String(raw.id ?? raw.modelId ?? "");
   const tags = Array.isArray(raw.tags) ? raw.tags.map(String) : [];
   const cardData = raw.cardData;
@@ -109,7 +109,7 @@ function normalizeEntry(raw: Record<string, unknown>, kind: EntityKind): Catalog
     provider: "huggingface",
     entityKind: kind,
     repoId,
-    revision: String(raw.sha ?? "main"),
+    revision: String(raw.sha ?? fallbackRevision),
     canonicalUrl: canonicalUrl(kind, repoId),
     title: repoId,
     author: typeof raw.author === "string" ? raw.author : repoId.split("/")[0],
@@ -195,8 +195,11 @@ export async function searchHuggingFace(input: SearchInput = {}): Promise<Catalo
 
 export async function getHuggingFaceInfo(refOrInput: ProviderRef | string, defaultKind: EntityKind = "model"): Promise<CatalogEntry> {
   const ref = typeof refOrInput === "string" ? parseProviderRef(refOrInput, defaultKind) : refOrInput;
-  const raw = await hfJson<Record<string, unknown>>(`/api/${apiKind(ref.entityKind)}/${encodeRepoId(ref.repoId)}`);
-  return normalizeEntry(raw, ref.entityKind);
+  const revision = ref.revision || "main";
+  const raw = await hfJson<Record<string, unknown>>(
+    `/api/${apiKind(ref.entityKind)}/${encodeRepoId(ref.repoId)}/revision/${encodeURIComponent(revision)}`,
+  );
+  return normalizeEntry(raw, ref.entityKind, revision);
 }
 
 export async function listHuggingFaceFiles(refOrInput: ProviderRef | string, defaultKind: EntityKind = "model"): Promise<RemoteFileEntry[]> {

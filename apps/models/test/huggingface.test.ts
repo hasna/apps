@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { downloadPlannedFiles, listHuggingFaceFiles, matchesFilePattern } from "../src/huggingface.js";
+import { downloadPlannedFiles, getHuggingFaceInfo, listHuggingFaceFiles, matchesFilePattern } from "../src/huggingface.js";
 
 test("include patterns match exact basenames without substring bleed", () => {
   expect(matchesFilePattern("config.json", "config.json")).toBe(true);
@@ -24,6 +24,47 @@ test("file listing surfaces Hub auth failures instead of falling back to sibling
     await expect(listHuggingFaceFiles("hf:owner/private")).rejects.toThrow("401 Unauthorized");
     expect(calls).toHaveLength(1);
     expect(calls[0]).toContain("/api/models/owner/private/tree/main");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("info fetches revision-scoped metadata for explicit refs", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = async (input) => {
+    calls.push(String(input));
+    return Response.json({
+      id: "owner/repo",
+      sha: "resolved-commit",
+      tags: ["text-generation"],
+      private: false,
+      gated: false,
+    });
+  };
+
+  try {
+    const info = await getHuggingFaceInfo("hf:owner/repo@feature-branch");
+    expect(info.revision).toBe("resolved-commit");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("/api/models/owner/repo/revision/feature-branch");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("info preserves the requested revision when metadata omits sha", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({
+    id: "owner/repo",
+    tags: [],
+    private: false,
+    gated: false,
+  });
+
+  try {
+    const info = await getHuggingFaceInfo("hf:owner/repo@v1.2.3");
+    expect(info.revision).toBe("v1.2.3");
   } finally {
     globalThis.fetch = originalFetch;
   }
