@@ -190,6 +190,48 @@ describe("api-runner", () => {
       expect(capturedOptions?.method).toBe("POST");
     });
 
+    test("does not mutate check headers when adding default content type", async () => {
+      let capturedOptions: RequestInit | undefined;
+      global.fetch = mock((_url: string, opts?: RequestInit) => {
+        capturedOptions = opts;
+        return Promise.resolve(mockResponse(201, '{"id":"123"}'));
+      });
+
+      const check = makeCheck({
+        method: "POST",
+        headers: { "X-Test": "yes" },
+        body: '{"name":"Alice"}',
+        expectedStatus: 201,
+      });
+      await runApiCheck(check);
+
+      expect(capturedOptions?.headers).toEqual({
+        "X-Test": "yes",
+        "Content-Type": "application/json",
+      });
+      expect(check.headers).toEqual({ "X-Test": "yes" });
+    });
+
+    test("respects existing content type header case-insensitively", async () => {
+      let capturedOptions: RequestInit | undefined;
+      global.fetch = mock((_url: string, opts?: RequestInit) => {
+        capturedOptions = opts;
+        return Promise.resolve(mockResponse(201, '{"id":"123"}'));
+      });
+
+      const check = makeCheck({
+        method: "POST",
+        headers: { "content-type": "text/plain" },
+        body: "name=Alice",
+        expectedStatus: 201,
+      });
+      await runApiCheck(check);
+
+      expect(capturedOptions?.headers).toEqual({
+        "content-type": "text/plain",
+      });
+    });
+
     test("stores response body in result", async () => {
       global.fetch = mock(() => Promise.resolve(mockResponse(200, '{"data":"value"}')));
 

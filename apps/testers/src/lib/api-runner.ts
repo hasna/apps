@@ -10,6 +10,11 @@ export interface RunApiCheckOptions {
   baseUrl?: string;
 }
 
+function hasHeader(headers: Record<string, string>, name: string): boolean {
+  const normalized = name.toLowerCase();
+  return Object.keys(headers).some((key) => key.toLowerCase() === normalized);
+}
+
 export async function runApiCheck(
   check: ApiCheck,
   options?: RunApiCheckOptions,
@@ -29,16 +34,17 @@ export async function runApiCheck(
   const timeoutId = setTimeout(() => controller.abort(), check.timeoutMs);
 
   try {
+    const headers = { ...check.headers };
     const fetchOptions: RequestInit = {
       method: check.method,
-      headers: check.headers as Record<string, string>,
+      headers,
       signal: controller.signal,
     };
 
     if (check.body && ["POST", "PUT", "PATCH"].includes(check.method)) {
       fetchOptions.body = check.body;
-      if (!(fetchOptions.headers as Record<string, string>)["Content-Type"]) {
-        (fetchOptions.headers as Record<string, string>)["Content-Type"] = "application/json";
+      if (!hasHeader(headers, "Content-Type")) {
+        headers["Content-Type"] = "application/json";
       }
     }
 
