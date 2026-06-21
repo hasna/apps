@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseServerCliArgs, getServerHelpText, resolveServerPort } from "./index.js";
+import { parseServerCliArgs, getServerHelpText, resolveServerPort, createServer } from "./index.js";
 
 describe("server CLI flags", () => {
   test("prints help and exits when --help is used", () => {
@@ -64,5 +64,24 @@ describe("server CLI flags", () => {
   test("throws on missing port value", () => {
     expect(() => parseServerCliArgs(["--port"]))
       .toThrow("Missing value for --port");
+  });
+});
+
+describe("server HTTP API", () => {
+  test("returns 400 for malformed JSON request bodies", async () => {
+    const server = createServer(0);
+
+    try {
+      const response = await fetch(`http://localhost:${server.port}/validate`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{",
+      });
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "Invalid JSON body" });
+    } finally {
+      server.stop(true);
+    }
   });
 });

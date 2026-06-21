@@ -9,6 +9,16 @@ export const DEFAULT_PORT = 7070;
 
 type PortEnv = Record<string, string | undefined>;
 
+class HttpError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string
+  ) {
+    super(message);
+    this.name = "HttpError";
+  }
+}
+
 export function getServerHelpText(): string {
   return [
     "Usage: omp-serve [options]",
@@ -122,7 +132,7 @@ export function createServer(port: number = resolveServerPort()) {
 
           case "/validate": {
             if (req.method !== "POST") return methodNotAllowed(headers);
-            const body = await req.json() as { file?: string; content?: string };
+            const body = await parseJsonBody<{ file?: string; content?: string }>(req);
             const doc = body.file ? parseFromFile(body.file) : parseFromString(body.content ?? "");
             const errors = validate(doc);
             const errorCount = errors.filter((e) => e.level === "error").length;
@@ -136,7 +146,7 @@ export function createServer(port: number = resolveServerPort()) {
 
           case "/compile": {
             if (req.method !== "POST") return methodNotAllowed(headers);
-            const body = await req.json() as { file?: string; content?: string };
+            const body = await parseJsonBody<{ file?: string; content?: string }>(req);
             const doc = body.file ? parseFromFile(body.file) : parseFromString(body.content ?? "");
             const plan = compile(doc);
             return Response.json(plan, { headers });
@@ -144,7 +154,7 @@ export function createServer(port: number = resolveServerPort()) {
 
           case "/inspect": {
             if (req.method !== "POST") return methodNotAllowed(headers);
-            const body = await req.json() as { file?: string; content?: string };
+            const body = await parseJsonBody<{ file?: string; content?: string }>(req);
             const doc = body.file ? parseFromFile(body.file) : parseFromString(body.content ?? "");
             const plan = compile(doc);
             return Response.json({
@@ -159,7 +169,7 @@ export function createServer(port: number = resolveServerPort()) {
 
           case "/lint": {
             if (req.method !== "POST") return methodNotAllowed(headers);
-            const body = await req.json() as { file?: string; content?: string };
+            const body = await parseJsonBody<{ file?: string; content?: string }>(req);
             const doc = body.file ? parseFromFile(body.file) : parseFromString(body.content ?? "");
             const issues = validateAndLint(doc);
             return Response.json({
@@ -172,7 +182,7 @@ export function createServer(port: number = resolveServerPort()) {
 
           case "/run": {
             if (req.method !== "POST") return methodNotAllowed(headers);
-            const body = await req.json() as { file: string; output_dir?: string; dry_run?: boolean };
+            const body = await parseJsonBody<{ file: string; output_dir?: string; dry_run?: boolean }>(req);
             if (!body.file) return Response.json({ error: "file is required" }, { status: 422, headers });
             const result = await run(body.file, {
               outputDir: body.output_dir ?? ".",
@@ -185,9 +195,10 @@ export function createServer(port: number = resolveServerPort()) {
             return Response.json({ error: "Not found" }, { status: 404, headers });
         }
       } catch (error) {
+        const status = error instanceof HttpError ? error.status : 500;
         return Response.json(
           { error: error instanceof Error ? error.message : String(error) },
-          { status: 500, headers }
+          { status, headers }
         );
       }
     },
@@ -213,6 +224,14 @@ export function main(args: string[] = process.argv.slice(2)) {
 
 function methodNotAllowed(headers: Record<string, string>) {
   return Response.json({ error: "Method not allowed" }, { status: 405, headers });
+}
+
+async function parseJsonBody<T>(req: Request): Promise<T> {
+  try {
+    return await req.json() as T;
+  } catch {
+    throw new HttpError(400, "Invalid JSON body");
+  }
 }
 
 if (import.meta.main) {
