@@ -2,9 +2,39 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { Database } from "bun:sqlite";
 import { getDbPath } from "./paths.js";
-import type { CatalogEntry, InstalledArtifact, RemoteFileEntry } from "./types.js";
+import { parseProviderRef } from "./ref.js";
+import type { CatalogEntry, InstalledArtifact, ProviderRef, RemoteFileEntry } from "./types.js";
 
 const SCHEMA_VERSION = 1;
+
+function rowToInstall(row: Record<string, unknown>): InstalledArtifact {
+  return {
+    id: String(row.id),
+    provider: String(row.provider),
+    entityKind: String(row.entity_kind) as InstalledArtifact["entityKind"],
+    repoId: String(row.repo_id),
+    revision: String(row.revision),
+    installPath: String(row.install_path),
+    bytes: Number(row.bytes),
+    files: JSON.parse(String(row.files_json)) as string[],
+    status: String(row.status) as InstalledArtifact["status"],
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function parseInstallRef(input: string): { ref: ProviderRef; hasExplicitRevision: boolean } | null {
+  try {
+    const trimmed = input.trim();
+    const ref = parseProviderRef(trimmed);
+    return {
+      ref,
+      hasExplicitRevision: trimmed.includes("@"),
+    };
+  } catch {
+    return null;
+  }
+}
 
 export class ModelsStore {
   readonly db: Database;
@@ -227,27 +257,30 @@ export class ModelsStore {
 
   listInstalls(): InstalledArtifact[] {
     const rows = this.db.query<Record<string, unknown>, []>("SELECT * FROM installs ORDER BY updated_at DESC").all();
-    return rows.map((row) => ({
-      id: String(row.id),
-      provider: String(row.provider),
-      entityKind: String(row.entity_kind) as InstalledArtifact["entityKind"],
-      repoId: String(row.repo_id),
-      revision: String(row.revision),
-      installPath: String(row.install_path),
-      bytes: Number(row.bytes),
-      files: JSON.parse(String(row.files_json)) as string[],
-      status: String(row.status) as InstalledArtifact["status"],
-      createdAt: String(row.created_at),
-      updatedAt: String(row.updated_at),
-    }));
+    return rows.map(rowToInstall);
   }
 
   findInstall(repoIdOrId: string): InstalledArtifact | null {
     const row = this.db.query<Record<string, unknown>, [string, string]>(
       "SELECT * FROM installs WHERE id = ? OR repo_id = ? ORDER BY updated_at DESC LIMIT 1",
     ).get(repoIdOrId, repoIdOrId);
-    if (!row) return null;
-    return this.listInstalls().find((install) => install.id === row.id) ?? null;
+    if (row) return rowToInstall(row);
+
+    const parsed = parseInstallRef(repoIdOrId);
+    if (!parsed) return null;
+
+    const refRow = parsed.hasExplicitRevision
+      ? this.db.query<Record<string, unknown>, [string, string, string, string]>(
+        `SELECT * FROM installs
+         WHERE provider = ? AND entity_kind = ? AND repo_id = ? AND revision = ?
+         ORDER BY updated_at DESC LIMIT 1`,
+      ).get(parsed.ref.provider, parsed.ref.entityKind, parsed.ref.repoId, parsed.ref.revision)
+      : this.db.query<Record<string, unknown>, [string, string, string]>(
+        `SELECT * FROM installs
+         WHERE provider = ? AND entity_kind = ? AND repo_id = ?
+         ORDER BY updated_at DESC LIMIT 1`,
+      ).get(parsed.ref.provider, parsed.ref.entityKind, parsed.ref.repoId);
+    return refRow ? rowToInstall(refRow) : null;
   }
 
   deleteInstall(id: string): boolean {
