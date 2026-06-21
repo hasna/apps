@@ -17,9 +17,29 @@ function rowToAvailability(row: any): Availability {
   };
 }
 
+function parseAvailabilityTime(value: string): number {
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value);
+  if (!match) {
+    throw new RangeError("Availability times must use HH:mm format between 00:00 and 23:59");
+  }
+
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function assertValidAvailabilityWindow(dayOfWeek: number, startTime: string, endTime: string): void {
+  if (!Number.isInteger(dayOfWeek) || dayOfWeek < 0 || dayOfWeek > 6) {
+    throw new RangeError("Availability day_of_week must be an integer from 0 to 6");
+  }
+
+  if (parseAvailabilityTime(endTime) <= parseAvailabilityTime(startTime)) {
+    throw new RangeError("Availability end_time must be after start_time");
+  }
+}
+
 export function createAvailability(input: CreateAvailabilityInput, db?: Database): Availability {
   db = db || getDatabase();
   const id = crypto.randomUUID().slice(0, 8);
+  assertValidAvailabilityWindow(input.day_of_week, input.start_time, input.end_time);
 
   db.run(
     `INSERT INTO availability (id, agent_id, org_id, day_of_week, start_time, end_time, exceptions) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -50,10 +70,13 @@ export function updateAvailability(id: string, updates: { start_time?: string; e
   db = db || getDatabase();
   const existing = getAvailability(id, db);
   if (!existing) throw new NotFoundError("Availability", id);
+  const startTime = updates.start_time ?? existing.start_time;
+  const endTime = updates.end_time ?? existing.end_time;
+  assertValidAvailabilityWindow(existing.day_of_week, startTime, endTime);
 
   db.run(
     `UPDATE availability SET start_time = ?, end_time = ?, exceptions = ?, updated_at = datetime('now') WHERE id = ?`,
-    [updates.start_time ?? existing.start_time, updates.end_time ?? existing.end_time, updates.exceptions !== undefined ? (updates.exceptions ? JSON.stringify(updates.exceptions) : null) : (existing.exceptions ? JSON.stringify(existing.exceptions) : null), id]
+    [startTime, endTime, updates.exceptions !== undefined ? (updates.exceptions ? JSON.stringify(updates.exceptions) : null) : (existing.exceptions ? JSON.stringify(existing.exceptions) : null), id]
   );
 
   return getAvailability(id, db)!;
@@ -68,6 +91,7 @@ export function deleteAvailability(id: string, db?: Database): boolean {
 /** Set all availability for an agent/org — replaces existing entries for the given day_of_week */
 export function upsertAgentAvailability(agentId: string, orgId: string, dayOfWeek: number, startTime: string, endTime: string, db?: Database): Availability {
   db = db || getDatabase();
+  assertValidAvailabilityWindow(dayOfWeek, startTime, endTime);
 
   // Delete existing for this agent/org/day
   const existing = db.query("SELECT * FROM availability WHERE agent_id = ? AND org_id = ? AND day_of_week = ?").all(agentId, orgId, dayOfWeek);
