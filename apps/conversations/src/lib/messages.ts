@@ -117,6 +117,10 @@ export function sendMessage(opts: SendMessageOptions): Message {
 
   checkRateLimit(opts.from);
 
+  const validatedAttachments = opts.attachments && opts.attachments.length > 0
+    ? opts.attachments.map((att) => validateAttachment(att.source_path, att.name))
+    : [];
+
   const db = getDb();
   const explicitSession = opts.session_id && opts.session_id.trim().length > 0 ? opts.session_id : undefined;
   const sessionId = explicitSession
@@ -158,13 +162,12 @@ export function sendMessage(opts: SendMessageOptions): Message {
   const message = parseMessage(row);
 
   // Handle file attachments
-  if (opts.attachments && opts.attachments.length > 0) {
+  if (validatedAttachments.length > 0) {
     const attachmentsDir = join(getAttachmentsDir(), String(message.id));
     mkdirSync(attachmentsDir, { recursive: true });
 
     const attachmentInfos: Attachment[] = [];
-    for (const att of opts.attachments) {
-      const { safeSource, safeName } = validateAttachment(att.source_path, att.name);
+    for (const { safeSource, safeName } of validatedAttachments) {
       const destPath = join(attachmentsDir, safeName);
       copyFileSync(safeSource, destPath);
       const stat = statSync(destPath);

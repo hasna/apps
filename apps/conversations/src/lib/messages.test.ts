@@ -756,6 +756,31 @@ describe("attachments", () => {
     const msg = sendMessage({ from: "alice", to: "bob", content: "no files" });
     expect(msg.attachments).toBeNull();
   });
+
+  test("does not persist message when attachment source is missing", () => {
+    expect(() => sendMessage({
+      from: "alice",
+      to: "bob",
+      content: "bad attachment",
+      attachments: [{ name: "missing.txt", source_path: join(TEMP_DIR, "missing.txt") }],
+    })).toThrow("Attachment source not found");
+
+    expect(readMessages()).toHaveLength(0);
+  });
+
+  test("does not persist message when attachment name is invalid", () => {
+    const srcFile = join(TEMP_DIR, "secret.txt");
+    writeFileSync(srcFile, "secret");
+
+    expect(() => sendMessage({
+      from: "alice",
+      to: "bob",
+      content: "bad attachment name",
+      attachments: [{ name: ".env", source_path: srcFile }],
+    })).toThrow("Invalid attachment name");
+
+    expect(readMessages()).toHaveLength(0);
+  });
 });
 
 describe("readDigest", () => {
