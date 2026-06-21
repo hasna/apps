@@ -1,5 +1,14 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { unlinkSync, existsSync, mkdirSync, rmdirSync, writeFileSync, readdirSync } from "fs";
+import {
+  unlinkSync,
+  existsSync,
+  mkdirSync,
+  rmdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+} from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -141,5 +150,109 @@ describe("applyTemplate", () => {
     });
     const result = applyTemplate(tpl.id, testProjectDir);
     expect(result.success).toBe(true);
+  });
+
+  test("rejects OUTPUT_FILES paths that escape the project directory", () => {
+    const escapeName = `escaped-${Date.now()}-${Math.random().toString(36).slice(2)}.css`;
+    const escapePath = join(testProjectDir, "..", escapeName);
+    const tpl = createTemplate({
+      ...FIXTURE_INPUT,
+      variables: {
+        OUTPUT_FILES: JSON.stringify([{ path: `../${escapeName}`, content: "body { color: red; }" }]),
+      },
+    });
+
+    const result = applyTemplate(tpl.id, testProjectDir);
+    const escapedExists = existsSync(escapePath);
+    if (escapedExists) unlinkSync(escapePath);
+
+    expect(result.success).toBe(false);
+    expect(result.errors).toContain(`Template output path escapes project directory: ../${escapeName}`);
+    expect(escapedExists).toBe(false);
+  });
+
+  test("rejects _FILE keys that escape the project directory", () => {
+    const escapeName = `escaped-${Date.now()}-${Math.random().toString(36).slice(2)}.css`;
+    const escapePath = join(testProjectDir, "..", escapeName);
+    const tpl = createTemplate({
+      ...FIXTURE_INPUT,
+      variables: { [`.._${escapeName}_FILE`]: "body { color: red; }" },
+    });
+
+    const result = applyTemplate(tpl.id, testProjectDir);
+    const escapedExists = existsSync(escapePath);
+    if (escapedExists) unlinkSync(escapePath);
+
+    expect(result.success).toBe(false);
+    expect(result.errors).toContain(`Template output path escapes project directory: ../${escapeName}`);
+    expect(escapedExists).toBe(false);
+  });
+
+  test("rejects output files that escape through a symlinked directory", () => {
+    const outsideDir = join(tmpdir(), `styles-tpl-outside-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(outsideDir, { recursive: true });
+    symlinkSync(outsideDir, join(testProjectDir, "linked"), "dir");
+
+    const tpl = createTemplate({
+      ...FIXTURE_INPUT,
+      variables: {
+        OUTPUT_FILES: JSON.stringify([{ path: "linked/escaped.css", content: "body { color: red; }" }]),
+      },
+    });
+
+    try {
+      const result = applyTemplate(tpl.id, testProjectDir);
+      const escapedPath = join(outsideDir, "escaped.css");
+      const escapedExists = existsSync(escapedPath);
+      if (escapedExists) unlinkSync(escapedPath);
+
+      expect(result.success).toBe(false);
+      expect(result.errors).toContain("Template output path escapes project directory: linked/escaped.css");
+      expect(escapedExists).toBe(false);
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  test("does not overwrite template-provided style context when project path is relative", () => {
+    const baseDir = join(tmpdir(), `styles-tpl-relative-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const projectName = "project";
+    const stylePath = join(baseDir, projectName, ".styles", "style.md");
+    const previousCwd = process.cwd();
+
+    mkdirSync(join(baseDir, projectName), { recursive: true });
+    process.chdir(baseDir);
+
+    try {
+      const tpl = createTemplate({
+        ...FIXTURE_INPUT,
+        variables: {
+          OUTPUT_FILES: JSON.stringify([{ path: ".styles/style.md", content: "CUSTOM STYLE" }]),
+        },
+      });
+
+      const result = applyTemplate(tpl.id, projectName);
+
+      expect(result.success).toBe(true);
+      expect(readFileSync(stylePath, "utf-8")).toBe("CUSTOM STYLE");
+      expect(result.filesCreated.filter((path) => path.endsWith(".styles/style.md")).length).toBe(1);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(baseDir, { recursive: true, force: true });
+    }
+  });
+
+  test("allows in-project output path names that start with two dots", () => {
+    const tpl = createTemplate({
+      ...FIXTURE_INPUT,
+      variables: {
+        OUTPUT_FILES: JSON.stringify([{ path: "..generated/theme.css", content: "body { color: green; }" }]),
+      },
+    });
+
+    const result = applyTemplate(tpl.id, testProjectDir);
+
+    expect(result.success).toBe(true);
+    expect(existsSync(join(testProjectDir, "..generated", "theme.css"))).toBe(true);
   });
 });

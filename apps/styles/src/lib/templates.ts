@@ -1,6 +1,6 @@
 import { getDb } from "./db.js";
-import { writeFileSync, mkdirSync, existsSync } from "fs";
-import { join, dirname } from "path";
+import { writeFileSync, mkdirSync, existsSync, realpathSync } from "fs";
+import { dirname, resolve, relative, isAbsolute, sep } from "path";
 
 export interface StyleTemplate {
   id: string;
@@ -37,6 +37,44 @@ function rowToTemplate(row: Record<string, unknown>): StyleTemplate {
  */
 function interpolate(template: string, vars: Record<string, string>): string {
   return template.replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] ?? `{{${key}}}`);
+}
+
+function pathEscapesRoot(root: string, target: string): boolean {
+  const relativePath = relative(root, target);
+  return relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath);
+}
+
+function findExistingAncestor(path: string): string {
+  let current = path;
+  while (!existsSync(current)) {
+    const parent = dirname(current);
+    if (parent === current) return current;
+    current = parent;
+  }
+  return current;
+}
+
+function resolveTemplateOutputPath(projectPath: string, outputPath: string): string {
+  const projectRoot = resolve(projectPath);
+  if (!existsSync(projectRoot)) mkdirSync(projectRoot, { recursive: true });
+
+  const absPath = resolve(projectRoot, outputPath);
+  const projectRelativePath = relative(projectRoot, absPath);
+
+  if (projectRelativePath === "" || pathEscapesRoot(projectRoot, absPath)) {
+    throw new Error(`Template output path escapes project directory: ${outputPath}`);
+  }
+
+  const realProjectRoot = realpathSync(projectRoot);
+  const realCheckPath = existsSync(absPath)
+    ? realpathSync(absPath)
+    : realpathSync(findExistingAncestor(dirname(absPath)));
+
+  if (pathEscapesRoot(realProjectRoot, realCheckPath)) {
+    throw new Error(`Template output path escapes project directory: ${outputPath}`);
+  }
+
+  return absPath;
 }
 
 // ── CRUD ─────────────────────────────────────────────────────────────────────
@@ -133,13 +171,18 @@ export function applyTemplate(id: string, projectPath: string): ApplyResult {
 
       for (const file of outputFiles) {
         try {
-          const absPath = join(projectPath, file.path);
+          const absPath = resolveTemplateOutputPath(projectPath, file.path);
           const dir = dirname(absPath);
           if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
           writeFileSync(absPath, interpolate(file.content, vars), "utf-8");
           filesCreated.push(absPath);
         } catch (e) {
-          errors.push(`Failed to write ${file.path}: ${(e as Error).message}`);
+          const message = (e as Error).message;
+          errors.push(
+            message.startsWith("Template output path escapes project directory:")
+              ? message
+              : `Failed to write ${file.path}: ${message}`
+          );
         }
       }
     }
@@ -148,21 +191,26 @@ export function applyTemplate(id: string, projectPath: string): ApplyResult {
     for (const [key, content] of Object.entries(vars)) {
       if (!key.endsWith("_FILE")) continue;
       const relPath = key.slice(0, -5).toLowerCase().replace(/_/g, "/");
-      const absPath = join(projectPath, relPath);
       try {
+        const absPath = resolveTemplateOutputPath(projectPath, relPath);
         const dir = dirname(absPath);
         if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
         writeFileSync(absPath, interpolate(content, vars), "utf-8");
         filesCreated.push(absPath);
       } catch (e) {
-        errors.push(`Failed to write ${relPath}: ${(e as Error).message}`);
+        const message = (e as Error).message;
+        errors.push(
+          message.startsWith("Template output path escapes project directory:")
+            ? message
+            : `Failed to write ${relPath}: ${message}`
+        );
       }
     }
 
     // Always write a style context file
-    const stylesMdPath = join(projectPath, ".styles", "style.md");
+    const stylesMdPath = resolveTemplateOutputPath(projectPath, ".styles/style.md");
     if (!filesCreated.some((f) => f === stylesMdPath)) {
-      const stylesMdDir = join(projectPath, ".styles");
+      const stylesMdDir = dirname(stylesMdPath);
       if (!existsSync(stylesMdDir)) mkdirSync(stylesMdDir, { recursive: true });
 
       const header = `# Style Context\n\nTemplate: **${template.name}**\n${
