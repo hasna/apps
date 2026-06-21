@@ -19,7 +19,7 @@ export type { FormatOpts } from "./dispatch-formatter.js";
  */
 export async function executeDispatch(
   dispatch: Dispatch,
-  opts: { dryRun?: boolean; formatOpts?: import("./dispatch-formatter.ts").FormatOpts } = {},
+  opts: { dryRun?: boolean; confirmBusy?: boolean; formatOpts?: import("./dispatch-formatter.ts").FormatOpts } = {},
   db?: Database,
 ): Promise<void> {
   const _db = db ?? getDatabase();
@@ -41,7 +41,10 @@ export async function executeDispatch(
   const delayMs = dispatch.delay_ms ?? calculateDelay(message);
 
   try {
-    await sendToTmux(dispatch.target_window, message, delayMs, opts.dryRun ?? false);
+    await sendToTmux(dispatch.target_window, message, delayMs, {
+      dryRun: opts.dryRun ?? false,
+      confirmBusy: opts.confirmBusy ?? false,
+    });
 
     createDispatchLog(
       {
@@ -83,7 +86,7 @@ export async function executeDispatch(
  * Returns the count of dispatches that were fired.
  */
 export async function runDueDispatches(
-  opts: { dryRun?: boolean } = {},
+  opts: { dryRun?: boolean; confirmBusy?: boolean } = {},
   db?: Database,
 ): Promise<number> {
   const _db = db ?? getDatabase();
@@ -108,7 +111,7 @@ export async function runDueDispatches(
  */
 export async function dispatchToMultiple(
   input: Omit<CreateDispatchInput, "target_window"> & { targets: string[]; stagger_ms?: number },
-  opts: { dryRun?: boolean } = {},
+  opts: { dryRun?: boolean; confirmBusy?: boolean } = {},
   db?: Database,
 ): Promise<Dispatch[]> {
   const _db = db ?? getDatabase();

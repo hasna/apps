@@ -55,6 +55,8 @@ The stable contracts cover these object IDs:
 - `duplicate_task_candidate`
 - `task_merge_result`
 - `external_issue_import_report`
+- `tester_issue_report`
+- `tester_issue_report_result`
 - `verification_provider`
 - `verification_provider_result`
 - `local_extension_compatibility`
@@ -370,6 +372,18 @@ task, duplicate relationship id, and moved evidence counts.
 network access was used, normalized GitHub/Linear/Jira/URL records, created
 tasks, linked inbox evidence, source-metadata matches that were skipped,
 duplicate candidates, warnings, and follow-up local commands.
+
+`tester_issue_report` is the stable input payload for `testers.issue_report.v1`
+reports emitted by `@hasna/testers` or compatible local test runners. It carries
+issue kind, severity, optional tester fingerprint, run/scenario/source metadata,
+target URL or selector metadata, failure details, labels, and evidence
+references.
+
+`tester_issue_report_result` is returned by `todos issues report --json` and
+`upsertTesterIssueReport` helpers. It records dry-run/apply mode, the
+computed tester fingerprint, the normalized report, the matched or changed task,
+the action (`preview`, `matched`, `created`, `updated`, or `regressed`), warnings,
+and follow-up local commands.
 
 ## Verification Providers
 

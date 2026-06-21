@@ -1,5 +1,12 @@
 import { describe, test, expect } from "bun:test";
-import { parseTmuxTarget, calculateDelay, formatTmuxTarget, DELAY_MIN, DELAY_MAX } from "./tmux.ts";
+import {
+  parseTmuxTarget,
+  calculateDelay,
+  formatTmuxTarget,
+  tmuxPaneBusyStatus,
+  DELAY_MIN,
+  DELAY_MAX,
+} from "./tmux.ts";
 
 describe("parseTmuxTarget", () => {
   test("parses bare window name", () => {
@@ -99,5 +106,37 @@ describe("calculateDelay", () => {
   test("100-char message adds exactly 40ms over DELAY_MIN", () => {
     const msg = "x".repeat(100);
     expect(calculateDelay(msg)).toBe(DELAY_MIN + 40);
+  });
+});
+
+describe("tmuxPaneBusyStatus", () => {
+  const basePane = {
+    target: "work:0.0",
+    paneId: "%1",
+    currentCommand: "bash",
+    paneDead: false,
+    inputOff: false,
+    inMode: false,
+  };
+
+  test("treats shells as idle", () => {
+    expect(tmuxPaneBusyStatus({ ...basePane, currentCommand: "zsh" })).toEqual({
+      busy: false,
+      reason: null,
+    });
+  });
+
+  test("requires confirmation for active programs", () => {
+    expect(tmuxPaneBusyStatus({ ...basePane, currentCommand: "codewith" })).toEqual({
+      busy: true,
+      reason: "pane is running codewith",
+    });
+  });
+
+  test("requires confirmation when pane input is disabled", () => {
+    expect(tmuxPaneBusyStatus({ ...basePane, inputOff: true })).toEqual({
+      busy: true,
+      reason: "pane input is disabled",
+    });
   });
 });

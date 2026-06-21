@@ -24,9 +24,10 @@ export function registerDispatchTools(server: McpServer, { shouldRegisterTool, r
         target: z.string().describe("tmux target — window name, session:window, or session:window.pane"),
         delay_ms: z.number().optional().describe("Delay in ms between sending the message and hitting Enter. Auto-calculated from message length (3-5s) if omitted."),
         scheduled_at: z.string().optional().describe("ISO datetime to schedule the dispatch for. Fires immediately if omitted."),
+        confirm_busy: z.boolean().optional().describe("Send even if the target tmux pane appears busy. Default: false."),
         dry_run: z.boolean().optional().describe("Preview the formatted message without sending. Default: false."),
       },
-      async ({ task_ids, target, delay_ms, scheduled_at, dry_run }) => {
+      async ({ task_ids, target, delay_ms, scheduled_at, confirm_busy, dry_run }) => {
         try {
           const db = getDatabase();
           const resolvedIds = task_ids.map((id) => resolveId(id));
@@ -42,7 +43,7 @@ export function registerDispatchTools(server: McpServer, { shouldRegisterTool, r
           }
 
           const dispatch = createDispatch({ task_ids: resolvedIds, target_window: target, message, delay_ms: effectiveDelay, scheduled_at }, db);
-          if (!scheduled_at) await executeDispatch(dispatch, {}, db);
+          if (!scheduled_at) await executeDispatch(dispatch, { confirmBusy: confirm_busy ?? false }, db);
 
           return {
             content: [{
@@ -67,9 +68,10 @@ export function registerDispatchTools(server: McpServer, { shouldRegisterTool, r
         filter_status: z.array(z.enum(["pending", "in_progress", "completed", "failed", "cancelled"])).optional().describe("Only include tasks with these statuses. Default: pending."),
         delay_ms: z.number().optional().describe("Delay in ms between sending and Enter. Auto-calculated if omitted."),
         scheduled_at: z.string().optional().describe("ISO datetime to schedule. Fires immediately if omitted."),
+        confirm_busy: z.boolean().optional().describe("Send even if the target tmux pane appears busy. Default: false."),
         dry_run: z.boolean().optional().describe("Preview without sending. Default: false."),
       },
-      async ({ task_list_id, target, filter_status, delay_ms, scheduled_at, dry_run }) => {
+      async ({ task_list_id, target, filter_status, delay_ms, scheduled_at, confirm_busy, dry_run }) => {
         try {
           const db = getDatabase();
           const resolvedListId = resolveId(task_list_id, "task_lists");
@@ -88,7 +90,7 @@ export function registerDispatchTools(server: McpServer, { shouldRegisterTool, r
           }
 
           const dispatch = createDispatch({ title: `Task list: ${taskList.name}`, task_list_id: resolvedListId, target_window: target, message, delay_ms: effectiveDelay, scheduled_at }, db);
-          if (!scheduled_at) await executeDispatch(dispatch, {}, db);
+          if (!scheduled_at) await executeDispatch(dispatch, { confirmBusy: confirm_busy ?? false }, db);
 
           return {
             content: [{
@@ -113,9 +115,10 @@ export function registerDispatchTools(server: McpServer, { shouldRegisterTool, r
         task_list_id: z.string().optional().describe("Task list ID to dispatch (use this or task_ids)"),
         stagger_ms: z.number().optional().describe("Delay between each window dispatch. Default: 500ms."),
         delay_ms: z.number().optional().describe("Delay between message send and Enter. Auto-calculated if omitted."),
+        confirm_busy: z.boolean().optional().describe("Send even if target tmux panes appear busy. Default: false."),
         dry_run: z.boolean().optional().describe("Preview without sending. Default: false."),
       },
-      async ({ targets, task_ids, task_list_id, stagger_ms, delay_ms, dry_run }) => {
+      async ({ targets, task_ids, task_list_id, stagger_ms, delay_ms, confirm_busy, dry_run }) => {
         try {
           if (!task_ids && !task_list_id) throw new Error("Either task_ids or task_list_id is required");
           const db = getDatabase();
@@ -124,7 +127,7 @@ export function registerDispatchTools(server: McpServer, { shouldRegisterTool, r
 
           const dispatches = await dispatchToMultiple(
             { targets, task_ids: resolvedTaskIds, task_list_id: resolvedListId, delay_ms, stagger_ms },
-            { dryRun: dry_run },
+            { dryRun: dry_run, confirmBusy: confirm_busy ?? false },
             db,
           );
 
@@ -185,12 +188,13 @@ export function registerDispatchTools(server: McpServer, { shouldRegisterTool, r
       "Manually trigger all pending dispatches that are due (scheduled_at <= now). Returns the count fired.",
       {
         dry_run: z.boolean().optional().describe("Preview without sending. Default: false."),
+        confirm_busy: z.boolean().optional().describe("Send even if target tmux panes appear busy. Default: false."),
         all: z.boolean().optional().describe("Ignore scheduled_at and fire all pending dispatches immediately."),
       },
-      async ({ dry_run }) => {
+      async ({ dry_run, confirm_busy }) => {
         try {
           const { runDueDispatches } = await import("../../lib/dispatch.js");
-          const count = await runDueDispatches({ dryRun: dry_run });
+          const count = await runDueDispatches({ dryRun: dry_run, confirmBusy: confirm_busy ?? false });
           return { content: [{ type: "text" as const, text: `Fired ${count} dispatch(es).` }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };

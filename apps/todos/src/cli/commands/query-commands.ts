@@ -2660,6 +2660,63 @@ export function registerQueryCommands(program: Command) {
       }
     });
 
+  issues
+    .command("report [json]")
+    .description("Dry-run or apply testers.issue_report.v1 payloads into local tasks")
+    .option("--file <path>", "Read a tester issue report JSON object, array, or { reports: [] } bundle")
+    .option("--project <id>", "Project ID for created tasks")
+    .option("--list <id>", "Task list ID for created tasks")
+    .option("--priority <priority>", "Default priority when report severity is missing", "medium")
+    .option("--assign <agent>", "Assign created or updated tasks to an agent")
+    .option("--apply", "Create or update local tasks; default is dry-run preview")
+    .option("--no-update-existing", "Match existing tasks without updating them")
+    .option("-j, --json", "Output as JSON")
+    .action(async (jsonText: string | undefined, opts) => {
+      const globalOpts = program.opts();
+      try {
+        const {
+          readTesterIssueReportsPayload,
+          upsertTesterIssueReports,
+        } = await import("../../lib/tester-issue-reports.js");
+        let body = jsonText || "";
+        if (opts.file) body = readFileSync(opts.file, "utf-8");
+        if (!body && !process.stdin.isTTY) body = await Bun.stdin.text();
+        if (!body.trim()) {
+          console.error(chalk.red("Provide a tester issue report JSON payload, --file, or stdin input."));
+          process.exit(1);
+        }
+
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(body);
+        } catch {
+          console.error(chalk.red("Tester issue report payload must be valid JSON."));
+          process.exit(1);
+        }
+
+        const result = upsertTesterIssueReports({
+          reports: readTesterIssueReportsPayload(parsed),
+          project_id: resolveProjectOption(opts.project) || autoProject(globalOpts) || undefined,
+          task_list_id: opts.list,
+          agent_id: globalOpts.agent,
+          assigned_to: opts.assign,
+          default_priority: parsePriority(opts.priority) || "medium",
+          apply: Boolean(opts.apply),
+          update_existing: opts.updateExisting,
+        });
+        if (opts.json || globalOpts.json) { output(result, true); return; }
+
+        const mode = result.dry_run ? "Previewed" : "Applied";
+        console.log(chalk.green(`${mode} ${result.summary.total} tester issue report${result.summary.total === 1 ? "" : "s"}.`));
+        for (const item of result.results) {
+          const taskRef = item.task ? item.task.short_id || item.task.id.slice(0, 8) : "(no task)";
+          console.log(`  ${chalk.cyan(item.action.padEnd(9))} ${taskRef} ${chalk.dim(item.fingerprint)} ${item.report.title}`);
+        }
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
   const inbox = program
     .command("inbox")
     .description("Capture local inbox items from pasted errors, CI logs, git context, files, or GitHub issue URLs");

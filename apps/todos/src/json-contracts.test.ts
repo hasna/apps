@@ -39,6 +39,7 @@ import { previewRetentionCleanup } from "./lib/retention-cleanup.js";
 import { resolveMentions } from "./lib/mention-resolver.js";
 import { findDuplicateTasks, mergeDuplicateTask } from "./lib/task-dedupe.js";
 import { importExternalIssues } from "./lib/external-issue-importers.js";
+import { TESTERS_ISSUE_REPORT_SCHEMA_VERSION, upsertTesterIssueReport } from "./lib/tester-issue-reports.js";
 import { checkLocalNotifications } from "./lib/local-notifications.js";
 import { runVerificationProvider, upsertVerificationProvider } from "./lib/verification-providers.js";
 import { createHandoff } from "./db/handoffs.js";
@@ -143,6 +144,8 @@ describe("stable JSON contracts", () => {
       "duplicate_task_candidate",
       "task_merge_result",
       "external_issue_import_report",
+      "tester_issue_report",
+      "tester_issue_report_result",
       "verification_provider",
       "verification_provider_result",
       "local_extension_compatibility",
@@ -296,6 +299,20 @@ describe("stable JSON contracts", () => {
         html_url: "https://github.com/hasna/todos/issues/992",
       },
       provider: "github",
+      project_id: project.id,
+      apply: true,
+    }, db);
+    const testerIssueReport = {
+      schema_version: TESTERS_ISSUE_REPORT_SCHEMA_VERSION,
+      title: "Tester contract issue",
+      kind: "assertion_failure",
+      severity: "high",
+      fingerprint: "tester-contract-issue",
+      source: { tool: "testers", run_id: "run-contract", url: "https://preview.example.com" },
+      failure: { message: "Expected contract fixture to pass" },
+    };
+    const testerIssueResult = upsertTesterIssueReport({
+      report: testerIssueReport,
       project_id: project.id,
       apply: true,
     }, db);
@@ -518,6 +535,8 @@ describe("stable JSON contracts", () => {
     expectValid("duplicate_task_candidate", duplicateCandidate);
     expectValid("task_merge_result", mergeResult);
     expectValid("external_issue_import_report", externalIssueImport);
+    expectValid("tester_issue_report", testerIssueReport);
+    expectValid("tester_issue_report_result", testerIssueResult);
     expectValid("verification_provider", verificationProvider);
     expectValid("verification_provider_result", verificationProviderResult);
     expectValid("local_extension_compatibility", extensionCompatibility);

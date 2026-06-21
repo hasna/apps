@@ -2149,6 +2149,15 @@ export {
   importExternalIssues,
 } from "./lib/external-issue-importers.js";
 export {
+  TESTERS_ISSUE_REPORT_RESULT_SCHEMA_VERSION,
+  TESTERS_ISSUE_REPORT_SCHEMA_VERSION,
+  fingerprintTesterIssueReport,
+  normalizeTesterIssueReport,
+  readTesterIssueReportsPayload,
+  upsertTesterIssueReport,
+  upsertTesterIssueReports,
+} from "./lib/tester-issue-reports.js";
+export {
   LOCAL_NOTIFICATION_SCHEMA_VERSION,
   checkLocalNotifications,
 } from "./lib/local-notifications.js";
@@ -2171,6 +2180,20 @@ export type {
   ExternalIssueProvider,
   ExternalIssueRecord,
 } from "./lib/external-issue-importers.js";
+export type {
+  TesterIssueArtifact,
+  TesterIssueEvidence,
+  TesterIssueFailure,
+  TesterIssueKind,
+  TesterIssueReportAction,
+  TesterIssueReportSource,
+  TesterIssueReportTarget,
+  TesterIssueReportV1,
+  TesterIssueSeverity,
+  UpsertTesterIssueReportInput,
+  UpsertTesterIssueReportResult,
+  UpsertTesterIssueReportsResult,
+} from "./lib/tester-issue-reports.js";
 export type {
   CheckLocalNotificationsInput,
   CheckLocalNotificationsResult,

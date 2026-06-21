@@ -16,6 +16,7 @@ export const SCHEMA_ENTITIES = [
   "handoff",
   "import_export_bundle",
   "mcp_response",
+  "tester_issue_report",
 ] as const;
 
 export type SchemaEntity = (typeof SCHEMA_ENTITIES)[number];
@@ -220,6 +221,62 @@ export const JSON_SCHEMAS: Record<SchemaEntity, JsonSchemaDefinition> = {
     },
     is_error: { type: "boolean" },
   }),
+
+  tester_issue_report: def("tester_issue_report", "testers.issue_report.v1", "TesterIssueReport", ["schema_version", "title", "kind", "severity"], {
+    schema_version: { type: "string", enum: ["testers.issue_report.v1"] },
+    id: { type: "string" },
+    fingerprint: { type: "string" },
+    title: { type: "string" },
+    summary: { type: ["string", "null"] },
+    kind: { type: "string" },
+    severity: { type: "string", enum: ["low", "medium", "high", "critical"] },
+    source: {
+      type: "object",
+      additionalProperties: true,
+      properties: {
+        tool: { type: "string" },
+        run_id: { type: "string" },
+        result_id: { type: "string" },
+        scenario_id: { type: "string" },
+        scenario_name: { type: "string" },
+        project_id: { type: "string" },
+        url: { type: "string" },
+        page_url: { type: "string" },
+        artifact_url: { type: "string" },
+        screenshot_url: { type: "string" },
+        commit: { type: "string" },
+        branch: { type: "string" },
+      },
+    },
+    target: {
+      type: "object",
+      additionalProperties: true,
+      properties: {
+        url: { type: "string" },
+        route: { type: "string" },
+        selector: { type: "string" },
+        component: { type: "string" },
+        browser: { type: "string" },
+        viewport: { type: "string" },
+      },
+    },
+    failure: {
+      type: "object",
+      additionalProperties: true,
+      properties: {
+        message: { type: "string" },
+        expected: { type: "string" },
+        actual: { type: "string" },
+        stack: { type: "string" },
+        reasoning: { type: "string" },
+        steps: { type: "array", items: { type: "string" } },
+      },
+    },
+    evidence: { type: "object", additionalProperties: true },
+    labels: { type: "array", items: { type: "string" } },
+    metadata: { type: "object", additionalProperties: true },
+    occurred_at: ISO_DATE,
+  }),
 };
 
 /** Contract fixtures used by compatibility tests. */
@@ -301,6 +358,24 @@ export const SCHEMA_CONTRACT_FIXTURES: Record<SchemaEntity, Record<string, unkno
   mcp_response: {
     schema_version: "todos.mcp_response.v1",
     content: [{ type: "text", text: "ok" }],
+  },
+  tester_issue_report: {
+    schema_version: "testers.issue_report.v1",
+    title: "Checkout button fails",
+    kind: "assertion_failure",
+    severity: "high",
+    fingerprint: "checkout-button-1234",
+    source: {
+      tool: "testers",
+      run_id: "run-001",
+      scenario_id: "scenario-001",
+      url: "https://preview.example.com/checkout",
+    },
+    failure: {
+      message: "Expected checkout button to become enabled",
+      steps: ["Open checkout", "Fill required fields"],
+    },
+    labels: ["checkout", "regression"],
   },
 };
 

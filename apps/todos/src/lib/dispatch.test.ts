@@ -89,7 +89,23 @@ describe("executeDispatch", () => {
     expect(logs[0]!.status).toBe("sent");
 
     // sendToTmux was called with dryRun=true
-    expect(spy).toHaveBeenCalledWith("main", "hello", 100, true);
+    expect(spy).toHaveBeenCalledWith("main", "hello", 100, {
+      dryRun: true,
+      confirmBusy: false,
+    });
+  });
+
+  it("passes busy-pane confirmation through to tmux send", async () => {
+    const spy = mockSendSuccess();
+    const db = getDatabase();
+    const dispatch = createDispatch({ target_window: "main", message: "hello", task_ids: [], delay_ms: 100 }, db);
+
+    await executeDispatch(dispatch, { confirmBusy: true }, db);
+
+    expect(spy).toHaveBeenCalledWith("main", "hello", 100, {
+      dryRun: false,
+      confirmBusy: true,
+    });
   });
 
   it("auto-calculates delay when delay_ms is null", async () => {
@@ -191,7 +207,23 @@ describe("runDueDispatches", () => {
 
     const count = await runDueDispatches({ dryRun: true }, db);
     expect(count).toBe(1);
-    expect(spy).toHaveBeenCalledWith("w1", "hello", expect.any(Number), true);
+    expect(spy).toHaveBeenCalledWith("w1", "hello", expect.any(Number), {
+      dryRun: true,
+      confirmBusy: false,
+    });
+  });
+
+  it("passes busy-pane confirmation through while firing due dispatches", async () => {
+    const spy = mockSendSuccess();
+    const db = getDatabase();
+    createDispatch({ target_window: "w1", message: "hello", task_ids: [] }, db);
+
+    const count = await runDueDispatches({ confirmBusy: true }, db);
+    expect(count).toBe(1);
+    expect(spy).toHaveBeenCalledWith("w1", "hello", expect.any(Number), {
+      dryRun: false,
+      confirmBusy: true,
+    });
   });
 });
 

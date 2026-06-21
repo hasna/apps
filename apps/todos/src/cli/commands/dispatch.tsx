@@ -22,6 +22,7 @@ export function registerDispatchCommands(program: Command): void {
     .option("--at <datetime>", "ISO datetime to schedule the dispatch")
     .option("--multiple <targets>", "Comma-separated list of additional tmux targets (fan-out)")
     .option("--stagger <ms>", "Delay between targets when using --multiple (default: 500ms)", parseInt)
+    .option("--confirm-busy", "Send even if the target tmux pane appears busy")
     .option("--dry-run", "Preview the formatted message without sending")
     .action(async (target: string, opts) => {
       const globalOpts = program.opts();
@@ -69,7 +70,7 @@ export function registerDispatchCommands(program: Command): void {
         if (targets.length > 1) {
           const dispatches = await dispatchToMultiple(
             { targets, task_ids: tasks.map((t) => t.id), message, delay_ms: delayMs, stagger_ms: opts.stagger ?? 500, scheduled_at: opts.at },
-            {},
+            { confirmBusy: opts.confirmBusy ?? false },
             db,
           );
           if (useJson) {
@@ -86,7 +87,7 @@ export function registerDispatchCommands(program: Command): void {
           );
 
           if (!opts.at) {
-            await executeDispatch(dispatch, {}, db);
+            await executeDispatch(dispatch, { confirmBusy: opts.confirmBusy ?? false }, db);
             if (useJson) {
               console.log(JSON.stringify({ id: dispatch.id, status: "sent" }));
             } else {
@@ -116,10 +117,14 @@ export function registerDispatchCommands(program: Command): void {
     .command("run")
     .description("Fire all pending dispatches that are due now")
     .option("--all", "Ignore scheduled_at and fire all pending immediately")
+    .option("--confirm-busy", "Send even if a target tmux pane appears busy")
     .option("--dry-run", "Preview without sending")
     .action(async (opts) => {
       try {
-        const count = await runDueDispatches({ dryRun: opts.dryRun });
+        const count = await runDueDispatches({
+          dryRun: opts.dryRun,
+          confirmBusy: opts.confirmBusy ?? false,
+        });
         console.log(chalk.green(`Fired ${count} dispatch(es).`));
       } catch (e) {
         console.error(chalk.red(`Error: ${e instanceof Error ? e.message : String(e)}`));
