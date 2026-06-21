@@ -158,6 +158,16 @@ describe("proxy", () => {
       const conn = await connectToServer(entry);
       expect(conn.tools).toHaveLength(2);
     });
+
+    it("rejects unknown transport values instead of treating them as HTTP", async () => {
+      const entry = makeEntry({
+        transport: "websocket" as "stdio",
+        url: "https://example.test/mcp",
+      });
+
+      await expect(connectToServer(entry)).rejects.toThrow("Unsupported transport type");
+      expect(mockConnect).not.toHaveBeenCalled();
+    });
   });
 
   // ── disconnectServer ──

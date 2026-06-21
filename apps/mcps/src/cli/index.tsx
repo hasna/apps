@@ -20,6 +20,8 @@ import {
   unsetServerCredentialRef,
   updateServer,
   cloneServer,
+  normalizeServerTransport,
+  normalizeServerUrl,
 } from "../lib/registry.js";
 import type { CredentialReferenceMap, CredentialReferenceSource, McpSource } from "../types.js";
 import { diagnoseServer } from "../lib/doctor.js";
@@ -1833,6 +1835,16 @@ program
       }
       const literalEnv = normalizeLiteralEnv(s.env ?? {});
       const credentialRefs = normalizeCredentialRefs(s.credentialRefs ?? s.credential_refs ?? {});
+      let transport: ReturnType<typeof normalizeServerTransport>;
+      let url: string | null;
+      try {
+        transport = normalizeServerTransport(s.transport);
+        url = normalizeServerUrl(s.url);
+      } catch (err) {
+        console.error(chalk.red(`Invalid server in import "${s.id ?? "(unknown)"}": ${(err as Error).message}`));
+        closeDb();
+        process.exit(1);
+      }
       db.run(
         `INSERT ${orReplace} INTO servers (id, name, description, command, args, env, credential_refs, transport, url, source, enabled, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [
@@ -1843,8 +1855,8 @@ program
           JSON.stringify(s.args ?? []),
           JSON.stringify(literalEnv),
           JSON.stringify(credentialRefs),
-          s.transport,
-          s.url,
+          transport,
+          url,
           s.source,
           s.enabled ? 1 : 0,
           s.created_at,

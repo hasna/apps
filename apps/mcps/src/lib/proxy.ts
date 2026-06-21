@@ -3,7 +3,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { TOOL_PREFIX_SEPARATOR } from "./config.js";
-import { listServers, cacheTools } from "./registry.js";
+import { listServers, cacheTools, normalizeServerUrl } from "./registry.js";
 import { getDb } from "./db.js";
 import { assertLocalCommandConsent, type LocalCommandConsent } from "./local-command-consent.js";
 import { credentialRefPlaceholders, resolveServerEnv } from "./credentials.js";
@@ -30,14 +30,11 @@ function buildEnv(extra: Record<string, string>): Record<string, string> {
 }
 
 function requireUrl(entry: McpServerEntry): URL {
-  if (!entry.url) {
+  const url = normalizeServerUrl(entry.url);
+  if (!url) {
     throw new Error(`Server "${entry.id}" is missing a URL for ${entry.transport} transport`);
   }
-  try {
-    return new URL(entry.url);
-  } catch {
-    throw new Error(`Server "${entry.id}" has an invalid URL: ${entry.url}`);
-  }
+  return new URL(url);
 }
 
 export async function connectToServer(entry: McpServerEntry, options: ConnectOptions = {}): Promise<ConnectedServer> {
@@ -75,8 +72,10 @@ export async function connectToServer(entry: McpServerEntry, options: ConnectOpt
         });
       } else if (entry.transport === "sse") {
         transport = new SSEClientTransport(requireUrl(entry));
-      } else {
+      } else if (entry.transport === "streamable-http") {
         transport = new StreamableHTTPClientTransport(requireUrl(entry));
+      } else {
+        throw new Error(`Unsupported transport type for server "${entry.id}": ${entry.transport}`);
       }
 
       await client.connect(transport);

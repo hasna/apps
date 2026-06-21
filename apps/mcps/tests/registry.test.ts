@@ -75,6 +75,27 @@ describe("registry", () => {
       expect(s.url).toBe("http://localhost:3000");
     });
 
+    it("rejects unknown transport values", () => {
+      expect(() =>
+        addServer({ command: "node", transport: "websocket" as "stdio" })
+      ).toThrow("Invalid transport type");
+    });
+
+    it("rejects blank and non-string transport values", () => {
+      expect(() => addServer({ command: "node", transport: "" as "stdio" })).toThrow(
+        "Invalid transport type"
+      );
+      expect(() => addServer({ command: "node", transport: 42 as unknown as "stdio" })).toThrow(
+        "Invalid transport type"
+      );
+    });
+
+    it("rejects invalid remote transport URLs", () => {
+      expect(() =>
+        addServer({ command: "node", transport: "streamable-http", url: "not a url" })
+      ).toThrow("URL must be a valid HTTP(S) URL");
+    });
+
     it("respects source option", () => {
       const s = addServer({ command: "npx", source: "registry" });
       expect(s.source).toBe("registry");
@@ -208,14 +229,50 @@ describe("registry", () => {
 
     it("updates transport", () => {
       addServer({ command: "npx", name: "upd-transport" });
-      const updated = updateServer("upd-transport", { transport: "sse" });
+      const updated = updateServer("upd-transport", {
+        transport: "sse",
+        url: "http://localhost:3000/sse",
+      });
       expect(updated.transport).toBe("sse");
+      expect(updated.url).toBe("http://localhost:3000/sse");
+    });
+
+    it("rejects unknown transport updates without changing the existing transport", () => {
+      addServer({ command: "npx", name: "upd-invalid-transport" });
+
+      expect(() =>
+        updateServer("upd-invalid-transport", { transport: "websocket" as "stdio" })
+      ).toThrow("Invalid transport type");
+      expect(getServer("upd-invalid-transport")!.transport).toBe("stdio");
+    });
+
+    it("rejects null transport updates without changing the existing transport", () => {
+      addServer({ command: "npx", name: "upd-null-transport" });
+
+      expect(() =>
+        updateServer("upd-null-transport", { transport: null as unknown as "stdio" })
+      ).toThrow("Invalid transport type");
+      expect(getServer("upd-null-transport")!.transport).toBe("stdio");
     });
 
     it("updates url", () => {
       addServer({ command: "npx", name: "upd-url" });
       const updated = updateServer("upd-url", { url: "http://localhost:3000" });
       expect(updated.url).toBe("http://localhost:3000");
+    });
+
+    it("rejects invalid URL updates without changing the existing URL", () => {
+      addServer({
+        command: "node",
+        name: "upd-invalid-url",
+        transport: "sse",
+        url: "http://localhost:3000/sse",
+      });
+
+      expect(() => updateServer("upd-invalid-url", { url: "file:///tmp/socket" })).toThrow(
+        "URL must be a valid HTTP(S) URL"
+      );
+      expect(getServer("upd-invalid-url")!.url).toBe("http://localhost:3000/sse");
     });
 
     it("updates enabled", () => {

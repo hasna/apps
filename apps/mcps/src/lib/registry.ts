@@ -6,6 +6,12 @@ import {
 } from "./credentials.js";
 import type { CredentialReference, McpServerEntry, AddServerOptions } from "../types.js";
 
+export const VALID_TRANSPORTS = new Set<McpServerEntry["transport"]>([
+  "stdio",
+  "sse",
+  "streamable-http",
+]);
+
 function parseRow(row: Record<string, unknown>): McpServerEntry {
   return {
     id: row.id as string,
@@ -47,6 +53,44 @@ function normalizeCandidate(value?: string): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+export function normalizeServerTransport(
+  value: unknown,
+  fallback: McpServerEntry["transport"] = "stdio"
+): McpServerEntry["transport"] {
+  if (value === undefined) return fallback;
+  if (typeof value !== "string") {
+    throw new Error("Invalid transport type");
+  }
+  const transport = value.trim();
+  if (!transport) {
+    throw new Error("Invalid transport type");
+  }
+  if (!VALID_TRANSPORTS.has(transport as McpServerEntry["transport"])) {
+    throw new Error("Invalid transport type");
+  }
+  return transport as McpServerEntry["transport"];
+}
+
+export function normalizeServerUrl(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "string") {
+    throw new Error("URL must be a valid HTTP(S) URL");
+  }
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("unsupported protocol");
+    }
+  } catch {
+    throw new Error("URL must be a valid HTTP(S) URL");
+  }
+
+  return trimmed;
+}
+
 function pickNameFromArgs(args?: string[]): string | undefined {
   if (!args || args.length === 0) return undefined;
   const ddIndex = args.indexOf("--");
@@ -86,6 +130,8 @@ export function addServer(opts: AddServerOptions): McpServerEntry {
   if (!id) {
     throw new Error("Unable to generate a valid server ID");
   }
+  const transport = normalizeServerTransport(opts.transport);
+  const url = normalizeServerUrl(opts.url);
 
   const row = db
     .prepare(
@@ -101,8 +147,8 @@ export function addServer(opts: AddServerOptions): McpServerEntry {
       JSON.stringify(opts.args || []),
       JSON.stringify(normalizeLiteralEnv(opts.env)),
       JSON.stringify(normalizeCredentialRefs(opts.credentialRefs)),
-      opts.transport || "stdio",
-      opts.url || null,
+      transport,
+      url,
       opts.source || "local"
     ) as Record<string, unknown>;
 
@@ -133,6 +179,15 @@ export function updateServer(
   const db = getDb();
   const sets: string[] = [];
   const values: (string | number | null)[] = [];
+  let nextTransport: McpServerEntry["transport"] | undefined;
+  let nextUrl: string | null | undefined;
+
+  if (updates.transport !== undefined) {
+    nextTransport = normalizeServerTransport(updates.transport);
+  }
+  if (updates.url !== undefined) {
+    nextUrl = normalizeServerUrl(updates.url);
+  }
 
   if (updates.name !== undefined) {
     const name = normalizeCandidate(updates.name);
@@ -168,11 +223,11 @@ export function updateServer(
   }
   if (updates.transport !== undefined) {
     sets.push("transport = ?");
-    values.push(updates.transport);
+    values.push(nextTransport!);
   }
   if (updates.url !== undefined) {
     sets.push("url = ?");
-    values.push(updates.url);
+    values.push(nextUrl ?? null);
   }
   if (updates.enabled !== undefined) {
     sets.push("enabled = ?");
