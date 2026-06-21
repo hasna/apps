@@ -14,7 +14,7 @@ function getTagValues(xml: string, tag: string): string[] {
   const pattern = new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\/${tag}>`, "gi");
   let m: RegExpExecArray | null;
   while ((m = pattern.exec(xml)) !== null) {
-    const val = m[1]?.trim() ?? "";
+    const val = decodeXmlText(m[1]?.trim() ?? "");
     if (val) values.push(val);
   }
   return values;
@@ -30,6 +30,63 @@ function isGzipped(contentType: string): boolean {
     contentType.includes("gzip") ||
     contentType.includes("x-gzip") ||
     contentType.includes("application/x-gzip")
+  );
+}
+
+function decodeXmlText(value: string): string {
+  const cdataPattern = /<!\[CDATA\[([\s\S]*?)\]\]>/g;
+  let result = "";
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = cdataPattern.exec(value)) !== null) {
+    result += decodeXmlEntities(value.slice(lastIndex, match.index));
+    result += match[1] ?? "";
+    lastIndex = match.index + match[0].length;
+  }
+
+  result += decodeXmlEntities(value.slice(lastIndex));
+  return result;
+}
+
+function decodeXmlEntities(value: string): string {
+  return value.replace(
+    /&(#(?:x[0-9a-f]+|\d+)|amp|lt|gt|quot|apos);/gi,
+    (entity, name: string) => {
+      const normalized = name.toLowerCase();
+
+      switch (normalized) {
+        case "amp":
+          return "&";
+        case "lt":
+          return "<";
+        case "gt":
+          return ">";
+        case "quot":
+          return "\"";
+        case "apos":
+          return "'";
+      }
+
+      const codePoint = normalized.startsWith("#x")
+        ? parseInt(normalized.slice(2), 16)
+        : parseInt(normalized.slice(1), 10);
+
+      if (!isValidXmlCodePoint(codePoint)) return entity;
+
+      return String.fromCodePoint(codePoint);
+    }
+  );
+}
+
+function isValidXmlCodePoint(codePoint: number): boolean {
+  return (
+    codePoint === 0x9 ||
+    codePoint === 0xa ||
+    codePoint === 0xd ||
+    (codePoint >= 0x20 && codePoint <= 0xd7ff) ||
+    (codePoint >= 0xe000 && codePoint <= 0xfffd) ||
+    (codePoint >= 0x10000 && codePoint <= 0x10ffff)
   );
 }
 
