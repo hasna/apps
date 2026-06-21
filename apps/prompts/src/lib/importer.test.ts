@@ -60,6 +60,63 @@ Review this {{language}} code.`
     expect(item?.body).toBe("Just a plain body")
   })
 
+  test("parses quoted frontmatter values and tags", () => {
+    const md = `---
+title: "Deploy Review"
+slug: 'deploy-review'
+collection: "ops"
+tags: ["release", 'checklist']
+description: "Review deployment readiness"
+---
+
+Check rollout risks.`
+
+    const item = markdownToImportItem(md, "deploy-review.md")
+    expect(item).toEqual({
+      title: "Deploy Review",
+      slug: "deploy-review",
+      collection: "ops",
+      tags: ["release", "checklist"],
+      description: "Review deployment readiness",
+      body: "Check rollout risks.",
+    })
+  })
+
+  test("preserves escaped backslashes in quoted frontmatter", () => {
+    const md = `---
+description: "C:\\\\new"
+tags: ["C:\\\\release"]
+---
+
+Keep path-like values intact.`
+
+    const item = markdownToImportItem(md, "path-prompt.md")
+    expect(item?.description).toBe("C:\\new")
+    expect(item?.tags).toEqual(["C:\\release"])
+  })
+
+  test("decodes common escapes and preserves unknown escapes in quoted frontmatter", () => {
+    const md = `---
+description: "alpha\\tbeta\\rgamma\\qdelta"
+tags: ["tab\\tvalue", "raw\\qvalue"]
+---
+
+Keep escaped values predictable.`
+
+    const item = markdownToImportItem(md, "escaped-prompt.md")
+    expect(item?.description).toBe("alpha\tbeta\rgamma\\qdelta")
+    expect(item?.tags).toEqual(["tab\tvalue", "raw\\qvalue"])
+  })
+
+  test("parses frontmatter with CRLF line endings", () => {
+    const md = "---\r\ntitle: Windows Prompt\r\nslug: windows-prompt\r\n---\r\n\r\nUse CRLF safely.\r\n"
+
+    const item = markdownToImportItem(md, "windows-prompt.md")
+    expect(item?.title).toBe("Windows Prompt")
+    expect(item?.slug).toBe("windows-prompt")
+    expect(item?.body).toBe("Use CRLF safely.")
+  })
+
   test("roundtrip: export then re-import", () => {
     const md = promptToMarkdown(mockPrompt)
     const item = markdownToImportItem(md, "test-prompt.md")

@@ -88,12 +88,13 @@ export function exportToMarkdownFiles(collection?: string): Array<{ filename: st
 
 // ── Markdown import ───────────────────────────────────────────────────────────
 export function markdownToImportItem(content: string, filename?: string): ImportItem | null {
-  const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---\n+([\s\S]*)$/)
+  const normalized = content.replace(/\r\n?/g, "\n")
+  const frontmatterMatch = normalized.match(/^---\n([\s\S]*?)\n---\n+([\s\S]*)$/)
   if (!frontmatterMatch) {
     // No frontmatter — treat entire content as body, filename as title
     if (!filename) return null
     const title = filename.replace(/\.md$/, "").replace(/-/g, " ")
-    return { title, body: content.trim() }
+    return { title, body: normalized.trim() }
   }
 
   const frontmatter = frontmatterMatch[1] ?? ""
@@ -101,7 +102,7 @@ export function markdownToImportItem(content: string, filename?: string): Import
 
   const get = (key: string): string | null => {
     const m = frontmatter.match(new RegExp(`^${key}:\\s*(.+)$`, "m"))
-    return m ? (m[1] ?? "").trim() : null
+    return m ? parseFrontmatterScalar(m[1] ?? "") : null
   }
 
   const title = get("title") ?? (filename?.replace(/\.md$/, "").replace(/-/g, " ") ?? "Untitled")
@@ -112,11 +113,80 @@ export function markdownToImportItem(content: string, filename?: string): Import
   const tagsStr = get("tags")
   let tags: string[] | undefined
   if (tagsStr) {
-    const inner = tagsStr.replace(/^\[/, "").replace(/\]$/, "")
-    tags = inner.split(",").map((t) => t.trim()).filter(Boolean)
+    tags = parseFrontmatterList(tagsStr)
   }
 
   return { title, slug, body, collection, tags, description }
+}
+
+function parseFrontmatterScalar(value: string): string {
+  const trimmed = value.trim()
+  if (trimmed.length < 2) return trimmed
+
+  const quote = trimmed[0]
+  if ((quote !== "\"" && quote !== "'") || trimmed[trimmed.length - 1] !== quote) {
+    return trimmed
+  }
+
+  const inner = trimmed.slice(1, -1)
+  if (quote === "'") return inner.replace(/''/g, "'")
+  return parseDoubleQuotedScalar(inner)
+}
+
+function parseDoubleQuotedScalar(value: string): string {
+  let parsed = ""
+  for (let i = 0; i < value.length; i++) {
+    const char = value[i]!
+    if (char !== "\\" || i + 1 >= value.length) {
+      parsed += char
+      continue
+    }
+
+    const escaped = value[++i]!
+    if (escaped === "n") parsed += "\n"
+    else if (escaped === "r") parsed += "\r"
+    else if (escaped === "t") parsed += "\t"
+    else if (escaped === "\"") parsed += "\""
+    else if (escaped === "\\") parsed += "\\"
+    else parsed += `\\${escaped}`
+  }
+  return parsed
+}
+
+function parseFrontmatterList(value: string): string[] {
+  const trimmed = value.trim()
+  const inner = trimmed.startsWith("[") && trimmed.endsWith("]")
+    ? trimmed.slice(1, -1)
+    : trimmed
+  const items: string[] = []
+  let current = ""
+  let quote: "\"" | "'" | null = null
+
+  for (let i = 0; i < inner.length; i++) {
+    const char = inner[i]!
+    if (quote) {
+      current += char
+      if (char === "\\" && quote === "\"" && i + 1 < inner.length) {
+        current += inner[++i]!
+      } else if (char === quote) {
+        quote = null
+      }
+      continue
+    }
+
+    if (char === "\"" || char === "'") {
+      quote = char
+      current += char
+    } else if (char === ",") {
+      items.push(current)
+      current = ""
+    } else {
+      current += char
+    }
+  }
+  items.push(current)
+
+  return items.map(parseFrontmatterScalar).filter(Boolean)
 }
 
 export function importFromMarkdown(files: Array<{ filename: string; content: string }>, changedBy?: string): ImportResult {
