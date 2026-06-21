@@ -671,6 +671,13 @@ CREATE INDEX IF NOT EXISTS idx_run_attempts_legacy_result ON run_attempts(legacy
 CREATE INDEX IF NOT EXISTS idx_run_events_attempt ON run_events(attempt_id);
 CREATE INDEX IF NOT EXISTS idx_run_artifacts_attempt ON run_artifacts(attempt_id);
   `,
+
+  // Migration 35: Guard execution attempt sequencing
+  `
+CREATE UNIQUE INDEX IF NOT EXISTS idx_run_attempts_run_spec_attempt
+  ON run_attempts(run_id, spec_id, attempt_number)
+  WHERE run_id IS NOT NULL AND spec_id IS NOT NULL;
+  `,
 ];
 
 function applyMigrations(database: Database): void {

@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
-import { registerEventsCommands } from "@hasna/events/commander";
 import chalk from "chalk";
 import pkg from "../../package.json";
 import { render, Box, Text, useInput, useApp } from "ink";
@@ -155,6 +154,45 @@ import {
   type SandboxAppLaunchResult,
   type SandboxAppLaunchPlan,
 } from "../lib/sandbox-app.js";
+
+type RegisterEventsCommands = (
+  program: Command,
+  options: { source: string },
+) => void;
+
+function registerUnavailableEventsCommand(program: Command): void {
+  program
+    .command("events")
+    .description("Emit, list, and replay Hasna events")
+    .action(() => {
+      console.error(
+        "The optional @hasna/events package is not available in this environment.",
+      );
+      process.exit(1);
+    });
+}
+
+async function registerOptionalEventsCommands(program: Command): Promise<void> {
+  const specifier = "@hasna/events/commander";
+  try {
+    const module = (await import(specifier)) as {
+      registerEventsCommands?: RegisterEventsCommands;
+    };
+    if (module.registerEventsCommands) {
+      module.registerEventsCommands(program, { source: "testers" });
+      return;
+    }
+  } catch (error) {
+    if (process.env["TESTERS_DEBUG_EVENTS_IMPORT"] === "1") {
+      console.warn(
+        `Skipping optional @hasna/events CLI commands: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+  registerUnavailableEventsCommand(program);
+}
 
 // ─── Interactive Add Prompt (Ink) ────────────────────────────────────────────
 
@@ -733,7 +771,7 @@ program
   .option("-q, --quiet", "Suppress all output", false)
   .option("--no-color", "Disable color output");
 
-registerEventsCommands(program, { source: "testers" });
+await registerOptionalEventsCommands(program);
 
 program
   .command("prod-debug <target>")

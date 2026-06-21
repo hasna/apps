@@ -117,6 +117,19 @@ describe("app-agnostic execution storage", () => {
     expect(completed.finishedAt).toBeTruthy();
   });
 
+  test("assigns attempt numbers per run and spec", () => {
+    const run = createRun({ url: "http://127.0.0.1:3000", model: "test-model" });
+    const spec = createTestSpec({ name: "Retry target", kind: "agentic" });
+
+    const first = createRunAttempt({ runId: run.id, specId: spec.id });
+    const second = createRunAttempt({ runId: run.id, specId: spec.id });
+    const explicit = createRunAttempt({ runId: run.id, specId: spec.id, attemptNumber: 10 });
+
+    expect(first.attemptNumber).toBe(1);
+    expect(second.attemptNumber).toBe(2);
+    expect(explicit.attemptNumber).toBe(10);
+  });
+
   test("mirrors legacy scenarios into idempotent test specs without changing scenario APIs", () => {
     const project = createProject({ name: "legacy-project", scenarioPrefix: "LEG" });
     const scenario = createScenario({

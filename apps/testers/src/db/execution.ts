@@ -6,6 +6,22 @@ import { getScenario } from "./scenarios.js";
 type JsonObject = Record<string, unknown>;
 type SqlValue = string | number | null;
 
+function withImmediateTransaction<T>(db: ReturnType<typeof getDatabase>, operation: () => T): T {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const result = operation();
+    db.exec("COMMIT");
+    return result;
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      // Preserve the original operation error.
+    }
+    throw error;
+  }
+}
+
 export type ExecutionSubjectKind = "web_app" | "api" | "cli" | "repo" | "service" | "dataset" | "custom";
 export type TestSpecKind = "browser" | "api" | "eval" | "pipeline" | "agentic" | "manual" | "custom";
 export type RunAttemptStatus = "queued" | "running" | "passed" | "failed" | "error" | "skipped" | "cancelled" | "flaky";
@@ -832,28 +848,30 @@ export function createRunAttempt(input: CreateRunAttemptInput): RunAttempt {
   const status = input.status ?? "queued";
   const finishedAt = input.finishedAt ?? (terminalAttemptStatus(status) ? now() : null);
 
-  db.query(`
-    INSERT INTO run_attempts
-      (id, loop_run_id, run_id, spec_id, subject_id, legacy_result_id, attempt_number, status, executor, model, started_at, finished_at, duration_ms, summary, error, metadata)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    id,
-    input.loopRunId ?? null,
-    input.runId ?? null,
-    input.specId ?? null,
-    input.subjectId ?? null,
-    input.legacyResultId ?? null,
-    input.attemptNumber ?? nextAttemptNumber(input.runId, input.specId),
-    status,
-    cleanText(input.executor ?? "manual", "executor"),
-    input.model ?? null,
-    input.startedAt ?? now(),
-    finishedAt,
-    input.durationMs ?? null,
-    input.summary ?? null,
-    input.error ?? null,
-    toJson(input.metadata, {}),
-  );
+  withImmediateTransaction(db, () => {
+    db.query(`
+      INSERT INTO run_attempts
+        (id, loop_run_id, run_id, spec_id, subject_id, legacy_result_id, attempt_number, status, executor, model, started_at, finished_at, duration_ms, summary, error, metadata)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      input.loopRunId ?? null,
+      input.runId ?? null,
+      input.specId ?? null,
+      input.subjectId ?? null,
+      input.legacyResultId ?? null,
+      input.attemptNumber ?? nextAttemptNumber(input.runId, input.specId),
+      status,
+      cleanText(input.executor ?? "manual", "executor"),
+      input.model ?? null,
+      input.startedAt ?? now(),
+      finishedAt,
+      input.durationMs ?? null,
+      input.summary ?? null,
+      input.error ?? null,
+      toJson(input.metadata, {}),
+    );
+  });
 
   return getRunAttempt(id)!;
 }
@@ -966,21 +984,23 @@ export function recordRunEvent(input: CreateRunEventInput): ExecutionRunEvent {
   const db = getDatabase();
   const id = uuid();
 
-  db.query(`
-    INSERT INTO run_events (id, attempt_id, run_id, loop_run_id, sequence, level, type, message, data, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    id,
-    input.attemptId,
-    input.runId ?? null,
-    input.loopRunId ?? null,
-    input.sequence ?? nextEventSequence(input.attemptId),
-    input.level ?? "info",
-    cleanText(input.type, "type"),
-    input.message ?? null,
-    toJson(input.data, {}),
-    now(),
-  );
+  withImmediateTransaction(db, () => {
+    db.query(`
+      INSERT INTO run_events (id, attempt_id, run_id, loop_run_id, sequence, level, type, message, data, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      input.attemptId,
+      input.runId ?? null,
+      input.loopRunId ?? null,
+      input.sequence ?? nextEventSequence(input.attemptId),
+      input.level ?? "info",
+      cleanText(input.type, "type"),
+      input.message ?? null,
+      toJson(input.data, {}),
+      now(),
+    );
+  });
 
   return getRunEvent(id)!;
 }
