@@ -9,6 +9,23 @@ import { storeOutput, expandOutput } from "../../expand-store.js";
 import { shouldBeLazy, toLazy } from "../../lazy-executor.js";
 import { diffOutput } from "../../diff-cache.js";
 import { recordSaving } from "../../economy.js";
+import { shellPathArg } from "../../shell-quote.js";
+
+export function buildBrowseCommand(options: {
+  target: string;
+  recursive: boolean;
+  depth: number;
+  includeHidden: boolean;
+}): string {
+  const target = shellPathArg(options.target);
+  if (options.recursive) {
+    let command = `find ${target} -maxdepth ${options.depth} -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -path '*/.next/*'`;
+    if (!options.includeHidden) command += " -not -name '.*'";
+    return command;
+  }
+
+  return options.includeHidden ? `ls -la ${target}` : `ls -l ${target}`;
+}
 
 export function registerExecuteTools(server: McpServer, h: ToolHelpers): void {
 
@@ -212,14 +229,12 @@ export function registerExecuteTools(server: McpServer, h: ToolHelpers): void {
     async ({ path, recursive, maxDepth, includeHidden }) => {
       const target = path ?? process.cwd();
       const depth = maxDepth ?? 2;
-
-      let command: string;
-      if (recursive) {
-        command = `find "${target}" -maxdepth ${depth} -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -path '*/.next/*'`;
-        if (!includeHidden) command += " -not -name '.*'";
-      } else {
-        command = includeHidden ? `ls -la "${target}"` : `ls -l "${target}"`;
-      }
+      const command = buildBrowseCommand({
+        target,
+        recursive: !!recursive,
+        depth,
+        includeHidden: !!includeHidden,
+      });
 
       const result = await h.exec(command);
       const files = result.stdout.split("\n").filter(l => l.trim());

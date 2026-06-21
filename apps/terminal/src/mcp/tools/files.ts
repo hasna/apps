@@ -6,6 +6,11 @@ import { stripAnsi } from "../../compression.js";
 import { estimateTokens } from "../../tokens.js";
 import { getOutputProvider } from "../../providers/index.js";
 import { cachedRead } from "../../file-cache.js";
+import { shellPathArg } from "../../shell-quote.js";
+
+export function buildSymbolsDirCommand(dir: string, maxFiles: number): string {
+  return `find ${shellPathArg(dir)} -maxdepth 3 -type f \\( -name "*.ts" -o -name "*.js" -o -name "*.py" -o -name "*.go" -o -name "*.rs" -o -name "*.java" -o -name "*.rb" -o -name "*.php" \\) -not -path "*/node_modules/*" -not -path "*/dist/*" -not -name "*.test.*" -not -name "*.spec.*" | head -${maxFiles}`;
+}
 
 export function registerFileTools(server: McpServer, h: ToolHelpers): void {
 
@@ -176,10 +181,7 @@ Line numbers must be accurate (count from 1).`,
       const limit = maxFiles ?? 10;
 
       // Find source files
-      const findResult = await h.exec(
-        `find "${dir}" -maxdepth 3 -type f \\( -name "*.ts" -o -name "*.js" -o -name "*.py" -o -name "*.go" -o -name "*.rs" -o -name "*.java" -o -name "*.rb" -o -name "*.php" \\) -not -path "*/node_modules/*" -not -path "*/dist/*" -not -name "*.test.*" -not -name "*.spec.*" | head -${limit}`,
-        process.cwd(), 5000
-      );
+      const findResult = await h.exec(buildSymbolsDirCommand(dir, limit), process.cwd(), 5000);
       const files = findResult.stdout.split("\n").filter(l => l.trim());
 
       const allSymbols: Record<string, any[]> = {};
