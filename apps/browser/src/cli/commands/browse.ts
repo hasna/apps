@@ -16,7 +16,7 @@ export function register(program: Command) {
 program
   .command("navigate <url>")
   .description("Navigate to a URL and optionally take a screenshot")
-  .option("--engine <engine>", "Browser engine: playwright|cdp|lightpanda|auto", "auto")
+  .option("--engine <engine>", "Browser engine: playwright|cdp|lightpanda|bun|tui|extension|kernel|auto; auto never selects extension or kernel", "auto")
   .option("--screenshot", "Take a screenshot after navigation")
   .option("--extract", "Extract page text after navigation")
   .option("--headed", "Run in headed (visible) mode")

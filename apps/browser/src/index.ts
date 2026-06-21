@@ -20,8 +20,9 @@ export { recordHeartbeat, getLastHeartbeat, listHeartbeats, cleanOldHeartbeats }
 // Engines
 export * from "./engines/playwright.js";
 export * from "./engines/cdp.js";
+export * from "./engines/kernel.js";
 export * from "./engines/lightpanda.js";
-export { selectEngine, isEngineAvailable, inferUseCase } from "./engines/selector.js";
+export { selectEngine, isEngineAvailable, inferUseCase, resolveEnginePreference } from "./engines/selector.js";
 
 // Lib
 export * from "./lib/session.js";

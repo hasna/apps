@@ -9,6 +9,9 @@ export interface CreateSessionData {
   agentId?: string;
   startUrl?: string;
   name?: string;
+  remoteSessionId?: string;
+  persistenceId?: string;
+  browserLiveViewUrl?: string;
 }
 
 export function createSession(data: CreateSessionData): Session {
@@ -33,8 +36,18 @@ export function createSession(data: CreateSessionData): Session {
   }
 
   db.prepare(
-    "INSERT INTO sessions (id, engine, project_id, agent_id, start_url, name) VALUES (?, ?, ?, ?, ?, ?)"
-  ).run(id, data.engine, data.projectId ?? null, data.agentId ?? null, data.startUrl ?? null, name);
+    "INSERT INTO sessions (id, engine, project_id, agent_id, start_url, name, remote_session_id, persistence_id, browser_live_view_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  ).run(
+    id,
+    data.engine,
+    data.projectId ?? null,
+    data.agentId ?? null,
+    data.startUrl ?? null,
+    name,
+    data.remoteSessionId ?? null,
+    data.persistenceId ?? null,
+    data.browserLiveViewUrl ?? null,
+  );
   return getSession(id);
 }
 

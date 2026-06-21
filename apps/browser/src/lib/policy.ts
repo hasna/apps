@@ -9,6 +9,7 @@ export type BrowserCapability =
   | "tui_launch"
   | "extension_session"
   | "extension_evaluate"
+  | "stealth"
   | "storage_state"
   | "file_upload"
   | "file_download";

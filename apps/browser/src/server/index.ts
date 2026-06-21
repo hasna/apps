@@ -256,6 +256,10 @@ const server = Bun.serve<ExtensionSocketData>({
           approvalToken: body.approval_token,
           extensionServerUrl: body.extension_server_url,
           extensionTokenId: body.extension_token_id,
+          kernelPersistenceId: body.kernel_persistence_id,
+          kernelTimeoutSeconds: body.kernel_timeout_seconds,
+          kernelEnvSecrets: body.kernel_env_secrets,
+          kernelAuthMode: body.kernel_auth_mode,
         });
         return ok({ session }, 201);
       }

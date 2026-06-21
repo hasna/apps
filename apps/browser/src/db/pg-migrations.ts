@@ -306,6 +306,13 @@ export const PG_MIGRATIONS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_video_recordings_status ON video_recordings(status)`,
   `CREATE INDEX IF NOT EXISTS idx_video_recordings_started ON video_recordings(started_at)`,
 
+  // Migration 12: Remote browser metadata
+  `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS remote_session_id TEXT`,
+  `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS persistence_id TEXT`,
+  `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS browser_live_view_url TEXT`,
+  `CREATE INDEX IF NOT EXISTS idx_sessions_remote_session ON sessions(remote_session_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_sessions_persistence ON sessions(persistence_id)`,
+
   // Lazy tables from url-watcher.ts
   `CREATE TABLE IF NOT EXISTS watch_jobs (
     id         TEXT PRIMARY KEY,

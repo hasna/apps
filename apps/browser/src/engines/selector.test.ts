@@ -1,5 +1,5 @@
 import { describe, it, expect, mock } from "bun:test";
-import { selectEngine, isEngineAvailable, inferUseCase } from "./selector.js";
+import { OPEN_BROWSER_BACKEND_ENV, OPEN_BROWSER_REMOTE_ENV, resolveEnginePreference, selectEngine, isEngineAvailable, inferUseCase } from "./selector.js";
 import { UseCase } from "../types/index.js";
 import { isBunWebViewAvailable } from "./bun-webview.js";
 
@@ -56,6 +56,7 @@ describe("engine selector", () => {
     it("explicit engine overrides use case", () => {
       expect(selectEngine(UseCase.SCRAPE, "playwright")).toBe("playwright");
       expect(selectEngine(UseCase.SCREENSHOT, "cdp")).toBe("cdp");
+      expect(selectEngine(UseCase.SCREENSHOT, "kernel")).toBe("kernel");
     });
 
     it("auto explicit falls back to use-case selection", () => {
@@ -75,6 +76,11 @@ describe("engine selector", () => {
 
     it("auto is always available", () => {
       expect(isEngineAvailable("auto")).toBe(true);
+    });
+
+    it("kernel is explicit-only and available through remote credentials at runtime", () => {
+      expect(selectEngine(UseCase.SPA_NAVIGATE)).not.toBe("kernel");
+      expect(isEngineAvailable("kernel")).toBe(true);
     });
 
     it("lightpanda depends on binary", () => {
@@ -106,6 +112,21 @@ describe("engine selector", () => {
 
     it("is case-insensitive", () => {
       expect(inferUseCase("SCRAPE")).toBe(UseCase.SCRAPE);
+    });
+  });
+
+  describe("resolveEnginePreference", () => {
+    it("prefers explicit non-auto engine over env", () => {
+      expect(resolveEnginePreference("playwright", { [OPEN_BROWSER_BACKEND_ENV]: "kernel" })).toBe("playwright");
+    });
+
+    it("uses OPEN_BROWSER_BACKEND=kernel when caller leaves engine auto", () => {
+      expect(resolveEnginePreference("auto", { [OPEN_BROWSER_BACKEND_ENV]: "kernel" })).toBe("kernel");
+      expect(resolveEnginePreference(undefined, { [OPEN_BROWSER_BACKEND_ENV]: "kernel" })).toBe("kernel");
+    });
+
+    it("uses OPEN_BROWSER_REMOTE=1 as explicit remote kernel selection", () => {
+      expect(resolveEnginePreference("auto", { [OPEN_BROWSER_REMOTE_ENV]: "1" })).toBe("kernel");
     });
   });
 });

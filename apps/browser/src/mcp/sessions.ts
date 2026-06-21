@@ -49,6 +49,7 @@ ENGINES:
 - "bun": native Bun.WebView — fastest for screenshots and scraping
 - "tui": terminal UI testing — launches a CLI/TUI app (Ink, Blessed, Bubbletea, etc.) via ttyd and connects Playwright to it. Pass the shell command as start_url (e.g. "htop", "bun run app.tsx"). All browser tools (screenshot, click, type, wait) work on the terminal. Use tui_theme to control dark/light appearance and tui_method to choose between buffer-based reads and DOM-row reads.
 - "extension": explicit-only real Chrome session automation through a paired MV3 extension connected to browser-serve
+- "kernel": explicit-only kernel.sh cloud sandbox attached through CDP
 
 TIPS:
 - If agent_id is set and already has an active session, returns the existing one (use force_new to override)
@@ -56,7 +57,7 @@ TIPS:
 - Use cdp_url to attach to an already-running Chrome instance
 - For TUI sessions: start_url is the shell command to run, NOT a URL`,
   {
-    engine: z.enum(["playwright", "cdp", "lightpanda", "bun", "tui", "extension", "auto"]).optional().default("auto")
+    engine: z.enum(["playwright", "cdp", "lightpanda", "bun", "tui", "extension", "kernel", "auto"]).optional().default("auto")
       .describe("Browser engine. Use 'tui' for terminal/CLI app testing — pass the command as start_url"),
     use_case: z.string().optional()
       .describe("Hint for auto engine selection: scrape, screenshot, form, auth, network, har, perf, terminal, tui"),
@@ -80,8 +81,13 @@ TIPS:
       .describe("TUI engine only: terminal font size in pixels (default: 14). Larger = more readable screenshots, smaller = more content visible."),
     tui_method: z.enum(["buffer", "dom"]).optional().default("buffer")
       .describe("TUI engine only: how terminal state is read. 'buffer' reads xterm's internal buffer; 'dom' reads rendered DOM rows for a more structured browser-native view."),
+    kernel_persistence_id: z.string().optional().describe("Kernel engine only: reusable Kernel profile/persistence name"),
+    kernel_timeout_seconds: z.number().optional().describe("Kernel engine only: remote browser inactivity timeout"),
+    kernel_env_secrets: z.record(z.string()).optional().describe("Kernel engine only: env var name -> @hasna/secrets key to inject at sandbox creation"),
+    kernel_auth_mode: z.enum(["managed", "cdp_autofill", "auto", "off"]).optional().default("managed")
+      .describe("Kernel engine only: managed auth keeps passwords out of model-visible page/tool results"),
   },
-  async ({ engine, use_case, project_id, agent_id, start_url, headless, viewport_width, viewport_height, stealth, auto_gallery, storage_state, force_new, tags, cdp_url, approval_token, tui_theme, tui_font_size, tui_method }) => {
+  async ({ engine, use_case, project_id, agent_id, start_url, headless, viewport_width, viewport_height, stealth, auto_gallery, storage_state, force_new, tags, cdp_url, approval_token, tui_theme, tui_font_size, tui_method, kernel_persistence_id, kernel_timeout_seconds, kernel_env_secrets, kernel_auth_mode }) => {
     try {
       // Auto-reuse: if agent already has an active session, return it
       if (agent_id && !force_new) {
@@ -104,6 +110,10 @@ TIPS:
         tuiTheme: tui_theme as "dark" | "light" | "system" | undefined,
         tuiFontSize: tui_font_size,
         tuiMethod: tui_method as "buffer" | "dom" | undefined,
+        kernelPersistenceId: kernel_persistence_id,
+        kernelTimeoutSeconds: kernel_timeout_seconds,
+        kernelEnvSecrets: kernel_env_secrets,
+        kernelAuthMode: kernel_auth_mode,
       });
       // Apply tags if provided
       if (tags?.length) {

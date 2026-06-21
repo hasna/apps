@@ -12,6 +12,21 @@ import { hasConnectedExtension } from "../lib/extension-bridge.js";
 // cdp        → low-level DevTools tasks (network, perf, coverage, injection)
 // playwright → full automation (forms, SPAs, auth, multi-tab, file upload)
 // extension  → explicit-only real Chrome session automation; never auto-selected
+// kernel     → explicit-only kernel.sh cloud sandbox; never auto-selected
+
+export const OPEN_BROWSER_BACKEND_ENV = "OPEN_BROWSER_BACKEND";
+export const OPEN_BROWSER_REMOTE_ENV = "OPEN_BROWSER_REMOTE";
+
+const VALID_ENGINES = new Set<BrowserEngine>([
+  "playwright",
+  "cdp",
+  "lightpanda",
+  "bun",
+  "tui",
+  "extension",
+  "kernel",
+  "auto",
+]);
 
 const ENGINE_MAP: Record<UseCase, BrowserEngine> = {
   // Tasks where Bun.WebView is ideal (fast, zero-dep, built-in stealth)
@@ -66,6 +81,23 @@ export function selectEngine(
   return preferred;
 }
 
+export function resolveEnginePreference(
+  explicit?: BrowserEngine,
+  env: Record<string, string | undefined> = process.env
+): BrowserEngine | undefined {
+  if (explicit && explicit !== "auto") return explicit;
+
+  const backend = env[OPEN_BROWSER_BACKEND_ENV]?.trim().toLowerCase();
+  if (backend && VALID_ENGINES.has(backend as BrowserEngine)) {
+    return backend as BrowserEngine;
+  }
+
+  const remote = env[OPEN_BROWSER_REMOTE_ENV]?.trim().toLowerCase();
+  if (remote === "1" || remote === "true" || remote === "yes") return "kernel";
+
+  return explicit;
+}
+
 /**
  * Returns true if the engine is available on this system.
  */
@@ -77,6 +109,7 @@ export function isEngineAvailable(engine: BrowserEngine): boolean {
   if (engine === "lightpanda") return isLightpandaAvailable();
   if (engine === "tui") return isTuiAvailable();
   if (engine === "extension") return isExtensionAvailable();
+  if (engine === "kernel") return true;
   return false;
 }
 

@@ -459,6 +459,16 @@ function runMigrations(db: TypedDb): void {
         CREATE INDEX IF NOT EXISTS idx_video_recordings_started ON video_recordings(started_at);
       `,
     },
+    {
+      version: 12,
+      sql: `
+        ALTER TABLE sessions ADD COLUMN remote_session_id TEXT;
+        ALTER TABLE sessions ADD COLUMN persistence_id TEXT;
+        ALTER TABLE sessions ADD COLUMN browser_live_view_url TEXT;
+        CREATE INDEX IF NOT EXISTS idx_sessions_remote_session ON sessions(remote_session_id);
+        CREATE INDEX IF NOT EXISTS idx_sessions_persistence ON sessions(persistence_id);
+      `,
+    },
   ];
 
   for (const m of migrations) {

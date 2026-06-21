@@ -1,6 +1,6 @@
 // ─── Engine Types ────────────────────────────────────────────────────────────
 
-export type BrowserEngine = "playwright" | "cdp" | "lightpanda" | "bun" | "tui" | "extension" | "auto";
+export type BrowserEngine = "playwright" | "cdp" | "lightpanda" | "bun" | "tui" | "extension" | "kernel" | "auto";
 
 // ─── Chrome Extension Engine Protocol ────────────────────────────────────────
 
@@ -128,6 +128,9 @@ export interface Session {
   agent_id?: string;
   start_url?: string;
   name?: string;
+  remote_session_id?: string;
+  persistence_id?: string;
+  browser_live_view_url?: string;
   status: SessionStatus;
   created_at: string;
   closed_at?: string;
@@ -155,6 +158,11 @@ export interface SessionOptions {
   tuiMethod?: "buffer" | "dom";          // TUI engine only: how terminal state is read (default: "buffer")
   extensionServerUrl?: string;             // Extension engine only: browser-serve URL for out-of-process SDK/CLI dispatch
   extensionTokenId?: string;               // Extension engine only: target a specific paired extension token id
+  kernelPersistenceId?: string;             // Kernel engine only: reusable profile/persistence name
+  kernelTimeoutSeconds?: number;            // Kernel engine only: remote browser inactivity timeout
+  kernelEnv?: Record<string, string>;       // Kernel engine only: non-secret env values for sandbox creation
+  kernelEnvSecrets?: Record<string, string>; // Kernel engine only: env var name -> @hasna/secrets key
+  kernelAuthMode?: "managed" | "cdp_autofill" | "auto" | "off"; // Kernel engine only
 }
 
 // ─── Snapshot ────────────────────────────────────────────────────────────────

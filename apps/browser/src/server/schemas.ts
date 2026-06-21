@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import type { VideoRecordingCaptureMode, VideoRecordingCodec, VideoRecordingEncoding, VideoRecordingFormat, VideoRecordingPreset, VideoRecordingQuality } from "../types/index.js";
 
-export const browserEngineSchema = z.enum(["playwright", "cdp", "lightpanda", "bun", "tui", "extension", "auto"]);
+export const browserEngineSchema = z.enum(["playwright", "cdp", "lightpanda", "bun", "tui", "extension", "kernel", "auto"]);
 
 export const createSessionRequestSchema = z.object({
   engine: browserEngineSchema.optional(),
@@ -15,6 +15,10 @@ export const createSessionRequestSchema = z.object({
   approval_token: z.string().min(1).optional(),
   extension_server_url: z.string().min(1).optional(),
   extension_token_id: z.string().min(1).optional(),
+  kernel_persistence_id: z.string().min(1).optional(),
+  kernel_timeout_seconds: z.number().int().positive().optional(),
+  kernel_env_secrets: z.record(z.string()).optional(),
+  kernel_auth_mode: z.enum(["managed", "cdp_autofill", "auto", "off"]).optional(),
 }).passthrough();
 
 export const extensionPairRequestSchema = z.object({

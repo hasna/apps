@@ -6,7 +6,7 @@ import { createSession as dbCreateSession, getSession as dbGetSession, listSessi
 import { launchPlaywright, getPage as getPlaywrightPage, closeBrowser as closePlaywrightBrowser, BrowserPool } from "../engines/playwright.js";
 import { connectLightpanda } from "../engines/lightpanda.js";
 import { BunWebViewSession, isBunWebViewAvailable } from "../engines/bun-webview.js";
-import { selectEngine } from "../engines/selector.js";
+import { resolveEnginePreference, selectEngine } from "../engines/selector.js";
 import { launchTui, closeTui, type TuiSession } from "../engines/tui.js";
 import { createExtensionPage, isExtensionPage } from "../engines/extension.js";
 import { stopTuiRecording } from "./tui-recording.js";
@@ -100,6 +100,60 @@ function detachPlaywrightListeners(cleanups: Array<() => void | Promise<void>>):
   }
 }
 
+async function attachRemoteBrowserSession(
+  browser: Browser,
+  opts: SessionOptions,
+  config: {
+    engine: BrowserEngine;
+    name: string;
+    cleanup?: () => void | Promise<void>;
+    remoteSessionId?: string;
+    persistenceId?: string;
+    browserLiveViewUrl?: string;
+    deferListeners?: boolean;
+  },
+): Promise<CreateSessionResult> {
+  const contexts = browser.contexts();
+  const context = contexts.length > 0 ? contexts[0] : await browser.newContext();
+  const pages = context.pages();
+  const page = pages.length > 0 ? pages[0] : await context.newPage();
+
+  const session = dbCreateSession({
+    engine: config.engine,
+    projectId: opts.projectId,
+    agentId: opts.agentId,
+    startUrl: opts.startUrl ?? page.url(),
+    name: opts.name ?? config.name,
+    remoteSessionId: config.remoteSessionId,
+    persistenceId: config.persistenceId,
+    browserLiveViewUrl: config.browserLiveViewUrl,
+  });
+
+  const cleanups: Array<() => void | Promise<void>> = [];
+  if (config.cleanup) cleanups.push(config.cleanup);
+  if (!config.deferListeners) {
+    attachPlaywrightListeners(page, session.id, cleanups, {
+      captureNetwork: opts.captureNetwork,
+      captureConsole: opts.captureConsole,
+    });
+  }
+
+  handles.set(session.id, {
+    browser,
+    bunView: null,
+    tuiSession: null,
+    page,
+    engine: config.engine,
+    cleanups,
+    tokenBudget: { total: 0, used: 0 },
+    lastActivity: Date.now(),
+    autoGallery: opts.autoGallery ?? false,
+    startUrl: opts.startUrl ?? "",
+  });
+
+  return { session, page };
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export interface CreateSessionResult {
@@ -113,36 +167,13 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
     assertBrowserCapability("cdp_attach", { approvalToken: opts.approvalToken });
     const { connectToExistingBrowser } = await import("../engines/cdp.js");
     const cdpBrowser = await connectToExistingBrowser(opts.cdpUrl);
-    const contexts = cdpBrowser.contexts();
-    const context = contexts.length > 0 ? contexts[0] : await cdpBrowser.newContext();
-    const pages = context.pages();
-    const page = pages.length > 0 ? pages[0] : await context.newPage();
-
-    const session = dbCreateSession({
-      engine: "cdp",
-      projectId: opts.projectId,
-      agentId: opts.agentId,
-      startUrl: page.url(),
-      name: opts.name ?? "attached",
-    });
-
-    const cleanups: Array<() => void | Promise<void>> = [];
-    if (opts.captureNetwork !== false) {
-      try { cleanups.push(enableNetworkLogging(page, session.id)); } catch {}
-    }
-    if (opts.captureConsole !== false) {
-      try { cleanups.push(enableConsoleCapture(page, session.id)); } catch {}
-    }
-    try { cleanups.push(setupDialogHandler(page, session.id)); } catch {}
-
-    handles.set(session.id, { browser: cdpBrowser, bunView: null, tuiSession: null, page, engine: "cdp", cleanups, tokenBudget: { total: 0, used: 0 }, lastActivity: Date.now(), autoGallery: opts.autoGallery ?? false, startUrl: opts.startUrl ?? "" });
-
-    return { session, page };
+    return attachRemoteBrowserSession(cdpBrowser, opts, { engine: "cdp", name: "attached" });
   }
 
-  const engine = opts.engine === "auto" || !opts.engine
-    ? selectEngine(opts.useCase ?? UseCase.SPA_NAVIGATE, opts.engine)
-    : opts.engine;
+  const requestedEngine = resolveEnginePreference(opts.engine);
+  const engine = requestedEngine === "auto" || !requestedEngine
+    ? selectEngine(opts.useCase ?? UseCase.SPA_NAVIGATE, requestedEngine)
+    : requestedEngine;
 
   const resolvedEngine: BrowserEngine = engine === "auto" ? "playwright" : engine;
   if (opts.startUrl) assertBrowserNavigationAllowed(opts.startUrl);
@@ -153,7 +184,48 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
   let page: Page;
   let actualEngine: BrowserEngine = resolvedEngine;
 
-  if (resolvedEngine === "bun") {
+  if (resolvedEngine === "kernel") {
+    const { connectKernelBrowser, autofillLoginFromVault } = await import("../engines/kernel.js");
+    const kernelBrowser = await connectKernelBrowser({
+      startUrl: opts.startUrl,
+      name: opts.name,
+      headless: opts.headless ?? true,
+      stealth: opts.stealth,
+      viewport: opts.viewport,
+      timeoutSeconds: opts.kernelTimeoutSeconds,
+      persistenceId: opts.kernelPersistenceId,
+      env: opts.kernelEnv,
+      envSecrets: opts.kernelEnvSecrets,
+      authMode: opts.kernelAuthMode,
+      approvalToken: opts.approvalToken,
+    });
+    try {
+      const shouldAutofill = Boolean(opts.startUrl && (opts.kernelAuthMode === "cdp_autofill" || kernelBrowser.metadata.authFallback === "cdp_autofill"));
+      const result = await attachRemoteBrowserSession(kernelBrowser.browser, opts, {
+        engine: "kernel",
+        name: kernelBrowser.metadata.persistenceId ?? "kernel",
+        cleanup: kernelBrowser.close,
+        remoteSessionId: kernelBrowser.metadata.sessionId,
+        persistenceId: kernelBrowser.metadata.persistenceId,
+        browserLiveViewUrl: kernelBrowser.metadata.browserLiveViewUrl,
+        deferListeners: shouldAutofill,
+      });
+      if (shouldAutofill && opts.startUrl) {
+        await autofillLoginFromVault(result.page, opts.startUrl).catch(() => false);
+        const handle = handles.get(result.session.id);
+        if (handle) {
+          attachPlaywrightListeners(result.page, result.session.id, handle.cleanups, {
+            captureNetwork: opts.captureNetwork,
+            captureConsole: opts.captureConsole,
+          });
+        }
+      }
+      return result;
+    } catch (err) {
+      await kernelBrowser.close().catch(() => {});
+      throw err;
+    }
+  } else if (resolvedEngine === "bun") {
     if (!isBunWebViewAvailable()) {
       console.warn("[browser] Bun.WebView requested but not available — falling back to playwright. Run: bun upgrade --canary");
       actualEngine = "playwright";
@@ -424,6 +496,9 @@ export async function closeSession(sessionId: string): Promise<Session> {
         // the SDK session must not close that real browser context.
       } else if (handle.tuiSession) {
         // TUI cleanup is handled via cleanups array (closeTui)
+      } else if (handle.engine === "cdp" || handle.engine === "kernel") {
+        try { await handle.page.context().close(); } catch {}
+        try { await handle.browser?.close(); } catch {}
       } else {
         try { await handle.page.context().close(); } catch {}
         try { if (handle.browser) pool.release(handle.browser); } catch {}
