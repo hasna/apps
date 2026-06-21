@@ -162,6 +162,19 @@ describe("registry", () => {
       expect(updated.name).toBe("New Name");
     });
 
+    it("trims name updates", () => {
+      addServer({ command: "npx", name: "trim-name" });
+      const updated = updateServer("trim-name", { name: "  Trimmed Name  " });
+      expect(updated.name).toBe("Trimmed Name");
+    });
+
+    it("rejects empty name updates without changing the existing name", () => {
+      addServer({ command: "npx", name: "upd-empty-name" });
+
+      expect(() => updateServer("upd-empty-name", { name: "   " })).toThrow("Name is required");
+      expect(getServer("upd-empty-name")!.name).toBe("upd-empty-name");
+    });
+
     it("updates description", () => {
       addServer({ command: "npx", name: "upd-desc" });
       const updated = updateServer("upd-desc", { description: "new desc" });

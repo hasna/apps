@@ -425,7 +425,16 @@ export async function startServer(
             return json({ error: "Invalid JSON body" }, 400, port);
           }
           const fields: Parameters<typeof updateServer>[1] = {};
-          if (body.name !== undefined) fields.name = body.name;
+          if (body.name !== undefined) {
+            if (typeof body.name !== "string") {
+              return json({ error: "Invalid 'name' format" }, 400, port);
+            }
+            const name = body.name.trim();
+            if (!name) {
+              return json({ error: "Name is required" }, 400, port);
+            }
+            fields.name = name;
+          }
           if (body.description !== undefined) fields.description = body.description;
           if (body.command !== undefined) {
             if (typeof body.command !== "string") {

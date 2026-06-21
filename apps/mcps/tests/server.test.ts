@@ -238,6 +238,34 @@ describe("server API", () => {
   // ── PATCH /api/servers/:id ──
 
   describe("PATCH /api/servers/:id", () => {
+    it("returns 400 for blank name updates without changing the existing name", async () => {
+      addServer({ command: "npx", name: "patch-name" });
+
+      const { status, data } = await api("/api/servers/patch-name", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "   " }),
+      });
+
+      expect(status).toBe(400);
+      expect(data.error).toBe("Name is required");
+      expect(getServer("patch-name")!.name).toBe("patch-name");
+    });
+
+    it("returns 400 for non-string name updates without changing the existing name", async () => {
+      addServer({ command: "npx", name: "patch-invalid-name" });
+
+      const { status, data } = await api("/api/servers/patch-invalid-name", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: 42 }),
+      });
+
+      expect(status).toBe(400);
+      expect(data.error).toBe("Invalid 'name' format");
+      expect(getServer("patch-invalid-name")!.name).toBe("patch-invalid-name");
+    });
+
     it("returns 400 for blank command updates without changing the existing command", async () => {
       addServer({ command: "npx", name: "patch-cmd" });
 

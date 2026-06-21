@@ -135,8 +135,12 @@ export function updateServer(
   const values: (string | number | null)[] = [];
 
   if (updates.name !== undefined) {
+    const name = normalizeCandidate(updates.name);
+    if (!name) {
+      throw new Error("Name is required");
+    }
     sets.push("name = ?");
-    values.push(updates.name);
+    values.push(name);
   }
   if (updates.description !== undefined) {
     sets.push("description = ?");
