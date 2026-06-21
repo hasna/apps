@@ -194,9 +194,11 @@ function validatePersonaIds(workflow: TestingWorkflow): void {
 
 function relativeRemotePath(remoteDir: string, remoteChildDir: string): string {
   if (!remoteChildDir.startsWith("/")) {
-    const relative = remoteChildDir.replace(/^\/+/, "").replace(/\/+$/, "");
-    if (!relative || relative === ".") {
-      throw new Error("Sandbox app remote directory must be a child directory, not the workflow root");
+    const relative = pathPosix.normalize(
+      remoteChildDir.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, ""),
+    );
+    if (!relative || relative === "." || relative.startsWith("..") || pathPosix.isAbsolute(relative)) {
+      throw new Error("Sandbox app remote directory must be a child directory, not the workflow root or parent");
     }
     return relative;
   }

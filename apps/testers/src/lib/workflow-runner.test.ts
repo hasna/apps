@@ -137,6 +137,42 @@ describe("workflow runner", () => {
     }
   });
 
+  test("rejects sandbox app remote directories that escape the workflow bundle", () => {
+    const appSourceDir = mkdtempSync(join(tmpdir(), "testers-app-source-"));
+    cleanupPaths.push(appSourceDir);
+    writeFileSync(join(appSourceDir, "package.json"), "{}");
+
+    const workflow = createTestingWorkflow({
+      name: "escaping app dir",
+      scenarioFilter: { scenarioIds: ["S1"] },
+      execution: {
+        target: "sandbox",
+        provider: "e2b",
+        sandboxRemoteDir: "/workspace/testers",
+        appSourceDir,
+        appRemoteDir: "../../outside",
+      },
+    });
+    const plan = buildWorkflowRunPlan(workflow, { url: "https://preview.example" });
+
+    expect(() => createWorkflowDatabaseBundle(workflow, plan)).toThrow("must be a child directory");
+
+    const absoluteEscape = createTestingWorkflow({
+      name: "absolute escaping app dir",
+      scenarioFilter: { scenarioIds: ["S1"] },
+      execution: {
+        target: "sandbox",
+        provider: "e2b",
+        sandboxRemoteDir: "/workspace/testers",
+        appSourceDir,
+        appRemoteDir: "/workspace/outside",
+      },
+    });
+    const absolutePlan = buildWorkflowRunPlan(absoluteEscape, { url: "https://preview.example" });
+
+    expect(() => createWorkflowDatabaseBundle(absoluteEscape, absolutePlan)).toThrow("inside the workflow remote directory");
+  });
+
   test("runs sandbox workflows through the sandboxes SDK with a portable DB bundle", async () => {
     const originalSmokePassword = process.env.SMOKE_TEST_PASSWORD;
     const originalOpenAIKey = process.env.OPENAI_API_KEY;

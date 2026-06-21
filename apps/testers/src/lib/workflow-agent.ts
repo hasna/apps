@@ -2,7 +2,10 @@ import { getTestingWorkflow } from "../db/workflows.js";
 import { getResultsByRun } from "../db/results.js";
 import { getScenario, listScenarios } from "../db/scenarios.js";
 import { listPersonas } from "../db/personas.js";
-import { createTodoTask } from "./todos-connector.js";
+import {
+  reportTesterIssueReportsToTodos,
+  TESTERS_ISSUE_REPORT_SCHEMA_VERSION,
+} from "./todos-connector.js";
 import { runByFilter } from "./runner.js";
 import { loadAiSdkToolLoopHelpers, runAiSdkToolLoop } from "./ai-sdk-runtime.js";
 import type { Result, Run, TestingWorkflow } from "../types/index.js";
@@ -139,20 +142,39 @@ export async function generateWorkflowActionsWithAi(input: {
         const inputArgs = args as { title: string; description: string; priority?: string; tags?: string[] };
         const title = String(inputArgs.title);
         const description = String(inputArgs.description);
-        const created = createTodoTask({
-          title,
-          description,
-          priority: typeof inputArgs.priority === "string" ? inputArgs.priority : "high",
-          tags: Array.isArray(inputArgs.tags) ? inputArgs.tags.map(String) : ["testers", "workflow"],
+        const reported = reportTesterIssueReportsToTodos({
+          reports: [{
+            schema_version: TESTERS_ISSUE_REPORT_SCHEMA_VERSION,
+            title,
+            summary: description,
+            kind: "unknown",
+            severity: typeof inputArgs.priority === "string" ? inputArgs.priority : "high",
+            source: {
+              tool: "testers",
+              run_id: input.run.id,
+              project_id: input.workflow.projectId ?? undefined,
+              url: input.run.url,
+            },
+            target: { url: input.run.url },
+            failure: { reasoning: description },
+            labels: Array.isArray(inputArgs.tags) ? inputArgs.tags.map(String) : ["testers", "workflow"],
+            metadata: {
+              workflow_id: input.workflow.id,
+              workflow_name: input.workflow.name,
+              workflow_goal: input.workflow.goal?.prompt,
+            },
+          }],
+          defaultPriority: "high",
+          apply: true,
         });
         actions.push({
           type: "todo",
           title,
           description,
-          todoTaskId: created.taskId,
-          skippedReason: created.skippedReason,
+          todoTaskId: reported.taskIds[0],
+          skippedReason: reported.error,
         });
-        return created;
+        return reported;
       },
     }),
     finish_workflow_review: tool({

@@ -437,7 +437,6 @@ export function reportTesterIssueReportsToTodos(
   if (cliResult.error || cliResult.status !== 0) {
     return emptyReportResult(reports.length, {
       failed: reports.length,
-      skipped: reports.length,
       error: cliResult.error?.message || cliResult.stderr || `todos exited with status ${cliResult.status}`,
       stdout: cliResult.stdout,
       stderr: cliResult.stderr,
@@ -465,7 +464,6 @@ export function reportTesterIssueReportsToTodos(
   } catch (error) {
     return emptyReportResult(reports.length, {
       failed: reports.length,
-      skipped: reports.length,
       error: error instanceof Error ? error.message : String(error),
       stdout: cliResult.stdout,
       stderr: cliResult.stderr,

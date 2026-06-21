@@ -136,6 +136,24 @@ describe("createFailureTasks", () => {
     expect(calls[0]!.args).toContain("--json");
     expect(calls[0]!.args).toContain("proj-123");
   });
+
+  it("counts a failed todos issue-report call once", async () => {
+    process.env["TESTERS_TODOS_PROJECT_ID"] = "proj-123";
+    const result = await createFailureTasks(
+      makeRun(),
+      [makeResult()],
+      [makeScenario()],
+      {
+        todosCliRunner: () => ({
+          status: 1,
+          stdout: "",
+          stderr: "unknown command",
+        }),
+      },
+    );
+
+    expect(result).toEqual({ created: 0, skipped: 1 });
+  });
 });
 
 // ─── notifyFailureToConversations ─────────────────────────────────────────────

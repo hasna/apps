@@ -109,12 +109,12 @@ export async function runHealthScan(options: HealthScanOptions): Promise<HealthS
   let regressedCount = 0;
   let existingCount = 0;
 
-  const newAndRegressed: Array<{ issue: ScanIssue; persistedId: string }> = [];
+  const newAndRegressed: Array<{ issue: ScanIssue; persistedId: string; fingerprint: string }> = [];
 
   for (const issue of allIssues) {
     const { issue: persisted, outcome } = upsertScanIssue(issue, projectId);
-    if (outcome === "new") { newCount++; newAndRegressed.push({ issue, persistedId: persisted.id }); }
-    else if (outcome === "regressed") { regressedCount++; newAndRegressed.push({ issue, persistedId: persisted.id }); }
+    if (outcome === "new") { newCount++; newAndRegressed.push({ issue, persistedId: persisted.id, fingerprint: persisted.fingerprint }); }
+    else if (outcome === "regressed") { regressedCount++; newAndRegressed.push({ issue, persistedId: persisted.id, fingerprint: persisted.fingerprint }); }
     else existingCount++;
   }
 
@@ -139,14 +139,14 @@ export async function runHealthScan(options: HealthScanOptions): Promise<HealthS
 // ─── Todo task creation ───────────────────────────────────────────────────────
 
 async function createTodoTasksForIssues(
-  items: Array<{ issue: ScanIssue; persistedId: string }>,
+  items: Array<{ issue: ScanIssue; persistedId: string; fingerprint: string }>,
   url: string,
   projectId?: string,
 ): Promise<void> {
   const todosProjectId = process.env["TESTERS_TODOS_PROJECT_ID"];
   if (!todosProjectId || items.length === 0) return;
 
-  const reports = items.map(({ issue, persistedId }) => scanIssueToTesterIssueReport(issue, persistedId, url, projectId));
+  const reports = items.map(({ issue, persistedId, fingerprint }) => scanIssueToTesterIssueReport(issue, persistedId, fingerprint, url, projectId));
   const result = reportTesterIssueReportsToTodos({
     reports,
     projectId: todosProjectId,
@@ -177,12 +177,13 @@ function scanKind(issueType: string): TesterIssueKind {
 function scanIssueToTesterIssueReport(
   issue: ScanIssue,
   persistedId: string,
+  fingerprint: string,
   url: string,
   projectId?: string,
 ): TesterIssueReportV1 {
   return {
     schema_version: TESTERS_ISSUE_REPORT_SCHEMA_VERSION,
-    fingerprint: `scan:${persistedId}`,
+    fingerprint: `scan:${fingerprint}`,
     title: `[scan] ${issue.type.replace(/_/g, " ")}: ${issue.message.slice(0, 100)}`,
     summary: `Health scan detected a ${issue.type.replace(/_/g, " ")} issue.`,
     kind: scanKind(issue.type),

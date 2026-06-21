@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_AI_SDK_PLANNER_MODEL,
   DEFAULT_AI_SDK_TOOL_LOOP_RETRIES,
+  assertAiSdkGatewayCredentials,
   loadAiSdkToolLoopHelpers,
   resolveAiSdkPlannerModel,
   runAiSdkToolLoop,
@@ -52,5 +53,11 @@ describe("AI SDK runtime helpers", () => {
       maxRetries: DEFAULT_AI_SDK_TOOL_LOOP_RETRIES,
     });
     expect((calls[1] as { stopWhen: unknown }).stopWhen).toBe(stopWhen);
+  });
+
+  test("requires AI Gateway credentials for real string-model calls", async () => {
+    expect(() => assertAiSdkGatewayCredentials({})).toThrow("AI SDK string model execution requires");
+    expect(() => assertAiSdkGatewayCredentials({ AI_GATEWAY_API_KEY: "gateway-key" })).not.toThrow();
+    expect(() => assertAiSdkGatewayCredentials({ VERCEL_AI_GATEWAY_API_KEY: "gateway-key" })).not.toThrow();
   });
 });
