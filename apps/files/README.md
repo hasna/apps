@@ -119,6 +119,48 @@ MCP_HTTP=1 files-mcp
 
 Stdio remains the default when no `--http` flag is passed.
 
+## SDK-Safe Path Helpers
+
+Application runtimes that only need file-path normalization can import the
+pure path subpath. It does not import the files database, CLI, server, MCP, or
+cloud sync surfaces.
+
+```ts
+import {
+  normalizeFolderPathSegments,
+  normalizeSafeRelativePath,
+  sanitizePathSegment,
+} from "@hasna/files/path";
+
+const folderSegments = normalizeFolderPathSegments("Reports/Q1", {
+  fallback: "Downloads",
+});
+const sandboxPath = normalizeSafeRelativePath("src/index.ts");
+const safeName = sanitizePathSegment("../report.pdf");
+```
+
+## SDK-Safe S3 Object Store
+
+Application runtimes that need S3-compatible object storage can import the
+pure S3 subpath. It does not import the files database, CLI, server, MCP, or
+cloud sync surfaces; callers own tenant keys, billing, audit, and policy.
+
+```ts
+import { createS3ObjectStore } from "@hasna/files/s3";
+
+const store = createS3ObjectStore({ region: "us-east-1" });
+await store.putObject({
+  bucket: "my-bucket",
+  key: "orgs/org-1/files/report.txt",
+  body: Buffer.from("hello"),
+  contentType: "text/plain",
+});
+const buffer = await store.getObjectBodyBuffer({
+  bucket: "my-bucket",
+  key: "orgs/org-1/files/report.txt",
+});
+```
+
 ## REST API
 
 ```bash

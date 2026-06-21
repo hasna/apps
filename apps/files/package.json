@@ -18,6 +18,14 @@
     "./storage": {
       "types": "./dist/storage.d.ts",
       "import": "./dist/storage.js"
+    },
+    "./path": {
+      "types": "./dist/path.d.ts",
+      "import": "./dist/path.js"
+    },
+    "./s3": {
+      "types": "./dist/s3.d.ts",
+      "import": "./dist/s3.js"
     }
   },
   "files": [
@@ -30,11 +38,11 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && cd dashboard && bun run build && cd .. && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external @aws-sdk/* && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @aws-sdk/* && bun build src/server/index.ts --outdir dist/server --target bun --external @aws-sdk/* && bun build src/index.ts src/storage.ts --outdir dist --target bun --external @aws-sdk/* && bun run build:types",
+    "build": "bun run clean && cd dashboard && bun run build && cd .. && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external @aws-sdk/* && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @aws-sdk/* && bun build src/server/index.ts --outdir dist/server --target bun --external @aws-sdk/* && bun build src/index.ts src/storage.ts --outdir dist --target bun --external @aws-sdk/* && bun build src/lib/path.ts --outfile dist/path.js --target bun && bun build src/s3.ts --outfile dist/s3.js --target bun --external @aws-sdk/* && bun run build:types",
     "build:cli": "bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk",
     "build:mcp": "bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk",
     "build:server": "bun build src/server/index.ts --outdir dist/server --target bun",
-    "build:lib": "bun build src/index.ts src/storage.ts --outdir dist --target bun && bun run build:types",
+    "build:lib": "bun build src/index.ts src/storage.ts --outdir dist --target bun --external @aws-sdk/* && bun build src/lib/path.ts --outfile dist/path.js --target bun && bun build src/s3.ts --outfile dist/s3.js --target bun --external @aws-sdk/* && bun run build:types",
     "build:types": "tsc --emitDeclarationOnly --outDir dist",
     "build:dashboard": "cd dashboard && bun run build",
     "smoke:knowledge-installed": "bun run scripts/knowledge-installed-smoke.ts",
