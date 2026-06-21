@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { and, eq } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { getDb, fineTunedModels, trainingJobs } from "../../db/index.js";
+import { parseTagList } from "../../lib/gatherers/tags.js";
 import * as openaiProvider from "../../lib/providers/openai.js";
 import { ThinkerLabsProvider } from "../../lib/providers/thinker-labs.js";
 import { printTable, printStatus, printJson, printError, printSuccess, printInfo } from "../ui.js";
@@ -51,6 +52,23 @@ function parseListFilters(opts: ListModelsOptions): { provider?: Provider; statu
   const status = statusRaw as ModelStatus | undefined;
 
   return { provider, status, limit };
+}
+
+function formatModelTags(tags: string | null | undefined): string {
+  const parsed = parseTagList(tags);
+  return parsed.length > 0 ? parsed.join(", ") : "(none)";
+}
+
+function addModelTagJson(tags: string | null | undefined, tag: string): string {
+  const existing = parseTagList(tags);
+  if (!existing.includes(tag)) {
+    existing.push(tag);
+  }
+  return JSON.stringify(existing);
+}
+
+function removeModelTagJson(tags: string | null | undefined, tag: string): string {
+  return JSON.stringify(parseTagList(tags).filter((existingTag) => existingTag !== tag));
 }
 
 export function registerModelsCommands(program: Command): void {
@@ -130,7 +148,7 @@ export function registerModelsCommands(program: Command): void {
         }
         if (opts.json) { printJson(model); return; }
         console.log();
-        const tagsList = model.tags ? (JSON.parse(model.tags) as string[]).join(", ") : "(none)";
+        const tagsList = formatModelTags(model.tags);
         console.log(`  ID:            ${model.id}`);
         console.log(`  Name:          ${model.name}`);
         console.log(`  Display Name:  ${model.displayName ?? "(none)"}`);
@@ -195,15 +213,13 @@ export function registerModelsCommands(program: Command): void {
           printError(`Model not found: ${id}`);
           process.exit(1);
         }
-        const existing: string[] = model.tags ? (JSON.parse(model.tags) as string[]) : [];
-        if (!existing.includes(tag)) {
-          existing.push(tag);
-        }
+        const tagsJson = addModelTagJson(model.tags, tag);
+        const updated = parseTagList(tagsJson);
         await db
           .update(fineTunedModels)
-          .set({ tags: JSON.stringify(existing), updatedAt: Date.now() })
+          .set({ tags: tagsJson, updatedAt: Date.now() })
           .where(eq(fineTunedModels.id, id));
-        printSuccess(`Tag "${tag}" added. Tags: ${existing.join(", ")}`);
+        printSuccess(`Tag "${tag}" added. Tags: ${updated.join(", ")}`);
       } catch (err) {
         printError(err instanceof Error ? err.message : String(err));
         process.exit(1);
@@ -221,11 +237,11 @@ export function registerModelsCommands(program: Command): void {
           printError(`Model not found: ${id}`);
           process.exit(1);
         }
-        const existing: string[] = model.tags ? (JSON.parse(model.tags) as string[]) : [];
-        const updated = existing.filter((t) => t !== tag);
+        const tagsJson = removeModelTagJson(model.tags, tag);
+        const updated = parseTagList(tagsJson);
         await db
           .update(fineTunedModels)
-          .set({ tags: JSON.stringify(updated), updatedAt: Date.now() })
+          .set({ tags: tagsJson, updatedAt: Date.now() })
           .where(eq(fineTunedModels.id, id));
         printSuccess(`Tag "${tag}" removed. Tags: ${updated.join(", ") || "(none)"}`);
       } catch (err) {
@@ -314,4 +330,4 @@ export function registerModelsCommands(program: Command): void {
     });
 }
 
-export { parseListFilters, parseListLimit };
+export { addModelTagJson, formatModelTags, parseListFilters, parseListLimit, removeModelTagJson };
