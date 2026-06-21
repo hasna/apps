@@ -229,4 +229,69 @@ packages:
     expect(compromised).toBeDefined();
     expect(compromised!.severity).toBe(Severity.Critical);
   });
+
+  test("detects compromised transitive package-lock.json packages entries", async () => {
+    writeFileSync(join(tempDir, "package.json"), JSON.stringify({ dependencies: { "parent": "1.0.0" } }));
+    writeFileSync(join(tempDir, "package-lock.json"), JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        "node_modules/parent": { version: "1.0.0" },
+        "node_modules/parent/node_modules/axios": { version: "1.14.1" },
+      },
+    }));
+
+    const findings = await lockfileScanner.scan(tempDir);
+    const compromised = findings.find((f) =>
+      f.rule_id.startsWith("lockfile-compromised") && f.message.includes("axios@1.14.1")
+    );
+    expect(compromised).toBeDefined();
+    expect(compromised!.severity).toBe(Severity.Critical);
+  });
+
+  test("preserves scoped package-lock.json names whose scope contains node_modules", async () => {
+    createAdvisory({
+      package_name: "@node_modules/malware",
+      ecosystem: Ecosystem.Npm,
+      affected_versions: ["1.2.3"],
+      safe_versions: ["1.2.4"],
+      attack_type: AttackType.MaliciousPackage,
+      severity: Severity.Critical,
+      title: "Scoped node_modules advisory",
+      description: "Test advisory for package-lock path parsing",
+      source: "https://example.com/advisory",
+    });
+    createAdvisory({
+      package_name: "@my-node_modules/malware",
+      ecosystem: Ecosystem.Npm,
+      affected_versions: ["2.0.0"],
+      safe_versions: ["2.0.1"],
+      attack_type: AttackType.MaliciousPackage,
+      severity: Severity.Critical,
+      title: "Scoped my-node_modules advisory",
+      description: "Test advisory for nested package-lock path parsing",
+      source: "https://example.com/advisory",
+    });
+
+    writeFileSync(join(tempDir, "package.json"), JSON.stringify({
+      dependencies: {
+        "@node_modules/malware": "1.2.3",
+        "parent": "1.0.0",
+      },
+    }));
+    writeFileSync(join(tempDir, "package-lock.json"), JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        "node_modules/@node_modules/malware": { version: "1.2.3" },
+        "node_modules/parent": { version: "1.0.0" },
+        "node_modules/parent/node_modules/@my-node_modules/malware": { version: "2.0.0" },
+      },
+    }));
+
+    const findings = await lockfileScanner.scan(tempDir);
+    const messages = findings
+      .filter((f) => f.rule_id.startsWith("lockfile-compromised"))
+      .map((f) => f.message);
+    expect(messages.some((message) => message.includes("@node_modules/malware@1.2.3"))).toBe(true);
+    expect(messages.some((message) => message.includes("@my-node_modules/malware@2.0.0"))).toBe(true);
+  });
 });

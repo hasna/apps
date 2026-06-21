@@ -76,7 +76,7 @@ function parsePackageLockJson(content: string): LockedDep[] {
       for (const [key, val] of Object.entries(lock.packages)) {
         if (!key) continue;
         const v = val as any;
-        const name = key.replace(/^node_modules\//, "");
+        const name = packageLockNameFromPath(key);
         if (v.version) deps.push({ name, version: v.version, integrity: v.integrity });
       }
     }
@@ -88,6 +88,23 @@ function parsePackageLockJson(content: string): LockedDep[] {
     }
   } catch {}
   return deps;
+}
+
+function packageLockNameFromPath(packagePath: string): string {
+  const segments = packagePath.split("/");
+  for (let i = segments.length - 1; i >= 0; i--) {
+    if (segments[i] !== "node_modules") continue;
+
+    const name = segments[i + 1];
+    if (!name) return packagePath;
+    if (name.startsWith("@")) {
+      const scopedPackage = segments[i + 2];
+      return scopedPackage ? `${name}/${scopedPackage}` : name;
+    }
+    return name;
+  }
+
+  return packagePath;
 }
 
 function extractYarnPackageName(header: string): string | null {
