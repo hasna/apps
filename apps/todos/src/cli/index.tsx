@@ -9,13 +9,76 @@ type RegisterEventsCommands = (
   options: { source: string },
 ) => void;
 
+function registerUnavailableEventsCommands(program: Command): void {
+  const events = program
+    .command("events")
+    .description("Emit, list, and replay Hasna events");
+
+  events
+    .command("list")
+    .description("List recorded events")
+    .option("--json", "Output as JSON")
+    .action((command: Command) => {
+      if (command.opts().json) {
+        console.log(JSON.stringify([]));
+        return;
+      }
+      console.log("No events available. Optional @hasna/events commands are not installed.");
+    });
+
+  events
+    .command("emit <type>")
+    .description("Emit an event from this app")
+    .option("--json", "Output as JSON")
+    .action((type: string, command: Command) => {
+      if (command.opts().json) {
+        console.log(JSON.stringify({ emitted: false, type, reason: "events_unavailable" }));
+        return;
+      }
+      console.error("Optional @hasna/events commands are not installed.");
+      process.exitCode = 1;
+    });
+
+  events
+    .command("replay")
+    .description("Replay recorded events")
+    .option("--json", "Output as JSON")
+    .action((command: Command) => {
+      if (command.opts().json) {
+        console.log(JSON.stringify({ replayed: 0, reason: "events_unavailable" }));
+        return;
+      }
+      console.error("Optional @hasna/events commands are not installed.");
+      process.exitCode = 1;
+    });
+
+  const webhooks = program
+    .command("webhooks")
+    .description("Manage Hasna event webhook subscriptions");
+
+  webhooks
+    .command("list")
+    .description("List configured event webhooks")
+    .option("--json", "Output as JSON")
+    .action((command: Command) => {
+      if (command.opts().json) {
+        console.log(JSON.stringify([]));
+        return;
+      }
+      console.log("No webhooks available. Optional @hasna/events commands are not installed.");
+    });
+}
+
 async function registerOptionalEventsCommands(program: Command): Promise<void> {
   const specifier = "@hasna/events/commander";
   try {
     const module = (await import(specifier)) as {
       registerEventsCommands?: RegisterEventsCommands;
     };
-    module.registerEventsCommands?.(program, { source: "todos" });
+    if (module.registerEventsCommands) {
+      module.registerEventsCommands(program, { source: "todos" });
+      return;
+    }
   } catch (error) {
     if (process.env["TODOS_DEBUG_EVENTS_IMPORT"] === "1") {
       console.warn(
@@ -25,6 +88,7 @@ async function registerOptionalEventsCommands(program: Command): Promise<void> {
       );
     }
   }
+  registerUnavailableEventsCommands(program);
 }
 
 // Global options
