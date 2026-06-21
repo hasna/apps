@@ -9,6 +9,10 @@ type RegisterEventsCommands = (
   options: { source: string },
 ) => void;
 
+function fallbackJsonRequested(): boolean {
+  return program.opts().json === true || process.argv.includes("--json");
+}
+
 function registerUnavailableEventsCommands(program: Command): void {
   const events = program
     .command("events")
@@ -18,8 +22,8 @@ function registerUnavailableEventsCommands(program: Command): void {
     .command("list")
     .description("List recorded events")
     .option("--json", "Output as JSON")
-    .action((command: Command) => {
-      if (command.opts().json) {
+    .action(() => {
+      if (fallbackJsonRequested()) {
         console.log(JSON.stringify([]));
         return;
       }
@@ -30,8 +34,8 @@ function registerUnavailableEventsCommands(program: Command): void {
     .command("emit <type>")
     .description("Emit an event from this app")
     .option("--json", "Output as JSON")
-    .action((type: string, command: Command) => {
-      if (command.opts().json) {
+    .action((type: string) => {
+      if (fallbackJsonRequested()) {
         console.log(JSON.stringify({ emitted: false, type, reason: "events_unavailable" }));
         return;
       }
@@ -43,8 +47,8 @@ function registerUnavailableEventsCommands(program: Command): void {
     .command("replay")
     .description("Replay recorded events")
     .option("--json", "Output as JSON")
-    .action((command: Command) => {
-      if (command.opts().json) {
+    .action(() => {
+      if (fallbackJsonRequested()) {
         console.log(JSON.stringify({ replayed: 0, reason: "events_unavailable" }));
         return;
       }
@@ -60,8 +64,8 @@ function registerUnavailableEventsCommands(program: Command): void {
     .command("list")
     .description("List configured event webhooks")
     .option("--json", "Output as JSON")
-    .action((command: Command) => {
-      if (command.opts().json) {
+    .action(() => {
+      if (fallbackJsonRequested()) {
         console.log(JSON.stringify([]));
         return;
       }
