@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { getLocalMachineId, latestHeartbeatByMachine, listHeartbeats } from "./db.js";
 import { readManifest } from "./manifests.js";
 import { getManifestPath } from "./paths.js";
-import { REDACTED_VALUE, publicMetadataKeys, redactErrorMessage, redactMetadata, redactSensitiveValue } from "./redaction.js";
+import { REDACTED_VALUE, publicMetadataKeys, redactErrorMessage, redactMetadataForTopology, redactSensitiveValue } from "./redaction.js";
 import type { MachineManifest, MachinePlatform } from "./types.js";
 import { getPackageVersion } from "./version.js";
 
@@ -619,7 +619,7 @@ function buildEntry(input: {
     },
     route_hints: hints,
     tags: manifest?.tags ?? [],
-    metadata: redactMetadata(manifest?.metadata),
+    metadata: redactMetadataForTopology(manifest?.metadata),
   };
 }
 

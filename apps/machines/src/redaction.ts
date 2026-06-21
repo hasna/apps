@@ -85,23 +85,27 @@ export function redactIdentifier(value: string): string {
   return value.replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 80) || "adapter";
 }
 
-export function redactSensitiveValue(value: unknown, key = ""): unknown {
+export interface RedactSensitiveValueOptions {
+  redactPaths?: boolean;
+}
+
+export function redactSensitiveValue(value: unknown, key = "", options: RedactSensitiveValueOptions = {}): unknown {
   if (typeof value === "string") {
     if (isSensitiveKey(key) && !(isSecretReferenceKey(key) && !looksSensitiveString(value))) {
       return REDACTED_VALUE;
     }
     if (looksSensitiveString(value)) return REDACTED_VALUE;
-    return redactPath(value);
+    return options.redactPaths === false ? value : redactPath(value);
   }
 
   if (Array.isArray(value)) {
-    return value.map((entry) => redactSensitiveValue(entry, key));
+    return value.map((entry) => redactSensitiveValue(entry, key, options));
   }
 
   if (isRecord(value)) {
     const redacted: Record<string, unknown> = {};
     for (const [entryKey, entryValue] of Object.entries(value)) {
-      redacted[entryKey] = redactSensitiveValue(entryValue, entryKey);
+      redacted[entryKey] = redactSensitiveValue(entryValue, entryKey, options);
     }
     return redacted;
   }
@@ -117,6 +121,10 @@ export function publicMetadataKeys(metadata: Record<string, unknown> | undefined
 
 export function redactMetadata(metadata: Record<string, unknown> | undefined): Record<string, unknown> {
   return redactSensitiveValue(metadata ?? {}) as Record<string, unknown>;
+}
+
+export function redactMetadataForTopology(metadata: Record<string, unknown> | undefined): Record<string, unknown> {
+  return redactSensitiveValue(metadata ?? {}, "", { redactPaths: false }) as Record<string, unknown>;
 }
 
 export function redactManifestForDiagnostics(machine: MachineManifest): Record<string, unknown> {

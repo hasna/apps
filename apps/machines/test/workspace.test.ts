@@ -84,7 +84,9 @@ describe("workspace resolver CLI", () => {
         includeTailscale: false,
       });
       expect(resolved.paths.project_root.source).toBe("manifest_metadata");
+      expect(resolved.paths.project_root.path).toBe("/home/operator/workspace/hasna/opensource/open-knowledge");
       expect(resolved.paths.open_files_root.source).toBe("manifest_metadata");
+      expect(resolved.paths.open_files_root.path).toBe("/home/operator/workspace/hasna/opensource/open-files");
       expect(resolved.warnings).not.toContain("project_root_inferred:open-knowledge");
       expect(resolved.warnings).not.toContain("open_files_root_inferred:open-knowledge");
       expect(resolved.repair_hints).toEqual([]);
