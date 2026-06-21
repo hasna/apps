@@ -120,6 +120,15 @@ Configure which adapter connects the eval runner to your app:
 ```bash
 # HTTP (any REST endpoint)
 evals run dataset.jsonl --adapter http --url http://localhost:3000/api/chat
+evals run dataset.jsonl \
+  --adapter http \
+  --url http://localhost:3000/api/chat \
+  --method POST \
+  --headers '{"Authorization":"Bearer test-token"}' \
+  --response-mode text \
+  --input-path input \
+  --output-path output \
+  --timeout-ms 30000
 
 # Direct Anthropic API
 evals run dataset.jsonl --adapter anthropic --model claude-sonnet-4-6
@@ -136,6 +145,38 @@ evals run dataset.jsonl --adapter function --module ./src/handler.js
 # CLI command (pipe stdin, capture stdout)
 evals run dataset.jsonl --adapter cli --command "my-cli-tool --input '{{input}}'"
 ```
+
+---
+
+## Live regression evals
+
+Use real traffic to seed eval cases, but keep a review gate before cases become CI blockers:
+
+```bash
+# Capture sampled request/response pairs into a staging dataset
+evals capture \
+  --app https://preview.example.com/api/chat \
+  --rate 0.05 \
+  --output datasets/captured.jsonl
+
+# Promote reviewed cases into a stable regression suite
+evals run datasets/regression.jsonl \
+  --adapter http \
+  --url https://preview.example.com/api/chat \
+  --headers '{"Authorization":"Bearer test-token"}' \
+  --input-path input \
+  --output-path choices.0.message.content
+
+# Lock the current passing run and fail future drops
+evals ci set-baseline main
+evals ci run datasets/regression.jsonl \
+  --adapter http \
+  --url https://preview.example.com/api/chat \
+  --baseline main \
+  --fail-if-regression 5
+```
+
+Captured cases are tagged `captured` and `needs-review` and include a short response preview. Promote only consent-safe, redacted, high-signal cases into durable datasets; keep the live capture output as a staging inbox rather than a direct CI corpus.
 
 ---
 

@@ -102,10 +102,7 @@ export async function runAssertions(
 }
 
 export function assertionsPassed(results: AssertionResult[]): boolean {
-  return results.every((r) => r.passed || r.reason === "Skipped — earlier assertion failed"
-    ? false
-    : true
-  );
+  return results.every((r) => r.passed);
 }
 
 export function allAssertionsPassed(results: AssertionResult[]): boolean {

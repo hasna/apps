@@ -1,4 +1,9 @@
 import { describe, test, expect, beforeAll, afterAll, mock } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import { closeDatabase } from "../db/store.js";
+import { createEvalsServerHandler } from "./index.js";
 
 // Mock adapters and judge so the server doesn't need real API keys
 mock.module("@anthropic-ai/sdk", () => ({
@@ -22,49 +27,46 @@ mock.module("openai", () => ({
 process.env["EVALS_DB_PATH"] = ":memory:";
 process.env["EVALS_PORT"] = "19490";
 
-// Dynamically import the server after env vars are set
-// We start it in a background process via fetch tests against the port
-
 const BASE = "http://localhost:19490";
+const handler = createEvalsServerHandler();
 
 // Helper
 async function post(path: string, body: unknown) {
-  return fetch(`${BASE}${path}`, {
+  return handler(new Request(`${BASE}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  });
+  }));
 }
 
 async function get(path: string) {
-  return fetch(`${BASE}${path}`);
+  return handler(new Request(`${BASE}${path}`));
 }
 
-let serverProc: ReturnType<typeof Bun.spawn>;
+let tmpDir: string;
+let datasetPath: string;
+let modulePath: string;
 
 beforeAll(async () => {
-  // Spawn evals-serve as a subprocess
-  serverProc = Bun.spawn(
-    ["bun", "run", "src/server/index.ts"],
-    {
-      env: { ...process.env, EVALS_DB_PATH: ":memory:", EVALS_PORT: "19490" },
-      stdout: "pipe",
-      stderr: "pipe",
-    }
-  );
+  tmpDir = mkdtempSync(join(tmpdir(), "evals-server-"));
+  datasetPath = join(tmpDir, "server.jsonl");
+  modulePath = join(tmpDir, "adapter.js");
 
-  // Wait for server to be ready
-  for (let i = 0; i < 20; i++) {
-    await Bun.sleep(100);
-    try {
-      const r = await fetch(`${BASE}/api/health`, { signal: AbortSignal.timeout(200) });
-      if (r.ok) break;
-    } catch { /* not ready yet */ }
-  }
+  writeFileSync(datasetPath, JSON.stringify({
+    id: "server-run-1",
+    input: "hello",
+    assertions: [{ type: "contains", value: "server echo: hello" }],
+    tags: ["server-success"],
+  }) + "\n");
+
+  writeFileSync(modulePath, `export default async function(input) { return "server echo: " + input; }\n`);
+
+  closeDatabase();
 });
 
 afterAll(() => {
-  serverProc.kill();
+  closeDatabase();
+  if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
 });
 
 describe("GET /api/health", () => {
@@ -99,6 +101,54 @@ describe("POST /api/runs — validation", () => {
     expect(r.status).toBe(400);
     const body = await r.json() as { error: string };
     expect(body.error).toContain("adapter");
+  });
+});
+
+describe("POST /api/runs — success", () => {
+  test("runs, saves, lists, and returns a baseline through the API", async () => {
+    const runResponse = await post("/api/runs", {
+      dataset: datasetPath,
+      adapter: { type: "function", modulePath },
+      skipJudge: true,
+      save: true,
+    });
+
+    expect(runResponse.status).toBe(200);
+    const run = await runResponse.json() as {
+      id: string;
+      dataset: string;
+      stats: { total: number; passed: number; failed: number; errors: number };
+      results: Array<{ caseId: string; verdict: string; output: string }>;
+    };
+
+    expect(run.id).toBeTruthy();
+    expect(run.dataset).toBe(datasetPath);
+    expect(run.stats.total).toBe(1);
+    expect(run.stats.passed).toBe(1);
+    expect(run.stats.failed).toBe(0);
+    expect(run.stats.errors).toBe(0);
+    expect(run.results[0]?.caseId).toBe("server-run-1");
+    expect(run.results[0]?.verdict).toBe("PASS");
+    expect(run.results[0]?.output).toBe("server echo: hello");
+
+    const getResponse = await get(`/api/runs/${run.id}`);
+    expect(getResponse.status).toBe(200);
+    const fetched = await getResponse.json() as { id: string };
+    expect(fetched.id).toBe(run.id);
+
+    const listResponse = await get(`/api/runs?dataset=${encodeURIComponent(datasetPath)}`);
+    expect(listResponse.status).toBe(200);
+    const listed = await listResponse.json() as Array<{ id: string; dataset: string }>;
+    expect(listed.some((item) => item.id === run.id && item.dataset === datasetPath)).toBe(true);
+
+    const baselineName = `server-main-${Date.now()}`;
+    const baselineResponse = await post("/api/baselines", { name: baselineName, runId: run.id });
+    expect(baselineResponse.status).toBe(200);
+
+    const baselineRunResponse = await get(`/api/baselines/${baselineName}`);
+    expect(baselineRunResponse.status).toBe(200);
+    const baselineRun = await baselineRunResponse.json() as { id: string };
+    expect(baselineRun.id).toBe(run.id);
   });
 });
 

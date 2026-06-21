@@ -27,6 +27,24 @@ describe("HTTP adapter", () => {
         if (url.pathname === "/api/custom") {
           return Response.json({ output: "custom response" });
         }
+        if (url.pathname === "/api/tool-call") {
+          return Response.json({
+            choices: [{
+              message: {
+                content: "searched",
+                tool_calls: [{
+                  function: {
+                    name: "search",
+                    arguments: JSON.stringify({ query: "AI evals" }),
+                  },
+                }],
+              },
+            }],
+          });
+        }
+        if (url.pathname === "/api/error-json") {
+          return Response.json({ error: "server failed" }, { status: 500 });
+        }
         if (url.pathname === "/api/slow") {
           return new Promise((resolve) =>
             setTimeout(() => resolve(Response.json({ content: "slow" })), 200)
@@ -56,6 +74,28 @@ describe("HTTP adapter", () => {
     );
     expect(result.inputTokens).toBe(10);
     expect(result.outputTokens).toBe(5);
+  });
+
+  test("extracts OpenAI-style tool calls from JSON responses", async () => {
+    const result = await callHttpAdapter(
+      { type: "http", url: `http://localhost:${port}/api/tool-call` },
+      "search"
+    );
+    expect(result.output).toBe("searched");
+    expect(result.toolCalls).toEqual([
+      { name: "search", arguments: { query: "AI evals" } },
+    ]);
+  });
+
+  test("returns an adapter error for non-2xx JSON responses", async () => {
+    const result = await callHttpAdapter(
+      { type: "http", url: `http://localhost:${port}/api/error-json` },
+      "hello"
+    );
+    expect(result.statusCode).toBe(500);
+    expect(result.output).toBe("");
+    expect(result.error).toContain("HTTP 500");
+    expect(result.error).toContain("server failed");
   });
 
   test("uses custom outputPath to extract response field", async () => {

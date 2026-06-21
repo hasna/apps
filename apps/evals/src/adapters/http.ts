@@ -40,6 +40,49 @@ function setNestedValue(obj: Record<string, unknown>, path: string, value: unkno
   cur[last] = value;
 }
 
+function parseToolArguments(value: unknown): Record<string, unknown> | undefined {
+  if (!value) return undefined;
+  if (typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function normalizeToolCalls(value: unknown): Array<{ name: string; arguments?: Record<string, unknown> }> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const calls = value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const record = item as Record<string, unknown>;
+    const fn = record["function"];
+    if (fn && typeof fn === "object") {
+      const functionRecord = fn as Record<string, unknown>;
+      const name = functionRecord["name"];
+      if (typeof name !== "string" || !name) return [];
+      return [{
+        name,
+        arguments: parseToolArguments(functionRecord["arguments"]),
+      }];
+    }
+    const name = record["name"] ?? record["toolName"];
+    if (typeof name !== "string" || !name) return [];
+    return [{
+      name,
+      arguments: parseToolArguments(record["arguments"] ?? record["args"]),
+    }];
+  });
+  return calls.length > 0 ? calls : undefined;
+}
+
 export async function callHttpAdapter(
   config: HttpAdapterConfig,
   input: string,
@@ -77,6 +120,24 @@ export async function callHttpAdapter(
     });
 
     const durationMs = Date.now() - start;
+    if (!response.ok) {
+      const text = await response.text().catch(() => response.statusText);
+      return {
+        output: "",
+        durationMs,
+        statusCode: response.status,
+        error: `HTTP ${response.status}: ${text.slice(0, 500)}`,
+      };
+    }
+
+    if (config.responseMode === "text") {
+      return {
+        output: await response.text(),
+        durationMs,
+        statusCode: response.status,
+      };
+    }
+
     const data = await response.json() as Record<string, unknown>;
 
     // Extract output using outputPath or smart defaults
@@ -98,12 +159,17 @@ export async function callHttpAdapter(
     const usage = getNestedValue(data, "usage") as Record<string, unknown> | undefined;
     const inputTokens = Number(usage?.["prompt_tokens"] ?? usage?.["input_tokens"] ?? 0) || undefined;
     const outputTokens = Number(usage?.["completion_tokens"] ?? usage?.["output_tokens"] ?? 0) || undefined;
+    const toolCalls =
+      normalizeToolCalls(getNestedValue(data, "choices.0.message.tool_calls")) ??
+      normalizeToolCalls(getNestedValue(data, "toolCalls")) ??
+      normalizeToolCalls(getNestedValue(data, "tool_calls"));
 
     return {
       output,
       durationMs,
       inputTokens,
       outputTokens,
+      toolCalls,
       statusCode: response.status,
     };
   } catch (err) {

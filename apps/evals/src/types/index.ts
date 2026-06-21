@@ -9,6 +9,8 @@ export interface HttpAdapterConfig {
   url: string;
   method?: "GET" | "POST" | "PUT" | "PATCH";
   headers?: Record<string, string>;
+  /** Response parser. Use "text" for SSE/data streams or plain text endpoints. */
+  responseMode?: "json" | "text";
   /** Path into request body where the input message goes, e.g. "messages[-1].content" */
   inputPath?: string;
   /** Path into response body where the output text lives, e.g. "choices[0].message.content" */

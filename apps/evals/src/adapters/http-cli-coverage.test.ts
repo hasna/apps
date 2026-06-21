@@ -29,6 +29,10 @@ describe("HTTP adapter — response shape edge cases", () => {
             return Response.json({ output: "output field response" });
           case "/fallback-json":
             return Response.json({ unknown_shape: true, value: 42 });
+          case "/text-response-mode":
+            return new Response("event: done\ndata: hello from a stream\n", {
+              headers: { "Content-Type": "text/event-stream" },
+            });
           case "/array-negative":
             // Array indexing with negative index via outputPath
             return Response.json({
@@ -84,6 +88,16 @@ describe("HTTP adapter — response shape edge cases", () => {
     expect(result.output).toContain("unknown_shape");
   });
 
+  test("supports text response mode for streams and plain text endpoints", async () => {
+    const result = await callHttpAdapter(
+      { type: "http", url: `http://localhost:${port}/text-response-mode`, responseMode: "text" },
+      "hello"
+    );
+    expect(result.output).toContain("hello from a stream");
+    expect(result.statusCode).toBe(200);
+    expect(result.error).toBeUndefined();
+  });
+
   test("uses custom outputPath for nested extraction", async () => {
     const result = await callHttpAdapter(
       { type: "http", url: `http://localhost:${port}/nested-create`, outputPath: "result.answer" },
@@ -113,13 +127,14 @@ describe("HTTP adapter — response shape edge cases", () => {
     expect(result.output).toBe("my search");
   });
 
-  test("handles 404 text response (JSON parse fails → error)", async () => {
+  test("returns status-aware errors for non-2xx text responses", async () => {
     const result = await callHttpAdapter(
       { type: "http", url: `http://localhost:${port}/404` },
       "hello"
     );
-    // Non-JSON body causes json() to throw → captured as error
+    expect(result.statusCode).toBe(404);
     expect(result.error).toBeTruthy();
+    expect(result.error).toContain("Not found");
     expect(result.output).toBe("");
   });
 

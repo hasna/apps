@@ -19,9 +19,8 @@ function err(message: string, status = 400): Response {
   return json({ error: message }, status);
 }
 
-Bun.serve({
-  port: PORT,
-  async fetch(req) {
+export function createEvalsServerHandler(): (req: Request) => Promise<Response> {
+  return async function fetch(req: Request): Promise<Response> {
     const url = new URL(req.url);
     const method = req.method;
     const path = url.pathname;
@@ -95,7 +94,17 @@ Bun.serve({
     } catch (e) {
       return err(e instanceof Error ? e.message : String(e), 500);
     }
-  },
-});
+  };
+}
 
-console.log(`evals-serve running on http://localhost:${PORT}`);
+export function startEvalsServer(port = PORT): ReturnType<typeof Bun.serve> {
+  return Bun.serve({
+    port,
+    fetch: createEvalsServerHandler(),
+  });
+}
+
+if (import.meta.main) {
+  startEvalsServer(PORT);
+  console.log(`evals-serve running on http://localhost:${PORT}`);
+}

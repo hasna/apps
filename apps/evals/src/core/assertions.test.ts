@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { runAssertion, runAssertions, sortAssertionsCheapestFirst, allAssertionsPassed } from "./assertions.js";
+import { runAssertion, runAssertions, sortAssertionsCheapestFirst, allAssertionsPassed, assertionsPassed } from "./assertions.js";
 import type { AssertionContext } from "./assertions.js";
 
 const ctx: AssertionContext = {
@@ -201,5 +201,19 @@ describe("runAssertions (short-circuit)", () => {
       { type: "min_length", value: 5 },
     ], ctx);
     expect(allAssertionsPassed(results)).toBe(true);
+  });
+
+  test("assertionsPassed returns true only when every assertion passed", async () => {
+    const passing = await runAssertions([
+      { type: "contains", value: "Hello" },
+      { type: "min_length", value: 5 },
+    ], ctx);
+    const failing = await runAssertions([
+      { type: "contains", value: "MISSING" },
+      { type: "min_length", value: 5 },
+    ], ctx);
+
+    expect(assertionsPassed(passing)).toBe(true);
+    expect(assertionsPassed(failing)).toBe(false);
   });
 });
