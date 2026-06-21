@@ -22,8 +22,12 @@ export function isStdioMode(args: string[] = process.argv.slice(2)): boolean {
 export function resolveHttpPort(args: string[] = process.argv.slice(2)): number {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === "--port" && args[i + 1]) {
-      return parsePort(args[i + 1]);
+    if (arg === "--port") {
+      const value = args[i + 1];
+      if (value === undefined || value === "" || value.startsWith("--")) {
+        throw new Error("Missing value for --port");
+      }
+      return parsePort(value);
     }
     if (arg.startsWith("--port=")) {
       return parsePort(arg.slice("--port=".length));
@@ -39,7 +43,11 @@ export function resolveHttpPort(args: string[] = process.argv.slice(2)): number 
 }
 
 function parsePort(raw: string): number {
-  const port = Number.parseInt(raw, 10);
+  const normalized = raw.trim();
+  if (!/^\d+$/.test(normalized)) {
+    throw new Error(`Invalid port: ${raw}`);
+  }
+  const port = Number(normalized);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error(`Invalid port: ${raw}`);
   }

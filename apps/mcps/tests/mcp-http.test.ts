@@ -41,6 +41,32 @@ describe("MCP HTTP transport", () => {
     expect(HTTP_NAME).toBe("mcps");
   });
 
+  it("resolves explicit HTTP ports and rejects malformed values", () => {
+    expect(resolveHttpPort(["--port", "9123"])).toBe(9123);
+    expect(resolveHttpPort(["--port=9124"])).toBe(9124);
+
+    for (const raw of ["0", "65536", "12.5", "123abc", "abc"]) {
+      expect(() => resolveHttpPort(["--port", raw])).toThrow(`Invalid port: ${raw}`);
+    }
+
+    expect(() => resolveHttpPort(["--port"])).toThrow("Missing value for --port");
+    expect(() => resolveHttpPort(["--port", "--stdio"])).toThrow("Missing value for --port");
+  });
+
+  it("validates MCP_HTTP_PORT using the same strict rules", () => {
+    const previous = process.env.MCP_HTTP_PORT;
+    try {
+      process.env.MCP_HTTP_PORT = "4477";
+      expect(resolveHttpPort([])).toBe(4477);
+
+      process.env.MCP_HTTP_PORT = "4477x";
+      expect(() => resolveHttpPort([])).toThrow("Invalid port: 4477x");
+    } finally {
+      if (previous === undefined) delete process.env.MCP_HTTP_PORT;
+      else process.env.MCP_HTTP_PORT = previous;
+    }
+  });
+
   it("GET /health returns ok", async () => {
     httpServer = startHttpServer({ port: 0, host: "127.0.0.1" });
     await Bun.sleep(100);
