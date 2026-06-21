@@ -23,6 +23,68 @@ export interface InstallToAgentsOptions {
   localCommandConsent?: LocalCommandConsent;
 }
 
+function formatTomlString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function formatTomlKey(key: string): string {
+  return /^[A-Za-z0-9_-]+$/.test(key) ? key : formatTomlString(key);
+}
+
+function formatTomlEnv(env: Record<string, string>): string {
+  return Object.entries(env)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${formatTomlKey(key)} = ${formatTomlString(value)}`)
+    .join("\n");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function codexServerHeader(id: string): string {
+  return `[mcp_servers.${id}]`;
+}
+
+function codexEnvHeader(id: string): string {
+  return `[mcp_servers.${id}.env]`;
+}
+
+function formatCodexEnvBlock(id: string, env: Record<string, string>): string {
+  return `\n${codexEnvHeader(id)}\n${formatTomlEnv(env)}\n`;
+}
+
+function formatCodexServerBlock(entry: McpServerEntry, env: Record<string, string>): string {
+  return (
+    `\n${codexServerHeader(entry.id)}\n` +
+    `command = ${formatTomlString(entry.command)}\n` +
+    `args = [${entry.args.map((a) => formatTomlString(a)).join(", ")}]\n` +
+    (Object.keys(env).length > 0 ? formatCodexEnvBlock(entry.id, env) : "")
+  );
+}
+
+function upsertCodexEnvBlock(config: string, id: string, env: Record<string, string>): string {
+  const envBlock = formatCodexEnvBlock(id, env);
+  const envHeaderPattern = escapeRegExp(codexEnvHeader(id));
+  const envBlockPattern = new RegExp(
+    `(?:\\r?\\n)?[ \\t]*${envHeaderPattern}[ \\t]*\\r?\\n[\\s\\S]*?(?=\\r?\\n[ \\t]*\\[|\\s*$)`,
+  );
+  if (envBlockPattern.test(config)) {
+    return config.replace(envBlockPattern, () => envBlock);
+  }
+
+  const serverHeaderPattern = escapeRegExp(codexServerHeader(id));
+  const serverBlockPattern = new RegExp(
+    `([ \\t]*${serverHeaderPattern}[ \\t]*\\r?\\n[\\s\\S]*?)(?=\\r?\\n[ \\t]*\\[|\\s*$)`,
+  );
+  let inserted = false;
+  const updated = config.replace(serverBlockPattern, (_match, serverBlock: string) => {
+    inserted = true;
+    return `${serverBlock}${envBlock}`;
+  });
+  return inserted ? updated : `${config}${envBlock}`;
+}
+
 /** Install to Claude Code via `claude mcp add` */
 function installToClaude(entry: McpServerEntry): InstallResult {
   try {
@@ -59,16 +121,15 @@ function installToCodex(entry: McpServerEntry): InstallResult {
       mkdirSync(configDir, { recursive: true });
     }
 
-    const block =
-      `\n[mcp_servers.${entry.id}]\n` +
-      `command = ${JSON.stringify(entry.command)}\n` +
-      `args = [${entry.args.map((a) => JSON.stringify(a)).join(", ")}]\n`;
-
+    const env = assertAgentInstallEnv(entry);
     const existing = existsSync(configPath) ? readFileSync(configPath, "utf-8") : "";
-    if (existing.includes(`[mcp_servers.${entry.id}]`)) {
-      return { agent: "codex", success: true }; // already installed
+    if (existing.includes(codexServerHeader(entry.id))) {
+      if (Object.keys(env).length > 0) {
+        writeFileSync(configPath, upsertCodexEnvBlock(existing, entry.id, env), "utf-8");
+      }
+      return { agent: "codex", success: true };
     }
-    writeFileSync(configPath, existing + block, "utf-8");
+    writeFileSync(configPath, existing + formatCodexServerBlock(entry, env), "utf-8");
     return { agent: "codex", success: true };
   } catch (err) {
     return { agent: "codex", success: false, error: (err as Error).message };
