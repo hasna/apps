@@ -17,6 +17,14 @@ program
   .description("Universal calendar management for AI coding agents")
   .version("0.1.0");
 
+program.enablePositionalOptions();
+program.exitOverride();
+program.configureOutput({
+  writeErr: (str) => {
+    if (!wantsJson()) process.stderr.write(str);
+  },
+});
+
 // Global flags
 program.option("--agent <name>", "Agent name");
 program.option("--org <slug>", "Org slug");
@@ -24,106 +32,95 @@ program.option("--json", "Output as JSON");
 
 // ── Org commands ─────────────────────────────────────────────────────────────
 
-program
-  .command("org-add <name>")
+calendarCommand("org-add <name>")
   .description("Create a new org")
   .option("--slug <slug>", "Org slug")
   .option("--description <desc>", "Description")
   .action((name, opts) => {
     const org = createOrg({ name, slug: opts.slug, description: opts.description });
-    output(opts.json ? JSON.stringify(org) : chalk.green(`Org created: ${org.name} (${org.slug}) [${org.id}]`));
+    output(wantsJson(opts) ? JSON.stringify(org) : chalk.green(`Org created: ${org.name} (${org.slug}) [${org.id}]`));
   });
 
-program
-  .command("org-list")
+calendarCommand("org-list")
   .description("List all orgs")
   .action((opts) => {
     const orgs = listOrgs();
-    output(opts.json ? JSON.stringify(orgs) : orgs.map((o) => `${o.name} (${o.slug}) [${o.id}]`).join("\n") || chalk.gray("No orgs"));
+    output(wantsJson(opts) ? JSON.stringify(orgs) : orgs.map((o) => `${o.name} (${o.slug}) [${o.id}]`).join("\n") || chalk.gray("No orgs"));
   });
 
-program
-  .command("org-show <id>")
+calendarCommand("org-show <id>")
   .description("Show org details")
   .action((id, opts) => {
     const org = getOrg(id) || getOrgBySlug(id);
-    if (!org) { output(chalk.red("Org not found")); process.exit(1); }
-    output(opts.json ? JSON.stringify(org) : `${org.name} (${org.slug})\n  ID: ${org.id}`);
+    if (!org) fail("Org not found");
+    output(wantsJson(opts) ? JSON.stringify(org) : `${org.name} (${org.slug})\n  ID: ${org.id}`);
   });
 
-program
-  .command("org-update <id>")
+calendarCommand("org-update <id>")
   .description("Update an org")
   .option("--name <name>", "Org name")
   .option("--description <desc>", "Description")
   .action((id, opts) => {
     const org = updateOrg(id, { name: opts.name, description: opts.description });
-    output(opts.json ? JSON.stringify(org) : chalk.green(`Org updated: ${org.name}`));
+    output(wantsJson(opts) ? JSON.stringify(org) : chalk.green(`Org updated: ${org.name}`));
   });
 
-program
-  .command("org-delete <id>")
+calendarCommand("org-delete <id>")
   .description("Delete an org")
-  .action((id) => {
+  .action((id, opts) => {
     const ok = deleteOrg(id);
-    output(ok ? chalk.green("Org deleted") : chalk.red("Org not found"));
+    outputJsonOrText({ deleted: ok }, ok ? chalk.green("Org deleted") : chalk.red("Org not found"), opts);
   });
 
 // ── Agent commands ───────────────────────────────────────────────────────────
 
-program
-  .command("init <name>")
+calendarCommand("init <name>")
   .description("Register an agent")
   .option("--description <desc>", "Description")
   .option("--role <role>", "Role")
   .option("--org <org>", "Org ID")
   .action((name, opts) => {
     const agent = registerAgent({ name, description: opts.description, role: opts.role, org_id: opts.org });
-    output(opts.json ? JSON.stringify(agent) : chalk.green(`Agent registered: ${agent.name} [${agent.id}]`));
+    output(wantsJson(opts) ? JSON.stringify(agent) : chalk.green(`Agent registered: ${agent.name} [${agent.id}]`));
   });
 
-program
-  .command("agents")
+calendarCommand("agents")
   .description("List agents")
   .action((opts) => {
     const agents = listAgents();
-    output(opts.json ? JSON.stringify(agents) : agents.map((a) => `${a.name} [${a.id}]`).join("\n") || chalk.gray("No agents"));
+    output(wantsJson(opts) ? JSON.stringify(agents) : agents.map((a) => `${a.name} [${a.id}]`).join("\n") || chalk.gray("No agents"));
   });
 
-program
-  .command("heartbeat [agent]")
+calendarCommand("heartbeat [agent]")
   .description("Update agent heartbeat")
   .action((agent, opts) => {
-    const name = agent || opts.agent;
-    if (!name) { output(chalk.red("Agent name required")); process.exit(1); }
+    const name = agent || opts.agent || program.opts().agent;
+    if (!name) fail("Agent name required");
     const a = getAgentByName(name);
-    if (!a) { output(chalk.red("Agent not found")); process.exit(1); }
-    heartbeat(a.id);
-    output(chalk.green(`Heartbeat: ${name}`));
+    if (!a) fail("Agent not found");
+    const updated = heartbeat(a.id);
+    outputJsonOrText(updated, chalk.green(`Heartbeat: ${name}`), opts);
   });
 
-program
-  .command("agent-update <id>")
+calendarCommand("agent-update <id>")
   .description("Update an agent")
   .option("--description <desc>", "Description")
   .option("--role <role>", "Role")
   .action((id, opts) => {
     const agent = updateAgent(id, { description: opts.description, role: opts.role });
-    output(opts.json ? JSON.stringify(agent) : chalk.green(`Agent updated: ${agent?.name}`));
+    output(wantsJson(opts) ? JSON.stringify(agent) : chalk.green(`Agent updated: ${agent?.name}`));
   });
 
-program
-  .command("agent-delete <id>")
+calendarCommand("agent-delete <id>")
   .description("Delete an agent")
-  .action((id) => {
+  .action((id, opts) => {
     const ok = deleteAgent(id);
-    output(ok ? chalk.green("Agent deleted") : chalk.red("Agent not found"));
+    outputJsonOrText({ deleted: ok }, ok ? chalk.green("Agent deleted") : chalk.red("Agent not found"), opts);
   });
 
 // ── Calendar commands ────────────────────────────────────────────────────────
 
-program
-  .command("cal-add <name>")
+calendarCommand("cal-add <name>")
   .description("Create a calendar")
   .requiredOption("--org <orgId>", "Org ID")
   .option("--slug <slug>", "Calendar slug")
@@ -141,20 +138,18 @@ program
       timezone: opts.timezone || "UTC",
       visibility: opts.visibility as any,
     });
-    output(opts.json ? JSON.stringify(cal) : chalk.green(`Calendar created: ${cal.name} [${cal.id}]`));
+    output(wantsJson(opts) ? JSON.stringify(cal) : chalk.green(`Calendar created: ${cal.name} [${cal.id}]`));
   });
 
-program
-  .command("cal-list")
+calendarCommand("cal-list")
   .description("List calendars")
   .option("--org <orgId>", "Filter by org")
   .action((opts) => {
     const cals = listCalendars(opts.org || undefined);
-    output(opts.json ? JSON.stringify(cals) : cals.map((c) => `${c.name} (${c.slug}) [${c.id}]`).join("\n") || chalk.gray("No calendars"));
+    output(wantsJson(opts) ? JSON.stringify(cals) : cals.map((c) => `${c.name} (${c.slug}) [${c.id}]`).join("\n") || chalk.gray("No calendars"));
   });
 
-program
-  .command("cal-update <id>")
+calendarCommand("cal-update <id>")
   .description("Update a calendar")
   .option("--name <name>", "Name")
   .option("--description <desc>", "Description")
@@ -169,21 +164,19 @@ program
       timezone: opts.timezone,
       visibility: opts.visibility as any,
     });
-    output(opts.json ? JSON.stringify(cal) : chalk.green(`Calendar updated: ${cal.name}`));
+    output(wantsJson(opts) ? JSON.stringify(cal) : chalk.green(`Calendar updated: ${cal.name}`));
   });
 
-program
-  .command("cal-delete <id>")
+calendarCommand("cal-delete <id>")
   .description("Delete a calendar")
-  .action((id) => {
+  .action((id, opts) => {
     const ok = deleteCalendar(id);
-    output(ok ? chalk.green("Calendar deleted") : chalk.red("Calendar not found"));
+    outputJsonOrText({ deleted: ok }, ok ? chalk.green("Calendar deleted") : chalk.red("Calendar not found"), opts);
   });
 
 // ── Event commands ───────────────────────────────────────────────────────────
 
-program
-  .command("add <title>")
+calendarCommand("add <title>")
   .description("Create an event")
   .requiredOption("--calendar <calendarId>", "Calendar ID")
   .requiredOption("--start <iso>", "Start time (ISO 8601)")
@@ -200,7 +193,7 @@ program
   .option("--agent <agentId>", "Creator agent ID")
   .action((title, opts) => {
     const cal = getCalendar(opts.calendar);
-    if (!cal) { output(chalk.red("Calendar not found")); process.exit(1); }
+    if (!cal) fail("Calendar not found");
 
     const evt = createEvent({
       title,
@@ -219,11 +212,10 @@ program
       created_by: opts.agent,
     });
 
-    output(opts.json ? JSON.stringify(evt) : chalk.green(`Event created: ${evt.title}\n  ${evt.start_at} -> ${evt.end_at} [${evt.id}]`));
+    output(wantsJson(opts) ? JSON.stringify(evt) : chalk.green(`Event created: ${evt.title}\n  ${evt.start_at} -> ${evt.end_at} [${evt.id}]`));
   });
 
-program
-  .command("list")
+calendarCommand("list")
   .description("List events")
   .option("--calendar <calendarId>", "Calendar ID")
   .option("--org <orgId>", "Org ID")
@@ -238,22 +230,20 @@ program
       before: opts.before,
       limit: opts.limit,
     });
-    output(opts.json ? JSON.stringify(events) : events.map((e) => `${e.title}\n  ${e.start_at} -> ${e.end_at} [${e.id}]`).join("\n") || chalk.gray("No events"));
+    output(wantsJson(opts) ? JSON.stringify(events) : events.map((e) => `${e.title}\n  ${e.start_at} -> ${e.end_at} [${e.id}]`).join("\n") || chalk.gray("No events"));
   });
 
-program
-  .command("show <id>")
+calendarCommand("show <id>")
   .description("Show event details")
   .action((id, opts) => {
     const evt = getEvent(id);
-    if (!evt) { output(chalk.red("Event not found")); process.exit(1); }
+    if (!evt) fail("Event not found");
     const attendees = getAttendeesForEvent(id);
     const result = { event: evt, attendees };
-    output(opts.json ? JSON.stringify(result) : `${evt.title}\n  ${evt.start_at} -> ${evt.end_at}\n  Location: ${evt.location || "—"}\n  Status: ${evt.status}\n  Attendees: ${attendees.length}`);
+    output(wantsJson(opts) ? JSON.stringify(result) : `${evt.title}\n  ${evt.start_at} -> ${evt.end_at}\n  Location: ${evt.location || "—"}\n  Status: ${evt.status}\n  Attendees: ${attendees.length}`);
   });
 
-program
-  .command("update <id>")
+calendarCommand("update <id>")
   .description("Update an event")
   .option("--title <title>", "Title")
   .option("--start <iso>", "Start time")
@@ -270,34 +260,31 @@ program
       location: opts.location,
       status: opts.status as any,
     });
-    output(opts.json ? JSON.stringify(evt) : chalk.green(`Event updated: ${evt.title}`));
+    output(wantsJson(opts) ? JSON.stringify(evt) : chalk.green(`Event updated: ${evt.title}`));
   });
 
-program
-  .command("delete <id>")
+calendarCommand("delete <id>")
   .description("Delete an event")
-  .action((id) => {
+  .action((id, opts) => {
     const ok = deleteEvent(id);
-    output(ok ? chalk.green("Event deleted") : chalk.red("Event not found"));
+    outputJsonOrText({ deleted: ok }, ok ? chalk.green("Event deleted") : chalk.red("Event not found"), opts);
   });
 
-program
-  .command("search <query>")
+calendarCommand("search <query>")
   .description("Search events (full-text)")
   .option("--org <orgId>", "Org ID")
   .action((query, opts) => {
     const events = searchEvents(query, opts.org || undefined);
-    output(opts.json ? JSON.stringify(events) : events.map((e) => `${e.title}\n  ${e.start_at} -> ${e.end_at}`).join("\n") || chalk.gray("No results"));
+    output(wantsJson(opts) ? JSON.stringify(events) : events.map((e) => `${e.title}\n  ${e.start_at} -> ${e.end_at}`).join("\n") || chalk.gray("No results"));
   });
 
-program
-  .command("conflicts <calendarId>")
+calendarCommand("conflicts <calendarId>")
   .description("Find conflicting events for a time range")
   .requiredOption("--start <iso>", "Start time")
   .requiredOption("--end <iso>", "End time")
   .action((calendarId, opts) => {
     const conflicts = findConflicts(calendarId, { start: opts.start, end: opts.end });
-    output(opts.json ? JSON.stringify(conflicts) : conflicts.length === 0
+    output(wantsJson(opts) ? JSON.stringify(conflicts) : conflicts.length === 0
       ? chalk.green("No conflicts")
       : chalk.yellow(`${conflicts.length} conflict(s):\n${conflicts.map((e) => `  ${e.title} (${e.start_at} -> ${e.end_at})`).join("\n")}`)
     );
@@ -305,8 +292,7 @@ program
 
 // ── Attendee commands ────────────────────────────────────────────────────────
 
-program
-  .command("attendee-add")
+calendarCommand("attendee-add")
   .description("Add attendee to event")
   .requiredOption("--event <eventId>", "Event ID")
   .option("--agent <agentId>", "Agent ID")
@@ -322,31 +308,28 @@ program
       email: opts.email,
       required: !opts.optional,
     });
-    output(opts.json ? JSON.stringify(attendee) : chalk.green(`Attendee added: ${attendee.display_name || attendee.agent_id || attendee.email || "?"} [${attendee.id}]`));
+    output(wantsJson(opts) ? JSON.stringify(attendee) : chalk.green(`Attendee added: ${attendee.display_name || attendee.agent_id || attendee.email || "?"} [${attendee.id}]`));
   });
 
-program
-  .command("attendee-respond <attendeeId>")
+calendarCommand("attendee-respond <attendeeId>")
   .description("Respond to event invitation")
   .requiredOption("--status <status>", "Status: accepted, declined, tentative")
   .option("--comment <comment>", "Response comment")
   .action((attendeeId, opts) => {
     const attendee = updateAttendee(attendeeId, { status: opts.status as any, response_comment: opts.comment || null });
-    output(opts.json ? JSON.stringify(attendee) : chalk.green(`Response recorded: ${attendee.status}`));
+    output(wantsJson(opts) ? JSON.stringify(attendee) : chalk.green(`Response recorded: ${attendee.status}`));
   });
 
-program
-  .command("attendee-delete <id>")
+calendarCommand("attendee-delete <id>")
   .description("Delete an attendee")
-  .action((id) => {
+  .action((id, opts) => {
     const ok = deleteAttendee(id);
-    output(ok ? chalk.green("Attendee deleted") : chalk.red("Attendee not found"));
+    outputJsonOrText({ deleted: ok }, ok ? chalk.green("Attendee deleted") : chalk.red("Attendee not found"), opts);
   });
 
 // ── Availability commands ────────────────────────────────────────────────────
 
-program
-  .command("availability-set")
+calendarCommand("availability-set")
   .description("Set agent availability for a day of week")
   .requiredOption("--agent <agentId>", "Agent ID")
   .requiredOption("--org <orgId>", "Org ID")
@@ -355,71 +338,104 @@ program
   .requiredOption("--end <HH:mm>", "End time")
   .action((opts) => {
     const av = upsertAgentAvailability(opts.agent, opts.org, opts.day, opts.start, opts.end);
-    output(opts.json ? JSON.stringify(av) : chalk.green(`Availability set: day ${opts.day} ${opts.start}-${opts.end} [${av.id}]`));
+    output(wantsJson(opts) ? JSON.stringify(av) : chalk.green(`Availability set: day ${opts.day} ${opts.start}-${opts.end} [${av.id}]`));
   });
 
-program
-  .command("availability-show <agentId>")
+calendarCommand("availability-show <agentId>")
   .description("Show agent availability")
   .option("--org <orgId>", "Org ID")
   .action((agentId, opts) => {
     const avail = getAvailabilityForAgent(agentId, opts.org || undefined);
     const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    output(opts.json ? JSON.stringify(avail) : avail.map((a) => `  ${days[a.day_of_week]}: ${a.start_time} - ${a.end_time}`).join("\n") || chalk.gray("No availability set"));
+    output(wantsJson(opts) ? JSON.stringify(avail) : avail.map((a) => `  ${days[a.day_of_week]}: ${a.start_time} - ${a.end_time}`).join("\n") || chalk.gray("No availability set"));
   });
 
-program
-  .command("availability-delete <id>")
+calendarCommand("availability-delete <id>")
   .description("Delete an availability entry")
-  .action((id) => {
+  .action((id, opts) => {
     const ok = deleteAvailability(id);
-    output(ok ? chalk.green("Availability deleted") : chalk.red("Availability not found"));
+    outputJsonOrText({ deleted: ok }, ok ? chalk.green("Availability deleted") : chalk.red("Availability not found"), opts);
   });
 
 // ── Membership commands ──────────────────────────────────────────────────────
 
-program
-  .command("member-add")
+calendarCommand("member-add")
   .description("Add agent to org")
   .requiredOption("--org <orgId>", "Org ID")
   .requiredOption("--agent <agentId>", "Agent ID")
   .option("--role <role>", "Role: admin, member, service")
   .action((opts) => {
     const m = createMembership({ org_id: opts.org, agent_id: opts.agent, role: opts.role as any });
-    output(opts.json ? JSON.stringify(m) : chalk.green(`Added ${opts.agent} to org ${opts.org} as ${m.role}`));
+    output(wantsJson(opts) ? JSON.stringify(m) : chalk.green(`Added ${opts.agent} to org ${opts.org} as ${m.role}`));
   });
 
-program
-  .command("members <orgId>")
+calendarCommand("members <orgId>")
   .description("List org members")
   .action((orgId, opts) => {
     const members = getMembershipsForOrg(orgId);
-    output(opts.json ? JSON.stringify(members) : members.map((m) => `  ${m.agent_id} — ${m.role}`).join("\n") || chalk.gray("No members"));
+    output(wantsJson(opts) ? JSON.stringify(members) : members.map((m) => `  ${m.agent_id} — ${m.role}`).join("\n") || chalk.gray("No members"));
   });
 
-program
-  .command("member-remove <agentId> <orgId>")
+calendarCommand("member-remove <agentId> <orgId>")
   .description("Remove agent from org")
-  .action((agentId, orgId) => {
+  .action((agentId, orgId, opts) => {
     const ok = deleteMembershipByAgentAndOrg(agentId, orgId);
-    output(ok ? chalk.green("Member removed") : chalk.red("Member not found"));
+    outputJsonOrText({ removed: ok }, ok ? chalk.green("Member removed") : chalk.red("Member not found"), opts);
   });
 
 // ── Agent org management ─────────────────────────────────────────────────────
 
-program
-  .command("agent-orgs <agentId>")
+calendarCommand("agent-orgs <agentId>")
   .description("List orgs an agent belongs to")
   .action((agentId, opts) => {
     const orgs = getOrgsForAgent(agentId);
-    output(opts.json ? JSON.stringify(orgs) : orgs.map((m) => `  ${m.org_id} — ${m.role}`).join("\n") || chalk.gray("No orgs"));
+    output(wantsJson(opts) ? JSON.stringify(orgs) : orgs.map((m) => `  ${m.org_id} — ${m.role}`).join("\n") || chalk.gray("No orgs"));
   });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+function calendarCommand(name: string) {
+  return program.command(name).option("--json", "Output as JSON");
+}
+
+function wantsJson(opts: { json?: boolean } = {}) {
+  return Boolean(opts.json || program.opts().json || process.argv.includes("--json") || process.argv.includes("-j"));
+}
+
+function outputJsonOrText(value: unknown, text: string, opts: { json?: boolean } = {}) {
+  output(wantsJson(opts) ? JSON.stringify(value) : text);
+}
+
+function fail(message: string): never {
+  output(wantsJson() ? JSON.stringify({ error: message }) : chalk.red(message));
+  process.exit(1);
+}
+
+function handleError(error: unknown): never {
+  const commanderError = error as { code?: string; exitCode?: number; message?: string };
+  const isCommanderExit = typeof commanderError.code === "string" && commanderError.code.startsWith("commander.");
+  const exitCode = commanderError.exitCode ?? 1;
+
+  if (commanderError.code === "commander.helpDisplayed" || commanderError.code === "commander.version") {
+    process.exit(exitCode);
+  }
+
+  if (wantsJson()) {
+    output(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+  } else if (!isCommanderExit) {
+    output(chalk.red(error instanceof Error ? error.message : String(error)));
+  }
+
+  process.exit(exitCode);
+}
 
 function output(text: string) {
   console.log(text);
 }
 registerEventsCommands(program, { source: "calendar" });
 
-program.parse();
+try {
+  await program.parseAsync();
+} catch (error) {
+  handleError(error);
+}
