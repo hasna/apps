@@ -1,6 +1,6 @@
 {
   "name": "@hasna/ui",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Offline-first UI design toolkit: mirror the ui.sh design skill locally and preview variants with a self-contained, dependency-free picker — no remote MCP, no hosted picker script.",
   "type": "module",
   "license": "MIT",
