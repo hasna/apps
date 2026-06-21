@@ -164,6 +164,154 @@ describe("code scanner", () => {
       expect(evalFindings.length).toBe(0);
     });
 
+    test("does not suppress findings when security-ignore appears inside a string", () => {
+      const marker = "security" + "-ignore";
+      const content = `const marker = "${marker}"; const password = "SuperSecret123!";`;
+      const findings = scanFile("config.ts", content);
+
+      const passwordFinding = findings.find((f) => f.rule_id === "hardcoded-password");
+      expect(passwordFinding).toBeDefined();
+    });
+
+    test("does not treat postfix decrement as a security-ignore comment", () => {
+      const marker = "security" + "-ignore";
+      const content = `i--; const marker = "${marker}"; const password = "SuperSecret123!";`;
+      const findings = scanFile("config.ts", content);
+
+      const passwordFinding = findings.find((f) => f.rule_id === "hardcoded-password");
+      expect(passwordFinding).toBeDefined();
+    });
+
+    test("does not treat text after a closed block comment as a security-ignore comment", () => {
+      const marker = "security" + "-ignore";
+      const content = `/* harmless */ const marker = "${marker}"; const password = "SuperSecret123!";`;
+      const findings = scanFile("config.ts", content);
+
+      const passwordFinding = findings.find((f) => f.rule_id === "hardcoded-password");
+      expect(passwordFinding).toBeDefined();
+    });
+
+    test("does not suppress findings when security-ignore appears inside a multiline string", () => {
+      const marker = "security" + "-ignore";
+      const content = [
+        "const marker = `",
+        `  // ${marker}\`; const password = "SuperSecret123!";`,
+      ].join("\n");
+      const findings = scanFile("config.ts", content);
+
+      const passwordFinding = findings.find((f) => f.rule_id === "hardcoded-password");
+      expect(passwordFinding).toBeDefined();
+    });
+
+    test("keeps quote state after block security-ignore comments", () => {
+      const marker = "security" + "-ignore";
+      const content = [
+        `/* ${marker} */ const text = \``,
+        `  // ${marker}\`; const password = "SuperSecret123!";`,
+      ].join("\n");
+      const findings = scanFile("config.ts", content);
+
+      const passwordFinding = findings.find((f) => f.rule_id === "hardcoded-password");
+      expect(passwordFinding).toBeDefined();
+    });
+
+    test("suppresses findings when security-ignore appears in a comment", () => {
+      const content = 'const password = "SuperSecret123!"; // security-ignore';
+      const findings = scanFile("config.ts", content);
+
+      const passwordFindings = findings.filter((f) => f.rule_id === "hardcoded-password");
+      expect(passwordFindings).toHaveLength(0);
+    });
+
+    test("suppresses findings after multi-line block comments with apostrophes", () => {
+      const content = [
+        "/*",
+        " * John's deployment note",
+        " */",
+        'const password = "SuperSecret123!"; // security-ignore',
+      ].join("\n");
+      const findings = scanFile("config.ts", content);
+
+      const passwordFindings = findings.filter((f) => f.rule_id === "hardcoded-password");
+      expect(passwordFindings).toHaveLength(0);
+    });
+
+    test("suppresses findings with adjacent js comment delimiters", () => {
+      const contents = [
+        'const password = "SuperSecret123!";// security-ignore',
+        'const password = "SuperSecret123!";/* security-ignore */',
+      ];
+
+      for (const content of contents) {
+        const findings = scanFile("config.ts", content);
+        const passwordFindings = findings.filter((f) => f.rule_id === "hardcoded-password");
+        expect(passwordFindings).toHaveLength(0);
+      }
+    });
+
+    test("keeps block security-ignore suppression before a later plain line comment", () => {
+      const marker = "security" + "-ignore";
+      const content = `const password = "SuperSecret123!"; /* ${marker} */ // ordinary comment`;
+      const findings = scanFile("config.ts", content);
+
+      const passwordFindings = findings.filter((f) => f.rule_id === "hardcoded-password");
+      expect(passwordFindings).toHaveLength(0);
+    });
+
+    test("suppresses findings inside block comments that carry security-ignore", () => {
+      const marker = "security" + "-ignore";
+      const content = `/* ${marker} const password = "SuperSecret123!"; */`;
+      const findings = scanFile("config.ts", content);
+
+      const passwordFindings = findings.filter((f) => f.rule_id === "hardcoded-password");
+      expect(passwordFindings).toHaveLength(0);
+    });
+
+    test("suppresses findings later inside multiline block comments that carry security-ignore", () => {
+      const marker = "security" + "-ignore";
+      const content = ["/* " + marker, 'const password = "SuperSecret123!";', "*/"].join("\n");
+      const findings = scanFile("config.ts", content);
+
+      const passwordFindings = findings.filter((f) => f.rule_id === "hardcoded-password");
+      expect(passwordFindings).toHaveLength(0);
+    });
+
+    test("does not treat security-ignore inside a regex literal as a comment", () => {
+      const marker = "security" + "-ignore";
+      const content = `const re = /[//] ${marker}/; const password = "SuperSecret123!";`;
+      const findings = scanFile("config.ts", content);
+
+      const passwordFinding = findings.find((f) => f.rule_id === "hardcoded-password");
+      expect(passwordFinding).toBeDefined();
+    });
+
+    test("does not treat security-ignore inside an exported regex literal as a comment", () => {
+      const marker = "security" + "-ignore";
+      const content = `export default /[//] ${marker}/; const password = "SuperSecret123!";`;
+      const findings = scanFile("config.ts", content);
+
+      const passwordFinding = findings.find((f) => f.rule_id === "hardcoded-password");
+      expect(passwordFinding).toBeDefined();
+    });
+
+    test("does not treat security-ignore inside a control-flow regex literal as a comment", () => {
+      const marker = "security" + "-ignore";
+      const content = `if (ok) /[//] ${marker}/.test(input); const password = "SuperSecret123!";`;
+      const findings = scanFile("config.ts", content);
+
+      const passwordFinding = findings.find((f) => f.rule_id === "hardcoded-password");
+      expect(passwordFinding).toBeDefined();
+    });
+
+    test("suppresses earlier lines in multiline block comments that carry security-ignore", () => {
+      const marker = "security" + "-ignore";
+      const content = ['/* const password = "SuperSecret123!";', `${marker} */`].join("\n");
+      const findings = scanFile("config.ts", content);
+
+      const passwordFindings = findings.filter((f) => f.rule_id === "hardcoded-password");
+      expect(passwordFindings).toHaveLength(0);
+    });
+
     test("clean file produces no findings", () => {
       const content = `
 import { createHash } from "crypto";

@@ -83,6 +83,499 @@ export function getCodeSnippet(content: string, line: number, context: number = 
     .join("\n");
 }
 
+const SECURITY_IGNORE = "security-ignore";
+const SLASH_COMMENT_EXTENSIONS = new Set([
+  ".c",
+  ".cc",
+  ".cpp",
+  ".cs",
+  ".cxx",
+  ".go",
+  ".h",
+  ".hpp",
+  ".java",
+  ".js",
+  ".jsx",
+  ".kt",
+  ".kts",
+  ".php",
+  ".rs",
+  ".swift",
+  ".ts",
+  ".tsx",
+]);
+const HASH_COMMENT_EXTENSIONS = new Set([
+  ".bash",
+  ".cfg",
+  ".conf",
+  ".fish",
+  ".ini",
+  ".properties",
+  ".py",
+  ".rb",
+  ".sh",
+  ".toml",
+  ".yaml",
+  ".yml",
+  ".zsh",
+]);
+const SQL_COMMENT_EXTENSIONS = new Set([".sql"]);
+
+interface CommentSyntax {
+  block: boolean;
+  dash: boolean;
+  hash: boolean;
+  slash: boolean;
+}
+
+export interface SecurityIgnoreBlockRange {
+  end: number;
+  start: number;
+}
+
+export interface SecurityIgnoreLineScan {
+  blockCommentRanges: SecurityIgnoreBlockRange[];
+  commentIndex: number | null;
+  commentKind: "block" | "line" | null;
+  finalBlockComment: boolean;
+  finalBlockCommentHasSecurityIgnore: boolean;
+  finalQuote: string | null;
+}
+
+const NO_COMMENT_SYNTAX: CommentSyntax = {
+  block: false,
+  dash: false,
+  hash: false,
+  slash: false,
+};
+
+const HASH_COMMENT_SYNTAX: CommentSyntax = {
+  block: false,
+  dash: false,
+  hash: true,
+  slash: false,
+};
+
+function isWhitespace(char: string | undefined): boolean {
+  return char === undefined || /\s/.test(char);
+}
+
+function findMatchingOpenParen(lineText: string, closeIndex: number): number {
+  let depth = 0;
+  for (let i = closeIndex; i >= 0; i--) {
+    if (lineText[i] === ")") {
+      depth++;
+      continue;
+    }
+    if (lineText[i] === "(") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+function canStartRegexLiteral(lineText: string, index: number): boolean {
+  let previousIndex = index - 1;
+  while (previousIndex >= 0 && /\s/.test(lineText[previousIndex])) {
+    previousIndex--;
+  }
+  if (previousIndex < 0) return true;
+
+  const previousChar = lineText[previousIndex];
+  if ("=(:,[!&|?;{}+-*%^~<>".includes(previousChar)) return true;
+  if (previousChar === ")") {
+    const openParen = findMatchingOpenParen(lineText, previousIndex);
+    if (openParen !== -1 && /\b(?:for|if|while|with)$/.test(lineText.slice(0, openParen).trimEnd())) {
+      return true;
+    }
+  }
+
+  return /\b(?:await|case|default|delete|do|else|in|new|of|return|throw|typeof|void|yield)$/.test(
+    lineText.slice(0, previousIndex + 1).trimEnd(),
+  );
+}
+
+function skipRegexLiteral(lineText: string, start: number): number {
+  let escaped = false;
+  let inCharacterClass = false;
+
+  for (let i = start + 1; i < lineText.length; i++) {
+    const char = lineText[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === "[" && !inCharacterClass) {
+      inCharacterClass = true;
+      continue;
+    }
+    if (char === "]" && inCharacterClass) {
+      inCharacterClass = false;
+      continue;
+    }
+    if (char === "/" && !inCharacterClass) {
+      let end = i + 1;
+      while (/[A-Za-z]/.test(lineText[end] ?? "")) {
+        end++;
+      }
+      return end;
+    }
+  }
+
+  return start + 1;
+}
+
+function isEnvLikeFile(filePath: string): boolean {
+  const base = path.basename(filePath.replace(/\\/g, "/")).toLowerCase();
+  return base === ".env" || base.startsWith(".env.") || base.endsWith(".env");
+}
+
+function getCommentSyntax(filePath?: string): CommentSyntax {
+  if (!filePath) {
+    return NO_COMMENT_SYNTAX;
+  }
+
+  const normalized = filePath.replace(/\\/g, "/").toLowerCase();
+  if (normalized.startsWith("process:") || normalized.startsWith("tmux:")) {
+    return NO_COMMENT_SYNTAX;
+  }
+
+  if (isEnvLikeFile(normalized)) {
+    return HASH_COMMENT_SYNTAX;
+  }
+
+  const extension = path.extname(normalized);
+  if (SLASH_COMMENT_EXTENSIONS.has(extension)) {
+    return {
+      block: true,
+      dash: false,
+      hash: false,
+      slash: true,
+    };
+  }
+
+  if (HASH_COMMENT_EXTENSIONS.has(extension)) {
+    return HASH_COMMENT_SYNTAX;
+  }
+
+  if (SQL_COMMENT_EXTENSIONS.has(extension)) {
+    return {
+      block: true,
+      dash: true,
+      hash: false,
+      slash: false,
+    };
+  }
+
+  return NO_COMMENT_SYNTAX;
+}
+
+export function scanSecurityIgnoreLine(
+  lineText: string,
+  filePath?: string,
+  initialQuote: string | null = null,
+  initialBlockComment = false,
+  initialBlockCommentHasSecurityIgnore = false,
+): SecurityIgnoreLineScan {
+  const syntax = getCommentSyntax(filePath);
+  let quote = initialQuote;
+  let blockComment = initialBlockComment;
+  let blockCommentHasSecurityIgnore = initialBlockCommentHasSecurityIgnore;
+  let escaped = false;
+  const blockCommentRanges: SecurityIgnoreBlockRange[] = [];
+  let commentIndex: number | null = null;
+  let commentKind: "block" | "line" | null = null;
+
+  function recordBlockSecurityIgnore(start: number, end: number): void {
+    blockCommentRanges.push({ start, end });
+    if (commentIndex === null) {
+      commentIndex = start;
+      commentKind = "block";
+    }
+  }
+
+  let i = 0;
+  while (i < lineText.length) {
+    const char = lineText[i];
+
+    if (blockComment) {
+      const end = lineText.indexOf("*/", i);
+      const commentEnd = end === -1 ? lineText.length : end;
+      blockCommentHasSecurityIgnore =
+        blockCommentHasSecurityIgnore || lineText.slice(i, commentEnd).includes(SECURITY_IGNORE);
+      if (blockCommentHasSecurityIgnore) {
+        recordBlockSecurityIgnore(i, end === -1 ? lineText.length : end + 2);
+      }
+      if (end === -1) {
+        return {
+          blockCommentRanges,
+          commentIndex,
+          commentKind,
+          finalBlockComment: true,
+          finalBlockCommentHasSecurityIgnore: blockCommentHasSecurityIgnore,
+          finalQuote: quote,
+        };
+      }
+      blockComment = false;
+      blockCommentHasSecurityIgnore = false;
+      i = end + 2;
+      continue;
+    }
+
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+        i++;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        i++;
+        continue;
+      }
+      if (char === quote) {
+        quote = null;
+      }
+      i++;
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === "`") {
+      quote = char;
+      i++;
+      continue;
+    }
+
+    if (syntax.block && lineText.startsWith("/*", i)) {
+      const end = lineText.indexOf("*/", i + 2);
+      const commentEnd = end === -1 ? lineText.length : end;
+      blockCommentHasSecurityIgnore = lineText.slice(i + 2, commentEnd).includes(SECURITY_IGNORE);
+      if (blockCommentHasSecurityIgnore) {
+        recordBlockSecurityIgnore(i, end === -1 ? lineText.length : end + 2);
+      }
+      if (end === -1) {
+        return {
+          blockCommentRanges,
+          commentIndex,
+          commentKind,
+          finalBlockComment: true,
+          finalBlockCommentHasSecurityIgnore: blockCommentHasSecurityIgnore,
+          finalQuote: quote,
+        };
+      }
+      blockCommentHasSecurityIgnore = false;
+      i = end + 2;
+      continue;
+    }
+
+    if (syntax.slash && lineText.startsWith("//", i)) {
+      const hasIgnore = lineText.slice(i + 2).includes(SECURITY_IGNORE);
+      return {
+        blockCommentRanges,
+        commentIndex: hasIgnore ? i : commentIndex,
+        commentKind: hasIgnore ? "line" : commentKind,
+        finalBlockComment: false,
+        finalBlockCommentHasSecurityIgnore: false,
+        finalQuote: null,
+      };
+    }
+
+    if (syntax.slash && char === "/" && canStartRegexLiteral(lineText, i)) {
+      i = skipRegexLiteral(lineText, i);
+      continue;
+    }
+
+    if (syntax.hash && char === "#" && isWhitespace(lineText[i - 1])) {
+      const hasIgnore = lineText.slice(i + 1).includes(SECURITY_IGNORE);
+      return {
+        blockCommentRanges,
+        commentIndex: hasIgnore ? i : commentIndex,
+        commentKind: hasIgnore ? "line" : commentKind,
+        finalBlockComment: false,
+        finalBlockCommentHasSecurityIgnore: false,
+        finalQuote: null,
+      };
+    }
+
+    if (
+      syntax.dash &&
+      lineText.startsWith("--", i) &&
+      isWhitespace(lineText[i - 1]) &&
+      isWhitespace(lineText[i + 2])
+    ) {
+      const hasIgnore = lineText.slice(i + 2).includes(SECURITY_IGNORE);
+      return {
+        blockCommentRanges,
+        commentIndex: hasIgnore ? i : commentIndex,
+        commentKind: hasIgnore ? "line" : commentKind,
+        finalBlockComment: false,
+        finalBlockCommentHasSecurityIgnore: false,
+        finalQuote: null,
+      };
+    }
+
+    i++;
+  }
+
+  return {
+    blockCommentRanges,
+    commentIndex,
+    commentKind,
+    finalBlockComment: blockComment,
+    finalBlockCommentHasSecurityIgnore: blockCommentHasSecurityIgnore,
+    finalQuote: quote,
+  };
+}
+
+interface PendingBlockRange {
+  line: number;
+  range: SecurityIgnoreBlockRange;
+}
+
+export function collectSecurityIgnoreBlockRanges(content: string, filePath?: string): Map<number, SecurityIgnoreBlockRange[]> {
+  const syntax = getCommentSyntax(filePath);
+  const rangesByLine = new Map<number, SecurityIgnoreBlockRange[]>();
+  if (!syntax.block) return rangesByLine;
+
+  const lines = content.split("\n");
+  let quote: string | null = null;
+  let blockComment = false;
+  let blockCommentHasSecurityIgnore = false;
+  let pendingRanges: PendingBlockRange[] = [];
+
+  function addPendingRange(line: number, start: number, end: number): void {
+    pendingRanges.push({ line, range: { start, end } });
+  }
+
+  function commitPendingRanges(): void {
+    if (blockCommentHasSecurityIgnore) {
+      for (const pending of pendingRanges) {
+        const existing = rangesByLine.get(pending.line) ?? [];
+        existing.push(pending.range);
+        rangesByLine.set(pending.line, existing);
+      }
+    }
+    pendingRanges = [];
+    blockCommentHasSecurityIgnore = false;
+  }
+
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const lineText = lines[lineIndex];
+    let escaped = false;
+    let i = 0;
+
+    while (i < lineText.length) {
+      const char = lineText[i];
+
+      if (blockComment) {
+        const end = lineText.indexOf("*/", i);
+        const commentEnd = end === -1 ? lineText.length : end;
+        blockCommentHasSecurityIgnore =
+          blockCommentHasSecurityIgnore || lineText.slice(i, commentEnd).includes(SECURITY_IGNORE);
+        addPendingRange(lineIndex, i, end === -1 ? lineText.length : end + 2);
+        if (end === -1) break;
+        blockComment = false;
+        i = end + 2;
+        commitPendingRanges();
+        continue;
+      }
+
+      if (quote) {
+        if (escaped) {
+          escaped = false;
+          i++;
+          continue;
+        }
+        if (char === "\\") {
+          escaped = true;
+          i++;
+          continue;
+        }
+        if (char === quote) {
+          quote = null;
+        }
+        i++;
+        continue;
+      }
+
+      if (char === '"' || char === "'" || char === "`") {
+        quote = char;
+        i++;
+        continue;
+      }
+
+      if (lineText.startsWith("/*", i)) {
+        const end = lineText.indexOf("*/", i + 2);
+        const commentEnd = end === -1 ? lineText.length : end;
+        blockCommentHasSecurityIgnore = lineText.slice(i + 2, commentEnd).includes(SECURITY_IGNORE);
+        addPendingRange(lineIndex, i, end === -1 ? lineText.length : end + 2);
+        if (end === -1) {
+          blockComment = true;
+          break;
+        }
+        i = end + 2;
+        commitPendingRanges();
+        continue;
+      }
+
+      if (syntax.slash && lineText.startsWith("//", i)) break;
+      if (syntax.slash && char === "/" && canStartRegexLiteral(lineText, i)) {
+        i = skipRegexLiteral(lineText, i);
+        continue;
+      }
+      if (syntax.hash && char === "#" && isWhitespace(lineText[i - 1])) break;
+      if (
+        syntax.dash &&
+        lineText.startsWith("--", i) &&
+        isWhitespace(lineText[i - 1]) &&
+        isWhitespace(lineText[i + 2])
+      ) {
+        break;
+      }
+
+      i++;
+    }
+  }
+
+  if (blockComment) commitPendingRanges();
+  return rangesByLine;
+}
+
+export function mergeSecurityIgnoreBlockRanges(
+  scan: SecurityIgnoreLineScan,
+  blockCommentRanges: SecurityIgnoreBlockRange[] | undefined,
+): SecurityIgnoreLineScan {
+  if (!blockCommentRanges || blockCommentRanges.length === 0) return scan;
+  return {
+    ...scan,
+    blockCommentRanges: [...scan.blockCommentRanges, ...blockCommentRanges],
+    commentIndex: scan.commentIndex ?? blockCommentRanges[0].start,
+    commentKind: scan.commentKind ?? "block",
+  };
+}
+
+export function hasSecurityIgnoreComment(lineText: string, filePath?: string): boolean {
+  return scanSecurityIgnoreLine(lineText, filePath).commentIndex !== null;
+}
+
+export function isFindingSuppressedBySecurityIgnore(
+  scan: SecurityIgnoreLineScan,
+  matchIndex: number,
+): boolean {
+  if (scan.commentIndex === null) return false;
+  if (scan.commentKind === "line") return true;
+  return scan.blockCommentRanges.some((range) => {
+    const matchIsInsideBlock = matchIndex >= range.start && matchIndex < range.end;
+    const blockAppearsAfterMatch = range.start >= matchIndex;
+    return matchIsInsideBlock || blockAppearsAfterMatch;
+  });
+}
+
 // --- Secret patterns ---
 
 export interface SecretPattern {
@@ -180,18 +673,20 @@ const HEX_RE = /\b[0-9a-fA-F]{16,}\b/g;
 const BASE64_RE = /\b[A-Za-z0-9+/=]{20,}\b/g;
 const UNQUOTED_ENV_API_KEY_RE = /(?:api_key|apikey|api[-_]?key)\s*=\s*([A-Za-z0-9_\-]{16,})(?=\s|$|[;,#])/gi;
 
-function isEnvLikeFile(filePath: string): boolean {
-  const base = path.basename(filePath.replace(/\\/g, "/")).toLowerCase();
-  return base === ".env" || base.startsWith(".env.") || base.endsWith(".env");
-}
-
-function detectUnquotedEnvApiKeys(content: string, filePath: string, line: number, lineText: string): FindingInput[] {
+function detectUnquotedEnvApiKeys(
+  content: string,
+  filePath: string,
+  line: number,
+  lineText: string,
+  securityIgnore: SecurityIgnoreLineScan,
+): FindingInput[] {
   if (!isEnvLikeFile(filePath)) return [];
 
   const findings: FindingInput[] = [];
   let match: RegExpExecArray | null;
   UNQUOTED_ENV_API_KEY_RE.lastIndex = 0;
   while ((match = UNQUOTED_ENV_API_KEY_RE.exec(lineText)) !== null) {
+    if (isFindingSuppressedBySecurityIgnore(securityIgnore, match.index)) continue;
     findings.push({
       rule_id: "generic-api-key",
       scanner_type: ScannerType.Secrets,
@@ -207,13 +702,20 @@ function detectUnquotedEnvApiKeys(content: string, filePath: string, line: numbe
   return findings;
 }
 
-function detectHighEntropyStrings(content: string, filePath: string, line: number, lineText: string): FindingInput[] {
+function detectHighEntropyStrings(
+  content: string,
+  filePath: string,
+  line: number,
+  lineText: string,
+  securityIgnore: SecurityIgnoreLineScan,
+): FindingInput[] {
   const findings: FindingInput[] = [];
 
   let hexMatch: RegExpExecArray | null;
   HEX_RE.lastIndex = 0;
   while ((hexMatch = HEX_RE.exec(lineText)) !== null) {
     const token = hexMatch[0];
+    if (isFindingSuppressedBySecurityIgnore(securityIgnore, hexMatch.index)) continue;
     if (shannonEntropy(token) > 4.5) {
       findings.push({
         rule_id: "high-entropy-hex",
@@ -231,6 +733,7 @@ function detectHighEntropyStrings(content: string, filePath: string, line: numbe
   BASE64_RE.lastIndex = 0;
   while ((b64Match = BASE64_RE.exec(lineText)) !== null) {
     const token = b64Match[0];
+    if (isFindingSuppressedBySecurityIgnore(securityIgnore, b64Match.index)) continue;
     if (shannonEntropy(token) > 5.0) {
       findings.push({
         rule_id: "high-entropy-base64",
@@ -252,18 +755,33 @@ function detectHighEntropyStrings(content: string, filePath: string, line: numbe
 export function scanFile(filePath: string, content: string): FindingInput[] {
   const findings: FindingInput[] = [];
   const lines = content.split("\n");
+  const securityIgnoreBlockRanges = collectSecurityIgnoreBlockRanges(content, filePath);
+  let quote: string | null = null;
+  let blockComment = false;
+  let blockCommentHasSecurityIgnore = false;
 
   for (let i = 0; i < lines.length; i++) {
     const lineText = lines[i];
     const lineNum = i + 1;
-
-    // Skip lines with security-ignore suppression comment
-    if (lineText.includes("security-ignore")) continue;
+    const securityIgnore = mergeSecurityIgnoreBlockRanges(
+      scanSecurityIgnoreLine(
+        lineText,
+        filePath,
+        quote,
+        blockComment,
+        blockCommentHasSecurityIgnore,
+      ),
+      securityIgnoreBlockRanges.get(i),
+    );
+    quote = securityIgnore.finalQuote;
+    blockComment = securityIgnore.finalBlockComment;
+    blockCommentHasSecurityIgnore = securityIgnore.finalBlockCommentHasSecurityIgnore;
 
     for (const sp of SECRET_PATTERNS) {
       sp.pattern.lastIndex = 0;
       let match: RegExpExecArray | null;
       while ((match = sp.pattern.exec(lineText)) !== null) {
+        if (isFindingSuppressedBySecurityIgnore(securityIgnore, match.index)) continue;
         findings.push({
           rule_id: sp.id,
           scanner_type: ScannerType.Secrets,
@@ -277,8 +795,8 @@ export function scanFile(filePath: string, content: string): FindingInput[] {
       }
     }
 
-    findings.push(...detectUnquotedEnvApiKeys(content, filePath, lineNum, lineText));
-    findings.push(...detectHighEntropyStrings(content, filePath, lineNum, lineText));
+    findings.push(...detectUnquotedEnvApiKeys(content, filePath, lineNum, lineText, securityIgnore));
+    findings.push(...detectHighEntropyStrings(content, filePath, lineNum, lineText, securityIgnore));
   }
 
   return findings;

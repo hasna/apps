@@ -8,7 +8,14 @@ import {
   Severity,
   DEFAULT_CONFIG,
 } from "../types/index.js";
-import { walkDirectory, getCodeSnippet } from "./secrets.js";
+import {
+  walkDirectory,
+  getCodeSnippet,
+  scanSecurityIgnoreLine,
+  isFindingSuppressedBySecurityIgnore,
+  collectSecurityIgnoreBlockRanges,
+  mergeSecurityIgnoreBlockRanges,
+} from "./secrets.js";
 
 // --- AI safety patterns ---
 
@@ -155,20 +162,38 @@ function scanFile(filePath: string, content: string): FindingInput[] {
 
   if (!hasAiContent) return findings;
 
+  let quote: string | null = null;
+  const securityIgnoreBlockRanges = collectSecurityIgnoreBlockRanges(content, filePath);
+  let blockComment = false;
+  let blockCommentHasSecurityIgnore = false;
   for (let i = 0; i < lines.length; i++) {
     const lineText = lines[i];
     const lineNum = i + 1;
-
-    // Skip lines with security-ignore suppression comment
-    if (lineText.includes("security-ignore")) continue;
+    const quoteAtLineStart = quote;
+    const securityIgnore = mergeSecurityIgnoreBlockRanges(
+      scanSecurityIgnoreLine(
+        lineText,
+        filePath,
+        quoteAtLineStart,
+        blockComment,
+        blockCommentHasSecurityIgnore,
+      ),
+      securityIgnoreBlockRanges.get(i),
+    );
+    quote = securityIgnore.finalQuote;
+    blockComment = securityIgnore.finalBlockComment;
+    blockCommentHasSecurityIgnore = securityIgnore.finalBlockCommentHasSecurityIgnore;
 
     const trimmed = lineText.trim();
-    if (trimmed.startsWith("//") || trimmed.startsWith("#") || trimmed.startsWith("*")) continue;
+    if (quoteAtLineStart === null && (trimmed.startsWith("//") || trimmed.startsWith("#") || trimmed.startsWith("*"))) {
+      continue;
+    }
 
     for (const ap of AI_PATTERNS) {
       ap.pattern.lastIndex = 0;
       let match: RegExpExecArray | null;
       while ((match = ap.pattern.exec(lineText)) !== null) {
+        if (isFindingSuppressedBySecurityIgnore(securityIgnore, match.index)) continue;
         // Special handling: system prompt in client-side only
         if (ap.id === "ai-client-system-prompt" && !isLikelyClientSide(filePath)) {
           continue;

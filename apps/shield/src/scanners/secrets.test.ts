@@ -142,6 +142,234 @@ function greet() { return "hi"; }
       expect(patternFindings.length).toBe(0);
     });
 
+    test("does not suppress findings when security-ignore appears inside a string", () => {
+      const marker = "security" + "-ignore";
+      const content = `api_key = "${marker}-abc1234567890abcdef"`;
+      const findings = scanFile("config.ts", content);
+
+      const apiKeyFinding = findings.find((f) => f.rule_id === "generic-api-key");
+      expect(apiKeyFinding).toBeDefined();
+    });
+
+    test("does not treat URL schemes as security-ignore comments", () => {
+      const scheme = "postgres" + "://";
+      const marker = "security" + "-ignore";
+      const content = `DATABASE_URL=${scheme}user:pass@${marker}.example.com/db`;
+      const findings = scanFile(".env", content);
+
+      const dbFinding = findings.find((f) => f.rule_id === "database-url");
+      expect(dbFinding).toBeDefined();
+    });
+
+    test("does not treat URL path slashes as security-ignore comments", () => {
+      const scheme = "postgres" + "://";
+      const marker = "security" + "-ignore";
+      const content = `DATABASE_URL=${scheme}user:pass@example.com//${marker}/db`;
+      const findings = scanFile(".env", content);
+
+      const dbFinding = findings.find((f) => f.rule_id === "database-url");
+      expect(dbFinding).toBeDefined();
+    });
+
+    test("does not treat URL punctuation before slashes as security-ignore comments", () => {
+      const scheme = "postgres" + "://";
+      const marker = "security" + "-ignore";
+      const contents = [
+        `DATABASE_URL=${scheme}user:pass@example.com/db;//${marker}`,
+        `DATABASE_URL=${scheme}user:pass@example.com/db?x=(//${marker})`,
+      ];
+
+      for (const content of contents) {
+        const findings = scanFile(".env", content);
+        const dbFinding = findings.find((f) => f.rule_id === "database-url");
+        expect(dbFinding).toBeDefined();
+      }
+    });
+
+    test("does not use code-style security-ignore comments for non-code files", () => {
+      const scheme = "postgres" + "://";
+      const marker = "security" + "-ignore";
+      const inputs = [
+        {
+          file: "config.yml",
+          content: `DATABASE_URL: ${scheme}user:pass@example.com/db?x=(//${marker})`,
+        },
+        {
+          file: "process:123",
+          content: `DATABASE_URL=${scheme}user:pass@example.com/db?x=(//${marker})`,
+        },
+      ];
+
+      for (const input of inputs) {
+        const findings = scanFile(input.file, input.content);
+        const dbFinding = findings.find((f) => f.rule_id === "database-url");
+        expect(dbFinding).toBeDefined();
+      }
+    });
+
+    test("does not use hash security-ignore comments for unknown file types", () => {
+      const marker = "security" + "-ignore";
+      const files = ["payload.txt", "config.json", "key.pem"];
+
+      for (const file of files) {
+        const findings = scanFile(file, `api_key = "abcdef1234567890abcdef" # ${marker}`);
+        const apiKeyFinding = findings.find((f) => f.rule_id === "generic-api-key");
+        expect(apiKeyFinding).toBeDefined();
+      }
+    });
+
+    test("does not suppress findings when security-ignore appears inside a multiline string", () => {
+      const marker = "security" + "-ignore";
+      const content = [
+        "const marker = `",
+        `  // ${marker}\`; api_key = "abcdef1234567890abcdef"`,
+      ].join("\n");
+      const findings = scanFile("config.ts", content);
+
+      const apiKeyFinding = findings.find((f) => f.rule_id === "generic-api-key");
+      expect(apiKeyFinding).toBeDefined();
+    });
+
+    test("keeps quote state after block security-ignore comments", () => {
+      const marker = "security" + "-ignore";
+      const content = [
+        `/* ${marker} */ const text = \``,
+        `  // ${marker}\`; api_key = "abcdef1234567890abcdef"`,
+      ].join("\n");
+      const findings = scanFile("config.ts", content);
+
+      const apiKeyFinding = findings.find((f) => f.rule_id === "generic-api-key");
+      expect(apiKeyFinding).toBeDefined();
+    });
+
+    test("does not treat double dashes inside env values as security-ignore comments", () => {
+      const marker = "security" + "-ignore";
+      const contents = [
+        `API_KEY=abcdef1234567890-- ${marker}`,
+        `API_KEY=abcdef1234567890 -- ${marker}`,
+      ];
+
+      for (const content of contents) {
+        const findings = scanFile(".env", content);
+        const apiKeyFinding = findings.find((f) => f.rule_id === "generic-api-key");
+        expect(apiKeyFinding).toBeDefined();
+      }
+    });
+
+    test("suppresses findings when security-ignore appears in a comment", () => {
+      const content = 'api_key = "abcdef1234567890abcdef" // security-ignore';
+      const findings = scanFile("config.ts", content);
+
+      const apiKeyFindings = findings.filter((f) => f.rule_id === "generic-api-key");
+      expect(apiKeyFindings).toHaveLength(0);
+    });
+
+    test("suppresses findings after multi-line block comments with apostrophes", () => {
+      const genericApiKey = "abcdef1234567890" + "abcdef";
+      const content = [
+        "/*",
+        " * John's deployment note",
+        " */",
+        `api_key = "${genericApiKey}" // security-ignore`,
+      ].join("\n");
+      const findings = scanFile("config.ts", content);
+
+      const apiKeyFindings = findings.filter((f) => f.rule_id === "generic-api-key");
+      expect(apiKeyFindings).toHaveLength(0);
+    });
+
+    test("suppresses findings with adjacent js comment delimiters", () => {
+      const genericApiKey = "abcdef1234567890" + "abcdef";
+      const contents = [
+        `api_key = "${genericApiKey}"// security-ignore`,
+        `api_key = "${genericApiKey}"/* security-ignore */`,
+      ];
+
+      for (const content of contents) {
+        const findings = scanFile("config.ts", content);
+        const apiKeyFindings = findings.filter((f) => f.rule_id === "generic-api-key");
+        expect(apiKeyFindings).toHaveLength(0);
+      }
+    });
+
+    test("keeps block security-ignore suppression before a later plain line comment", () => {
+      const genericApiKey = "abcdef1234567890" + "abcdef";
+      const marker = "security" + "-ignore";
+      const content = `api_key = "${genericApiKey}" /* ${marker} */ // ordinary comment`;
+      const findings = scanFile("config.ts", content);
+
+      const apiKeyFindings = findings.filter((f) => f.rule_id === "generic-api-key");
+      expect(apiKeyFindings).toHaveLength(0);
+    });
+
+    test("suppresses findings inside block comments that carry security-ignore", () => {
+      const genericApiKey = "abcdef1234567890" + "abcdef";
+      const marker = "security" + "-ignore";
+      const content = `/* ${marker} api_key = "${genericApiKey}" */`;
+      const findings = scanFile("config.ts", content);
+
+      const apiKeyFindings = findings.filter((f) => f.rule_id === "generic-api-key");
+      expect(apiKeyFindings).toHaveLength(0);
+    });
+
+    test("suppresses findings later inside multiline block comments that carry security-ignore", () => {
+      const genericApiKey = "abcdef1234567890" + "abcdef";
+      const marker = "security" + "-ignore";
+      const content = ["/* " + marker, `api_key = "${genericApiKey}"`, "*/"].join("\n");
+      const findings = scanFile("config.ts", content);
+
+      const apiKeyFindings = findings.filter((f) => f.rule_id === "generic-api-key");
+      expect(apiKeyFindings).toHaveLength(0);
+    });
+
+    test("does not treat security-ignore inside a regex literal as a comment", () => {
+      const genericApiKey = "abcdef1234567890" + "abcdef";
+      const marker = "security" + "-ignore";
+      const content = `const re = /[//] ${marker}/; api_key = "${genericApiKey}"`;
+      const findings = scanFile("config.ts", content);
+
+      const apiKeyFinding = findings.find((f) => f.rule_id === "generic-api-key");
+      expect(apiKeyFinding).toBeDefined();
+    });
+
+    test("does not treat security-ignore inside an exported regex literal as a comment", () => {
+      const genericApiKey = "abcdef1234567890" + "abcdef";
+      const marker = "security" + "-ignore";
+      const content = `export default /[//] ${marker}/; api_key = "${genericApiKey}"`;
+      const findings = scanFile("config.ts", content);
+
+      const apiKeyFinding = findings.find((f) => f.rule_id === "generic-api-key");
+      expect(apiKeyFinding).toBeDefined();
+    });
+
+    test("does not treat security-ignore inside a control-flow regex literal as a comment", () => {
+      const genericApiKey = "abcdef1234567890" + "abcdef";
+      const marker = "security" + "-ignore";
+      const content = `if (ok) /[//] ${marker}/.test(input); api_key = "${genericApiKey}"`;
+      const findings = scanFile("config.ts", content);
+
+      const apiKeyFinding = findings.find((f) => f.rule_id === "generic-api-key");
+      expect(apiKeyFinding).toBeDefined();
+    });
+
+    test("suppresses earlier lines in multiline block comments that carry security-ignore", () => {
+      const genericApiKey = "abcdef1234567890" + "abcdef";
+      const marker = "security" + "-ignore";
+      const content = [`/* api_key = "${genericApiKey}"`, `${marker} */`].join("\n");
+      const findings = scanFile("config.ts", content);
+
+      const apiKeyFindings = findings.filter((f) => f.rule_id === "generic-api-key");
+      expect(apiKeyFindings).toHaveLength(0);
+    });
+
+    test("suppresses env findings when security-ignore appears in a hash comment", () => {
+      const content = "API_KEY=abcdef1234567890 # security-ignore";
+      const findings = scanFile(".env", content);
+
+      const apiKeyFindings = findings.filter((f) => f.rule_id === "generic-api-key");
+      expect(apiKeyFindings).toHaveLength(0);
+    });
+
     test("reports correct line number and column", () => {
       const content = "line 1\nline 2\nconst key = \"AKIAIOSFODNN7EXAMPLE\";\nline 4";
       const findings = scanFile("test.ts", content);

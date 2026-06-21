@@ -8,7 +8,14 @@ import {
   Severity,
   DEFAULT_CONFIG,
 } from "../types/index.js";
-import { walkDirectory, getCodeSnippet } from "./secrets.js";
+import {
+  walkDirectory,
+  getCodeSnippet,
+  scanSecurityIgnoreLine,
+  isFindingSuppressedBySecurityIgnore,
+  collectSecurityIgnoreBlockRanges,
+  mergeSecurityIgnoreBlockRanges,
+} from "./secrets.js";
 
 // --- Code analysis patterns ---
 
@@ -190,22 +197,40 @@ const CODE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".r
 export function scanFile(filePath: string, content: string): FindingInput[] {
   const findings: FindingInput[] = [];
   const lines = content.split("\n");
+  const securityIgnoreBlockRanges = collectSecurityIgnoreBlockRanges(content, filePath);
+  let quote: string | null = null;
+  let blockComment = false;
+  let blockCommentHasSecurityIgnore = false;
 
   for (let i = 0; i < lines.length; i++) {
     const lineText = lines[i];
     const lineNum = i + 1;
-
-    // Skip lines with security-ignore suppression comment
-    if (lineText.includes("security-ignore")) continue;
+    const quoteAtLineStart = quote;
+    const securityIgnore = mergeSecurityIgnoreBlockRanges(
+      scanSecurityIgnoreLine(
+        lineText,
+        filePath,
+        quoteAtLineStart,
+        blockComment,
+        blockCommentHasSecurityIgnore,
+      ),
+      securityIgnoreBlockRanges.get(i),
+    );
+    quote = securityIgnore.finalQuote;
+    blockComment = securityIgnore.finalBlockComment;
+    blockCommentHasSecurityIgnore = securityIgnore.finalBlockCommentHasSecurityIgnore;
 
     // Skip comment-only lines
     const trimmed = lineText.trim();
-    if (trimmed.startsWith("//") || trimmed.startsWith("#") || trimmed.startsWith("*")) continue;
+    if (quoteAtLineStart === null && (trimmed.startsWith("//") || trimmed.startsWith("#") || trimmed.startsWith("*"))) {
+      continue;
+    }
 
     for (const cp of CODE_PATTERNS) {
       cp.pattern.lastIndex = 0;
       let match: RegExpExecArray | null;
       while ((match = cp.pattern.exec(lineText)) !== null) {
+        if (isFindingSuppressedBySecurityIgnore(securityIgnore, match.index)) continue;
         findings.push({
           rule_id: cp.id,
           scanner_type: ScannerType.Code,
