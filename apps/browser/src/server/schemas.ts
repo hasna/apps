@@ -16,9 +16,43 @@ export const createSessionRequestSchema = z.object({
   extension_server_url: z.string().min(1).optional(),
   extension_token_id: z.string().min(1).optional(),
   kernel_persistence_id: z.string().min(1).optional(),
+  kernel_profile_id: z.string().min(1).optional(),
+  kernel_profile_name: z.string().min(1).optional(),
+  kernel_save_profile_changes: z.boolean().optional(),
   kernel_timeout_seconds: z.number().int().positive().optional(),
+  kernel_project_id: z.string().min(1).optional(),
+  kernel_base_url: z.string().min(1).optional(),
+  kernel_request_timeout_ms: z.number().int().positive().optional(),
+  kernel_proxy_id: z.string().min(1).optional(),
+  kernel_gpu: z.boolean().optional(),
+  kernel_kiosk_mode: z.boolean().optional(),
+  kernel_tags: z.record(z.string()).optional(),
+  kernel_telemetry: z.union([z.boolean(), z.record(z.unknown())]).optional(),
+  kernel_chrome_policy: z.record(z.unknown()).optional(),
+  kernel_env: z.record(z.string()).optional(),
   kernel_env_secrets: z.record(z.string()).optional(),
   kernel_auth_mode: z.enum(["managed", "cdp_autofill", "auto", "off"]).optional(),
+}).passthrough();
+
+export const kernelPlaywrightRequestSchema = z.object({
+  code: z.string().min(1),
+  timeout_sec: z.number().int().positive().max(300).optional(),
+}).passthrough();
+
+export const kernelComputerScreenshotRequestSchema = z.object({
+  region: z.object({
+    x: z.number().int().min(0),
+    y: z.number().int().min(0),
+    width: z.number().int().positive(),
+    height: z.number().int().positive(),
+  }).optional(),
+  filename: z.string().min(1).optional(),
+}).passthrough();
+
+export const kernelReplayStartRequestSchema = z.object({
+  framerate: z.number().int().positive().max(120).optional(),
+  max_duration_seconds: z.number().int().positive().optional(),
+  record_audio: z.boolean().optional(),
 }).passthrough();
 
 export const extensionPairRequestSchema = z.object({
@@ -69,6 +103,9 @@ export const videoStartRequestSchema = z.object({
 }).passthrough();
 
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
+export type KernelPlaywrightRequest = z.infer<typeof kernelPlaywrightRequestSchema>;
+export type KernelComputerScreenshotRequest = z.infer<typeof kernelComputerScreenshotRequestSchema>;
+export type KernelReplayStartRequest = z.infer<typeof kernelReplayStartRequestSchema>;
 export type ExtensionPairRequest = z.infer<typeof extensionPairRequestSchema>;
 export type ExtensionDispatchRequest = z.infer<typeof extensionDispatchRequestSchema>;
 export type VideoStartRequest = z.infer<typeof videoStartRequestSchema> & {

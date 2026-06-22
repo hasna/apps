@@ -77,6 +77,8 @@ describe("mcp buildServer stdio registration", () => {
 
     const tools = await client.listTools();
     expect(tools.tools.some((tool) => tool.name === "browser_session_list")).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === "browser_kernel_status")).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === "browser_kernel_playwright_execute")).toBe(true);
 
     await client.close();
     await server.close();

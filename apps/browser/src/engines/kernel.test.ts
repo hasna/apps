@@ -1,11 +1,26 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import type { Browser } from "playwright";
 import {
+  captureKernelComputerScreenshotToDownloads,
   connectKernelBrowser,
   createKernelSandbox,
+  downloadKernelFileToDownloads,
+  downloadKernelReplayToDownloads,
+  executeKernelPlaywright,
+  getKernelStatus,
+  listKernelBrowsers,
+  listKernelFiles,
+  listKernelReplays,
+  redactKernelSensitiveText,
+  runKernelComputerAction,
   setKernelCdpConnectorForTests,
   setKernelClientFactoryForTests,
   setKernelSecretsProviderForTests,
+  startKernelReplay,
+  stopKernelReplay,
   type KernelSecretsProvider,
 } from "./kernel.js";
 
@@ -40,10 +55,22 @@ function secretsProvider(overrides: Partial<KernelSecretsProvider> = {}): Kernel
   };
 }
 
+let tmpDir: string;
+
+beforeEach(() => {
+  tmpDir = mkdtempSync(join(tmpdir(), "browser-kernel-test-"));
+  process.env["BROWSER_DATA_DIR"] = tmpDir;
+  process.env["BROWSER_DB_PATH"] = join(tmpDir, "browser.db");
+});
+
 afterEach(() => {
   setKernelClientFactoryForTests(undefined);
   setKernelSecretsProviderForTests(undefined);
   setKernelCdpConnectorForTests(undefined);
+  delete process.env["BROWSER_DATA_DIR"];
+  delete process.env["BROWSER_DB_PATH"];
+  delete process.env["BROWSER_ALLOW_STEALTH"];
+  rmSync(tmpDir, { recursive: true, force: true });
 });
 
 describe("kernel engine", () => {
@@ -141,7 +168,7 @@ describe("kernel engine", () => {
     } catch (err) {
       message = err instanceof Error ? err.message : String(err);
     }
-    expect(message).toContain("[redacted-cdp-url]");
+    expect(message).toContain("[redacted-kernel-websocket-url]");
     expect(message).not.toContain("secret.kernel.test");
     expect(deletes).toEqual(["kernel-session-redact"]);
   });
@@ -213,5 +240,221 @@ describe("kernel engine", () => {
     expect(sandbox.metadata.authConnectionId).toBe("auth-1");
     expect(sandbox.metadata.authStatus).toBe("AUTHENTICATED");
     expect(sandbox.metadata.authLiveViewUrl).toBe("https://kernel.test/auth-live");
+  });
+
+  it("creates named profiles before launching browsers and passes current Kernel options", async () => {
+    const profileCreates: unknown[] = [];
+    const createCalls: unknown[] = [];
+    setKernelSecretsProviderForTests(secretsProvider());
+    process.env["BROWSER_ALLOW_STEALTH"] = "1";
+    setKernelClientFactoryForTests(() => ({
+      profiles: {
+        async create(params) {
+          profileCreates.push(params);
+        },
+      },
+      browsers: {
+        async create(params) {
+          createCalls.push(params);
+          return {
+            session_id: "kernel-session-options",
+            cdp_ws_url: "wss://kernel.test/cdp-options?jwt=secret",
+            webdriver_ws_url: "wss://kernel.test/webdriver-options?jwt=secret",
+            browser_live_view_url: "https://kernel.test/live?jwt=secret",
+            base_url: "https://kernel.test/browser/kernel",
+            profile: { id: "profile-id", name: "profile-a" },
+            headless: false,
+            stealth: true,
+            timeout_seconds: 90,
+            gpu: true,
+            kiosk_mode: true,
+            proxy_id: "proxy-1",
+          };
+        },
+        async deleteByID() {},
+      },
+    }));
+
+    const sandbox = await createKernelSandbox({
+      startUrl: "https://example.test",
+      profileName: "profile-a",
+      saveProfileChanges: false,
+      headless: false,
+      stealth: true,
+      timeoutSeconds: 90,
+      proxyId: "proxy-1",
+      gpu: true,
+      kioskMode: true,
+      tags: { team: "browser" },
+      telemetry: true,
+      chromePolicy: { DownloadRestrictions: 0 },
+      authMode: "off",
+      approvalToken: process.env["BROWSER_CAPABILITY_TOKEN"],
+    });
+
+    expect(profileCreates).toEqual([{ name: "profile-a" }]);
+    expect(createCalls).toEqual([{
+      headless: false,
+      start_url: "https://example.test",
+      name: undefined,
+      timeout_seconds: 90,
+      viewport: undefined,
+      chrome_policy: { DownloadRestrictions: 0 },
+      gpu: true,
+      kiosk_mode: true,
+      stealth: true,
+      proxy_id: "proxy-1",
+      tags: { team: "browser" },
+      telemetry: true,
+      profile: { name: "profile-a", save_changes: false },
+    }]);
+    expect(sandbox.metadata).toMatchObject({
+      sessionId: "kernel-session-options",
+      baseUrl: "https://kernel.test/browser/kernel",
+      persistenceId: "profile-a",
+      proxyId: "proxy-1",
+      gpu: true,
+      kioskMode: true,
+    });
+  });
+
+  it("reports Kernel status without exposing the API key", async () => {
+    setKernelSecretsProviderForTests(secretsProvider());
+    setKernelClientFactoryForTests(() => ({
+      browsers: {
+        async create() {
+          throw new Error("not used");
+        },
+        async deleteByID() {},
+        async list() {
+          return { items: [{ session_id: "remote-1", cdp_ws_url: "wss://kernel.test/cdp?jwt=secret" }] };
+        },
+      },
+    }));
+
+    const status = await getKernelStatus({ checkRemote: true });
+    expect(status.configured).toBe(true);
+    expect(status.apiKeySource).toBe("vault");
+    expect(status.remote).toEqual({ ok: true, activeSessions: 1 });
+    expect(JSON.stringify(status)).not.toContain("kernel-test-key");
+  });
+
+  it("lists Kernel sessions with capability URLs redacted", async () => {
+    setKernelSecretsProviderForTests(secretsProvider());
+    setKernelClientFactoryForTests(() => ({
+      browsers: {
+        async create() {
+          throw new Error("not used");
+        },
+        async deleteByID() {},
+        async list() {
+          return {
+            items: [{
+              session_id: "remote-1",
+              cdp_ws_url: "wss://kernel.test/cdp?jwt=secret",
+              webdriver_ws_url: "wss://kernel.test/webdriver?jwt=secret",
+              browser_live_view_url: "https://kernel.test/live?jwt=secret",
+              base_url: "https://kernel.test/browser/kernel?jwt=secret",
+              name: "remote-browser",
+            }],
+          };
+        },
+      },
+    }));
+
+    const sessions = await listKernelBrowsers();
+    const serialized = JSON.stringify(sessions);
+    expect(serialized).not.toContain("cdp?jwt=secret");
+    expect(serialized).toContain("has_cdp_ws_url");
+    expect(serialized).toContain("jwt=%5Bredacted%5D");
+  });
+
+  it("downloads Kernel filesystem files and computer screenshots into downloads", async () => {
+    setKernelSecretsProviderForTests(secretsProvider());
+    setKernelClientFactoryForTests(() => ({
+      browsers: {
+        async create() {
+          throw new Error("not used");
+        },
+        async deleteByID() {},
+        fs: {
+          async listFiles() {
+            return [{ name: "report.txt", path: "/tmp/report.txt", is_dir: false, mode: "-rw-r--r--", mod_time: "now", size_bytes: 5 }];
+          },
+          async fileInfo() {
+            return { name: "report.txt", path: "/tmp/report.txt", is_dir: false, mode: "-rw-r--r--", mod_time: "now", size_bytes: 5 };
+          },
+          async readFile() {
+            return new Response("hello");
+          },
+        },
+        computer: {
+          async captureScreenshot() {
+            return new Response(new Uint8Array([1, 2, 3]));
+          },
+        },
+      },
+    }));
+
+    expect(await listKernelFiles("remote-1", "/tmp")).toHaveLength(1);
+    const file = await downloadKernelFileToDownloads("remote-1", "/tmp/report.txt", { localSessionId: "local-1" });
+    const screenshot = await captureKernelComputerScreenshotToDownloads("remote-1", { localSessionId: "local-1" });
+
+    expect(file.filename).toContain("report");
+    expect(file.session_id).toBe("local-1");
+    expect(screenshot.type).toBe("screenshot");
+  });
+
+  it("executes Kernel Playwright, computer actions, and replay lifecycle helpers", async () => {
+    const actions: unknown[] = [];
+    setKernelSecretsProviderForTests(secretsProvider());
+    setKernelClientFactoryForTests(() => ({
+      browsers: {
+        async create() {
+          throw new Error("not used");
+        },
+        async deleteByID() {},
+        playwright: {
+          async execute(_id, body) {
+            return { success: true, result: body.code.includes("title") ? "Example" : null, stdout: "ok" };
+          },
+        },
+        computer: {
+          async clickMouse(_id, body) {
+            actions.push(body);
+          },
+        },
+        replays: {
+          async list() {
+            return [{ replay_id: "replay-1", replay_view_url: "https://kernel.test/replay" }];
+          },
+          async start() {
+            return { replay_id: "replay-2", replay_view_url: "https://kernel.test/replay-2" };
+          },
+          async stop() {},
+          async download() {
+            return new Response(new Uint8Array([1, 2, 3, 4]));
+          },
+        },
+      },
+    }));
+
+    expect(await executeKernelPlaywright("remote-1", "return await page.title();")).toMatchObject({ success: true, result: "Example" });
+    expect(await runKernelComputerAction("remote-1", "click", { x: 1, y: 2 })).toEqual({ ok: true });
+    expect(actions).toEqual([{ x: 1, y: 2 }]);
+    expect(await listKernelReplays("remote-1")).toHaveLength(1);
+    expect(await startKernelReplay("remote-1")).toMatchObject({ replay_id: "replay-2" });
+    expect(await stopKernelReplay("remote-1", "replay-2")).toEqual({ stopped: "replay-2" });
+    const replay = await downloadKernelReplayToDownloads("remote-1", "replay-2");
+    expect(replay.type).toBe("video");
+  });
+
+  it("redacts Kernel secrets from error strings", () => {
+    const redacted = redactKernelSensitiveText("Bearer abc123 failed for wss://kernel.test/cdp?jwt=secret and KERNEL_API_KEY=secret");
+    expect(redacted).toContain("Bearer [redacted]");
+    expect(redacted).toContain("[redacted-kernel-websocket-url]");
+    expect(redacted).not.toContain("abc123");
+    expect(redacted).not.toContain("jwt=secret");
+    expect(redacted).not.toContain("KERNEL_API_KEY=secret");
   });
 });

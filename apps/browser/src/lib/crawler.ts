@@ -1,3 +1,4 @@
+import type { BrowserContext } from "playwright";
 import type { CrawlResult, CrawledPage, CrawlOptions } from "../types/index.js";
 import { UseCase } from "../types/index.js";
 import { selectEngine } from "../engines/selector.js";
@@ -19,13 +20,27 @@ export async function crawl(startUrl: string, opts: CrawlOptions = {}): Promise<
 
   // Launch browser
   let browser: Awaited<ReturnType<typeof launchPlaywright>>;
-  if (engine === "lightpanda") {
+  let context: BrowserContext;
+  let close: () => Promise<void>;
+  if (engine === "kernel") {
+    const { createSession, closeSession } = await import("./session.js");
+    const created = await createSession({
+      ...(opts.sessionOptions ?? {}),
+      engine: "kernel",
+      headless: opts.sessionOptions?.headless ?? true,
+    });
+    context = created.page.context();
+    browser = context.browser() as Awaited<ReturnType<typeof launchPlaywright>>;
+    close = () => closeSession(created.session.id).then(() => undefined);
+  } else if (engine === "lightpanda") {
     browser = await connectLightpanda();
+    context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+    close = () => browser.close().catch(() => undefined);
   } else {
     browser = await launchPlaywright({ headless: true });
+    context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+    close = () => browser.close().catch(() => undefined);
   }
-
-  const context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
 
   async function crawlPage(url: string, depth: number): Promise<void> {
     if (depth > maxDepth || pages.length >= maxPages || visited.has(url)) return;
@@ -62,7 +77,7 @@ export async function crawl(startUrl: string, opts: CrawlOptions = {}): Promise<
   try {
     await crawlPage(startUrl, 0);
   } finally {
-    await browser.close().catch(() => {});
+    await close().catch(() => {});
   }
 
   const result = createCrawlResult({

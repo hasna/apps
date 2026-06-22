@@ -12,6 +12,7 @@ import { register as registerNetwork } from "./network.js";
 import { register as registerData } from "./data.js";
 import { register as registerTui } from "./tui.js";
 import { register as registerExtension } from "./extension.js";
+import { register as registerKernel } from "./kernel.js";
 import { registerStorageTools } from "./storage.js";
 import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 
@@ -30,6 +31,7 @@ export function buildServer(): McpServer {
   registerData(server);
   registerTui(server);
   registerExtension(server);
+  registerKernel(server);
   registerStorageTools(server);
 
   return server;

@@ -4,7 +4,7 @@ set -euo pipefail
 chunks=(
   "src/engines/selector.test.ts src/engines/kernel.test.ts src/engines/tui.test.ts src/engines/bun-webview.test.ts src/engines/extension.test.ts src/engines/extension.e2e.test.ts"
   "src/mcp/v4.test.ts src/mcp/gallery.test.ts src/mcp/index.test.ts src/mcp/http.test.ts src/mcp/meta-regression.test.ts"
-  "src/server/index.test.ts src/cli/index.test.ts src/sdk.test.ts"
+  "src/server/index.test.ts src/cli/index.test.ts src/sdk.test.ts src/docs-policy.test.ts"
   "src/db/storage-sync.test.ts src/cli/storage.test.ts src/server/security.test.ts"
   "src/db/agents.test.ts src/db/gallery.test.ts src/db/projects.test.ts src/db/recordings.test.ts src/db/schema.test.ts src/db/sessions.test.ts src/db/video-recordings.test.ts"
   "src/lib/actions.test.ts src/lib/actions-ref.test.ts src/lib/extractor.test.ts src/lib/snapshot.test.ts src/lib/screenshot.test.ts src/lib/screenshot-v4.test.ts src/lib/annotate.test.ts"
