@@ -4,10 +4,11 @@ import { runDaemon, startDaemon } from "./daemon.js";
 import { daemonStatus, stopDaemon } from "./control.js";
 import { installStartup } from "./install.js";
 import { Store } from "../lib/store.js";
+import { packageVersion } from "../lib/version.js";
 
 const program = new Command();
 
-program.name("loops-daemon").description("OpenLoops daemon helper").version("0.3.6");
+program.name("loops-daemon").description("OpenLoops daemon helper").version(packageVersion());
 
 program
   .command("run")

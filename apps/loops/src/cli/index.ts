@@ -26,10 +26,11 @@ import { workflowBodyFromJson } from "../lib/workflow-spec.js";
 import { normalizeGoalSpec } from "../lib/workflow-spec.js";
 import { runDoctor } from "../lib/doctor.js";
 import { listOpenMachines, resolveLoopMachine } from "../lib/machines.js";
+import { packageVersion } from "../lib/version.js";
 
 const program = new Command();
 
-program.name("loops").description("Persistent local loops for commands and headless coding agents").version("0.3.6");
+program.name("loops").description("Persistent local loops for commands and headless coding agents").version(packageVersion());
 program.option("-j, --json", "print JSON");
 
 function isJson(): boolean {

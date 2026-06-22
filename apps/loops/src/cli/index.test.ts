@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -26,6 +26,34 @@ function futureAt(): string {
 }
 
 describe("loops CLI", () => {
+  test("reports the package version", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-version-"));
+    const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string };
+    const version = runCli(dataDir, ["--version"]);
+
+    expect(version.status).toBe(0);
+    expect(version.stdout.trim()).toBe(pkg.version);
+
+    const daemonVersion = spawnSync(process.execPath, [join(dirname(cliPath), "../daemon/index.ts"), "--version"], {
+      env: { ...process.env, LOOPS_DATA_DIR: dataDir },
+      encoding: "utf8",
+    });
+    expect(daemonVersion.status).toBe(0);
+    expect(daemonVersion.stdout.trim()).toBe(pkg.version);
+  });
+
+  test("compiled CLI reports the package version", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-cli-compiled-version-"));
+    const outfile = join(root, "loops");
+    const build = spawnSync("bun", ["build", cliPath, "--compile", "--outfile", outfile], { encoding: "utf8" });
+    const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string };
+
+    expect(build.status).toBe(0);
+    const version = spawnSync(outfile, ["--version"], { encoding: "utf8" });
+    expect(version.status).toBe(0);
+    expect(version.stdout.trim()).toBe(pkg.version);
+  });
+
   test("run-now exits zero for succeeded runs", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-ok-"));
     const create = runCli(dataDir, ["create", "command", "ok", "--at", futureAt(), "--cmd", "printf ok"]);
