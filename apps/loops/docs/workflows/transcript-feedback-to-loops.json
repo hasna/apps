@@ -1,0 +1,80 @@
+{
+  "name": "transcript-feedback-to-loops",
+  "description": "Turn an authorized media transcript into a reviewable backlog of recurring OpenLoops workflows.",
+  "version": 1,
+  "steps": [
+    {
+      "id": "check-transcriber",
+      "description": "Fail early if the transcriber CLI is unavailable to the workflow runner.",
+      "target": {
+        "type": "command",
+        "command": "transcriber",
+        "args": ["--version"],
+        "cwd": "/path/to/repo",
+        "timeoutMs": 30000
+      }
+    },
+    {
+      "id": "check-loops",
+      "description": "Fail early if the loops CLI is unavailable for generated workflow validation.",
+      "target": {
+        "type": "command",
+        "command": "loops",
+        "args": ["--version"],
+        "cwd": "/path/to/repo",
+        "timeoutMs": 30000
+      }
+    },
+    {
+      "id": "transcribe-media",
+      "description": "Use iapp-transcriber to download authorized media and write a structured transcript artifact.",
+      "dependsOn": ["check-transcriber"],
+      "target": {
+        "type": "command",
+        "command": "mkdir -p .openloops/transcripts && transcriber transcribe \"${TRANSCRIBER_SOURCE_URL:?set TRANSCRIBER_SOURCE_URL in workflow target.env}\" --provider \"${TRANSCRIBER_PROVIDER:-openai}\" --json > .openloops/transcripts/latest-transcript.json",
+        "shell": true,
+        "cwd": "/path/to/repo",
+        "env": {
+          "TRANSCRIBER_PROVIDER": "openai"
+        },
+        "timeoutMs": 3600000
+      }
+    },
+    {
+      "id": "extract-loop-backlog",
+      "description": "Extract recurring engineering loop candidates from the transcript.",
+      "dependsOn": ["transcribe-media"],
+      "target": {
+        "type": "agent",
+        "provider": "codewith",
+        "cwd": "/path/to/repo",
+        "timeoutMs": 1800000,
+        "prompt": "Read .openloops/transcripts/latest-transcript.json and create or update docs/loop-backlog.md. Extract only recurring work that is useful enough to schedule through OpenLoops. For each candidate include cadence, target provider, allowed write scope, expected artifacts, verification command, stop condition, and the specific transcript insight that justifies it. Prefer loops for code review/security, customer feedback triage, maintenance PRs, CI optimization, knowledge capture, and workflow hygiene."
+      }
+    },
+    {
+      "id": "author-loop-workflows",
+      "description": "Turn approved backlog items into workflow specs.",
+      "dependsOn": ["extract-loop-backlog"],
+      "target": {
+        "type": "agent",
+        "provider": "codewith",
+        "cwd": "/path/to/repo",
+        "timeoutMs": 1800000,
+        "prompt": "Use docs/loop-backlog.md to author or update workflow JSON specs under docs/workflows/generated. Each workflow must use deterministic command steps for checks, agent steps for judgment or code changes, and workflow or step goals only when the outcome needs planning. Keep prompts scoped to the target repo, name allowed paths, and include validation evidence."
+      }
+    },
+    {
+      "id": "validate-loop-workflows",
+      "description": "Validate generated workflow specs before scheduling.",
+      "dependsOn": ["author-loop-workflows", "check-loops"],
+      "target": {
+        "type": "command",
+        "command": "set -- docs/workflows/generated/*.json; [ -e \"$1\" ] || { echo \"no generated workflow specs found; nothing to validate\"; exit 0; }; for file do loops workflows validate \"$file\" --preflight; done",
+        "shell": true,
+        "cwd": "/path/to/repo",
+        "timeoutMs": 300000
+      }
+    }
+  ]
+}

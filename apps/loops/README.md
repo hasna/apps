@@ -24,7 +24,12 @@ Update:
 
 ```bash
 npm update -g @hasna/loops
+loops daemon stop
+loops daemon start
+loops daemon status
 ```
+
+Restart the daemon on every machine that runs scheduled loops; already-running daemon processes keep using the old package until restarted.
 
 From source:
 
@@ -197,6 +202,18 @@ Use `shell: true` only when you intentionally want shell parsing:
 ```json
 { "type": "command", "command": "git status --short", "shell": true }
 ```
+
+## Transcript-Driven Loops
+
+OpenLoops can turn long-form media or meeting transcripts into recurring workflow work when paired with `iapp-transcriber`. The template at `docs/workflows/transcript-feedback-to-loops.json` transcribes an authorized media URL, asks an agent to extract recurring loop candidates, authors workflow specs, and validates generated workflows before scheduling. Copy it into the target repo, replace `/path/to/repo` with that repo's absolute path, and provide `TRANSCRIBER_SOURCE_URL` through the runner environment or a private, uncommitted workflow copy before storing or scheduling it. Do not commit private or signed media URLs.
+
+```bash
+loops workflows validate /path/to/repo/.openloops/transcript-feedback-to-loops.json --preflight
+loops workflows create /path/to/repo/.openloops/transcript-feedback-to-loops.json
+loops workflows run transcript-feedback-to-loops --show-output
+```
+
+See `docs/TRANSCRIPT_LOOP_PATTERNS.md` for transcript-to-loop guardrails and example schedules for review, maintenance, CI optimization, feedback triage, and knowledge-capture loops.
 
 ## Manage
 
