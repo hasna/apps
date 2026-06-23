@@ -12,6 +12,7 @@ import {
   discoverMachineTopology,
   getMachinesConsumerCapabilities,
   getMachinesConsumerSchemaBundle,
+  getMachineDetails,
   listMachineProjectAssignments,
   listMachineTrashPolicies,
   resolveNoteMachineContext,
@@ -31,19 +32,21 @@ describe("machines consumer SDK", () => {
     expect(MACHINES_CONSUMER_CAPABILITIES.machine_list_pagination).toBe(true);
     expect(MACHINES_CONSUMER_CAPABILITIES.note_machine_context).toBe(true);
     expect(MACHINES_CONSUMER_CAPABILITIES.machine_trash_policies).toBe(true);
+    expect(MACHINES_CONSUMER_CAPABILITIES.machine_details).toBe(true);
     expect(getMachinesConsumerCapabilities()).toEqual(MACHINES_CONSUMER_CAPABILITIES);
     expect(MACHINES_CONSUMER_CONTRACT).toMatchObject({
       schema_version: 1,
       package_name: "@hasna/machines",
       entrypoint: "@hasna/machines/consumer",
       schema_artifact: "schemas/machines-consumer.schema.json",
-      envelopes: ["topology", "route", "workspace", "compatibility", "resolver_snapshot", "project_assignments", "note_machine_context", "machine_trash_policies"],
+      envelopes: ["topology", "route", "workspace", "compatibility", "resolver_snapshot", "project_assignments", "note_machine_context", "machine_trash_policies", "machine_details"],
     });
     expect(MACHINES_CONSUMER_CONTRACT.stable_exports).toContain("resolveMachineWorkspace");
     expect(MACHINES_CONSUMER_CONTRACT.stable_exports).toContain("createMachineResolverSnapshot");
     expect(MACHINES_CONSUMER_CONTRACT.stable_exports).toContain("listMachineProjectAssignments");
     expect(MACHINES_CONSUMER_CONTRACT.stable_exports).toContain("resolveNoteMachineContext");
     expect(MACHINES_CONSUMER_CONTRACT.stable_exports).toContain("listMachineTrashPolicies");
+    expect(MACHINES_CONSUMER_CONTRACT.stable_exports).toContain("getMachineDetails");
     expect(MACHINES_CONSUMER_CONTRACT.stable_exports).toContain("validateMachinesConsumerEnvelope");
     expect(MACHINES_CONSUMER_CONTRACT.field_capabilities.workspace.trust_auth).toBe(true);
     expect(MACHINES_CONSUMER_CONTRACT.field_capabilities.topology.display_name_fallback).toBe(true);
@@ -51,6 +54,7 @@ describe("machines consumer SDK", () => {
     expect(MACHINES_CONSUMER_CONTRACT.field_capabilities.project_assignments.open_projects_compatibility).toBe(true);
     expect(MACHINES_CONSUMER_CONTRACT.field_capabilities.note_machine_context.actor_context).toBe(true);
     expect(MACHINES_CONSUMER_CONTRACT.field_capabilities.machine_trash_policies.retention_metadata).toBe(true);
+    expect(MACHINES_CONSUMER_CONTRACT.field_capabilities.machine_details.safe_display_metadata).toBe(true);
     expect(typeof discoverMachineTopology).toBe("function");
     expect(typeof checkMachineCompatibility).toBe("function");
     expect(typeof resolveMachineRoute).toBe("function");
@@ -59,6 +63,7 @@ describe("machines consumer SDK", () => {
     expect(typeof listMachineProjectAssignments).toBe("function");
     expect(typeof resolveNoteMachineContext).toBe("function");
     expect(typeof listMachineTrashPolicies).toBe("function");
+    expect(typeof getMachineDetails).toBe("function");
   });
 
   test("exports schema artifacts and validates consumer envelopes", () => {
@@ -79,6 +84,7 @@ describe("machines consumer SDK", () => {
       "note_machine_reference",
       "note_actor_context",
       "machine_trash_policy",
+      "machine_details",
     ]));
 
     const artifact = JSON.parse(readFileSync(resolve(import.meta.dir, "..", MACHINES_CONSUMER_CONTRACT.schema_artifact), "utf8"));

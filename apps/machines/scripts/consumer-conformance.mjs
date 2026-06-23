@@ -172,6 +172,7 @@ function writeSdkProbe(appDir) {
       checkMachineCompatibility,
       createMachineResolverSnapshot,
       discoverMachineTopology,
+      getMachineDetails,
       listMachineProjectAssignments,
       listMachineTrashPolicies,
       resolveNoteMachineContext,
@@ -213,6 +214,10 @@ function writeSdkProbe(appDir) {
       topology,
       now: new Date('2026-06-09T00:00:00.000Z'),
     });
+    const machineDetails = getMachineDetails('consumer-conformance-local', {
+      topology,
+      now: new Date('2026-06-09T00:00:00.000Z'),
+    });
     const snapshot = createMachineResolverSnapshot({
       route,
       workspace,
@@ -238,6 +243,7 @@ function writeSdkProbe(appDir) {
         project_assignments: validateMachinesConsumerEnvelope('project_assignments', projectAssignments).ok,
         note_machine_context: validateMachinesConsumerEnvelope('note_machine_context', noteMachineContext).ok,
         machine_trash_policies: validateMachinesConsumerEnvelope('machine_trash_policies', trashPolicies).ok,
+        machine_details: validateMachinesConsumerEnvelope('machine_details', machineDetails).ok,
       },
       topology: { schema_version: topology.schema_version, machines: topology.machines.length, pagination: topology.pagination, first_display_name: topology.machines[0]?.display_name ?? null },
       route: { schema_version: route.schema_version, ok: route.ok, route: route.route, target: route.target, cacheable: route.cacheability.cacheable },
@@ -247,6 +253,7 @@ function writeSdkProbe(appDir) {
       project_assignments: { schema_version: projectAssignments.schema_version, count: projectAssignments.assignments.length },
       note_machine_context: { schema_version: noteMachineContext.schema_version, origin: noteMachineContext.origin_machine?.display_name ?? null, actor: noteMachineContext.actor.display_name },
       machine_trash_policies: { schema_version: trashPolicies.schema_version, count: trashPolicies.policies.length, pagination: trashPolicies.pagination },
+      machine_details: { schema_version: machineDetails.schema_version, display_name: machineDetails.display_name, status: machineDetails.status.label },
     }));
   `);
   return script;
@@ -354,7 +361,7 @@ function assertCase(name, output) {
     if (!output.envelopes.includes("resolver_snapshot") || output.resolver_snapshot.schema_version !== 1) {
       throw new Error(`${name}: missing resolver snapshot envelope\n${JSON.stringify(output, null, 2)}`);
     }
-    for (const envelope of ["project_assignments", "note_machine_context", "machine_trash_policies"]) {
+    for (const envelope of ["project_assignments", "note_machine_context", "machine_trash_policies", "machine_details"]) {
       if (!output.envelopes.includes(envelope) || output[envelope].schema_version !== 1) {
         throw new Error(`${name}: missing ${envelope} envelope\n${JSON.stringify(output, null, 2)}`);
       }

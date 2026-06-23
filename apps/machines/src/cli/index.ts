@@ -78,6 +78,7 @@ import {
   type NoteMachineContext,
   type NoteMachineContextSource,
 } from "../notes.js";
+import { getMachineDetails, type MachineDetails } from "../details.js";
 import {
   checkMachineCompatibility,
   type CompatibilityCheck,
@@ -405,6 +406,29 @@ function renderMachineTrashPolicies(result: MachineTrashPolicies): string {
     ]),
     ...lines,
   ].join("\n");
+}
+
+function renderMachineDetails(result: MachineDetails): string {
+  const lines = [
+    renderKeyValueTable([
+      ["name", result.display_name],
+      ["machine", result.machine_id],
+      ["status", result.status.label],
+      ["platform", result.platform ?? "unknown"],
+      ["type", result.machine_type ?? "unknown"],
+      ["role", result.role ?? result.roles?.join(", ") ?? "unknown"],
+      ["capabilities", result.machine_capabilities?.join(", ") ?? "unknown"],
+      ["updated", result.updated_at ?? "unknown"],
+      ["last seen", result.last_seen_at ?? "unknown"],
+      ["recent sync", result.timestamps.recent_sync_at ?? "unknown"],
+      ["source", result.source.metadata_source],
+      ["warnings", result.warnings.join(", ") || "none"],
+    ]),
+  ];
+  if (result.display_metadata && Object.keys(result.display_metadata).length > 0) {
+    lines.push(renderList("display metadata", Object.entries(result.display_metadata).map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : String(value)}`)));
+  }
+  return lines.join("\n");
 }
 
 function renderFleetStatus(status: FleetStatus): string {
@@ -1323,6 +1347,19 @@ program
       const route = machine.ssh.command_target ? `${machine.ssh.route}:${machine.ssh.command_target}` : machine.ssh.route;
       console.log(`${machine.display_name.padEnd(18)} ${machine.machine_id.padEnd(18)} ${String(machine.platform || "unknown").padEnd(8)} ${machine.heartbeat_status.padEnd(8)} ${machine.updated_at ?? "unknown"} ${route}`);
     }
+  });
+
+program
+  .command("details")
+  .description("Show consumer-safe machine details for right-click View details")
+  .option("--machine <id>", "Machine identifier; defaults to local")
+  .option("--tailscale", "Probe tailscale while resolving details", false)
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { machine?: string; tailscale?: boolean; json?: boolean }) => {
+    const result = getMachineDetails(options.machine ?? "local", {
+      includeTailscale: options.tailscale,
+    });
+    printJsonOrText(result, renderMachineDetails(result), options.json);
   });
 
 function parseMachineIdList(values: string[] | undefined): string[] {

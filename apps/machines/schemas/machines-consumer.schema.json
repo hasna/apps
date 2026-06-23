@@ -129,11 +129,234 @@
               "resolver_snapshot",
               "project_assignments",
               "note_machine_context",
-              "machine_trash_policies"
+              "machine_trash_policies",
+              "machine_details"
             ]
           }
         },
         "stable_exports": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "machine_details": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "package",
+        "capabilities",
+        "generated_at",
+        "machine_id",
+        "slug",
+        "display_name",
+        "displayName",
+        "known",
+        "status",
+        "timestamps",
+        "source",
+        "warnings"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "package": {
+          "type": "object"
+        },
+        "capabilities": {
+          "type": "object"
+        },
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "machine_id": {
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        },
+        "friendly_name": {
+          "type": "string"
+        },
+        "friendlyName": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "known": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "object",
+          "required": [
+            "state",
+            "label",
+            "online"
+          ],
+          "properties": {
+            "state": {
+              "enum": [
+                "online",
+                "offline",
+                "unknown"
+              ]
+            },
+            "label": {
+              "enum": [
+                "Online",
+                "Offline",
+                "Unknown"
+              ]
+            },
+            "online": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "last_seen_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "last_heartbeat_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "platform": {
+          "type": "string"
+        },
+        "machine_type": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "machine_capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "last_seen_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timestamps": {
+          "type": "object",
+          "properties": {
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "last_seen_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "last_heartbeat_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "last_tailscale_seen_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "recent_sync_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "recent_sync_status": {
+              "type": "string"
+            },
+            "storage_sync_status": {
+              "type": "string"
+            }
+          }
+        },
+        "source": {
+          "type": "object",
+          "required": [
+            "authority",
+            "metadata_source",
+            "manifest_declared",
+            "heartbeat_present",
+            "topology_entry",
+            "local"
+          ],
+          "properties": {
+            "authority": {
+              "const": "open-machines"
+            },
+            "metadata_source": {
+              "enum": [
+                "manifest_metadata",
+                "heartbeat",
+                "topology",
+                "fallback"
+              ]
+            },
+            "manifest_declared": {
+              "type": "boolean"
+            },
+            "heartbeat_present": {
+              "type": "boolean"
+            },
+            "topology_entry": {
+              "type": "boolean"
+            },
+            "local": {
+              "type": "boolean"
+            }
+          }
+        },
+        "display_metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
+          }
+        },
+        "warnings": {
           "type": "array",
           "items": {
             "type": "string"

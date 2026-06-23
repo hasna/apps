@@ -7,6 +7,7 @@ import { getAgentStatus } from "../agent/runtime.js";
 import { PRIVATE_OUTPUT_DENIED_WARNING, isPrivateOutputEnabled } from "../redaction.js";
 import { discoverMachineTopology, redactRouteForOutput, redactTopologyForOutput, resolveMachineRoute } from "../topology.js";
 import { listMachineTrashPolicies, resolveNoteMachineContext, type NoteActorType, type NoteMachineContextSource } from "../notes.js";
+import { getMachineDetails } from "../details.js";
 import { createTrustedNotificationApproval, listNotificationChannels, testNotificationChannel } from "./notifications.js";
 import {
   clearMachineFriendlyNameMutationArgs,
@@ -66,6 +67,7 @@ export function getServeInfo(options: ServeOptions = {}): ServeInfo {
       "/api/topology",
       "/api/routes",
       "/api/machines/friendly-name",
+      "/api/machines/details",
       "/api/notes/machine-context",
       "/api/notes/trash-policies",
       "/api/projects/assignments",
@@ -515,6 +517,15 @@ export function startDashboardServer(options: ServeOptions = {}): ReturnType<typ
           }
         }
         return jsonError("Use GET, POST, PUT, or DELETE for machine friendly names.", 405);
+      }
+      if (url.pathname === "/api/machines/details") {
+        if (request.method !== "GET") {
+          return jsonError("Use GET for machine details.", 405);
+        }
+        return Response.json(getMachineDetails(
+          url.searchParams.get("machine") ?? url.searchParams.get("machine_id") ?? "local",
+          { includeTailscale: url.searchParams.get("tailscale") === "true" },
+        ));
       }
       if (url.pathname === "/api/notes/machine-context") {
         if (request.method !== "GET") {

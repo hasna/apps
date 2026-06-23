@@ -93,6 +93,7 @@ describe("consumer entrypoint boundary", () => {
           MACHINES_CONSUMER_CONTRACT,
           MACHINES_CONSUMER_CONTRACT_VERSION,
           createMachineResolverSnapshot,
+          getMachineDetails,
           listMachineTrashPolicies,
           resolveNoteMachineContext,
           resolveMachineWorkspace,
@@ -104,6 +105,7 @@ describe("consumer entrypoint boundary", () => {
           entrypoint: MACHINES_CONSUMER_CONTRACT.entrypoint,
           has_workspace_resolver: typeof resolveMachineWorkspace === "function",
           has_snapshot_helper: typeof createMachineResolverSnapshot === "function",
+          has_machine_details: typeof getMachineDetails === "function",
           has_note_context: typeof resolveNoteMachineContext === "function",
           has_trash_policies: typeof listMachineTrashPolicies === "function",
           has_validator: typeof validateMachinesConsumerEnvelope === "function",
@@ -131,6 +133,7 @@ describe("consumer entrypoint boundary", () => {
         entrypoint: "@hasna/machines/consumer",
         has_workspace_resolver: true,
         has_snapshot_helper: true,
+        has_machine_details: true,
         has_note_context: true,
         has_trash_policies: true,
         has_validator: true,
@@ -151,6 +154,7 @@ describe("consumer entrypoint boundary", () => {
           machine_list_pagination: true,
           note_machine_context: true,
           machine_trash_policies: true,
+          machine_details: true,
         },
       });
     } finally {

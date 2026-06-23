@@ -272,6 +272,55 @@ describe("cli command handling", () => {
     }
   });
 
+  test("details CLI exposes consumer-safe machine details", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-cli-details-"));
+    try {
+      const env = {
+        ...process.env,
+        HASNA_MACHINES_MANIFEST_PATH: join(dir, "machines.json"),
+        HASNA_MACHINES_DB_PATH: join(dir, "machines.db"),
+        HASNA_MACHINES_MACHINE_ID: "details-node",
+        [MUTATION_APPROVAL_FLAG_ENV]: "1",
+      };
+      expect(runCli(["manifest", "init"], env).status).toBe(0);
+      expect(runCli(["manifest", "add", "--from-stdin"], env, JSON.stringify({
+        id: "details-node",
+        friendlyName: "Studio Laptop",
+        platform: "macos",
+        workspacePath: "/Users/hasna/Workspace",
+        updatedAt: "2026-06-20T00:00:00.000Z",
+        metadata: {
+          machine_type: "laptop",
+          role: "primary",
+          capabilities: ["notes", "sync"],
+          owner: "Hasna",
+          api_key: "should-not-appear",
+        },
+      })).status).toBe(0);
+
+      const details = runCli(["details", "--machine", "details-node", "--json"], env);
+      expect(details.stderr).toBe("");
+      expect(details.status).toBe(0);
+      const payload = JSON.parse(details.stdout);
+      expect(payload).toMatchObject({
+        machine_id: "details-node",
+        friendly_name: "Studio Laptop",
+        display_name: "Studio Laptop",
+        machine_type: "laptop",
+        role: "primary",
+        machine_capabilities: ["notes", "sync"],
+        status: {
+          state: "unknown",
+          label: "Unknown",
+          online: null,
+        },
+      });
+      expect(JSON.stringify(payload)).not.toContain("should-not-appear");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("screen-credentials reports secret references without printing secret values", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-cli-screen-credentials-"));
     try {

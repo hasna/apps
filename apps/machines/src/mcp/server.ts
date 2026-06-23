@@ -43,6 +43,7 @@ import { buildSyncPlan, runSyncPlan } from "../commands/sync.js";
 import { getAgentStatus } from "../agent/runtime.js";
 import { discoverMachineTopology, redactRouteForOutput, redactTopologyForOutput, resolveMachineRoute, resolveMachineWorkspace } from "../topology.js";
 import { listMachineTrashPolicies, resolveNoteMachineContext } from "../notes.js";
+import { getMachineDetails } from "../details.js";
 import { checkMachineCompatibility } from "../compatibility.js";
 import { getStorageStatus, resolveTables, storagePull, storagePush, storageSync } from "../storage.js";
 import { assertMutationApproved, createTrustedSdkMutationApproval, mutationPlanDigest } from "../commands/mutation-approval.js";
@@ -63,6 +64,7 @@ export const MACHINE_MCP_TOOL_NAMES = [
   "machines_friendly_name_get",
   "machines_friendly_name_set",
   "machines_friendly_name_clear",
+  "machines_details",
   "machines_notes_context",
   "machines_notes_trash_policies",
   "machines_manifest_remove",
@@ -330,6 +332,22 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
       });
       return { content: [{ type: "text", text: JSON.stringify(manifestClearFriendlyName(input), null, 2) }] };
     }
+  );
+  server.tool(
+    "machines_details",
+    "Return consumer-safe machine details for right-click View details.",
+    {
+      machine_id: z.string().optional().describe("Machine identifier; defaults to local"),
+      include_tailscale: z.boolean().optional().describe("Whether to probe tailscale while resolving details"),
+    },
+    async ({ machine_id, include_tailscale }) => ({
+      content: [{
+        type: "text",
+        text: JSON.stringify(getMachineDetails(machine_id ?? "local", {
+          includeTailscale: include_tailscale,
+        }), null, 2),
+      }],
+    })
   );
   server.tool(
     "machines_notes_context",

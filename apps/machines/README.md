@@ -106,6 +106,7 @@ import {
   MACHINES_CONSUMER_CONTRACT,
   createMachineResolverSnapshot,
   discoverMachineTopology,
+  getMachineDetails,
   getLocalMachineTopology,
   listMachineTrashPolicies,
   resolveNoteMachineContext,
@@ -117,6 +118,7 @@ import {
 console.log(MACHINES_CONSUMER_CONTRACT.schema_version);
 const topology = discoverMachineTopology();
 const local = getLocalMachineTopology();
+const details = getMachineDetails("linux-dev-01");
 const route = resolveMachineRoute("linux-dev-01");
 const workspace = resolveMachineWorkspace({
   machineId: "linux-dev-01",
@@ -256,11 +258,40 @@ the same field names. These fields are the coordination contract for open-notes:
 store stable ids in note records, show `display_name`, and use pagination
 metadata for any machine-backed lists.
 
+### Hasna Notes machine details contract
+
+For right-click View details, Hasna Notes should call `getMachineDetails(id)`,
+`GET /api/machines/details?machine=<id>`, `machines details --machine <id>
+--json`, or MCP `machines_details`.
+
+The `machine_details` envelope is a friendly, consumer-safe view. It includes:
+
+- `machine_id` and `slug`: stable machine id for storage and links.
+- `friendly_name` / `friendlyName`: present only when a user label is set.
+- `display_name` / `displayName`: always present; uses friendly name first, then `machine_id`.
+- `known`: whether open-machines found the machine in topology.
+- `status`: `state`, neutral `label`, `online`, and optional seen timestamps.
+- `platform`, `machine_type`, `role`, `roles`, `machine_capabilities`, and `tags` when known.
+- `updated_at`, `last_seen_at`, and `timestamps.recent_sync_at` / `recent_sync_status` when known.
+- `source`: `authority`, `metadata_source`, `manifest_declared`, `heartbeat_present`, `topology_entry`, and `local`.
+- `display_metadata`: only safe whitelisted display metadata such as type, role, owner, team, region, environment, and capabilities.
+
+Fallback behavior:
+
+- UI label: render `display_name`; it already falls back from friendly name to slug/id.
+- Status: when no heartbeat or online signal is known, render `status.label` as `Unknown`.
+- Optional fields are omitted when absent rather than filled with raw/internal data.
+- Missing machines still return `machine_id`, `slug`, `display_name`, `known: false`, neutral unknown status, and `unknown_machine:details:<id>` in `warnings`.
+
+Raw route targets, hostnames, local paths, secrets, private heartbeat details,
+and sensitive metadata keys are not part of the default details view.
+
 The package includes `schemas/machines-consumer.schema.json` and also exports
 `MACHINES_CONSUMER_SCHEMA_BUNDLE`, `getMachinesConsumerSchemaBundle()`, and
 `validateMachinesConsumerEnvelope()`. Downstream apps can use these helpers to
 validate topology, route, workspace, compatibility, resolver-snapshot,
-project-assignment, note-machine-context, and machine-trash-policy envelopes
+project-assignment, note-machine-context, machine-trash-policy, and
+machine-details envelopes
 without importing CLI, MCP, agent, installer, or storage-heavy internals.
 
 The package also ships a downstream conformance fixture for consumers that want
@@ -610,6 +641,7 @@ The dashboard exposes:
 - `/api/topology` manifest, heartbeat, SSH, LAN, and Tailscale topology JSON
 - `/api/routes` resolved route JSON for known machines
 - `/api/machines/friendly-name` get, set, or clear a machine display label
+- `/api/machines/details` consumer-safe machine details JSON
 - `/api/notes/machine-context` note origin/source/target machine and actor provenance JSON
 - `/api/notes/trash-policies` per-machine note trash retention metadata JSON
 - `/api/daemon/status` daemon heartbeat rows

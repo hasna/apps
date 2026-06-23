@@ -191,6 +191,7 @@ describe("serve", () => {
     expect(info.routes).toContain("/api/topology");
     expect(info.routes).toContain("/api/routes");
     expect(info.routes).toContain("/api/machines/friendly-name");
+    expect(info.routes).toContain("/api/machines/details");
     expect(info.routes).toContain("/api/notes/machine-context");
     expect(info.routes).toContain("/api/notes/trash-policies");
     expect(info.routes).toContain("/api/projects/assignments");
@@ -226,6 +227,9 @@ describe("serve", () => {
       platform: "linux",
       workspacePath: "/home/operator/workspace",
       metadata: {
+        machine_type: "server",
+        role: "primary",
+        capabilities: ["notes", "sync"],
         notesTrash: {
           enabled: true,
           retentionDays: 14,
@@ -274,6 +278,7 @@ describe("serve", () => {
     process.env["HASNA_MACHINES_ALLOW_PRIVATE_OUTPUT"] = "1";
     const privateTopology = await fetch(`${base}/api/topology?tailscale=false&privateMetadata=true`).then((response) => response.json());
     const routes = await fetch(`${base}/api/routes?tailscale=false`).then((response) => response.json());
+    const machineDetails = await fetch(`${base}/api/machines/details?machine=demo-node-01&tailscale=false`).then((response) => response.json());
     const noteContext = await fetch(`${base}/api/notes/machine-context?origin_machine_id=demo-node-01&source_machine_id=demo-node-01&actor_type=agent&agent_name=Notes%20Agent&source=agent`).then((response) => response.json());
     const noteTrash = await fetch(`${base}/api/notes/trash-policies?machine=demo-node-01`).then((response) => response.json());
     const daemon = await fetch(`${base}/api/daemon/status`).then((response) => response.json());
@@ -302,6 +307,19 @@ describe("serve", () => {
     expect(Array.isArray(doctor.checks)).toBe(true);
     expect(Array.isArray(topology.machines)).toBe(true);
     expect(Array.isArray(routes.routes)).toBe(true);
+    expect(machineDetails).toMatchObject({
+      machine_id: "demo-node-01",
+      friendly_name: "Demo Node",
+      display_name: "Demo Node",
+      machine_type: "server",
+      role: "primary",
+      machine_capabilities: ["notes", "sync"],
+      status: {
+        state: "online",
+        label: "Online",
+        online: true,
+      },
+    });
     expect(noteContext.origin_machine).toMatchObject({ machine_id: "demo-node-01", display_name: "Demo Node" });
     expect(noteContext.actor).toMatchObject({ actor_type: "agent", display_name: "Notes Agent" });
     expect(noteTrash.policies[0]).toMatchObject({

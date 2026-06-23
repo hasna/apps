@@ -9,6 +9,7 @@ import {
 import type { MachineCompatibilityReport } from "./compatibility.js";
 import type { MachineProjectAssignments } from "./projects.js";
 import type { MachineTrashPolicies, NoteMachineContext } from "./notes.js";
+import type { MachineDetails } from "./details.js";
 
 export type MachinesConsumerSchemaEnvelope =
   | "contract"
@@ -19,7 +20,8 @@ export type MachinesConsumerSchemaEnvelope =
   | "resolver_snapshot"
   | "project_assignments"
   | "note_machine_context"
-  | "machine_trash_policies";
+  | "machine_trash_policies"
+  | "machine_details";
 
 export interface MachinesConsumerValidationResult {
   ok: boolean;
@@ -69,8 +71,80 @@ export const MACHINES_CONSUMER_SCHEMA_BUNDLE: MachinesConsumerSchemaBundle = {
         capabilities: { type: "object" },
         field_capabilities: { type: "object" },
         cacheability: { type: "object" },
-        envelopes: { type: "array", items: { enum: ["topology", "route", "workspace", "compatibility", "resolver_snapshot", "project_assignments", "note_machine_context", "machine_trash_policies"] } },
+        envelopes: { type: "array", items: { enum: ["topology", "route", "workspace", "compatibility", "resolver_snapshot", "project_assignments", "note_machine_context", "machine_trash_policies", "machine_details"] } },
         stable_exports: { type: "array", items: { type: "string" } },
+      },
+    },
+    machine_details: {
+      type: "object",
+      required: ["schema_version", "package", "capabilities", "generated_at", "machine_id", "slug", "display_name", "displayName", "known", "status", "timestamps", "source", "warnings"],
+      properties: {
+        schema_version: { const: MACHINES_CONSUMER_CONTRACT_VERSION },
+        package: { type: "object" },
+        capabilities: { type: "object" },
+        generated_at: { type: "string", format: "date-time" },
+        machine_id: { type: "string" },
+        slug: { type: "string" },
+        friendly_name: { type: "string" },
+        friendlyName: { type: "string" },
+        display_name: { type: "string" },
+        displayName: { type: "string" },
+        known: { type: "boolean" },
+        status: {
+          type: "object",
+          required: ["state", "label", "online"],
+          properties: {
+            state: { enum: ["online", "offline", "unknown"] },
+            label: { enum: ["Online", "Offline", "Unknown"] },
+            online: { type: ["boolean", "null"] },
+            last_seen_at: { type: "string", format: "date-time" },
+            last_heartbeat_at: { type: "string", format: "date-time" },
+          },
+        },
+        platform: { type: "string" },
+        machine_type: { type: "string" },
+        role: { type: "string" },
+        roles: { type: "array", items: { type: "string" } },
+        machine_capabilities: { type: "array", items: { type: "string" } },
+        tags: { type: "array", items: { type: "string" } },
+        updated_at: { type: "string", format: "date-time" },
+        last_seen_at: { type: "string", format: "date-time" },
+        timestamps: {
+          type: "object",
+          properties: {
+            updated_at: { type: "string", format: "date-time" },
+            last_seen_at: { type: "string", format: "date-time" },
+            last_heartbeat_at: { type: "string", format: "date-time" },
+            last_tailscale_seen_at: { type: "string", format: "date-time" },
+            recent_sync_at: { type: "string", format: "date-time" },
+            recent_sync_status: { type: "string" },
+            storage_sync_status: { type: "string" },
+          },
+        },
+        source: {
+          type: "object",
+          required: ["authority", "metadata_source", "manifest_declared", "heartbeat_present", "topology_entry", "local"],
+          properties: {
+            authority: { const: "open-machines" },
+            metadata_source: { enum: ["manifest_metadata", "heartbeat", "topology", "fallback"] },
+            manifest_declared: { type: "boolean" },
+            heartbeat_present: { type: "boolean" },
+            topology_entry: { type: "boolean" },
+            local: { type: "boolean" },
+          },
+        },
+        display_metadata: {
+          type: "object",
+          additionalProperties: {
+            anyOf: [
+              { type: "string" },
+              { type: "number" },
+              { type: "boolean" },
+              { type: "array", items: { type: "string" } },
+            ],
+          },
+        },
+        warnings: { type: "array", items: { type: "string" } },
       },
     },
     note_machine_reference: {
@@ -338,6 +412,26 @@ function hasNullableString(value: Record<string, unknown>, key: string): boolean
   return value[key] === null || typeof value[key] === "string";
 }
 
+function hasOptionalString(value: Record<string, unknown>, key: string): boolean {
+  return !(key in value) || typeof value[key] === "string";
+}
+
+function hasOptionalStringArray(value: Record<string, unknown>, key: string): boolean {
+  return !(key in value) || (Array.isArray(value[key]) && (value[key] as unknown[]).every((entry) => typeof entry === "string"));
+}
+
+function hasMachineDetailsMetadataValue(value: unknown): boolean {
+  if (typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function hasOptionalMachineDetailsDisplayMetadata(value: Record<string, unknown>): boolean {
+  if (!("display_metadata" in value)) return true;
+  if (!isRecord(value.display_metadata)) return false;
+  return Object.values(value.display_metadata).every(hasMachineDetailsMetadataValue);
+}
+
 function requireFields(value: Record<string, unknown>, fields: string[], errors: string[]): void {
   for (const field of fields) {
     if (!(field in value)) errors.push(`missing:${field}`);
@@ -506,6 +600,56 @@ export function validateMachinesConsumerEnvelope(
       }
     }
     if (!hasArray(value, "warnings")) errors.push("warnings");
+  } else if (envelope === "machine_details") {
+    requireFields(value, ["package", "capabilities", "generated_at", "machine_id", "slug", "display_name", "displayName", "known", "status", "timestamps", "source", "warnings"], errors);
+    if (!hasString(value, "machine_id")) errors.push("machine_id");
+    if (!hasString(value, "slug")) errors.push("slug");
+    if (!hasOptionalString(value, "friendly_name")) errors.push("friendly_name");
+    if (!hasOptionalString(value, "friendlyName")) errors.push("friendlyName");
+    if (!hasString(value, "display_name")) errors.push("display_name");
+    if (!hasString(value, "displayName")) errors.push("displayName");
+    if (typeof value.known !== "boolean") errors.push("known");
+    if (!hasOptionalString(value, "platform")) errors.push("platform");
+    if (!hasOptionalString(value, "machine_type")) errors.push("machine_type");
+    if (!hasOptionalString(value, "role")) errors.push("role");
+    if (!hasOptionalStringArray(value, "roles")) errors.push("roles");
+    if (!hasOptionalStringArray(value, "machine_capabilities")) errors.push("machine_capabilities");
+    if (!hasOptionalStringArray(value, "tags")) errors.push("tags");
+    if (!hasOptionalString(value, "updated_at")) errors.push("updated_at");
+    if (!hasOptionalString(value, "last_seen_at")) errors.push("last_seen_at");
+    if (!hasObject(value, "status")) {
+      errors.push("status");
+    } else {
+      const status = value.status as Record<string, unknown>;
+      requireFields(status, ["state", "label", "online"], errors);
+      if (!["online", "offline", "unknown"].includes(String(status.state))) errors.push("status.state");
+      if (!["Online", "Offline", "Unknown"].includes(String(status.label))) errors.push("status.label");
+      if (status.online !== null && typeof status.online !== "boolean") errors.push("status.online");
+      if (!hasOptionalString(status, "last_seen_at")) errors.push("status.last_seen_at");
+      if (!hasOptionalString(status, "last_heartbeat_at")) errors.push("status.last_heartbeat_at");
+    }
+    if (!hasObject(value, "timestamps")) {
+      errors.push("timestamps");
+    } else {
+      const timestamps = value.timestamps as Record<string, unknown>;
+      for (const key of ["updated_at", "last_seen_at", "last_heartbeat_at", "last_tailscale_seen_at", "recent_sync_at", "recent_sync_status", "storage_sync_status"]) {
+        if (!hasOptionalString(timestamps, key)) errors.push(`timestamps.${key}`);
+      }
+    }
+    if (!hasObject(value, "source")) {
+      errors.push("source");
+    } else {
+      const source = value.source as Record<string, unknown>;
+      requireFields(source, ["authority", "metadata_source", "manifest_declared", "heartbeat_present", "topology_entry", "local"], errors);
+      if (source.authority !== "open-machines") errors.push("source.authority");
+      if (!["manifest_metadata", "heartbeat", "topology", "fallback"].includes(String(source.metadata_source))) errors.push("source.metadata_source");
+      if (typeof source.manifest_declared !== "boolean") errors.push("source.manifest_declared");
+      if (typeof source.heartbeat_present !== "boolean") errors.push("source.heartbeat_present");
+      if (typeof source.topology_entry !== "boolean") errors.push("source.topology_entry");
+      if (typeof source.local !== "boolean") errors.push("source.local");
+    }
+    if (!hasOptionalMachineDetailsDisplayMetadata(value)) errors.push("display_metadata");
+    if (!hasArray(value, "warnings")) errors.push("warnings");
   }
 
   return { ok: errors.length === 0, envelope, schema_id: MACHINES_CONSUMER_SCHEMA_URI, errors };
@@ -519,4 +663,5 @@ export type MachinesConsumerEnvelopeValue =
   | MachineResolverSnapshot
   | MachineProjectAssignments
   | NoteMachineContext
-  | MachineTrashPolicies;
+  | MachineTrashPolicies
+  | MachineDetails;

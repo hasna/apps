@@ -47,6 +47,7 @@ test("exports expected MCP tool surface", () => {
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_friendly_name_get");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_friendly_name_set");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_friendly_name_clear");
+  expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_details");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_notes_context");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_notes_trash_policies");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_daemon_status");
@@ -345,6 +346,22 @@ test("MCP note contract tools expose provenance and trash metadata", async () =>
     expect(context.source_machine).toMatchObject({ machine_id: "agent-node", display_name: "Agent Box" });
     expect(context.target_machine).toMatchObject({ machine_id: "missing-target", known: false });
     expect(context.actor).toMatchObject({ actor_type: "agent", display_name: "Notes Agent" });
+
+    const detailsResult = await client.callTool({
+      name: "machines_details",
+      arguments: { machine_id: "origin-node", include_tailscale: false },
+    });
+    const detailsText = (detailsResult.content as Array<{ type: string; text: string }>)[0]?.text;
+    expect(JSON.parse(detailsText)).toMatchObject({
+      machine_id: "origin-node",
+      friendly_name: "Desk Mac",
+      display_name: "Desk Mac",
+      status: {
+        state: "unknown",
+        label: "Unknown",
+        online: null,
+      },
+    });
 
     const trashResult = await client.callTool({
       name: "machines_notes_trash_policies",

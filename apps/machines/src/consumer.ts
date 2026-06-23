@@ -98,6 +98,19 @@ export type {
   NoteSyncTarget,
 } from "./notes.js";
 export {
+  MACHINE_DETAILS_KIND,
+  getMachineDetails,
+} from "./details.js";
+export type {
+  MachineDetails,
+  MachineDetailsMetadataValue,
+  MachineDetailsOptions,
+  MachineDetailsSource,
+  MachineDetailsStatus,
+  MachineDetailsStatusState,
+  MachineDetailsTimestamps,
+} from "./details.js";
+export {
   checkMachineCompatibility,
 } from "./compatibility.js";
 export type {
