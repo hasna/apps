@@ -42,6 +42,7 @@ import { buildSetupPlan, runSetupPlan } from "../commands/setup.js";
 import { buildSyncPlan, runSyncPlan } from "../commands/sync.js";
 import { getAgentStatus } from "../agent/runtime.js";
 import { discoverMachineTopology, redactRouteForOutput, redactTopologyForOutput, resolveMachineRoute, resolveMachineWorkspace } from "../topology.js";
+import { listMachineTrashPolicies, resolveNoteMachineContext } from "../notes.js";
 import { checkMachineCompatibility } from "../compatibility.js";
 import { getStorageStatus, resolveTables, storagePull, storagePush, storageSync } from "../storage.js";
 import { assertMutationApproved, createTrustedSdkMutationApproval, mutationPlanDigest } from "../commands/mutation-approval.js";
@@ -62,6 +63,8 @@ export const MACHINE_MCP_TOOL_NAMES = [
   "machines_friendly_name_get",
   "machines_friendly_name_set",
   "machines_friendly_name_clear",
+  "machines_notes_context",
+  "machines_notes_trash_policies",
   "machines_manifest_remove",
   "machines_agent_status",
   "machines_daemon_status",
@@ -327,6 +330,76 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
       });
       return { content: [{ type: "text", text: JSON.stringify(manifestClearFriendlyName(input), null, 2) }] };
     }
+  );
+  server.tool(
+    "machines_notes_context",
+    "Resolve note origin/source/target machine display names, sync targets, and actor provenance for Hasna Notes consumers.",
+    {
+      origin_machine_id: z.string().optional().describe("Machine that owns/originated the note"),
+      source_machine_id: z.string().optional().describe("Machine where the note event or sync source came from"),
+      target_machine_id: z.string().optional().describe("Machine the note is being synced to"),
+      sync_target_machine_ids: z.array(z.string()).optional().describe("Additional sync target machine ids"),
+      actor_type: z.enum(["human", "agent", "system", "unknown"]).optional().describe("Actor kind"),
+      actor_id: z.string().optional().describe("Actor identifier"),
+      actor_name: z.string().optional().describe("Actor display name"),
+      agent_id: z.string().optional().describe("Agent identifier for agent-created notes"),
+      agent_name: z.string().optional().describe("Agent display name for agent-created notes"),
+      source: z.enum(["open-notes", "agent", "sync", "import", "open-machines", "unknown"]).optional().describe("Provenance source"),
+      include_tailscale: z.boolean().optional().describe("Whether to probe tailscale while building context"),
+    },
+    async ({
+      origin_machine_id,
+      source_machine_id,
+      target_machine_id,
+      sync_target_machine_ids,
+      actor_type,
+      actor_id,
+      actor_name,
+      agent_id,
+      agent_name,
+      source,
+      include_tailscale,
+    }) => ({
+      content: [{
+        type: "text",
+        text: JSON.stringify(resolveNoteMachineContext({
+          originMachineId: origin_machine_id,
+          sourceMachineId: source_machine_id,
+          targetMachineId: target_machine_id,
+          syncTargetMachineIds: sync_target_machine_ids,
+          includeTailscale: include_tailscale,
+          actor: {
+            actor_type,
+            actor_id,
+            actor_name,
+            agent_id,
+            agent_name,
+            source,
+          },
+        }), null, 2),
+      }],
+    })
+  );
+  server.tool(
+    "machines_notes_trash_policies",
+    "List per-machine note trash retention metadata with latest-10/View-more pagination.",
+    {
+      machine_id: z.string().optional().describe("Filter by machine identifier"),
+      limit: z.number().int().min(1).nullable().optional().describe("Maximum machines to return; default is 10, null returns all"),
+      offset: z.number().int().min(0).optional().describe("Machine list offset for View more pagination"),
+      include_tailscale: z.boolean().optional().describe("Whether to probe tailscale while listing policies"),
+    },
+    async ({ machine_id, limit, offset, include_tailscale }) => ({
+      content: [{
+        type: "text",
+        text: JSON.stringify(listMachineTrashPolicies({
+          machineId: machine_id,
+          limit,
+          offset,
+          includeTailscale: include_tailscale,
+        }), null, 2),
+      }],
+    })
   );
   server.tool(
     "machines_manifest_remove",

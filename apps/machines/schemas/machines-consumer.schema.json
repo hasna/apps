@@ -127,11 +127,398 @@
               "workspace",
               "compatibility",
               "resolver_snapshot",
-              "project_assignments"
+              "project_assignments",
+              "note_machine_context",
+              "machine_trash_policies"
             ]
           }
         },
         "stable_exports": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "note_machine_reference": {
+      "type": "object",
+      "required": [
+        "machine_id",
+        "friendly_name",
+        "display_name",
+        "updated_at",
+        "role",
+        "known",
+        "manifest_declared"
+      ],
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "friendly_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "role": {
+          "enum": [
+            "origin",
+            "source",
+            "target",
+            "sync_target",
+            "trash_owner"
+          ]
+        },
+        "known": {
+          "type": "boolean"
+        },
+        "manifest_declared": {
+          "type": "boolean"
+        }
+      }
+    },
+    "note_actor_context": {
+      "type": "object",
+      "required": [
+        "actor_type",
+        "actor_id",
+        "actor_name",
+        "agent_id",
+        "agent_name",
+        "source",
+        "display_name"
+      ],
+      "properties": {
+        "actor_type": {
+          "enum": [
+            "human",
+            "agent",
+            "system",
+            "unknown"
+          ]
+        },
+        "actor_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "actor_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "enum": [
+            "open-notes",
+            "agent",
+            "sync",
+            "import",
+            "open-machines",
+            "unknown"
+          ]
+        },
+        "display_name": {
+          "type": "string"
+        }
+      }
+    },
+    "note_machine_context": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "package",
+        "capabilities",
+        "generated_at",
+        "origin_machine_id",
+        "source_machine_id",
+        "target_machine_id",
+        "origin_machine",
+        "source_machine",
+        "target_machine",
+        "sync_target_machine_ids",
+        "sync_targets",
+        "actor",
+        "warnings"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "package": {
+          "type": "object"
+        },
+        "capabilities": {
+          "type": "object"
+        },
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "origin_machine_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_machine_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target_machine_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "origin_machine": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/note_machine_reference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_machine": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/note_machine_reference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target_machine": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/note_machine_reference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sync_target_machine_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sync_targets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "machine_id",
+              "machine"
+            ],
+            "properties": {
+              "machine_id": {
+                "type": "string"
+              },
+              "machine": {
+                "$ref": "#/$defs/note_machine_reference"
+              }
+            }
+          }
+        },
+        "actor": {
+          "$ref": "#/$defs/note_actor_context"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "machine_trash_policy": {
+      "type": "object",
+      "required": [
+        "machine_id",
+        "friendly_name",
+        "display_name",
+        "updated_at",
+        "enabled",
+        "retention_days",
+        "delete_after_days",
+        "trash_path",
+        "source",
+        "metadata_keys"
+      ],
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "friendly_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "retention_days": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "delete_after_days": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "trash_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "enum": [
+            "manifest_metadata",
+            "default"
+          ]
+        },
+        "metadata_keys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "machine_trash_policies": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "package",
+        "capabilities",
+        "generated_at",
+        "pagination",
+        "policies",
+        "warnings"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "package": {
+          "type": "object"
+        },
+        "capabilities": {
+          "type": "object"
+        },
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "pagination": {
+          "type": "object",
+          "required": [
+            "limit",
+            "offset",
+            "total",
+            "count",
+            "hasMore",
+            "nextOffset",
+            "has_more",
+            "next_offset",
+            "order"
+          ],
+          "properties": {
+            "limit": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "offset": {
+              "type": "number"
+            },
+            "total": {
+              "type": "number"
+            },
+            "count": {
+              "type": "number"
+            },
+            "hasMore": {
+              "type": "boolean"
+            },
+            "nextOffset": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "has_more": {
+              "type": "boolean"
+            },
+            "next_offset": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "order": {
+              "const": "updated_at_desc"
+            }
+          }
+        },
+        "policies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/machine_trash_policy"
+          }
+        },
+        "warnings": {
           "type": "array",
           "items": {
             "type": "string"

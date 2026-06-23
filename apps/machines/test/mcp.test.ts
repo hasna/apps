@@ -47,6 +47,8 @@ test("exports expected MCP tool surface", () => {
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_friendly_name_get");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_friendly_name_set");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_friendly_name_clear");
+  expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_notes_context");
+  expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_notes_trash_policies");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_daemon_status");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_daemon_service_plan");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("storage_status");
@@ -279,6 +281,83 @@ test("MCP friendly-name tools use scoped approvals and topology pagination", asy
       machine_id: "demo-node-11",
       friendly_name: null,
       display_name: "demo-node-11",
+    });
+  } finally {
+    await client.close();
+    await server.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("MCP note contract tools expose provenance and trash metadata", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "machines-mcp-notes-"));
+  process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
+  process.env["HASNA_MACHINES_DB_PATH"] = join(dir, "machines.db");
+  process.env["HASNA_MACHINES_MACHINE_ID"] = "origin-node";
+  manifestInit();
+  manifestAdd({
+    id: "origin-node",
+    friendlyName: "Desk Mac",
+    platform: "macos",
+    workspacePath: "/Users/hasna/Workspace",
+    updatedAt: "2026-06-20T00:00:00.000Z",
+  });
+  manifestAdd({
+    id: "agent-node",
+    friendlyName: "Agent Box",
+    platform: "linux",
+    workspacePath: "/srv/workspace",
+    updatedAt: "2026-06-21T00:00:00.000Z",
+    metadata: {
+      notesTrash: {
+        enabled: true,
+        retentionDays: 21,
+        deleteAfterDays: 42,
+        trashPath: "/srv/notes/.trash",
+      },
+    },
+  });
+
+  const server = createMcpServer("0.0.1");
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "notes-contract-test", version: "0.0.1" });
+
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+
+  try {
+    const contextResult = await client.callTool({
+      name: "machines_notes_context",
+      arguments: {
+        origin_machine_id: "origin-node",
+        source_machine_id: "agent-node",
+        target_machine_id: "missing-target",
+        sync_target_machine_ids: ["missing-target"],
+        actor_type: "agent",
+        agent_id: "notes-agent",
+        agent_name: "Notes Agent",
+        source: "agent",
+      },
+    });
+    const contextText = (contextResult.content as Array<{ type: string; text: string }>)[0]?.text;
+    const context = JSON.parse(contextText);
+    expect(context.origin_machine).toMatchObject({ machine_id: "origin-node", display_name: "Desk Mac" });
+    expect(context.source_machine).toMatchObject({ machine_id: "agent-node", display_name: "Agent Box" });
+    expect(context.target_machine).toMatchObject({ machine_id: "missing-target", known: false });
+    expect(context.actor).toMatchObject({ actor_type: "agent", display_name: "Notes Agent" });
+
+    const trashResult = await client.callTool({
+      name: "machines_notes_trash_policies",
+      arguments: { machine_id: "agent-node" },
+    });
+    const trashText = (trashResult.content as Array<{ type: string; text: string }>)[0]?.text;
+    expect(JSON.parse(trashText).policies[0]).toMatchObject({
+      machine_id: "agent-node",
+      display_name: "Agent Box",
+      enabled: true,
+      retention_days: 21,
+      delete_after_days: 42,
+      trash_path: "/srv/notes/.trash",
     });
   } finally {
     await client.close();

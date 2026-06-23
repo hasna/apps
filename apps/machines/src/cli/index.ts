@@ -71,6 +71,14 @@ import {
 } from "../projects.js";
 import { DEFAULT_MACHINE_LIST_LIMIT, discoverMachineTopology, redactRouteForOutput, redactTopologyForOutput, resolveMachineRoute, resolveMachineWorkspace } from "../topology.js";
 import {
+  listMachineTrashPolicies,
+  resolveNoteMachineContext,
+  type MachineTrashPolicies,
+  type NoteActorType,
+  type NoteMachineContext,
+  type NoteMachineContextSource,
+} from "../notes.js";
+import {
   checkMachineCompatibility,
   type CompatibilityCheck,
   type CompatibilityCommandSpec,
@@ -361,6 +369,44 @@ function renderProjectAssignments(result: MachineProjectAssignments): string {
   }).join("\n");
 }
 
+function renderNoteMachineContext(result: NoteMachineContext): string {
+  const machine = (label: string, ref: NoteMachineContext["origin_machine"]) => {
+    if (!ref) return [label, "none"] as [string, string];
+    const known = ref.known ? "" : " unknown";
+    return [label, `${ref.display_name} (${ref.machine_id})${known}`] as [string, string];
+  };
+  return [
+    renderKeyValueTable([
+      machine("origin", result.origin_machine),
+      machine("source", result.source_machine),
+      machine("target", result.target_machine),
+      ["sync targets", result.sync_targets.map((target) => `${target.machine.display_name} (${target.machine_id})`).join(", ") || "none"],
+      ["actor", `${result.actor.display_name} (${result.actor.actor_type}/${result.actor.source})`],
+      ["warnings", result.warnings.join(", ") || "none"],
+    ]),
+  ].join("\n");
+}
+
+function renderMachineTrashPolicies(result: MachineTrashPolicies): string {
+  if (result.policies.length === 0) return "machine trash policies: none";
+  const lines = result.policies.map((policy) => {
+    const retention = policy.retention_days === null ? "retention:unset" : `retention:${policy.retention_days}d`;
+    const deleteAfter = policy.delete_after_days === null ? "delete-after:unset" : `delete-after:${policy.delete_after_days}d`;
+    const enabled = policy.enabled === null ? "enabled:unspecified" : `enabled:${policy.enabled}`;
+    return `${policy.display_name.padEnd(18)} ${policy.machine_id.padEnd(18)} ${enabled} ${retention} ${deleteAfter} ${policy.source}`;
+  });
+  return [
+    renderKeyValueTable([
+      ["policies", `${result.pagination.count}/${result.pagination.total}`],
+      ["limit", String(result.pagination.limit ?? "all")],
+      ["offset", String(result.pagination.offset)],
+      ["has more", String(result.pagination.hasMore)],
+      ["warnings", result.warnings.join(", ") || "none"],
+    ]),
+    ...lines,
+  ].join("\n");
+}
+
 function renderFleetStatus(status: FleetStatus): string {
   return [
     renderKeyValueTable([
@@ -445,6 +491,7 @@ const clipboardCommand = program.command("clipboard").description("Real-time cli
 const installClaudeCommand = program.command("install-claude").description("Install or inspect Claude, Codex, and Gemini CLIs");
 const daemonCommand = program.command("daemon").description("Install and inspect the machines-agent fleet daemon service");
 const projectsCommand = program.command("projects").description("Expose machine/project assignments for @hasna/projects");
+const notesCommand = program.command("notes").description("Expose note ownership, provenance, and per-machine trash contracts");
 const trustedNotificationApproval = createTrustedNotificationApproval();
 
 function cliMachineId(machineId: string | null | undefined): string {
@@ -1276,6 +1323,79 @@ program
       const route = machine.ssh.command_target ? `${machine.ssh.route}:${machine.ssh.command_target}` : machine.ssh.route;
       console.log(`${machine.display_name.padEnd(18)} ${machine.machine_id.padEnd(18)} ${String(machine.platform || "unknown").padEnd(8)} ${machine.heartbeat_status.padEnd(8)} ${machine.updated_at ?? "unknown"} ${route}`);
     }
+  });
+
+function parseMachineIdList(values: string[] | undefined): string[] {
+  return (values ?? [])
+    .flatMap((value) => String(value).split(","))
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+notesCommand
+  .command("context")
+  .description("Resolve note origin/source/target machine display names and actor provenance")
+  .option("--origin-machine <id>", "Machine that owns/originated the note")
+  .option("--source-machine <id>", "Machine where the note event or sync source came from")
+  .option("--target-machine <id>", "Machine the note is being synced to")
+  .option("--sync-target <id...>", "Additional sync target machine ids; comma-separated values are accepted")
+  .option("--actor-type <type>", "human | agent | system | unknown")
+  .option("--actor-id <id>", "Actor identifier")
+  .option("--actor-name <name>", "Actor display name")
+  .option("--agent-id <id>", "Agent identifier for agent-created notes")
+  .option("--agent-name <name>", "Agent display name for agent-created notes")
+  .option("--source <source>", "open-notes | agent | sync | import | open-machines | unknown")
+  .option("--tailscale", "Probe tailscale while building machine display context", false)
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: {
+    originMachine?: string;
+    sourceMachine?: string;
+    targetMachine?: string;
+    syncTarget?: string[];
+    actorType?: string;
+    actorId?: string;
+    actorName?: string;
+    agentId?: string;
+    agentName?: string;
+    source?: string;
+    tailscale?: boolean;
+    json?: boolean;
+  }) => {
+    const result = resolveNoteMachineContext({
+      originMachineId: options.originMachine,
+      sourceMachineId: options.sourceMachine,
+      targetMachineId: options.targetMachine,
+      syncTargetMachineIds: parseMachineIdList(options.syncTarget),
+      includeTailscale: options.tailscale,
+      actor: {
+        actor_type: options.actorType as NoteActorType | undefined,
+        actor_id: options.actorId,
+        actor_name: options.actorName,
+        agent_id: options.agentId,
+        agent_name: options.agentName,
+        source: options.source as NoteMachineContextSource | undefined,
+      },
+    });
+    printJsonOrText(result, renderNoteMachineContext(result), options.json);
+  });
+
+notesCommand
+  .command("trash-policies")
+  .description("List per-machine note trash retention metadata")
+  .option("--machine <id>", "Filter by machine id")
+  .option("--limit <n>", `Maximum machines to return (default ${DEFAULT_MACHINE_LIST_LIMIT})`)
+  .option("--offset <n>", "Machine list offset for View more pagination")
+  .option("--all", "Return every discovered machine", false)
+  .option("--tailscale", "Probe tailscale while listing machine trash policies", false)
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { machine?: string; limit?: string; offset?: string; all?: boolean; tailscale?: boolean; json?: boolean }) => {
+    const result = listMachineTrashPolicies({
+      machineId: options.machine,
+      includeTailscale: options.tailscale,
+      limit: options.all ? null : options.limit ? parseIntegerOption(options.limit, "limit", { min: 1 }) : undefined,
+      offset: options.offset ? parseIntegerOption(options.offset, "offset", { min: 0 }) : undefined,
+    });
+    printJsonOrText(result, renderMachineTrashPolicies(result), options.json);
   });
 
 program

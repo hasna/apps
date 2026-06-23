@@ -8,6 +8,7 @@ import {
 } from "./topology.js";
 import type { MachineCompatibilityReport } from "./compatibility.js";
 import type { MachineProjectAssignments } from "./projects.js";
+import type { MachineTrashPolicies, NoteMachineContext } from "./notes.js";
 
 export type MachinesConsumerSchemaEnvelope =
   | "contract"
@@ -16,7 +17,9 @@ export type MachinesConsumerSchemaEnvelope =
   | "workspace"
   | "compatibility"
   | "resolver_snapshot"
-  | "project_assignments";
+  | "project_assignments"
+  | "note_machine_context"
+  | "machine_trash_policies";
 
 export interface MachinesConsumerValidationResult {
   ok: boolean;
@@ -66,8 +69,107 @@ export const MACHINES_CONSUMER_SCHEMA_BUNDLE: MachinesConsumerSchemaBundle = {
         capabilities: { type: "object" },
         field_capabilities: { type: "object" },
         cacheability: { type: "object" },
-        envelopes: { type: "array", items: { enum: ["topology", "route", "workspace", "compatibility", "resolver_snapshot", "project_assignments"] } },
+        envelopes: { type: "array", items: { enum: ["topology", "route", "workspace", "compatibility", "resolver_snapshot", "project_assignments", "note_machine_context", "machine_trash_policies"] } },
         stable_exports: { type: "array", items: { type: "string" } },
+      },
+    },
+    note_machine_reference: {
+      type: "object",
+      required: ["machine_id", "friendly_name", "display_name", "updated_at", "role", "known", "manifest_declared"],
+      properties: {
+        machine_id: { type: "string" },
+        friendly_name: { type: ["string", "null"] },
+        display_name: { type: "string" },
+        updated_at: { type: ["string", "null"], format: "date-time" },
+        role: { enum: ["origin", "source", "target", "sync_target", "trash_owner"] },
+        known: { type: "boolean" },
+        manifest_declared: { type: "boolean" },
+      },
+    },
+    note_actor_context: {
+      type: "object",
+      required: ["actor_type", "actor_id", "actor_name", "agent_id", "agent_name", "source", "display_name"],
+      properties: {
+        actor_type: { enum: ["human", "agent", "system", "unknown"] },
+        actor_id: { type: ["string", "null"] },
+        actor_name: { type: ["string", "null"] },
+        agent_id: { type: ["string", "null"] },
+        agent_name: { type: ["string", "null"] },
+        source: { enum: ["open-notes", "agent", "sync", "import", "open-machines", "unknown"] },
+        display_name: { type: "string" },
+      },
+    },
+    note_machine_context: {
+      type: "object",
+      required: ["schema_version", "package", "capabilities", "generated_at", "origin_machine_id", "source_machine_id", "target_machine_id", "origin_machine", "source_machine", "target_machine", "sync_target_machine_ids", "sync_targets", "actor", "warnings"],
+      properties: {
+        schema_version: { const: MACHINES_CONSUMER_CONTRACT_VERSION },
+        package: { type: "object" },
+        capabilities: { type: "object" },
+        generated_at: { type: "string", format: "date-time" },
+        origin_machine_id: { type: ["string", "null"] },
+        source_machine_id: { type: ["string", "null"] },
+        target_machine_id: { type: ["string", "null"] },
+        origin_machine: { anyOf: [{ $ref: "#/$defs/note_machine_reference" }, { type: "null" }] },
+        source_machine: { anyOf: [{ $ref: "#/$defs/note_machine_reference" }, { type: "null" }] },
+        target_machine: { anyOf: [{ $ref: "#/$defs/note_machine_reference" }, { type: "null" }] },
+        sync_target_machine_ids: { type: "array", items: { type: "string" } },
+        sync_targets: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["machine_id", "machine"],
+            properties: {
+              machine_id: { type: "string" },
+              machine: { $ref: "#/$defs/note_machine_reference" },
+            },
+          },
+        },
+        actor: { $ref: "#/$defs/note_actor_context" },
+        warnings: { type: "array", items: { type: "string" } },
+      },
+    },
+    machine_trash_policy: {
+      type: "object",
+      required: ["machine_id", "friendly_name", "display_name", "updated_at", "enabled", "retention_days", "delete_after_days", "trash_path", "source", "metadata_keys"],
+      properties: {
+        machine_id: { type: "string" },
+        friendly_name: { type: ["string", "null"] },
+        display_name: { type: "string" },
+        updated_at: { type: ["string", "null"], format: "date-time" },
+        enabled: { type: ["boolean", "null"] },
+        retention_days: { type: ["number", "null"] },
+        delete_after_days: { type: ["number", "null"] },
+        trash_path: { type: ["string", "null"] },
+        source: { enum: ["manifest_metadata", "default"] },
+        metadata_keys: { type: "array", items: { type: "string" } },
+      },
+    },
+    machine_trash_policies: {
+      type: "object",
+      required: ["schema_version", "package", "capabilities", "generated_at", "pagination", "policies", "warnings"],
+      properties: {
+        schema_version: { const: MACHINES_CONSUMER_CONTRACT_VERSION },
+        package: { type: "object" },
+        capabilities: { type: "object" },
+        generated_at: { type: "string", format: "date-time" },
+        pagination: {
+          type: "object",
+          required: ["limit", "offset", "total", "count", "hasMore", "nextOffset", "has_more", "next_offset", "order"],
+          properties: {
+            limit: { type: ["number", "null"] },
+            offset: { type: "number" },
+            total: { type: "number" },
+            count: { type: "number" },
+            hasMore: { type: "boolean" },
+            nextOffset: { type: ["number", "null"] },
+            has_more: { type: "boolean" },
+            next_offset: { type: ["number", "null"] },
+            order: { const: "updated_at_desc" },
+          },
+        },
+        policies: { type: "array", items: { $ref: "#/$defs/machine_trash_policy" } },
+        warnings: { type: "array", items: { type: "string" } },
       },
     },
     topology: {
@@ -232,10 +334,46 @@ function hasCacheability(value: Record<string, unknown>, key = "cacheability"): 
     && hasArray(cache, "reasons");
 }
 
+function hasNullableString(value: Record<string, unknown>, key: string): boolean {
+  return value[key] === null || typeof value[key] === "string";
+}
+
 function requireFields(value: Record<string, unknown>, fields: string[], errors: string[]): void {
   for (const field of fields) {
     if (!(field in value)) errors.push(`missing:${field}`);
   }
+}
+
+function validatePagination(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) {
+    errors.push(path);
+    return;
+  }
+  requireFields(value, ["limit", "offset", "total", "count", "hasMore", "nextOffset", "has_more", "next_offset", "order"], errors);
+  if (value.limit !== null && typeof value.limit !== "number") errors.push(`${path}.limit`);
+  if (typeof value.offset !== "number") errors.push(`${path}.offset`);
+  if (typeof value.total !== "number") errors.push(`${path}.total`);
+  if (typeof value.count !== "number") errors.push(`${path}.count`);
+  if (typeof value.hasMore !== "boolean") errors.push(`${path}.hasMore`);
+  if (value.nextOffset !== null && typeof value.nextOffset !== "number") errors.push(`${path}.nextOffset`);
+  if (typeof value.has_more !== "boolean") errors.push(`${path}.has_more`);
+  if (value.next_offset !== null && typeof value.next_offset !== "number") errors.push(`${path}.next_offset`);
+  if (value.order !== "updated_at_desc") errors.push(`${path}.order`);
+}
+
+function validateNoteMachineReference(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) {
+    errors.push(path);
+    return;
+  }
+  requireFields(value, ["machine_id", "friendly_name", "display_name", "updated_at", "role", "known", "manifest_declared"], errors);
+  if (!hasString(value, "machine_id")) errors.push(`${path}.machine_id`);
+  if (!hasString(value, "display_name")) errors.push(`${path}.display_name`);
+  if (!hasNullableString(value, "friendly_name")) errors.push(`${path}.friendly_name`);
+  if (!hasNullableString(value, "updated_at")) errors.push(`${path}.updated_at`);
+  if (!["origin", "source", "target", "sync_target", "trash_owner"].includes(String(value.role))) errors.push(`${path}.role`);
+  if (typeof value.known !== "boolean") errors.push(`${path}.known`);
+  if (typeof value.manifest_declared !== "boolean") errors.push(`${path}.manifest_declared`);
 }
 
 export function getMachinesConsumerSchemaBundle(): MachinesConsumerSchemaBundle {
@@ -262,15 +400,7 @@ export function validateMachinesConsumerEnvelope(
     if (!hasArray(value, "stable_exports")) errors.push("stable_exports");
   } else if (envelope === "topology") {
     requireFields(value, ["package", "capabilities", "generated_at", "local_machine_id", "pagination", "machines", "warnings"], errors);
-    if (!hasObject(value, "pagination")) {
-      errors.push("pagination");
-    } else {
-      const pagination = value.pagination as Record<string, unknown>;
-      requireFields(pagination, ["limit", "offset", "total", "count", "hasMore", "nextOffset", "has_more", "next_offset", "order"], errors);
-      if (typeof pagination.hasMore !== "boolean") errors.push("pagination.hasMore");
-      if (typeof pagination.has_more !== "boolean") errors.push("pagination.has_more");
-      if (pagination.order !== "updated_at_desc") errors.push("pagination.order");
-    }
+    validatePagination(value.pagination, "pagination", errors);
     if (!hasArray(value, "machines")) errors.push("machines");
     if (Array.isArray(value.machines)) {
       for (const [index, machine] of value.machines.entries()) {
@@ -317,6 +447,65 @@ export function validateMachinesConsumerEnvelope(
     if (!hasArray(value, "projects")) errors.push("projects");
     if (!hasArray(value, "machines")) errors.push("machines");
     if (!hasArray(value, "warnings")) errors.push("warnings");
+  } else if (envelope === "note_machine_context") {
+    requireFields(value, ["package", "capabilities", "generated_at", "origin_machine_id", "source_machine_id", "target_machine_id", "origin_machine", "source_machine", "target_machine", "sync_target_machine_ids", "sync_targets", "actor", "warnings"], errors);
+    if (!hasNullableString(value, "origin_machine_id")) errors.push("origin_machine_id");
+    if (!hasNullableString(value, "source_machine_id")) errors.push("source_machine_id");
+    if (!hasNullableString(value, "target_machine_id")) errors.push("target_machine_id");
+    if (value.origin_machine !== null) validateNoteMachineReference(value.origin_machine, "origin_machine", errors);
+    if (value.source_machine !== null) validateNoteMachineReference(value.source_machine, "source_machine", errors);
+    if (value.target_machine !== null) validateNoteMachineReference(value.target_machine, "target_machine", errors);
+    if (!hasArray(value, "sync_target_machine_ids")) errors.push("sync_target_machine_ids");
+    if (!hasArray(value, "sync_targets")) errors.push("sync_targets");
+    if (Array.isArray(value.sync_targets)) {
+      for (const [index, target] of value.sync_targets.entries()) {
+        if (!isRecord(target)) {
+          errors.push(`sync_targets.${index}`);
+          continue;
+        }
+        requireFields(target, ["machine_id", "machine"], errors);
+        if (!hasString(target, "machine_id")) errors.push(`sync_targets.${index}.machine_id`);
+        validateNoteMachineReference(target.machine, `sync_targets.${index}.machine`, errors);
+      }
+    }
+    if (!hasObject(value, "actor")) {
+      errors.push("actor");
+    } else {
+      const actor = value.actor as Record<string, unknown>;
+      requireFields(actor, ["actor_type", "actor_id", "actor_name", "agent_id", "agent_name", "source", "display_name"], errors);
+      if (!["human", "agent", "system", "unknown"].includes(String(actor.actor_type))) errors.push("actor.actor_type");
+      if (!hasNullableString(actor, "actor_id")) errors.push("actor.actor_id");
+      if (!hasNullableString(actor, "actor_name")) errors.push("actor.actor_name");
+      if (!hasNullableString(actor, "agent_id")) errors.push("actor.agent_id");
+      if (!hasNullableString(actor, "agent_name")) errors.push("actor.agent_name");
+      if (!["open-notes", "agent", "sync", "import", "open-machines", "unknown"].includes(String(actor.source))) errors.push("actor.source");
+      if (!hasString(actor, "display_name")) errors.push("actor.display_name");
+    }
+    if (!hasArray(value, "warnings")) errors.push("warnings");
+  } else if (envelope === "machine_trash_policies") {
+    requireFields(value, ["package", "capabilities", "generated_at", "pagination", "policies", "warnings"], errors);
+    validatePagination(value.pagination, "pagination", errors);
+    if (!hasArray(value, "policies")) errors.push("policies");
+    if (Array.isArray(value.policies)) {
+      for (const [index, policy] of value.policies.entries()) {
+        if (!isRecord(policy)) {
+          errors.push(`policies.${index}`);
+          continue;
+        }
+        requireFields(policy, ["machine_id", "friendly_name", "display_name", "updated_at", "enabled", "retention_days", "delete_after_days", "trash_path", "source", "metadata_keys"], errors);
+        if (!hasString(policy, "machine_id")) errors.push(`policies.${index}.machine_id`);
+        if (!hasString(policy, "display_name")) errors.push(`policies.${index}.display_name`);
+        if (!hasNullableString(policy, "friendly_name")) errors.push(`policies.${index}.friendly_name`);
+        if (!hasNullableString(policy, "updated_at")) errors.push(`policies.${index}.updated_at`);
+        if (policy.enabled !== null && typeof policy.enabled !== "boolean") errors.push(`policies.${index}.enabled`);
+        if (policy.retention_days !== null && typeof policy.retention_days !== "number") errors.push(`policies.${index}.retention_days`);
+        if (policy.delete_after_days !== null && typeof policy.delete_after_days !== "number") errors.push(`policies.${index}.delete_after_days`);
+        if (!hasNullableString(policy, "trash_path")) errors.push(`policies.${index}.trash_path`);
+        if (!["manifest_metadata", "default"].includes(String(policy.source))) errors.push(`policies.${index}.source`);
+        if (!hasArray(policy, "metadata_keys")) errors.push(`policies.${index}.metadata_keys`);
+      }
+    }
+    if (!hasArray(value, "warnings")) errors.push("warnings");
   }
 
   return { ok: errors.length === 0, envelope, schema_id: MACHINES_CONSUMER_SCHEMA_URI, errors };
@@ -328,4 +517,6 @@ export type MachinesConsumerEnvelopeValue =
   | MachineWorkspaceResolution
   | MachineCompatibilityReport
   | MachineResolverSnapshot
-  | MachineProjectAssignments;
+  | MachineProjectAssignments
+  | NoteMachineContext
+  | MachineTrashPolicies;

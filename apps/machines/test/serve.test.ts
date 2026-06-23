@@ -191,6 +191,8 @@ describe("serve", () => {
     expect(info.routes).toContain("/api/topology");
     expect(info.routes).toContain("/api/routes");
     expect(info.routes).toContain("/api/machines/friendly-name");
+    expect(info.routes).toContain("/api/notes/machine-context");
+    expect(info.routes).toContain("/api/notes/trash-policies");
     expect(info.routes).toContain("/api/projects/assignments");
     expect(info.routes).toContain("/api/daemon/status");
     expect(info.routes).toContain("/api/doctor");
@@ -217,11 +219,20 @@ describe("serve", () => {
     manifestInit();
     manifestAdd({
       id: "demo-node-01",
+      friendlyName: "Demo Node",
       hostname: "demo-node-01.private.example",
       sshAddress: "operator@demo-node-01.private.example",
       tailscaleName: "demo-node-01.tailnet.example",
       platform: "linux",
       workspacePath: "/home/operator/workspace",
+      metadata: {
+        notesTrash: {
+          enabled: true,
+          retentionDays: 14,
+          deleteAfterDays: 45,
+          trashPath: "/home/operator/notes/.trash",
+        },
+      },
       apps: [{ name: "shell", manager: "custom", packageName: "sh" }],
     });
     upsertHeartbeat("demo-node-01", 42, "online", {
@@ -263,6 +274,8 @@ describe("serve", () => {
     process.env["HASNA_MACHINES_ALLOW_PRIVATE_OUTPUT"] = "1";
     const privateTopology = await fetch(`${base}/api/topology?tailscale=false&privateMetadata=true`).then((response) => response.json());
     const routes = await fetch(`${base}/api/routes?tailscale=false`).then((response) => response.json());
+    const noteContext = await fetch(`${base}/api/notes/machine-context?origin_machine_id=demo-node-01&source_machine_id=demo-node-01&actor_type=agent&agent_name=Notes%20Agent&source=agent`).then((response) => response.json());
+    const noteTrash = await fetch(`${base}/api/notes/trash-policies?machine=demo-node-01`).then((response) => response.json());
     const daemon = await fetch(`${base}/api/daemon/status`).then((response) => response.json());
     const selfTest = await fetch(`${base}/api/self-test`).then((response) => response.json());
     const apps = await fetch(`${base}/api/apps/status`).then((response) => response.json());
@@ -289,6 +302,15 @@ describe("serve", () => {
     expect(Array.isArray(doctor.checks)).toBe(true);
     expect(Array.isArray(topology.machines)).toBe(true);
     expect(Array.isArray(routes.routes)).toBe(true);
+    expect(noteContext.origin_machine).toMatchObject({ machine_id: "demo-node-01", display_name: "Demo Node" });
+    expect(noteContext.actor).toMatchObject({ actor_type: "agent", display_name: "Notes Agent" });
+    expect(noteTrash.policies[0]).toMatchObject({
+      machine_id: "demo-node-01",
+      display_name: "Demo Node",
+      enabled: true,
+      retention_days: 14,
+      delete_after_days: 45,
+    });
     expect(Array.isArray(daemon.agents)).toBe(true);
     expect(JSON.stringify(topology)).not.toContain("demo-node-01.tailnet.example");
     expect(JSON.stringify(topology)).not.toContain("100.64.0.7");

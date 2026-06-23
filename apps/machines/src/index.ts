@@ -2,6 +2,7 @@ export * from "./types.js";
 export * from "./cross-project-types.js";
 export * from "./redaction.js";
 export * from "./topology.js";
+export * from "./notes.js";
 export * from "./compatibility.js";
 export * from "./version.js";
 

@@ -193,6 +193,85 @@ describe("cli command handling", () => {
     }
   });
 
+  test("notes CLI exposes machine provenance context and trash policy metadata", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-cli-notes-"));
+    try {
+      const env = {
+        ...process.env,
+        HASNA_MACHINES_MANIFEST_PATH: join(dir, "machines.json"),
+        HASNA_MACHINES_DB_PATH: join(dir, "machines.db"),
+        HASNA_MACHINES_MACHINE_ID: "origin-node",
+        [MUTATION_APPROVAL_FLAG_ENV]: "1",
+      };
+      expect(runCli(["manifest", "init"], env).status).toBe(0);
+      expect(runCli(["manifest", "add", "--from-stdin"], env, JSON.stringify({
+        id: "origin-node",
+        friendlyName: "Desk Mac",
+        platform: "macos",
+        workspacePath: "/Users/hasna/Workspace",
+        updatedAt: "2026-06-20T00:00:00.000Z",
+      })).status).toBe(0);
+      expect(runCli(["manifest", "add", "--from-stdin"], env, JSON.stringify({
+        id: "agent-node",
+        friendlyName: "Agent Box",
+        platform: "linux",
+        workspacePath: "/srv/workspace",
+        updatedAt: "2026-06-21T00:00:00.000Z",
+        metadata: {
+          notes_trash: {
+            enabled: true,
+            retention_days: 30,
+            delete_after_days: 60,
+            trash_path: "/srv/notes/.trash",
+          },
+        },
+      })).status).toBe(0);
+
+      const context = runCli([
+        "notes",
+        "context",
+        "--origin-machine",
+        "origin-node",
+        "--source-machine",
+        "agent-node",
+        "--target-machine",
+        "missing-target",
+        "--sync-target",
+        "missing-target",
+        "--actor-type",
+        "agent",
+        "--agent-id",
+        "notes-agent",
+        "--agent-name",
+        "Notes Agent",
+        "--source",
+        "agent",
+        "--json",
+      ], env);
+      expect(context.stderr).toBe("");
+      expect(context.status).toBe(0);
+      const contextPayload = JSON.parse(context.stdout);
+      expect(contextPayload.origin_machine).toMatchObject({ display_name: "Desk Mac" });
+      expect(contextPayload.source_machine).toMatchObject({ display_name: "Agent Box" });
+      expect(contextPayload.target_machine).toMatchObject({ machine_id: "missing-target", known: false });
+      expect(contextPayload.actor).toMatchObject({ actor_type: "agent", display_name: "Notes Agent" });
+
+      const trash = runCli(["notes", "trash-policies", "--machine", "agent-node", "--json"], env);
+      expect(trash.stderr).toBe("");
+      expect(trash.status).toBe(0);
+      expect(JSON.parse(trash.stdout).policies[0]).toMatchObject({
+        machine_id: "agent-node",
+        display_name: "Agent Box",
+        enabled: true,
+        retention_days: 30,
+        delete_after_days: 60,
+        trash_path: "/srv/notes/.trash",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("screen-credentials reports secret references without printing secret values", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-cli-screen-credentials-"));
     try {

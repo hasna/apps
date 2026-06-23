@@ -173,6 +173,8 @@ function writeSdkProbe(appDir) {
       createMachineResolverSnapshot,
       discoverMachineTopology,
       listMachineProjectAssignments,
+      listMachineTrashPolicies,
+      resolveNoteMachineContext,
       validateMachinesConsumerEnvelope,
       resolveMachineRoute,
       resolveMachineWorkspace,
@@ -200,6 +202,17 @@ function writeSdkProbe(appDir) {
     const projectAssignments = listMachineProjectAssignments({
       now: new Date('2026-06-09T00:00:00.000Z'),
     });
+    const noteMachineContext = resolveNoteMachineContext({
+      topology,
+      originMachineId: 'consumer-conformance-local',
+      sourceMachineId: 'consumer-conformance-local',
+      actor: { actor_type: 'agent', agent_id: 'conformance-agent', agent_name: 'Conformance Agent', source: 'agent' },
+      now: new Date('2026-06-09T00:00:00.000Z'),
+    });
+    const trashPolicies = listMachineTrashPolicies({
+      topology,
+      now: new Date('2026-06-09T00:00:00.000Z'),
+    });
     const snapshot = createMachineResolverSnapshot({
       route,
       workspace,
@@ -223,6 +236,8 @@ function writeSdkProbe(appDir) {
         compatibility: validateMachinesConsumerEnvelope('compatibility', compatibility).ok,
         resolver_snapshot: validateMachinesConsumerEnvelope('resolver_snapshot', snapshot).ok,
         project_assignments: validateMachinesConsumerEnvelope('project_assignments', projectAssignments).ok,
+        note_machine_context: validateMachinesConsumerEnvelope('note_machine_context', noteMachineContext).ok,
+        machine_trash_policies: validateMachinesConsumerEnvelope('machine_trash_policies', trashPolicies).ok,
       },
       topology: { schema_version: topology.schema_version, machines: topology.machines.length, pagination: topology.pagination, first_display_name: topology.machines[0]?.display_name ?? null },
       route: { schema_version: route.schema_version, ok: route.ok, route: route.route, target: route.target, cacheable: route.cacheability.cacheable },
@@ -230,6 +245,8 @@ function writeSdkProbe(appDir) {
       compatibility: { schema_version: compatibility.schema_version, ok: compatibility.ok },
       resolver_snapshot: { schema_version: snapshot.schema_version, cacheable: snapshot.cacheability.cacheable, authority: snapshot.cacheability.source_authority },
       project_assignments: { schema_version: projectAssignments.schema_version, count: projectAssignments.assignments.length },
+      note_machine_context: { schema_version: noteMachineContext.schema_version, origin: noteMachineContext.origin_machine?.display_name ?? null, actor: noteMachineContext.actor.display_name },
+      machine_trash_policies: { schema_version: trashPolicies.schema_version, count: trashPolicies.policies.length, pagination: trashPolicies.pagination },
     }));
   `);
   return script;
@@ -336,6 +353,11 @@ function assertCase(name, output) {
     }
     if (!output.envelopes.includes("resolver_snapshot") || output.resolver_snapshot.schema_version !== 1) {
       throw new Error(`${name}: missing resolver snapshot envelope\n${JSON.stringify(output, null, 2)}`);
+    }
+    for (const envelope of ["project_assignments", "note_machine_context", "machine_trash_policies"]) {
+      if (!output.envelopes.includes(envelope) || output[envelope].schema_version !== 1) {
+        throw new Error(`${name}: missing ${envelope} envelope\n${JSON.stringify(output, null, 2)}`);
+      }
     }
     if (!output.topology.pagination || output.topology.pagination.limit !== 10) {
       throw new Error(`${name}: missing topology pagination contract\n${JSON.stringify(output, null, 2)}`);

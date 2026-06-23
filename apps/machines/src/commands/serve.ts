@@ -6,6 +6,7 @@ import { diffClaudeCli, getClaudeCliStatus } from "./install-claude.js";
 import { getAgentStatus } from "../agent/runtime.js";
 import { PRIVATE_OUTPUT_DENIED_WARNING, isPrivateOutputEnabled } from "../redaction.js";
 import { discoverMachineTopology, redactRouteForOutput, redactTopologyForOutput, resolveMachineRoute } from "../topology.js";
+import { listMachineTrashPolicies, resolveNoteMachineContext, type NoteActorType, type NoteMachineContextSource } from "../notes.js";
 import { createTrustedNotificationApproval, listNotificationChannels, testNotificationChannel } from "./notifications.js";
 import {
   clearMachineFriendlyNameMutationArgs,
@@ -65,6 +66,8 @@ export function getServeInfo(options: ServeOptions = {}): ServeInfo {
       "/api/topology",
       "/api/routes",
       "/api/machines/friendly-name",
+      "/api/notes/machine-context",
+      "/api/notes/trash-policies",
       "/api/projects/assignments",
       "/api/daemon/status",
       "/api/manifest",
@@ -373,6 +376,23 @@ function machineListQueryOptions(url: URL): { limit?: number | null; offset?: nu
   };
 }
 
+function firstQueryString(url: URL, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = url.searchParams.get(key);
+    if (value?.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function queryMachineIdList(url: URL, keys: string[]): string[] {
+  const values: string[] = [];
+  for (const key of keys) values.push(...url.searchParams.getAll(key));
+  return values
+    .flatMap((value) => value.split(","))
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
 function parseProjectAssignmentBody(body: Record<string, unknown>): AssignMachineProjectInput {
   const hasPrimary = "primary" in body || "is_primary" in body || "isPrimary" in body;
   return {
@@ -495,6 +515,36 @@ export function startDashboardServer(options: ServeOptions = {}): ReturnType<typ
           }
         }
         return jsonError("Use GET, POST, PUT, or DELETE for machine friendly names.", 405);
+      }
+      if (url.pathname === "/api/notes/machine-context") {
+        if (request.method !== "GET") {
+          return jsonError("Use GET for note machine context.", 405);
+        }
+        return Response.json(resolveNoteMachineContext({
+          originMachineId: firstQueryString(url, ["origin_machine_id", "originMachineId", "origin_machine", "originMachine", "origin", "machine"]),
+          sourceMachineId: firstQueryString(url, ["source_machine_id", "sourceMachineId", "source_machine", "sourceMachine"]),
+          targetMachineId: firstQueryString(url, ["target_machine_id", "targetMachineId", "target_machine", "targetMachine", "target"]),
+          syncTargetMachineIds: queryMachineIdList(url, ["sync_target_machine_ids", "syncTargetMachineIds", "sync_target", "syncTarget"]),
+          includeTailscale: url.searchParams.get("tailscale") === "true",
+          actor: {
+            actor_type: firstQueryString(url, ["actor_type", "actorType"]) as NoteActorType | undefined,
+            actor_id: firstQueryString(url, ["actor_id", "actorId"]),
+            actor_name: firstQueryString(url, ["actor_name", "actorName"]),
+            agent_id: firstQueryString(url, ["agent_id", "agentId"]),
+            agent_name: firstQueryString(url, ["agent_name", "agentName"]),
+            source: firstQueryString(url, ["provenance_source", "provenanceSource", "actor_source", "actorSource", "source"]) as NoteMachineContextSource | undefined,
+          },
+        }));
+      }
+      if (url.pathname === "/api/notes/trash-policies") {
+        if (request.method !== "GET") {
+          return jsonError("Use GET for note trash policies.", 405);
+        }
+        return Response.json(listMachineTrashPolicies({
+          machineId: url.searchParams.get("machine") ?? url.searchParams.get("machine_id") ?? undefined,
+          includeTailscale: url.searchParams.get("tailscale") === "true",
+          ...machineListQueryOptions(url),
+        }));
       }
       if (url.pathname === "/api/projects/assignments") {
         if (request.method === "GET") {

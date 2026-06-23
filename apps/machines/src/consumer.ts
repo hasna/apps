@@ -77,6 +77,27 @@ export type {
   RemoveMachineProjectAssignmentInput,
 } from "./projects.js";
 export {
+  MACHINE_TRASH_POLICIES_KIND,
+  NOTE_MACHINE_CONTEXT_KIND,
+  listMachineTrashPolicies,
+  machineReferenceForNote,
+  resolveNoteMachineContext,
+} from "./notes.js";
+export type {
+  MachineTrashPolicies,
+  MachineTrashPoliciesOptions,
+  MachineTrashPolicy,
+  MachineTrashPolicySource,
+  NoteActorContext,
+  NoteActorType,
+  NoteMachineContext,
+  NoteMachineContextOptions,
+  NoteMachineContextSource,
+  NoteMachineReference,
+  NoteMachineRole,
+  NoteSyncTarget,
+} from "./notes.js";
+export {
   checkMachineCompatibility,
 } from "./compatibility.js";
 export type {
