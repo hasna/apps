@@ -75,7 +75,7 @@ import {
   type StorageContract,
   type StorageValidationResult,
 } from './storage-contract';
-import type { KnowledgeItem } from './store';
+import { ensureStore, type KnowledgeItem } from './store';
 import { initializeWikiLayout, recordWikiLayoutCatalog } from './wiki-layout';
 import {
   canonicalExampleKnowledgeStorage,
@@ -1700,27 +1700,36 @@ export class KnowledgeService {
 
   async search(options: Omit<HybridSearchOptions, 'dbPath' | 'config'>) {
     const workspace = this.ensureWorkspace();
+    const legacyStorePath = options.legacyStorePath ?? workspace.jsonStorePath;
+    if (!options.legacyStorePath) ensureStore(legacyStorePath);
     return hybridSearch({
       ...options,
       dbPath: workspace.knowledgeDbPath,
+      legacyStorePath,
       config: this.config(),
     });
   }
 
   async retrieveContext(options: Omit<RetrievalOptions, 'dbPath' | 'config'>) {
     const workspace = this.ensureWorkspace();
+    const legacyStorePath = options.legacyStorePath ?? workspace.jsonStorePath;
+    if (!options.legacyStorePath) ensureStore(legacyStorePath);
     return retrieveKnowledgeContext({
       ...options,
       dbPath: workspace.knowledgeDbPath,
+      legacyStorePath,
       config: this.config(),
     });
   }
 
   async runPrompt(options: Omit<KnowledgePromptOptions, 'dbPath' | 'config'>) {
     const workspace = this.ensureWorkspace();
+    const legacyStorePath = options.legacyStorePath ?? workspace.jsonStorePath;
+    if (!options.legacyStorePath) ensureStore(legacyStorePath);
     return runKnowledgePrompt({
       ...options,
       dbPath: workspace.knowledgeDbPath,
+      legacyStorePath,
       config: this.config(),
     });
   }
