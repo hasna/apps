@@ -6,3 +6,85 @@ This project is intended to evaluate whether actions, prompts, shell commands,
 MCP tool calls, browser/computer use, model routing, source access, secrets
 access, and business operations should be allowed, denied, warned, redacted, or
 approval-gated.
+
+## Status
+
+First useful OSS version: local-first TypeScript SDK, policy evaluator, CLI,
+examples, and integration helper shapes for sibling open-* tools.
+
+## Install
+
+```bash
+bun install
+bun run typecheck
+bun test
+```
+
+## CLI
+
+```bash
+guardrails evaluate \
+  --policy examples/policies/starter.guardrails.json \
+  --input examples/requests/destructive-shell-command.json \
+  --json
+```
+
+Exit codes:
+
+- `0`: allowed, warned, or redacted.
+- `1`: denied or invalid input.
+- `2`: approval required.
+
+## SDK
+
+```ts
+import {
+  defaultGuardrailPolicySet,
+  evaluateGuardrail,
+  openTerminalCommandGuardrailInput,
+} from "@hasna/guardrails";
+
+const input = openTerminalCommandGuardrailInput({
+  command: "rm -rf ./tmp/generated-output",
+  cwd: "/workspace/project",
+  targetKind: "shell",
+});
+
+const decision = evaluateGuardrail(input, defaultGuardrailPolicySet);
+```
+
+## Decision Shape
+
+Every decision includes:
+
+- `status`: `allow`, `deny`, `warn`, `redact`, or `approval_required`.
+- `reason` and `matchedPolicies`.
+- `evidence`, `obligations`, `redactions`, and `approvalRequirements`.
+- `audit` metadata with decision id, evaluated time, policy set, operation type,
+  actor, trace id, and labels.
+
+## Examples
+
+The starter policy covers:
+
+- Secret redaction.
+- Destructive shell command approval.
+- Remote content piped to shell denial.
+- Expensive model routing warnings.
+- External-source trust warnings.
+- High-impact business-action approval.
+
+## Boundaries
+
+Guardrails evaluate and decide. They do not execute actions, dispatch prompts,
+run commands, call MCP tools, route models, or scan repositories.
+
+- `open-actions` defines executable action contracts and previews.
+- `open-security` owns security scanning and vulnerability/secret exposure
+  workflows.
+- `open-terminal`, `open-dispatch`, `open-mcps`, `open-gateway`, and
+  `open-router` own their runtime mechanics and can call this package before
+  execution.
+
+See [docs/boundaries.md](docs/boundaries.md) and
+[docs/integrations.md](docs/integrations.md).
