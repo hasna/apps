@@ -1003,7 +1003,12 @@ program
   .action(async (opts: { port?: string }) => {
     const port = parseCliPort(opts.port ?? '3456', '--port')
     const { startServer } = await import('../server/serve.js')
-    startServer(port)
+    try {
+      startServer(port)
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error))
+      process.exitCode = 1
+    }
   })
 
 // ── dashboard ─────────────────────────────────────────────────────────────────
@@ -1014,7 +1019,15 @@ program
   .option('-p, --port <port>', 'Server port', '3456')
   .action(async (opts: { port?: string }) => {
     const port = parseCliPort(opts.port ?? '3456', '--port')
+    const { getServeApiToken } = await import('../lib/serve-auth.js')
+    const token = getServeApiToken()
+    if (!token) {
+      console.error('ECONOMY_API_TOKEN or HASNA_ECONOMY_API_TOKEN is required to start the dashboard server')
+      process.exitCode = 1
+      return
+    }
     const url = `http://localhost:${port}`
+    const dashboardUrl = `${url}/#token=${encodeURIComponent(token)}`
 
     // Check if server is already running
     let serverRunning = false
@@ -1055,9 +1068,9 @@ program
 
     console.log(chalk.cyan(`Opening ${url}`))
     try {
-      execSync(`open ${url}`)
+      execSync(`open ${JSON.stringify(dashboardUrl)}`)
     } catch {
-      console.log(chalk.yellow(`Open your browser at ${url}`))
+      console.log(chalk.yellow(`Open your browser at ${dashboardUrl}`))
     }
   })
 

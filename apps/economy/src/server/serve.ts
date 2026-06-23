@@ -20,19 +20,15 @@ import { querySavingsSummary } from '../lib/savings.js'
 import { usageSnapshotFilterForPeriod } from '../lib/periods.js'
 import { queryBillingDiff } from '../lib/billing-diff.js'
 import { queryUsageSnapshots } from '../db/database.js'
-import { isAuthorizedRequest } from '../lib/serve-auth.js'
+import { getServeBindHost, isAuthorizedRequest, requireServeApiToken } from '../lib/serve-auth.js'
 import { randomUUID } from 'crypto'
 import { existsSync } from 'fs'
 import { resolve, sep } from 'path'
-import { getServeBindHost } from '../lib/serve-auth.js'
 import type { Period } from '../types/index.js'
 import type { Agent } from '../lib/agents.js'
 
-const CORS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Economy-Token',
-}
+const CORS_METHODS = 'GET,POST,PUT,DELETE,OPTIONS'
+const CORS_HEADERS = 'Content-Type, Authorization, X-Economy-Token'
 const AGENT_ERROR = `agent must be one of: ${AGENTS.join(', ')}`
 const SYNC_SOURCES = ['all', ...AGENTS] as const
 const DEFAULT_DASHBOARD_DIR = new URL('../../dashboard/dist', import.meta.url).pathname
@@ -44,10 +40,52 @@ interface StartServerOptions {
   log?: (message: string) => void
 }
 
+function configuredCorsOrigins(): Set<string> {
+  const raw = process.env['ECONOMY_CORS_ORIGINS']?.trim() || process.env['ECONOMY_CORS_ORIGIN']?.trim() || ''
+  return new Set(raw.split(',').map(origin => origin.trim()).filter(Boolean))
+}
+
+function isLocalCorsOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin)
+    return (url.protocol === 'http:' || url.protocol === 'https:') &&
+      ['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname)
+  } catch {
+    return false
+  }
+}
+
+function isAllowedCorsOrigin(origin: string): boolean {
+  return configuredCorsOrigins().has(origin) || isLocalCorsOrigin(origin)
+}
+
+function corsHeadersFor(req: Request): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Access-Control-Allow-Methods': CORS_METHODS,
+    'Access-Control-Allow-Headers': CORS_HEADERS,
+    Vary: 'Origin',
+  }
+  const origin = req.headers.get('Origin')
+  if (origin && isAllowedCorsOrigin(origin)) {
+    headers['Access-Control-Allow-Origin'] = origin
+  }
+  return headers
+}
+
+function withCors(req: Request, response: Response): Response {
+  const headers = new Headers(response.headers)
+  for (const [key, value] of Object.entries(corsHeadersFor(req))) headers.set(key, value)
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
+}
+
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { 'Content-Type': 'application/json', ...CORS },
+    headers: { 'Content-Type': 'application/json' },
   })
 }
 
@@ -146,11 +184,19 @@ function applyFields<T extends Record<string, unknown>>(obj: T, fields?: string[
 
 export function createHandler(db: Database) {
   return async function handler(req: Request): Promise<Response> {
+    return withCors(req, await handleApiRequest(db, req))
+  }
+}
+
+async function handleApiRequest(db: Database, req: Request): Promise<Response> {
     const url = new URL(req.url)
     const path = url.pathname
     const method = req.method
 
-    if (method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS })
+    if (method === 'OPTIONS') {
+      const origin = req.headers.get('Origin')
+      return new Response(null, { status: origin && !isAllowedCorsOrigin(origin) ? 403 : 204 })
+    }
 
     if (!isAuthorizedRequest(req, path)) return err('Unauthorized', 401)
 
@@ -517,10 +563,10 @@ export function createHandler(db: Database) {
     }
 
     return err('Not found', 404)
-  }
 }
 
 export function startServer(port = 3456, options: StartServerOptions = {}): ReturnType<typeof Bun.serve> {
+  requireServeApiToken()
   const db = options.db ?? openDatabase()
   ensurePricingSeeded(db)
   const apiHandler = createHandler(db)

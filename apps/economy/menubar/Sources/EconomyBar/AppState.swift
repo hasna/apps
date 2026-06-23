@@ -27,6 +27,7 @@ final class AppState: ObservableObject {
   @Published var apiBaseURL: String = APIClient.storedBaseURL()
   @Published var sessionQuery: String = ""
   @Published var isEditingServer: Bool = false
+  @Published var apiTokenConfigured: Bool = APIClient.hasStoredAPIToken()
   @Published var todaySavedUsd: Double = 0
   @Published var weekSavedUsd: Double = 0
   @Published var savedUsd: Double = 0
@@ -87,6 +88,32 @@ final class AppState: ObservableObject {
       let normalized = await client.setBaseURL(value)
       await MainActor.run {
         self.apiBaseURL = normalized
+        self.isEditingServer = false
+      }
+      await self.refresh()
+    }
+  }
+
+  func saveAPIToken(_ value: String) {
+    Task { [weak self] in
+      guard let self else { return }
+      let normalized = await client.setAPIToken(value)
+      await MainActor.run {
+        self.apiTokenConfigured = !normalized.isEmpty
+        self.isEditingServer = false
+      }
+      await self.refresh()
+    }
+  }
+
+  func saveAPISettings(baseURL: String, token: String) {
+    Task { [weak self] in
+      guard let self else { return }
+      let normalizedURL = await client.setBaseURL(baseURL)
+      let normalizedToken = await client.setAPIToken(token)
+      await MainActor.run {
+        self.apiBaseURL = normalizedURL
+        self.apiTokenConfigured = !normalizedToken.isEmpty
         self.isEditingServer = false
       }
       await self.refresh()

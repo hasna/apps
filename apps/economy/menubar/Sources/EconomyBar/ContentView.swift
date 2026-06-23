@@ -213,6 +213,7 @@ struct ContentView: View {
   @EnvironmentObject var appState: AppState
   @Environment(\.openURL) private var openURL
   @State private var draftAPIBaseURL: String = ""
+  @State private var draftAPIToken: String = ""
   @State private var selectedPeriod: WorkPeriod = WorkPeriod.initial
   @State private var selectedScreen: MenuScreen = MenuScreen.initial
   @State private var selectedTab: WorkTab = .all
@@ -885,7 +886,12 @@ struct ContentView: View {
         }
 
         ManageSectionsGroup(title: "SETTINGS", badge: nil, actionTitle: nil, action: nil) {
-          ServerSettingsRow(baseURL: appState.apiBaseURL, isEditing: appState.isEditingServer, action: toggleServerEditor)
+          ServerSettingsRow(
+            baseURL: appState.apiBaseURL,
+            tokenConfigured: appState.apiTokenConfigured,
+            isEditing: appState.isEditingServer,
+            action: toggleServerEditor
+          )
 
           if appState.isEditingServer {
             Divider().opacity(0.55)
@@ -937,13 +943,19 @@ struct ContentView: View {
       TextField("Server URL", text: $draftAPIBaseURL)
         .textFieldStyle(.roundedBorder)
         .font(.system(size: 12, weight: .regular))
-        .onSubmit(saveServerURL)
+        .onSubmit(saveServerSettings)
+
+      SecureField("API Token", text: $draftAPIToken)
+        .textFieldStyle(.roundedBorder)
+        .font(.system(size: 12, weight: .regular))
+        .onSubmit(saveServerSettings)
 
       HStack(spacing: 8) {
-        Button("Save", action: saveServerURL)
+        Button("Save", action: saveServerSettings)
           .buttonStyle(.borderedProminent)
         Button("Cancel") {
           draftAPIBaseURL = appState.apiBaseURL
+          draftAPIToken = APIClient.storedAPIToken()
           appState.cancelServerEditing()
         }
         .buttonStyle(.bordered)
@@ -1001,6 +1013,7 @@ struct ContentView: View {
 
   private func toggleServerEditor() {
     draftAPIBaseURL = appState.apiBaseURL
+    draftAPIToken = APIClient.storedAPIToken()
     appState.toggleServerEditor()
   }
 
@@ -1013,6 +1026,7 @@ struct ContentView: View {
   private func closeSections() {
     if appState.isEditingServer {
       draftAPIBaseURL = appState.apiBaseURL
+      draftAPIToken = APIClient.storedAPIToken()
       appState.cancelServerEditing()
     }
     withAnimation(.easeInOut(duration: 0.16)) {
@@ -1128,12 +1142,19 @@ struct ContentView: View {
     mutate(&manageSections[index])
   }
 
-  private func saveServerURL() {
-    appState.saveAPIBaseURL(draftAPIBaseURL)
+  private func saveServerSettings() {
+    appState.saveAPISettings(baseURL: draftAPIBaseURL, token: draftAPIToken)
   }
 
   private func openDashboard() {
-    if let url = URL(string: appState.apiBaseURL) {
+    var value = appState.apiBaseURL
+    let token = APIClient.storedAPIToken()
+    var fragmentAllowed = CharacterSet.urlQueryAllowed
+    fragmentAllowed.remove(charactersIn: "&=+#")
+    if !token.isEmpty, let encoded = token.addingPercentEncoding(withAllowedCharacters: fragmentAllowed) {
+      value += "/#token=\(encoded)"
+    }
+    if let url = URL(string: value) {
       openURL(url)
     }
   }
@@ -1324,6 +1345,7 @@ private struct ManageChip: View {
 
 private struct ServerSettingsRow: View {
   let baseURL: String
+  let tokenConfigured: Bool
   let isEditing: Bool
   let action: () -> Void
 
@@ -1339,6 +1361,10 @@ private struct ServerSettingsRow: View {
           .foregroundStyle(.secondary)
           .lineLimit(1)
           .truncationMode(.middle)
+        Text(tokenConfigured ? "API token set" : "API token missing")
+          .font(.system(size: 10, weight: .regular))
+          .foregroundStyle(tokenConfigured ? .green : .orange)
+          .lineLimit(1)
       }
 
       Spacer(minLength: 10)

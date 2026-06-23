@@ -23,6 +23,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  api.setDashboardApiToken("")
   globalThis.fetch = originalFetch
 })
 
@@ -133,6 +134,40 @@ describe("dashboard API client", () => {
       days: 14,
       providers: ["anthropic", "openai", "gemini"],
     })
+  })
+
+  test("sends stored API token on requests", async () => {
+    api.setDashboardApiToken("dashboard-secret")
+
+    await api.getSummary("today")
+
+    expect(requests[0].init?.headers).toEqual({
+      "Content-Type": "application/json",
+      Authorization: "Bearer dashboard-secret",
+    })
+  })
+
+  test("stores token from URL fragment and strips it from browser history", () => {
+    let replacedUrl = ""
+    const originalLocation = globalThis.location
+    const originalHistory = globalThis.history
+    Object.defineProperty(globalThis, "location", {
+      configurable: true,
+      value: { hash: "#token=fragment-secret&tab=overview", pathname: "/dashboard", search: "?port=3456" },
+    })
+    Object.defineProperty(globalThis, "history", {
+      configurable: true,
+      value: { replaceState: (_state: unknown, _title: string, url: string) => { replacedUrl = url } },
+    })
+
+    try {
+      expect(api.initDashboardApiTokenFromLocation()).toBe("fragment-secret")
+      expect(api.getDashboardApiToken()).toBe("fragment-secret")
+      expect(replacedUrl).toBe("/dashboard?port=3456#tab=overview")
+    } finally {
+      Object.defineProperty(globalThis, "location", { configurable: true, value: originalLocation })
+      Object.defineProperty(globalThis, "history", { configurable: true, value: originalHistory })
+    }
   })
 
   test("posts budget, pricing, source sync, and goal payloads", async () => {

@@ -1,4 +1,59 @@
 const API_BASE = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3456'
+const API_TOKEN_STORAGE_KEY = 'economy-dashboard-api-token'
+const BUILD_API_TOKEN = ((import.meta.env.VITE_ECONOMY_API_TOKEN as string | undefined) ?? (import.meta.env.VITE_API_TOKEN as string | undefined) ?? '').trim()
+let memoryApiToken = ''
+
+function storageApiToken(): string {
+  if (typeof globalThis.localStorage === 'undefined') return memoryApiToken
+  return globalThis.localStorage.getItem(API_TOKEN_STORAGE_KEY)?.trim() ?? ''
+}
+
+export function initDashboardApiTokenFromLocation(): string {
+  if (typeof globalThis.location === 'undefined') return getDashboardApiToken()
+  const hash = globalThis.location.hash
+  if (!hash.includes('token=')) return getDashboardApiToken()
+
+  const params = new URLSearchParams(hash.replace(/^#\/?/, ''))
+  const token = params.get('token')?.trim() ?? ''
+  if (token) setDashboardApiToken(token)
+  params.delete('token')
+
+  const nextHash = params.toString()
+  const nextUrl = `${globalThis.location.pathname}${globalThis.location.search}${nextHash ? `#${nextHash}` : ''}`
+  globalThis.history?.replaceState(null, '', nextUrl)
+  return getDashboardApiToken()
+}
+
+export function getDashboardApiToken(): string {
+  return storageApiToken() || BUILD_API_TOKEN
+}
+
+export function setDashboardApiToken(token: string): string {
+  const normalized = token.trim()
+  if (typeof globalThis.localStorage !== 'undefined') {
+    if (normalized) globalThis.localStorage.setItem(API_TOKEN_STORAGE_KEY, normalized)
+    else globalThis.localStorage.removeItem(API_TOKEN_STORAGE_KEY)
+  } else {
+    memoryApiToken = normalized
+  }
+  return normalized
+}
+
+function headersWithAuth(headers?: HeadersInit): Record<string, string> {
+  const result: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (headers instanceof Headers) {
+    for (const [key, value] of headers.entries()) result[key] = value
+  } else if (Array.isArray(headers)) {
+    for (const [key, value] of headers) result[key] = value
+  } else if (headers) {
+    Object.assign(result, headers)
+  }
+
+  const hasAuth = Object.keys(result).some(key => ['authorization', 'x-economy-token'].includes(key.toLowerCase()))
+  const token = getDashboardApiToken()
+  if (token && !hasAuth) result.Authorization = `Bearer ${token}`
+  return result
+}
 
 export type Agent =
   | 'claude'
@@ -17,8 +72,8 @@ export const ALL_AGENTS: Agent[] = [
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const url = `${API_BASE}${path}`
   const res = await fetch(url, {
-    headers: { 'Content-Type': 'application/json' },
     ...options,
+    headers: headersWithAuth(options?.headers),
   })
   if (!res.ok) {
     const text = await res.text()

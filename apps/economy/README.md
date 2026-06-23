@@ -30,6 +30,7 @@ bun install -g @hasna/economy
 economy sync --verbose
 economy today
 economy pricing list
+export ECONOMY_API_TOKEN="$(openssl rand -hex 32)"
 economy serve --port 3456
 ```
 
@@ -181,8 +182,18 @@ Budget webhooks fire after sync when the alert threshold is crossed. Failed webh
 Start the server:
 
 ```bash
+export ECONOMY_API_TOKEN="$(openssl rand -hex 32)"
 economy-serve --port 3456
 ```
+
+The REST API requires `ECONOMY_API_TOKEN` or `HASNA_ECONOMY_API_TOKEN` by default.
+Pass it as `Authorization: Bearer <token>` or `X-Economy-Token: <token>`.
+`/health` stays unauthenticated for local liveness checks.
+
+The server binds to `127.0.0.1` unless `ECONOMY_BIND` or `ECONOMY_HOST` is set.
+Only localhost browser origins are allowed by default; set
+`ECONOMY_CORS_ORIGIN` or comma-separated `ECONOMY_CORS_ORIGINS` for a specific
+dashboard origin. CORS never defaults to `*`.
 
 Common endpoints:
 

@@ -210,4 +210,14 @@ describe('economy CLI mutation validation', () => {
     expect(result.exitCode).toBe(1)
     expect(result.stderr).toContain('--agent must be one of: claude, takumi, codex, gemini, opencode, cursor, pi, hermes')
   })
+
+  test('dashboard command requires an API token before starting or opening', async () => {
+    const result = await runCli(['dashboard', '--port', '3456'], {
+      ECONOMY_API_TOKEN: '',
+      HASNA_ECONOMY_API_TOKEN: '',
+    })
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('ECONOMY_API_TOKEN or HASNA_ECONOMY_API_TOKEN is required')
+  })
 })

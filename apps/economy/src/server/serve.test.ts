@@ -16,6 +16,15 @@ const SYNC_ENV_KEYS = [
   'HASNA_ECONOMY_GEMINI_TMP_DIR',
   'HASNA_ECONOMY_GEMINI_HISTORY_DIR',
 ] as const
+const SERVE_ENV_KEYS = [
+  'ECONOMY_API_TOKEN',
+  'HASNA_ECONOMY_API_TOKEN',
+  'ECONOMY_BIND',
+  'ECONOMY_HOST',
+  'ECONOMY_CORS_ORIGIN',
+  'ECONOMY_CORS_ORIGINS',
+] as const
+const SERVE_ENV = Object.fromEntries(SERVE_ENV_KEYS.map(key => [key, process.env[key]])) as Record<typeof SERVE_ENV_KEYS[number], string | undefined>
 
 function makeDb(): Database {
   return openDatabase(':memory:', true)
@@ -50,13 +59,18 @@ async function req(
   path: string,
   method = 'GET',
   body?: unknown,
-  headers: Record<string, string> = {},
+  headers: Record<string, string> | null = {},
 ): Promise<{ status: number; data: unknown }> {
+  const requestHeaders = headers === null ? {} : {
+    ...(body ? { 'Content-Type': 'application/json' } : {}),
+    ...(process.env['ECONOMY_API_TOKEN'] && !headers['Authorization'] && !headers['X-Economy-Token']
+      ? { Authorization: `Bearer ${process.env['ECONOMY_API_TOKEN']}` }
+      : {}),
+    ...headers,
+  }
   const r = new Request(`http://localhost:3456${path}`, {
     method,
-    headers: body
-      ? { 'Content-Type': 'application/json', ...headers }
-      : headers,
+    headers: requestHeaders,
     body: body ? JSON.stringify(body) : undefined,
   })
   const res = await handler(r)
@@ -65,9 +79,11 @@ async function req(
 }
 
 async function rawReq(handler: (r: Request) => Promise<Response>, path: string, method: string, body: string): Promise<{ status: number; data: unknown }> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (process.env['ECONOMY_API_TOKEN']) headers['Authorization'] = `Bearer ${process.env['ECONOMY_API_TOKEN']}`
   const r = new Request(`http://localhost:3456${path}`, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body,
   })
   const res = await handler(r)
@@ -80,6 +96,8 @@ describe('REST API server', () => {
   let db: Database
 
   beforeEach(() => {
+    for (const key of SERVE_ENV_KEYS) delete process.env[key]
+    process.env['ECONOMY_API_TOKEN'] = 'test-token'
     db = makeDb()
     seedData(db)
     handler = createHandler(db)
@@ -87,6 +105,11 @@ describe('REST API server', () => {
 
   afterEach(() => {
     for (const key of SYNC_ENV_KEYS) delete process.env[key]
+    for (const key of SERVE_ENV_KEYS) {
+      const value = SERVE_ENV[key]
+      if (value == null) delete process.env[key]
+      else process.env[key] = value
+    }
     for (const root of roots.splice(0)) {
       if (existsSync(root)) rmSync(root, { recursive: true, force: true })
     }
@@ -176,22 +199,38 @@ describe('REST API server', () => {
     expect(typeof d['is_alert']).toBe('boolean')
   })
 
-  it('rejects API requests without token when ECONOMY_API_TOKEN is set', async () => {
-    process.env['ECONOMY_API_TOKEN'] = 'test-token'
-    try {
-      const authed = await req(handler, '/api/summary?period=today', 'GET', undefined, {
-        Authorization: 'Bearer test-token',
-      })
-      expect(authed.status).toBe(200)
+  it('rejects API requests without a valid token by default', async () => {
+    const authed = await req(handler, '/api/summary?period=today', 'GET', undefined, {
+      Authorization: 'Bearer test-token',
+    })
+    expect(authed.status).toBe(200)
 
-      const denied = await req(handler, '/api/summary?period=today')
-      expect(denied.status).toBe(401)
+    const headerAuthed = await req(handler, '/api/summary?period=today', 'GET', undefined, {
+      'X-Economy-Token': 'test-token',
+    })
+    expect(headerAuthed.status).toBe(200)
 
-      const health = await req(handler, '/health')
-      expect(health.status).toBe(200)
-    } finally {
-      delete process.env['ECONOMY_API_TOKEN']
-    }
+    const denied = await req(handler, '/api/summary?period=today', 'GET', undefined, null)
+    expect(denied.status).toBe(401)
+
+    const wrong = await req(handler, '/api/summary?period=today', 'GET', undefined, {
+      Authorization: 'Bearer wrong-token',
+    })
+    expect(wrong.status).toBe(401)
+
+    const health = await req(handler, '/health', 'GET', undefined, null)
+    expect(health.status).toBe(200)
+  })
+
+  it('rejects API requests when no token is configured', async () => {
+    delete process.env['ECONOMY_API_TOKEN']
+    delete process.env['HASNA_ECONOMY_API_TOKEN']
+
+    const denied = await req(handler, '/api/summary?period=today', 'GET', undefined, null)
+    expect(denied.status).toBe(401)
+
+    const health = await req(handler, '/health', 'GET', undefined, null)
+    expect(health.status).toBe(200)
   })
 
   it('POST /api/billing/sync validates days', async () => {
@@ -720,11 +759,47 @@ describe('REST API server', () => {
     expect(rows.every(row => row['agent'] === 'claude')).toBe(true)
   })
 
-  it('OPTIONS returns 204 with CORS headers', async () => {
-    const r = new Request('http://localhost:3456/api/summary', { method: 'OPTIONS' })
+  it('OPTIONS returns non-wildcard CORS headers for local origins', async () => {
+    const r = new Request('http://localhost:3456/api/summary', {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'http://localhost:5173',
+        'Access-Control-Request-Method': 'GET',
+      },
+    })
     const res = await handler(r)
     expect(res.status).toBe(204)
-    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('http://localhost:5173')
+    expect(res.headers.get('Access-Control-Allow-Origin')).not.toBe('*')
+    expect(res.headers.get('Vary')).toBe('Origin')
+  })
+
+  it('OPTIONS rejects disallowed CORS origins', async () => {
+    const r = new Request('http://localhost:3456/api/summary', {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'https://example.invalid',
+        'Access-Control-Request-Method': 'GET',
+      },
+    })
+    const res = await handler(r)
+    expect(res.status).toBe(403)
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull()
+  })
+
+  it('honors explicit CORS origin configuration without wildcarding', async () => {
+    process.env['ECONOMY_CORS_ORIGINS'] = '   '
+    process.env['ECONOMY_CORS_ORIGIN'] = 'https://dashboard.example.test'
+    const r = new Request('http://localhost:3456/api/summary', {
+      headers: {
+        Authorization: 'Bearer test-token',
+        Origin: 'https://dashboard.example.test',
+      },
+    })
+    const res = await handler(r)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://dashboard.example.test')
+    expect(res.headers.get('Access-Control-Allow-Origin')).not.toBe('*')
   })
 
   it('returns 404 for unknown routes', async () => {
@@ -733,10 +808,13 @@ describe('REST API server', () => {
     expect((data as Record<string, unknown>)['error']).toBeDefined()
   })
 
-  it('CORS headers present on all responses', async () => {
-    const r = new Request('http://localhost:3456/health')
+  it('CORS headers are omitted for untrusted origins on normal responses', async () => {
+    const r = new Request('http://localhost:3456/health', {
+      headers: { Origin: 'https://example.invalid' },
+    })
     const res = await handler(r)
-    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull()
   })
 
   it('serves dashboard assets, SPA fallback, and blocks path traversal', async () => {
@@ -789,7 +867,16 @@ describe('REST API server', () => {
     expect(await response.json()).toEqual({ path: '/settings/budgets' })
   })
 
-  it('startServer returns a stoppable server bound to all interfaces', async () => {
+  it('startServer refuses to start without an API token', () => {
+    delete process.env['ECONOMY_API_TOKEN']
+    expect(() => startServer(0, {
+      db,
+      dashboardDir: '/tmp/missing-dashboard',
+      log: () => {},
+    })).toThrow('ECONOMY_API_TOKEN or HASNA_ECONOMY_API_TOKEN is required')
+  })
+
+  it('startServer returns a stoppable server bound to loopback by default', async () => {
     const root = mkdtempSync(join(tmpdir(), 'economy-start-server-'))
     roots.push(root)
     const server = startServer(0, {
@@ -800,7 +887,7 @@ describe('REST API server', () => {
 
     try {
       expect(server.port).toBeGreaterThan(0)
-      expect(server.hostname).toBe('0.0.0.0')
+      expect(server.hostname).toBe('127.0.0.1')
       const response = await fetch(`http://127.0.0.1:${server.port}/health`)
       expect(response.status).toBe(200)
       const payload = await response.json() as Record<string, Record<string, string>>
