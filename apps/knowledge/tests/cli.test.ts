@@ -295,6 +295,96 @@ describe('knowledge cli', () => {
     expect(updateOut.item.content).toBe('Updated body');
   });
 
+  test('global notes added through CLI are searchable and available as context', () => {
+    const home = mkdtempSync(join(tmpdir(), 'ok-global-note-search-home-'));
+    const env = {
+      HOME: home,
+      HASNA_KNOWLEDGE_AUTH_DIR: join(home, 'auth'),
+    };
+
+    const add = runCli([
+      'add',
+      'Hasna OSS boundary',
+      'local-first hosted wrapper open actions guardrails open orgs',
+      '--scope',
+      'global',
+      '--json',
+    ], undefined, env);
+    expect(add.exitCode).toBe(0);
+    const addOut = JSON.parse(new TextDecoder().decode(add.stdout));
+
+    const update = runCli(['update', '--id', addOut.item.id, '--tag', 'opensource', '--scope', 'global', '--json'], undefined, env);
+    expect(update.exitCode).toBe(0);
+
+    const list = runCli(['list', '--tag', 'opensource', '--scope', 'global', '--json'], undefined, env);
+    expect(list.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(list.stdout)).total).toBe(1);
+
+    const inventory = runCli(['inventory', '--scope', 'global', '--json'], undefined, env);
+    expect(inventory.exitCode).toBe(0);
+    const inventoryOut = JSON.parse(new TextDecoder().decode(inventory.stdout));
+    expect(inventoryOut.summary.legacy_items).toBe(1);
+    expect(inventoryOut.summary.chunks).toBe(0);
+
+    const search = runCli(['search', 'Hasna OSS boundary', '--scope', 'global', '--json'], undefined, env);
+    expect(search.exitCode).toBe(0);
+    const searchOut = JSON.parse(new TextDecoder().decode(search.stdout));
+    expect(searchOut.counts.keyword_results).toBe(1);
+    expect(searchOut.results[0]).toMatchObject({
+      kind: 'legacy_item',
+      id: addOut.item.id,
+      title: 'Hasna OSS boundary',
+      source: { uri: `knowledge://item/${addOut.item.id}` },
+    });
+
+    const context = runCli([
+      'search',
+      'local-first hosted wrapper open actions guardrails open orgs',
+      '--context',
+      '--scope',
+      'global',
+      '--json',
+    ], undefined, env);
+    expect(context.exitCode).toBe(0);
+    const contextOut = JSON.parse(new TextDecoder().decode(context.stdout));
+    expect(contextOut.results[0]).toMatchObject({ kind: 'legacy_item', id: addOut.item.id });
+    expect(contextOut.excerpts[0].text).toContain('local-first hosted wrapper');
+
+    const reindex = runCli(['reindex', 'enqueue', '--scope', 'global', '--json'], undefined, env);
+    expect(reindex.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(reindex.stdout)).enqueued).toBe(0);
+  });
+
+  test('global search migrates the old legacy note store before list is run', () => {
+    const home = mkdtempSync(join(tmpdir(), 'ok-global-note-legacy-migrate-'));
+    const legacyDir = join(home, '.open-knowledge');
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(legacyDir, 'db.json'), JSON.stringify({
+      items: [{
+        id: 'k_legacy_global_search',
+        title: 'Legacy Global Search',
+        content: 'tokenxyz first command migration path',
+        url: null,
+        tags: ['legacy'],
+        created_at: '2026-06-23T00:00:00.000Z',
+        updated_at: '2026-06-23T00:01:00.000Z',
+      }],
+    }));
+    const env = {
+      HOME: home,
+      HASNA_KNOWLEDGE_AUTH_DIR: join(home, 'auth'),
+    };
+
+    const search = runCli(['search', 'tokenxyz', '--scope', 'global', '--json'], undefined, env);
+    expect(search.exitCode).toBe(0);
+    const searchOut = JSON.parse(new TextDecoder().decode(search.stdout));
+    expect(searchOut.results[0]).toMatchObject({
+      kind: 'legacy_item',
+      id: 'k_legacy_global_search',
+    });
+    expect(existsSync(join(home, '.hasna', 'apps', 'knowledge', 'db.json'))).toBe(true);
+  });
+
   test('project scope uses .hasna/apps/knowledge workspace', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-workspace-'));
 

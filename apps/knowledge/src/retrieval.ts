@@ -149,6 +149,7 @@ function citationScore(result: HybridSearchEntry): number {
 function authorityScore(result: HybridSearchEntry): number {
   if (result.kind === 'wiki_chunk') return 0.85;
   if (result.kind === 'source_chunk') return 0.8;
+  if (result.kind === 'legacy_item') return 0.6;
   if (result.kind === 'wiki_page') return 0.65;
   return 0.55;
 }

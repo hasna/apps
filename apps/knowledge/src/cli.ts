@@ -476,6 +476,7 @@ async function run(argv: string[]): Promise<void> {
   if (!command || flags.help || command === 'help') { printCommandHelp(positional[1]); return; }
 
   const service = createKnowledgeService({ scope: flags.scope });
+  const storePathOverridden = Boolean(flags.store);
   let storePath = flags.store;
   if (!storePath) {
     if (flags.scope === 'project' || flags.scope === 'local') {
@@ -483,6 +484,9 @@ async function run(argv: string[]): Promise<void> {
     } else {
       storePath = defaultStorePath();
     }
+  }
+  if (!storePathOverridden && (command === 'search' || command === 'ask' || command === 'build')) {
+    ensureStore(storePath);
   }
 
   if (command === 'inventory') {
@@ -1131,6 +1135,7 @@ async function run(argv: string[]): Promise<void> {
         modelRef: flags.model,
         dimensions: flags.dimensions,
         fake: flags.fake,
+        legacyStorePath: storePath,
       });
       output({ ok: true, ...context, message: `${context.excerpts.length} context excerpt(s)` }, flags.json);
       return;
@@ -1142,6 +1147,7 @@ async function run(argv: string[]): Promise<void> {
       modelRef: flags.model,
       dimensions: flags.dimensions,
       fake: flags.fake,
+      legacyStorePath: storePath,
     });
     output({ ok: true, ...result, message: `${result.results.length} search result(s)` }, flags.json);
     return;
@@ -1177,6 +1183,7 @@ async function run(argv: string[]): Promise<void> {
       fake: flags.fake,
       generate: flags.generate,
       approveWrite: flags.approveWrite,
+      legacyStorePath: storePath,
     });
     output({ ok: true, ...result, message: result.generated ? 'Generated answer with citations' : 'Prepared citation context draft' }, flags.json);
     return;

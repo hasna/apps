@@ -225,8 +225,8 @@ knowledge list|ls [options]
 ```
 List compatibility JSON-store items with pagination, search, and tag filtering.
 Use `knowledge inventory` or `knowledge search` when an agent needs the
-SQLite catalog, source chunks, generated wiki pages, artifacts, runs, and sync
-state too.
+SQLite catalog, source chunks, generated wiki pages, artifacts, runs, sync
+state, or keyword retrieval across active compatibility notes too.
 
 | Flag | Description |
 |------|-------------|
@@ -568,17 +568,24 @@ hash, updates permission/path/delete metadata, and records a local run ledger.
 Outbox inputs can be local files or allowed S3 objects, but raw source files
 remain owned by `open-files`.
 
+Compatibility notes created by `knowledge add` live in the JSON item store.
+They are returned by `knowledge search` and `knowledge search --context` through
+keyword matching, but they are not chunked or embedded by `reindex`; reindexing
+only refreshes SQLite source/wiki chunks and vector rows.
+
 ### search
 ```bash
 knowledge search <query> [--scope project] [--limit <n>] [--json]
 knowledge search <query> --semantic [--model openai:text-embedding-3-small] [--scope project] [--json]
 knowledge search <query> --context [--semantic] [--scope project] [--json]
 ```
-Run hybrid search over `chunks_fts`, generated wiki chunks, wiki/index catalog
-rows, and optional vector results. The default path is local-only keyword and
-catalog search. `--semantic` embeds the query and merges vector results from
-`vector_index_entries`, preserving source refs, artifact URIs, citations,
-revision/hash metadata, and provenance in each structured result.
+Run hybrid search over active JSON-store notes, `chunks_fts`, generated wiki
+chunks, wiki/index catalog rows, and optional vector results. The default path
+is local-only keyword and catalog search. `--semantic` embeds the query and
+merges vector results from `vector_index_entries`, preserving source refs,
+artifact URIs, citations, revision/hash metadata, and provenance in each
+structured result. JSON notes are keyword-only results with `kind:
+legacy_item` and `knowledge://item/<id>` source refs.
 
 `--context` returns a reranked context pack for agents: selected excerpts,
 assembled citations, freshness and permission notes, graph evidence from
