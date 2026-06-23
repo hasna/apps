@@ -1,11 +1,27 @@
-import type { CreateLoopInput, Goal, GoalRun, Loop, LoopRun } from "../types.js";
+import type { CreateLoopInput, Goal, GoalRun, Loop, LoopRun, LoopStatus, RunStatus } from "../types.js";
 import { advanceLoop, executeClaimedRun, manualRunScheduledFor, shouldAdvanceManualRun, tick } from "../lib/scheduler.js";
 import { Store } from "../lib/store.js";
+import { mergeLoopLabels, normalizeLoopLabels, removeLoopLabels } from "../lib/labels.js";
 export { runGoal } from "../lib/goal/runner.js";
 
 export interface LoopsClientOptions {
   store?: Store;
   runnerId?: string;
+}
+
+export interface ListLoopsOptions {
+  status?: LoopStatus;
+  label?: string;
+  labels?: string[];
+  limit?: number;
+}
+
+export interface ListRunsOptions {
+  loopId?: string;
+  status?: RunStatus;
+  label?: string;
+  labels?: string[];
+  limit?: number;
 }
 
 export class LoopsClient {
@@ -23,8 +39,8 @@ export class LoopsClient {
     return this.store.createLoop(input);
   }
 
-  list(): Loop[] {
-    return this.store.listLoops();
+  list(opts: ListLoopsOptions = {}): Loop[] {
+    return this.store.listLoops(opts);
   }
 
   get(idOrName: string): Loop {
@@ -46,12 +62,30 @@ export class LoopsClient {
     return this.store.updateLoop(loop.id, { status: "stopped", nextRunAt: undefined });
   }
 
+  setLabels(idOrName: string, labels: string[]): Loop {
+    const loop = this.get(idOrName);
+    return this.store.updateLoop(loop.id, { labels: normalizeLoopLabels(labels) });
+  }
+
+  addLabels(idOrName: string, labels: string[]): Loop {
+    const loop = this.get(idOrName);
+    return this.store.updateLoop(loop.id, { labels: mergeLoopLabels(loop.labels, labels) });
+  }
+
+  removeLabels(idOrName: string, labels: string[]): Loop {
+    const loop = this.get(idOrName);
+    return this.store.updateLoop(loop.id, { labels: removeLoopLabels(loop.labels, labels) });
+  }
+
   delete(idOrName: string): boolean {
     return this.store.deleteLoop(idOrName);
   }
 
-  runs(loopId?: string): LoopRun[] {
-    return this.store.listRuns({ loopId });
+  runs(loopIdOrOpts?: string | ListRunsOptions, opts: Omit<ListRunsOptions, "loopId"> = {}): LoopRun[] {
+    if (typeof loopIdOrOpts === "string" || loopIdOrOpts === undefined) {
+      return this.store.listRuns({ ...opts, loopId: loopIdOrOpts });
+    }
+    return this.store.listRuns(loopIdOrOpts);
   }
 
   goal(idOrName: string): { goal?: Goal; runs: GoalRun[] } {

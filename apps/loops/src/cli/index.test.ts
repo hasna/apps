@@ -135,6 +135,67 @@ describe("loops CLI", () => {
     expect(shown.machine.id).toBe(value.machine.id);
   });
 
+  test("create/list/show/runs support labels and label edits", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-labels-"));
+    const createBrowser = runCli(dataDir, [
+      "--json",
+      "create",
+      "command",
+      "browser",
+      "--at",
+      futureAt(),
+      "--cmd",
+      "printf browser",
+      "--label",
+      "BrowserPlan",
+      "--label",
+      "nightly",
+    ]);
+    expect(createBrowser.status).toBe(0);
+    const browser = JSON.parse(createBrowser.stdout);
+    expect(browser.labels).toEqual(["browserplan", "nightly"]);
+
+    const createOther = runCli(dataDir, ["create", "command", "other", "--at", futureAt(), "--cmd", "true", "--label", "other"]);
+    expect(createOther.status).toBe(0);
+
+    const show = runCli(dataDir, ["--json", "show", "browser"]);
+    expect(show.status).toBe(0);
+    expect(JSON.parse(show.stdout).labels).toEqual(["browserplan", "nightly"]);
+
+    const list = runCli(dataDir, ["--json", "list", "--label", "browserplan"]);
+    expect(list.status).toBe(0);
+    expect(JSON.parse(list.stdout).map((loop: { name: string }) => loop.name)).toEqual(["browser"]);
+
+    const run = runCli(dataDir, ["--json", "run-now", "browser"]);
+    expect(run.status).toBe(0);
+    const runs = runCli(dataDir, ["--json", "runs", "--label", "browserplan"]);
+    expect(runs.status).toBe(0);
+    expect(JSON.parse(runs.stdout).map((entry: { loopName: string }) => entry.loopName)).toEqual(["browser"]);
+
+    const add = runCli(dataDir, ["--json", "labels", "add", "browser", "urgent"]);
+    expect(add.status).toBe(0);
+    expect(JSON.parse(add.stdout).labels).toEqual(["browserplan", "nightly", "urgent"]);
+
+    const remove = runCli(dataDir, ["--json", "labels", "remove", "browser", "nightly"]);
+    expect(remove.status).toBe(0);
+    expect(JSON.parse(remove.stdout).labels).toEqual(["browserplan", "urgent"]);
+
+    const set = runCli(dataDir, ["--json", "labels", "set", "browser", "browserplan"]);
+    expect(set.status).toBe(0);
+    expect(JSON.parse(set.stdout).labels).toEqual(["browserplan"]);
+
+    const clear = runCli(dataDir, ["--json", "labels", "clear", "browser"]);
+    expect(clear.status).toBe(0);
+    expect(JSON.parse(clear.stdout).labels).toEqual([]);
+  });
+
+  test("--label validates label format", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-bad-label-"));
+    const create = runCli(dataDir, ["create", "command", "bad-label", "--at", futureAt(), "--cmd", "true", "--label", "bad label"]);
+    expect(create.status).not.toBe(0);
+    expect(create.stderr).toContain("label");
+  });
+
   test("machines commands expose OpenMachines topology", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-machines-"));
     const list = runCli(dataDir, ["--json", "machines", "list"]);

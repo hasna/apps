@@ -204,6 +204,7 @@ export interface Loop {
   id: string;
   name: string;
   description?: string;
+  labels?: string[];
   status: LoopStatus;
   schedule: ScheduleSpec;
   target: LoopTarget;
@@ -247,6 +248,7 @@ export interface LoopRun {
 export interface CreateLoopInput {
   name: string;
   description?: string;
+  labels?: string[];
   schedule: ScheduleSpec;
   target: LoopTarget;
   goal?: GoalSpec;

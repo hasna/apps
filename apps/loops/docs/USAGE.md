@@ -99,6 +99,29 @@ accounts tools add codewith --label "Codewith" --env-var CODEWITH_HOME --bin cod
 accounts tools add aicopilot --label "AI Copilot" --env-var AICOPILOT_CONFIG_DIR --bin aicopilot
 ```
 
+## Labels
+
+Add `--label <label>` when creating command, agent, or workflow loops. The flag is repeatable:
+
+```bash
+loops create command repo-status --every 1m --cmd "git status --short" --label browserplan --label maintenance
+loops list --label browserplan
+loops runs --label browserplan
+```
+
+Labels are normalized to lowercase and must start with a letter or digit. Use only letters, digits, dots, dashes, and underscores. A loop can have up to 32 labels.
+
+Manage labels after creation:
+
+```bash
+loops labels add repo-status urgent
+loops labels remove repo-status maintenance
+loops labels set repo-status browserplan nightly
+loops labels clear repo-status
+```
+
+Repeated `--label` filters require all requested labels to be present. Run filtering uses the loop's current labels, not a historical label snapshot stored on each run.
+
 ## Workflows
 
 Create a workflow JSON file:
@@ -192,6 +215,54 @@ Use `--json` for machine-readable output. Prompt bodies and run stdout/stderr ar
 - `source=ad_hoc`: the loop was not due yet, so OpenLoops created a one-off manual slot. This is a single immediate attempt and does not schedule retries or consume the future scheduled slot.
 - `source=due_slot`: the persisted scheduled slot was already due, so the manual run claims that slot and advances or retries the loop using normal scheduler rules.
 - `source=retry_slot`: the loop was waiting on a failed slot retry, so the manual run claims that retry slot and advances the loop using normal retry rules.
+
+## MCP Server
+
+OpenLoops ships a stdio MCP server for local agents and MCP clients:
+
+```json
+{
+  "mcpServers": {
+    "openloops": {
+      "command": "loops-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+When running from a source checkout, use:
+
+```json
+{
+  "mcpServers": {
+    "openloops": {
+      "command": "bun",
+      "args": ["run", "/path/to/open-loops/src/mcp/index.ts"]
+    }
+  }
+}
+```
+
+The server exposes these tools:
+
+- `openloops_create_loop`: create command, agent, or workflow loops with schedules, labels, policy, goals, and machine assignment.
+- `openloops_list_loops`: list loops by status and labels.
+- `openloops_get_loop`: read one loop with bounded recent runs.
+- `openloops_run_now`: run a loop immediately using normal OpenLoops execution semantics.
+- `openloops_pause_loop`, `openloops_resume_loop`, `openloops_stop_loop`, `openloops_delete_loop`: manage loop lifecycle.
+- `openloops_update_labels`: set, add, remove, or clear loop labels.
+- `openloops_list_runs`: inspect recent runs by loop, status, labels, and bounded output.
+- `openloops_validate_workflow`: validate a workflow spec object and optionally preflight targets.
+- `openloops_create_workflow`, `openloops_list_workflows`, `openloops_get_workflow`, `openloops_archive_workflow`: manage stored workflow specs.
+- `openloops_run_workflow`, `openloops_list_workflow_runs`, `openloops_inspect_workflow_run`, `openloops_list_workflow_events`, `openloops_cancel_workflow_run`, `openloops_recover_workflow_run`: run, inspect, cancel, and recover workflow executions.
+- `openloops_get_goal`, `openloops_get_goal_status`: read configured or runtime goal state.
+- `openloops_list_machines`, `openloops_resolve_machine`: inspect OpenMachines assignments for loops.
+- `openloops_tick`: run one scheduler tick, claiming and executing due loops.
+- `openloops_daemon_status`: read daemon process, lease, loop, and run counts.
+- `openloops_doctor`: run local health checks.
+
+Tool responses include structured JSON plus a compact text JSON summary. Run stdout/stderr and agent prompts are redacted by default; tools that expose output accept `showOutput` and cap text through `maxOutputChars` up to 32,000 characters. MCP command loop creation uses the same typed command target boundary as the CLI and SDK. Connect the server only to trusted local clients because `openloops_run_now`, `openloops_run_workflow`, and `openloops_tick` can execute loops or workflows stored in OpenLoops.
 
 ## Daemon
 

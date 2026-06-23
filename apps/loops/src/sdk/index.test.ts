@@ -7,6 +7,32 @@ import { Store } from "../lib/store.js";
 import { LoopsClient } from "./index.js";
 
 describe("loops sdk", () => {
+  test("lists and updates labels", () => {
+    const store = new Store(":memory:");
+    const client = new LoopsClient({ store, runnerId: "manual" });
+    try {
+      client.create({
+        name: "sdk-labels",
+        labels: ["BrowserPlan"],
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "command", command: "true" },
+      });
+      client.create({
+        name: "sdk-other",
+        labels: ["other"],
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "command", command: "true" },
+      });
+
+      expect(client.list({ label: "browserplan" }).map((loop) => loop.name)).toEqual(["sdk-labels"]);
+      expect(client.addLabels("sdk-labels", ["nightly"]).labels).toEqual(["browserplan", "nightly"]);
+      expect(client.removeLabels("sdk-labels", ["browserplan"]).labels).toEqual(["nightly"]);
+      expect(client.setLabels("sdk-labels", []).labels).toEqual([]);
+    } finally {
+      client.close();
+    }
+  });
+
   test("runNow falls back to ad hoc when the due slot is already terminal", async () => {
     const store = new Store(":memory:");
     const client = new LoopsClient({ store, runnerId: "manual" });

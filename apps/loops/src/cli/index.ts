@@ -27,6 +27,7 @@ import { normalizeGoalSpec } from "../lib/workflow-spec.js";
 import { runDoctor } from "../lib/doctor.js";
 import { listOpenMachines, resolveLoopMachine } from "../lib/machines.js";
 import { packageVersion } from "../lib/version.js";
+import { mergeLoopLabels, normalizeLoopLabels, removeLoopLabels } from "../lib/labels.js";
 
 const program = new Command();
 
@@ -69,6 +70,17 @@ function positiveDuration(raw: string | undefined, label: string): number | unde
   return value;
 }
 
+type CliOpts = Record<string, string | string[] | boolean | undefined>;
+
+function collectRepeated(value: string, previous: string[]): string[] {
+  return [...(previous ?? []), value];
+}
+
+function labelsFromOpts(opts: CliOpts): string[] {
+  const value = opts.label;
+  return normalizeLoopLabels(Array.isArray(value) ? value : typeof value === "string" ? [value] : undefined);
+}
+
 function parsePolicy(opts: {
   catchUp?: string;
   catchUpLimit?: string;
@@ -91,7 +103,7 @@ function parsePolicy(opts: {
   };
 }
 
-function baseCreateInput(name: string, opts: Record<string, string | boolean | undefined>, target: LoopTarget): CreateLoopInput {
+function baseCreateInput(name: string, opts: CliOpts, target: LoopTarget): CreateLoopInput {
   const schedule = parseSchedule({
     at: typeof opts.at === "string" ? opts.at : undefined,
     every: typeof opts.every === "string" ? opts.every : undefined,
@@ -109,6 +121,7 @@ function baseCreateInput(name: string, opts: Record<string, string | boolean | u
   return {
     name,
     description: typeof opts.description === "string" ? opts.description : undefined,
+    labels: labelsFromOpts(opts),
     schedule,
     target,
     goal: goalFromOpts(opts),
@@ -134,6 +147,10 @@ function addScheduleOptions(command: Command): Command {
     .option("-d, --description <text>", "description");
 }
 
+function addLabelOptions(command: Command): Command {
+  return command.option("--label <label>", "loop label; repeatable", collectRepeated, []);
+}
+
 function addAccountOptions(command: Command): Command {
   return command
     .option("--account <profile>", "OpenAccounts profile name for this target")
@@ -152,7 +169,7 @@ function addGoalOptions(command: Command): Command {
     .option("--goal-max-turns <n>", "maximum goal orchestration turns");
 }
 
-function goalFromOpts(opts: Record<string, string | boolean | undefined>) {
+function goalFromOpts(opts: CliOpts) {
   const hasGoalOption = opts.goal !== undefined || opts.goalBudget !== undefined || opts.goalModel !== undefined || opts.goalMaxTurns !== undefined;
   if (!hasGoalOption) return undefined;
   if (typeof opts.goal !== "string") throw new Error("--goal is required when using goal options");
@@ -185,13 +202,15 @@ addGoalOptions(
   addAccountOptions(
     addMachineOptions(
       addScheduleOptions(
-      create
-        .command("command <name>")
-        .description("create a deterministic shell command loop")
-        .requiredOption("--cmd <command>", "command string to execute")
-        .option("--cwd <dir>", "working directory")
-        .option("--timeout <duration>", "run timeout")
-        .option("--no-shell", "execute without a shell"),
+        addLabelOptions(
+          create
+            .command("command <name>")
+            .description("create a deterministic shell command loop")
+            .requiredOption("--cmd <command>", "command string to execute")
+            .option("--cwd <dir>", "working directory")
+            .option("--timeout <duration>", "run timeout")
+            .option("--no-shell", "execute without a shell"),
+        ),
       ),
     ),
   ),
@@ -217,17 +236,19 @@ addGoalOptions(
   addAccountOptions(
     addMachineOptions(
       addScheduleOptions(
-      create
-        .command("agent <name>")
-        .description("create a headless coding-agent loop")
-        .requiredOption("--provider <provider>", "claude, cursor, codewith, aicopilot, opencode, or codex")
-        .requiredOption("--prompt <prompt>", "agent prompt")
-        .option("--cwd <dir>", "working directory")
-        .option("--model <model>", "model")
-        .option("--agent <agent>", "provider-specific agent")
-        .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
-        .option("--timeout <duration>", "run timeout")
-        .option("--config-isolation <mode>", "safe or none", "safe"),
+        addLabelOptions(
+          create
+            .command("agent <name>")
+            .description("create a headless coding-agent loop")
+            .requiredOption("--provider <provider>", "claude, cursor, codewith, aicopilot, opencode, or codex")
+            .requiredOption("--prompt <prompt>", "agent prompt")
+            .option("--cwd <dir>", "working directory")
+            .option("--model <model>", "model")
+            .option("--agent <agent>", "provider-specific agent")
+            .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
+            .option("--timeout <duration>", "run timeout")
+            .option("--config-isolation <mode>", "safe or none", "safe"),
+        ),
       ),
     ),
   ),
@@ -263,10 +284,12 @@ addGoalOptions(
 addGoalOptions(
   addMachineOptions(
     addScheduleOptions(
-    create
-      .command("workflow <name>")
-      .description("schedule a stored workflow")
-      .requiredOption("--workflow <idOrName>", "workflow id or name"),
+      addLabelOptions(
+        create
+          .command("workflow <name>")
+          .description("schedule a stored workflow")
+          .requiredOption("--workflow <idOrName>", "workflow id or name"),
+      ),
     ),
   ),
 ).action((name, opts) => {
@@ -559,15 +582,17 @@ program
   .command("list")
   .alias("ls")
   .option("--status <status>", "filter by status")
+  .option("--label <label>", "filter by label; repeatable", collectRepeated, [])
   .action((opts) => {
     const store = new Store();
     try {
-      const loops = store.listLoops({ status: opts.status });
+      const loops = store.listLoops({ status: opts.status, labels: labelsFromOpts(opts) });
       if (isJson()) print(loops.map(publicLoop));
       else {
         for (const loop of loops) {
+          const labels = loop.labels?.length ? `  labels=${loop.labels.join(",")}` : "";
           const machine = loop.machine ? `  machine=${loop.machine.id}` : "";
-          console.log(`${loop.id}  ${loop.status.padEnd(7)}  next=${loop.nextRunAt ?? "-"}  ${loop.name}${machine}`);
+          console.log(`${loop.id}  ${loop.status.padEnd(7)}  next=${loop.nextRunAt ?? "-"}  ${loop.name}${labels}${machine}`);
         }
       }
     } finally {
@@ -587,12 +612,13 @@ program.command("show <idOrName>").action((idOrName) => {
 program
   .command("runs [idOrName]")
   .option("--limit <n>", "limit", "50")
+  .option("--label <label>", "filter by loop label; repeatable", collectRepeated, [])
   .option("--show-output", "show stdout/stderr")
   .action((idOrName, opts) => {
     const store = new Store();
     try {
       const loop = idOrName ? store.requireLoop(idOrName) : undefined;
-      const runs = store.listRuns({ loopId: loop?.id, limit: Number(opts.limit) });
+      const runs = store.listRuns({ loopId: loop?.id, labels: labelsFromOpts(opts), limit: Number(opts.limit) });
       if (isJson()) print(runs.map((run) => publicRun(run, opts.showOutput)));
       else {
         for (const run of runs) {
@@ -610,6 +636,65 @@ program
 program.command("pause <idOrName>").action((idOrName) => updateStatus(idOrName, "paused"));
 program.command("resume <idOrName>").action((idOrName) => updateStatus(idOrName, "active"));
 program.command("stop <idOrName>").action((idOrName) => updateStatus(idOrName, "stopped"));
+
+const labels = program.command("labels").description("manage loop labels");
+
+labels
+  .command("set <idOrName> [labels...]")
+  .description("replace loop labels")
+  .action((idOrName, nextLabels) => {
+    const store = new Store();
+    try {
+      const loop = store.requireLoop(idOrName);
+      const updated = store.updateLoop(loop.id, { labels: normalizeLoopLabels(nextLabels ?? []) });
+      print(publicLoop(updated), `${updated.id} labels=${updated.labels?.join(",") ?? ""}`);
+    } finally {
+      store.close();
+    }
+  });
+
+labels
+  .command("add <idOrName> <labels...>")
+  .description("add loop labels")
+  .action((idOrName, addedLabels) => {
+    const store = new Store();
+    try {
+      const loop = store.requireLoop(idOrName);
+      const updated = store.updateLoop(loop.id, { labels: mergeLoopLabels(loop.labels, addedLabels) });
+      print(publicLoop(updated), `${updated.id} labels=${updated.labels?.join(",") ?? ""}`);
+    } finally {
+      store.close();
+    }
+  });
+
+labels
+  .command("remove <idOrName> <labels...>")
+  .alias("rm")
+  .description("remove loop labels")
+  .action((idOrName, removedLabels) => {
+    const store = new Store();
+    try {
+      const loop = store.requireLoop(idOrName);
+      const updated = store.updateLoop(loop.id, { labels: removeLoopLabels(loop.labels, removedLabels) });
+      print(publicLoop(updated), `${updated.id} labels=${updated.labels?.join(",") ?? ""}`);
+    } finally {
+      store.close();
+    }
+  });
+
+labels
+  .command("clear <idOrName>")
+  .description("remove all loop labels")
+  .action((idOrName) => {
+    const store = new Store();
+    try {
+      const loop = store.requireLoop(idOrName);
+      const updated = store.updateLoop(loop.id, { labels: [] });
+      print(publicLoop(updated), `${updated.id} labels=`);
+    } finally {
+      store.close();
+    }
+  });
 
 function updateStatus(idOrName: string, status: "paused" | "active" | "stopped"): void {
   const store = new Store();

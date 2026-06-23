@@ -1,0 +1,298 @@
+import { describe, expect, test } from "bun:test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { createOpenLoopsMcpServer } from "./server.js";
+import { Store } from "../lib/store.js";
+
+async function mcpClient(store: Store) {
+  const server = createOpenLoopsMcpServer({ store, runnerId: "mcp-test" });
+  const client = new Client({ name: "openloops-test", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  return { client, server };
+}
+
+function structured<T>(value: unknown): T {
+  const result = value as { structuredContent?: unknown };
+  expect(result.structuredContent).toBeDefined();
+  return result.structuredContent as T;
+}
+
+describe("OpenLoops MCP server", () => {
+  test("advertises explicit practical tools", async () => {
+    const store = new Store(":memory:");
+    const { client, server } = await mcpClient(store);
+    try {
+      const tools = await client.listTools();
+      const names = tools.tools.map((tool) => tool.name).sort();
+      expect(names).toEqual([
+        "openloops_archive_workflow",
+        "openloops_cancel_workflow_run",
+        "openloops_create_loop",
+        "openloops_create_workflow",
+        "openloops_daemon_status",
+        "openloops_delete_loop",
+        "openloops_doctor",
+        "openloops_get_goal",
+        "openloops_get_goal_status",
+        "openloops_get_loop",
+        "openloops_get_workflow",
+        "openloops_inspect_workflow_run",
+        "openloops_list_loops",
+        "openloops_list_machines",
+        "openloops_list_runs",
+        "openloops_list_workflow_events",
+        "openloops_list_workflow_runs",
+        "openloops_list_workflows",
+        "openloops_pause_loop",
+        "openloops_recover_workflow_run",
+        "openloops_resolve_machine",
+        "openloops_resume_loop",
+        "openloops_run_now",
+        "openloops_run_workflow",
+        "openloops_stop_loop",
+        "openloops_tick",
+        "openloops_update_labels",
+        "openloops_validate_workflow",
+      ]);
+      const create = tools.tools.find((tool) => tool.name === "openloops_create_loop");
+      expect(create?.inputSchema.type).toBe("object");
+      expect(create?.inputSchema.properties).toHaveProperty("schedule");
+      expect(create?.inputSchema.properties).toHaveProperty("target");
+      expect(create?.inputSchema.properties).toHaveProperty("labels");
+    } finally {
+      await client.close();
+      await server.close();
+      store.close();
+    }
+  });
+
+  test("creates, filters, runs, inspects, labels, pauses, resumes, and deletes loops", async () => {
+    const store = new Store(":memory:");
+    const { client, server } = await mcpClient(store);
+    try {
+      const created = structured<{ loop: { name: string; labels: string[] } }>(
+        await client.callTool({
+          name: "openloops_create_loop",
+          arguments: {
+            name: "mcp-loop",
+            labels: ["BrowserPlan"],
+            schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+            target: { type: "command", command: "printf SECRET_OUTPUT", shell: true },
+          },
+        }),
+      );
+      expect(created.loop.name).toBe("mcp-loop");
+      expect(created.loop.labels).toEqual(["browserplan"]);
+
+      const listed = structured<{ loops: { name: string }[] }>(
+        await client.callTool({ name: "openloops_list_loops", arguments: { labels: ["browserplan"] } }),
+      );
+      expect(listed.loops.map((loop) => loop.name)).toEqual(["mcp-loop"]);
+
+      const redactedRun = structured<{ run: { status: string; stdout?: string } }>(
+        await client.callTool({ name: "openloops_run_now", arguments: { idOrName: "mcp-loop" } }),
+      );
+      expect(redactedRun.run.status).toBe("succeeded");
+      expect(redactedRun.run.stdout).toContain("[redacted");
+      expect(JSON.stringify(redactedRun)).not.toContain("SECRET_OUTPUT");
+      const redactedCall = await client.callTool({ name: "openloops_get_loop", arguments: { idOrName: "mcp-loop" } });
+      expect(JSON.stringify(redactedCall.content)).not.toContain("SECRET_OUTPUT");
+
+      const runs = structured<{ runs: { loopName: string; stdout?: string }[] }>(
+        await client.callTool({
+          name: "openloops_list_runs",
+          arguments: { labels: ["browserplan"], showOutput: true, maxOutputChars: 6 },
+        }),
+      );
+      expect(runs.runs[0]?.loopName).toBe("mcp-loop");
+      expect(runs.runs[0]?.stdout).toContain("[truncated");
+
+      const relabeled = structured<{ loop: { labels: string[] } }>(
+        await client.callTool({ name: "openloops_update_labels", arguments: { idOrName: "mcp-loop", mode: "add", labels: ["urgent"] } }),
+      );
+      expect(relabeled.loop.labels).toEqual(["browserplan", "urgent"]);
+
+      const paused = structured<{ loop: { status: string } }>(
+        await client.callTool({ name: "openloops_pause_loop", arguments: { idOrName: "mcp-loop" } }),
+      );
+      expect(paused.loop.status).toBe("paused");
+      const resumed = structured<{ loop: { status: string } }>(
+        await client.callTool({ name: "openloops_resume_loop", arguments: { idOrName: "mcp-loop" } }),
+      );
+      expect(resumed.loop.status).toBe("active");
+
+      const read = structured<{ loop: { name: string }; recentRuns: unknown[] }>(
+        await client.callTool({ name: "openloops_get_loop", arguments: { idOrName: "mcp-loop", includeRecentRuns: true } }),
+      );
+      expect(read.loop.name).toBe("mcp-loop");
+      expect(read.recentRuns.length).toBe(1);
+
+      const deleted = structured<{ removed: boolean }>(
+        await client.callTool({ name: "openloops_delete_loop", arguments: { idOrName: "mcp-loop" } }),
+      );
+      expect(deleted.removed).toBe(true);
+
+      const badAuthProfile = await client.callTool({
+        name: "openloops_create_loop",
+        arguments: {
+          name: "bad-auth-profile",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "agent", provider: "claude", prompt: "test", authProfile: "account001" },
+        },
+      });
+      expect(badAuthProfile.isError).toBe(true);
+      expect(JSON.stringify(badAuthProfile.content)).toContain("authProfile");
+    } finally {
+      await client.close();
+      await server.close();
+      store.close();
+    }
+  });
+
+  test("validates workflows and reports daemon status", async () => {
+    const store = new Store(":memory:");
+    const { client, server } = await mcpClient(store);
+    try {
+      const validation = structured<{ valid: boolean; workflow: { name: string } }>(
+        await client.callTool({
+          name: "openloops_validate_workflow",
+          arguments: {
+            workflow: {
+              name: "mcp-workflow",
+              steps: [{ id: "status", target: { type: "command", command: "true" } }],
+            },
+          },
+        }),
+      );
+      expect(validation.valid).toBe(true);
+      expect(validation.workflow.name).toBe("mcp-workflow");
+
+      const createdWorkflow = structured<{ workflow: { id: string; name: string } }>(
+        await client.callTool({
+          name: "openloops_create_workflow",
+          arguments: {
+            workflow: {
+              name: "mcp-workflow",
+              steps: [{ id: "status", target: { type: "command", command: "printf WFSECRET", shell: true } }],
+            },
+          },
+        }),
+      );
+      expect(createdWorkflow.workflow.name).toBe("mcp-workflow");
+
+      const workflowLoop = structured<{ loop: { target: { type: string; workflowId: string } } }>(
+        await client.callTool({
+          name: "openloops_create_loop",
+          arguments: {
+            name: "workflow-loop",
+            schedule: { type: "once", at: "2999-01-01T00:00:00Z" },
+            target: { type: "workflow", workflowId: "mcp-workflow" },
+          },
+        }),
+      );
+      expect(workflowLoop.loop.target.workflowId).toBe(createdWorkflow.workflow.id);
+      const missingWorkflow = await client.callTool({
+        name: "openloops_create_loop",
+        arguments: {
+          name: "missing-workflow-loop",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "workflow", workflowId: "missing-workflow" },
+        },
+      });
+      expect(missingWorkflow.isError).toBe(true);
+      expect(JSON.stringify(missingWorkflow.content)).toContain("workflow not found");
+
+      const workflows = structured<{ workflows: { name: string }[] }>(
+        await client.callTool({ name: "openloops_list_workflows", arguments: {} }),
+      );
+      expect(workflows.workflows.map((workflow) => workflow.name)).toContain("mcp-workflow");
+      const workflow = structured<{ workflow: { id: string } }>(
+        await client.callTool({ name: "openloops_get_workflow", arguments: { idOrName: "mcp-workflow" } }),
+      );
+      expect(workflow.workflow.id).toBe(createdWorkflow.workflow.id);
+
+      const workflowRun = structured<{ workflowRun: { id: string; status: string }; steps: { stdout?: string }[] }>(
+        await client.callTool({ name: "openloops_run_workflow", arguments: { idOrName: "mcp-workflow" } }),
+      );
+      expect(workflowRun.workflowRun.status).toBe("succeeded");
+      expect(JSON.stringify(workflowRun)).not.toContain("WFSECRET");
+      const workflowRuns = structured<{ workflowRuns: { id: string }[] }>(
+        await client.callTool({ name: "openloops_list_workflow_runs", arguments: { idOrName: "mcp-workflow" } }),
+      );
+      expect(workflowRuns.workflowRuns[0]?.id).toBe(workflowRun.workflowRun.id);
+      const inspected = structured<{ workflowRun: { id: string }; steps: unknown[]; events: unknown[] }>(
+        await client.callTool({ name: "openloops_inspect_workflow_run", arguments: { runId: workflowRun.workflowRun.id } }),
+      );
+      expect(inspected.workflowRun.id).toBe(workflowRun.workflowRun.id);
+      expect(inspected.steps.length).toBe(1);
+      const events = structured<{ events: unknown[] }>(
+        await client.callTool({ name: "openloops_list_workflow_events", arguments: { runId: workflowRun.workflowRun.id } }),
+      );
+      expect(events.events.length).toBeGreaterThan(0);
+
+      const pendingRun = store.createWorkflowRun({ workflow: store.requireWorkflow("mcp-workflow") });
+      const cancelled = structured<{ workflowRun: { status: string } }>(
+        await client.callTool({ name: "openloops_cancel_workflow_run", arguments: { runId: pendingRun.id, reason: "test cancel" } }),
+      );
+      expect(cancelled.workflowRun.status).toBe("cancelled");
+      const recoverRun = store.createWorkflowRun({ workflow: store.requireWorkflow("mcp-workflow") });
+      store.startWorkflowStepRun(recoverRun.id, "status");
+      const recovered = structured<{ recoveredSteps: unknown[] }>(
+        await client.callTool({ name: "openloops_recover_workflow_run", arguments: { runId: recoverRun.id, reason: "test recover" } }),
+      );
+      expect(recovered.recoveredSteps.length).toBe(1);
+
+      const archived = structured<{ workflow: { status: string } }>(
+        await client.callTool({ name: "openloops_archive_workflow", arguments: { idOrName: "mcp-workflow" } }),
+      );
+      expect(archived.workflow.status).toBe("archived");
+
+      const goalLoop = structured<{ loop: { goal: { objective: string } } }>(
+        await client.callTool({
+          name: "openloops_create_loop",
+          arguments: {
+            name: "goal-loop",
+            schedule: { type: "once", at: "2999-01-01T00:00:00Z" },
+            target: { type: "command", command: "true" },
+            goal: { objective: "verify from MCP" },
+          },
+        }),
+      );
+      expect(goalLoop.loop.goal.objective).toBe("verify from MCP");
+      const goal = structured<{ config: { objective: string } }>(
+        await client.callTool({ name: "openloops_get_goal", arguments: { idOrName: "goal-loop" } }),
+      );
+      expect(goal.config.objective).toBe("verify from MCP");
+
+      const runtimeGoal = store.createGoal({ objective: "runtime goal" });
+      const goalStatus = structured<{ goal: { goalId: string } }>(
+        await client.callTool({ name: "openloops_get_goal_status", arguments: { runId: runtimeGoal.goalId } }),
+      );
+      expect(goalStatus.goal.goalId).toBe(runtimeGoal.goalId);
+
+      await client.callTool({
+        name: "openloops_create_loop",
+        arguments: {
+          name: "tick-loop",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+      });
+      const due = structured<{ completed: { loopName: string }[] }>(
+        await client.callTool({ name: "openloops_tick", arguments: {} }),
+      );
+      expect(due.completed.map((run) => run.loopName)).toContain("tick-loop");
+
+      const daemon = structured<{ status: { loops: { total: number }; runs: { total: number } } }>(
+        await client.callTool({ name: "openloops_daemon_status", arguments: {} }),
+      );
+      expect(daemon.status.loops.total).toBeGreaterThan(0);
+      expect(daemon.status.runs.total).toBeGreaterThan(0);
+    } finally {
+      await client.close();
+      await server.close();
+      store.close();
+    }
+  });
+});

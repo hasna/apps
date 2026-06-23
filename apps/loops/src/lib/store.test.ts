@@ -1,3 +1,7 @@
+import { Database } from "bun:sqlite";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { Store } from "./store.js";
 
@@ -43,6 +47,107 @@ describe("Store", () => {
       );
       expect(store.getLoop(loop.id)?.machine).toEqual(loop.machine);
       expect(store.listLoops()[0]?.machine?.id).toBe("spark01");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("persists labels and filters loops and runs by label", () => {
+    const store = new Store(":memory:");
+    try {
+      const browser = store.createLoop(
+        {
+          name: "browser-loop",
+          labels: ["BrowserPlan", "nightly", "nightly"],
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const maintenance = store.createLoop(
+        {
+          name: "maintenance-loop",
+          labels: ["maintenance"],
+          schedule: { type: "once", at: "2026-01-01T00:01:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      store.claimRun(browser, "2026-01-01T00:00:00.000Z", "test");
+      store.claimRun(maintenance, "2026-01-01T00:01:00.000Z", "test");
+
+      expect(store.getLoop(browser.id)?.labels).toEqual(["browserplan", "nightly"]);
+      expect(store.listLoops({ label: "browserplan" }).map((loop) => loop.name)).toEqual(["browser-loop"]);
+      expect(store.listLoops({ labels: ["browserplan", "nightly"] }).map((loop) => loop.name)).toEqual(["browser-loop"]);
+      expect(store.listRuns({ label: "browserplan" }).map((run) => run.loopName)).toEqual(["browser-loop"]);
+
+      const relabeled = store.updateLoop(browser.id, { labels: ["maintenance"] });
+      expect(relabeled.labels).toEqual(["maintenance"]);
+      expect(store.listLoops({ label: "browserplan" })).toEqual([]);
+      expect(store.listLoops({ label: "maintenance" }).map((loop) => loop.name).sort()).toEqual(["browser-loop", "maintenance-loop"]);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("migrates older unlabeled loops as empty labels", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-label-migration-"));
+    const path = join(root, "loops.db");
+    const old = new Database(path);
+    old.exec(`
+      CREATE TABLE loops (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        status TEXT NOT NULL,
+        schedule_json TEXT NOT NULL,
+        target_json TEXT NOT NULL,
+        goal_json TEXT,
+        machine_json TEXT,
+        next_run_at TEXT,
+        retry_scheduled_for TEXT,
+        catch_up TEXT NOT NULL,
+        catch_up_limit INTEGER NOT NULL,
+        overlap TEXT NOT NULL,
+        max_attempts INTEGER NOT NULL,
+        retry_delay_ms INTEGER NOT NULL,
+        lease_ms INTEGER NOT NULL,
+        expires_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+    old
+      .query(
+        `INSERT INTO loops (id, name, description, status, schedule_json, target_json, goal_json, machine_json, next_run_at,
+          retry_scheduled_for, catch_up, catch_up_limit, overlap, max_attempts, retry_delay_ms, lease_ms, expires_at, created_at, updated_at)
+         VALUES ('old-loop', 'old-loop', NULL, 'active', '{"type":"once","at":"2026-01-01T00:00:00Z"}',
+          '{"type":"command","command":"true"}', NULL, NULL, '2026-01-01T00:00:00.000Z', NULL, 'latest', 50, 'skip',
+          1, 60000, 1800000, NULL, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+      )
+      .run();
+    old.close();
+
+    const store = new Store(path);
+    try {
+      expect(store.requireLoop("old-loop").labels).toEqual([]);
+      expect(store.listLoops({ label: "missing" })).toEqual([]);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("rejects invalid labels", () => {
+    const store = new Store(":memory:");
+    try {
+      expect(() =>
+        store.createLoop({
+          name: "bad-label",
+          labels: ["bad label"],
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        }),
+      ).toThrow("label");
     } finally {
       store.close();
     }

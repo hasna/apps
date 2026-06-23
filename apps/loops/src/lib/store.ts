@@ -27,6 +27,7 @@ import { dbPath } from "./paths.js";
 import { initialNextRun } from "./schedule.js";
 import { assertGoalTransition, rollupSummary, updateReadyFlags } from "./goal/status.js";
 import { normalizeCreateWorkflowInput } from "./workflow-spec.js";
+import { normalizeLoopLabels } from "./labels.js";
 
 interface DaemonLeaseFence {
   daemonLeaseId?: string;
@@ -38,6 +39,7 @@ interface LoopRow {
   name: string;
   description: string | null;
   status: string;
+  labels_json: string | null;
   schedule_json: string;
   target_json: string;
   goal_json: string | null;
@@ -222,6 +224,7 @@ function rowToLoop(row: LoopRow): Loop {
     id: row.id,
     name: row.name,
     description: row.description ?? undefined,
+    labels: row.labels_json ? normalizeLoopLabels(JSON.parse(row.labels_json) as string[]) : [],
     status: row.status as LoopStatus,
     schedule: JSON.parse(row.schedule_json) as Loop["schedule"],
     target: JSON.parse(row.target_json) as Loop["target"],
@@ -490,6 +493,7 @@ export class Store {
         name TEXT NOT NULL,
         description TEXT,
         status TEXT NOT NULL,
+        labels_json TEXT NOT NULL DEFAULT '[]',
         schedule_json TEXT NOT NULL,
         target_json TEXT NOT NULL,
         goal_json TEXT,
@@ -689,6 +693,11 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_goal_runs_workflow_run ON goal_runs(workflow_run_id);
     `);
     try {
+      this.db.query("ALTER TABLE loops ADD COLUMN labels_json TEXT NOT NULL DEFAULT '[]'").run();
+    } catch {
+      /* column already exists */
+    }
+    try {
       this.db.query("ALTER TABLE loops ADD COLUMN machine_json TEXT").run();
     } catch {
       /* column already exists */
@@ -732,6 +741,9 @@ export class Store {
     this.db
       .query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)")
       .run("0003_goals", nowIso());
+    this.db
+      .query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)")
+      .run("0004_loop_labels", nowIso());
   }
 
   private assertDaemonLeaseFence(opts: DaemonLeaseFence = {}, now: string = nowIso()): void {
@@ -748,6 +760,7 @@ export class Store {
       id: genId(),
       name: input.name,
       description: input.description,
+      labels: normalizeLoopLabels(input.labels),
       status: "active",
       schedule: input.schedule,
       target: input.target,
@@ -766,9 +779,9 @@ export class Store {
     };
     this.db
       .query(
-        `INSERT INTO loops (id, name, description, status, schedule_json, target_json, machine_json, next_run_at, retry_scheduled_for,
+        `INSERT INTO loops (id, name, description, status, labels_json, schedule_json, target_json, machine_json, next_run_at, retry_scheduled_for,
           goal_json, catch_up, catch_up_limit, overlap, max_attempts, retry_delay_ms, lease_ms, expires_at, created_at, updated_at)
-         VALUES ($id, $name, $description, $status, $schedule, $target, $machine, $nextRun, NULL, $goal, $catchUp, $catchUpLimit,
+         VALUES ($id, $name, $description, $status, $labels, $schedule, $target, $machine, $nextRun, NULL, $goal, $catchUp, $catchUpLimit,
           $overlap, $maxAttempts, $retryDelay, $leaseMs, $expiresAt, $created, $updated)`,
       )
       .run({
@@ -776,6 +789,7 @@ export class Store {
         $name: loop.name,
         $description: loop.description ?? null,
         $status: loop.status,
+        $labels: JSON.stringify(loop.labels ?? []),
         $schedule: JSON.stringify(loop.schedule),
         $target: JSON.stringify(loop.target),
         $machine: loop.machine ? JSON.stringify(loop.machine) : null,
@@ -810,13 +824,22 @@ export class Store {
     })();
   }
 
-  listLoops(opts: { status?: LoopStatus; limit?: number } = {}): Loop[] {
+  listLoops(opts: { status?: LoopStatus; label?: string; labels?: string[]; limit?: number } = {}): Loop[] {
     const limit = opts.limit ?? 200;
-    const rows = opts.status
-      ? this.db
-          .query<LoopRow, [string, number]>("SELECT * FROM loops WHERE status = ? ORDER BY next_run_at ASC LIMIT ?")
-          .all(opts.status, limit)
-      : this.db.query<LoopRow, [number]>("SELECT * FROM loops ORDER BY status ASC, next_run_at ASC LIMIT ?").all(limit);
+    const labels = normalizeLoopLabels(opts.labels ?? (opts.label ? [opts.label] : undefined));
+    const where: string[] = [];
+    const params: Record<string, string | number> = { $limit: limit };
+    if (opts.status) {
+      where.push("status = $status");
+      params.$status = opts.status;
+    }
+    labels.forEach((label, index) => {
+      const key = `$label${index}`;
+      where.push(`EXISTS (SELECT 1 FROM json_each(loops.labels_json) WHERE value = ${key})`);
+      params[key] = label;
+    });
+    const sql = `SELECT * FROM loops${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY status ASC, next_run_at ASC LIMIT $limit`;
+    const rows = this.db.query<LoopRow, Record<string, string | number>>(sql).all(params);
     return rows.map(rowToLoop);
   }
 
@@ -835,16 +858,21 @@ export class Store {
 
   updateLoop(
     id: string,
-    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt">>,
+    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "labels">>,
     opts: DaemonLeaseFence = {},
   ): Loop {
     const current = this.getLoop(id);
     if (!current) throw new Error(`loop not found: ${id}`);
     const updated = (opts.now ?? new Date()).toISOString();
-    const merged: Loop = { ...current, ...patch, updatedAt: updated };
+    const merged: Loop = {
+      ...current,
+      ...patch,
+      labels: patch.labels !== undefined ? normalizeLoopLabels(patch.labels) : current.labels ?? [],
+      updatedAt: updated,
+    };
     this.db
       .query(
-        `UPDATE loops SET status=$status, next_run_at=$nextRun, retry_scheduled_for=$retrySlot,
+        `UPDATE loops SET status=$status, labels_json=$labels, next_run_at=$nextRun, retry_scheduled_for=$retrySlot,
          expires_at=$expiresAt, updated_at=$updated
          WHERE id=$id
            AND ($daemonLeaseId IS NULL OR EXISTS (
@@ -854,6 +882,7 @@ export class Store {
       .run({
         $id: id,
         $status: merged.status,
+        $labels: JSON.stringify(merged.labels ?? []),
         $nextRun: merged.nextRunAt ?? null,
         $retrySlot: merged.retryScheduledFor ?? null,
         $expiresAt: merged.expiresAt ?? null,
@@ -2083,26 +2112,27 @@ export class Store {
     return this.getRun(id);
   }
 
-  listRuns(opts: { loopId?: string; status?: RunStatus; limit?: number } = {}): LoopRun[] {
+  listRuns(opts: { loopId?: string; status?: RunStatus; label?: string; labels?: string[]; limit?: number } = {}): LoopRun[] {
     const limit = opts.limit ?? 100;
-    let rows: RunRow[];
-    if (opts.loopId && opts.status) {
-      rows = this.db
-        .query<RunRow, [string, string, number]>(
-          "SELECT * FROM loop_runs WHERE loop_id = ? AND status = ? ORDER BY created_at DESC LIMIT ?",
-        )
-        .all(opts.loopId, opts.status, limit);
-    } else if (opts.loopId) {
-      rows = this.db
-        .query<RunRow, [string, number]>("SELECT * FROM loop_runs WHERE loop_id = ? ORDER BY created_at DESC LIMIT ?")
-        .all(opts.loopId, limit);
-    } else if (opts.status) {
-      rows = this.db
-        .query<RunRow, [string, number]>("SELECT * FROM loop_runs WHERE status = ? ORDER BY created_at DESC LIMIT ?")
-        .all(opts.status, limit);
-    } else {
-      rows = this.db.query<RunRow, [number]>("SELECT * FROM loop_runs ORDER BY created_at DESC LIMIT ?").all(limit);
+    const labels = normalizeLoopLabels(opts.labels ?? (opts.label ? [opts.label] : undefined));
+    const where: string[] = [];
+    const params: Record<string, string | number> = { $limit: limit };
+    if (opts.loopId) {
+      where.push("loop_runs.loop_id = $loopId");
+      params.$loopId = opts.loopId;
     }
+    if (opts.status) {
+      where.push("loop_runs.status = $status");
+      params.$status = opts.status;
+    }
+    labels.forEach((label, index) => {
+      const key = `$label${index}`;
+      where.push(`EXISTS (SELECT 1 FROM json_each(loops.labels_json) WHERE value = ${key})`);
+      params[key] = label;
+    });
+    const join = labels.length ? " JOIN loops ON loops.id = loop_runs.loop_id" : "";
+    const sql = `SELECT loop_runs.* FROM loop_runs${join}${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY loop_runs.created_at DESC LIMIT $limit`;
+    const rows = this.db.query<RunRow, Record<string, string | number>>(sql).all(params);
     return rows.map(rowToRun);
   }
 

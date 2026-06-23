@@ -57,6 +57,7 @@ export function publicLoop(loop: Loop): Record<string, unknown> {
         : loop.target;
   return {
     ...loop,
+    labels: loop.labels ?? [],
     target,
   };
 }
