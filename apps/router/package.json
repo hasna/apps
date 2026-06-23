@@ -1,0 +1,73 @@
+{
+  "name": "@hasna/router",
+  "version": "0.1.0",
+  "description": "Deterministic smart model router companion for open-gateway",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "open-router": "dist/cli/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./cli": {
+      "import": "./dist/cli/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "docs",
+    "examples",
+    "router.config.example.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && bun build src/index.ts src/cli/index.ts --outdir dist --target bun && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "smoke": "bun run src/cli/index.ts smoke --config router.config.example.json",
+    "prepublishOnly": "bun run typecheck && bun run test && bun run build"
+  },
+  "keywords": [
+    "ai",
+    "llm",
+    "router",
+    "model-routing",
+    "open-gateway",
+    "openrouter",
+    "vercel-ai-gateway",
+    "litellm",
+    "portkey",
+    "cloudflare-ai-gateway",
+    "kong-ai-gateway",
+    "hasna"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/open-router.git"
+  },
+  "homepage": "https://github.com/hasna/open-router",
+  "bugs": {
+    "url": "https://github.com/hasna/open-router/issues"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "author": "Andrei Hasna <andrei@hasna.com>",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.4",
+    "typescript": "^5.7.3"
+  }
+}
