@@ -58,34 +58,160 @@ if (handleMetadataArgs(process.argv.slice(2), {
   process.exit(0);
 }
 
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
-};
+const ADMIN_TOKEN_ENV_KEYS = ["OPEN_SIGNATURES_ADMIN_TOKEN", "SIGNATURES_ADMIN_TOKEN"] as const;
+const ALLOWED_ORIGINS_ENV_KEYS = ["OPEN_SIGNATURES_ALLOWED_ORIGINS", "SIGNATURES_ALLOWED_ORIGINS"] as const;
+const CORS_ALLOW_METHODS = "GET, POST, PUT, DELETE, OPTIONS";
+const CORS_ALLOW_HEADERS = "Content-Type, Authorization, X-Open-Signatures-Admin-Token";
+const ADMIN_AUTH_CHALLENGE = "Bearer realm=\"open-signatures-admin\"";
+const ADMIN_API_TOKEN = readFirstEnv(ADMIN_TOKEN_ENV_KEYS);
+const ALLOWED_CORS_ORIGINS = resolveAllowedOrigins();
+const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
-function json(data: unknown, status = 200): Response {
+function readFirstEnv(keys: readonly string[]): string | undefined {
+  for (const key of keys) {
+    const value = process.env[key]?.trim();
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function resolveAllowedOrigins(): Set<string> {
+  const configured = readFirstEnv(ALLOWED_ORIGINS_ENV_KEYS);
+  if (configured) {
+    return new Set(configured.split(",").map((origin) => origin.trim()).filter(Boolean));
+  }
+  return new Set([
+    `http://localhost:${PORT}`,
+    `http://127.0.0.1:${PORT}`,
+    `http://[::1]:${PORT}`,
+  ]);
+}
+
+function corsHeaders(req: Request): Headers {
+  const headers = new Headers({ "Vary": "Origin" });
+  const origin = req.headers.get("Origin");
+  if (origin && isAllowedOrigin(req, origin)) {
+    headers.set("Access-Control-Allow-Origin", origin);
+    headers.set("Access-Control-Allow-Methods", CORS_ALLOW_METHODS);
+    headers.set("Access-Control-Allow-Headers", CORS_ALLOW_HEADERS);
+    headers.set("Access-Control-Max-Age", "600");
+  }
+  return headers;
+}
+
+function preflight(req: Request): Response {
+  const origin = req.headers.get("Origin");
+  if (origin && !isAllowedOrigin(req, origin)) {
+    return new Response(null, { status: 403, headers: { "Vary": "Origin" } });
+  }
+  return new Response(null, { status: 204, headers: corsHeaders(req) });
+}
+
+function isAllowedOrigin(req: Request, origin: string): boolean {
+  return origin === new URL(req.url).origin || ALLOWED_CORS_ORIGINS.has(origin);
+}
+
+function responseHeaders(req: Request, contentType: string, extraHeaders?: HeadersInit): Headers {
+  const headers = corsHeaders(req);
+  headers.set("Content-Type", contentType);
+  if (extraHeaders) {
+    new Headers(extraHeaders).forEach((value, key) => headers.set(key, value));
+  }
+  return headers;
+}
+
+function jsonResponse(req: Request, data: unknown, status = 200, extraHeaders?: HeadersInit): Response {
   return new Response(JSON.stringify(data, null, 2), {
     status,
-    headers: {
-      "Content-Type": "application/json",
-      ...CORS_HEADERS,
-    },
+    headers: responseHeaders(req, "application/json", extraHeaders),
   });
 }
 
-function error(message: string, status = 400): Response {
-  return json({ error: message }, status);
+function errorResponse(req: Request, message: string, status = 400, extraHeaders?: HeadersInit): Response {
+  return jsonResponse(req, { error: message }, status, extraHeaders);
 }
 
-function html(body: string, status = 200): Response {
+function htmlResponse(req: Request, body: string, status = 200): Response {
   return new Response(body, {
     status,
-    headers: {
-      "Content-Type": "text/html; charset=utf-8",
-      ...CORS_HEADERS,
-    },
+    headers: responseHeaders(req, "text/html; charset=utf-8"),
   });
+}
+
+function isPublicRoute(path: string, method: string): boolean {
+  return (path === "/health" && method === "GET")
+    || (method === "GET" && /^\/sign\/[^/]+$/.test(path))
+    || (method === "POST" && /^\/api\/sign\/[^/]+$/.test(path));
+}
+
+function isAdminApiRoute(path: string, method: string): boolean {
+  return path.startsWith("/api/") && !isPublicRoute(path, method);
+}
+
+function readAdminCredential(req: Request): string | undefined {
+  const auth = req.headers.get("Authorization");
+  const bearer = auth?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+  if (bearer) return bearer;
+  return req.headers.get("X-Open-Signatures-Admin-Token")?.trim() || undefined;
+}
+
+function constantTimeEqual(actual: string, expected: string): boolean {
+  const actualBytes = new TextEncoder().encode(actual);
+  const expectedBytes = new TextEncoder().encode(expected);
+  const length = Math.max(actualBytes.length, expectedBytes.length);
+  let diff = actualBytes.length ^ expectedBytes.length;
+  for (let i = 0; i < length; i++) {
+    diff |= (actualBytes[i] ?? 0) ^ (expectedBytes[i] ?? 0);
+  }
+  return diff === 0;
+}
+
+function requireAdminApiAuth(
+  req: Request,
+  path: string,
+  method: string,
+  error: (message: string, status?: number, extraHeaders?: HeadersInit) => Response
+): Response | undefined {
+  if (!isAdminApiRoute(path, method)) return undefined;
+  if (!ADMIN_API_TOKEN) {
+    return error(
+      "Admin API authentication is not configured. Set OPEN_SIGNATURES_ADMIN_TOKEN or SIGNATURES_ADMIN_TOKEN.",
+      503,
+      { "WWW-Authenticate": ADMIN_AUTH_CHALLENGE }
+    );
+  }
+  const credential = readAdminCredential(req);
+  if (!credential || !constantTimeEqual(credential, ADMIN_API_TOKEN)) {
+    return error("Unauthorized", 401, { "WWW-Authenticate": ADMIN_AUTH_CHALLENGE });
+  }
+  return undefined;
+}
+
+function rejectDisallowedOrigin(
+  req: Request,
+  error: (message: string, status?: number) => Response
+): Response | undefined {
+  const origin = req.headers.get("Origin");
+  if (origin && !isAllowedOrigin(req, origin)) {
+    return error("Origin is not allowed", 403);
+  }
+  return undefined;
+}
+
+function requireJsonApiRequest(
+  req: Request,
+  path: string,
+  method: string,
+  error: (message: string, status?: number) => Response
+): Response | undefined {
+  if (!path.startsWith("/api/") || !UNSAFE_METHODS.has(method) || method === "DELETE") {
+    return undefined;
+  }
+  const contentType = req.headers.get("Content-Type")?.toLowerCase() ?? "";
+  if (!contentType.startsWith("application/json")) {
+    return error("Content-Type must be application/json", 415);
+  }
+  return undefined;
 }
 
 function escapeHtml(value: unknown): string {
@@ -211,11 +337,21 @@ Bun.serve({
     const url = new URL(req.url);
     const path = url.pathname;
     const method = req.method;
+    const json = (data: unknown, status = 200, extraHeaders?: HeadersInit) => jsonResponse(req, data, status, extraHeaders);
+    const error = (message: string, status = 400, extraHeaders?: HeadersInit) => errorResponse(req, message, status, extraHeaders);
+    const html = (body: string, status = 200) => htmlResponse(req, body, status);
 
     // CORS preflight
     if (method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: CORS_HEADERS });
+      return preflight(req);
     }
+
+    const authError = requireAdminApiAuth(req, path, method, error);
+    if (authError) return authError;
+    const originError = rejectDisallowedOrigin(req, error);
+    if (originError) return originError;
+    const contentTypeError = requireJsonApiRequest(req, path, method, error);
+    if (contentTypeError) return contentTypeError;
 
     try {
       // Health
