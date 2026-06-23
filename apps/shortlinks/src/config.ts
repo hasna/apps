@@ -8,6 +8,12 @@ export const DEFAULT_DATA_DIR = join(homedir(), ".hasna", SERVICE_NAME);
 export interface ShortlinksConfig {
   defaultDomain?: string;
   publicBaseUrl?: string;
+  mode?: "local" | "remote" | "api";
+  api?: {
+    baseUrl?: string;
+    token?: string;
+    tokenEnv?: string;
+  };
   cloudflare?: {
     accountId?: string;
     workerName?: string;
@@ -53,16 +59,37 @@ export function saveConfig(config: ShortlinksConfig): void {
 }
 
 export function updateConfig(patch: ShortlinksConfig): ShortlinksConfig {
+  const current = loadConfig();
   const next: ShortlinksConfig = {
-    ...loadConfig(),
+    ...current,
     ...patch,
+    api: {
+      ...current.api,
+      ...patch.api,
+    },
     cloudflare: {
-      ...loadConfig().cloudflare,
+      ...current.cloudflare,
       ...patch.cloudflare,
     },
   };
   saveConfig(next);
   return next;
+}
+
+export function getApiBaseUrl(config = loadConfig()): string | null {
+  const baseUrl = process.env.SHORTLINKS_API_URL || process.env.HASNA_SHORTLINKS_API_URL || config.api?.baseUrl || "";
+  return baseUrl ? baseUrl.replace(/\/+$/, "") : null;
+}
+
+export function getApiToken(config = loadConfig()): string | null {
+  const envName = config.api?.tokenEnv || "SHORTLINKS_API_TOKEN";
+  const token =
+    process.env[envName] ||
+    process.env.SHORTLINKS_API_TOKEN ||
+    process.env.HASNA_SHORTLINKS_API_TOKEN ||
+    config.api?.token ||
+    "";
+  return token || null;
 }
 
 export function normalizeHostname(input: string): string {

@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
-import { Command } from "commander";
+import { Command, Option } from "commander";
+import { registerEventsCommands } from "@hasna/events/commander";
 import chalk from "chalk";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -8,6 +9,7 @@ import { spawnSync } from "node:child_process";
 import { ShortlinksStore } from "../store.js";
 import { PgShortlinksStore } from "../pg-store.js";
 import { getConfigPath, getDataDir, getDatabasePath, loadConfig, saveConfig, updateConfig } from "../config.js";
+import { ShortlinksApiClient } from "../api-client.js";
 import { serveShortlinks } from "../server.js";
 import { createCloudflarePlan, writeWorkerFiles, upsertCloudflareDnsRecord } from "../cloudflare.js";
 import { runDomains } from "../domains-cli.js";
@@ -15,7 +17,7 @@ import { createLocalSetupPlan, registerMachinesDns } from "../local.js";
 import { PG_MIGRATIONS } from "../pg-migrations.js";
 import type { Link } from "../types.js";
 
-type RuntimeStore = ShortlinksStore | PgShortlinksStore;
+type RuntimeStore = ShortlinksStore | PgShortlinksStore | ShortlinksApiClient;
 
 function getPackageVersion(): string {
   try {
@@ -68,16 +70,22 @@ async function withStoreAsync<T>(fn: (store: ShortlinksStore) => Promise<T>): Pr
   }
 }
 
-function storeMode(): "local" | "cloud" {
+function storeMode(): "local" | "remote" | "api" {
   const opts = program.opts();
-  const value = String(opts.cloud ? "cloud" : opts.store || process.env.SHORTLINKS_STORE || "local").toLowerCase();
-  if (value !== "local" && value !== "cloud") throw new Error(`Unknown store mode: ${value}`);
+  const config = loadConfig();
+  const value = String(opts.remote ? "remote" : opts.store || process.env.SHORTLINKS_STORE || config.mode || "local").toLowerCase();
+  if (value !== "local" && value !== "remote" && value !== "api") throw new Error(`Unknown store mode: ${value}`);
   return value;
 }
 
 async function withRuntimeStore<T>(fn: (store: RuntimeStore) => T | Promise<T>): Promise<T> {
-  if (storeMode() === "cloud") {
-    const store = await PgShortlinksStore.fromCloud("shortlinks");
+  const mode = storeMode();
+  if (mode === "api") {
+    const store = new ShortlinksApiClient({ baseUrl: program.opts().apiUrl });
+    return await fn(store);
+  }
+  if (mode === "remote") {
+    const store = await PgShortlinksStore.fromStorage("shortlinks");
     try {
       return await fn(store);
     } finally {
@@ -101,13 +109,22 @@ function commandExists(command: string): boolean {
   return result.status === 0;
 }
 
+function parseMaxUses(opts: { maxUses?: string; maxClicks?: string }): number | undefined {
+  const raw = opts.maxUses ?? opts.maxClicks;
+  if (!raw) return undefined;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) throw new Error("--max-uses must be a positive integer");
+  return parsed;
+}
+
 program
   .name("shortlinks")
-  .description("CLI-only shortlink manager with custom domains, click tracking, Cloudflare helpers, and cloud sync")
+  .description("CLI-only shortlink manager with custom domains, click tracking, Cloudflare helpers, and storage sync")
   .version(getPackageVersion())
   .option("--db <path>", "SQLite database path")
-  .option("--store <mode>", "Data store mode: cloud or local", process.env.SHORTLINKS_STORE || "local")
-  .option("--cloud", "Use the shortlinks PostgreSQL database directly")
+  .option("--store <mode>", "Data store mode: local, remote, or api", process.env.SHORTLINKS_STORE || loadConfig().mode || "local")
+  .option("--api-url <url>", "Shortlinks HTTP API base URL")
+  .addOption(new Option("--remote", "Use the shortlinks PostgreSQL storage database directly"))
   .option("-j, --json", "Output JSON for agents and scripts");
 
 program
@@ -158,23 +175,45 @@ configCmd
   .description("Show local config")
   .option("-j, --json", "Output JSON")
   .action((opts) => {
-    const data = { path: getConfigPath(), config: loadConfig() };
+    const config = loadConfig();
+    const data = {
+      path: getConfigPath(),
+      config: {
+        ...config,
+        api: config.api ? { ...config.api, token: config.api.token ? "****" : "" } : undefined,
+      },
+    };
     print(data, opts, () => console.log(JSON.stringify(data, null, 2)));
   });
 
 configCmd
   .command("set <key> <value>")
-  .description("Set config value: default-domain, public-base-url, cloudflare-account-id, cloudflare-worker-name, cloudflare-origin")
+  .description("Set config value: mode, default-domain, public-base-url, api-url, api-token, api-token-env, cloudflare-account-id, cloudflare-worker-name, cloudflare-origin")
   .option("-j, --json", "Output JSON")
   .action((key, value, opts) => {
     try {
       let config = loadConfig();
       switch (key) {
+        case "mode": {
+          const mode = value.toLowerCase();
+          if (mode !== "local" && mode !== "remote" && mode !== "api") throw new Error("mode must be local, remote, or api");
+          config = updateConfig({ mode: mode as "local" | "remote" | "api" });
+          break;
+        }
         case "default-domain":
           config = updateConfig({ defaultDomain: value, publicBaseUrl: config.publicBaseUrl || `https://${value}` });
           break;
         case "public-base-url":
           config = updateConfig({ publicBaseUrl: value });
+          break;
+        case "api-url":
+          config = updateConfig({ api: { baseUrl: value.replace(/\/+$/, "") } });
+          break;
+        case "api-token":
+          config = updateConfig({ api: { token: value } });
+          break;
+        case "api-token-env":
+          config = updateConfig({ api: { tokenEnv: value } });
           break;
         case "cloudflare-account-id":
           config = updateConfig({ cloudflare: { accountId: value } });
@@ -188,7 +227,11 @@ configCmd
         default:
           throw new Error(`Unknown config key: ${key}`);
       }
-      print({ path: getConfigPath(), config }, opts, () => console.log(chalk.green(`Set ${key}.`)));
+      const masked = {
+        ...config,
+        api: config.api ? { ...config.api, token: config.api.token ? "****" : "" } : undefined,
+      };
+      print({ path: getConfigPath(), config: masked }, opts, () => console.log(chalk.green(`Set ${key}.`)));
     } catch (error) {
       handleError(error);
     }
@@ -340,6 +383,7 @@ async function createLinkAction(url: string, opts: any): Promise<void> {
       slug: opts.slug,
       title: opts.title,
       expiresAt: opts.expires,
+      maxUses: parseMaxUses(opts),
       slugLength: opts.length ? Number(opts.length) : undefined,
     }));
     print(link, opts, () => console.log(formatLink(link)));
@@ -355,6 +399,8 @@ linkCmd
   .option("--slug <slug>", "Custom slug")
   .option("--title <title>", "Human title")
   .option("--expires <date>", "Expiration date")
+  .option("--max-uses <count>", "Maximum successful redirects")
+  .option("--max-clicks <count>", "Alias for --max-uses")
   .option("--length <n>", "Generated slug length", "7")
   .option("-j, --json", "Output JSON")
   .action(createLinkAction);
@@ -366,6 +412,8 @@ program
   .option("--slug <slug>", "Custom slug")
   .option("--title <title>", "Human title")
   .option("--expires <date>", "Expiration date")
+  .option("--max-uses <count>", "Maximum successful redirects")
+  .option("--max-clicks <count>", "Alias for --max-uses")
   .option("--length <n>", "Generated slug length", "7")
   .option("-j, --json", "Output JSON")
   .action(createLinkAction);
@@ -491,11 +539,13 @@ program
   .option("--host <host>", "Bind host", "127.0.0.1")
   .option("--port <port>", "Port", "8787")
   .option("--default-host <hostname>", "Fallback host if the request has no Host header")
-  .option("--cloud", "Serve directly from the shortlinks PostgreSQL database")
+  .option("--api-path-prefix <path>", "Admin API path prefix", process.env.SHORTLINKS_API_PATH_PREFIX || "/api")
+  .option("--remote", "Serve directly from the shortlinks PostgreSQL storage database")
+  .addOption(new Option("--cloud", "Deprecated alias for --remote").hideHelp())
   .action(async (opts) => {
     try {
-      const store = opts.cloud || storeMode() === "cloud"
-        ? await PgShortlinksStore.fromCloud("shortlinks")
+      const store = opts.remote || opts.cloud || storeMode() === "remote"
+        ? await PgShortlinksStore.fromStorage("shortlinks")
         : undefined;
       const server = serveShortlinks({
         store,
@@ -503,8 +553,9 @@ program
         host: opts.host,
         port: Number(opts.port),
         defaultHost: opts.defaultHost,
+        apiPathPrefix: opts.apiPathPrefix,
       });
-      const mode = store ? "cloud" : "local";
+      const mode = store ? "remote" : "local";
       console.log(chalk.green(`shortlinks redirect server listening on http://${server.hostname}:${server.port} (${mode})`));
     } catch (error) {
       handleError(error);
@@ -542,10 +593,16 @@ cfCmd
   .option("--out-dir <dir>", "Output directory", "cloudflare")
   .option("--worker <name>", "Worker name", "shortlinks")
   .option("--origin <url>", "Origin redirect server URL", process.env.SHORTLINKS_ORIGIN || "https://shortlinks.example.com")
+  .option("--attachments-origin <url>", "Origin URL for reserved attachment paths", process.env.ATTACHMENTS_ORIGIN)
   .option("-j, --json", "Output JSON")
   .action((opts) => {
     try {
-      const result = writeWorkerFiles({ outDir: opts.outDir, workerName: opts.worker, origin: opts.origin });
+      const result = writeWorkerFiles({
+        outDir: opts.outDir,
+        workerName: opts.worker,
+        origin: opts.origin,
+        attachmentsOrigin: opts.attachmentsOrigin,
+      });
       print(result, opts, () => {
         console.log(chalk.green(`Wrote ${result.workerPath}`));
         console.log(chalk.green(`Wrote ${result.wranglerPath}`));
@@ -578,88 +635,74 @@ cfCmd
     }
   });
 
-const cloudCmd = program.command("cloud").description("@hasna/cloud sync helpers");
-
-cloudCmd
+function installStorageCommands(storageCmd: Command): void {
+  storageCmd
   .command("migrate")
-  .description("Apply shortlinks PostgreSQL migrations")
+  .description("Apply shortlinks PostgreSQL migrations to remote storage")
   .option("--connection-string <url>", "PostgreSQL connection string")
   .option("-j, --json", "Output JSON")
   .action(async (opts) => {
     try {
-      const { getConnectionString, applyPgMigrations } = await import("@hasna/cloud");
-      const conn = opts.connectionString || getConnectionString("shortlinks");
-      const result = await applyPgMigrations(conn, PG_MIGRATIONS, "shortlinks");
+      const { getStorageConnectionString } = await import("../storage-config.js");
+      const { applyPgMigrations } = await import("../pg-migrate.js");
+      const conn = opts.connectionString || getStorageConnectionString("shortlinks");
+      const result = await applyPgMigrations(conn);
       print(result, opts, () => console.log(JSON.stringify(result, null, 2)));
     } catch (error) {
       handleError(error);
     }
   });
 
-async function syncCloud(direction: "push" | "pull" | "sync", opts: any): Promise<void> {
-  const {
-    getCloudConfig,
-    getConnectionString,
-    SqliteAdapter,
-    PgAdapterAsync,
-    listSqliteTables,
-    listPgTables,
-    syncPush,
-    syncPull,
-  } = await import("@hasna/cloud");
-  const config = getCloudConfig();
-  if (config.mode === "local") throw new Error("Cloud mode is local. Run `cloud setup` first.");
-  const local = new SqliteAdapter(getDatabasePath(program.opts().db));
-  const remote = new PgAdapterAsync(getConnectionString("shortlinks"));
-  try {
-    const requestedTables: string[] | null = opts.tables ? opts.tables.split(",").map((t: string) => t.trim()).filter(Boolean) : null;
-    const localTables: string[] = requestedTables || listSqliteTables(local).filter((t: string) => !t.startsWith("_"));
-    const remoteTables: string[] = requestedTables || await listPgTables(remote).catch(() => localTables);
-    const tables: string[] = [...new Set(direction === "pull" ? remoteTables : direction === "push" ? localTables : [...localTables, ...remoteTables])];
-    const results: Array<{ direction: "pull" | "push"; tables: unknown }> = [];
-    if (direction === "pull" || direction === "sync") {
-      results.push({ direction: "pull", tables: await syncPull(remote, local, { tables }) });
-    }
-    if (direction === "push" || direction === "sync") {
-      results.push({ direction: "push", tables: await syncPush(local, remote, { tables }) });
-    }
-    print({ service: "shortlinks", results }, opts, () => console.log(JSON.stringify({ service: "shortlinks", results }, null, 2)));
-  } finally {
-    local.close?.();
-    await remote.close?.();
-  }
+async function syncStorage(direction: "push" | "pull" | "sync", opts: any): Promise<void> {
+  const { getStorageConfig } = await import("../storage-config.js");
+  const { parseStorageTables, pullStorageChanges, pushStorageChanges, syncStorageChanges } = await import("../storage-sync.js");
+  const config = getStorageConfig();
+  if (config.mode === "local") throw new Error("Storage mode is local. Configure HASNA_SHORTLINKS_DATABASE_URL or ~/.hasna/shortlinks/storage/config.json first.");
+  const tables = parseStorageTables(opts.tables);
+  const dbPath = program.opts().db;
+  const result = direction === "push"
+    ? await pushStorageChanges(dbPath, tables)
+    : direction === "pull"
+      ? await pullStorageChanges(dbPath, tables)
+      : await syncStorageChanges(dbPath, tables);
+  print({ service: "shortlinks", result }, opts, () => console.log(JSON.stringify({ service: "shortlinks", result }, null, 2)));
 }
 
 for (const direction of ["push", "pull", "sync"] as const) {
-  cloudCmd
+  storageCmd
     .command(direction)
-    .description(`${direction === "sync" ? "Bidirectionally sync" : direction === "push" ? "Push" : "Pull"} shortlinks data ${direction === "pull" ? "from" : "to"} PostgreSQL`)
+    .description(`${direction === "sync" ? "Bidirectionally sync" : direction === "push" ? "Push" : "Pull"} shortlinks data ${direction === "pull" ? "from" : "to"} remote PostgreSQL storage`)
     .option("--tables <tables>", "Comma-separated table names")
     .option("-j, --json", "Output JSON")
-    .action((opts) => syncCloud(direction, opts).catch(handleError));
+    .action((opts) => syncStorage(direction, opts).catch(handleError));
 }
 
-cloudCmd
+storageCmd
   .command("status")
-  .description("Show local and cloud configuration health")
+  .description("Show local and remote storage configuration health")
   .option("-j, --json", "Output JSON")
   .action(async (opts) => {
     try {
-      const { getCloudConfig } = await import("@hasna/cloud");
+      const { getStorageStatus } = await import("../storage-sync.js");
       const stats = withStore((store) => store.totalStats());
-      const config = getCloudConfig();
+      const status = getStorageStatus(program.opts().db);
       const data = {
         service: "shortlinks",
-        db_path: getDatabasePath(program.opts().db),
+        db_path: status.db_path,
         local: stats,
-        cloud_mode: config.mode,
-        rds_host: config.rds?.host || null,
+        canonical: status.canonical,
+        storage_mode: status.mode,
+        enabled: status.enabled,
+        tables: status.tables,
       };
       print(data, opts, () => console.log(JSON.stringify(data, null, 2)));
     } catch (error) {
       handleError(error);
     }
   });
+}
+
+installStorageCommands(program.command("storage").description("Local/remote storage sync helpers"));
 
 const localCmd = program.command("local").description("Local domain setup helpers");
 
@@ -731,7 +774,7 @@ program
         stats,
         commands: {
           domains: commandExists("domains"),
-          cloud: commandExists("cloud"),
+          storage: commandExists("storage"),
           wrangler: commandExists("wrangler"),
           secrets: commandExists("secrets"),
         },
@@ -747,5 +790,7 @@ program
       handleError(error);
     }
   });
+registerEventsCommands(program, { source: "shortlinks" });
+
 
 program.parseAsync(process.argv).catch(handleError);

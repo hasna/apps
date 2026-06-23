@@ -3,4 +3,7 @@ main = "shortlinks.js"
 compatibility_date = "2026-05-01"
 
 [vars]
-SHORTLINKS_ORIGIN = "https://shortlinks.hasna.xyz"
+SHORTLINKS_ORIGIN = "https://shortlinks.example.com"
+ATTACHMENTS_ORIGIN = ""
+SHORTLINKS_RESERVED_PATH_PREFIXES = "a,api"
+SHORTLINKS_ADMIN_PATH_PREFIXES = "/api,/_shortlinks/api"

@@ -61,4 +61,8 @@ export const PG_MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_clicks_clicked_at ON clicks(clicked_at);
   CREATE INDEX IF NOT EXISTS idx_clicks_updated ON clicks(updated_at);
   `,
+  `
+  ALTER TABLE links ADD COLUMN IF NOT EXISTS max_uses INTEGER;
+  ALTER TABLE links ADD COLUMN IF NOT EXISTS used_count INTEGER NOT NULL DEFAULT 0;
+  `,
 ];

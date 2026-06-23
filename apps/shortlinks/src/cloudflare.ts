@@ -62,23 +62,60 @@ export function generateWorkerScript(): string {
     }
 
     const incoming = new URL(request.url);
-    const upstream = new URL(incoming.pathname + incoming.search, origin);
-    const headers = new Headers(request.headers);
-    headers.set("x-forwarded-host", incoming.host);
-    headers.set("x-shortlinks-worker", "cloudflare");
+    const proxyTo = (targetOrigin, marker) => {
+      const upstream = new URL(incoming.pathname + incoming.search, targetOrigin);
+      const headers = new Headers(request.headers);
+      headers.set("x-forwarded-host", incoming.host);
+      headers.set("x-shortlinks-worker", marker);
 
-    return fetch(upstream.toString(), {
-      method: request.method,
-      headers,
-      body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
-      redirect: "manual"
-    });
+      return fetch(upstream.toString(), {
+        method: request.method,
+        headers,
+        body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
+        redirect: "manual"
+      });
+    };
+
+    const splitList = (value, fallback) => (value || fallback)
+      .split(",")
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean);
+
+    let firstSegment = "";
+    try {
+      firstSegment = decodeURIComponent(incoming.pathname.replace(/^\\/+/, "").split("/")[0] || "").toLowerCase();
+    } catch {
+      return new Response("Invalid path", { status: 400 });
+    }
+
+    const reserved = splitList(env.SHORTLINKS_RESERVED_PATH_PREFIXES, "a,api");
+    if (firstSegment && reserved.includes(firstSegment)) {
+      if (env.ATTACHMENTS_ORIGIN) {
+        return proxyTo(env.ATTACHMENTS_ORIGIN, "attachments");
+      }
+      return new Response("Reserved path prefix", { status: 404 });
+    }
+
+    const normalizePathPrefix = (prefix) => {
+      const trimmed = prefix.replace(/^\\/+|\\/+$/g, "");
+      return trimmed ? "/" + trimmed : "/";
+    };
+    const adminPrefixes = splitList(
+      [env.SHORTLINKS_ADMIN_PATH_PREFIXES, env.SHORTLINKS_API_PATH_PREFIX, "/api,/_shortlinks/api"].filter(Boolean).join(","),
+      "/api,/_shortlinks/api"
+    ).map(normalizePathPrefix);
+    const path = incoming.pathname.replace(/\\/+$/g, "").toLowerCase() || "/";
+    if (adminPrefixes.some((prefix) => path === prefix || path.startsWith(prefix + "/"))) {
+      return new Response("Not found", { status: 404 });
+    }
+
+    return proxyTo(origin, "cloudflare");
   }
 };
 `;
 }
 
-export function writeWorkerFiles(options: { outDir?: string; workerName?: string; origin?: string } = {}): { workerPath: string; wranglerPath: string } {
+export function writeWorkerFiles(options: { outDir?: string; workerName?: string; origin?: string; attachmentsOrigin?: string } = {}): { workerPath: string; wranglerPath: string } {
   const outDir = options.outDir || "cloudflare";
   const workerName = options.workerName || "shortlinks";
   mkdirSync(outDir, { recursive: true });
@@ -91,6 +128,9 @@ compatibility_date = "2026-05-01"
 
 [vars]
 SHORTLINKS_ORIGIN = "${options.origin || "https://shortlinks.example.com"}"
+ATTACHMENTS_ORIGIN = "${options.attachmentsOrigin || ""}"
+SHORTLINKS_RESERVED_PATH_PREFIXES = "a,api"
+SHORTLINKS_ADMIN_PATH_PREFIXES = "/api,/_shortlinks/api"
 `);
   return { workerPath, wranglerPath };
 }
