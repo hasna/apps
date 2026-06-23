@@ -140,6 +140,9 @@ describe("consumer entrypoint boundary", () => {
           cacheability_metadata: true,
           resolver_snapshots: true,
           field_capability_descriptors: true,
+          project_assignments: true,
+          friendly_machine_names: true,
+          machine_list_pagination: true,
         },
       });
     } finally {

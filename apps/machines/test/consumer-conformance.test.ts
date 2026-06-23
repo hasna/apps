@@ -37,7 +37,7 @@ describe("consumer conformance fixture", () => {
       const fakeCli = join(binDir, "machines-fixture");
       writeFileSync(fakeCli, `#!/bin/sh
 if [ "$1" = "topology" ]; then
-  printf '%s\n' '{"schema_version":1,"machines":[{"machine_id":"consumer-conformance-local"}],"warnings":[]}'
+  printf '%s\n' '{"schema_version":1,"pagination":{"limit":10,"offset":0,"total":1,"count":1,"hasMore":false,"nextOffset":null,"has_more":false,"next_offset":null,"order":"updated_at_desc"},"machines":[{"machine_id":"consumer-conformance-local","friendly_name":null,"display_name":"consumer-conformance-local","updated_at":null}],"warnings":[]}'
   exit 0
 fi
 if [ "$1" = "route" ]; then

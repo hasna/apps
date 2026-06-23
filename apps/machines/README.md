@@ -37,10 +37,21 @@ origin allowlist.
 machines manifest init
 machines manifest bootstrap
 machines manifest add --id linux-dev-01 --platform linux --workspace-path ~/workspace
+machines manifest add --id linux-dev-01 --friendly-name "Linux Dev" --platform linux --workspace-path ~/workspace
 machines manifest add --id mac-lab-01 --platform macos --workspace-path ~/Workspace --app ghostty:cask
+machines manifest friendly-name get linux-dev-01 --json
+machines manifest friendly-name set linux-dev-01 "Linux Dev" --approval-token "$TOKEN" --json
+machines manifest friendly-name clear linux-dev-01 --approval-token "$TOKEN" --json
 machines manifest validate
 machines manifest list
 ```
+
+`id` is the stable machine slug and must not be changed for display purposes.
+Use `friendlyName` for user-facing labels. Consumers should display the
+topology `display_name` field, which is computed as `friendly_name` when set
+and `machine_id` otherwise. Setting or clearing `friendlyName` updates the
+machine `updatedAt` timestamp and requires the same scoped mutation approval
+model as other manifest writes.
 
 Public packages should keep private fleet state behind an opaque source/ref
 boundary. `HASNA_MACHINES_PRIVATE_MANIFEST_REF` (or
@@ -128,10 +139,56 @@ records the stable entrypoint, envelope names, schema artifact, field
 capabilities, default resolver TTL, and stable exports used by downstream apps
 such as `@hasna/knowledge`.
 
+### Hasna Notes machine list contract
+
+Hasna Notes and similar sidebar consumers should read machine lists from
+`discoverMachineTopology()` or `GET /api/topology`. The list defaults to the
+latest 10 machines ordered by `updated_at` descending. For View more, pass
+`limit` and `offset`:
+
+```bash
+machines topology --json
+machines topology --limit 10 --offset 10 --json
+curl 'http://127.0.0.1:7676/api/topology?limit=10&offset=10&tailscale=false'
+```
+
+Each `topology.machines[]` row includes:
+
+- `machine_id`: stable slug/id. Use this for storage, links, mutations, and route/workspace calls.
+- `friendly_name`: user-set label or `null`.
+- `display_name`: `friendly_name` when present, otherwise `machine_id`. Use this in UI.
+- `updated_at`: best known ordering timestamp from manifest updates, heartbeat updates, or live peer data.
+
+The `topology.pagination` object includes `limit`, `offset`, `total`, `count`,
+`hasMore`, `nextOffset`, plus snake-case aliases `has_more` and
+`next_offset`. Render the first page by default, and request the next page with
+`offset=nextOffset` when `hasMore` is true. Callers that explicitly need every
+machine can pass `limit: null` in the SDK or `all=true` to the HTTP API, but UI
+lists should keep the latest-10 default.
+
+Friendly names can be read and changed through the CLI, SDK, dashboard API,
+and MCP:
+
+```bash
+machines manifest friendly-name get linux-dev-01 --json
+machines manifest friendly-name set linux-dev-01 "Linux Dev" --approval-token "$TOKEN" --json
+machines manifest friendly-name clear linux-dev-01 --approval-token "$TOKEN" --json
+```
+
+HTTP dashboard API:
+
+- `GET /api/machines/friendly-name?machine=linux-dev-01`
+- `POST /api/machines/friendly-name` with `machine_id`, `friendly_name`, and a scoped `approval_token`
+- `DELETE /api/machines/friendly-name?machine=linux-dev-01` with a scoped approval token
+
+MCP tools expose the same contract as `machines_friendly_name_get`,
+`machines_friendly_name_set`, `machines_friendly_name_clear`, and
+`machines_topology` with `limit` and `offset` arguments.
+
 The package includes `schemas/machines-consumer.schema.json` and also exports
 `MACHINES_CONSUMER_SCHEMA_BUNDLE`, `getMachinesConsumerSchemaBundle()`, and
 `validateMachinesConsumerEnvelope()`. Downstream apps can use these helpers to
-validate route, workspace, compatibility, and resolver-snapshot envelopes
+validate topology, route, workspace, compatibility, and resolver-snapshot envelopes
 without importing CLI, MCP, agent, installer, or storage-heavy internals.
 
 The package also ships a downstream conformance fixture for consumers that want
@@ -150,6 +207,7 @@ CLI and MCP expose the same topology view:
 
 ```bash
 machines topology --json
+machines topology --limit 10 --offset 10 --json
 machines topology --no-tailscale --json
 machines route --machine linux-dev-01 --json
 machines ssh --machine linux-dev-01 --private-metadata
@@ -479,6 +537,7 @@ The dashboard exposes:
 - `/api/status` fleet status JSON
 - `/api/topology` manifest, heartbeat, SSH, LAN, and Tailscale topology JSON
 - `/api/routes` resolved route JSON for known machines
+- `/api/machines/friendly-name` get, set, or clear a machine display label
 - `/api/daemon/status` daemon heartbeat rows
 - `/api/manifest` current manifest JSON
 - `/api/notifications` notification channel JSON

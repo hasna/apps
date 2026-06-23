@@ -21,6 +21,8 @@ export interface ManifestFileSyncSpec {
 
 export interface MachineManifest {
   id: string;
+  friendlyName?: string;
+  updatedAt?: string;
   hostname?: string;
   sshAddress?: string;
   tailscaleName?: string;
@@ -113,10 +115,13 @@ export interface MachineDiff {
 
 export interface FleetStatusMachine {
   machineId: string;
+  friendlyName?: string | null;
+  displayName?: string;
   platform?: string;
   manifestDeclared: boolean;
   heartbeatStatus: "online" | "offline" | "unknown";
   lastHeartbeatAt?: string;
+  updatedAt?: string | null;
   daemonVersion?: string | null;
   agentMode?: string | null;
   storageSyncStatus?: string | null;

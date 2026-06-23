@@ -8,6 +8,7 @@ export {
   MACHINES_CONSUMER_SCHEMA_URI,
   MACHINES_PACKAGE_NAME,
   DEFAULT_MACHINE_RESOLVER_TTL_MS,
+  DEFAULT_MACHINE_LIST_LIMIT,
   createMachineResolverSnapshot,
   discoverMachineTopology,
   getMachinesConsumerCapabilities,
@@ -26,6 +27,7 @@ export type {
   MachineResolverSnapshot,
   MachineResolverSnapshotRoute,
   MachineResolverSnapshotWorkspace,
+  MachineListPagination,
   MachineTopology,
   MachineTopologyEntry,
   MachineTopologyOptions,
@@ -58,6 +60,22 @@ export type {
   MachinesConsumerSchemaEnvelope,
   MachinesConsumerValidationResult,
 } from "./consumer-schema.js";
+export {
+  listMachineProjectAssignments,
+  projectAssignmentMutationArgs,
+  projectAssignmentResourceId,
+  removeProjectAssignmentMutationArgs,
+} from "./projects.js";
+export type {
+  AssignMachineProjectInput,
+  MachineProjectAssignment,
+  MachineProjectAssignmentMachineSummary,
+  MachineProjectAssignmentProjectSummary,
+  MachineProjectAssignmentSource,
+  MachineProjectAssignments,
+  MachineProjectAssignmentsOptions,
+  RemoveMachineProjectAssignmentInput,
+} from "./projects.js";
 export {
   checkMachineCompatibility,
 } from "./compatibility.js";

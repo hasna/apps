@@ -7,6 +7,7 @@ import {
   type MachineWorkspaceResolution,
 } from "./topology.js";
 import type { MachineCompatibilityReport } from "./compatibility.js";
+import type { MachineProjectAssignments } from "./projects.js";
 
 export type MachinesConsumerSchemaEnvelope =
   | "contract"
@@ -14,7 +15,8 @@ export type MachinesConsumerSchemaEnvelope =
   | "route"
   | "workspace"
   | "compatibility"
-  | "resolver_snapshot";
+  | "resolver_snapshot"
+  | "project_assignments";
 
 export interface MachinesConsumerValidationResult {
   ok: boolean;
@@ -64,20 +66,47 @@ export const MACHINES_CONSUMER_SCHEMA_BUNDLE: MachinesConsumerSchemaBundle = {
         capabilities: { type: "object" },
         field_capabilities: { type: "object" },
         cacheability: { type: "object" },
-        envelopes: { type: "array", items: { enum: ["topology", "route", "workspace", "compatibility", "resolver_snapshot"] } },
+        envelopes: { type: "array", items: { enum: ["topology", "route", "workspace", "compatibility", "resolver_snapshot", "project_assignments"] } },
         stable_exports: { type: "array", items: { type: "string" } },
       },
     },
     topology: {
       type: "object",
-      required: ["schema_version", "package", "capabilities", "generated_at", "local_machine_id", "machines", "warnings"],
+      required: ["schema_version", "package", "capabilities", "generated_at", "local_machine_id", "pagination", "machines", "warnings"],
       properties: {
         schema_version: { const: MACHINES_CONSUMER_CONTRACT_VERSION },
         package: { type: "object" },
         capabilities: { type: "object" },
         generated_at: { type: "string", format: "date-time" },
         local_machine_id: { type: "string" },
-        machines: { type: "array" },
+        pagination: {
+          type: "object",
+          required: ["limit", "offset", "total", "count", "hasMore", "nextOffset", "has_more", "next_offset", "order"],
+          properties: {
+            limit: { type: ["number", "null"] },
+            offset: { type: "number" },
+            total: { type: "number" },
+            count: { type: "number" },
+            hasMore: { type: "boolean" },
+            nextOffset: { type: ["number", "null"] },
+            has_more: { type: "boolean" },
+            next_offset: { type: ["number", "null"] },
+            order: { const: "updated_at_desc" },
+          },
+        },
+        machines: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["machine_id", "friendly_name", "display_name", "updated_at"],
+            properties: {
+              machine_id: { type: "string" },
+              friendly_name: { type: ["string", "null"] },
+              display_name: { type: "string" },
+              updated_at: { type: ["string", "null"], format: "date-time" },
+            },
+          },
+        },
         warnings: { type: "array", items: { type: "string" } },
       },
     },
@@ -162,6 +191,19 @@ export const MACHINES_CONSUMER_SCHEMA_BUNDLE: MachinesConsumerSchemaBundle = {
         provenance: { type: "object" },
       },
     },
+    project_assignments: {
+      type: "object",
+      required: ["schema_version", "package", "generated_at", "assignments", "projects", "machines", "warnings"],
+      properties: {
+        schema_version: { const: MACHINES_CONSUMER_CONTRACT_VERSION },
+        package: { type: "object" },
+        generated_at: { type: "string", format: "date-time" },
+        assignments: { type: "array" },
+        projects: { type: "array" },
+        machines: { type: "array" },
+        warnings: { type: "array", items: { type: "string" } },
+      },
+    },
   },
 };
 
@@ -219,8 +261,30 @@ export function validateMachinesConsumerEnvelope(
     if (!hasArray(value, "envelopes")) errors.push("envelopes");
     if (!hasArray(value, "stable_exports")) errors.push("stable_exports");
   } else if (envelope === "topology") {
-    requireFields(value, ["package", "capabilities", "generated_at", "local_machine_id", "machines", "warnings"], errors);
+    requireFields(value, ["package", "capabilities", "generated_at", "local_machine_id", "pagination", "machines", "warnings"], errors);
+    if (!hasObject(value, "pagination")) {
+      errors.push("pagination");
+    } else {
+      const pagination = value.pagination as Record<string, unknown>;
+      requireFields(pagination, ["limit", "offset", "total", "count", "hasMore", "nextOffset", "has_more", "next_offset", "order"], errors);
+      if (typeof pagination.hasMore !== "boolean") errors.push("pagination.hasMore");
+      if (typeof pagination.has_more !== "boolean") errors.push("pagination.has_more");
+      if (pagination.order !== "updated_at_desc") errors.push("pagination.order");
+    }
     if (!hasArray(value, "machines")) errors.push("machines");
+    if (Array.isArray(value.machines)) {
+      for (const [index, machine] of value.machines.entries()) {
+        if (!isRecord(machine)) {
+          errors.push(`machines.${index}`);
+          continue;
+        }
+        requireFields(machine, ["machine_id", "friendly_name", "display_name", "updated_at"], errors);
+        if (!hasString(machine, "machine_id")) errors.push(`machines.${index}.machine_id`);
+        if (!hasString(machine, "display_name")) errors.push(`machines.${index}.display_name`);
+        if (machine.friendly_name !== null && typeof machine.friendly_name !== "string") errors.push(`machines.${index}.friendly_name`);
+        if (machine.updated_at !== null && typeof machine.updated_at !== "string") errors.push(`machines.${index}.updated_at`);
+      }
+    }
     if (!hasArray(value, "warnings")) errors.push("warnings");
   } else if (envelope === "route") {
     requireFields(value, ["package", "ok", "machine_id", "requested_machine_id", "generated_at", "route", "source", "target", "command_target", "confidence", "local", "evidence", "cacheability", "warnings"], errors);
@@ -247,6 +311,12 @@ export function validateMachinesConsumerEnvelope(
     if (!hasCacheability(value)) errors.push("cacheability");
     if (!hasArray(value, "warnings")) errors.push("warnings");
     if (!hasObject(value, "provenance")) errors.push("provenance");
+  } else if (envelope === "project_assignments") {
+    requireFields(value, ["package", "generated_at", "assignments", "projects", "machines", "warnings"], errors);
+    if (!hasArray(value, "assignments")) errors.push("assignments");
+    if (!hasArray(value, "projects")) errors.push("projects");
+    if (!hasArray(value, "machines")) errors.push("machines");
+    if (!hasArray(value, "warnings")) errors.push("warnings");
   }
 
   return { ok: errors.length === 0, envelope, schema_id: MACHINES_CONSUMER_SCHEMA_URI, errors };
@@ -257,4 +327,5 @@ export type MachinesConsumerEnvelopeValue =
   | MachineRouteResolution
   | MachineWorkspaceResolution
   | MachineCompatibilityReport
-  | MachineResolverSnapshot;
+  | MachineResolverSnapshot
+  | MachineProjectAssignments;

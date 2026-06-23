@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { arch, hostname, platform, userInfo } from "node:os";
 import { spawnSync } from "node:child_process";
 import { getLocalMachineId, latestHeartbeatByMachine, listHeartbeats } from "./db.js";
-import { readManifest } from "./manifests.js";
+import { machineDisplayName, normalizeFriendlyName, readManifest } from "./manifests.js";
 import { getManifestPath } from "./paths.js";
 import { REDACTED_VALUE, publicMetadataKeys, redactErrorMessage, redactMetadataForTopology, redactSensitiveValue } from "./redaction.js";
 import type { MachineManifest, MachinePlatform } from "./types.js";
@@ -14,6 +14,8 @@ export const MACHINES_CONSUMER_ENTRYPOINT = "@hasna/machines/consumer";
 export const MACHINES_CONSUMER_SCHEMA_URI = "https://schemas.hasna.xyz/machines/consumer/v1/machines-consumer.schema.json";
 export const MACHINES_CONSUMER_SCHEMA_ARTIFACT = "schemas/machines-consumer.schema.json";
 export const DEFAULT_MACHINE_RESOLVER_TTL_MS = 24 * 60 * 60 * 1000;
+export const DEFAULT_MACHINE_LIST_LIMIT = 10;
+export const MACHINE_LIST_ORDER = "updated_at_desc";
 
 export interface TopologyCommandResult {
   stdout: string;
@@ -28,6 +30,8 @@ export interface MachineTopologyOptions {
   runner?: TopologyCommandRunner;
   now?: Date;
   resolverTtlMs?: number | null;
+  limit?: number | null;
+  offset?: number;
 }
 
 export interface MachineRouteHint {
@@ -38,6 +42,9 @@ export interface MachineRouteHint {
 
 export interface MachineTopologyEntry {
   machine_id: string;
+  friendly_name: string | null;
+  display_name: string;
+  updated_at: string | null;
   hostname: string | null;
   platform: MachinePlatform | string | null;
   os: string | null;
@@ -95,13 +102,20 @@ export interface MachinesConsumerCapabilities {
   cacheability_metadata?: true;
   resolver_snapshots?: true;
   field_capability_descriptors?: true;
+  project_assignments?: true;
+  friendly_machine_names?: true;
+  machine_list_pagination?: true;
 }
 
-export type MachinesConsumerEnvelope = "topology" | "route" | "workspace" | "compatibility" | "resolver_snapshot";
+export type MachinesConsumerEnvelope = "topology" | "route" | "workspace" | "compatibility" | "resolver_snapshot" | "project_assignments";
 
 export interface MachinesConsumerFieldCapabilities {
   topology: {
     machine_identity: true;
+    friendly_names: true;
+    display_name_fallback: true;
+    recent_ordering: true;
+    pagination: true;
     route_hints: true;
     tailscale_status: true;
     manifest_metadata: true;
@@ -126,6 +140,11 @@ export interface MachinesConsumerFieldCapabilities {
   resolver_snapshot: {
     cacheability: true;
     redacted_provenance: true;
+  };
+  project_assignments: {
+    open_projects_compatibility: true;
+    machine_project_index: true;
+    manifest_metadata_source: true;
   };
 }
 
@@ -156,11 +175,18 @@ export const MACHINES_CONSUMER_CAPABILITIES: MachinesConsumerCapabilities = {
   cacheability_metadata: true,
   resolver_snapshots: true,
   field_capability_descriptors: true,
+  project_assignments: true,
+  friendly_machine_names: true,
+  machine_list_pagination: true,
 };
 
 export const MACHINES_CONSUMER_FIELD_CAPABILITIES: MachinesConsumerFieldCapabilities = {
   topology: {
     machine_identity: true,
+    friendly_names: true,
+    display_name_fallback: true,
+    recent_ordering: true,
+    pagination: true,
     route_hints: true,
     tailscale_status: true,
     manifest_metadata: true,
@@ -186,6 +212,11 @@ export const MACHINES_CONSUMER_FIELD_CAPABILITIES: MachinesConsumerFieldCapabili
     cacheability: true,
     redacted_provenance: true,
   },
+  project_assignments: {
+    open_projects_compatibility: true,
+    machine_project_index: true,
+    manifest_metadata_source: true,
+  },
 };
 
 export const MACHINES_CONSUMER_CONTRACT: MachinesConsumerContract = {
@@ -200,7 +231,7 @@ export const MACHINES_CONSUMER_CONTRACT: MachinesConsumerContract = {
     default_ttl_ms: DEFAULT_MACHINE_RESOLVER_TTL_MS,
     stale_requires_refresh: true,
   },
-  envelopes: ["topology", "route", "workspace", "compatibility", "resolver_snapshot"],
+  envelopes: ["topology", "route", "workspace", "compatibility", "resolver_snapshot", "project_assignments"],
   stable_exports: [
     "MACHINES_CONSUMER_CONTRACT",
     "MACHINES_CONSUMER_CONTRACT_VERSION",
@@ -209,11 +240,13 @@ export const MACHINES_CONSUMER_CONTRACT: MachinesConsumerContract = {
     "MACHINES_CONSUMER_SCHEMA_BUNDLE",
     "MACHINES_CONSUMER_SCHEMA_URI",
     "MACHINES_PACKAGE_NAME",
+    "DEFAULT_MACHINE_LIST_LIMIT",
     "discoverMachineTopology",
     "getLocalMachineTopology",
     "resolveMachineRoute",
     "resolveMachineWorkspace",
     "createMachineResolverSnapshot",
+    "listMachineProjectAssignments",
     "getMachinesConsumerSchemaBundle",
     "validateMachinesConsumerEnvelope",
     "checkMachineCompatibility",
@@ -238,8 +271,21 @@ export interface MachineTopology {
   local_hostname: string;
   current_platform: MachinePlatform | string;
   manifest_path_known: boolean;
+  pagination: MachineListPagination;
   machines: MachineTopologyEntry[];
   warnings: string[];
+}
+
+export interface MachineListPagination {
+  limit: number | null;
+  offset: number;
+  total: number;
+  count: number;
+  hasMore: boolean;
+  nextOffset: number | null;
+  has_more: boolean;
+  next_offset: number | null;
+  order: typeof MACHINE_LIST_ORDER;
 }
 
 export type MachineRouteKind = "local" | "lan" | "tailscale" | "ssh" | "unknown";
@@ -560,6 +606,71 @@ function parseHeartbeatJson(value: string | null | undefined): Record<string, un
   }
 }
 
+function parseDateMs(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function latestIso(values: Array<string | null | undefined>): string | null {
+  const latest = values
+    .map((value) => ({ value, ms: parseDateMs(value) }))
+    .filter((entry): entry is { value: string; ms: number } => entry.value !== null && entry.value !== undefined && entry.ms !== null)
+    .sort((left, right) => right.ms - left.ms)[0];
+  return latest?.value ?? null;
+}
+
+function normalizeListOffset(offset: number | undefined): number {
+  if (offset === undefined || !Number.isFinite(offset)) return 0;
+  return Math.max(0, Math.floor(offset));
+}
+
+function normalizeListLimit(limit: number | null | undefined): number | null {
+  if (limit === null) return null;
+  if (limit === undefined || !Number.isFinite(limit)) return DEFAULT_MACHINE_LIST_LIMIT;
+  return Math.max(1, Math.floor(limit));
+}
+
+function compareMachineListOrder(left: MachineTopologyEntry, right: MachineTopologyEntry): number {
+  const leftMs = parseDateMs(left.updated_at);
+  const rightMs = parseDateMs(right.updated_at);
+  if (leftMs !== null || rightMs !== null) {
+    if (leftMs === null) return 1;
+    if (rightMs === null) return -1;
+    if (leftMs !== rightMs) return rightMs - leftMs;
+  }
+  return left.machine_id.localeCompare(right.machine_id);
+}
+
+function paginateMachineEntries(entries: MachineTopologyEntry[], options: MachineTopologyOptions): {
+  machines: MachineTopologyEntry[];
+  pagination: MachineListPagination;
+} {
+  const ordered = [...entries].sort(compareMachineListOrder);
+  const offset = normalizeListOffset(options.offset);
+  const limit = normalizeListLimit(options.limit);
+  const total = ordered.length;
+  const machines = limit === null
+    ? ordered.slice(offset)
+    : ordered.slice(offset, offset + limit);
+  const nextOffset = offset + machines.length < total ? offset + machines.length : null;
+  const hasMore = nextOffset !== null;
+  return {
+    machines,
+    pagination: {
+      limit,
+      offset,
+      total,
+      count: machines.length,
+      hasMore,
+      nextOffset,
+      has_more: hasMore,
+      next_offset: nextOffset,
+      order: MACHINE_LIST_ORDER,
+    },
+  };
+}
+
 function buildEntry(input: {
   machineId: string;
   localMachineId: string;
@@ -579,8 +690,13 @@ function buildEntry(input: {
   const route = selectedRoute?.kind === "ssh" ? "ssh" : selectedRoute?.kind ?? "unknown";
   const routeUser = userFromSshAddress(manifest?.sshAddress)
     ?? (typeof manifest?.metadata?.user === "string" ? manifest.metadata.user : null);
+  const friendlyName = manifest ? normalizeFriendlyName(manifest.friendlyName) : null;
+  const displayName = manifest ? machineDisplayName(manifest) : input.machineId;
   return {
     machine_id: input.machineId,
+    friendly_name: friendlyName,
+    display_name: displayName,
+    updated_at: latestIso([manifest?.updatedAt, input.heartbeat?.updated_at, peer?.LastSeen]),
     hostname: manifest?.hostname ?? peer?.HostName ?? null,
     platform: manifest?.platform ?? (peer?.OS ? normalizePlatform(peer.OS) : null),
     os: peer?.OS ?? null,
@@ -639,7 +755,7 @@ export function discoverMachineTopology(options: MachineTopologyOptions = {}): M
     ...peers.keys(),
   ]);
   const manifestById = new Map(manifest.machines.map((machine) => [machine.id, machine]));
-  const machines = [...machineIds].sort().map((machineId) => {
+  const allMachines = [...machineIds].sort().map((machineId) => {
     const manifestMachine = manifestById.get(machineId);
     return buildEntry({
       machineId,
@@ -649,6 +765,7 @@ export function discoverMachineTopology(options: MachineTopologyOptions = {}): M
       heartbeat: heartbeatByMachine.get(machineId),
     });
   });
+  const { machines, pagination } = paginateMachineEntries(allMachines, options);
   return {
     schema_version: MACHINES_CONSUMER_CONTRACT_VERSION,
     package: {
@@ -661,6 +778,7 @@ export function discoverMachineTopology(options: MachineTopologyOptions = {}): M
     local_hostname: hostname(),
     current_platform: normalizePlatform(),
     manifest_path_known: existsSync(getManifestPath()),
+    pagination,
     machines,
     warnings,
   };
@@ -894,7 +1012,7 @@ function mergeCacheability(input: {
 
 export function resolveMachineRoute(machineId: string, options: MachineRouteOptions = {}): MachineRouteResolution {
   const now = options.now ?? new Date();
-  const topology = options.topology ?? discoverMachineTopology(options);
+  const topology = options.topology ?? discoverMachineTopology({ ...options, limit: null, offset: 0 });
   const warnings = [...topology.warnings];
   const { machine, matchedBy } = findRouteMachine(topology, machineId);
   const generatedAt = now.toISOString();
@@ -1250,7 +1368,7 @@ function projectPathFromMetadata(metadata: Record<string, unknown>, projectId: s
   const keys = [projectId, repoName].filter((value): value is string => Boolean(value));
   return readMappedPath({
     metadata,
-    containers: ["workspace_paths", "workspacePaths", "repo_paths", "repoPaths", "project_paths", "projectPaths", "projects"],
+    containers: ["project_assignments", "projectAssignments", "workspace_paths", "workspacePaths", "repo_paths", "repoPaths", "project_paths", "projectPaths", "projects"],
     keys,
   });
 }
@@ -1259,6 +1377,17 @@ function openFilesPathFromMetadata(metadata: Record<string, unknown>, projectId:
   const direct = metadataString(metadata, ["open_files_root", "openFilesRoot", "open_files_path", "openFilesPath"]);
   if (direct) return direct;
   const keys = [projectId, repoName, "open-files", "open_files", "default"].filter((value): value is string => Boolean(value));
+  for (const containerName of ["project_assignments", "projectAssignments"]) {
+    const container = metadata[containerName];
+    if (!isRecord(container)) continue;
+    for (const key of keys) {
+      const value = container[key];
+      if (isRecord(value)) {
+        const path = metadataString(value, ["open_files_root", "openFilesRoot", "open_files_path", "openFilesPath"]);
+        if (path) return path;
+      }
+    }
+  }
   return readMappedPath({
     metadata,
     containers: ["open_files_roots", "openFilesRoots", "open_files_paths", "openFilesPaths"],
@@ -1304,7 +1433,7 @@ function metadataKeysForDiagnostics(metadata: Record<string, unknown>): string[]
 
 export function resolveMachineWorkspace(options: MachineWorkspaceOptions): MachineWorkspaceResolution {
   const now = options.now ?? new Date();
-  const topology = options.topology ?? discoverMachineTopology(options);
+  const topology = options.topology ?? discoverMachineTopology({ ...options, limit: null, offset: 0 });
   const warnings = [...topology.warnings];
   const { machine, matchedBy } = findRouteMachine(topology, options.machineId);
   const generatedAt = now.toISOString();
@@ -1582,9 +1711,12 @@ export function createMachineResolverSnapshot(options: CreateMachineResolverSnap
 }
 
 export function getLocalMachineTopology(options: MachineTopologyOptions = {}): MachineTopologyEntry {
-  const topology = discoverMachineTopology(options);
+  const topology = discoverMachineTopology({ ...options, limit: null, offset: 0 });
   return topology.machines.find((machine) => machine.machine_id === topology.local_machine_id) ?? {
     machine_id: topology.local_machine_id,
+    friendly_name: null,
+    display_name: topology.local_machine_id,
+    updated_at: null,
     hostname: hostname(),
     platform: normalizePlatform(),
     os: platform(),

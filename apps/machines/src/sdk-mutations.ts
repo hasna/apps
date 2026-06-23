@@ -20,10 +20,18 @@ import {
   addDomainMapping as rawAddDomainMapping,
 } from "./commands/dns.js";
 import {
+  clearMachineFriendlyNameMutationArgs,
   manifestAdd as rawManifestAdd,
   manifestBootstrapCurrentMachine as rawManifestBootstrapCurrentMachine,
+  manifestClearFriendlyName as rawManifestClearFriendlyName,
   manifestInit as rawManifestInit,
   manifestRemove as rawManifestRemove,
+  manifestSetFriendlyName as rawManifestSetFriendlyName,
+  machineFriendlyNameResourceId,
+  setMachineFriendlyNameMutationArgs,
+  type ClearMachineFriendlyNameInput,
+  type MachineFriendlyNameResult,
+  type SetMachineFriendlyNameInput,
 } from "./commands/manifest.js";
 import {
   runAppsInstall as rawRunAppsInstall,
@@ -72,6 +80,16 @@ import {
   type SdkMutationApprovalOptions,
 } from "./commands/mutation-approval.js";
 import type { FleetManifest, MachineManifest } from "./types.js";
+import {
+  assignMachineProject as rawAssignMachineProject,
+  removeMachineProjectAssignment as rawRemoveMachineProjectAssignment,
+  projectAssignmentMutationArgs,
+  projectAssignmentResourceId,
+  removeProjectAssignmentMutationArgs,
+  type AssignMachineProjectInput,
+  type MachineProjectAssignments,
+  type RemoveMachineProjectAssignmentInput,
+} from "./projects.js";
 
 type ApplyOptions = { apply?: boolean; yes?: boolean };
 type SdkApplyOptions<T extends ApplyOptions> = T & SdkMutationApprovalOptions;
@@ -155,6 +173,58 @@ export function manifestRemove(machineId: string, options: SdkMutationApprovalOp
     args: { machine_id: machineId },
   }, options);
   return rawManifestRemove(machineId);
+}
+
+export function manifestSetFriendlyName(
+  input: SetMachineFriendlyNameInput,
+  options: SdkMutationApprovalOptions = {},
+): MachineFriendlyNameResult {
+  assertSdkMutationApproved({
+    operation: "machines_friendly_name_set",
+    machineId: input.machineId,
+    resourceId: machineFriendlyNameResourceId(input.machineId),
+    args: setMachineFriendlyNameMutationArgs(input),
+  }, options);
+  return rawManifestSetFriendlyName(input);
+}
+
+export function manifestClearFriendlyName(
+  input: ClearMachineFriendlyNameInput,
+  options: SdkMutationApprovalOptions = {},
+): MachineFriendlyNameResult {
+  assertSdkMutationApproved({
+    operation: "machines_friendly_name_clear",
+    machineId: input.machineId,
+    resourceId: machineFriendlyNameResourceId(input.machineId),
+    args: clearMachineFriendlyNameMutationArgs(input),
+  }, options);
+  return rawManifestClearFriendlyName(input);
+}
+
+export function assignMachineProject(
+  input: AssignMachineProjectInput,
+  options: SdkMutationApprovalOptions = {},
+): MachineProjectAssignments {
+  assertSdkMutationApproved({
+    operation: "machines_projects_assign",
+    machineId: input.machineId,
+    resourceId: projectAssignmentResourceId(input.machineId, input.projectId),
+    args: projectAssignmentMutationArgs(input),
+  }, options);
+  return rawAssignMachineProject(input);
+}
+
+export function removeMachineProjectAssignment(
+  input: RemoveMachineProjectAssignmentInput,
+  options: SdkMutationApprovalOptions = {},
+): MachineProjectAssignments {
+  assertSdkMutationApproved({
+    operation: "machines_projects_unassign",
+    machineId: input.machineId,
+    resourceId: projectAssignmentResourceId(input.machineId, input.projectId),
+    args: removeProjectAssignmentMutationArgs(input),
+  }, options);
+  return rawRemoveMachineProjectAssignment(input);
 }
 
 export function runSetup(

@@ -19,12 +19,17 @@ const systemPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 const runtimeBinPath = dirname(process.execPath);
 const supportedContractVersion = 1;
 
+function defaultCliCommand() {
+  const builtCli = join(repoRoot, "dist", "cli", "index.js");
+  return existsSync(builtCli) ? builtCli : "machines";
+}
+
 function parseArgs(argv) {
   const options = {
     json: false,
     keepTemp: false,
     packageDir: process.env.MACHINES_PACKAGE_DIR || repoRoot,
-    cliCommand: process.env.MACHINES_CLI_COMMAND || "machines",
+    cliCommand: process.env.MACHINES_CLI_COMMAND || defaultCliCommand(),
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -167,6 +172,7 @@ function writeSdkProbe(appDir) {
       checkMachineCompatibility,
       createMachineResolverSnapshot,
       discoverMachineTopology,
+      listMachineProjectAssignments,
       validateMachinesConsumerEnvelope,
       resolveMachineRoute,
       resolveMachineWorkspace,
@@ -191,6 +197,9 @@ function writeSdkProbe(appDir) {
       workspaces: [],
       now: new Date('2026-06-09T00:00:00.000Z'),
     });
+    const projectAssignments = listMachineProjectAssignments({
+      now: new Date('2026-06-09T00:00:00.000Z'),
+    });
     const snapshot = createMachineResolverSnapshot({
       route,
       workspace,
@@ -208,16 +217,19 @@ function writeSdkProbe(appDir) {
       capabilities: MACHINES_CONSUMER_CONTRACT.capabilities,
       validation: {
         contract: validateMachinesConsumerEnvelope('contract', MACHINES_CONSUMER_CONTRACT).ok,
+        topology: validateMachinesConsumerEnvelope('topology', topology).ok,
         route: validateMachinesConsumerEnvelope('route', route).ok,
         workspace: validateMachinesConsumerEnvelope('workspace', workspace).ok,
         compatibility: validateMachinesConsumerEnvelope('compatibility', compatibility).ok,
         resolver_snapshot: validateMachinesConsumerEnvelope('resolver_snapshot', snapshot).ok,
+        project_assignments: validateMachinesConsumerEnvelope('project_assignments', projectAssignments).ok,
       },
-      topology: { schema_version: topology.schema_version, machines: topology.machines.length },
+      topology: { schema_version: topology.schema_version, machines: topology.machines.length, pagination: topology.pagination, first_display_name: topology.machines[0]?.display_name ?? null },
       route: { schema_version: route.schema_version, ok: route.ok, route: route.route, target: route.target, cacheable: route.cacheability.cacheable },
       workspace: { schema_version: workspace.schema_version, ok: workspace.ok, project_root: workspace.paths.project_root.path, cacheable: workspace.cacheability.cacheable },
       compatibility: { schema_version: compatibility.schema_version, ok: compatibility.ok },
       resolver_snapshot: { schema_version: snapshot.schema_version, cacheable: snapshot.cacheability.cacheable, authority: snapshot.cacheability.source_authority },
+      project_assignments: { schema_version: projectAssignments.schema_version, count: projectAssignments.assignments.length },
     }));
   `);
   return script;
@@ -260,7 +272,7 @@ function writeCliProbe(appDir) {
     console.log(JSON.stringify({
       source: 'cli',
       supported: true,
-      topology: { schema_version: topology.schema_version, machines: topology.machines.length },
+      topology: { schema_version: topology.schema_version, machines: topology.machines.length, pagination: topology.pagination },
       route: { schema_version: route.schema_version, ok: route.ok, route: route.route, target: route.target },
     }));
   `);
@@ -325,6 +337,9 @@ function assertCase(name, output) {
     if (!output.envelopes.includes("resolver_snapshot") || output.resolver_snapshot.schema_version !== 1) {
       throw new Error(`${name}: missing resolver snapshot envelope\n${JSON.stringify(output, null, 2)}`);
     }
+    if (!output.topology.pagination || output.topology.pagination.limit !== 10) {
+      throw new Error(`${name}: missing topology pagination contract\n${JSON.stringify(output, null, 2)}`);
+    }
     if (!output.schema_artifact || !output.schema_id || !Object.values(output.validation).every(Boolean)) {
       throw new Error(`${name}: schema validation failed\n${JSON.stringify(output, null, 2)}`);
     }
@@ -337,6 +352,9 @@ function assertCase(name, output) {
   if (name === "global-cli-only") {
     if (output.source !== "cli" || output.supported !== true || output.topology.schema_version !== 1 || output.route.schema_version !== 1) {
       throw new Error(`${name}: invalid CLI output\n${JSON.stringify(output, null, 2)}`);
+    }
+    if (!output.topology.pagination || output.topology.pagination.limit !== 10) {
+      throw new Error(`${name}: missing CLI topology pagination\n${JSON.stringify(output, null, 2)}`);
     }
   }
   if (name === "no-sdk-no-cli") {

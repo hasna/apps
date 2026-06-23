@@ -1,13 +1,25 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { EventsClient } from "@hasna/events";
-import { manifestAdd, manifestInit } from "../src/commands/manifest.js";
+import {
+  clearMachineFriendlyNameMutationArgs,
+  machineFriendlyNameResourceId,
+  manifestAdd,
+  manifestInit,
+  setMachineFriendlyNameMutationArgs,
+} from "../src/commands/manifest.js";
 import { addNotificationChannel } from "../src/commands/notifications.js";
 import { createMutationApprovalToken, mutationArgsSha256, MUTATION_APPROVAL_FLAG_ENV, MUTATION_APPROVAL_TOKEN_ENV } from "../src/commands/mutation-approval.js";
 import { getServeInfo, renderDashboardHtml, startDashboardServer } from "../src/commands/serve.js";
 import { upsertHeartbeat } from "../src/db.js";
+import {
+  projectAssignmentMutationArgs,
+  projectAssignmentResourceId,
+  removeProjectAssignmentMutationArgs,
+  type AssignMachineProjectInput,
+} from "../src/projects.js";
 import { PRIVATE_OUTPUT_DENIED_WARNING } from "../src/redaction.js";
 
 const dashboardMutationSecret = "serve-dashboard-test-secret";
@@ -107,6 +119,58 @@ function webhookTestApproval(dir: string, channelId: string, args: {
   }));
 }
 
+function projectAssignmentApproval(input: AssignMachineProjectInput): string {
+  return createMutationApprovalToken({
+    surface: "dashboard",
+    operation: "machines_projects_assign",
+    transport: "dashboard:http",
+    callerId: "dashboard",
+    runId: "dashboard",
+    machineId: input.machineId,
+    resourceId: projectAssignmentResourceId(input.machineId, input.projectId),
+    args: projectAssignmentMutationArgs(input),
+  }, { secret: dashboardMutationSecret });
+}
+
+function projectAssignmentRemoveApproval(input: { machineId: string; projectId: string }): string {
+  return createMutationApprovalToken({
+    surface: "dashboard",
+    operation: "machines_projects_unassign",
+    transport: "dashboard:http",
+    callerId: "dashboard",
+    runId: "dashboard",
+    machineId: input.machineId,
+    resourceId: projectAssignmentResourceId(input.machineId, input.projectId),
+    args: removeProjectAssignmentMutationArgs(input),
+  }, { secret: dashboardMutationSecret });
+}
+
+function friendlyNameSetApproval(input: { machineId: string; friendlyName: string }): string {
+  return createMutationApprovalToken({
+    surface: "dashboard",
+    operation: "machines_friendly_name_set",
+    transport: "dashboard:http",
+    callerId: "dashboard",
+    runId: "dashboard",
+    machineId: input.machineId,
+    resourceId: machineFriendlyNameResourceId(input.machineId),
+    args: setMachineFriendlyNameMutationArgs(input),
+  }, { secret: dashboardMutationSecret });
+}
+
+function friendlyNameClearApproval(input: { machineId: string }): string {
+  return createMutationApprovalToken({
+    surface: "dashboard",
+    operation: "machines_friendly_name_clear",
+    transport: "dashboard:http",
+    callerId: "dashboard",
+    runId: "dashboard",
+    machineId: input.machineId,
+    resourceId: machineFriendlyNameResourceId(input.machineId),
+    args: clearMachineFriendlyNameMutationArgs(input),
+  }, { secret: dashboardMutationSecret });
+}
+
 describe("serve", () => {
   afterEach(() => {
     delete process.env["HASNA_MACHINES_MANIFEST_PATH"];
@@ -126,6 +190,8 @@ describe("serve", () => {
     expect(info.routes).toContain("/api/status");
     expect(info.routes).toContain("/api/topology");
     expect(info.routes).toContain("/api/routes");
+    expect(info.routes).toContain("/api/machines/friendly-name");
+    expect(info.routes).toContain("/api/projects/assignments");
     expect(info.routes).toContain("/api/daemon/status");
     expect(info.routes).toContain("/api/doctor");
   });
@@ -200,6 +266,7 @@ describe("serve", () => {
     const daemon = await fetch(`${base}/api/daemon/status`).then((response) => response.json());
     const selfTest = await fetch(`${base}/api/self-test`).then((response) => response.json());
     const apps = await fetch(`${base}/api/apps/status`).then((response) => response.json());
+    const projectAssignments = await fetch(`${base}/api/projects/assignments`).then((response) => response.json());
     const webhooks = await fetch(`${base}/api/webhooks`).then((response) => response.json());
     const emitted = await fetch(`${base}/api/events`, {
       method: "POST",
@@ -234,10 +301,226 @@ describe("serve", () => {
     expect(JSON.stringify(privateTopology)).toContain("demo-node-01.tailnet.example");
     expect(Array.isArray(selfTest.checks)).toBe(true);
     expect(Array.isArray(apps.apps)).toBe(true);
+    expect(Array.isArray(projectAssignments.assignments)).toBe(true);
     expect(webhooks[0].id).toBe("events-local");
     expect(emitted.event.type).toBe("machines.test");
     expect(Array.isArray(listedEvents)).toBe(true);
     expect(dispatch.channelId).toBe("local");
+  });
+
+  test("friendly-name API sets, reads, clears, and paginates topology", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-serve-friendly-name-"));
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "demo-node-02";
+    process.env["HASNA_MACHINES_DB_PATH"] = join(dir, "machines.db");
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
+    process.env[MUTATION_APPROVAL_TOKEN_ENV] = dashboardMutationSecret;
+    manifestInit();
+    for (let index = 0; index < 12; index += 1) {
+      manifestAdd({
+        id: `demo-node-${String(index).padStart(2, "0")}`,
+        platform: "linux",
+        workspacePath: `/workspace/${index}`,
+        updatedAt: `2026-06-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
+      });
+    }
+
+    const server = startDashboardServer({ host: "127.0.0.1", port: 0 });
+    const base = `http://127.0.0.1:${server.port}`;
+    try {
+      const denied = await fetch(`${base}/api/machines/friendly-name`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ machine_id: "demo-node-11", friendly_name: "Studio Linux" }),
+      });
+      expect(denied.status).toBe(403);
+
+      const setInput = { machineId: "demo-node-11", friendlyName: "Studio Linux" };
+      const set = await fetch(`${base}/api/machines/friendly-name`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          machine_id: setInput.machineId,
+          friendly_name: setInput.friendlyName,
+          approval_token: friendlyNameSetApproval(setInput),
+        }),
+      });
+      expect(set.status).toBe(200);
+      expect(await set.json()).toMatchObject({
+        machine_id: "demo-node-11",
+        friendly_name: "Studio Linux",
+        display_name: "Studio Linux",
+      });
+
+      const read = await fetch(`${base}/api/machines/friendly-name?machine=demo-node-11`).then((response) => response.json());
+      expect(read).toMatchObject({ display_name: "Studio Linux" });
+
+      const topology = await fetch(`${base}/api/topology?tailscale=false&limit=1`).then((response) => response.json());
+      expect(topology.pagination).toMatchObject({
+        limit: 1,
+        offset: 0,
+        total: 12,
+        count: 1,
+        hasMore: true,
+        nextOffset: 1,
+      });
+      expect(topology.machines[0]).toMatchObject({
+        machine_id: "demo-node-11",
+        friendly_name: "Studio Linux",
+        display_name: "Studio Linux",
+      });
+
+      const zeroLimitTopology = await fetch(`${base}/api/topology?tailscale=false&limit=0`).then((response) => response.json());
+      expect(zeroLimitTopology.pagination).toMatchObject({
+        limit: 1,
+        offset: 0,
+        count: 1,
+        hasMore: true,
+        nextOffset: 1,
+      });
+
+      const clearInput = { machineId: "demo-node-11" };
+      const cleared = await fetch(`${base}/api/machines/friendly-name?machine=demo-node-11`, {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${friendlyNameClearApproval(clearInput)}` },
+      });
+      expect(cleared.status).toBe(200);
+      expect(await cleared.json()).toMatchObject({
+        machine_id: "demo-node-11",
+        friendly_name: null,
+        display_name: "demo-node-11",
+      });
+    } finally {
+      server.stop(true);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("project assignments API lists, assigns, and removes with scoped approval", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-serve-projects-"));
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "control";
+    process.env["HASNA_MACHINES_DB_PATH"] = join(dir, "machines.db");
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
+    process.env[MUTATION_APPROVAL_TOKEN_ENV] = dashboardMutationSecret;
+    manifestInit();
+    manifestAdd({
+      id: "demo-node-01",
+      hostname: "demo-node-01",
+      platform: "linux",
+      workspacePath: "/home/operator/workspace",
+    });
+
+    const server = startDashboardServer({ host: "127.0.0.1", port: 0 });
+    const base = `http://127.0.0.1:${server.port}`;
+    try {
+      const empty = await fetch(`${base}/api/projects/assignments`).then((response) => response.json());
+      expect(empty.assignments).toEqual([]);
+
+      const input: AssignMachineProjectInput = {
+        machineId: "demo-node-01",
+        projectId: "open-machines",
+        path: "/home/operator/workspace/hasna/opensource/open-machines",
+        workspaceId: "ws_open_machines",
+        repoName: "open-machines",
+        workspaceRoot: null,
+        openFilesRoot: "/home/operator/workspace/hasna/opensource/open-files",
+        label: "demo-node-01",
+        kind: "machine-local",
+        primary: true,
+        metadata: { team: "platform" },
+      };
+
+      const denied = await fetch(`${base}/api/projects/assignments`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          machine_id: input.machineId,
+          project_id: input.projectId,
+          path: input.path,
+          workspace_id: input.workspaceId,
+          repo_name: input.repoName,
+          open_files_root: input.openFilesRoot,
+          label: input.label,
+          kind: input.kind,
+          primary: true,
+          metadata: input.metadata,
+        }),
+      });
+      expect(denied.status).toBe(403);
+
+      const wrongMachineToken = createMutationApprovalToken({
+        surface: "dashboard",
+        operation: "machines_projects_assign",
+        transport: "dashboard:http",
+        callerId: "dashboard",
+        runId: "dashboard",
+        machineId: "other-node",
+        resourceId: projectAssignmentResourceId(input.machineId, input.projectId),
+        args: projectAssignmentMutationArgs(input),
+      }, { secret: dashboardMutationSecret });
+      const wrongMachine = await fetch(`${base}/api/projects/assignments`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          machine_id: input.machineId,
+          project_id: input.projectId,
+          path: input.path,
+          workspace_id: input.workspaceId,
+          repo_name: input.repoName,
+          open_files_root: input.openFilesRoot,
+          label: input.label,
+          kind: input.kind,
+          primary: true,
+          metadata: input.metadata,
+          approval_token: wrongMachineToken,
+        }),
+      });
+      expect(wrongMachine.status).toBe(403);
+
+      const assigned = await fetch(`${base}/api/projects/assignments`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          machine_id: input.machineId,
+          project_id: input.projectId,
+          path: input.path,
+          workspace_id: input.workspaceId,
+          repo_name: input.repoName,
+          open_files_root: input.openFilesRoot,
+          label: input.label,
+          kind: input.kind,
+          primary: true,
+          metadata: input.metadata,
+          approval_token: projectAssignmentApproval(input),
+        }),
+      });
+      expect(assigned.status).toBe(200);
+      expect((await assigned.json()).assignments[0]).toMatchObject({
+        machine_id: "demo-node-01",
+        project_id: "open-machines",
+        projects_location_input: {
+          project: "ws_open_machines",
+          metadata: {
+            machine_id: "demo-node-01",
+            team: "platform",
+          },
+        },
+      });
+
+      const filtered = await fetch(`${base}/api/projects/assignments?project=open-machines`).then((response) => response.json());
+      expect(filtered.filters).toEqual({ machine_id: null, project_id: "open-machines" });
+      expect(filtered.assignments).toHaveLength(1);
+
+      const removeInput = { machineId: input.machineId, projectId: input.projectId };
+      const removed = await fetch(`${base}/api/projects/assignments?machine=demo-node-01&project=open-machines`, {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${projectAssignmentRemoveApproval(removeInput)}` },
+      });
+      expect(removed.status).toBe(200);
+      expect((await removed.json()).assignments).toEqual([]);
+    } finally {
+      server.stop(true);
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("dashboard POST mutation routes require scoped approval tokens", async () => {

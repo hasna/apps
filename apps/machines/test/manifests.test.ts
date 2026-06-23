@@ -3,10 +3,13 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
+  manifestClearFriendlyName,
   manifestAdd,
   manifestBootstrapCurrentMachine,
+  manifestGetFriendlyName,
   manifestInit,
   manifestRemove,
+  manifestSetFriendlyName,
   manifestValidate,
 } from "../src/commands/manifest.js";
 import {
@@ -34,6 +37,47 @@ describe("manifest commands", () => {
 
     expect(updated.machines).toHaveLength(1);
     expect(updated.machines[0]?.id).toBe("demo-node-01");
+    expect(updated.machines[0]?.updatedAt).toBeDefined();
+  });
+
+  test("persists friendly names without changing stable machine ids", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-friendly-name-"));
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
+    manifestInit();
+    manifestAdd({
+      id: "demo-node-01",
+      friendlyName: "  Studio Linux  ",
+      platform: "linux",
+      workspacePath: "~/workspace",
+      updatedAt: "2026-06-09T10:00:00.000Z",
+    });
+
+    expect(readManifest().machines[0]).toMatchObject({
+      id: "demo-node-01",
+      friendlyName: "Studio Linux",
+      updatedAt: "2026-06-09T10:00:00.000Z",
+    });
+    expect(manifestGetFriendlyName("demo-node-01")).toMatchObject({
+      machine_id: "demo-node-01",
+      friendly_name: "Studio Linux",
+      display_name: "Studio Linux",
+    });
+
+    const set = manifestSetFriendlyName({ machineId: "demo-node-01", friendlyName: "Notes Rig" });
+    expect(set).toMatchObject({
+      machine_id: "demo-node-01",
+      friendly_name: "Notes Rig",
+      display_name: "Notes Rig",
+    });
+    expect(readManifest().machines[0]?.id).toBe("demo-node-01");
+
+    const cleared = manifestClearFriendlyName({ machineId: "demo-node-01" });
+    expect(cleared).toMatchObject({
+      machine_id: "demo-node-01",
+      friendly_name: null,
+      display_name: "demo-node-01",
+    });
+    expect(readManifest().machines[0]?.friendlyName).toBeUndefined();
   });
 
   test("bootstraps and removes the current machine", () => {

@@ -25,7 +25,19 @@ import { PRIVATE_OUTPUT_DENIED_WARNING, isPrivateOutputEnabled } from "../redact
 import { runSelfTest } from "../commands/self-test.js";
 import { buildSshCommand } from "../commands/ssh.js";
 import { getStatus } from "../commands/status.js";
-import { manifestBootstrapCurrentMachine, manifestGet, manifestList, manifestRemove, manifestValidate } from "../commands/manifest.js";
+import {
+  clearMachineFriendlyNameMutationArgs,
+  machineFriendlyNameResourceId,
+  manifestBootstrapCurrentMachine,
+  manifestClearFriendlyName,
+  manifestGet,
+  manifestGetFriendlyName,
+  manifestList,
+  manifestRemove,
+  manifestSetFriendlyName,
+  manifestValidate,
+  setMachineFriendlyNameMutationArgs,
+} from "../commands/manifest.js";
 import { buildSetupPlan, runSetupPlan } from "../commands/setup.js";
 import { buildSyncPlan, runSyncPlan } from "../commands/sync.js";
 import { getAgentStatus } from "../agent/runtime.js";
@@ -47,6 +59,9 @@ export const MACHINE_MCP_TOOL_NAMES = [
   "machines_manifest_validate",
   "machines_manifest_bootstrap",
   "machines_manifest_get",
+  "machines_friendly_name_get",
+  "machines_friendly_name_set",
+  "machines_friendly_name_clear",
   "machines_manifest_remove",
   "machines_agent_status",
   "machines_daemon_status",
@@ -273,6 +288,47 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
     async ({ machine_id }) => ({ content: [{ type: "text", text: JSON.stringify(manifestGet(machine_id), null, 2) }] })
   );
   server.tool(
+    "machines_friendly_name_get",
+    "Read a machine friendly name and computed display name without changing the stable machine id.",
+    { machine_id: z.string().describe("Machine identifier") },
+    async ({ machine_id }) => ({ content: [{ type: "text", text: JSON.stringify(manifestGetFriendlyName(machine_id), null, 2) }] })
+  );
+  server.tool(
+    "machines_friendly_name_set",
+    "Set a user-friendly display name for a machine without changing the stable machine id.",
+    {
+      machine_id: z.string().describe("Machine identifier"),
+      friendly_name: z.string().describe("User-friendly display name"),
+      approval_token: approvalTokenSchema,
+    },
+    async ({ machine_id, friendly_name, approval_token }) => {
+      const input = { machineId: machine_id, friendlyName: friendly_name };
+      requireMcpMutation("machines_friendly_name_set", approval_token, {
+        machineId: input.machineId,
+        resourceId: machineFriendlyNameResourceId(input.machineId),
+        args: setMachineFriendlyNameMutationArgs(input),
+      });
+      return { content: [{ type: "text", text: JSON.stringify(manifestSetFriendlyName(input), null, 2) }] };
+    }
+  );
+  server.tool(
+    "machines_friendly_name_clear",
+    "Clear a machine friendly name so consumers fall back to the stable machine id.",
+    {
+      machine_id: z.string().describe("Machine identifier"),
+      approval_token: approvalTokenSchema,
+    },
+    async ({ machine_id, approval_token }) => {
+      const input = { machineId: machine_id };
+      requireMcpMutation("machines_friendly_name_clear", approval_token, {
+        machineId: input.machineId,
+        resourceId: machineFriendlyNameResourceId(input.machineId),
+        args: clearMachineFriendlyNameMutationArgs(input),
+      });
+      return { content: [{ type: "text", text: JSON.stringify(manifestClearFriendlyName(input), null, 2) }] };
+    }
+  );
+  server.tool(
     "machines_manifest_remove",
     "Remove a single machine from the fleet manifest.",
     { machine_id: z.string().describe("Machine identifier"), approval_token: approvalTokenSchema },
@@ -401,12 +457,18 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
     "Discover local, manifest, heartbeat, SSH, and Tailscale machine topology.",
     {
       include_tailscale: z.boolean().optional().describe("Whether to probe tailscale status --json"),
+      limit: z.number().int().min(1).nullable().optional().describe("Maximum machines to return; default is 10, null returns all"),
+      offset: z.number().int().min(0).optional().describe("Machine list offset for View more pagination"),
       private_metadata: z.boolean().optional().describe("Include private host/network route fields"),
     },
-    async ({ include_tailscale, private_metadata }) => {
+    async ({ include_tailscale, limit, offset, private_metadata }) => {
       const privateMetadata = privateMetadataAllowed(private_metadata);
       const warnings = privateOutputWarnings(private_metadata, privateMetadata);
-      const topology = redactTopologyForOutput(discoverMachineTopology({ includeTailscale: include_tailscale !== false }), { privateMetadata });
+      const topology = redactTopologyForOutput(discoverMachineTopology({
+        includeTailscale: include_tailscale !== false,
+        limit,
+        offset,
+      }), { privateMetadata });
       return { content: [{ type: "text", text: JSON.stringify(appendWarnings(topology, warnings), null, 2) }] };
     }
   );

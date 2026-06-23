@@ -6,6 +6,23 @@ export * from "./compatibility.js";
 export * from "./version.js";
 
 export {
+  listMachineProjectAssignments,
+  projectAssignmentMutationArgs,
+  projectAssignmentResourceId,
+  removeProjectAssignmentMutationArgs,
+} from "./projects.js";
+export type {
+  AssignMachineProjectInput,
+  MachineProjectAssignment,
+  MachineProjectAssignmentMachineSummary,
+  MachineProjectAssignmentProjectSummary,
+  MachineProjectAssignmentSource,
+  MachineProjectAssignments,
+  MachineProjectAssignmentsOptions,
+  RemoveMachineProjectAssignmentInput,
+} from "./projects.js";
+
+export {
   MACHINES_STORAGE_ENV,
   MACHINES_STORAGE_FALLBACK_ENV,
   MACHINES_STORAGE_MODE_ENV,
@@ -57,6 +74,8 @@ export {
   getDefaultManifest,
   getManifestMachine,
   getManifestSourceRef,
+  machineDisplayName,
+  normalizeFriendlyName,
   readManifest,
   readManifestWithSource,
   validateManifest,
@@ -66,13 +85,26 @@ export type { ManifestSourceAdapter, ReadManifestWithSourceOptions } from "./man
 export {
   manifestAdd,
   manifestBootstrapCurrentMachine,
+  manifestClearFriendlyName,
   manifestInit,
   manifestRemove,
+  manifestSetFriendlyName,
+  assignMachineProject,
+  removeMachineProjectAssignment,
 } from "./sdk-mutations.js";
 export {
+  clearMachineFriendlyNameMutationArgs,
   manifestGet,
+  manifestGetFriendlyName,
   manifestList,
   manifestValidate,
+  machineFriendlyNameResourceId,
+  setMachineFriendlyNameMutationArgs,
+} from "./commands/manifest.js";
+export type {
+  ClearMachineFriendlyNameInput,
+  MachineFriendlyNameResult,
+  SetMachineFriendlyNameInput,
 } from "./commands/manifest.js";
 
 export {
