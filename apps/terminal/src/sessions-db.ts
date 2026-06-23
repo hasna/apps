@@ -1,20 +1,43 @@
 // SQLite session database — tracks every terminal interaction
-import Database from "better-sqlite3";
+import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "fs";
-import { join } from "path";
+import { dirname, join } from "path";
 import { randomUUID } from "crypto";
 import { getTerminalDir } from "./paths.js";
 
-const DIR = getTerminalDir();
-const DB_PATH = process.env.HASNA_TERMINAL_DB_PATH ?? process.env.TERMINAL_DB_PATH ?? join(DIR, "sessions.db");
+export interface TerminalStatement {
+  run(...params: unknown[]): unknown;
+  all(...params: unknown[]): unknown[];
+  get(...params: unknown[]): unknown;
+}
 
-let db: Database.Database | null = null;
+export interface TerminalDatabase {
+  exec(sql: string): unknown;
+  prepare(sql: string): TerminalStatement;
+  transaction<TArgs extends unknown[], TResult>(fn: (...args: TArgs) => TResult): (...args: TArgs) => TResult;
+  close(): void;
+}
 
-function getDb(): Database.Database {
-  if (db) return db;
-  if (!existsSync(DIR)) mkdirSync(DIR, { recursive: true });
-  db = new Database(DB_PATH);
-  db.pragma("journal_mode = WAL");
+let db: Database | null = null;
+let activeDbPath: string | null = null;
+
+export function getSessionsDbPath(): string {
+  return process.env.HASNA_TERMINAL_DB_PATH ?? process.env.TERMINAL_DB_PATH ?? join(getTerminalDir(), "sessions.db");
+}
+
+export function getDb(): TerminalDatabase {
+  const dbPath = getSessionsDbPath();
+  if (db && activeDbPath === dbPath) return db;
+  if (db) {
+    db.close();
+    db = null;
+  }
+  const dir = dirname(dbPath);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  db = new Database(dbPath);
+  activeDbPath = dbPath;
+  db.exec("PRAGMA journal_mode = WAL;");
+  db.exec("PRAGMA foreign_keys = ON;");
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
@@ -171,7 +194,7 @@ export function updateInteraction(id: number, data: {
   tokensSaved?: number;
 }): void {
   const sets: string[] = [];
-  const vals: unknown[] = [];
+  const vals: Array<string | number | null> = [];
   if (data.command !== undefined) { sets.push("command = ?"); vals.push(data.command); }
   if (data.output !== undefined) { sets.push("output = ?"); vals.push(data.output.slice(0, 500)); }
   if (data.exitCode !== undefined) { sets.push("exit_code = ?"); vals.push(data.exitCode); }
@@ -348,5 +371,5 @@ export function pruneSessions(olderThanDays: number = 90): { sessionsDeleted: nu
 
 /** Close the database connection */
 export function closeDb(): void {
-  if (db) { db.close(); db = null; }
+  if (db) { db.close(); db = null; activeDbPath = null; }
 }

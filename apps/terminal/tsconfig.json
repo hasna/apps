@@ -6,9 +6,11 @@
     "jsx": "react-jsx",
     "outDir": "./dist",
     "rootDir": "./src",
+    "declaration": true,
     "strict": true,
     "esModuleInterop": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "types": ["bun-types", "node"]
   },
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts"]

@@ -16,7 +16,7 @@ import { registerProcessTools } from "./tools/process.js";
 import { registerBatchTools } from "./tools/batch.js";
 import { registerMemoryTools } from "./tools/memory.js";
 import { registerMetaTools } from "./tools/meta.js";
-import { registerCloudTools } from "@hasna/cloud";
+import { getStorageStatus, storagePull, storagePush, storageSync } from "../storage.js";
 
 // ── server ───────────────────────────────────────────────────────────────────
 
@@ -51,7 +51,31 @@ export function createServer(): McpServer {
   registerBatchTools(server, h);
   registerMemoryTools(server, h);
   registerMetaTools(server, h);
-  registerCloudTools(server, "terminal");
+
+  server.tool("storage_status", "Show terminal storage sync configuration and local sync history.", {}, async () => ({
+    content: [{ type: "text" as const, text: JSON.stringify(getStorageStatus(), null, 2) }],
+  }));
+
+  server.tool(
+    "storage_push",
+    "Push local terminal session data to storage PostgreSQL.",
+    { tables: z.array(z.string()).optional().describe("Optional table list to push") },
+    async ({ tables }) => ({ content: [{ type: "text" as const, text: JSON.stringify(await storagePush(tables ? { tables } : undefined), null, 2) }] })
+  );
+
+  server.tool(
+    "storage_pull",
+    "Pull terminal session data from storage PostgreSQL to local SQLite.",
+    { tables: z.array(z.string()).optional().describe("Optional table list to pull") },
+    async ({ tables }) => ({ content: [{ type: "text" as const, text: JSON.stringify(await storagePull(tables ? { tables } : undefined), null, 2) }] })
+  );
+
+  server.tool(
+    "storage_sync",
+    "Bidirectional terminal storage sync: pull then push.",
+    { tables: z.array(z.string()).optional().describe("Optional table list to sync") },
+    async ({ tables }) => ({ content: [{ type: "text" as const, text: JSON.stringify(await storageSync(tables ? { tables } : undefined), null, 2) }] })
+  );
 
   // ── Agent Tools ──────────────────────────────────────────────────────────
   const _agentReg = new Map<string, { id: string; name: string; last_seen_at: string; project_id?: string }>();

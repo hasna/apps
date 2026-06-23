@@ -1,8 +1,14 @@
 #!/usr/bin/env bun
 import React from "react";
 import { render } from "ink";
+import { runEventsCli } from "@hasna/events/cli";
 
 const args = process.argv.slice(2);
+
+if (args[0] === "events" || args[0] === "webhooks") {
+  await runEventsCli(args, { source: "terminal", programName: "terminal" });
+  process.exit(0);
+}
 
 // ── Help / Version ───────────────────────────────────────────────────────────
 
@@ -34,11 +40,14 @@ SUBCOMMANDS:
   overview                     Project overview (deps, scripts, structure)
   stats                        Token economy dashboard
   sessions [stats|<id>]        Session history and analytics
+  storage status|push|pull|sync Local/remote session database sync
   recipe add|list|run|delete   Reusable command recipes
   collection create|list       Recipe collections
   mcp serve                    Start MCP server (called by agents, not you)
   discover [--days=N] [--json]  Scan Claude sessions, show token savings potential
   snapshot                     Terminal state as JSON
+  events                       Emit, list, and replay Hasna events
+  webhooks                     Manage Hasna event webhook subscriptions
   --help                       Show this help
   --version                    Show version
 
@@ -55,6 +64,7 @@ ENVIRONMENT:
   CEREBRAS_API_KEY             Cerebras API key (free, open-source)
   GROQ_API_KEY                 Groq API key (free, ultra-fast inference)
   ANTHROPIC_API_KEY            Anthropic API key (Claude models)
+  HASNA_TERMINAL_DATABASE_URL  Optional storage PostgreSQL URL
 `);
   process.exit(0);
 }
@@ -321,6 +331,63 @@ else if (args[0] === "sessions") {
         console.log(`  ${s.id.slice(0, 8)}  ${date}  ${dir}  ${s.provider ?? "auto"}`);
       }
     }
+  }
+}
+
+// ── Storage command ─────────────────────────────────────────────────────────
+
+else if (args[0] === "storage") {
+  const sub = args[1] ?? "status";
+  const json = args.includes("--json") || args.includes("-j");
+  const tablesFlag = args.find(a => a.startsWith("--tables="))?.split("=")[1]
+    ?? (args.includes("--tables") ? args[args.indexOf("--tables") + 1] : undefined);
+
+  try {
+    const {
+      getStorageStatus,
+      parseStorageTables,
+      storagePull,
+      storagePush,
+      storageSync,
+    } = await import("./storage.js");
+
+    if (sub === "status") {
+      const status = getStorageStatus();
+      if (json) console.log(JSON.stringify(status, null, 2));
+      else {
+        console.log("Storage:");
+        console.log(`  Mode: ${status.mode}`);
+        console.log(`  Configured: ${status.configured ? "yes" : "no"}`);
+        console.log(`  Active env: ${status.activeEnv ?? "none"}`);
+        console.log(`  Canonical cluster: ${status.canonical.cluster}`);
+        console.log(`  Canonical database: ${status.canonical.database}`);
+        console.log(`  Runtime secret: ${status.canonical.runtimeSecretPath}`);
+        console.log(`  Primary env: ${status.canonical.primaryEnv}`);
+        console.log(`  Fallback env: ${status.canonical.fallbackEnv}`);
+        console.log(`  Tables: ${status.tables.join(", ")}`);
+      }
+    } else if (sub === "push") {
+      const results = await storagePush({ tables: parseStorageTables(tablesFlag) });
+      printStorageResults(results, json);
+    } else if (sub === "pull") {
+      const results = await storagePull({ tables: parseStorageTables(tablesFlag) });
+      printStorageResults(results, json);
+    } else if (sub === "sync") {
+      const result = await storageSync({ tables: parseStorageTables(tablesFlag) });
+      if (json) console.log(JSON.stringify(result, null, 2));
+      else {
+        console.log("Pull:");
+        printStorageResults(result.pull, false);
+        console.log("Push:");
+        printStorageResults(result.push, false);
+      }
+    } else {
+      console.log("Usage: terminal storage [status|push|pull|sync] [--tables=a,b] [--json]");
+      process.exit(1);
+    }
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
   }
 }
 
@@ -770,4 +837,16 @@ else {
 
   const App = (await import("./App.js")).default;
   render(<App />);
+}
+
+function printStorageResults(results: Array<{ table: string; rowsRead: number; rowsWritten: number; errors: string[] }>, json: boolean): void {
+  if (json) {
+    console.log(JSON.stringify(results, null, 2));
+    return;
+  }
+  for (const result of results) {
+    const marker = result.errors.length > 0 ? "!" : "✓";
+    const suffix = result.errors.length > 0 ? ` (${result.errors.join("; ")})` : "";
+    console.log(`  ${marker} ${result.table}: read ${result.rowsRead}, wrote ${result.rowsWritten}${suffix}`);
+  }
 }

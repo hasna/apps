@@ -92,15 +92,27 @@ The app gets there through several cheap layers:
 - local learned prompt-to-command mappings so repeated agent requests can skip AI entirely
 - persistent economy/session stats so agents can measure token savings, cost, and ROI over time
 
-## Cloud Sync
+## Storage
 
-This package supports cloud sync via `@hasna/cloud`:
+Terminal stores session data locally under the Hasna data directory and includes repo-owned PostgreSQL migrations for remote storage deployments.
 
 ```bash
-cloud setup
-cloud sync push --service terminal
-cloud sync pull --service terminal
+terminal storage status --json
+HASNA_TERMINAL_DATABASE_URL=postgres://... terminal storage push --tables sessions,interactions --json
+terminal storage pull --json
+terminal storage sync --json
 ```
+
+Canonical production storage uses database `terminal` on RDS cluster
+`hasna-xyz-infra-apps-prod-postgres`. Runtime credentials are stored in AWS
+Secrets Manager at `hasna/xyz/opensource/terminal/prod/rds`; load its
+`database_url` value into `HASNA_TERMINAL_DATABASE_URL`. The legacy fallback
+`TERMINAL_DATABASE_URL` is still accepted during cutover and rollback windows.
+
+Optional storage mode env vars are `HASNA_TERMINAL_STORAGE_MODE` or
+`TERMINAL_STORAGE_MODE` with `local`, `hybrid`, or `remote`. `local` keeps data
+in SQLite only, `hybrid` syncs local SQLite with PostgreSQL, and `remote` is
+reserved for deployments that should require the canonical PostgreSQL target.
 
 ## Data Directory
 
