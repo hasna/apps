@@ -321,6 +321,62 @@ describe("cli command handling", () => {
     }
   });
 
+  test("browserplan CLI exposes target fleet and excludes spark machines", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-cli-browserplan-"));
+    try {
+      const env = {
+        ...process.env,
+        HASNA_MACHINES_MANIFEST_PATH: join(dir, "machines.json"),
+        HASNA_MACHINES_DB_PATH: join(dir, "machines.db"),
+        HASNA_MACHINES_MACHINE_ID: "control",
+        [MUTATION_APPROVAL_FLAG_ENV]: "1",
+      };
+      expect(runCli(["manifest", "init"], env).status).toBe(0);
+      expect(runCli(["manifest", "add", "--from-stdin"], env, JSON.stringify({
+        id: "machine001",
+        friendlyName: "Browser Rig 01",
+        platform: "linux",
+        workspacePath: "/home/hasna/Workspace",
+        metadata: { user: "hasna" },
+      })).status).toBe(0);
+      expect(runCli(["manifest", "add", "--from-stdin"], env, JSON.stringify({
+        id: "spark01",
+        friendlyName: "Spark Local",
+        platform: "linux",
+        workspacePath: "/home/hasna/Workspace",
+      })).status).toBe(0);
+
+      const result = runCli(["browserplan", "fleet", "--machine", "machine001,spark01", "--json"], env);
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      const payload = JSON.parse(result.stdout);
+      expect(payload).toMatchObject({
+        kind: "browserplan_fleet",
+        target: {
+          name: "browserplan-machine001-machine011",
+          owner: "open-chrome",
+          install_target_excludes: ["spark01", "spark02"],
+        },
+        coverage: {
+          expected: 1,
+          returned: 1,
+          known: 1,
+          excluded_requested: ["spark01"],
+        },
+      });
+      expect(payload.machines[0]).toMatchObject({
+        machine_id: "machine001",
+        display_name: "Browser Rig 01",
+        friendly_name: "Browser Rig 01",
+        install_state: { checked: false },
+      });
+      expect(payload.machines[0].operation_hooks.map((hook: { id: string }) => hook.id)).toContain("headed_launch");
+      expect(JSON.stringify(payload)).not.toContain("Spark Local");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("screen-credentials reports secret references without printing secret values", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-cli-screen-credentials-"));
     try {

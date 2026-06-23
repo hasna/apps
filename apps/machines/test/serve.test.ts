@@ -192,6 +192,7 @@ describe("serve", () => {
     expect(info.routes).toContain("/api/routes");
     expect(info.routes).toContain("/api/machines/friendly-name");
     expect(info.routes).toContain("/api/machines/details");
+    expect(info.routes).toContain("/api/browserplan/fleet");
     expect(info.routes).toContain("/api/notes/machine-context");
     expect(info.routes).toContain("/api/notes/trash-policies");
     expect(info.routes).toContain("/api/projects/assignments");
@@ -279,6 +280,7 @@ describe("serve", () => {
     const privateTopology = await fetch(`${base}/api/topology?tailscale=false&privateMetadata=true`).then((response) => response.json());
     const routes = await fetch(`${base}/api/routes?tailscale=false`).then((response) => response.json());
     const machineDetails = await fetch(`${base}/api/machines/details?machine=demo-node-01&tailscale=false`).then((response) => response.json());
+    const browserPlanFleet = await fetch(`${base}/api/browserplan/fleet?machine=machine001,spark01&tailscale=false`).then((response) => response.json());
     const noteContext = await fetch(`${base}/api/notes/machine-context?origin_machine_id=demo-node-01&source_machine_id=demo-node-01&actor_type=agent&agent_name=Notes%20Agent&source=agent`).then((response) => response.json());
     const noteTrash = await fetch(`${base}/api/notes/trash-policies?machine=demo-node-01`).then((response) => response.json());
     const daemon = await fetch(`${base}/api/daemon/status`).then((response) => response.json());
@@ -319,6 +321,25 @@ describe("serve", () => {
         label: "Online",
         online: true,
       },
+    });
+    expect(browserPlanFleet).toMatchObject({
+      kind: "browserplan_fleet",
+      target: {
+        name: "browserplan-machine001-machine011",
+        install_target_excludes: ["spark01", "spark02"],
+      },
+      coverage: {
+        expected: 1,
+        returned: 1,
+        known: 0,
+        missing: ["machine001"],
+        excluded_requested: ["spark01"],
+      },
+    });
+    expect(browserPlanFleet.machines[0]).toMatchObject({
+      machine_id: "machine001",
+      known: false,
+      install_state: { checked: false },
     });
     expect(noteContext.origin_machine).toMatchObject({ machine_id: "demo-node-01", display_name: "Demo Node" });
     expect(noteContext.actor).toMatchObject({ actor_type: "agent", display_name: "Notes Agent" });

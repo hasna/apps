@@ -44,6 +44,7 @@ import { getAgentStatus } from "../agent/runtime.js";
 import { discoverMachineTopology, redactRouteForOutput, redactTopologyForOutput, resolveMachineRoute, resolveMachineWorkspace } from "../topology.js";
 import { listMachineTrashPolicies, resolveNoteMachineContext } from "../notes.js";
 import { getMachineDetails } from "../details.js";
+import { getBrowserPlanFleet } from "../browserplan.js";
 import { checkMachineCompatibility } from "../compatibility.js";
 import { getStorageStatus, resolveTables, storagePull, storagePush, storageSync } from "../storage.js";
 import { assertMutationApproved, createTrustedSdkMutationApproval, mutationPlanDigest } from "../commands/mutation-approval.js";
@@ -65,6 +66,7 @@ export const MACHINE_MCP_TOOL_NAMES = [
   "machines_friendly_name_set",
   "machines_friendly_name_clear",
   "machines_details",
+  "machines_browserplan_fleet",
   "machines_notes_context",
   "machines_notes_trash_policies",
   "machines_manifest_remove",
@@ -345,6 +347,25 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
         type: "text",
         text: JSON.stringify(getMachineDetails(machine_id ?? "local", {
           includeTailscale: include_tailscale,
+        }), null, 2),
+      }],
+    })
+  );
+  server.tool(
+    "machines_browserplan_fleet",
+    "Return BrowserPlan target machine001-machine011 fleet metadata and safe remote operation hooks.",
+    {
+      machine_ids: z.array(z.string()).optional().describe("Optional BrowserPlan machine ids; spark01/spark02 are excluded"),
+      include_tailscale: z.boolean().optional().describe("Whether to probe tailscale while resolving reachability"),
+      check_installs: z.boolean().optional().describe("Run remote compatibility probes for browserplan/chrome/bun/git state"),
+    },
+    async ({ machine_ids, include_tailscale, check_installs }) => ({
+      content: [{
+        type: "text",
+        text: JSON.stringify(getBrowserPlanFleet({
+          machineIds: machine_ids,
+          includeTailscale: include_tailscale,
+          includeInstallState: check_installs,
         }), null, 2),
       }],
     })

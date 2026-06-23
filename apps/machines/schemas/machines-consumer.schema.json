@@ -130,11 +130,593 @@
               "project_assignments",
               "note_machine_context",
               "machine_trash_policies",
-              "machine_details"
+              "machine_details",
+              "browserplan_fleet"
             ]
           }
         },
         "stable_exports": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "browserplan_fleet": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "package",
+        "capabilities",
+        "generated_at",
+        "kind",
+        "target",
+        "coverage",
+        "operation_contract",
+        "machines",
+        "warnings"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "package": {
+          "type": "object"
+        },
+        "capabilities": {
+          "type": "object"
+        },
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "kind": {
+          "const": "browserplan_fleet"
+        },
+        "target": {
+          "type": "object",
+          "required": [
+            "name",
+            "owner",
+            "machine_ids",
+            "excluded_machine_ids",
+            "install_target_excludes"
+          ],
+          "properties": {
+            "name": {
+              "const": "browserplan-machine001-machine011"
+            },
+            "owner": {
+              "const": "open-chrome"
+            },
+            "machine_ids": {
+              "const": [
+                "machine001",
+                "machine002",
+                "machine003",
+                "machine004",
+                "machine005",
+                "machine006",
+                "machine007",
+                "machine008",
+                "machine009",
+                "machine010",
+                "machine011"
+              ]
+            },
+            "excluded_machine_ids": {
+              "const": [
+                "spark01",
+                "spark02"
+              ]
+            },
+            "install_target_excludes": {
+              "const": [
+                "spark01",
+                "spark02"
+              ]
+            }
+          }
+        },
+        "coverage": {
+          "type": "object",
+          "required": [
+            "expected",
+            "returned",
+            "known",
+            "missing",
+            "unreachable",
+            "excluded_requested"
+          ],
+          "properties": {
+            "expected": {
+              "type": "number"
+            },
+            "returned": {
+              "type": "number"
+            },
+            "known": {
+              "type": "number"
+            },
+            "missing": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "machine001",
+                  "machine002",
+                  "machine003",
+                  "machine004",
+                  "machine005",
+                  "machine006",
+                  "machine007",
+                  "machine008",
+                  "machine009",
+                  "machine010",
+                  "machine011"
+                ]
+              }
+            },
+            "unreachable": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "machine001",
+                  "machine002",
+                  "machine003",
+                  "machine004",
+                  "machine005",
+                  "machine006",
+                  "machine007",
+                  "machine008",
+                  "machine009",
+                  "machine010",
+                  "machine011"
+                ]
+              }
+            },
+            "excluded_requested": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "spark01",
+                  "spark02"
+                ]
+              }
+            }
+          }
+        },
+        "operation_contract": {
+          "type": "object",
+          "required": [
+            "command_owner",
+            "route_owner",
+            "default_timeout_ms",
+            "private_route_policy",
+            "supported_operations",
+            "stable_surfaces"
+          ],
+          "properties": {
+            "command_owner": {
+              "const": "open-chrome"
+            },
+            "route_owner": {
+              "const": "open-machines"
+            },
+            "default_timeout_ms": {
+              "type": "number"
+            },
+            "private_route_policy": {
+              "const": "private targets are omitted unless caller explicitly requests private metadata on a trusted local operator surface"
+            },
+            "supported_operations": {
+              "const": [
+                "profile_setup",
+                "headed_launch",
+                "headless_launch",
+                "daemon_status",
+                "supervisor_status",
+                "tab_inventory",
+                "session_inventory",
+                "app_install_update"
+              ]
+            },
+            "stable_surfaces": {
+              "type": "object",
+              "required": [
+                "sdk",
+                "cli",
+                "api",
+                "mcp"
+              ],
+              "properties": {
+                "sdk": {
+                  "const": "getBrowserPlanFleet"
+                },
+                "cli": {
+                  "const": "machines browserplan fleet --json"
+                },
+                "api": {
+                  "const": "/api/browserplan/fleet"
+                },
+                "mcp": {
+                  "const": "machines_browserplan_fleet"
+                }
+              }
+            }
+          }
+        },
+        "machines": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "machine_id",
+              "slug",
+              "display_name",
+              "displayName",
+              "known",
+              "eligible",
+              "status",
+              "reachability",
+              "install_state",
+              "operation_hooks",
+              "warnings"
+            ],
+            "properties": {
+              "machine_id": {
+                "enum": [
+                  "machine001",
+                  "machine002",
+                  "machine003",
+                  "machine004",
+                  "machine005",
+                  "machine006",
+                  "machine007",
+                  "machine008",
+                  "machine009",
+                  "machine010",
+                  "machine011"
+                ]
+              },
+              "slug": {
+                "enum": [
+                  "machine001",
+                  "machine002",
+                  "machine003",
+                  "machine004",
+                  "machine005",
+                  "machine006",
+                  "machine007",
+                  "machine008",
+                  "machine009",
+                  "machine010",
+                  "machine011"
+                ]
+              },
+              "friendly_name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "friendlyName": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "display_name": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "known": {
+                "type": "boolean"
+              },
+              "eligible": {
+                "type": "boolean"
+              },
+              "eligibility_reasons": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "platform": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "os": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "user": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "workspace": {
+                "type": "object"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "updated_at": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": "object",
+                "required": [
+                  "state",
+                  "label",
+                  "online"
+                ],
+                "properties": {
+                  "state": {
+                    "enum": [
+                      "online",
+                      "offline",
+                      "unknown"
+                    ]
+                  },
+                  "label": {
+                    "enum": [
+                      "Online",
+                      "Offline",
+                      "Unknown"
+                    ]
+                  },
+                  "online": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "reachability": {
+                "type": "object",
+                "required": [
+                  "ok",
+                  "route",
+                  "source",
+                  "confidence",
+                  "local",
+                  "tailscale_online",
+                  "cacheable",
+                  "warnings"
+                ],
+                "properties": {
+                  "ok": {
+                    "type": "boolean"
+                  },
+                  "route": {
+                    "enum": [
+                      "local",
+                      "lan",
+                      "tailscale",
+                      "ssh",
+                      "unknown"
+                    ]
+                  },
+                  "source": {
+                    "enum": [
+                      "local",
+                      "lan",
+                      "tailscale",
+                      "ssh",
+                      "unknown"
+                    ]
+                  },
+                  "confidence": {
+                    "enum": [
+                      "exact",
+                      "high",
+                      "medium",
+                      "low",
+                      "none"
+                    ]
+                  },
+                  "local": {
+                    "type": "boolean"
+                  },
+                  "tailscale_online": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "cacheable": {
+                    "type": "boolean"
+                  },
+                  "warnings": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "install_state": {
+                "type": "object",
+                "required": [
+                  "checked",
+                  "source",
+                  "browserplan_cli",
+                  "machines_cli",
+                  "bun",
+                  "git",
+                  "node",
+                  "chrome",
+                  "warnings"
+                ],
+                "properties": {
+                  "checked": {
+                    "type": "boolean"
+                  },
+                  "source": {
+                    "enum": [
+                      "compatibility",
+                      "not_checked",
+                      "failed"
+                    ]
+                  },
+                  "warnings": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "operation_hooks": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "label",
+                    "description",
+                    "owner",
+                    "available",
+                    "readiness",
+                    "required_capabilities",
+                    "blocked_by",
+                    "command_template",
+                    "command_placeholders",
+                    "safe_runner"
+                  ],
+                  "properties": {
+                    "id": {
+                      "enum": [
+                        "profile_setup",
+                        "headed_launch",
+                        "headless_launch",
+                        "daemon_status",
+                        "supervisor_status",
+                        "tab_inventory",
+                        "session_inventory",
+                        "app_install_update"
+                      ]
+                    },
+                    "owner": {
+                      "const": "open-chrome"
+                    },
+                    "available": {
+                      "type": "boolean"
+                    },
+                    "readiness": {
+                      "enum": [
+                        "ready",
+                        "blocked",
+                        "unknown"
+                      ]
+                    },
+                    "required_capabilities": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "blocked_by": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "command_template": {
+                      "type": "string"
+                    },
+                    "command_placeholders": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "safe_runner": {
+                      "type": "object",
+                      "required": [
+                        "sdk",
+                        "cli",
+                        "mcp",
+                        "ownership"
+                      ],
+                      "properties": {
+                        "mcp": {
+                          "type": "object",
+                          "required": [
+                            "tool",
+                            "args",
+                            "private_metadata_note"
+                          ],
+                          "properties": {
+                            "tool": {
+                              "const": "machines_ssh_resolve"
+                            },
+                            "args": {
+                              "type": "object",
+                              "required": [
+                                "machine_id",
+                                "remote_command",
+                                "private_metadata"
+                              ],
+                              "properties": {
+                                "machine_id": {
+                                  "enum": [
+                                    "machine001",
+                                    "machine002",
+                                    "machine003",
+                                    "machine004",
+                                    "machine005",
+                                    "machine006",
+                                    "machine007",
+                                    "machine008",
+                                    "machine009",
+                                    "machine010",
+                                    "machine011"
+                                  ]
+                                },
+                                "remote_command": {
+                                  "const": "<browserplan-owned command>"
+                                },
+                                "private_metadata": {
+                                  "const": false
+                                }
+                              }
+                            },
+                            "private_metadata_note": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "warnings": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "warnings": {
           "type": "array",
           "items": {
             "type": "string"

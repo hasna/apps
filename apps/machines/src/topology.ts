@@ -108,6 +108,7 @@ export interface MachinesConsumerCapabilities {
   note_machine_context?: true;
   machine_trash_policies?: true;
   machine_details?: true;
+  browserplan_fleet?: true;
 }
 
 export type MachinesConsumerEnvelope =
@@ -119,7 +120,8 @@ export type MachinesConsumerEnvelope =
   | "project_assignments"
   | "note_machine_context"
   | "machine_trash_policies"
-  | "machine_details";
+  | "machine_details"
+  | "browserplan_fleet";
 
 export interface MachinesConsumerFieldCapabilities {
   topology: {
@@ -180,6 +182,14 @@ export interface MachinesConsumerFieldCapabilities {
     recent_sync_timestamps: true;
     source_metadata: true;
   };
+  browserplan_fleet: {
+    machine001_machine011_target: true;
+    spark_exclusion: true;
+    remote_operation_hooks: true;
+    install_state_detection: true;
+    route_reachability: true;
+    workspace_summary: true;
+  };
 }
 
 export interface MachinesConsumerContract {
@@ -215,6 +225,7 @@ export const MACHINES_CONSUMER_CAPABILITIES: MachinesConsumerCapabilities = {
   note_machine_context: true,
   machine_trash_policies: true,
   machine_details: true,
+  browserplan_fleet: true,
 };
 
 export const MACHINES_CONSUMER_FIELD_CAPABILITIES: MachinesConsumerFieldCapabilities = {
@@ -276,6 +287,14 @@ export const MACHINES_CONSUMER_FIELD_CAPABILITIES: MachinesConsumerFieldCapabili
     recent_sync_timestamps: true,
     source_metadata: true,
   },
+  browserplan_fleet: {
+    machine001_machine011_target: true,
+    spark_exclusion: true,
+    remote_operation_hooks: true,
+    install_state_detection: true,
+    route_reachability: true,
+    workspace_summary: true,
+  },
 };
 
 export const MACHINES_CONSUMER_CONTRACT: MachinesConsumerContract = {
@@ -290,7 +309,7 @@ export const MACHINES_CONSUMER_CONTRACT: MachinesConsumerContract = {
     default_ttl_ms: DEFAULT_MACHINE_RESOLVER_TTL_MS,
     stale_requires_refresh: true,
   },
-  envelopes: ["topology", "route", "workspace", "compatibility", "resolver_snapshot", "project_assignments", "note_machine_context", "machine_trash_policies", "machine_details"],
+  envelopes: ["topology", "route", "workspace", "compatibility", "resolver_snapshot", "project_assignments", "note_machine_context", "machine_trash_policies", "machine_details", "browserplan_fleet"],
   stable_exports: [
     "MACHINES_CONSUMER_CONTRACT",
     "MACHINES_CONSUMER_CONTRACT_VERSION",
@@ -310,6 +329,8 @@ export const MACHINES_CONSUMER_CONTRACT: MachinesConsumerContract = {
     "listMachineTrashPolicies",
     "machineReferenceForNote",
     "getMachineDetails",
+    "getBrowserPlanFleet",
+    "normalizeBrowserPlanMachineId",
     "getMachinesConsumerSchemaBundle",
     "validateMachinesConsumerEnvelope",
     "checkMachineCompatibility",

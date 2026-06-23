@@ -10,6 +10,12 @@ import type { MachineCompatibilityReport } from "./compatibility.js";
 import type { MachineProjectAssignments } from "./projects.js";
 import type { MachineTrashPolicies, NoteMachineContext } from "./notes.js";
 import type { MachineDetails } from "./details.js";
+import {
+  BROWSERPLAN_EXCLUDED_MACHINE_IDS,
+  BROWSERPLAN_MACHINE_IDS,
+  BROWSERPLAN_TARGET_NAME,
+  type BrowserPlanFleet,
+} from "./browserplan.js";
 
 export type MachinesConsumerSchemaEnvelope =
   | "contract"
@@ -21,7 +27,8 @@ export type MachinesConsumerSchemaEnvelope =
   | "project_assignments"
   | "note_machine_context"
   | "machine_trash_policies"
-  | "machine_details";
+  | "machine_details"
+  | "browserplan_fleet";
 
 export interface MachinesConsumerValidationResult {
   ok: boolean;
@@ -37,6 +44,24 @@ export interface MachinesConsumerSchemaBundle {
   type: "object";
   $defs: Record<string, unknown>;
 }
+
+const BROWSERPLAN_OPERATION_IDS = [
+  "profile_setup",
+  "headed_launch",
+  "headless_launch",
+  "daemon_status",
+  "supervisor_status",
+  "tab_inventory",
+  "session_inventory",
+  "app_install_update",
+] as const;
+const BROWSERPLAN_STABLE_SURFACES = {
+  sdk: "getBrowserPlanFleet",
+  cli: "machines browserplan fleet --json",
+  api: "/api/browserplan/fleet",
+  mcp: "machines_browserplan_fleet",
+} as const;
+const BROWSERPLAN_PRIVATE_ROUTE_POLICY = "private targets are omitted unless caller explicitly requests private metadata on a trusted local operator surface";
 
 export const MACHINES_CONSUMER_SCHEMA_BUNDLE: MachinesConsumerSchemaBundle = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -71,8 +96,161 @@ export const MACHINES_CONSUMER_SCHEMA_BUNDLE: MachinesConsumerSchemaBundle = {
         capabilities: { type: "object" },
         field_capabilities: { type: "object" },
         cacheability: { type: "object" },
-        envelopes: { type: "array", items: { enum: ["topology", "route", "workspace", "compatibility", "resolver_snapshot", "project_assignments", "note_machine_context", "machine_trash_policies", "machine_details"] } },
+        envelopes: { type: "array", items: { enum: ["topology", "route", "workspace", "compatibility", "resolver_snapshot", "project_assignments", "note_machine_context", "machine_trash_policies", "machine_details", "browserplan_fleet"] } },
         stable_exports: { type: "array", items: { type: "string" } },
+      },
+    },
+    browserplan_fleet: {
+      type: "object",
+      required: ["schema_version", "package", "capabilities", "generated_at", "kind", "target", "coverage", "operation_contract", "machines", "warnings"],
+      properties: {
+        schema_version: { const: MACHINES_CONSUMER_CONTRACT_VERSION },
+        package: { type: "object" },
+        capabilities: { type: "object" },
+        generated_at: { type: "string", format: "date-time" },
+        kind: { const: "browserplan_fleet" },
+        target: {
+          type: "object",
+          required: ["name", "owner", "machine_ids", "excluded_machine_ids", "install_target_excludes"],
+          properties: {
+            name: { const: BROWSERPLAN_TARGET_NAME },
+            owner: { const: "open-chrome" },
+            machine_ids: { const: [...BROWSERPLAN_MACHINE_IDS] },
+            excluded_machine_ids: { const: [...BROWSERPLAN_EXCLUDED_MACHINE_IDS] },
+            install_target_excludes: { const: [...BROWSERPLAN_EXCLUDED_MACHINE_IDS] },
+          },
+        },
+        coverage: {
+          type: "object",
+          required: ["expected", "returned", "known", "missing", "unreachable", "excluded_requested"],
+          properties: {
+            expected: { type: "number" },
+            returned: { type: "number" },
+            known: { type: "number" },
+            missing: { type: "array", items: { enum: [...BROWSERPLAN_MACHINE_IDS] } },
+            unreachable: { type: "array", items: { enum: [...BROWSERPLAN_MACHINE_IDS] } },
+            excluded_requested: { type: "array", items: { enum: [...BROWSERPLAN_EXCLUDED_MACHINE_IDS] } },
+          },
+        },
+        operation_contract: {
+          type: "object",
+          required: ["command_owner", "route_owner", "default_timeout_ms", "private_route_policy", "supported_operations", "stable_surfaces"],
+          properties: {
+            command_owner: { const: "open-chrome" },
+            route_owner: { const: "open-machines" },
+            default_timeout_ms: { type: "number" },
+            private_route_policy: { const: BROWSERPLAN_PRIVATE_ROUTE_POLICY },
+            supported_operations: { const: [...BROWSERPLAN_OPERATION_IDS] },
+            stable_surfaces: {
+              type: "object",
+              required: ["sdk", "cli", "api", "mcp"],
+              properties: {
+                sdk: { const: BROWSERPLAN_STABLE_SURFACES.sdk },
+                cli: { const: BROWSERPLAN_STABLE_SURFACES.cli },
+                api: { const: BROWSERPLAN_STABLE_SURFACES.api },
+                mcp: { const: BROWSERPLAN_STABLE_SURFACES.mcp },
+              },
+            },
+          },
+        },
+        machines: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["machine_id", "slug", "display_name", "displayName", "known", "eligible", "status", "reachability", "install_state", "operation_hooks", "warnings"],
+            properties: {
+              machine_id: { enum: [...BROWSERPLAN_MACHINE_IDS] },
+              slug: { enum: [...BROWSERPLAN_MACHINE_IDS] },
+              friendly_name: { type: ["string", "null"] },
+              friendlyName: { type: ["string", "null"] },
+              display_name: { type: "string" },
+              displayName: { type: "string" },
+              known: { type: "boolean" },
+              eligible: { type: "boolean" },
+              eligibility_reasons: { type: "array", items: { type: "string" } },
+              platform: { type: ["string", "null"] },
+              os: { type: ["string", "null"] },
+              user: { type: ["string", "null"] },
+              workspace: { type: "object" },
+              tags: { type: "array", items: { type: "string" } },
+              updated_at: { type: ["string", "null"] },
+              status: {
+                type: "object",
+                required: ["state", "label", "online"],
+                properties: {
+                  state: { enum: ["online", "offline", "unknown"] },
+                  label: { enum: ["Online", "Offline", "Unknown"] },
+                  online: { type: ["boolean", "null"] },
+                },
+              },
+              reachability: {
+                type: "object",
+                required: ["ok", "route", "source", "confidence", "local", "tailscale_online", "cacheable", "warnings"],
+                properties: {
+                  ok: { type: "boolean" },
+                  route: { enum: ["local", "lan", "tailscale", "ssh", "unknown"] },
+                  source: { enum: ["local", "lan", "tailscale", "ssh", "unknown"] },
+                  confidence: { enum: ["exact", "high", "medium", "low", "none"] },
+                  local: { type: "boolean" },
+                  tailscale_online: { type: ["boolean", "null"] },
+                  cacheable: { type: "boolean" },
+                  warnings: { type: "array", items: { type: "string" } },
+                },
+              },
+              install_state: {
+                type: "object",
+                required: ["checked", "source", "browserplan_cli", "machines_cli", "bun", "git", "node", "chrome", "warnings"],
+                properties: {
+                  checked: { type: "boolean" },
+                  source: { enum: ["compatibility", "not_checked", "failed"] },
+                  warnings: { type: "array", items: { type: "string" } },
+                },
+              },
+              operation_hooks: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: ["id", "label", "description", "owner", "available", "readiness", "required_capabilities", "blocked_by", "command_template", "command_placeholders", "safe_runner"],
+                  properties: {
+                    id: { enum: [...BROWSERPLAN_OPERATION_IDS] },
+                    owner: { const: "open-chrome" },
+                    available: { type: "boolean" },
+                    readiness: { enum: ["ready", "blocked", "unknown"] },
+                    required_capabilities: { type: "array", items: { type: "string" } },
+                    blocked_by: { type: "array", items: { type: "string" } },
+                    command_template: { type: "string" },
+                    command_placeholders: { type: "array", items: { type: "string" } },
+                    safe_runner: {
+                      type: "object",
+                      required: ["sdk", "cli", "mcp", "ownership"],
+                      properties: {
+                        mcp: {
+                          type: "object",
+                          required: ["tool", "args", "private_metadata_note"],
+                          properties: {
+                            tool: { const: "machines_ssh_resolve" },
+                            args: {
+                              type: "object",
+                              required: ["machine_id", "remote_command", "private_metadata"],
+                              properties: {
+                                machine_id: { enum: [...BROWSERPLAN_MACHINE_IDS] },
+                                remote_command: { const: "<browserplan-owned command>" },
+                                private_metadata: { const: false },
+                              },
+                            },
+                            private_metadata_note: { type: "string" },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+              warnings: { type: "array", items: { type: "string" } },
+            },
+          },
+        },
+        warnings: { type: "array", items: { type: "string" } },
       },
     },
     machine_details: {
@@ -432,6 +610,81 @@ function hasOptionalMachineDetailsDisplayMetadata(value: Record<string, unknown>
   return Object.values(value.display_metadata).every(hasMachineDetailsMetadataValue);
 }
 
+const BROWSERPLAN_MACHINE_ID_SET = new Set<string>(BROWSERPLAN_MACHINE_IDS);
+const BROWSERPLAN_EXCLUDED_MACHINE_ID_SET = new Set<string>(BROWSERPLAN_EXCLUDED_MACHINE_IDS);
+const BROWSERPLAN_OPERATION_ID_SET = new Set<string>(BROWSERPLAN_OPERATION_IDS);
+const BROWSERPLAN_CAPABILITY_STATES = new Set(["available", "missing", "unknown", "failed"]);
+const BROWSERPLAN_ROUTE_KINDS = new Set(["local", "lan", "tailscale", "ssh", "unknown"]);
+const BROWSERPLAN_ROUTE_CONFIDENCES = new Set(["exact", "high", "medium", "low", "none"]);
+
+function arrayEquals(value: unknown, expected: readonly string[]): boolean {
+  return Array.isArray(value) && value.length === expected.length && value.every((entry, index) => entry === expected[index]);
+}
+
+function validateStringArrayOf(value: unknown, path: string, allowed: ReadonlySet<string>, errors: string[]): void {
+  if (!Array.isArray(value)) {
+    errors.push(path);
+    return;
+  }
+  for (const [index, entry] of value.entries()) {
+    if (typeof entry !== "string" || !allowed.has(entry)) errors.push(`${path}.${index}`);
+  }
+}
+
+function validateBrowserPlanCapability(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) {
+    errors.push(path);
+    return;
+  }
+  requireFields(value, ["state", "command", "version", "detail"], errors);
+  if (!BROWSERPLAN_CAPABILITY_STATES.has(String(value.state))) errors.push(`${path}.state`);
+  if (!hasString(value, "command")) errors.push(`${path}.command`);
+  if (!hasNullableString(value, "version")) errors.push(`${path}.version`);
+  if (!hasNullableString(value, "detail")) errors.push(`${path}.detail`);
+}
+
+function validateBrowserPlanSafeRunner(value: unknown, path: string, machineId: string, errors: string[]): void {
+  if (!isRecord(value)) {
+    errors.push(path);
+    return;
+  }
+  requireFields(value, ["sdk", "cli", "mcp", "ownership"], errors);
+  if (isRecord(value.sdk)) {
+    if (value.sdk.function !== "runMachineCommand") errors.push(`${path}.sdk.function`);
+    if (value.sdk.machine_id !== machineId) errors.push(`${path}.sdk.machine_id`);
+    if (value.sdk.command_argument !== "<browserplan-owned command>") errors.push(`${path}.sdk.command_argument`);
+    if (typeof value.sdk.timeout_ms !== "number") errors.push(`${path}.sdk.timeout_ms`);
+  } else {
+    errors.push(`${path}.sdk`);
+  }
+  if (isRecord(value.cli)) {
+    if (!Array.isArray(value.cli.command)) errors.push(`${path}.cli.command`);
+    if (!hasString(value.cli, "private_metadata_note")) errors.push(`${path}.cli.private_metadata_note`);
+  } else {
+    errors.push(`${path}.cli`);
+  }
+  if (isRecord(value.mcp)) {
+    if (value.mcp.tool !== "machines_ssh_resolve") errors.push(`${path}.mcp.tool`);
+    if (!hasString(value.mcp, "private_metadata_note")) errors.push(`${path}.mcp.private_metadata_note`);
+    if (isRecord(value.mcp.args)) {
+      if (value.mcp.args.machine_id !== machineId) errors.push(`${path}.mcp.args.machine_id`);
+      if (value.mcp.args.remote_command !== "<browserplan-owned command>") errors.push(`${path}.mcp.args.remote_command`);
+      if (value.mcp.args.private_metadata !== false) errors.push(`${path}.mcp.args.private_metadata`);
+    } else {
+      errors.push(`${path}.mcp.args`);
+    }
+  } else {
+    errors.push(`${path}.mcp`);
+  }
+  if (isRecord(value.ownership)) {
+    if (value.ownership.command_owner !== "open-chrome") errors.push(`${path}.ownership.command_owner`);
+    if (value.ownership.route_owner !== "open-machines") errors.push(`${path}.ownership.route_owner`);
+    if (value.ownership.secrets_owner !== "open-identities/open-attachments/open-mailery") errors.push(`${path}.ownership.secrets_owner`);
+  } else {
+    errors.push(`${path}.ownership`);
+  }
+}
+
 function requireFields(value: Record<string, unknown>, fields: string[], errors: string[]): void {
   for (const field of fields) {
     if (!(field in value)) errors.push(`missing:${field}`);
@@ -600,6 +853,142 @@ export function validateMachinesConsumerEnvelope(
       }
     }
     if (!hasArray(value, "warnings")) errors.push("warnings");
+  } else if (envelope === "browserplan_fleet") {
+    requireFields(value, ["package", "capabilities", "generated_at", "kind", "target", "coverage", "operation_contract", "machines", "warnings"], errors);
+    if (value.kind !== "browserplan_fleet") errors.push("kind");
+    if (!hasObject(value, "target")) {
+      errors.push("target");
+    } else {
+      const target = value.target as Record<string, unknown>;
+      requireFields(target, ["name", "owner", "machine_ids", "excluded_machine_ids", "install_target_excludes"], errors);
+      if (target.name !== BROWSERPLAN_TARGET_NAME) errors.push("target.name");
+      if (target.owner !== "open-chrome") errors.push("target.owner");
+      if (!arrayEquals(target.machine_ids, BROWSERPLAN_MACHINE_IDS)) errors.push("target.machine_ids");
+      if (!arrayEquals(target.excluded_machine_ids, BROWSERPLAN_EXCLUDED_MACHINE_IDS)) errors.push("target.excluded_machine_ids");
+      if (!arrayEquals(target.install_target_excludes, BROWSERPLAN_EXCLUDED_MACHINE_IDS)) errors.push("target.install_target_excludes");
+    }
+    if (!hasObject(value, "coverage")) {
+      errors.push("coverage");
+    } else {
+      const coverage = value.coverage as Record<string, unknown>;
+      requireFields(coverage, ["expected", "returned", "known", "missing", "unreachable", "excluded_requested"], errors);
+      for (const key of ["expected", "returned", "known"]) {
+        if (typeof coverage[key] !== "number") errors.push(`coverage.${key}`);
+      }
+      for (const key of ["missing", "unreachable", "excluded_requested"]) {
+        if (!hasArray(coverage, key)) errors.push(`coverage.${key}`);
+      }
+      validateStringArrayOf(coverage.missing, "coverage.missing", BROWSERPLAN_MACHINE_ID_SET, errors);
+      validateStringArrayOf(coverage.unreachable, "coverage.unreachable", BROWSERPLAN_MACHINE_ID_SET, errors);
+      validateStringArrayOf(coverage.excluded_requested, "coverage.excluded_requested", BROWSERPLAN_EXCLUDED_MACHINE_ID_SET, errors);
+    }
+    if (!hasObject(value, "operation_contract")) {
+      errors.push("operation_contract");
+    } else {
+      const contract = value.operation_contract as Record<string, unknown>;
+      requireFields(contract, ["command_owner", "route_owner", "default_timeout_ms", "private_route_policy", "supported_operations", "stable_surfaces"], errors);
+      if (contract.command_owner !== "open-chrome") errors.push("operation_contract.command_owner");
+      if (contract.route_owner !== "open-machines") errors.push("operation_contract.route_owner");
+      if (typeof contract.default_timeout_ms !== "number") errors.push("operation_contract.default_timeout_ms");
+      if (contract.private_route_policy !== BROWSERPLAN_PRIVATE_ROUTE_POLICY) errors.push("operation_contract.private_route_policy");
+      if (!arrayEquals(contract.supported_operations, BROWSERPLAN_OPERATION_IDS)) errors.push("operation_contract.supported_operations");
+      if (!isRecord(contract.stable_surfaces)) {
+        errors.push("operation_contract.stable_surfaces");
+      } else {
+        for (const [key, expected] of Object.entries(BROWSERPLAN_STABLE_SURFACES)) {
+          if (contract.stable_surfaces[key] !== expected) errors.push(`operation_contract.stable_surfaces.${key}`);
+        }
+      }
+    }
+    if (!hasArray(value, "machines")) {
+      errors.push("machines");
+    } else {
+      const machines = value.machines as unknown[];
+      const coverage = isRecord(value.coverage) ? value.coverage : null;
+      if (coverage) {
+        if (typeof coverage.expected === "number" && coverage.expected !== machines.length) errors.push("coverage.expected");
+        if (typeof coverage.returned === "number" && coverage.returned !== machines.length) errors.push("coverage.returned");
+        if (typeof coverage.known === "number" && Array.isArray(coverage.missing) && coverage.known !== machines.length - coverage.missing.length) errors.push("coverage.known");
+      }
+      for (const [index, machine] of machines.entries()) {
+        if (!isRecord(machine)) {
+          errors.push(`machines.${index}`);
+          continue;
+        }
+        requireFields(machine, ["machine_id", "slug", "display_name", "displayName", "known", "eligible", "status", "reachability", "install_state", "operation_hooks", "warnings"], errors);
+        if (!hasString(machine, "machine_id")) errors.push(`machines.${index}.machine_id`);
+        if (!BROWSERPLAN_MACHINE_ID_SET.has(String(machine.machine_id))) errors.push(`machines.${index}.machine_id`);
+        if (machine.slug !== machine.machine_id) errors.push(`machines.${index}.slug`);
+        if (BROWSERPLAN_EXCLUDED_MACHINE_ID_SET.has(String(machine.machine_id))) errors.push(`machines.${index}.excluded_machine_id`);
+        if (!hasNullableString(machine, "friendly_name")) errors.push(`machines.${index}.friendly_name`);
+        if (!hasNullableString(machine, "friendlyName")) errors.push(`machines.${index}.friendlyName`);
+        if (!hasString(machine, "display_name")) errors.push(`machines.${index}.display_name`);
+        if (!hasString(machine, "displayName")) errors.push(`machines.${index}.displayName`);
+        if (machine.displayName !== machine.display_name) errors.push(`machines.${index}.displayName`);
+        if (typeof machine.known !== "boolean") errors.push(`machines.${index}.known`);
+        if (typeof machine.eligible !== "boolean") errors.push(`machines.${index}.eligible`);
+        if (!hasObject(machine, "status")) {
+          errors.push(`machines.${index}.status`);
+        } else {
+          const status = machine.status as Record<string, unknown>;
+          requireFields(status, ["state", "label", "online"], errors);
+          if (!["online", "offline", "unknown"].includes(String(status.state))) errors.push(`machines.${index}.status.state`);
+          if (!["Online", "Offline", "Unknown"].includes(String(status.label))) errors.push(`machines.${index}.status.label`);
+          if (status.online !== null && typeof status.online !== "boolean") errors.push(`machines.${index}.status.online`);
+        }
+        if (!hasObject(machine, "reachability")) {
+          errors.push(`machines.${index}.reachability`);
+        } else {
+          const reachability = machine.reachability as Record<string, unknown>;
+          requireFields(reachability, ["ok", "route", "source", "confidence", "local", "tailscale_online", "cacheable", "warnings"], errors);
+          if (typeof reachability.ok !== "boolean") errors.push(`machines.${index}.reachability.ok`);
+          if (!BROWSERPLAN_ROUTE_KINDS.has(String(reachability.route))) errors.push(`machines.${index}.reachability.route`);
+          if (!BROWSERPLAN_ROUTE_KINDS.has(String(reachability.source))) errors.push(`machines.${index}.reachability.source`);
+          if (!BROWSERPLAN_ROUTE_CONFIDENCES.has(String(reachability.confidence))) errors.push(`machines.${index}.reachability.confidence`);
+          if (typeof reachability.local !== "boolean") errors.push(`machines.${index}.reachability.local`);
+          if (reachability.tailscale_online !== null && typeof reachability.tailscale_online !== "boolean") errors.push(`machines.${index}.reachability.tailscale_online`);
+          if (typeof reachability.cacheable !== "boolean") errors.push(`machines.${index}.reachability.cacheable`);
+          if (!hasArray(reachability, "warnings")) errors.push(`machines.${index}.reachability.warnings`);
+        }
+        if (!hasObject(machine, "install_state")) {
+          errors.push(`machines.${index}.install_state`);
+        } else {
+          const install = machine.install_state as Record<string, unknown>;
+          requireFields(install, ["checked", "source", "browserplan_cli", "machines_cli", "bun", "git", "node", "chrome", "warnings"], errors);
+          if (typeof install.checked !== "boolean") errors.push(`machines.${index}.install_state.checked`);
+          if (!["compatibility", "not_checked", "failed"].includes(String(install.source))) errors.push(`machines.${index}.install_state.source`);
+          for (const key of ["browserplan_cli", "machines_cli", "bun", "git", "node", "chrome"]) {
+            validateBrowserPlanCapability(install[key], `machines.${index}.install_state.${key}`, errors);
+          }
+          if (!hasArray(install, "warnings")) errors.push(`machines.${index}.install_state.warnings`);
+        }
+        if (!hasArray(machine, "operation_hooks")) {
+          errors.push(`machines.${index}.operation_hooks`);
+        } else {
+          for (const [hookIndex, hook] of (machine.operation_hooks as unknown[]).entries()) {
+            const path = `machines.${index}.operation_hooks.${hookIndex}`;
+            if (!isRecord(hook)) {
+              errors.push(path);
+              continue;
+            }
+            requireFields(hook, ["id", "label", "description", "owner", "available", "readiness", "required_capabilities", "blocked_by", "command_template", "command_placeholders", "safe_runner"], errors);
+            if (!BROWSERPLAN_OPERATION_ID_SET.has(String(hook.id))) errors.push(`${path}.id`);
+            if (hook.owner !== "open-chrome") errors.push(`${path}.owner`);
+            if (typeof hook.available !== "boolean") errors.push(`${path}.available`);
+            if (!["ready", "blocked", "unknown"].includes(String(hook.readiness))) errors.push(`${path}.readiness`);
+            if (!hasString(hook, "command_template")) errors.push(`${path}.command_template`);
+            if (hook.id === "supervisor_status" && String(hook.command_template).includes("remote start")) errors.push(`${path}.command_template`);
+            if (hook.id === "app_install_update" && !String(hook.command_template).includes("<open-chrome-project-root>")) errors.push(`${path}.command_template`);
+            if (!hasArray(hook, "command_placeholders")) errors.push(`${path}.command_placeholders`);
+            if (!hasArray(hook, "required_capabilities")) errors.push(`${path}.required_capabilities`);
+            if (!hasArray(hook, "blocked_by")) errors.push(`${path}.blocked_by`);
+            validateBrowserPlanSafeRunner(hook.safe_runner, `${path}.safe_runner`, String(machine.machine_id), errors);
+          }
+        }
+        if (!hasArray(machine, "warnings")) errors.push(`machines.${index}.warnings`);
+      }
+    }
+    if (!hasArray(value, "warnings")) errors.push("warnings");
   } else if (envelope === "machine_details") {
     requireFields(value, ["package", "capabilities", "generated_at", "machine_id", "slug", "display_name", "displayName", "known", "status", "timestamps", "source", "warnings"], errors);
     if (!hasString(value, "machine_id")) errors.push("machine_id");
@@ -664,4 +1053,5 @@ export type MachinesConsumerEnvelopeValue =
   | MachineProjectAssignments
   | NoteMachineContext
   | MachineTrashPolicies
-  | MachineDetails;
+  | MachineDetails
+  | BrowserPlanFleet;
