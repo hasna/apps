@@ -18,11 +18,17 @@ import { getPackageVersion } from "../version.js";
 import {
   manifestAdd,
   manifestBootstrapCurrentMachine,
+  manifestClearFriendlyName,
   manifestGet,
+  manifestGetFriendlyName,
   manifestInit,
   manifestList,
   manifestRemove,
+  manifestSetFriendlyName,
   manifestValidate,
+  clearMachineFriendlyNameMutationArgs,
+  machineFriendlyNameResourceId,
+  setMachineFriendlyNameMutationArgs,
 } from "../commands/manifest.js";
 import { buildSetupPlan, runSetupPlan } from "../commands/setup.js";
 import { buildBackupPlan, resolveBackupTarget, runBackup } from "../commands/backup.js";
@@ -53,7 +59,26 @@ import { resolveScreenTarget, buildScreenCommand, buildScreenEnableCommand, reso
 import { buildSyncPlan, runSyncPlan } from "../commands/sync.js";
 import { getStatus } from "../commands/status.js";
 import { repairWorkspaceManifestMappings, type WorkspaceManifestRepairResult } from "../commands/workspace.js";
-import { discoverMachineTopology, redactRouteForOutput, redactTopologyForOutput, resolveMachineRoute, resolveMachineWorkspace } from "../topology.js";
+import {
+  assignMachineProject,
+  listMachineProjectAssignments,
+  projectAssignmentMutationArgs,
+  projectAssignmentResourceId,
+  removeMachineProjectAssignment,
+  removeProjectAssignmentMutationArgs,
+  type AssignMachineProjectInput,
+  type MachineProjectAssignments,
+} from "../projects.js";
+import { DEFAULT_MACHINE_LIST_LIMIT, discoverMachineTopology, redactRouteForOutput, redactTopologyForOutput, resolveMachineRoute, resolveMachineWorkspace } from "../topology.js";
+import {
+  listMachineTrashPolicies,
+  resolveNoteMachineContext,
+  type MachineTrashPolicies,
+  type NoteActorType,
+  type NoteMachineContext,
+  type NoteMachineContextSource,
+} from "../notes.js";
+import { getMachineDetails, type MachineDetails } from "../details.js";
 import {
   checkMachineCompatibility,
   type CompatibilityCheck,
@@ -336,6 +361,76 @@ function renderWorkspaceRepairResult(result: WorkspaceManifestRepairResult): str
   ].join("\n");
 }
 
+function renderProjectAssignments(result: MachineProjectAssignments): string {
+  if (result.assignments.length === 0) return "project assignments: none";
+  return result.assignments.map((assignment) => {
+    const primary = assignment.is_primary ? " primary" : "";
+    const path = assignment.path ?? "unresolved";
+    return `${assignment.machine_id.padEnd(18)} ${assignment.project_id.padEnd(24)} ${path}${primary}`;
+  }).join("\n");
+}
+
+function renderNoteMachineContext(result: NoteMachineContext): string {
+  const machine = (label: string, ref: NoteMachineContext["origin_machine"]) => {
+    if (!ref) return [label, "none"] as [string, string];
+    const known = ref.known ? "" : " unknown";
+    return [label, `${ref.display_name} (${ref.machine_id})${known}`] as [string, string];
+  };
+  return [
+    renderKeyValueTable([
+      machine("origin", result.origin_machine),
+      machine("source", result.source_machine),
+      machine("target", result.target_machine),
+      ["sync targets", result.sync_targets.map((target) => `${target.machine.display_name} (${target.machine_id})`).join(", ") || "none"],
+      ["actor", `${result.actor.display_name} (${result.actor.actor_type}/${result.actor.source})`],
+      ["warnings", result.warnings.join(", ") || "none"],
+    ]),
+  ].join("\n");
+}
+
+function renderMachineTrashPolicies(result: MachineTrashPolicies): string {
+  if (result.policies.length === 0) return "machine trash policies: none";
+  const lines = result.policies.map((policy) => {
+    const retention = policy.retention_days === null ? "retention:unset" : `retention:${policy.retention_days}d`;
+    const deleteAfter = policy.delete_after_days === null ? "delete-after:unset" : `delete-after:${policy.delete_after_days}d`;
+    const enabled = policy.enabled === null ? "enabled:unspecified" : `enabled:${policy.enabled}`;
+    return `${policy.display_name.padEnd(18)} ${policy.machine_id.padEnd(18)} ${enabled} ${retention} ${deleteAfter} ${policy.source}`;
+  });
+  return [
+    renderKeyValueTable([
+      ["policies", `${result.pagination.count}/${result.pagination.total}`],
+      ["limit", String(result.pagination.limit ?? "all")],
+      ["offset", String(result.pagination.offset)],
+      ["has more", String(result.pagination.hasMore)],
+      ["warnings", result.warnings.join(", ") || "none"],
+    ]),
+    ...lines,
+  ].join("\n");
+}
+
+function renderMachineDetails(result: MachineDetails): string {
+  const lines = [
+    renderKeyValueTable([
+      ["name", result.display_name],
+      ["machine", result.machine_id],
+      ["status", result.status.label],
+      ["platform", result.platform ?? "unknown"],
+      ["type", result.machine_type ?? "unknown"],
+      ["role", result.role ?? result.roles?.join(", ") ?? "unknown"],
+      ["capabilities", result.machine_capabilities?.join(", ") ?? "unknown"],
+      ["updated", result.updated_at ?? "unknown"],
+      ["last seen", result.last_seen_at ?? "unknown"],
+      ["recent sync", result.timestamps.recent_sync_at ?? "unknown"],
+      ["source", result.source.metadata_source],
+      ["warnings", result.warnings.join(", ") || "none"],
+    ]),
+  ];
+  if (result.display_metadata && Object.keys(result.display_metadata).length > 0) {
+    lines.push(renderList("display metadata", Object.entries(result.display_metadata).map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : String(value)}`)));
+  }
+  return lines.join("\n");
+}
+
 function renderFleetStatus(status: FleetStatus): string {
   return [
     renderKeyValueTable([
@@ -350,7 +445,7 @@ function renderFleetStatus(status: FleetStatus): string {
     ]),
     "",
     ...status.machines.map((machine) =>
-      `${machine.machineId.padEnd(18)} ${machine.platform || "unknown"} ${machine.heartbeatStatus} ${machine.agentMode || "agent:unknown"} ${machine.storageSyncStatus || "storage:unknown"} ${machine.lastHeartbeatAt || "—"}`
+      `${(machine.displayName ?? machine.machineId).padEnd(18)} ${machine.machineId.padEnd(18)} ${machine.platform || "unknown"} ${machine.heartbeatStatus} ${machine.agentMode || "agent:unknown"} ${machine.storageSyncStatus || "storage:unknown"} ${machine.updatedAt || machine.lastHeartbeatAt || "—"}`
     ),
   ].join("\n");
 }
@@ -419,6 +514,8 @@ const runtimeCommand = program.command("runtime").description("Watch runtime con
 const clipboardCommand = program.command("clipboard").description("Real-time clipboard sync across fleet machines");
 const installClaudeCommand = program.command("install-claude").description("Install or inspect Claude, Codex, and Gemini CLIs");
 const daemonCommand = program.command("daemon").description("Install and inspect the machines-agent fleet daemon service");
+const projectsCommand = program.command("projects").description("Expose machine/project assignments for @hasna/projects");
+const notesCommand = program.command("notes").description("Expose note ownership, provenance, and per-machine trash contracts");
 const trustedNotificationApproval = createTrustedNotificationApproval();
 
 function cliMachineId(machineId: string | null | undefined): string {
@@ -959,6 +1056,65 @@ manifestCommand
     console.log(JSON.stringify(machine, null, 2));
   });
 
+const manifestFriendlyNameCommand = manifestCommand
+  .command("friendly-name")
+  .description("Read or update a user-friendly display name without changing the stable machine id");
+
+manifestFriendlyNameCommand
+  .command("get")
+  .description("Read a machine friendly name and computed display name")
+  .argument("<id>", "Machine identifier")
+  .option("-j, --json", "Print JSON output", false)
+  .action((id: string, options: { json?: boolean }) => {
+    try {
+      const result = manifestGetFriendlyName(id);
+      printJsonOrText(result, renderKeyValueTable([
+        ["machine", result.machine_id],
+        ["friendly name", result.friendly_name ?? "none"],
+        ["display name", result.display_name],
+        ["updated", result.updated_at ?? "unknown"],
+      ]), options.json);
+    } catch (error) {
+      process.exitCode = 1;
+      console.error(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+manifestFriendlyNameCommand
+  .command("set")
+  .description("Set a user-friendly display name for a machine")
+  .argument("<id>", "Machine identifier")
+  .argument("<name>", "Friendly display name")
+  .option("--approval-token <token>", "Scoped mutation approval token")
+  .option("-j, --json", "Print JSON output", false)
+  .action((id: string, name: string, options: { approvalToken?: string; json?: boolean }) => {
+    const input = { machineId: id, friendlyName: name };
+    requireCliMutation("machines_friendly_name_set", options.approvalToken, {
+      machineId: input.machineId,
+      resourceId: machineFriendlyNameResourceId(input.machineId),
+      args: setMachineFriendlyNameMutationArgs(input),
+    });
+    const result = manifestSetFriendlyName(input);
+    printJsonOrText(result, `display name: ${result.display_name}`, options.json);
+  });
+
+manifestFriendlyNameCommand
+  .command("clear")
+  .description("Clear a machine friendly name so consumers fall back to the stable id")
+  .argument("<id>", "Machine identifier")
+  .option("--approval-token <token>", "Scoped mutation approval token")
+  .option("-j, --json", "Print JSON output", false)
+  .action((id: string, options: { approvalToken?: string; json?: boolean }) => {
+    const input = { machineId: id };
+    requireCliMutation("machines_friendly_name_clear", options.approvalToken, {
+      machineId: input.machineId,
+      resourceId: machineFriendlyNameResourceId(input.machineId),
+      args: clearMachineFriendlyNameMutationArgs(input),
+    });
+    const result = manifestClearFriendlyName(input);
+    printJsonOrText(result, `display name: ${result.display_name}`, options.json);
+  });
+
 manifestCommand
   .command("remove")
   .description("Remove a machine from the manifest")
@@ -975,6 +1131,7 @@ manifestCommand
   .option("--id <id>", "Machine identifier")
   .option("--platform <platform>", "linux | macos | windows")
   .option("--workspace-path <path>", "Primary workspace path")
+  .option("--friendly-name <name>", "User-friendly display name; stable --id is unchanged")
   .option("--hostname <hostname>", "Machine hostname")
   .option("--ssh-address <sshAddress>", "Machine SSH address")
   .option("--tailscale-name <tailscaleName>", "Machine Tailscale DNS name")
@@ -1031,6 +1188,7 @@ manifestCommand
     const metadata = typeof options["metadata"] === "string" ? JSON.parse(options["metadata"]) : undefined;
     const machine: MachineManifest = {
       id: String(options["id"]),
+      friendlyName: options["friendlyName"] ? String(options["friendlyName"]) : undefined,
       hostname: options["hostname"] ? String(options["hostname"]) : undefined,
       sshAddress: options["sshAddress"] ? String(options["sshAddress"]) : undefined,
       tailscaleName: options["tailscaleName"] ? String(options["tailscaleName"]) : undefined,
@@ -1159,10 +1317,17 @@ program
   .command("topology")
   .description("Discover local, manifest, heartbeat, SSH, and Tailscale machine topology")
   .option("--no-tailscale", "Skip tailscale status probing")
+  .option("--limit <n>", `Maximum machines to return (default ${DEFAULT_MACHINE_LIST_LIMIT})`)
+  .option("--offset <n>", "Machine list offset for View more pagination")
+  .option("--all", "Return every discovered machine", false)
   .option("--private-metadata", "Print private host/network route fields", false)
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { tailscale?: boolean; privateMetadata?: boolean; json?: boolean }) => {
-    const rawTopology = discoverMachineTopology({ includeTailscale: options.tailscale !== false });
+  .action((options: { tailscale?: boolean; limit?: string; offset?: string; all?: boolean; privateMetadata?: boolean; json?: boolean }) => {
+    const rawTopology = discoverMachineTopology({
+      includeTailscale: options.tailscale !== false,
+      limit: options.all ? null : options.limit ? parseIntegerOption(options.limit, "limit", { min: 1 }) : undefined,
+      offset: options.offset ? parseIntegerOption(options.offset, "offset", { min: 0 }) : undefined,
+    });
     const topology = redactTopologyForOutput(rawTopology, { privateMetadata: options.privateMetadata });
     if (options.json) {
       console.log(JSON.stringify(topology, null, 2));
@@ -1172,13 +1337,102 @@ program
       ["local machine", topology.local_machine_id],
       ["hostname", topology.local_hostname],
       ["platform", String(topology.current_platform)],
-      ["machines", String(topology.machines.length)],
+      ["machines", `${topology.pagination.count}/${topology.pagination.total}`],
+      ["limit", String(topology.pagination.limit ?? "all")],
+      ["offset", String(topology.pagination.offset)],
+      ["has more", String(topology.pagination.hasMore)],
       ["warnings", topology.warnings.join(", ") || "none"],
     ]));
     for (const machine of topology.machines) {
       const route = machine.ssh.command_target ? `${machine.ssh.route}:${machine.ssh.command_target}` : machine.ssh.route;
-      console.log(`${machine.machine_id.padEnd(18)} ${String(machine.platform || "unknown").padEnd(8)} ${machine.heartbeat_status.padEnd(8)} ${route}`);
+      console.log(`${machine.display_name.padEnd(18)} ${machine.machine_id.padEnd(18)} ${String(machine.platform || "unknown").padEnd(8)} ${machine.heartbeat_status.padEnd(8)} ${machine.updated_at ?? "unknown"} ${route}`);
     }
+  });
+
+program
+  .command("details")
+  .description("Show consumer-safe machine details for right-click View details")
+  .option("--machine <id>", "Machine identifier; defaults to local")
+  .option("--tailscale", "Probe tailscale while resolving details", false)
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { machine?: string; tailscale?: boolean; json?: boolean }) => {
+    const result = getMachineDetails(options.machine ?? "local", {
+      includeTailscale: options.tailscale,
+    });
+    printJsonOrText(result, renderMachineDetails(result), options.json);
+  });
+
+function parseMachineIdList(values: string[] | undefined): string[] {
+  return (values ?? [])
+    .flatMap((value) => String(value).split(","))
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+notesCommand
+  .command("context")
+  .description("Resolve note origin/source/target machine display names and actor provenance")
+  .option("--origin-machine <id>", "Machine that owns/originated the note")
+  .option("--source-machine <id>", "Machine where the note event or sync source came from")
+  .option("--target-machine <id>", "Machine the note is being synced to")
+  .option("--sync-target <id...>", "Additional sync target machine ids; comma-separated values are accepted")
+  .option("--actor-type <type>", "human | agent | system | unknown")
+  .option("--actor-id <id>", "Actor identifier")
+  .option("--actor-name <name>", "Actor display name")
+  .option("--agent-id <id>", "Agent identifier for agent-created notes")
+  .option("--agent-name <name>", "Agent display name for agent-created notes")
+  .option("--source <source>", "open-notes | agent | sync | import | open-machines | unknown")
+  .option("--tailscale", "Probe tailscale while building machine display context", false)
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: {
+    originMachine?: string;
+    sourceMachine?: string;
+    targetMachine?: string;
+    syncTarget?: string[];
+    actorType?: string;
+    actorId?: string;
+    actorName?: string;
+    agentId?: string;
+    agentName?: string;
+    source?: string;
+    tailscale?: boolean;
+    json?: boolean;
+  }) => {
+    const result = resolveNoteMachineContext({
+      originMachineId: options.originMachine,
+      sourceMachineId: options.sourceMachine,
+      targetMachineId: options.targetMachine,
+      syncTargetMachineIds: parseMachineIdList(options.syncTarget),
+      includeTailscale: options.tailscale,
+      actor: {
+        actor_type: options.actorType as NoteActorType | undefined,
+        actor_id: options.actorId,
+        actor_name: options.actorName,
+        agent_id: options.agentId,
+        agent_name: options.agentName,
+        source: options.source as NoteMachineContextSource | undefined,
+      },
+    });
+    printJsonOrText(result, renderNoteMachineContext(result), options.json);
+  });
+
+notesCommand
+  .command("trash-policies")
+  .description("List per-machine note trash retention metadata")
+  .option("--machine <id>", "Filter by machine id")
+  .option("--limit <n>", `Maximum machines to return (default ${DEFAULT_MACHINE_LIST_LIMIT})`)
+  .option("--offset <n>", "Machine list offset for View more pagination")
+  .option("--all", "Return every discovered machine", false)
+  .option("--tailscale", "Probe tailscale while listing machine trash policies", false)
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { machine?: string; limit?: string; offset?: string; all?: boolean; tailscale?: boolean; json?: boolean }) => {
+    const result = listMachineTrashPolicies({
+      machineId: options.machine,
+      includeTailscale: options.tailscale,
+      limit: options.all ? null : options.limit ? parseIntegerOption(options.limit, "limit", { min: 1 }) : undefined,
+      offset: options.offset ? parseIntegerOption(options.offset, "offset", { min: 0 }) : undefined,
+    });
+    printJsonOrText(result, renderMachineTrashPolicies(result), options.json);
   });
 
 program
@@ -1198,6 +1452,95 @@ program
     });
     printJsonOrText(result, renderCompatibilityResult(result), options.json);
     if (!result.ok && !options.json) process.exitCode = 1;
+  });
+
+const projectsAssignmentsCommand = projectsCommand
+  .command("assignments")
+  .description("List or update manifest-backed @hasna/projects machine assignments");
+
+projectsAssignmentsCommand
+  .command("list", { isDefault: true })
+  .description("List machine-to-project location assignments")
+  .option("--machine <id>", "Filter by machine id")
+  .option("--project <id>", "Filter by project/workspace id")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { machine?: string; project?: string; json?: boolean }) => {
+    const result = listMachineProjectAssignments({
+      machineId: options.machine,
+      projectId: options.project,
+    });
+    printJsonOrText(result, renderProjectAssignments(result), options.json);
+  });
+
+projectsAssignmentsCommand
+  .command("assign")
+  .description("Write a machine/project location assignment into the machines manifest")
+  .requiredOption("--machine <id>", "Machine identifier")
+  .requiredOption("--project <id>", "Project or workspace identifier")
+  .requiredOption("--path <path>", "Absolute project path on the machine")
+  .option("--workspace-id <id>", "open-projects workspace id")
+  .option("--repo <name>", "Repository name; defaults to project id")
+  .option("--workspace-root <path>", "Machine workspace root")
+  .option("--open-files-root <path>", "open-files root on the machine")
+  .option("--label <label>", "Location label", "main")
+  .option("--kind <kind>", "Location kind", "machine-local")
+  .option("--primary", "Mark this machine as primary for the project")
+  .option("--metadata <json>", "Assignment metadata JSON object")
+  .option("--approval-token <token>", "Scoped mutation approval token")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: {
+    machine: string;
+    project: string;
+    path: string;
+    workspaceId?: string;
+    repo?: string;
+    workspaceRoot?: string;
+    openFilesRoot?: string;
+    label?: string;
+    kind?: string;
+    primary?: boolean;
+    metadata?: string;
+    approvalToken?: string;
+    json?: boolean;
+  }) => {
+    const input: AssignMachineProjectInput = {
+      machineId: options.machine,
+      projectId: options.project,
+      path: options.path,
+      workspaceId: options.workspaceId ?? null,
+      repoName: options.repo ?? null,
+      workspaceRoot: options.workspaceRoot ?? null,
+      openFilesRoot: options.openFilesRoot ?? null,
+      label: options.label,
+      kind: options.kind,
+      primary: options.primary === true ? true : undefined,
+      metadata: options.metadata === undefined ? undefined : parseJsonObjectOption(options.metadata, {}),
+    };
+    requireCliMutation("machines_projects_assign", options.approvalToken, {
+      machineId: input.machineId,
+      resourceId: projectAssignmentResourceId(input.machineId, input.projectId),
+      args: projectAssignmentMutationArgs(input),
+    });
+    const result = assignMachineProject(input);
+    printJsonOrText(result, renderProjectAssignments(result), options.json);
+  });
+
+projectsAssignmentsCommand
+  .command("remove")
+  .description("Remove a machine/project assignment from the machines manifest")
+  .requiredOption("--machine <id>", "Machine identifier")
+  .requiredOption("--project <id>", "Project or workspace identifier")
+  .option("--approval-token <token>", "Scoped mutation approval token")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { machine: string; project: string; approvalToken?: string; json?: boolean }) => {
+    const input = { machineId: options.machine, projectId: options.project };
+    requireCliMutation("machines_projects_unassign", options.approvalToken, {
+      machineId: input.machineId,
+      resourceId: projectAssignmentResourceId(input.machineId, input.projectId),
+      args: removeProjectAssignmentMutationArgs(input),
+    });
+    const result = removeMachineProjectAssignment(input);
+    printJsonOrText(result, renderProjectAssignments(result), options.json);
   });
 
 const workspaceCommand = program.command("workspace").description("Resolve sync-safe workspace paths for open-* consumers");
@@ -1818,7 +2161,7 @@ program
   .option("--cmd <command>", "Remote command to run")
   .option("-j, --json", "Print JSON output", false)
   .action((options: { machine: string; tailscale?: boolean; privateMetadata?: boolean; cmd?: string; json?: boolean }) => {
-    const topology = discoverMachineTopology({ includeTailscale: options.tailscale !== false });
+    const topology = discoverMachineTopology({ includeTailscale: options.tailscale !== false, limit: null, offset: 0 });
     const resolved = resolveMachineRoute(options.machine, { topology });
     const publicResolved = redactRouteForOutput(resolved, { privateMetadata: options.privateMetadata });
     const command = resolved.ok && resolved.target
@@ -1877,7 +2220,7 @@ program
   .option("-j, --json", "Print JSON output", false)
   .action((machineArg: string | undefined, options: { machine?: string; all?: boolean; print?: boolean; json?: boolean }) => {
     if (options.all) {
-      const topology = discoverMachineTopology();
+      const topology = discoverMachineTopology({ limit: null, offset: 0 });
       type ScreenAllResult = { machine: string; ok: boolean; url?: string; route?: string; error?: string };
       const results: ScreenAllResult[] = topology.machines.map((m) => {
         try {
@@ -1931,7 +2274,7 @@ program
   .option("--no-tailscale", "Skip tailscale status probing")
   .option("-j, --json", "Print JSON output", false)
   .action((options: { machine?: string; all?: boolean; checkSecret?: boolean; secretsCommand: string; tailscale?: boolean; json?: boolean }) => {
-    const topology = discoverMachineTopology({ includeTailscale: options.tailscale !== false });
+    const topology = discoverMachineTopology({ includeTailscale: options.tailscale !== false, limit: null, offset: 0 });
     const machineIds = options.all
       ? topology.machines.map((machine) => machine.machine_id)
       : [options.machine].filter((machine): machine is string => Boolean(machine));

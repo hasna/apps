@@ -37,10 +37,21 @@ origin allowlist.
 machines manifest init
 machines manifest bootstrap
 machines manifest add --id linux-dev-01 --platform linux --workspace-path ~/workspace
+machines manifest add --id linux-dev-01 --friendly-name "Linux Dev" --platform linux --workspace-path ~/workspace
 machines manifest add --id mac-lab-01 --platform macos --workspace-path ~/Workspace --app ghostty:cask
+machines manifest friendly-name get linux-dev-01 --json
+machines manifest friendly-name set linux-dev-01 "Linux Dev" --approval-token "$TOKEN" --json
+machines manifest friendly-name clear linux-dev-01 --approval-token "$TOKEN" --json
 machines manifest validate
 machines manifest list
 ```
+
+`id` is the stable machine slug and must not be changed for display purposes.
+Use `friendlyName` for user-facing labels. Consumers should display the
+topology `display_name` field, which is computed as `friendly_name` when set
+and `machine_id` otherwise. Setting or clearing `friendlyName` updates the
+machine `updatedAt` timestamp and requires the same scoped mutation approval
+model as other manifest writes.
 
 Public packages should keep private fleet state behind an opaque source/ref
 boundary. `HASNA_MACHINES_PRIVATE_MANIFEST_REF` (or
@@ -95,7 +106,10 @@ import {
   MACHINES_CONSUMER_CONTRACT,
   createMachineResolverSnapshot,
   discoverMachineTopology,
+  getMachineDetails,
   getLocalMachineTopology,
+  listMachineTrashPolicies,
+  resolveNoteMachineContext,
   resolveMachineRoute,
   resolveMachineWorkspace,
   validateMachinesConsumerEnvelope,
@@ -104,6 +118,7 @@ import {
 console.log(MACHINES_CONSUMER_CONTRACT.schema_version);
 const topology = discoverMachineTopology();
 const local = getLocalMachineTopology();
+const details = getMachineDetails("linux-dev-01");
 const route = resolveMachineRoute("linux-dev-01");
 const workspace = resolveMachineWorkspace({
   machineId: "linux-dev-01",
@@ -128,10 +143,155 @@ records the stable entrypoint, envelope names, schema artifact, field
 capabilities, default resolver TTL, and stable exports used by downstream apps
 such as `@hasna/knowledge`.
 
+### Hasna Notes machine list contract
+
+Hasna Notes and similar sidebar consumers should read machine lists from
+`discoverMachineTopology()` or `GET /api/topology`. The list defaults to the
+latest 10 machines ordered by `updated_at` descending. For View more, pass
+`limit` and `offset`:
+
+```bash
+machines topology --json
+machines topology --limit 10 --offset 10 --json
+curl 'http://127.0.0.1:7676/api/topology?limit=10&offset=10&tailscale=false'
+```
+
+Each `topology.machines[]` row includes:
+
+- `machine_id`: stable slug/id. Use this for storage, links, mutations, and route/workspace calls.
+- `friendly_name`: user-set label or `null`.
+- `display_name`: `friendly_name` when present, otherwise `machine_id`. Use this in UI.
+- `updated_at`: best known ordering timestamp from manifest updates, heartbeat updates, or live peer data.
+
+The `topology.pagination` object includes `limit`, `offset`, `total`, `count`,
+`hasMore`, `nextOffset`, plus snake-case aliases `has_more` and
+`next_offset`. Render the first page by default, and request the next page with
+`offset=nextOffset` when `hasMore` is true. Callers that explicitly need every
+machine can pass `limit: null` in the SDK or `all=true` to the HTTP API, but UI
+lists should keep the latest-10 default.
+
+Friendly names can be read and changed through the CLI, SDK, dashboard API,
+and MCP:
+
+```bash
+machines manifest friendly-name get linux-dev-01 --json
+machines manifest friendly-name set linux-dev-01 "Linux Dev" --approval-token "$TOKEN" --json
+machines manifest friendly-name clear linux-dev-01 --approval-token "$TOKEN" --json
+```
+
+HTTP dashboard API:
+
+- `GET /api/machines/friendly-name?machine=linux-dev-01`
+- `POST /api/machines/friendly-name` with `machine_id`, `friendly_name`, and a scoped `approval_token`
+- `DELETE /api/machines/friendly-name?machine=linux-dev-01` with a scoped approval token
+
+MCP tools expose the same contract as `machines_friendly_name_get`,
+`machines_friendly_name_set`, `machines_friendly_name_clear`, and
+`machines_topology` with `limit` and `offset` arguments.
+
+### Hasna Notes ownership and provenance contract
+
+Open-machines does not own note storage. It does expose machine identity,
+display-name, sync-target, actor provenance, and per-machine trash metadata that
+Hasna Notes can attach to its own note records.
+
+Use `resolveNoteMachineContext()` when a note is created, synced, or rendered in
+a unified view:
+
+```ts
+const context = resolveNoteMachineContext({
+  originMachineId: "linux-dev-01",
+  sourceMachineId: "agent-runner-01",
+  targetMachineId: "macbook-local",
+  syncTargetMachineIds: ["macbook-local"],
+  actor: {
+    actor_type: "agent",
+    agent_id: "notes-agent",
+    agent_name: "Notes Agent",
+    source: "agent",
+  },
+});
+```
+
+The `note_machine_context` envelope includes these stable fields:
+
+- `origin_machine_id`: machine that owns/originated the note.
+- `source_machine_id`: machine where the note event or sync source came from; defaults to `origin_machine_id`.
+- `target_machine_id`: machine the note is being synced to, when applicable.
+- `origin_machine`, `source_machine`, `target_machine`: references with `machine_id`, `friendly_name`, `display_name`, `updated_at`, `known`, and `manifest_declared`.
+- `sync_target_machine_ids` and `sync_targets`: machines that should receive or display synced copies.
+- `actor`: `actor_type`, `actor_id`, `actor_name`, `agent_id`, `agent_name`, `source`, and `display_name`.
+
+Consumers should render machine labels from each reference's `display_name`,
+which already falls back to `machine_id`. If a note references a machine that is
+not currently in topology, the reference still uses the requested machine id,
+sets `known: false`, and adds a warning such as
+`unknown_machine:sync_target:linux-dev-99`.
+
+For per-machine trash metadata, use `listMachineTrashPolicies()`:
+
+```ts
+const trash = listMachineTrashPolicies({ limit: 10, offset: 0 });
+```
+
+Each `machine_trash_policies.policies[]` row includes `machine_id`,
+`friendly_name`, `display_name`, `updated_at`, `enabled`, `retention_days`,
+`delete_after_days`, `trash_path`, `source`, and `metadata_keys`. The list uses
+the same `pagination` object as topology. Manifest metadata can provide policy
+settings under `metadata.notes_trash`, `metadata.notesTrash`,
+`metadata.note_trash`, `metadata.noteTrash`, or `metadata.trash`; camelCase and
+snake_case retention fields are accepted. Missing metadata returns
+`source: "default"` with nullable settings so Hasna Notes can apply its own
+default policy.
+
+Equivalent read-only surfaces:
+
+```bash
+machines notes context --origin-machine linux-dev-01 --source-machine agent-runner-01 --actor-type agent --agent-name "Notes Agent" --source agent --json
+machines notes trash-policies --limit 10 --offset 0 --json
+curl 'http://127.0.0.1:7676/api/notes/machine-context?origin_machine_id=linux-dev-01&source_machine_id=agent-runner-01&actor_type=agent&agent_name=Notes%20Agent&source=agent'
+curl 'http://127.0.0.1:7676/api/notes/trash-policies?limit=10&offset=0'
+```
+
+MCP exposes `machines_notes_context` and `machines_notes_trash_policies` with
+the same field names. These fields are the coordination contract for open-notes:
+store stable ids in note records, show `display_name`, and use pagination
+metadata for any machine-backed lists.
+
+### Hasna Notes machine details contract
+
+For right-click View details, Hasna Notes should call `getMachineDetails(id)`,
+`GET /api/machines/details?machine=<id>`, `machines details --machine <id>
+--json`, or MCP `machines_details`.
+
+The `machine_details` envelope is a friendly, consumer-safe view. It includes:
+
+- `machine_id` and `slug`: stable machine id for storage and links.
+- `friendly_name` / `friendlyName`: present only when a user label is set.
+- `display_name` / `displayName`: always present; uses friendly name first, then `machine_id`.
+- `known`: whether open-machines found the machine in topology.
+- `status`: `state`, neutral `label`, `online`, and optional seen timestamps.
+- `platform`, `machine_type`, `role`, `roles`, `machine_capabilities`, and `tags` when known.
+- `updated_at`, `last_seen_at`, and `timestamps.recent_sync_at` / `recent_sync_status` when known.
+- `source`: `authority`, `metadata_source`, `manifest_declared`, `heartbeat_present`, `topology_entry`, and `local`.
+- `display_metadata`: only safe whitelisted display metadata such as type, role, owner, team, region, environment, and capabilities.
+
+Fallback behavior:
+
+- UI label: render `display_name`; it already falls back from friendly name to slug/id.
+- Status: when no heartbeat or online signal is known, render `status.label` as `Unknown`.
+- Optional fields are omitted when absent rather than filled with raw/internal data.
+- Missing machines still return `machine_id`, `slug`, `display_name`, `known: false`, neutral unknown status, and `unknown_machine:details:<id>` in `warnings`.
+
+Raw route targets, hostnames, local paths, secrets, private heartbeat details,
+and sensitive metadata keys are not part of the default details view.
+
 The package includes `schemas/machines-consumer.schema.json` and also exports
 `MACHINES_CONSUMER_SCHEMA_BUNDLE`, `getMachinesConsumerSchemaBundle()`, and
 `validateMachinesConsumerEnvelope()`. Downstream apps can use these helpers to
-validate route, workspace, compatibility, and resolver-snapshot envelopes
+validate topology, route, workspace, compatibility, resolver-snapshot,
+project-assignment, note-machine-context, machine-trash-policy, and
+machine-details envelopes
 without importing CLI, MCP, agent, installer, or storage-heavy internals.
 
 The package also ships a downstream conformance fixture for consumers that want
@@ -150,6 +310,7 @@ CLI and MCP expose the same topology view:
 
 ```bash
 machines topology --json
+machines topology --limit 10 --offset 10 --json
 machines topology --no-tailscale --json
 machines route --machine linux-dev-01 --json
 machines ssh --machine linux-dev-01 --private-metadata
@@ -479,6 +640,10 @@ The dashboard exposes:
 - `/api/status` fleet status JSON
 - `/api/topology` manifest, heartbeat, SSH, LAN, and Tailscale topology JSON
 - `/api/routes` resolved route JSON for known machines
+- `/api/machines/friendly-name` get, set, or clear a machine display label
+- `/api/machines/details` consumer-safe machine details JSON
+- `/api/notes/machine-context` note origin/source/target machine and actor provenance JSON
+- `/api/notes/trash-policies` per-machine note trash retention metadata JSON
 - `/api/daemon/status` daemon heartbeat rows
 - `/api/manifest` current manifest JSON
 - `/api/notifications` notification channel JSON

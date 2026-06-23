@@ -93,6 +93,9 @@ describe("consumer entrypoint boundary", () => {
           MACHINES_CONSUMER_CONTRACT,
           MACHINES_CONSUMER_CONTRACT_VERSION,
           createMachineResolverSnapshot,
+          getMachineDetails,
+          listMachineTrashPolicies,
+          resolveNoteMachineContext,
           resolveMachineWorkspace,
           validateMachinesConsumerEnvelope,
         } from "@hasna/machines/consumer";
@@ -102,6 +105,9 @@ describe("consumer entrypoint boundary", () => {
           entrypoint: MACHINES_CONSUMER_CONTRACT.entrypoint,
           has_workspace_resolver: typeof resolveMachineWorkspace === "function",
           has_snapshot_helper: typeof createMachineResolverSnapshot === "function",
+          has_machine_details: typeof getMachineDetails === "function",
+          has_note_context: typeof resolveNoteMachineContext === "function",
+          has_trash_policies: typeof listMachineTrashPolicies === "function",
           has_validator: typeof validateMachinesConsumerEnvelope === "function",
           schema_artifact: MACHINES_CONSUMER_CONTRACT.schema_artifact,
           capabilities: MACHINES_CONSUMER_CONTRACT.capabilities,
@@ -127,6 +133,9 @@ describe("consumer entrypoint boundary", () => {
         entrypoint: "@hasna/machines/consumer",
         has_workspace_resolver: true,
         has_snapshot_helper: true,
+        has_machine_details: true,
+        has_note_context: true,
+        has_trash_policies: true,
         has_validator: true,
         schema_artifact: "schemas/machines-consumer.schema.json",
         capabilities: {
@@ -140,6 +149,12 @@ describe("consumer entrypoint boundary", () => {
           cacheability_metadata: true,
           resolver_snapshots: true,
           field_capability_descriptors: true,
+          project_assignments: true,
+          friendly_machine_names: true,
+          machine_list_pagination: true,
+          note_machine_context: true,
+          machine_trash_policies: true,
+          machine_details: true,
         },
       });
     } finally {

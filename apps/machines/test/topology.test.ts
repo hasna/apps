@@ -92,6 +92,9 @@ describe("machine topology SDK", () => {
 
       const demoNode01 = topology.machines.find((machine) => machine.machine_id === "demo-node-01");
       expect(demoNode01?.manifest_declared).toBe(true);
+      expect(demoNode01?.friendly_name).toBe(null);
+      expect(demoNode01?.display_name).toBe("demo-node-01");
+      expect(demoNode01?.updated_at).toBeDefined();
       expect(demoNode01?.tailscale.ips).toEqual(["203.0.113.34"]);
       expect(demoNode01?.ssh.route).toBe("tailscale");
       expect(demoNode01?.ssh.command_target).toBe("operator@demo-node-01.tailnet.ts.net");
@@ -192,6 +195,90 @@ describe("machine topology SDK", () => {
       const local = getLocalMachineTopology({ includeTailscale: false });
       expect(local.machine_id).toBe("demo-node-02");
       expect(local.route_hints.some((hint) => hint.kind === "local")).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("returns latest 10 machines by default with display-name fallback and view-more metadata", () => {
+    const dir = setupTemp("machines-topology-pagination-");
+    try {
+      for (let index = 0; index < 12; index += 1) {
+        const id = `demo-node-${String(index).padStart(2, "0")}`;
+        manifestAdd({
+          id,
+          friendlyName: index === 11 ? "Studio Linux" : undefined,
+          platform: "linux",
+          workspacePath: `/workspace/${id}`,
+          updatedAt: `2026-06-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
+        });
+      }
+
+      const firstPage = discoverMachineTopology({
+        includeTailscale: false,
+        now: new Date("2026-06-20T00:00:00.000Z"),
+      });
+      expect(firstPage.pagination).toMatchObject({
+        limit: 10,
+        offset: 0,
+        total: 12,
+        count: 10,
+        hasMore: true,
+        has_more: true,
+        nextOffset: 10,
+        next_offset: 10,
+        order: "updated_at_desc",
+      });
+      expect(firstPage.machines.map((machine) => machine.machine_id)).toEqual([
+        "demo-node-11",
+        "demo-node-10",
+        "demo-node-09",
+        "demo-node-08",
+        "demo-node-07",
+        "demo-node-06",
+        "demo-node-05",
+        "demo-node-04",
+        "demo-node-03",
+        "demo-node-02",
+      ]);
+      expect(firstPage.machines[0]).toMatchObject({
+        machine_id: "demo-node-11",
+        friendly_name: "Studio Linux",
+        display_name: "Studio Linux",
+        updated_at: "2026-06-12T00:00:00.000Z",
+      });
+      expect(firstPage.machines[1]).toMatchObject({
+        machine_id: "demo-node-10",
+        friendly_name: null,
+        display_name: "demo-node-10",
+      });
+
+      const secondPage = discoverMachineTopology({
+        includeTailscale: false,
+        offset: firstPage.pagination.nextOffset ?? 0,
+      });
+      expect(secondPage.pagination).toMatchObject({
+        limit: 10,
+        offset: 10,
+        total: 12,
+        count: 2,
+        hasMore: false,
+        nextOffset: null,
+      });
+      expect(secondPage.machines.map((machine) => machine.machine_id)).toEqual(["demo-node-01", "demo-node-00"]);
+
+      const full = discoverMachineTopology({ includeTailscale: false, limit: null });
+      expect(full.pagination.limit).toBeNull();
+      expect(full.machines).toHaveLength(12);
+
+      const zeroLimit = discoverMachineTopology({ includeTailscale: false, limit: 0 });
+      expect(zeroLimit.pagination).toMatchObject({
+        limit: 1,
+        offset: 0,
+        count: 1,
+        hasMore: true,
+        nextOffset: 1,
+      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

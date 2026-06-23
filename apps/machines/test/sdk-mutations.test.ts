@@ -79,6 +79,41 @@ describe("published SDK mutation boundary", () => {
     }
   });
 
+  test("friendly-name SDK mutators require scoped approval and preserve machine slug", () => {
+    const { dir, manifestPath } = withTempEnv("machines-sdk-friendly-name-");
+    try {
+      const machine = { id: "sdk-friendly-node", platform: "linux" as const, workspacePath: "/workspace" };
+      machines.manifestAdd(machine, trustedSdkMutation());
+
+      expect(() => machines.manifestSetFriendlyName({
+        machineId: "sdk-friendly-node",
+        friendlyName: "SDK Studio",
+      })).toThrow("sdk.machines_friendly_name_set requires");
+      expect(JSON.parse(readFileSync(manifestPath, "utf8")).machines[0].friendlyName).toBeUndefined();
+
+      const set = machines.manifestSetFriendlyName({
+        machineId: "sdk-friendly-node",
+        friendlyName: "SDK Studio",
+      }, trustedSdkMutation());
+      expect(set).toMatchObject({
+        machine_id: "sdk-friendly-node",
+        friendly_name: "SDK Studio",
+        display_name: "SDK Studio",
+      });
+      expect(readManifestIds(manifestPath)).toEqual(["sdk-friendly-node"]);
+
+      expect(() => machines.manifestClearFriendlyName({ machineId: "sdk-friendly-node" })).toThrow("sdk.machines_friendly_name_clear requires");
+      const cleared = machines.manifestClearFriendlyName({ machineId: "sdk-friendly-node" }, trustedSdkMutation());
+      expect(cleared).toMatchObject({
+        machine_id: "sdk-friendly-node",
+        friendly_name: null,
+        display_name: "sdk-friendly-node",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("SDK scoped token authorizes only the bound manifest mutation", () => {
     const { dir, manifestPath } = withTempEnv("machines-sdk-token-");
     try {
@@ -110,6 +145,46 @@ describe("published SDK mutation boundary", () => {
         runId: "run-sdk-token",
       });
       expect(readManifestIds(manifestPath)).toEqual(["sdk-token-node"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("project assignment SDK mutators require scoped approval", () => {
+    const { dir } = withTempEnv("machines-sdk-project-assignments-");
+    try {
+      const machine = { id: "sdk-project-node", platform: "linux" as const, workspacePath: "/workspace" };
+      machines.manifestAdd(machine, trustedSdkMutation());
+
+      const input = {
+        machineId: "sdk-project-node",
+        projectId: "open-machines",
+        path: "/workspace/open-machines",
+        label: "sdk-project-node",
+        kind: "machine-local",
+        primary: true,
+      };
+      expect(() => machines.assignMachineProject(input)).toThrow("sdk.machines_projects_assign requires");
+      expect(machines.listMachineProjectAssignments().assignments).toEqual([]);
+
+      const assigned = machines.assignMachineProject(input, trustedSdkMutation());
+      expect(assigned.assignments[0]).toMatchObject({
+        machine_id: "sdk-project-node",
+        project_id: "open-machines",
+        path: "/workspace/open-machines",
+      });
+
+      expect(() => machines.removeMachineProjectAssignment({
+        machineId: "sdk-project-node",
+        projectId: "open-machines",
+      })).toThrow("sdk.machines_projects_unassign requires");
+      expect(machines.listMachineProjectAssignments().assignments).toHaveLength(1);
+
+      machines.removeMachineProjectAssignment({
+        machineId: "sdk-project-node",
+        projectId: "open-machines",
+      }, trustedSdkMutation());
+      expect(machines.listMachineProjectAssignments().assignments).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

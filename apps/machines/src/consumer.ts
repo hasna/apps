@@ -8,6 +8,7 @@ export {
   MACHINES_CONSUMER_SCHEMA_URI,
   MACHINES_PACKAGE_NAME,
   DEFAULT_MACHINE_RESOLVER_TTL_MS,
+  DEFAULT_MACHINE_LIST_LIMIT,
   createMachineResolverSnapshot,
   discoverMachineTopology,
   getMachinesConsumerCapabilities,
@@ -26,6 +27,7 @@ export type {
   MachineResolverSnapshot,
   MachineResolverSnapshotRoute,
   MachineResolverSnapshotWorkspace,
+  MachineListPagination,
   MachineTopology,
   MachineTopologyEntry,
   MachineTopologyOptions,
@@ -58,6 +60,56 @@ export type {
   MachinesConsumerSchemaEnvelope,
   MachinesConsumerValidationResult,
 } from "./consumer-schema.js";
+export {
+  listMachineProjectAssignments,
+  projectAssignmentMutationArgs,
+  projectAssignmentResourceId,
+  removeProjectAssignmentMutationArgs,
+} from "./projects.js";
+export type {
+  AssignMachineProjectInput,
+  MachineProjectAssignment,
+  MachineProjectAssignmentMachineSummary,
+  MachineProjectAssignmentProjectSummary,
+  MachineProjectAssignmentSource,
+  MachineProjectAssignments,
+  MachineProjectAssignmentsOptions,
+  RemoveMachineProjectAssignmentInput,
+} from "./projects.js";
+export {
+  MACHINE_TRASH_POLICIES_KIND,
+  NOTE_MACHINE_CONTEXT_KIND,
+  listMachineTrashPolicies,
+  machineReferenceForNote,
+  resolveNoteMachineContext,
+} from "./notes.js";
+export type {
+  MachineTrashPolicies,
+  MachineTrashPoliciesOptions,
+  MachineTrashPolicy,
+  MachineTrashPolicySource,
+  NoteActorContext,
+  NoteActorType,
+  NoteMachineContext,
+  NoteMachineContextOptions,
+  NoteMachineContextSource,
+  NoteMachineReference,
+  NoteMachineRole,
+  NoteSyncTarget,
+} from "./notes.js";
+export {
+  MACHINE_DETAILS_KIND,
+  getMachineDetails,
+} from "./details.js";
+export type {
+  MachineDetails,
+  MachineDetailsMetadataValue,
+  MachineDetailsOptions,
+  MachineDetailsSource,
+  MachineDetailsStatus,
+  MachineDetailsStatusState,
+  MachineDetailsTimestamps,
+} from "./details.js";
 export {
   checkMachineCompatibility,
 } from "./compatibility.js";
