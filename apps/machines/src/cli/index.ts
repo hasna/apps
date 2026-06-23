@@ -79,6 +79,7 @@ import {
   type NoteMachineContextSource,
 } from "../notes.js";
 import { getMachineDetails, type MachineDetails } from "../details.js";
+import { getBrowserPlanFleet, type BrowserPlanFleet } from "../browserplan.js";
 import {
   checkMachineCompatibility,
   type CompatibilityCheck,
@@ -431,6 +432,26 @@ function renderMachineDetails(result: MachineDetails): string {
   return lines.join("\n");
 }
 
+function renderBrowserPlanFleet(result: BrowserPlanFleet): string {
+  const lines = [
+    renderKeyValueTable([
+      ["target", result.target.name],
+      ["machines", `${result.coverage.known}/${result.coverage.expected} known`],
+      ["missing", result.coverage.missing.join(", ") || "none"],
+      ["unreachable", result.coverage.unreachable.join(", ") || "none"],
+      ["excluded", result.target.install_target_excludes.join(", ")],
+      ["warnings", result.warnings.join(", ") || "none"],
+    ]),
+  ];
+  for (const machine of result.machines) {
+    const route = machine.reachability.ok ? `${machine.reachability.route}/${machine.reachability.confidence}` : "unreachable";
+    const browserplan = machine.install_state.browserplan_cli.state;
+    const chrome = machine.install_state.chrome.state;
+    lines.push(`${machine.display_name.padEnd(18)} ${machine.machine_id.padEnd(10)} ${String(machine.platform ?? "unknown").padEnd(8)} ${machine.status.label.padEnd(7)} ${route.padEnd(16)} browserplan:${browserplan} chrome:${chrome}`);
+  }
+  return lines.join("\n");
+}
+
 function renderFleetStatus(status: FleetStatus): string {
   return [
     renderKeyValueTable([
@@ -516,6 +537,7 @@ const installClaudeCommand = program.command("install-claude").description("Inst
 const daemonCommand = program.command("daemon").description("Install and inspect the machines-agent fleet daemon service");
 const projectsCommand = program.command("projects").description("Expose machine/project assignments for @hasna/projects");
 const notesCommand = program.command("notes").description("Expose note ownership, provenance, and per-machine trash contracts");
+const browserPlanCommand = program.command("browserplan").description("Expose BrowserPlan fleet contracts for open-chrome");
 const trustedNotificationApproval = createTrustedNotificationApproval();
 
 function cliMachineId(machineId: string | null | undefined): string {
@@ -1360,6 +1382,23 @@ program
       includeTailscale: options.tailscale,
     });
     printJsonOrText(result, renderMachineDetails(result), options.json);
+  });
+
+browserPlanCommand
+  .command("fleet", { isDefault: true })
+  .description("List BrowserPlan target machines and safe remote operation hooks")
+  .option("--machine <id...>", "Limit to BrowserPlan machine ids; comma-separated values are accepted")
+  .option("--tailscale", "Probe tailscale while resolving BrowserPlan fleet reachability", false)
+  .option("--check-installs", "Run remote compatibility probes for browserplan/chrome/bun/git state", false)
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { machine?: string[]; tailscale?: boolean; checkInstalls?: boolean; json?: boolean }) => {
+    const result = getBrowserPlanFleet({
+      machineIds: parseMachineIdList(options.machine),
+      includeTailscale: options.tailscale,
+      includeInstallState: options.checkInstalls,
+    });
+    printJsonOrText(result, renderBrowserPlanFleet(result), options.json);
+    if (result.coverage.missing.length > 0 || result.coverage.unreachable.length > 0) process.exitCode = options.json ? 0 : 1;
   });
 
 function parseMachineIdList(values: string[] | undefined): string[] {

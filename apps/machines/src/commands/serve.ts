@@ -8,6 +8,7 @@ import { PRIVATE_OUTPUT_DENIED_WARNING, isPrivateOutputEnabled } from "../redact
 import { discoverMachineTopology, redactRouteForOutput, redactTopologyForOutput, resolveMachineRoute } from "../topology.js";
 import { listMachineTrashPolicies, resolveNoteMachineContext, type NoteActorType, type NoteMachineContextSource } from "../notes.js";
 import { getMachineDetails } from "../details.js";
+import { getBrowserPlanFleet } from "../browserplan.js";
 import { createTrustedNotificationApproval, listNotificationChannels, testNotificationChannel } from "./notifications.js";
 import {
   clearMachineFriendlyNameMutationArgs,
@@ -68,6 +69,7 @@ export function getServeInfo(options: ServeOptions = {}): ServeInfo {
       "/api/routes",
       "/api/machines/friendly-name",
       "/api/machines/details",
+      "/api/browserplan/fleet",
       "/api/notes/machine-context",
       "/api/notes/trash-policies",
       "/api/projects/assignments",
@@ -526,6 +528,16 @@ export function startDashboardServer(options: ServeOptions = {}): ReturnType<typ
           url.searchParams.get("machine") ?? url.searchParams.get("machine_id") ?? "local",
           { includeTailscale: url.searchParams.get("tailscale") === "true" },
         ));
+      }
+      if (url.pathname === "/api/browserplan/fleet") {
+        if (request.method !== "GET") {
+          return jsonError("Use GET for BrowserPlan fleet.", 405);
+        }
+        return Response.json(getBrowserPlanFleet({
+          machineIds: queryMachineIdList(url, ["machine", "machine_id", "machines", "machine_ids"]),
+          includeTailscale: url.searchParams.get("tailscale") === "true",
+          includeInstallState: url.searchParams.get("check_installs") === "true" || url.searchParams.get("installState") === "true",
+        }));
       }
       if (url.pathname === "/api/notes/machine-context") {
         if (request.method !== "GET") {

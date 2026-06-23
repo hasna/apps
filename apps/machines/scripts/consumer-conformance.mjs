@@ -172,6 +172,7 @@ function writeSdkProbe(appDir) {
       checkMachineCompatibility,
       createMachineResolverSnapshot,
       discoverMachineTopology,
+      getBrowserPlanFleet,
       getMachineDetails,
       listMachineProjectAssignments,
       listMachineTrashPolicies,
@@ -218,6 +219,10 @@ function writeSdkProbe(appDir) {
       topology,
       now: new Date('2026-06-09T00:00:00.000Z'),
     });
+    const browserPlanFleet = getBrowserPlanFleet({
+      topology,
+      now: new Date('2026-06-09T00:00:00.000Z'),
+    });
     const snapshot = createMachineResolverSnapshot({
       route,
       workspace,
@@ -244,6 +249,7 @@ function writeSdkProbe(appDir) {
         note_machine_context: validateMachinesConsumerEnvelope('note_machine_context', noteMachineContext).ok,
         machine_trash_policies: validateMachinesConsumerEnvelope('machine_trash_policies', trashPolicies).ok,
         machine_details: validateMachinesConsumerEnvelope('machine_details', machineDetails).ok,
+        browserplan_fleet: validateMachinesConsumerEnvelope('browserplan_fleet', browserPlanFleet).ok,
       },
       topology: { schema_version: topology.schema_version, machines: topology.machines.length, pagination: topology.pagination, first_display_name: topology.machines[0]?.display_name ?? null },
       route: { schema_version: route.schema_version, ok: route.ok, route: route.route, target: route.target, cacheable: route.cacheability.cacheable },
@@ -254,6 +260,13 @@ function writeSdkProbe(appDir) {
       note_machine_context: { schema_version: noteMachineContext.schema_version, origin: noteMachineContext.origin_machine?.display_name ?? null, actor: noteMachineContext.actor.display_name },
       machine_trash_policies: { schema_version: trashPolicies.schema_version, count: trashPolicies.policies.length, pagination: trashPolicies.pagination },
       machine_details: { schema_version: machineDetails.schema_version, display_name: machineDetails.display_name, status: machineDetails.status.label },
+      browserplan_fleet: {
+        schema_version: browserPlanFleet.schema_version,
+        target: browserPlanFleet.target.name,
+        expected: browserPlanFleet.coverage.expected,
+        returned: browserPlanFleet.coverage.returned,
+        excluded: browserPlanFleet.target.install_target_excludes,
+      },
     }));
   `);
   return script;
@@ -293,11 +306,19 @@ function writeCliProbe(appDir) {
 
     const topology = run(['topology', '--no-tailscale', '--json']);
     const route = run(['route', '--machine', 'local', '--no-tailscale', '--json']);
+    const browserPlanFleet = run(['browserplan', 'fleet', '--json']);
     console.log(JSON.stringify({
       source: 'cli',
       supported: true,
       topology: { schema_version: topology.schema_version, machines: topology.machines.length, pagination: topology.pagination },
       route: { schema_version: route.schema_version, ok: route.ok, route: route.route, target: route.target },
+      browserplan_fleet: {
+        schema_version: browserPlanFleet.schema_version,
+        target: browserPlanFleet.target.name,
+        expected: browserPlanFleet.coverage.expected,
+        returned: browserPlanFleet.coverage.returned,
+        excluded: browserPlanFleet.target.install_target_excludes,
+      },
     }));
   `);
   return script;
@@ -361,7 +382,7 @@ function assertCase(name, output) {
     if (!output.envelopes.includes("resolver_snapshot") || output.resolver_snapshot.schema_version !== 1) {
       throw new Error(`${name}: missing resolver snapshot envelope\n${JSON.stringify(output, null, 2)}`);
     }
-    for (const envelope of ["project_assignments", "note_machine_context", "machine_trash_policies", "machine_details"]) {
+    for (const envelope of ["project_assignments", "note_machine_context", "machine_trash_policies", "machine_details", "browserplan_fleet"]) {
       if (!output.envelopes.includes(envelope) || output[envelope].schema_version !== 1) {
         throw new Error(`${name}: missing ${envelope} envelope\n${JSON.stringify(output, null, 2)}`);
       }
@@ -384,6 +405,9 @@ function assertCase(name, output) {
     }
     if (!output.topology.pagination || output.topology.pagination.limit !== 10) {
       throw new Error(`${name}: missing CLI topology pagination\n${JSON.stringify(output, null, 2)}`);
+    }
+    if (!output.browserplan_fleet || output.browserplan_fleet.schema_version !== 1 || output.browserplan_fleet.expected !== 11) {
+      throw new Error(`${name}: missing CLI BrowserPlan fleet contract\n${JSON.stringify(output, null, 2)}`);
     }
   }
   if (name === "no-sdk-no-cli") {

@@ -44,6 +44,10 @@ if [ "$1" = "route" ]; then
   printf '%s\n' '{"schema_version":1,"ok":true,"route":"local","target":"localhost","warnings":[]}'
   exit 0
 fi
+if [ "$1" = "browserplan" ] && [ "$2" = "fleet" ]; then
+  printf '%s\n' '{"schema_version":1,"kind":"browserplan_fleet","target":{"name":"browserplan-machine001-machine011","install_target_excludes":["spark01","spark02"]},"coverage":{"expected":11,"returned":0,"known":0,"missing":["machine001","machine002","machine003","machine004","machine005","machine006","machine007","machine008","machine009","machine010","machine011"],"unreachable":[],"excluded_requested":[]},"machines":[],"warnings":[]}'
+  exit 0
+fi
 echo "unexpected machines fixture command: $*" >&2
 exit 1
 `);

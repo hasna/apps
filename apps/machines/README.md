@@ -106,6 +106,7 @@ import {
   MACHINES_CONSUMER_CONTRACT,
   createMachineResolverSnapshot,
   discoverMachineTopology,
+  getBrowserPlanFleet,
   getMachineDetails,
   getLocalMachineTopology,
   listMachineTrashPolicies,
@@ -119,6 +120,7 @@ console.log(MACHINES_CONSUMER_CONTRACT.schema_version);
 const topology = discoverMachineTopology();
 const local = getLocalMachineTopology();
 const details = getMachineDetails("linux-dev-01");
+const browserPlanFleet = getBrowserPlanFleet();
 const route = resolveMachineRoute("linux-dev-01");
 const workspace = resolveMachineWorkspace({
   machineId: "linux-dev-01",
@@ -286,12 +288,72 @@ Fallback behavior:
 Raw route targets, hostnames, local paths, secrets, private heartbeat details,
 and sensitive metadata keys are not part of the default details view.
 
+### BrowserPlan fleet contract
+
+Open-chrome owns BrowserPlan. Open-machines exposes the stable machine/fleet
+contract that BrowserPlan can consume to select targets and route BrowserPlan-
+owned remote commands:
+
+```ts
+const fleet = getBrowserPlanFleet({
+  machineIds: ["machine001", "machine002"],
+  includeTailscale: false,
+  includeInstallState: false,
+});
+```
+
+Equivalent read-only surfaces:
+
+```bash
+machines browserplan fleet --json
+machines browserplan fleet --machine machine001,machine002 --json
+machines browserplan fleet --machine machine001 --check-installs --json
+curl 'http://127.0.0.1:7676/api/browserplan/fleet?machine=machine001,machine002'
+```
+
+MCP exposes the same envelope as `machines_browserplan_fleet` with
+`machine_ids`, `include_tailscale`, and `check_installs` arguments.
+
+The `browserplan_fleet` envelope includes:
+
+- `target.name`: `browserplan-machine001-machine011`.
+- `target.machine_ids`: the full BrowserPlan target ids `machine001` through `machine011`.
+- `target.excluded_machine_ids` / `install_target_excludes`: `spark01` and `spark02`.
+- `coverage`: `expected`, `returned`, `known`, `missing`, `unreachable`, and `excluded_requested`. When `machineIds` filters are supplied, `expected` is the selected BrowserPlan target count; `target.machine_ids` still documents the full fixed target.
+- `machines[]`: `machine_id`, `slug`, `friendly_name` / `friendlyName`, `display_name` / `displayName`, `known`, `eligible`, `eligibility_reasons`, `platform`, `os`, `user`, `workspace`, `tags`, `updated_at`, `status`, `reachability`, `daemon`, `install_state`, `operation_hooks`, and `warnings`.
+- `operation_contract.stable_surfaces`: SDK, CLI, API, and MCP names that expose this shape.
+
+Machine ids are unambiguous. `machine001` and `machine002` are BrowserPlan fleet
+targets and are distinct from `spark01` and `spark02`. `spark01` and `spark02`
+are never returned as BrowserPlan machines; if requested, they appear in
+`coverage.excluded_requested` with a warning.
+
+For UI labels, render each machine's `display_name`; it already falls back from
+friendly name to stable id. `status.label` uses `Online`, `Offline`, or neutral
+`Unknown`. Optional metadata is omitted or nullable when open-machines does not
+know it.
+
+`operation_hooks` are contracts, not command execution. BrowserPlan/open-chrome
+owns the concrete remote commands for profile setup, headed launch, headless
+launch, daemon/supervisor status, tab/session inventory, and app install/update.
+Open-machines owns route resolution and exposes the safe runner pattern:
+`runMachineCommand()` in the SDK, `machines ssh --machine <id> --cmd
+<browserplan-owned command> --json` in the CLI, and MCP `machines_ssh_resolve`.
+Private route details are still omitted unless a trusted local operator surface
+opts into private metadata.
+
+Install state is cheap by default: `install_state.checked` is `false` and
+capabilities are `unknown`. Callers that need BrowserPlan/chrome/bun/git state
+must opt in with SDK `includeInstallState: true`, CLI `--check-installs`, API
+`check_installs=true`, or MCP `check_installs: true`; remote probe failures
+return warnings and blocked hooks instead of throwing.
+
 The package includes `schemas/machines-consumer.schema.json` and also exports
 `MACHINES_CONSUMER_SCHEMA_BUNDLE`, `getMachinesConsumerSchemaBundle()`, and
 `validateMachinesConsumerEnvelope()`. Downstream apps can use these helpers to
 validate topology, route, workspace, compatibility, resolver-snapshot,
 project-assignment, note-machine-context, machine-trash-policy, and
-machine-details envelopes
+machine-details, and BrowserPlan fleet envelopes
 without importing CLI, MCP, agent, installer, or storage-heavy internals.
 
 The package also ships a downstream conformance fixture for consumers that want
@@ -642,6 +704,7 @@ The dashboard exposes:
 - `/api/routes` resolved route JSON for known machines
 - `/api/machines/friendly-name` get, set, or clear a machine display label
 - `/api/machines/details` consumer-safe machine details JSON
+- `/api/browserplan/fleet` BrowserPlan machine001-machine011 target contract JSON
 - `/api/notes/machine-context` note origin/source/target machine and actor provenance JSON
 - `/api/notes/trash-policies` per-machine note trash retention metadata JSON
 - `/api/daemon/status` daemon heartbeat rows

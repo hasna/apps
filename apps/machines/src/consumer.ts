@@ -111,6 +111,30 @@ export type {
   MachineDetailsTimestamps,
 } from "./details.js";
 export {
+  BROWSERPLAN_EXCLUDED_MACHINE_IDS,
+  BROWSERPLAN_FLEET_KIND,
+  BROWSERPLAN_MACHINE_IDS,
+  BROWSERPLAN_TARGET_NAME,
+  getBrowserPlanFleet,
+  normalizeBrowserPlanMachineId,
+} from "./browserplan.js";
+export type {
+  BrowserPlanCapability,
+  BrowserPlanCapabilityState,
+  BrowserPlanExcludedMachineId,
+  BrowserPlanFleet,
+  BrowserPlanFleetOptions,
+  BrowserPlanInstallState,
+  BrowserPlanMachine,
+  BrowserPlanMachineId,
+  BrowserPlanMachineReachability,
+  BrowserPlanMachineStatus,
+  BrowserPlanOperationHook,
+  BrowserPlanOperationId,
+  BrowserPlanSafeRunnerContract,
+  BrowserPlanWorkspaceSummary,
+} from "./browserplan.js";
+export {
   checkMachineCompatibility,
 } from "./compatibility.js";
 export type {

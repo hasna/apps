@@ -25,6 +25,7 @@ afterEach(() => {
   delete process.env["HASNA_MACHINES_NOTIFICATIONS_PATH"];
   delete process.env["HASNA_MACHINES_MANIFEST_PATH"];
   delete process.env["HASNA_MACHINES_DB_PATH"];
+  delete process.env["HASNA_MACHINES_MACHINE_ID"];
   delete process.env["HASNA_MACHINES_DATABASE_URL"];
   delete process.env["MACHINES_DATABASE_URL"];
   delete process.env["HASNA_MACHINES_MUTATION_REPLAY_PATH"];
@@ -48,6 +49,7 @@ test("exports expected MCP tool surface", () => {
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_friendly_name_set");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_friendly_name_clear");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_details");
+  expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_browserplan_fleet");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_notes_context");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_notes_trash_policies");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_daemon_status");
@@ -61,6 +63,69 @@ test("exports expected MCP tool surface", () => {
   expect(MACHINE_MCP_TOOL_NAMES).not.toContain("webhooks");
   expect(MACHINE_MCP_TOOL_NAMES.filter((name) => /^(events|hasna_events|webhooks)(_|$)/.test(name))).toEqual([]);
   expect(createMcpServer("0.0.1")).toBeDefined();
+});
+
+test("MCP BrowserPlan fleet tool exposes target machines and operation hooks", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "machines-mcp-browserplan-"));
+  process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
+  process.env["HASNA_MACHINES_DB_PATH"] = join(dir, "machines.db");
+  process.env["HASNA_MACHINES_MACHINE_ID"] = "control";
+  manifestInit();
+  manifestAdd({
+    id: "machine001",
+    friendlyName: "Browser Rig 01",
+    platform: "linux" as const,
+    workspacePath: "/home/hasna/Workspace",
+    metadata: { user: "hasna" },
+  });
+  manifestAdd({
+    id: "spark01",
+    friendlyName: "Spark Local",
+    platform: "linux" as const,
+    workspacePath: "/home/hasna/Workspace",
+  });
+
+  const server = createMcpServer("0.0.1");
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "browserplan-contract-test", version: "0.0.1" });
+
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+
+  try {
+    const result = await client.callTool({
+      name: "machines_browserplan_fleet",
+      arguments: { machine_ids: ["machine001", "spark01"], include_tailscale: false },
+    });
+    const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
+    const payload = JSON.parse(text);
+    expect(payload).toMatchObject({
+      kind: "browserplan_fleet",
+      target: {
+        name: "browserplan-machine001-machine011",
+        owner: "open-chrome",
+        install_target_excludes: ["spark01", "spark02"],
+      },
+      coverage: {
+        expected: 1,
+        returned: 1,
+        known: 1,
+        excluded_requested: ["spark01"],
+      },
+    });
+    expect(payload.machines[0]).toMatchObject({
+      machine_id: "machine001",
+      display_name: "Browser Rig 01",
+      friendly_name: "Browser Rig 01",
+      install_state: { checked: false },
+    });
+    expect(payload.machines[0].operation_hooks.map((hook: { id: string }) => hook.id)).toContain("headless_launch");
+    expect(JSON.stringify(payload)).not.toContain("Spark Local");
+  } finally {
+    await client.close();
+    await server.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("MCP mutation tools reject caller-supplied yes without operator approval", async () => {

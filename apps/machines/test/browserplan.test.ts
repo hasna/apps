@@ -1,0 +1,243 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { closeDb } from "../src/db.js";
+import { manifestAdd, manifestInit } from "../src/commands/manifest.js";
+import { getBrowserPlanFleet, normalizeBrowserPlanMachineId } from "../src/browserplan.js";
+import { validateMachinesConsumerEnvelope } from "../src/consumer-schema.js";
+import { discoverMachineTopology } from "../src/topology.js";
+import type { CompatibilityCommandRunner } from "../src/compatibility.js";
+
+const ENV_KEYS = [
+  "HASNA_MACHINES_DB_PATH",
+  "HASNA_MACHINES_MANIFEST_PATH",
+  "HASNA_MACHINES_MACHINE_ID",
+  "HASNA_MACHINES_REACHABLE_HOSTS",
+] as const;
+
+afterEach(() => {
+  closeDb();
+  for (const key of ENV_KEYS) delete process.env[key];
+});
+
+function setupTemp(name: string): string {
+  const dir = mkdtempSync(join(tmpdir(), name));
+  process.env.HASNA_MACHINES_DB_PATH = join(dir, "machines.db");
+  process.env.HASNA_MACHINES_MANIFEST_PATH = join(dir, "machines.json");
+  process.env.HASNA_MACHINES_MACHINE_ID = "machine001";
+  manifestInit();
+  return dir;
+}
+
+function addBrowserPlanFixtureMachines(): void {
+  process.env.HASNA_MACHINES_REACHABLE_HOSTS = "operator@machine001,operator@machine002";
+  manifestAdd({
+    id: "machine001",
+    friendlyName: "Browser One",
+    platform: "macos",
+    workspacePath: "/Users/hasna/Workspace",
+    sshAddress: "operator@machine001",
+    tags: ["browserplan", "mail"],
+    updatedAt: "2026-06-23T08:00:00.000Z",
+    metadata: {
+      workspace_paths: { "open-chrome": "/Users/hasna/Workspace/open-chrome" },
+      open_files_roots: { "open-chrome": "/Users/hasna/Workspace/open-files" },
+      authenticated: true,
+    },
+  });
+  manifestAdd({
+    id: "machine002",
+    platform: "linux",
+    workspacePath: "/home/hasna/Workspace",
+    sshAddress: "operator@machine002",
+    updatedAt: "2026-06-23T07:00:00.000Z",
+  });
+  manifestAdd({
+    id: "spark01",
+    platform: "linux",
+    workspacePath: "/home/hasna/Workspace",
+    sshAddress: "operator@spark01",
+    updatedAt: "2026-06-23T06:00:00.000Z",
+  });
+}
+
+function installRunner(overrides: Record<string, Set<string>> = {}): CompatibilityCommandRunner {
+  return (machineId, command) => {
+    const commandName = command.match(/cmd='([^']+)'/)?.[1] ?? "";
+    const missing = overrides[machineId]?.has(commandName) === true;
+    if (commandName) {
+      return {
+        machineId,
+        source: "ssh",
+        stdout: missing ? "path=\n" : `path=/usr/bin/${commandName}\nversion=${commandName} 1.2.3\n`,
+        stderr: "",
+        exitCode: 0,
+      };
+    }
+    return { machineId, source: "ssh", stdout: "", stderr: "", exitCode: 0 };
+  };
+}
+
+describe("BrowserPlan fleet contract", () => {
+  test("normalizes only BrowserPlan machine ids and excludes spark ids", () => {
+    expect(normalizeBrowserPlanMachineId("machine001")).toBe("machine001");
+    expect(normalizeBrowserPlanMachineId("Machine2")).toBe("machine002");
+    expect(normalizeBrowserPlanMachineId("machine011")).toBe("machine011");
+    expect(normalizeBrowserPlanMachineId("machine012")).toBeNull();
+    expect(normalizeBrowserPlanMachineId("spark01")).toBeNull();
+    expect(normalizeBrowserPlanMachineId("spark02")).toBeNull();
+  });
+
+  test("lists machine001-machine011 coverage without mixing spark machines", () => {
+    const dir = setupTemp("machines-browserplan-");
+    try {
+      addBrowserPlanFixtureMachines();
+      const topology = discoverMachineTopology({ includeTailscale: false, limit: null });
+      const fleet = getBrowserPlanFleet({
+        machineIds: ["machine001", "machine2", "spark01", "machine999"],
+        topology,
+        now: new Date("2026-06-23T09:00:00.000Z"),
+      });
+
+      expect(fleet).toMatchObject({
+        kind: "browserplan_fleet",
+        target: {
+          name: "browserplan-machine001-machine011",
+          owner: "open-chrome",
+          install_target_excludes: ["spark01", "spark02"],
+        },
+        coverage: {
+          expected: 2,
+          returned: 2,
+          known: 2,
+          missing: [],
+          excluded_requested: ["spark01"],
+        },
+      });
+      expect(fleet.target.machine_ids).toHaveLength(11);
+      expect(fleet.target.machine_ids).toContain("machine011");
+      expect(fleet.machines.map((machine) => machine.machine_id)).toEqual(["machine001", "machine002"]);
+      expect(fleet.machines.map((machine) => machine.machine_id)).not.toContain("spark01");
+      expect(fleet.warnings).toContain("browserplan_machine_excluded:spark01");
+      expect(fleet.warnings).toContain("browserplan_machine_unsupported:machine999");
+      expect(fleet.machines[0]?.display_name).toBe("Browser One");
+      expect(fleet.machines[0]?.workspace.project_root).toBe("/Users/hasna/Workspace/open-chrome");
+      expect(fleet.machines[0]?.install_state.checked).toBe(false);
+      expect(fleet.machines[0]?.operation_hooks.map((hook) => hook.id)).toEqual([
+        "profile_setup",
+        "headed_launch",
+        "headless_launch",
+        "daemon_status",
+        "supervisor_status",
+        "tab_inventory",
+        "session_inventory",
+        "app_install_update",
+      ]);
+      expect(fleet.machines[0]?.operation_hooks.every((hook) => hook.safe_runner.mcp.args.private_metadata === false)).toBe(true);
+      expect(fleet.machines[0]?.operation_hooks.find((hook) => hook.id === "supervisor_status")?.command_template).toBe("browserplan remote status --machine <machine-id> --json");
+      expect(fleet.machines[0]?.operation_hooks.find((hook) => hook.id === "app_install_update")?.command_template).toBe("cd <open-chrome-project-root> && git pull --ff-only origin main && bun install --frozen-lockfile");
+      expect(validateMachinesConsumerEnvelope("browserplan_fleet", fleet)).toMatchObject({ ok: true, errors: [] });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("detects remote capabilities and blocks hooks when BrowserPlan is missing", () => {
+    const dir = setupTemp("machines-browserplan-installs-");
+    try {
+      addBrowserPlanFixtureMachines();
+      const topology = discoverMachineTopology({ includeTailscale: false, limit: null });
+      const fleet = getBrowserPlanFleet({
+        machineIds: ["machine001", "machine002"],
+        topology,
+        includeInstallState: true,
+        runner: installRunner({ machine002: new Set(["browserplan"]) }),
+        now: new Date("2026-06-23T09:00:00.000Z"),
+      });
+
+      const machine001 = fleet.machines.find((machine) => machine.machine_id === "machine001");
+      const machine002 = fleet.machines.find((machine) => machine.machine_id === "machine002");
+      expect(machine001?.install_state).toMatchObject({
+        checked: true,
+        browserplan_cli: { state: "available" },
+        chrome: { state: "available" },
+      });
+      expect(machine001?.operation_hooks.find((hook) => hook.id === "headed_launch")).toMatchObject({
+        readiness: "ready",
+        available: true,
+      });
+      expect(machine002?.install_state.browserplan_cli.state).toBe("missing");
+      expect(machine002?.operation_hooks.find((hook) => hook.id === "profile_setup")).toMatchObject({
+        readiness: "blocked",
+        available: false,
+        blocked_by: ["browserplan_cli_missing"],
+      });
+      expect(validateMachinesConsumerEnvelope("browserplan_fleet", fleet)).toMatchObject({ ok: true, errors: [] });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("reports missing BrowserPlan target machines as coverage gaps", () => {
+    const dir = setupTemp("machines-browserplan-missing-");
+    try {
+      const fleet = getBrowserPlanFleet({
+        machineIds: ["machine011"],
+        topology: discoverMachineTopology({ includeTailscale: false, limit: null }),
+        now: new Date("2026-06-23T09:00:00.000Z"),
+      });
+
+      expect(fleet.coverage).toMatchObject({
+        expected: 1,
+        returned: 1,
+        known: 0,
+        missing: ["machine011"],
+      });
+      expect(fleet.machines[0]).toMatchObject({
+        machine_id: "machine011",
+        known: false,
+        eligible: false,
+        eligibility_reasons: ["machine_missing_from_open_machines_topology", "route_unavailable", "route_confidence_none"],
+      });
+      expect(fleet.machines[0]?.operation_hooks.every((hook) => hook.available === false)).toBe(true);
+      expect(validateMachinesConsumerEnvelope("browserplan_fleet", fleet)).toMatchObject({ ok: true, errors: [] });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects malformed BrowserPlan fleet contract payloads", () => {
+    const dir = setupTemp("machines-browserplan-schema-");
+    try {
+      addBrowserPlanFixtureMachines();
+      const fleet = getBrowserPlanFleet({
+        machineIds: ["machine001"],
+        topology: discoverMachineTopology({ includeTailscale: false, limit: null }),
+        now: new Date("2026-06-23T09:00:00.000Z"),
+      });
+      const malformed = structuredClone(fleet) as any;
+      malformed.target.machine_ids = ["spark01"];
+      malformed.target.excluded_machine_ids = [];
+      malformed.coverage.missing = ["spark01"];
+      malformed.operation_contract.stable_surfaces.mcp = "wrong_tool";
+      malformed.machines[0].operation_hooks[0].safe_runner.mcp.args.private_metadata = true;
+      malformed.machines[0].operation_hooks.find((hook: { id: string }) => hook.id === "supervisor_status").command_template = "browserplan remote start --machine <machine-id> --json";
+      malformed.machines[0].operation_hooks.find((hook: { id: string }) => hook.id === "app_install_update").command_template = "cd /tmp/open-chrome && git pull --ff-only origin main";
+
+      const result = validateMachinesConsumerEnvelope("browserplan_fleet", malformed);
+      expect(result.ok).toBe(false);
+      expect(result.errors).toEqual(expect.arrayContaining([
+        "target.machine_ids",
+        "target.excluded_machine_ids",
+        "coverage.missing.0",
+        "operation_contract.stable_surfaces.mcp",
+        "machines.0.operation_hooks.0.safe_runner.mcp.args.private_metadata",
+        "machines.0.operation_hooks.4.command_template",
+        "machines.0.operation_hooks.7.command_template",
+      ]));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
