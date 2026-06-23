@@ -1,5 +1,5 @@
 import { describe, test, expect, afterAll, mock, beforeEach } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -14,8 +14,11 @@ import {
   extractRegistrarFromRdap,
   extractExpiryFromRdap,
   extractNameserversFromRdap,
+  checkDnsPropagation,
+  checkSsl,
   exportZoneFile,
   importZoneFile,
+  whoisLookup,
   validateDns,
   type RdapResponse,
 } from "./dns-tools";
@@ -217,6 +220,40 @@ describe("RDAP Data Extraction", () => {
 
   test("extractNameserversFromRdap returns empty for missing nameservers", () => {
     expect(extractNameserversFromRdap({})).toEqual([]);
+  });
+});
+
+// ============================================================
+// Command Injection Regression
+// ============================================================
+
+describe("DNS tool input validation", () => {
+  test("whoisLookup rejects shell metacharacters before subprocess execution", () => {
+    const marker = join(tempDir, "whois-injected");
+
+    expect(() => whoisLookup(`example.com; touch ${marker} #`)).toThrow(/Invalid domain name/);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  test("checkDnsPropagation rejects injected query names before dig execution", () => {
+    const marker = join(tempDir, "dns-domain-injected");
+
+    expect(() => checkDnsPropagation(`example.com; touch ${marker} #`, "A")).toThrow(/Invalid domain name/);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  test("checkDnsPropagation rejects injected record types before dig execution", () => {
+    const marker = join(tempDir, "dns-record-injected");
+
+    expect(() => checkDnsPropagation("example.com", `A; touch ${marker} #`)).toThrow(/Invalid DNS record type/);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  test("checkSsl rejects shell metacharacters before openssl execution", () => {
+    const marker = join(tempDir, "ssl-injected");
+
+    expect(() => checkSsl(`example.com; touch ${marker} #`)).toThrow(/Invalid domain name/);
+    expect(existsSync(marker)).toBe(false);
   });
 });
 
