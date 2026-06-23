@@ -1,14 +1,17 @@
 import type { Database } from 'bun:sqlite';
+import { existsSync, readFileSync } from 'node:fs';
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { searchVectorIndex, type EmbeddingRuntimeOptions } from './embeddings';
 import { sourceProvenance, type GeneratedArtifactProvenance, type KnowledgeProvenance } from './provenance';
+import type { KnowledgeItem } from './store';
 import type { KnowledgeConfig } from './workspace';
 
-export type SearchResultKind = 'source_chunk' | 'wiki_chunk' | 'wiki_page' | 'knowledge_index';
+export type SearchResultKind = 'source_chunk' | 'wiki_chunk' | 'legacy_item' | 'wiki_page' | 'knowledge_index';
 export type SearchProvenance = KnowledgeProvenance | GeneratedArtifactProvenance;
 
 export interface HybridSearchOptions extends EmbeddingRuntimeOptions {
   dbPath: string;
+  legacyStorePath?: string;
   query: string;
   limit?: number;
   semantic?: boolean;
@@ -281,6 +284,50 @@ function selectKnowledgeIndexes(db: Database, terms: string[], limit: number): I
   ).all(...likeParams(terms, fields.length), limit);
 }
 
+function readLegacyItems(path?: string): KnowledgeItem[] {
+  if (!path || !existsSync(path)) return [];
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as { items?: unknown };
+    if (!parsed || !Array.isArray(parsed.items)) return [];
+    return parsed.items.filter((item): item is KnowledgeItem => {
+      return Boolean(
+        item
+        && typeof item === 'object'
+        && typeof (item as KnowledgeItem).id === 'string'
+        && typeof (item as KnowledgeItem).title === 'string'
+        && typeof (item as KnowledgeItem).content === 'string',
+      );
+    });
+  } catch {
+    return [];
+  }
+}
+
+function legacyItemHaystack(item: KnowledgeItem): string {
+  return [
+    item.id,
+    item.short_id,
+    item.title,
+    item.content,
+    item.url,
+    ...(item.tags ?? []),
+  ].filter((value): value is string => typeof value === 'string' && value.length > 0).join(' ').toLowerCase();
+}
+
+function selectLegacyItems(path: string | undefined, terms: string[], limit: number): Array<{
+  item: KnowledgeItem;
+  score: number;
+}> {
+  if (terms.length === 0) return [];
+  return readLegacyItems(path)
+    .filter((item) => item.archived !== true)
+    .map((item) => ({ item, haystack: legacyItemHaystack(item) }))
+    .filter(({ haystack }) => terms.some((term) => haystack.includes(term)))
+    .map(({ item, haystack }) => ({ item, score: catalogScore(haystack, terms) }))
+    .sort((a, b) => b.score - a.score || a.item.id.localeCompare(b.item.id))
+    .slice(0, limit);
+}
+
 function chunkResult(row: FtsChunkRow, keywordScore: number): HybridSearchEntry {
   const metadata = parseJsonObject(row.chunk_metadata_json);
   const provenance = provenanceForChunk(row);
@@ -314,6 +361,31 @@ function chunkResult(row: FtsChunkRow, keywordScore: number): HybridSearchEntry 
     } : null,
     provenance,
     reasons: ['keyword_match'],
+  };
+  result.score = combinedScore(result.scores, result.citation);
+  return result;
+}
+
+function legacyItemResult(item: KnowledgeItem, keywordScore: number): HybridSearchEntry {
+  const uri = `knowledge://item/${encodeURIComponent(item.id)}`;
+  const result: HybridSearchEntry = {
+    kind: 'legacy_item',
+    id: item.id,
+    title: item.title,
+    text: item.content,
+    score: 0,
+    scores: { keyword: keywordScore },
+    source: {
+      uri,
+      ref: uri,
+      kind: 'legacy_item',
+      revision: null,
+      hash: null,
+    },
+    citation: null,
+    artifact: null,
+    provenance: null,
+    reasons: ['legacy_note_match', 'keyword_match'],
   };
   result.score = combinedScore(result.scores, result.citation);
   return result;
@@ -395,8 +467,9 @@ function sortResults(results: HybridSearchEntry[]): HybridSearchEntry[] {
   const kindOrder: Record<SearchResultKind, number> = {
     source_chunk: 0,
     wiki_chunk: 1,
-    wiki_page: 2,
-    knowledge_index: 3,
+    legacy_item: 2,
+    wiki_page: 3,
+    knowledge_index: 4,
   };
   return results.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
@@ -429,7 +502,10 @@ export async function hybridSearch(options: HybridSearchOptions): Promise<Hybrid
 
     const wikiRows = selectWikiPages(db, terms, Math.max(limit, 10));
     const indexRows = selectKnowledgeIndexes(db, terms, Math.max(limit, 10));
+    const legacyRows = selectLegacyItems(options.legacyStorePath, terms, Math.max(limit, 10));
     catalogCount = wikiRows.length + indexRows.length;
+    keywordCount += legacyRows.length;
+    legacyRows.forEach(({ item, score }) => mergeResult(merged, legacyItemResult(item, score)));
     wikiRows.forEach((row) => mergeResult(merged, wikiPageResult(row, terms)));
     indexRows.forEach((row) => mergeResult(merged, indexResult(row, terms)));
   } finally {

@@ -40,6 +40,10 @@ Local mode starts with SQLite:
 - `wiki_pages`, `wiki_backlinks`, and `citations` provide graph and provenance
   signals.
 - `knowledge_indexes` tracks generated machine-readable shards.
+- The compatibility JSON item store remains the source of truth for notes
+  created by `knowledge add`. Hybrid search reads active notes directly as
+  keyword-only `legacy_item` results; notes are not copied into `chunks` or
+  vector tables by default.
 
 The JSON vector representation is intentionally simple for the first local
 implementation. The retrieval interface should hide it so a later vector
@@ -83,17 +87,19 @@ unauthorized content.
 1. Normalize the query.
 2. Embed the query if a semantic-capable provider is configured.
 3. Run keyword FTS over source chunks and generated wiki chunks.
-4. Search wiki page and machine-readable index catalog rows.
-5. Run vector search over source chunks and wiki pages when semantic mode is
+4. Keyword-match active compatibility JSON notes.
+5. Search wiki page and machine-readable index catalog rows.
+6. Run vector search over source chunks and wiki pages when semantic mode is
    requested.
-6. Expand candidate pages through backlinks and citations.
-7. Drop stale candidates whose source revision/hash no longer matches
+7. Expand candidate pages through backlinks and citations.
+8. Drop stale candidates whose source revision/hash no longer matches
    `open-files`.
-8. Apply permission filters.
-9. Merge and dedupe by source revision, wiki page, citation, and text hash.
-10. Rerank by relevance, exact-match score, semantic score, freshness, citation
+9. Apply permission filters.
+10. Merge and dedupe by source revision, wiki page, citation, note id, and text
+   hash.
+11. Rerank by relevance, exact-match score, semantic score, freshness, citation
    quality, and wiki authority.
-11. Return structured results with source refs, citation spans, page refs,
+12. Return structured results with source refs, citation spans, page refs,
     scores, and reason codes.
 
 ## Result Shape
@@ -168,6 +174,9 @@ Reindexing is driven by source revisions:
   vector counts; `reindex enqueue` records missing work in `reindex_queue`.
 - `reindex embeddings` performs incremental refreshes, while `--full` clears and
   rebuilds `chunk_embeddings` and `vector_index_entries`.
+- Compatibility JSON notes are not reindex work items. They remain searchable
+  through direct keyword matching and appear in context packs as
+  `legacy_item` excerpts with `knowledge://item/<id>` refs.
 - Wiki pages should track the source revisions they cite so lint can flag stale
   pages.
 - Embedding refresh jobs should be idempotent and checkpointed in `runs` and
@@ -177,7 +186,8 @@ Reindexing is driven by source revisions:
 
 - Local search works without network access for keyword-only retrieval.
 - Semantic search is optional and provider-gated.
-- Every returned excerpt can resolve to a source ref or wiki page.
+- Every returned excerpt can resolve to a source ref, wiki page, or
+  compatibility `knowledge://item/<id>` note ref.
 - Permission filters run before model context assembly.
 - Retrieval internals can swap from JSON vectors to pgvector or managed vector
   stores without changing CLI/MCP result contracts.

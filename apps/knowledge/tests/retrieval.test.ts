@@ -7,6 +7,42 @@ import { retrieveKnowledgeContext } from '../src/retrieval';
 import { ingestSourceRef } from '../src/source-ingest';
 
 describe('knowledge retrieval context packs', () => {
+  test('assembles context excerpts from legacy JSON notes', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-retrieval-legacy-note-'));
+    const dbPath = join(dir, 'knowledge.db');
+    const legacyStorePath = join(dir, 'db.json');
+    writeFileSync(legacyStorePath, JSON.stringify({
+      items: [{
+        id: 'k_note_context',
+        title: 'Hasna OSS boundary',
+        content: 'local-first hosted wrapper open actions guardrails open orgs',
+        url: null,
+        tags: ['opensource'],
+        created_at: '2026-06-23T00:00:00.000Z',
+        updated_at: '2026-06-23T00:01:00.000Z',
+      }],
+    }));
+
+    const context = await retrieveKnowledgeContext({
+      dbPath,
+      legacyStorePath,
+      query: 'local-first hosted wrapper open actions guardrails open orgs',
+      limit: 5,
+    });
+
+    expect(context.results[0]).toMatchObject({
+      kind: 'legacy_item',
+      id: 'k_note_context',
+      source: { ref: 'knowledge://item/k_note_context' },
+    });
+    expect(context.citations[0]).toMatchObject({
+      kind: 'legacy_item',
+      source_uri: 'knowledge://item/k_note_context',
+      chunk_id: null,
+    });
+    expect(context.excerpts[0].text).toContain('local-first hosted wrapper');
+  });
+
   test('reranks search results and assembles citations, excerpts, and graph evidence', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-retrieval-'));
     const dbPath = join(dir, 'knowledge.db');
