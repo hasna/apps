@@ -7,6 +7,7 @@ import { estimateTokens } from "../../tokens.js";
 import { getOutputProvider } from "../../providers/index.js";
 import { cachedRead } from "../../file-cache.js";
 import { shellPathArg } from "../../shell-quote.js";
+import { compactLines, truncateText } from "../../compact-output.js";
 
 export function buildSymbolsDirCommand(dir: string, maxFiles: number): string {
   return `find ${shellPathArg(dir)} -maxdepth 3 -type f \\( -name "*.ts" -o -name "*.js" -o -name "*.py" -o -name "*.go" -o -name "*.rs" -o -name "*.java" -o -name "*.rb" -o -name "*.php" \\) -not -path "*/node_modules/*" -not -path "*/dist/*" -not -name "*.test.*" -not -name "*.spec.*" | head -${maxFiles}`;
@@ -25,8 +26,9 @@ export function registerFileTools(server: McpServer, h: ToolHelpers): void {
       limit: z.number().optional().describe("Max lines to return"),
       summarize: z.boolean().optional().describe("Return AI summary instead of full content (saves ~90% tokens)"),
       focus: z.string().optional().describe("Focus hint for summary (e.g., 'public API', 'error handling', 'auth logic')"),
+      full: z.boolean().optional().describe("Return full file content. Default is a compact preview unless limit or summarize is set."),
     },
-    async ({ path: rawPath, offset, limit, summarize, focus }) => {
+    async ({ path: rawPath, offset, limit, summarize, focus, full }) => {
       const start = Date.now();
       const path = h.resolvePath(rawPath);
       const result = cachedRead(path, { offset, limit });
@@ -61,12 +63,16 @@ export function registerFileTools(server: McpServer, h: ToolHelpers): void {
         };
       }
 
+      const compact = !full && limit === undefined ? compactLines(result.content) : null;
       h.logCall("read_file", { command: path, outputTokens: estimateTokens(result.content), tokensSaved: 0, durationMs: Date.now() - start });
       return {
         content: [{ type: "text" as const, text: JSON.stringify({
-          content: result.content,
+          content: compact ? compact.content : result.content,
+          lines: compact?.lineCount ?? result.content.split("\n").length,
+          truncated: compact?.truncated ?? false,
           cached: result.cached,
           readCount: result.readCount,
+          hint: compact?.truncated ? "Use full=true, summarize=true, or limit/offset for more detail." : undefined,
           ...(result.cached ? { note: `Served from cache (read #${result.readCount})` } : {}),
         }) }],
       };
@@ -81,12 +87,17 @@ export function registerFileTools(server: McpServer, h: ToolHelpers): void {
     {
       files: z.array(z.string()).describe("File paths (relative or absolute)"),
       summarize: z.boolean().optional().describe("AI summary instead of full content"),
+      full: z.boolean().optional().describe("Return full file contents. Default is compact previews."),
+      limit: z.number().optional().describe("Max preview lines per file (default: 80)"),
     },
-    async ({ files, summarize }) => {
+    async ({ files, summarize, full, limit }) => {
       const start = Date.now();
       const results: Record<string, any> = {};
+      const selectedFiles = files.slice(0, 10);
+      const perFileLines = limit ?? 40;
+      const perFileChars = Math.max(800, Math.floor(12000 / Math.max(1, selectedFiles.length)));
 
-      for (const f of files.slice(0, 10)) { // max 10 files per call
+      for (const f of selectedFiles) { // max 10 files per call
         const filePath = h.resolvePath(f);
         const result = cachedRead(filePath, {});
 
@@ -101,9 +112,21 @@ export function registerFileTools(server: McpServer, h: ToolHelpers): void {
           });
           results[f] = { summary, lines: result.content.split("\n").length };
         } else {
-          results[f] = { content: result.content, lines: result.content.split("\n").length };
+          const compact = full ? null : compactLines(result.content, perFileLines, perFileChars);
+          results[f] = {
+            content: compact ? compact.content : result.content,
+            lines: compact?.lineCount ?? result.content.split("\n").length,
+            truncated: compact?.truncated ?? false,
+            hint: compact?.truncated ? "Use full=true, summarize=true, or a dedicated read_file call with limit/offset for more detail." : undefined,
+          };
         }
       }
+      results.__meta = {
+        requested: files.length,
+        returned: selectedFiles.length,
+        truncated: files.length > selectedFiles.length || Object.entries(results).some(([key, value]) => key !== "__meta" && value?.truncated),
+        hint: "Default multi-file reads are aggregate-budgeted. Use full=true or summarize=true deliberately for larger output.",
+      };
 
       h.logCall("read_files", { command: `${files.length} files`, durationMs: Date.now() - start, aiProcessed: !!summarize });
       return { content: [{ type: "text" as const, text: JSON.stringify(results) }] };
@@ -161,7 +184,14 @@ Line numbers must be accurate (count from 1).`,
       h.logCall("symbols", { command: filePath, outputTokens, tokensSaved: Math.max(0, outputTokens - symbolTokens), durationMs: Date.now() - start, aiProcessed: true });
 
       return {
-        content: [{ type: "text" as const, text: JSON.stringify(symbols) }],
+        content: [{ type: "text" as const, text: JSON.stringify({
+          symbols: symbols.slice(0, 100).map((symbol) => ({
+            ...symbol,
+            signature: symbol.signature ? truncateText(symbol.signature, 180) : undefined,
+          })),
+          total: symbols.length,
+          hint: symbols.length > 100 ? "Showing 100 symbols. Use read_symbol for exact code blocks." : undefined,
+        }) }],
       };
     }
   );
@@ -204,7 +234,18 @@ Line numbers must be accurate (count from 1).`,
       }
 
       h.logCall("symbols_dir", { command: `${files.length} files in ${dir}`, durationMs: Date.now() - start, aiProcessed: true });
-      return { content: [{ type: "text" as const, text: JSON.stringify({ directory: dir, files: files.length, symbols: allSymbols }) }] };
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        directory: dir,
+        files: files.length,
+        symbols: Object.fromEntries(Object.entries(allSymbols).map(([file, symbols]) => [
+          file,
+          symbols.slice(0, 50).map((symbol) => ({
+            ...symbol,
+            signature: symbol.signature ? truncateText(symbol.signature, 160) : undefined,
+          })),
+        ])),
+        hint: "Use symbols({path}) or read_symbol({path,name}) for detail.",
+      }) }] };
     }
   );
 

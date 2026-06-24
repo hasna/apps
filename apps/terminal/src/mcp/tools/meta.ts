@@ -11,6 +11,14 @@ import { listSessions, getSessionInteractions, getSessionStats, getSessionEconom
 import { getEconomyStats } from "../../economy.js";
 import { captureSnapshot } from "../../snapshots.js";
 import { storeOutput } from "../../expand-store.js";
+import {
+  compactCollection,
+  compactInteraction,
+  compactRecipe,
+  compactSession,
+  compactSnapshot,
+  truncateText,
+} from "../../compact-output.js";
 
 export function registerMetaTools(server: McpServer, h: ToolHelpers): void {
 
@@ -46,18 +54,38 @@ export function registerMetaTools(server: McpServer, h: ToolHelpers): void {
       action: z.enum(["list", "detail", "stats"]).describe("list=recent sessions, detail=specific session, stats=aggregates"),
       sessionId: z.string().optional().describe("Session ID (for detail action)"),
       limit: z.number().optional().describe("Max sessions to return (for list, default: 20)"),
+      offset: z.number().optional().describe("Skip N rows for pagination"),
+      verbose: z.boolean().optional().describe("Return full detail arrays instead of compact summaries"),
     },
-    async ({ action, sessionId, limit }) => {
+    async ({ action, sessionId, limit, offset, verbose }) => {
       if (action === "stats") {
         return { content: [{ type: "text" as const, text: JSON.stringify(getSessionStats()) }] };
       }
       if (action === "detail" && sessionId) {
         const interactions = getSessionInteractions(sessionId);
         const economy = getSessionEconomy(sessionId);
-        return { content: [{ type: "text" as const, text: JSON.stringify({ interactions, economy }) }] };
+        const pageSize = Math.min(limit ?? 20, 100);
+        const start = offset ?? 0;
+        const page = interactions.slice(start, start + pageSize);
+        return { content: [{ type: "text" as const, text: JSON.stringify({
+          interactions: verbose ? page : page.map((item) => compactInteraction(item)),
+          economy,
+          totalInteractions: interactions.length,
+          limit: pageSize,
+          offset: start,
+          nextOffset: start + page.length < interactions.length ? start + page.length : null,
+          hint: "Use verbose=true for full prompts/commands or action='stats' for aggregates.",
+        }) }] };
       }
-      const sessions = listSessions(limit ?? 20);
-      return { content: [{ type: "text" as const, text: JSON.stringify(sessions) }] };
+      const pageSize = Math.min(limit ?? 20, 100);
+      const sessions = listSessions(pageSize + (offset ?? 0)).slice(offset ?? 0);
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        sessions: verbose ? sessions : sessions.map((session) => compactSession(session)),
+        returned: sessions.length,
+        limit: pageSize,
+        offset: offset ?? 0,
+        hint: "Use action='detail' with sessionId for interactions, verbose=true for full rows.",
+      }) }] };
     }
   );
 
@@ -66,9 +94,16 @@ export function registerMetaTools(server: McpServer, h: ToolHelpers): void {
   server.tool(
     "snapshot",
     "Capture a compact snapshot of terminal state (cwd, env, running processes, recent commands, recipes). Useful for agent context handoff.",
-    async () => {
+    {
+      verbose: z.boolean().optional().describe("Return more env/process/recipe/command detail"),
+      full: z.boolean().optional().describe("Return the full legacy snapshot. Default is compact."),
+    },
+    async ({ verbose, full }) => {
       const snap = captureSnapshot();
-      return { content: [{ type: "text" as const, text: JSON.stringify(snap) }] };
+      return { content: [{ type: "text" as const, text: JSON.stringify(full ? snap : {
+        ...compactSnapshot(snap, Boolean(verbose)),
+        hint: "Use full=true for the full legacy snapshot payload.",
+      }) }] };
     }
   );
 
@@ -123,11 +158,19 @@ export function registerMetaTools(server: McpServer, h: ToolHelpers): void {
     {
       collection: z.string().optional().describe("Filter by collection name"),
       project: z.string().optional().describe("Project path for project-scoped recipes"),
+      limit: z.number().optional().describe("Max recipes to return (default: 20)"),
+      verbose: z.boolean().optional().describe("Return full recipe objects"),
     },
-    async ({ collection, project }) => {
+    async ({ collection, project, limit, verbose }) => {
       let recipes = listRecipes(project);
       if (collection) recipes = recipes.filter(r => r.collection === collection);
-      return { content: [{ type: "text" as const, text: JSON.stringify(recipes) }] };
+      const pageSize = Math.min(limit ?? 20, 100);
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        recipes: verbose ? recipes.slice(0, pageSize) : recipes.slice(0, pageSize).map((recipe) => compactRecipe(recipe)),
+        total: recipes.length,
+        returned: Math.min(recipes.length, pageSize),
+        hint: "Use verbose=true for full command metadata or run_recipe for execution.",
+      }) }] };
     }
   );
 
@@ -140,7 +183,7 @@ export function registerMetaTools(server: McpServer, h: ToolHelpers): void {
       name: z.string().describe("Recipe name"),
       variables: z.record(z.string(), z.string()).optional().describe("Variable values: {port: '3000'}"),
       cwd: z.string().optional().describe("Working directory"),
-      format: z.enum(["raw", "json", "compressed"]).optional().describe("Output format"),
+      format: z.enum(["raw", "json", "compressed"]).optional().describe("raw returns full output; default/json/compressed return compact output"),
     },
     async ({ name, variables, cwd, format }) => {
       const recipe = getRecipe(name, cwd);
@@ -152,17 +195,20 @@ export function registerMetaTools(server: McpServer, h: ToolHelpers): void {
       const result = await h.exec(command, cwd, 30000);
       const output = (result.stdout + result.stderr).trim();
 
-      if (format === "json" || format === "compressed") {
-        const processed = await processOutput(command, output);
+      if (format === "raw") {
         return { content: [{ type: "text" as const, text: JSON.stringify({
-          recipe: name, exitCode: result.exitCode, summary: processed.summary,
-          structured: processed.structured, duration: result.duration,
-          tokensSaved: processed.tokensSaved, aiProcessed: processed.aiProcessed,
+          recipe: name, exitCode: result.exitCode, output: stripAnsi(output), duration: result.duration,
+          hint: "raw output requested explicitly; omit format or use compressed to reduce tokens.",
         }) }] };
       }
 
+      const processed = await processOutput(command, output);
       return { content: [{ type: "text" as const, text: JSON.stringify({
-        recipe: name, exitCode: result.exitCode, output: stripAnsi(output), duration: result.duration,
+        recipe: name, exitCode: result.exitCode, summary: processed.summary,
+        structured: processed.structured, duration: result.duration,
+        tokensSaved: processed.tokensSaved, aiProcessed: processed.aiProcessed,
+        outputPreview: output.split("\n").length <= 5 ? truncateText(stripAnsi(output), 500) : undefined,
+        hint: "Use format='raw' only when full stdout/stderr is required.",
       }) }] };
     }
   );
@@ -193,10 +239,17 @@ export function registerMetaTools(server: McpServer, h: ToolHelpers): void {
     "List recipe collections.",
     {
       project: z.string().optional().describe("Project path"),
+      limit: z.number().optional().describe("Max collections to return (default: 20)"),
+      verbose: z.boolean().optional().describe("Return full collection objects"),
     },
-    async ({ project }) => {
+    async ({ project, limit, verbose }) => {
       const collections = listCollections(project);
-      return { content: [{ type: "text" as const, text: JSON.stringify(collections) }] };
+      const pageSize = Math.min(limit ?? 20, 100);
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        collections: verbose ? collections.slice(0, pageSize) : collections.slice(0, pageSize).map((collection) => compactCollection(collection)),
+        total: collections.length,
+        returned: Math.min(collections.length, pageSize),
+      }) }] };
     }
   );
 }

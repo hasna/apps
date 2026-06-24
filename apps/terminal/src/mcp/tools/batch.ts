@@ -7,6 +7,7 @@ import { processOutput } from "../../output-processor.js";
 import { getOutputProvider } from "../../providers/index.js";
 import { searchContent } from "../../search/index.js";
 import { cachedRead } from "../../file-cache.js";
+import { compactLines, truncateText } from "../../compact-output.js";
 
 export function registerBatchTools(server: McpServer, h: ToolHelpers): void {
 
@@ -29,9 +30,12 @@ export function registerBatchTools(server: McpServer, h: ToolHelpers): void {
       const start = Date.now();
       const workDir = cwd ?? process.cwd();
       const results: Record<string, any>[] = [];
+      const selectedOps = ops.slice(0, 10);
+      const readOps = selectedOps.filter((op) => op.type === "read").length;
+      const readPreviewChars = Math.max(800, Math.floor(12000 / Math.max(1, readOps)));
 
-      for (let i = 0; i < ops.slice(0, 10).length; i++) {
-        const op = ops[i];
+      for (let i = 0; i < selectedOps.length; i++) {
+        const op = selectedOps[i];
         try {
           if (op.type === "execute" && op.command) {
             const result = await h.exec(op.command, workDir, 30000);
@@ -56,7 +60,16 @@ export function registerBatchTools(server: McpServer, h: ToolHelpers): void {
               });
               results.push({ op: i, type: "read", path: op.path, summary, lines: result.content.split("\n").length });
             } else {
-              results.push({ op: i, type: "read", path: op.path, content: result.content, lines: result.content.split("\n").length });
+              const compact = compactLines(result.content, 40, readPreviewChars);
+              results.push({
+                op: i,
+                type: "read",
+                path: op.path,
+                content: compact.content,
+                lines: compact.lineCount,
+                truncated: compact.truncated,
+                hint: compact.truncated ? "Batch read previews share a response budget. Use a dedicated read_file call with full=true or summarize=true for more detail." : undefined,
+              });
             }
           } else if (op.type === "write" && op.path && op.content !== undefined) {
             const filePath = h.resolvePath(op.path, workDir);
@@ -89,7 +102,16 @@ export function registerBatchTools(server: McpServer, h: ToolHelpers): void {
               });
               let symbols: any[] = [];
               try { const m = summary.match(/\[[\s\S]*\]/); if (m) symbols = JSON.parse(m[0]); } catch {}
-              results.push({ op: i, type: "symbols", path: op.path, symbols });
+              results.push({
+                op: i,
+                type: "symbols",
+                path: op.path,
+                symbols: symbols.slice(0, 50).map((symbol) => ({
+                  ...symbol,
+                  signature: symbol.signature ? truncateText(symbol.signature, 160) : undefined,
+                })),
+                total: symbols.length,
+              });
             } else {
               results.push({ op: i, type: "symbols", path: op.path, error: "Cannot read file" });
             }
@@ -100,7 +122,14 @@ export function registerBatchTools(server: McpServer, h: ToolHelpers): void {
       }
 
       h.logCall("batch", { command: `${ops.length} ops`, durationMs: Date.now() - start, aiProcessed: true });
-      return { content: [{ type: "text" as const, text: JSON.stringify({ results, total: results.length, durationMs: Date.now() - start }) }] };
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        results,
+        total: results.length,
+        requested: ops.length,
+        truncated: ops.length > selectedOps.length || results.some((result) => result.truncated),
+        hint: "Default batch output is compact. Use dedicated detail tools for full file/output payloads.",
+        durationMs: Date.now() - start,
+      }) }] };
     }
   );
 }

@@ -36,6 +36,8 @@ export async function getBootContext(cwd: string): Promise<Record<string, unknow
     try { pkg = JSON.parse(readFileSync(pkgPath, "utf8")); } catch {}
   }
 
+  const sourceFiles = srcLs.split("\n").filter(l => l.trim());
+
   bootCache = {
     cwd,
     git: {
@@ -53,7 +55,9 @@ export async function getBootContext(cwd: string): Promise<Record<string, unknow
       scripts: pkg.scripts ? Object.keys(pkg.scripts) : [],
       deps: pkg.dependencies ? Object.keys(pkg.dependencies).length : 0,
     } : null,
-    sourceFiles: srcLs.split("\n").filter(l => l.trim()),
+    sourceFiles: sourceFiles.slice(0, 50),
+    sourceFileCount: sourceFiles.length,
+    hint: sourceFiles.length > 50 ? "Boot context capped sourceFiles at 50 entries. Use project_overview or search_files for more." : undefined,
   };
   bootCwd = cwd;
 

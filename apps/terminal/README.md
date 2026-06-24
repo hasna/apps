@@ -33,6 +33,50 @@ bun benchmarks/benchmark.mjs --variant=progressive
 bun benchmarks/benchmark.mjs --compare
 ```
 
+## Compact Defaults
+
+The CLI and MCP tools default to compact, agent-safe output. List, status,
+history, snapshot, recipe, process, search, and file-read surfaces return
+bounded summaries first, then point to the detail path.
+
+Use gradual disclosure when more detail is needed:
+
+```bash
+terminal snapshot              # compact text summary
+terminal snapshot --json        # full machine-readable snapshot
+terminal sessions --limit=20
+terminal sessions show <id> --verbose
+terminal recipe list --limit=20
+terminal recipe show <name>
+```
+
+For MCP tools, request detail explicitly with fields such as `verbose: true`,
+`full: true`, larger `limit` values, `offset` pagination, or `format: "raw"`.
+Default JSON responses remain structured, but large text fields and arrays are
+truncated or paged unless detail is requested.
+
+Examples:
+
+```json
+{"tool":"repo_state","arguments":{"limit":20}}
+{"tool":"repo_state","arguments":{"verbose":true}}
+{"tool":"browse","arguments":{"path":"src","recursive":true,"limit":50}}
+{"tool":"snapshot","arguments":{"full":true}}
+{"tool":"read_file","arguments":{"path":"src/cli.tsx","full":true}}
+{"tool":"read_files","arguments":{"files":["src/cli.tsx","src/mcp/server.ts"],"summarize":true}}
+```
+
+Compatibility notes for agents:
+
+- `read_file` and `read_files` return compact previews by default; use
+  `full: true`, `summarize: true`, or line `limit`/`offset` when exact content is
+  needed.
+- `snapshot` is compact by default in both CLI and MCP; use CLI `--json` or MCP
+  `full: true` for the full legacy payload.
+- MCP list/status tools such as `list_agents`, `repo_state`, `browse`,
+  `session_history`, `list_recipes`, and `bg_status` return bounded structured
+  envelopes with totals and hints.
+
 ## Token Reduction
 
 The benchmark is intentionally adversarial. It treats the old optimistic 90% result as invalid and measures the ways token savings break down: AI input/output overhead, Groq/Cerebras provider cost, provider rate limits, retries, cache misses, full-output expansion, summary quality traps, small outputs, and already-compact output.

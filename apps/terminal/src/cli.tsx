@@ -2,6 +2,16 @@
 import React from "react";
 import { render } from "ink";
 import { runEventsCli } from "@hasna/events/cli";
+import {
+  compactInteraction,
+  compactSession,
+  formatCollectionList,
+  formatRecipeList,
+  formatSnapshot,
+  hasFlag,
+  parseLimit,
+  truncateText,
+} from "./compact-output.js";
 
 const args = process.argv.slice(2);
 
@@ -54,11 +64,11 @@ SUBCOMMANDS:
   overview                     Project overview (deps, scripts, structure)
   stats                        Token economy dashboard
   sessions [stats|<id>]        Session history and analytics
-  recipe add|list|run|delete   Reusable command recipes
+  recipe add|list|show|run|delete Reusable command recipes
   collection create|list       Recipe collections
   mcp serve                    Start MCP server (called by agents, not you)
   discover [--days=N] [--json]  Scan Claude sessions, show token savings potential
-  snapshot                     Terminal state as JSON
+  snapshot [--json|--verbose]  Compact terminal state; --json returns full data
   events                       Emit, list, and replay Hasna events
   webhooks                     Manage Hasna event webhook subscriptions
   --help                       Show this help
@@ -77,6 +87,10 @@ ENVIRONMENT:
   CEREBRAS_API_KEY             Cerebras API key (free, open-source)
   GROQ_API_KEY                 Groq API key (free, ultra-fast inference)
   ANTHROPIC_API_KEY            Anthropic API key (Claude models)
+
+GRADUAL DISCLOSURE:
+  List and status commands are compact by default. Use --limit=N, --verbose,
+  --json, or show/inspect subcommands when you need full details.
 `);
   process.exit(0);
 }
@@ -245,15 +259,30 @@ else if (args[0] === "recipe") {
 
   if (sub === "list") {
     const collection = args.find(a => a.startsWith("--collection="))?.split("=")[1];
+    const limit = parseLimit(args, 20);
+    const verbose = hasFlag(args, "--verbose");
+    const json = hasFlag(args, "--json");
     let recipes = listRecipes(process.cwd());
     if (collection) recipes = recipes.filter(r => r.collection === collection);
     if (recipes.length === 0) { console.log("No recipes found."); }
+    else if (json) {
+      console.log(JSON.stringify(recipes, null, 2));
+    }
     else {
-      for (const r of recipes) {
-        const scope = r.project ? "(project)" : "(global)";
-        const col = r.collection ? ` [${r.collection}]` : "";
-        console.log(`  ${r.name}${col} ${scope} → ${r.command}`);
-      }
+      console.log(formatRecipeList(recipes.slice(0, limit), recipes.length, verbose));
+    }
+  } else if ((sub === "show" || sub === "inspect") && args[2]) {
+    const recipe = getRecipe(args[2], process.cwd());
+    if (!recipe) { console.error(`Recipe '${args[2]}' not found.`); process.exit(1); }
+    if (hasFlag(args, "--json")) {
+      console.log(JSON.stringify(recipe, null, 2));
+    } else {
+      console.log(`Recipe: ${recipe.name}`);
+      console.log(`  Collection: ${recipe.collection ?? "none"}`);
+      console.log(`  Scope: ${recipe.project ? "project" : recipe.id.startsWith("sys-") ? "system" : "global"}`);
+      if (recipe.description) console.log(`  Description: ${recipe.description}`);
+      if (recipe.variables.length > 0) console.log(`  Variables: ${recipe.variables.map(v => v.name).join(", ")}`);
+      console.log(`\n  ${recipe.command}`);
     }
   } else if (sub === "add" && args[2] && args[3]) {
     const name = args[2];
@@ -282,7 +311,8 @@ else if (args[0] === "recipe") {
   } else {
     console.log("Usage: t recipe [add|list|run|delete]");
     console.log("  t recipe add <name> <command> [--collection=X] [--project]");
-    console.log("  t recipe list [--collection=X]");
+    console.log("  t recipe list [--collection=X] [--limit=N] [--verbose] [--json]");
+    console.log("  t recipe show <name> [--json]");
     console.log("  t recipe run <name> [--var=value]");
     console.log("  t recipe delete <name>");
   }
@@ -300,9 +330,10 @@ else if (args[0] === "collection") {
   } else if (sub === "list") {
     const cols = listCollections(process.cwd());
     if (cols.length === 0) console.log("No collections.");
-    else for (const c of cols) console.log(`  ${c.name}${c.description ? ` — ${c.description}` : ""}`);
+    else if (hasFlag(args, "--json")) console.log(JSON.stringify(cols, null, 2));
+    else console.log(formatCollectionList(cols.slice(0, parseLimit(args, 20)), cols.length));
   } else {
-    console.log("Usage: t collection [create|list]");
+    console.log("Usage: t collection [create|list] [--limit=N] [--json]");
   }
 }
 
@@ -317,9 +348,16 @@ else if (args[0] === "stats") {
 
 else if (args[0] === "sessions") {
   const { listSessions, getSession, getSessionInteractions, getSessionStats } = await import("./sessions-db.js");
+  const json = hasFlag(args, "--json");
+  const verbose = hasFlag(args, "--verbose");
+  const limit = parseLimit(args, 10);
 
   if (args[1] === "stats") {
     const stats = getSessionStats();
+    if (json) {
+      console.log(JSON.stringify(stats, null, 2));
+      process.exit(0);
+    }
     console.log("Session Stats:");
     console.log(`  Total sessions:     ${stats.totalSessions}`);
     console.log(`  Total interactions:  ${stats.totalInteractions}`);
@@ -328,32 +366,43 @@ else if (args[0] === "sessions") {
     console.log(`  Cache hit rate:      ${(stats.cacheHitRate * 100).toFixed(1)}%`);
     console.log(`  Avg per session:     ${stats.avgInteractionsPerSession.toFixed(1)}`);
     console.log(`  Error rate:          ${(stats.errorRate * 100).toFixed(1)}%`);
-  } else if (args[1]) {
+  } else if (args[1] && args[1] !== "list" && !args[1].startsWith("--")) {
     // Show specific session
-    const session = getSession(args[1]);
-    if (!session) { console.error(`Session '${args[1]}' not found.`); process.exit(1); }
+    const sessionId = (args[1] === "show" || args[1] === "inspect") ? args[2] : args[1];
+    const session = sessionId ? getSession(sessionId) : null;
+    if (!session) { console.error(`Session '${sessionId ?? ""}' not found.`); process.exit(1); }
+    const interactions = getSessionInteractions(session.id);
+    if (json) {
+      console.log(JSON.stringify({ session, interactions }, null, 2));
+      process.exit(0);
+    }
     console.log(`Session: ${session.id}`);
     console.log(`  Started: ${new Date(session.started_at).toLocaleString()}`);
     console.log(`  CWD:     ${session.cwd}`);
     console.log(`  Provider: ${session.provider ?? "auto"}`);
     console.log("");
-    const interactions = getSessionInteractions(session.id);
-    for (const i of interactions) {
-      const status = i.exit_code === 0 ? "✓" : i.exit_code ? "✗" : "·";
-      console.log(`  ${status} ${i.nl}`);
-      if (i.command) console.log(`    $ ${i.command}`);
+    for (const i of interactions.slice(0, verbose ? interactions.length : limit)) {
+      const item = compactInteraction(i, verbose);
+      const status = item.status === "ok" ? "✓" : item.status === "error" ? "✗" : "·";
+      console.log(`  ${status} ${item.prompt}`);
+      if (item.command) console.log(`    $ ${item.command}`);
     }
     console.log(`\n  ${interactions.length} interactions`);
+    if (!verbose && interactions.length > limit) console.log(`  Showing ${limit}. Use --verbose or --limit=N for more.`);
   } else {
     // List recent sessions
-    const sessions = listSessions(20);
-    if (sessions.length === 0) { console.log("No sessions yet."); }
+    const sessions = listSessions(limit);
+    if (sessions.length === 0) { console.log("No sessions yet.\nUse sessions show <id> for details, --limit=N for more, or --json for machine-readable output."); }
+    else if (json) {
+      console.log(JSON.stringify(sessions, null, 2));
+    }
     else {
       for (const s of sessions) {
+        const item = compactSession(s);
         const date = new Date(s.started_at).toLocaleString();
-        const dir = s.cwd.split("/").pop() || s.cwd;
-        console.log(`  ${s.id.slice(0, 8)}  ${date}  ${dir}  ${s.provider ?? "auto"}`);
+        console.log(`  ${String(item.id).slice(0, 8)}  ${date}  ${item.cwd}  ${item.provider}`);
       }
+      console.log("\nUse sessions show <id> for details, --limit=N for more, or --json for machine-readable output.");
     }
   }
 }
@@ -395,7 +444,9 @@ else if (args[0] === "symbols" && args[1]) {
   const { resolve } = await import("path");
   const { statSync, readdirSync } = await import("fs");
   const target = resolve(args[1]);
-  const filter = args[2]; // optional: grep-like filter on symbol name
+  const filter = args[2]?.startsWith("--") ? undefined : args[2]; // optional: grep-like filter on symbol name
+  const limit = parseLimit(args, 50);
+  const verbose = hasFlag(args, "--verbose");
 
   // Support directories — recurse and extract symbols from all source files
   const files: string[] = [];
@@ -415,10 +466,24 @@ else if (args[0] === "symbols" && args[1]) {
     }
   } catch { files.push(target); }
 
-  let totalSymbols = 0;
+  let shownSymbols = 0;
+  let matchedSymbols = 0;
+  let filesWithMatches = 0;
+  let scannedFiles = 0;
+  let truncated = false;
   for (const file of files) {
+    if (!verbose && shownSymbols >= limit) {
+      truncated = true;
+      break;
+    }
+    scannedFiles++;
     const symbols = extractSymbolsFromFile(file);
-    const filtered = filter ? symbols.filter(s => s.name.toLowerCase().includes(filter.toLowerCase()) || s.kind.toLowerCase().includes(filter.toLowerCase())) : symbols;
+    const filteredAll = filter ? symbols.filter(s => s.name.toLowerCase().includes(filter.toLowerCase()) || s.kind.toLowerCase().includes(filter.toLowerCase())) : symbols;
+    if (filteredAll.length === 0) continue;
+    matchedSymbols += filteredAll.length;
+    filesWithMatches++;
+    const remaining = verbose ? filteredAll.length : Math.max(0, limit - shownSymbols);
+    const filtered = verbose ? filteredAll : filteredAll.slice(0, remaining);
     if (filtered.length === 0) continue;
     const relPath = file.replace(process.cwd() + "/", "");
     if (files.length > 1) console.log(`\n${relPath}:`);
@@ -426,10 +491,18 @@ else if (args[0] === "symbols" && args[1]) {
       const exp = s.exported ? "⬡" : "·";
       console.log(`  ${exp} ${s.kind.padEnd(10)} L${String(s.line).padStart(4)}  ${s.name}`);
     }
-    totalSymbols += filtered.length;
+    shownSymbols += filtered.length;
+    if (!verbose && filteredAll.length > filtered.length) {
+      truncated = true;
+      console.log("  ... more; use --verbose, --limit=N, or a narrower filter");
+    }
   }
-  if (totalSymbols === 0) console.log("No symbols found.");
-  else if (files.length > 1) console.log(`\n${totalSymbols} symbols across ${files.length} files`);
+  if (shownSymbols === 0) console.log("No symbols found.");
+  else if (files.length > 1) {
+    console.log(`\n${shownSymbols} symbols shown from ${filesWithMatches} matching files (${scannedFiles}/${files.length} files scanned).`);
+    if (truncated) console.log(`Showing at most ${limit} symbols. Use --limit=N, --verbose, or a filter for more detail.`);
+    else if (matchedSymbols > shownSymbols) console.log(`Use --verbose to show all ${matchedSymbols} matched symbols.`);
+  }
 }
 
 // ── History command ──────────────────────────────────────────────────────────
@@ -437,13 +510,20 @@ else if (args[0] === "symbols" && args[1]) {
 else if (args[0] === "history") {
   const { loadContext } = await import("./session-context.js");
   const entries = loadContext();
+  const limit = parseLimit(args, 5);
+  const verbose = hasFlag(args, "--verbose");
+  if (hasFlag(args, "--json")) {
+    console.log(JSON.stringify(entries, null, 2));
+    process.exit(0);
+  }
   if (entries.length === 0) { console.log("No recent history."); }
   else {
-    for (const e of entries) {
+    for (const e of entries.slice(-limit)) {
       const time = new Date(e.timestamp).toLocaleTimeString();
-      console.log(`  ${time}  ${e.prompt}`);
-      console.log(`    $ ${e.command}`);
+      console.log(`  ${time}  ${verbose ? e.prompt : truncateText(e.prompt, 100)}`);
+      console.log(`    $ ${verbose ? e.command : truncateText(e.command, 120)}`);
     }
+    if (entries.length > limit) console.log(`\nShowing ${limit} of ${entries.length}. Use --limit=N, --verbose, or --json for details.`);
   }
 }
 
@@ -477,7 +557,9 @@ else if (args[0] === "discover") {
 
 else if (args[0] === "snapshot") {
   const { captureSnapshot } = await import("./snapshots.js");
-  console.log(JSON.stringify(captureSnapshot(), null, 2));
+  const snapshot = captureSnapshot();
+  if (hasFlag(args, "--json")) console.log(JSON.stringify(snapshot, null, 2));
+  else console.log(formatSnapshot(snapshot, hasFlag(args, "--verbose")));
 }
 
 // ── Project init ─────────────────────────────────────────────────────────────

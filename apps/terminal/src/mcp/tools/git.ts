@@ -7,6 +7,7 @@ import { estimateTokens } from "../../tokens.js";
 import { processOutput } from "../../output-processor.js";
 import { getOutputProvider } from "../../providers/index.js";
 import { invalidateBootCache } from "../../session-boot.js";
+import { compactLines, truncateText } from "../../compact-output.js";
 
 export function registerGitTools(server: McpServer, h: ToolHelpers): void {
 
@@ -207,11 +208,13 @@ Rules:
 
   server.tool(
     "repo_state",
-    "Get full repository state in one call — branch, status, staged/unstaged files, recent commits. Replaces the common 3-command pattern: git status + git diff --stat + git log.",
+    "Get compact repository state in one call — branch, status counts, bounded changed-file lists, and recent commits. Use verbose=true for full lists.",
     {
       path: z.string().optional().describe("Repo path (default: cwd)"),
+      limit: z.number().optional().describe("Max changed files/commits to return per section (default: 20, max: 100)"),
+      verbose: z.boolean().optional().describe("Return full changed-file lists and diff summary"),
     },
-    async ({ path }) => {
+    async ({ path, limit, verbose }) => {
       const cwd = path ?? process.cwd();
       const [statusResult, diffResult, logResult] = await Promise.all([
         h.exec("git status --porcelain", cwd),
@@ -236,13 +239,37 @@ Rules:
         return match ? { hash: match[1], message: match[2] } : { hash: "", message: l };
       });
 
+      const pageSize = Math.min(limit ?? 20, 100);
+      const compactDiff = compactLines(diffResult.stdout.trim() || "no changes", 30, 4000);
+      const formatFiles = (files: string[]) => (verbose ? files : files.slice(0, pageSize)).map((file) => truncateText(file, 180));
+
       return {
         content: [{ type: "text" as const, text: JSON.stringify({
           branch: branchResult.stdout.trim(),
           dirty: staged.length + unstaged.length + untracked.length > 0,
-          staged, unstaged, untracked,
-          diffSummary: diffResult.stdout.trim() || "no changes",
-          recentCommits: commits,
+          staged: formatFiles(staged),
+          unstaged: formatFiles(unstaged),
+          untracked: formatFiles(untracked),
+          diffSummary: verbose ? diffResult.stdout.trim() || "no changes" : compactDiff.content,
+          recentCommits: (verbose ? commits : commits.slice(0, pageSize)).map((commit) => ({
+            hash: commit.hash,
+            message: truncateText(commit.message, verbose ? 240 : 120),
+          })),
+          totals: {
+            staged: staged.length,
+            unstaged: unstaged.length,
+            untracked: untracked.length,
+            recentCommits: commits.length,
+          },
+          limit: pageSize,
+          truncated: !verbose && (
+            staged.length > pageSize ||
+            unstaged.length > pageSize ||
+            untracked.length > pageSize ||
+            commits.length > pageSize ||
+            compactDiff.truncated
+          ),
+          hint: "Use verbose=true for full git status arrays and diff summary.",
         }) }],
       };
     }
@@ -252,11 +279,13 @@ Rules:
 
   server.tool(
     "last_commit",
-    "Get details of the last commit — hash, message, files changed, diff stats. Replaces: git log -1 + git show --stat + git diff HEAD~1.",
+    "Get compact details of the last commit — hash, message, and bounded diff stats. Use verbose=true for all stat lines.",
     {
       path: z.string().optional().describe("Repo path (default: cwd)"),
+      limit: z.number().optional().describe("Max changed-file stat lines to return (default: 40, max: 200)"),
+      verbose: z.boolean().optional().describe("Return all changed-file stat lines"),
     },
-    async ({ path }) => {
+    async ({ path, limit, verbose }) => {
       const cwd = path ?? process.cwd();
       const [logResult, statResult] = await Promise.all([
         h.exec("git log -1 --format='%H%n%s%n%an%n%ai'", cwd),
@@ -265,14 +294,20 @@ Rules:
 
       const [hash, message, author, date] = logResult.stdout.split("\n");
       const filesChanged = statResult.stdout.split("\n").filter(l => l.trim() && !l.includes("changed"));
+      const pageSize = Math.min(limit ?? 40, 200);
+      const visible = verbose ? filesChanged : filesChanged.slice(0, pageSize);
 
       return {
         content: [{ type: "text" as const, text: JSON.stringify({
           hash: hash?.trim(),
-          message: message?.trim(),
+          message: truncateText(message?.trim(), 200),
           author: author?.trim(),
           date: date?.trim(),
-          filesChanged,
+          filesChanged: visible.map((line) => truncateText(line, 220)),
+          totalFilesChanged: filesChanged.length,
+          returned: visible.length,
+          truncated: !verbose && filesChanged.length > visible.length,
+          hint: !verbose && filesChanged.length > visible.length ? "Use verbose=true for all changed-file stat lines." : undefined,
         }) }],
       };
     }
