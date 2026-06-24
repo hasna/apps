@@ -1804,6 +1804,15 @@ export class Store {
     return (row?.count ?? 0) > 0;
   }
 
+  hasRunningRunForSlot(loopId: string, scheduledFor: string): boolean {
+    const row = this.db
+      .query<{ count: number }, [string, string]>(
+        "SELECT COUNT(*) AS count FROM loop_runs WHERE loop_id = ? AND scheduled_for = ? AND status = 'running'",
+      )
+      .get(loopId, scheduledFor);
+    return (row?.count ?? 0) > 0;
+  }
+
   markRunPid(id: string, pid: number, claimedBy?: string, opts: DaemonLeaseFence = {}): LoopRun | undefined {
     const now = (opts.now ?? new Date()).toISOString();
     const res = claimedBy

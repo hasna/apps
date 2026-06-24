@@ -13,7 +13,8 @@ program.name("loops-daemon").description("OpenLoops daemon helper").version(pack
 program
   .command("run")
   .option("--interval-ms <ms>", "tick interval", (value) => Number(value))
-  .action(async (opts) => runDaemon({ intervalMs: opts.intervalMs }));
+  .option("--concurrency <n>", "maximum loop runs to execute concurrently", (value) => Number(value))
+  .action(async (opts) => runDaemon({ intervalMs: opts.intervalMs, concurrency: opts.concurrency }));
 
 program.command("start").action(async () => {
   const result = await startDaemon({ cliEntry: process.argv[1] ?? "loops-daemon", args: ["run"] });

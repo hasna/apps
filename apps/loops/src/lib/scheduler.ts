@@ -23,6 +23,15 @@ export interface TickResult {
   expired: Loop[];
 }
 
+export interface ClaimedLoopRun {
+  loop: Loop;
+  run: LoopRun;
+}
+
+export interface ClaimDueRunsResult extends TickResult {
+  claims: ClaimedLoopRun[];
+}
+
 export function manualRunScheduledFor(loop: Loop, now: Date = new Date()): string {
   if (loop.status === "active" && loop.nextRunAt && new Date(loop.nextRunAt).getTime() <= now.getTime()) {
     return loop.retryScheduledFor ?? loop.nextRunAt;
@@ -209,6 +218,91 @@ async function runSlot(deps: SchedulerDeps, loop: Loop, scheduledFor: string): P
   );
   deps.onRun?.(finalRun);
   return finalRun;
+}
+
+function claimSlot(deps: SchedulerDeps, loop: Loop, scheduledFor: string): ClaimedLoopRun | LoopRun | undefined {
+  const now = deps.now?.() ?? new Date();
+  deps.beforeRun?.(loop, scheduledFor);
+  if (loop.overlap === "skip" && deps.store.hasRunningRun(loop.id)) {
+    if (deps.store.hasRunningRunForSlot(loop.id, scheduledFor)) return undefined;
+    let skipped: LoopRun;
+    try {
+      skipped = deps.store.createSkippedRun(loop, scheduledFor, "previous run still active", {
+        daemonLeaseId: deps.daemonLeaseId,
+      });
+    } catch (error) {
+      if (deps.daemonLeaseId && isDaemonLeaseLost(error)) return undefined;
+      throw error;
+    }
+    advanceLoop(deps.store, loop, skipped, now, true, { daemonLeaseId: deps.daemonLeaseId });
+    deps.onRun?.(skipped);
+    return skipped;
+  }
+
+  let claim: ReturnType<Store["claimRun"]>;
+  try {
+    claim = deps.store.claimRun(loop, scheduledFor, deps.runnerId, now, { daemonLeaseId: deps.daemonLeaseId });
+  } catch (error) {
+    if (deps.daemonLeaseId && isDaemonLeaseLost(error)) return undefined;
+    throw error;
+  }
+  if (!claim) return undefined;
+  deps.beforeRun?.(claim.loop, claim.run.scheduledFor);
+  deps.onRun?.(claim.run);
+  return claim;
+}
+
+export function claimDueRuns(deps: SchedulerDeps & { maxClaims?: number }): ClaimDueRunsResult {
+  const now = deps.now?.() ?? new Date();
+  const recovered = deps.store.recoverExpiredRunLeases(now, { daemonLeaseId: deps.daemonLeaseId });
+  const recoveredByLoop = new Map<string, LoopRun[]>();
+  for (const run of recovered) {
+    recoveredByLoop.set(run.loopId, [...(recoveredByLoop.get(run.loopId) ?? []), run]);
+  }
+  for (const runs of recoveredByLoop.values()) {
+    const loop = deps.store.getLoop(runs[0]!.loopId);
+    if (!loop) continue;
+    const retryable = runs
+      .filter((run) => run.attempt < loop.maxAttempts)
+      .sort((a, b) => new Date(a.scheduledFor).getTime() - new Date(b.scheduledFor).getTime())[0];
+    if (retryable) {
+      advanceLoop(deps.store, loop, retryable, new Date(retryable.finishedAt ?? now), false, {
+        daemonLeaseId: deps.daemonLeaseId,
+      });
+      continue;
+    }
+    for (const run of runs) {
+      const current = deps.store.getLoop(run.loopId);
+      if (current) {
+        advanceLoop(deps.store, current, run, new Date(run.finishedAt ?? now), false, {
+          daemonLeaseId: deps.daemonLeaseId,
+        });
+      }
+    }
+  }
+  const expired = deps.store.expireLoops(now, { daemonLeaseId: deps.daemonLeaseId });
+  const claims: ClaimedLoopRun[] = [];
+  const claimed: LoopRun[] = [];
+  const skipped: LoopRun[] = [];
+  const maxClaims = Math.max(0, deps.maxClaims ?? Number.POSITIVE_INFINITY);
+
+  for (const loop of deps.store.dueLoops(now)) {
+    if (claims.length >= maxClaims) break;
+    const plan = dueSlots(loop, now);
+    for (const slot of plan.slots) {
+      if (claims.length >= maxClaims) break;
+      const run = claimSlot(deps, loop, slot);
+      if (!run) continue;
+      if ("loop" in run) {
+        claims.push(run);
+        claimed.push(run.run);
+      } else if (run.status === "skipped") {
+        skipped.push(run);
+      }
+    }
+  }
+
+  return { claims, claimed, completed: [], skipped, recovered, expired };
 }
 
 export async function tick(deps: SchedulerDeps): Promise<TickResult> {

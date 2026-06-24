@@ -15,9 +15,9 @@ const DEFAULT_MAX_TURNS = 10;
 const PlanNodeSchema = z.object({
   key: z.string().min(1).max(64).regex(/^[A-Za-z0-9_.-]+$/),
   objective: z.string().min(1),
-  dependsOn: z.array(z.string().min(1)).optional().default([]),
-  priority: z.number().int().optional().default(0),
-  tokenBudget: z.number().int().positive().optional(),
+  dependsOn: z.array(z.string().min(1)),
+  priority: z.number().int(),
+  tokenBudget: z.number().int().positive().nullable(),
 });
 
 const PlanSchema = z.object({
@@ -26,9 +26,9 @@ const PlanSchema = z.object({
 
 const AchievementSchema = z.object({
   achieved: z.boolean(),
-  status: z.enum(["active", "blocked", "budgetLimited", "complete", "cancelled"]).optional(),
-  evidence: z.array(z.string()).optional().default([]),
-  unmetRequirements: z.array(z.string()).optional().default([]),
+  status: z.enum(["active", "blocked", "budgetLimited", "complete", "cancelled"]).nullable(),
+  evidence: z.array(z.string()),
+  unmetRequirements: z.array(z.string()),
   adversarialReview: z.string().min(1),
 });
 
@@ -130,7 +130,7 @@ async function planGoal(store: Store, goal: Goal, spec: GoalSpec, model: Languag
     objective: node.objective,
     dependsOn: node.dependsOn ?? [],
     priority: node.priority ?? 0,
-    tokenBudget: node.tokenBudget,
+    tokenBudget: node.tokenBudget ?? undefined,
     sequence: index,
   }));
   assertAcyclicNodes(rawNodes.map((node) => ({ key: node.key, dependsOn: node.dependsOn })));

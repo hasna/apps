@@ -7,6 +7,12 @@ import type { ExecutorResult } from "../../types.js";
 import { Store } from "../store.js";
 import { runGoal } from "./runner.js";
 
+type JsonSchemaObject = {
+  properties?: Record<string, JsonSchemaObject>;
+  required?: string[];
+  items?: JsonSchemaObject;
+};
+
 function generated(object: unknown, totalTokens = 10) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(object) }],
@@ -38,6 +44,39 @@ function ok(stdout = ""): ExecutorResult {
   };
 }
 
+function plannedNode({
+  key,
+  objective,
+  dependsOn = [],
+  priority = 0,
+  tokenBudget = null,
+}: {
+  key: string;
+  objective: string;
+  dependsOn?: string[];
+  priority?: number;
+  tokenBudget?: number | null;
+}) {
+  return { key, objective, dependsOn, priority, tokenBudget };
+}
+
+function expectAllPropertiesRequired(schema: JsonSchemaObject, path = "schema") {
+  if (schema.properties) {
+    const propertyKeys = Object.keys(schema.properties).sort();
+    expect(schema.required?.toSorted()).toEqual(propertyKeys);
+    for (const [key, property] of Object.entries(schema.properties)) {
+      expectAllPropertiesRequired(property, `${path}.${key}`);
+    }
+  }
+  if (schema.items) expectAllPropertiesRequired(schema.items, `${path}[]`);
+}
+
+function responseJsonSchema(call: (typeof MockLanguageModelV3.prototype.doGenerateCalls)[number] | undefined) {
+  const responseFormat = call?.responseFormat;
+  expect(responseFormat?.type).toBe("json");
+  return (responseFormat as { type: "json"; schema?: JsonSchemaObject }).schema;
+}
+
 describe("runGoal", () => {
   test("plans, executes dependent nodes, validates adversarially, and persists rows under a daemon fence", async () => {
     const store = new Store(":memory:");
@@ -46,8 +85,8 @@ describe("runGoal", () => {
       const model = mockObjects([
         {
           nodes: [
-            { key: "a", objective: "write A" },
-            { key: "b", objective: "write B", dependsOn: ["a"] },
+            plannedNode({ key: "a", objective: "write A" }),
+            plannedNode({ key: "b", objective: "write B", dependsOn: ["a"] }),
           ],
         },
         {
@@ -82,7 +121,7 @@ describe("runGoal", () => {
   test("stops before executing nodes when the token budget is exhausted", async () => {
     const store = new Store(":memory:");
     try {
-      const model = mockObjects([{ nodes: [{ key: "only", objective: "do expensive work" }] }], 20);
+      const model = mockObjects([{ nodes: [plannedNode({ key: "only", objective: "do expensive work" })] }], 20);
       const calls: string[] = [];
       const result = await runGoal(store, { objective: "respect tiny budget", tokenBudget: 5, maxTurns: 3 }, {
         model,
@@ -111,7 +150,7 @@ describe("runGoal", () => {
         unmetRequirements: ["missing required proof"],
         adversarialReview: "The evidence does not prove the explicit requirement.",
       };
-      const model = mockObjects([{ nodes: [{ key: "prove", objective: "produce proof" }] }, blocker, blocker, blocker]);
+      const model = mockObjects([{ nodes: [plannedNode({ key: "prove", objective: "produce proof" })] }, blocker, blocker, blocker]);
       const result = await runGoal(store, { objective: "prove completion", maxTurns: 5 }, {
         model,
         executeNode: async () => ok("ran proof step"),
@@ -138,7 +177,7 @@ describe("runGoal", () => {
     const store = new Store(":memory:");
     try {
       const model = mockObjects([
-        { nodes: [{ key: "env", objective: "inspect metadata" }] },
+        { nodes: [plannedNode({ key: "env", objective: "inspect metadata" })] },
         {
           achieved: true,
           status: "complete",
@@ -157,6 +196,37 @@ describe("runGoal", () => {
       expect(result.stdout).toContain("node=env");
       expect(result.stdout).toContain("objective=inspect env");
       expect(result.stdout).toContain("goal=");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("uses strict provider JSON schemas with every property required", async () => {
+    const store = new Store(":memory:");
+    try {
+      const model = mockObjects([
+        { nodes: [plannedNode({ key: "strict", objective: "check schema" })] },
+        {
+          achieved: true,
+          status: "complete",
+          evidence: ["strict schema accepted"],
+          unmetRequirements: [],
+          adversarialReview: "The provider-facing schemas require every declared property.",
+        },
+      ]);
+
+      await runGoal(store, { objective: "inspect strict schema", maxTurns: 2 }, {
+        model,
+        executeNode: async () => ok("strict"),
+      });
+
+      const planSchema = responseJsonSchema(model.doGenerateCalls[0]);
+      const achievementSchema = responseJsonSchema(model.doGenerateCalls[1]);
+
+      expect(planSchema).toBeDefined();
+      expect(achievementSchema).toBeDefined();
+      expectAllPropertiesRequired(planSchema!);
+      expectAllPropertiesRequired(achievementSchema!);
     } finally {
       store.close();
     }
