@@ -17,6 +17,30 @@ bun install -g @hasna/files
 files --help
 ```
 
+CLI list/search/status-style commands are compact by default for agent
+terminals: long names and paths are shortened, list output is capped, and the
+footer shows the next detail command. Use `--verbose` for full human-readable
+rows, `--limit` to page more rows, and `--json` for the stable machine-readable
+records.
+
+Examples:
+
+```bash
+files list                 # compact rows, shortened paths
+files list --verbose       # full paths
+files list --json          # full records for scripts
+files dupes --limit 20     # capped groups and sample paths
+files dupes --verbose      # all duplicate paths
+files knowledge manifest   # compact manifest summary
+files knowledge manifest --json
+files organize export      # compact audit summary
+files organize export --json
+```
+
+Export-style commands that can produce large payloads now summarize to stdout
+unless a detail/export path is explicit. Use `--json`, `--format jsonl`, or
+`--output`/`--out` when a script or downstream importer needs full data.
+
 ## Google Drive Sync
 
 Google Drive sync uses profiles configured through the connectors CLI:
@@ -103,6 +127,14 @@ OPEN_FILES_MCP_ALLOW_DESTRUCTIVE=1 files-mcp
 
 `OPEN_FILES_ALLOW_<CAPABILITY>=1` or `OPEN_FILES_MCP_ALLOW_ALL=1` may be used
 for controlled local operator sessions.
+
+MCP read tools that list or search records return compact JSON envelopes by
+default to avoid filling agent context. Pass `verbose: true` to tools such as
+`list_files`, `search_files`, `list_sources`, `find_duplicates`, or activity
+history tools when an agent needs full records. Large export tools such as
+`export_knowledge_manifest` and `files_organization_export_audit` also return
+summaries by default; set `verbose: true` or write an artifact path for full
+payloads.
 
 ## HTTP mode
 

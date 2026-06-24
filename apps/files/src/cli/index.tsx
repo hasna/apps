@@ -32,6 +32,7 @@ import { doctorKnowledgeSources } from "../lib/knowledge-doctor.js";
 import { exportKnowledgeSourceManifest, formatKnowledgeSourceManifest } from "../lib/knowledge-manifest.js";
 import { resolveKnowledgeSourceRef } from "../lib/knowledge-resolver.js";
 import { buildOpenFilesFileRef, buildOpenFilesFileRevisionRef } from "../lib/source-ref.js";
+import { DEFAULT_COMPACT_LIMIT, truncateText } from "../lib/compact-output.js";
 import { acknowledgeKnowledgeSourceOutbox, pollKnowledgeSourceOutbox } from "../db/knowledge-outbox.js";
 import { getDb, getDbPath } from "../db/database.js";
 import { requireId } from "../db/resolve.js";
@@ -42,6 +43,7 @@ import type {
   FileSearchDocumentKind,
   FileSearchDocumentStatus,
   GoogleDriveConfig,
+  KnowledgeSourceManifest,
   KnowledgeSourceManifestFormat,
   KnowledgeSourceResolveMode,
   S3Config,
@@ -77,8 +79,10 @@ sources
   .command("list")
   .alias("ls")
   .description("List all configured sources")
+  .option("-l, --limit <n>", "Max rows in human output", String(DEFAULT_COMPACT_LIMIT))
+  .option("--verbose", "Show full source locations and machine IDs")
   .option("--json", "Output as JSON")
-  .action((opts: { json?: boolean }) => {
+  .action((opts: { limit: string; verbose?: boolean; json?: boolean }) => {
     const machine = getCurrentMachine();
     const all = listSources();
     if (opts.json) { console.log(JSON.stringify(all, null, 2)); return; }
@@ -86,17 +90,26 @@ sources
       console.log(chalk.dim("No sources configured. Run: files sources add <path>"));
       return;
     }
-    for (const s of all) {
+    let limit: number;
+    try {
+      limit = parseIntFlag(opts.limit, "limit", { min: 1 });
+    } catch (e) {
+      console.error(chalk.red((e as Error).message));
+      process.exit(1);
+    }
+    const rows = all.slice(0, limit);
+    for (const s of rows) {
       const isMine = s.machine_id === machine.id;
       const typeLabel = s.type === "s3"
-        ? chalk.blue(`s3://${s.bucket}${s.prefix ? `/${s.prefix}` : ""}${(s.config as S3Config).profile ? ` profile:${(s.config as S3Config).profile}` : ""}`)
+        ? chalk.blue(`${truncateIfNeeded(`s3://${s.bucket}${s.prefix ? `/${s.prefix}` : ""}`, opts.verbose)}${(s.config as S3Config).profile ? ` profile:${(s.config as S3Config).profile}` : ""}`)
         : s.type === "google_drive"
           ? chalk.magenta(`google-drive:${(s.config as GoogleDriveConfig).profile}`)
-          : chalk.green(s.path ?? "");
+          : chalk.green(truncateIfNeeded(s.path ?? "", opts.verbose));
       const status = s.enabled ? chalk.green("enabled") : chalk.red("disabled");
-      const mine = isMine ? "" : chalk.dim(` [${s.machine_id}]`);
+      const mine = isMine || !opts.verbose ? "" : chalk.dim(` [${s.machine_id}]`);
       console.log(`${chalk.bold(s.id)}  ${chalk.cyan(s.name)}  ${typeLabel}  ${status}  ${chalk.dim(s.file_count + " files")}${mine}`);
     }
+    printRowsHint(rows.length, all.length, "source", `files sources list --limit ${Math.max(limit * 2, DEFAULT_COMPACT_LIMIT)}`, "files sources list --verbose", "full locations");
   });
 
 sources
@@ -486,8 +499,11 @@ sources
 sources
   .command("google-drive-items <id>")
   .description("List Google Drive items visible to a source")
+  .option("-l, --limit <n>", "Max rows in human output", String(DEFAULT_COMPACT_LIMIT))
+  .option("--offset <n>", "Offset", "0")
+  .option("--verbose", "Show full Drive paths")
   .option("--json", "Output as JSON")
-  .action(async (id: string, opts: { json?: boolean }) => {
+  .action(async (id: string, opts: { limit: string; offset: string; verbose?: boolean; json?: boolean }) => {
     const source = getSource(requireId(id, "sources"));
     if (!source || source.type !== "google_drive") {
       console.error(chalk.red("Source must be a Google Drive source"));
@@ -496,9 +512,23 @@ sources
     const items = await listGoogleDriveItems(source);
     if (opts.json) { console.log(JSON.stringify(items, null, 2)); return; }
     if (!items.length) { console.log(chalk.dim("No Google Drive items found.")); return; }
-    for (const item of items) {
-      console.log(`${chalk.bold(item.id)}  ${chalk.cyan(item.path)}  ${chalk.dim(item.drive_name)}`);
+    let limit: number;
+    let offset: number;
+    try {
+      limit = parseIntFlag(opts.limit, "limit", { min: 1 });
+      offset = parseIntFlag(opts.offset, "offset", { min: 0 });
+    } catch (e) {
+      console.error(chalk.red((e as Error).message));
+      process.exit(1);
     }
+    const rows = items.slice(offset, offset + limit);
+    for (const item of rows) {
+      console.log(`${chalk.bold(item.id)}  ${chalk.cyan(truncateIfNeeded(item.path, opts.verbose))}  ${chalk.dim(item.drive_name)}`);
+    }
+    const nextOffset = offset + rows.length;
+    const more = nextOffset < items.length ? `files sources google-drive-items ${source.id} --offset ${nextOffset} --limit ${limit} for more, ` : "";
+    console.log(chalk.dim(`\nshowing ${rows.length} of ${items.length} item(s)`));
+    console.log(chalk.dim(`use ${more}files sources google-drive-items ${source.id} --verbose for full Drive paths, or --json for full records`));
   });
 
 sources
@@ -625,6 +655,7 @@ program
   .option("--scope <scope>", "Search scope: all, metadata, content", "all")
   .option("-l, --limit <n>", "Max results", "20")
   .option("--offset <n>", "Offset", "0")
+  .option("--verbose", "Show full paths")
   .option("--json", "Output as JSON")
   .action((query: string, opts: {
     source?: string;
@@ -634,6 +665,7 @@ program
     scope: string;
     limit: string;
     offset: string;
+    verbose?: boolean;
     json?: boolean;
   }) => {
     let limit: number;
@@ -662,11 +694,11 @@ program
     for (const f of results) {
       const tags = f.tags.length ? chalk.yellow(` [${f.tags.join(", ")}]`) : "";
       const src = f.source_name ? chalk.dim(` (${f.source_name})`) : "";
-      const target = f.organization_target_path ? chalk.green(` -> ${f.organization_target_path}`) : "";
+      const target = f.organization_target_path ? chalk.green(` -> ${truncateIfNeeded(f.organization_target_path, opts.verbose)}`) : "";
       const match = formatSearchMatch(f.search_match_sources, f.search_document_kinds);
-      console.log(`${chalk.bold(f.id)}  ${chalk.cyan(f.name)}  ${chalk.dim(f.path)}${target}${tags}${src}${match}`);
+      console.log(`${chalk.bold(f.id)}  ${chalk.cyan(truncateIfNeeded(f.name, opts.verbose, 56))}  ${chalk.dim(truncateIfNeeded(f.path, opts.verbose))}${target}${tags}${src}${match}`);
     }
-    console.log(chalk.dim(`\n${results.length} result(s)`));
+    printRowsHint(results.length, undefined, "result", `files search ${JSON.stringify(query)} --limit ${Math.max(limit * 2, DEFAULT_COMPACT_LIMIT)}`, `files search ${JSON.stringify(query)} --verbose`);
   });
 
 // ─── search index ──────────────────────────────────────────────────────────
@@ -753,7 +785,7 @@ searchIndex
   .description("List derived search documents without printing indexed text")
   .option("--kind <kind>", "Filter by document kind")
   .option("--status <status>", "Filter by status")
-  .option("-l, --limit <n>", "Max documents", "50")
+  .option("-l, --limit <n>", "Max documents", String(DEFAULT_COMPACT_LIMIT))
   .option("--offset <n>", "Offset", "0")
   .option("--json", "Output as JSON")
   .action((fileId: string | undefined, opts: {
@@ -776,7 +808,8 @@ searchIndex
       for (const doc of docs) {
         console.log(`${chalk.bold(doc.id)}  ${chalk.cyan(doc.kind)}  ${doc.status}  ${chalk.dim(`chars:${doc.searchable_chars} updated:${doc.updated_at}`)}`);
       }
-      console.log(chalk.dim(`\n${docs.length} document(s)`));
+      console.log(chalk.dim(`\nshowing ${docs.length} document(s)`));
+      console.log(chalk.dim("use files search-index list --json for full records"));
     } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
   });
 
@@ -832,7 +865,7 @@ program
   .option("-e, --ext <ext>", "Filter by extension")
   .option("-c, --collection <id>", "Filter by collection ID")
   .option("-p, --project <id>", "Filter by project ID")
-  .option("-l, --limit <n>", "Max results", "50")
+  .option("-l, --limit <n>", "Max results", String(DEFAULT_COMPACT_LIMIT))
   .option("--offset <n>", "Offset", "0")
   .option("--after <date>", "Modified after date (YYYY-MM-DD)")
   .option("--before <date>", "Modified before date (YYYY-MM-DD)")
@@ -840,12 +873,13 @@ program
   .option("--max-size <size>", "Maximum size (e.g. 100mb)")
   .option("--sort <field>", "Sort by: name, size, date (default: date)")
   .option("--asc", "Sort ascending (default: descending)")
+  .option("--verbose", "Show full paths")
   .option("--json", "Output as JSON")
   .action((opts: {
     source?: string; machine?: string; tag?: string; ext?: string;
     collection?: string; project?: string; limit: string; offset: string;
     after?: string; before?: string; minSize?: string; maxSize?: string;
-    sort?: string; asc?: boolean; json?: boolean;
+    sort?: string; asc?: boolean; verbose?: boolean; json?: boolean;
   }) => {
     let limit: number;
     let offset: number;
@@ -877,9 +911,9 @@ program
     if (!files.length) { console.log(chalk.dim("No files found.")); return; }
     for (const f of files) {
       const tags = f.tags.length ? chalk.yellow(` [${f.tags.join(", ")}]`) : "";
-      console.log(`${chalk.bold(f.id)}  ${chalk.cyan(f.name)}  ${chalk.dim(formatSize(f.size))}  ${chalk.dim(f.path)}${tags}`);
+      console.log(`${chalk.bold(f.id)}  ${chalk.cyan(truncateIfNeeded(f.name, opts.verbose, 56))}  ${chalk.dim(formatSize(f.size))}  ${chalk.dim(truncateIfNeeded(f.path, opts.verbose))}${tags}`);
     }
-    console.log(chalk.dim(`\n${files.length} file(s)`));
+    printRowsHint(files.length, undefined, "file", `files list --limit ${Math.max(limit * 2, DEFAULT_COMPACT_LIMIT)}`, "files list --verbose");
   });
 
 // ─── tag ────────────────────────────────────────────────────────────────────
@@ -910,12 +944,18 @@ program
 program
   .command("tags")
   .description("List all tags")
+  .option("-l, --limit <n>", "Max rows in human output", String(DEFAULT_COMPACT_LIMIT))
   .option("--json", "Output as JSON")
-  .action((opts: { json?: boolean }) => {
+  .action((opts: { limit: string; json?: boolean }) => {
     const tags = listTags();
     if (opts.json) { console.log(JSON.stringify(tags, null, 2)); return; }
     if (!tags.length) { console.log(chalk.dim("No tags yet.")); return; }
-    for (const t of tags) console.log(`${chalk.bold(t.id)}  ${chalk.hex(t.color)(t.name)}`);
+    const limit = parseIntFlag(opts.limit, "limit", { min: 1 });
+    const rows = tags.slice(0, limit);
+    for (const t of rows) console.log(`${chalk.bold(t.id)}  ${chalk.hex(t.color)(truncateIfNeeded(t.name, false, 56))}`);
+    console.log(chalk.dim(`\nshowing ${rows.length} of ${tags.length} tag(s)`));
+    const more = rows.length < tags.length ? `files tags --limit ${Math.max(limit * 2, DEFAULT_COMPACT_LIMIT)} for more, ` : "";
+    console.log(chalk.dim(`use ${more}files tags --json for full records`));
   });
 
 // ─── download ───────────────────────────────────────────────────────────────
@@ -966,11 +1006,16 @@ program
 const cols = program.command("collections").description("Manage collections");
 cols
   .command("list")
+  .option("-l, --limit <n>", "Max rows in human output", String(DEFAULT_COMPACT_LIMIT))
+  .option("--verbose", "Show full descriptions")
   .option("--json", "Output as JSON")
-  .action((opts: { json?: boolean }) => {
+  .action((opts: { limit: string; verbose?: boolean; json?: boolean }) => {
     const collections = listCollections();
     if (opts.json) { console.log(JSON.stringify(collections, null, 2)); return; }
-    for (const c of collections) console.log(`${chalk.bold(c.id)}  ${chalk.cyan(c.name)}  ${chalk.dim(c.description)}`);
+    const limit = parseIntFlag(opts.limit, "limit", { min: 1 });
+    const rows = collections.slice(0, limit);
+    for (const c of rows) console.log(`${chalk.bold(c.id)}  ${chalk.cyan(truncateIfNeeded(c.name, opts.verbose, 56))}  ${chalk.dim(truncateIfNeeded(c.description, opts.verbose, 80))}`);
+    printRowsHint(rows.length, collections.length, "collection", `files collections list --limit ${Math.max(limit * 2, DEFAULT_COMPACT_LIMIT)}`, "files collections list --verbose", "full descriptions");
   });
 cols.command("create <name> [description]").action((name: string, desc?: string) => {
   const c = createCollection(name, desc);
@@ -996,11 +1041,16 @@ cols.command("add <collection-id> <file-id>").action((colId: string, fileId: str
 const projs = program.command("projects").description("Manage projects");
 projs
   .command("list")
+  .option("-l, --limit <n>", "Max rows in human output", String(DEFAULT_COMPACT_LIMIT))
+  .option("--verbose", "Show full descriptions")
   .option("--json", "Output as JSON")
-  .action((opts: { json?: boolean }) => {
+  .action((opts: { limit: string; verbose?: boolean; json?: boolean }) => {
     const projects = listProjects();
     if (opts.json) { console.log(JSON.stringify(projects, null, 2)); return; }
-    for (const p of projects) console.log(`${chalk.bold(p.id)}  ${chalk.cyan(p.name)}  ${chalk.dim(p.description)}`);
+    const limit = parseIntFlag(opts.limit, "limit", { min: 1 });
+    const rows = projects.slice(0, limit);
+    for (const p of rows) console.log(`${chalk.bold(p.id)}  ${chalk.cyan(truncateIfNeeded(p.name, opts.verbose, 56))}  ${chalk.dim(truncateIfNeeded(p.description, opts.verbose, 80))}`);
+    printRowsHint(rows.length, projects.length, "project", `files projects list --limit ${Math.max(limit * 2, DEFAULT_COMPACT_LIMIT)}`, "files projects list --verbose", "full descriptions");
   });
 projs.command("create <name> [description]").action((name: string, desc?: string) => {
   const p = createProject(name, desc);
@@ -1143,8 +1193,11 @@ program
   .command("dupes")
   .description("Find duplicate files (same BLAKE3 hash, different paths)")
   .option("-s, --source <id>", "Limit to a specific source")
+  .option("-l, --limit <n>", "Max duplicate groups in human output", "20")
+  .option("--files-per-group <n>", "Max duplicate file paths per group in human output", "3")
+  .option("--verbose", "Show every duplicate file path")
   .option("--json", "Output as JSON")
-  .action((opts: { source?: string; json?: boolean }) => {
+  .action((opts: { source?: string; limit: string; filesPerGroup: string; verbose?: boolean; json?: boolean }) => {
     const db = getDb();
     const resolvedSourceId = opts.source ? requireId(opts.source, "sources") : undefined;
 
@@ -1181,19 +1234,34 @@ program
       return;
     }
 
+    let limit: number;
+    let filesPerGroup: number;
+    try {
+      limit = parseIntFlag(opts.limit, "limit", { min: 1 });
+      filesPerGroup = parseIntFlag(opts.filesPerGroup, "files-per-group", { min: 1 });
+    } catch (e) {
+      console.error(chalk.red((e as Error).message));
+      process.exit(1);
+    }
+
     const wasted = groups.reduce((acc, g) => acc + g.total_size - (g.total_size / g.cnt), 0);
     console.log(chalk.bold(`\n  ${groups.length} duplicate group(s) — ${formatSize(wasted)} wasted\n`));
 
-    for (const g of groups) {
+    for (const g of groups.slice(0, limit)) {
       const files = db.query<{ id: string; name: string; path: string; source_id: string; size: number }, [string]>(
         "SELECT id, name, path, source_id, size FROM files WHERE hash=? AND status='active' ORDER BY indexed_at"
       ).all(g.hash);
       console.log(chalk.yellow(`  ${g.hash.slice(0, 16)}…  ${chalk.dim(`×${g.cnt}  ${formatSize(files[0]!.size)} each`)}`));
-      for (const f of files) {
-        console.log(`    ${chalk.bold(f.id)}  ${chalk.cyan(f.name)}  ${chalk.dim(f.path)}`);
+      const shownFiles = opts.verbose ? files : files.slice(0, filesPerGroup);
+      for (const f of shownFiles) {
+        console.log(`    ${chalk.bold(f.id)}  ${chalk.cyan(truncateIfNeeded(f.name, opts.verbose, 56))}  ${chalk.dim(truncateIfNeeded(f.path, opts.verbose))}`);
+      }
+      if (!opts.verbose && files.length > shownFiles.length) {
+        console.log(chalk.dim(`    ... ${files.length - shownFiles.length} more duplicate file(s); use --verbose for all paths`));
       }
       console.log();
     }
+    printRowsHint(Math.min(groups.length, limit), groups.length, "duplicate group", `files dupes --limit ${Math.max(limit * 2, 20)}`, "files dupes --verbose");
   });
 
 // ─── peers ───────────────────────────────────────────────────────────────────
@@ -1204,16 +1272,21 @@ peers
   .command("list")
   .alias("ls")
   .description("List saved peers")
+  .option("-l, --limit <n>", "Max rows in human output", String(DEFAULT_COMPACT_LIMIT))
+  .option("--verbose", "Show full URLs and names")
   .option("--json", "Output as JSON")
-  .action((opts: { json?: boolean }) => {
+  .action((opts: { limit: string; verbose?: boolean; json?: boolean }) => {
     const all = listPeers();
     if (opts.json) { console.log(JSON.stringify(all, null, 2)); return; }
     if (!all.length) { console.log(chalk.dim("No peers saved. Run: files peers add <url>")); return; }
-    for (const p of all) {
+    const limit = parseIntFlag(opts.limit, "limit", { min: 1 });
+    const rows = all.slice(0, limit);
+    for (const p of rows) {
       const auto = p.auto_sync ? chalk.green(` [auto every ${p.sync_interval_minutes}m]`) : "";
       const last = p.last_synced_at ? chalk.dim(` last synced ${p.last_synced_at}`) : chalk.dim(" never synced");
-      console.log(`${chalk.bold(p.id)}  ${chalk.cyan(p.url)}  ${p.name || ""}${auto}${last}`);
+      console.log(`${chalk.bold(p.id)}  ${chalk.cyan(truncateIfNeeded(p.url, opts.verbose))}  ${truncateIfNeeded(p.name || "", opts.verbose, 48)}${auto}${last}`);
     }
+    printRowsHint(rows.length, all.length, "peer", `files peers list --limit ${Math.max(limit * 2, DEFAULT_COMPACT_LIMIT)}`, "files peers list --verbose", "full URLs");
   });
 
 peers
@@ -1448,14 +1521,19 @@ knowledge
         include_evidence_assets: opts.includeEvidenceAssets,
       });
 
-      if (opts.json || format === "json") {
+      if (opts.json) {
         console.log(JSON.stringify(manifest, null, 2));
         return;
       }
 
       if (opts.out) {
         console.log(chalk.green(`manifest written: ${manifest.artifact?.path}`));
-        console.log(chalk.dim(`items:${manifest.item_count} high_watermark:${manifest.high_watermark}`));
+        printKnowledgeManifestSummary(manifest);
+        return;
+      }
+
+      if (format === "json") {
+        printKnowledgeManifestSummary(manifest);
         return;
       }
 
@@ -1780,6 +1858,26 @@ function formatSearchMatch(sources?: string[], kinds?: string[]): string {
   return chalk.dim(` [${sources.map((source) => source === "content" ? `content${contentKinds}` : source).join(", ")}]`);
 }
 
+function truncateIfNeeded(value: unknown, verbose = false, maxLength = 96): string {
+  const text = String(value ?? "");
+  return verbose ? text : truncateText(text, maxLength);
+}
+
+function printRowsHint(
+  shown: number,
+  total: number | undefined,
+  noun: string,
+  limitCommand: string,
+  verboseCommand: string,
+  detailLabel = "full paths",
+): void {
+  const plural = shown === 1 ? noun : `${noun}s`;
+  const totalText = total === undefined ? "" : ` of ${total}`;
+  console.log(chalk.dim(`\nshowing ${shown}${totalText} ${plural}`));
+  const moreHint = total !== undefined && shown < total ? `${limitCommand} for more, ` : "";
+  console.log(chalk.dim(`use ${moreHint}${verboseCommand} for ${detailLabel}, or --json for full records`));
+}
+
 function formatSearchDocumentForOutput(document: FileSearchDocument): {
   id: string;
   file_id: string;
@@ -1835,6 +1933,18 @@ function parseResolveMode(value: string): KnowledgeSourceResolveMode {
     || value === "signed_url"
   ) return value;
   throw new Error("Invalid --mode: expected metadata, content, extracted_text, snapshot, or signed_url");
+}
+
+function printKnowledgeManifestSummary(manifest: KnowledgeSourceManifest): void {
+  console.log(chalk.bold("Knowledge Manifest"));
+  console.log(`  id: ${manifest.manifest_id}`);
+  console.log(`  items: ${manifest.item_count}`);
+  console.log(`  tombstones: ${manifest.tombstone_count}`);
+  console.log(`  delta: ${manifest.delta}`);
+  console.log(`  high watermark: ${manifest.high_watermark}`);
+  if (manifest.next_cursor) console.log(`  next cursor: ${truncateText(manifest.next_cursor, 80)}`);
+  if (manifest.artifact) console.log(`  artifact: ${manifest.artifact.provider}:${manifest.artifact.path ?? manifest.artifact.key}`);
+  console.log(chalk.dim("use files knowledge manifest --json for full JSON, --format jsonl for JSONL, or --out <path> for artifacts"));
 }
 
 function parseSize(s: string): number {

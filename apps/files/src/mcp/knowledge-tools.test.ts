@@ -72,9 +72,24 @@ describe("knowledge MCP tools", () => {
     expect(tools.tools.some((tool) => tool.name === "resolve_knowledge_source")).toBe(true);
     expect(tools.tools.some((tool) => tool.name === "poll_knowledge_outbox")).toBe(true);
 
-    const manifestResult = await client.callTool({
+    const compactManifestResult = await client.callTool({
       name: "export_knowledge_manifest",
       arguments: { source_id: source.id, limit: 10 },
+    });
+    const compactManifest = JSON.parse((compactManifestResult.content as Array<{ text: string }>)[0]!.text) as {
+      item_count: number;
+      items?: unknown[];
+      sample_items: Array<{ file_id: string }>;
+      hint: string;
+    };
+    expect(compactManifest.item_count).toBe(1);
+    expect(compactManifest.sample_items[0]?.file_id).toBe(file.id);
+    expect(compactManifest.items).toBeUndefined();
+    expect(compactManifest.hint).toContain("verbose=true");
+
+    const manifestResult = await client.callTool({
+      name: "export_knowledge_manifest",
+      arguments: { source_id: source.id, limit: 10, verbose: true },
     });
     const manifest = JSON.parse((manifestResult.content as Array<{ text: string }>)[0]!.text) as {
       items: Array<{ file_id: string }>;

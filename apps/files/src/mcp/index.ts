@@ -18,6 +18,15 @@ import { extractTextSnapshotFromFile } from "../lib/extraction-snapshot.js";
 import { doctorKnowledgeSources } from "../lib/knowledge-doctor.js";
 import { exportKnowledgeSourceManifest } from "../lib/knowledge-manifest.js";
 import { resolveKnowledgeSourceRef } from "../lib/knowledge-resolver.js";
+import {
+  DEFAULT_MCP_LIMIT,
+  compactActivityRecord,
+  compactFileRecord,
+  compactPage,
+  compactSourceRecord,
+  normalizeCompactLimit,
+  truncateText,
+} from "../lib/compact-output.js";
 import { acknowledgeKnowledgeSourceOutbox, pollKnowledgeSourceOutbox } from "../db/knowledge-outbox.js";
 import { parseOpenFilesSourceRef } from "../lib/source-ref.js";
 import { registerEvidenceTools } from "./evidence-tools.js";
@@ -30,7 +39,14 @@ import { existsSync } from "fs";
 import { homedir } from "os";
 import { createRequire } from "module";
 import { buildOpenFilesFileRef } from "../lib/source-ref.js";
-import type { GoogleDriveConfig, KnowledgeSourceManifestFormat, KnowledgeSourceResolveMode, S3Config } from "../types/index.js";
+import type {
+  GoogleDriveConfig,
+  KnowledgeSourceManifest,
+  KnowledgeSourceManifestFormat,
+  KnowledgeSourceManifestItem,
+  KnowledgeSourceResolveMode,
+  S3Config,
+} from "../types/index.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
@@ -140,6 +156,12 @@ function normalizeMcpReadLimit(value: number | undefined): number {
   return Math.min(normalized, MAX_MCP_READ_BYTES);
 }
 
+function normalizeMcpOffset(value: number | undefined): number {
+  if (!Number.isFinite(value ?? 0)) return 0;
+  const normalized = Math.floor(value ?? 0);
+  return normalized < 0 ? 0 : normalized;
+}
+
 function normalizeMcpImportLimit(): number {
   const parsed = Number(process.env.OPEN_FILES_MCP_IMPORT_MAX_BYTES);
   if (!Number.isFinite(parsed)) return DEFAULT_MCP_IMPORT_BYTES;
@@ -194,6 +216,86 @@ function mcpError(message: string) {
   return { content: [{ type: "text" as const, text: message }], isError: true };
 }
 
+function mcpJson(value: unknown) {
+  return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
+}
+
+function mcpCompactHint(detail: string): string {
+  return `${detail} Set verbose=true for full records where available.`;
+}
+
+function compactNamedRecord(record: Record<string, unknown>, opts: { verbose?: boolean } = {}): Record<string, unknown> {
+  if (opts.verbose) return record;
+  return Object.fromEntries(Object.entries({
+    id: record.id,
+    name: record.name === undefined ? undefined : truncateText(record.name, 64),
+    description: record.description === undefined ? undefined : truncateText(record.description, 80),
+    status: record.status,
+    parent_id: record.parent_id,
+    file_count: record.file_count,
+    created_at: record.created_at,
+    updated_at: record.updated_at,
+  }).filter(([, value]) => value !== undefined));
+}
+
+function compactGoogleDriveItem(item: Record<string, unknown>, opts: { verbose?: boolean } = {}): Record<string, unknown> {
+  if (opts.verbose) return item;
+  return Object.fromEntries(Object.entries({
+    id: item.id,
+    name: item.name === undefined ? undefined : truncateText(item.name, 64),
+    path: item.path === undefined ? undefined : truncateText(item.path, 96),
+    drive_name: item.drive_name === undefined ? undefined : truncateText(item.drive_name, 48),
+    mime_type: item.mime_type,
+    size: item.size,
+    modified_time: item.modified_time,
+  }).filter(([, value]) => value !== undefined));
+}
+
+function compactKnowledgeManifest(manifest: KnowledgeSourceManifest): Record<string, unknown> {
+  return {
+    manifest_id: manifest.manifest_id,
+    generated_at: manifest.generated_at,
+    format: manifest.format,
+    filters: manifest.filters,
+    item_count: manifest.item_count,
+    cursor: manifest.cursor,
+    next_cursor: manifest.next_cursor,
+    delta: manifest.delta,
+    high_watermark: manifest.high_watermark,
+    delta_cursor: manifest.delta_cursor,
+    tombstone_count: manifest.tombstone_count,
+    artifact: manifest.artifact,
+    sample_items: manifest.items.slice(0, 5).map(compactManifestItem),
+    hint: "Default output is a compact manifest summary. Set verbose=true for full manifest items or output_local_path/output_s3_* for artifacts.",
+  };
+}
+
+function compactManifestItem(item: KnowledgeSourceManifestItem): Record<string, unknown> {
+  if (item.kind === "file") {
+    return Object.fromEntries(Object.entries({
+      kind: item.kind,
+      file_id: item.file_id,
+      source_ref: item.source_ref,
+      name: truncateText(item.name, 64),
+      path: truncateText(item.path, 96),
+      mime: item.mime,
+      size: item.size,
+      status: item.status,
+      updated_at: item.updated_at,
+    }).filter(([, value]) => value !== undefined));
+  }
+  return Object.fromEntries(Object.entries({
+    kind: item.kind,
+    asset_id: item.asset_id,
+    source_ref: item.source_ref,
+    original_name: truncateText(item.original_name, 64),
+    mime: item.mime,
+    size: item.size,
+    status: item.status,
+    updated_at: item.updated_at,
+  }).filter(([, value]) => value !== undefined));
+}
+
 export function buildServer(): McpServer {
   const server = new McpServer({
     name: "files",
@@ -223,9 +325,19 @@ registerStorageTools(registerTool);
 
 registerTool("list_sources", "List all configured file sources", {
   machine_id: z.string().optional().describe("Filter by machine ID"),
-}, async ({ machine_id }) => {
+  limit: z.number().optional().default(DEFAULT_MCP_LIMIT),
+  verbose: z.boolean().optional().default(false).describe("Return full source records instead of compact summaries"),
+}, async ({ machine_id, limit, verbose }) => {
   const sources = listSources(machine_id);
-  return { content: [{ type: "text", text: JSON.stringify(sources, null, 2) }] };
+  if (verbose) return mcpJson(sources);
+  const normalizedLimit = normalizeCompactLimit(limit);
+  const rows = sources.slice(0, normalizedLimit).map((source) => compactSourceRecord(source as unknown as Record<string, unknown>));
+  return mcpJson(compactPage(rows, {
+    limit: normalizedLimit,
+    offset: 0,
+    hasMore: sources.length > rows.length,
+    hint: mcpCompactHint("Use verbose=true or CLI `files sources list --verbose` for full locations."),
+  }));
 });
 
 registerTool("add_source", "Add a local folder or S3 bucket as an indexed source", {
@@ -301,13 +413,25 @@ registerTool("add_google_drive_source", "Add a Google Drive source that syncs in
 
 registerTool("list_google_drive_items", "List Google Drive items visible to a Google Drive source", {
   source_id: z.string().describe("Google Drive source ID"),
-}, async ({ source_id }) => {
+  limit: z.number().optional().default(DEFAULT_MCP_LIMIT),
+  offset: z.number().optional().default(0),
+  verbose: z.boolean().optional().default(false).describe("Return full Google Drive item records"),
+}, async ({ source_id, limit, offset, verbose }) => {
   const source = getSource(source_id);
   if (!source || source.type !== "google_drive") {
     return { content: [{ type: "text" as const, text: "Source must be a Google Drive source" }], isError: true };
   }
   const items = await listGoogleDriveItems(source);
-  return { content: [{ type: "text", text: JSON.stringify(items, null, 2) }] };
+  if (verbose) return mcpJson(items);
+  const normalizedLimit = normalizeCompactLimit(limit);
+  const normalizedOffset = normalizeMcpOffset(offset);
+  const rows = items.slice(normalizedOffset, normalizedOffset + normalizedLimit).map((item) => compactGoogleDriveItem(item as unknown as Record<string, unknown>));
+  return mcpJson(compactPage(rows, {
+    limit: normalizedLimit,
+    offset: normalizedOffset,
+    hasMore: items.length > normalizedOffset + rows.length,
+    hint: mcpCompactHint("Use limit/offset-style pagination or verbose=true for full Drive records."),
+  }));
 });
 
 registerTool("preflight_google_drive_sync", "Check Google Drive auth, destination, and visible item scope without uploading", {
@@ -389,18 +513,27 @@ registerTool("list_files", "List indexed files with optional filters. If agent_i
   max_size: z.number().optional().describe("Maximum file size in bytes"),
   sort: z.enum(["name", "size", "date"]).optional().default("date"),
   sort_dir: z.enum(["asc", "desc"]).optional().default("desc"),
-  limit: z.number().optional().default(50),
+  limit: z.number().optional().default(DEFAULT_MCP_LIMIT),
   offset: z.number().optional().default(0),
   sync_status: z.enum(["local_only", "synced", "conflict"]).optional().describe("Filter by sync status"),
   agent_id: z.string().optional().describe("Agent ID — auto-applies focused project filter if set"),
+  verbose: z.boolean().optional().default(false).describe("Return full file records instead of compact summaries"),
 }, async (opts) => {
   // Workspace scoping: auto-apply agent's focused project
   if (opts.agent_id && !opts.project_id) {
     const agent = getAgent(opts.agent_id);
     if (agent?.project_id) opts.project_id = agent.project_id;
   }
-  const files = listFiles(opts);
-  return { content: [{ type: "text", text: JSON.stringify(files, null, 2) }] };
+  const limit = normalizeCompactLimit(opts.limit);
+  const offset = Math.max(0, Math.floor(opts.offset ?? 0));
+  const files = listFiles({ ...opts, limit, offset });
+  if (opts.verbose) return mcpJson(files);
+  return mcpJson(compactPage(files.map((file) => compactFileRecord(file as unknown as Record<string, unknown>)), {
+    limit,
+    offset,
+    hasMore: files.length === limit,
+    hint: mcpCompactHint("Use get_file with an id for details, or verbose=true for full list records."),
+  }));
 });
 
 registerTool("search_files", "Full-text search across file names, paths, and tags", {
@@ -412,12 +545,21 @@ registerTool("search_files", "Full-text search across file names, paths, and tag
   limit: z.number().optional().default(20),
   offset: z.number().optional().default(0),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
-}, async ({ query, source_id, machine_id, tag, ext, limit, offset, agent_id }) => {
-  const results = searchFiles(query, { source_id, machine_id, tag, ext, limit, offset });
+  verbose: z.boolean().optional().default(false).describe("Return full search result records instead of compact summaries"),
+}, async ({ query, source_id, machine_id, tag, ext, limit, offset, agent_id, verbose }) => {
+  const normalizedLimit = normalizeCompactLimit(limit, 20);
+  const normalizedOffset = Math.max(0, Math.floor(offset ?? 0));
+  const results = searchFiles(query, { source_id, machine_id, tag, ext, limit: normalizedLimit, offset: normalizedOffset });
   if (agent_id) {
     logActivity({ agent_id, action: "search", metadata: { query, results_count: results.length } });
   }
-  return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+  if (verbose) return mcpJson(results);
+  return mcpJson(compactPage(results.map((file) => compactFileRecord(file as unknown as Record<string, unknown>)), {
+    limit: normalizedLimit,
+    offset: normalizedOffset,
+    hasMore: results.length === normalizedLimit,
+    hint: mcpCompactHint("Use get_file with an id for details, or verbose=true for full search records."),
+  }));
 });
 
 registerTool("get_file", "Get full details for a file by ID", {
@@ -472,8 +614,19 @@ registerTool("upload_file", "Upload a local file to an S3 source", {
 
 // ─── Tags ─────────────────────────────────────────────────────────────────────
 
-registerTool("list_tags", "List all tags", {}, async () => {
-  return { content: [{ type: "text", text: JSON.stringify(listTags(), null, 2) }] };
+registerTool("list_tags", "List all tags", {
+  limit: z.number().optional().default(DEFAULT_MCP_LIMIT),
+  verbose: z.boolean().optional().default(false),
+}, async ({ limit, verbose }) => {
+  const tags = listTags();
+  if (verbose) return mcpJson(tags);
+  const normalizedLimit = normalizeCompactLimit(limit);
+  return mcpJson(compactPage(tags.slice(0, normalizedLimit).map((tag) => compactNamedRecord(tag as unknown as Record<string, unknown>)), {
+    limit: normalizedLimit,
+    offset: 0,
+    hasMore: tags.length > normalizedLimit,
+    hint: mcpCompactHint("Use verbose=true for full tag records."),
+  }));
 });
 
 registerTool("tag_file", "Add one or more tags to a file", {
@@ -507,8 +660,18 @@ registerTool("delete_tag", "Delete a tag entirely (removes from all files)", {
 
 registerTool("list_collections", "List all collections", {
   parent_id: z.string().optional().describe("Filter by parent collection ID"),
-}, async ({ parent_id }) => {
-  return { content: [{ type: "text", text: JSON.stringify(listCollections(parent_id), null, 2) }] };
+  limit: z.number().optional().default(DEFAULT_MCP_LIMIT),
+  verbose: z.boolean().optional().default(false),
+}, async ({ parent_id, limit, verbose }) => {
+  const collections = listCollections(parent_id);
+  if (verbose) return mcpJson(collections);
+  const normalizedLimit = normalizeCompactLimit(limit);
+  return mcpJson(compactPage(collections.slice(0, normalizedLimit).map((collection) => compactNamedRecord(collection as unknown as Record<string, unknown>)), {
+    limit: normalizedLimit,
+    offset: 0,
+    hasMore: collections.length > normalizedLimit,
+    hint: mcpCompactHint("Use get_collection with an id or verbose=true for full records."),
+  }));
 });
 
 registerTool("create_collection", "Create a new collection (supports nesting and auto-rules)", {
@@ -585,8 +748,18 @@ registerTool("delete_collection", "Delete a collection (does not delete files, o
 
 registerTool("list_projects", "List all projects", {
   status: z.enum(["active", "archived", "completed"]).optional().describe("Filter by status"),
-}, async ({ status }) => {
-  return { content: [{ type: "text", text: JSON.stringify(listProjects(status), null, 2) }] };
+  limit: z.number().optional().default(DEFAULT_MCP_LIMIT),
+  verbose: z.boolean().optional().default(false),
+}, async ({ status, limit, verbose }) => {
+  const projects = listProjects(status);
+  if (verbose) return mcpJson(projects);
+  const normalizedLimit = normalizeCompactLimit(limit);
+  return mcpJson(compactPage(projects.slice(0, normalizedLimit).map((project) => compactNamedRecord(project as unknown as Record<string, unknown>)), {
+    limit: normalizedLimit,
+    offset: 0,
+    hasMore: projects.length > normalizedLimit,
+    hint: mcpCompactHint("Use get_project with an id or verbose=true for full records."),
+  }));
 });
 
 registerTool("create_project", "Create a new project", {
@@ -642,8 +815,19 @@ registerTool("delete_project", "Delete a project (does not delete files, only th
 
 // ─── Machines ─────────────────────────────────────────────────────────────────
 
-registerTool("list_machines", "List all known machines that have indexed files", {}, async () => {
-  return { content: [{ type: "text", text: JSON.stringify(listMachines(), null, 2) }] };
+registerTool("list_machines", "List all known machines that have indexed files", {
+  limit: z.number().optional().default(DEFAULT_MCP_LIMIT),
+  verbose: z.boolean().optional().default(false),
+}, async ({ limit, verbose }) => {
+  const machines = listMachines();
+  if (verbose) return mcpJson(machines);
+  const normalizedLimit = normalizeCompactLimit(limit);
+  return mcpJson(compactPage(machines.slice(0, normalizedLimit).map((machine) => compactNamedRecord(machine as unknown as Record<string, unknown>)), {
+    limit: normalizedLimit,
+    offset: 0,
+    hasMore: machines.length > normalizedLimit,
+    hint: mcpCompactHint("Use verbose=true for full machine records."),
+  }));
 });
 
 // ─── get_file_url ─────────────────────────────────────────────────────────────
@@ -757,6 +941,7 @@ registerTool("export_knowledge_manifest", "Export a read-only open-files source 
   output_s3_key: z.string().optional(),
   include_acl_summary: z.boolean().optional(),
   include_evidence_assets: z.boolean().optional(),
+  verbose: z.boolean().optional().default(false).describe("Return full manifest items instead of a compact summary"),
 }, async (params) => {
   try {
     if (params.output_local_path || params.output_s3_source_id || params.output_s3_key) {
@@ -785,7 +970,7 @@ registerTool("export_knowledge_manifest", "Export a read-only open-files source 
       include_acl_summary: params.include_acl_summary,
       include_evidence_assets: params.include_evidence_assets,
     });
-    return { content: [{ type: "text", text: JSON.stringify(manifest, null, 2) }] };
+    return mcpJson(params.verbose ? manifest : compactKnowledgeManifest(manifest));
   } catch (error) {
     return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
   }
@@ -1131,18 +1316,42 @@ registerTool("restore_file", "Restore a soft-deleted file", {
 
 registerTool("find_duplicates", "Find files with the same BLAKE3 hash (duplicates)", {
   source_id: z.string().optional().describe("Limit to a specific source"),
-}, async ({ source_id }) => {
+  limit: z.number().optional().default(20),
+  files_per_group: z.number().optional().default(3),
+  verbose: z.boolean().optional().default(false).describe("Return every duplicate file path"),
+}, async ({ source_id, limit, files_per_group, verbose }) => {
   const { getDb } = await import("../db/database.js");
   const db = getDb();
   const sourceFilter = source_id ? "AND source_id = ?" : "";
   const params = source_id ? [source_id] as import("bun:sqlite").SQLQueryBindings[] : [];
-  const groups = db.query<{ hash: string; cnt: number; paths: string }, import("bun:sqlite").SQLQueryBindings[]>(`
-    SELECT hash, COUNT(*) as cnt, GROUP_CONCAT(path, ' | ') as paths
+  const groups = db.query<{ hash: string; cnt: number; total_size: number }, import("bun:sqlite").SQLQueryBindings[]>(`
+    SELECT hash, COUNT(*) as cnt, COALESCE(SUM(size), 0) as total_size
     FROM files WHERE status='active' AND hash IS NOT NULL ${sourceFilter}
     GROUP BY hash HAVING cnt > 1
     ORDER BY cnt DESC
   `).all(...params);
-  return { content: [{ type: "text", text: JSON.stringify(groups, null, 2) }] };
+  const normalizedLimit = normalizeCompactLimit(limit, 20);
+  const normalizedFilesPerGroup = normalizeCompactLimit(files_per_group, 3, 25);
+  const rows = groups.slice(0, normalizedLimit).map((group) => {
+    const files = db.query<{ id: string; name: string; path: string; source_id: string; size: number }, [string]>(
+      "SELECT id, name, path, source_id, size FROM files WHERE hash=? AND status='active' ORDER BY indexed_at"
+    ).all(group.hash);
+    return {
+      hash: group.hash,
+      count: group.cnt,
+      total_size: group.total_size,
+      files: (verbose ? files : files.slice(0, normalizedFilesPerGroup)).map((file) =>
+        compactFileRecord(file as unknown as Record<string, unknown>, { verbose }),
+      ),
+      ...(verbose || files.length <= normalizedFilesPerGroup ? {} : { omitted_files: files.length - normalizedFilesPerGroup }),
+    };
+  });
+  return mcpJson(compactPage(rows, {
+    limit: normalizedLimit,
+    offset: 0,
+    hasMore: groups.length > normalizedLimit,
+    hint: mcpCompactHint("Use verbose=true for every duplicate file path."),
+  }));
 });
 
 // ─── get_stats ────────────────────────────────────────────────────────────────
@@ -1430,41 +1639,64 @@ registerTool("get_file_by_path", "Look up a file by its path within a source", {
 registerTool("recent_files", "Get files recently touched by agents (read, upload, tag, annotate, etc.)", {
   agent_id: z.string().optional().describe("Filter by agent ID (omit for all agents)"),
   limit: z.number().optional().default(20),
-}, async ({ agent_id, limit }) => {
+  verbose: z.boolean().optional().default(false),
+}, async ({ agent_id, limit, verbose }) => {
   const { getDb: getRecentDb } = await import("../db/database.js");
   const db = getRecentDb();
-  const lim = limit ?? 20;
+  const lim = normalizeCompactLimit(limit, 20);
   const query = agent_id
     ? "SELECT DISTINCT file_id, MAX(created_at) as last_touched FROM agent_activity WHERE file_id IS NOT NULL AND agent_id = ? GROUP BY file_id ORDER BY last_touched DESC LIMIT ?"
     : "SELECT DISTINCT file_id, MAX(created_at) as last_touched FROM agent_activity WHERE file_id IS NOT NULL GROUP BY file_id ORDER BY last_touched DESC LIMIT ?";
   const params = agent_id ? [agent_id, lim] : [lim];
   const rows = (db.query(query) as any).all(params) as { file_id: string; last_touched: string }[];
   const files = rows.map(r => { const f = getFile(r.file_id); return f ? { ...f, last_touched: r.last_touched } : null; }).filter(Boolean);
-  return { content: [{ type: "text" as const, text: JSON.stringify(files, null, 2) }] };
+  if (verbose) return mcpJson(files);
+  return mcpJson(compactPage(files.map((file) => compactFileRecord(file as Record<string, unknown>)), {
+    limit: lim,
+    offset: 0,
+    hasMore: files.length === lim,
+    hint: mcpCompactHint("Use get_file with an id or verbose=true for full records."),
+  }));
 });
 
 registerTool("list_deleted_files", "List soft-deleted files (trash)", {
   source_id: z.string().optional(),
-  limit: z.number().optional().default(50),
+  limit: z.number().optional().default(DEFAULT_MCP_LIMIT),
   offset: z.number().optional().default(0),
-}, async ({ source_id, limit, offset }) => {
-  const files = listFiles({ source_id, status: "deleted", limit, offset });
-  return { content: [{ type: "text" as const, text: JSON.stringify(files, null, 2) }] };
+  verbose: z.boolean().optional().default(false),
+}, async ({ source_id, limit, offset, verbose }) => {
+  const normalizedLimit = normalizeCompactLimit(limit);
+  const normalizedOffset = Math.max(0, Math.floor(offset ?? 0));
+  const files = listFiles({ source_id, status: "deleted", limit: normalizedLimit, offset: normalizedOffset });
+  if (verbose) return mcpJson(files);
+  return mcpJson(compactPage(files.map((file) => compactFileRecord(file as unknown as Record<string, unknown>)), {
+    limit: normalizedLimit,
+    offset: normalizedOffset,
+    hasMore: files.length === normalizedLimit,
+    hint: mcpCompactHint("Use get_file with an id or verbose=true for full deleted-file records."),
+  }));
 });
 
 registerTool("list_conflicts", "List files with sync conflicts", {
   source_id: z.string().optional(),
-  limit: z.number().optional().default(50),
-}, async ({ source_id, limit }) => {
+  limit: z.number().optional().default(DEFAULT_MCP_LIMIT),
+  verbose: z.boolean().optional().default(false),
+}, async ({ source_id, limit, verbose }) => {
   const { getDb: getConflictDb } = await import("../db/database.js");
   const db = getConflictDb();
-  const lim = limit ?? 50;
+  const lim = normalizeCompactLimit(limit);
   const query = source_id
     ? "SELECT * FROM files WHERE sync_status = 'conflict' AND source_id = ? LIMIT ?"
     : "SELECT * FROM files WHERE sync_status = 'conflict' LIMIT ?";
   const params = source_id ? [source_id, lim] : [lim];
   const rows = (db.query(query) as any).all(params);
-  return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+  if (verbose) return mcpJson(rows);
+  return mcpJson(compactPage((rows as Record<string, unknown>[]).map((row) => compactFileRecord(row)), {
+    limit: lim,
+    offset: 0,
+    hasMore: rows.length === lim,
+    hint: mcpCompactHint("Use verbose=true for full conflict rows."),
+  }));
 });
 
 registerTool("resolve_conflict", "Resolve a sync conflict by picking a side", {
@@ -1572,7 +1804,9 @@ registerTool("set_focus", "Set active project context for this agent session.", 
 });
 
 registerTool("list_agents", "List all registered agents.", {}, async () => {
-  return { content: [{ type: "text" as const, text: JSON.stringify(listDbAgents()) }] };
+  return mcpJson(compactPage(listDbAgents().map((agent) => compactNamedRecord(agent as unknown as Record<string, unknown>)), {
+    hint: mcpCompactHint("Use get_agent_activity for activity details."),
+  }));
 });
 
 // ─── Watcher ──────────────────────────────────────────────────────────────────
@@ -1604,11 +1838,20 @@ registerTool("get_file_history", "Get all agent activity for a file", {
   after: z.string().optional().describe("Filter: activity after this date (ISO 8601)"),
   before: z.string().optional().describe("Filter: activity before this date (ISO 8601)"),
   action: z.string().optional().describe("Filter by action type (upload, download, tag, etc.)"),
-  limit: z.number().optional().default(50),
+  limit: z.number().optional().default(DEFAULT_MCP_LIMIT),
   offset: z.number().optional().default(0),
-}, async ({ file_id, after, before, action, limit, offset }) => {
-  const history = getFileHistory(file_id, { after, before, action: action as any, limit, offset });
-  return { content: [{ type: "text" as const, text: JSON.stringify(history, null, 2) }] };
+  verbose: z.boolean().optional().default(false),
+}, async ({ file_id, after, before, action, limit, offset, verbose }) => {
+  const normalizedLimit = normalizeCompactLimit(limit);
+  const normalizedOffset = Math.max(0, Math.floor(offset ?? 0));
+  const history = getFileHistory(file_id, { after, before, action: action as any, limit: normalizedLimit, offset: normalizedOffset });
+  if (verbose) return mcpJson(history);
+  return mcpJson(compactPage(history.map((entry) => compactActivityRecord(entry as unknown as Record<string, unknown>)), {
+    limit: normalizedLimit,
+    offset: normalizedOffset,
+    hasMore: history.length === normalizedLimit,
+    hint: mcpCompactHint("Use verbose=true for full activity metadata."),
+  }));
 });
 
 registerTool("get_agent_activity", "Get all activity by a specific agent", {
@@ -1616,11 +1859,20 @@ registerTool("get_agent_activity", "Get all activity by a specific agent", {
   after: z.string().optional().describe("Filter: activity after this date (ISO 8601)"),
   before: z.string().optional().describe("Filter: activity before this date (ISO 8601)"),
   action: z.string().optional().describe("Filter by action type"),
-  limit: z.number().optional().default(50),
+  limit: z.number().optional().default(DEFAULT_MCP_LIMIT),
   offset: z.number().optional().default(0),
-}, async ({ agent_id, after, before, action, limit, offset }) => {
-  const activity = getAgentActivity(agent_id, { after, before, action: action as any, limit, offset });
-  return { content: [{ type: "text" as const, text: JSON.stringify(activity, null, 2) }] };
+  verbose: z.boolean().optional().default(false),
+}, async ({ agent_id, after, before, action, limit, offset, verbose }) => {
+  const normalizedLimit = normalizeCompactLimit(limit);
+  const normalizedOffset = Math.max(0, Math.floor(offset ?? 0));
+  const activity = getAgentActivity(agent_id, { after, before, action: action as any, limit: normalizedLimit, offset: normalizedOffset });
+  if (verbose) return mcpJson(activity);
+  return mcpJson(compactPage(activity.map((entry) => compactActivityRecord(entry as unknown as Record<string, unknown>)), {
+    limit: normalizedLimit,
+    offset: normalizedOffset,
+    hasMore: activity.length === normalizedLimit,
+    hint: mcpCompactHint("Use verbose=true for full activity metadata."),
+  }));
 });
 
 registerTool("get_session_activity", "Get all activity within a session", {
@@ -1628,11 +1880,20 @@ registerTool("get_session_activity", "Get all activity within a session", {
   after: z.string().optional().describe("Filter: activity after this date (ISO 8601)"),
   before: z.string().optional().describe("Filter: activity before this date (ISO 8601)"),
   action: z.string().optional().describe("Filter by action type"),
-  limit: z.number().optional().default(50),
+  limit: z.number().optional().default(DEFAULT_MCP_LIMIT),
   offset: z.number().optional().default(0),
-}, async ({ session_id, after, before, action, limit, offset }) => {
-  const activity = getSessionActivity(session_id, { after, before, action: action as any, limit, offset });
-  return { content: [{ type: "text" as const, text: JSON.stringify(activity, null, 2) }] };
+  verbose: z.boolean().optional().default(false),
+}, async ({ session_id, after, before, action, limit, offset, verbose }) => {
+  const normalizedLimit = normalizeCompactLimit(limit);
+  const normalizedOffset = Math.max(0, Math.floor(offset ?? 0));
+  const activity = getSessionActivity(session_id, { after, before, action: action as any, limit: normalizedLimit, offset: normalizedOffset });
+  if (verbose) return mcpJson(activity);
+  return mcpJson(compactPage(activity.map((entry) => compactActivityRecord(entry as unknown as Record<string, unknown>)), {
+    limit: normalizedLimit,
+    offset: normalizedOffset,
+    hasMore: activity.length === normalizedLimit,
+    hint: mcpCompactHint("Use verbose=true for full activity metadata."),
+  }));
 });
 
   return server;

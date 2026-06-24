@@ -15,6 +15,7 @@ import {
   DEFAULT_EVIDENCE_S3_BUCKET,
   type EvidenceStorageOptions,
 } from "../lib/evidence.js";
+import { DEFAULT_COMPACT_LIMIT, truncateText } from "../lib/compact-output.js";
 import type { FileAssetStatus } from "../types/index.js";
 
 const FILE_ASSET_STATUSES = ["pending_upload", "uploaded", "verified", "archived", "deleted"] as const satisfies readonly FileAssetStatus[];
@@ -217,7 +218,8 @@ export function registerEvidenceCommands(program: Command): void {
     .option("--app <app>", "App")
     .option("--kind <kind>", "Kind")
     .option("--status <status>", "Status")
-    .option("--limit <n>", "Limit", "50")
+    .option("--limit <n>", "Limit", String(DEFAULT_COMPACT_LIMIT))
+    .option("--verbose", "Show full original names")
     .option("--json", "Output as JSON")
     .action((opts: EvidenceListOptions) => {
       runCliSync(() => {
@@ -234,8 +236,10 @@ export function registerEvidenceCommands(program: Command): void {
           return;
         }
         for (const asset of assets) {
-          console.log(`${chalk.bold(asset.id)}  ${chalk.cyan(asset.app)}:${asset.kind}  ${asset.status}/${asset.scan_status}  ${chalk.dim(asset.original_name)}`);
+          const name = opts.verbose ? asset.original_name : truncateText(asset.original_name, 80);
+          console.log(`${chalk.bold(asset.id)}  ${chalk.cyan(asset.app)}:${asset.kind}  ${asset.status}/${asset.scan_status}  ${chalk.dim(name)}`);
         }
+        console.log(chalk.dim(`\nshowing ${assets.length} asset(s); use --verbose for full names, or --json for full records`));
       });
     });
 
@@ -322,6 +326,7 @@ interface EvidenceListOptions {
   kind?: string;
   status?: string;
   limit: string;
+  verbose?: boolean;
   json?: boolean;
 }
 

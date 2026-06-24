@@ -15,8 +15,10 @@ import {
   listFileOrganizationUnassignedGroups,
   updateFileOrganizationReview,
 } from "../db/organization.js";
+import { DEFAULT_COMPACT_LIMIT, truncateText } from "../lib/compact-output.js";
 import type {
   FileOrganizationAclReviewStatus,
+  FileOrganizationAuditExport,
   FileOrganizationPermissionRisk,
   FileOrganizationPermissionScope,
   FileOrganizationAuditExportFormat,
@@ -34,6 +36,7 @@ interface OrganizationListOptions {
   limit: string;
   offset: string;
   json?: boolean;
+  verbose?: boolean;
 }
 
 interface OrganizationReviewOptions {
@@ -60,6 +63,7 @@ interface OrganizationExportOptions {
   output?: string;
   includeEvents?: boolean;
   limit: string;
+  json?: boolean;
 }
 
 interface OrganizationInferOptions {
@@ -173,8 +177,9 @@ export function registerOrganizationCommands(program: Command): void {
     .option("--acl-status <status>", "Filter by ACL review status")
     .option("--permission-risk <risk>", "Filter by permission risk")
     .option("--duplicates", "Only duplicate rows")
-    .option("-l, --limit <n>", "Max rows", "50")
+    .option("-l, --limit <n>", "Max rows", String(DEFAULT_COMPACT_LIMIT))
     .option("--offset <n>", "Offset", "0")
+    .option("--verbose", "Show full file names and original paths")
     .option("--json", "Output as JSON")
     .action((opts: OrganizationListOptions) => {
       try {
@@ -196,9 +201,19 @@ export function registerOrganizationCommands(program: Command): void {
           const duplicate = row.duplicate_group_id ? chalk.yellow(" duplicate") : "";
           const owner = row.owner ? chalk.dim(` owner:${row.owner}`) : "";
           const acl = chalk.dim(` acl:${row.acl_review_status}/${row.permission_risk}`);
-          console.log(`${chalk.bold(row.id)}  ${chalk.cyan(row.review_status)}${duplicate}${owner}${acl}  ${row.file_name}  ${chalk.dim(row.original_path)}`);
+          console.log(
+            `${chalk.bold(row.id)}  ${chalk.cyan(row.review_status)}${duplicate}${owner}${acl}  `
+            + `${formatCompactText(row.file_name, opts.verbose, 64)}  ${chalk.dim(formatCompactText(row.original_path, opts.verbose))}`,
+          );
         }
-        console.log(chalk.dim(`\n${rows.length} review row(s)`));
+        printCompactHint(
+          rows.length,
+          parseLimit(opts.offset, "offset"),
+          parseLimit(opts.limit, "limit"),
+          "review row",
+          "files organize list",
+          "files organize list --verbose",
+        );
       } catch (error) {
         console.error(chalk.red(error instanceof Error ? error.message : String(error)));
         process.exitCode = 1;
@@ -335,7 +350,7 @@ export function registerOrganizationCommands(program: Command): void {
     .option("--unassigned", "Filter to groups containing rows with no owner candidate")
     .option("--root-type <type>", "Filter by root type: my_drive, shared_drive, unknown")
     .option("--include-rows", "Include row-level details in JSON output")
-    .option("-l, --limit <n>", "Max groups", "50")
+    .option("-l, --limit <n>", "Max groups", String(DEFAULT_COMPACT_LIMIT))
     .option("--offset <n>", "Offset", "0")
     .option("--json", "Output as JSON")
     .action((opts: OrganizationDuplicateOptions) => {
@@ -362,7 +377,13 @@ export function registerOrganizationCommands(program: Command): void {
           console.log(`${chalk.bold(group.duplicate_group_id)}  rows:${group.row_count}  roots:${roots}  owners:${owners}`);
           console.log(`  candidate: ${group.candidate_survivor_review_id}  reasons:${chalk.dim(reasons)}`);
         }
-        console.log(chalk.dim(`\n${groups.length} duplicate group(s)`));
+        console.log(chalk.dim(`\nshowing ${groups.length} duplicate group(s)`));
+        if (groups.length === parseLimit(opts.limit, "limit")) {
+          const nextOffset = parseLimit(opts.offset, "offset") + groups.length;
+          console.log(chalk.dim(`use files organize duplicates --offset ${nextOffset} for the next page, or --json --include-rows for row details`));
+        } else {
+          console.log(chalk.dim("use --json --include-rows for row details"));
+        }
       } catch (error) {
         console.error(chalk.red(error instanceof Error ? error.message : String(error)));
         process.exitCode = 1;
@@ -376,7 +397,7 @@ export function registerOrganizationCommands(program: Command): void {
     .option("--top-level <name>", "Filter by exact top-level folder or root file name")
     .option("--exclude-top-level <name>", "Exclude exact top-level folder or root file name; repeatable", collectValues, [])
     .option("--include-rows", "Include row-level details in JSON output")
-    .option("-l, --limit <n>", "Max groups", "50")
+    .option("-l, --limit <n>", "Max groups", String(DEFAULT_COMPACT_LIMIT))
     .option("--offset <n>", "Offset", "0")
     .option("--json", "Output as JSON")
     .action((opts: OrganizationUnassignedOptions) => {
@@ -401,7 +422,13 @@ export function registerOrganizationCommands(program: Command): void {
           console.log(`${chalk.bold(group.top_level)}  rows:${group.row_count}  root:${group.root_type}  track:${group.suggested_review_track}`);
           console.log(`  duplicates:${group.duplicate_row_count}  root-files:${group.root_file_count}  reasons:${chalk.dim(reasons)}`);
         }
-        console.log(chalk.dim(`\n${groups.length} unassigned group(s)`));
+        console.log(chalk.dim(`\nshowing ${groups.length} unassigned group(s)`));
+        if (groups.length === parseLimit(opts.limit, "limit")) {
+          const nextOffset = parseLimit(opts.offset, "offset") + groups.length;
+          console.log(chalk.dim(`use files organize unassigned --offset ${nextOffset} for the next page, or --json --include-rows for row details`));
+        } else {
+          console.log(chalk.dim("use --json --include-rows for row details"));
+        }
       } catch (error) {
         console.error(chalk.red(error instanceof Error ? error.message : String(error)));
         process.exitCode = 1;
@@ -465,7 +492,8 @@ export function registerOrganizationCommands(program: Command): void {
     .option("--format <format>", "Export format: json, jsonl, csv", "json")
     .option("--output <path>", "Write export artifact to a file instead of stdout")
     .option("--include-events", "Include organization audit event history")
-    .option("-l, --limit <n>", "Max rows per export section; 0 exports all matching rows", "1000")
+    .option("-l, --limit <n>", "Max rows per export section; 0 exports all matching rows", "100")
+    .option("--json", "Write the full JSON export to stdout")
     .action((opts: OrganizationExportOptions) => {
       try {
         const format = parseExportFormat(opts.format);
@@ -477,6 +505,15 @@ export function registerOrganizationCommands(program: Command): void {
         if (opts.output) {
           writeFileSync(opts.output, text);
           console.log(chalk.green(`Wrote ${format} organization audit export: ${opts.output}`));
+          printOrganizationAuditSummary(audit);
+          return;
+        }
+        if (opts.json) {
+          process.stdout.write(formatFileOrganizationAuditExport(audit, "json"));
+          return;
+        }
+        if (format === "json") {
+          printOrganizationAuditSummary(audit);
           return;
         }
         process.stdout.write(text);
@@ -489,18 +526,23 @@ export function registerOrganizationCommands(program: Command): void {
   organize
     .command("events <id-or-file-id>")
     .description("List organization audit events for a review or file")
-    .option("-l, --limit <n>", "Max rows", "50")
+    .option("-l, --limit <n>", "Max rows", String(DEFAULT_COMPACT_LIMIT))
+    .option("--verbose", "Show full event notes")
     .option("--json", "Output as JSON")
-    .action((idOrFileId: string, opts: { limit: string; json?: boolean }) => {
+    .action((idOrFileId: string, opts: { limit: string; json?: boolean; verbose?: boolean }) => {
       try {
-        const events = listFileOrganizationEvents(idOrFileId, parseLimit(opts.limit, "limit"));
+        const limit = parseLimit(opts.limit, "limit");
+        const events = listFileOrganizationEvents(idOrFileId, limit);
         if (opts.json) {
           printJson(events);
           return;
         }
         for (const event of events) {
-          console.log(`${chalk.bold(event.id)}  ${chalk.cyan(event.action)}  ${event.from_status ?? "-"} -> ${event.to_status ?? "-"}  ${chalk.dim(event.created_at)}`);
+          const note = event.note ? `  ${chalk.dim(formatCompactText(event.note, opts.verbose, 80))}` : "";
+          console.log(`${chalk.bold(event.id)}  ${chalk.cyan(event.action)}  ${event.from_status ?? "-"} -> ${event.to_status ?? "-"}  ${chalk.dim(event.created_at)}${note}`);
         }
+        console.log(chalk.dim(`\nshowing ${events.length} event(s)`));
+        if (events.length === limit) console.log(chalk.dim(`use files organize events ${idOrFileId} --limit ${limit * 2} for more, --verbose for full notes, or --json for full records`));
       } catch (error) {
         console.error(chalk.red(error instanceof Error ? error.message : String(error)));
         process.exitCode = 1;
@@ -511,4 +553,35 @@ export function registerOrganizationCommands(program: Command): void {
 function parseExportFormat(value: string): FileOrganizationAuditExportFormat {
   if (value === "json" || value === "jsonl" || value === "csv") return value;
   throw new Error("format must be one of: json, jsonl, csv");
+}
+
+function formatCompactText(value: unknown, verbose = false, maxLength = 96): string {
+  const text = String(value ?? "");
+  return verbose ? text : truncateText(text, maxLength);
+}
+
+function printCompactHint(
+  shown: number,
+  offset: number,
+  limit: number,
+  noun: string,
+  baseCommand: string,
+  verboseCommand: string,
+): void {
+  const plural = shown === 1 ? noun : `${noun}s`;
+  console.log(chalk.dim(`\nshowing ${shown} ${plural}`));
+  const next = shown === limit ? `${baseCommand} --offset ${offset + shown} for the next page, ` : "";
+  console.log(chalk.dim(`use ${next}${verboseCommand} for full paths, or --json for full records`));
+}
+
+function printOrganizationAuditSummary(audit: FileOrganizationAuditExport): void {
+  console.log(chalk.bold("Organization Audit Export"));
+  console.log(`  generated: ${audit.generated_at}`);
+  console.log(`  total reviews: ${audit.stats.total}`);
+  console.log(`  unresolved: ${audit.summary.unresolved_count} (${audit.unresolved_rows.length} rows in export)`);
+  console.log(`  moved: ${audit.summary.moved_count} (${audit.moved_rows.length} rows in export)`);
+  console.log(`  ignored: ${audit.summary.ignored_count} (${audit.ignored_rows.length} rows in export)`);
+  console.log(`  permission risk: ${audit.summary.permission_risk_count} (${audit.permission_risk_rows.length} rows in export)`);
+  if (audit.events) console.log(`  events: ${audit.summary.event_count ?? audit.events.length}`);
+  console.log(chalk.dim("use files organize export --json for full JSON, --format jsonl/csv for streaming export, or --output <path> for artifacts"));
 }
