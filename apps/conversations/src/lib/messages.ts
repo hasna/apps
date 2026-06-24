@@ -4,6 +4,7 @@ import { randomUUID } from "crypto";
 import { mkdirSync, copyFileSync, statSync, existsSync, realpathSync } from "fs";
 import { join, basename, resolve } from "path";
 import { fireWebhooks } from "./webhooks.js";
+import { normalizeChannelName } from "./channel-names.js";
 
 /** Strip null/undefined fields from a message for compact output. */
 export function compactMessage(msg: Message): Partial<Message> {
@@ -126,9 +127,12 @@ export function sendMessage(opts: SendMessageOptions): Message {
     : [];
 
   const db = getDb();
+  const channelName = opts.channel ? normalizeChannelName(opts.channel) : null;
   const explicitSession = opts.session_id && opts.session_id.trim().length > 0 ? opts.session_id : undefined;
-  const sessionId = explicitSession
-    ?? (opts.space ? `space:${opts.space}` : `${[opts.from, opts.to].sort().join("-")}-${randomUUID().slice(0, 8)}`);
+  const sessionId = channelName
+    ? `channel:${channelName}`
+    : explicitSession ?? `${[opts.from, opts.to].sort().join("-")}-${randomUUID().slice(0, 8)}`;
+  const toAgent = channelName ?? opts.to;
   const metadata = opts.metadata ? JSON.stringify(opts.metadata) : null;
   const normalizedPriority = (opts.priority === "low" || opts.priority === "normal" || opts.priority === "high" || opts.priority === "urgent")
     ? opts.priority
@@ -141,7 +145,7 @@ export function sendMessage(opts: SendMessageOptions): Message {
   const msgUuid = randomUUID().replace(/-/g, "");
 
   const stmt = db.prepare(`
-    INSERT INTO messages (uuid, session_id, from_agent, to_agent, space, project_id, content, priority, working_dir, repository, branch, metadata, blocking, reply_to)
+    INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, working_dir, repository, branch, metadata, blocking, reply_to)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     RETURNING *
   `);
@@ -150,8 +154,8 @@ export function sendMessage(opts: SendMessageOptions): Message {
     msgUuid,
     sessionId,
     opts.from,
-    opts.to,
-    opts.space || null,
+    toAgent,
+    channelName,
     opts.project_id || null,
     opts.content,
     normalizedPriority,
@@ -189,10 +193,10 @@ export function sendMessage(opts: SendMessageOptions): Message {
   }
 
   // Parse @mentions and create notification DMs (non-blocking)
-  if (opts.space) {
+  if (channelName) {
     const mentions = parseMentions(opts.content);
     if (mentions.length > 0) {
-      void processMentions(message.id, opts.from, opts.space, mentions, db);
+      void processMentions(message.id, opts.from, channelName, mentions, db);
     }
   }
 
@@ -219,9 +223,9 @@ export function readMessages(opts: ReadMessagesOptions = {}): Message[] {
     conditions.push("to_agent = ?");
     params.push(opts.to);
   }
-  if (opts.space) {
-    conditions.push("space = ?");
-    params.push(opts.space);
+  if (opts.channel) {
+    conditions.push("channel = ?");
+    params.push(normalizeChannelName(opts.channel));
   }
   if (opts.project_id) {
     conditions.push("project_id = ?");
@@ -311,12 +315,13 @@ export function markSessionRead(sessionId: string, reader: string): number {
   return result.changes;
 }
 
-export function markSpaceRead(spaceName: string, reader: string): number {
+export function markChannelRead(channelName: string, reader: string): number {
   const db = getDb();
+  const normalized = normalizeChannelName(channelName);
   const stmt = db.prepare(
-    `UPDATE messages SET read_at = strftime('%Y-%m-%dT%H:%M:%f', 'now') WHERE space = ? AND from_agent != ? AND read_at IS NULL`
+    `UPDATE messages SET read_at = strftime('%Y-%m-%dT%H:%M:%f', 'now') WHERE channel = ? AND from_agent != ? AND read_at IS NULL`
   );
-  const result = stmt.run(spaceName, reader);
+  const result = stmt.run(normalized, reader);
   return result.changes;
 }
 
@@ -371,7 +376,7 @@ export interface DigestMessage {
   preview: string;
   priority: string;
   has_attachments: boolean;
-  space?: string | null;
+  channel?: string | null;
   to?: string | null;
   unread: boolean;
 }
@@ -383,7 +388,7 @@ export interface DigestResult {
 }
 
 export interface ReadDigestOptions {
-  space?: string;
+  channel?: string;
   session_id?: string;
   to?: string;
   since?: string;
@@ -398,7 +403,7 @@ export function readDigest(opts: ReadDigestOptions = {}): DigestResult {
   // Count total unread with same filters
   const countConditions: string[] = ["read_at IS NULL"];
   const countParams: (string | number)[] = [];
-  if (opts.space) { countConditions.push("space = ?"); countParams.push(opts.space); }
+  if (opts.channel) { countConditions.push("channel = ?"); countParams.push(normalizeChannelName(opts.channel)); }
   if (opts.session_id) { countConditions.push("session_id = ?"); countParams.push(opts.session_id); }
   if (opts.to) { countConditions.push("to_agent = ?"); countParams.push(opts.to); }
   if (opts.since) { countConditions.push("created_at > ?"); countParams.push(opts.since); }
@@ -421,7 +426,7 @@ export function readDigest(opts: ReadDigestOptions = {}): DigestResult {
     preview: m.content.slice(0, 100) + (m.content.length > 100 ? "…" : ""),
     priority: m.priority,
     has_attachments: Array.isArray(m.attachments) && m.attachments.length > 0,
-    space: m.space,
+    channel: m.channel,
     to: m.to_agent,
     unread: !m.read_at,
   }));
@@ -430,7 +435,7 @@ export function readDigest(opts: ReadDigestOptions = {}): DigestResult {
 }
 
 export interface ExportMessagesOptions {
-  space?: string;
+  channel?: string;
   session_id?: string;
   from?: string;
   since?: string;
@@ -452,9 +457,9 @@ export function exportMessages(opts?: ExportMessagesOptions): string {
   const conditions: string[] = [];
   const params: (string | number)[] = [];
 
-  if (opts?.space) {
-    conditions.push("space = ?");
-    params.push(opts.space);
+  if (opts?.channel) {
+    conditions.push("channel = ?");
+    params.push(normalizeChannelName(opts.channel));
   }
   if (opts?.session_id) {
     conditions.push("session_id = ?");
@@ -483,14 +488,14 @@ export function exportMessages(opts?: ExportMessagesOptions): string {
   const format = opts?.format ?? "json";
 
   if (format === "csv") {
-    const headers = "id,session_id,from_agent,to_agent,space,content,priority,created_at,read_at";
+    const headers = "id,session_id,from_agent,to_agent,channel,content,priority,created_at,read_at";
     const lines = messages.map((m) =>
       [
         String(m.id),
         escapeCsvField(m.session_id),
         escapeCsvField(m.from_agent),
         escapeCsvField(m.to_agent),
-        escapeCsvField(m.space),
+        escapeCsvField(m.channel),
         escapeCsvField(m.content),
         escapeCsvField(m.priority),
         escapeCsvField(m.created_at),
@@ -539,14 +544,14 @@ export function unpinMessage(id: number): Message | null {
   return row ? parseMessage(row) : null;
 }
 
-export function getPinnedMessages(opts?: { space?: string; session_id?: string; limit?: number }): Message[] {
+export function getPinnedMessages(opts?: { channel?: string; session_id?: string; limit?: number }): Message[] {
   const db = getDb();
   const conditions: string[] = ["pinned_at IS NOT NULL"];
   const params: (string | number)[] = [];
 
-  if (opts?.space) {
-    conditions.push("space = ?");
-    params.push(opts.space);
+  if (opts?.channel) {
+    conditions.push("channel = ?");
+    params.push(normalizeChannelName(opts.channel));
   }
   if (opts?.session_id) {
     conditions.push("session_id = ?");
@@ -574,7 +579,7 @@ export function getUnreadBlockers(agent: string): Message[] {
     WHERE blocking = 1 AND read_at IS NULL
     AND (
       to_agent = ?
-      OR space IN (SELECT space FROM space_members WHERE agent = ?)
+      OR channel IN (SELECT channel FROM channel_members WHERE agent = ?)
     )
     ORDER BY created_at ASC, id ASC
   `).all(agent, agent) as Record<string, unknown>[];
@@ -619,7 +624,7 @@ export function searchMessages(opts: SearchMessagesOptions): SearchResult[] {
     ftsParams.push(ftsQuery);
 
     let extraWhere = "";
-    if (opts.space) { extraWhere += " AND m.space = ?"; ftsParams.push(opts.space); }
+    if (opts.channel) { extraWhere += " AND m.channel = ?"; ftsParams.push(normalizeChannelName(opts.channel)); }
     if (opts.from) { extraWhere += " AND m.from_agent = ?"; ftsParams.push(opts.from); }
     if (opts.to) { extraWhere += " AND m.to_agent = ?"; ftsParams.push(opts.to); }
     if (opts.since) { extraWhere += " AND m.created_at >= ?"; ftsParams.push(opts.since); }
@@ -657,7 +662,7 @@ export function searchMessages(opts: SearchMessagesOptions): SearchResult[] {
   const conditions: string[] = ["content LIKE ?"];
   const params: (string | number)[] = [`%${opts.query}%`];
 
-  if (opts.space) { conditions.push("space = ?"); params.push(opts.space); }
+  if (opts.channel) { conditions.push("channel = ?"); params.push(normalizeChannelName(opts.channel)); }
   if (opts.from) { conditions.push("from_agent = ?"); params.push(opts.from); }
   if (opts.to) { conditions.push("to_agent = ?"); params.push(opts.to); }
   if (opts.since) { conditions.push("created_at >= ?"); params.push(opts.since); }
@@ -676,15 +681,15 @@ export function searchMessages(opts: SearchMessagesOptions): SearchResult[] {
 }
 
 export interface UnreadCount {
-  space: string;
+  channel: string;
   unread_count: number;
   latest_message_at: string | null;
 }
 
 /**
- * Get unread message counts per space — lightweight alternative to read_messages.
- * Returns only spaces where the agent is a member (via space_members) or has received messages.
- * If agent is omitted, returns counts for all spaces.
+ * Get unread message counts per channel — lightweight alternative to read_messages.
+ * Returns only channels where the agent is a member (via channel_members) or has received messages.
+ * If agent is omitted, returns counts for all channels.
  */
 export function listUnreadCounts(agent?: string): UnreadCount[] {
   const db = getDb();
@@ -692,33 +697,33 @@ export function listUnreadCounts(agent?: string): UnreadCount[] {
   if (agent) {
     const rows = db.prepare(`
       SELECT
-        space,
-        COUNT(CASE WHEN read_at IS NULL AND (to_agent = ? OR to_agent IS NULL OR to_agent = '') THEN 1 END) AS unread_count,
+        channel,
+        COUNT(CASE WHEN read_at IS NULL AND from_agent != ? THEN 1 END) AS unread_count,
         MAX(created_at) AS latest_message_at
       FROM messages
-      WHERE space IN (
-        SELECT DISTINCT space FROM space_members WHERE agent = ?
+      WHERE channel IN (
+        SELECT DISTINCT channel FROM channel_members WHERE agent = ?
         UNION
-        SELECT DISTINCT space FROM messages WHERE to_agent = ? AND space IS NOT NULL
+        SELECT DISTINCT channel FROM messages WHERE to_agent = ? AND channel IS NOT NULL
       )
-      GROUP BY space
+      GROUP BY channel
       HAVING COUNT(*) > 0
       ORDER BY unread_count DESC, latest_message_at DESC
-    `).all(agent, agent, agent) as Array<{ space: string; unread_count: number; latest_message_at: string | null }>;
+    `).all(agent, agent, agent) as Array<{ channel: string; unread_count: number; latest_message_at: string | null }>;
     return rows;
   }
 
   const rows = db.prepare(`
     SELECT
-      space,
+      channel,
       COUNT(CASE WHEN read_at IS NULL THEN 1 END) AS unread_count,
       MAX(created_at) AS latest_message_at
     FROM messages
-    WHERE space IS NOT NULL
-    GROUP BY space
+    WHERE channel IS NOT NULL
+    GROUP BY channel
     HAVING COUNT(*) > 0
     ORDER BY unread_count DESC, latest_message_at DESC
-  `).all() as Array<{ space: string; unread_count: number; latest_message_at: string | null }>;
+  `).all() as Array<{ channel: string; unread_count: number; latest_message_at: string | null }>;
   return rows;
 }
 
@@ -734,23 +739,23 @@ export function parseMentions(content: string): string[] {
 async function processMentions(
   messageId: number,
   fromAgent: string,
-  space: string,
+  channel: string,
   mentionedAgents: string[],
   db: ReturnType<typeof getDb>
 ): Promise<void> {
   const stmt = db.prepare(
-    "INSERT INTO message_mentions (message_id, mentioned_agent, from_agent, space) VALUES (?, ?, ?, ?)"
+    "INSERT INTO message_mentions (message_id, mentioned_agent, from_agent, channel) VALUES (?, ?, ?, ?)"
   );
   for (const agent of mentionedAgents) {
     try {
-      stmt.run(messageId, agent, fromAgent, space);
+      stmt.run(messageId, agent, fromAgent, channel);
       // Send DM notification
       if (agent !== fromAgent.toLowerCase()) {
         sendMessage({
           from: fromAgent,
           to: agent,
-          content: `You were mentioned in #${space} by ${fromAgent} (message #${messageId})`,
-          metadata: { type: "mention_notification", source_message_id: messageId, space },
+          content: `You were mentioned in #${channel} by ${fromAgent} (message #${messageId})`,
+          metadata: { type: "mention_notification", source_message_id: messageId, channel },
         });
       }
     } catch { /* ignore duplicate/error */ }
@@ -758,28 +763,28 @@ async function processMentions(
 }
 
 export interface MentionCount {
-  space: string;
+  channel: string;
   unread_count: number;
   mention_count: number;
   latest_message_at: string | null;
 }
 
-/** Get unread counts AND mention counts per space for an agent. */
+/** Get unread counts AND mention counts per channel for an agent. */
 export function listUnreadCountsWithMentions(agent: string): MentionCount[] {
   const db = getDb();
   const rows = db.prepare(`
     SELECT
-      space,
-      COUNT(CASE WHEN read_at IS NULL AND (to_agent = ? OR to_agent IS NULL OR to_agent = '') THEN 1 END) AS unread_count,
-      (SELECT COUNT(*) FROM message_mentions mm WHERE mm.space = m.space AND mm.mentioned_agent = ? AND mm.notified_at IS NULL) AS mention_count,
+      channel,
+      COUNT(CASE WHEN read_at IS NULL AND from_agent != ? THEN 1 END) AS unread_count,
+      (SELECT COUNT(*) FROM message_mentions mm WHERE mm.channel = m.channel AND mm.mentioned_agent = ? AND mm.notified_at IS NULL) AS mention_count,
       MAX(created_at) AS latest_message_at
     FROM messages m
-    WHERE space IN (
-      SELECT DISTINCT space FROM space_members WHERE agent = ?
+    WHERE channel IN (
+      SELECT DISTINCT channel FROM channel_members WHERE agent = ?
       UNION
-      SELECT DISTINCT space FROM messages WHERE to_agent = ? AND space IS NOT NULL
+      SELECT DISTINCT channel FROM messages WHERE to_agent = ? AND channel IS NOT NULL
     )
-    GROUP BY space
+    GROUP BY channel
     HAVING COUNT(*) > 0
     ORDER BY mention_count DESC, unread_count DESC, latest_message_at DESC
   `).all(agent, agent, agent, agent) as MentionCount[];
@@ -787,11 +792,11 @@ export function listUnreadCountsWithMentions(agent: string): MentionCount[] {
 }
 
 /** Get messages that mention a specific agent. */
-export function getMessagesForAgent(agent: string, opts?: { space?: string; unread_only?: boolean; limit?: number }): Array<{ message: Message; mention_id: number }> {
+export function getMessagesForAgent(agent: string, opts?: { channel?: string; unread_only?: boolean; limit?: number }): Array<{ message: Message; mention_id: number }> {
   const db = getDb();
   const conditions = ["mm.mentioned_agent = ?"];
   const params: (string | number)[] = [agent.toLowerCase()];
-  if (opts?.space) { conditions.push("m.space = ?"); params.push(opts.space); }
+  if (opts?.channel) { conditions.push("m.channel = ?"); params.push(normalizeChannelName(opts.channel)); }
   if (opts?.unread_only) { conditions.push("mm.notified_at IS NULL"); }
   // LIMIT must be a literal integer — validated and capped
   const safeLimit = Math.max(1, Math.min(Math.floor(opts?.limit ?? 50), 1000));
@@ -805,12 +810,13 @@ export function getMessagesForAgent(agent: string, opts?: { space?: string; unre
 }
 
 /** Mark mentions as notified (agent has seen them). */
-export function markMentionsRead(agent: string, space?: string): number {
+export function markMentionsRead(agent: string, channel?: string): number {
   const db = getDb();
-  if (space) {
+  if (channel) {
+    const normalized = normalizeChannelName(channel);
     const result = db.prepare(
-      "UPDATE message_mentions SET notified_at = strftime('%Y-%m-%dT%H:%M:%f', 'now') WHERE mentioned_agent = ? AND space = ? AND notified_at IS NULL"
-    ).run(agent, space);
+      "UPDATE message_mentions SET notified_at = strftime('%Y-%m-%dT%H:%M:%f', 'now') WHERE mentioned_agent = ? AND channel = ? AND notified_at IS NULL"
+    ).run(agent, normalized);
     return result.changes;
   }
   const result = db.prepare(
@@ -877,17 +883,18 @@ export function getReadReceipts(messageId: number): ReadReceipt[] {
   ).all(messageId) as ReadReceipt[];
 }
 
-/** Get read status summary for a space message: who has read it and who hasn't. */
+/** Get read status summary for a channel message: who has read it and who hasn't. */
 export function getMessageReadStatus(
   messageId: number,
-  space: string
+  channel: string
 ): { receipts: ReadReceipt[]; unread_by: string[] } {
   const db = getDb();
+  const normalized = normalizeChannelName(channel);
   const receipts = getReadReceipts(messageId);
   const readers = new Set(receipts.map((r) => r.agent));
   const members = db.prepare(
-    "SELECT agent FROM space_members WHERE space = ?"
-  ).all(space) as { agent: string }[];
+    "SELECT agent FROM channel_members WHERE channel = ?"
+  ).all(normalized) as { agent: string }[];
   const unread_by = members.map((m) => m.agent).filter((a) => !readers.has(a));
   return { receipts, unread_by };
 }

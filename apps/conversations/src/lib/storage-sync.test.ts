@@ -77,7 +77,7 @@ describe("conversations storage configuration", () => {
 
   it("returns default storage tables and rejects unsupported tables", () => {
     expect(resolveTables()).toEqual([...DEFAULT_STORAGE_TABLES]);
-    expect(() => resolveTables("spaces,missing")).toThrow("Unsupported conversations storage table");
+    expect(() => resolveTables("channels,missing")).toThrow("Unsupported conversations storage table");
   });
 
   it("exports storage helpers from the storage subpath source", async () => {
@@ -104,7 +104,7 @@ describe("conversations storage configuration", () => {
       db.prepare(`
         INSERT INTO _sync_conflicts (id, table_name, pk, local_row, remote_row)
         VALUES (?, ?, ?, ?, ?)
-      `).run("conflict-1", "spaces", "general", "{}", "{}");
+      `).run("conflict-1", "channels", "general", "{}", "{}");
 
       ensureConflictsTable(db);
 

@@ -22,7 +22,7 @@ export interface RelatedEntity {
 export interface AgentNetwork {
   agent: string;
   communicates_with: { agent: string; message_count: number; last_at: string }[];
-  spaces: { space: string; message_count: number }[];
+  channels: { channel: string; message_count: number }[];
   projects: string[];
 }
 
@@ -51,12 +51,12 @@ function ensureGraphTable(): void {
 }
 
 /**
- * Build the knowledge graph from messages, spaces, and projects.
+ * Build the knowledge graph from messages, channels, and projects.
  * Scans all messages to create edges:
  *   agent → communicates_with → agent (DM frequency)
- *   agent → member_of → space (space membership)
- *   agent → posts_in → space (message activity)
- *   space → belongs_to → project (space-project link)
+ *   agent → member_of → channel (channel membership)
+ *   agent → posts_in → channel (message activity)
+ *   channel → belongs_to → project (channel-project link)
  *   message → replies_to → message (threading)
  */
 export function buildGraph(): { edges_created: number; edges_updated: number } {
@@ -78,7 +78,7 @@ export function buildGraph(): { edges_created: number; edges_updated: number } {
     // Agent-to-agent communication (DMs)
     const dmPairs = db.prepare(`
       SELECT from_agent, to_agent, COUNT(*) as cnt, MAX(created_at) as last_at
-      FROM messages WHERE space IS NULL AND from_agent != to_agent
+      FROM messages WHERE channel IS NULL AND from_agent != to_agent
       GROUP BY from_agent, to_agent
     `).all() as { from_agent: string; to_agent: string; cnt: number; last_at: string }[];
 
@@ -90,41 +90,41 @@ export function buildGraph(): { edges_created: number; edges_updated: number } {
       if (existing) updated++; else created++;
     }
 
-    // Agent posts in space
-    const spacePosts = db.prepare(`
-      SELECT from_agent, space, COUNT(*) as cnt
-      FROM messages WHERE space IS NOT NULL
-      GROUP BY from_agent, space
-    `).all() as { from_agent: string; space: string; cnt: number }[];
+    // Agent posts in channel
+    const channelPosts = db.prepare(`
+      SELECT from_agent, channel, COUNT(*) as cnt
+      FROM messages WHERE channel IS NOT NULL
+      GROUP BY from_agent, channel
+    `).all() as { from_agent: string; channel: string; cnt: number }[];
 
-    for (const sp of spacePosts) {
+    for (const sp of channelPosts) {
       const existing = db.prepare(
-        "SELECT 1 FROM graph_edges WHERE from_type='agent' AND from_id=? AND to_type='space' AND to_id=? AND relation='posts_in'"
-      ).get(sp.from_agent, sp.space);
-      upsert.run("agent", sp.from_agent, "space", sp.space, "posts_in", sp.cnt);
+        "SELECT 1 FROM graph_edges WHERE from_type='agent' AND from_id=? AND to_type='channel' AND to_id=? AND relation='posts_in'"
+      ).get(sp.from_agent, sp.channel);
+      upsert.run("agent", sp.from_agent, "channel", sp.channel, "posts_in", sp.cnt);
       if (existing) updated++; else created++;
     }
 
-    // Space membership
-    const members = db.prepare("SELECT agent, space FROM space_members").all() as { agent: string; space: string }[];
+    // Channel membership
+    const members = db.prepare("SELECT agent, channel FROM channel_members").all() as { agent: string; channel: string }[];
     for (const m of members) {
       const existing = db.prepare(
-        "SELECT 1 FROM graph_edges WHERE from_type='agent' AND from_id=? AND to_type='space' AND to_id=? AND relation='member_of'"
-      ).get(m.agent, m.space);
-      upsert.run("agent", m.agent, "space", m.space, "member_of", 1);
+        "SELECT 1 FROM graph_edges WHERE from_type='agent' AND from_id=? AND to_type='channel' AND to_id=? AND relation='member_of'"
+      ).get(m.agent, m.channel);
+      upsert.run("agent", m.agent, "channel", m.channel, "member_of", 1);
       if (existing) updated++; else created++;
     }
 
-    // Space belongs to project
-    const spaceProjects = db.prepare(
-      "SELECT name, project_id FROM spaces WHERE project_id IS NOT NULL"
+    // Channel belongs to project
+    const channelProjects = db.prepare(
+      "SELECT name, project_id FROM channels WHERE project_id IS NOT NULL"
     ).all() as { name: string; project_id: string }[];
 
-    for (const sp of spaceProjects) {
+    for (const sp of channelProjects) {
       const existing = db.prepare(
-        "SELECT 1 FROM graph_edges WHERE from_type='space' AND from_id=? AND to_type='project' AND to_id=? AND relation='belongs_to'"
+        "SELECT 1 FROM graph_edges WHERE from_type='channel' AND from_id=? AND to_type='project' AND to_id=? AND relation='belongs_to'"
       ).get(sp.name, sp.project_id);
-      upsert.run("space", sp.name, "project", sp.project_id, "belongs_to", 1);
+      upsert.run("channel", sp.name, "project", sp.project_id, "belongs_to", 1);
       if (existing) updated++; else created++;
     }
   });
@@ -162,30 +162,30 @@ export function getAgentNetwork(agent: string): AgentNetwork {
   // Who does this agent talk to most?
   const comms = db.prepare(`
     SELECT to_id as agent, weight as message_count,
-      (SELECT MAX(created_at) FROM messages WHERE from_agent = ? AND to_agent = ge.to_id AND space IS NULL) as last_at
+      (SELECT MAX(created_at) FROM messages WHERE from_agent = ? AND to_agent = ge.to_id AND channel IS NULL) as last_at
     FROM graph_edges ge
     WHERE from_type = 'agent' AND from_id = ? AND relation = 'communicates_with'
     ORDER BY weight DESC LIMIT 20
   `).all(agent, agent) as { agent: string; message_count: number; last_at: string }[];
 
-  // What spaces does this agent post in?
-  const spaces = db.prepare(`
-    SELECT to_id as space, weight as message_count FROM graph_edges
+  // What channels does this agent post in?
+  const channels = db.prepare(`
+    SELECT to_id as channel, weight as message_count FROM graph_edges
     WHERE from_type = 'agent' AND from_id = ? AND relation = 'posts_in'
     ORDER BY weight DESC LIMIT 20
-  `).all(agent) as { space: string; message_count: number }[];
+  `).all(agent) as { channel: string; message_count: number }[];
 
-  // What projects is this agent associated with? (through spaces)
+  // What projects is this agent associated with? (through channels)
   const projects = db.prepare(`
     SELECT DISTINCT g2.to_id FROM graph_edges g1
-    JOIN graph_edges g2 ON g1.to_type = 'space' AND g1.to_id = g2.from_id AND g2.relation = 'belongs_to'
+    JOIN graph_edges g2 ON g1.to_type = 'channel' AND g1.to_id = g2.from_id AND g2.relation = 'belongs_to'
     WHERE g1.from_type = 'agent' AND g1.from_id = ? AND g1.relation IN ('member_of', 'posts_in')
   `).all(agent) as { to_id: string }[];
 
   return {
     agent,
     communicates_with: comms,
-    spaces,
+    channels,
     projects: projects.map((p) => p.to_id),
   };
 }

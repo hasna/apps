@@ -14,7 +14,7 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
     session_id: "test-session",
     from_agent: "alice",
     to_agent: "bob",
-    space: null,
+    channel: null,
     project_id: null,
     content: "hello",
     priority: "normal",
@@ -69,7 +69,7 @@ describe("fireWebhooks", () => {
     fireWebhooks(makeMessage({ blocking: false }));
   });
 
-  test("matches dm event for non-space messages", () => {
+  test("matches dm event for non-channel messages", () => {
     let called = false;
     const originalFetch = globalThis.fetch;
     (globalThis as any).fetch = async (...args: any[]) => { called = true; return new Response("ok"); };
@@ -77,7 +77,7 @@ describe("fireWebhooks", () => {
     writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
       webhooks: [{ url: "http://localhost:9999/hook", events: ["dm"] }],
     }));
-    fireWebhooks(makeMessage({ space: null }));
+    fireWebhooks(makeMessage({ channel: null }));
 
     // Restore
     setTimeout(() => { globalThis.fetch = originalFetch; }, 100);
@@ -92,11 +92,11 @@ describe("fireWebhooks", () => {
     fireWebhooks(makeMessage({ blocking: true }));
   });
 
-  test("matches space event for space messages", () => {
+  test("matches channel event for channel messages", () => {
     writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
-      webhooks: [{ url: "http://localhost:9999/hook", events: ["space"] }],
+      webhooks: [{ url: "http://localhost:9999/hook", events: ["channel"] }],
     }));
-    fireWebhooks(makeMessage({ space: "general" }));
+    fireWebhooks(makeMessage({ channel: "general" }));
   });
 
   test("matches mention event when agent is @mentioned", () => {
@@ -114,12 +114,12 @@ describe("fireWebhooks", () => {
     fireWebhooks(makeMessage({ to_agent: "bob" }));
   });
 
-  test("fires webhook for agent-scoped space message", () => {
+  test("fires webhook for agent-scoped channel message", () => {
     writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
-      webhooks: [{ url: "http://localhost:9999/hook", events: ["space"], agent: "charlie" }],
+      webhooks: [{ url: "http://localhost:9999/hook", events: ["channel"], agent: "charlie" }],
     }));
-    // Space messages are not filtered by agent scope (only DMs are)
-    fireWebhooks(makeMessage({ space: "general", to_agent: "general" }));
+    // Channel messages are not filtered by agent scope (only DMs are)
+    fireWebhooks(makeMessage({ channel: "general", to_agent: "general" }));
   });
 
   test("mention event does not match when agent not mentioned", () => {
@@ -171,7 +171,7 @@ describe("fireTaskWebhooks", () => {
 
   test("does nothing when no webhooks have task events", () => {
     writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
-      webhooks: [{ url: "https://example.com/hook", events: ["dm", "space"] }],
+      webhooks: [{ url: "https://example.com/hook", events: ["dm", "channel"] }],
     }));
     fireTaskWebhooks(makeTaskEvent());
   });

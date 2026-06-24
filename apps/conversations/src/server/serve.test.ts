@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
 import { startDashboardServer } from "./serve";
 import { sendMessage } from "../lib/messages";
-import { createSpace, joinSpace } from "../lib/spaces";
+import { createChannel, joinChannel } from "../lib/channels";
 import { createProject } from "../lib/projects";
 import { closeDb } from "../lib/db";
 import { mkdirSync, rmSync, unlinkSync, writeFileSync } from "fs";
@@ -45,7 +45,7 @@ describe("API /api/status", () => {
     expect(data.db_path).toBeTruthy();
     expect(typeof data.total_messages).toBe("number");
     expect(typeof data.total_sessions).toBe("number");
-    expect(typeof data.total_spaces).toBe("number");
+    expect(typeof data.total_channels).toBe("number");
     expect(typeof data.total_projects).toBe("number");
     expect(typeof data.unread_messages).toBe("number");
   });
@@ -117,29 +117,29 @@ describe("API /api/sessions", () => {
   });
 });
 
-describe("API /api/spaces", () => {
-  test("GET returns spaces array", async () => {
-    createSpace("api-test-sp", "tester", { description: "Test space" });
-    const res = await fetch(`${base()}/api/spaces`);
+describe("API /api/channels", () => {
+  test("GET returns channels array", async () => {
+    createChannel("api-test-sp", "tester", { description: "Test channel" });
+    const res = await fetch(`${base()}/api/channels`);
     expect(res.status).toBe(200);
     const data = await res.json() as any[];
     expect(data.some((sp: any) => sp.name === "api-test-sp")).toBe(true);
   });
 
-  test("POST creates a space", async () => {
-    const res = await fetch(`${base()}/api/spaces`, {
+  test("POST creates a channel", async () => {
+    const res = await fetch(`${base()}/api/channels`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "web-space", created_by: "web-user", description: "Created via API" }),
+      body: JSON.stringify({ name: "web-channel", created_by: "web-user", description: "Created via API" }),
     });
     expect(res.status).toBe(200);
     const sp = await res.json() as any;
-    expect(sp.name).toBe("web-space");
+    expect(sp.name).toBe("web-channel");
   });
 
   test("POST returns 400 on duplicate", async () => {
-    createSpace("dup-sp", "tester");
-    const res = await fetch(`${base()}/api/spaces`, {
+    createChannel("dup-sp", "tester");
+    const res = await fetch(`${base()}/api/channels`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: "dup-sp", created_by: "tester" }),
@@ -213,13 +213,13 @@ describe("API /api/messages/search", () => {
     expect(data[0].from_agent).toBe("search-sender-a");
   });
 
-  test("filters by space param", async () => {
-    sendMessage({ from: "a", to: "search-sp", content: "searchspace-test", space: "search-sp" });
-    sendMessage({ from: "a", to: "b", content: "searchspace-test" });
-    const res = await fetch(`${base()}/api/messages/search?q=searchspace-test&space=search-sp`);
+  test("filters by channel param", async () => {
+    sendMessage({ from: "a", to: "search-sp", content: "searchchannel-test", channel: "search-sp" });
+    sendMessage({ from: "a", to: "b", content: "searchchannel-test" });
+    const res = await fetch(`${base()}/api/messages/search?q=searchchannel-test&channel=search-sp`);
     const data = await res.json() as any[];
     expect(data).toHaveLength(1);
-    expect(data[0].space).toBe("search-sp");
+    expect(data[0].channel).toBe("search-sp");
   });
 
   test("returns empty array when no matches", async () => {
@@ -241,14 +241,14 @@ describe("API /api/messages/pinned", () => {
     expect(data.some((m: any) => m.id === msg.id)).toBe(true);
   });
 
-  test("GET filters by space", async () => {
-    createSpace("pin-sp", "tester");
-    const msg = sendMessage({ from: "a", to: "pin-sp", content: "pinned-in-space", space: "pin-sp" });
+  test("GET filters by channel", async () => {
+    createChannel("pin-sp", "tester");
+    const msg = sendMessage({ from: "a", to: "pin-sp", content: "pinned-in-channel", channel: "pin-sp" });
     await fetch(`${base()}/api/messages/${msg.id}/pin`, { method: "POST" });
-    const res = await fetch(`${base()}/api/messages/pinned?space=pin-sp`);
+    const res = await fetch(`${base()}/api/messages/pinned?channel=pin-sp`);
     expect(res.status).toBe(200);
     const data = await res.json() as any[];
-    expect(data.every((m: any) => m.space === "pin-sp")).toBe(true);
+    expect(data.every((m: any) => m.channel === "pin-sp")).toBe(true);
   });
 
   test("GET respects limit param", async () => {
@@ -388,28 +388,28 @@ describe("API /api/messages/:id (PUT)", () => {
   });
 });
 
-describe("API /api/spaces/:name (GET)", () => {
-  test("GET returns a single space", async () => {
-    createSpace("get-single-sp", "tester", { description: "A test space" });
-    const res = await fetch(`${base()}/api/spaces/get-single-sp`);
+describe("API /api/channels/:name (GET)", () => {
+  test("GET returns a single channel", async () => {
+    createChannel("get-single-sp", "tester", { description: "A test channel" });
+    const res = await fetch(`${base()}/api/channels/get-single-sp`);
     expect(res.status).toBe(200);
     const data = await res.json() as any;
     expect(data.name).toBe("get-single-sp");
-    expect(data.description).toBe("A test space");
+    expect(data.description).toBe("A test channel");
   });
 
-  test("GET returns 404 for non-existent space", async () => {
-    const res = await fetch(`${base()}/api/spaces/does-not-exist-sp`);
+  test("GET returns 404 for non-existent channel", async () => {
+    const res = await fetch(`${base()}/api/channels/does-not-exist-sp`);
     expect(res.status).toBe(404);
     const data = await res.json() as any;
     expect(data.error).toBeTruthy();
   });
 });
 
-describe("API /api/spaces/:name (PUT)", () => {
-  test("PUT updates a space description", async () => {
-    createSpace("update-sp", "tester", { description: "old desc" });
-    const res = await fetch(`${base()}/api/spaces/update-sp`, {
+describe("API /api/channels/:name (PUT)", () => {
+  test("PUT updates a channel description", async () => {
+    createChannel("update-sp", "tester", { description: "old desc" });
+    const res = await fetch(`${base()}/api/channels/update-sp`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ description: "new desc" }),
@@ -419,8 +419,8 @@ describe("API /api/spaces/:name (PUT)", () => {
     expect(data.description).toBe("new desc");
   });
 
-  test("PUT returns 400 for non-existent space", async () => {
-    const res = await fetch(`${base()}/api/spaces/nonexistent-update-sp`, {
+  test("PUT returns 400 for non-existent channel", async () => {
+    const res = await fetch(`${base()}/api/channels/nonexistent-update-sp`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ description: "wont work" }),
@@ -431,36 +431,36 @@ describe("API /api/spaces/:name (PUT)", () => {
   });
 });
 
-describe("API /api/spaces/:name/archive", () => {
-  test("POST archives a space", async () => {
-    createSpace("archive-sp", "tester");
-    const res = await fetch(`${base()}/api/spaces/archive-sp/archive`, { method: "POST" });
+describe("API /api/channels/:name/archive", () => {
+  test("POST archives a channel", async () => {
+    createChannel("archive-sp", "tester");
+    const res = await fetch(`${base()}/api/channels/archive-sp/archive`, { method: "POST" });
     expect(res.status).toBe(200);
     const data = await res.json() as any;
     expect(data.name).toBe("archive-sp");
   });
 
-  test("POST returns 400 for non-existent space", async () => {
-    const res = await fetch(`${base()}/api/spaces/nonexistent-archive-sp/archive`, { method: "POST" });
+  test("POST returns 400 for non-existent channel", async () => {
+    const res = await fetch(`${base()}/api/channels/nonexistent-archive-sp/archive`, { method: "POST" });
     expect(res.status).toBe(400);
     const data = await res.json() as any;
     expect(data.error).toBeTruthy();
   });
 });
 
-describe("API /api/spaces/:name/unarchive", () => {
-  test("POST unarchives a space", async () => {
-    createSpace("unarchive-sp", "tester");
+describe("API /api/channels/:name/unarchive", () => {
+  test("POST unarchives a channel", async () => {
+    createChannel("unarchive-sp", "tester");
     // Archive first
-    await fetch(`${base()}/api/spaces/unarchive-sp/archive`, { method: "POST" });
-    const res = await fetch(`${base()}/api/spaces/unarchive-sp/unarchive`, { method: "POST" });
+    await fetch(`${base()}/api/channels/unarchive-sp/archive`, { method: "POST" });
+    const res = await fetch(`${base()}/api/channels/unarchive-sp/unarchive`, { method: "POST" });
     expect(res.status).toBe(200);
     const data = await res.json() as any;
     expect(data.name).toBe("unarchive-sp");
   });
 
-  test("POST returns 400 for non-existent space", async () => {
-    const res = await fetch(`${base()}/api/spaces/nonexistent-unarchive-sp/unarchive`, { method: "POST" });
+  test("POST returns 400 for non-existent channel", async () => {
+    const res = await fetch(`${base()}/api/channels/nonexistent-unarchive-sp/unarchive`, { method: "POST" });
     expect(res.status).toBe(400);
     const data = await res.json() as any;
     expect(data.error).toBeTruthy();
@@ -535,9 +535,9 @@ describe("API /api/projects/:id (DELETE)", () => {
     expect(data.error).toBeTruthy();
   });
 
-  test("DELETE returns 400 when spaces reference the project", async () => {
+  test("DELETE returns 400 when channels reference the project", async () => {
     const proj = createProject({ name: "nodelete-proj", created_by: "tester" });
-    createSpace("proj-ref-sp", "tester", { project_id: proj.id });
+    createChannel("proj-ref-sp", "tester", { project_id: proj.id });
     const res = await fetch(`${base()}/api/projects/${proj.id}`, { method: "DELETE" });
     expect(res.status).toBe(400);
     const data = await res.json() as any;
@@ -583,13 +583,13 @@ describe("API /api/export", () => {
     expect(text.length).toBeGreaterThan(0);
   });
 
-  test("GET filters by space", async () => {
-    createSpace("export-sp", "tester");
-    sendMessage({ from: "a", to: "export-sp", content: "export-sp-msg", space: "export-sp" });
-    const res = await fetch(`${base()}/api/export?space=export-sp`);
+  test("GET filters by channel", async () => {
+    createChannel("export-sp", "tester");
+    sendMessage({ from: "a", to: "export-sp", content: "export-sp-msg", channel: "export-sp" });
+    const res = await fetch(`${base()}/api/export?channel=export-sp`);
     expect(res.status).toBe(200);
     const data = await res.json() as any[];
-    expect(data.every((m: any) => m.space === "export-sp")).toBe(true);
+    expect(data.every((m: any) => m.channel === "export-sp")).toBe(true);
   });
 
   test("GET filters by from", async () => {
@@ -633,7 +633,7 @@ describe("API /api/locks", () => {
   });
 
   test("GET filters by resource_type", async () => {
-    const res = await fetch(`${base()}/api/locks?resource_type=space`);
+    const res = await fetch(`${base()}/api/locks?resource_type=channel`);
     expect(res.status).toBe(200);
     const data = await res.json() as any[];
     expect(Array.isArray(data)).toBe(true);

@@ -112,7 +112,7 @@ export function listProjects(opts?: {
   const rows = db.prepare(`
     SELECT
       p.*,
-      (SELECT COUNT(*) FROM spaces WHERE project_id = p.id) AS space_count
+      (SELECT COUNT(*) FROM channels WHERE project_id = p.id) AS channel_count
     FROM projects p
     ${where}
     ORDER BY p.name ASC
@@ -121,7 +121,7 @@ export function listProjects(opts?: {
 
   return rows.map((row) => ({
     ...parseProject(row),
-    space_count: row.space_count as number,
+    channel_count: row.channel_count as number,
   }));
 }
 
@@ -130,7 +130,7 @@ export function getProject(id: string): ProjectInfo | null {
   const row = db.prepare(`
     SELECT
       p.*,
-      (SELECT COUNT(*) FROM spaces WHERE project_id = p.id) AS space_count
+      (SELECT COUNT(*) FROM channels WHERE project_id = p.id) AS channel_count
     FROM projects p
     WHERE p.id = ?
   `).get(id) as Record<string, unknown> | null;
@@ -139,7 +139,7 @@ export function getProject(id: string): ProjectInfo | null {
 
   return {
     ...parseProject(row),
-    space_count: row.space_count as number,
+    channel_count: row.channel_count as number,
   };
 }
 
@@ -148,7 +148,7 @@ export function getProjectByName(name: string): ProjectInfo | null {
   const row = db.prepare(`
     SELECT
       p.*,
-      (SELECT COUNT(*) FROM spaces WHERE project_id = p.id) AS space_count
+      (SELECT COUNT(*) FROM channels WHERE project_id = p.id) AS channel_count
     FROM projects p
     WHERE p.name = ?
   `).get(name) as Record<string, unknown> | null;
@@ -157,7 +157,7 @@ export function getProjectByName(name: string): ProjectInfo | null {
 
   return {
     ...parseProject(row),
-    space_count: row.space_count as number,
+    channel_count: row.channel_count as number,
   };
 }
 
@@ -204,13 +204,13 @@ export function updateProject(id: string, updates: {
 export function deleteProject(id: string): boolean {
   const db = getDb();
 
-  // Check if any spaces reference this project
-  const spaceCount = (db.prepare(
-    "SELECT COUNT(*) as c FROM spaces WHERE project_id = ?"
+  // Check if any channels reference this project
+  const channelCount = (db.prepare(
+    "SELECT COUNT(*) as c FROM channels WHERE project_id = ?"
   ).get(id) as { c: number }).c;
 
-  if (spaceCount > 0) {
-    throw new Error(`Cannot delete project: ${spaceCount} space(s) still reference it`);
+  if (channelCount > 0) {
+    throw new Error(`Cannot delete project: ${channelCount} channel(s) still reference it`);
   }
 
   const result = db.prepare("DELETE FROM projects WHERE id = ?").run(id);

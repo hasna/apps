@@ -31,10 +31,10 @@ export function registerWebhookTools(server: McpServer): void {
 
   // ---- Add Webhook ----
   server.registerTool("add_webhook", {
-    description: "Add a new webhook. Validates URL (must be HTTPS, not private IP) and events. Valid events: dm, blocker, space, mention, task.",
+    description: "Add a new webhook. Validates URL (must be HTTPS, not private IP) and events. Valid events: dm, blocker, channel, mention, task.",
     inputSchema: {
       url: z.string(),
-      events: z.array(z.enum(["dm", "blocker", "space", "mention", "task"])),
+      events: z.array(z.enum(["dm", "blocker", "channel", "mention", "task"])),
       agent: z.string().optional(),
     },
   }, async (args: Record<string, any>) => {

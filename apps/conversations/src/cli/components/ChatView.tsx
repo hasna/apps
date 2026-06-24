@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Box, Text, useInput } from "ink";
 import TextInput from "ink-text-input";
-import { readMessages, sendMessage, markSessionRead, markSpaceRead } from "../../lib/messages.js";
+import { readMessages, sendMessage, markSessionRead, markChannelRead } from "../../lib/messages.js";
 import { startPolling } from "../../lib/poll.js";
 import { MessageBubble } from "./MessageBubble.js";
 import type { Message } from "../../types.js";
@@ -12,28 +12,28 @@ interface ChatViewProps {
   // DM mode
   sessionId?: string;
   recipient?: string;
-  // Space mode
-  spaceName?: string;
+  // Channel mode
+  channelName?: string;
 }
 
-export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient, spaceName }: ChatViewProps) {
+export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient, channelName }: ChatViewProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState(initialSessionId);
-  const isSpace = !!spaceName;
+  const isChannel = !!channelName;
   const seenIds = useRef<Set<number>>(new Set());
 
   // Load existing messages + poll for new ones
   useEffect(() => {
     seenIds.current = new Set();
-    const opts = isSpace
-      ? { space: spaceName }
+    const opts = isChannel
+      ? { channel: channelName }
       : sessionId
         ? { session_id: sessionId }
         : {};
 
     // Only load if we have something to query
-    if (isSpace || sessionId) {
+    if (isChannel || sessionId) {
       const existing = readMessages(opts);
       for (const msg of existing) {
         seenIds.current.add(msg.id);
@@ -43,8 +43,8 @@ export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient
       setMessages([]);
     }
 
-    const pollOpts = isSpace
-      ? { space: spaceName }
+    const pollOpts = isChannel
+      ? { channel: channelName }
       : sessionId
         ? { session_id: sessionId }
         : null;
@@ -65,17 +65,17 @@ export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient
     });
 
     return stop;
-  }, [sessionId, spaceName]);
+  }, [sessionId, channelName]);
 
   // Mark as read
   useEffect(() => {
     if (messages.length === 0) return;
-    if (isSpace && spaceName) {
-      markSpaceRead(spaceName, agent);
+    if (isChannel && channelName) {
+      markChannelRead(channelName, agent);
     } else if (sessionId) {
       markSessionRead(sessionId, agent);
     }
-  }, [messages.length, isSpace, spaceName, sessionId, agent]);
+  }, [messages.length, isChannel, channelName, sessionId, agent]);
 
   useInput((_, key) => {
     if (key.escape) onBack();
@@ -84,13 +84,13 @@ export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient
   const handleSubmit = (value: string) => {
     if (!value.trim()) return;
 
-    if (isSpace && spaceName) {
+    if (isChannel && channelName) {
       const msg = sendMessage({
         from: agent,
-        to: spaceName,
+        to: channelName,
         content: value.trim(),
-        space: spaceName,
-        session_id: `space:${spaceName}`,
+        channel: channelName,
+        session_id: `channel:${channelName}`,
       });
       seenIds.current.add(msg.id);
       setMessages((prev) => [...prev, msg]);
@@ -113,18 +113,18 @@ export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient
     setInput("");
   };
 
-  const title = isSpace
-    ? `#${spaceName}`
+  const title = isChannel
+    ? `#${channelName}`
     : recipient || "self";
 
-  const prompt = isSpace
-    ? `${agent} → #${spaceName}`
+  const prompt = isChannel
+    ? `${agent} → #${channelName}`
     : `${agent} → ${recipient || "self"}`;
 
   return (
     <Box flexDirection="column" padding={1}>
       <Box marginBottom={1}>
-        <Text bold color={isSpace ? "magenta" : "cyan"}>{title}</Text>
+        <Text bold color={isChannel ? "magenta" : "cyan"}>{title}</Text>
         <Text dimColor>  (Esc: back)</Text>
       </Box>
 
@@ -143,7 +143,7 @@ export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient
       </Box>
 
       <Box marginTop={1}>
-        <Text color={isSpace ? "magenta" : "cyan"}>{prompt}: </Text>
+        <Text color={isChannel ? "magenta" : "cyan"}>{prompt}: </Text>
         <TextInput
           value={input}
           onChange={setInput}

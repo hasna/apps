@@ -112,7 +112,7 @@ describe("conversations_storage_push", () => {
   test("accepts explicit tables parameter", async () => {
     const result = await client.callTool({
       name: "conversations_storage_push",
-      arguments: { tables: "spaces,projects" },
+      arguments: { tables: "channels,projects" },
     }) as any;
     const text = getText(result);
     expect(typeof text).toBe("string");
@@ -133,7 +133,7 @@ describe("conversations_storage_pull", () => {
   test("accepts explicit tables parameter", async () => {
     const result = await client.callTool({
       name: "conversations_storage_pull",
-      arguments: { tables: "spaces" },
+      arguments: { tables: "channels" },
     }) as any;
     const text = getText(result);
     expect(typeof text).toBe("string");

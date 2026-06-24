@@ -1,11 +1,11 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { sendMessage, readMessages, readDigest, markRead, markSessionRead, markSpaceRead, markAllRead, getMessageById, searchMessages, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers } from "../../lib/messages.js";
+import { sendMessage, readMessages, readDigest, markRead, markSessionRead, markChannelRead, markAllRead, getMessageById, searchMessages, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers } from "../../lib/messages.js";
 import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { renderContent } from "../../lib/terminal-markdown.js";
 import { heartbeat } from "../../lib/presence.js";
-import { buildMessagePreview, listSpaceNotificationSubscriptions, markAllSpaceNotificationsRead, readSpaceNotifications } from "../../lib/space-notifications.js";
+import { buildMessagePreview, listChannelNotificationSubscriptions, markAllChannelNotificationsRead, readChannelNotifications } from "../../lib/channel-notifications.js";
 
 export function registerMessagingCommands(program: Command): void {
   // ---- send ----
@@ -13,7 +13,7 @@ export function registerMessagingCommands(program: Command): void {
     .command("send")
     .description("Send a message to an agent")
     .argument("<message>", "Message content")
-    .option("--to <agent>", "Recipient agent ID (required unless --space is used)")
+    .option("--to <agent>", "Recipient agent ID (required unless --channel is used)")
     .option("--from <agent>", "Sender agent ID")
     .option("--session <id>", "Session ID (auto-generated if omitted)")
     .option("--priority <level>", "Priority: low, normal, high, urgent", "normal")
@@ -21,13 +21,13 @@ export function registerMessagingCommands(program: Command): void {
     .option("--repository <repo>", "Repository context")
     .option("--branch <branch>", "Branch context")
     .option("--metadata <json>", "JSON metadata string")
-    .option("--space <name>", "Send to a space instead of a specific agent")
+    .option("--channel <name>", "Send to a channel instead of a specific agent")
     .option("--blocking", "Send as a blocking message (recipient must acknowledge)")
     .option("-j, --json", "Output as JSON")
     .action((message, opts) => {
       const from = resolveIdentity(opts.from).trim();
       const to = typeof opts.to === "string" ? opts.to.trim() : "";
-      const space = typeof opts.space === "string" ? opts.space.trim() : "";
+      const channel = typeof opts.channel === "string" ? opts.channel.trim() : "";
       const content = typeof message === "string" ? message : "";
       const session = typeof opts.session === "string" && opts.session.trim()
         ? opts.session.trim()
@@ -37,8 +37,8 @@ export function registerMessagingCommands(program: Command): void {
         console.error(chalk.red("Sender identity is required."));
         process.exit(1);
       }
-      if (!to && !space) {
-        console.error(chalk.red("Recipient is required: use --to <agent> or --space <name>."));
+      if (!to && !channel) {
+        console.error(chalk.red("Recipient is required: use --to <agent> or --channel <name>."));
         process.exit(1);
       }
       if (!content.trim()) {
@@ -59,7 +59,7 @@ export function registerMessagingCommands(program: Command): void {
       const msg = sendMessage({
         from,
         to: to || from,
-        space: space || undefined,
+        channel: channel || undefined,
         content,
         session_id: session,
         priority: opts.priority,
@@ -72,8 +72,8 @@ export function registerMessagingCommands(program: Command): void {
 
       if (opts.json) {
         console.log(JSON.stringify(msg, null, 2));
-      } else if (space) {
-        console.log(chalk.green(`Message sent to #${space}`) + chalk.dim(` (id: ${msg.id})`));
+      } else if (channel) {
+        console.log(chalk.green(`Message sent to #${channel}`) + chalk.dim(` (id: ${msg.id})`));
       } else {
         console.log(chalk.green(`Message sent`) + chalk.dim(` (id: ${msg.id}, session: ${msg.session_id})`));
       }
@@ -87,7 +87,7 @@ export function registerMessagingCommands(program: Command): void {
     .option("--session <id>", "Filter by session ID")
     .option("--from <agent>", "Filter by sender")
     .option("--to <agent>", "Filter by recipient")
-    .option("--space <name>", "Filter by space")
+    .option("--channel <name>", "Filter by channel")
     .option("--since <timestamp>", "Messages after this ISO timestamp")
     .option("--limit <n>", "Max messages to return", parseInt)
     .option("--unread", "Only unread messages")
@@ -98,7 +98,7 @@ export function registerMessagingCommands(program: Command): void {
         session_id: opts.session,
         from: opts.from,
         to: opts.to,
-        space: opts.space,
+        channel: opts.channel,
         since: opts.since,
         limit: opts.limit,
         unread_only: opts.unread,
@@ -106,8 +106,8 @@ export function registerMessagingCommands(program: Command): void {
 
       if (opts.markRead) {
         const reader = resolveIdentity(opts.to);
-        if (opts.space) {
-          markSpaceRead(opts.space, reader);
+        if (opts.channel) {
+          markChannelRead(opts.channel, reader);
         } else if (opts.session) {
           markSessionRead(opts.session, reader);
         } else {
@@ -125,7 +125,7 @@ export function registerMessagingCommands(program: Command): void {
           for (const msg of messages) {
             const time = chalk.dim(msg.created_at.slice(11, 19));
             const from = chalk.cyan(msg.from_agent);
-            const to = msg.space ? chalk.magenta(`#${msg.space}`) : chalk.yellow(msg.to_agent);
+            const to = msg.channel ? chalk.magenta(`#${msg.channel}`) : chalk.yellow(msg.to_agent);
             const priority = msg.priority !== "normal" ? chalk.red(` [${msg.priority}]`) : "";
             const unread = !msg.read_at ? chalk.green(" *") : "";
             console.log(`${time} ${from} → ${to}${priority}${unread}`);
@@ -161,7 +161,7 @@ export function registerMessagingCommands(program: Command): void {
         console.log(JSON.stringify(msg, null, 2));
       } else {
         const time = chalk.dim(msg.created_at.slice(0, 19).replace("T", " "));
-        const destination = msg.space ? chalk.magenta(`#${msg.space}`) : chalk.yellow(msg.to_agent);
+        const destination = msg.channel ? chalk.magenta(`#${msg.channel}`) : chalk.yellow(msg.to_agent);
         const priority = msg.priority !== "normal" ? chalk.red(` [${msg.priority}]`) : "";
         const unread = !msg.read_at ? chalk.green(" [unread]") : "";
         console.log(`${chalk.cyan(msg.from_agent)} → ${destination}${priority}${unread} ${chalk.dim(`[#${msg.id}] ${time}`)}`);
@@ -177,14 +177,14 @@ export function registerMessagingCommands(program: Command): void {
   program
     .command("digest")
     .description("Show unread message digest (preview only, auto-marks read)")
-    .argument("[space]", "Space name to digest (omit for DMs)")
+    .argument("[channel]", "Channel name to digest (omit for DMs)")
     .option("--since <timestamp>", "Messages after this ISO timestamp")
     .option("--limit <n>", "Max messages to show", parseInt)
     .option("--to <agent>", "Filter by recipient (for DMs)")
     .option("-j, --json", "Output as JSON")
-    .action((spaceArg, opts) => {
+    .action((channelArg, opts) => {
       const result = readDigest({
-        space: spaceArg || undefined,
+        channel: channelArg || undefined,
         since: opts.since,
         limit: opts.limit,
         to: opts.to,
@@ -200,7 +200,7 @@ export function registerMessagingCommands(program: Command): void {
           for (const msg of result.messages) {
             const time = chalk.dim(msg.created_at.slice(11, 19));
             const from = chalk.cyan(msg.from);
-            const dest = msg.space ? chalk.magenta(`#${msg.space}`) : chalk.yellow(msg.to ?? "?");
+            const dest = msg.channel ? chalk.magenta(`#${msg.channel}`) : chalk.yellow(msg.to ?? "?");
             const priority = msg.priority !== "normal" ? chalk.red(` [${msg.priority}]`) : "";
             const att = msg.has_attachments ? chalk.dim(" 📎") : "";
             console.log(`${time} ${from} → ${dest}${priority}${att}`);
@@ -216,7 +216,7 @@ export function registerMessagingCommands(program: Command): void {
     .command("search")
     .description("Search messages by content")
     .argument("<query>", "Search query string")
-    .option("--space <name>", "Filter by space")
+    .option("--channel <name>", "Filter by channel")
     .option("--from <agent>", "Filter by sender")
     .option("--to <agent>", "Filter by recipient")
     .option("--limit <n>", "Max results to return", parseInt)
@@ -230,7 +230,7 @@ export function registerMessagingCommands(program: Command): void {
 
       const messages = searchMessages({
         query: q,
-        space: opts.space,
+        channel: opts.channel,
         from: opts.from,
         to: opts.to,
         limit: opts.limit,
@@ -246,7 +246,7 @@ export function registerMessagingCommands(program: Command): void {
           for (const msg of messages) {
             const time = chalk.dim(msg.created_at.slice(11, 19));
             const from = chalk.cyan(msg.from_agent);
-            const to = msg.space ? chalk.magenta(`#${msg.space}`) : chalk.yellow(msg.to_agent);
+            const to = msg.channel ? chalk.magenta(`#${msg.channel}`) : chalk.yellow(msg.to_agent);
             const priority = msg.priority !== "normal" ? chalk.red(` [${msg.priority}]`) : "";
             const unread = !msg.read_at ? chalk.green(" *") : "";
             console.log(`${time} ${from} → ${to}${priority}${unread}: ${msg.content}`);
@@ -259,7 +259,7 @@ export function registerMessagingCommands(program: Command): void {
   // ---- since ----
   program
     .command("since")
-    .description("Show all activity (DMs + spaces) since a duration ago")
+    .description("Show all activity (DMs + channels) since a duration ago")
     .argument("<duration>", "Duration: e.g. 30m, 2h, 1d")
     .option("-j, --json", "Output as JSON")
     .action((duration, opts) => {
@@ -286,7 +286,7 @@ export function registerMessagingCommands(program: Command): void {
           for (const msg of messages) {
             const time = chalk.dim(msg.created_at.slice(11, 19));
             const from = chalk.cyan(msg.from_agent);
-            const where = msg.space ? chalk.magenta(`#${msg.space}`) : chalk.yellow(`→ ${msg.to_agent}`);
+            const where = msg.channel ? chalk.magenta(`#${msg.channel}`) : chalk.yellow(`→ ${msg.to_agent}`);
             const priority = msg.priority !== "normal" ? chalk.red(` [${msg.priority}]`) : "";
             const unread = !msg.read_at ? chalk.green(" •") : "";
             const content = renderContent(msg.content);
@@ -324,11 +324,11 @@ export function registerMessagingCommands(program: Command): void {
         console.error(chalk.red("Reply content cannot be empty."));
         process.exit(1);
       }
-      const space =
-        original.space ||
-        (original.session_id?.startsWith("space:") ? original.session_id.slice(6) : undefined);
-      const to = space
-        ? space
+      const channel =
+        original.channel ||
+        (original.session_id?.startsWith("channel:") ? original.session_id.slice(6) : undefined);
+      const to = channel
+        ? channel
         : (original.from_agent === from ? original.to_agent : original.from_agent);
       const msg = sendMessage({
         from,
@@ -336,7 +336,7 @@ export function registerMessagingCommands(program: Command): void {
         content,
         session_id: original.session_id,
         priority: opts.priority,
-        space,
+        channel,
       });
 
       if (opts.json) {
@@ -354,7 +354,7 @@ export function registerMessagingCommands(program: Command): void {
     .argument("[ids...]", "Message IDs to mark as read")
     .option("--all", "Mark all messages as read")
     .option("--session <id>", "Mark all messages in session as read")
-    .option("--space <name>", "Mark all messages in space as read")
+    .option("--channel <name>", "Mark all messages in channel as read")
     .option("--agent <id>", "Agent marking messages as read")
     .option("-j, --json", "Output as JSON")
     .action((ids, opts) => {
@@ -365,12 +365,12 @@ export function registerMessagingCommands(program: Command): void {
         count = markAllRead(agent);
       } else if (opts.session) {
         count = markSessionRead(opts.session, agent);
-      } else if (opts.space) {
-        count = markSpaceRead(opts.space, agent);
+      } else if (opts.channel) {
+        count = markChannelRead(opts.channel, agent);
       } else if (ids.length > 0) {
         count = markRead(ids.map(Number), agent);
       } else {
-        console.error(chalk.red("Provide message IDs, --all, --session, or --space flag."));
+        console.error(chalk.red("Provide message IDs, --all, --session, or --channel flag."));
         process.exit(1);
       }
 
@@ -386,7 +386,7 @@ export function registerMessagingCommands(program: Command): void {
   program
     .command("export")
     .description("Export messages as JSON or CSV")
-    .option("--space <name>", "Filter by space")
+    .option("--channel <name>", "Filter by channel")
     .option("--session <id>", "Filter by session ID")
     .option("--from <agent>", "Filter by sender")
     .option("--since <date>", "Messages after this ISO date")
@@ -395,7 +395,7 @@ export function registerMessagingCommands(program: Command): void {
     .action((opts) => {
       const format = opts.format === "csv" ? "csv" : "json";
       const result = exportMessages({
-        space: opts.space,
+        channel: opts.channel,
         session_id: opts.session,
         from: opts.from,
         since: opts.since,
@@ -518,12 +518,12 @@ export function registerMessagingCommands(program: Command): void {
   program
     .command("pinned")
     .description("List pinned messages")
-    .option("--space <name>", "Filter by space")
+    .option("--channel <name>", "Filter by channel")
     .option("--session <id>", "Filter by session ID")
     .option("--limit <n>", "Max results", parseInt)
     .option("-j, --json", "Output as JSON")
     .action((opts) => {
-      const messages = getPinnedMessages({ space: opts.space, session_id: opts.session, limit: opts.limit });
+      const messages = getPinnedMessages({ channel: opts.channel, session_id: opts.session, limit: opts.limit });
       if (opts.json) {
         console.log(JSON.stringify(messages, null, 2));
       } else {
@@ -534,7 +534,7 @@ export function registerMessagingCommands(program: Command): void {
           for (const msg of messages) {
             const time = chalk.dim(msg.created_at.slice(11, 19));
             const from = chalk.cyan(msg.from_agent);
-            const where = msg.space ? chalk.magenta(`#${msg.space}`) : chalk.yellow(msg.to_agent);
+            const where = msg.channel ? chalk.magenta(`#${msg.channel}`) : chalk.yellow(msg.to_agent);
             console.log(`${chalk.yellow("📌")} [#${msg.id}] ${time} ${from} → ${where}: ${msg.content}`);
           }
         }
@@ -560,7 +560,7 @@ export function registerMessagingCommands(program: Command): void {
         } else {
           console.log(chalk.red.bold(`${blockers.length} blocking message(s):\n`));
           for (const b of blockers) {
-            const where = b.space ? chalk.magenta(`#${b.space}`) : chalk.yellow("DM");
+            const where = b.channel ? chalk.magenta(`#${b.channel}`) : chalk.yellow("DM");
             const time = chalk.dim(b.created_at.slice(11, 19));
             console.log(`  ${chalk.red(`[#${b.id}]`)} ${time} ${chalk.cyan(b.from_agent)} ${where}: ${b.content}`);
           }
@@ -573,9 +573,9 @@ export function registerMessagingCommands(program: Command): void {
   // ---- watch ----
   program
     .command("notifications")
-    .description("List preview-only notifications from subscribed spaces")
+    .description("List preview-only notifications from subscribed channels")
     .option("--from <agent>", "Your agent identity")
-    .option("--space <name>", "Filter to a single space")
+    .option("--channel <name>", "Filter to a single channel")
     .option("--since <timestamp>", "Notifications after this ISO timestamp")
     .option("--limit <n>", "Max notifications to return", parseInt)
     .option("--all", "Include already-read notifications")
@@ -587,9 +587,9 @@ export function registerMessagingCommands(program: Command): void {
       heartbeat(agent);
 
       if (opts.clear) {
-        const cleared = markAllSpaceNotificationsRead(agent, opts.space);
+        const cleared = markAllChannelNotificationsRead(agent, opts.channel);
         if (opts.json) {
-          console.log(JSON.stringify({ cleared, agent, space: opts.space || null }, null, 2));
+          console.log(JSON.stringify({ cleared, agent, channel: opts.channel || null }, null, 2));
         } else {
           console.log(chalk.green(`Cleared ${cleared} notification(s).`));
         }
@@ -597,9 +597,9 @@ export function registerMessagingCommands(program: Command): void {
         return;
       }
 
-      const notifications = readSpaceNotifications({
+      const notifications = readChannelNotifications({
         agent,
-        space: opts.space,
+        channel: opts.channel,
         since: opts.since,
         unread_only: !opts.all,
         limit: opts.limit,
@@ -609,13 +609,13 @@ export function registerMessagingCommands(program: Command): void {
       if (opts.json) {
         console.log(JSON.stringify(notifications, null, 2));
       } else if (notifications.length === 0) {
-        console.log(chalk.dim("No space notifications."));
+        console.log(chalk.dim("No channel notifications."));
       } else {
         for (const item of notifications) {
           const time = chalk.dim(item.created_at.slice(11, 19));
           const priority = item.priority !== "normal" ? chalk.red(` [${item.priority}]`) : "";
           const unread = item.unread ? chalk.yellow(" [unread]") : "";
-          console.log(`${time} ${chalk.cyan(item.from_agent)} ${chalk.magenta(`#${item.space}`)}${priority}${unread} ${chalk.dim(`msg #${item.message_id}`)}`);
+          console.log(`${time} ${chalk.cyan(item.from_agent)} ${chalk.magenta(`#${item.channel}`)}${priority}${unread} ${chalk.dim(`msg #${item.message_id}`)}`);
           console.log(`  ${item.preview}`);
         }
         console.log(chalk.dim("\nInspect the full message later with: conversations show <message-id>"));
@@ -627,8 +627,8 @@ export function registerMessagingCommands(program: Command): void {
     .command("watch")
     .description("Watch for new messages with desktop notifications")
     .option("--from <agent>", "Your agent identity")
-    .option("--space <name>", "Watch a specific space")
-    .option("--all", "Watch DMs and all subscribed spaces")
+    .option("--channel <name>", "Watch a specific channel")
+    .option("--all", "Watch DMs and all subscribed channels")
     .option("--interval <ms>", "Poll interval in milliseconds", parseInt)
     .action((opts) => {
       const agent = resolveIdentity(opts.from);
@@ -637,15 +637,15 @@ export function registerMessagingCommands(program: Command): void {
       const interval = Number.isFinite(opts.interval) && opts.interval > 0 ? opts.interval : 1000;
       const cols = Math.min(process.stdout.columns || 80, 100);
 
-      // Resolve the agent's subscribed spaces when --all is used
-      let agentSpaces: string[] = [];
+      // Resolve the agent's subscribed channels when --all is used
+      let agentChannels: string[] = [];
       if (opts.all) {
-        agentSpaces = listSpaceNotificationSubscriptions(agent).map((row) => row.space);
+        agentChannels = listChannelNotificationSubscriptions(agent).map((row) => row.channel);
       }
 
       const modeLabel = opts.all
-        ? `DMs + ${agentSpaces.length} space(s)`
-        : opts.space ? `Space: #${opts.space}` : "All DMs";
+        ? `DMs + ${agentChannels.length} channel(s)`
+        : opts.channel ? `Channel: #${opts.channel}` : "All DMs";
 
       console.log("");
       console.log(chalk.bold(`  Conversations`) + chalk.dim(` — watching as ${chalk.cyan(agent)}`));
@@ -669,8 +669,8 @@ export function registerMessagingCommands(program: Command): void {
 
       const renderMessage = (msg: import("../../types.js").Message) => {
         const time = chalk.dim(msg.created_at.slice(11, 19));
-        const where = msg.space
-          ? chalk.magenta(`#${msg.space}`)
+        const where = msg.channel
+          ? chalk.magenta(`#${msg.channel}`)
           : chalk.yellow("DM");
         const priority = msg.priority !== "normal"
           ? (msg.priority === "urgent" ? chalk.red.bold(` [${msg.priority}]`) :
@@ -693,7 +693,7 @@ export function registerMessagingCommands(program: Command): void {
         console.log("");
       };
 
-      const renderNotification = (notification: import("../../types.js").SpaceNotification) => {
+      const renderNotification = (notification: import("../../types.js").ChannelNotification) => {
         const time = chalk.dim(notification.created_at.slice(11, 19));
         const priority = notification.priority !== "normal"
           ? (notification.priority === "urgent" ? chalk.red.bold(` [${notification.priority}]`) :
@@ -702,7 +702,7 @@ export function registerMessagingCommands(program: Command): void {
           : "";
         const sender = chalk.cyan.bold(notification.from_agent);
 
-        console.log(`  ${sender}  ${chalk.magenta(`#${notification.space}`)}  ${time}${priority} ${chalk.dim(`[#${notification.message_id}]`)}`);
+        console.log(`  ${sender}  ${chalk.magenta(`#${notification.channel}`)}  ${time}${priority} ${chalk.dim(`[#${notification.message_id}]`)}`);
         console.log(`    ${notification.preview}`);
         console.log(chalk.dim(`    Preview only. Inspect with: conversations show ${notification.message_id}`));
         console.log(chalk.dim("    " + "·".repeat(Math.min(cols - 8, 60))));
@@ -712,7 +712,7 @@ export function registerMessagingCommands(program: Command): void {
       // Show recent messages first
       if (opts.all) {
         const dmRecent = readMessages({ to: agent, limit: 20, order: "asc" });
-        const pendingNotifications = readSpaceNotifications({
+        const pendingNotifications = readChannelNotifications({
           agent,
           unread_only: true,
           limit: 20,
@@ -724,7 +724,7 @@ export function registerMessagingCommands(program: Command): void {
           for (const msg of dmRecent) { renderMessage(msg); }
         }
         if (pendingNotifications.length > 0) {
-          console.log(chalk.dim(`  ── Pending space notifications (${pendingNotifications.length}) ──\n`));
+          console.log(chalk.dim(`  ── Pending channel notifications (${pendingNotifications.length}) ──\n`));
           for (const notification of pendingNotifications) { renderNotification(notification); }
         }
         if (dmRecent.length > 0 || pendingNotifications.length > 0) {
@@ -732,8 +732,8 @@ export function registerMessagingCommands(program: Command): void {
         }
       } else {
         const recent = readMessages({
-          to: opts.space ? undefined : agent,
-          space: opts.space,
+          to: opts.channel ? undefined : agent,
+          channel: opts.channel,
           limit: 20,
           order: "asc",
         });
@@ -750,16 +750,16 @@ export function registerMessagingCommands(program: Command): void {
           renderMessage(msg);
 
           // Desktop notification (short preview)
-          const where = msg.space ? `#${msg.space}` : "DM";
+          const where = msg.channel ? `#${msg.channel}` : "DM";
           const preview = buildMessagePreview(msg.content, 150);
           desktopNotify(`${msg.from_agent} (${where})`, preview);
         }
       };
 
-      const onNewNotifications = (notifications: import("../../types.js").SpaceNotification[]) => {
+      const onNewNotifications = (notifications: import("../../types.js").ChannelNotification[]) => {
         for (const notification of notifications) {
           renderNotification(notification);
-          desktopNotify(`${notification.from_agent} (#${notification.space})`, notification.preview);
+          desktopNotify(`${notification.from_agent} (#${notification.channel})`, notification.preview);
         }
       };
 
@@ -773,7 +773,7 @@ export function registerMessagingCommands(program: Command): void {
           if (inFlightNotifications) return;
           inFlightNotifications = true;
           try {
-            const notifications = readSpaceNotifications({
+            const notifications = readChannelNotifications({
               agent,
               unread_only: true,
               limit: 200,
@@ -790,8 +790,8 @@ export function registerMessagingCommands(program: Command): void {
         stops.push({ stop: () => clearInterval(timer) });
       } else {
         stops.push(startPolling({
-          to_agent: opts.space ? undefined : agent,
-          space: opts.space,
+          to_agent: opts.channel ? undefined : agent,
+          channel: opts.channel,
           interval_ms: interval,
           on_messages: onNewMessages,
         }));

@@ -10,7 +10,7 @@ describe("registerMessagingCommands", () => {
     const send = program.commands.find((c) => c.name() === "send");
     expect(send).toBeDefined();
     expect(send?.options.some((o) => o.long === "--to")).toBe(true);
-    expect(send?.options.some((o) => o.long === "--space")).toBe(true);
+    expect(send?.options.some((o) => o.long === "--channel")).toBe(true);
   });
 
   test("registers read command", () => {
@@ -45,7 +45,7 @@ describe("registerMessagingCommands", () => {
 
     const search = program.commands.find((c) => c.name() === "search");
     expect(search).toBeDefined();
-    expect(search?.options.some((o) => o.long === "--space")).toBe(true);
+    expect(search?.options.some((o) => o.long === "--channel")).toBe(true);
   });
 
   test("registers since command", () => {

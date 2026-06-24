@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSessionRead, markSpaceRead, getMessageById, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, searchMessages, getUnreadBlockers, getThreadReplies, compactMessage, listUnreadCounts, parseMentions, listUnreadCountsWithMentions, getMessagesForAgent, markMentionsRead, markUnread, markUnreadByIds, recordReadReceipt, recordReadReceiptsBatch, getReadReceipts, getMessageReadStatus, MAX_MESSAGE_BYTES } from "./messages";
-import { createSpace, joinSpace } from "./spaces";
+import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSessionRead, markChannelRead, getMessageById, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, searchMessages, getUnreadBlockers, getThreadReplies, compactMessage, listUnreadCounts, parseMentions, listUnreadCountsWithMentions, getMessagesForAgent, markMentionsRead, markUnread, markUnreadByIds, recordReadReceipt, recordReadReceiptsBatch, getReadReceipts, getMessageReadStatus, MAX_MESSAGE_BYTES } from "./messages";
+import { createChannel, joinChannel } from "./channels";
 import { closeDb } from "./db";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
@@ -28,7 +28,7 @@ describe("sendMessage", () => {
     expect(msg.to_agent).toBe("bob");
     expect(msg.content).toBe("hello");
     expect(msg.priority).toBe("normal");
-    expect(msg.space).toBeNull();
+    expect(msg.channel).toBeNull();
     expect(msg.read_at).toBeNull();
     expect(msg.created_at).toBeTruthy();
   });
@@ -58,14 +58,24 @@ describe("sendMessage", () => {
     expect(msg.project_id).toBeNull();
   });
 
-  test("supports space", () => {
-    const msg = sendMessage({ from: "a", to: "general", content: "hello", space: "general" });
-    expect(msg.space).toBe("general");
+  test("supports channel", () => {
+    const msg = sendMessage({ from: "a", to: "general", content: "hello", channel: "general" });
+    expect(msg.channel).toBe("general");
   });
 
-  test("generates space session_id", () => {
-    const msg = sendMessage({ from: "a", to: "general", content: "hello", space: "general" });
-    expect(msg.session_id).toBe("space:general");
+  test("normalizes channel messages to the canonical channel key", () => {
+    createChannel("My Channel", "alice");
+    const msg = sendMessage({ from: "alice", to: "My Channel", content: "hello", channel: "My Channel", session_id: "channel:My Channel" });
+    expect(msg.channel).toBe("my-channel");
+    expect(msg.to_agent).toBe("my-channel");
+    expect(msg.session_id).toBe("channel:my-channel");
+    expect(readMessages({ channel: "My Channel" }).map((m) => m.id)).toEqual([msg.id]);
+    expect(readMessages({ channel: "my-channel" }).map((m) => m.id)).toEqual([msg.id]);
+  });
+
+  test("generates channel session_id", () => {
+    const msg = sendMessage({ from: "a", to: "general", content: "hello", channel: "general" });
+    expect(msg.session_id).toBe("channel:general");
   });
 
   test("supports metadata", () => {
@@ -132,12 +142,12 @@ describe("readMessages", () => {
     expect(msgs[0].project_id).toBe("proj-abc");
   });
 
-  test("filters by space", () => {
-    sendMessage({ from: "a", to: "general", content: "1", space: "general" });
+  test("filters by channel", () => {
+    sendMessage({ from: "a", to: "general", content: "1", channel: "general" });
     sendMessage({ from: "a", to: "b", content: "2" });
-    const msgs = readMessages({ space: "general" });
+    const msgs = readMessages({ channel: "general" });
     expect(msgs).toHaveLength(1);
-    expect(msgs[0].space).toBe("general");
+    expect(msgs[0].channel).toBe("general");
   });
 
   test("filters by unread_only", () => {
@@ -215,8 +225,8 @@ describe("markReadByIds", () => {
     expect(markReadByIds([])).toBe(0);
   });
 
-  test("marks space messages", () => {
-    const msg = sendMessage({ from: "a", to: "myspace", space: "myspace", content: "hi" });
+  test("marks channel messages", () => {
+    const msg = sendMessage({ from: "a", to: "mychannel", channel: "mychannel", content: "hi" });
     const count = markReadByIds([msg.id]);
     expect(count).toBe(1);
     const updated = getMessageById(msg.id);
@@ -241,12 +251,12 @@ describe("markSessionRead", () => {
   });
 });
 
-describe("markSpaceRead", () => {
-  test("marks space messages as read (except own)", () => {
-    sendMessage({ from: "alice", to: "general", content: "1", space: "general" });
-    sendMessage({ from: "bob", to: "general", content: "2", space: "general" });
+describe("markChannelRead", () => {
+  test("marks channel messages as read (except own)", () => {
+    sendMessage({ from: "alice", to: "general", content: "1", channel: "general" });
+    sendMessage({ from: "bob", to: "general", content: "2", channel: "general" });
     // Bob reads — should mark alice's message, not his own
-    const count = markSpaceRead("general", "bob");
+    const count = markChannelRead("general", "bob");
     expect(count).toBe(1);
   });
 });
@@ -302,20 +312,20 @@ describe("exportMessages", () => {
     sendMessage({ from: "alice", to: "bob", content: "hello" });
     const result = exportMessages({ format: "csv" });
     const lines = result.split("\n");
-    expect(lines[0]).toBe("id,session_id,from_agent,to_agent,space,content,priority,created_at,read_at");
+    expect(lines[0]).toBe("id,session_id,from_agent,to_agent,channel,content,priority,created_at,read_at");
     expect(lines).toHaveLength(2);
     expect(lines[1]).toContain("alice");
     expect(lines[1]).toContain("bob");
     expect(lines[1]).toContain("hello");
   });
 
-  test("filters by space", () => {
-    sendMessage({ from: "a", to: "general", content: "in-space", space: "general" });
-    sendMessage({ from: "a", to: "b", content: "no-space" });
-    const result = exportMessages({ space: "general" });
+  test("filters by channel", () => {
+    sendMessage({ from: "a", to: "general", content: "in-channel", channel: "general" });
+    sendMessage({ from: "a", to: "b", content: "no-channel" });
+    const result = exportMessages({ channel: "general" });
     const parsed = JSON.parse(result);
     expect(parsed).toHaveLength(1);
-    expect(parsed[0].content).toBe("in-space");
+    expect(parsed[0].content).toBe("in-channel");
   });
 
   test("filters by date range (since/until)", () => {
@@ -458,14 +468,14 @@ describe("getPinnedMessages", () => {
     expect(pinned[0].content).toBe("pinned");
   });
 
-  test("filters by space", () => {
-    const msg1 = sendMessage({ from: "a", to: "general", content: "space-pinned", space: "general" });
+  test("filters by channel", () => {
+    const msg1 = sendMessage({ from: "a", to: "general", content: "channel-pinned", channel: "general" });
     const msg2 = sendMessage({ from: "a", to: "b", content: "dm-pinned" });
     pinMessage(msg1.id);
     pinMessage(msg2.id);
-    const pinned = getPinnedMessages({ space: "general" });
+    const pinned = getPinnedMessages({ channel: "general" });
     expect(pinned).toHaveLength(1);
-    expect(pinned[0].content).toBe("space-pinned");
+    expect(pinned[0].content).toBe("channel-pinned");
   });
 
   test("filters by session_id", () => {
@@ -547,12 +557,12 @@ describe("searchMessages", () => {
     expect(results.every((r) => r.relevance_score >= 0)).toBe(true);
   });
 
-  test("filters by space", () => {
-    sendMessage({ from: "a", to: "general", content: "deploy in space", space: "general" });
+  test("filters by channel", () => {
+    sendMessage({ from: "a", to: "general", content: "deploy in channel", channel: "general" });
     sendMessage({ from: "a", to: "b", content: "deploy in DM" });
-    const results = searchMessages({ query: "deploy", space: "general" });
+    const results = searchMessages({ query: "deploy", channel: "general" });
     expect(results).toHaveLength(1);
-    expect(results[0].space).toBe("general");
+    expect(results[0].channel).toBe("general");
   });
 
   test("filters by from", () => {
@@ -588,10 +598,10 @@ describe("searchMessages", () => {
   });
 
   test("combines multiple filters", () => {
-    sendMessage({ from: "alice", to: "general", content: "deploy v1", space: "general" });
-    sendMessage({ from: "bob", to: "general", content: "deploy v2", space: "general" });
+    sendMessage({ from: "alice", to: "general", content: "deploy v1", channel: "general" });
+    sendMessage({ from: "bob", to: "general", content: "deploy v2", channel: "general" });
     sendMessage({ from: "alice", to: "bob", content: "deploy v3" });
-    const results = searchMessages({ query: "deploy", from: "alice", space: "general" });
+    const results = searchMessages({ query: "deploy", from: "alice", channel: "general" });
     expect(results).toHaveLength(1);
     expect(results[0].content).toBe("deploy v1");
   });
@@ -628,15 +638,15 @@ describe("blocking messages", () => {
     expect(blockers).toHaveLength(0);
   });
 
-  test("getUnreadBlockers returns blockers from spaces", () => {
-    createSpace("blocker-space", "alice");
-    joinSpace("blocker-space", "bob");
+  test("getUnreadBlockers returns blockers from channels", () => {
+    createChannel("blocker-channel", "alice");
+    joinChannel("blocker-channel", "bob");
 
-    sendMessage({ from: "alice", to: "blocker-space", content: "space blocker", space: "blocker-space", blocking: true });
+    sendMessage({ from: "alice", to: "blocker-channel", content: "channel blocker", channel: "blocker-channel", blocking: true });
 
     const blockers = getUnreadBlockers("bob");
     expect(blockers).toHaveLength(1);
-    expect(blockers[0].content).toBe("space blocker");
+    expect(blockers[0].content).toBe("channel blocker");
   });
 
   test("getUnreadBlockers returns empty for no blockers", () => {
@@ -822,11 +832,11 @@ describe("readDigest", () => {
     expect(result.messages[0].preview).toBe("second");
   });
 
-  test("filters by space", () => {
-    sendMessage({ from: "a", to: "myspace", space: "myspace", content: "in space" });
+  test("filters by channel", () => {
+    sendMessage({ from: "a", to: "mychannel", channel: "mychannel", content: "in channel" });
     sendMessage({ from: "a", to: "b", content: "dm" });
-    const result = readDigest({ space: "myspace" });
-    expect(result.messages.every((m) => m.space === "myspace")).toBe(true);
+    const result = readDigest({ channel: "mychannel" });
+    expect(result.messages.every((m) => m.channel === "mychannel")).toBe(true);
   });
 
   test("has_attachments is false when no attachments", () => {
@@ -840,7 +850,7 @@ describe("compactMessage", () => {
   test("strips null fields", () => {
     const msg = sendMessage({ from: "a", to: "b", content: "hello" });
     const compact = compactMessage(msg);
-    expect(compact.space).toBeUndefined();
+    expect(compact.channel).toBeUndefined();
     expect(compact.metadata).toBeUndefined();
     expect(compact.content).toBe("hello");
   });
@@ -859,21 +869,21 @@ describe("parseMentions", () => {
 });
 
 describe("listUnreadCounts", () => {
-  test("returns unread counts per space for agent", () => {
-    createSpace("dev", "admin");
-    joinSpace("dev", "bob");
-    // Space messages with to_agent="" or to_agent=null count as unread for all members
-    sendMessage({ from: "a", to: "", space: "dev", content: "hello world" });
+  test("returns unread counts per channel for agent", () => {
+    createChannel("dev", "admin");
+    joinChannel("dev", "bob");
+    // Channel messages count as unread for members when sent by another agent.
+    sendMessage({ from: "a", to: "", channel: "dev", content: "hello world" });
     const counts = listUnreadCounts("bob");
     expect(counts.length).toBeGreaterThanOrEqual(1);
-    const dev = counts.find((c) => c.space === "dev");
+    const dev = counts.find((c) => c.channel === "dev");
     expect(dev).toBeDefined();
     expect(dev!.unread_count).toBeGreaterThanOrEqual(1);
   });
 
-  test("returns all spaces when no agent specified", () => {
-    createSpace("general", "admin");
-    sendMessage({ from: "a", to: "general", space: "general", content: "hi there" });
+  test("returns all channels when no agent specified", () => {
+    createChannel("general", "admin");
+    sendMessage({ from: "a", to: "general", channel: "general", content: "hi there" });
     const counts = listUnreadCounts();
     expect(counts.length).toBeGreaterThanOrEqual(1);
   });
@@ -881,9 +891,9 @@ describe("listUnreadCounts", () => {
 
 describe("listUnreadCountsWithMentions", () => {
   test("returns mention counts", () => {
-    createSpace("proj", "admin");
-    joinSpace("proj", "carol");
-    sendMessage({ from: "a", to: "proj", space: "proj", content: "hey @carol check this" });
+    createChannel("proj", "admin");
+    joinChannel("proj", "carol");
+    sendMessage({ from: "a", to: "proj", channel: "proj", content: "hey @carol check this" });
     const counts = listUnreadCountsWithMentions("carol");
     expect(counts.length).toBeGreaterThanOrEqual(1);
   });
@@ -891,8 +901,8 @@ describe("listUnreadCountsWithMentions", () => {
 
 describe("getMessagesForAgent", () => {
   test("returns messages mentioning agent", async () => {
-    createSpace("team", "admin");
-    sendMessage({ from: "a", to: "team", space: "team", content: "ping @dave" });
+    createChannel("team", "admin");
+    sendMessage({ from: "a", to: "team", channel: "team", content: "ping @dave" });
     // processMentions is async — give it time
     await new Promise((r) => setTimeout(r, 100));
     const result = getMessagesForAgent("dave");
@@ -900,29 +910,29 @@ describe("getMessagesForAgent", () => {
     expect(result[0].mention_id).toBeDefined();
   });
 
-  test("filters by space", async () => {
-    createSpace("s1", "admin");
-    createSpace("s2", "admin");
-    sendMessage({ from: "a", to: "s1", space: "s1", content: "in s1 @eve" });
-    sendMessage({ from: "a", to: "s2", space: "s2", content: "in s2 @eve" });
+  test("filters by channel", async () => {
+    createChannel("s1", "admin");
+    createChannel("s2", "admin");
+    sendMessage({ from: "a", to: "s1", channel: "s1", content: "in s1 @eve" });
+    sendMessage({ from: "a", to: "s2", channel: "s2", content: "in s2 @eve" });
     await new Promise((r) => setTimeout(r, 100));
-    const result = getMessagesForAgent("eve", { space: "s1" });
+    const result = getMessagesForAgent("eve", { channel: "s1" });
     expect(result.length).toBe(1);
   });
 });
 
 describe("markMentionsRead", () => {
   test("marks all mentions as read", async () => {
-    createSpace("ch", "admin");
-    sendMessage({ from: "a", to: "ch", space: "ch", content: "@frank check this" });
+    createChannel("ch", "admin");
+    sendMessage({ from: "a", to: "ch", channel: "ch", content: "@frank check this" });
     await new Promise((r) => setTimeout(r, 100));
     const changed = markMentionsRead("frank");
     expect(changed).toBeGreaterThanOrEqual(1);
   });
 
-  test("marks mentions in specific space", async () => {
-    createSpace("sp", "admin");
-    sendMessage({ from: "a", to: "sp", space: "sp", content: "@grace look here" });
+  test("marks mentions in specific channel", async () => {
+    createChannel("sp", "admin");
+    sendMessage({ from: "a", to: "sp", channel: "sp", content: "@grace look here" });
     await new Promise((r) => setTimeout(r, 100));
     const changed = markMentionsRead("grace", "sp");
     expect(changed).toBeGreaterThanOrEqual(1);
@@ -976,10 +986,10 @@ describe("recordReadReceipt / getReadReceipts / getMessageReadStatus", () => {
   });
 
   test("getMessageReadStatus shows unread members", () => {
-    createSpace("rs", "admin");
-    joinSpace("rs", "alice");
-    joinSpace("rs", "bob");
-    const msg = sendMessage({ from: "alice", to: "rs", space: "rs", content: "hey" });
+    createChannel("rs", "admin");
+    joinChannel("rs", "alice");
+    joinChannel("rs", "bob");
+    const msg = sendMessage({ from: "alice", to: "rs", channel: "rs", content: "hey" });
     recordReadReceipt(msg.id, "alice");
     const status = getMessageReadStatus(msg.id, "rs");
     expect(status.receipts.length).toBe(1);

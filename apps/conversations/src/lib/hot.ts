@@ -3,7 +3,7 @@ import { getDb } from "./db.js";
 export interface HotSession {
   session_id: string;
   participants: string[];
-  space: string | null;
+  channel: string | null;
   last_message_at: string;
   message_count: number;
   hotness_score: number;
@@ -22,7 +22,7 @@ export interface HotSession {
 export interface HotSessionsOptions {
   limit?: number;
   min_score?: number;
-  space?: string;
+  channel?: string;
   project_id?: string;
 }
 
@@ -32,12 +32,12 @@ export function computeHotness(sessionId: string): HotSession | null {
   const base = db.prepare(`
     SELECT session_id,
       GROUP_CONCAT(DISTINCT from_agent) as agents,
-      MAX(space) as space,
+      MAX(channel) as channel,
       MAX(created_at) as last_message_at,
       COUNT(*) as message_count
     FROM messages WHERE session_id = ?
     GROUP BY session_id
-  `).get(sessionId) as { session_id: string; agents: string; space: string | null; last_message_at: string; message_count: number } | null;
+  `).get(sessionId) as { session_id: string; agents: string; channel: string | null; last_message_at: string; message_count: number } | null;
 
   if (!base) return null;
 
@@ -85,7 +85,7 @@ export function computeHotness(sessionId: string): HotSession | null {
   return {
     session_id: base.session_id,
     participants: base.agents.split(","),
-    space: base.space,
+    channel: base.channel,
     last_message_at: base.last_message_at,
     message_count: base.message_count,
     hotness_score,
@@ -109,7 +109,7 @@ export function listHotSessions(opts?: HotSessionsOptions): HotSession[] {
 
   let where = "";
   const params: string[] = [];
-  if (opts?.space) { where = " WHERE space = ?"; params.push(opts.space); }
+  if (opts?.channel) { where = " WHERE channel = ?"; params.push(opts.channel); }
   else if (opts?.project_id) { where = " WHERE project_id = ?"; params.push(opts.project_id); }
 
   const sessions = db.prepare(

@@ -3,6 +3,7 @@ import type { Changes, SQLQueryBindings, Statement } from "bun:sqlite";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
+import { buildLegacyChannelNameMap, normalizeChannelName } from "./channel-names.js";
 
 export interface ConversationsStatement<ReturnType = any, ParamsType extends unknown[] = unknown[]> {
   all(...params: ParamsType): ReturnType[];
@@ -89,6 +90,17 @@ type PresenceColumnInfo = {
 
 type LegacyPresenceRow = Record<string, unknown> & {
   _rowid: number;
+};
+
+type LegacyChannelRow = {
+  name: string;
+  description: string | null;
+  parent_id: string | null;
+  project_id: string | null;
+  created_by: string | null;
+  created_at: string | null;
+  archived_at: string | null;
+  topic: string | null;
 };
 
 export function getDataDir(): string {
@@ -269,6 +281,335 @@ function ensureAgentPresenceAgentUniqueIndex(db: Database): void {
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_presence_agent_unique ON agent_presence(agent)");
 }
 
+function tableExists(db: Database, table: string): boolean {
+  return Boolean(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(table));
+}
+
+function columnNames(db: Database, table: string): string[] {
+  if (!tableExists(db, table)) return [];
+  return db.prepare(`PRAGMA table_info("${table.replace(/"/g, '""')}")`).all().map((row) => (row as { name: string }).name);
+}
+
+function hasColumn(db: Database, table: string, column: string): boolean {
+  return columnNames(db, table).includes(column);
+}
+
+function safeExec(db: Database, sql: string): void {
+  try {
+    db.exec(sql);
+  } catch {
+    // Best effort for optional legacy indexes/triggers that may not exist.
+  }
+}
+
+function nullableColumnExpr(columns: Set<string>, column: string): string {
+  return columns.has(column) ? column : `NULL AS ${column}`;
+}
+
+function ensureFlatChannelsTable(db: Database): void {
+  if (!tableExists(db, "channels") || !hasColumn(db, "channels", "parent_id")) return;
+
+  const columns = new Set(columnNames(db, "channels"));
+  safeExec(db, "DROP INDEX IF EXISTS idx_channels_parent");
+  safeExec(db, "DROP INDEX IF EXISTS idx_channels_project");
+  db.exec("DROP TABLE IF EXISTS channels_flat_import");
+
+  db.exec(`
+    CREATE TABLE channels_flat_import (
+      name TEXT PRIMARY KEY,
+      description TEXT,
+      topic TEXT,
+      project_id TEXT REFERENCES projects(id),
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+      archived_at TEXT,
+      metadata TEXT,
+      tags TEXT
+    )
+  `);
+  db.exec(`
+    INSERT OR IGNORE INTO channels_flat_import
+      (name, description, topic, project_id, created_by, created_at, archived_at, metadata, tags)
+    SELECT
+      name,
+      ${nullableColumnExpr(columns, "description")},
+      ${nullableColumnExpr(columns, "topic")},
+      ${nullableColumnExpr(columns, "project_id")},
+      COALESCE(created_by, 'migration'),
+      COALESCE(created_at, strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+      ${nullableColumnExpr(columns, "archived_at")},
+      ${nullableColumnExpr(columns, "metadata")},
+      ${nullableColumnExpr(columns, "tags")}
+    FROM channels
+  `);
+  db.exec("DROP TABLE channels");
+  db.exec("ALTER TABLE channels_flat_import RENAME TO channels");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_channels_project ON channels(project_id)");
+}
+
+function legacyTimestamp(db: Database): string {
+  return (db.prepare(
+    "SELECT strftime('%Y-%m-%dT%H:%M:%f', 'now') AS now"
+  ).get() as { now: string }).now;
+}
+
+function getLegacyChannelRows(db: Database): LegacyChannelRow[] {
+  if (!tableExists(db, "spaces")) return [];
+  const columns = new Set(columnNames(db, "spaces"));
+  const archivedExpr = columns.has("archived_at") ? "archived_at" : "NULL AS archived_at";
+  const topicExpr = columns.has("topic") ? "topic" : "NULL AS topic";
+  const parentExpr = columns.has("parent_id") ? "parent_id" : "NULL AS parent_id";
+  const projectExpr = columns.has("project_id") ? "project_id" : "NULL AS project_id";
+  return db.prepare(`
+    SELECT name, description, ${parentExpr}, ${projectExpr}, created_by, created_at, ${archivedExpr}, ${topicExpr}
+    FROM spaces
+  `).all() as LegacyChannelRow[];
+}
+
+function addDistinctValues(values: Set<string>, rows: Array<Record<string, unknown>>, column: string): void {
+  for (const row of rows) {
+    const value = row[column];
+    if (typeof value === "string" && value.trim()) values.add(value.trim());
+  }
+}
+
+function collectLegacyChannelNames(db: Database, legacyRows: LegacyChannelRow[]): string[] {
+  const values = new Set<string>();
+  for (const row of legacyRows) values.add(row.name);
+  if (hasColumn(db, "messages", "space")) addDistinctValues(values, db.prepare("SELECT DISTINCT space FROM messages WHERE space IS NOT NULL AND space != ''").all() as Array<Record<string, unknown>>, "space");
+  if (tableExists(db, "space_members")) addDistinctValues(values, db.prepare("SELECT DISTINCT space FROM space_members WHERE space IS NOT NULL AND space != ''").all() as Array<Record<string, unknown>>, "space");
+  if (tableExists(db, "space_subscriptions")) addDistinctValues(values, db.prepare("SELECT DISTINCT space FROM space_subscriptions WHERE space IS NOT NULL AND space != ''").all() as Array<Record<string, unknown>>, "space");
+  if (hasColumn(db, "message_mentions", "space")) addDistinctValues(values, db.prepare("SELECT DISTINCT space FROM message_mentions WHERE space IS NOT NULL AND space != ''").all() as Array<Record<string, unknown>>, "space");
+  if (hasColumn(db, "tasks", "space")) addDistinctValues(values, db.prepare("SELECT DISTINCT space FROM tasks WHERE space IS NOT NULL AND space != ''").all() as Array<Record<string, unknown>>, "space");
+  if (tableExists(db, "graph_edges")) {
+    addDistinctValues(values, db.prepare("SELECT DISTINCT from_id FROM graph_edges WHERE from_type = 'space'").all() as Array<Record<string, unknown>>, "from_id");
+    addDistinctValues(values, db.prepare("SELECT DISTINCT to_id FROM graph_edges WHERE to_type = 'space'").all() as Array<Record<string, unknown>>, "to_id");
+  }
+  if (tableExists(db, "resource_locks")) addDistinctValues(values, db.prepare("SELECT DISTINCT resource_id FROM resource_locks WHERE resource_type = 'space'").all() as Array<Record<string, unknown>>, "resource_id");
+  return [...values];
+}
+
+function hasRows(db: Database, sql: string): boolean {
+  try {
+    return Boolean(db.prepare(sql).get());
+  } catch {
+    return false;
+  }
+}
+
+function hasLegacyChannelArtifacts(db: Database): boolean {
+  return tableExists(db, "spaces") ||
+    tableExists(db, "space_members") ||
+    tableExists(db, "space_subscriptions") ||
+    tableExists(db, "space_notification_reads") ||
+    hasColumn(db, "messages", "space") ||
+    hasColumn(db, "message_mentions", "space") ||
+    hasColumn(db, "tasks", "space") ||
+    hasRows(db, "SELECT 1 FROM graph_edges WHERE from_type = 'space' OR to_type = 'space' LIMIT 1") ||
+    hasRows(db, "SELECT 1 FROM resource_locks WHERE resource_type = 'space' LIMIT 1");
+}
+
+function legacyChannelDepth(name: string, byName: Map<string, LegacyChannelRow>): number {
+  let depth = 0;
+  let current = byName.get(name);
+  const seen = new Set<string>();
+  while (current?.parent_id && !seen.has(current.parent_id)) {
+    seen.add(current.parent_id);
+    depth++;
+    current = byName.get(current.parent_id);
+  }
+  return depth;
+}
+
+function firstLegacyMessageMetadata(db: Database, legacyName: string): { created_at: string; created_by: string | null } {
+  const filters: string[] = [];
+  const params: string[] = [];
+  if (hasColumn(db, "messages", "space")) {
+    filters.push("space = ?");
+    params.push(legacyName);
+  }
+  if (hasColumn(db, "messages", "channel")) {
+    filters.push("channel = ?");
+    params.push(legacyName);
+  }
+  if (filters.length === 0) return { created_at: legacyTimestamp(db), created_by: null };
+  const row = db.prepare(`
+    SELECT created_at, from_agent
+    FROM messages
+    WHERE ${filters.join(" OR ")}
+    ORDER BY created_at ASC, id ASC
+    LIMIT 1
+  `).get(...params) as { created_at: string; from_agent: string } | null;
+  return { created_at: row?.created_at ?? legacyTimestamp(db), created_by: row?.from_agent ?? null };
+}
+
+function insertImportedChannel(
+  db: Database,
+  channelName: string,
+  legacyName: string,
+  source: "space" | "reference",
+  row: LegacyChannelRow | undefined,
+  parentChannel: string | null,
+  depth: number,
+): void {
+  const firstMessage = row ? null : firstLegacyMessageMetadata(db, legacyName);
+  const metadata = {
+    import_source: {
+      type: "legacy_space",
+      source,
+      name: legacyName,
+      parent: row?.parent_id ?? null,
+      parent_channel: parentChannel,
+      depth,
+      normalized_name: channelName,
+    },
+  };
+  const tags = ["imported", "legacy-space"];
+  if (row?.parent_id) tags.push(`legacy-parent:${normalizeChannelName(row.parent_id)}`);
+  if (depth > 0) tags.push(`legacy-depth:${depth}`);
+
+  db.prepare(`
+    INSERT INTO channels (name, description, topic, project_id, created_by, created_at, archived_at, metadata, tags)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(name) DO UPDATE SET
+      description = COALESCE(channels.description, excluded.description),
+      topic = COALESCE(channels.topic, excluded.topic),
+      project_id = COALESCE(channels.project_id, excluded.project_id),
+      archived_at = COALESCE(channels.archived_at, excluded.archived_at),
+      metadata = COALESCE(channels.metadata, excluded.metadata),
+      tags = COALESCE(channels.tags, excluded.tags)
+  `).run(
+    channelName,
+    row?.description ?? null,
+    row?.topic ?? null,
+    row?.project_id ?? null,
+    row?.created_by ?? firstMessage?.created_by ?? "migration",
+    row?.created_at ?? firstMessage?.created_at ?? legacyTimestamp(db),
+    row?.archived_at ?? null,
+    JSON.stringify(metadata),
+    JSON.stringify(tags),
+  );
+}
+
+function mapLegacyChannel(value: string | null | undefined, nameMap: Map<string, string>): string | null {
+  if (!value) return null;
+  return nameMap.get(value) ?? normalizeChannelName(value);
+}
+
+function migrateLegacyChannels(db: Database): void {
+  if (hasColumn(db, "message_mentions", "space") && !hasColumn(db, "message_mentions", "channel")) {
+    db.exec("ALTER TABLE message_mentions ADD COLUMN channel TEXT");
+  }
+  if (hasColumn(db, "tasks", "space") && !hasColumn(db, "tasks", "channel")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN channel TEXT");
+  }
+
+  const legacyRows = getLegacyChannelRows(db);
+  const legacyNames = collectLegacyChannelNames(db, legacyRows);
+  if (legacyNames.length === 0) return;
+
+  const nameMap = buildLegacyChannelNameMap(legacyNames);
+  const legacyByName = new Map(legacyRows.map((row) => [row.name, row]));
+
+  db.exec("BEGIN");
+  try {
+    for (const legacyName of legacyNames.sort((left, right) => left.localeCompare(right))) {
+      const row = legacyByName.get(legacyName);
+      const channelName = mapLegacyChannel(legacyName, nameMap)!;
+      const parentChannel = row?.parent_id ? mapLegacyChannel(row.parent_id, nameMap) : null;
+      insertImportedChannel(db, channelName, legacyName, row ? "space" : "reference", row, parentChannel, row ? legacyChannelDepth(row.name, legacyByName) : 0);
+    }
+
+    if (tableExists(db, "space_members")) {
+      const insert = db.prepare("INSERT OR IGNORE INTO channel_members (channel, agent, joined_at) VALUES (?, ?, ?)");
+      const rows = db.prepare("SELECT space, agent, joined_at FROM space_members").all() as Array<{ space: string; agent: string; joined_at: string }>;
+      for (const row of rows) insert.run(mapLegacyChannel(row.space, nameMap), row.agent, row.joined_at);
+    }
+
+    if (tableExists(db, "space_subscriptions")) {
+      const insert = db.prepare(`
+        INSERT OR IGNORE INTO channel_subscriptions (channel, agent, created_at, preview_chars, since_message_id)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+      const hasSince = hasColumn(db, "space_subscriptions", "since_message_id");
+      const rows = db.prepare(`SELECT space, agent, created_at, preview_chars, ${hasSince ? "since_message_id" : "0 AS since_message_id"} FROM space_subscriptions`).all() as Array<{ space: string; agent: string; created_at: string; preview_chars: number; since_message_id: number }>;
+      for (const row of rows) insert.run(mapLegacyChannel(row.space, nameMap), row.agent, row.created_at, row.preview_chars, row.since_message_id);
+    }
+
+    if (tableExists(db, "space_notification_reads")) {
+      db.exec("INSERT OR IGNORE INTO channel_notification_reads (agent, message_id, read_at) SELECT agent, message_id, read_at FROM space_notification_reads");
+    }
+
+    if (hasColumn(db, "messages", "space")) {
+      const updateMessages = db.prepare("UPDATE messages SET channel = ?, to_agent = ? WHERE space = ?");
+      for (const [legacyName, channelName] of nameMap) updateMessages.run(channelName, channelName, legacyName);
+    }
+    if (hasColumn(db, "messages", "channel")) {
+      const updateMessages = db.prepare("UPDATE messages SET channel = ?, to_agent = CASE WHEN to_agent = ? THEN ? ELSE to_agent END WHERE channel = ?");
+      for (const [legacyName, channelName] of nameMap) updateMessages.run(channelName, legacyName, channelName, legacyName);
+    }
+    const updateSessions = db.prepare("UPDATE messages SET session_id = ? WHERE session_id = ? OR session_id = ?");
+    for (const [legacyName, channelName] of nameMap) {
+      updateSessions.run(`channel:${channelName}`, `space:${legacyName}`, `channel:${legacyName}`);
+    }
+
+    if (hasColumn(db, "message_mentions", "space")) {
+      const updateMentions = db.prepare("UPDATE message_mentions SET channel = ? WHERE space = ?");
+      for (const [legacyName, channelName] of nameMap) updateMentions.run(channelName, legacyName);
+    }
+    if (hasColumn(db, "tasks", "space")) {
+      const updateTasks = db.prepare("UPDATE tasks SET channel = ? WHERE space = ?");
+      for (const [legacyName, channelName] of nameMap) updateTasks.run(channelName, legacyName);
+    }
+    if (tableExists(db, "graph_edges")) {
+      const updateFrom = db.prepare("UPDATE graph_edges SET from_type = 'channel', from_id = ? WHERE from_type = 'space' AND from_id = ?");
+      const updateTo = db.prepare("UPDATE graph_edges SET to_type = 'channel', to_id = ? WHERE to_type = 'space' AND to_id = ?");
+      for (const [legacyName, channelName] of nameMap) {
+        updateFrom.run(channelName, legacyName);
+        updateTo.run(channelName, legacyName);
+      }
+    }
+    if (tableExists(db, "resource_locks")) {
+      const updateLocks = db.prepare("UPDATE resource_locks SET resource_type = 'channel', resource_id = ? WHERE resource_type = 'space' AND resource_id = ?");
+      for (const [legacyName, channelName] of nameMap) updateLocks.run(channelName, legacyName);
+    }
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function dropLegacyChannelStorage(db: Database): void {
+  safeExec(db, "DROP TRIGGER IF EXISTS messages_fts_insert");
+  safeExec(db, "DROP TRIGGER IF EXISTS messages_fts_delete");
+  safeExec(db, "DROP TRIGGER IF EXISTS messages_fts_update");
+  safeExec(db, "DROP TABLE IF EXISTS messages_fts");
+  safeExec(db, "DROP INDEX IF EXISTS idx_messages_space");
+  safeExec(db, "DROP INDEX IF EXISTS idx_spaces_parent");
+  safeExec(db, "DROP INDEX IF EXISTS idx_spaces_project");
+  safeExec(db, "DROP INDEX IF EXISTS idx_space_subscriptions_agent");
+  safeExec(db, "DROP INDEX IF EXISTS idx_space_subscriptions_space");
+  safeExec(db, "DROP INDEX IF EXISTS idx_space_notification_reads_agent");
+  safeExec(db, "DROP INDEX IF EXISTS idx_space_notification_reads_message");
+  safeExec(db, "DROP INDEX IF EXISTS idx_tasks_space");
+  db.exec("DROP TABLE IF EXISTS space_members");
+  db.exec("DROP TABLE IF EXISTS space_subscriptions");
+  db.exec("DROP TABLE IF EXISTS space_notification_reads");
+  db.exec("DROP TABLE IF EXISTS spaces");
+  if (hasColumn(db, "messages", "space")) db.exec("ALTER TABLE messages DROP COLUMN space");
+  if (hasColumn(db, "message_mentions", "space")) db.exec("ALTER TABLE message_mentions DROP COLUMN space");
+  if (hasColumn(db, "tasks", "space")) db.exec("ALTER TABLE tasks DROP COLUMN space");
+}
+
+function dropMessagesFts(db: Database): void {
+  safeExec(db, "DROP TRIGGER IF EXISTS messages_fts_insert");
+  safeExec(db, "DROP TRIGGER IF EXISTS messages_fts_delete");
+  safeExec(db, "DROP TRIGGER IF EXISTS messages_fts_update");
+  safeExec(db, "DROP TABLE IF EXISTS messages_fts");
+}
+
 export function getDb(): Database {
   if (db) return db;
 
@@ -279,7 +620,7 @@ export function getDb(): Database {
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA busy_timeout = 5000");
 
-  // Messages table (new DBs get 'space' column; existing DBs migrate below)
+  // Messages table (new DBs get 'channel' column; existing DBs migrate below)
   db.exec(`
     CREATE TABLE IF NOT EXISTS messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -287,7 +628,7 @@ export function getDb(): Database {
       session_id TEXT NOT NULL,
       from_agent TEXT NOT NULL,
       to_agent TEXT NOT NULL,
-      space TEXT,
+      channel TEXT,
       project_id TEXT,
       content TEXT NOT NULL,
       priority TEXT NOT NULL DEFAULT 'normal',
@@ -302,20 +643,13 @@ export function getDb(): Database {
 
   const initialMsgCols = db.prepare("PRAGMA table_info(messages)").all() as { name: string }[];
   const initialMsgColNames = initialMsgCols.map((c) => c.name);
-  if (initialMsgColNames.includes("channel") && !initialMsgColNames.includes("space")) {
-    db.exec("ALTER TABLE messages ADD COLUMN space TEXT");
-    db.exec("UPDATE messages SET space = channel WHERE channel IS NOT NULL");
-    db.exec(`
-      UPDATE messages
-      SET session_id = 'space:' || substr(session_id, 9)
-      WHERE session_id LIKE 'channel:%'
-    `);
+  if (!initialMsgColNames.includes("channel")) {
+    db.exec("ALTER TABLE messages ADD COLUMN channel TEXT");
   }
 
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_agent)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at)");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_messages_space ON messages(space)");
 
   // Projects table
   db.exec(`
@@ -337,43 +671,44 @@ export function getDb(): Database {
   db.exec("CREATE INDEX IF NOT EXISTS idx_projects_name ON projects(name)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status)");
 
-  // Spaces table
+  // Channels table
   db.exec(`
-    CREATE TABLE IF NOT EXISTS spaces (
+    CREATE TABLE IF NOT EXISTS channels (
       name TEXT PRIMARY KEY,
       description TEXT,
-      parent_id TEXT REFERENCES spaces(name),
+      topic TEXT,
       project_id TEXT REFERENCES projects(id),
       created_by TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
-      archived_at TEXT
+      archived_at TEXT,
+      metadata TEXT,
+      tags TEXT
     )
   `);
 
-  db.exec("CREATE INDEX IF NOT EXISTS idx_spaces_parent ON spaces(parent_id)");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_spaces_project ON spaces(project_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_channels_project ON channels(project_id)");
 
-  // Space members table
+  // Channel members table
   db.exec(`
-    CREATE TABLE IF NOT EXISTS space_members (
-      space TEXT NOT NULL REFERENCES spaces(name),
+    CREATE TABLE IF NOT EXISTS channel_members (
+      channel TEXT NOT NULL REFERENCES channels(name),
       agent TEXT NOT NULL,
       joined_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
-      PRIMARY KEY (space, agent)
+      PRIMARY KEY (channel, agent)
     )
   `);
   db.exec(`
-    CREATE TABLE IF NOT EXISTS space_subscriptions (
-      space TEXT NOT NULL REFERENCES spaces(name),
+    CREATE TABLE IF NOT EXISTS channel_subscriptions (
+      channel TEXT NOT NULL REFERENCES channels(name),
       agent TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
       preview_chars INTEGER NOT NULL DEFAULT 140,
       since_message_id INTEGER NOT NULL DEFAULT 0,
-      PRIMARY KEY (space, agent)
+      PRIMARY KEY (channel, agent)
     )
   `);
-  db.exec("CREATE INDEX IF NOT EXISTS idx_space_subscriptions_agent ON space_subscriptions(agent)");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_space_subscriptions_space ON space_subscriptions(space)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_channel_subscriptions_agent ON channel_subscriptions(agent)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_channel_subscriptions_channel ON channel_subscriptions(channel)");
 
   // Agent presence table
   db.exec(`
@@ -422,91 +757,55 @@ export function getDb(): Database {
   db.exec("CREATE INDEX IF NOT EXISTS idx_reactions_message ON reactions(message_id)");
 
   db.exec(`
-    CREATE TABLE IF NOT EXISTS space_notification_reads (
+    CREATE TABLE IF NOT EXISTS channel_notification_reads (
       agent TEXT NOT NULL,
       message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
       read_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
       PRIMARY KEY (agent, message_id)
     )
   `);
-  db.exec("CREATE INDEX IF NOT EXISTS idx_space_notification_reads_agent ON space_notification_reads(agent)");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_space_notification_reads_message ON space_notification_reads(message_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_channel_notification_reads_agent ON channel_notification_reads(agent)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_channel_notification_reads_message ON channel_notification_reads(message_id)");
 
   // ---- Migrations for existing databases ----
 
-  const existingTables = db.prepare(
-    "SELECT name FROM sqlite_master WHERE type='table'"
-  ).all() as { name: string }[];
-  const tableNames = existingTables.map((t) => t.name);
-
-  // Migrate channels -> spaces (if old DB)
-  if (tableNames.includes("channels") && tableNames.includes("spaces")) {
-    const spaceCount = (db.prepare("SELECT COUNT(*) as c FROM spaces").get() as { c: number }).c;
-    const channelCount = (db.prepare("SELECT COUNT(*) as c FROM channels").get() as { c: number }).c;
-
-    if (channelCount > 0 && spaceCount === 0) {
-      db.exec("BEGIN");
-      try {
-        db.exec(`
-          INSERT OR IGNORE INTO spaces (name, description, created_by, created_at)
-          SELECT name, description, created_by, created_at FROM channels
-        `);
-        if (tableNames.includes("channel_members")) {
-          db.exec(`
-            INSERT OR IGNORE INTO space_members (space, agent, joined_at)
-            SELECT channel, agent, joined_at FROM channel_members
-          `);
-        }
-        db.exec("COMMIT");
-      } catch (e) {
-        db.exec("ROLLBACK");
-        throw e;
-      }
-    }
-
-    // Drop old tables after migration
-    db.exec("DROP TABLE IF EXISTS channel_members");
-    db.exec("DROP TABLE IF EXISTS channels");
+  const channelCols = db.prepare("PRAGMA table_info(channels)").all() as { name: string }[];
+  const channelColNames = channelCols.map((c) => c.name);
+  if (!channelColNames.includes("archived_at")) {
+    db.exec("ALTER TABLE channels ADD COLUMN archived_at TEXT");
+  }
+  if (!channelColNames.includes("topic")) {
+    db.exec("ALTER TABLE channels ADD COLUMN topic TEXT");
+  }
+  if (!channelColNames.includes("metadata")) {
+    db.exec("ALTER TABLE channels ADD COLUMN metadata TEXT");
+  }
+  if (!channelColNames.includes("tags")) {
+    db.exec("ALTER TABLE channels ADD COLUMN tags TEXT");
+  }
+  if (channelColNames.includes("parent_id")) {
+    ensureFlatChannelsTable(db);
   }
 
-  // Migrate messages.channel -> messages.space column
-  const msgCols = db.prepare("PRAGMA table_info(messages)").all() as { name: string }[];
-  const colNames = msgCols.map((c) => c.name);
-
-  if (colNames.includes("channel") && !colNames.includes("space")) {
-    db.exec("ALTER TABLE messages ADD COLUMN space TEXT");
-    db.exec("CREATE INDEX IF NOT EXISTS idx_messages_space ON messages(space)");
-    db.exec("UPDATE messages SET space = channel WHERE channel IS NOT NULL");
+  const channelSubscriptionCols = db.prepare("PRAGMA table_info(channel_subscriptions)").all() as { name: string }[];
+  const channelSubscriptionColNames = channelSubscriptionCols.map((c) => c.name);
+  if (!channelSubscriptionColNames.includes("since_message_id")) {
+    db.exec("ALTER TABLE channel_subscriptions ADD COLUMN since_message_id INTEGER NOT NULL DEFAULT 0");
     db.exec(`
-      UPDATE messages
-      SET session_id = 'space:' || substr(session_id, 9)
-      WHERE session_id LIKE 'channel:%'
-    `);
-  }
-
-  // Migrate spaces table: add archived_at column
-  const spaceCols = db.prepare("PRAGMA table_info(spaces)").all() as { name: string }[];
-  const spaceColNames = spaceCols.map((c) => c.name);
-  if (!spaceColNames.includes("archived_at")) {
-    db.exec("ALTER TABLE spaces ADD COLUMN archived_at TEXT");
-  }
-  if (!spaceColNames.includes("topic")) {
-    db.exec("ALTER TABLE spaces ADD COLUMN topic TEXT");
-  }
-
-  const spaceSubscriptionCols = db.prepare("PRAGMA table_info(space_subscriptions)").all() as { name: string }[];
-  const spaceSubscriptionColNames = spaceSubscriptionCols.map((c) => c.name);
-  if (!spaceSubscriptionColNames.includes("since_message_id")) {
-    db.exec("ALTER TABLE space_subscriptions ADD COLUMN since_message_id INTEGER NOT NULL DEFAULT 0");
-    db.exec(`
-      UPDATE space_subscriptions
+      UPDATE channel_subscriptions
       SET since_message_id = COALESCE(
-        (SELECT MAX(m.id) FROM messages m WHERE m.space = space_subscriptions.space),
+        (SELECT MAX(m.id) FROM messages m WHERE m.channel = channel_subscriptions.channel),
         0
       )
       WHERE since_message_id = 0
     `);
   }
+
+  const hasLegacyChannels = hasLegacyChannelArtifacts(db);
+  if (hasLegacyChannels) {
+    migrateLegacyChannels(db);
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel)");
 
   // Add edited_at and pinned_at columns if missing
   const msgCols2 = db.prepare("PRAGMA table_info(messages)").all() as { name: string }[];
@@ -578,7 +877,7 @@ export function getDb(): Database {
 
   ensureAgentPresenceAgentUniqueIndex(db);
 
-  // Per-agent space message read receipts
+  // Per-agent channel message read receipts
   db.exec(`
     CREATE TABLE IF NOT EXISTS message_read_receipts (
       message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
@@ -597,7 +896,7 @@ export function getDb(): Database {
       message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
       mentioned_agent TEXT NOT NULL,
       from_agent TEXT NOT NULL,
-      space TEXT,
+      channel TEXT,
       notified_at TEXT,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now'))
     )
@@ -606,6 +905,12 @@ export function getDb(): Database {
   db.exec("CREATE INDEX IF NOT EXISTS idx_mentions_message ON message_mentions(message_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_mentions_notified ON message_mentions(notified_at)");
 
+  if (hasLegacyChannels) {
+    dropLegacyChannelStorage(db);
+  } else if (tableExists(db, "messages_fts") && !hasColumn(db, "messages_fts", "channel")) {
+    dropMessagesFts(db);
+  }
+
   // FTS5 virtual table for full-text search
   const ftsExists = db.prepare(
     "SELECT name FROM sqlite_master WHERE type='table' AND name='messages_fts'"
@@ -613,34 +918,34 @@ export function getDb(): Database {
   if (!ftsExists) {
     db.exec(`
       CREATE VIRTUAL TABLE messages_fts USING fts5(
-        content, from_agent, to_agent, space,
+        content, from_agent, to_agent, channel,
         content_rowid='id', content='messages'
       )
     `);
     // Populate from existing messages
     db.exec(`
-      INSERT INTO messages_fts(rowid, content, from_agent, to_agent, space)
-      SELECT id, content, from_agent, to_agent, space FROM messages
+      INSERT INTO messages_fts(rowid, content, from_agent, to_agent, channel)
+      SELECT id, content, from_agent, to_agent, channel FROM messages
     `);
     // Triggers to keep FTS in sync
     db.exec(`
       CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages BEGIN
-        INSERT INTO messages_fts(rowid, content, from_agent, to_agent, space)
-        VALUES (new.id, new.content, new.from_agent, new.to_agent, new.space);
+        INSERT INTO messages_fts(rowid, content, from_agent, to_agent, channel)
+        VALUES (new.id, new.content, new.from_agent, new.to_agent, new.channel);
       END
     `);
     db.exec(`
       CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages BEGIN
-        INSERT INTO messages_fts(messages_fts, rowid, content, from_agent, to_agent, space)
-        VALUES ('delete', old.id, old.content, old.from_agent, old.to_agent, old.space);
+        INSERT INTO messages_fts(messages_fts, rowid, content, from_agent, to_agent, channel)
+        VALUES ('delete', old.id, old.content, old.from_agent, old.to_agent, old.channel);
       END
     `);
     db.exec(`
       CREATE TRIGGER IF NOT EXISTS messages_fts_update AFTER UPDATE OF content ON messages BEGIN
-        INSERT INTO messages_fts(messages_fts, rowid, content, from_agent, to_agent, space)
-        VALUES ('delete', old.id, old.content, old.from_agent, old.to_agent, old.space);
-        INSERT INTO messages_fts(rowid, content, from_agent, to_agent, space)
-        VALUES (new.id, new.content, new.from_agent, new.to_agent, new.space);
+        INSERT INTO messages_fts(messages_fts, rowid, content, from_agent, to_agent, channel)
+        VALUES ('delete', old.id, old.content, old.from_agent, old.to_agent, old.channel);
+        INSERT INTO messages_fts(rowid, content, from_agent, to_agent, channel)
+        VALUES (new.id, new.content, new.from_agent, new.to_agent, new.channel);
       END
     `);
   }
@@ -670,7 +975,7 @@ export function getDb(): Database {
       assignee TEXT,
       reporter TEXT NOT NULL,
       project_id TEXT,
-      space TEXT,
+      channel TEXT,
       parent_id INTEGER REFERENCES tasks(id),
       depends_on TEXT,
       tags TEXT,
@@ -682,12 +987,19 @@ export function getDb(): Database {
       due_at TEXT
     )
   `);
+  if (!hasColumn(db, "tasks", "channel")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN channel TEXT");
+  }
+  if (hasColumn(db, "tasks", "space")) {
+    safeExec(db, "DROP INDEX IF EXISTS idx_tasks_space");
+    safeExec(db, "ALTER TABLE tasks DROP COLUMN space");
+  }
   db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_uuid ON tasks(uuid)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_reporter ON tasks(reporter)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_space ON tasks(space)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_channel ON tasks(channel)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority)");
 

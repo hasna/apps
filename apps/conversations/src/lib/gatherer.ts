@@ -16,7 +16,7 @@ interface TrainingExample {
 }
 
 function windowToExample(
-  window: Array<{ from_agent: string; to_agent: string | null; space: string | null; content: string }>
+  window: Array<{ from_agent: string; to_agent: string | null; channel: string | null; content: string }>
 ): TrainingExample | null {
   if (window.length < 2) return null;
 
@@ -30,7 +30,7 @@ function windowToExample(
     const role: "user" | "assistant" = i % 2 === 0 ? "user" : "assistant";
     messages.push({
       role,
-      content: `[${msg.from_agent} → ${msg.to_agent ?? msg.space ?? "all"}]: ${msg.content}`,
+      content: `[${msg.from_agent} → ${msg.to_agent ?? msg.channel ?? "all"}]: ${msg.content}`,
     });
   }
 
@@ -38,7 +38,7 @@ function windowToExample(
   if (!last) return null;
   messages.push({
     role: "assistant",
-    content: `[${last.from_agent} → ${last.to_agent ?? last.space ?? "all"}]: ${last.content}`,
+    content: `[${last.from_agent} → ${last.to_agent ?? last.channel ?? "all"}]: ${last.content}`,
   });
 
   return { messages };

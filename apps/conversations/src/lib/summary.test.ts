@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { getConversationSummary } from "./summary";
 import { sendMessage, pinMessage } from "./messages";
 import { addReaction } from "./reactions";
-import { createSpace } from "./spaces";
+import { createChannel } from "./channels";
 import { closeDb } from "./db";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
@@ -75,12 +75,12 @@ describe("getConversationSummary", () => {
     expect(summary!.activity.reply_count).toBe(1);
   });
 
-  test("summarizes a space by name", () => {
-    createSpace("summary-space", "tester");
-    sendMessage({ from: "a", to: "summary-space", content: "space message about testing", space: "summary-space" });
-    sendMessage({ from: "b", to: "summary-space", content: "more testing discussion", space: "summary-space" });
+  test("summarizes a channel by name", () => {
+    createChannel("summary-channel", "tester");
+    sendMessage({ from: "a", to: "summary-channel", content: "channel message about testing", channel: "summary-channel" });
+    sendMessage({ from: "b", to: "summary-channel", content: "more testing discussion", channel: "summary-channel" });
 
-    const summary = getConversationSummary("summary-space");
+    const summary = getConversationSummary("summary-channel");
     expect(summary).toBeTruthy();
     expect(summary!.message_count).toBe(2);
   });

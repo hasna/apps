@@ -64,7 +64,7 @@ describe("createTask", () => {
       assignee: "agent-2",
       priority: "high",
       project_id: "proj-1",
-      space: "general",
+      channel: "general",
       tags: ["sdk", "tasks"],
       metadata: { key: "value" },
       due_at: "2026-05-01T00:00:00Z",
@@ -73,7 +73,7 @@ describe("createTask", () => {
     expect(task.assignee).toBe("agent-2");
     expect(task.priority).toBe("high");
     expect(task.project_id).toBe("proj-1");
-    expect(task.space).toBe("general");
+    expect(task.channel).toBe("general");
     expect(task.tags).toEqual(["sdk", "tasks"]);
     expect(task.metadata).toEqual({ key: "value" });
     expect(task.due_at).toBe("2026-05-01T00:00:00Z");

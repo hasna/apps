@@ -1,52 +1,52 @@
 /**
- * Space tools: create_space, list_spaces, send_to_space, read_space,
- * join_space, leave_space, update_space, archive_space, unarchive_space,
- * subscribe_space_notifications, unsubscribe_space_notifications,
- * list_space_subscriptions, read_space_notifications, mark_space_notifications_read,
- * set_space_topic, get_space_topic, summarize_space
+ * Channel tools: create_channel, list_channels, send_to_channel, read_channel,
+ * join_channel, leave_channel, update_channel, archive_channel, unarchive_channel,
+ * subscribe_channel_notifications, unsubscribe_channel_notifications,
+ * list_channel_subscriptions, read_channel_notifications, mark_channel_notifications_read,
+ * set_channel_topic, get_channel_topic, summarize_channel
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { sendMessage, readMessages, markReadByIds } from "../../lib/messages.js";
-import { createSpace, updateSpace, archiveSpace, unarchiveSpace, listSpaces, getSpace, joinSpace, leaveSpace } from "../../lib/spaces.js";
-import { listSpaceNotificationSubscriptions, markAllSpaceNotificationsRead, markSpaceNotificationsRead, readSpaceNotifications, subscribeToSpaceNotifications, unsubscribeFromSpaceNotifications } from "../../lib/space-notifications.js";
+import { createChannel, updateChannel, archiveChannel, unarchiveChannel, listChannels, getChannel, joinChannel, leaveChannel } from "../../lib/channels.js";
+import { listChannelNotificationSubscriptions, markAllChannelNotificationsRead, markChannelNotificationsRead, readChannelNotifications, subscribeToChannelNotifications, unsubscribeFromChannelNotifications } from "../../lib/channel-notifications.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { recordReadReceiptsBatch } from "../../lib/messages.js";
 import { getConversationSummary } from "../../lib/summary.js";
 
-export function registerSpaceTools(server: McpServer): void {
+export function registerChannelTools(server: McpServer): void {
 
-  server.registerTool("create_space", {
-    description: "Create a space and auto-join.",
+  server.registerTool("create_channel", {
+    description: "Create a channel and auto-join.",
     inputSchema: {
       name: z.string(),
       from: z.string().optional(),
       description: z.string().optional(),
-      parent_id: z.string().optional(),
+      topic: z.string().optional(),
       project_id: z.string().optional(),
     },
   }, async (args: Record<string, any>) => {
-    const { from: fromParam, name, description, parent_id, project_id } = args;
+    const { from: fromParam, name, description, topic, project_id } = args;
     const agent = resolveIdentity(fromParam);
     try {
-      const sp = createSpace(name, agent, { description, parent_id, project_id });
+      const sp = createChannel(name, agent, { description, topic, project_id });
       return {
         content: [{ type: "text", text: JSON.stringify(sp) }],
       };
     } catch (e: any) {
       if (e.message?.includes("UNIQUE constraint")) {
         try {
-          const existing = getSpace(name);
+          const existing = getChannel(name);
           if (existing) {
             return {
-              content: [{ type: "text", text: `Space "${name}" already exists. Use read_space or join_space to interact with it.` }],
+              content: [{ type: "text", text: `Channel "${name}" already exists. Use read_channel or join_channel to interact with it.` }],
               isError: true,
             };
           }
         } catch { /* fallthrough */ }
         return {
-          content: [{ type: "text", text: `Space "${name}" already exists. Use list_spaces to find it.` }],
+          content: [{ type: "text", text: `Channel "${name}" already exists. Use list_channels to find it.` }],
           isError: true,
         };
       }
@@ -57,58 +57,52 @@ export function registerSpaceTools(server: McpServer): void {
     }
   });
 
-  server.registerTool("list_spaces", {
-    description: "List spaces with counts.",
+  server.registerTool("list_channels", {
+    description: "List channels with counts.",
     inputSchema: {
       project_id: z.string().optional(),
-      parent_id: z.string().optional(),
       include_archived: z.coerce.boolean().optional(),
     },
   }, async (args: Record<string, any>) => {
-    const { project_id, parent_id, include_archived } = args;
-    const opts: { project_id?: string; parent_id?: string | null; include_archived?: boolean } = {};
+    const { project_id, include_archived } = args;
+    const opts: { project_id?: string; include_archived?: boolean } = {};
     if (project_id) opts.project_id = project_id;
-    if (parent_id === "null") {
-      opts.parent_id = null;
-    } else if (parent_id) {
-      opts.parent_id = parent_id;
-    }
     if (include_archived) opts.include_archived = true;
 
-    const spaces = listSpaces(opts);
+    const channels = listChannels(opts);
 
     return {
-      content: [{ type: "text", text: JSON.stringify(spaces) }],
+      content: [{ type: "text", text: JSON.stringify(channels) }],
     };
   });
 
-  server.registerTool("send_to_space", {
-    description: "Post a message to a space.",
+  server.registerTool("send_to_channel", {
+    description: "Post a message to a channel.",
     inputSchema: {
-      space: z.string(),
+      channel: z.string(),
       content: z.string(),
       from: z.string().optional(),
       priority: z.string().optional(),
       blocking: z.coerce.boolean().optional(),
     },
   }, async (args: Record<string, any>) => {
-    const { from: fromParam, space, content, priority, blocking } = args;
+    const { from: fromParam, channel, content, priority, blocking } = args;
     const from = resolveIdentity(fromParam);
 
-    const sp = getSpace(space);
+    const sp = getChannel(channel);
     if (!sp) {
       return {
-        content: [{ type: "text", text: `space "${space}" not found` }],
+        content: [{ type: "text", text: `channel "${channel}" not found` }],
         isError: true,
       };
     }
 
     const msg = sendMessage({
       from,
-      to: space,
+      to: channel,
       content,
-      space,
-      session_id: `space:${space}`,
+      channel,
+      session_id: `channel:${channel}`,
       priority,
       blocking,
     });
@@ -118,11 +112,11 @@ export function registerSpaceTools(server: McpServer): void {
     };
   });
 
-  server.registerTool("read_space", {
-    description: "Read messages from a space.",
+  server.registerTool("read_channel", {
+    description: "Read messages from a channel.",
     inputSchema: {
-      space: z.string(),
-      from: z.string().optional().describe("Agent reading the space — used for per-agent read receipts"),
+      channel: z.string(),
+      from: z.string().optional().describe("Agent reading the channel — used for per-agent read receipts"),
       since: z.string().optional(),
       limit: z.coerce.number().optional(),
       mark_read: z.coerce.boolean().optional(),
@@ -132,18 +126,18 @@ export function registerSpaceTools(server: McpServer): void {
       latest: z.coerce.number().optional().describe("Return the N most recent messages, newest first"),
     },
   }, async (args: Record<string, any>) => {
-    const { space, from: fromParam, since, limit, mark_read, max_content_length, threads_only, include_reply_counts, latest } = args;
-    const messages = readMessages({ space, since, limit, max_content_length, threads_only, include_reply_counts, latest });
+    const { channel, from: fromParam, since, limit, mark_read, max_content_length, threads_only, include_reply_counts, latest } = args;
+    const messages = readMessages({ channel, since, limit, max_content_length, threads_only, include_reply_counts, latest });
 
     if (mark_read !== false && messages.length > 0) {
       markReadByIds(messages.map((m) => m.id));
     }
 
-    // Record per-agent read receipts for all space messages
+    // Record per-agent read receipts for all channel messages
     if (fromParam && messages.length > 0) {
       const agent = resolveIdentity(fromParam);
       recordReadReceiptsBatch(messages.map((m) => m.id), agent);
-      markSpaceNotificationsRead(agent, messages.map((m) => m.id));
+      markChannelNotificationsRead(agent, messages.map((m) => m.id));
     }
 
     return {
@@ -151,92 +145,92 @@ export function registerSpaceTools(server: McpServer): void {
     };
   });
 
-  server.registerTool("join_space", {
-    description: "Join a space as a member.",
+  server.registerTool("join_channel", {
+    description: "Join a channel as a member.",
     inputSchema: {
-      space: z.string(),
+      channel: z.string(),
       from: z.string().optional(),
     },
   }, async (args: Record<string, any>) => {
-    const { from: fromParam, space } = args;
+    const { from: fromParam, channel } = args;
     const agent = resolveIdentity(fromParam);
-    const ok = joinSpace(space, agent);
+    const ok = joinChannel(channel, agent);
 
     if (!ok) {
       return {
-        content: [{ type: "text", text: `space "${space}" not found` }],
+        content: [{ type: "text", text: `channel "${channel}" not found` }],
         isError: true,
       };
     }
 
     return {
-      content: [{ type: "text", text: JSON.stringify({ space, agent, joined: true }) }],
+      content: [{ type: "text", text: JSON.stringify({ channel, agent, joined: true }) }],
     };
   });
 
-  server.registerTool("leave_space", {
-    description: "Leave a space.",
+  server.registerTool("leave_channel", {
+    description: "Leave a channel.",
     inputSchema: {
-      space: z.string(),
+      channel: z.string(),
       from: z.string().optional(),
     },
   }, async (args: Record<string, any>) => {
-    const { from: fromParam, space } = args;
+    const { from: fromParam, channel } = args;
     const agent = resolveIdentity(fromParam);
-    const left = leaveSpace(space, agent);
+    const left = leaveChannel(channel, agent);
 
     return {
-      content: [{ type: "text", text: JSON.stringify({ space, agent, left }) }],
+      content: [{ type: "text", text: JSON.stringify({ channel, agent, left }) }],
     };
   });
 
-  server.registerTool("subscribe_space_notifications", {
-    description: "Subscribe an agent to preview-only notifications for a space.",
+  server.registerTool("subscribe_channel_notifications", {
+    description: "Subscribe an agent to preview-only notifications for a channel.",
     inputSchema: {
-      space: z.string(),
+      channel: z.string(),
       from: z.string().optional(),
       preview_chars: z.coerce.number().optional(),
     },
   }, async (args: Record<string, any>) => {
     const agent = resolveIdentity(args.from);
     try {
-      const subscription = subscribeToSpaceNotifications(args.space, agent, { preview_chars: args.preview_chars });
+      const subscription = subscribeToChannelNotifications(args.channel, agent, { preview_chars: args.preview_chars });
       return { content: [{ type: "text", text: JSON.stringify(subscription) }] };
     } catch (e: any) {
       return { content: [{ type: "text", text: e.message }], isError: true };
     }
   });
 
-  server.registerTool("unsubscribe_space_notifications", {
-    description: "Stop preview-only notifications for a space.",
+  server.registerTool("unsubscribe_channel_notifications", {
+    description: "Stop preview-only notifications for a channel.",
     inputSchema: {
-      space: z.string(),
+      channel: z.string(),
       from: z.string().optional(),
     },
   }, async (args: Record<string, any>) => {
     const agent = resolveIdentity(args.from);
-    const unsubscribed = unsubscribeFromSpaceNotifications(args.space, agent);
-    return { content: [{ type: "text", text: JSON.stringify({ space: args.space, agent, unsubscribed }) }] };
+    const unsubscribed = unsubscribeFromChannelNotifications(args.channel, agent);
+    return { content: [{ type: "text", text: JSON.stringify({ channel: args.channel, agent, unsubscribed }) }] };
   });
 
-  server.registerTool("list_space_subscriptions", {
-    description: "List an agent's preview-only space notification subscriptions.",
+  server.registerTool("list_channel_subscriptions", {
+    description: "List an agent's preview-only channel notification subscriptions.",
     inputSchema: {
       from: z.string().optional(),
-      space: z.string().optional(),
+      channel: z.string().optional(),
     },
   }, async (args: Record<string, any>) => {
     const agent = resolveIdentity(args.from);
-    const subscriptions = listSpaceNotificationSubscriptions(agent)
-      .filter((row) => !args.space || row.space === args.space);
+    const subscriptions = listChannelNotificationSubscriptions(agent)
+      .filter((row) => !args.channel || row.channel === args.channel);
     return { content: [{ type: "text", text: JSON.stringify(subscriptions) }] };
   });
 
-  server.registerTool("read_space_notifications", {
-    description: "Read preview-only notifications for an agent's subscribed spaces. Returns blurbs, not full message bodies.",
+  server.registerTool("read_channel_notifications", {
+    description: "Read preview-only notifications for an agent's subscribed channels. Returns blurbs, not full message bodies.",
     inputSchema: {
       from: z.string().optional(),
-      space: z.string().optional(),
+      channel: z.string().optional(),
       unread_only: z.coerce.boolean().optional(),
       limit: z.coerce.number().optional(),
       since: z.string().optional(),
@@ -244,9 +238,9 @@ export function registerSpaceTools(server: McpServer): void {
     },
   }, async (args: Record<string, any>) => {
     const agent = resolveIdentity(args.from);
-    const notifications = readSpaceNotifications({
+    const notifications = readChannelNotifications({
       agent,
-      space: args.space,
+      channel: args.channel,
       unread_only: args.unread_only,
       limit: args.limit,
       since: args.since,
@@ -255,21 +249,21 @@ export function registerSpaceTools(server: McpServer): void {
     return { content: [{ type: "text", text: JSON.stringify({ notifications, count: notifications.length }) }] };
   });
 
-  server.registerTool("mark_space_notifications_read", {
-    description: "Mark preview-only space notifications as read for an agent.",
+  server.registerTool("mark_channel_notifications_read", {
+    description: "Mark preview-only channel notifications as read for an agent.",
     inputSchema: {
       from: z.string().optional(),
       ids: z.array(z.coerce.number()).optional(),
-      space: z.string().optional(),
+      channel: z.string().optional(),
       all: z.coerce.boolean().optional(),
     },
   }, async (args: Record<string, any>) => {
     const agent = resolveIdentity(args.from);
     let marked = 0;
     if (args.all) {
-      marked = markAllSpaceNotificationsRead(agent, args.space);
+      marked = markAllChannelNotificationsRead(agent, args.channel);
     } else if (Array.isArray(args.ids) && args.ids.length > 0) {
-      marked = markSpaceNotificationsRead(agent, args.ids);
+      marked = markChannelNotificationsRead(agent, args.ids);
     } else {
       return { content: [{ type: "text", text: "Provide ids or all=true" }], isError: true };
     }
@@ -277,23 +271,23 @@ export function registerSpaceTools(server: McpServer): void {
     return { content: [{ type: "text", text: JSON.stringify({ marked_read: marked }) }] };
   });
 
-  server.registerTool("update_space", {
-    description: "Update space description or parent.",
+  server.registerTool("update_channel", {
+    description: "Update channel description, topic, or project.",
     inputSchema: {
       name: z.string(),
       description: z.string().optional(),
-      parent_id: z.string().optional(),
+      topic: z.string().optional(),
       project_id: z.string().optional(),
     },
   }, async (args: Record<string, any>) => {
-    const { name, description, parent_id, project_id } = args;
-    const updates: { description?: string; parent_id?: string | null; project_id?: string | null } = {};
+    const { name, description, topic, project_id } = args;
+    const updates: { description?: string; topic?: string | null; project_id?: string | null } = {};
     if (description !== undefined) updates.description = description;
-    if (parent_id !== undefined) updates.parent_id = parent_id === "null" ? null : parent_id;
+    if (topic !== undefined) updates.topic = topic === "null" ? null : topic;
     if (project_id !== undefined) updates.project_id = project_id === "null" ? null : project_id;
 
     try {
-      const sp = updateSpace(name, updates);
+      const sp = updateChannel(name, updates);
       return {
         content: [{ type: "text", text: JSON.stringify(sp) }],
       };
@@ -305,14 +299,14 @@ export function registerSpaceTools(server: McpServer): void {
     }
   });
 
-  server.registerTool("archive_space", {
-    description: "Archive a space.",
+  server.registerTool("archive_channel", {
+    description: "Archive a channel.",
     inputSchema: {
       name: z.string(),
     },
   }, async ({ name }) => {
     try {
-      const sp = archiveSpace(name);
+      const sp = archiveChannel(name);
       return {
         content: [{ type: "text", text: JSON.stringify(sp) }],
       };
@@ -324,14 +318,14 @@ export function registerSpaceTools(server: McpServer): void {
     }
   });
 
-  server.registerTool("unarchive_space", {
-    description: "Unarchive a space.",
+  server.registerTool("unarchive_channel", {
+    description: "Unarchive a channel.",
     inputSchema: {
       name: z.string(),
     },
   }, async ({ name }) => {
     try {
-      const sp = unarchiveSpace(name);
+      const sp = unarchiveChannel(name);
       return {
         content: [{ type: "text", text: JSON.stringify(sp) }],
       };
@@ -343,57 +337,57 @@ export function registerSpaceTools(server: McpServer): void {
     }
   });
 
-  server.registerTool("set_space_topic", {
-    description: "Set the current topic/status of a space. Separate from the static description — use this for live status like '\ud83d\udd34 blocked on auth' or '\u2705 shipping v2'.",
+  server.registerTool("set_channel_topic", {
+    description: "Set the current topic/status of a channel. Separate from the static description — use this for live status like '\ud83d\udd34 blocked on auth' or '\u2705 shipping v2'.",
     inputSchema: {
-      space: z.string().describe("Space name"),
+      channel: z.string().describe("Channel name"),
       topic: z.string().nullable().describe("New topic/status. Pass null to clear."),
     },
   }, async (args: Record<string, any>) => {
     const db = (await import("../../lib/db.js")).getDb();
-    const existing = db.prepare("SELECT name FROM spaces WHERE name = ?").get(args.space);
+    const existing = db.prepare("SELECT name FROM channels WHERE name = ?").get(args.channel);
     if (!existing) {
-      return { content: [{ type: "text", text: `Space not found: ${args.space}` }], isError: true };
+      return { content: [{ type: "text", text: `Channel not found: ${args.channel}` }], isError: true };
     }
-    db.prepare("UPDATE spaces SET topic = ? WHERE name = ?").run(args.topic ?? null, args.space);
+    db.prepare("UPDATE channels SET topic = ? WHERE name = ?").run(args.topic ?? null, args.channel);
     return { content: [{ type: "text", text: args.topic ? `Topic set: ${args.topic}` : "Topic cleared" }] };
   });
 
-  server.registerTool("get_space_topic", {
-    description: "Get the current topic/status of a space.",
-    inputSchema: { space: z.string() },
+  server.registerTool("get_channel_topic", {
+    description: "Get the current topic/status of a channel.",
+    inputSchema: { channel: z.string() },
   }, async (args: Record<string, any>) => {
     const db = (await import("../../lib/db.js")).getDb();
-    const row = db.prepare("SELECT topic FROM spaces WHERE name = ?").get(args.space) as { topic: string | null } | null;
-    if (!row) return { content: [{ type: "text", text: `Space not found: ${args.space}` }], isError: true };
-    return { content: [{ type: "text", text: JSON.stringify({ space: args.space, topic: row.topic }) }] };
+    const row = db.prepare("SELECT topic FROM channels WHERE name = ?").get(args.channel) as { topic: string | null } | null;
+    if (!row) return { content: [{ type: "text", text: `Channel not found: ${args.channel}` }], isError: true };
+    return { content: [{ type: "text", text: JSON.stringify({ channel: args.channel, topic: row.topic }) }] };
   });
 
-  server.registerTool("summarize_space", {
-    description: "Get a structured catch-up summary of a space for a time window — participants, topics, key messages, blockers, activity counts. No LLM required.",
+  server.registerTool("summarize_channel", {
+    description: "Get a structured catch-up summary of a channel for a time window — participants, topics, key messages, blockers, activity counts. No LLM required.",
     inputSchema: {
-      space: z.string().describe("Space name"),
+      channel: z.string().describe("Channel name"),
       since: z.string().optional().describe("ISO 8601 timestamp — only include messages after this. Defaults to 24h ago."),
       limit: z.coerce.number().optional().describe("Max messages to analyze (default: 100)"),
     },
   }, async (args: Record<string, any>) => {
-    const { space, since, limit } = args;
+    const { channel, since, limit } = args;
     const sinceTs = since ?? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const db = (await import("../../lib/db.js")).getDb();
 
     // Count messages in window
     const total = (db.prepare(
-      "SELECT COUNT(*) as c FROM messages WHERE space = ? AND created_at >= ?"
-    ).get(space, sinceTs) as { c: number }).c;
+      "SELECT COUNT(*) as c FROM messages WHERE channel = ? AND created_at >= ?"
+    ).get(channel, sinceTs) as { c: number }).c;
 
     if (total === 0) {
-      return { content: [{ type: "text", text: `No messages in #${space} since ${sinceTs.slice(0, 10)}.` }] };
+      return { content: [{ type: "text", text: `No messages in #${channel} since ${sinceTs.slice(0, 10)}.` }] };
     }
 
     // Get summary using existing getConversationSummary but filtered by since
     const rows = db.prepare(
-      `SELECT * FROM messages WHERE space = ? AND created_at >= ? ORDER BY created_at DESC LIMIT ?`
-    ).all(space, sinceTs, limit ?? 100) as Record<string, unknown>[];
+      `SELECT * FROM messages WHERE channel = ? AND created_at >= ? ORDER BY created_at DESC LIMIT ?`
+    ).all(channel, sinceTs, limit ?? 100) as Record<string, unknown>[];
 
     // Participants
     const agents = new Set<string>();
@@ -417,7 +411,7 @@ export function registerSpaceTools(server: McpServer): void {
     }
 
     const parts = [
-      `Space: #${space} | Since: ${sinceTs.slice(0, 10)} | ${total} messages (showing ${rows.length})`,
+      `Channel: #${channel} | Since: ${sinceTs.slice(0, 10)} | ${total} messages (showing ${rows.length})`,
       `\nParticipants (${agents.size}): ${Object.entries(agentCounts).sort((a, b) => b[1] - a[1]).map(([n, c]) => `${n}(${c})`).join(", ")}`,
     ];
 

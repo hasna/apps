@@ -9,7 +9,7 @@ import { App } from "./components/App.js";
 import { registerBrainsCommand } from "./brains.js";
 import { registerStorageCommands } from "./storage.js";
 import { registerMessagingCommands } from "./commands/messaging.js";
-import { registerSpaceCommands } from "./commands/spaces.js";
+import { registerChannelCommands } from "./commands/channels.js";
 import { registerProjectCommands } from "./commands/projects.js";
 import { registerAgentCommands } from "./commands/agents.js";
 import { registerAnalyticsCommands } from "./commands/analytics.js";
@@ -25,7 +25,7 @@ program
 
 // ---- command groups ----
 registerMessagingCommands(program);
-registerSpaceCommands(program);
+registerChannelCommands(program);
 registerProjectCommands(program);
 registerAgentCommands(program);
 registerAnalyticsCommands(program);

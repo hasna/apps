@@ -7,10 +7,10 @@ import { resolveIdentity } from "../../lib/identity.js";
 import { heartbeat, listAgents } from "../../lib/presence.js";
 import { addReaction, removeReaction, getReactionSummary } from "../../lib/reactions.js";
 import { listHotSessions } from "../../lib/hot.js";
-import { getSpaceTopics, getSessionTopics, getTrendingTopics } from "../../lib/topics.js";
+import { getChannelTopics, getSessionTopics, getTrendingTopics } from "../../lib/topics.js";
 import { getConversationSummary } from "../../lib/summary.js";
 import { buildGraph, getAgentNetwork, getGraphStats } from "../../lib/graph.js";
-import { listSpaceNotificationSubscriptions, readSpaceNotifications } from "../../lib/space-notifications.js";
+import { listChannelNotificationSubscriptions, readChannelNotifications } from "../../lib/channel-notifications.js";
 import { renderContent } from "../../lib/terminal-markdown.js";
 import pkg from "../../../package.json";
 
@@ -20,7 +20,7 @@ export function registerAnalyticsCommands(program: Command): void {
 
   graph
     .command("build")
-    .description("Build/rebuild knowledge graph from messages, spaces, projects")
+    .description("Build/rebuild knowledge graph from messages, channels, projects")
     .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const result = buildGraph();
@@ -66,10 +66,10 @@ export function registerAnalyticsCommands(program: Command): void {
             console.log(`    ${chalk.cyan(c.agent.padEnd(20))} ${chalk.dim(`${c.message_count} msgs`)}`);
           }
         }
-        if (network.spaces.length > 0) {
-          console.log(chalk.bold("  Active spaces:"));
-          for (const s of network.spaces) {
-            console.log(`    ${chalk.magenta("#" + s.space.padEnd(19))} ${chalk.dim(`${s.message_count} msgs`)}`);
+        if (network.channels.length > 0) {
+          console.log(chalk.bold("  Active channels:"));
+          for (const s of network.channels) {
+            console.log(`    ${chalk.magenta("#" + s.channel.padEnd(19))} ${chalk.dim(`${s.message_count} msgs`)}`);
           }
         }
         if (network.projects.length > 0) {
@@ -83,7 +83,7 @@ export function registerAnalyticsCommands(program: Command): void {
   program
     .command("summary")
     .description("Get a structured summary of a conversation")
-    .argument("<target>", "Session ID or space name")
+    .argument("<target>", "Session ID or channel name")
     .option("-j, --json", "Output as JSON")
     .action((target, opts) => {
       const summary = getConversationSummary(target);
@@ -125,15 +125,15 @@ export function registerAnalyticsCommands(program: Command): void {
   // ---- topics ----
   program
     .command("topics")
-    .description("Extract topics from a space, session, or trending globally")
-    .option("--space <name>", "Topics for a specific space")
+    .description("Extract topics from a channel, session, or trending globally")
+    .option("--channel <name>", "Topics for a specific channel")
     .option("--session <id>", "Topics for a specific session")
     .option("--hours <n>", "Trending topics in last N hours", parseInt)
     .option("-j, --json", "Output as JSON")
     .action((opts) => {
       let topics;
-      if (opts.space) {
-        topics = getSpaceTopics(opts.space);
+      if (opts.channel) {
+        topics = getChannelTopics(opts.channel);
       } else if (opts.session) {
         topics = getSessionTopics(opts.session);
       } else {
@@ -146,7 +146,7 @@ export function registerAnalyticsCommands(program: Command): void {
         if (topics.length === 0) {
           console.log(chalk.dim("No topics found."));
         } else {
-          const label = opts.space ? `#${opts.space}` : opts.session ? opts.session : `last ${opts.hours ?? 24}h`;
+          const label = opts.channel ? `#${opts.channel}` : opts.session ? opts.session : `last ${opts.hours ?? 24}h`;
           console.log(chalk.bold(`Topics for ${label}\n`));
           for (const t of topics) {
             const bar = "█".repeat(Math.min(Math.round(t.weight * 50), 30));
@@ -163,13 +163,13 @@ export function registerAnalyticsCommands(program: Command): void {
     .description("Show hot conversations ranked by activity")
     .option("--limit <n>", "Max results", parseInt)
     .option("--min-score <n>", "Minimum hotness score", parseInt)
-    .option("--space <name>", "Filter by space")
+    .option("--channel <name>", "Filter by channel")
     .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const sessions = listHotSessions({
         limit: opts.limit ?? 10,
         min_score: opts.minScore,
-        space: opts.space,
+        channel: opts.channel,
       });
 
       if (opts.json) {
@@ -181,7 +181,7 @@ export function registerAnalyticsCommands(program: Command): void {
           console.log(chalk.bold("Hot Conversations\n"));
           for (const s of sessions) {
             const score = s.hotness_score > 20 ? chalk.red(`🔥 ${s.hotness_score}`) : chalk.yellow(`  ${s.hotness_score}`);
-            const where = s.space ? chalk.magenta(`#${s.space}`) : chalk.cyan(s.participants.join(", "));
+            const where = s.channel ? chalk.magenta(`#${s.channel}`) : chalk.cyan(s.participants.join(", "));
             const time = chalk.dim(s.last_message_at.slice(11, 16));
             const msgs = chalk.dim(`${s.message_count} msgs`);
             const agents = chalk.dim(`${s.metrics.unique_agents} agents`);
@@ -195,7 +195,7 @@ export function registerAnalyticsCommands(program: Command): void {
   // ---- context ----
   program
     .command("context")
-    .description("One-shot session boot context for agents: online agents, unread DMs, spaces, recent activity")
+    .description("One-shot session boot context for agents: online agents, unread DMs, channels, recent activity")
     .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const agent = resolveIdentity();
@@ -208,18 +208,18 @@ export function registerAnalyticsCommands(program: Command): void {
       // Unread DMs
       const unreadDMs = readMessages({ to: agent, unread_only: true, limit: 5 });
 
-      // Spaces I'm in
-      const mySpaces = db.prepare(`
+      // Channels I'm in
+      const myChannels = db.prepare(`
         SELECT s.name, s.description,
-          (SELECT COUNT(*) FROM messages m WHERE m.space = s.name AND m.read_at IS NULL) as unread
-        FROM spaces s
-        JOIN space_members sm ON sm.space = s.name
+          (SELECT COUNT(*) FROM messages m WHERE m.channel = s.name AND m.read_at IS NULL) as unread
+        FROM channels s
+        JOIN channel_members sm ON sm.channel = s.name
         WHERE sm.agent = ?
         ORDER BY s.name
       `).all(agent) as { name: string; description: string | null; unread: number }[];
 
-      const subscriptions = listSpaceNotificationSubscriptions(agent);
-      const spaceNotifications = readSpaceNotifications({
+      const subscriptions = listChannelNotificationSubscriptions(agent);
+      const channelNotifications = readChannelNotifications({
         agent,
         unread_only: true,
         limit: 5,
@@ -232,9 +232,9 @@ export function registerAnalyticsCommands(program: Command): void {
         agent,
         online_agents: onlineAgents,
         unread_dms: unreadDMs,
-        spaces: mySpaces,
-        space_subscriptions: subscriptions,
-        space_notifications: spaceNotifications,
+        channels: myChannels,
+        channel_subscriptions: subscriptions,
+        channel_notifications: channelNotifications,
         recent_dms: recentDMs,
       };
 
@@ -261,37 +261,37 @@ export function registerAnalyticsCommands(program: Command): void {
           console.log(`${chalk.bold("Unread DMs:")} ${chalk.dim("none")}`);
         }
 
-        // Spaces
-        if (mySpaces.length > 0) {
-          console.log(`${chalk.bold("My spaces:")}`);
-          for (const sp of mySpaces) {
+        // Channels
+        if (myChannels.length > 0) {
+          console.log(`${chalk.bold("My channels:")}`);
+          for (const sp of myChannels) {
             const unread = sp.unread > 0 ? chalk.yellow(` (${sp.unread} unread)`) : "";
             console.log(`  ${chalk.magenta("#" + sp.name)}${unread}`);
           }
         } else {
-          console.log(`${chalk.bold("My spaces:")} ${chalk.dim("none")}`);
+          console.log(`${chalk.bold("My channels:")} ${chalk.dim("none")}`);
         }
 
         if (subscriptions.length > 0) {
-          console.log(`${chalk.bold("Subscribed spaces:")}`);
+          console.log(`${chalk.bold("Subscribed channels:")}`);
           for (const row of subscriptions) {
-            console.log(`  ${chalk.magenta("#" + row.space)} ${chalk.dim(`preview ${row.preview_chars} chars`)}`);
+            console.log(`  ${chalk.magenta("#" + row.channel)} ${chalk.dim(`preview ${row.preview_chars} chars`)}`);
           }
         } else {
-          console.log(`${chalk.bold("Subscribed spaces:")} ${chalk.dim("none")}`);
+          console.log(`${chalk.bold("Subscribed channels:")} ${chalk.dim("none")}`);
         }
 
-        if (spaceNotifications.length > 0) {
-          console.log(`${chalk.bold("Space notifications:")}`);
-          for (const notification of spaceNotifications) {
+        if (channelNotifications.length > 0) {
+          console.log(`${chalk.bold("Channel notifications:")}`);
+          for (const notification of channelNotifications) {
             console.log(
-              `  ${chalk.dim(notification.created_at.slice(11, 16))} ${chalk.cyan(notification.from_agent)} ${chalk.magenta("#" + notification.space)} ${chalk.dim(`msg #${notification.message_id}`)}`
+              `  ${chalk.dim(notification.created_at.slice(11, 16))} ${chalk.cyan(notification.from_agent)} ${chalk.magenta("#" + notification.channel)} ${chalk.dim(`msg #${notification.message_id}`)}`
             );
             console.log(`    ${chalk.dim(notification.preview)}`);
           }
           console.log(chalk.dim("  Inspect with: conversations show <message-id>"));
         } else {
-          console.log(`${chalk.bold("Space notifications:")} ${chalk.dim("none")}`);
+          console.log(`${chalk.bold("Channel notifications:")} ${chalk.dim("none")}`);
         }
       }
       closeDb();
@@ -335,14 +335,14 @@ export function registerAnalyticsCommands(program: Command): void {
       const totalMessages = (db.prepare("SELECT COUNT(*) as count FROM messages").get() as { count: number }).count;
       const totalSessions = (db.prepare("SELECT COUNT(DISTINCT session_id) as count FROM messages").get() as { count: number }).count;
       const totalUnread = (db.prepare("SELECT COUNT(*) as count FROM messages WHERE read_at IS NULL").get() as { count: number }).count;
-      const totalSpaces = (db.prepare("SELECT COUNT(*) as count FROM spaces").get() as { count: number }).count;
+      const totalChannels = (db.prepare("SELECT COUNT(*) as count FROM channels").get() as { count: number }).count;
       const totalProjects = (db.prepare("SELECT COUNT(*) as count FROM projects").get() as { count: number }).count;
 
       const stats = {
         db_path: dbPath,
         total_messages: totalMessages,
         total_sessions: totalSessions,
-        total_spaces: totalSpaces,
+        total_channels: totalChannels,
         total_projects: totalProjects,
         unread_messages: totalUnread,
       };
@@ -354,7 +354,7 @@ export function registerAnalyticsCommands(program: Command): void {
         console.log(`  DB Path:    ${stats.db_path}`);
         console.log(`  Messages:   ${stats.total_messages}`);
         console.log(`  Sessions:   ${stats.total_sessions}`);
-        console.log(`  Spaces:     ${stats.total_spaces}`);
+        console.log(`  Channels:     ${stats.total_channels}`);
         console.log(`  Projects:   ${stats.total_projects}`);
         console.log(`  Unread:     ${stats.unread_messages}`);
       }

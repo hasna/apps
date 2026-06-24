@@ -5,7 +5,7 @@ import type { Message } from "../types.js";
 export interface PollOptions {
   session_id?: string;
   to_agent?: string;
-  space?: string;
+  channel?: string;
   interval_ms?: number;
   on_messages: (messages: Message[]) => void;
 }
@@ -23,7 +23,7 @@ export function startPolling(opts: PollOptions): { stop: () => void } {
     const latest = readMessages({
       session_id: opts.session_id,
       to: opts.to_agent,
-      space: opts.space,
+      channel: opts.channel,
       order: "desc",
       limit: 1,
     });
@@ -40,7 +40,7 @@ export function startPolling(opts: PollOptions): { stop: () => void } {
       const messages = readMessages({
         session_id: opts.session_id,
         to: opts.to_agent,
-        space: opts.space,
+        channel: opts.channel,
         since_id: lastSeenId,
         order: "asc",
       });
@@ -94,17 +94,17 @@ export function useMessages(sessionId: string, agent?: string): Message[] {
 }
 
 /**
- * React hook for polling messages in a space.
+ * React hook for polling messages in a channel.
  */
-export function useSpaceMessages(spaceName: string): Message[] {
+export function useChannelMessages(channelName: string): Message[] {
   const [messages, setMessages] = useState<Message[]>([]);
 
   useEffect(() => {
-    const existing = readMessages({ space: spaceName });
+    const existing = readMessages({ channel: channelName });
     setMessages(existing);
 
     const { stop } = startPolling({
-      space: spaceName,
+      channel: channelName,
       interval_ms: 200,
       on_messages: (newMessages) => {
         setMessages((prev) => [...prev, ...newMessages]);
@@ -112,7 +112,7 @@ export function useSpaceMessages(spaceName: string): Message[] {
     });
 
     return stop;
-  }, [spaceName]);
+  }, [channelName]);
 
   return messages;
 }

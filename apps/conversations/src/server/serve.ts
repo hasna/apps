@@ -9,7 +9,7 @@
 
 import { readMessages, sendMessage, markRead, searchMessages, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages } from "../lib/messages.js";
 import { listSessions, getSession } from "../lib/sessions.js";
-import { listSpaces, getSpace, createSpace, updateSpace, archiveSpace, unarchiveSpace, joinSpace, leaveSpace, getSpaceMembers } from "../lib/spaces.js";
+import { listChannels, getChannel, createChannel, updateChannel, archiveChannel, unarchiveChannel, joinChannel, leaveChannel, getChannelMembers } from "../lib/channels.js";
 import { listProjects, getProject, getProjectByName, createProject, updateProject, deleteProject } from "../lib/projects.js";
 import { getDb, getDbPath } from "../lib/db.js";
 import { listAgents } from "../lib/presence.js";
@@ -84,14 +84,14 @@ function getStatus() {
   const totalMessages = (db.prepare("SELECT COUNT(*) as count FROM messages").get() as { count: number }).count;
   const totalSessions = (db.prepare("SELECT COUNT(DISTINCT session_id) as count FROM messages").get() as { count: number }).count;
   const totalUnread = (db.prepare("SELECT COUNT(*) as count FROM messages WHERE read_at IS NULL").get() as { count: number }).count;
-  const totalSpaces = (db.prepare("SELECT COUNT(*) as count FROM spaces").get() as { count: number }).count;
+  const totalChannels = (db.prepare("SELECT COUNT(*) as count FROM channels").get() as { count: number }).count;
   const totalProjects = (db.prepare("SELECT COUNT(*) as count FROM projects").get() as { count: number }).count;
 
   return {
     db_path: dbPath,
     total_messages: totalMessages,
     total_sessions: totalSessions,
-    total_spaces: totalSpaces,
+    total_channels: totalChannels,
     total_projects: totalProjects,
     unread_messages: totalUnread,
   };
@@ -217,11 +217,11 @@ export function startDashboardServer(port = 0, host?: string) {
         if (!Number.isFinite(limit) || limit <= 0) limit = 50;
         if (limit > 500) limit = 500;
         const session = url.searchParams.get("session") || undefined;
-        const space = url.searchParams.get("space") || undefined;
+        const channel = url.searchParams.get("channel") || undefined;
         const from = url.searchParams.get("from") || undefined;
         const to = url.searchParams.get("to") || undefined;
         const compact = url.searchParams.get("compact") === "true";
-        const messages = readMessages({ session_id: session, space, from, to, limit, order: "desc", compact });
+        const messages = readMessages({ session_id: session, channel, from, to, limit, order: "desc", compact });
         return jsonResponse(applyFields(messages, url.searchParams.get("fields")));
       }
 
@@ -231,11 +231,11 @@ export function startDashboardServer(port = 0, host?: string) {
         }
         try {
           const text = await req.text();
-          const body = JSON.parse(text) as { from?: string; to?: string; content?: string; space?: string; priority?: string };
+          const body = JSON.parse(text) as { from?: string; to?: string; content?: string; channel?: string; priority?: string };
           const from = typeof body.from === "string" ? body.from.trim() : "";
           const to = typeof body.to === "string" ? body.to.trim() : "";
           const content = typeof body.content === "string" ? body.content.trim() : "";
-          const space = typeof body.space === "string" ? body.space.trim() : undefined;
+          const channel = typeof body.channel === "string" ? body.channel.trim() : undefined;
           const priority = typeof body.priority === "string" ? body.priority.trim().toLowerCase() : undefined;
 
           if (!from || !to || !content) {
@@ -248,7 +248,7 @@ export function startDashboardServer(port = 0, host?: string) {
             from,
             to,
             content,
-            space,
+            channel,
             priority: priority as any,
           });
           return jsonResponse(msg);
@@ -266,21 +266,21 @@ export function startDashboardServer(port = 0, host?: string) {
         let limit = parseInt(rawLimit || "50", 10);
         if (!Number.isFinite(limit) || limit <= 0) limit = 50;
         if (limit > 500) limit = 500;
-        const space = url.searchParams.get("space") || undefined;
+        const channel = url.searchParams.get("channel") || undefined;
         const from = url.searchParams.get("from") || undefined;
         const to = url.searchParams.get("to") || undefined;
-        const messages = searchMessages({ query: q.trim(), space, from, to, limit });
+        const messages = searchMessages({ query: q.trim(), channel, from, to, limit });
         return jsonResponse(messages);
       }
 
       if (path === "/api/export" && req.method === "GET") {
-        const space = url.searchParams.get("space") || undefined;
+        const channel = url.searchParams.get("channel") || undefined;
         const session = url.searchParams.get("session") || undefined;
         const from = url.searchParams.get("from") || undefined;
         const since = url.searchParams.get("since") || undefined;
         const until = url.searchParams.get("until") || undefined;
         const format = url.searchParams.get("format") === "csv" ? "csv" : "json";
-        const result = exportMessages({ space, session_id: session, from, since, until, format });
+        const result = exportMessages({ channel, session_id: session, from, since, until, format });
 
         if (format === "csv") {
           return new Response(result, {
@@ -296,7 +296,7 @@ export function startDashboardServer(port = 0, host?: string) {
       }
 
       if (path === "/api/messages/pinned" && req.method === "GET") {
-        const space = url.searchParams.get("space") || undefined;
+        const channel = url.searchParams.get("channel") || undefined;
         const session_id = url.searchParams.get("session_id") || undefined;
         const rawLimit = url.searchParams.get("limit");
         let limit: number | undefined;
@@ -305,7 +305,7 @@ export function startDashboardServer(port = 0, host?: string) {
           if (!Number.isFinite(limit) || limit <= 0) limit = 50;
           if (limit > 500) limit = 500;
         }
-        const messages = getPinnedMessages({ space, session_id, limit });
+        const messages = getPinnedMessages({ channel, session_id, limit });
         return jsonResponse(messages);
       }
 
@@ -373,70 +373,70 @@ export function startDashboardServer(port = 0, host?: string) {
         return jsonResponse(applyFields(listSessions(agent), url.searchParams.get("fields")));
       }
 
-      if (path === "/api/spaces" && req.method === "GET") {
+      if (path === "/api/channels" && req.method === "GET") {
         const projectId = url.searchParams.get("project_id") || undefined;
         const includeArchived = url.searchParams.get("include_archived") === "true";
         const listOpts: { project_id?: string; include_archived?: boolean } = {};
         if (projectId) listOpts.project_id = projectId;
         if (includeArchived) listOpts.include_archived = true;
-        return jsonResponse(applyFields(listSpaces(Object.keys(listOpts).length > 0 ? listOpts : undefined), url.searchParams.get("fields")));
+        return jsonResponse(applyFields(listChannels(Object.keys(listOpts).length > 0 ? listOpts : undefined), url.searchParams.get("fields")));
       }
 
-      if (path === "/api/spaces" && req.method === "POST") {
+      if (path === "/api/channels" && req.method === "POST") {
         if (!isSameOrigin(req)) {
           return jsonResponse({ error: "Invalid origin" }, 403);
         }
         try {
           const text = await req.text();
-          const body = JSON.parse(text) as { name?: string; created_by?: string; description?: string; parent_id?: string; project_id?: string };
+          const body = JSON.parse(text) as { name?: string; created_by?: string; description?: string; topic?: string; project_id?: string };
           const name = typeof body.name === "string" ? body.name.trim() : "";
           const createdBy = typeof body.created_by === "string" ? body.created_by.trim() : "";
           const description = typeof body.description === "string" ? body.description.trim() : undefined;
-          const parent_id = typeof body.parent_id === "string" ? body.parent_id.trim() : undefined;
+          const topic = typeof body.topic === "string" ? body.topic.trim() : undefined;
           const project_id = typeof body.project_id === "string" ? body.project_id.trim() : undefined;
           if (!name || !createdBy) {
             return jsonResponse({ error: "name and created_by are required" }, 400);
           }
-          const sp = createSpace(name, createdBy, { description, parent_id, project_id });
+          const sp = createChannel(name, createdBy, { description, topic, project_id });
           return jsonResponse(sp);
         } catch (e: any) {
           return jsonResponse({ error: e.message }, 400);
         }
       }
 
-      // Space update/archive/unarchive by name
-      const spaceArchiveMatch = path.match(/^\/api\/spaces\/([^/]+)\/archive$/);
-      if (spaceArchiveMatch && req.method === "POST") {
+      // Channel update/archive/unarchive by name
+      const channelArchiveMatch = path.match(/^\/api\/channels\/([^/]+)\/archive$/);
+      if (channelArchiveMatch && req.method === "POST") {
         if (!isSameOrigin(req)) {
           return jsonResponse({ error: "Invalid origin" }, 403);
         }
         try {
-          const sp = archiveSpace(decodeURIComponent(spaceArchiveMatch[1]));
+          const sp = archiveChannel(decodeURIComponent(channelArchiveMatch[1]));
           return jsonResponse(sp);
         } catch (e: any) {
           return jsonResponse({ error: e.message }, 400);
         }
       }
 
-      const spaceUnarchiveMatch = path.match(/^\/api\/spaces\/([^/]+)\/unarchive$/);
-      if (spaceUnarchiveMatch && req.method === "POST") {
+      const channelUnarchiveMatch = path.match(/^\/api\/channels\/([^/]+)\/unarchive$/);
+      if (channelUnarchiveMatch && req.method === "POST") {
         if (!isSameOrigin(req)) {
           return jsonResponse({ error: "Invalid origin" }, 403);
         }
         try {
-          const sp = unarchiveSpace(decodeURIComponent(spaceUnarchiveMatch[1]));
+          const sp = unarchiveChannel(decodeURIComponent(channelUnarchiveMatch[1]));
           return jsonResponse(sp);
         } catch (e: any) {
           return jsonResponse({ error: e.message }, 400);
         }
       }
 
-      const spaceMatch = path.match(/^\/api\/spaces\/([^/]+)$/);
-      if (spaceMatch) {
-        const spaceName = decodeURIComponent(spaceMatch[1]);
+      const channelMatch = path.match(/^\/api\/channels\/([^/]+)$/);
+      if (channelMatch) {
+        const channelName = decodeURIComponent(channelMatch[1]);
         if (req.method === "GET") {
-          const sp = getSpace(spaceName);
-          if (!sp) return jsonResponse({ error: "Space not found" }, 404);
+          const sp = getChannel(channelName);
+          if (!sp) return jsonResponse({ error: "Channel not found" }, 404);
           return jsonResponse(sp);
         }
         if (req.method === "PUT") {
@@ -445,12 +445,12 @@ export function startDashboardServer(port = 0, host?: string) {
           }
           try {
             const text = await req.text();
-            const body = JSON.parse(text) as { description?: string; parent_id?: string | null; project_id?: string | null };
-            const updates: { description?: string; parent_id?: string | null; project_id?: string | null } = {};
+            const body = JSON.parse(text) as { description?: string; topic?: string | null; project_id?: string | null };
+            const updates: { description?: string; topic?: string | null; project_id?: string | null } = {};
             if (body.description !== undefined) updates.description = body.description;
-            if (body.parent_id !== undefined) updates.parent_id = body.parent_id;
+            if (body.topic !== undefined) updates.topic = body.topic;
             if (body.project_id !== undefined) updates.project_id = body.project_id;
-            const sp = updateSpace(spaceName, updates);
+            const sp = updateChannel(channelName, updates);
             return jsonResponse(sp);
           } catch (e: any) {
             return jsonResponse({ error: e.message }, 400);
@@ -538,13 +538,13 @@ export function startDashboardServer(port = 0, host?: string) {
         return jsonResponse(applyFields(agents, url.searchParams.get("fields")));
       }
 
-      // GET /api/sessions/hot[?limit=N&min_score=N&space=X]
+      // GET /api/sessions/hot[?limit=N&min_score=N&channel=X]
       if (path === "/api/sessions/hot" && req.method === "GET") {
         const limit = url.searchParams.get("limit") ? parseInt(url.searchParams.get("limit")!) : undefined;
         const min_score = url.searchParams.get("min_score") ? parseInt(url.searchParams.get("min_score")!) : undefined;
-        const space = url.searchParams.get("space") ?? undefined;
+        const channel = url.searchParams.get("channel") ?? undefined;
         const project_id = url.searchParams.get("project_id") ?? undefined;
-        const sessions = listHotSessions({ limit, min_score, space, project_id });
+        const sessions = listHotSessions({ limit, min_score, channel, project_id });
         return jsonResponse(sessions);
       }
 

@@ -11,7 +11,7 @@ export const SYNC_EXCLUDED = new Set([
   "reactions",
   "message_read_receipts",
   "message_mentions",
-  "space_notification_reads",
+  "channel_notification_reads",
   "tasks",
   "task_comments",
   "task_activity",
@@ -25,9 +25,9 @@ export const SYNC_EXCLUDED = new Set([
 
 export const DEFAULT_STORAGE_TABLES = [
   "projects",
-  "spaces",
-  "space_members",
-  "space_subscriptions",
+  "channels",
+  "channel_members",
+  "channel_subscriptions",
   "agent_presence",
   "resource_locks",
   "graph_edges",
@@ -39,16 +39,16 @@ type Row = Record<string, unknown>;
 
 const PRIMARY_KEYS: Record<SyncTable, string[]> = {
   projects: ["id"],
-  spaces: ["name"],
-  space_members: ["space", "agent"],
-  space_subscriptions: ["space", "agent"],
+  channels: ["name"],
+  channel_members: ["channel", "agent"],
+  channel_subscriptions: ["channel", "agent"],
   agent_presence: ["agent", "project_id"],
   resource_locks: ["resource_type", "resource_id", "lock_type"],
   graph_edges: ["from_type", "from_id", "to_type", "to_id", "relation"],
   feedback: ["id"],
 };
 
-const CONFLICT_TABLES = new Set(["spaces", "projects", "agent_presence"]);
+const CONFLICT_TABLES = new Set(["channels", "projects", "agent_presence"]);
 
 export type StorageMode = "local" | "remote" | "hybrid";
 
@@ -319,7 +319,7 @@ export function listConflicts(db: Database, options?: { resolved?: boolean }): R
 
 export async function detectAndLogConflicts(local: Database, remote: PgAdapterAsync, table: string): Promise<number> {
   if (!CONFLICT_TABLES.has(table)) return 0;
-  const pk = table === "spaces" ? "name" : "id";
+  const pk = table === "channels" ? "name" : "id";
   const localRows = local.all<Row>(`SELECT * FROM ${quoteIdent(table)}`);
   const remoteRows = await remote.all(`SELECT * FROM ${quoteIdent(table)}`) as Row[];
   if (localRows.length === 0 || remoteRows.length === 0) return 0;

@@ -3,7 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerMessagingTools } from "./messaging";
-import { createSpace } from "../../lib/spaces";
+import { createChannel } from "../../lib/channels";
 import { closeDb } from "../../lib/db";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
@@ -176,14 +176,14 @@ describe("messaging MCP tools", () => {
     });
   });
 
-  describe("mark_space_read", () => {
-    test("marks space messages read", async () => {
-      createSpace("messaging-space", "messaging-test-agent");
+  describe("mark_channel_read", () => {
+    test("marks channel messages read", async () => {
+      createChannel("messaging-channel", "messaging-test-agent");
       const result = parseResult(await client.callTool({
-        name: "mark_space_read",
-        arguments: { space: "messaging-space" },
+        name: "mark_channel_read",
+        arguments: { channel: "messaging-channel" },
       }) as any) as any;
-      expect(result.space).toBe("messaging-space");
+      expect(result.channel).toBe("messaging-channel");
     });
   });
 
@@ -268,12 +268,12 @@ describe("messaging MCP tools", () => {
   });
 
   describe("broadcast", () => {
-    test("sends to multiple spaces", async () => {
-      createSpace("bc-space-1", "messaging-test-agent");
-      createSpace("bc-space-2", "messaging-test-agent");
+    test("sends to multiple channels", async () => {
+      createChannel("bc-channel-1", "messaging-test-agent");
+      createChannel("bc-channel-2", "messaging-test-agent");
       const result = parseResult(await client.callTool({
         name: "broadcast",
-        arguments: { spaces: ["bc-space-1", "bc-space-2"], content: "broadcast msg" },
+        arguments: { channels: ["bc-channel-1", "bc-channel-2"], content: "broadcast msg" },
       }) as any) as any;
       expect(result.sent.length).toBe(2);
       expect(result.total).toBe(2);

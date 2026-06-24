@@ -45,7 +45,7 @@ export function registerTaskTools(server: McpServer): void {
       assignee: z.string().optional(),
       priority: z.enum(["low", "medium", "high", "critical"]).optional(),
       project_id: z.string().optional(),
-      space: z.string().optional(),
+      channel: z.string().optional(),
       parent_id: z.coerce.number().optional(),
       depends_on: z.array(z.coerce.number()).optional(),
       tags: z.array(z.string()).optional(),
@@ -63,7 +63,7 @@ export function registerTaskTools(server: McpServer): void {
       assignee: args.assignee,
       priority: args.priority,
       project_id: args.project_id,
-      space: args.space,
+      channel: args.channel,
       parent_id: args.parent_id,
       depends_on: args.depends_on,
       tags: args.tags,
@@ -96,7 +96,7 @@ export function registerTaskTools(server: McpServer): void {
       assignee: z.string().optional(),
       reporter: z.string().optional(),
       project_id: z.string().optional(),
-      space: z.string().optional(),
+      channel: z.string().optional(),
       parent_id: z.coerce.number().nullable().optional(),
       priority: z.enum(["low", "medium", "high", "critical"]).optional(),
       tag: z.string().optional(),
@@ -375,13 +375,13 @@ export function registerTaskTools(server: McpServer): void {
 
   // ---- Search Tasks ----
   server.registerTool("search_tasks", {
-    description: "Search tasks using full-text search on subject, description, and tags. Supports phrase queries (quoted) and prefix matching. Optional filters: status, assignee, project_id, space, priority. Use sort='relevance' (default) or 'recent'.",
+    description: "Search tasks using full-text search on subject, description, and tags. Supports phrase queries (quoted) and prefix matching. Optional filters: status, assignee, project_id, channel, priority. Use sort='relevance' (default) or 'recent'.",
     inputSchema: {
       query: z.string(),
       status: z.enum(["pending", "in_progress", "completed", "cancelled", "blocked"]).optional(),
       assignee: z.string().optional(),
       project_id: z.string().optional(),
-      space: z.string().optional(),
+      channel: z.string().optional(),
       priority: z.enum(["low", "medium", "high", "critical"]).optional(),
       limit: z.coerce.number().optional(),
       sort: z.enum(["relevance", "recent"]).optional(),

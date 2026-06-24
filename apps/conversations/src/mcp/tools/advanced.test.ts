@@ -211,7 +211,7 @@ describe("advanced MCP tools", () => {
   });
 
   describe("get_summary", () => {
-    test("returns error when no session_id or space", async () => {
+    test("returns error when no session_id or channel", async () => {
       const result = await client.callTool({
         name: "get_summary",
         arguments: {},
@@ -229,7 +229,7 @@ describe("advanced MCP tools", () => {
   });
 
   describe("get_topics", () => {
-    test("returns trending topics when no space or session", async () => {
+    test("returns trending topics when no channel or session", async () => {
       const result = parseResult(await client.callTool({
         name: "get_topics",
         arguments: {},

@@ -2,34 +2,34 @@ import React, { useState, useEffect } from "react";
 import { Box, Text, useInput } from "ink";
 import SelectInput from "ink-select-input";
 import { listSessions } from "../../lib/sessions.js";
-import { listSpaces } from "../../lib/spaces.js";
+import { listChannels } from "../../lib/channels.js";
 import { getDb } from "../../lib/db.js";
-import type { Session, SpaceInfo } from "../../types.js";
+import type { Session, ChannelInfo } from "../../types.js";
 
-function getSpaceUnreadCount(spaceName: string, agent: string): number {
+function getChannelUnreadCount(channelName: string, agent: string): number {
   const db = getDb();
   const row = db.prepare(
-    "SELECT COUNT(*) as count FROM messages WHERE space = ? AND from_agent != ? AND read_at IS NULL"
-  ).get(spaceName, agent) as { count: number };
+    "SELECT COUNT(*) as count FROM messages WHERE channel = ? AND from_agent != ? AND read_at IS NULL"
+  ).get(channelName, agent) as { count: number };
   return row.count;
 }
 
 interface SessionListProps {
   agent: string;
   onSelect: (session: Session) => void;
-  onSelectSpace: (spaceName: string) => void;
+  onSelectChannel: (channelName: string) => void;
   onNew: () => void;
 }
 
-export function SessionList({ agent, onSelect, onSelectSpace, onNew }: SessionListProps) {
+export function SessionList({ agent, onSelect, onSelectChannel, onNew }: SessionListProps) {
   const [sessions, setSessions] = useState(() => listSessions(agent));
-  const [spaces, setSpaces] = useState(() => listSpaces());
+  const [channels, setChannels] = useState(() => listChannels());
 
-  // Poll for new sessions/spaces
+  // Poll for new sessions/channels
   useEffect(() => {
     const timer = setInterval(() => {
       setSessions(listSessions(agent));
-      setSpaces(listSpaces());
+      setChannels(listChannels());
     }, 1000);
     return () => clearInterval(timer);
   }, [agent]);
@@ -38,44 +38,17 @@ export function SessionList({ agent, onSelect, onSelectSpace, onNew }: SessionLi
     if (input === "n") onNew();
   });
 
-  // Build hierarchical space tree: top-level spaces at root, children indented below
-  const topLevel = spaces.filter((sp) => !sp.parent_id);
-  const children = spaces.filter((sp) => sp.parent_id);
-
-  const spaceItems: Array<{ label: string; value: string }> = [];
-  for (const sp of topLevel) {
-    const unread = getSpaceUnreadCount(sp.name, agent);
+  const channelItems = channels.map((sp) => {
+    const unread = getChannelUnreadCount(sp.name, agent);
     const unreadBadge = unread > 0 ? ` (${unread} unread)` : "";
-    spaceItems.push({
+    return {
       label: `#${sp.name}${sp.description ? ` — ${sp.description}` : ""}  ${sp.message_count} msgs${unreadBadge}`,
-      value: `space:${sp.name}`,
-    });
+      value: `channel:${sp.name}`,
+    };
+  });
 
-    // Add direct children indented
-    const directChildren = children.filter((c) => c.parent_id === sp.name);
-    for (const child of directChildren) {
-      const childUnread = getSpaceUnreadCount(child.name, agent);
-      const childBadge = childUnread > 0 ? ` (${childUnread} unread)` : "";
-      spaceItems.push({
-        label: `  └ #${child.name}${child.description ? ` — ${child.description}` : ""}  ${child.message_count} msgs${childBadge}`,
-        value: `space:${child.name}`,
-      });
-
-      // Add grandchildren (level 3)
-      const grandChildren = children.filter((gc) => gc.parent_id === child.name);
-      for (const gc of grandChildren) {
-        const gcUnread = getSpaceUnreadCount(gc.name, agent);
-        const gcBadge = gcUnread > 0 ? ` (${gcUnread} unread)` : "";
-        spaceItems.push({
-          label: `    └ #${gc.name}${gc.description ? ` — ${gc.description}` : ""}  ${gc.message_count} msgs${gcBadge}`,
-          value: `space:${gc.name}`,
-        });
-      }
-    }
-  }
-
-  // Filter out space sessions — they show up as space items instead
-  const dmSessions = sessions.filter((s) => !s.session_id.startsWith("space:"));
+  // Filter out channel sessions — they show up as channel items instead
+  const dmSessions = sessions.filter((s) => !s.session_id.startsWith("channel:"));
 
   const sessionItems = dmSessions.map((s) => {
     const others = s.participants.filter((p) => p !== agent).join(", ") || agent;
@@ -86,7 +59,7 @@ export function SessionList({ agent, onSelect, onSelectSpace, onNew }: SessionLi
     };
   });
 
-  const allItems = [...spaceItems, ...sessionItems];
+  const allItems = [...channelItems, ...sessionItems];
 
   if (allItems.length === 0) {
     return (
@@ -113,8 +86,8 @@ export function SessionList({ agent, onSelect, onSelectSpace, onNew }: SessionLi
       <SelectInput
         items={allItems}
         onSelect={(item) => {
-          if (item.value.startsWith("space:")) {
-            onSelectSpace(item.value.slice(6));
+          if (item.value.startsWith("channel:")) {
+            onSelectChannel(item.value.slice(6));
           } else {
             const session = dmSessions.find((s) => s.session_id === item.value);
             if (session) onSelect(session);

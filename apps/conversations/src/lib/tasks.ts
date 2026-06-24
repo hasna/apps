@@ -1,6 +1,7 @@
 import { getDb } from "./db.js";
 import { randomUUID } from "crypto";
 import { fireTaskWebhooks } from "./webhooks.js";
+import { normalizeChannelName } from "./channel-names.js";
 import type {
   Task,
   TaskInfo,
@@ -38,7 +39,7 @@ function parseTask(row: Record<string, unknown>): Task {
     assignee: (row.assignee as string) || null,
     reporter: row.reporter as string,
     project_id: (row.project_id as string) || null,
-    space: (row.space as string) || null,
+    channel: (row.channel as string) || null,
     parent_id: (row.parent_id as number) || null,
     depends_on: dependsOn,
     tags,
@@ -84,14 +85,14 @@ export function createTask(opts: CreateTaskOptions): Task {
   const description = opts.description || null;
   const assignee = opts.assignee || null;
   const project_id = opts.project_id || null;
-  const space = opts.space || null;
+  const channel = opts.channel ? normalizeChannelName(opts.channel) : null;
   const parent_id = opts.parent_id || null;
   const tags = opts.tags ? JSON.stringify(opts.tags) : null;
   const metadata = opts.metadata ? JSON.stringify(opts.metadata) : null;
   const due_at = opts.due_at || null;
 
   const row = db.prepare(`
-    INSERT INTO tasks (uuid, subject, description, reporter, assignee, priority, project_id, space, parent_id, tags, metadata, due_at)
+    INSERT INTO tasks (uuid, subject, description, reporter, assignee, priority, project_id, channel, parent_id, tags, metadata, due_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     RETURNING *
   `).get(
@@ -102,7 +103,7 @@ export function createTask(opts: CreateTaskOptions): Task {
     assignee,
     priority,
     project_id,
-    space,
+    channel,
     parent_id,
     tags,
     metadata,
@@ -183,7 +184,7 @@ export function listTasks(opts: ListTasksOptions = {}): TaskInfo[] {
   if (opts.assignee) { conditions.push("t.assignee = ?"); params.push(opts.assignee); }
   if (opts.reporter) { conditions.push("t.reporter = ?"); params.push(opts.reporter); }
   if (opts.project_id) { conditions.push("t.project_id = ?"); params.push(opts.project_id); }
-  if (opts.space) { conditions.push("t.space = ?"); params.push(opts.space); }
+  if (opts.channel) { conditions.push("t.channel = ?"); params.push(normalizeChannelName(opts.channel)); }
   if (opts.priority) { conditions.push("t.priority = ?"); params.push(opts.priority); }
   if (opts.tag) { conditions.push("t.tags LIKE ?"); params.push(`%"${opts.tag}"%`); }
   if (opts.tags && opts.tags.length > 0) {
@@ -608,7 +609,7 @@ export function searchTasks(opts: SearchTasksOptions): SearchResultTask[] {
           if (opts.status && task.status !== opts.status) continue;
           if (opts.assignee && task.assignee !== opts.assignee) continue;
           if (opts.project_id && task.project_id !== opts.project_id) continue;
-          if (opts.space && task.space !== opts.space) continue;
+          if (opts.channel && task.channel !== normalizeChannelName(opts.channel)) continue;
           if (opts.priority && task.priority !== opts.priority) continue;
           if (!opts.include_archived && task.status === "cancelled") continue;
 
@@ -642,7 +643,7 @@ export function searchTasks(opts: SearchTasksOptions): SearchResultTask[] {
   if (opts.status) { conditions.push("t.status = ?"); params.push(opts.status); }
   if (opts.assignee) { conditions.push("t.assignee = ?"); params.push(opts.assignee); }
   if (opts.project_id) { conditions.push("t.project_id = ?"); params.push(opts.project_id); }
-  if (opts.space) { conditions.push("t.space = ?"); params.push(opts.space); }
+  if (opts.channel) { conditions.push("t.channel = ?"); params.push(normalizeChannelName(opts.channel)); }
   if (opts.priority) { conditions.push("t.priority = ?"); params.push(opts.priority); }
   if (!opts.include_archived) { conditions.push("t.status != 'cancelled'"); }
 
