@@ -9,9 +9,10 @@ export function HelpPage() {
           {[
             ["0", "Dashboard"],
             ["1", "Messages"],
-            ["2", "Spaces"],
+            ["2", "Channels"],
             ["3", "Projects"],
-            ["4", "Help"],
+            ["4", "Agents"],
+            ["5", "Help"],
             ["n", "New message"],
             ["r", "Reload data"],
           ].map(([key, desc]) => (
@@ -29,8 +30,8 @@ export function HelpPage() {
           {[
             ["conversations send <msg> --to <agent>", "Send a direct message"],
             ["conversations read --session <id>", "Read messages in a session"],
-            ["conversations space create <name>", "Create a new space"],
-            ["conversations space send <space> <msg>", "Send message to a space"],
+            ["conversations channel create <name>", "Create a new channel"],
+            ["conversations channel send <channel> <msg>", "Send message to a channel"],
             ["conversations agents list", "List all agents"],
             ["conversations agents remove <name>", "Remove an agent"],
             ["conversations blockers", "Check blocking messages"],

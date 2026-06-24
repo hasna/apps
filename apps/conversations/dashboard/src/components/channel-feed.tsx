@@ -4,8 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/markdown";
 import type { Message } from "@/types";
 
-interface SpaceFeedProps {
-  spaceName: string;
+interface ChannelFeedProps {
+  channelName: string;
   onBack: () => void;
 }
 
@@ -37,14 +37,14 @@ function agentColor(name: string): string {
   return colors[Math.abs(hash) % colors.length];
 }
 
-export function SpaceFeed({ spaceName, onBack }: SpaceFeedProps) {
+export function ChannelFeed({ channelName, onBack }: ChannelFeedProps) {
   const [messages, setMessages] = React.useState<Message[]>([]);
   const [limit, setLimit] = React.useState(50);
 
   React.useEffect(() => {
     const load = async () => {
       try {
-        const res = await fetch(`/api/messages?space=${encodeURIComponent(spaceName)}&limit=${limit}`);
+        const res = await fetch(`/api/messages?channel=${encodeURIComponent(channelName)}&limit=${limit}`);
         const data = (await res.json()) as Message[];
         // API returns newest first — keep that order for feed (newest on top)
         setMessages(data);
@@ -55,7 +55,7 @@ export function SpaceFeed({ spaceName, onBack }: SpaceFeedProps) {
     load();
     const timer = setInterval(load, 2000);
     return () => clearInterval(timer);
-  }, [spaceName, limit]);
+  }, [channelName, limit]);
 
   return (
     <div>
@@ -63,13 +63,13 @@ export function SpaceFeed({ spaceName, onBack }: SpaceFeedProps) {
         <Button variant="ghost" size="sm" onClick={onBack}>
           <ArrowLeftIcon className="size-4" />
         </Button>
-        <h2 className="text-lg font-semibold">#{spaceName}</h2>
+        <h2 className="text-lg font-semibold">#{channelName}</h2>
         <span className="text-sm text-muted-foreground">{messages.length} messages</span>
       </div>
 
       {messages.length === 0 ? (
         <div className="rounded-xl border p-8 text-center text-muted-foreground">
-          No messages in this space yet.
+          No messages in this channel yet.
         </div>
       ) : (
         <div className="space-y-3">
