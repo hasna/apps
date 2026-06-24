@@ -501,3 +501,11 @@ bun run typecheck
 bun run build
 bun run src/cli/index.ts --help
 ```
+
+## Release, security, and community
+
+- License: Apache-2.0. See [LICENSE](LICENSE).
+- Release notes: [CHANGELOG.md](CHANGELOG.md).
+- Security reporting and package safety model: [SECURITY.md](SECURITY.md).
+- Contribution guide: [CONTRIBUTING.md](CONTRIBUTING.md).
+- Community expectations: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
