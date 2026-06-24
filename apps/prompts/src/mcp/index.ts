@@ -20,6 +20,7 @@ import { validateCron, getNextRunTime } from "../lib/cron.js"
 import { diffTexts, formatDiff } from "../lib/diff.js"
 import { lintAll } from "../lib/lint.js"
 import { runAudit } from "../lib/audit.js"
+import { pageItems, toPromptSummary, toScheduleSummary, toSearchSummary, toVersionSummary } from "../lib/compact.js"
 import { homedir } from "os"
 import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite, mkdirSync as fsMkdir, readdirSync as fsReaddir, statSync as fsStat } from "fs"
 import { join as pathJoin, resolve as pathResolve, dirname as pathDirname } from "path"
@@ -89,13 +90,20 @@ server.registerTool(
 server.registerTool(
   "prompts_get",
   {
-    description: "Get a prompt by ID, slug, or partial ID.",
-    inputSchema: { id: z.string().describe("Prompt ID (PRMT-00001), slug, or partial ID") },
+    description: "Get compact prompt metadata by ID, slug, or partial ID. Body is omitted by default; use include_body:true or prompts_body when you need the text.",
+    inputSchema: {
+      id: z.string().describe("Prompt ID (PRMT-00001), slug, or partial ID"),
+      include_body: z.boolean().optional().describe("Include full body text. Prefer prompts_body when you only need the body."),
+    },
   },
-  async ({ id }) => {
+  async ({ id, include_body }) => {
     const prompt = getPrompt(id)
     if (!prompt) return err(`Prompt not found: ${id}`)
-    return ok(prompt)
+    if (include_body) return ok(prompt)
+    return ok({
+      ...toPromptSummary(prompt, { bodyPreviewChars: 160 }),
+      _hint: "Use prompts_body for body only, prompts_use to consume/increment usage, or include_body:true for the full record.",
+    })
   }
 )
 
@@ -179,7 +187,11 @@ server.registerTool(
     try {
       const prompt = usePrompt(id)
       await maybeSaveMemento({ slug: prompt.slug, body: prompt.body, agentId: agent })
-      return ok({ body: prompt.body, prompt })
+      return ok({
+        body: prompt.body,
+        prompt: toPromptSummary(prompt),
+        _hint: "Body is included because prompts_use is the explicit body retrieval path.",
+      })
     } catch (e) {
       return err(e instanceof Error ? e.message : String(e))
     }
@@ -308,7 +320,7 @@ server.registerTool(
   async ({ id, limit }) => {
     const prompt = getPrompt(id)
     if (!prompt) return err(`Prompt not found: ${id}`)
-    return ok(findSimilar(prompt.id, limit))
+    return ok(findSimilar(prompt.id, limit).map((r) => toSearchSummary(r)))
   }
 )
 
@@ -317,9 +329,23 @@ server.registerTool(
   "prompts_collections",
   {
     description: "List all prompt collections with prompt counts.",
-    inputSchema: {},
+    inputSchema: {
+      limit: z.number().optional().default(20),
+      offset: z.number().optional().default(0),
+    },
   },
-  async () => ok(listCollections())
+  async ({ limit = 20, offset = 0 }) => {
+    const collections = listCollections()
+    const page = pageItems(collections, limit, offset)
+    return ok({
+      collections: page.items,
+      count: collections.length,
+      limit: page.limit,
+      offset: page.offset,
+      has_more: page.has_more,
+      next_offset: page.next_offset,
+    })
+  }
 )
 
 // ── prompts_move ──────────────────────────────────────────────────────────────
@@ -346,13 +372,22 @@ server.registerTool(
 server.registerTool(
   "prompts_history",
   {
-    description: "Get version history for a prompt.",
-    inputSchema: { id: z.string() },
+    description: "Get compact version history for a prompt. Bodies are omitted by default; pass include_body:true to retrieve version bodies.",
+    inputSchema: {
+      id: z.string(),
+      include_body: z.boolean().optional().describe("Include full body text for every version."),
+    },
   },
-  async ({ id }) => {
+  async ({ id, include_body }) => {
     const prompt = getPrompt(id)
     if (!prompt) return err(`Prompt not found: ${id}`)
-    return ok(listVersions(prompt.id))
+    const versions = listVersions(prompt.id)
+    return ok({
+      prompt: toPromptSummary(prompt),
+      versions: versions.map((v) => toVersionSummary(v, { includeBody: include_body ?? false })),
+      count: versions.length,
+      _hint: include_body ? undefined : "Pass include_body:true only when you need historical body text.",
+    })
   }
 )
 
@@ -629,14 +664,25 @@ server.registerTool(
   "prompts_unused",
   {
     description: "List prompts with use_count = 0 — never used. Good for library cleanup.",
-    inputSchema: { collection: z.string().optional(), limit: z.number().optional().default(50) },
+    inputSchema: {
+      collection: z.string().optional(),
+      limit: z.number().optional().default(20),
+      offset: z.number().optional().default(0),
+    },
   },
-  async ({ collection, limit }) => {
+  async ({ collection, limit, offset = 0 }) => {
     const all = listPromptsSlim({ collection, limit: 10000 })
     const unused = all.filter((p) => p.use_count === 0)
-      .slice(0, limit)
       .map((p) => ({ id: p.id, slug: p.slug, title: p.title, collection: p.collection, created_at: p.created_at }))
-    return ok({ unused, count: unused.length })
+    const page = pageItems(unused, limit, offset)
+    return ok({
+      unused: page.items,
+      count: unused.length,
+      limit: page.limit,
+      offset: page.offset,
+      has_more: page.has_more,
+      next_offset: page.next_offset,
+    })
   }
 )
 
@@ -664,7 +710,7 @@ server.registerTool(
     },
   },
   async ({ id, expires_at }) => {
-    try { return ok(setExpiry(id, expires_at)) }
+    try { return ok(toPromptSummary(setExpiry(id, expires_at))) }
     catch (e) { return err(e instanceof Error ? e.message : String(e)) }
   }
 )
@@ -693,7 +739,7 @@ server.registerTool(
         tags: source.tags,
         source: "manual",
       })
-      return ok(prompt)
+      return ok(promptToSaveResult(prompt, true))
     } catch (e) { return err(e instanceof Error ? e.message : String(e)) }
   }
 )
@@ -738,7 +784,7 @@ server.registerTool(
     try {
       if (next_prompt !== undefined) {
         const p = setNextPrompt(id, next_prompt ?? null)
-        return ok(p)
+        return ok(toPromptSummary(p))
       }
       // Show full chain
       const chain: Array<{ id: string; slug: string; title: string }> = []
@@ -762,7 +808,7 @@ server.registerTool(
     inputSchema: { id: z.string() },
   },
   async ({ id }) => {
-    try { return ok(pinPrompt(id, true)) }
+    try { return ok(toPromptSummary(pinPrompt(id, true))) }
     catch (e) { return err(e instanceof Error ? e.message : String(e)) }
   }
 )
@@ -774,7 +820,7 @@ server.registerTool(
     inputSchema: { id: z.string() },
   },
   async ({ id }) => {
-    try { return ok(pinPrompt(id, false)) }
+    try { return ok(toPromptSummary(pinPrompt(id, false))) }
     catch (e) { return err(e instanceof Error ? e.message : String(e)) }
   }
 )
@@ -799,19 +845,29 @@ server.registerTool(
 server.registerTool(
   "prompts_lint",
   {
-    description: "Check prompt quality: missing descriptions, undocumented template vars, short bodies, no tags.",
-    inputSchema: { collection: z.string().optional() },
+    description: "Check prompt quality: missing descriptions, undocumented template vars, short bodies, no tags. Returns compact prompt metadata by default.",
+    inputSchema: {
+      collection: z.string().optional(),
+      limit: z.number().optional().default(20),
+      offset: z.number().optional().default(0),
+    },
   },
-  async ({ collection }) => {
+  async ({ collection, limit = 20, offset = 0 }) => {
     const prompts = listPrompts({ collection, limit: 10000 })
     const results = lintAll(prompts)
+    const page = pageItems(results, limit, offset)
     const summary = {
       total_checked: prompts.length,
       prompts_with_issues: results.length,
       errors: results.flatMap((r) => r.issues).filter((i) => i.severity === "error").length,
       warnings: results.flatMap((r) => r.issues).filter((i) => i.severity === "warn").length,
       info: results.flatMap((r) => r.issues).filter((i) => i.severity === "info").length,
-      results,
+      limit: page.limit,
+      offset: page.offset,
+      has_more: page.has_more,
+      next_offset: page.next_offset,
+      results: page.items.map((r) => ({ prompt: toPromptSummary(r.prompt), issues: r.issues })),
+      _hint: page.has_more ? `Call again with offset:${page.next_offset} for more lint results.` : undefined,
     }
     return ok(summary)
   }
@@ -822,16 +878,29 @@ server.registerTool(
   "prompts_stale",
   {
     description: "List prompts not used in N days. Useful for library hygiene.",
-    inputSchema: { days: z.number().optional().default(30).describe("Inactivity threshold in days") },
+    inputSchema: {
+      days: z.number().optional().default(30).describe("Inactivity threshold in days"),
+      limit: z.number().optional().default(20),
+      offset: z.number().optional().default(0),
+    },
   },
-  async ({ days }) => {
+  async ({ days, limit = 20, offset = 0 }) => {
     const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
     const all = listPromptsSlim({ limit: 10000 })
     const stale = all
       .filter((p) => p.last_used_at === null || p.last_used_at < cutoff)
       .sort((a, b) => (a.last_used_at ?? "").localeCompare(b.last_used_at ?? ""))
       .map((p) => ({ id: p.id, slug: p.slug, title: p.title, last_used_at: p.last_used_at, use_count: p.use_count }))
-    return ok({ stale, count: stale.length, threshold_days: days })
+    const page = pageItems(stale, limit, offset)
+    return ok({
+      stale: page.items,
+      count: stale.length,
+      threshold_days: days,
+      limit: page.limit,
+      offset: page.offset,
+      has_more: page.has_more,
+      next_offset: page.next_offset,
+    })
   }
 )
 
@@ -870,9 +939,23 @@ server.registerTool(
   "prompts_project_list",
   {
     description: "List all projects with prompt counts.",
-    inputSchema: {},
+    inputSchema: {
+      limit: z.number().optional().default(20),
+      offset: z.number().optional().default(0),
+    },
   },
-  async () => ok(listProjects())
+  async ({ limit = 20, offset = 0 }) => {
+    const projects = listProjects()
+    const page = pageItems(projects, limit, offset)
+    return ok({
+      projects: page.items,
+      count: projects.length,
+      limit: page.limit,
+      offset: page.offset,
+      has_more: page.has_more,
+      next_offset: page.next_offset,
+    })
+  }
 )
 
 // ── prompts_project_get ───────────────────────────────────────────────────────
@@ -935,8 +1018,9 @@ server.registerTool(
       })
 
       return ok({
-        schedule,
+        schedule: toScheduleSummary(schedule),
         message: `Prompt "${prompt.title}" scheduled with cron "${cron}". Next run: ${schedule.next_run_at}. Call prompts_get_due to execute due prompts.`,
+        _hint: "Schedule variables are summarized. Use prompts_list_schedules include_vars:true to inspect them.",
       })
     } catch (e) {
       return err(e instanceof Error ? e.message : String(e))
@@ -951,9 +1035,12 @@ server.registerTool(
     description: "List all prompt schedules, optionally filtered by prompt.",
     inputSchema: {
       prompt_id: z.string().optional().describe("Filter by prompt ID or slug"),
+      limit: z.number().optional().default(20),
+      offset: z.number().optional().default(0),
+      include_vars: z.boolean().optional().describe("Include full schedule variable payloads."),
     },
   },
-  async ({ prompt_id }) => {
+  async ({ prompt_id, limit = 20, offset = 0, include_vars }) => {
     try {
       let resolvedId: string | undefined
       if (prompt_id) {
@@ -962,7 +1049,16 @@ server.registerTool(
         resolvedId = prompt.id
       }
       const schedules = listSchedules(resolvedId)
-      return ok({ schedules, count: schedules.length })
+      const page = pageItems(schedules, limit, offset)
+      return ok({
+        schedules: page.items.map((s) => toScheduleSummary(s, { includeVars: include_vars ?? false })),
+        count: schedules.length,
+        limit: page.limit,
+        offset: page.offset,
+        has_more: page.has_more,
+        next_offset: page.next_offset,
+        _hint: include_vars ? undefined : "Pass include_vars:true only when you need schedule variable payloads.",
+      })
     } catch (e) {
       return err(e instanceof Error ? e.message : String(e))
     }
@@ -1083,9 +1179,23 @@ server.registerTool(
   "list_agents",
   {
     description: "List all registered agents.",
-    inputSchema: {},
+    inputSchema: {
+      limit: z.number().optional().default(20),
+      offset: z.number().optional().default(0),
+    },
   },
-  async () => ok(listAgents())
+  async ({ limit = 20, offset = 0 }) => {
+    const agents = listAgents()
+    const page = pageItems(agents, limit, offset)
+    return ok({
+      agents: page.items,
+      count: agents.length,
+      limit: page.limit,
+      offset: page.offset,
+      has_more: page.has_more,
+      next_offset: page.next_offset,
+    })
+  }
 )
 
 // ── prompts_bulk_tag ──────────────────────────────────────────────────────────
@@ -1259,9 +1369,11 @@ server.registerTool(
       agents: z.array(z.string()).optional().describe("Agent names to check (default: all)"),
       depth: z.number().optional().default(3).describe("Max directory depth to scan for git repos"),
       missing_only: z.boolean().optional().describe("Only return repos with missing configs"),
+      limit: z.number().optional().default(20),
+      offset: z.number().optional().default(0),
     },
   },
-  async ({ workspace, agents, depth = 3, missing_only }) => {
+  async ({ workspace, agents, depth = 3, missing_only, limit = 20, offset = 0 }) => {
     const wsDir = workspace ? pathResolve(workspace) : pathResolve(homedir(), "workspace")
     if (!fsExists(wsDir)) return err(`Workspace not found: ${wsDir}`)
 
@@ -1300,7 +1412,18 @@ server.registerTool(
       }
     }
 
-    return ok({ workspace: wsDir, repos_scanned: repos.length, reports })
+    const page = pageItems(reports, limit, offset)
+    return ok({
+      workspace: wsDir,
+      repos_scanned: repos.length,
+      reports: page.items,
+      total_reports: reports.length,
+      limit: page.limit,
+      offset: page.offset,
+      has_more: page.has_more,
+      next_offset: page.next_offset,
+      _hint: page.has_more ? `Call again with offset:${page.next_offset} for more repo reports.` : undefined,
+    })
   }
 )
 

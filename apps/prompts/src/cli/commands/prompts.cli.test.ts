@@ -28,6 +28,10 @@ function runCli(dbPath: string, args: string[]): CliResult {
   }
 }
 
+function stripAnsi(value: string): string {
+  return value.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
+}
+
 describe("CLI templates command", () => {
   test("respects --project scope", () => {
     const dir = mkdtempSync(join(tmpdir(), "open-prompts-cli-"))
@@ -53,6 +57,89 @@ describe("CLI templates command", () => {
     expect(slugs).toContain("global-template")
     expect(slugs).toContain("alpha-template")
     expect(slugs).not.toContain("beta-template")
+  })
+})
+
+describe("CLI compact output defaults", () => {
+  test("list caps human output and keeps JSON full records explicit", () => {
+    const dir = mkdtempSync(join(tmpdir(), "open-prompts-cli-compact-"))
+    const dbPath = join(dir, "prompts.db")
+
+    for (let i = 1; i <= 25; i++) {
+      const title = `Prompt ${String(i).padStart(2, "0")} with a deliberately long title that should not flood terminals`
+      const body = `body ${i} ${"x".repeat(220)} unique-${i}`
+      const result = runCli(dbPath, ["save", title, "--body", body, "--slug", `compact-${i}`, "--tags", "alpha,beta,gamma,delta", "--force"])
+      expect(result.exitCode).toBe(0)
+    }
+
+    const list = runCli(dbPath, ["list"])
+    expect(list.exitCode).toBe(0)
+    const stdout = stripAnsi(list.stdout)
+    expect(stdout.match(/prmt-/g)?.length).toBe(20)
+    expect(stdout).toContain("Showing 20 prompt(s). Next: --offset 20")
+    expect(stdout).toContain("Use --verbose for more metadata")
+    expect(stdout).toContain("prompts show <id>")
+
+    const jsonList = runCli(dbPath, ["--json", "list", "--limit", "1"])
+    expect(jsonList.exitCode).toBe(0)
+    const parsed = JSON.parse(jsonList.stdout) as Array<{ body?: string; slug: string }>
+    expect(parsed.length).toBe(1)
+    expect(parsed[0]?.body).toContain("unique-")
+  })
+
+  test("show is compact by default and verbose discloses the full body", () => {
+    const dir = mkdtempSync(join(tmpdir(), "open-prompts-cli-show-"))
+    const dbPath = join(dir, "prompts.db")
+    const longBody = `start ${"x".repeat(220)} UNIQUE_VERBOSE_TAIL`
+
+    expect(runCli(dbPath, ["save", "Detail Prompt", "--body", longBody, "--slug", "detail-prompt"]).exitCode).toBe(0)
+
+    const compact = runCli(dbPath, ["show", "detail-prompt"])
+    expect(compact.exitCode).toBe(0)
+    const compactOut = stripAnsi(compact.stdout)
+    expect(compactOut).toContain("Body chars:")
+    expect(compactOut).toContain("Use --verbose for the full body")
+    expect(compactOut).not.toContain("UNIQUE_VERBOSE_TAIL")
+
+    const verbose = runCli(dbPath, ["show", "detail-prompt", "--verbose"])
+    expect(verbose.exitCode).toBe(0)
+    expect(stripAnsi(verbose.stdout)).toContain("UNIQUE_VERBOSE_TAIL")
+  })
+
+  test("lint exits nonzero when errors are beyond the displayed page", () => {
+    const dir = mkdtempSync(join(tmpdir(), "open-prompts-cli-lint-"))
+    const dbPath = join(dir, "prompts.db")
+
+    expect(runCli(dbPath, ["save", "Hidden Error", "--body", "tiny", "--slug", "hidden-error"]).exitCode).toBe(0)
+    for (let i = 1; i <= 20; i++) {
+      expect(runCli(dbPath, ["save", `Warning ${i}`, "--body", `long enough body ${i}`, "--slug", `warning-${i}`]).exitCode).toBe(0)
+    }
+
+    const lint = runCli(dbPath, ["lint"])
+    expect(lint.exitCode).toBe(1)
+    const stdout = stripAnsi(lint.stdout)
+    expect(stdout).toContain("Showing 20 of 21 prompt(s) with issues")
+    expect(stdout).toContain("1 errors")
+    expect(stdout).toContain("Use --limit 21 or --json")
+  })
+
+  test("recent supports offset pagination when it prints a next hint", () => {
+    const dir = mkdtempSync(join(tmpdir(), "open-prompts-cli-recent-page-"))
+    const dbPath = join(dir, "prompts.db")
+
+    for (let i = 1; i <= 11; i++) {
+      const slug = `recent-${i}`
+      expect(runCli(dbPath, ["save", `Recent ${i}`, "--body", `recent body ${i}`, "--slug", slug]).exitCode).toBe(0)
+      expect(runCli(dbPath, ["use", slug]).exitCode).toBe(0)
+    }
+
+    const firstPage = runCli(dbPath, ["recent", "10"])
+    expect(firstPage.exitCode).toBe(0)
+    expect(stripAnsi(firstPage.stdout)).toContain("Next: --offset 10")
+
+    const secondPage = runCli(dbPath, ["recent", "10", "--offset", "10"])
+    expect(secondPage.exitCode).toBe(0)
+    expect(stripAnsi(secondPage.stdout).match(/prmt-/g)?.length).toBe(1)
   })
 })
 

@@ -5,14 +5,14 @@ import chalk from "chalk"
 import { createRequire } from "module"
 import { listCollections, movePrompt } from "../db/collections.js"
 import { createProject, getProject, listProjects, deleteProject } from "../db/projects.js"
-import { getPrompt, listPrompts, upsertPrompt, getPromptStats, pinPrompt, setNextPrompt, setExpiry, getTrending, deletePrompt, usePrompt } from "../db/prompts.js"
+import { getPrompt, listPrompts, listPromptsSlim, upsertPrompt, getPromptStats, pinPrompt, setNextPrompt, setExpiry, getTrending, deletePrompt, usePrompt } from "../db/prompts.js"
 import { createSchedule, listSchedules, deleteSchedule, getDueSchedules } from "../db/schedules.js"
 import { validateCron, getNextRunTime } from "../lib/cron.js"
 import { runAudit } from "../lib/audit.js"
 import { generateZshCompletion, generateBashCompletion } from "../lib/completion.js"
 import { lintAll } from "../lib/lint.js"
 import { importFromJson, exportToJson, scanAndImportSlashCommands } from "../lib/importer.js"
-import { isJson, output, handleError, fmtPrompt, getActiveProjectId, writeToClipboard } from "./utils.js"
+import { isJson, output, handleError, fmtPrompt, getActiveProjectId, writeToClipboard, parseOffset, parsePositiveInt, printPageSummary } from "./utils.js"
 import { registerPromptCommands } from "./commands/prompts.js"
 import { registerVersionCommands } from "./commands/versions.js"
 import { registerQolCommands } from "./commands/qol.js"
@@ -46,16 +46,31 @@ registerConfigCommands(program)
 program
   .command("collections")
   .description("List all collections")
-  .action(() => {
+  .option("-n, --limit <n>", "Max collections to show in human output", "20")
+  .option("-o, --offset <n>", "Skip first N collections", "0")
+  .option("--cursor <n>", "Alias for --offset")
+  .action((opts: Record<string, string | boolean>) => {
     try {
       const cols = listCollections()
       if (isJson(program)) {
         output(program, cols)
       } else {
-        for (const c of cols) {
+        const limit = parsePositiveInt(opts["limit"], 20)
+        const offset = parseOffset(opts)
+        const shown = cols.slice(offset, offset + limit)
+        for (const c of shown) {
           console.log(`${chalk.bold(c.name)}  ${chalk.gray(`${c.prompt_count} prompt(s)`)}`)
           if (c.description) console.log(chalk.gray("  " + c.description))
         }
+        printPageSummary({
+          shown: shown.length,
+          total: cols.length,
+          noun: "collection",
+          limit,
+          offset,
+          hasMore: offset + shown.length < cols.length,
+          detailHint: "Use --json for full collection records.",
+        })
       }
     } catch (e) {
       handleError(program, e)
@@ -154,23 +169,36 @@ program
 program
   .command("recent [n]")
   .description("Show recently used prompts (default: 10)")
-  .action((n: string | undefined) => {
+  .option("-o, --offset <n>", "Skip first N recent prompts", "0")
+  .option("--cursor <n>", "Alias for --offset")
+  .option("--verbose", "Show more metadata per prompt")
+  .action((n: string | undefined, opts: Record<string, string | boolean>) => {
     try {
       const limit = parseInt(n ?? "10") || 10
+      const offset = parseOffset(opts)
       const project_id = getActiveProjectId(program)
-      const prompts = listPrompts({
-        limit,
+      const json = isJson(program)
+      const prompts = (json ? listPrompts : listPromptsSlim)({
+        limit: json ? offset + limit : Math.max(100, offset + limit + 1),
         ...(project_id !== null ? { project_id } : {}),
       })
         .filter((p) => p.last_used_at !== null)
         .sort((a, b) => (b.last_used_at ?? "").localeCompare(a.last_used_at ?? ""))
-        .slice(0, limit)
-      if (isJson(program)) { output(program, prompts); return }
+      if (json) { output(program, prompts.slice(offset, offset + limit)); return }
       if (prompts.length === 0) { console.log(chalk.gray("No recently used prompts.")); return }
-      for (const p of prompts) {
+      const shown = prompts.slice(offset, offset + limit)
+      for (const p of shown) {
         const ago = chalk.gray(new Date(p.last_used_at!).toLocaleString())
-        console.log(`${chalk.bold(p.id)} ${chalk.green(p.slug)}  ${p.title}  ${ago}`)
+        console.log(`${fmtPrompt(p, { verbose: Boolean(opts["verbose"]) })}  ${ago}`)
       }
+      printPageSummary({
+        shown: shown.length,
+        noun: "prompt",
+        limit,
+        offset,
+        hasMore: prompts.length > offset + shown.length,
+        detailHint: "Use --verbose for more metadata, --json for raw records, or `prompts show <id>` / `prompts body <id>` for details.",
+      })
     } catch (e) { handleError(program, e) }
   })
 
@@ -179,11 +207,13 @@ program
   .command("lint")
   .description("Check prompt quality: missing descriptions, undocumented vars, short bodies, no tags")
   .option("-c, --collection <name>", "Lint only this collection")
-  .action((opts: Record<string, string>) => {
+  .option("-n, --limit <n>", "Max prompts with issues to show in human output", "20")
+  .option("--verbose", "Show all issue details up to --limit")
+  .action((opts: Record<string, string | boolean>) => {
     try {
       const project_id = getActiveProjectId(program)
       const prompts = listPrompts({
-        collection: opts["collection"],
+        collection: typeof opts["collection"] === "string" ? opts["collection"] : undefined,
         limit: 10000,
         ...(project_id !== null ? { project_id } : {}),
       })
@@ -191,16 +221,23 @@ program
       if (isJson(program)) { output(program, results); return }
       if (results.length === 0) { console.log(chalk.green("✓ All prompts pass lint.")); return }
 
-      let errors = 0, warns = 0, infos = 0
-      for (const { prompt: p, issues } of results) {
+      const allIssues = results.flatMap((r) => r.issues)
+      const errors = allIssues.filter((issue) => issue.severity === "error").length
+      const warns = allIssues.filter((issue) => issue.severity === "warn").length
+      const infos = allIssues.filter((issue) => issue.severity === "info").length
+      const limit = parsePositiveInt(opts["limit"], 20)
+      const shown = results.slice(0, limit)
+      for (const { prompt: p, issues } of shown) {
         console.log(`\n${chalk.bold(p.slug)}  ${chalk.gray(p.id)}`)
-        for (const issue of issues) {
-          if (issue.severity === "error") { console.log(chalk.red(`  ✗ [${issue.rule}] ${issue.message}`)); errors++ }
-          else if (issue.severity === "warn") { console.log(chalk.yellow(`  ⚠ [${issue.rule}] ${issue.message}`)); warns++ }
-          else { console.log(chalk.gray(`  ℹ [${issue.rule}] ${issue.message}`)); infos++ }
+        for (const issue of issues.slice(0, opts["verbose"] ? issues.length : 3)) {
+          if (issue.severity === "error") console.log(chalk.red(`  ✗ [${issue.rule}] ${issue.message}`))
+          else if (issue.severity === "warn") console.log(chalk.yellow(`  ⚠ [${issue.rule}] ${issue.message}`))
+          else console.log(chalk.gray(`  ℹ [${issue.rule}] ${issue.message}`))
         }
+        if (!opts["verbose"] && issues.length > 3) console.log(chalk.gray(`  ... ${issues.length - 3} more issue(s); use --verbose`))
       }
-      console.log(chalk.bold(`\n${results.length} prompt(s) with issues — ${errors} errors, ${warns} warnings, ${infos} info`))
+      console.log(chalk.bold(`\nShowing ${shown.length} of ${results.length} prompt(s) with issues — ${errors} errors, ${warns} warnings, ${infos} info`))
+      if (results.length > shown.length) console.log(chalk.gray(`Use --limit ${results.length} or --json for the full lint result.`))
       if (errors > 0) process.exit(1)
     } catch (e) { handleError(program, e) }
   })
@@ -209,12 +246,17 @@ program
 program
   .command("stale [days]")
   .description("List prompts not used in N days (default: 30)")
-  .action((days: string | undefined) => {
+  .option("-n, --limit <n>", "Max stale prompts to show in human output", "20")
+  .option("-o, --offset <n>", "Skip first N stale prompts", "0")
+  .option("--cursor <n>", "Alias for --offset")
+  .option("--verbose", "Show more metadata per prompt")
+  .action((days: string | undefined, opts: Record<string, string | boolean>) => {
     try {
       const threshold = parseInt(days ?? "30") || 30
       const project_id = getActiveProjectId(program)
       const cutoff = new Date(Date.now() - threshold * 24 * 60 * 60 * 1000).toISOString()
-      const all = listPrompts({
+      const json = isJson(program)
+      const all = (json ? listPrompts : listPromptsSlim)({
         limit: 10000,
         ...(project_id !== null ? { project_id } : {}),
       })
@@ -226,17 +268,29 @@ program
       if (isJson(program)) { output(program, { stale, expired }); return }
       if (expired.length > 0) {
         console.log(chalk.red(`\nExpired (${expired.length}):`))
-        for (const p of expired) console.log(chalk.red(`  ✗ ${p.slug}`) + chalk.gray(` expired ${new Date(p.expires_at!).toLocaleDateString()}`))
+        for (const p of expired.slice(0, 10)) console.log(chalk.red(`  ✗ ${p.slug}`) + chalk.gray(` expired ${new Date(p.expires_at!).toLocaleDateString()}`))
+        if (expired.length > 10) console.log(chalk.gray(`  ... ${expired.length - 10} more expired prompt(s); use --json`))
       }
       if (stale.length === 0 && expired.length === 0) { console.log(chalk.green(`No stale prompts (threshold: ${threshold} days).`)); return }
       if (stale.length > 0) {
+        const limit = parsePositiveInt(opts["limit"], 20)
+        const offset = parseOffset(opts)
+        const shown = stale.slice(offset, offset + limit)
         console.log(chalk.bold(`\nStale prompts (not used in ${threshold}+ days):`))
-        for (const p of stale) {
+        for (const p of shown) {
           const last = p.last_used_at ? chalk.gray(new Date(p.last_used_at).toLocaleDateString()) : chalk.red("never")
-          console.log(`  ${chalk.green(p.slug)}  ${chalk.gray(`${p.use_count}×`)}  last used: ${last}`)
+          console.log(`  ${fmtPrompt(p, { verbose: Boolean(opts["verbose"]) })}  last used: ${last}`)
         }
+        printPageSummary({
+          shown: shown.length,
+          total: stale.length,
+          noun: "stale prompt",
+          limit,
+          offset,
+          hasMore: offset + shown.length < stale.length,
+          detailHint: "Use --verbose for more metadata, --json for raw records, or `prompts show <id>` / `prompts body <id>` for details.",
+        })
       }
-      console.log(chalk.gray(`\n${stale.length} stale prompt(s)`))
     } catch (e) { handleError(program, e) }
   })
 
@@ -300,15 +354,30 @@ projectCmd
 projectCmd
   .command("list")
   .description("List all projects")
-  .action(() => {
+  .option("-n, --limit <n>", "Max projects to show in human output", "20")
+  .option("-o, --offset <n>", "Skip first N projects", "0")
+  .option("--cursor <n>", "Alias for --offset")
+  .action((opts: Record<string, string | boolean>) => {
     try {
       const projects = listProjects()
       if (isJson(program)) { output(program, projects); return }
       if (projects.length === 0) { console.log(chalk.gray("No projects.")); return }
-      for (const p of projects) {
+      const limit = parsePositiveInt(opts["limit"], 20)
+      const offset = parseOffset(opts)
+      const shown = projects.slice(offset, offset + limit)
+      for (const p of shown) {
         console.log(`${chalk.bold(p.name)}  ${chalk.gray(p.slug)}  ${chalk.cyan(`${p.prompt_count} prompt(s)`)}`)
         if (p.description) console.log(chalk.gray(`  ${p.description}`))
       }
+      printPageSummary({
+        shown: shown.length,
+        total: projects.length,
+        noun: "project",
+        limit,
+        offset,
+        hasMore: offset + shown.length < projects.length,
+        detailHint: "Use --json for full project records or `prompts project get <id>` for one project.",
+      })
     } catch (e) { handleError(program, e) }
   })
 
@@ -326,20 +395,34 @@ projectCmd
 projectCmd
   .command("prompts <id>")
   .description("List all prompts for a project (project-scoped + globals)")
-  .option("-n, --limit <n>", "Max results", "100")
-  .action((id: string, opts: Record<string, string>) => {
+  .option("-n, --limit <n>", "Max results (default: 20 human, 100 JSON)")
+  .option("-o, --offset <n>", "Skip first N results", "0")
+  .option("--cursor <n>", "Alias for --offset")
+  .option("--verbose", "Show more metadata per prompt")
+  .action((id: string, opts: Record<string, string | boolean>) => {
     try {
       const project = getProject(id)
       if (!project) handleError(program, `Project not found: ${id}`)
-      const prompts = listPrompts({ project_id: project!.id, limit: parseInt(opts["limit"] ?? "100") || 100 })
+      const json = isJson(program)
+      const limit = parsePositiveInt(opts["limit"], json ? 100 : 20)
+      const offset = parseOffset(opts)
+      const prompts = (json ? listPrompts : listPromptsSlim)({ project_id: project!.id, limit: json ? limit : limit + 1, offset })
       if (isJson(program)) { output(program, prompts); return }
       if (prompts.length === 0) { console.log(chalk.gray("No prompts.")); return }
       console.log(chalk.bold(`Prompts for project: ${project!.name}`))
-      for (const p of prompts) {
+      const shown = prompts.slice(0, limit)
+      for (const p of shown) {
         const scope = p.project_id ? chalk.cyan(" [project]") : chalk.gray(" [global]")
-        console.log(fmtPrompt(p) + scope)
+        console.log(fmtPrompt(p, { verbose: Boolean(opts["verbose"]) }) + scope)
       }
-      console.log(chalk.gray(`\n${prompts.length} prompt(s)`))
+      printPageSummary({
+        shown: shown.length,
+        noun: "prompt",
+        limit,
+        offset,
+        hasMore: prompts.length > limit,
+        detailHint: "Use --verbose for more metadata, --json for raw records, or `prompts show <id>` / `prompts body <id>` for details.",
+      })
     } catch (e) { handleError(program, e) }
   })
 
@@ -392,22 +475,38 @@ program
   .command("unused")
   .description("List prompts that have never been used (use_count = 0)")
   .option("-c, --collection <name>")
-  .option("-n, --limit <n>", "Max results", "50")
-  .action((opts: Record<string, string>) => {
+  .option("-n, --limit <n>", "Max results (default: 20 human, 50 JSON)")
+  .option("-o, --offset <n>", "Skip first N results", "0")
+  .option("--cursor <n>", "Alias for --offset")
+  .option("--verbose", "Show more metadata per prompt")
+  .action((opts: Record<string, string | boolean>) => {
     try {
       const project_id = getActiveProjectId(program)
-      const all = listPrompts({
-        collection: opts["collection"],
-        limit: parseInt(opts["limit"] ?? "50") || 50,
+      const json = isJson(program)
+      const limit = parsePositiveInt(opts["limit"], json ? 50 : 20)
+      const offset = parseOffset(opts)
+      const all = (json ? listPrompts : listPromptsSlim)({
+        collection: typeof opts["collection"] === "string" ? opts["collection"] : undefined,
+        limit: 10000,
         ...(project_id !== null ? { project_id } : {}),
       })
       const unused = all.filter((p) => p.use_count === 0).sort((a, b) => a.created_at.localeCompare(b.created_at))
-      if (isJson(program)) { output(program, unused); return }
+      if (isJson(program)) { output(program, unused.slice(offset, offset + limit)); return }
       if (unused.length === 0) { console.log(chalk.green("All prompts have been used at least once.")); return }
       console.log(chalk.bold(`Unused prompts (${unused.length}):`))
-      for (const p of unused) {
-        console.log(`  ${fmtPrompt(p)}  ${chalk.gray(`created ${new Date(p.created_at).toLocaleDateString()}`)}`)
+      const shown = unused.slice(offset, offset + limit)
+      for (const p of shown) {
+        console.log(`  ${fmtPrompt(p, { verbose: Boolean(opts["verbose"]) })}  ${chalk.gray(`created ${new Date(p.created_at).toLocaleDateString()}`)}`)
       }
+      printPageSummary({
+        shown: shown.length,
+        total: unused.length,
+        noun: "unused prompt",
+        limit,
+        offset,
+        hasMore: offset + shown.length < unused.length,
+        detailHint: "Use --verbose for more metadata, --json for raw records, or `prompts show <id>` / `prompts body <id>` for details.",
+      })
     } catch (e) { handleError(program, e) }
   })
 
@@ -589,13 +688,16 @@ program
   .description("Auto-scan .claude/commands, .codex/skills, .gemini/extensions and import all prompts")
   .option("--dir <path>", "Root dir to scan (default: cwd)", process.cwd())
   .option("--agent <name>", "Attribution")
+  .option("-n, --limit <n>", "Max scanned files to show in human output", "50")
   .action((opts: Record<string, string>) => {
     try {
       const { scanned, imported } = scanAndImportSlashCommands(opts["dir"] ?? process.cwd(), opts["agent"])
       if (isJson(program)) { output(program, { scanned, imported }); return }
       if (scanned.length === 0) { console.log(chalk.gray("No slash command files found.")); return }
       console.log(chalk.bold(`Scanned ${scanned.length} file(s):`))
-      for (const s of scanned) console.log(chalk.gray(`  ${s.source}/${s.file}`))
+      const limit = parsePositiveInt(opts["limit"], 50)
+      for (const s of scanned.slice(0, limit)) console.log(chalk.gray(`  ${s.source}/${s.file}`))
+      if (scanned.length > limit) console.log(chalk.gray(`  ... ${scanned.length - limit} more file(s); use --limit or --json`))
       console.log(`\n${chalk.green(`Created: ${imported.created}`)}  ${chalk.yellow(`Updated: ${imported.updated}`)}`)
       if (imported.errors.length > 0) {
         for (const e of imported.errors) console.error(chalk.red(`  ✗ ${e.item}: ${e.error}`))
@@ -662,14 +764,29 @@ scheduleCmd
 scheduleCmd
   .command("list [id]")
   .description("List schedules, optionally filtered by prompt ID")
-  .action((id?: string) => {
+  .option("-n, --limit <n>", "Max schedules to show in human output", "20")
+  .option("-o, --offset <n>", "Skip first N schedules", "0")
+  .option("--cursor <n>", "Alias for --offset")
+  .action((id: string | undefined, opts: Record<string, string | boolean>) => {
     try {
       const schedules = listSchedules(id)
       if (isJson(program)) { output(program, schedules); return }
       if (!schedules.length) { console.log(chalk.gray("No schedules.")); return }
-      for (const s of schedules) {
+      const limit = parsePositiveInt(opts["limit"], 20)
+      const offset = parseOffset(opts)
+      const shown = schedules.slice(offset, offset + limit)
+      for (const s of shown) {
         console.log(`${chalk.bold(s.id)}  ${chalk.cyan(s.prompt_slug)}  cron:${s.cron}  next:${s.next_run_at}  runs:${s.run_count}`)
       }
+      printPageSummary({
+        shown: shown.length,
+        total: schedules.length,
+        noun: "schedule",
+        limit,
+        offset,
+        hasMore: offset + shown.length < schedules.length,
+        detailHint: "Use --json for full schedule records.",
+      })
     } catch (e) { handleError(program, e) }
   })
 
