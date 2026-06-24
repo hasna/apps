@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import type { StatusContext } from "./providers/types";
+import type { StatusContext } from "./providers/types.js";
 
 export interface ContextUsage {
   /** Tokens currently occupying the context window (input side). */

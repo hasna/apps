@@ -8,7 +8,7 @@ and more — rendered as a single line for your agent's status bar.
 apple03 · statusline (main) · 12h · 1.2k · fable 5 [1m] · 90% left · $0.04
 ```
 
-Zero runtime dependencies. Built with [Bun](https://bun.sh) + TypeScript. Apache-2.0.
+Built with [Bun](https://bun.sh) + TypeScript. The CLI renderer is dependency-light; the optional MCP server uses the Model Context Protocol SDK. Apache-2.0.
 
 ## Install
 
@@ -72,6 +72,46 @@ renders each enabled segment, drops anything unavailable, and prints one line. S
 that need more than the payload offers (e.g. `context-remaining`) read the session
 transcript to compute it. A segment failure is never fatal — it's simply omitted.
 
+## SDK
+
+The package root is a side-effect-free SDK surface:
+
+```ts
+import {
+  renderStatusline,
+  listSegments,
+  enableSegments,
+  saveConfig,
+  loadConfig,
+} from "@hasna/statusline";
+
+const config = loadConfig();
+const line = await renderStatusline({ cwd: process.cwd() }, config);
+const next = enableSegments(["duration"], config).config;
+saveConfig(next);
+```
+
+Useful exports include `parseClaudeInput`, `renderLine`, `segments`, `getSegment`,
+`defaultConfig`, `loadConfig`, `saveConfig`, `configPath`, `previewStatusline`,
+`orderSegments`, `disableSegments`, `setSeparator`, and `installClaude`.
+
+## MCP
+
+`statusline-mcp` starts a stdio MCP server:
+
+```bash
+statusline-mcp
+```
+
+It exposes safe tools for `render_statusline`, `preview_statusline`,
+`list_segments`, `get_config`, `update_config`, `enable_segments`,
+`disable_segments`, `order_segments`, and `reset_config`. Config mutation tools
+require `confirm_write: true`; every mutation tool supports `dry_run: true`.
+
+The MCP server intentionally does not mutate Claude settings. Use
+`statusline install claude` or the `installClaude()` SDK helper when you
+explicitly want to wire the CLI into Claude Code.
+
 ## Providers
 
 | Agent | Status |
@@ -87,8 +127,10 @@ Adding a provider means one small parser: agent payload → `StatusContext`
 
 ```bash
 bun install
+bun run typecheck
 bun test
-echo '{"cwd":"'$PWD'","model":{"id":"claude-fable-5[1m]"}}' | bun src/index.ts render
+bun run build
+echo '{"cwd":"'$PWD'","model":{"id":"claude-fable-5[1m]"}}' | bun src/cli.ts render
 ```
 
 ## License

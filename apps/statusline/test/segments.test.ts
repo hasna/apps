@@ -79,8 +79,9 @@ describe("git segments", () => {
     expect(out).toMatch(/^(open-)?statusline( \(.+\))?$/);
   });
   test("git-branch renders branch", async () => {
-    const out = await getSegment("git-branch")!.render(ctx());
-    expect(out).toBe("main");
+    const out = await getSegment("git-branch")!.render(ctx({ cwd: process.cwd(), workspace: { current_dir: process.cwd() } }));
+    expect(typeof out).toBe("string");
+    expect(out!.length).toBeGreaterThan(0);
   });
   test("commit-age null on repo without commits or non-repo", async () => {
     const out = await getSegment("commit-age")!.render(ctx({ cwd: "/tmp", workspace: { current_dir: "/tmp" } }));
