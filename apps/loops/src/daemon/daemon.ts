@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { genId } from "../lib/ids.js";
 import { daemonLogPath, ensureDataDir, pidFilePath } from "../lib/paths.js";
 import { advanceLoop, claimDueRuns, executeClaimedRun, type ClaimedLoopRun } from "../lib/scheduler.js";
+import { dueSlots } from "../lib/schedule.js";
 import { executeLoopTarget } from "../lib/workflow-runner.js";
 import { Store } from "../lib/store.js";
 import { isDaemonRunning, removePid, writePid } from "./control.js";
@@ -35,6 +36,20 @@ function concurrencyFromEnv(): number | undefined {
   if (!raw) return undefined;
   const value = Number(raw);
   return Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+function countBackpressuredDueSlots(store: Store, now: Date): number {
+  let count = 0;
+  for (const loop of store.dueLoops(now)) {
+    for (const slot of dueSlots(loop, now).slots) {
+      const existing = store.getRunBySlot(loop.id, slot);
+      if (existing?.status === "running" || existing?.status === "succeeded" || existing?.status === "skipped") continue;
+      if (existing && existing.attempt >= loop.maxAttempts) continue;
+      if (loop.overlap === "skip" && store.hasRunningRun(loop.id)) continue;
+      count += 1;
+    }
+  }
+  return count;
 }
 
 export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
@@ -150,19 +165,22 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
       onTickError: (err) => log(`tick error: ${err instanceof Error ? err.message : String(err)}`),
       tickFn: async () => {
         ensureLease();
+        const now = new Date();
         const available = Math.max(0, concurrency - activeRuns.size);
+        const backpressured = available === 0 ? countBackpressuredDueSlots(store, now) : 0;
         const result = claimDueRuns({
           store,
           runnerId,
           daemonLeaseId: leaseId,
           beforeRun: () => ensureLease(),
+          now: () => now,
           maxClaims: available,
         });
         for (const claim of result.claims) startClaim(claim);
-        const changed = result.claims.length + result.skipped.length + result.recovered.length + result.expired.length;
+        const changed = result.claims.length + result.skipped.length + result.recovered.length + result.expired.length + backpressured;
         if (changed > 0) {
           log(
-            `tick claimed=${result.claims.length} active=${activeRuns.size} skipped=${result.skipped.length} recovered=${result.recovered.length} expired=${result.expired.length}`,
+            `tick claimed=${result.claims.length} active=${activeRuns.size} skipped=${result.skipped.length} recovered=${result.recovered.length} expired=${result.expired.length} backpressured=${backpressured}`,
           );
         }
       },

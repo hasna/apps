@@ -118,6 +118,61 @@ describe("daemon", () => {
     }
   });
 
+  test("reports due-slot backpressure when all daemon run slots are occupied", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-daemon-backpressure-"));
+    const store = new Store(":memory:");
+    const logs: string[] = [];
+    let stop = false;
+    let started = 0;
+    let releaseGate: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    try {
+      store.createLoop({
+        name: "long-agent-shaped-command",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "command", command: "true" },
+      });
+      store.createLoop({
+        name: "heartbeat-command",
+        schedule: { type: "once", at: "2026-01-01T00:00:01Z" },
+        target: { type: "command", command: "true" },
+      });
+
+      const daemon = runDaemon({
+        store,
+        pidPath: join(root, "loops-daemon.pid"),
+        intervalMs: 5,
+        concurrency: 1,
+        sleep: async (ms) => Bun.sleep(ms),
+        shouldStop: () => stop,
+        log: (message) => logs.push(message),
+        execute: async () => {
+          started += 1;
+          await gate;
+          return executorResult("succeeded", "2026-01-01T00:00:02.000Z");
+        },
+      });
+
+      for (let i = 0; i < 100 && !logs.some((line) => /backpressured=[1-9]/.test(line)); i++) {
+        await Bun.sleep(10);
+      }
+
+      stop = true;
+      releaseGate();
+      await daemon;
+
+      expect(started).toBe(1);
+      expect(logs.some((line) => /backpressured=[1-9]/.test(line))).toBe(true);
+    } finally {
+      stop = true;
+      releaseGate();
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("aborts active workflow children on daemon stop", async () => {
     const root = mkdtempSync(join(tmpdir(), "loops-daemon-stop-"));
     const marker = join(root, "late-write");

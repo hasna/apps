@@ -77,6 +77,32 @@ function budgetExhausted(goal: Goal): boolean {
   return goal.tokenBudget !== undefined && goal.tokensUsed >= goal.tokenBudget;
 }
 
+function abortResult(
+  store: Store,
+  goal: Goal,
+  nodes: GoalPlanNode[],
+  evidence: string[],
+  opts: RunGoalOptions,
+  startedAt: string,
+): GoalExecutorResult {
+  const timeoutMessage = opts.signalTimeoutMessage?.();
+  if (timeoutMessage) {
+    for (const node of nodes) {
+      if (node.status === "active") {
+        store.updateGoalPlanNode(goal.goalId, node.key, { status: "pending", ready: false }, { daemonLeaseId: opts.daemonLeaseId });
+      }
+    }
+  }
+  goal = store.updateGoalStatus(goal.goalId, timeoutMessage ? "usageLimited" : "cancelled", { daemonLeaseId: opts.daemonLeaseId });
+  return resultFromGoal(
+    goal,
+    timeoutMessage ? "timed_out" : "failed",
+    stdoutFor(goal, nodes, evidence),
+    timeoutMessage ?? "goal cancelled",
+    startedAt,
+  );
+}
+
 function sameBlockerKey(values: string[]): string {
   return values.map((value) => value.trim()).filter(Boolean).join("\n") || "goal completion remains unproven";
 }
@@ -191,9 +217,18 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
     },
     { daemonLeaseId: opts.daemonLeaseId },
   );
-  let nodes = await planGoal(store, goal, spec, model, opts);
-  goal = store.requireGoal(goal.goalId);
   const evidence: string[] = [];
+  if (existing && goal.status === "usageLimited") {
+    goal = store.updateGoalStatus(goal.goalId, "active", { daemonLeaseId: opts.daemonLeaseId });
+  }
+  let nodes: GoalPlanNode[] = [];
+  try {
+    nodes = await planGoal(store, goal, spec, model, opts);
+  } catch (err) {
+    if (opts.signal?.aborted) return abortResult(store, goal, nodes, evidence, opts, startedAt);
+    throw err;
+  }
+  goal = store.requireGoal(goal.goalId);
   let validation: unknown;
   let lastBlocker = "";
   let repeatedBlockerCount = 0;
@@ -205,8 +240,7 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
 
   for (let turn = 1; turn <= (spec.maxTurns ?? DEFAULT_MAX_TURNS); turn++) {
     if (opts.signal?.aborted) {
-      goal = store.updateGoalStatus(goal.goalId, "cancelled", { daemonLeaseId: opts.daemonLeaseId });
-      return resultFromGoal(goal, "failed", stdoutFor(goal, nodes, evidence), "goal cancelled", startedAt);
+      return abortResult(store, goal, nodes, evidence, opts, startedAt);
     }
     goal = store.requireGoal(goal.goalId);
     nodes = store.listGoalPlanNodes(goal.goalId);
@@ -225,7 +259,18 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
         if (!node || node.status !== "pending") continue;
         opts.beforePersist?.();
         store.updateGoalPlanNode(goal.goalId, node.key, { status: "active", ready: false }, { daemonLeaseId: opts.daemonLeaseId });
-        const result = await executeUnderlyingTarget(opts.target, goal, node, opts);
+        let result: ExecutorResult;
+        try {
+          result = await executeUnderlyingTarget(opts.target, goal, node, opts);
+        } catch (err) {
+          if (opts.signal?.aborted) {
+            return abortResult(store, goal, store.listGoalPlanNodes(goal.goalId), evidence, opts, startedAt);
+          }
+          throw err;
+        }
+        if (opts.signal?.aborted) {
+          return abortResult(store, goal, store.listGoalPlanNodes(goal.goalId), evidence, opts, startedAt);
+        }
         store.recordGoalEvent(
           {
             goalId: goal.goalId,
@@ -270,18 +315,27 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
     }
 
     if (nodes.every((node) => node.status === "complete")) {
-      const judged = await generateObject({
-        model,
-        schema: AchievementSchema,
-        temperature: 0,
-        prompt: achievementPrompt(goal, nodes, evidence),
-        abortSignal: opts.signal,
-      });
-      const tokens = usageTotal(judged.usage);
-      validation = judged.object;
-      const achieved = judged.object.achieved && judged.object.adversarialReview.trim().length > 0;
-      const unmet = achieved ? [] : judged.object.unmetRequirements.length > 0
-        ? judged.object.unmetRequirements
+      let judgedObject: z.infer<typeof AchievementSchema>;
+      let judgedUsage: unknown;
+      try {
+        const judged = await generateObject({
+          model,
+          schema: AchievementSchema,
+          temperature: 0,
+          prompt: achievementPrompt(goal, nodes, evidence),
+          abortSignal: opts.signal,
+        });
+        judgedObject = judged.object;
+        judgedUsage = judged.usage;
+      } catch (err) {
+        if (opts.signal?.aborted) return abortResult(store, goal, nodes, evidence, opts, startedAt);
+        throw err;
+      }
+      const tokens = usageTotal(judgedUsage);
+      validation = judgedObject;
+      const achieved = judgedObject.achieved && judgedObject.adversarialReview.trim().length > 0;
+      const unmet = achieved ? [] : judgedObject.unmetRequirements.length > 0
+        ? judgedObject.unmetRequirements
         : ["adversarial review did not prove completion"];
       store.recordGoalEvent(
         {
@@ -292,11 +346,11 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
           tokensUsed: tokens,
           evidence: {
             achieved,
-            evidence: judged.object.evidence,
+            evidence: judgedObject.evidence,
             unmetRequirements: unmet,
-            adversarialReview: judged.object.adversarialReview,
+            adversarialReview: judgedObject.adversarialReview,
           },
-          rawResponse: judged.object,
+          rawResponse: judgedObject,
         },
         { daemonLeaseId: opts.daemonLeaseId },
       );

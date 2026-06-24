@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -137,6 +137,62 @@ describe("runGoal", () => {
       expect(store.getGoal(result.goalId!)?.status).toBe("budgetLimited");
     } finally {
       store.close();
+    }
+  });
+
+  test("returns timed_out when an outer loop timeout aborts goal execution", async () => {
+    const store = new Store(":memory:");
+    const controller = new AbortController();
+    try {
+      const model = mockObjects([{ nodes: [plannedNode({ key: "slow", objective: "do slow work" })] }]);
+      const result = await runGoal(store, { objective: "respect loop timeout", maxTurns: 3 }, {
+        model,
+        signal: controller.signal,
+        signalTimeoutMessage: () => "loop target timed out after 100ms",
+        executeNode: async () => {
+          controller.abort();
+          return ok("late result");
+        },
+      });
+
+      expect(result.status).toBe("timed_out");
+      expect(result.error).toContain("loop target timed out");
+      expect(store.getGoal(result.goalId!)?.status).toBe("usageLimited");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("aborts a real goal-wrapped command target on timeout", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-goal-timeout-"));
+    const marker = join(root, "late-write");
+    const store = new Store(":memory:");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30);
+    try {
+      const model = mockObjects([{ nodes: [plannedNode({ key: "slow", objective: "do slow work" })] }]);
+      const result = await runGoal(store, { objective: "respect command timeout", maxTurns: 3 }, {
+        model,
+        signal: controller.signal,
+        signalTimeoutMessage: () => "loop target timed out after 30ms",
+        target: {
+          type: "command",
+          command: `sleep 1; printf late > ${JSON.stringify(marker)}`,
+          shell: true,
+          timeoutMs: 5_000,
+        },
+      });
+
+      expect(result.status).toBe("timed_out");
+      expect(result.error).toContain("loop target timed out");
+      expect(store.getGoal(result.goalId!)?.status).toBe("usageLimited");
+      expect(store.listGoalPlanNodes(result.goalId!).map((node) => node.status)).toEqual(["pending"]);
+      await Bun.sleep(1_100);
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      clearTimeout(timer);
+      store.close();
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

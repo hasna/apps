@@ -19,7 +19,7 @@ import { commandNotFoundMessage, executableExists, normalizeExecutionPath } from
 import { nowIso } from "./ids.js";
 import { refreshLoopMachine } from "./machines.js";
 
-const DEFAULT_TIMEOUT_MS = 30 * 60_000;
+export const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024;
 
 export interface ExecuteOptions extends PersistGuardOptions {
@@ -261,6 +261,10 @@ function commandSpec(target: ExecutableTarget): CommandSpec {
     accountTool: agentTarget.account?.tool ?? accountToolForProvider(agentTarget.provider),
     stdin: agentTarget.prompt,
   };
+}
+
+export function executableTargetTimeoutMs(target: ExecutableTarget): number {
+  return commandSpec(target).timeoutMs;
 }
 
 function executionEnv(

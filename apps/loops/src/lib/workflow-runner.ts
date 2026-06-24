@@ -1,5 +1,6 @@
 import type { ExecutableTarget, ExecutorResult, Loop, LoopRun, WorkflowRun, WorkflowRunStatus, WorkflowSpec, WorkflowStep } from "../types.js";
-import { executeLoop, executeTarget, preflightTarget, type ExecuteOptions } from "./executor.js";
+import { executeLoop, executeTarget, executableTargetTimeoutMs, preflightTarget, type ExecuteOptions } from "./executor.js";
+import type { GoalExecutionContext, GoalSpec } from "./goal/types.js";
 import { runGoal } from "./goal/runner.js";
 import { nowIso } from "./ids.js";
 import type { Store } from "./store.js";
@@ -42,6 +43,40 @@ function workflowResult(
     finishedAt,
     durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
   };
+}
+
+async function runExecutableGoal(
+  store: Store,
+  goal: GoalSpec,
+  target: ExecutableTarget,
+  opts: ExecuteOptions & {
+    signalTimeoutMessage?: () => string | undefined;
+    context?: GoalExecutionContext;
+  },
+): Promise<ExecutorResult> {
+  const targetTimeoutMs = executableTargetTimeoutMs(target);
+  const controller = new AbortController();
+  let targetTimedOut = false;
+  const externalAbort = (): void => controller.abort();
+  if (opts.signal?.aborted) controller.abort();
+  opts.signal?.addEventListener("abort", externalAbort, { once: true });
+  const timer = setTimeout(() => {
+    targetTimedOut = true;
+    controller.abort();
+  }, targetTimeoutMs);
+  timer.unref();
+  try {
+    return await runGoal(store, goal, {
+      ...opts,
+      signal: controller.signal,
+      signalTimeoutMessage: () => targetTimedOut ? `loop target timed out after ${targetTimeoutMs}ms` : opts.signalTimeoutMessage?.(),
+      target,
+      context: opts.context,
+    });
+  } finally {
+    clearTimeout(timer);
+    opts.signal?.removeEventListener("abort", externalAbort);
+  }
 }
 
 export async function executeWorkflow(
@@ -152,9 +187,8 @@ export async function executeWorkflow(
     cancelTimer.unref();
     try {
       if (step.goal) {
-        result = await runGoal(store, step.goal, {
+        result = await runExecutableGoal(store, step.goal, targetWithStepAccount(step), {
           ...opts,
-          target: targetWithStepAccount(step),
           signal: controller.signal,
           context: {
             loopId: opts.loop?.id,
@@ -288,9 +322,8 @@ export async function executeLoopTarget(
 ): Promise<ExecutorResult> {
   if (loop.target.type !== "workflow") {
     if (loop.goal) {
-      return runGoal(store, loop.goal, {
+      return runExecutableGoal(store, loop.goal, loop.target, {
         ...opts,
-        target: loop.target,
         context: {
           loopId: loop.id,
           loopName: loop.name,

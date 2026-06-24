@@ -123,6 +123,7 @@ export interface RunGoalOptions {
   daemonLeaseId?: string;
   beforePersist?: () => void;
   signal?: AbortSignal;
+  signalTimeoutMessage?: () => string | undefined;
   cancelPollMs?: number;
   context?: GoalExecutionContext;
 }
