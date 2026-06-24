@@ -87,6 +87,7 @@ export interface CommandTarget {
 export type AgentProvider = "claude" | "cursor" | "codewith" | "aicopilot" | "opencode" | "codex";
 
 export type AgentConfigIsolation = "safe" | "none";
+export type AgentSandbox = "read-only" | "workspace-write" | "danger-full-access";
 
 export interface AgentTarget {
   type: "agent";
@@ -99,6 +100,7 @@ export interface AgentTarget {
   extraArgs?: string[];
   timeoutMs?: number;
   configIsolation?: AgentConfigIsolation;
+  sandbox?: AgentSandbox;
   account?: AccountRef;
 }
 

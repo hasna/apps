@@ -152,4 +152,41 @@ describe("agent adapters", () => {
       store.close();
     }
   });
+
+  test("runs codewith with configured sandbox", async () => {
+    const binDir = mkdtempSync(join(tmpdir(), "loops-codewith-sandbox-"));
+    const fake = join(binDir, "codewith");
+    await Bun.write(fake, "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\"\nprintf 'stdin:'\ncat\n");
+    chmodSync(fake, 0o755);
+
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "codewith-sandbox-agent",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "codewith",
+          prompt: "say ok",
+          cwd: ".",
+          configIsolation: "safe",
+          sandbox: "danger-full-access",
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+      });
+      expect(result.status).toBe("succeeded");
+      const args = result.stdout.trim().split(/\r?\n/);
+      const sandboxIndex = args.indexOf("--sandbox");
+      expect(sandboxIndex).toBeGreaterThan(-1);
+      expect(args[sandboxIndex + 1]).toBe("danger-full-access");
+      expect(args.filter((arg) => arg === "--sandbox")).toHaveLength(1);
+      expect(args).toContain("stdin:say ok");
+    } finally {
+      store.close();
+    }
+  });
 });

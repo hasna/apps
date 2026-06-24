@@ -1,11 +1,31 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
+import { MockLanguageModelV3 } from "ai/test";
 import { tick } from "./scheduler.js";
 import { Store } from "./store.js";
 import { executeLoopTarget, executeWorkflow } from "./workflow-runner.js";
 import { workflowBodyFromJson } from "./workflow-spec.js";
+
+function generated(object: unknown) {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(object) }],
+    finishReason: { unified: "stop" as const, raw: undefined },
+    usage: {
+      inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
+      outputTokens: { total: 10, text: 10, reasoning: undefined },
+    },
+    warnings: [],
+  };
+}
+
+function mockObjects(objects: unknown[]) {
+  let index = 0;
+  return new MockLanguageModelV3({
+    doGenerate: async () => generated(objects[Math.min(index++, objects.length - 1)]),
+  });
+}
 
 describe("workflow runner", () => {
   test("runs dependent command steps and records step runs and events", async () => {
@@ -73,6 +93,190 @@ describe("workflow runner", () => {
       expect(store.listWorkflowStepRuns(workflowRuns[0]!.id)[0]?.stdout).toContain("scheduled");
     } finally {
       store.close();
+    }
+  });
+
+  test("workflow-level goals add explicit goal context to agent step prompts", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-workflow-goal-agent-"));
+    const fake = join(root, "claude");
+    await Bun.write(
+      fake,
+      [
+        "#!/usr/bin/env bash",
+        'prompt_file="$PWD/$LOOPS_WORKFLOW_STEP_ID.prompt"',
+        "{",
+        "printf 'env_goal=%s\\n' \"$LOOPS_GOAL_ID\"",
+        "printf 'env_objective=%s\\n' \"$LOOPS_GOAL_OBJECTIVE\"",
+        "printf 'env_node=%s\\n' \"$LOOPS_GOAL_NODE_KEY\"",
+        "printf 'env_node_objective=%s\\n' \"$LOOPS_GOAL_NODE_OBJECTIVE\"",
+        "printf 'stdin:\\n'",
+        "cat",
+        '} > "$prompt_file"',
+        "printf workflow-agent-ok",
+      ].join("\n"),
+    );
+    chmodSync(fake, 0o755);
+    try {
+      const model = mockObjects([
+        {
+          nodes: [
+            {
+              key: "workflow-node",
+              objective: "run the workflow agent step with goal context",
+              dependsOn: [],
+              priority: 0,
+              tokenBudget: null,
+            },
+          ],
+        },
+        {
+          achieved: true,
+          status: "complete",
+          evidence: ["workflow agent step received explicit goal context"],
+          unmetRequirements: [],
+          adversarialReview: "The captured workflow step prompt includes goal id, top objective, node objective, criteria, and original prompt.",
+        },
+      ]);
+      const workflow = store.createWorkflow({
+        name: "goal-workflow-agent",
+        goal: { objective: "ship workflow goal context", maxTurns: 2 },
+        steps: [
+          {
+            id: "agent-step",
+            target: {
+              type: "agent",
+              provider: "claude",
+              prompt: "Workflow agent prompt.",
+              cwd: root,
+              configIsolation: "safe",
+            },
+          },
+        ],
+      });
+
+      const result = await executeWorkflow(store, workflow, {
+        model,
+        env: { ...process.env, PATH: `${root}:${process.env.PATH}` },
+      });
+
+      expect(result.status).toBe("succeeded");
+      const prompt = readFileSync(join(root, "agent-step.prompt"), "utf8");
+      expect(prompt).toContain("env_goal=");
+      expect(prompt).toContain("env_objective=ship workflow goal context");
+      expect(prompt).toContain("env_node=workflow-node");
+      expect(prompt).toContain("env_node_objective=run the workflow agent step with goal context");
+      expect(prompt).toContain("OpenLoops goal context:");
+      expect(prompt).toContain("Top objective: ship workflow goal context");
+      expect(prompt).toContain("Current node: workflow-node");
+      expect(prompt).toContain("Current node objective: run the workflow agent step with goal context");
+      expect(prompt).toContain("Acceptance criteria:");
+      expect(prompt).toContain("Explicit node instruction:");
+      expect(prompt).toContain("Original target prompt:");
+      expect(prompt).toContain("Workflow agent prompt.");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("nested workflow and step goals preserve the parent goal context in agent prompts", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-nested-goal-agent-"));
+    const fake = join(root, "claude");
+    await Bun.write(
+      fake,
+      [
+        "#!/usr/bin/env bash",
+        'prompt_file="$PWD/$LOOPS_WORKFLOW_STEP_ID.nested.prompt"',
+        "{",
+        "printf 'env_goal=%s\\n' \"$LOOPS_GOAL_ID\"",
+        "printf 'env_objective=%s\\n' \"$LOOPS_GOAL_OBJECTIVE\"",
+        "printf 'env_node=%s\\n' \"$LOOPS_GOAL_NODE_KEY\"",
+        "printf 'env_node_objective=%s\\n' \"$LOOPS_GOAL_NODE_OBJECTIVE\"",
+        "printf 'stdin:\\n'",
+        "cat",
+        '} > "$prompt_file"',
+        "printf nested-workflow-agent-ok",
+      ].join("\n"),
+    );
+    chmodSync(fake, 0o755);
+    try {
+      const model = mockObjects([
+        {
+          nodes: [
+            {
+              key: "outer-node",
+              objective: "run the workflow",
+              dependsOn: [],
+              priority: 0,
+              tokenBudget: null,
+            },
+          ],
+        },
+        {
+          nodes: [
+            {
+              key: "step-node",
+              objective: "run the nested step agent",
+              dependsOn: [],
+              priority: 0,
+              tokenBudget: null,
+            },
+          ],
+        },
+        {
+          achieved: true,
+          status: "complete",
+          evidence: ["step goal complete"],
+          unmetRequirements: [],
+          adversarialReview: "The nested step agent prompt includes both step and parent workflow goal context.",
+        },
+        {
+          achieved: true,
+          status: "complete",
+          evidence: ["workflow goal complete"],
+          unmetRequirements: [],
+          adversarialReview: "The workflow goal completed after the nested step goal.",
+        },
+      ]);
+      const workflow = store.createWorkflow({
+        name: "nested-goal-workflow",
+        goal: { objective: "outer workflow objective", maxTurns: 3 },
+        steps: [
+          {
+            id: "agent-step",
+            goal: { objective: "step goal objective", maxTurns: 2 },
+            target: {
+              type: "agent",
+              provider: "claude",
+              prompt: "Nested workflow agent prompt.",
+              cwd: root,
+              configIsolation: "safe",
+            },
+          },
+        ],
+      });
+
+      const result = await executeWorkflow(store, workflow, {
+        model,
+        env: { ...process.env, PATH: `${root}:${process.env.PATH}` },
+      });
+
+      expect(result.status).toBe("succeeded");
+      const prompt = readFileSync(join(root, "agent-step.nested.prompt"), "utf8");
+      expect(prompt).toContain("Top objective: step goal objective");
+      expect(prompt).toContain("Current node: step-node");
+      expect(prompt).toContain("Current node objective: run the nested step agent");
+      expect(prompt).toContain("Parent goal context:");
+      expect(prompt).toContain("- Top objective: outer workflow objective");
+      expect(prompt).toContain("- Current node: outer-node");
+      expect(prompt).toContain("- Current node objective: run the workflow");
+      expect(prompt).toContain("Original target prompt:");
+      expect(prompt).toContain("Nested workflow agent prompt.");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

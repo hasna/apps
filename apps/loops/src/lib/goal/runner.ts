@@ -1,16 +1,18 @@
 import { generateObject, type LanguageModel } from "ai";
 import { z } from "zod";
 import type { ExecutableTarget, ExecutorResult } from "../../types.js";
-import { executeTarget } from "../executor.js";
+import { executeTarget, type GoalPromptContext } from "../executor.js";
 import { nowIso } from "../ids.js";
 import type { Store } from "../store.js";
 import { assertAcyclicNodes, readyNodeKeys, rollupSummary } from "./status.js";
 import { resolveGoalModel } from "./model-factory.js";
 import { achievementPrompt, iterationPrompt, planPrompt } from "./prompts.js";
-import type { Goal, GoalExecutorResult, GoalPlanNode, GoalSpec, RunGoalOptions } from "./types.js";
+import type { Goal, GoalExecutorResult, GoalPlanNode, GoalRun, GoalSpec, RunGoalOptions } from "./types.js";
 import { GOAL_OBJECTIVE_MAX_CHARS } from "./types.js";
 
 const DEFAULT_MAX_TURNS = 10;
+const GOAL_EVIDENCE_TEXT_MAX_CHARS = 12_000;
+const GOAL_EVENT_STDIO_MAX_CHARS = 60_000;
 
 const PlanNodeSchema = z.object({
   key: z.string().min(1).max(64).regex(/^[A-Za-z0-9_.-]+$/),
@@ -81,6 +83,67 @@ function sameBlockerKey(values: string[]): string {
   return values.map((value) => value.trim()).filter(Boolean).join("\n") || "goal completion remains unproven";
 }
 
+function truncateMiddle(value: string | undefined, maxChars: number): string {
+  if (!value || value.length <= maxChars) return value ?? "";
+  const placeholder = "\n...[truncated]...\n";
+  const keep = Math.max(0, maxChars - placeholder.length - 32);
+  const head = Math.ceil(keep / 2);
+  const tail = Math.floor(keep / 2);
+  const omitted = value.length - head - tail;
+  return `${value.slice(0, head)}\n...[truncated ${omitted} chars]...\n${value.slice(value.length - tail)}`;
+}
+
+function nodeEvidenceLine(node: GoalPlanNode, result: ExecutorResult): string {
+  return [
+    `node ${node.key} succeeded`,
+    `objective: ${node.objective}`,
+    `stdout:\n${truncateMiddle(result.stdout, GOAL_EVIDENCE_TEXT_MAX_CHARS)}`,
+    `stderr:\n${truncateMiddle(result.stderr, GOAL_EVIDENCE_TEXT_MAX_CHARS)}`,
+  ].join("\n");
+}
+
+function storedNodeEvidenceLine(run: GoalRun, node: GoalPlanNode | undefined): string | undefined {
+  const evidence = run.evidence as { status?: unknown; stdout?: unknown; stderr?: unknown } | undefined;
+  if (run.phase !== "execute" || run.status !== "complete" || !run.nodeKey || evidence?.status !== "succeeded") {
+    return undefined;
+  }
+  return [
+    `node ${run.nodeKey} succeeded`,
+    node ? `objective: ${node.objective}` : undefined,
+    `stdout:\n${truncateMiddle(typeof evidence.stdout === "string" ? evidence.stdout : "", GOAL_EVIDENCE_TEXT_MAX_CHARS)}`,
+    `stderr:\n${truncateMiddle(typeof evidence.stderr === "string" ? evidence.stderr : "", GOAL_EVIDENCE_TEXT_MAX_CHARS)}`,
+  ].filter((line): line is string => Boolean(line)).join("\n");
+}
+
+function storedEvidenceLines(store: Store, goalId: string, nodes: GoalPlanNode[]): string[] {
+  const nodesByKey = new Map(nodes.map((node) => [node.key, node]));
+  return store.listGoalRuns({ goalId })
+    .map((run) => storedNodeEvidenceLine(run, run.nodeKey ? nodesByKey.get(run.nodeKey) : undefined))
+    .filter((line): line is string => Boolean(line));
+}
+
+function acceptanceCriteriaFor(goal: Goal, node: GoalPlanNode): string[] {
+  return [
+    `Satisfy the top objective: ${goal.objective}`,
+    `Complete the current node objective: ${node.objective}`,
+    "Respect the original target prompt, repository instructions, and any workflow or loop constraints.",
+    "Return concrete evidence of completed work, verification commands, or blockers for OpenLoops validation.",
+  ];
+}
+
+function promptContextFor(goal: Goal, node: GoalPlanNode, evidence: string[], parentGoalContext?: GoalPromptContext): GoalPromptContext {
+  return {
+    goalId: goal.goalId,
+    topObjective: goal.objective,
+    currentNodeKey: node.key,
+    currentNodeObjective: node.objective,
+    acceptanceCriteria: acceptanceCriteriaFor(goal, node),
+    priorEvidence: evidence.map((line) => truncateMiddle(line, GOAL_EVIDENCE_TEXT_MAX_CHARS)),
+    explicitNodeInstruction: `Work against current node ${node.key}: ${node.objective}. Use the original target prompt as the task surface, but prioritize this node and produce concise evidence for goal validation.`,
+    parentGoalContext,
+  };
+}
+
 function metadataFor(goal: Goal, node: GoalPlanNode, context: RunGoalOptions["context"]): Record<string, string | undefined> {
   return {
     loopId: context?.loopId,
@@ -94,6 +157,7 @@ function metadataFor(goal: Goal, node: GoalPlanNode, context: RunGoalOptions["co
     goalId: goal.goalId,
     goalObjective: goal.objective,
     goalNodeKey: node.key,
+    goalNodeObjective: node.objective,
   };
 }
 
@@ -101,16 +165,19 @@ async function executeUnderlyingTarget(
   target: ExecutableTarget | undefined,
   goal: Goal,
   node: GoalPlanNode,
+  evidence: string[],
   opts: RunGoalOptions,
 ): Promise<ExecutorResult> {
   const metadata = metadataFor(goal, node, opts.context);
-  if (opts.executeNode) return opts.executeNode(node, metadata);
+  const goalPromptContext = promptContextFor(goal, node, evidence, opts.goalPromptContext);
+  if (opts.executeNode) return opts.executeNode(node, metadata, goalPromptContext);
   if (!target) throw new Error("runGoal requires either target or executeNode");
   return executeTarget(target, metadata, {
     env: opts.env,
     daemonLeaseId: opts.daemonLeaseId,
     beforePersist: opts.beforePersist,
     signal: opts.signal,
+    goalPromptContext,
   });
 }
 
@@ -192,7 +259,7 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
   );
   let nodes = await planGoal(store, goal, spec, model, opts);
   goal = store.requireGoal(goal.goalId);
-  const evidence: string[] = [];
+  const evidence: string[] = storedEvidenceLines(store, goal.goalId, nodes);
   let validation: unknown;
   let lastBlocker = "";
   let repeatedBlockerCount = 0;
@@ -224,7 +291,7 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
         if (!node || node.status !== "pending") continue;
         opts.beforePersist?.();
         store.updateGoalPlanNode(goal.goalId, node.key, { status: "active", ready: false }, { daemonLeaseId: opts.daemonLeaseId });
-        const result = await executeUnderlyingTarget(opts.target, goal, node, opts);
+        const result = await executeUnderlyingTarget(opts.target, goal, node, evidence, opts);
         store.recordGoalEvent(
           {
             goalId: goal.goalId,
@@ -235,15 +302,15 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
             evidence: {
               status: result.status,
               exitCode: result.exitCode,
-              stdout: result.stdout,
-              stderr: result.stderr,
-              error: result.error,
+              stdout: truncateMiddle(result.stdout, GOAL_EVENT_STDIO_MAX_CHARS),
+              stderr: truncateMiddle(result.stderr, GOAL_EVENT_STDIO_MAX_CHARS),
+              error: truncateMiddle(result.error, GOAL_EVIDENCE_TEXT_MAX_CHARS),
             },
           },
           { daemonLeaseId: opts.daemonLeaseId },
         );
         if (result.status === "succeeded") {
-          evidence.push(`node ${node.key} succeeded\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+          evidence.push(nodeEvidenceLine(node, result));
           store.updateGoalPlanNode(goal.goalId, node.key, {
             status: "complete",
             timeUsedSeconds: Math.round(result.durationMs / 1000),

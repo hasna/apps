@@ -89,6 +89,7 @@ function addTargetFields(fields: SearchField[], prefix: string, target: LoopTarg
     addField(fields, `${prefix}.model`, target.model);
     addField(fields, `${prefix}.agent`, target.agent);
     addField(fields, `${prefix}.authProfile`, target.authProfile);
+    addField(fields, `${prefix}.sandbox`, target.sandbox);
     addField(fields, `${prefix}.extraArgs`, target.extraArgs?.join(" "));
     addAccountFields(fields, `${prefix}.account`, target.account);
     return;

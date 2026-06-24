@@ -513,6 +513,7 @@ addGoalOptions(
             .option("--agent <agent>", "provider-specific agent")
             .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
             .option("--timeout <duration>", "run timeout")
+            .option("--sandbox <mode>", "agent sandbox for providers that support it: read-only, workspace-write, or danger-full-access")
             .option("--config-isolation <mode>", "safe or none", "safe"),
         ),
       ),
@@ -526,6 +527,9 @@ addGoalOptions(
   if (!["safe", "none"].includes(opts.configIsolation)) {
     throw new Error("--config-isolation must be safe or none");
   }
+  if (opts.sandbox && !["read-only", "workspace-write", "danger-full-access"].includes(opts.sandbox)) {
+    throw new Error("--sandbox must be read-only, workspace-write, or danger-full-access");
+  }
   const store = new Store();
   try {
     const target: LoopTarget = {
@@ -538,6 +542,7 @@ addGoalOptions(
       authProfile: providerAuthProfileFromOpts(opts, provider),
       timeoutMs: opts.timeout ? parseDuration(opts.timeout) : undefined,
       configIsolation: opts.configIsolation,
+      sandbox: opts.sandbox,
       account: accountFromOpts(opts),
     };
     const loop = store.createLoop(baseCreateInput(name, opts, target));

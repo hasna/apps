@@ -1,11 +1,13 @@
+import type { LanguageModel } from "ai";
 import type { ExecutableTarget, ExecutorResult, Loop, LoopRun, WorkflowRun, WorkflowRunStatus, WorkflowSpec, WorkflowStep } from "../types.js";
-import { executeLoop, executeTarget, preflightTarget, type ExecuteOptions } from "./executor.js";
+import { executeLoop, executeTarget, preflightTarget, type ExecuteOptions, type GoalPromptContext } from "./executor.js";
 import { runGoal } from "./goal/runner.js";
 import { nowIso } from "./ids.js";
 import type { Store } from "./store.js";
 import { workflowExecutionOrder } from "./workflow-spec.js";
 
 export interface ExecuteWorkflowOptions extends ExecuteOptions {
+  model?: LanguageModel;
   loop?: Loop;
   loopRun?: LoopRun;
   scheduledFor?: string;
@@ -19,6 +21,16 @@ function targetWithStepAccount(step: WorkflowStep): ExecutableTarget {
   const timeoutMs = step.timeoutMs ?? step.target.timeoutMs;
   if (!account && timeoutMs === step.target.timeoutMs) return step.target;
   return { ...step.target, account, timeoutMs } as ExecutableTarget;
+}
+
+function goalMetadata(context: GoalPromptContext | undefined): Record<string, string> {
+  if (!context) return {};
+  return {
+    goalId: context.goalId,
+    goalObjective: context.topObjective,
+    goalNodeKey: context.currentNodeKey,
+    goalNodeObjective: context.currentNodeObjective,
+  };
 }
 
 function workflowResult(
@@ -60,10 +72,11 @@ export async function executeWorkflow(
         workflowId: workflow.id,
         workflowName: workflow.name,
       },
-      executeNode: async (node) =>
+      executeNode: async (_node, _metadata, goalPromptContext) =>
         executeWorkflow(store, workflowWithoutGoal, {
           ...opts,
-          idempotencyKey: `${opts.idempotencyKey ?? workflow.id}:goal:${node.key}`,
+          idempotencyKey: `${opts.idempotencyKey ?? workflow.id}:goal:${goalPromptContext.currentNodeKey}`,
+          goalPromptContext,
         }),
     });
   }
@@ -137,6 +150,7 @@ export async function executeWorkflow(
       workflowName: workflow.name,
       workflowRunId: run.id,
       workflowStepId: step.id,
+      ...goalMetadata(opts.goalPromptContext),
     };
     let result: ExecutorResult;
     const controller = new AbortController();
@@ -309,13 +323,14 @@ export async function executeLoopTarget(
         workflowId: workflow.id,
         workflowName: workflow.name,
       },
-      executeNode: async (node) =>
+      executeNode: async (_node, _metadata, goalPromptContext) =>
         executeWorkflow(store, workflow, {
           ...opts,
           loop,
           loopRun: run,
           scheduledFor: run.scheduledFor,
-          idempotencyKey: `${loop.id}:${run.scheduledFor}:attempt:${run.attempt}:goal:${node.key}`,
+          idempotencyKey: `${loop.id}:${run.scheduledFor}:attempt:${run.attempt}:goal:${goalPromptContext.currentNodeKey}`,
+          goalPromptContext,
         }),
     });
   }

@@ -99,6 +99,26 @@ accounts tools add codewith --label "Codewith" --env-var CODEWITH_HOME --bin cod
 accounts tools add aicopilot --label "AI Copilot" --env-var AICOPILOT_CONFIG_DIR --bin aicopilot
 ```
 
+Run Cursor through the native agent adapter when the standard `cursor-agent -p` contract is enough:
+
+```bash
+loops create agent cursor-review \
+  --provider cursor \
+  --every 1h \
+  --cwd /path/to/repo \
+  --prompt "Review recent changes and report concrete correctness risks."
+```
+
+Use a command loop only when you need Cursor CLI flags that OpenLoops does not model yet. The command body is stored with the loop, so keep secrets out of it. If you wrap this command loop with `--goal`, include the `LOOPS_GOAL_*` environment values in the prompt because OpenLoops cannot infer which part of an arbitrary shell command is an AI prompt:
+
+```bash
+loops create command cursor-review-custom \
+  --every 1h \
+  --cwd /path/to/repo \
+  --goal "Review recent changes and report concrete correctness risks." \
+  --cmd 'printf "OpenLoops goal context:\nGoal ID: %s\nTop objective: %s\nCurrent node: %s\nCurrent node objective: %s\n\nOriginal target prompt:\nReview recent changes and report concrete correctness risks.\n" "$LOOPS_GOAL_ID" "$LOOPS_GOAL_OBJECTIVE" "$LOOPS_GOAL_NODE_KEY" "$LOOPS_GOAL_NODE_OBJECTIVE" | cursor-agent -p --model gpt-4.1'
+```
+
 ## Labels
 
 Add `--label <label>` when creating command, agent, or workflow loops. The flag is repeatable:
@@ -145,6 +165,51 @@ loops runs --repo open-codewith --status failed
 ```
 
 Use `loops project show <path-or-name>` for a compact project health summary grouped by loop status, latest run status, and current failure family.
+
+## Goals
+
+Add `--goal` to wrap a command, agent, or workflow loop in an AI-SDK orchestration layer. OpenLoops asks the configured model to create a flat DAG plan, executes ready nodes by calling the underlying target, then runs an adversarial achievement audit before marking the goal complete.
+
+```bash
+export OPENROUTER_API_KEY=...
+
+loops create agent repo-fixer \
+  --provider codex \
+  --at "$(date -u -d '+1 minute' +%Y-%m-%dT%H:%M:%SZ)" \
+  --cwd /path/to/repo \
+  --prompt "Work only on the requested repository task." \
+  --goal "Fix the failing lint check and prove it with a passing lint run." \
+  --goal-budget 2000 \
+  --goal-model openai/gpt-4o-mini \
+  --goal-max-turns 5
+```
+
+Goal planning and validation use the Vercel AI SDK with `@openrouter/ai-sdk-provider`. Set `OPENROUTER_API_KEY`; optionally set `LOOPS_GOAL_BASE_URL` to point at a local gateway compatible with OpenRouter. Goal context is passed to wrapped commands and agents as `LOOPS_GOAL_ID`, `LOOPS_GOAL_OBJECTIVE`, `LOOPS_GOAL_NODE_KEY`, and `LOOPS_GOAL_NODE_OBJECTIVE`.
+
+For agent targets, OpenLoops also prepends an explicit stdin context block with the goal id, top objective, current node key/objective, acceptance criteria, prior evidence, and node-specific instruction before the original target prompt. Workflow-level goal wrappers propagate the same prompt context to agent steps.
+
+Inspect configured and runtime goal state:
+
+```bash
+loops goal show <loop-or-goal-id>
+loops goal status <goal-run-id-or-loop-run-id>
+```
+
+Workflow JSON can also embed goals at the workflow or step level:
+
+```json
+{
+  "name": "goal-workflow",
+  "goal": { "objective": "Complete the workflow and verify the evidence.", "maxTurns": 3 },
+  "steps": [
+    {
+      "id": "fix",
+      "goal": { "objective": "Finish this step and prove it with output evidence." },
+      "target": { "type": "command", "command": "bun test", "shell": true }
+    }
+  ]
+}
+```
 
 ## Workflows
 

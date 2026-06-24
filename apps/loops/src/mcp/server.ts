@@ -96,6 +96,7 @@ const agentTargetSchema = z
     extraArgs: z.array(z.string()).optional(),
     timeoutMs: positiveIntSchema.optional(),
     configIsolation: z.enum(["safe", "none"]).optional(),
+    sandbox: z.enum(["read-only", "workspace-write", "danger-full-access"]).optional(),
     account: accountSchema.optional(),
   })
   .strict();

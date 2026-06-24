@@ -99,6 +99,26 @@ accounts tools add codewith --label "Codewith" --env-var CODEWITH_HOME --bin cod
 accounts tools add aicopilot --label "AI Copilot" --env-var AICOPILOT_CONFIG_DIR --bin aicopilot
 ```
 
+Run Cursor through the native agent adapter when the standard `cursor-agent -p` contract is enough:
+
+```bash
+loops create agent cursor-review \
+  --provider cursor \
+  --every 1h \
+  --cwd /path/to/repo \
+  --prompt "Review recent changes and report concrete correctness risks."
+```
+
+Use a command loop only when you need Cursor CLI flags that OpenLoops does not model yet. The command body is stored with the loop, so keep secrets out of it. If you wrap this command loop with `--goal`, include the `LOOPS_GOAL_*` environment values in the prompt because OpenLoops cannot infer which part of an arbitrary shell command is an AI prompt:
+
+```bash
+loops create command cursor-review-custom \
+  --every 1h \
+  --cwd /path/to/repo \
+  --goal "Review recent changes and report concrete correctness risks." \
+  --cmd 'printf "OpenLoops goal context:\nGoal ID: %s\nTop objective: %s\nCurrent node: %s\nCurrent node objective: %s\n\nOriginal target prompt:\nReview recent changes and report concrete correctness risks.\n" "$LOOPS_GOAL_ID" "$LOOPS_GOAL_OBJECTIVE" "$LOOPS_GOAL_NODE_KEY" "$LOOPS_GOAL_NODE_OBJECTIVE" | cursor-agent -p --model gpt-4.1'
+```
+
 ## Labels
 
 Add `--label <label>` when creating command, agent, or workflow loops. The flag is repeatable:
@@ -164,7 +184,9 @@ loops create agent repo-fixer \
   --goal-max-turns 5
 ```
 
-Goal planning and validation use the Vercel AI SDK with `@openrouter/ai-sdk-provider`. Set `OPENROUTER_API_KEY`; optionally set `LOOPS_GOAL_BASE_URL` to point at a local gateway compatible with OpenRouter. Goal context is passed to wrapped commands and agents as `LOOPS_GOAL_ID`, `LOOPS_GOAL_OBJECTIVE`, and `LOOPS_GOAL_NODE_KEY`.
+Goal planning and validation use the Vercel AI SDK with `@openrouter/ai-sdk-provider`. Set `OPENROUTER_API_KEY`; optionally set `LOOPS_GOAL_BASE_URL` to point at a local gateway compatible with OpenRouter. Goal context is passed to wrapped commands and agents as `LOOPS_GOAL_ID`, `LOOPS_GOAL_OBJECTIVE`, `LOOPS_GOAL_NODE_KEY`, and `LOOPS_GOAL_NODE_OBJECTIVE`.
+
+For agent targets, OpenLoops also prepends an explicit stdin context block with the goal id, top objective, current node key/objective, acceptance criteria, prior evidence, and node-specific instruction before the original target prompt. Workflow-level goal wrappers propagate the same prompt context to agent steps.
 
 Inspect configured and runtime goal state:
 
