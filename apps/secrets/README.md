@@ -190,12 +190,21 @@ The vault database lives at `~/.hasna/secrets/vault.db`. Key material lives in
 `~/.hasna/secrets/vault.key` for local-key mode or
 `~/.hasna/secrets/vault.key.enc` for KMS envelope-encryption mode.
 
+On startup, when no explicit `HASNA_SECRETS_DB_PATH` or `OPEN_SECRETS_DB`
+override is set, `@hasna/secrets` also checks for the historical
+`~/.open-secrets/vault.db` location used by older integrations. Compatible
+legacy rows are copied into `~/.hasna/secrets/vault.db` without deleting or
+modifying the legacy database. Existing canonical rows win on key conflicts. If
+canonical data already exists and new legacy rows will be merged, a
+`vault.db.pre-open-secrets-migration-<timestamp>.bak` backup is written beside
+the canonical vault before the merge.
+
 ## Safety Notes
 
 - `list`, `search`, and `export --redact` do not print secret values.
 - `get` and MCP `get_secret` return raw secret values.
 - Never paste secret values into commits, logs, issues, PRs, or chat messages.
-- Keep `.env`, `.env.local`, `.secrets/`, and `.connect/` out of git.
+- Keep `.env`, `.env.local`, `.secrets/`, `.open-secrets/`, and `.connect/` out of git.
 
 ## License
 

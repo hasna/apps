@@ -95,6 +95,12 @@ Storage
   Key material:     ~/.hasna/secrets/vault.key or vault.key.enc
   Env-file bridge:  ~/.secrets/{division}/{service}/{env}.env
 
+Legacy import
+  If no HASNA_SECRETS_DB_PATH or OPEN_SECRETS_DB override is set, startup checks
+  for ~/.open-secrets/vault.db and copies compatible missing rows into
+  ~/.hasna/secrets/vault.db. The legacy DB is left in place, canonical rows win
+  on conflicts, and an existing canonical DB is backed up before new rows merge.
+
 Key format
   Use slash-delimited keys:
     <division>/<service>/<env>/<name>

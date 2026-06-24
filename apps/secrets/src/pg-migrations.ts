@@ -44,4 +44,13 @@ export const PG_MIGRATIONS: string[] = [
     machine_id TEXT,
     created_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
+
+  // Migration 5: local migration metadata markers
+  `CREATE TABLE IF NOT EXISTS migration_metadata (
+    key TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    migrated_at TEXT NOT NULL,
+    imported_secrets INTEGER NOT NULL DEFAULT 0,
+    imported_audit_entries INTEGER NOT NULL DEFAULT 0
+  )`,
 ];
