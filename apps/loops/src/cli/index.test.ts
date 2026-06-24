@@ -189,6 +189,68 @@ describe("loops CLI", () => {
     expect(JSON.parse(clear.stdout).labels).toEqual([]);
   });
 
+  test("default list is capped and points to pagination while JSON remains full", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-compact-list-"));
+    for (let index = 1; index <= 30; index++) {
+      const create = runCli(dataDir, ["create", "command", `loop-${String(index).padStart(2, "0")}`, "--at", futureAt(), "--cmd", "true"]);
+      expect(create.status).toBe(0);
+    }
+
+    const list = runCli(dataDir, ["list"]);
+    expect(list.status).toBe(0);
+    const lines = list.stdout.trim().split(/\r?\n/);
+    expect(lines).toHaveLength(26);
+    expect(lines.at(-1)).toContain("more available: loops list --cursor 25");
+    expect(list.stdout).not.toContain('"target"');
+
+    const next = runCli(dataDir, ["list", "--cursor", "25"]);
+    expect(next.status).toBe(0);
+    expect(next.stdout).toContain("loop-26");
+
+    const json = runCli(dataDir, ["--json", "list"]);
+    expect(json.status).toBe(0);
+    const values = JSON.parse(json.stdout);
+    expect(values).toHaveLength(30);
+    expect(values[0].target.type).toBe("command");
+  });
+
+  test("show and daemon status are compact by default and verbose/json disclose details", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-compact-show-"));
+    const create = runCli(dataDir, ["create", "command", "compact-show", "--at", futureAt(), "--cmd", "printf detail"]);
+    expect(create.status).toBe(0);
+
+    const show = runCli(dataDir, ["show", "compact-show"]);
+    expect(show.status).toBe(0);
+    expect(show.stdout.trim().startsWith("{")).toBe(false);
+    expect(show.stdout).toContain("Use --verbose or --json");
+
+    const verboseShow = runCli(dataDir, ["show", "compact-show", "--verbose"]);
+    expect(verboseShow.status).toBe(0);
+    expect(JSON.parse(verboseShow.stdout).target.type).toBe("command");
+
+    const status = runCli(dataDir, ["daemon", "status"]);
+    expect(status.status).toBe(0);
+    expect(status.stdout.trim().startsWith("{")).toBe(false);
+    expect(status.stdout).toContain("loops total=");
+
+    const verboseStatus = runCli(dataDir, ["daemon", "status", "--verbose"]);
+    expect(verboseStatus.status).toBe(0);
+    expect(JSON.parse(verboseStatus.stdout).loops.total).toBe(1);
+  });
+
+  test("shown command output is bounded by max-output-chars", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-bounded-output-"));
+    const create = runCli(dataDir, ["create", "command", "bounded", "--at", futureAt(), "--cmd", "printf abcdefghij"]);
+    expect(create.status).toBe(0);
+
+    const run = runCli(dataDir, ["run-now", "bounded", "--show-output", "--max-output-chars", "4"]);
+    expect(run.status).toBe(0);
+    expect(run.stdout).toContain("stdout:");
+    expect(run.stdout).toContain("abcd");
+    expect(run.stdout).toContain("[truncated 6 chars]");
+    expect(run.stdout).not.toContain("abcdefghij");
+  });
+
   test("--label validates label format", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-bad-label-"));
     const create = runCli(dataDir, ["create", "command", "bad-label", "--at", futureAt(), "--cmd", "true", "--label", "bad label"]);
@@ -265,6 +327,30 @@ describe("loops CLI", () => {
     expect(inspected.steps[0].stdout).toContain("[redacted");
   });
 
+  test("workflow inspect JSON keeps the larger event default", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-workflow-json-events-"));
+    const store = new Store(join(dataDir, "loops.db"));
+    let runId = "";
+    try {
+      const workflow = store.createWorkflow({
+        name: "many-events",
+        steps: [{ id: "step", target: { type: "command", command: "true" } }],
+      });
+      const run = store.createWorkflowRun({ workflow });
+      runId = run.id;
+      for (let index = 0; index < 75; index++) {
+        store.appendWorkflowEvent(run.id, "note", undefined, { index });
+      }
+    } finally {
+      store.close();
+    }
+
+    const inspect = runCli(dataDir, ["--json", "workflows", "inspect", runId]);
+    expect(inspect.status).toBe(0);
+    const value = JSON.parse(inspect.stdout);
+    expect(value.events).toHaveLength(76);
+  });
+
   test("create --goal persists goal config and goal show renders it", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-goal-"));
     const create = runCli(dataDir, [
@@ -295,6 +381,31 @@ describe("loops CLI", () => {
     const goal = JSON.parse(show.stdout);
     expect(goal.config.objective).toBe("verify the command result");
     expect(goal.config.model).toBe("openai/gpt-4o-mini");
+  });
+
+  test("goal show JSON keeps the store default run count", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-goal-json-runs-"));
+    const store = new Store(join(dataDir, "loops.db"));
+    let goalId = "";
+    try {
+      const goal = store.createGoal({ objective: "track many events" });
+      goalId = goal.goalId;
+      for (let index = 0; index < 150; index++) {
+        store.recordGoalEvent({
+          goalId,
+          phase: "status",
+          status: "active",
+          tokensUsed: index,
+        });
+      }
+    } finally {
+      store.close();
+    }
+
+    const show = runCli(dataDir, ["--json", "goal", "show", goalId]);
+    expect(show.status).toBe(0);
+    const value = JSON.parse(show.stdout);
+    expect(value.runs).toHaveLength(150);
   });
 
   test("--goal requires a non-empty objective", () => {

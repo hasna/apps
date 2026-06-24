@@ -1,4 +1,16 @@
-import type { ExecutorResult, Goal, GoalRun, Loop, LoopRun, WorkflowEvent, WorkflowRun, WorkflowSpec, WorkflowStepRun } from "../types.js";
+import type {
+  ExecutorResult,
+  Goal,
+  GoalRun,
+  Loop,
+  LoopRun,
+  LoopTarget,
+  ScheduleSpec,
+  WorkflowEvent,
+  WorkflowRun,
+  WorkflowSpec,
+  WorkflowStepRun,
+} from "../types.js";
 
 const TEXT_OUTPUT_LIMIT = 32 * 1024;
 const SENSITIVE_PAYLOAD_KEYS = new Set(["env", "error", "prompt", "reason", "stderr", "stdout"]);
@@ -10,9 +22,17 @@ export function redact(value: string | undefined, visible = 0): string | undefin
   return `${value.slice(0, visible)}... [redacted ${value.length - visible} chars]`;
 }
 
-function truncateTextOutput(value: string): string {
-  if (value.length <= TEXT_OUTPUT_LIMIT) return value;
-  return `${value.slice(0, TEXT_OUTPUT_LIMIT)}\n[truncated ${value.length - TEXT_OUTPUT_LIMIT} chars]`;
+export function truncateDisplay(value: string | undefined, maxChars = 120): string | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxChars) return normalized;
+  if (maxChars <= 20) return `${normalized.slice(0, maxChars)}...`;
+  return `${normalized.slice(0, maxChars - 14)}... (${normalized.length - (maxChars - 14)} more)`;
+}
+
+function truncateTextOutput(value: string, limit = TEXT_OUTPUT_LIMIT): string {
+  if (value.length <= limit) return value;
+  return `${value.slice(0, limit)}\n[truncated ${value.length - limit} chars]`;
 }
 
 function redactSensitivePayload(value: unknown, key?: string): unknown {
@@ -30,7 +50,7 @@ function redactSensitivePayload(value: unknown, key?: string): unknown {
 
 export function textOutputBlocks(
   value: Pick<LoopRun | WorkflowStepRun, "stdout" | "stderr">,
-  opts: { indent?: string } = {},
+  opts: { indent?: string; limit?: number } = {},
 ): string[] {
   const indent = opts.indent ?? "";
   const nested = `${indent}  `;
@@ -41,11 +61,143 @@ export function textOutputBlocks(
   ] as const) {
     if (!output) continue;
     blocks.push(`${indent}${label}:`);
-    for (const line of truncateTextOutput(output).replace(/\s+$/, "").split(/\r?\n/)) {
+    for (const line of truncateTextOutput(output, opts.limit).replace(/\s+$/, "").split(/\r?\n/)) {
       blocks.push(`${nested}${line}`);
     }
   }
   return blocks;
+}
+
+export function scheduleSummary(schedule: ScheduleSpec): string {
+  if (schedule.type === "once") return `once ${schedule.at}`;
+  if (schedule.type === "interval") return `every ${schedule.everyMs}ms ${schedule.anchor ?? "fixed_rate"}`;
+  if (schedule.type === "cron") return `cron ${schedule.expression}`;
+  return `dynamic min=${schedule.minIntervalMs ?? 60_000}ms`;
+}
+
+export function targetSummary(target: LoopTarget): string {
+  if (target.type === "command") {
+    const command = target.args?.length ? `${target.command} ${target.args.join(" ")}` : target.command;
+    return `command ${truncateDisplay(command, 80)}`;
+  }
+  if (target.type === "agent") {
+    const model = target.model ? ` model=${target.model}` : "";
+    const agent = target.agent ? ` agent=${target.agent}` : "";
+    return `agent ${target.provider}${model}${agent}`;
+  }
+  return `workflow ${target.workflowId}`;
+}
+
+export function compactLoop(loop: Loop): Record<string, unknown> {
+  return {
+    id: loop.id,
+    name: loop.name,
+    status: loop.status,
+    nextRunAt: loop.nextRunAt,
+    retryScheduledFor: loop.retryScheduledFor,
+    schedule: scheduleSummary(loop.schedule),
+    target: targetSummary(loop.target),
+    labels: loop.labels ?? [],
+    machine: loop.machine?.id,
+    goal: Boolean(loop.goal),
+    updatedAt: loop.updatedAt,
+  };
+}
+
+export function compactRun(run: LoopRun): Record<string, unknown> {
+  return {
+    id: run.id,
+    loopId: run.loopId,
+    loopName: run.loopName,
+    status: run.status,
+    attempt: run.attempt,
+    scheduledFor: run.scheduledFor,
+    startedAt: run.startedAt,
+    finishedAt: run.finishedAt,
+    durationMs: run.durationMs,
+    exitCode: run.exitCode,
+    hasOutput: Boolean(run.stdout || run.stderr),
+    updatedAt: run.updatedAt,
+  };
+}
+
+export function compactWorkflow(workflow: WorkflowSpec): Record<string, unknown> {
+  return {
+    id: workflow.id,
+    name: workflow.name,
+    status: workflow.status,
+    version: workflow.version,
+    steps: workflow.steps.length,
+    goal: Boolean(workflow.goal),
+    updatedAt: workflow.updatedAt,
+  };
+}
+
+export function compactWorkflowRun(run: WorkflowRun): Record<string, unknown> {
+  return {
+    id: run.id,
+    workflowId: run.workflowId,
+    workflowName: run.workflowName,
+    status: run.status,
+    loopRunId: run.loopRunId,
+    startedAt: run.startedAt,
+    finishedAt: run.finishedAt,
+    durationMs: run.durationMs,
+    error: redact(run.error),
+    updatedAt: run.updatedAt,
+  };
+}
+
+export function compactWorkflowStepRun(run: WorkflowStepRun): Record<string, unknown> {
+  return {
+    id: run.id,
+    stepId: run.stepId,
+    sequence: run.sequence,
+    status: run.status,
+    startedAt: run.startedAt,
+    finishedAt: run.finishedAt,
+    durationMs: run.durationMs,
+    exitCode: run.exitCode,
+    hasOutput: Boolean(run.stdout || run.stderr),
+    error: redact(run.error),
+  };
+}
+
+export function compactWorkflowEvent(event: WorkflowEvent): Record<string, unknown> {
+  return {
+    id: event.id,
+    sequence: event.sequence,
+    eventType: event.eventType,
+    stepId: event.stepId,
+    createdAt: event.createdAt,
+  };
+}
+
+export function compactGoal(goal: Goal): Record<string, unknown> {
+  return {
+    goalId: goal.goalId,
+    status: goal.status,
+    objective: redact(goal.objective, 120),
+    tokensUsed: goal.tokensUsed,
+    tokenBudget: goal.tokenBudget,
+    timeUsedSeconds: goal.timeUsedSeconds,
+    sourceType: goal.sourceType,
+    sourceId: goal.sourceId,
+    updatedAt: goal.updatedAt,
+  };
+}
+
+export function compactGoalRun(run: GoalRun): Record<string, unknown> {
+  return {
+    runId: run.runId,
+    goalId: run.goalId,
+    turn: run.turn,
+    phase: run.phase,
+    status: run.status,
+    nodeKey: run.nodeKey,
+    tokensUsed: run.tokensUsed,
+    createdAt: run.createdAt,
+  };
 }
 
 export function publicLoop(loop: Loop): Record<string, unknown> {

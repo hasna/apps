@@ -89,6 +89,11 @@ describe("OpenLoops MCP server", () => {
         await client.callTool({ name: "openloops_list_loops", arguments: { labels: ["browserplan"] } }),
       );
       expect(listed.loops.map((loop) => loop.name)).toEqual(["mcp-loop"]);
+      expect(typeof (listed.loops[0] as { target?: unknown }).target).toBe("string");
+      const verboseListed = structured<{ loops: { target: { type: string } }[] }>(
+        await client.callTool({ name: "openloops_list_loops", arguments: { labels: ["browserplan"], verbose: true } }),
+      );
+      expect(verboseListed.loops[0]?.target.type).toBe("command");
 
       const redactedRun = structured<{ run: { status: string; stdout?: string } }>(
         await client.callTool({ name: "openloops_run_now", arguments: { idOrName: "mcp-loop" } }),
@@ -127,6 +132,11 @@ describe("OpenLoops MCP server", () => {
       );
       expect(read.loop.name).toBe("mcp-loop");
       expect(read.recentRuns.length).toBe(1);
+      const compactRead = structured<{ loop: { name: string }; recentRuns?: unknown[] }>(
+        await client.callTool({ name: "openloops_get_loop", arguments: { idOrName: "mcp-loop" } }),
+      );
+      expect(compactRead.loop.name).toBe("mcp-loop");
+      expect(compactRead.recentRuns).toBeUndefined();
 
       const deleted = structured<{ removed: boolean }>(
         await client.callTool({ name: "openloops_delete_loop", arguments: { idOrName: "mcp-loop" } }),

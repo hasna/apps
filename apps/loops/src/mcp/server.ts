@@ -5,6 +5,14 @@ import type { CreateLoopInput, GoalSpec, LoopRun, LoopStatus, RunStatus, Workflo
 import { daemonStatus } from "../daemon/control.js";
 import { runDoctor } from "../lib/doctor.js";
 import {
+  compactGoal,
+  compactGoalRun,
+  compactLoop,
+  compactRun,
+  compactWorkflow,
+  compactWorkflowEvent,
+  compactWorkflowRun,
+  compactWorkflowStepRun,
   publicExecutorResult,
   publicGoal,
   publicGoalRun,
@@ -282,6 +290,7 @@ interface ListLoopsArgs {
   status?: LoopStatus;
   labels?: string[];
   limit?: number;
+  verbose?: boolean;
 }
 
 interface GetLoopArgs {
@@ -290,6 +299,7 @@ interface GetLoopArgs {
   runsLimit?: number;
   showOutput?: boolean;
   maxOutputChars?: number;
+  verbose?: boolean;
 }
 
 interface IdArgs {
@@ -313,6 +323,7 @@ interface ListRunsArgs {
   status?: RunStatus;
   labels?: string[];
   limit?: number;
+  verbose?: boolean;
 }
 
 interface ValidateWorkflowArgs {
@@ -329,6 +340,7 @@ interface WorkflowSpecArgs {
 interface ListWorkflowsArgs {
   status?: WorkflowSpec["status"];
   limit?: number;
+  verbose?: boolean;
 }
 
 interface WorkflowIdArgs {
@@ -338,6 +350,7 @@ interface WorkflowIdArgs {
 interface RunWorkflowArgs extends WorkflowIdArgs {
   showOutput?: boolean;
   maxOutputChars?: number;
+  verbose?: boolean;
 }
 
 interface ListWorkflowRunsArgs {
@@ -347,12 +360,14 @@ interface ListWorkflowRunsArgs {
   loopRunId?: string;
   status?: WorkflowRunStatus;
   limit?: number;
+  verbose?: boolean;
 }
 
 interface InspectWorkflowRunArgs {
   runId: string;
   showOutput?: boolean;
   maxOutputChars?: number;
+  verbose?: boolean;
 }
 
 interface WorkflowRunIdArgs {
@@ -361,6 +376,7 @@ interface WorkflowRunIdArgs {
 
 interface WorkflowEventsArgs extends WorkflowRunIdArgs {
   limit?: number;
+  verbose?: boolean;
 }
 
 interface WorkflowReasonArgs extends WorkflowRunIdArgs {
@@ -370,11 +386,13 @@ interface WorkflowReasonArgs extends WorkflowRunIdArgs {
 interface GoalArgs {
   idOrName: string;
   limit?: number;
+  verbose?: boolean;
 }
 
 interface GoalStatusArgs {
   runId: string;
   limit?: number;
+  verbose?: boolean;
 }
 
 interface MachineIdArgs {
@@ -445,14 +463,15 @@ export function createOpenLoopsMcpServer(opts: OpenLoopsMcpServerOptions = {}): 
         status: z.enum(["active", "paused", "stopped", "expired"]).optional(),
         labels: labelsSchema.optional(),
         limit: positiveIntSchema.optional(),
+        verbose: z.boolean().optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ status, labels, limit }) =>
+    async ({ status, labels, limit, verbose }) =>
       jsonResult({
         loops: store
           .listLoops({ status: loopStatus(status), labels: normalizeLoopLabels(labels), limit: boundedLimit(limit, MAX_LIMIT) })
-          .map(publicLoop),
+          .map((loop) => (verbose ? publicLoop(loop) : compactLoop(loop))),
       }),
   );
 
@@ -468,18 +487,19 @@ export function createOpenLoopsMcpServer(opts: OpenLoopsMcpServerOptions = {}): 
         runsLimit: positiveIntSchema.optional(),
         showOutput: z.boolean().optional(),
         maxOutputChars: positiveIntSchema.optional(),
+        verbose: z.boolean().optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ idOrName, includeRecentRuns, runsLimit, showOutput, maxOutputChars }) => {
+    async ({ idOrName, includeRecentRuns, runsLimit, showOutput, maxOutputChars, verbose }) => {
       const loop = store.requireLoop(idOrName);
       const recentRuns =
-        includeRecentRuns === false
+        includeRecentRuns !== true
           ? undefined
           : store
               .listRuns({ loopId: loop.id, limit: showOutput ? boundedOutputLimit(runsLimit, DEFAULT_RECENT_LIMIT) : boundedLimit(runsLimit, DEFAULT_RECENT_LIMIT) })
-              .map((run) => boundRun(run, showOutput, maxOutputChars));
-      return jsonResult({ loop: publicLoop(loop), recentRuns });
+              .map((run) => (showOutput || verbose ? boundRun(run, showOutput, maxOutputChars) : compactRun(run)));
+      return jsonResult({ loop: verbose ? publicLoop(loop) : compactLoop(loop), recentRuns });
     },
   );
 
@@ -570,10 +590,11 @@ export function createOpenLoopsMcpServer(opts: OpenLoopsMcpServerOptions = {}): 
         limit: positiveIntSchema.optional(),
         showOutput: z.boolean().optional(),
         maxOutputChars: positiveIntSchema.optional(),
+        verbose: z.boolean().optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ idOrName, status, labels, limit, showOutput, maxOutputChars }) => {
+    async ({ idOrName, status, labels, limit, showOutput, maxOutputChars, verbose }) => {
       const loop = idOrName ? store.requireLoop(idOrName) : undefined;
       const runs = store
         .listRuns({
@@ -582,7 +603,7 @@ export function createOpenLoopsMcpServer(opts: OpenLoopsMcpServerOptions = {}): 
           labels: normalizeLoopLabels(labels),
           limit: showOutput ? boundedOutputLimit(limit, 10) : boundedLimit(limit, 50),
         })
-        .map((run) => boundRun(run, showOutput, maxOutputChars));
+        .map((run) => (showOutput || verbose ? boundRun(run, showOutput, maxOutputChars) : compactRun(run)));
       return jsonResult({ runs });
     },
   );
@@ -645,10 +666,12 @@ export function createOpenLoopsMcpServer(opts: OpenLoopsMcpServerOptions = {}): 
       inputSchema: {
         status: z.enum(["active", "archived"]).optional(),
         limit: positiveIntSchema.optional(),
+        verbose: z.boolean().optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ status, limit }) => jsonResult({ workflows: store.listWorkflows({ status, limit: boundedLimit(limit, 50) }).map(publicWorkflow) }),
+    async ({ status, limit, verbose }) =>
+      jsonResult({ workflows: store.listWorkflows({ status, limit: boundedLimit(limit, 50) }).map((workflow) => (verbose ? publicWorkflow(workflow) : compactWorkflow(workflow))) }),
   );
 
   registerTool<WorkflowIdArgs>(
@@ -673,10 +696,11 @@ export function createOpenLoopsMcpServer(opts: OpenLoopsMcpServerOptions = {}): 
         idOrName: z.string().min(1),
         showOutput: z.boolean().optional(),
         maxOutputChars: positiveIntSchema.optional(),
+        verbose: z.boolean().optional(),
       },
       annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
-    async ({ idOrName, showOutput, maxOutputChars }) => {
+    async ({ idOrName, showOutput, maxOutputChars, verbose }) => {
       const workflow = store.requireWorkflow(idOrName);
       const result = await executeWorkflow(store, workflow);
       const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0];
@@ -689,8 +713,8 @@ export function createOpenLoopsMcpServer(opts: OpenLoopsMcpServerOptions = {}): 
       }
       return jsonResult({
         result: publicResult,
-        workflowRun: run ? publicWorkflowRun(run) : undefined,
-        steps: steps.map((step) => boundWorkflowStepRun(step, showOutput, maxOutputChars)),
+        workflowRun: run ? (verbose ? publicWorkflowRun(run) : compactWorkflowRun(run)) : undefined,
+        steps: steps.map((step) => (showOutput || verbose ? boundWorkflowStepRun(step, showOutput, maxOutputChars) : compactWorkflowStepRun(step))),
       });
     },
   );
@@ -706,16 +730,17 @@ export function createOpenLoopsMcpServer(opts: OpenLoopsMcpServerOptions = {}): 
         loopRunId: z.string().min(1).optional(),
         status: z.enum(["running", "succeeded", "failed", "timed_out", "cancelled"]).optional(),
         limit: positiveIntSchema.optional(),
+        verbose: z.boolean().optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ idOrName, loopRunId, status, limit }) => {
+    async ({ idOrName, loopRunId, status, limit, verbose }) => {
       const workflow = idOrName ? store.requireWorkflow(idOrName) : undefined;
       const wanted = workflowRunStatus(status);
       const runs = store
         .listWorkflowRuns({ workflowId: workflow?.id, loopRunId, limit: boundedLimit(limit, 50) })
         .filter((run) => !wanted || run.status === wanted)
-        .map(publicWorkflowRun);
+        .map((run) => (verbose ? publicWorkflowRun(run) : compactWorkflowRun(run)));
       return jsonResult({ workflowRuns: runs });
     },
   );
@@ -730,15 +755,18 @@ export function createOpenLoopsMcpServer(opts: OpenLoopsMcpServerOptions = {}): 
         runId: z.string().min(1),
         showOutput: z.boolean().optional(),
         maxOutputChars: positiveIntSchema.optional(),
+        verbose: z.boolean().optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ runId, showOutput, maxOutputChars }) => {
+    async ({ runId, showOutput, maxOutputChars, verbose }) => {
       const run = store.requireWorkflowRun(runId);
       return jsonResult({
-        workflowRun: publicWorkflowRun(run),
-        steps: store.listWorkflowStepRuns(run.id).map((step) => boundWorkflowStepRun(step, showOutput, maxOutputChars)),
-        events: store.listWorkflowEvents(run.id, DEFAULT_RECENT_LIMIT).map(publicWorkflowEvent),
+        workflowRun: verbose ? publicWorkflowRun(run) : compactWorkflowRun(run),
+        steps: store
+          .listWorkflowStepRuns(run.id)
+          .map((step) => (showOutput || verbose ? boundWorkflowStepRun(step, showOutput, maxOutputChars) : compactWorkflowStepRun(step))),
+        events: store.listWorkflowEvents(run.id, DEFAULT_RECENT_LIMIT).map((event) => (verbose ? publicWorkflowEvent(event) : compactWorkflowEvent(event))),
       });
     },
   );
@@ -752,10 +780,12 @@ export function createOpenLoopsMcpServer(opts: OpenLoopsMcpServerOptions = {}): 
       inputSchema: {
         runId: z.string().min(1),
         limit: positiveIntSchema.optional(),
+        verbose: z.boolean().optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ runId, limit }) => jsonResult({ events: store.listWorkflowEvents(runId, boundedLimit(limit, 100)).map(publicWorkflowEvent) }),
+    async ({ runId, limit, verbose }) =>
+      jsonResult({ events: store.listWorkflowEvents(runId, boundedLimit(limit, 100)).map((event) => (verbose ? publicWorkflowEvent(event) : compactWorkflowEvent(event))) }),
   );
 
   registerTool<WorkflowReasonArgs>(
@@ -815,16 +845,18 @@ export function createOpenLoopsMcpServer(opts: OpenLoopsMcpServerOptions = {}): 
       inputSchema: {
         idOrName: z.string().min(1),
         limit: positiveIntSchema.optional(),
+        verbose: z.boolean().optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ idOrName, limit }) => {
+    async ({ idOrName, limit, verbose }) => {
       const runtimeGoal = store.getGoal(idOrName) ?? store.findGoalByLoop(idOrName);
       if (runtimeGoal) {
+        const runs = store.listGoalRuns({ goalId: runtimeGoal.goalId, limit: boundedLimit(limit, 50) });
         return jsonResult({
-          goal: publicGoal(runtimeGoal),
+          goal: verbose ? publicGoal(runtimeGoal) : compactGoal(runtimeGoal),
           nodes: store.listGoalPlanNodes(runtimeGoal.goalId),
-          runs: store.listGoalRuns({ goalId: runtimeGoal.goalId, limit: boundedLimit(limit, 50) }).map(publicGoalRun),
+          runs: runs.map((run) => (verbose ? publicGoalRun(run) : compactGoalRun(run))),
         });
       }
       const loop = store.getLoop(idOrName) ?? store.findLoopByName(idOrName);
@@ -844,16 +876,18 @@ export function createOpenLoopsMcpServer(opts: OpenLoopsMcpServerOptions = {}): 
       inputSchema: {
         runId: z.string().min(1),
         limit: positiveIntSchema.optional(),
+        verbose: z.boolean().optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ runId, limit }) => {
+    async ({ runId, limit, verbose }) => {
       const runtimeGoal = store.findGoalByRunId(runId);
       if (!runtimeGoal) throw new Error(`goal run not found: ${runId}`);
+      const runs = store.listGoalRuns({ goalId: runtimeGoal.goalId, limit: boundedLimit(limit, 50) });
       return jsonResult({
-        goal: publicGoal(runtimeGoal),
+        goal: verbose ? publicGoal(runtimeGoal) : compactGoal(runtimeGoal),
         nodes: store.listGoalPlanNodes(runtimeGoal.goalId),
-        runs: store.listGoalRuns({ goalId: runtimeGoal.goalId, limit: boundedLimit(limit, 50) }).map(publicGoalRun),
+        runs: runs.map((run) => (verbose ? publicGoalRun(run) : compactGoalRun(run))),
       });
     },
   );
@@ -894,11 +928,11 @@ export function createOpenLoopsMcpServer(opts: OpenLoopsMcpServerOptions = {}): 
     async () => {
       const result = await tick({ store, runnerId: opts.runnerId ?? `mcp-tick:${process.pid}` });
       return jsonResult({
-        claimed: result.claimed.map((run) => boundRun(run, false, undefined)),
-        completed: result.completed.map((run) => boundRun(run, false, undefined)),
-        skipped: result.skipped.map((run) => boundRun(run, false, undefined)),
-        recovered: result.recovered.map((run) => boundRun(run, false, undefined)),
-        expired: result.expired.map(publicLoop),
+        claimed: result.claimed.map(compactRun),
+        completed: result.completed.map(compactRun),
+        skipped: result.skipped.map(compactRun),
+        recovered: result.recovered.map(compactRun),
+        expired: result.expired.map(compactLoop),
       });
     },
   );

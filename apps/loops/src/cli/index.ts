@@ -1,7 +1,19 @@
 #!/usr/bin/env bun
 import { existsSync, readFileSync } from "node:fs";
 import { Command } from "commander";
-import type { AccountRef, AgentProvider, CatchUpPolicy, CreateLoopInput, LoopTarget, OverlapPolicy, ScheduleSpec } from "../types.js";
+import type {
+  AccountRef,
+  AgentProvider,
+  CatchUpPolicy,
+  CreateLoopInput,
+  Loop,
+  LoopTarget,
+  OverlapPolicy,
+  ScheduleSpec,
+  WorkflowRun,
+  WorkflowStepRun,
+  WorkflowSpec,
+} from "../types.js";
 import { daemonLogPath } from "../lib/paths.js";
 import {
   publicLoop,
@@ -13,13 +25,16 @@ import {
   publicWorkflowEvent,
   publicWorkflowRun,
   publicWorkflowStepRun,
+  scheduleSummary,
+  targetSummary,
   textOutputBlocks,
+  truncateDisplay,
 } from "../lib/format.js";
 import { parseDuration } from "../lib/schedule.js";
 import { Store } from "../lib/store.js";
 import { executeWorkflow, preflightWorkflow } from "../lib/workflow-runner.js";
 import { advanceLoop, executeClaimedRun, manualRunScheduledFor, manualRunSource, shouldAdvanceManualRun, tick } from "../lib/scheduler.js";
-import { daemonStatus, stopDaemon } from "../daemon/control.js";
+import { daemonStatus, stopDaemon, type DaemonStatus } from "../daemon/control.js";
 import { runDaemon, startDaemon } from "../daemon/daemon.js";
 import { enableStartup, installStartup } from "../daemon/install.js";
 import { workflowBodyFromJson } from "../lib/workflow-spec.js";
@@ -33,9 +48,21 @@ const program = new Command();
 
 program.name("loops").description("Persistent local loops for commands and headless coding agents").version(packageVersion());
 program.option("-j, --json", "print JSON");
+program.option("-v, --verbose", "show full redacted detail output");
+
+const DEFAULT_HUMAN_LIST_LIMIT = 25;
+const DEFAULT_HUMAN_RUN_LIMIT = 20;
+const DEFAULT_HUMAN_EVENT_LIMIT = 50;
+const DEFAULT_HUMAN_LOG_LINES = 40;
+const DEFAULT_HUMAN_OUTPUT_CHARS = 4_000;
+const MAX_HUMAN_OUTPUT_CHARS = 64_000;
 
 function isJson(): boolean {
   return Boolean(program.opts().json);
+}
+
+function isVerbose(opts: CliOpts = {}): boolean {
+  return Boolean(opts.verbose || program.opts().verbose);
 }
 
 function print(value: unknown, human?: string): void {
@@ -43,8 +70,92 @@ function print(value: unknown, human?: string): void {
   else console.log(human);
 }
 
-function printTextOutput(value: { stdout?: string; stderr?: string }): void {
-  for (const line of textOutputBlocks(value, { indent: "  " })) console.log(line);
+function printDetail(value: unknown, human: string, opts: CliOpts = {}): void {
+  if (isJson() || isVerbose(opts)) console.log(JSON.stringify(value, null, 2));
+  else console.log(human);
+}
+
+function printTextOutput(value: { stdout?: string; stderr?: string }, opts: { limit?: number } = {}): void {
+  for (const line of textOutputBlocks(value, { indent: "  ", limit: opts.limit ?? DEFAULT_HUMAN_OUTPUT_CHARS })) console.log(line);
+}
+
+function addVerboseOption(command: Command): Command {
+  return command.option("-v, --verbose", "show full redacted detail output");
+}
+
+function parseNonNegativeInteger(raw: string | undefined, label: string): number | undefined {
+  if (raw === undefined) return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) throw new Error(`${label} must be a non-negative integer`);
+  return value;
+}
+
+function outputLimit(opts: CliOpts): number {
+  const raw = typeof opts.maxOutputChars === "string" ? opts.maxOutputChars : undefined;
+  return Math.min(positiveInteger(raw, "--max-output-chars") ?? DEFAULT_HUMAN_OUTPUT_CHARS, MAX_HUMAN_OUTPUT_CHARS);
+}
+
+function defaultLimit(opts: CliOpts, humanDefault: number, jsonDefault: number): number {
+  return positiveInteger(typeof opts.limit === "string" ? opts.limit : undefined, "--limit") ?? (isJson() ? jsonDefault : humanDefault);
+}
+
+function pageItems<T>(items: T[], opts: CliOpts, limit: number): { page: T[]; cursor: number; nextCursor?: number } {
+  const cursor = parseNonNegativeInteger(typeof opts.cursor === "string" ? opts.cursor : undefined, "--cursor") ?? 0;
+  const page = items.slice(cursor, cursor + limit);
+  const nextCursor = items.length > cursor + limit ? cursor + limit : undefined;
+  return { page, cursor, nextCursor };
+}
+
+function printPageHint(noun: string, shown: number, nextCursor: number | undefined, nextCommand: string, detailHint: string): void {
+  const more = nextCursor === undefined ? "" : `; more available: ${nextCommand} --cursor ${nextCursor}`;
+  console.log(`showing ${shown} ${noun}${more}. ${detailHint}`);
+}
+
+function loopLine(loop: Loop, verbose = false): string {
+  const labels = loop.labels?.length ? ` labels=${loop.labels.join(",")}` : "";
+  const machine = loop.machine ? ` machine=${loop.machine.id}` : "";
+  const goal = loop.goal ? " goal=yes" : "";
+  const base = `${loop.id}  ${loop.status.padEnd(7)}  next=${loop.nextRunAt ?? "-"}  ${loop.name}${labels}${machine}${goal}`;
+  return verbose ? `${base}  schedule=${scheduleSummary(loop.schedule)}  target=${targetSummary(loop.target)}` : base;
+}
+
+function loopDetail(loop: Loop): string {
+  return [
+    `${loop.id}  ${loop.status}  ${loop.name}`,
+    `next=${loop.nextRunAt ?? "-"} retry=${loop.retryScheduledFor ?? "-"} schedule=${scheduleSummary(loop.schedule)}`,
+    `target=${targetSummary(loop.target)}`,
+    `labels=${loop.labels?.join(",") || "-"} machine=${loop.machine?.id ?? "-"} goal=${loop.goal ? "yes" : "no"}`,
+    "Use --verbose or --json for full loop metadata.",
+  ].join("\n");
+}
+
+function workflowLine(workflow: WorkflowSpec): string {
+  const goal = workflow.goal ? " goal=yes" : "";
+  return `${workflow.id}  ${workflow.status.padEnd(8)}  steps=${workflow.steps.length}${goal}  ${workflow.name}`;
+}
+
+function workflowRunLine(run: WorkflowRun): string {
+  const duration = run.durationMs === undefined ? "" : ` duration=${run.durationMs}ms`;
+  return `${run.id}  ${run.status.padEnd(10)}  ${run.workflowName}  started=${run.startedAt ?? "-"}${duration}`;
+}
+
+function workflowStepLine(step: WorkflowStepRun, verbose = false): string {
+  const output = step.stdout || step.stderr ? " output=yes" : "";
+  const duration = step.durationMs === undefined ? "" : ` duration=${step.durationMs}ms`;
+  const error = step.error ? ` error=${truncateDisplay(step.error, verbose ? 180 : 80)}` : "";
+  return `  ${String(step.sequence).padStart(2, "0")}  ${step.status.padEnd(10)}  ${step.stepId}${duration}${output}${error}`;
+}
+
+function daemonStatusLine(status: DaemonStatus): string {
+  const daemon = status.running ? `running pid=${status.pid}` : status.stale ? `stale pid=${status.pid}` : "stopped";
+  const lease = status.lease ? ` lease=pid:${status.lease.pid}@${status.lease.hostname} until=${status.lease.expiresAt}` : "";
+  return [
+    `daemon ${daemon} host=${status.host}${lease}`,
+    `loops total=${status.loops.total} active=${status.loops.active} paused=${status.loops.paused} stopped=${status.loops.stopped} expired=${status.loops.expired}`,
+    `runs total=${status.runs.total} running=${status.runs.running} failed=${status.runs.failed} succeeded=${status.runs.succeeded} abandoned=${status.runs.abandoned}`,
+    `logs=${status.logPath}`,
+    "Use --verbose or --json for full daemon status.",
+  ].join("\n");
 }
 
 function parseSchedule(opts: { at?: string; every?: string; cron?: string; dynamic?: boolean }): ScheduleSpec {
@@ -313,27 +424,40 @@ const machines = program.command("machines").description("inspect OpenMachines t
 
 const goal = program.command("goal").description("inspect goal runs");
 
-goal.command("show <idOrName>").description("show a goal or configured loop/workflow goal").action((idOrName) => {
+addVerboseOption(goal.command("show <idOrName>").description("show a goal or configured loop/workflow goal").option("--limit <n>", "goal run limit")).action((idOrName, opts) => {
   const store = new Store();
   try {
     const runtimeGoal = store.getGoal(idOrName) ?? store.findGoalByLoop(idOrName);
     if (runtimeGoal) {
+      const runs = store.listGoalRuns({ goalId: runtimeGoal.goalId, limit: defaultLimit(opts, DEFAULT_HUMAN_RUN_LIMIT, 200) });
       const value = {
         goal: publicGoal(runtimeGoal),
         nodes: store.listGoalPlanNodes(runtimeGoal.goalId),
-        runs: store.listGoalRuns({ goalId: runtimeGoal.goalId }).map(publicGoalRun),
+        runs: runs.map(publicGoalRun),
       };
-      print(value, `${runtimeGoal.goalId} ${runtimeGoal.status} ${runtimeGoal.objective}`);
+      printDetail(
+        value,
+        [
+          `${runtimeGoal.goalId} ${runtimeGoal.status} tokens=${runtimeGoal.tokensUsed}${runtimeGoal.tokenBudget ? `/${runtimeGoal.tokenBudget}` : ""}`,
+          truncateDisplay(runtimeGoal.objective, 180) ?? "",
+          `runs=${runs.length}. Use --verbose or --json for plan nodes and run evidence.`,
+        ].join("\n"),
+        opts,
+      );
       return;
     }
     const loop = store.getLoop(idOrName) ?? store.findLoopByName(idOrName);
     if (loop?.goal) {
-      print({ config: loop.goal, loop: publicLoop(loop) }, `configured goal for loop ${loop.name}: ${loop.goal.objective}`);
+      printDetail({ config: loop.goal, loop: publicLoop(loop) }, `configured goal for loop ${loop.name}: ${truncateDisplay(loop.goal.objective, 180)}`, opts);
       return;
     }
     const workflow = store.getWorkflow(idOrName) ?? store.findWorkflowByName(idOrName);
     if (workflow?.goal) {
-      print({ config: workflow.goal, workflow: publicWorkflow(workflow) }, `configured goal for workflow ${workflow.name}: ${workflow.goal.objective}`);
+      printDetail(
+        { config: workflow.goal, workflow: publicWorkflow(workflow) },
+        `configured goal for workflow ${workflow.name}: ${truncateDisplay(workflow.goal.objective, 180)}`,
+        opts,
+      );
       return;
     }
     throw new Error(`goal not found: ${idOrName}`);
@@ -342,17 +466,22 @@ goal.command("show <idOrName>").description("show a goal or configured loop/work
   }
 });
 
-goal.command("status <runId>").description("show goal status for a goal, goal event, loop run, or workflow run").action((runId) => {
+addVerboseOption(goal.command("status <runId>").description("show goal status for a goal, goal event, loop run, or workflow run").option("--limit <n>", "goal run limit")).action((runId, opts) => {
   const store = new Store();
   try {
     const runtimeGoal = store.findGoalByRunId(runId);
     if (!runtimeGoal) throw new Error(`goal run not found: ${runId}`);
+      const runs = store.listGoalRuns({ goalId: runtimeGoal.goalId, limit: defaultLimit(opts, DEFAULT_HUMAN_RUN_LIMIT, 200) });
     const value = {
       goal: publicGoal(runtimeGoal),
       nodes: store.listGoalPlanNodes(runtimeGoal.goalId),
-      runs: store.listGoalRuns({ goalId: runtimeGoal.goalId }).map(publicGoalRun),
+      runs: runs.map(publicGoalRun),
     };
-    print(value, `${runtimeGoal.goalId} ${runtimeGoal.status} tokens=${runtimeGoal.tokensUsed}`);
+    printDetail(
+      value,
+      `${runtimeGoal.goalId} ${runtimeGoal.status} tokens=${runtimeGoal.tokensUsed} runs=${runs.length}\nUse --verbose or --json for plan nodes and run evidence.`,
+      opts,
+    );
   } finally {
     store.close();
   }
@@ -362,19 +491,26 @@ machines
   .command("list")
   .alias("ls")
   .description("list known machines")
-  .action(() => {
+  .option("--limit <n>", "maximum machines to show")
+  .option("--cursor <offset>", "zero-based offset for the next page")
+  .action((opts) => {
     const values = listOpenMachines();
-    if (isJson()) print(values);
+    const limit = defaultLimit(opts, DEFAULT_HUMAN_LIST_LIMIT, 200);
+    const { page, nextCursor } = pageItems(values, opts, limit);
+    if (isJson()) print(page);
     else {
-      for (const machine of values) {
+      for (const machine of page) {
         const route = machine.local ? "local" : machine.route ?? "-";
         console.log(`${machine.id.padEnd(12)}  ${route.padEnd(10)}  workspace=${machine.workspacePath ?? "-"}  host=${machine.hostname ?? "-"}`);
       }
+      printPageHint("machines", page.length, nextCursor, "loops machines list", "Use `loops machines show <id>` for details.");
     }
   });
 
-machines.command("show <id>").description("resolve a machine assignment").action((id) => {
-  print(resolveLoopMachine(id));
+addVerboseOption(machines.command("show <id>").description("resolve a machine assignment")).action((id, opts) => {
+  const machine = resolveLoopMachine(id);
+  const route = machine.local ? "local" : machine.route ?? "-";
+  printDetail(machine, `${machine.id} route=${route} local=${Boolean(machine.local)} workspace=${machine.workspacePath ?? "-"}\nUse --verbose or --json for full machine metadata.`, opts);
 });
 
 workflows
@@ -419,49 +555,68 @@ workflows
   .command("list")
   .alias("ls")
   .option("--status <status>", "active or archived", "active")
+  .option("--limit <n>", "maximum workflows to show")
+  .option("--cursor <offset>", "zero-based offset for the next page")
   .action((opts) => {
     const store = new Store();
     try {
-      const workflowsList = store.listWorkflows({ status: opts.status });
-      if (isJson()) print(workflowsList.map(publicWorkflow));
+      const limit = defaultLimit(opts, DEFAULT_HUMAN_LIST_LIMIT, 200);
+      const cursor = parseNonNegativeInteger(typeof opts.cursor === "string" ? opts.cursor : undefined, "--cursor") ?? 0;
+      const workflowsList = store.listWorkflows({ status: opts.status, limit: cursor + limit + 1 });
+      const { page, nextCursor } = pageItems(workflowsList, opts, limit);
+      if (isJson()) print(page.map(publicWorkflow));
       else {
-        for (const workflow of workflowsList) {
-          console.log(`${workflow.id}  ${workflow.status.padEnd(8)}  steps=${workflow.steps.length}  ${workflow.name}`);
-        }
+        for (const workflow of page) console.log(workflowLine(workflow));
+        printPageHint("workflows", page.length, nextCursor, "loops workflows list", "Use `loops workflows show <id>` for details.");
       }
     } finally {
       store.close();
     }
   });
 
-workflows.command("show <idOrName>").action((idOrName) => {
+addVerboseOption(workflows.command("show <idOrName>")).action((idOrName, opts) => {
   const store = new Store();
   try {
-    print(publicWorkflow(store.requireWorkflow(idOrName)));
+    const workflow = store.requireWorkflow(idOrName);
+    printDetail(
+      publicWorkflow(workflow),
+      [
+        workflowLine(workflow),
+        workflow.description ? `description=${truncateDisplay(workflow.description, 180)}` : "description=-",
+        `updated=${workflow.updatedAt}`,
+        "Use --verbose or --json for full workflow steps.",
+      ].join("\n"),
+      opts,
+    );
   } finally {
     store.close();
   }
 });
 
-workflows.command("inspect <runId>").description("show a workflow run with steps and events").action((runId) => {
+addVerboseOption(
+  workflows
+    .command("inspect <runId>")
+    .description("show a workflow run with steps and events")
+    .option("--events-limit <n>", "maximum events to include"),
+).action((runId, opts) => {
   const store = new Store();
   try {
     const run = store.requireWorkflowRun(runId);
     const steps = store.listWorkflowStepRuns(run.id);
-    const events = store.listWorkflowEvents(run.id);
+    const eventsLimit = defaultLimit({ limit: opts.eventsLimit }, DEFAULT_HUMAN_EVENT_LIMIT, 200);
+    const events = store.listWorkflowEvents(run.id, eventsLimit);
     const value = {
       workflowRun: publicWorkflowRun(run),
       steps: steps.map((step) => publicWorkflowStepRun(step)),
       events: events.map(publicWorkflowEvent),
     };
-    if (isJson()) print(value);
+    if (isJson() || isVerbose(opts)) print(value);
     else {
-      console.log(`${run.id}  ${run.status}  ${run.workflowName}`);
+      console.log(workflowRunLine(run));
       for (const step of steps) {
-        const publicStep = publicWorkflowStepRun(step);
-        console.log(`  ${String(step.sequence).padStart(2, "0")}  ${step.status.padEnd(10)}  ${step.stepId}  ${publicStep.error ?? ""}`);
+        console.log(workflowStepLine(step));
       }
-      console.log(`  events=${events.length}`);
+      console.log(`  events=${events.length}. Use --verbose or --json for redacted event payloads.`);
     }
   } finally {
     store.close();
@@ -471,6 +626,7 @@ workflows.command("inspect <runId>").description("show a workflow run with steps
 workflows
   .command("run <idOrName>")
   .option("--show-output", "show step stdout/stderr")
+  .option("--max-output-chars <n>", "maximum stdout/stderr characters to print", String(DEFAULT_HUMAN_OUTPUT_CHARS))
   .action(async (idOrName, opts) => {
     const store = new Store();
     try {
@@ -487,9 +643,8 @@ workflows
       else {
         console.log(`${run?.id ?? workflow.id} ${result.status}`);
         for (const step of steps) {
-          const publicStep = publicWorkflowStepRun(step, opts.showOutput);
-          console.log(`  ${String(step.sequence).padStart(2, "0")}  ${step.status.padEnd(10)}  ${step.stepId}  ${publicStep.error ?? ""}`);
-          if (opts.showOutput) printTextOutput(step);
+          console.log(workflowStepLine(step));
+          if (opts.showOutput) printTextOutput(step, { limit: outputLimit(opts) });
         }
       }
     } finally {
@@ -499,17 +654,20 @@ workflows
 
 workflows
   .command("runs [idOrName]")
-  .option("--limit <n>", "limit", "50")
+  .option("--limit <n>", "maximum runs to show")
+  .option("--cursor <offset>", "zero-based offset for the next page")
   .action((idOrName, opts) => {
     const store = new Store();
     try {
       const workflow = idOrName ? store.requireWorkflow(idOrName) : undefined;
-      const runs = store.listWorkflowRuns({ workflowId: workflow?.id, limit: Number(opts.limit) });
-      if (isJson()) print(runs.map(publicWorkflowRun));
+      const limit = defaultLimit(opts, DEFAULT_HUMAN_RUN_LIMIT, 50);
+      const cursor = parseNonNegativeInteger(typeof opts.cursor === "string" ? opts.cursor : undefined, "--cursor") ?? 0;
+      const runs = store.listWorkflowRuns({ workflowId: workflow?.id, limit: cursor + limit + 1 });
+      const { page, nextCursor } = pageItems(runs, opts, limit);
+      if (isJson()) print(page.map(publicWorkflowRun));
       else {
-        for (const run of runs) {
-          console.log(`${run.id}  ${run.status.padEnd(10)}  ${run.workflowName}  started=${run.startedAt ?? "-"}`);
-        }
+        for (const run of page) console.log(workflowRunLine(run));
+        printPageHint("workflow runs", page.length, nextCursor, "loops workflows runs", "Use `loops workflows inspect <run-id>` for steps/events.");
       }
     } finally {
       store.close();
@@ -518,16 +676,21 @@ workflows
 
 workflows
   .command("events <runId>")
-  .option("--limit <n>", "limit", "200")
+  .option("--limit <n>", "maximum events to show")
+  .option("--cursor <offset>", "zero-based offset for the next page")
   .action((runId, opts) => {
     const store = new Store();
     try {
-      const events = store.listWorkflowEvents(runId, Number(opts.limit));
-      if (isJson()) print(events.map(publicWorkflowEvent));
+      const limit = defaultLimit(opts, DEFAULT_HUMAN_EVENT_LIMIT, 200);
+      const cursor = parseNonNegativeInteger(typeof opts.cursor === "string" ? opts.cursor : undefined, "--cursor") ?? 0;
+      const events = store.listWorkflowEvents(runId, cursor + limit + 1);
+      const { page, nextCursor } = pageItems(events, opts, limit);
+      if (isJson()) print(page.map(publicWorkflowEvent));
       else {
-        for (const event of events) {
+        for (const event of page) {
           console.log(`${String(event.sequence).padStart(3, "0")}  ${event.eventType.padEnd(14)}  ${event.stepId ?? "-"}  ${event.createdAt}`);
         }
+        printPageHint("workflow events", page.length, nextCursor, "loops workflows events <run-id>", "Use --json for redacted event payloads.");
       }
     } finally {
       store.close();
@@ -583,27 +746,31 @@ program
   .alias("ls")
   .option("--status <status>", "filter by status")
   .option("--label <label>", "filter by label; repeatable", collectRepeated, [])
+  .option("--limit <n>", "maximum loops to show")
+  .option("--cursor <offset>", "zero-based offset for the next page")
+  .option("-v, --verbose", "show schedule and target summaries")
   .action((opts) => {
     const store = new Store();
     try {
-      const loops = store.listLoops({ status: opts.status, labels: labelsFromOpts(opts) });
-      if (isJson()) print(loops.map(publicLoop));
+      const limit = defaultLimit(opts, DEFAULT_HUMAN_LIST_LIMIT, 200);
+      const cursor = parseNonNegativeInteger(typeof opts.cursor === "string" ? opts.cursor : undefined, "--cursor") ?? 0;
+      const loops = store.listLoops({ status: opts.status, labels: labelsFromOpts(opts), limit: cursor + limit + 1 });
+      const { page, nextCursor } = pageItems(loops, opts, limit);
+      if (isJson()) print(page.map(publicLoop));
       else {
-        for (const loop of loops) {
-          const labels = loop.labels?.length ? `  labels=${loop.labels.join(",")}` : "";
-          const machine = loop.machine ? `  machine=${loop.machine.id}` : "";
-          console.log(`${loop.id}  ${loop.status.padEnd(7)}  next=${loop.nextRunAt ?? "-"}  ${loop.name}${labels}${machine}`);
-        }
+        for (const loop of page) console.log(loopLine(loop, isVerbose(opts)));
+        printPageHint("loops", page.length, nextCursor, "loops list", "Use `loops show <id>` for details.");
       }
     } finally {
       store.close();
     }
   });
 
-program.command("show <idOrName>").action((idOrName) => {
+addVerboseOption(program.command("show <idOrName>")).action((idOrName, opts) => {
   const store = new Store();
   try {
-    print(publicLoop(store.requireLoop(idOrName)));
+    const loop = store.requireLoop(idOrName);
+    printDetail(publicLoop(loop), loopDetail(loop), opts);
   } finally {
     store.close();
   }
@@ -611,22 +778,27 @@ program.command("show <idOrName>").action((idOrName) => {
 
 program
   .command("runs [idOrName]")
-  .option("--limit <n>", "limit", "50")
+  .option("--limit <n>", "maximum runs to show")
+  .option("--cursor <offset>", "zero-based offset for the next page")
   .option("--label <label>", "filter by loop label; repeatable", collectRepeated, [])
   .option("--show-output", "show stdout/stderr")
+  .option("--max-output-chars <n>", "maximum stdout/stderr characters to print", String(DEFAULT_HUMAN_OUTPUT_CHARS))
   .action((idOrName, opts) => {
     const store = new Store();
     try {
       const loop = idOrName ? store.requireLoop(idOrName) : undefined;
-      const runs = store.listRuns({ loopId: loop?.id, labels: labelsFromOpts(opts), limit: Number(opts.limit) });
-      if (isJson()) print(runs.map((run) => publicRun(run, opts.showOutput)));
+      const limit = defaultLimit(opts, DEFAULT_HUMAN_RUN_LIMIT, 50);
+      const cursor = parseNonNegativeInteger(typeof opts.cursor === "string" ? opts.cursor : undefined, "--cursor") ?? 0;
+      const runs = store.listRuns({ loopId: loop?.id, labels: labelsFromOpts(opts), limit: cursor + limit + 1 });
+      const { page, nextCursor } = pageItems(runs, opts, limit);
+      if (isJson()) print(page.map((run) => publicRun(run, opts.showOutput)));
       else {
-        for (const run of runs) {
-          console.log(
-            `${run.id}  ${run.status.padEnd(10)}  attempt=${run.attempt}  slot=${run.scheduledFor}  ${run.loopName}`,
-          );
-          if (opts.showOutput) printTextOutput(run);
+        for (const run of page) {
+          const hasOutput = run.stdout || run.stderr ? " output=yes" : "";
+          console.log(`${run.id}  ${run.status.padEnd(10)}  attempt=${run.attempt}  slot=${run.scheduledFor}  ${run.loopName}${hasOutput}`);
+          if (opts.showOutput) printTextOutput(run, { limit: outputLimit(opts) });
         }
+        printPageHint("runs", page.length, nextCursor, "loops runs", "Use --show-output for bounded stdout/stderr.");
       }
     } finally {
       store.close();
@@ -723,6 +895,7 @@ program
 program
   .command("run-now <idOrName>")
   .option("--show-output", "show stdout/stderr")
+  .option("--max-output-chars <n>", "maximum stdout/stderr characters to print", String(DEFAULT_HUMAN_OUTPUT_CHARS))
   .action(async (idOrName, opts) => {
     const store = new Store();
     try {
@@ -749,7 +922,7 @@ program
       }
       const value = { ...publicRun(run, opts.showOutput), runNow: { source, advancesLoop: shouldAdvance } };
       print(value, `${run.id} ${run.status} source=${source} slot=${run.scheduledFor}`);
-      if (!isJson() && opts.showOutput) printTextOutput(run);
+      if (!isJson() && opts.showOutput) printTextOutput(run, { limit: outputLimit(opts) });
       if (run.status !== "succeeded") process.exitCode = 1;
     } finally {
       store.close();
@@ -766,16 +939,18 @@ program.command("tick").description("run one scheduler tick").action(async () =>
   }
 });
 
-program.command("doctor").description("check local OpenLoops runtime dependencies and state").action(() => {
+addVerboseOption(program.command("doctor").description("check local OpenLoops runtime dependencies and state")).action((opts) => {
   const store = new Store();
   try {
     const report = runDoctor(store);
-    if (isJson()) print(report);
+    if (isJson() || isVerbose(opts)) print(report);
     else {
       for (const check of report.checks) {
         const marker = check.status === "ok" ? "ok" : check.status === "warn" ? "warn" : "fail";
-        console.log(`${marker.padEnd(4)} ${check.id.padEnd(22)} ${check.message}${check.detail ? ` (${check.detail})` : ""}`);
+        const detail = check.detail ? ` (${truncateDisplay(check.detail, 160)})` : "";
+        console.log(`${marker.padEnd(4)} ${check.id.padEnd(22)} ${check.message}${detail}`);
       }
+      console.log("Use --verbose or --json for full check details.");
     }
     if (!report.ok) process.exitCode = 1;
   } finally {
@@ -800,10 +975,11 @@ daemon.command("stop").action(async () => {
   print(result, result.stopped ? `stopped pid=${result.pid}` : "not running");
 });
 
-daemon.command("status").action(() => {
+addVerboseOption(daemon.command("status")).action((opts) => {
   const store = new Store();
   try {
-    print(daemonStatus(store));
+    const status = daemonStatus(store);
+    printDetail(status, daemonStatusLine(status), opts);
   } finally {
     store.close();
   }
@@ -824,7 +1000,9 @@ daemon
 
 daemon
   .command("logs")
-  .option("-n, --lines <n>", "lines", "80")
+  .option("-n, --lines <n>", "lines", String(DEFAULT_HUMAN_LOG_LINES))
+  .option("--max-line-chars <n>", "maximum characters per line", "240")
+  .option("-v, --verbose", "print full log lines")
   .action((opts) => {
     const path = daemonLogPath();
     if (!existsSync(path)) {
@@ -832,7 +1010,10 @@ daemon
       return;
     }
     const lines = readFileSync(path, "utf8").trimEnd().split("\n");
-    console.log(lines.slice(-Number(opts.lines)).join("\n"));
+    const selected = lines.slice(-positiveInteger(opts.lines, "--lines")!);
+    const maxLineChars = isVerbose(opts) ? Number.POSITIVE_INFINITY : positiveInteger(opts.maxLineChars, "--max-line-chars")!;
+    console.log(selected.map((line) => truncateDisplay(line, maxLineChars) ?? "").join("\n"));
+    if (!isVerbose(opts)) console.log("Use --verbose or --max-line-chars for more log text.");
   });
 
 await program.parseAsync(process.argv);

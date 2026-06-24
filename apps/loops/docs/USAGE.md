@@ -210,6 +210,20 @@ loops run-now <id-or-name>
 
 Use `--json` for machine-readable output. Prompt bodies and run stdout/stderr are redacted by default in status output. `loops run-now` exits non-zero when the recorded run fails or times out.
 
+Human output is compact by default so agent terminals do not fill with full records:
+
+```bash
+loops list                 # first compact page, default 25 rows
+loops list --limit 50
+loops list --cursor 25     # next page when the previous command prints a cursor hint
+loops show <id-or-name>    # compact detail
+loops show <id-or-name> --verbose
+loops runs --show-output --max-output-chars 8000
+loops daemon status --verbose
+```
+
+Use `show`/`inspect` commands for one record at a time. Use `--verbose` for full redacted detail output and `--json` for stable machine-readable records. Output streams are redacted unless explicitly requested and are bounded in human output.
+
 `loops run-now` reports the manual run source:
 
 - `source=ad_hoc`: the loop was not due yet, so OpenLoops created a one-off manual slot. This is a single immediate attempt and does not schedule retries or consume the future scheduled slot.
@@ -262,7 +276,7 @@ The server exposes these tools:
 - `openloops_daemon_status`: read daemon process, lease, loop, and run counts.
 - `openloops_doctor`: run local health checks.
 
-Tool responses include structured JSON plus a compact text JSON summary. Run stdout/stderr and agent prompts are redacted by default; tools that expose output accept `showOutput` and cap text through `maxOutputChars` up to 32,000 characters. MCP command loop creation uses the same typed command target boundary as the CLI and SDK. Connect the server only to trusted local clients because `openloops_run_now`, `openloops_run_workflow`, and `openloops_tick` can execute loops or workflows stored in OpenLoops.
+Tool responses include structured JSON plus a compact text JSON summary. List/read tools return compact records by default and accept `verbose` where full redacted records are useful. Run stdout/stderr and agent prompts are redacted by default; tools that expose output accept `showOutput` and cap text through `maxOutputChars` up to 32,000 characters. MCP command loop creation uses the same typed command target boundary as the CLI and SDK. Connect the server only to trusted local clients because `openloops_run_now`, `openloops_run_workflow`, and `openloops_tick` can execute loops or workflows stored in OpenLoops.
 
 ## Daemon
 
