@@ -3,6 +3,7 @@ import type { Run, Result, Screenshot } from "../types/index.js";
 import { listScreenshots } from "../db/screenshots.js";
 import { getScenario } from "../db/scenarios.js";
 import { getDatabase } from "../db/database.js";
+import { pageItems, paginationHint, truncateText } from "./compact-output.js";
 
 // ─── Color/emoji helpers ─────────────────────────────────────────────────────
 
@@ -14,14 +15,35 @@ export interface ReportOptions {
   json?: boolean;
   verbose?: boolean;
   failedOnly?: boolean;
+  summaryResults?: Result[];
+  limit?: number;
+  offset?: number;
+  compactFooter?: boolean;
 }
 
 export function formatTerminal(run: Run, results: Result[], options?: ReportOptions): string {
   const lines: string[] = [];
   const failedOnly = options?.failedOnly ?? false;
+  const verbose = options?.verbose ?? false;
+  const displayResults = failedOnly
+    ? results.filter((r) => r.status === "failed" || r.status === "error")
+    : results;
+  const page = verbose
+    ? {
+        items: displayResults,
+        total: displayResults.length,
+        returned: displayResults.length,
+        offset: 0,
+      }
+    : pageItems(displayResults, {
+        limit: options?.limit,
+        offset: options?.offset,
+        defaultLimit: 50,
+        maxLimit: 200,
+      });
 
   lines.push("");
-  lines.push(chalk.bold(`  Run ${run.id.slice(0, 8)} — ${run.url}`));
+  lines.push(chalk.bold(`  Run ${run.id.slice(0, 8)} — ${verbose ? run.url : truncateText(run.url, 110)}`));
   lines.push(chalk.dim(`  Model: ${run.model} | Parallel: ${run.parallel} | Headed: ${run.headed ? "yes" : "no"}`));
   lines.push("");
 
@@ -34,14 +56,11 @@ export function formatTerminal(run: Run, results: Result[], options?: ReportOpti
     }
   }
 
-  for (const result of results) {
-    // Skip passed/skipped results when --failed-only is set
-    if (failedOnly && result.status !== "failed" && result.status !== "error") {
-      continue;
-    }
-
+  for (const result of page.items) {
     const scenario = getScenario(result.scenarioId);
-    const name = scenario ? `${scenario.shortId}: ${scenario.name}` : result.scenarioId.slice(0, 8);
+    const name = scenario
+      ? `${scenario.shortId}: ${verbose ? scenario.name : truncateText(scenario.name, 90)}`
+      : result.scenarioId.slice(0, 8);
     const screenshots = listScreenshots(result.id);
     const duration = `${(result.durationMs / 1000).toFixed(1)}s`;
     const screenshotCount = screenshots.length;
@@ -71,15 +90,18 @@ export function formatTerminal(run: Run, results: Result[], options?: ReportOpti
     lines.push(`  ${statusIcon}  ${statusColor(name)}  ${chalk.dim(duration)}  ${chalk.dim(`${screenshotCount} screenshots`)}`);
 
     if (result.reasoning && (result.status === "failed" || result.status === "error")) {
-      lines.push(chalk.dim(`         ${result.reasoning}`));
+      lines.push(chalk.dim(`         ${verbose ? result.reasoning : truncateText(result.reasoning, 180)}`));
     }
     if (result.error) {
-      lines.push(chalk.red(`         ${result.error}`));
+      lines.push(chalk.red(`         ${verbose ? result.error : truncateText(result.error, 180)}`));
     }
   }
 
   lines.push("");
-  lines.push(formatActionableSummary(run, results));
+  lines.push(formatActionableSummary(run, options?.summaryResults ?? results));
+  if (!verbose && options?.compactFooter !== false) {
+    lines.push(chalk.dim(`  ${paginationHint(page.returned, page.total, `testers results ${run.id.slice(0, 8)} --verbose, --limit/--offset, or --json`, page.offset)}`));
+  }
   lines.push("");
 
   return lines.join("\n");
@@ -187,7 +209,7 @@ export function getExitCode(run: Run): number {
   return 2; // error or cancelled
 }
 
-export function formatRunList(runs: Run[]): string {
+export function formatRunList(runs: Run[], options?: { total?: number; limit?: number; offset?: number; verbose?: boolean }): string {
   const lines: string[] = [];
   lines.push("");
   lines.push(chalk.bold("  Recent Runs"));
@@ -211,9 +233,12 @@ export function formatRunList(runs: Run[]): string {
     const date = new Date(run.startedAt).toLocaleString();
     const id = run.id.slice(0, 8);
 
-    lines.push(`  ${statusIcon}  ${chalk.dim(id)}  ${run.url}  ${chalk.dim(`${run.passed}/${run.total}`)}  ${chalk.dim(date)}`);
+    const url = options?.verbose ? run.url : truncateText(run.url, 88);
+    lines.push(`  ${statusIcon}  ${chalk.dim(id)}  ${url}  ${chalk.dim(`${run.passed}/${run.total}`)}  ${chalk.dim(date)}`);
   }
 
+  lines.push("");
+  lines.push(chalk.dim(`  ${paginationHint(runs.length, options?.total ?? runs.length, "testers results <run-id> or --json", options?.offset ?? 0)}`));
   lines.push("");
   return lines.join("\n");
 }
@@ -242,7 +267,10 @@ export function getScenarioRunStats(scenarioId: string): ScenarioRunStats {
   };
 }
 
-export function formatScenarioList(scenarios: Array<{ id?: string; shortId: string; name: string; priority: string; tags: string[]; flakinessScore?: number | null; recentRunCount?: number }>): string {
+export function formatScenarioList(
+  scenarios: Array<{ id?: string; shortId: string; name: string; priority: string; tags: string[]; flakinessScore?: number | null; recentRunCount?: number }>,
+  options?: { total?: number; limit?: number; offset?: number; verbose?: boolean },
+): string {
   const lines: string[] = [];
   lines.push("");
   lines.push(chalk.bold("  Scenarios"));
@@ -263,7 +291,9 @@ export function formatScenarioList(scenarios: Array<{ id?: string; shortId: stri
           ? chalk.blue
           : chalk.dim;
 
-    const tags = s.tags.length > 0 ? chalk.dim(` [${s.tags.join(", ")}]`) : "";
+    const shownTags = options?.verbose ? s.tags : s.tags.slice(0, 5);
+    const tagsSuffix = !options?.verbose && s.tags.length > shownTags.length ? ` +${s.tags.length - shownTags.length}` : "";
+    const tags = shownTags.length > 0 ? chalk.dim(` [${shownTags.map((tag) => truncateText(tag, 24)).join(", ")}${tagsSuffix}]`) : "";
 
     // Run stats (last status + pass rate)
     let lastStatusIcon = chalk.dim("—");
@@ -281,9 +311,12 @@ export function formatScenarioList(scenarios: Array<{ id?: string; shortId: stri
       ? chalk.yellow(` ⚡ flaky (${Math.round(s.flakinessScore * 100)}%)`)
       : "";
 
-    lines.push(`  ${chalk.cyan(s.shortId)}  ${s.name}  ${priorityColor(s.priority)}${tags}${flakinessStr}  ${lastStatusIcon} ${passRateStr}`);
+    const name = options?.verbose ? s.name : truncateText(s.name, 90);
+    lines.push(`  ${chalk.cyan(s.shortId)}  ${name}  ${priorityColor(s.priority)}${tags}${flakinessStr}  ${lastStatusIcon} ${passRateStr}`);
   }
 
+  lines.push("");
+  lines.push(chalk.dim(`  ${paginationHint(scenarios.length, options?.total ?? scenarios.length, "testers show <id>, --verbose, or --json", options?.offset ?? 0)}`));
   lines.push("");
   return lines.join("\n");
 }

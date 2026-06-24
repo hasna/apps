@@ -6,9 +6,9 @@ import { z } from "zod";
 import { registerCloudTools } from "@hasna/cloud";
 import pkg from "../../package.json";
 
-import { createScenario, getScenario, getScenarioByShortId, listScenarios, updateScenario, deleteScenario, findStaleScenarios } from "../db/scenarios.js";
+import { createScenario, getScenario, getScenarioByShortId, listScenarios, countScenarios, updateScenario, deleteScenario, findStaleScenarios } from "../db/scenarios.js";
 import { getTemplate, listTemplateNames, SCENARIO_TEMPLATES } from "../lib/templates.js";
-import { getRun, listRuns, updateRun } from "../db/runs.js";
+import { getRun, listRuns, countRuns, updateRun } from "../db/runs.js";
 import { listResults, getResultsByRun } from "../db/results.js";
 import { listScreenshots } from "../db/screenshots.js";
 import { createProject, ensureProject, listProjects } from "../db/projects.js";
@@ -22,9 +22,9 @@ import { createSchedule, listSchedules, updateSchedule, deleteSchedule, getSched
 import { getNextRunTime } from "../lib/scheduler.js";
 import { getDatabase } from "../db/database.js";
 import { VersionConflictError } from "../types/index.js";
-import { createApiCheck, getApiCheck, listApiChecks, updateApiCheck, deleteApiCheck, getLatestApiCheckResult, listApiCheckResults } from "../db/api-checks.js";
+import { createApiCheck, getApiCheck, listApiChecks, countApiChecks, updateApiCheck, deleteApiCheck, getLatestApiCheckResult, listApiCheckResults } from "../db/api-checks.js";
 import { runApiCheck, runApiChecksByFilter } from "../lib/api-runner.js";
-import { createPersona, getPersona, listPersonas, updatePersona, deletePersona } from "../db/personas.js";
+import { createPersona, getPersona, listPersonas, countPersonas, updatePersona, deletePersona } from "../db/personas.js";
 import { PersonaNotFoundError } from "../types/index.js";
 import { getTestersDir } from "../lib/paths.js";
 import { createProdDebugPlan } from "../lib/prod-debug.js";
@@ -32,6 +32,23 @@ import { createTestingWorkflow, getTestingWorkflow, listTestingWorkflows } from 
 import { runTestingWorkflow } from "../lib/workflow-runner.js";
 import { runWorkflowGoalLoop } from "../lib/workflow-agent.js";
 import { redactPersona, redactPersonas } from "../lib/persona-redaction.js";
+import {
+  compactApiCheck,
+  compactApiCheckResult,
+  compactEnvironment,
+  compactPersona,
+  compactProject,
+  compactResult,
+  compactRun,
+  compactScenario,
+  compactSchedule,
+  compactWorkflow,
+  compactLimit,
+  compactOffset,
+  pageItems,
+  paginationHint,
+  truncateText,
+} from "../lib/compact-output.js";
 
 function json(data: unknown): { content: [{ type: "text"; text: string }] } {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
@@ -113,6 +130,23 @@ function errorResponse(
 const ID_DESC = "Accepts either the full UUID (e.g. 'abc123...') or the short ID (e.g. 'sc-1').";
 const MODEL_DESC =
   "Model to use. Values: 'quick' (claude-haiku-4-5, cheapest), 'thorough' (claude-sonnet-4-6, balanced), 'deep' (claude-opus-4-6, most capable). Default: 'quick'.";
+
+function compactToolPayload<T>(
+  items: T[],
+  total: number,
+  detailHint: string,
+  meta: Record<string, unknown> = {},
+) {
+  const offset = typeof meta["offset"] === "number" ? meta["offset"] : 0;
+  return {
+    items,
+    total,
+    ...meta,
+    returned: items.length,
+    truncated: offset + items.length < total,
+    hint: paginationHint(items.length, total, detailHint, offset),
+  };
+}
 
 export function buildServer(): McpServer {
 const server = new McpServer({
@@ -295,16 +329,51 @@ server.tool(
     projectId: z.string().optional().describe("Filter by project ID"),
     tags: z.array(z.string()).optional().describe("Filter by tags"),
     priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("Filter by priority"),
-    limit: z.number().optional().describe("Max results to return"),
+    limit: z.number().optional().describe("Max compact results to return (default 20, max 100)"),
+    offset: z.number().optional().describe("Number of results to skip"),
     flakyOnly: z.boolean().optional().describe("Return only scenarios with flakinessScore < 0.8 (have recent failures)"),
+    verbose: z.boolean().optional().describe("Return full scenario records instead of compact summaries"),
   },
-  async ({ projectId, tags, priority, limit, flakyOnly }) => {
+  async ({ projectId, tags, priority, limit, offset, flakyOnly, verbose }) => {
     try {
-      let scenarios = listScenarios({ projectId, tags, priority, limit });
+      const effectiveLimit = compactLimit(limit, 20, 100);
+      const effectiveOffset = compactOffset(offset);
+      let page;
+      let total: number;
       if (flakyOnly) {
-        scenarios = scenarios.filter((s) => s.flakinessScore !== null && s.flakinessScore !== undefined && s.flakinessScore < 0.8);
+        const scenarios = listScenarios({ projectId, tags, priority })
+          .filter((s) => s.flakinessScore !== null && s.flakinessScore !== undefined && s.flakinessScore < 0.8);
+        page = pageItems(scenarios, {
+          limit: effectiveLimit,
+          offset: effectiveOffset,
+          defaultLimit: 20,
+          maxLimit: 100,
+        });
+        total = page.total;
+      } else {
+        const scenarios = listScenarios({
+          projectId,
+          tags,
+          priority,
+          limit: effectiveLimit,
+          offset: effectiveOffset || undefined,
+        });
+        total = countScenarios({ projectId, tags, priority });
+        page = {
+          items: scenarios,
+          total,
+          limit: effectiveLimit,
+          offset: effectiveOffset,
+          returned: scenarios.length,
+          truncated: effectiveOffset + scenarios.length < total,
+        };
       }
-      return json({ items: scenarios, total: scenarios.length });
+      return json(compactToolPayload(
+        verbose ? page.items : page.items.map(compactScenario),
+        total,
+        "get_scenario <id> or verbose=true",
+        { limit: page.limit, offset: page.offset },
+      ));
     } catch (error) {
       return errorResponse(error);
     }
@@ -484,13 +553,22 @@ server.tool(
     until: z.string().optional().describe("Filter runs started at or before this ISO date"),
     sort: z.enum(["date", "duration", "cost"]).optional().describe("Sort field"),
     desc: z.boolean().optional().describe("Sort descending (default true)"),
-    limit: z.number().optional().describe("Max results to return"),
+    limit: z.number().optional().describe("Max compact results to return (default 20, max 100)"),
     offset: z.number().optional().describe("Number of results to skip"),
+    verbose: z.boolean().optional().describe("Return full run records instead of compact summaries"),
   },
-  async ({ projectId, status, since, until, sort, desc, limit, offset }) => {
+  async ({ projectId, status, since, until, sort, desc, limit, offset, verbose }) => {
     try {
-      const runs = listRuns({ projectId, status, since, until, sort, desc, limit, offset });
-      return json({ items: runs, total: runs.length });
+      const effectiveLimit = compactLimit(limit, 20, 100);
+      const effectiveOffset = compactOffset(offset);
+      const runs = listRuns({ projectId, status, since, until, sort, desc, limit: effectiveLimit, offset: effectiveOffset || undefined });
+      const total = countRuns({ projectId, status, since, until });
+      return json(compactToolPayload(
+        verbose ? runs : runs.map(compactRun),
+        total,
+        "get_run <id> or verbose=true",
+        { limit: effectiveLimit, offset: effectiveOffset },
+      ));
     } catch (error) {
       return errorResponse(error);
     }
@@ -506,8 +584,11 @@ server.tool(
     runId: z.string().describe(`Run ID. ${ID_DESC}`),
     status: z.enum(["passed", "failed", "error", "running"]).optional().describe("Filter by result status"),
     scenarioId: z.string().optional().describe("Filter by scenario ID (full or partial)"),
+    limit: z.number().optional().describe("Max compact results to return (default 20, max 100)"),
+    offset: z.number().optional().describe("Number of results to skip"),
+    verbose: z.boolean().optional().describe("Return full result records, including full reasoning/error text"),
   },
-  async ({ runId, status, scenarioId }) => {
+  async ({ runId, status, scenarioId, limit, offset, verbose }) => {
     try {
       let results = listResults(runId);
       if (status) {
@@ -516,7 +597,14 @@ server.tool(
       if (scenarioId) {
         results = results.filter((r) => r.scenarioId === scenarioId || r.scenarioId.startsWith(scenarioId));
       }
-      return json({ items: results, total: results.length });
+      const page = pageItems(results, { limit, offset, defaultLimit: 20, maxLimit: 100 });
+      const summaries = page.items.map((result) => compactResult(result, getScenario(result.scenarioId)));
+      return json(compactToolPayload(
+        verbose ? page.items : summaries,
+        page.total,
+        "get_results with verbose=true or get_screenshots <resultId>",
+        { limit: page.limit, offset: page.offset },
+      ));
     } catch (error) {
       return errorResponse(error);
     }
@@ -597,11 +685,21 @@ server.tool(
 server.tool(
   "list_projects",
   "List all registered projects",
-  {},
-  async () => {
+  {
+    limit: z.number().optional().describe("Max compact results to return (default 20, max 100)"),
+    offset: z.number().optional().describe("Number of results to skip"),
+    verbose: z.boolean().optional().describe("Return full project records instead of compact summaries"),
+  },
+  async ({ limit, offset, verbose }) => {
     try {
       const projects = listProjects();
-      return json({ items: projects, total: projects.length });
+      const page = pageItems(projects, { limit, offset, defaultLimit: 20, maxLimit: 100 });
+      return json(compactToolPayload(
+        verbose ? page.items : page.items.map(compactProject),
+        page.total,
+        "verbose=true",
+        { limit: page.limit, offset: page.offset },
+      ));
     } catch (error) {
       return errorResponse(error);
     }
@@ -691,11 +789,20 @@ server.tool(
   {
     projectId: z.string().optional().describe("Filter by testers project ID"),
     enabled: z.boolean().optional().describe("Filter by enabled state"),
+    limit: z.number().optional().describe("Max compact results to return (default 20, max 100)"),
+    offset: z.number().optional().describe("Number of results to skip"),
+    verbose: z.boolean().optional().describe("Return full workflow records instead of compact summaries"),
   },
-  async ({ projectId, enabled }) => {
+  async ({ projectId, enabled, limit, offset, verbose }) => {
     try {
       const workflows = listTestingWorkflows({ projectId, enabled });
-      return json({ items: workflows, total: workflows.length });
+      const page = pageItems(workflows, { limit, offset, defaultLimit: 20, maxLimit: 100 });
+      return json(compactToolPayload(
+        verbose ? page.items : page.items.map(compactWorkflow),
+        page.total,
+        "get_testing_workflow <id> or verbose=true",
+        { limit: page.limit, offset: page.offset },
+      ));
     } catch (error) {
       return errorResponse(error);
     }
@@ -784,11 +891,29 @@ server.tool(
 server.tool(
   "list_agents",
   "List all registered agents",
-  {},
-  async () => {
+  {
+    limit: z.number().optional().describe("Max compact results to return (default 20, max 100)"),
+    offset: z.number().optional().describe("Number of results to skip"),
+    verbose: z.boolean().optional().describe("Return full agent records"),
+  },
+  async ({ limit, offset, verbose }) => {
     try {
       const agents = listAgents();
-      return json({ items: agents, total: agents.length });
+      const page = pageItems(agents, { limit, offset, defaultLimit: 20, maxLimit: 100 });
+      const compactAgents = page.items.map((agent) => ({
+        id: agent.id,
+        shortId: agent.id.slice(0, 8),
+        name: truncateText(agent.name, 80),
+        role: agent.role ? truncateText(agent.role, 60) : null,
+        focus: agent.metadata && typeof agent.metadata["focus"] === "string" ? truncateText(agent.metadata["focus"], 100) : null,
+        lastSeenAt: agent.lastSeenAt,
+      }));
+      return json(compactToolPayload(
+        verbose ? page.items : compactAgents,
+        page.total,
+        "verbose=true",
+        { limit: page.limit, offset: page.offset },
+      ));
     } catch (error) {
       return errorResponse(error);
     }
@@ -954,14 +1079,23 @@ server.tool(
   {
     days: z.number().optional().describe("Scenarios not run in this many days are considered stale (default 7)"),
     projectId: z.string().optional().describe("Filter by project ID"),
+    limit: z.number().optional().describe("Max compact results to return (default 20, max 100)"),
+    offset: z.number().optional().describe("Number of results to skip"),
+    verbose: z.boolean().optional().describe("Return full stale scenario records instead of compact summaries"),
   },
-  async ({ days = 7, projectId }) => {
+  async ({ days = 7, projectId, limit, offset, verbose }) => {
     try {
       let scenarios = findStaleScenarios(days);
       if (projectId) {
         scenarios = scenarios.filter((s) => s.projectId === projectId);
       }
-      return json({ items: scenarios, total: scenarios.length });
+      const page = pageItems(scenarios, { limit, offset, defaultLimit: 20, maxLimit: 100 });
+      return json(compactToolPayload(
+        verbose ? page.items : page.items.map(compactScenario),
+        page.total,
+        "get_scenario <id> or verbose=true",
+        { limit: page.limit, offset: page.offset },
+      ));
     } catch (error) {
       return errorResponse(error);
     }
@@ -1195,11 +1329,29 @@ server.tool(
     type: z.enum(["console_error", "network_error", "broken_link", "performance"]).optional(),
     projectId: z.string().optional(),
     limit: z.number().optional(),
+    offset: z.number().optional(),
+    verbose: z.boolean().optional().describe("Return full scan issue records"),
   },
-  async ({ status, type, projectId, limit }) => {
+  async ({ status, type, projectId, limit, offset, verbose }) => {
     try {
-      const issues = listScanIssues({ status, type, projectId, limit });
-      return json({ items: issues, total: issues.length });
+      const issues = listScanIssues({ status, type, projectId });
+      const page = pageItems(issues, { limit, offset, defaultLimit: 20, maxLimit: 100 });
+      const compactIssues = page.items.map((issue) => ({
+        id: issue.id,
+        type: issue.type,
+        severity: issue.severity,
+        status: issue.status,
+        message: truncateText(issue.message, 120),
+        pageUrl: truncateText(issue.pageUrl, 100),
+        firstSeenAt: issue.firstSeenAt,
+        lastSeenAt: issue.lastSeenAt,
+      }));
+      return json(compactToolPayload(
+        verbose ? page.items : compactIssues,
+        page.total,
+        "verbose=true",
+        { limit: page.limit, offset: page.offset },
+      ));
     } catch (e) { return errorResponse(e); }
   },
 );
@@ -1274,12 +1426,31 @@ server.tool(
     projectId: z.string().optional().describe("Filter by project ID"),
     enabled: z.boolean().optional().describe("Filter by enabled status"),
     tags: z.array(z.string()).optional().describe("Filter by tags"),
-    limit: z.number().optional().describe("Max results to return (default 20)"),
+    limit: z.number().optional().describe("Max compact results to return (default 20, max 100)"),
+    offset: z.number().optional().describe("Number of results to skip"),
+    verbose: z.boolean().optional().describe("Return full API check records instead of compact summaries"),
   },
-  async ({ projectId, enabled, tags, limit = 20 }) => {
+  async ({ projectId, enabled, tags, limit, offset, verbose }) => {
     try {
-      const checks = listApiChecks({ projectId, enabled, tags, limit });
-      return json({ items: checks, total: checks.length });
+      const effectiveLimit = compactLimit(limit, 20, 100);
+      const effectiveOffset = compactOffset(offset);
+      const checks = tags && tags.length > 0
+        ? pageItems(listApiChecks({ projectId, enabled, tags }), {
+            limit: effectiveLimit,
+            offset: effectiveOffset,
+            defaultLimit: 20,
+            maxLimit: 100,
+          }).items
+        : listApiChecks({ projectId, enabled, limit: effectiveLimit, offset: effectiveOffset || undefined });
+      const total = tags && tags.length > 0
+        ? listApiChecks({ projectId, enabled, tags }).length
+        : countApiChecks({ projectId, enabled });
+      return json(compactToolPayload(
+        verbose ? checks : checks.map(compactApiCheck),
+        total,
+        "get_api_check <id> or verbose=true",
+        { limit: effectiveLimit, offset: effectiveOffset },
+      ));
     } catch (error) {
       return errorResponse(error);
     }
@@ -1409,14 +1580,22 @@ server.tool(
   `Get recent results for an API check. ${ID_DESC}`,
   {
     checkId: z.string().describe(`API check ID or short ID. ${ID_DESC}`),
-    limit: z.number().optional().describe("Max results to return (default 10)"),
+    limit: z.number().optional().describe("Max compact results to return (default 10, max 100)"),
+    offset: z.number().optional().describe("Number of results to skip"),
+    verbose: z.boolean().optional().describe("Return full API check result records"),
   },
-  async ({ checkId, limit = 10 }) => {
+  async ({ checkId, limit = 10, offset, verbose }) => {
     try {
       const check = getApiCheck(checkId);
       if (!check) return errorResponse(notFoundErr(checkId, "ApiCheck"));
-      const results = listApiCheckResults(check.id, { limit });
-      return json({ items: results, total: results.length });
+      const results = listApiCheckResults(check.id);
+      const page = pageItems(results, { limit, offset, defaultLimit: 10, maxLimit: 100 });
+      return json(compactToolPayload(
+        verbose ? page.items : page.items.map(compactApiCheckResult),
+        page.total,
+        "get_api_check_results with verbose=true for full response data",
+        { limit: page.limit, offset: page.offset },
+      ));
     } catch (error) {
       return errorResponse(error);
     }
@@ -1472,11 +1651,27 @@ server.tool(
     projectId: z.string().optional().describe("Filter by project ID (includes global personas)"),
     enabled: z.boolean().optional().describe("Filter by enabled status"),
     globalOnly: z.boolean().optional().describe("Return only global personas (no project)"),
+    limit: z.number().optional().describe("Max compact results to return (default 20, max 100)"),
+    offset: z.number().optional().describe("Number of results to skip"),
+    verbose: z.boolean().optional().describe("Return full redacted persona records instead of compact summaries"),
   },
-  async ({ projectId, enabled, globalOnly }) => {
+  async ({ projectId, enabled, globalOnly, limit, offset, verbose }) => {
     try {
-      const personas = listPersonas({ projectId, enabled, globalOnly });
-      return json({ items: redactPersonas(personas), total: personas.length });
+      const effectiveLimit = compactLimit(limit, 20, 100);
+      const effectiveOffset = compactOffset(offset);
+      const filter = { projectId, enabled, globalOnly };
+      const personas = listPersonas({
+        ...filter,
+        limit: effectiveLimit,
+        offset: effectiveOffset || undefined,
+      });
+      const total = countPersonas(filter);
+      return json(compactToolPayload(
+        verbose ? redactPersonas(personas) : personas.map(compactPersona),
+        total,
+        "get_persona <id> or verbose=true",
+        { limit: effectiveLimit, offset: effectiveOffset },
+      ));
     } catch (error) {
       return errorResponse(error);
     }
@@ -2337,15 +2532,26 @@ server.tool(
   {
     projectId: z.string().optional().describe("Filter by project ID"),
     enabled: z.boolean().optional().describe("Filter by enabled status"),
+    limit: z.number().optional().describe("Max compact results to return (default 20, max 100)"),
+    offset: z.number().optional().describe("Number of results to skip"),
+    verbose: z.boolean().optional().describe("Return full schedule records instead of compact summaries"),
   },
-  async ({ projectId, enabled }) => {
+  async ({ projectId, enabled, limit, offset, verbose }) => {
     try {
-      const schedules = listSchedules({ projectId, enabled });
-      const enriched = schedules.map((s) => ({
+      const effectiveLimit = compactLimit(limit, 20, 100);
+      const effectiveOffset = compactOffset(offset);
+      const allSchedules = listSchedules({ projectId, enabled });
+      const page = pageItems(allSchedules, { limit: effectiveLimit, offset: effectiveOffset });
+      const enriched = page.items.map((s) => ({
         ...s,
         nextRunAt: getNextRunTime(s.cronExpression)?.toISOString() ?? null,
       }));
-      return json({ items: enriched, total: enriched.length });
+      return json(compactToolPayload(
+        verbose ? enriched : enriched.map(compactSchedule),
+        page.total,
+        "verbose=true",
+        { limit: page.limit, offset: page.offset },
+      ));
     } catch (e) {
       return errorResponse(e);
     }
@@ -2561,12 +2767,21 @@ server.tool(
   "List registered environments with their URLs",
   {
     projectId: z.string().optional().describe("Filter by project ID"),
+    limit: z.number().optional().describe("Max compact results to return (default 20, max 100)"),
+    offset: z.number().optional().describe("Number of results to skip"),
+    verbose: z.boolean().optional().describe("Return full environment records instead of compact summaries"),
   },
-  async ({ projectId }) => {
+  async ({ projectId, limit, offset, verbose }) => {
     try {
       const { listEnvironments } = await import("../db/environments.js");
       const envs = listEnvironments(projectId);
-      return json({ items: envs, total: envs.length });
+      const page = pageItems(envs, { limit, offset, defaultLimit: 20, maxLimit: 100 });
+      return json(compactToolPayload(
+        verbose ? page.items : page.items.map(compactEnvironment),
+        page.total,
+        "list_environments with verbose=true",
+        { limit: page.limit, offset: page.offset },
+      ));
     } catch (e) {
       return errorResponse(e);
     }
@@ -2615,12 +2830,17 @@ server.tool(
   "Group scenarios by page (targetPath). Shows which pages have test coverage and which don't. Useful for spotting gaps.",
   {
     projectId: z.string().optional().describe("Filter by project ID"),
+    limit: z.number().optional().describe("Max pages to return (default 20, max 100)"),
+    offset: z.number().optional().describe("Number of pages to skip"),
+    scenariosPerPage: z.number().optional().describe("Max compact scenarios included per page (default 5, max 20)"),
+    verbose: z.boolean().optional().describe("Return all scenarios per returned page instead of compact page samples"),
   },
-  async ({ projectId }) => {
+  async ({ projectId, limit, offset, scenariosPerPage, verbose }) => {
     try {
       const scenarios = listScenarios({ projectId });
       const byPage: Record<string, Array<{ id: string; shortId: string; name: string; priority: string; tags: string[] }>> = {};
       const noPath: Array<{ id: string; shortId: string; name: string }> = [];
+      const scenarioSampleLimit = compactLimit(scenariosPerPage, 5, 20);
 
       for (const s of scenarios) {
         if (s.targetPath) {
@@ -2633,14 +2853,34 @@ server.tool(
 
       const pages = Object.entries(byPage)
         .sort(([a], [b]) => a.localeCompare(b))
-        .map(([path, items]) => ({ path, scenarioCount: items.length, scenarios: items }));
+        .map(([path, items]) => ({
+          path: truncateText(path, 100),
+          scenarioCount: items.length,
+          scenarios: verbose
+            ? items
+            : items.slice(0, scenarioSampleLimit).map((scenario) => ({
+                ...scenario,
+                name: truncateText(scenario.name, 90),
+                tags: scenario.tags.slice(0, 5).map((tag) => truncateText(tag, 30)),
+              })),
+          truncatedScenarios: !verbose && items.length > scenarioSampleLimit,
+        }));
+      const page = pageItems(pages, { limit, offset, defaultLimit: 20, maxLimit: 100 });
+      const noPageSample = noPath.slice(0, scenarioSampleLimit).map((scenario) => ({
+        ...scenario,
+        name: truncateText(scenario.name, 90),
+      }));
 
       return json({
-        pages,
+        pages: page.items,
         totalPages: pages.length,
         totalScenarios: scenarios.length,
         scenariosWithNoPage: noPath.length,
-        noPageScenarios: noPath,
+        noPageScenarios: verbose ? noPath : noPageSample,
+        returned: page.returned,
+        limit: page.limit,
+        offset: page.offset,
+        hint: paginationHint(page.returned, pages.length, "list_scenarios_by_page with verbose=true or get_scenario <id>"),
       });
     } catch (e) {
       return errorResponse(e);
