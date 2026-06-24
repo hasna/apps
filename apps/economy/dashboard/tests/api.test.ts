@@ -1,6 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test"
 
 process.env.VITE_API_URL = "http://dashboard.test"
+process.env.VITE_API_TOKEN = "build-secret"
+process.env.VITE_ECONOMY_API_TOKEN = "build-economy-secret"
 
 type DashboardApi = typeof import("../src/api")
 
@@ -168,6 +170,12 @@ describe("dashboard API client", () => {
       Object.defineProperty(globalThis, "location", { configurable: true, value: originalLocation })
       Object.defineProperty(globalThis, "history", { configurable: true, value: originalHistory })
     }
+  })
+
+  test("does not read API tokens from build-time environment", () => {
+    api.setDashboardApiToken("")
+
+    expect(api.getDashboardApiToken()).toBe("")
   })
 
   test("posts budget, pricing, source sync, and goal payloads", async () => {

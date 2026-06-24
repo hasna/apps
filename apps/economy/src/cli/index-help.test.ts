@@ -220,4 +220,31 @@ describe('economy CLI mutation validation', () => {
     expect(result.exitCode).toBe(1)
     expect(result.stderr).toContain('ECONOMY_API_TOKEN or HASNA_ECONOMY_API_TOKEN is required')
   })
+
+  test('dashboard command does not pass the token to an already-running local service', async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const path = new URL(req.url).pathname
+        if (path === '/health') return Response.json({ data: { status: 'ok' }, meta: {} })
+        return new Response('<html>not economy</html>', { headers: { 'Content-Type': 'text/html' } })
+      },
+    })
+
+    try {
+      const result = await runCli(['dashboard', '--port', String(server.port)], {
+        ECONOMY_API_TOKEN: 'dashboard-secret',
+        HASNA_ECONOMY_API_TOKEN: '',
+      })
+      const output = `${result.stdout}\n${result.stderr}`
+
+      expect(result.exitCode).toBe(0)
+      expect(output).toContain('Using an already-running server')
+      expect(output).toContain(`Opening http://localhost:${server.port}`)
+      expect(output).not.toContain('dashboard-secret')
+      expect(output).not.toContain('#token=')
+    } finally {
+      server.stop(true)
+    }
+  })
 })

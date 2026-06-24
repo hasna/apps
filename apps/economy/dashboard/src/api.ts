@@ -1,6 +1,5 @@
 const API_BASE = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3456'
 const API_TOKEN_STORAGE_KEY = 'economy-dashboard-api-token'
-const BUILD_API_TOKEN = ((import.meta.env.VITE_ECONOMY_API_TOKEN as string | undefined) ?? (import.meta.env.VITE_API_TOKEN as string | undefined) ?? '').trim()
 let memoryApiToken = ''
 
 function storageApiToken(): string {
@@ -25,7 +24,7 @@ export function initDashboardApiTokenFromLocation(): string {
 }
 
 export function getDashboardApiToken(): string {
-  return storageApiToken() || BUILD_API_TOKEN
+  return storageApiToken()
 }
 
 export function setDashboardApiToken(token: string): string {

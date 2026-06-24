@@ -1029,7 +1029,9 @@ program
       return
     }
     const url = `http://localhost:${port}`
-    const dashboardUrl = `${url}/#token=${encodeURIComponent(token)}`
+    let dashboardUrl = url
+    let startedVerifiedServer = false
+    const dashboardBootstrap = randomUUID()
 
     // Check if server is already running
     let serverRunning = false
@@ -1048,7 +1050,7 @@ program
       const child = spawn(process.execPath, [serveScript], {
         detached: true,
         stdio: 'ignore',
-        env: { ...process.env, ECONOMY_PORT: String(port) },
+        env: { ...process.env, ECONOMY_PORT: String(port), ECONOMY_DASHBOARD_BOOTSTRAP: dashboardBootstrap },
       })
       child.unref()
       // Wait for it to start
@@ -1056,8 +1058,16 @@ program
       while (attempts < 20) {
         await new Promise(r => setTimeout(r, 250))
         try {
-          const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(300) })
-          if (res.ok) { serverRunning = true; break }
+          const res = await fetch(`${url}/health`, {
+            headers: { 'X-Economy-Dashboard-Bootstrap': dashboardBootstrap },
+            signal: AbortSignal.timeout(300),
+          })
+          const body = await res.json().catch(() => null) as { data?: { dashboard_bootstrap?: string } } | null
+          if (res.ok && body?.data?.dashboard_bootstrap === dashboardBootstrap) {
+            serverRunning = true
+            startedVerifiedServer = true
+            break
+          }
         } catch { /* wait */ }
         attempts++
       }
@@ -1065,7 +1075,14 @@ program
         console.log(chalk.green(`✓ Server started`))
       } else {
         console.log(chalk.yellow(`⚠ Server didn't respond — open ${url} manually after running \`economy serve\``))
+        return
       }
+    }
+
+    if (startedVerifiedServer) {
+      dashboardUrl = `${url}/#token=${encodeURIComponent(token)}`
+    } else {
+      console.log(chalk.yellow('Using an already-running server; enter the API token in the dashboard.'))
     }
 
     console.log(chalk.cyan(`Opening ${url}`))

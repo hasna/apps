@@ -29,6 +29,7 @@ import type { Agent } from '../lib/agents.js'
 
 const CORS_METHODS = 'GET,POST,PUT,DELETE,OPTIONS'
 const CORS_HEADERS = 'Content-Type, Authorization, X-Economy-Token'
+const DASHBOARD_BOOTSTRAP_HEADER = 'X-Economy-Dashboard-Bootstrap'
 const AGENT_ERROR = `agent must be one of: ${AGENTS.join(', ')}`
 const SYNC_SOURCES = ['all', ...AGENTS] as const
 const DEFAULT_DASHBOARD_DIR = new URL('../../dashboard/dist', import.meta.url).pathname
@@ -59,10 +60,16 @@ function isAllowedCorsOrigin(origin: string): boolean {
   return configuredCorsOrigins().has(origin) || isLocalCorsOrigin(origin)
 }
 
+function dashboardBootstrapForRequest(req: Request): string | undefined {
+  const expected = process.env['ECONOMY_DASHBOARD_BOOTSTRAP']?.trim()
+  if (!expected) return undefined
+  return req.headers.get(DASHBOARD_BOOTSTRAP_HEADER) === expected ? expected : undefined
+}
+
 function corsHeadersFor(req: Request): Record<string, string> {
   const headers: Record<string, string> = {
     'Access-Control-Allow-Methods': CORS_METHODS,
-    'Access-Control-Allow-Headers': CORS_HEADERS,
+    'Access-Control-Allow-Headers': `${CORS_HEADERS}, ${DASHBOARD_BOOTSTRAP_HEADER}`,
     Vary: 'Origin',
   }
   const origin = req.headers.get('Origin')
@@ -201,7 +208,14 @@ async function handleApiRequest(db: Database, req: Request): Promise<Response> {
     if (!isAuthorizedRequest(req, path)) return err('Unauthorized', 401)
 
     // Health
-    if (path === '/health') return ok({ status: 'ok', ts: new Date().toISOString() })
+    if (path === '/health') {
+      const dashboardBootstrap = dashboardBootstrapForRequest(req)
+      return ok({
+        status: 'ok',
+        ts: new Date().toISOString(),
+        ...(dashboardBootstrap ? { dashboard_bootstrap: dashboardBootstrap } : {}),
+      })
+    }
 
     // Summary
     if (path === '/api/summary' && method === 'GET') {

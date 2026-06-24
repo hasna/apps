@@ -23,6 +23,7 @@ const SERVE_ENV_KEYS = [
   'ECONOMY_HOST',
   'ECONOMY_CORS_ORIGIN',
   'ECONOMY_CORS_ORIGINS',
+  'ECONOMY_DASHBOARD_BOOTSTRAP',
 ] as const
 const SERVE_ENV = Object.fromEntries(SERVE_ENV_KEYS.map(key => [key, process.env[key]])) as Record<typeof SERVE_ENV_KEYS[number], string | undefined>
 
@@ -119,6 +120,18 @@ describe('REST API server', () => {
     const { status, data } = await req(handler, '/health')
     expect(status).toBe(200)
     expect((data as Record<string, unknown>)['data']).toMatchObject({ status: 'ok' })
+  })
+
+  it('GET /health echoes the dashboard bootstrap only when the caller proves it', async () => {
+    process.env['ECONOMY_DASHBOARD_BOOTSTRAP'] = 'bootstrap-secret'
+
+    let response = await req(handler, '/health')
+    expect(((response.data as Record<string, unknown>)['data'] as Record<string, unknown>)['dashboard_bootstrap']).toBeUndefined()
+
+    response = await req(handler, '/health', 'GET', undefined, {
+      'X-Economy-Dashboard-Bootstrap': 'bootstrap-secret',
+    })
+    expect(((response.data as Record<string, unknown>)['data'] as Record<string, unknown>)['dashboard_bootstrap']).toBe('bootstrap-secret')
   })
 
   it('GET /api/summary returns cost summary', async () => {
