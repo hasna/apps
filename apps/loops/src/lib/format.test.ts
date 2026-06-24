@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   publicExecutorResult,
   publicLoop,
+  publicRun,
   publicWorkflow,
   publicWorkflowEvent,
   publicWorkflowRun,
@@ -127,6 +128,41 @@ describe("textOutputBlocks", () => {
     );
     expect(JSON.stringify(value)).toContain("VISIBLE_WORKFLOW_STDOUT");
     expect(JSON.stringify(value)).toContain("VISIBLE_WORKFLOW_STDERR");
+  });
+
+  test("loop run goal output and failed-node stderr require explicit show-output opt-in", () => {
+    const hidden = publicRun({
+      id: "run",
+      loopId: "loop",
+      loopName: "goal-loop",
+      scheduledFor: "2026-01-01T00:00:00Z",
+      attempt: 1,
+      status: "failed",
+      stdout: "SECRET_GOAL_STDOUT should not leak",
+      stderr: "SECRET_GOAL_STDERR should not leak",
+      error: "node init failed: process exited with code 1",
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    });
+    const hiddenJson = JSON.stringify(hidden);
+    expect(hiddenJson).not.toContain("SECRET_GOAL_STDOUT");
+    expect(hiddenJson).not.toContain("SECRET_GOAL_STDERR");
+    expect(hiddenJson).toContain("[redacted");
+
+    const visible = publicRun({
+      id: "run",
+      loopId: "loop",
+      loopName: "goal-loop",
+      scheduledFor: "2026-01-01T00:00:00Z",
+      attempt: 1,
+      status: "failed",
+      stdout: "VISIBLE_GOAL_STDOUT",
+      stderr: "VISIBLE_GOAL_STDERR",
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    }, true);
+    expect(JSON.stringify(visible)).toContain("VISIBLE_GOAL_STDOUT");
+    expect(JSON.stringify(visible)).toContain("VISIBLE_GOAL_STDERR");
   });
 
   test("redacts executor result output and error by default", () => {

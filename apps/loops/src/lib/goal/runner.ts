@@ -11,6 +11,7 @@ import type { Goal, GoalExecutorResult, GoalPlanNode, GoalSpec, RunGoalOptions }
 import { GOAL_OBJECTIVE_MAX_CHARS } from "./types.js";
 
 const DEFAULT_MAX_TURNS = 10;
+const NODE_FAILURE_OUTPUT_MAX_CHARS = 1_200;
 
 const PlanNodeSchema = z.object({
   key: z.string().min(1).max(64).regex(/^[A-Za-z0-9_.-]+$/),
@@ -58,13 +59,14 @@ function resultFromGoal(
   stdout: string,
   error?: string,
   startedAt = goal.createdAt,
+  stderr = "",
 ): GoalExecutorResult {
   const finishedAt = nowIso();
   return {
     status,
     exitCode: status === "succeeded" ? 0 : 1,
     stdout,
-    stderr: "",
+    stderr,
     error,
     startedAt,
     finishedAt,
@@ -105,6 +107,25 @@ function abortResult(
 
 function sameBlockerKey(values: string[]): string {
   return values.map((value) => value.trim()).filter(Boolean).join("\n") || "goal completion remains unproven";
+}
+
+function outputExcerpt(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.length <= NODE_FAILURE_OUTPUT_MAX_CHARS) return trimmed;
+  const omitted = trimmed.length - NODE_FAILURE_OUTPUT_MAX_CHARS;
+  return `[truncated ${omitted} chars]\n${trimmed.slice(-NODE_FAILURE_OUTPUT_MAX_CHARS)}`;
+}
+
+function nodeFailureEvidence(node: GoalPlanNode, result: ExecutorResult): string {
+  const lines = [`node ${node.key} ${result.status}`];
+  if (result.exitCode !== undefined) lines.push(`exitCode: ${result.exitCode}`);
+  if (result.error) lines.push(`error: ${result.error}`);
+  const stderr = outputExcerpt(result.stderr);
+  if (stderr) lines.push(`stderr:\n${stderr}`);
+  const stdout = outputExcerpt(result.stdout);
+  if (stdout) lines.push(`stdout:\n${stdout}`);
+  return lines.join("\n");
 }
 
 function metadataFor(goal: Goal, node: GoalPlanNode, context: RunGoalOptions["context"]): ExecutionMetadata {
@@ -296,6 +317,8 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
           }, { daemonLeaseId: opts.daemonLeaseId });
           continue;
         }
+        const failureEvidence = nodeFailureEvidence(node, result);
+        evidence.push(failureEvidence);
         const blocker = `node ${node.key} ${result.status}${result.error ? `: ${result.error}` : ""}`;
         if (blocker === lastBlocker) repeatedBlockerCount += 1;
         else {
@@ -307,7 +330,14 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
         });
         if (repeatedBlockerCount >= 3) {
           goal = store.updateGoalStatus(goal.goalId, "blocked", { daemonLeaseId: opts.daemonLeaseId });
-          return resultFromGoal(goal, "failed", stdoutFor(goal, store.listGoalPlanNodes(goal.goalId), evidence), blocker, startedAt);
+          return resultFromGoal(
+            goal,
+            "failed",
+            stdoutFor(goal, store.listGoalPlanNodes(goal.goalId), evidence),
+            blocker,
+            startedAt,
+            failureEvidence,
+          );
         }
         break;
       }

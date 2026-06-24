@@ -44,6 +44,27 @@ function ok(stdout = ""): ExecutorResult {
   };
 }
 
+function failed({
+  stdout = "",
+  stderr = "",
+  error = "process exited with code 1",
+}: {
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+}): ExecutorResult {
+  return {
+    status: "failed",
+    exitCode: 1,
+    stdout,
+    stderr,
+    error,
+    startedAt: "2026-01-01T00:00:00.000Z",
+    finishedAt: "2026-01-01T00:00:01.000Z",
+    durationMs: 1000,
+  };
+}
+
 function plannedNode({
   key,
   objective,
@@ -135,6 +156,31 @@ describe("runGoal", () => {
       expect(result.error).toContain("budget");
       expect(calls).toEqual([]);
       expect(store.getGoal(result.goalId!)?.status).toBe("budgetLimited");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("surfaces failed node stderr in goal output and result stderr", async () => {
+    const store = new Store(":memory:");
+    try {
+      const model = mockObjects([{ nodes: [plannedNode({ key: "init", objective: "initialize provider" })] }]);
+      const result = await runGoal(store, { objective: "show failed node reason", maxTurns: 3 }, {
+        model,
+        executeNode: async () => failed({
+          stdout: "{\"type\":\"thread.started\"}",
+          stderr: "Codewith usage limit reached for profile account009",
+        }),
+      });
+
+      expect(result.status).toBe("failed");
+      expect(result.error).toBe("node init failed: process exited with code 1");
+      expect(result.stderr).toContain("node init failed");
+      expect(result.stderr).toContain("Codewith usage limit reached");
+      expect(result.stdout).toContain("Codewith usage limit reached");
+      const payload = JSON.parse(result.stdout) as { evidence: string[] };
+      expect(payload.evidence.some((entry) => entry.includes("stderr:") && entry.includes("account009"))).toBe(true);
+      expect(store.getGoal(result.goalId!)?.status).toBe("blocked");
     } finally {
       store.close();
     }
