@@ -166,13 +166,14 @@ export function registerStorageSyncTools(server: McpServer): void {
           return { content: [{ type: "text", text: PG_MIGRATIONS.join("\n\n---\n\n") }] };
         }
 
-        const pg = await getStoragePg();
         const lines: string[] = [];
-        for (let i = 0; i < PG_MIGRATIONS.length; i++) {
-          await pg.run(PG_MIGRATIONS[i]!);
-          lines.push(`Migration ${i + 1}/${PG_MIGRATIONS.length}: applied`);
+        const pg = await getStoragePg();
+        try {
+          await runStorageMigrations(pg);
+          lines.push(`Applied ${PG_MIGRATIONS.length} migration(s).`);
+        } finally {
+          await pg.close();
         }
-        await pg.close();
         lines.push("All migrations applied successfully.");
         return { content: [{ type: "text", text: lines.join("\n") }] };
       } catch (e) {

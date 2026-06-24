@@ -151,6 +151,7 @@ describe("conversations_storage_migrate", () => {
     }) as any;
     const text = getText(result);
     expect(text).toContain("CREATE TABLE");
+    expect(text).toContain("CREATE EXTENSION IF NOT EXISTS pgcrypto");
     expect(text).toContain("messages");
     expect(result.isError).toBeUndefined();
   });

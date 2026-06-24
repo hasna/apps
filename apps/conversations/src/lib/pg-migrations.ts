@@ -7,6 +7,8 @@
 export const PG_MIGRATIONS: string[] = [
   // Migration 1: Full schema (consolidated from SQLite incremental migrations)
   `
+  CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
   CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
@@ -91,16 +93,6 @@ export const PG_MIGRATIONS: string[] = [
   ALTER TABLE messages ADD COLUMN IF NOT EXISTS blocking BOOLEAN NOT NULL DEFAULT FALSE;
   ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachments TEXT;
   ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to BIGINT;
-  DO $$
-  BEGIN
-    IF EXISTS (
-      SELECT 1 FROM information_schema.columns
-      WHERE table_schema = 'public' AND table_name = 'messages' AND column_name = 'space'
-    ) THEN
-      UPDATE messages SET channel = space WHERE channel IS NULL AND space IS NOT NULL;
-      ALTER TABLE messages DROP COLUMN IF EXISTS space;
-    END IF;
-  END $$;
   CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
   CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_agent);
   CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
@@ -183,6 +175,382 @@ export const PG_MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_mentions_agent ON message_mentions(mentioned_agent);
   CREATE INDEX IF NOT EXISTS idx_mentions_message ON message_mentions(message_id);
   CREATE INDEX IF NOT EXISTS idx_mentions_notified ON message_mentions(notified_at);
+
+  CREATE OR REPLACE FUNCTION __open_conversations_normalize_channel_name(input TEXT)
+  RETURNS TEXT AS $$
+  DECLARE
+    value TEXT := lower(btrim(regexp_replace(COALESCE(input, ''), '^#+', '')));
+  BEGIN
+    value := regexp_replace(value, '[^a-z0-9._-]+', '-', 'g');
+    value := regexp_replace(value, '-+', '-', 'g');
+    value := regexp_replace(value, '^[._-]+|[._-]+$', '', 'g');
+    IF value = '' THEN
+      RETURN 'channel';
+    END IF;
+    RETURN value;
+  END;
+  $$ LANGUAGE plpgsql IMMUTABLE;
+
+  CREATE OR REPLACE FUNCTION __open_conversations_stable_suffix(value TEXT)
+  RETURNS TEXT AS $$
+  DECLARE
+    hash BIGINT := 2166136261;
+    code INTEGER;
+    index INTEGER;
+    digits TEXT := '0123456789abcdefghijklmnopqrstuvwxyz';
+    encoded TEXT := '';
+    remainder INTEGER;
+  BEGIN
+    FOR index IN 1..char_length(COALESCE(value, '')) LOOP
+      code := ascii(substr(value, index, 1));
+      hash := mod((hash # code::BIGINT) * 16777619, 4294967296::BIGINT);
+    END LOOP;
+
+    IF hash = 0 THEN
+      encoded := '0';
+    ELSE
+      WHILE hash > 0 LOOP
+        remainder := mod(hash, 36);
+        encoded := substr(digits, remainder + 1, 1) || encoded;
+        hash := hash / 36;
+      END LOOP;
+    END IF;
+
+    RETURN substr(lpad(encoded, 6, '0'), 1, 6);
+  END;
+  $$ LANGUAGE plpgsql IMMUTABLE;
+
+  DO $$
+  DECLARE
+    has_spaces BOOLEAN := to_regclass('public.spaces') IS NOT NULL;
+    has_space_members BOOLEAN := to_regclass('public.space_members') IS NOT NULL;
+    has_space_subscriptions BOOLEAN := to_regclass('public.space_subscriptions') IS NOT NULL;
+    has_space_notification_reads BOOLEAN := to_regclass('public.space_notification_reads') IS NOT NULL;
+    has_tasks BOOLEAN := to_regclass('public.tasks') IS NOT NULL;
+    has_graph_edges BOOLEAN := to_regclass('public.graph_edges') IS NOT NULL;
+    has_resource_locks BOOLEAN := to_regclass('public.resource_locks') IS NOT NULL;
+    has_messages_space BOOLEAN := EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'messages' AND column_name = 'space'
+    );
+    has_message_mentions_space BOOLEAN := EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'message_mentions' AND column_name = 'space'
+    );
+    has_tasks_space BOOLEAN := EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'tasks' AND column_name = 'space'
+    );
+    rec RECORD;
+    candidate TEXT;
+    resolved TEXT;
+    suffix_index INTEGER;
+  BEGIN
+    CREATE TEMP TABLE IF NOT EXISTS __legacy_spaces (
+      name TEXT PRIMARY KEY,
+      description TEXT,
+      parent_id TEXT,
+      project_id TEXT,
+      created_by TEXT,
+      created_at TIMESTAMPTZ,
+      archived_at TEXT,
+      topic TEXT
+    ) ON COMMIT DROP;
+    TRUNCATE __legacy_spaces;
+
+    CREATE TEMP TABLE IF NOT EXISTS __legacy_channel_names (
+      legacy_name TEXT PRIMARY KEY
+    ) ON COMMIT DROP;
+    TRUNCATE __legacy_channel_names;
+
+    CREATE TEMP TABLE IF NOT EXISTS __legacy_channel_map (
+      legacy_name TEXT PRIMARY KEY,
+      channel_name TEXT NOT NULL UNIQUE
+    ) ON COMMIT DROP;
+    TRUNCATE __legacy_channel_map;
+
+    CREATE TEMP TABLE IF NOT EXISTS __legacy_first_messages (
+      legacy_name TEXT PRIMARY KEY,
+      created_at TIMESTAMPTZ,
+      created_by TEXT
+    ) ON COMMIT DROP;
+    TRUNCATE __legacy_first_messages;
+
+    IF has_spaces THEN
+      EXECUTE format(
+        'INSERT INTO __legacy_spaces (name, description, parent_id, project_id, created_by, created_at, archived_at, topic)
+         SELECT name, %s, %s, %s, COALESCE(%s, ''migration''), COALESCE(%s, NOW()), %s, %s
+         FROM spaces
+         WHERE name IS NOT NULL AND btrim(name) <> ''''
+         ON CONFLICT (name) DO NOTHING',
+        CASE WHEN EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'spaces' AND column_name = 'description') THEN 'description' ELSE 'NULL::TEXT' END,
+        CASE WHEN EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'spaces' AND column_name = 'parent_id') THEN 'parent_id' ELSE 'NULL::TEXT' END,
+        CASE WHEN EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'spaces' AND column_name = 'project_id') THEN 'project_id' ELSE 'NULL::TEXT' END,
+        CASE WHEN EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'spaces' AND column_name = 'created_by') THEN 'created_by' ELSE 'NULL::TEXT' END,
+        CASE WHEN EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'spaces' AND column_name = 'created_at') THEN 'created_at' ELSE 'NULL::TIMESTAMPTZ' END,
+        CASE WHEN EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'spaces' AND column_name = 'archived_at') THEN 'archived_at' ELSE 'NULL::TEXT' END,
+        CASE WHEN EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'spaces' AND column_name = 'topic') THEN 'topic' ELSE 'NULL::TEXT' END
+      );
+
+      INSERT INTO __legacy_channel_names (legacy_name)
+      SELECT btrim(name) FROM __legacy_spaces
+      ON CONFLICT DO NOTHING;
+    END IF;
+
+    IF has_messages_space THEN
+      EXECUTE 'INSERT INTO __legacy_channel_names (legacy_name)
+               SELECT DISTINCT btrim(space) FROM messages WHERE space IS NOT NULL AND btrim(space) <> ''''
+               ON CONFLICT DO NOTHING';
+      EXECUTE 'INSERT INTO __legacy_first_messages (legacy_name, created_at, created_by)
+               SELECT legacy_name, created_at, from_agent
+               FROM (
+                 SELECT
+                   btrim(space) AS legacy_name,
+                   created_at,
+                   from_agent,
+                   row_number() OVER (PARTITION BY btrim(space) ORDER BY created_at ASC, id ASC) AS rn
+                 FROM messages
+                 WHERE space IS NOT NULL AND btrim(space) <> ''''
+               ) ranked
+               WHERE rn = 1
+               ON CONFLICT DO NOTHING';
+    END IF;
+    IF has_space_members THEN
+      EXECUTE 'INSERT INTO __legacy_channel_names (legacy_name)
+               SELECT DISTINCT btrim(space) FROM space_members WHERE space IS NOT NULL AND btrim(space) <> ''''
+               ON CONFLICT DO NOTHING';
+    END IF;
+    IF has_space_subscriptions THEN
+      EXECUTE 'INSERT INTO __legacy_channel_names (legacy_name)
+               SELECT DISTINCT btrim(space) FROM space_subscriptions WHERE space IS NOT NULL AND btrim(space) <> ''''
+               ON CONFLICT DO NOTHING';
+    END IF;
+    IF has_message_mentions_space THEN
+      EXECUTE 'INSERT INTO __legacy_channel_names (legacy_name)
+               SELECT DISTINCT btrim(space) FROM message_mentions WHERE space IS NOT NULL AND btrim(space) <> ''''
+               ON CONFLICT DO NOTHING';
+    END IF;
+    IF has_tasks_space THEN
+      EXECUTE 'INSERT INTO __legacy_channel_names (legacy_name)
+               SELECT DISTINCT btrim(space) FROM tasks WHERE space IS NOT NULL AND btrim(space) <> ''''
+               ON CONFLICT DO NOTHING';
+    END IF;
+    IF has_graph_edges THEN
+      EXECUTE 'INSERT INTO __legacy_channel_names (legacy_name)
+               SELECT DISTINCT btrim(from_id) FROM graph_edges WHERE from_type = ''space'' AND from_id IS NOT NULL AND btrim(from_id) <> ''''
+               ON CONFLICT DO NOTHING';
+      EXECUTE 'INSERT INTO __legacy_channel_names (legacy_name)
+               SELECT DISTINCT btrim(to_id) FROM graph_edges WHERE to_type = ''space'' AND to_id IS NOT NULL AND btrim(to_id) <> ''''
+               ON CONFLICT DO NOTHING';
+    END IF;
+    IF has_resource_locks THEN
+      EXECUTE 'INSERT INTO __legacy_channel_names (legacy_name)
+               SELECT DISTINCT btrim(resource_id) FROM resource_locks WHERE resource_type = ''space'' AND resource_id IS NOT NULL AND btrim(resource_id) <> ''''
+               ON CONFLICT DO NOTHING';
+    END IF;
+
+    FOR rec IN
+      WITH normalized AS (
+        SELECT legacy_name, __open_conversations_normalize_channel_name(legacy_name) AS base
+        FROM __legacy_channel_names
+      ),
+      canonical AS (
+        SELECT
+          base,
+          COALESCE(
+            MIN(legacy_name) FILTER (WHERE legacy_name = base),
+            MIN(legacy_name) FILTER (WHERE legacy_name !~ '^#'),
+            MIN(legacy_name)
+          ) AS canonical
+        FROM normalized
+        GROUP BY base
+      )
+      SELECT
+        n.legacy_name,
+        n.base,
+        CASE
+          WHEN n.legacy_name = c.canonical THEN n.base
+          ELSE n.base || '--' || __open_conversations_stable_suffix(n.legacy_name)
+        END AS candidate
+      FROM normalized n
+      JOIN canonical c ON c.base = n.base
+      ORDER BY n.base, n.legacy_name
+    LOOP
+      candidate := rec.candidate;
+      resolved := candidate;
+      suffix_index := 2;
+      WHILE EXISTS (SELECT 1 FROM __legacy_channel_map WHERE channel_name = resolved) LOOP
+        resolved := candidate || '-' || suffix_index::TEXT;
+        suffix_index := suffix_index + 1;
+      END LOOP;
+      INSERT INTO __legacy_channel_map (legacy_name, channel_name) VALUES (rec.legacy_name, resolved);
+    END LOOP;
+
+    IF EXISTS (SELECT 1 FROM __legacy_channel_map) THEN
+      WITH RECURSIVE lineage AS (
+        SELECT name, parent_id, 0 AS depth, ARRAY[name] AS path
+        FROM __legacy_spaces
+        UNION ALL
+        SELECT lineage.name, parent.parent_id, lineage.depth + 1, lineage.path || parent.name
+        FROM lineage
+        JOIN __legacy_spaces parent ON parent.name = lineage.parent_id
+        WHERE lineage.depth < 32 AND NOT parent.name = ANY(lineage.path)
+      ),
+      depths AS (
+        SELECT name, max(depth) AS depth FROM lineage GROUP BY name
+      )
+      INSERT INTO channels (name, description, topic, project_id, created_by, created_at, archived_at, metadata, tags)
+      SELECT
+        channel_map.channel_name,
+        legacy_spaces.description,
+        legacy_spaces.topic,
+        legacy_spaces.project_id,
+        COALESCE(legacy_spaces.created_by, first_message.created_by, 'migration'),
+        COALESCE(legacy_spaces.created_at, first_message.created_at, NOW()),
+        legacy_spaces.archived_at,
+        json_build_object(
+          'import_source',
+          json_build_object(
+            'type', 'legacy_space',
+            'source', CASE WHEN legacy_spaces.name IS NULL THEN 'reference' ELSE 'space' END,
+            'name', channel_map.legacy_name,
+            'parent', legacy_spaces.parent_id,
+            'parent_channel', parent_map.channel_name,
+            'depth', COALESCE(depths.depth, 0),
+            'normalized_name', channel_map.channel_name
+          )
+        )::TEXT,
+        to_json(array_remove(ARRAY[
+          'imported',
+          'legacy-space',
+          CASE WHEN legacy_spaces.parent_id IS NOT NULL THEN 'legacy-parent:' || COALESCE(parent_map.channel_name, __open_conversations_normalize_channel_name(legacy_spaces.parent_id)) END,
+          CASE WHEN COALESCE(depths.depth, 0) > 0 THEN 'legacy-depth:' || depths.depth::TEXT END
+        ], NULL))::TEXT
+      FROM __legacy_channel_map channel_map
+      LEFT JOIN __legacy_spaces legacy_spaces ON legacy_spaces.name = channel_map.legacy_name
+      LEFT JOIN __legacy_channel_map parent_map ON parent_map.legacy_name = legacy_spaces.parent_id
+      LEFT JOIN depths ON depths.name = legacy_spaces.name
+      LEFT JOIN __legacy_first_messages first_message ON first_message.legacy_name = channel_map.legacy_name
+      ON CONFLICT (name) DO UPDATE SET
+        description = COALESCE(channels.description, excluded.description),
+        topic = COALESCE(channels.topic, excluded.topic),
+        project_id = COALESCE(channels.project_id, excluded.project_id),
+        archived_at = COALESCE(channels.archived_at, excluded.archived_at),
+        metadata = COALESCE(channels.metadata, excluded.metadata),
+        tags = COALESCE(channels.tags, excluded.tags);
+
+      IF has_space_members THEN
+        EXECUTE 'INSERT INTO channel_members (channel, agent, joined_at)
+                 SELECT channel_map.channel_name, space_members.agent, space_members.joined_at
+                 FROM space_members
+                 JOIN __legacy_channel_map channel_map ON channel_map.legacy_name = space_members.space
+                 ON CONFLICT DO NOTHING';
+      END IF;
+
+      IF has_space_subscriptions THEN
+        EXECUTE format(
+          'INSERT INTO channel_subscriptions (channel, agent, created_at, preview_chars, since_message_id)
+           SELECT channel_map.channel_name, space_subscriptions.agent, space_subscriptions.created_at, space_subscriptions.preview_chars, %s
+           FROM space_subscriptions
+           JOIN __legacy_channel_map channel_map ON channel_map.legacy_name = space_subscriptions.space
+           ON CONFLICT DO NOTHING',
+          CASE WHEN EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'space_subscriptions' AND column_name = 'since_message_id') THEN 'space_subscriptions.since_message_id' ELSE '0' END
+        );
+      END IF;
+
+      IF has_space_notification_reads THEN
+        EXECUTE 'INSERT INTO channel_notification_reads (agent, message_id, read_at)
+                 SELECT agent, message_id, read_at FROM space_notification_reads
+                 ON CONFLICT DO NOTHING';
+      END IF;
+
+      IF has_messages_space THEN
+        EXECUTE 'UPDATE messages
+                 SET channel = channel_map.channel_name,
+                     to_agent = channel_map.channel_name
+                 FROM __legacy_channel_map channel_map
+                 WHERE messages.space = channel_map.legacy_name';
+      END IF;
+      EXECUTE 'UPDATE messages
+               SET channel = channel_map.channel_name,
+                   to_agent = CASE WHEN messages.to_agent = channel_map.legacy_name THEN channel_map.channel_name ELSE messages.to_agent END
+               FROM __legacy_channel_map channel_map
+               WHERE messages.channel = channel_map.legacy_name';
+      EXECUTE 'UPDATE messages
+               SET session_id = ''channel:'' || channel_map.channel_name
+               FROM __legacy_channel_map channel_map
+               WHERE messages.session_id = ''space:'' || channel_map.legacy_name
+                  OR messages.session_id = ''channel:'' || channel_map.legacy_name';
+
+      IF has_message_mentions_space THEN
+        ALTER TABLE message_mentions ADD COLUMN IF NOT EXISTS channel TEXT;
+        EXECUTE 'UPDATE message_mentions
+                 SET channel = channel_map.channel_name
+                 FROM __legacy_channel_map channel_map
+                 WHERE message_mentions.space = channel_map.legacy_name';
+      END IF;
+
+      IF has_tasks THEN
+        IF has_tasks_space THEN
+          ALTER TABLE tasks ADD COLUMN IF NOT EXISTS channel TEXT;
+          EXECUTE 'UPDATE tasks
+                   SET channel = channel_map.channel_name
+                   FROM __legacy_channel_map channel_map
+                   WHERE tasks.space = channel_map.legacy_name';
+        END IF;
+      END IF;
+
+      IF has_graph_edges THEN
+        EXECUTE 'UPDATE graph_edges
+                 SET from_type = ''channel'', from_id = channel_map.channel_name
+                 FROM __legacy_channel_map channel_map
+                 WHERE graph_edges.from_type = ''space'' AND graph_edges.from_id = channel_map.legacy_name';
+        EXECUTE 'UPDATE graph_edges
+                 SET to_type = ''channel'', to_id = channel_map.channel_name
+                 FROM __legacy_channel_map channel_map
+                 WHERE graph_edges.to_type = ''space'' AND graph_edges.to_id = channel_map.legacy_name';
+      END IF;
+
+      IF has_resource_locks THEN
+        EXECUTE 'UPDATE resource_locks
+                 SET resource_type = ''channel'', resource_id = channel_map.channel_name
+                 FROM __legacy_channel_map channel_map
+                 WHERE resource_locks.resource_type = ''space'' AND resource_locks.resource_id = channel_map.legacy_name';
+      END IF;
+    END IF;
+
+    DROP INDEX IF EXISTS idx_messages_space;
+    DROP INDEX IF EXISTS idx_spaces_parent;
+    DROP INDEX IF EXISTS idx_spaces_project;
+    DROP INDEX IF EXISTS idx_space_subscriptions_agent;
+    DROP INDEX IF EXISTS idx_space_subscriptions_space;
+    DROP INDEX IF EXISTS idx_space_notification_reads_agent;
+    DROP INDEX IF EXISTS idx_space_notification_reads_message;
+    DROP INDEX IF EXISTS idx_tasks_space;
+    DROP TABLE IF EXISTS space_members;
+    DROP TABLE IF EXISTS space_subscriptions;
+    DROP TABLE IF EXISTS space_notification_reads;
+    DROP TABLE IF EXISTS spaces;
+    IF has_messages_space THEN
+      ALTER TABLE messages DROP COLUMN IF EXISTS space;
+    END IF;
+    IF has_message_mentions_space THEN
+      ALTER TABLE message_mentions DROP COLUMN IF EXISTS space;
+    END IF;
+    IF has_tasks_space THEN
+      ALTER TABLE tasks DROP COLUMN IF EXISTS space;
+    END IF;
+  END $$;
+
+  UPDATE channel_subscriptions ss
+  SET since_message_id = COALESCE(
+    (SELECT MAX(m.id) FROM messages m WHERE m.channel = ss.channel),
+    0
+  )
+  WHERE ss.since_message_id = 0;
+
+  DROP FUNCTION IF EXISTS __open_conversations_normalize_channel_name(TEXT);
+  DROP FUNCTION IF EXISTS __open_conversations_stable_suffix(TEXT);
 
   -- Full-text search using PostgreSQL tsvector
   ALTER TABLE messages ADD COLUMN IF NOT EXISTS search_vector tsvector;
