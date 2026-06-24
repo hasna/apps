@@ -165,6 +165,8 @@ export interface SyncOptions {
   pi?: boolean
   hermes?: boolean
   verbose?: boolean
+  dedupe?: boolean
+  cloud?: boolean
 }
 
 export interface SessionFilter {

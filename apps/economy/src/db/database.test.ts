@@ -144,7 +144,8 @@ describe('openDatabase', () => {
     const root = tempRoot('economy-file-db-test')
     const dbPath = join(root, 'nested', 'data', 'economy.db')
 
-    openDatabase(dbPath, true)
+    const db = openDatabase(dbPath, true)
+    db.close()
 
     expect(existsSync(dirname(dbPath))).toBe(true)
     expect(existsSync(dbPath)).toBe(true)
@@ -814,10 +815,11 @@ describe('queryDailyBreakdown', () => {
 describe('queryRequestsSince', () => {
   it('returns only requests after the given timestamp', () => {
     const db = makeDb()
-    const past = new Date(Date.now() - 10000).toISOString()
+    const past = '2026-01-01T00:00:00.000Z'
+    const since = '2026-01-01T00:00:05.000Z'
+    const current = '2026-01-01T00:00:10.000Z'
     upsertRequest(db, sampleRequest({ id: 'old', timestamp: past }))
-    upsertRequest(db, sampleRequest({ id: 'new', timestamp: NOW }))
-    const since = new Date(Date.now() - 5000).toISOString()
+    upsertRequest(db, sampleRequest({ id: 'new', timestamp: current }))
     const results = queryRequestsSince(db, since)
     expect(results.some(r => r.id === 'new')).toBe(true)
     expect(results.some(r => r.id === 'old')).toBe(false)

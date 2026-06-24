@@ -1,7 +1,16 @@
 {
   "name": "@hasna/economy-sdk",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "SDK client for @hasna/economy REST API",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/economy.git",
+    "directory": "sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/hasna/economy/issues"
+  },
+  "homepage": "https://github.com/hasna/economy/tree/main/sdk#readme",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -13,7 +22,8 @@
   },
   "files": [
     "dist",
-    "LICENSE"
+    "LICENSE",
+    "README.md"
   ],
   "scripts": {
     "build": "bun build src/index.ts --outdir dist --target browser --packages external && tsc --emitDeclarationOnly --outDir dist",

@@ -7,6 +7,7 @@ import { deleteModelPricing, getModelPricing, seedModelPricing, upsertModelPrici
 export const DEFAULT_PRICING: Record<string, ModelPricing> = {
   // Claude. cacheWritePer1M is the 5-minute cache write rate;
   // cacheWrite1hPer1M is the 1-hour cache write rate.
+  'claude-opus-4-8':    { inputPer1M: 5.00,  outputPer1M: 25.00, cacheReadPer1M: 0.50,  cacheWritePer1M: 6.25,  cacheWrite1hPer1M: 10.00 },
   'claude-opus-4-7':    { inputPer1M: 5.00,  outputPer1M: 25.00, cacheReadPer1M: 0.50,  cacheWritePer1M: 6.25,  cacheWrite1hPer1M: 10.00 },
   'claude-opus-4-6':    { inputPer1M: 5.00,  outputPer1M: 25.00, cacheReadPer1M: 0.50,  cacheWritePer1M: 6.25,  cacheWrite1hPer1M: 10.00 },
   'claude-opus-4-5':    { inputPer1M: 5.00,  outputPer1M: 25.00, cacheReadPer1M: 0.50,  cacheWritePer1M: 6.25,  cacheWrite1hPer1M: 10.00 },

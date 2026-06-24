@@ -28,11 +28,13 @@ beforeEach(() => {
 afterEach(() => {
   delete process.env['HASNA_ECONOMY_CODEX_DB_PATH']
   delete process.env['HASNA_ECONOMY_CODEX_CONFIG_PATH']
+  delete process.env['HASNA_ECONOMY_CODEWITH_DB_PATH']
+  delete process.env['HASNA_ECONOMY_CODEWITH_CONFIG_PATH']
   if (existsSync(root)) rmSync(root, { recursive: true, force: true })
 })
 
-function writeCodexDb(tokensUsed = 1200, updatedAt = 2) {
-  const codexDb = new BunDatabase(codexDbPath)
+function writeCodexDbAt(path: string, pathRollout: string, id = 'thread-1', tokensUsed = 1200, updatedAt = 2, model = 'gpt-5.5') {
+  const codexDb = new BunDatabase(path)
   codexDb.exec(`
     CREATE TABLE threads (
       id TEXT PRIMARY KEY,
@@ -50,8 +52,12 @@ function writeCodexDb(tokensUsed = 1200, updatedAt = 2) {
     INSERT INTO threads
       (id, rollout_path, cwd, created_at, updated_at, tokens_used, title, model_provider, model)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run('thread-1', rolloutPath, '/tmp/codex-project', 1, updatedAt, tokensUsed, 'Test thread', 'openai', 'gpt-5.5')
+  `).run(id, pathRollout, '/tmp/codex-project', 1, updatedAt, tokensUsed, 'Test thread', 'openai', model)
   codexDb.close()
+}
+
+function writeCodexDb(tokensUsed = 1200, updatedAt = 2) {
+  writeCodexDbAt(codexDbPath, rolloutPath, 'thread-1', tokensUsed, updatedAt)
 }
 
 function writeLegacyCodexDb(tokensUsed = 1000) {
@@ -75,7 +81,11 @@ function writeLegacyCodexDb(tokensUsed = 1000) {
 }
 
 function writeRollout(...usages: Array<Record<string, number> & { timestamp?: string }>) {
-  writeFileSync(rolloutPath, usages.map((usage, index) => JSON.stringify({
+  writeRolloutAt(rolloutPath, usages)
+}
+
+function writeRolloutAt(path: string, usages: Array<Record<string, number> & { timestamp?: string }>) {
+  writeFileSync(path, usages.map((usage, index) => JSON.stringify({
     timestamp: usage.timestamp ?? `2026-05-08T10:00:0${index}.000Z`,
     type: 'event_msg',
     payload: {
@@ -143,6 +153,45 @@ describe('ingestCodex', () => {
     expect(session['request_count']).toBe(1)
     expect(session['total_tokens']).toBe(1200)
     expect(Number(session['total_cost_usd'])).toBeCloseTo(0.0092)
+  })
+
+  it('ingests Codewith state alongside Codex without thread id collisions', async () => {
+    const codewithDbPath = join(root, 'codewith-state_5.sqlite')
+    const codewithConfigPath = join(root, 'codewith-config.toml')
+    const codewithRolloutPath = join(root, 'codewith-rollout.jsonl')
+    process.env['HASNA_ECONOMY_CODEWITH_DB_PATH'] = codewithDbPath
+    process.env['HASNA_ECONOMY_CODEWITH_CONFIG_PATH'] = codewithConfigPath
+
+    writeCodexDb(1200, 2)
+    writeRollout({
+      input_tokens: 1000,
+      cached_input_tokens: 400,
+      output_tokens: 200,
+      total_tokens: 1200,
+    })
+    writeCodexDbAt(codewithDbPath, codewithRolloutPath, 'thread-1', 600, 3, 'codewith/gpt-5.5')
+    writeRolloutAt(codewithRolloutPath, [{
+      input_tokens: 500,
+      cached_input_tokens: 100,
+      output_tokens: 100,
+      total_tokens: 600,
+      timestamp: '2026-06-24T10:00:00.000Z',
+    }])
+
+    const result = await ingestCodex(db)
+    expect(result).toEqual({ sessions: 2, requests: 2 })
+
+    const sessions = db.prepare(`SELECT id, total_tokens FROM sessions ORDER BY id`).all() as Array<{ id: string; total_tokens: number }>
+    expect(sessions.map(row => row.id)).toEqual(['codex-codewith-thread-1', 'codex-thread-1'])
+    expect(sessions.find(row => row.id === 'codex-codewith-thread-1')?.total_tokens).toBe(600)
+
+    const request = db.prepare(`SELECT model, cost_usd, timestamp FROM requests WHERE session_id = ?`).get('codex-codewith-thread-1') as Record<string, number | string>
+    expect(request['model']).toBe('codewith/gpt-5.5')
+    expect(Number(request['cost_usd'])).toBeGreaterThan(0)
+    expect(request['timestamp']).toBe('2026-06-24T10:00:00.000Z')
+
+    const second = await ingestCodex(db)
+    expect(second).toEqual({ sessions: 0, requests: 0 })
   })
 
   it('uses final Codex total_token_usage snapshots as one aggregate request', async () => {

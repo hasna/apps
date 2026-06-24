@@ -1,6 +1,7 @@
 import { SqliteAdapter as Database } from '@hasna/cloud'
+import { execFileSync } from 'child_process'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'fs'
-import { hostname } from 'os'
+import { hostname, platform } from 'os'
 import { homedir } from 'os'
 import { join } from 'path'
 import type {
@@ -18,11 +19,35 @@ import type {
   SessionFilter,
 } from '../types/index.js'
 
+function normalizeMachineId(value: string | undefined | null): string | null {
+  const id = value?.trim().toLowerCase().split('.')[0]
+  return id && id.length > 0 ? id : null
+}
+
+function macHostMachineId(): string | null {
+  if (platform() !== 'darwin') return null
+  for (const key of ['LocalHostName', 'ComputerName', 'HostName']) {
+    try {
+      const value = execFileSync('/usr/sbin/scutil', ['--get', key], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 1000,
+      })
+      const id = normalizeMachineId(value)
+      if (id && id !== 'mac' && id !== 'localhost') return id
+    } catch {
+      // Optional macOS identity fallback only.
+    }
+  }
+  return null
+}
+
 export function getMachineId(): string {
-  if (process.env['ECONOMY_MACHINE_ID']) return process.env['ECONOMY_MACHINE_ID']
-  const h = hostname().toLowerCase()
-  if (h.startsWith('spark') || h.startsWith('apple')) return h.split('.')[0]!
-  return h.split('.')[0]!
+  const envMachine = normalizeMachineId(process.env['ECONOMY_MACHINE_ID'])
+  if (envMachine) return envMachine
+  const hostMachine = normalizeMachineId(hostname()) ?? 'unknown'
+  if (hostMachine === 'mac' || hostMachine === 'localhost') return macHostMachineId() ?? hostMachine
+  return hostMachine
 }
 
 export function getDataDir(): string {

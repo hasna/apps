@@ -34,8 +34,9 @@ export async function syncAll(db: Database, opts: SyncOptions = {}): Promise<Syn
     || opts.opencode || opts.cursor || opts.pi || opts.hermes,
   )
   const all = !anySpecific
+  const useCloud = opts.cloud !== false
 
-  await maybePullFromCloud()
+  if (useCloud) await maybePullFromCloud()
 
   const result: SyncAllResult = { deduped: 0, cloudPulled: false, cloudPushed: false }
 
@@ -54,8 +55,8 @@ export async function syncAll(db: Database, opts: SyncOptions = {}): Promise<Syn
   if (all || opts.pi) result.pi = await ingestPi(db, opts.verbose)
   if (all || opts.hermes) result.hermes = await ingestHermes(db, opts.verbose)
 
-  result.deduped = dedupeRequests(db)
-  result.cloudPushed = await maybePushAfterIngest()
+  if (opts.dedupe !== false) result.deduped = dedupeRequests(db)
+  if (useCloud) result.cloudPushed = await maybePushAfterIngest()
 
   return result
 }

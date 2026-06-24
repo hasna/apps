@@ -103,7 +103,7 @@ economy sync --recalculate
 economy sync --backfill-machine
 ```
 
-Full sync also imports active project metadata from `@hasna/projects` when the registry is available.
+Full sync also imports active project metadata from `@hasna/projects` when the registry is available. The Codex source reads both legacy `~/.codex/state_5.sqlite` and current Codewith `~/.codewith/state_5.sqlite` usage stores by default; explicit `HASNA_ECONOMY_CODEX_DB_PATH` and `HASNA_ECONOMY_CODEWITH_DB_PATH` values override those locations.
 
 Account attribution is automatic when `@hasna/accounts` has a matching active, applied, or env-dir profile for the agent. Account identity is the email address plus coding agent, so `work@example.com` under Codex and Claude is reported as two accounts. You can also force attribution for a process with `ECONOMY_ACCOUNT=tool:name` or agent-specific overrides such as `ECONOMY_CODEX_ACCOUNT=codex:work`.
 
@@ -273,6 +273,10 @@ bun run build
 cd dashboard && bun run lint
 cd menubar && swift build -c release
 ```
+
+## Open Source
+
+Economy is published under the Apache-2.0 license. See [CONTRIBUTING.md](CONTRIBUTING.md) for local development and release hygiene, [SECURITY.md](SECURITY.md) for vulnerability reporting, [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations, and [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ## HTTP mode
 
