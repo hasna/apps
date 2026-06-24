@@ -186,6 +186,87 @@ describe("runGoal", () => {
     }
   });
 
+  test("caps successful node output before persisting goal evidence", async () => {
+    const store = new Store(":memory:");
+    try {
+      const longStdout = `start-${"x".repeat(3_000)}-tail`;
+      const model = mockObjects([
+        { nodes: [plannedNode({ key: "large", objective: "produce bounded evidence" })] },
+        {
+          achieved: true,
+          status: "complete",
+          evidence: ["large output was bounded"],
+          unmetRequirements: [],
+          adversarialReview: "The bounded evidence proves the node ran without replaying the full output.",
+        },
+      ]);
+      const result = await runGoal(store, { objective: "bound successful evidence", maxTurns: 3 }, {
+        model,
+        executeNode: async () => ok(longStdout),
+      });
+
+      expect(result.status).toBe("succeeded");
+      const payload = JSON.parse(result.stdout) as { evidence: string[] };
+      expect(payload.evidence[0]).toContain("[truncated");
+      expect(payload.evidence[0]).toContain("start-");
+      expect(payload.evidence[0]).toContain("-tail");
+
+      const executeEvent = store.listGoalRuns({ goalId: result.goalId! }).find((entry) => entry.phase === "execute");
+      expect(JSON.stringify(executeEvent?.evidence)).toContain("[truncated");
+      expect(JSON.stringify(executeEvent?.evidence)).toContain("start-");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("keeps goal max-turn exhaustion retryable and resumes pending nodes", async () => {
+    const store = new Store(":memory:");
+    try {
+      const model = mockObjects([
+        {
+          nodes: [
+            plannedNode({ key: "a", objective: "do first step" }),
+            plannedNode({ key: "b", objective: "do second step", dependsOn: ["a"] }),
+          ],
+        },
+        {
+          achieved: true,
+          status: "complete",
+          evidence: ["both nodes ran"],
+          unmetRequirements: [],
+          adversarialReview: "The second attempt resumed the pending dependent node and validated completion.",
+        },
+      ]);
+      const calls: string[] = [];
+      const first = await runGoal(store, { objective: "resume after max turns", maxTurns: 1 }, {
+        model,
+        executeNode: async (node) => {
+          calls.push(node.key);
+          return ok(`ran ${node.key}`);
+        },
+      });
+
+      expect(first.status).toBe("failed");
+      expect(first.error).toBe("goal max turns exhausted");
+      expect(store.getGoal(first.goalId!)?.status).toBe("usageLimited");
+      expect(store.listGoalPlanNodes(first.goalId!).map((node) => node.status)).toEqual(["complete", "pending"]);
+
+      const second = await runGoal(store, { objective: "resume after max turns", maxTurns: 3 }, {
+        model,
+        executeNode: async (node) => {
+          calls.push(node.key);
+          return ok(`ran ${node.key}`);
+        },
+      });
+
+      expect(second.status).toBe("succeeded");
+      expect(calls).toEqual(["a", "b"]);
+      expect(store.getGoal(first.goalId!)?.status).toBe("complete");
+    } finally {
+      store.close();
+    }
+  });
+
   test("returns timed_out when an outer loop timeout aborts goal execution", async () => {
     const store = new Store(":memory:");
     const controller = new AbortController();

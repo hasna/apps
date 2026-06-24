@@ -11,7 +11,7 @@ import type { Goal, GoalExecutorResult, GoalPlanNode, GoalSpec, RunGoalOptions }
 import { GOAL_OBJECTIVE_MAX_CHARS } from "./types.js";
 
 const DEFAULT_MAX_TURNS = 10;
-const NODE_FAILURE_OUTPUT_MAX_CHARS = 1_200;
+const NODE_OUTPUT_MAX_CHARS = 1_200;
 
 const PlanNodeSchema = z.object({
   key: z.string().min(1).max(64).regex(/^[A-Za-z0-9_.-]+$/),
@@ -112,9 +112,33 @@ function sameBlockerKey(values: string[]): string {
 function outputExcerpt(value: string): string | undefined {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
-  if (trimmed.length <= NODE_FAILURE_OUTPUT_MAX_CHARS) return trimmed;
-  const omitted = trimmed.length - NODE_FAILURE_OUTPUT_MAX_CHARS;
-  return `[truncated ${omitted} chars]\n${trimmed.slice(-NODE_FAILURE_OUTPUT_MAX_CHARS)}`;
+  if (trimmed.length <= NODE_OUTPUT_MAX_CHARS) return trimmed;
+  const headChars = Math.ceil(NODE_OUTPUT_MAX_CHARS / 2);
+  const tailChars = Math.floor(NODE_OUTPUT_MAX_CHARS / 2);
+  const omitted = trimmed.length - headChars - tailChars;
+  return `[truncated ${omitted} chars]\n${trimmed.slice(0, headChars)}\n...\n${trimmed.slice(-tailChars)}`;
+}
+
+function nodeResultEventEvidence(result: ExecutorResult): Record<string, unknown> {
+  const evidence: Record<string, unknown> = {
+    status: result.status,
+    exitCode: result.exitCode,
+  };
+  if (result.error) evidence.error = result.error;
+  const stderr = outputExcerpt(result.stderr);
+  if (stderr) evidence.stderr = stderr;
+  const stdout = outputExcerpt(result.stdout);
+  if (stdout) evidence.stdout = stdout;
+  return evidence;
+}
+
+function nodeSuccessEvidence(node: GoalPlanNode, result: ExecutorResult): string {
+  const lines = [`node ${node.key} succeeded`];
+  const stdout = outputExcerpt(result.stdout);
+  if (stdout) lines.push(`stdout:\n${stdout}`);
+  const stderr = outputExcerpt(result.stderr);
+  if (stderr) lines.push(`stderr:\n${stderr}`);
+  return lines.join("\n");
 }
 
 function nodeFailureEvidence(node: GoalPlanNode, result: ExecutorResult): string {
@@ -299,18 +323,12 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
             phase: "execute",
             status: result.status === "succeeded" ? "complete" : "active",
             nodeKey: node.key,
-            evidence: {
-              status: result.status,
-              exitCode: result.exitCode,
-              stdout: result.stdout,
-              stderr: result.stderr,
-              error: result.error,
-            },
+            evidence: nodeResultEventEvidence(result),
           },
           { daemonLeaseId: opts.daemonLeaseId },
         );
         if (result.status === "succeeded") {
-          evidence.push(`node ${node.key} succeeded\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+          evidence.push(nodeSuccessEvidence(node, result));
           store.updateGoalPlanNode(goal.goalId, node.key, {
             status: "complete",
             timeUsedSeconds: Math.round(result.durationMs / 1000),
