@@ -69,7 +69,7 @@ export function registerAlertsCommand(program: Command): void {
       } else {
         const advisories = listAdvisories({ limit: 1 });
         if (advisories.length === 0) {
-          console.error(chalk.red("\n  No advisories in DB. Run `security scan` first.\n"));
+          console.error(chalk.red("\n  No advisories in DB. Run `shield scan` first.\n"));
           process.exit(1);
         }
         advisory = advisories[0];

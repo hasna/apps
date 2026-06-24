@@ -9,6 +9,7 @@ import {
 } from "../../lib/secret-exposure.js";
 import { SEVERITY_ORDER, Severity, type FindingInput } from "../../types/index.js";
 import { parseSeverity } from "../helpers.js";
+import { DEFAULT_COMPACT_LIMIT, parseLimitOption, truncateText } from "../../lib/output.js";
 
 type SecretCommandFormat = "terminal" | "json";
 
@@ -20,7 +21,7 @@ function parseSecretCommandFormat(value: string): SecretCommandFormat {
 
 function formatFinding(finding: FindingInput): string {
   const location = finding.column ? `${finding.file}:${finding.line}:${finding.column}` : `${finding.file}:${finding.line}`;
-  return `  [${finding.severity}] ${location} ${finding.message}`;
+  return `  [${finding.severity}] ${location} ${truncateText(finding.message)}`;
 }
 
 function printTerminalSummary(
@@ -28,6 +29,7 @@ function printTerminalSummary(
   findings: FindingInput[],
   failThreshold: Severity,
   enabledSources: string[],
+  options: { limit: number; verbose?: boolean },
 ): void {
   const summary = {
     critical: findings.filter((finding) => finding.severity === Severity.Critical).length,
@@ -53,7 +55,10 @@ function printTerminalSummary(
     ),
   );
 
-  for (const finding of findings) {
+  const visible = options.verbose ? findings : findings.slice(0, options.limit);
+  const hidden = findings.length - visible.length;
+
+  for (const finding of visible) {
     const color =
       finding.severity === Severity.Critical ? chalk.red :
         finding.severity === Severity.High ? chalk.magenta :
@@ -62,6 +67,14 @@ function printTerminalSummary(
               chalk.gray;
 
     console.log(color(formatFinding(finding)));
+    if (options.verbose && finding.code_snippet) {
+      console.log(chalk.gray(`      ${finding.code_snippet.trim()}`));
+    }
+  }
+  if (hidden > 0) {
+    console.log(chalk.gray(`\n  ${hidden} more finding(s) hidden. Use --verbose or --limit ${findings.length} for details.`));
+  } else if (!options.verbose) {
+    console.log(chalk.gray("\n  Use --verbose to include snippets."));
   }
   console.log();
 }
@@ -75,6 +88,8 @@ export function registerSecretsCommand(program: Command): void {
     .option("-j, --json", "Shortcut for --format json")
     .option("--severity <level>", "Minimum severity threshold to display", "info")
     .option("--fail-on <level>", "Exit non-zero when findings meet or exceed this severity", "high")
+    .option("--limit <n>", `Max findings to show in terminal output (default ${DEFAULT_COMPACT_LIMIT})`)
+    .option("--verbose", "Show full terminal finding details, including snippets")
     .option("--no-git-history", "Skip git history scanning")
     .option("--no-processes", "Skip running process environment scanning")
     .option("--no-tmux", "Skip tmux metadata/history scanning")
@@ -90,6 +105,7 @@ export function registerSecretsCommand(program: Command): void {
         const format = options.json ? "json" : parseSecretCommandFormat(options.format);
         const severityThreshold = parseSeverity(options.severity);
         const failThreshold = parseSeverity(options.failOn);
+        const displayLimit = parseLimitOption(options.limit, "--limit", DEFAULT_COMPACT_LIMIT);
         const includeProcesses = options.repoOnly ? false : options.processes;
         const includeTmux = options.repoOnly ? false : options.tmux;
 
@@ -109,16 +125,22 @@ export function registerSecretsCommand(program: Command): void {
         ].filter(Boolean) as string[];
 
         if (format === "json") {
+          const jsonFindings = options.limit === undefined ? filtered : filtered.slice(0, displayLimit);
           console.log(JSON.stringify({
             path: result.path,
             enabled_sources: enabledSources,
             severity_threshold: severityThreshold,
             fail_on: failThreshold,
             summary: summarizeSecretExposure(filtered),
-            findings: filtered,
+            findings: jsonFindings,
+            count: filtered.length,
+            shown: jsonFindings.length,
           }, null, 2));
         } else {
-          printTerminalSummary(result.path, filtered, failThreshold, enabledSources);
+          printTerminalSummary(result.path, filtered, failThreshold, enabledSources, {
+            limit: displayLimit,
+            verbose: Boolean(options.verbose),
+          });
         }
 
         const failOrder = SEVERITY_ORDER[failThreshold];

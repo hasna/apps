@@ -19,6 +19,14 @@ import {
 } from "../../db/index.js";
 import { isLLMAvailable } from "../../llm/index.js";
 import { ScannerType, Severity } from "../../types/index.js";
+import {
+  compactListResult,
+  compactProject,
+  compactRule,
+  compactScan,
+  DEFAULT_COMPACT_LIMIT,
+  parseLimitOption,
+} from "../../lib/output.js";
 
 type JsonResult = { content: Array<{ type: "text"; text: string }> };
 
@@ -33,11 +41,43 @@ export function registerRulesPoliciesTools(
     {
       scanner_type: z.string().optional().describe("Filter by scanner type"),
       enabled: z.boolean().optional().describe("Filter by enabled status"),
+      limit: z.number().optional().describe("Max compact results (default 20, max 200)"),
+      offset: z.number().optional().describe("Start offset for compact pagination"),
+      verbose: z.boolean().optional().describe("Return full rule records"),
     },
-    async ({ scanner_type, enabled }) => {
+    async ({ scanner_type, enabled, limit, offset, verbose }) => {
       try {
+        const displayLimit = parseLimitOption(limit, "limit", DEFAULT_COMPACT_LIMIT);
+        const displayOffset = parseLimitOption(offset, "offset", 0, Number.MAX_SAFE_INTEGER);
         const rules = listRules(scanner_type as ScannerType | undefined, enabled);
-        return jsonResult({ rules, count: rules.length });
+        const page = rules.slice(displayOffset);
+        if (verbose) {
+          const items = page.slice(0, displayLimit);
+          return jsonResult({
+            rules: items,
+            count: rules.length,
+            shown: items.length,
+            offset: displayOffset,
+            compact: false,
+          });
+        }
+        const compact = compactListResult(page, {
+          limit: displayLimit,
+          offset: displayOffset,
+          map: compactRule,
+          detailHint: "Call list_rules with verbose=true for rule patterns and metadata.",
+          verboseHint: "Call list_rules with verbose=true or adjust limit/offset for more.",
+        });
+        return jsonResult({
+          rules: compact.items,
+          count: rules.length,
+          shown: compact.shown,
+          offset: compact.offset,
+          limit: compact.limit,
+          next_offset: compact.next_offset,
+          hint: compact.hint,
+          compact: true,
+        });
       } catch (error) {
         return jsonResult({ error: String(error) });
       }
@@ -159,12 +199,43 @@ ${diff}
     "List scan history",
     {
       project_id: z.string().optional().describe("Filter by project ID"),
-      limit: z.number().optional().describe("Max results (default 50)"),
+      limit: z.number().optional().describe("Max compact results (default 20, max 200)"),
+      offset: z.number().optional().describe("Start offset for compact pagination"),
+      verbose: z.boolean().optional().describe("Return full scan records"),
     },
-    async ({ project_id, limit }) => {
+    async ({ project_id, limit, offset, verbose }) => {
       try {
-        const scans = listScans(project_id, limit ?? 50);
-        return jsonResult({ scans, count: scans.length });
+        const displayLimit = parseLimitOption(limit, "limit", DEFAULT_COMPACT_LIMIT);
+        const displayOffset = parseLimitOption(offset, "offset", 0, Number.MAX_SAFE_INTEGER);
+        const scans = listScans(project_id, displayOffset + displayLimit + (verbose ? 0 : 1));
+        const page = scans.slice(displayOffset);
+        if (verbose) {
+          const items = page.slice(0, displayLimit);
+          return jsonResult({
+            scans: items,
+            count: scans.length,
+            shown: items.length,
+            offset: displayOffset,
+            compact: false,
+          });
+        }
+        const compact = compactListResult(page, {
+          limit: displayLimit,
+          offset: displayOffset,
+          map: compactScan,
+          detailHint: "Call get_scan with an id for full details.",
+          verboseHint: "Call get_scan with an id, or adjust limit/offset for more scan rows.",
+        });
+        return jsonResult({
+          scans: compact.items,
+          count: scans.length,
+          shown: compact.shown,
+          offset: compact.offset,
+          limit: compact.limit,
+          next_offset: compact.next_offset,
+          hint: compact.hint,
+          compact: true,
+        });
       } catch (error) {
         return jsonResult({ error: String(error) });
       }
@@ -191,11 +262,44 @@ ${diff}
   server.tool(
     "list_projects",
     "List registered projects",
-    {},
-    async () => {
+    {
+      limit: z.number().optional().describe("Max compact results (default 20, max 200)"),
+      offset: z.number().optional().describe("Start offset for compact pagination"),
+      verbose: z.boolean().optional().describe("Return full project records"),
+    },
+    async ({ limit, offset, verbose }) => {
       try {
+        const displayLimit = parseLimitOption(limit, "limit", DEFAULT_COMPACT_LIMIT);
+        const displayOffset = parseLimitOption(offset, "offset", 0, Number.MAX_SAFE_INTEGER);
         const projects = listProjects();
-        return jsonResult({ projects, count: projects.length });
+        const page = projects.slice(displayOffset);
+        if (verbose) {
+          const items = page.slice(0, displayLimit);
+          return jsonResult({
+            projects: items,
+            count: projects.length,
+            shown: items.length,
+            offset: displayOffset,
+            compact: false,
+          });
+        }
+        const compact = compactListResult(page, {
+          limit: displayLimit,
+          offset: displayOffset,
+          map: compactProject,
+          detailHint: "Call register_project or project-specific tools for full project details.",
+          verboseHint: "Call list_projects with verbose=true or adjust limit/offset for more.",
+        });
+        return jsonResult({
+          projects: compact.items,
+          count: projects.length,
+          shown: compact.shown,
+          offset: compact.offset,
+          limit: compact.limit,
+          next_offset: compact.next_offset,
+          hint: compact.hint,
+          compact: true,
+        });
       } catch (error) {
         return jsonResult({ error: String(error) });
       }

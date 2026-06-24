@@ -12,6 +12,7 @@ import { registerScanTools } from "./tools/scan.js";
 import { registerFindingTools } from "./tools/findings.js";
 import { registerRulesPoliciesTools } from "./tools/rules-policies.js";
 import { registerAdvisoryTools } from "./tools/advisories.js";
+import { registerShieldStorageTools } from "./tools/storage.js";
 
 let seeded = false;
 let serverInstance: McpServer | null = null;
@@ -28,7 +29,7 @@ function ensureSeeded(): void {
 }
 
 function jsonResult(data: unknown): { content: Array<{ type: "text"; text: string }> } {
-  return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+  return { content: [{ type: "text" as const, text: JSON.stringify(data) }] };
 }
 
 function getCodeContext(filePath: string, line: number, contextLines = 10): string {
@@ -101,7 +102,17 @@ export function createMcpServer(): McpServer {
     async () => {
       const agents = [..._agentReg.values()];
       if (agents.length === 0) return { content: [{ type: "text" as const, text: "No agents registered." }] };
-      return { content: [{ type: "text" as const, text: JSON.stringify(agents, null, 2) }] };
+      return jsonResult({
+        agents: agents.slice(0, 20).map((agent) => ({
+          id: agent.id,
+          name: agent.name,
+          last_seen_at: agent.last_seen_at,
+          project_id: agent.project_id,
+        })),
+        count: agents.length,
+        shown: Math.min(agents.length, 20),
+        hint: agents.length > 20 ? "More agents hidden. Use focused agent tools for details." : "Use heartbeat or set_focus with an agent id.",
+      });
     },
   );
 
@@ -122,6 +133,7 @@ export function createMcpServer(): McpServer {
     },
   );
 
+  registerShieldStorageTools(server);
   registerCloudTools(server, "shield");
 
   return server;

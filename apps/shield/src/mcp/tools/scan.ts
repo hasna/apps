@@ -21,6 +21,7 @@ import {
   filterSecretExposureBySeverity,
   summarizeSecretExposure,
 } from "../../lib/secret-exposure.js";
+import { compactFinding, compactListResult, DEFAULT_COMPACT_LIMIT, parseLimitOption } from "../../lib/output.js";
 
 type JsonResult = { content: Array<{ type: "text"; text: string }> };
 
@@ -114,16 +115,51 @@ export function registerScanTools(
     {
       path: z.string().describe("Path to the file to scan"),
       content: z.string().optional().describe("File content (if not reading from disk)"),
+      limit: z.number().optional().describe(`Max findings to return (default ${DEFAULT_COMPACT_LIMIT})`),
+      offset: z.number().optional().describe("Skip N findings"),
+      verbose: z.boolean().optional().describe("Return full finding records instead of compact rows"),
     },
-    async ({ path: filePath }) => {
+    async ({ path: filePath, limit, offset, verbose }) => {
       try {
+        const resultLimit = parseLimitOption(limit, "limit", DEFAULT_COMPACT_LIMIT);
+        const resultOffset = parseLimitOption(offset, "offset", 0, Number.MAX_SAFE_INTEGER);
         const absPath = resolve(filePath);
         const dirPath = absPath.substring(0, absPath.lastIndexOf("/"));
         const findings = await runAllScanners(dirPath);
         const fileFindings = findings.filter(
           (f) => f.file === absPath || f.file === filePath || f.file.endsWith(filePath),
         );
-        return jsonResult({ file: absPath, findings: fileFindings, count: fileFindings.length });
+        const page = fileFindings.slice(resultOffset);
+        if (verbose) {
+          const verboseFindings = limit === undefined ? page : page.slice(0, resultLimit);
+          return jsonResult({
+            file: absPath,
+            findings: verboseFindings,
+            count: fileFindings.length,
+            shown: verboseFindings.length,
+            offset: resultOffset,
+            limit: limit === undefined ? null : resultLimit,
+            next_offset: limit !== undefined && page.length > verboseFindings.length ? resultOffset + verboseFindings.length : null,
+            compact: false,
+          });
+        }
+        const compact = compactListResult(page, {
+          limit: resultLimit,
+          offset: resultOffset,
+          map: compactFinding,
+          detailHint: "Use verbose=true for full finding records.",
+        });
+        return jsonResult({
+          file: absPath,
+          findings: compact.items,
+          count: fileFindings.length,
+          shown: compact.shown,
+          offset: compact.offset,
+          limit: compact.limit,
+          next_offset: compact.next_offset,
+          hint: compact.hint,
+          compact: true,
+        });
       } catch (error) {
         return jsonResult({ error: String(error) });
       }
@@ -140,9 +176,14 @@ export function registerScanTools(
       include_processes: z.boolean().optional().describe("Whether to include running process environment scanning"),
       include_tmux: z.boolean().optional().describe("Whether to include tmux metadata/history scanning"),
       severity: z.string().optional().describe("Minimum severity threshold (critical/high/medium/low/info)"),
+      limit: z.number().optional().describe(`Max findings to return (default ${DEFAULT_COMPACT_LIMIT})`),
+      offset: z.number().optional().describe("Skip N findings"),
+      verbose: z.boolean().optional().describe("Return full finding records instead of compact rows"),
     },
-    async ({ path, include_git_history, include_processes, include_tmux, severity }) => {
+    async ({ path, include_git_history, include_processes, include_tmux, severity, limit, offset, verbose }) => {
       try {
+        const resultLimit = parseLimitOption(limit, "limit", DEFAULT_COMPACT_LIMIT);
+        const resultOffset = parseLimitOption(offset, "offset", 0, Number.MAX_SAFE_INTEGER);
         const parsedSeverity = severity
           ? (() => {
             const normalized = severity.toLowerCase();
@@ -162,12 +203,28 @@ export function registerScanTools(
         });
 
         const findings = filterSecretExposureBySeverity(result.findings, parsedSeverity);
+        const page = findings.slice(resultOffset);
+        const verboseFindings = limit === undefined ? page : page.slice(0, resultLimit);
+        const compact = compactListResult(page, {
+          limit: resultLimit,
+          offset: resultOffset,
+          map: compactFinding,
+          detailHint: "Use verbose=true for full secret finding records.",
+        });
         return jsonResult({
           path: result.path,
           severity_threshold: parsedSeverity,
           summary: summarizeSecretExposure(findings),
-          findings,
+          findings: verbose ? verboseFindings : compact.items,
           count: findings.length,
+          shown: verbose ? verboseFindings.length : compact.shown,
+          offset: resultOffset,
+          limit: verbose ? (limit === undefined ? null : resultLimit) : compact.limit,
+          next_offset: verbose
+            ? (limit !== undefined && page.length > verboseFindings.length ? resultOffset + verboseFindings.length : null)
+            : compact.next_offset,
+          hint: verbose ? undefined : compact.hint,
+          compact: !verbose,
         });
       } catch (error) {
         return jsonResult({ error: String(error) });

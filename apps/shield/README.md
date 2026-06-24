@@ -20,14 +20,15 @@ bun install -g @hasna/shield
 shield scan .
 
 # Focused secret-exposure scan (repo files, git history, processes, tmux)
-security secrets .
+shield secrets .
 
 # Check if a package is compromised (axios/litellm/Trivy supply chain attacks)
-security check-package axios 1.14.1
-security check-package litellm 1.82.8 --ecosystem pypi
+shield check-package axios 1.14.1
+shield check-package litellm 1.82.8 --ecosystem pypi
 
 # List known supply chain attack advisories
-security advisories
+shield advisories
+shield advisory <id>
 
 # Quick scan (secrets + dependencies only)
 shield scan . --quick
@@ -35,6 +36,29 @@ shield scan . --quick
 # Install a pre-push hook that blocks pushes on exposed secrets
 shield init --install-pre-push
 ```
+
+## Output Defaults
+
+`shield` is compact by default so CLI and MCP output stays readable in agent
+terminals. List and scan commands show essential fields, truncate long text, and
+cap visible rows. Use detail flags when you need the full record:
+
+```bash
+shield scan . --limit 50
+shield scan . --verbose
+shield findings --limit 50 --offset 50
+shield findings --json
+shield secrets . --verbose
+shield advisories --verbose
+shield advisory <id>
+shield storage status --verbose
+```
+
+Human terminal output favors dense summaries. `--json` remains the
+machine-readable path and returns full records unless a command explicitly says
+otherwise. MCP list/status tools follow the same pattern: compact arrays by
+default, plus `limit`, `offset`, `verbose`, and detail tools such as
+`get_finding`, `get_scan`, and `get_advisory`.
 
 ## Scanners
 
@@ -78,13 +102,13 @@ Configure alerts for new supply chain detections:
 
 ```bash
 # Check alert status
-security alerts status
+shield alerts status
 
 # Test alerts with a known advisory
-security alerts test
+shield alerts test
 
 # Enable alerts (min severity: critical)
-security alerts enable
+shield alerts enable
 ```
 
 Supports: **Slack**, **Discord**, **Webhook**, **Twitter/X**, **Email**
@@ -126,20 +150,21 @@ API endpoints:
 ## All CLI Commands
 
 ```
-shield scan [path]              Run shield scan
-security secrets [options] [path] Focused secret-exposure scan (files + live context)
-shield findings                 List findings
-shield explain <id>             AI explanation for a finding
-shield fix <id>                 AI-suggested fix
-shield review                   Review staged git changes
-shield init                     Initialize for this repo
-shield baseline                 Mark findings as baseline
-shield score                    Show shield score
-security check-package <name>     Check if package is compromised
-security advisories               List supply chain advisories
-security alerts status|test|...   Manage alert channels
-shield mcp --claude|--all       Install MCP server
-shield serve                    Start web dashboard
+shield scan [path]                Run shield scan
+shield secrets [options] [path]   Focused secret-exposure scan (files + live context)
+shield findings                   List findings
+shield explain <id>               AI explanation for a finding
+shield fix <id>                   AI-suggested fix
+shield review                     Review staged git changes
+shield init                       Initialize for this repo
+shield baseline                   Mark findings as baseline
+shield score                      Show shield score
+shield check-package <name>       Check if package is compromised
+shield advisories                 List supply chain advisories
+shield advisory <id>              Show one supply chain advisory
+shield alerts status|test|...     Manage alert channels
+shield mcp --claude|--all         Install MCP server
+shield serve                      Start web dashboard
 ```
 
 ## Data
@@ -158,17 +183,26 @@ Stored in `~/.hasna/security/` (override with `SECURITY_DB` env var).
 Useful flags:
 
 ```bash
-security secrets . --repo-only
-security secrets . --json
-security secrets . --severity high --fail-on medium
+shield secrets . --repo-only
+shield secrets . --limit 50
+shield secrets . --verbose
+shield secrets . --json
+shield secrets . --severity high --fail-on medium
 ```
 
-## Cloud Sync
+## Storage Sync
 
 ```bash
-cloud sync push --service security
-cloud sync pull --service security
+shield storage status
+shield storage push
+shield storage pull
+shield storage sync
 ```
+
+Storage sync is optional. Set `HASNA_SECURITY_DATABASE_URL` or configure
+`~/.hasna/security/storage/config.json` to run in hybrid/remote mode with
+PostgreSQL. `SECURITY_DATABASE_URL` is accepted as a short non-deprecated
+fallback for local development.
 
 ## HTTP mode
 

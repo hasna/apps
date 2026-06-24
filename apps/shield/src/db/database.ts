@@ -1,12 +1,37 @@
-import { Database } from "bun:sqlite";
-import { SqliteAdapter } from "@hasna/cloud";
 import { existsSync, mkdirSync } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
+import { createRequire } from "module";
 
-let _db: Database | null = null;
+export interface SqliteStatement {
+  all(...params: unknown[]): unknown[];
+  get(...params: unknown[]): unknown;
+  run(...params: unknown[]): unknown;
+}
 
-function getDbPath(): string {
+export interface SqliteDatabase {
+  close(): void;
+  exec(sql: string): unknown;
+  prepare(sql: string): SqliteStatement;
+  transaction(fn: (...args: any[]) => unknown): (...args: any[]) => unknown;
+}
+
+type SqliteDatabaseConstructor = new (path: string) => SqliteDatabase;
+
+const require = createRequire(import.meta.url);
+
+function loadDatabaseConstructor(): SqliteDatabaseConstructor {
+  if (typeof Bun !== "undefined") {
+    const sqlite = require("bun:sqlite") as { Database: SqliteDatabaseConstructor };
+    return sqlite.Database;
+  }
+
+  return require("better-sqlite3") as SqliteDatabaseConstructor;
+}
+
+let _db: SqliteDatabase | null = null;
+
+export function getDbPath(): string {
   if (process.env.SECURITY_DB) return process.env.SECURITY_DB;
   const local = join(process.cwd(), ".shield", "shield.db");
   if (existsSync(dirname(local))) return local;
@@ -24,7 +49,7 @@ export function onDbInit(cb: () => void): void {
   if (_initialized) cb();
 }
 
-export function getDb(): Database {
+export function getDb(): SqliteDatabase {
   if (_db) {
     // Verify the connection is still alive
     try {
@@ -39,7 +64,8 @@ export function getDb(): Database {
   if (_db) return _db;
   const dbPath = getDbPath();
   mkdirSync(dirname(dbPath), { recursive: true });
-  _db = new SqliteAdapter(dbPath) as unknown as Database;
+  const Database = loadDatabaseConstructor();
+  _db = new Database(dbPath);
   _db.exec("PRAGMA journal_mode = WAL");
   _db.exec("PRAGMA foreign_keys = ON");
   _db.exec("PRAGMA busy_timeout = 5000");
@@ -58,7 +84,8 @@ export function closeDb(): void {
   }
 }
 
-export function getTestDb(): Database {
+export function getTestDb(): SqliteDatabase {
+  const Database = loadDatabaseConstructor();
   const db = new Database(":memory:");
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA foreign_keys = ON");
@@ -66,7 +93,7 @@ export function getTestDb(): Database {
   return db;
 }
 
-function runMigrations(db: Database): void {
+function runMigrations(db: SqliteDatabase): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS _migrations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,7 +111,7 @@ function runMigrations(db: Database): void {
     db.transaction(() => {
       db.exec(migration.sql);
       db.prepare("INSERT INTO _migrations (name) VALUES (?)").run(migration.name);
-    });
+    })();
   }
 }
 

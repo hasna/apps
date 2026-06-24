@@ -5,6 +5,7 @@ import {
   Severity,
   SEVERITY_ORDER,
 } from "../types/index.js";
+import { DEFAULT_COMPACT_LIMIT, truncateText } from "../lib/output.js";
 
 const SEVERITY_BADGE: Record<Severity, (text: string) => string> = {
   [Severity.Critical]: (t) => chalk.bgRed.white.bold(` ${t} `),
@@ -61,7 +62,13 @@ function computeScore(findings: Finding[]): SecurityScore {
   return score;
 }
 
-export function reportFindings(findings: Finding[]): void {
+export interface TerminalReportOptions {
+  limit?: number;
+  offset?: number;
+  verbose?: boolean;
+}
+
+export function reportFindings(findings: Finding[], options: TerminalReportOptions = {}): void {
   if (findings.length === 0) {
     console.log(chalk.green.bold("\n  No security findings detected.\n"));
     return;
@@ -71,29 +78,38 @@ export function reportFindings(findings: Finding[]): void {
     (a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity],
   );
 
-  console.log(
-    chalk.bold(`\n  Security Findings (${findings.length} total)\n`),
-  );
+  const limit = options.verbose ? findings.length : (options.limit ?? DEFAULT_COMPACT_LIMIT);
+  const visible = sorted.slice(0, limit);
+  const hidden = sorted.length - visible.length;
+
+  console.log(chalk.bold(`\n  Security Findings (showing ${visible.length}/${findings.length})\n`));
   console.log(chalk.gray("  " + "─".repeat(70)));
 
-  for (const finding of sorted) {
+  for (const finding of visible) {
     const badge = SEVERITY_BADGE[finding.severity](
       finding.severity.toUpperCase(),
     );
     const location = chalk.cyan(`${finding.file}:${finding.line}`);
     const message = finding.suppressed
-      ? chalk.strikethrough.gray(finding.message)
-      : finding.message;
+      ? chalk.strikethrough.gray(truncateText(finding.message))
+      : truncateText(finding.message);
 
     console.log(`  ${badge} ${location} — ${message}`);
 
-    if (finding.code_snippet) {
+    if (options.verbose && finding.code_snippet) {
       console.log(chalk.gray(`         ${finding.code_snippet.trim()}`));
     }
 
-    if (finding.llm_explanation) {
+    if (options.verbose && finding.llm_explanation) {
       console.log(chalk.dim(`         ${finding.llm_explanation}`));
     }
+  }
+
+  if (hidden > 0) {
+    const offsetHint = options.offset !== undefined ? ` --offset ${options.offset + visible.length}` : "";
+    console.log(chalk.gray(`\n  ${hidden} more finding(s) hidden. Use --verbose, --limit ${findings.length}, or shield findings${offsetHint} for more.`));
+  } else if (!options.verbose) {
+    console.log(chalk.gray("\n  Use --verbose to include snippets and LLM explanations."));
   }
 
   // Summary table

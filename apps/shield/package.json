@@ -18,15 +18,22 @@
     "./sdk": {
       "import": "./sdk/dist/index.js",
       "types": "./sdk/dist/index.d.ts"
+    },
+    "./storage": {
+      "import": "./dist/storage.js",
+      "types": "./dist/storage.d.ts"
     }
   },
   "scripts": {
-    "build": "bun run build:lib && bun run build:cli && bun run build:mcp && bun run build:server && bun run build:dashboard",
-    "build:lib": "bun build src/index.ts --outdir dist --target node",
+    "build": "bun run clean && bun run build:lib && bun run build:types && bun run build:cli && bun run build:mcp && bun run build:server && bun run build:sdk && bun run build:dashboard",
+    "build:lib": "bun build src/index.ts src/storage.ts --outdir dist --target node",
+    "build:types": "tsc -p tsconfig.build.json",
     "build:cli": "bun build src/cli/index.tsx --outfile dist/cli/index.js --target node",
     "build:mcp": "bun build src/mcp/index.ts --outfile dist/mcp/index.js --target node",
     "build:server": "bun build src/server/index.ts --outfile dist/server/index.js --target node",
+    "build:sdk": "cd sdk && bun run build",
     "build:dashboard": "cd dashboard && bun run build",
+    "pack:check": "bun run build && bun run scripts/validate-package.ts",
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
@@ -34,7 +41,7 @@
     "test:coverage": "bun test --coverage",
     "typecheck": "tsc --noEmit",
     "lint": "biome check src/",
-    "clean": "rm -rf dist dashboard/dist",
+    "clean": "rm -rf dist dashboard/dist sdk/dist",
     "postinstall": "mkdir -p $HOME/.hasna/shield 2>/dev/null || true"
   },
   "dependencies": {
@@ -47,6 +54,7 @@
     "express": "^5.1.0",
     "ink": "^5.2.0",
     "openai": "^4.86.2",
+    "pg": "^8.13.3",
     "react": "^19.1.0",
     "zod": "^3.24.4"
   },
@@ -54,12 +62,14 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/bun": "^1.2.12",
     "@types/express": "^5.0.2",
+    "@types/pg": "^8.11.11",
     "@types/react": "^19.1.2",
     "typescript": "^5.8.3"
   },
   "files": [
     "bin",
     "dist",
+    "sdk/dist",
     "dashboard/dist",
     "README.md",
     "LICENSE"

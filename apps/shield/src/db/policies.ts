@@ -75,7 +75,7 @@ export function updatePolicy(
 ): void {
   const db = getDb();
   const sets: string[] = [];
-  const params: unknown[] = [];
+  const params: any[] = [];
 
   if (updates.name !== undefined) {
     sets.push("name = ?");

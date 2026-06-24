@@ -14,6 +14,7 @@ import {
   parseFormat, parseSeverity, resolveScannerTypes, filterBySeverity,
   ensureProject, getCodeContext,
 } from "../helpers.js";
+import { DEFAULT_COMPACT_LIMIT, parseLimitOption } from "../../lib/output.js";
 
 export function registerScanCommand(program: Command): void {
   program
@@ -24,6 +25,8 @@ export function registerScanCommand(program: Command): void {
     .option("--scanner <type>", "Run specific scanner only")
     .option("--format <format>", "Output format (terminal/json/sarif)", "terminal")
     .option("--severity <level>", "Minimum severity threshold", "info")
+    .option("--limit <n>", `Max findings to show in terminal output (default ${DEFAULT_COMPACT_LIMIT})`)
+    .option("--verbose", "Show full terminal finding details, including snippets and LLM explanations")
     .option("--llm", "Enable LLM analysis of findings")
     .option("--no-cache", "Skip LLM cache")
     .action(async (path: string, options) => {
@@ -37,6 +40,7 @@ export function registerScanCommand(program: Command): void {
         const config = loadConfig(scanPath);
         const format = parseFormat(options.format);
         const severityThreshold = parseSeverity(options.severity);
+        const displayLimit = parseLimitOption(options.limit, "--limit", DEFAULT_COMPACT_LIMIT);
         const scannerTypes = resolveScannerTypes(options.scanner, options.quick, config);
         const useLLM = options.llm || config.llm_analyze;
 
@@ -108,7 +112,10 @@ export function registerScanCommand(program: Command): void {
 
         const filtered = filterBySeverity(storedFindings, severityThreshold);
         const reporter = getReporter(format);
-        const output = reporter.report(filtered, { ...scan, status: ScanStatus.Completed });
+        const output = reporter.report(filtered, { ...scan, status: ScanStatus.Completed }, {
+          limit: displayLimit,
+          verbose: Boolean(options.verbose),
+        });
         if (typeof output === "string") console.log(output);
 
         if (filtered.some((f) => f.severity === Severity.Critical || f.severity === Severity.High)) {

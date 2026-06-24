@@ -14,6 +14,7 @@ import {
   isLLMAvailable,
 } from "../../llm/index.js";
 import { Severity, ScannerType } from "../../types/index.js";
+import { compactFinding, compactListResult, DEFAULT_COMPACT_LIMIT, parseLimitOption } from "../../lib/output.js";
 
 type JsonResult = { content: Array<{ type: "text"; text: string }> };
 
@@ -31,18 +32,40 @@ export function registerFindingTools(
       severity: z.string().optional().describe("Filter by severity (critical, high, medium, low, info)"),
       scanner_type: z.string().optional().describe("Filter by scanner type"),
       file: z.string().optional().describe("Filter by file path"),
-      limit: z.number().optional().describe("Max results (default 100)"),
+      limit: z.number().optional().describe(`Max results (default ${DEFAULT_COMPACT_LIMIT})`),
+      offset: z.number().optional().describe("Skip N results"),
+      verbose: z.boolean().optional().describe("Return full finding records instead of compact rows"),
     },
-    async ({ scan_id, severity, scanner_type, file, limit }) => {
+    async ({ scan_id, severity, scanner_type, file, limit, offset, verbose }) => {
       try {
+        const resultLimit = parseLimitOption(limit, "limit", DEFAULT_COMPACT_LIMIT);
+        const resultOffset = parseLimitOption(offset, "offset", 0, Number.MAX_SAFE_INTEGER);
         const findings = listFindings({
           scan_id,
           severity: severity as Severity | undefined,
           scanner_type: scanner_type as ScannerType | undefined,
           file,
-          limit: limit ?? 100,
+          limit: verbose ? resultLimit : resultLimit + 1,
+          offset: resultOffset,
         });
-        return jsonResult({ findings, count: findings.length });
+        if (verbose) return jsonResult({ findings, count: findings.length, shown: findings.length, offset: resultOffset, compact: false });
+        const compact = compactListResult(findings, {
+          limit: resultLimit,
+          offset: resultOffset,
+          map: compactFinding,
+          detailHint: "Use get_finding with an id for full details.",
+          verboseHint: "Use verbose=true or get_finding with an id for snippets, fixes, and explanations.",
+        });
+        return jsonResult({
+          findings: compact.items,
+          count: compact.count,
+          shown: compact.shown,
+          offset: compact.offset,
+          limit: compact.limit,
+          next_offset: compact.next_offset,
+          hint: compact.hint,
+          compact: true,
+        });
       } catch (error) {
         return jsonResult({ error: String(error) });
       }

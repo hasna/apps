@@ -2,17 +2,17 @@ import type { Finding, Scan } from "../types/index.js";
 import { ReportFormat } from "../types/index.js";
 import { reportFindings as jsonReport } from "./json.js";
 import { reportFindings as sarifReport } from "./sarif.js";
-import { reportFindings as terminalReport } from "./terminal.js";
+import { reportFindings as terminalReport, type TerminalReportOptions } from "./terminal.js";
 
 export interface Reporter {
   format: ReportFormat;
-  report: (findings: Finding[], scan?: Scan) => string | void;
+  report: (findings: Finding[], scan?: Scan, options?: TerminalReportOptions) => string | void;
 }
 
 const terminalReporter: Reporter = {
   format: ReportFormat.Terminal,
-  report: (findings: Finding[]) => {
-    terminalReport(findings);
+  report: (findings: Finding[], _scan?: Scan, options?: TerminalReportOptions) => {
+    terminalReport(findings, options);
   },
 };
 

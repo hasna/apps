@@ -109,7 +109,7 @@ export interface ListFindingsOptions {
 export function listFindings(options: ListFindingsOptions = {}): Finding[] {
   const db = getDb();
   const conditions: string[] = [];
-  const params: unknown[] = [];
+  const params: any[] = [];
 
   if (options.scan_id) {
     conditions.push("scan_id = ?");
@@ -150,7 +150,7 @@ export function updateFinding(
 ): void {
   const db = getDb();
   const sets: string[] = [];
-  const params: unknown[] = [];
+  const params: any[] = [];
 
   if (updates.suppressed !== undefined) {
     sets.push("suppressed = ?");
@@ -187,7 +187,7 @@ export function suppressFinding(id: string, reason: string): void {
 export function countFindings(scan_id?: string, severity?: Severity): number {
   const db = getDb();
   const conditions: string[] = [];
-  const params: unknown[] = [];
+  const params: any[] = [];
 
   if (scan_id) {
     conditions.push("scan_id = ?");

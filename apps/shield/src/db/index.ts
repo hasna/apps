@@ -1,4 +1,32 @@
 export { getDb, closeDb, getTestDb, onDbInit } from "./database.js";
+export {
+  SECURITY_STORAGE_ENV,
+  SECURITY_STORAGE_FALLBACK_ENV,
+  STORAGE_DATABASE_ENV,
+  STORAGE_MODE_ENV,
+  getConnectionString,
+  getStorageConfig,
+  getStorageConnectionString,
+  getStorageDatabaseEnv,
+  getStorageDatabaseEnvName,
+  getStorageDatabaseUrl,
+  type StorageEnv,
+} from "./storage-config.js";
+export type { StorageConfig, StorageMode } from "./storage-config.js";
+export { PgAdapterAsync } from "./remote-storage.js";
+export { applyPgMigrations } from "./pg-migrate.js";
+export {
+  SECURITY_STORAGE_TABLES,
+  getStoragePg,
+  getStorageStatus,
+  parseStorageTables,
+  pullStorageChanges,
+  pushStorageChanges,
+  runStorageMigrations,
+  syncStorageChanges,
+  STORAGE_TABLES,
+} from "./storage-sync.js";
+export type { StorageStatus, StorageSyncResult, SyncResult } from "./storage-sync.js";
 export { createProject, getProject, getProjectByPath, listProjects, deleteProject } from "./projects.js";
 export { createScan, getScan, listScans, updateScanStatus, completeScan, deleteScan } from "./scans.js";
 export {

@@ -37,14 +37,14 @@ ${HOOK_MARKER}
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-run_security() {
-  if command -v security >/dev/null 2>&1; then
-    security secrets . --format terminal --fail-on high --no-git-history
+run_shield() {
+  if command -v shield >/dev/null 2>&1; then
+    shield secrets . --format terminal --fail-on high --no-git-history
     return $?
   fi
 
-  if [ -x "./node_modules/.bin/security" ]; then
-    ./node_modules/.bin/security secrets . --format terminal --fail-on high --no-git-history
+  if [ -x "./node_modules/.bin/shield" ]; then
+    ./node_modules/.bin/shield secrets . --format terminal --fail-on high --no-git-history
     return $?
   fi
 
@@ -58,11 +58,11 @@ run_security() {
     return $?
   fi
 
-  echo "open-security pre-push hook: security CLI not found" >&2
+  echo "open-security pre-push hook: shield CLI not found" >&2
   exit 1
 }
 
-run_security
+run_shield
 `;
 }
 

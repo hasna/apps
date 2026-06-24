@@ -34,7 +34,7 @@ export function registerManageCommands(program: Command): void {
         }
       }
 
-      console.log(chalk.gray("  Run `security scan` or `security secrets` to start scanning.\n"));
+      console.log(chalk.gray("  Run `shield scan` or `shield secrets` to start scanning.\n"));
     });
 
   // baseline
@@ -45,7 +45,7 @@ export function registerManageCommands(program: Command): void {
       getDb();
       const scans = listScans(undefined, 1);
       if (scans.length === 0) {
-        console.log(chalk.yellow("\n  No scans found. Run `security scan` first.\n"));
+        console.log(chalk.yellow("\n  No scans found. Run `shield scan` first.\n"));
         return;
       }
 
@@ -80,7 +80,7 @@ export function registerManageCommands(program: Command): void {
         getDb();
         const scans = listScans(undefined, 1);
         if (scans.length === 0) {
-          const message = "No scans found. Run `security scan` first.";
+          const message = "No scans found. Run `shield scan` first.";
           if (format === "json") {
             console.log(JSON.stringify({ error: message }, null, 2));
             process.exit(1);

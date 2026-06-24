@@ -74,7 +74,7 @@ export function getRule(id: string): Rule | null {
 export function listRules(scanner_type?: ScannerType, enabled?: boolean): Rule[] {
   const db = getDb();
   const conditions: string[] = [];
-  const params: unknown[] = [];
+  const params: any[] = [];
 
   if (scanner_type) {
     conditions.push("scanner_type = ?");
@@ -93,7 +93,7 @@ export function listRules(scanner_type?: ScannerType, enabled?: boolean): Rule[]
 export function updateRule(id: string, updates: Partial<Omit<Rule, "id" | "created_at" | "updated_at">>): void {
   const db = getDb();
   const sets: string[] = [];
-  const params: unknown[] = [];
+  const params: any[] = [];
 
   if (updates.name !== undefined) {
     sets.push("name = ?");

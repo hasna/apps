@@ -139,8 +139,8 @@ export function createAdvisoryIOC(input: {
   advisory_id: string;
   type: IOCType;
   value: string;
-  context?: string;
-  platform?: string;
+  context?: string | null;
+  platform?: string | null;
 }): AdvisoryIOC {
   const db = getDb();
   const id = crypto.randomUUID().replace(/-/g, "").slice(0, 32);
@@ -230,7 +230,14 @@ export function createRegistryEvent(input: {
     input.analysis ?? null,
     input.advisory_id ?? null,
   );
-  return db.prepare("SELECT * FROM registry_events WHERE id = ?").get(id) as any;
+  return rowToRegistryEvent(db.prepare("SELECT * FROM registry_events WHERE id = ?").get(id) as any);
+}
+
+function rowToRegistryEvent(row: any): RegistryEvent {
+  return {
+    ...row,
+    suspicious: row.suspicious === 1 || row.suspicious === true,
+  };
 }
 
 export function listRegistryEvents(options?: {
@@ -253,5 +260,6 @@ export function listRegistryEvents(options?: {
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   const limit = options?.limit ?? 100;
 
-  return db.prepare(`SELECT * FROM registry_events ${where} ORDER BY timestamp DESC LIMIT ?`).all(...params, limit) as any[];
+  return (db.prepare(`SELECT * FROM registry_events ${where} ORDER BY timestamp DESC LIMIT ?`).all(...params, limit) as any[])
+    .map(rowToRegistryEvent);
 }

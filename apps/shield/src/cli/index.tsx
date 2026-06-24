@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander";
+import { registerEventsCommands } from "@hasna/events/commander";
 import { getVersion } from "./helpers.js";
 import { registerScanCommand } from "./commands/scan.js";
 import { registerFindingsCommand } from "./commands/findings.js";
@@ -13,6 +13,7 @@ import { registerSupplyChainCommands } from "./commands/supply-chain.js";
 import { registerAlertsCommand } from "./commands/alerts.js";
 import { registerSecretsCommand } from "./commands/secrets.js";
 import { registerFleetPackageCommand } from "./commands/fleet-package.js";
+import { registerStorageCommands } from "./commands/storage.js";
 
 const program = new Command();
 
@@ -32,6 +33,7 @@ registerSupplyChainCommands(program);
 registerAlertsCommand(program);
 registerSecretsCommand(program);
 registerFleetPackageCommand(program);
+registerStorageCommands(program);
 registerEventsCommands(program, { source: "shield" });
 
 program.parse();

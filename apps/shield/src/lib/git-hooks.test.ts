@@ -23,7 +23,8 @@ describe("git hooks", () => {
 
     expect(result.installed).toBe(true);
     expect(contents).toContain("managed-by-open-security");
-    expect(contents).toContain("security secrets . --format terminal --fail-on high --no-git-history");
+    expect(contents).toContain("shield secrets . --format terminal --fail-on high --no-git-history");
+    expect(contents).toContain("./node_modules/.bin/shield secrets . --format terminal --fail-on high --no-git-history");
     expect(contents).toContain("bun run ./dist/cli/index.js secrets . --format terminal --fail-on high --no-git-history");
     expect(contents).toContain("bun run ./src/cli/index.tsx secrets . --format terminal --fail-on high --no-git-history");
     expect(statSync(result.hookPath).mode & 0o111).toBeGreaterThan(0);
