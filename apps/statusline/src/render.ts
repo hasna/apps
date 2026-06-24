@@ -1,6 +1,6 @@
-import type { StatusContext } from "./providers/types";
-import type { StatuslineConfig } from "./config";
-import { getSegment } from "./segments";
+import type { StatusContext } from "./providers/types.js";
+import type { StatuslineConfig } from "./config.js";
+import { getSegment } from "./segments/index.js";
 
 /** Render the configured segments; a failing segment is dropped, never fatal. */
 export async function renderLine(ctx: StatusContext, cfg: StatuslineConfig): Promise<string> {

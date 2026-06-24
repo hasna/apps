@@ -1,8 +1,8 @@
 import { hostname } from "node:os";
-import type { Segment, StatusContext } from "../providers/types";
-import { compactAge, compactDuration, compactNum, money } from "../format";
-import { gitBranch, gitProjectName, lastCommitEpoch, trackedLineCount } from "../git";
-import { contextUsage } from "../context-window";
+import type { Segment, StatusContext } from "../providers/types.js";
+import { compactAge, compactDuration, compactNum, money } from "../format.js";
+import { gitBranch, gitProjectName, lastCommitEpoch, trackedLineCount } from "../git.js";
+import { contextUsage } from "../context-window.js";
 
 /**
  * Format a model id like "claude-fable-5[1m]" or "claude-3-5-sonnet-20241022"

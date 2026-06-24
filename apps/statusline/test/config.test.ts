@@ -13,7 +13,7 @@ beforeEach(() => {
 
 describe("config", () => {
   test("configPath honors STATUSLINE_CONFIG", () => {
-    expect(configPath()).toBe(process.env.STATUSLINE_CONFIG);
+    expect(configPath()).toBe(process.env.STATUSLINE_CONFIG!);
   });
 
   test("load returns defaults when missing", () => {

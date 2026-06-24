@@ -1,4 +1,4 @@
-import type { StatusContext } from "./types";
+import type { StatusContext } from "./types.js";
 
 /**
  * Parse the JSON payload Claude Code pipes to a `statusLine` command.
