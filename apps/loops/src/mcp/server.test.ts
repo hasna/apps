@@ -94,6 +94,29 @@ describe("OpenLoops MCP server", () => {
         await client.callTool({ name: "openloops_list_loops", arguments: { labels: ["browserplan"], verbose: true } }),
       );
       expect(verboseListed.loops[0]?.target.type).toBe("command");
+      for (const name of ["mcp-loop-b", "mcp-loop-c"]) {
+        await client.callTool({
+          name: "openloops_create_loop",
+          arguments: {
+            name,
+            labels: ["BrowserPlan"],
+            schedule: { type: "once", at: "2026-01-02T00:00:00Z" },
+            target: { type: "command", command: "true" },
+          },
+        });
+      }
+      const firstPage = structured<{ loops: { id: string }[]; nextCursor?: number; hasMore: boolean }>(
+        await client.callTool({ name: "openloops_list_loops", arguments: { labels: ["browserplan"], limit: 1 } }),
+      );
+      expect(firstPage.loops).toHaveLength(1);
+      expect(firstPage.nextCursor).toBe(1);
+      expect(firstPage.hasMore).toBe(true);
+      const secondPage = structured<{ loops: { id: string }[]; nextCursor?: number; hasMore: boolean }>(
+        await client.callTool({ name: "openloops_list_loops", arguments: { labels: ["browserplan"], limit: 1, cursor: firstPage.nextCursor } }),
+      );
+      expect(secondPage.loops).toHaveLength(1);
+      expect(secondPage.loops[0]?.id).not.toBe(firstPage.loops[0]?.id);
+      expect(secondPage.hasMore).toBe(true);
 
       const redactedRun = structured<{ run: { status: string; stdout?: string } }>(
         await client.callTool({ name: "openloops_run_now", arguments: { idOrName: "mcp-loop" } }),
@@ -277,6 +300,19 @@ describe("OpenLoops MCP server", () => {
         await client.callTool({ name: "openloops_list_workflow_events", arguments: { runId: workflowRun.workflowRun.id } }),
       );
       expect(events.events.length).toBeGreaterThan(0);
+      const eventPage = structured<{ events: unknown[]; nextCursor?: number; hasMore: boolean }>(
+        await client.callTool({ name: "openloops_list_workflow_events", arguments: { runId: workflowRun.workflowRun.id, limit: 1 } }),
+      );
+      expect(eventPage.events).toHaveLength(1);
+      expect(eventPage.nextCursor).toBe(1);
+      expect(eventPage.hasMore).toBe(true);
+      const nextEventPage = structured<{ events: unknown[]; hasMore: boolean }>(
+        await client.callTool({
+          name: "openloops_list_workflow_events",
+          arguments: { runId: workflowRun.workflowRun.id, limit: 1, cursor: eventPage.nextCursor },
+        }),
+      );
+      expect(nextEventPage.events).toHaveLength(1);
 
       const pendingRun = store.createWorkflowRun({ workflow: store.requireWorkflow("mcp-workflow") });
       const cancelled = structured<{ workflowRun: { status: string } }>(

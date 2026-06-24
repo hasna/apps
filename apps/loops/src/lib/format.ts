@@ -14,7 +14,6 @@ import type {
 } from "../types.js";
 import type { DaemonStatus } from "../daemon/control.js";
 
-const TEXT_OUTPUT_LIMIT = 32 * 1024;
 const SENSITIVE_PAYLOAD_KEYS = new Set(["env", "error", "prompt", "reason", "stderr", "stdout"]);
 
 export function redact(value: string | undefined, visible = 0): string | undefined {
@@ -32,7 +31,8 @@ export function truncateDisplay(value: string | undefined, maxChars = 120): stri
   return `${normalized.slice(0, maxChars - 14)}... (${normalized.length - (maxChars - 14)} more)`;
 }
 
-function truncateTextOutput(value: string, limit = TEXT_OUTPUT_LIMIT): string {
+function truncateTextOutput(value: string, limit?: number): string {
+  if (limit === undefined) return value;
   if (value.length <= limit) return value;
   return `${value.slice(0, limit)}\n[truncated ${value.length - limit} chars]`;
 }
@@ -50,10 +50,7 @@ function redactSensitivePayload(value: unknown, key?: string): unknown {
   return value;
 }
 
-export function textOutputBlocks(
-  value: Pick<LoopRun | WorkflowStepRun, "stdout" | "stderr">,
-  opts: { indent?: string; limit?: number } = {},
-): string[] {
+export function textOutputBlocks(value: Pick<LoopRun | WorkflowStepRun, "stdout" | "stderr">, opts: { indent?: string; limit?: number } = {}): string[] {
   const indent = opts.indent ?? "";
   const nested = `${indent}  `;
   const blocks: string[] = [];
@@ -246,7 +243,7 @@ export function publicLoop(loop: Loop): Record<string, unknown> {
   };
 }
 
-export function publicRun(run: LoopRun, showOutput = false, maxOutputChars = TEXT_OUTPUT_LIMIT): Record<string, unknown> {
+export function publicRun(run: LoopRun, showOutput = false, maxOutputChars?: number): Record<string, unknown> {
   return {
     ...run,
     stdout: showOutput ? (run.stdout ? truncateTextOutput(run.stdout, maxOutputChars) : run.stdout) : run.stdout ? `[redacted ${run.stdout.length} chars]` : undefined,
@@ -254,7 +251,7 @@ export function publicRun(run: LoopRun, showOutput = false, maxOutputChars = TEX
   };
 }
 
-export function publicExecutorResult(result: ExecutorResult, showOutput = false, maxOutputChars = TEXT_OUTPUT_LIMIT): Record<string, unknown> {
+export function publicExecutorResult(result: ExecutorResult, showOutput = false, maxOutputChars?: number): Record<string, unknown> {
   return {
     ...result,
     stdout: showOutput ? (result.stdout ? truncateTextOutput(result.stdout, maxOutputChars) : result.stdout) : result.stdout ? `[redacted ${result.stdout.length} chars]` : undefined,
@@ -282,7 +279,7 @@ export function publicWorkflowRun(run: WorkflowRun): Record<string, unknown> {
   return { ...run, error: redact(run.error) };
 }
 
-export function publicWorkflowStepRun(run: WorkflowStepRun, showOutput = false, maxOutputChars = TEXT_OUTPUT_LIMIT): Record<string, unknown> {
+export function publicWorkflowStepRun(run: WorkflowStepRun, showOutput = false, maxOutputChars?: number): Record<string, unknown> {
   return {
     ...run,
     stdout: showOutput ? (run.stdout ? truncateTextOutput(run.stdout, maxOutputChars) : run.stdout) : run.stdout ? `[redacted ${run.stdout.length} chars]` : undefined,

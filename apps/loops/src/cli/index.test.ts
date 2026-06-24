@@ -279,6 +279,32 @@ describe("loops CLI", () => {
     expect(jsonRuns.stdout).not.toContain("abcdefghij");
   });
 
+  test("JSON show-output preserves full stdout unless max-output-chars is explicit", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-json-full-output-"));
+    const create = runCli(dataDir, [
+      "create",
+      "command",
+      "json-full-output",
+      "--at",
+      futureAt(),
+      "--cmd",
+      `${JSON.stringify(process.execPath)} -e "process.stdout.write('x'.repeat(5000))"`,
+    ]);
+    expect(create.status).toBe(0);
+
+    const full = runCli(dataDir, ["--json", "run-now", "json-full-output", "--show-output"]);
+    expect(full.status).toBe(0);
+    const value = JSON.parse(full.stdout);
+    expect(value.stdout).toHaveLength(5000);
+    expect(value.stdout).not.toContain("[truncated");
+
+    const bounded = runCli(dataDir, ["--json", "runs", "json-full-output", "--show-output", "--max-output-chars", "4"]);
+    expect(bounded.status).toBe(0);
+    const boundedValue = JSON.parse(bounded.stdout);
+    expect(boundedValue[0].stdout).toContain("xxxx");
+    expect(boundedValue[0].stdout).toContain("[truncated 4996 chars]");
+  });
+
   test("--label validates label format", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-bad-label-"));
     const create = runCli(dataDir, ["create", "command", "bad-label", "--at", futureAt(), "--cmd", "true", "--label", "bad label"]);
@@ -384,6 +410,93 @@ describe("loops CLI", () => {
     expect(inspect.status).toBe(0);
     const value = JSON.parse(inspect.stdout);
     expect(value.events).toHaveLength(76);
+  });
+
+  test("workflow compact step output is capped with a disclosure flag", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-workflow-step-cap-"));
+    const store = new Store(join(dataDir, "loops.db"));
+    let runId = "";
+    try {
+      const workflow = store.createWorkflow({
+        name: "many-steps",
+        steps: Array.from({ length: 55 }, (_, index) => ({
+          id: `step-${String(index).padStart(2, "0")}`,
+          target: { type: "command", command: "true" },
+        })),
+      });
+      const run = store.createWorkflowRun({ workflow });
+      runId = run.id;
+      for (const step of workflow.steps) store.startWorkflowStepRun(run.id, step.id);
+    } finally {
+      store.close();
+    }
+
+    const compact = runCli(dataDir, ["workflows", "inspect", runId]);
+    expect(compact.status).toBe(0);
+    expect(compact.stdout).toContain("steps=50/55");
+    expect(compact.stdout).toContain("use --steps-limit 55");
+    expect(compact.stdout).toContain("step-49");
+    expect(compact.stdout).not.toContain("step-50");
+
+    const expanded = runCli(dataDir, ["workflows", "inspect", runId, "--steps-limit", "55"]);
+    expect(expanded.status).toBe(0);
+    expect(expanded.stdout).toContain("step-54");
+    expect(expanded.stdout).toContain("steps=55.");
+  });
+
+  test("workflow compact step output redacts raw errors", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-workflow-error-redact-"));
+    const store = new Store(join(dataDir, "loops.db"));
+    let runId = "";
+    try {
+      const workflow = store.createWorkflow({
+        name: "workflow-error-redact",
+        steps: [{ id: "secret-error", target: { type: "command", command: "false" } }],
+      });
+      const run = store.createWorkflowRun({ workflow });
+      runId = run.id;
+      store.startWorkflowStepRun(run.id, "secret-error");
+      store.finalizeWorkflowStepRun(run.id, "secret-error", {
+        status: "failed",
+        finishedAt: new Date().toISOString(),
+        durationMs: 1,
+        stdout: "",
+        stderr: "",
+        exitCode: 1,
+        error: "SECRET_ERROR_TOKEN should not be shown",
+      });
+    } finally {
+      store.close();
+    }
+
+    const compact = runCli(dataDir, ["workflows", "inspect", runId]);
+    expect(compact.status).toBe(0);
+    expect(compact.stdout).toContain("error=[redacted");
+    expect(compact.stdout).not.toContain("SECRET_ERROR_TOKEN");
+  });
+
+  test("workflow run compact step output is capped", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-workflow-run-step-cap-"));
+    const file = workflowFile(dataDir, {
+      name: "run-many-steps",
+      steps: Array.from({ length: 55 }, (_, index) => ({
+        id: `run-step-${String(index).padStart(2, "0")}`,
+        target: { type: "command", command: "true" },
+      })),
+    });
+    const create = runCli(dataDir, ["workflows", "create", file]);
+    expect(create.status).toBe(0);
+
+    const compact = runCli(dataDir, ["workflows", "run", "run-many-steps"]);
+    expect(compact.status).toBe(0);
+    expect(compact.stdout).toContain("steps=50/55");
+    expect(compact.stdout).toContain("use --steps-limit 55");
+    expect(compact.stdout).toContain("run-step-49");
+    expect(compact.stdout).not.toContain("run-step-50");
+
+    const expanded = runCli(dataDir, ["workflows", "run", "run-many-steps", "--steps-limit", "55"]);
+    expect(expanded.status).toBe(0);
+    expect(expanded.stdout).toContain("run-step-54");
   });
 
   test("create --goal persists goal config and goal show renders it", () => {

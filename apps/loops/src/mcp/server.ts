@@ -44,6 +44,7 @@ const MAX_OUTPUT_RUN_LIMIT = 25;
 const labelSchema = z.string().min(1).max(64).regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/);
 const labelsSchema = z.array(labelSchema).max(32);
 const positiveIntSchema = z.number().int().positive();
+const nonNegativeIntSchema = z.number().int().nonnegative();
 
 const accountSchema = z
   .object({
@@ -139,6 +140,10 @@ function boundedLimit(value: number | undefined, fallback: number): number {
   return Math.max(1, Math.min(value ?? fallback, MAX_LIMIT));
 }
 
+function boundedCursor(value: number | undefined): number {
+  return Math.max(0, value ?? 0);
+}
+
 function boundedOutputLimit(value: number | undefined, fallback: number): number {
   return Math.max(1, Math.min(value ?? fallback, MAX_OUTPUT_RUN_LIMIT));
 }
@@ -151,6 +156,16 @@ function truncateText(value: unknown, limit: number): unknown {
   if (typeof value !== "string") return value;
   if (value.length <= limit) return value;
   return `${value.slice(0, limit)}\n[truncated ${value.length - limit} chars]`;
+}
+
+function pageItems<T>(items: T[], cursor: number, limit: number): {
+  page: T[];
+  nextCursor?: number;
+  hasMore: boolean;
+} {
+  const page = items.slice(cursor, cursor + limit);
+  const nextCursor = items.length > cursor + limit ? cursor + limit : undefined;
+  return { page, nextCursor, hasMore: nextCursor !== undefined };
 }
 
 function boundRun(run: LoopRun, showOutput: boolean | undefined, maxOutputChars: number | undefined): Record<string, unknown> {
@@ -292,6 +307,7 @@ interface ListLoopsArgs {
   status?: LoopStatus;
   labels?: string[];
   limit?: number;
+  cursor?: number;
   verbose?: boolean;
 }
 
@@ -325,6 +341,7 @@ interface ListRunsArgs {
   status?: RunStatus;
   labels?: string[];
   limit?: number;
+  cursor?: number;
   verbose?: boolean;
 }
 
@@ -342,6 +359,7 @@ interface WorkflowSpecArgs {
 interface ListWorkflowsArgs {
   status?: WorkflowSpec["status"];
   limit?: number;
+  cursor?: number;
   verbose?: boolean;
 }
 
@@ -362,6 +380,7 @@ interface ListWorkflowRunsArgs {
   loopRunId?: string;
   status?: WorkflowRunStatus;
   limit?: number;
+  cursor?: number;
   verbose?: boolean;
 }
 
@@ -380,6 +399,7 @@ interface WorkflowRunIdArgs {
 
 interface WorkflowEventsArgs extends WorkflowRunIdArgs {
   limit?: number;
+  cursor?: number;
   verbose?: boolean;
 }
 
@@ -403,6 +423,12 @@ interface GoalStatusArgs {
 
 interface MachineIdArgs {
   id: string;
+}
+
+interface ListMachinesArgs {
+  limit?: number;
+  cursor?: number;
+  verbose?: boolean;
 }
 
 export function createOpenLoopsMcpServer(opts: OpenLoopsMcpServerOptions = {}): McpServer {
@@ -469,16 +495,26 @@ export function createOpenLoopsMcpServer(opts: OpenLoopsMcpServerOptions = {}): 
         status: z.enum(["active", "paused", "stopped", "expired"]).optional(),
         labels: labelsSchema.optional(),
         limit: positiveIntSchema.optional(),
+        cursor: nonNegativeIntSchema.optional(),
         verbose: z.boolean().optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ status, labels, limit, verbose }) =>
-      jsonResult({
-        loops: store
-          .listLoops({ status: loopStatus(status), labels: normalizeLoopLabels(labels), limit: boundedLimit(limit, MAX_LIMIT) })
-          .map((loop) => (verbose ? publicLoop(loop) : compactLoop(loop))),
-      }),
+    async ({ status, labels, limit, cursor, verbose }) => {
+      const resolvedLimit = boundedLimit(limit, MAX_LIMIT);
+      const resolvedCursor = boundedCursor(cursor);
+      const loops = store.listLoops({
+        status: loopStatus(status),
+        labels: normalizeLoopLabels(labels),
+        limit: resolvedCursor + resolvedLimit + 1,
+      });
+      const { page, nextCursor, hasMore } = pageItems(loops, resolvedCursor, resolvedLimit);
+      return jsonResult({
+        loops: page.map((loop) => (verbose ? publicLoop(loop) : compactLoop(loop))),
+        nextCursor,
+        hasMore,
+      });
+    },
   );
 
   registerTool<GetLoopArgs>(
@@ -594,23 +630,29 @@ export function createOpenLoopsMcpServer(opts: OpenLoopsMcpServerOptions = {}): 
         status: z.enum(["running", "succeeded", "failed", "timed_out", "abandoned", "skipped"]).optional(),
         labels: labelsSchema.optional(),
         limit: positiveIntSchema.optional(),
+        cursor: nonNegativeIntSchema.optional(),
         showOutput: z.boolean().optional(),
         maxOutputChars: positiveIntSchema.optional(),
         verbose: z.boolean().optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ idOrName, status, labels, limit, showOutput, maxOutputChars, verbose }) => {
+    async ({ idOrName, status, labels, limit, cursor, showOutput, maxOutputChars, verbose }) => {
       const loop = idOrName ? store.requireLoop(idOrName) : undefined;
-      const runs = store
-        .listRuns({
-          loopId: loop?.id,
-          status: runStatus(status),
-          labels: normalizeLoopLabels(labels),
-          limit: showOutput ? boundedOutputLimit(limit, 10) : boundedLimit(limit, 50),
-        })
-        .map((run) => (showOutput || verbose ? boundRun(run, showOutput, maxOutputChars) : compactRun(run)));
-      return jsonResult({ runs });
+      const resolvedLimit = showOutput ? boundedOutputLimit(limit, 10) : boundedLimit(limit, 50);
+      const resolvedCursor = boundedCursor(cursor);
+      const runs = store.listRuns({
+        loopId: loop?.id,
+        status: runStatus(status),
+        labels: normalizeLoopLabels(labels),
+        limit: resolvedCursor + resolvedLimit + 1,
+      });
+      const { page, nextCursor, hasMore } = pageItems(runs, resolvedCursor, resolvedLimit);
+      return jsonResult({
+        runs: page.map((run) => (showOutput || verbose ? boundRun(run, showOutput, maxOutputChars) : compactRun(run))),
+        nextCursor,
+        hasMore,
+      });
     },
   );
 
@@ -672,12 +714,22 @@ export function createOpenLoopsMcpServer(opts: OpenLoopsMcpServerOptions = {}): 
       inputSchema: {
         status: z.enum(["active", "archived"]).optional(),
         limit: positiveIntSchema.optional(),
+        cursor: nonNegativeIntSchema.optional(),
         verbose: z.boolean().optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ status, limit, verbose }) =>
-      jsonResult({ workflows: store.listWorkflows({ status, limit: boundedLimit(limit, 50) }).map((workflow) => (verbose ? publicWorkflow(workflow) : compactWorkflow(workflow))) }),
+    async ({ status, limit, cursor, verbose }) => {
+      const resolvedLimit = boundedLimit(limit, 50);
+      const resolvedCursor = boundedCursor(cursor);
+      const workflows = store.listWorkflows({ status, limit: resolvedCursor + resolvedLimit + 1 });
+      const { page, nextCursor, hasMore } = pageItems(workflows, resolvedCursor, resolvedLimit);
+      return jsonResult({
+        workflows: page.map((workflow) => (verbose ? publicWorkflow(workflow) : compactWorkflow(workflow))),
+        nextCursor,
+        hasMore,
+      });
+    },
   );
 
   registerTool<WorkflowIdArgs>(
@@ -736,16 +788,27 @@ export function createOpenLoopsMcpServer(opts: OpenLoopsMcpServerOptions = {}): 
         loopRunId: z.string().min(1).optional(),
         status: z.enum(["running", "succeeded", "failed", "timed_out", "cancelled"]).optional(),
         limit: positiveIntSchema.optional(),
+        cursor: nonNegativeIntSchema.optional(),
         verbose: z.boolean().optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ idOrName, loopRunId, status, limit, verbose }) => {
+    async ({ idOrName, loopRunId, status, limit, cursor, verbose }) => {
       const workflow = idOrName ? store.requireWorkflow(idOrName) : undefined;
-      const runs = store
-        .listWorkflowRuns({ workflowId: workflow?.id, loopRunId, status: workflowRunStatus(status), limit: boundedLimit(limit, 50) })
-        .map((run) => (verbose ? publicWorkflowRun(run) : compactWorkflowRun(run)));
-      return jsonResult({ workflowRuns: runs });
+      const resolvedLimit = boundedLimit(limit, 50);
+      const resolvedCursor = boundedCursor(cursor);
+      const runs = store.listWorkflowRuns({
+        workflowId: workflow?.id,
+        loopRunId,
+        status: workflowRunStatus(status),
+        limit: resolvedCursor + resolvedLimit + 1,
+      });
+      const { page, nextCursor, hasMore } = pageItems(runs, resolvedCursor, resolvedLimit);
+      return jsonResult({
+        workflowRuns: page.map((run) => (verbose ? publicWorkflowRun(run) : compactWorkflowRun(run))),
+        nextCursor,
+        hasMore,
+      });
     },
   );
 
@@ -788,12 +851,22 @@ export function createOpenLoopsMcpServer(opts: OpenLoopsMcpServerOptions = {}): 
       inputSchema: {
         runId: z.string().min(1),
         limit: positiveIntSchema.optional(),
+        cursor: nonNegativeIntSchema.optional(),
         verbose: z.boolean().optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ runId, limit, verbose }) =>
-      jsonResult({ events: store.listWorkflowEvents(runId, boundedLimit(limit, 100)).map((event) => (verbose ? publicWorkflowEvent(event) : compactWorkflowEvent(event))) }),
+    async ({ runId, limit, cursor, verbose }) => {
+      const resolvedLimit = boundedLimit(limit, 100);
+      const resolvedCursor = boundedCursor(cursor);
+      const events = store.listWorkflowEvents(runId, resolvedCursor + resolvedLimit + 1);
+      const { page, nextCursor, hasMore } = pageItems(events, resolvedCursor, resolvedLimit);
+      return jsonResult({
+        events: page.map((event) => (verbose ? publicWorkflowEvent(event) : compactWorkflowEvent(event))),
+        nextCursor,
+        hasMore,
+      });
+    },
   );
 
   registerTool<WorkflowReasonArgs>(
@@ -910,16 +983,24 @@ export function createOpenLoopsMcpServer(opts: OpenLoopsMcpServerOptions = {}): 
     },
   );
 
-  registerTool<Record<string, never>>(
+  registerTool<ListMachinesArgs>(
     server,
     "openloops_list_machines",
     {
       title: "List OpenLoops Machines",
       description: "List known OpenMachines topology entries for loop assignment.",
-      inputSchema: {},
+      inputSchema: {
+        limit: positiveIntSchema.optional(),
+        cursor: nonNegativeIntSchema.optional(),
+      },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async () => jsonResult({ machines: listOpenMachines() }),
+    async ({ limit, cursor }) => {
+      const resolvedLimit = boundedLimit(limit, 50);
+      const resolvedCursor = boundedCursor(cursor);
+      const { page, nextCursor, hasMore } = pageItems(listOpenMachines(), resolvedCursor, resolvedLimit);
+      return jsonResult({ machines: page, nextCursor, hasMore });
+    },
   );
 
   registerTool<MachineIdArgs>(

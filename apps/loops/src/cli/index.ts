@@ -54,6 +54,7 @@ program.option("-v, --verbose", "show full redacted detail output");
 const DEFAULT_HUMAN_LIST_LIMIT = 25;
 const DEFAULT_HUMAN_RUN_LIMIT = 20;
 const DEFAULT_HUMAN_EVENT_LIMIT = 50;
+const DEFAULT_HUMAN_STEP_LIMIT = 50;
 const DEFAULT_HUMAN_LOG_LINES = 40;
 const DEFAULT_HUMAN_OUTPUT_CHARS = 4_000;
 const MAX_HUMAN_OUTPUT_CHARS = 64_000;
@@ -91,9 +92,20 @@ function parseNonNegativeInteger(raw: string | undefined, label: string): number
   return value;
 }
 
-function outputLimit(opts: CliOpts): number {
+function explicitOutputLimit(opts: CliOpts): number | undefined {
+  const source = (opts as CliOpts & { getOptionValueSource?: (key: string) => string | undefined }).getOptionValueSource?.("maxOutputChars");
+  if (source !== undefined && source !== "cli" && source !== "env") return undefined;
   const raw = typeof opts.maxOutputChars === "string" ? opts.maxOutputChars : undefined;
-  return Math.min(positiveInteger(raw, "--max-output-chars") ?? DEFAULT_HUMAN_OUTPUT_CHARS, MAX_HUMAN_OUTPUT_CHARS);
+  const value = positiveInteger(raw, "--max-output-chars");
+  return value === undefined ? undefined : Math.min(value, MAX_HUMAN_OUTPUT_CHARS);
+}
+
+function humanOutputLimit(opts: CliOpts): number {
+  return explicitOutputLimit(opts) ?? DEFAULT_HUMAN_OUTPUT_CHARS;
+}
+
+function jsonOutputLimit(opts: CliOpts): number | undefined {
+  return isJson() ? explicitOutputLimit(opts) : humanOutputLimit(opts);
 }
 
 function defaultLimit(opts: CliOpts, humanDefault: number, jsonDefault: number): number {
@@ -143,7 +155,7 @@ function workflowRunLine(run: WorkflowRun): string {
 function workflowStepLine(step: WorkflowStepRun, verbose = false): string {
   const output = step.stdout || step.stderr ? " output=yes" : "";
   const duration = step.durationMs === undefined ? "" : ` duration=${step.durationMs}ms`;
-  const error = step.error ? ` error=${truncateDisplay(step.error, verbose ? 180 : 80)}` : "";
+  const error = step.error ? ` error=${truncateDisplay(String(publicWorkflowStepRun(step).error), verbose ? 180 : 80)}` : "";
   return `  ${String(step.sequence).padStart(2, "0")}  ${step.status.padEnd(10)}  ${step.stepId}${duration}${output}${error}`;
 }
 
@@ -586,12 +598,15 @@ addVerboseOption(
   workflows
     .command("inspect <runId>")
     .description("show a workflow run with steps and events")
+    .option("--steps-limit <n>", "maximum steps to show in compact human output")
     .option("--events-limit <n>", "maximum events to include"),
 ).action((runId, opts) => {
   const store = new Store();
   try {
     const run = store.requireWorkflowRun(runId);
     const steps = store.listWorkflowStepRuns(run.id);
+    const stepLimit = positiveInteger(typeof opts.stepsLimit === "string" ? opts.stepsLimit : undefined, "--steps-limit") ?? DEFAULT_HUMAN_STEP_LIMIT;
+    const shownSteps = steps.slice(0, stepLimit);
     const eventsLimit = defaultLimit({ limit: opts.eventsLimit }, DEFAULT_HUMAN_EVENT_LIMIT, 200);
     const events = store.listWorkflowEvents(run.id, eventsLimit);
     const value = {
@@ -602,10 +617,11 @@ addVerboseOption(
     if (isJson() || isVerbose(opts)) print(value);
     else {
       console.log(workflowRunLine(run));
-      for (const step of steps) {
+      for (const step of shownSteps) {
         console.log(workflowStepLine(step));
       }
-      console.log(`  events=${events.length}. Use --verbose or --json for redacted event payloads.`);
+      const stepHint = steps.length > shownSteps.length ? ` steps=${shownSteps.length}/${steps.length}; use --steps-limit ${steps.length} for all steps.` : ` steps=${shownSteps.length}.`;
+      console.log(`  events=${events.length}.${stepHint} Use --verbose or --json for redacted event payloads.`);
     }
   } finally {
     store.close();
@@ -615,7 +631,8 @@ addVerboseOption(
 workflows
   .command("run <idOrName>")
   .option("--show-output", "show step stdout/stderr")
-  .option("--max-output-chars <n>", "maximum stdout/stderr characters to print", String(DEFAULT_HUMAN_OUTPUT_CHARS))
+  .option("--max-output-chars <n>", `maximum stdout/stderr characters to print; human default ${DEFAULT_HUMAN_OUTPUT_CHARS}`)
+  .option("--steps-limit <n>", "maximum steps to show in compact human output")
   .action(async (idOrName, opts) => {
     const store = new Store();
     try {
@@ -623,7 +640,9 @@ workflows
       const result = await executeWorkflow(store, workflow);
       const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0];
       const steps = run ? store.listWorkflowStepRuns(run.id) : [];
-      const maxOutputChars = outputLimit(opts);
+      const stepLimit = positiveInteger(typeof opts.stepsLimit === "string" ? opts.stepsLimit : undefined, "--steps-limit") ?? DEFAULT_HUMAN_STEP_LIMIT;
+      const shownSteps = steps.slice(0, stepLimit);
+      const maxOutputChars = jsonOutputLimit(opts);
       const value = {
         result: publicExecutorResult(result, opts.showOutput, maxOutputChars),
         workflowRun: run ? publicWorkflowRun(run) : undefined,
@@ -632,9 +651,12 @@ workflows
       if (isJson()) print(value);
       else {
         console.log(`${run?.id ?? workflow.id} ${result.status}`);
-        for (const step of steps) {
+        for (const step of shownSteps) {
           console.log(workflowStepLine(step));
-          if (opts.showOutput) printTextOutput(step, { limit: outputLimit(opts) });
+          if (opts.showOutput) printTextOutput(step, { limit: humanOutputLimit(opts) });
+        }
+        if (steps.length > shownSteps.length) {
+          console.log(`  steps=${shownSteps.length}/${steps.length}; use --steps-limit ${steps.length} for all steps.`);
         }
       }
     } finally {
@@ -772,7 +794,7 @@ program
   .option("--cursor <offset>", "zero-based offset for the next page")
   .option("--label <label>", "filter by loop label; repeatable", collectRepeated, [])
   .option("--show-output", "show stdout/stderr")
-  .option("--max-output-chars <n>", "maximum stdout/stderr characters to print", String(DEFAULT_HUMAN_OUTPUT_CHARS))
+  .option("--max-output-chars <n>", `maximum stdout/stderr characters to print; human default ${DEFAULT_HUMAN_OUTPUT_CHARS}`)
   .action((idOrName, opts) => {
     const store = new Store();
     try {
@@ -781,12 +803,12 @@ program
       const cursor = parseNonNegativeInteger(typeof opts.cursor === "string" ? opts.cursor : undefined, "--cursor") ?? 0;
       const runs = store.listRuns({ loopId: loop?.id, labels: labelsFromOpts(opts), limit: cursor + limit + 1 });
       const { page, nextCursor } = pageItems(runs, opts, limit);
-      if (isJson()) print(page.map((run) => publicRun(run, opts.showOutput, outputLimit(opts))));
+      if (isJson()) print(page.map((run) => publicRun(run, opts.showOutput, jsonOutputLimit(opts))));
       else {
         for (const run of page) {
           const hasOutput = run.stdout || run.stderr ? " output=yes" : "";
           console.log(`${run.id}  ${run.status.padEnd(10)}  attempt=${run.attempt}  slot=${run.scheduledFor}  ${run.loopName}${hasOutput}`);
-          if (opts.showOutput) printTextOutput(run, { limit: outputLimit(opts) });
+          if (opts.showOutput) printTextOutput(run, { limit: humanOutputLimit(opts) });
         }
         printPageHint("runs", page.length, nextCursor, "loops runs", "Use --show-output for bounded stdout/stderr.");
       }
@@ -885,7 +907,7 @@ program
 program
   .command("run-now <idOrName>")
   .option("--show-output", "show stdout/stderr")
-  .option("--max-output-chars <n>", "maximum stdout/stderr characters to print", String(DEFAULT_HUMAN_OUTPUT_CHARS))
+  .option("--max-output-chars <n>", `maximum stdout/stderr characters to print; human default ${DEFAULT_HUMAN_OUTPUT_CHARS}`)
   .action(async (idOrName, opts) => {
     const store = new Store();
     try {
@@ -910,9 +932,9 @@ program
       if (shouldAdvance) {
         advanceLoop(store, claim.loop, run, new Date(run.finishedAt ?? new Date()), run.status === "succeeded");
       }
-      const value = { ...publicRun(run, opts.showOutput, outputLimit(opts)), runNow: { source, advancesLoop: shouldAdvance } };
+      const value = { ...publicRun(run, opts.showOutput, jsonOutputLimit(opts)), runNow: { source, advancesLoop: shouldAdvance } };
       print(value, `${run.id} ${run.status} source=${source} slot=${run.scheduledFor}`);
-      if (!isJson() && opts.showOutput) printTextOutput(run, { limit: outputLimit(opts) });
+      if (!isJson() && opts.showOutput) printTextOutput(run, { limit: humanOutputLimit(opts) });
       if (run.status !== "succeeded") process.exitCode = 1;
     } finally {
       store.close();
