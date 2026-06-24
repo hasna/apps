@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { existsSync, readFileSync } from "node:fs";
 import { Command } from "commander";
-import type { AccountRef, AgentProvider, CatchUpPolicy, CreateLoopInput, LoopTarget, OverlapPolicy, ScheduleSpec } from "../types.js";
+import type { AccountRef, AgentProvider, CatchUpPolicy, CreateLoopInput, Loop, LoopTarget, OverlapPolicy, ScheduleSpec } from "../types.js";
 import { daemonLogPath } from "../lib/paths.js";
 import {
   publicLoop,
@@ -27,6 +27,14 @@ import { normalizeGoalSpec } from "../lib/workflow-spec.js";
 import { runDoctor } from "../lib/doctor.js";
 import { listOpenMachines, resolveLoopMachine } from "../lib/machines.js";
 import { packageVersion } from "../lib/version.js";
+import {
+  createMultiRepoLoopPlan,
+  discoverOpenRepos,
+  renderRepoTemplate,
+  type MultiRepoLoopPlan,
+  type OpenReposLoopRepo,
+  type OpenReposSelector,
+} from "../lib/open-repos.js";
 
 const program = new Command();
 
@@ -111,7 +119,7 @@ function baseCreateInput(name: string, opts: Record<string, string | boolean | u
     description: typeof opts.description === "string" ? opts.description : undefined,
     schedule,
     target,
-    goal: goalFromOpts(opts),
+    goal: goalFromOpts(opts as Record<string, string | boolean | undefined>),
     machine: typeof opts.machine === "string" ? resolveLoopMachine(opts.machine) : undefined,
     ...policy,
     expiresAt: typeof opts.expiresAt === "string" ? new Date(opts.expiresAt).toISOString() : undefined,
@@ -177,6 +185,207 @@ function providerAuthProfileFromOpts(opts: { authProfile?: string }, provider: A
   if (!opts.authProfile) return undefined;
   if (provider !== "codewith") throw new Error("--auth-profile is currently supported only for --provider codewith");
   return opts.authProfile;
+}
+
+function collectOption(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
+}
+
+function addOpenReposSelectorOptions(command: Command): Command {
+  return command
+    .option("--org <org>", "select repos by GitHub org/owner; repeatable", collectOption, [])
+    .option("--repo <name>", "select repos by repo id, name, full name, or path; repeatable", collectOption, [])
+    .option("--package-scope <scope>", "select repos by package.json scope, e.g. @hasna; repeatable", collectOption, [])
+    .option("--language <language>", "select repos by SDK language or local language inference; repeatable", collectOption, [])
+    .option("--path <path>", "select repos at or under a local path; repeatable", collectOption, [])
+    .option("--tag <tag>", "select repos by SDK tag/topic or indexed git tag; repeatable", collectOption, [])
+    .option("--query <text>", "select repos by a text query across repo metadata")
+    .option("--limit <n>", "maximum selected repos");
+}
+
+function addMultiRepoOptions(command: Command): Command {
+  return command
+    .option("--dry-run", "preview selected repos and loop records without writing")
+    .option("--name-template <template>", "loop name template", "repo:{kind}:{group}:{repo}")
+    .option("--max-concurrency <n>", "maximum active repo loops per generated group", "1")
+    .option("--memory-limit-mb <mb>", "future sandbox memory limit per repo loop", "2048")
+    .option("--allow-duplicates", "allow creating loops whose names already exist");
+}
+
+function selectorFromOpts(opts: {
+  org?: string[];
+  repo?: string[];
+  packageScope?: string[];
+  language?: string[];
+  path?: string[];
+  tag?: string[];
+  query?: string;
+  limit?: string;
+}): OpenReposSelector {
+  return {
+    orgs: opts.org,
+    repos: opts.repo,
+    packageScopes: opts.packageScope,
+    languages: opts.language,
+    paths: opts.path,
+    tags: opts.tag,
+    query: opts.query,
+    limit: positiveInteger(opts.limit, "--limit"),
+  };
+}
+
+function hasSelector(selector: OpenReposSelector): boolean {
+  return Boolean(
+    selector.query?.trim() ||
+      (selector.orgs?.length ?? 0) > 0 ||
+      (selector.repos?.length ?? 0) > 0 ||
+      (selector.packageScopes?.length ?? 0) > 0 ||
+      (selector.languages?.length ?? 0) > 0 ||
+      (selector.paths?.length ?? 0) > 0 ||
+      (selector.tags?.length ?? 0) > 0,
+  );
+}
+
+function repoEnvTarget(target: LoopTarget, env: Record<string, string>): LoopTarget {
+  if (target.type === "command") return { ...target, env: { ...(target.env ?? {}), ...env } };
+  if (target.type === "workflow") return { ...target, input: { ...(target.input ?? {}), ...env } };
+  return target;
+}
+
+function publicLoopInput(input: CreateLoopInput): Record<string, unknown> {
+  const target =
+    input.target.type === "agent"
+      ? { ...input.target, prompt: "[redacted]" }
+      : input.target.type === "command" && input.target.env
+        ? { ...input.target, env: input.target.env }
+        : input.target;
+  return { ...input, target };
+}
+
+function publicMultiRepoPlan(plan: MultiRepoLoopPlan): Record<string, unknown> {
+  return {
+    group: plan.group,
+    kind: plan.kind,
+    maxConcurrency: plan.maxConcurrency,
+    memoryLimitMb: plan.memoryLimitMb,
+    scheduling: plan.scheduling,
+    warnings: plan.warnings,
+    loops: plan.loops.map((entry) => ({
+      repo: entry.repo,
+      input: publicLoopInput(entry.input),
+    })),
+  };
+}
+
+function printMultiRepoPlan(plan: MultiRepoLoopPlan, dryRun: boolean, created: Loop[] = []): void {
+  if (isJson()) {
+    print({
+      dryRun,
+      created: created.map(publicLoop),
+      plan: publicMultiRepoPlan(plan),
+    });
+    return;
+  }
+  const verb = dryRun ? "would create" : "created";
+  console.log(
+    `${dryRun ? "dry run: " : ""}${verb} ${dryRun ? plan.loops.length : created.length} repo ${plan.kind} loop(s) group=${plan.group} maxConcurrency=${plan.maxConcurrency} memoryLimitMb=${plan.memoryLimitMb}`,
+  );
+  console.log(`  scheduling: ${plan.scheduling.description}`);
+  for (const warning of plan.warnings) console.log(`  warning: ${warning}`);
+  const entries = dryRun ? plan.loops : plan.loops.filter((_, index) => created[index]);
+  for (let index = 0; index < entries.length; index++) {
+    const entry = entries[index]!;
+    const loop = created[index];
+    console.log(`  ${loop?.id ?? "-"}  ${entry.input.name}  repo=${entry.repo.fullName}  path=${entry.repo.path}`);
+  }
+}
+
+async function buildMultiRepoPlan(
+  kind: "command" | "agent" | "workflow",
+  group: string,
+  opts: Record<string, string | boolean | string[] | undefined>,
+  targetForRepo: (repo: OpenReposLoopRepo, env: Record<string, string>) => LoopTarget,
+): Promise<MultiRepoLoopPlan> {
+  const selector = selectorFromOpts(opts as Parameters<typeof selectorFromOpts>[0]);
+  if (!hasSelector(selector)) throw new Error("choose at least one repo selector: --org, --repo, --package-scope, --language, --path, --tag, or --query");
+  const discovered = await discoverOpenRepos(selector);
+  if (discovered.repos.length === 0) throw new Error("open-repos selected 0 repos");
+  return createMultiRepoLoopPlan({
+    group,
+    kind,
+    repos: discovered.repos,
+    schedule: parseSchedule({
+      at: typeof opts.at === "string" ? opts.at : undefined,
+      every: typeof opts.every === "string" ? opts.every : undefined,
+      cron: typeof opts.cron === "string" ? opts.cron : undefined,
+      dynamic: Boolean(opts.dynamic),
+    }),
+    targetForRepo,
+    description: typeof opts.description === "string" ? opts.description : undefined,
+    nameTemplate: typeof opts.nameTemplate === "string" ? opts.nameTemplate : undefined,
+    maxConcurrency: positiveInteger(typeof opts.maxConcurrency === "string" ? opts.maxConcurrency : undefined, "--max-concurrency"),
+    memoryLimitMb: positiveInteger(typeof opts.memoryLimitMb === "string" ? opts.memoryLimitMb : undefined, "--memory-limit-mb"),
+    goal: goalFromOpts({
+      goal: typeof opts.goal === "string" ? opts.goal : undefined,
+      goalBudget: typeof opts.goalBudget === "string" ? opts.goalBudget : undefined,
+      goalModel: typeof opts.goalModel === "string" ? opts.goalModel : undefined,
+      goalMaxTurns: typeof opts.goalMaxTurns === "string" ? opts.goalMaxTurns : undefined,
+    }),
+    machine: typeof opts.machine === "string" ? resolveLoopMachine(opts.machine) : undefined,
+    policy: parsePolicy({
+      catchUp: typeof opts.catchUp === "string" ? opts.catchUp : undefined,
+      catchUpLimit: typeof opts.catchUpLimit === "string" ? opts.catchUpLimit : undefined,
+      overlap: typeof opts.overlap === "string" ? opts.overlap : undefined,
+      attempts: typeof opts.attempts === "string" ? opts.attempts : undefined,
+      retryDelay: typeof opts.retryDelay === "string" ? opts.retryDelay : undefined,
+      lease: typeof opts.lease === "string" ? opts.lease : undefined,
+    }),
+    warnings: discovered.warnings,
+  });
+}
+
+function createPlanLoops(store: Store, plan: MultiRepoLoopPlan, allowDuplicates: boolean): Loop[] {
+  if (!allowDuplicates) {
+    const plannedNames = new Set<string>();
+    for (const entry of plan.loops) {
+      if (plannedNames.has(entry.input.name)) {
+        throw new Error(`planned loop name is duplicated: ${entry.input.name}; pass --allow-duplicates to create duplicates`);
+      }
+      plannedNames.add(entry.input.name);
+      const existing = store.findLoopByName(entry.input.name);
+      if (existing) {
+        throw new Error(`loop already exists: ${entry.input.name}; pass --allow-duplicates to create another`);
+      }
+    }
+  }
+  const created: Loop[] = [];
+  for (const entry of plan.loops) {
+    created.push(store.createLoop(entry.input));
+  }
+  return created;
+}
+
+function openReposGroupFilter(group: string): Record<string, string> {
+  return { openReposSource: "open-repos", openReposGroup: group };
+}
+
+function listOpenReposGroupLoops(
+  store: Store,
+  opts: { group?: string; repo?: string; status?: string; limit?: string },
+): Loop[] {
+  const status = opts.status as Loop["status"] | undefined;
+  const loops = store.listLoops({
+    status,
+    metadata: opts.group ? openReposGroupFilter(opts.group) : { openReposSource: "open-repos" },
+    limit: positiveInteger(opts.limit, "--limit") ?? 10_000,
+  });
+  if (!opts.repo) return loops;
+  return loops.filter((loop) => {
+    const name = loop.metadata?.openReposRepoName;
+    const path = loop.metadata?.openReposRepoPath;
+    const fullName = loop.metadata?.openReposRepoFullName;
+    return [name, path, fullName].some((value) => typeof value === "string" && value.toLowerCase() === opts.repo!.toLowerCase());
+  });
 }
 
 const create = program.command("create").description("create loops");
@@ -283,6 +492,204 @@ addGoalOptions(
     store.close();
   }
 });
+
+const repos = program.command("repos").description("create and manage OpenRepos-backed multi-repo loops");
+const reposCreate = repos.command("create").description("create native loops across repos selected by open-repos");
+
+addGoalOptions(
+  addMachineOptions(
+    addMultiRepoOptions(
+      addOpenReposSelectorOptions(
+        addScheduleOptions(
+          reposCreate
+            .command("command <group>")
+            .description("create one command loop per selected repo")
+            .requiredOption("--cmd <command>", "command string to execute; supports {repo}, {repoPath}, {org}, and {group} templates")
+            .option("--cwd <dir>", "working directory template; defaults to each repo path")
+            .option("--timeout <duration>", "run timeout")
+            .option("--no-shell", "execute without a shell"),
+        ),
+      ),
+    ),
+  ),
+).action(async (group, opts) => {
+  const plan = await buildMultiRepoPlan("command", group, opts, (repo, env) => {
+    const ctx = { group, kind: "command" as const, repo, maxConcurrency: Number(opts.maxConcurrency ?? 1), memoryLimitMb: Number(opts.memoryLimitMb ?? 2048) };
+    return repoEnvTarget(
+      {
+        type: "command",
+        command: renderRepoTemplate(opts.cmd, ctx),
+        cwd: opts.cwd ? renderRepoTemplate(opts.cwd, ctx) : repo.path,
+        shell: opts.shell,
+        timeoutMs: opts.timeout ? parseDuration(opts.timeout) : undefined,
+        account: accountFromOpts(opts),
+      },
+      env,
+    );
+  });
+  if (opts.dryRun) {
+    printMultiRepoPlan(plan, true);
+    return;
+  }
+  const store = new Store();
+  try {
+    const created = createPlanLoops(store, plan, Boolean(opts.allowDuplicates));
+    printMultiRepoPlan(plan, false, created);
+  } finally {
+    store.close();
+  }
+});
+
+addGoalOptions(
+  addAccountOptions(
+    addMachineOptions(
+      addMultiRepoOptions(
+        addOpenReposSelectorOptions(
+          addScheduleOptions(
+            reposCreate
+              .command("agent <group>")
+              .description("create one coding-agent loop per selected repo")
+              .requiredOption("--provider <provider>", "claude, cursor, codewith, aicopilot, opencode, or codex")
+              .requiredOption("--prompt <prompt>", "agent prompt; supports {repo}, {repoPath}, {org}, and {group} templates")
+              .option("--cwd <dir>", "working directory template; defaults to each repo path")
+              .option("--model <model>", "model")
+              .option("--agent <agent>", "provider-specific agent")
+              .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
+              .option("--timeout <duration>", "run timeout")
+              .option("--config-isolation <mode>", "safe or none", "safe"),
+          ),
+        ),
+      ),
+    ),
+  ),
+).action(async (group, opts) => {
+  const provider = opts.provider as AgentProvider;
+  if (!["claude", "cursor", "codewith", "aicopilot", "opencode", "codex"].includes(provider)) {
+    throw new Error("unsupported provider");
+  }
+  if (!["safe", "none"].includes(opts.configIsolation)) {
+    throw new Error("--config-isolation must be safe or none");
+  }
+  const plan = await buildMultiRepoPlan("agent", group, opts, (repo) => {
+    const ctx = { group, kind: "agent" as const, repo, maxConcurrency: Number(opts.maxConcurrency ?? 1), memoryLimitMb: Number(opts.memoryLimitMb ?? 2048) };
+    return {
+      type: "agent",
+      provider,
+      prompt: renderRepoTemplate(opts.prompt, ctx),
+      cwd: opts.cwd ? renderRepoTemplate(opts.cwd, ctx) : repo.path,
+      model: opts.model,
+      agent: opts.agent,
+      authProfile: providerAuthProfileFromOpts(opts, provider),
+      timeoutMs: opts.timeout ? parseDuration(opts.timeout) : undefined,
+      configIsolation: opts.configIsolation,
+      account: accountFromOpts(opts),
+    };
+  });
+  if (opts.dryRun) {
+    printMultiRepoPlan(plan, true);
+    return;
+  }
+  const store = new Store();
+  try {
+    const created = createPlanLoops(store, plan, Boolean(opts.allowDuplicates));
+    printMultiRepoPlan(plan, false, created);
+  } finally {
+    store.close();
+  }
+});
+
+addGoalOptions(
+  addMachineOptions(
+    addMultiRepoOptions(
+      addOpenReposSelectorOptions(
+        addScheduleOptions(
+          reposCreate
+            .command("workflow <group>")
+            .description("create one stored-workflow loop per selected repo")
+            .requiredOption("--workflow <idOrName>", "stored workflow id or name")
+            .option("--timeout <duration>", "workflow run timeout"),
+        ),
+      ),
+    ),
+  ),
+).action(async (group, opts) => {
+  const store = new Store();
+  try {
+    const workflow = store.requireWorkflow(opts.workflow);
+    const plan = await buildMultiRepoPlan("workflow", group, opts, (_repo, env) => ({
+      type: "workflow",
+      workflowId: workflow.id,
+      input: env,
+      timeoutMs: opts.timeout ? parseDuration(opts.timeout) : undefined,
+    }));
+    if (opts.dryRun) {
+      printMultiRepoPlan(plan, true);
+      return;
+    }
+    const created = createPlanLoops(store, plan, Boolean(opts.allowDuplicates));
+    printMultiRepoPlan(plan, false, created);
+  } finally {
+    store.close();
+  }
+});
+
+repos
+  .command("list")
+  .alias("ls")
+  .description("list OpenRepos-backed repo loops")
+  .option("--group <group>", "filter by generated group")
+  .option("--repo <repo>", "filter by repo name, full name, or path")
+  .option("--status <status>", "filter by loop status")
+  .option("--limit <n>", "limit", "10000")
+  .action((opts) => {
+    const store = new Store();
+    try {
+      const loops = listOpenReposGroupLoops(store, opts);
+      if (isJson()) print(loops.map(publicLoop));
+      else {
+        for (const loop of loops) {
+          const repo = loop.metadata?.openReposRepoFullName || loop.metadata?.openReposRepoName || "-";
+          const group = loop.metadata?.openReposGroup || "-";
+          console.log(`${loop.id}  ${loop.status.padEnd(7)}  group=${group}  repo=${repo}  next=${loop.nextRunAt ?? "-"}  ${loop.name}`);
+        }
+      }
+    } finally {
+      store.close();
+    }
+  });
+
+function updateOpenReposGroup(group: string, status: "paused" | "active" | "stopped", opts: { repo?: string }): void {
+  const store = new Store();
+  try {
+    const loops = listOpenReposGroupLoops(store, { group, repo: opts.repo });
+    const updated = loops.map((loop) => store.updateLoop(loop.id, { status, nextRunAt: status === "stopped" ? undefined : loop.nextRunAt }));
+    if (isJson()) print(updated.map(publicLoop));
+    else console.log(`${status} ${updated.length} loop(s) group=${group}${opts.repo ? ` repo=${opts.repo}` : ""}`);
+  } finally {
+    store.close();
+  }
+}
+
+repos.command("pause <group>").option("--repo <repo>", "limit to one repo in the group").action((group, opts) => updateOpenReposGroup(group, "paused", opts));
+repos.command("resume <group>").option("--repo <repo>", "limit to one repo in the group").action((group, opts) => updateOpenReposGroup(group, "active", opts));
+repos.command("stop <group>").option("--repo <repo>", "limit to one repo in the group").action((group, opts) => updateOpenReposGroup(group, "stopped", opts));
+
+repos
+  .command("remove <group>")
+  .alias("rm")
+  .description("remove OpenRepos-backed loops for a group")
+  .option("--repo <repo>", "limit to one repo in the group")
+  .action((group, opts) => {
+    const store = new Store();
+    try {
+      const loops = listOpenReposGroupLoops(store, { group, repo: opts.repo });
+      let removed = 0;
+      for (const loop of loops) if (store.deleteLoop(loop.id)) removed++;
+      print({ removed, group, repo: opts.repo }, `removed ${removed} loop(s) group=${group}${opts.repo ? ` repo=${opts.repo}` : ""}`);
+    } finally {
+      store.close();
+    }
+  });
 
 const workflows = program.command("workflows").alias("workflow").description("manage workflow specs and runs");
 

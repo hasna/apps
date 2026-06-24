@@ -12,6 +12,7 @@ import type {
   GoalRun,
   GoalStatus,
   Loop,
+  LoopMetadata,
   LoopRun,
   LoopStatus,
   RunStatus,
@@ -42,6 +43,7 @@ interface LoopRow {
   target_json: string;
   goal_json: string | null;
   machine_json: string | null;
+  metadata_json: string | null;
   next_run_at: string | null;
   retry_scheduled_for: string | null;
   catch_up: string;
@@ -227,6 +229,7 @@ function rowToLoop(row: LoopRow): Loop {
     target: JSON.parse(row.target_json) as Loop["target"],
     goal: row.goal_json ? (JSON.parse(row.goal_json) as Loop["goal"]) : undefined,
     machine: row.machine_json ? (JSON.parse(row.machine_json) as Loop["machine"]) : undefined,
+    metadata: row.metadata_json ? (JSON.parse(row.metadata_json) as LoopMetadata) : undefined,
     nextRunAt: row.next_run_at ?? undefined,
     retryScheduledFor: row.retry_scheduled_for ?? undefined,
     catchUp: row.catch_up as Loop["catchUp"],
@@ -494,6 +497,7 @@ export class Store {
         target_json TEXT NOT NULL,
         goal_json TEXT,
         machine_json TEXT,
+        metadata_json TEXT,
         next_run_at TEXT,
         retry_scheduled_for TEXT,
         catch_up TEXT NOT NULL,
@@ -699,6 +703,11 @@ export class Store {
       /* column already exists */
     }
     try {
+      this.db.query("ALTER TABLE loops ADD COLUMN metadata_json TEXT").run();
+    } catch {
+      /* column already exists */
+    }
+    try {
       this.db.query("ALTER TABLE loop_runs ADD COLUMN goal_run_id TEXT").run();
     } catch {
       /* column already exists */
@@ -732,6 +741,9 @@ export class Store {
     this.db
       .query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)")
       .run("0003_goals", nowIso());
+    this.db
+      .query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)")
+      .run("0004_loop_metadata", nowIso());
   }
 
   private assertDaemonLeaseFence(opts: DaemonLeaseFence = {}, now: string = nowIso()): void {
@@ -753,6 +765,7 @@ export class Store {
       target: input.target,
       goal: input.goal,
       machine: input.machine,
+      metadata: input.metadata,
       nextRunAt: initialNextRun(input.schedule, from),
       catchUp: input.catchUp ?? "latest",
       catchUpLimit: input.catchUpLimit ?? 50,
@@ -766,9 +779,9 @@ export class Store {
     };
     this.db
       .query(
-        `INSERT INTO loops (id, name, description, status, schedule_json, target_json, machine_json, next_run_at, retry_scheduled_for,
+        `INSERT INTO loops (id, name, description, status, schedule_json, target_json, machine_json, metadata_json, next_run_at, retry_scheduled_for,
           goal_json, catch_up, catch_up_limit, overlap, max_attempts, retry_delay_ms, lease_ms, expires_at, created_at, updated_at)
-         VALUES ($id, $name, $description, $status, $schedule, $target, $machine, $nextRun, NULL, $goal, $catchUp, $catchUpLimit,
+         VALUES ($id, $name, $description, $status, $schedule, $target, $machine, $metadata, $nextRun, NULL, $goal, $catchUp, $catchUpLimit,
           $overlap, $maxAttempts, $retryDelay, $leaseMs, $expiresAt, $created, $updated)`,
       )
       .run({
@@ -779,6 +792,7 @@ export class Store {
         $schedule: JSON.stringify(loop.schedule),
         $target: JSON.stringify(loop.target),
         $machine: loop.machine ? JSON.stringify(loop.machine) : null,
+        $metadata: loop.metadata ? JSON.stringify(loop.metadata) : null,
         $goal: loop.goal ? JSON.stringify(loop.goal) : null,
         $nextRun: loop.nextRunAt ?? null,
         $catchUp: loop.catchUp,
@@ -810,8 +824,31 @@ export class Store {
     })();
   }
 
-  listLoops(opts: { status?: LoopStatus; limit?: number } = {}): Loop[] {
+  listLoops(opts: { status?: LoopStatus; limit?: number; metadata?: Record<string, string | number | boolean> } = {}): Loop[] {
     const limit = opts.limit ?? 200;
+    if (opts.metadata) {
+      const where: string[] = ["metadata_json IS NOT NULL"];
+      const params: Record<string, string | number> = { $limit: limit };
+      if (opts.status) {
+        where.push("status = $status");
+        params.$status = opts.status;
+      }
+      let index = 0;
+      for (const [key, value] of Object.entries(opts.metadata)) {
+        const pathKey = `$metadataPath${index}`;
+        const valueKey = `$metadataValue${index}`;
+        where.push(`json_extract(metadata_json, ${pathKey}) = ${valueKey}`);
+        params[pathKey] = `$.${key}`;
+        params[valueKey] = typeof value === "boolean" ? (value ? 1 : 0) : value;
+        index++;
+      }
+      const rows = this.db
+        .query<LoopRow, Record<string, string | number>>(
+          `SELECT * FROM loops WHERE ${where.join(" AND ")} ORDER BY status ASC, next_run_at ASC LIMIT $limit`,
+        )
+        .all(params);
+      return rows.map(rowToLoop);
+    }
     const rows = opts.status
       ? this.db
           .query<LoopRow, [string, number]>("SELECT * FROM loops WHERE status = ? ORDER BY next_run_at ASC LIMIT ?")

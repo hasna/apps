@@ -1,5 +1,6 @@
 import type { LanguageModel } from "ai";
 import type { ExecutableTarget, ExecutorResult } from "../../types.js";
+import type { ExecutionMetadata } from "../executor.js";
 import type { Store } from "../store.js";
 
 export type GoalStatus = "active" | "paused" | "blocked" | "usageLimited" | "budgetLimited" | "complete" | "cancelled";
@@ -110,13 +111,14 @@ export interface GoalExecutionContext {
   workflowName?: string;
   workflowRunId?: string;
   workflowStepId?: string;
+  extraEnv?: Record<string, string>;
 }
 
 export interface RunGoalOptions {
   store?: Store;
   model?: LanguageModel;
   target?: ExecutableTarget;
-  executeNode?: (node: GoalPlanNode, metadata: Record<string, string | undefined>) => Promise<ExecutorResult>;
+  executeNode?: (node: GoalPlanNode, metadata: ExecutionMetadata) => Promise<ExecutorResult>;
   env?: NodeJS.ProcessEnv;
   daemonLeaseId?: string;
   beforePersist?: () => void;

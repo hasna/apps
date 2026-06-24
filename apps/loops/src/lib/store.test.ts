@@ -48,6 +48,30 @@ describe("Store", () => {
     }
   });
 
+  test("persists loop metadata", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "metadata-loop",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+          metadata: {
+            openReposSource: "open-repos",
+            openReposGroup: "daily",
+            openReposMaxConcurrency: 1,
+          },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      expect(store.getLoop(loop.id)?.metadata?.openReposGroup).toBe("daily");
+      expect(store.listLoops({ metadata: { openReposSource: "open-repos", openReposGroup: "daily" } })).toHaveLength(1);
+      expect(store.listLoops({ metadata: { openReposSource: "open-repos", openReposGroup: "missing" } })).toHaveLength(0);
+    } finally {
+      store.close();
+    }
+  });
+
   test("recovers expired run leases as abandoned", () => {
     const store = new Store(":memory:");
     try {

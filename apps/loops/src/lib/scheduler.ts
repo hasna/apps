@@ -28,6 +28,12 @@ export interface ClaimedLoopRun {
   run: LoopRun;
 }
 
+interface LoopConcurrencyGroup {
+  key: string;
+  metadata: Record<string, string | number | boolean>;
+  maxConcurrency: number;
+}
+
 export interface ClaimDueRunsResult extends TickResult {
   claims: ClaimedLoopRun[];
 }
@@ -60,6 +66,35 @@ function nextAfterRetry(loop: Loop, now: Date): string {
 
 function isDaemonLeaseLost(error: unknown): boolean {
   return error instanceof Error && error.message === "daemon lease lost";
+}
+
+function positiveIntegerMetadata(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isInteger(parsed) && parsed > 0) return parsed;
+  }
+  return undefined;
+}
+
+function loopConcurrencyGroup(loop: Loop): LoopConcurrencyGroup | undefined {
+  if (loop.metadata?.openReposSource !== "open-repos") return undefined;
+  if (typeof loop.metadata.openReposGroup !== "string" || !loop.metadata.openReposGroup) return undefined;
+  const maxConcurrency = positiveIntegerMetadata(loop.metadata.openReposMaxConcurrency) ?? 1;
+  return {
+    key: `open-repos:${loop.metadata.openReposGroup}`,
+    metadata: {
+      openReposSource: "open-repos",
+      openReposGroup: loop.metadata.openReposGroup,
+    },
+    maxConcurrency,
+  };
+}
+
+function runningInGroup(store: Store, group: LoopConcurrencyGroup): number {
+  return store
+    .listLoops({ metadata: group.metadata, limit: 10_000 })
+    .filter((loop) => store.hasRunningRun(loop.id)).length;
 }
 
 export function advanceLoop(
@@ -285,17 +320,24 @@ export function claimDueRuns(deps: SchedulerDeps & { maxClaims?: number }): Clai
   const claimed: LoopRun[] = [];
   const skipped: LoopRun[] = [];
   const maxClaims = Math.max(0, deps.maxClaims ?? Number.POSITIVE_INFINITY);
+  const groupRunning = new Map<string, number>();
 
   for (const loop of deps.store.dueLoops(now)) {
     if (claims.length >= maxClaims) break;
+    const group = loopConcurrencyGroup(loop);
+    if (group && !groupRunning.has(group.key)) {
+      groupRunning.set(group.key, runningInGroup(deps.store, group));
+    }
     const plan = dueSlots(loop, now);
     for (const slot of plan.slots) {
       if (claims.length >= maxClaims) break;
+      if (group && (groupRunning.get(group.key) ?? 0) >= group.maxConcurrency) break;
       const run = claimSlot(deps, loop, slot);
       if (!run) continue;
       if ("loop" in run) {
         claims.push(run);
         claimed.push(run.run);
+        if (group) groupRunning.set(group.key, (groupRunning.get(group.key) ?? 0) + 1);
       } else if (run.status === "skipped") {
         skipped.push(run);
       }

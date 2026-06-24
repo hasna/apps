@@ -8,6 +8,13 @@ export { listOpenMachines, refreshLoopMachine, resolveLoopMachine } from "./lib/
 export { tick } from "./lib/scheduler.js";
 export { executeWorkflow, executeLoopTarget, preflightWorkflow } from "./lib/workflow-runner.js";
 export { workflowExecutionOrder, workflowBodyFromJson } from "./lib/workflow-spec.js";
+export {
+  createMultiRepoLoopPlan,
+  discoverOpenRepos,
+  renderRepoTemplate,
+  repoLoopEnv,
+  repoLoopMetadata,
+} from "./lib/open-repos.js";
 export { runDoctor } from "./lib/doctor.js";
 export { runGoal } from "./lib/goal/runner.js";
 export { resolveGoalModel } from "./lib/goal/model-factory.js";

@@ -99,6 +99,46 @@ accounts tools add codewith --label "Codewith" --env-var CODEWITH_HOME --bin cod
 accounts tools add aicopilot --label "AI Copilot" --env-var AICOPILOT_CONFIG_DIR --bin aicopilot
 ```
 
+## Multi-Repo Loops
+
+OpenLoops can use the `@hasna/repos` catalog as its repository discovery source and create one native loop per selected repo. Preview first with `--dry-run`:
+
+```bash
+loops repos create agent daily-review \
+  --dry-run \
+  --org hasna \
+  --package-scope @hasna \
+  --language TypeScript \
+  --provider codewith \
+  --every 1d \
+  --prompt "Review {fullName} for concrete maintenance issues. Work only in this repo."
+```
+
+Selectors can be combined with `--org`, `--repo`, `--package-scope`, `--language`, `--path`, `--tag`, and `--query`. Multiple values of the same selector are ORed; different selector categories are combined as filters.
+
+The default is sequential for each generated group: `--max-concurrency` defaults to `1`, and the daemon claims at most one due repo loop from that group at a time. Opt into bounded concurrency explicitly:
+
+```bash
+loops repos create command dependency-audit \
+  --org hasna \
+  --query security \
+  --max-concurrency 2 \
+  --memory-limit-mb 2048 \
+  --every 6h \
+  --cmd "bun audit"
+```
+
+Generated loops include OpenRepos metadata and repo environment such as `OPENLOOPS_REPO_PATH`, `OPENLOOPS_REPO_NAME`, `OPENLOOPS_REPO_FULL_NAME`, `OPENLOOPS_GROUP`, `OPENLOOPS_MAX_CONCURRENCY`, and `OPENLOOPS_MEMORY_LIMIT_MB`. Workflow loops receive the same values as workflow input environment for every step. With the current installable `@hasna/repos` SDK, `--tag` falls back to indexed git tags unless a newer SDK exposes repository topics or loop tags.
+
+Manage generated repo loops as a group or per repo:
+
+```bash
+loops repos list --group daily-review
+loops repos pause daily-review
+loops repos resume daily-review --repo hasna/open-loops
+loops repos remove daily-review --repo hasna/open-loops
+```
+
 ## Workflows
 
 Create a workflow JSON file:

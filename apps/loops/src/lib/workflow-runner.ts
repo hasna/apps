@@ -10,6 +10,7 @@ export interface ExecuteWorkflowOptions extends ExecuteOptions {
   loopRun?: LoopRun;
   scheduledFor?: string;
   idempotencyKey?: string;
+  workflowEnv?: Record<string, string>;
   cancelPollMs?: number;
   signalTimeoutMessage?: () => string | undefined;
 }
@@ -59,6 +60,7 @@ export async function executeWorkflow(
         scheduledFor: opts.loopRun?.scheduledFor ?? opts.scheduledFor,
         workflowId: workflow.id,
         workflowName: workflow.name,
+        extraEnv: opts.workflowEnv,
       },
       executeNode: async (node) =>
         executeWorkflow(store, workflowWithoutGoal, {
@@ -137,6 +139,7 @@ export async function executeWorkflow(
       workflowName: workflow.name,
       workflowRunId: run.id,
       workflowStepId: step.id,
+      extraEnv: opts.workflowEnv,
     };
     let result: ExecutorResult;
     const controller = new AbortController();
@@ -162,6 +165,7 @@ export async function executeWorkflow(
             workflowName: workflow.name,
             workflowRunId: run.id,
             workflowStepId: step.id,
+            extraEnv: opts.workflowEnv,
           },
         });
       } else {
@@ -297,7 +301,8 @@ export async function executeLoopTarget(
     }
     return executeLoop(loop, run, opts);
   }
-  const workflow = store.requireWorkflow(loop.target.workflowId);
+  const workflowTarget = loop.target;
+  const workflow = store.requireWorkflow(workflowTarget.workflowId);
   if (loop.goal) {
     return runGoal(store, loop.goal, {
       ...opts,
@@ -308,6 +313,7 @@ export async function executeLoopTarget(
         scheduledFor: run.scheduledFor,
         workflowId: workflow.id,
         workflowName: workflow.name,
+        extraEnv: workflowTarget.input,
       },
       executeNode: async (node) =>
         executeWorkflow(store, workflow, {
@@ -315,6 +321,7 @@ export async function executeLoopTarget(
           loop,
           loopRun: run,
           scheduledFor: run.scheduledFor,
+          workflowEnv: workflowTarget.input,
           idempotencyKey: `${loop.id}:${run.scheduledFor}:attempt:${run.attempt}:goal:${node.key}`,
         }),
     });
@@ -340,6 +347,7 @@ export async function executeLoopTarget(
       loop,
       loopRun: run,
       scheduledFor: run.scheduledFor,
+      workflowEnv: workflowTarget.input,
       idempotencyKey: `${loop.id}:${run.scheduledFor}:attempt:${run.attempt}`,
     });
   } finally {

@@ -45,6 +45,7 @@ export interface ExecutionMetadata {
   goalId?: string;
   goalObjective?: string;
   goalNodeKey?: string;
+  extraEnv?: Record<string, string>;
 }
 
 export interface PreflightResult {
@@ -154,6 +155,7 @@ function metadataEnv(metadata: ExecutionMetadata): Record<string, string> {
   if (metadata.goalId) env.LOOPS_GOAL_ID = metadata.goalId;
   if (metadata.goalObjective) env.LOOPS_GOAL_OBJECTIVE = metadata.goalObjective;
   if (metadata.goalNodeKey) env.LOOPS_GOAL_NODE_KEY = metadata.goalNodeKey;
+  Object.assign(env, metadata.extraEnv ?? {});
   return env;
 }
 

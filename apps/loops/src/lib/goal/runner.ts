@@ -1,7 +1,7 @@
 import { generateObject, type LanguageModel } from "ai";
 import { z } from "zod";
 import type { ExecutableTarget, ExecutorResult } from "../../types.js";
-import { executeTarget } from "../executor.js";
+import { executeTarget, type ExecutionMetadata } from "../executor.js";
 import { nowIso } from "../ids.js";
 import type { Store } from "../store.js";
 import { assertAcyclicNodes, readyNodeKeys, rollupSummary } from "./status.js";
@@ -81,7 +81,7 @@ function sameBlockerKey(values: string[]): string {
   return values.map((value) => value.trim()).filter(Boolean).join("\n") || "goal completion remains unproven";
 }
 
-function metadataFor(goal: Goal, node: GoalPlanNode, context: RunGoalOptions["context"]): Record<string, string | undefined> {
+function metadataFor(goal: Goal, node: GoalPlanNode, context: RunGoalOptions["context"]): ExecutionMetadata {
   return {
     loopId: context?.loopId,
     loopName: context?.loopName,
@@ -94,6 +94,7 @@ function metadataFor(goal: Goal, node: GoalPlanNode, context: RunGoalOptions["co
     goalId: goal.goalId,
     goalObjective: goal.objective,
     goalNodeKey: node.key,
+    extraEnv: context?.extraEnv,
   };
 }
 

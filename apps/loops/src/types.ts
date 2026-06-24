@@ -23,6 +23,10 @@ export type RunStatus =
   | "abandoned"
   | "skipped";
 
+export type LoopMetadataValue = string | number | boolean | null;
+
+export type LoopMetadata = Record<string, LoopMetadataValue>;
+
 export type CatchUpPolicy = "none" | "latest" | "all";
 
 export type OverlapPolicy = "skip" | "allow";
@@ -209,6 +213,7 @@ export interface Loop {
   target: LoopTarget;
   goal?: GoalSpec;
   machine?: LoopMachineRef;
+  metadata?: LoopMetadata;
   nextRunAt?: string;
   retryScheduledFor?: string;
   catchUp: CatchUpPolicy;
@@ -251,6 +256,7 @@ export interface CreateLoopInput {
   target: LoopTarget;
   goal?: GoalSpec;
   machine?: LoopMachineRef;
+  metadata?: LoopMetadata;
   catchUp?: CatchUpPolicy;
   catchUpLimit?: number;
   overlap?: OverlapPolicy;

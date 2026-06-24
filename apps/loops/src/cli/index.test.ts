@@ -1,16 +1,17 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { closeDb as closeReposDb, getDb as getReposDb } from "@hasna/repos";
 import { describe, expect, test } from "bun:test";
 import { Store } from "../lib/store.js";
 
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
 
-function runCli(dataDir: string, args: string[]) {
+function runCli(dataDir: string, args: string[], env: Record<string, string> = {}) {
   return spawnSync(process.execPath, [cliPath, ...args], {
-    env: { ...process.env, LOOPS_DATA_DIR: dataDir },
+    env: { ...process.env, ...env, LOOPS_DATA_DIR: dataDir },
     encoding: "utf8",
   });
 }
@@ -23,6 +24,18 @@ function workflowFile(dataDir: string, body: unknown): string {
 
 function futureAt(): string {
   return new Date(Date.now() + 60_000).toISOString();
+}
+
+function seedReposDb(dbPath: string, repo: { name: string; path: string; org: string }): void {
+  const db = getReposDb(dbPath);
+  try {
+    db.query(
+      `INSERT INTO repos (path, name, org, remote_url, default_branch, description, last_scanned, commit_count, branch_count, tag_count)
+       VALUES (?, ?, ?, ?, 'main', NULL, datetime('now'), 0, 0, 0)`,
+    ).run(repo.path, repo.name, repo.org, `https://github.com/${repo.org}/${repo.name}.git`);
+  } finally {
+    closeReposDb();
+  }
 }
 
 describe("loops CLI", () => {
@@ -148,6 +161,102 @@ describe("loops CLI", () => {
     const local = JSON.parse(show.stdout);
     expect(local.id).toBeTruthy();
     expect(local.local).toBe(true);
+  });
+
+  test("repos create command dry-run previews selected repos without creating loops", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-repos-dry-run-"));
+    const repoPath = join(dataDir, "open-one");
+    mkdirSync(repoPath, { recursive: true });
+    writeFileSync(join(repoPath, "package.json"), JSON.stringify({ name: "@hasna/open-one" }));
+    writeFileSync(join(repoPath, "tsconfig.json"), "{}");
+    const reposDb = join(dataDir, "repos.db");
+    seedReposDb(reposDb, { name: "open-one", path: repoPath, org: "hasna" });
+
+    const dryRun = runCli(
+      dataDir,
+      [
+        "--json",
+        "repos",
+        "create",
+        "command",
+        "daily",
+        "--dry-run",
+        "--org",
+        "hasna",
+        "--package-scope",
+        "@hasna",
+        "--language",
+        "TypeScript",
+        "--every",
+        "1h",
+        "--cmd",
+        "printf ok",
+      ],
+      { HASNA_REPOS_DB_PATH: reposDb },
+    );
+
+    expect(dryRun.status).toBe(0);
+    const value = JSON.parse(dryRun.stdout);
+    expect(value.dryRun).toBe(true);
+    expect(value.plan.maxConcurrency).toBe(1);
+    expect(value.plan.loops).toHaveLength(1);
+    expect(value.plan.loops[0].input.name).toBe("repo:command:daily:open-one");
+    expect(value.plan.loops[0].input.metadata.openReposMaxConcurrency).toBe(1);
+
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      expect(store.listLoops()).toHaveLength(0);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("repos create preflights duplicate names before creating any loop", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-repos-duplicates-"));
+    for (const name of ["open-one", "open-two"]) {
+      const repoPath = join(dataDir, name);
+      mkdirSync(repoPath, { recursive: true });
+      writeFileSync(join(repoPath, "package.json"), JSON.stringify({ name: `@hasna/${name}` }));
+      seedReposDb(join(dataDir, "repos.db"), { name, path: repoPath, org: "hasna" });
+    }
+    const reposDb = join(dataDir, "repos.db");
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      store.createLoop({
+        name: "repo:command:daily:open-two",
+        schedule: { type: "interval", everyMs: 3_600_000 },
+        target: { type: "command", command: "true" },
+      });
+    } finally {
+      store.close();
+    }
+
+    const create = runCli(
+      dataDir,
+      [
+        "repos",
+        "create",
+        "command",
+        "daily",
+        "--org",
+        "hasna",
+        "--every",
+        "1h",
+        "--cmd",
+        "printf ok",
+      ],
+      { HASNA_REPOS_DB_PATH: reposDb },
+    );
+
+    expect(create.status).not.toBe(0);
+    expect(create.stderr).toContain("loop already exists");
+    const after = new Store(join(dataDir, "loops.db"));
+    try {
+      expect(after.listLoops()).toHaveLength(1);
+      expect(after.findLoopByName("repo:command:daily:open-one")).toBeUndefined();
+    } finally {
+      after.close();
+    }
   });
 
   test("doctor exits non-zero when an active loop cannot preflight", () => {

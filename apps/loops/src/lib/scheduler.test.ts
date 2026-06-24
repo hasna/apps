@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ExecutorResult } from "../types.js";
-import { executeClaimedRun, manualRunScheduledFor, manualRunSource, shouldAdvanceManualRun, tick } from "./scheduler.js";
+import { claimDueRuns, executeClaimedRun, manualRunScheduledFor, manualRunSource, shouldAdvanceManualRun, tick } from "./scheduler.js";
 import { Store } from "./store.js";
 
 function result(status: ExecutorResult["status"], at: string): ExecutorResult {
@@ -37,6 +37,83 @@ describe("scheduler", () => {
       expect(out.completed).toHaveLength(1);
       expect(out.completed[0]?.status).toBe("succeeded");
       expect(store.getLoop(loop.id)?.status).toBe("stopped");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("claims only one due OpenRepos group loop by default", () => {
+    const store = new Store(":memory:");
+    try {
+      for (const name of ["one", "two", "three"]) {
+        store.createLoop(
+          {
+            name,
+            schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+            target: { type: "command", command: "true" },
+            metadata: {
+              openReposSource: "open-repos",
+              openReposGroup: "daily",
+              openReposRepoName: name,
+              openReposMaxConcurrency: 1,
+            },
+          },
+          new Date("2025-12-31T00:00:00Z"),
+        );
+      }
+
+      const out = claimDueRuns({
+        store,
+        runnerId: "daemon",
+        now: () => new Date("2026-01-01T00:00:00Z"),
+        maxClaims: 4,
+      });
+
+      expect(out.claims).toHaveLength(1);
+      expect(out.claimed[0]?.status).toBe("running");
+      expect(store.listRuns({ status: "running" })).toHaveLength(1);
+
+      const second = claimDueRuns({
+        store,
+        runnerId: "daemon",
+        now: () => new Date("2026-01-01T00:00:00Z"),
+        maxClaims: 4,
+      });
+      expect(second.claims).toHaveLength(0);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("honors explicit OpenRepos group max concurrency", () => {
+    const store = new Store(":memory:");
+    try {
+      for (const name of ["one", "two", "three"]) {
+        store.createLoop(
+          {
+            name,
+            schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+            target: { type: "command", command: "true" },
+            metadata: {
+              openReposSource: "open-repos",
+              openReposGroup: "daily",
+              openReposRepoName: name,
+              openReposMaxConcurrency: 2,
+            },
+          },
+          new Date("2025-12-31T00:00:00Z"),
+        );
+      }
+
+      const out = claimDueRuns({
+        store,
+        runnerId: "daemon",
+        now: () => new Date("2026-01-01T00:00:00Z"),
+        maxClaims: 4,
+      });
+
+      expect(out.claims).toHaveLength(2);
+      expect(store.listRuns({ status: "running" })).toHaveLength(2);
     } finally {
       store.close();
     }
