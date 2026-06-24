@@ -1,7 +1,15 @@
 {
   "name": "@hasna/economy",
-  "version": "0.2.34",
+  "version": "0.2.41",
   "description": "AI coding cost tracker — CLI + MCP server + REST API + web dashboard for Claude Code, Codex, Gemini, OpenCode, Cursor, Pi, and Hermes",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/economy.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hasna/economy/issues"
+  },
+  "homepage": "https://github.com/hasna/economy#readme",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -20,7 +28,12 @@
   "files": [
     "dist",
     "dashboard/dist",
-    "LICENSE"
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md"
   ],
   "scripts": {
     "build": "cd dashboard && bun run build && cd .. && bun build src/cli/index.ts --outdir dist/cli --target bun --packages external && bun build src/mcp/index.ts --outdir dist/mcp --target bun --packages external && bun build src/server/index.ts --outdir dist/server --target bun --packages external && bun build src/otel/index.ts --outdir dist/otel --target bun --packages external && bun build src/index.ts --outdir dist --target bun --packages external && tsc --emitDeclarationOnly --outDir dist",

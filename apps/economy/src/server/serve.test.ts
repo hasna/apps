@@ -207,11 +207,27 @@ describe('REST API server', () => {
   })
 
   it('POST /api/billing/sync reports provider errors without failing the whole sync', async () => {
-    const { status, data } = await req(handler, '/api/billing/sync', 'POST', { days: 7, providers: ['anthropic', 'gemini'] })
-    expect(status).toBe(200)
-    const result = (data as Record<string, unknown>)['data'] as Record<string, Record<string, string | number>>
-    expect(String(result['anthropic']?.['error'])).toContain('Missing Anthropic admin key')
-    expect(String(result['gemini']?.['skipped'])).toContain('Gemini billing export path')
+    const keys = [
+      'HASNAXYZ_ANTHROPIC_LIVE_ADMIN_API_KEY',
+      'ANTHROPIC_ADMIN_API_KEY',
+      'HASNA_ECONOMY_GEMINI_BILLING_EXPORT_PATH',
+      'HASNAXYZ_ECONOMY_GEMINI_BILLING_EXPORT_PATH',
+      'GEMINI_BILLING_EXPORT_PATH',
+    ] as const
+    const previous = new Map(keys.map(key => [key, process.env[key]]))
+    for (const key of keys) delete process.env[key]
+    try {
+      const { status, data } = await req(handler, '/api/billing/sync', 'POST', { days: 7, providers: ['anthropic', 'gemini'] })
+      expect(status).toBe(200)
+      const result = (data as Record<string, unknown>)['data'] as Record<string, Record<string, string | number>>
+      expect(String(result['anthropic']?.['error'])).toContain('Missing Anthropic admin key')
+      expect(String(result['gemini']?.['skipped'])).toContain('Gemini billing export path')
+    } finally {
+      for (const [key, value] of previous.entries()) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+    }
   })
 
   it('GET /api/projects returns project breakdown', async () => {

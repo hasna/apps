@@ -5,6 +5,7 @@ import chalk from 'chalk'
 import { registerBrainsCommand } from './brains.js'
 import { registerTodosCommand } from './commands/todos.js'
 import { registerExtendedCommands, registerFleetCommands } from './commands/extras.js'
+import { registerBriefCommand } from './commands/brief.js'
 import { AGENTS, parseAgent } from '../lib/agents.js'
 import { syncAll } from '../lib/sync-all.js'
 import { maybePullFromCloud, cloudPush, cloudPull, cloudSyncFull, getCloudDatabaseUrl, getCloudPg } from '../lib/cloud-sync.js'
@@ -28,7 +29,7 @@ program
 
 // ── Auto-sync helper ──────────────────────────────────────────────────────────
 
-async function autoSync(opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; verbose?: boolean } = {}): Promise<void> {
+async function autoSync(opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; verbose?: boolean; dedupe?: boolean; cloud?: boolean } = {}): Promise<void> {
   const db = openDatabase()
   ensurePricingSeeded(db)
   await maybePullFromCloud()
@@ -278,7 +279,8 @@ program
       }
     }
     if (opts.force) {
-      db.exec(`DELETE FROM ingest_state WHERE source IN (${AGENTS.map(a => `'${a}'`).join(', ')})`)
+      const ingestSources = [...AGENTS, 'codex-codewith']
+      db.exec(`DELETE FROM ingest_state WHERE source IN (${ingestSources.map(a => `'${a}'`).join(', ')})`)
       if (opts.verbose) console.log(chalk.dim('Cleared ingest cache'))
     }
     process.stdout.write(chalk.cyan('→ Ingesting agent data... '))
@@ -1691,6 +1693,7 @@ billingCmd
 
 registerBrainsCommand(program)
 registerTodosCommand(program)
+registerBriefCommand(program, { beforeRead: () => autoSync({ dedupe: false, cloud: false }) })
 registerExtendedCommands(program)
 registerFleetCommands(program)
 

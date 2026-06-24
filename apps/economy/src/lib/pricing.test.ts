@@ -23,7 +23,19 @@ describe('getPricing', () => {
       cacheWritePer1M: 1.00,
       cacheWrite1hPer1M: 1.60,
     })
+    expect(getPricing('claude-opus-4-8')).toMatchObject({
+      inputPer1M: 5.00,
+      outputPer1M: 25.00,
+      cacheReadPer1M: 0.50,
+      cacheWritePer1M: 6.25,
+      cacheWrite1hPer1M: 10.00,
+    })
     expect(getPricing('gpt-5.5')).toMatchObject({
+      inputPer1M: 5.00,
+      outputPer1M: 30.00,
+      cacheReadPer1M: 0.50,
+    })
+    expect(getPricing('codewith/gpt-5.5')).toMatchObject({
       inputPer1M: 5.00,
       outputPer1M: 30.00,
       cacheReadPer1M: 0.50,
