@@ -1,6 +1,6 @@
 import { join } from "path";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
-import type { Provider, SafetyConfig } from "../types/index.js";
+import type { Provider, ProviderFallbackConfig, SafetyConfig } from "../types/index.js";
 
 const CONFIG_DIR = join(process.env.HOME ?? "~", ".hasna", "computer");
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
@@ -11,6 +11,8 @@ export interface ComputerConfig {
   provider: Provider;
   /** Default model (per provider) */
   model?: string;
+  /** Optional model-provider fallback policy. Disabled by default to avoid surprise provider spend. */
+  providerFallback: ProviderFallbackConfig;
   /** Maximum steps per task */
   maxSteps: number;
   /** Save screenshots to disk by default */
@@ -28,6 +30,10 @@ export interface ComputerConfig {
 /** Default configuration */
 export const DEFAULT_CONFIG: ComputerConfig = {
   provider: "anthropic",
+  providerFallback: {
+    enabled: false,
+    fallbackOn: ["rate_limit", "unsupported", "error"],
+  },
   maxSteps: 50,
   saveScreenshots: false,
   screenshotMaxWidth: 1280,
@@ -107,6 +113,12 @@ function mergeConfig(
   return {
     provider: user.provider ?? defaults.provider,
     model: user.model ?? defaults.model,
+    providerFallback: {
+      enabled: user.providerFallback?.enabled ?? defaults.providerFallback.enabled,
+      provider: user.providerFallback?.provider ?? defaults.providerFallback.provider,
+      model: user.providerFallback?.model ?? defaults.providerFallback.model,
+      fallbackOn: user.providerFallback?.fallbackOn ?? defaults.providerFallback.fallbackOn,
+    },
     maxSteps: user.maxSteps ?? defaults.maxSteps,
     saveScreenshots: user.saveScreenshots ?? defaults.saveScreenshots,
     screenshotsDir: user.screenshotsDir ?? defaults.screenshotsDir,

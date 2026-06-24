@@ -13,7 +13,8 @@
  * - Or use a headless Mac mini / Mac Studio with no monitor
  */
 
-import { existsSync } from "fs";
+import { platform } from "os";
+import { formatMacProcessFailure, runMacProcess } from "./process.js";
 
 export interface HeadlessConfig {
   /** Strategy to use */
@@ -29,35 +30,42 @@ export interface HeadlessConfig {
  * Returns false if no display is attached (headless server).
  */
 export async function hasDisplay(): Promise<boolean> {
-  const proc = Bun.spawn(
-    ["system_profiler", "SPDisplaysDataType", "-detailLevel", "mini"],
-    { stdout: "pipe", stderr: "pipe" }
-  );
-  await proc.exited;
-  const stdout = await new Response(proc.stdout).text();
-  // If there are displays, we'll see "Resolution:" lines
-  return stdout.includes("Resolution:");
+  if (platform() !== "darwin") return false;
+
+  try {
+    const result = await runMacProcess(["system_profiler", "SPDisplaysDataType", "-detailLevel", "mini"]);
+    if (result.exitCode !== 0) return false;
+    // If there are displays, we'll see "Resolution:" lines
+    return result.stdout.includes("Resolution:");
+  } catch {
+    return false;
+  }
 }
 
 /**
  * Check if macOS Screen Sharing (VNC) is enabled.
  */
 export async function isScreenSharingEnabled(): Promise<boolean> {
-  const proc = Bun.spawn(
-    ["launchctl", "print", "system/com.apple.screensharing"],
-    { stdout: "pipe", stderr: "pipe" }
-  );
-  await proc.exited;
-  return proc.exitCode === 0;
+  if (platform() !== "darwin") return false;
+
+  try {
+    const result = await runMacProcess(["launchctl", "print", "system/com.apple.screensharing"]);
+    return result.exitCode === 0;
+  } catch {
+    return false;
+  }
 }
 
 /**
  * Check if Lume CLI is installed (trycua/cua).
  */
 export async function isLumeInstalled(): Promise<boolean> {
-  const proc = Bun.spawn(["which", "lume"], { stdout: "pipe", stderr: "pipe" });
-  await proc.exited;
-  return proc.exitCode === 0;
+  try {
+    const result = await runMacProcess(["which", "lume"]);
+    return result.exitCode === 0;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -66,20 +74,16 @@ export async function isLumeInstalled(): Promise<boolean> {
  */
 export async function startLumeVm(vmName: string = "computer-headless"): Promise<string> {
   // Check if VM exists
-  const list = Bun.spawn(["lume", "list"], { stdout: "pipe", stderr: "pipe" });
-  await list.exited;
-  const stdout = await new Response(list.stdout).text();
+  const list = await runMacProcess(["lume", "list"]);
+  if (list.exitCode !== 0) {
+    throw new Error(`Failed to list Lume VMs: ${formatMacProcessFailure(["lume", "list"], list)}`);
+  }
 
-  if (!stdout.includes(vmName)) {
+  if (!list.stdout.includes(vmName)) {
     // Create VM
-    const create = Bun.spawn(
-      ["lume", "create", vmName, "--os", "macos", "--no-display"],
-      { stdout: "pipe", stderr: "pipe" }
-    );
-    await create.exited;
+    const create = await runMacProcess(["lume", "create", vmName, "--os", "macos", "--no-display"]);
     if (create.exitCode !== 0) {
-      const err = await new Response(create.stderr).text();
-      throw new Error(`Failed to create Lume VM: ${err}`);
+      throw new Error(`Failed to create Lume VM: ${formatMacProcessFailure(["lume", "create", vmName, "--os", "macos", "--no-display"], create)}`);
     }
   }
 
@@ -112,7 +116,11 @@ export async function getHeadlessStatus(): Promise<{
   ]);
 
   let recommendation: string;
-  if (display) {
+  if (platform() !== "darwin") {
+    recommendation =
+      `Current platform is ${platform()}; this native headless driver is macOS-only. ` +
+      "Use a macOS machine, a browser/fleet adapter, or add a Linux/Windows display driver.";
+  } else if (display) {
     recommendation = "Display detected. Headless mode not needed — use normal mode.";
   } else if (screenSharing) {
     recommendation = "No display but Screen Sharing enabled. Connect via VNC to use computer use.";

@@ -1,19 +1,22 @@
-import { join, dirname } from "path";
-import { existsSync } from "fs";
-import { fileURLToPath } from "url";
-import type { DriverAction, ActionResult, Screenshot } from "../../types/index.js";
+import type { DriverAction, ActionResult, DriverExecutionContext, Screenshot } from "../../types/index.js";
 import { captureScreenshot } from "./screenshot.js";
+import { resolveMacHelper } from "./helpers.js";
+import { formatAbortSignalReason, formatMacProcessFailure, runMacProcess } from "./process.js";
 
 /**
  * Execute a mouse/keyboard action using cliclick + Swift helpers on macOS.
  */
-export async function executeAction(action: DriverAction): Promise<ActionResult> {
+export async function executeAction(
+  action: DriverAction,
+  context: DriverExecutionContext = {},
+): Promise<ActionResult> {
   const start = Date.now();
 
   try {
+    throwIfAborted(context.signal);
     switch (action.type) {
       case "screenshot": {
-        const screenshot = await captureScreenshot();
+        const screenshot = await captureScreenshot(undefined, context);
         return { success: true, screenshot, duration_ms: Date.now() - start };
       }
 
@@ -32,10 +35,10 @@ export async function executeAction(action: DriverAction): Promise<ActionResult>
           cmd = `c:${action.point.x},${action.point.y}`;
         }
 
-        await runCliclick(cmd);
+        await runCliclick(cmd, context);
         // Small delay to let the UI react
-        await sleep(100);
-        const screenshot = await captureScreenshot();
+        await sleep(100, context.signal);
+        const screenshot = await captureScreenshot(undefined, context);
         return { success: true, screenshot, duration_ms: Date.now() - start };
       }
 
@@ -43,18 +46,18 @@ export async function executeAction(action: DriverAction): Promise<ActionResult>
         // Use cliclick for typing — handles special chars
         // Escape colons in the text for cliclick
         const escaped = action.text.replace(/:/g, "\\:");
-        await runCliclick(`t:${escaped}`);
-        await sleep(50);
-        const screenshot = await captureScreenshot();
+        await runCliclick(`t:${escaped}`, context);
+        await sleep(50, context.signal);
+        const screenshot = await captureScreenshot(undefined, context);
         return { success: true, screenshot, duration_ms: Date.now() - start };
       }
 
       case "key": {
         // Map common key names to cliclick key press format
         const mapped = mapKeys(action.keys);
-        await runCliclick(`kp:${mapped}`);
-        await sleep(50);
-        const screenshot = await captureScreenshot();
+        await runCliclick(`kp:${mapped}`, context);
+        await sleep(50, context.signal);
+        const screenshot = await captureScreenshot(undefined, context);
         return { success: true, screenshot, duration_ms: Date.now() - start };
       }
 
@@ -70,45 +73,46 @@ export async function executeAction(action: DriverAction): Promise<ActionResult>
         if (action.deltaX !== 0) {
           args.push(String(action.deltaX));
         }
-        await runShell(...args);
-        await sleep(100);
-        const screenshot = await captureScreenshot();
+        await runShell(args, context);
+        await sleep(100, context.signal);
+        const screenshot = await captureScreenshot(undefined, context);
         return { success: true, screenshot, duration_ms: Date.now() - start };
       }
 
       case "mouse_move": {
-        await runCliclick(`m:${action.point.x},${action.point.y}`);
-        const screenshot = await captureScreenshot();
+        await runCliclick(`m:${action.point.x},${action.point.y}`, context);
+        const screenshot = await captureScreenshot(undefined, context);
         return { success: true, screenshot, duration_ms: Date.now() - start };
       }
 
       case "drag": {
         await runCliclick(
           `dd:${action.from.x},${action.from.y}`,
-          `du:${action.to.x},${action.to.y}`
+          `du:${action.to.x},${action.to.y}`,
+          context,
         );
-        await sleep(100);
-        const screenshot = await captureScreenshot();
+        await sleep(100, context.signal);
+        const screenshot = await captureScreenshot(undefined, context);
         return { success: true, screenshot, duration_ms: Date.now() - start };
       }
 
       case "wait": {
-        await sleep(action.ms);
-        const screenshot = await captureScreenshot();
+        await sleep(action.ms, context.signal);
+        const screenshot = await captureScreenshot(undefined, context);
         return { success: true, screenshot, duration_ms: Date.now() - start };
       }
 
       case "open_url": {
-        await runShell("open", action.url);
-        await sleep(1000); // Give browser time to load
-        const screenshot = await captureScreenshot();
+        await runShell(["open", action.url], context);
+        await sleep(1000, context.signal); // Give browser time to load
+        const screenshot = await captureScreenshot(undefined, context);
         return { success: true, screenshot, duration_ms: Date.now() - start };
       }
 
       case "open_app": {
-        await runShell("open", "-a", action.name);
-        await sleep(500);
-        const screenshot = await captureScreenshot();
+        await runShell(["open", "-a", action.name], context);
+        await sleep(500, context.signal);
+        const screenshot = await captureScreenshot(undefined, context);
         return { success: true, screenshot, duration_ms: Date.now() - start };
       }
 
@@ -129,35 +133,29 @@ export async function executeAction(action: DriverAction): Promise<ActionResult>
 }
 
 /** Run cliclick with given arguments */
-async function runCliclick(...args: string[]): Promise<void> {
-  const proc = Bun.spawn(["cliclick", ...args], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  await proc.exited;
-  if (proc.exitCode !== 0) {
-    const stderr = await new Response(proc.stderr).text();
-    throw new Error(`cliclick failed: ${stderr}`);
+async function runCliclick(...argsAndMaybeContext: Array<string | DriverExecutionContext>): Promise<void> {
+  const maybeContext = argsAndMaybeContext[argsAndMaybeContext.length - 1];
+  const context = typeof maybeContext === "object" ? maybeContext : {};
+  const args = (typeof maybeContext === "object" ? argsAndMaybeContext.slice(0, -1) : argsAndMaybeContext) as string[];
+  const command = ["cliclick", ...args];
+  const result = await runMacProcess(command, { signal: context.signal });
+  if (result.exitCode !== 0) {
+    throw new Error(formatMacProcessFailure(command, result));
   }
 }
 
 /** Run an arbitrary shell command */
-async function runShell(...cmd: string[]): Promise<string> {
-  const proc = Bun.spawn(cmd, {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  await proc.exited;
-  if (proc.exitCode !== 0) {
-    const stderr = await new Response(proc.stderr).text();
-    throw new Error(`${cmd[0]} failed: ${stderr}`);
+async function runShell(cmd: string[], context: DriverExecutionContext = {}): Promise<string> {
+  const result = await runMacProcess(cmd, { signal: context.signal });
+  if (result.exitCode !== 0) {
+    throw new Error(formatMacProcessFailure(cmd, result));
   }
-  return new Response(proc.stdout).text();
+  return result.stdout;
 }
 
 /** Run osascript */
 async function runOsascript(script: string): Promise<string> {
-  return runShell("osascript", "-e", script);
+  return runShell(["osascript", "-e", script]);
 }
 
 /** Map key names to cliclick format */
@@ -199,33 +197,29 @@ function mapKeys(keys: string): string {
   return mapped.join("+");
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new Error(formatAbortSignalReason(signal)));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      reject(new Error(formatAbortSignalReason(signal)));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new Error(formatAbortSignalReason(signal));
 }
 
 /** Resolve path to the compiled Swift scroll helper binary */
 let _scrollHelperPath: string | null = null;
 function getScrollHelperPath(): string {
   if (_scrollHelperPath) return _scrollHelperPath;
-
-  // Check multiple locations: helpers/ relative to this file, or in package
-  const candidates = [
-    // Development: helpers/ in project root
-    join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "helpers", "scroll"),
-    // Installed: helpers/ relative to dist/
-    join(dirname(fileURLToPath(import.meta.url)), "..", "helpers", "scroll"),
-    // Global install
-    join(process.env.HOME ?? "~", ".hasna", "computer", "helpers", "scroll"),
-  ];
-
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      _scrollHelperPath = candidate;
-      return candidate;
-    }
-  }
-
-  throw new Error(
-    "Scroll helper not found. Run `swiftc helpers/scroll.swift -o helpers/scroll` from the project root."
-  );
+  _scrollHelperPath = resolveMacHelper("scroll");
+  return _scrollHelperPath;
 }

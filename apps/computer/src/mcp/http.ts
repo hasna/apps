@@ -1,5 +1,15 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { buildServer } from "./server.js";
+import { logAuditEvent } from "../db/index.js";
+import {
+  authorizeRequest,
+  corsHeadersForRequest,
+  corsPreflightHeaders,
+  hasDisallowedCorsOrigin,
+  resolveSecurityConfig,
+  type ServerSecurityConfig,
+  withCorsHeaders,
+} from "../server/security.js";
 
 export const MCP_HTTP_PORT = 8883;
 export const MCP_NAME = "computer";
@@ -58,15 +68,58 @@ export async function handleMcpHttpRequest(req: Request): Promise<Response | nul
 }
 
 export async function startMcpHttpServer(
-  port: number
+  port: number,
+  security: ServerSecurityConfig = resolveSecurityConfig(process.env, port)
 ): Promise<{ port: number; stop: () => void }> {
   const httpServer = Bun.serve({
     hostname: "127.0.0.1",
     port,
     async fetch(req) {
+      if (req.method === "OPTIONS") {
+        if (hasDisallowedCorsOrigin(req, security)) {
+          return Response.json(
+            { error: "CORS origin not allowed" },
+            { status: 403, headers: corsHeadersForRequest(req, security) }
+          );
+        }
+        return new Response(null, { headers: corsPreflightHeaders(req, security) });
+      }
+      if (hasDisallowedCorsOrigin(req, security)) {
+        await logAuditEvent({
+          event: "http.cors",
+          transport: "mcp-http",
+          capability: "http.cors",
+          decision: "denied",
+          reason: "CORS origin not allowed",
+          metadata: {
+            method: req.method,
+            path: new URL(req.url).pathname,
+            origin: req.headers.get("origin") ?? undefined,
+          },
+        });
+        return Response.json(
+          { error: "CORS origin not allowed" },
+          { status: 403, headers: corsHeadersForRequest(req, security) }
+        );
+      }
+      const auth = authorizeRequest(req, security);
+      if (!auth.ok) {
+        await logAuditEvent({
+          event: "http.auth",
+          transport: "mcp-http",
+          capability: "http.auth",
+          decision: "denied",
+          reason: auth.reason,
+          metadata: {
+            method: req.method,
+            path: new URL(req.url).pathname,
+          },
+        });
+        return Response.json({ error: auth.reason }, { status: auth.status, headers: corsHeadersForRequest(req, security) });
+      }
       const handled = await handleMcpHttpRequest(req);
-      if (handled) return handled;
-      return Response.json({ error: "Not found" }, { status: 404 });
+      if (handled) return withCorsHeaders(handled, req, security);
+      return Response.json({ error: "Not found" }, { status: 404, headers: corsHeadersForRequest(req, security) });
     },
   });
   return { port: httpServer.port!, stop: () => httpServer.stop() };

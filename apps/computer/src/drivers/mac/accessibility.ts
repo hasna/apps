@@ -1,6 +1,5 @@
-import { join, dirname } from "path";
-import { existsSync } from "fs";
-import { fileURLToPath } from "url";
+import { resolveMacHelper } from "./helpers.js";
+import { formatMacProcessFailure, runMacProcess } from "./process.js";
 
 /** A UI element from the accessibility tree */
 export interface AXElement {
@@ -43,20 +42,13 @@ export async function queryAccessibilityTree(opts?: {
     args.push("--depth", String(opts.depth));
   }
 
-  const proc = Bun.spawn(args, {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  await proc.exited;
-
-  if (proc.exitCode !== 0) {
-    const stderr = await new Response(proc.stderr).text();
-    throw new Error(`accessibility query failed: ${stderr}`);
+  const result = await runMacProcess(args);
+  if (result.exitCode !== 0) {
+    throw new Error(`accessibility query failed: ${formatMacProcessFailure(args, result)}`);
   }
 
-  const stdout = await new Response(proc.stdout).text();
   try {
-    return JSON.parse(stdout) as AXElement[];
+    return JSON.parse(result.stdout) as AXElement[];
   } catch {
     return [];
   }
@@ -94,21 +86,6 @@ export function summarizeAccessibilityTree(elements: AXElement[]): string {
 let _helperPath: string | null = null;
 function getAccessibilityHelperPath(): string {
   if (_helperPath) return _helperPath;
-
-  const candidates = [
-    join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "helpers", "accessibility"),
-    join(dirname(fileURLToPath(import.meta.url)), "..", "helpers", "accessibility"),
-    join(process.env.HOME ?? "~", ".hasna", "computer", "helpers", "accessibility"),
-  ];
-
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      _helperPath = candidate;
-      return candidate;
-    }
-  }
-
-  throw new Error(
-    "Accessibility helper not found. Run `swiftc helpers/accessibility.swift -o helpers/accessibility -framework AppKit` from the project root."
-  );
+  _helperPath = resolveMacHelper("accessibility");
+  return _helperPath;
 }

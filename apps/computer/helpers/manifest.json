@@ -1,0 +1,32 @@
+{
+  "schema_version": "open-computer.helper-manifest.v1",
+  "helpers": {
+    "scroll": {
+      "platform": "macos",
+      "arch": "arm64",
+      "binary_format": "mach-o",
+      "source": "helpers/scroll.swift",
+      "binary": "helpers/scroll",
+      "source_sha256": "d91c829340641ff9b019a6a372a4c63abe753464528ce0dedc73f6a7f0a475fd",
+      "binary_sha256": "6ebd62f19b843269ec1339acdf8f6052778aa5a8e71901302ae96f0dcd01036b"
+    },
+    "accessibility": {
+      "platform": "macos",
+      "arch": "arm64",
+      "binary_format": "mach-o",
+      "source": "helpers/accessibility.swift",
+      "binary": "helpers/accessibility",
+      "source_sha256": "c36a61e4a8e01cbab2bbbe6f43ba64f76f297e5dadff3e9d9d68c5ba784bb5aa",
+      "binary_sha256": "7a6ea27fbe2a1b68e19abe87cafb3aad14e2229dc11305c69a2b4c72589550db"
+    },
+    "record": {
+      "platform": "macos",
+      "arch": "arm64",
+      "binary_format": "mach-o",
+      "source": "helpers/record.swift",
+      "binary": "helpers/record",
+      "source_sha256": "ae4b8da4d7cf58fa5c22ee5f8938101ab6e04841d11f4237bdca9ef63f0ed144",
+      "binary_sha256": "35b9a68716725bda4db9edabba31f3c1a4f28a3daae48a45d8f5827ce039789b"
+    }
+  }
+}

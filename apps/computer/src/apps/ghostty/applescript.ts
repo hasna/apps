@@ -80,6 +80,20 @@ export interface GhosttyScriptOptions {
   dir?: string;
   /** Maximize the new window (toggle_maximize, not native fullscreen). */
   max?: boolean;
+  /** Optional transcript capture targets keyed by pane index. */
+  transcript?: GhosttyTranscriptPlan;
+}
+
+export interface GhosttyTranscriptTarget {
+  paneIndex: number;
+  marker: string;
+  logPath: string;
+  statusPath: string;
+}
+
+export interface GhosttyTranscriptPlan {
+  id: string;
+  panes: GhosttyTranscriptTarget[];
 }
 
 /**
@@ -93,6 +107,9 @@ export interface GhosttyScriptOptions {
 export function buildGhosttyScript(opts: GhosttyScriptOptions): string {
   const { tabs, commands = [], dir, max = false } = opts;
   if (tabs.length === 0) throw new Error("At least one tab grid is required");
+  const transcriptByPane = new Map(
+    opts.transcript?.panes.map((pane) => [pane.paneIndex, pane]) ?? []
+  );
 
   const lines: string[] = [];
   lines.push('tell application "Ghostty"');
@@ -141,7 +158,10 @@ export function buildGhosttyScript(opts: GhosttyScriptOptions): string {
         const raw = commands[paneIndex];
         paneIndex++;
         let cmd: string | undefined;
-        if (dir && raw) cmd = `cd ${shellQuote(dir)} && ${raw}`;
+        const transcriptTarget = (raw || dir) ? transcriptByPane.get(paneIndex - 1) : undefined;
+        if (raw && transcriptTarget) cmd = wrapCommandForTranscript(raw, dir, transcriptTarget);
+        else if (dir && transcriptTarget) cmd = wrapCommandForTranscript(":", dir, transcriptTarget);
+        else if (dir && raw) cmd = `cd ${shellQuote(dir)} && ${raw}`;
         else if (dir) cmd = `cd ${shellQuote(dir)}`;
         else cmd = raw;
         if (cmd) {
@@ -155,4 +175,34 @@ export function buildGhosttyScript(opts: GhosttyScriptOptions): string {
   lines.push(`  focus ${term(0, 0, 0)}`);
   lines.push("end tell");
   return lines.join("\n") + "\n";
+}
+
+export function wrapCommandForTranscript(
+  rawCommand: string,
+  dir: string | undefined,
+  target: GhosttyTranscriptTarget,
+): string {
+  const statusFile = shellQuote(target.statusPath);
+  const logFile = shellQuote(target.logPath);
+  const marker = shellQuote(target.marker);
+  const pane = shellQuote(String(target.paneIndex));
+  const restoreDir = dir ? `cd ${shellQuote(dir)};` : "";
+  const command = dir
+    ? `(cd ${shellQuote(dir)} && { ${rawCommand}; })`
+    : `({ ${rawCommand}; })`;
+
+  return [
+    `__occtrl_status_file=${statusFile};`,
+    "{",
+    `printf '%s\\n' ${shellQuote(`[occtrl:${target.marker}:begin pane=${target.paneIndex}]`)};`,
+    command + ";",
+    "__occtrl_status=$?;",
+    `printf '[occtrl:%s:end pane=%s status=%s]\\n' ${marker} ${pane} \"$__occtrl_status\";`,
+    `printf '%s\\n' \"$__occtrl_status\" > \"$__occtrl_status_file\";`,
+    "}",
+    `2>&1 | tee -a ${logFile};`,
+    `__occtrl_status="$(cat "$__occtrl_status_file" 2>/dev/null || echo 1)";`,
+    restoreDir,
+    `if [ "$__occtrl_status" -eq 0 ]; then true; else false; fi`,
+  ].join(" ");
 }

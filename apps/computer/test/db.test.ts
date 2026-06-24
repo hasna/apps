@@ -5,6 +5,8 @@ import {
   createSession,
   updateSession,
   logAction,
+  logAuditEvent,
+  listAuditEvents,
   getSession,
   listSessions,
   getActionLogs,
@@ -96,13 +98,35 @@ describe("db", () => {
     expect(logs[1].action.type).toBe("type");
   });
 
+  test("logAuditEvent + listAuditEvents stores append-only audit rows", async () => {
+    const marker = `audit_${Date.now()}_${Math.random()}`;
+    const event = await logAuditEvent({
+      event: "test.audit",
+      transport: "test",
+      capability: "computer.test",
+      action_type: "type",
+      action_data: { type: "type", text: "[redacted]", text_length: 6 },
+      decision: "blocked",
+      reason: "test reason",
+      metadata: { marker },
+    });
+
+    const events = listAuditEvents({ transport: "test", limit: 20 });
+    const got = events.find((candidate) => candidate.id === event.id);
+    expect(got).toBeDefined();
+    expect(got!.event).toBe("test.audit");
+    expect(got!.decision).toBe("blocked");
+    expect(got!.metadata?.marker).toBe(marker);
+    expect(got!.action_data).toEqual({ type: "type", text: "[redacted]", text_length: 6 });
+  });
+
   test("listSessions returns sessions ordered by created_at desc", async () => {
     const s1 = makeSession({ created_at: "2026-01-01T00:00:00Z" });
     const s2 = makeSession({ created_at: "2026-01-02T00:00:00Z" });
     await createSession(s1);
     await createSession(s2);
 
-    const sessions = listSessions({ limit: 100 });
+    const sessions = listSessions({ limit: 1000 });
     const ids = sessions.map((s) => s.id);
     const i1 = ids.indexOf(s1.id);
     const i2 = ids.indexOf(s2.id);

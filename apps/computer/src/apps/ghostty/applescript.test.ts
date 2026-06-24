@@ -6,6 +6,7 @@ import {
   shellQuote,
   assignPaneCommands,
   buildGhosttyScript,
+  wrapCommandForTranscript,
 } from "./applescript.js";
 
 describe("parseGrid", () => {
@@ -231,6 +232,53 @@ describe("buildGhosttyScript — dir", () => {
       dir: "/Users/me/my proj",
     });
     expect(script).toContain("input text \"cd '/Users/me/my proj' && ls\" to t0_0_0");
+  });
+});
+
+describe("buildGhosttyScript — transcript capture", () => {
+  test("wraps commands with tee and status-file transcript capture", () => {
+    const script = buildGhosttyScript({
+      tabs: [{ rows: 1, cols: 1 }],
+      commands: ["bun test"],
+      dir: "/Users/me/proj",
+      transcript: {
+        id: "tr",
+        panes: [{
+          paneIndex: 0,
+          marker: "tr:pane-0:abc123",
+          logPath: "/tmp/occtrl/pane-0.log",
+          statusPath: "/tmp/occtrl/pane-0.status",
+        }],
+      },
+    });
+
+    expect(script).toContain("[occtrl:tr:pane-0:abc123:begin pane=0]");
+    expect(script).toContain("tee -a '/tmp/occtrl/pane-0.log'");
+    expect(script).toContain("__occtrl_status_file='/tmp/occtrl/pane-0.status'");
+    expect(script).toContain("cd '/Users/me/proj' && { bun test; }");
+    expect(script).toContain('send key "enter" to t0_0_0');
+  });
+
+  test("wrapCommandForTranscript preserves the command status through a status file", () => {
+    const command = wrapCommandForTranscript(
+      "false",
+      "/Users/me/proj",
+      {
+        paneIndex: 3,
+        marker: "tr:pane-3:def456",
+        logPath: "/tmp/occtrl/pane-3.log",
+        statusPath: "/tmp/occtrl/pane-3.status",
+      },
+    );
+
+    expect(command).toContain("printf '[occtrl:%s:end pane=%s status=%s]");
+    expect(command).toContain('__occtrl_status="$(cat "$__occtrl_status_file"');
+    expect(command).toContain("cd '/Users/me/proj';");
+    expect(command).toContain('if [ "$__occtrl_status" -eq 0 ]; then true; else false; fi');
+    expect(command).toContain("'3' \"$__occtrl_status\"");
+    expect(command).not.toContain("undefined");
+    expect(command.trim().startsWith("(")).toBe(false);
+    expect(command.indexOf("2>&1 | tee")).toBeLessThan(command.lastIndexOf("cd '/Users/me/proj';"));
   });
 });
 

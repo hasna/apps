@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import type { ComputerProvider, ModelResponse, Screenshot, DriverAction, Point } from "../types/index.js";
+import type { ComputerProvider, ModelResponse, Screenshot, DriverAction, ProviderSafetyCheck } from "../types/index.js";
 
 const DEFAULT_MODEL = "computer-use-preview";
 
@@ -222,6 +222,7 @@ function parseOpenAIResponse(response: any): ModelResponse {
   let action: DriverAction | null = null;
   let reasoning = "";
   let done = false;
+  const pendingSafetyChecks: ProviderSafetyCheck[] = [];
 
   const output = response.output ?? response.choices?.[0]?.message;
   if (!output) {
@@ -235,20 +236,53 @@ function parseOpenAIResponse(response: any): ModelResponse {
         reasoning += item.text;
         if (item.text.includes("TASK_COMPLETE")) done = true;
       } else if (item.type === "computer_call") {
-        action = convertOpenAICallToAction(item.action);
+        pendingSafetyChecks.push(...normalizePendingSafetyChecks(item.pending_safety_checks));
+        if (pendingSafetyChecks.length === 0) {
+          action = convertOpenAICallToAction(firstOpenAIAction(item));
+        }
       }
     }
   }
 
   return {
-    action: done ? null : action,
-    reasoning,
-    done,
+    action: done || pendingSafetyChecks.length > 0 ? null : action,
+    reasoning: pendingSafetyChecks.length > 0
+      ? appendSafetyCheckReasoning(reasoning, pendingSafetyChecks)
+      : reasoning,
+    done: pendingSafetyChecks.length > 0 ? false : done,
     usage: {
       input: response.usage?.input_tokens ?? response.usage?.prompt_tokens ?? 0,
       output: response.usage?.output_tokens ?? response.usage?.completion_tokens ?? 0,
     },
+    pendingSafetyChecks: pendingSafetyChecks.length > 0 ? pendingSafetyChecks : undefined,
   };
+}
+
+function firstOpenAIAction(item: Record<string, any>): Record<string, any> {
+  if (item.action) return item.action;
+  if (Array.isArray(item.actions) && item.actions.length > 0) return item.actions[0];
+  return { type: "screenshot" };
+}
+
+function normalizePendingSafetyChecks(value: unknown): ProviderSafetyCheck[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((check, index) => {
+    const item = check as { id?: unknown; code?: unknown; message?: unknown };
+    return {
+      provider: "openai" as const,
+      id: typeof item.id === "string" && item.id.length > 0 ? item.id : `openai_safety_check_${index}`,
+      code: typeof item.code === "string" ? item.code : undefined,
+      message: typeof item.message === "string" ? item.message : undefined,
+    };
+  });
+}
+
+function appendSafetyCheckReasoning(reasoning: string, checks: ProviderSafetyCheck[]): string {
+  const summary = checks
+    .map((check) => `${check.code ?? "safety_check"}${check.message ? `: ${check.message}` : ""}`)
+    .join("; ");
+  const prefix = reasoning.trim().length > 0 ? `${reasoning.trim()}\n` : "";
+  return `${prefix}OpenAI pending safety check approval required: ${summary}`;
 }
 
 function convertOpenAICallToAction(action: Record<string, any>): DriverAction {

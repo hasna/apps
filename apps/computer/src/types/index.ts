@@ -1,6 +1,21 @@
 /** Supported AI providers for computer use */
 export type Provider = "anthropic" | "openai";
 
+/** Provider failure classes that can trigger a configured fallback provider. */
+export type ProviderFallbackReason = "error" | "rate_limit" | "unsupported";
+
+/** Provider fallback policy for a single run or persisted config. */
+export interface ProviderFallbackConfig {
+  /** Whether provider fallback is enabled. */
+  enabled: boolean;
+  /** Fallback provider. If omitted, the alternate built-in provider is used. */
+  provider?: Provider;
+  /** Optional fallback model override. */
+  model?: string;
+  /** Failure classes that are allowed to trigger fallback. */
+  fallbackOn: ProviderFallbackReason[];
+}
+
 /** Mouse button types */
 export type MouseButton = "left" | "right" | "middle";
 
@@ -16,6 +31,28 @@ export interface ScreenSize {
   height: number;
 }
 
+export type CoordinateSpaceKind =
+  | "native_display"
+  | "screenshot"
+  | "scaled_screenshot"
+  | "browser_viewport";
+
+export interface ScreenBounds extends ScreenSize {
+  x: number;
+  y: number;
+  displayNumber?: number;
+  scaleFactor?: number;
+}
+
+export interface CoordinateSpace {
+  kind: CoordinateSpaceKind;
+  size: ScreenSize;
+  origin?: Point;
+  displayNumber?: number;
+  scaleFactor?: number;
+  label?: string;
+}
+
 /** A captured screenshot */
 export interface Screenshot {
   /** Base64-encoded PNG image data */
@@ -24,6 +61,8 @@ export interface Screenshot {
   size: ScreenSize;
   /** Timestamp of capture */
   timestamp: number;
+  /** Coordinate space used by image-local points in this screenshot */
+  coordinateSpace?: CoordinateSpace;
 }
 
 /** Actions the driver can execute on the OS */
@@ -47,6 +86,10 @@ export interface ActionResult {
   duration_ms: number;
 }
 
+export interface DriverExecutionContext {
+  signal?: AbortSignal;
+}
+
 /** The computer driver interface — OS-level screen + input control */
 export interface ComputerDriver {
   /** Get current screen size */
@@ -54,7 +97,7 @@ export interface ComputerDriver {
   /** Capture a screenshot */
   screenshot(): Promise<Screenshot>;
   /** Execute an action */
-  execute(action: DriverAction): Promise<ActionResult>;
+  execute(action: DriverAction, context?: DriverExecutionContext): Promise<ActionResult>;
   /** Clean up resources */
   dispose(): Promise<void>;
 }
@@ -69,6 +112,15 @@ export interface ModelResponse {
   done: boolean;
   /** Token usage for this step */
   usage?: { input: number; output: number };
+  /** Provider-reported safety checks that must be approved before executing the suggested action. */
+  pendingSafetyChecks?: ProviderSafetyCheck[];
+}
+
+export interface ProviderSafetyCheck {
+  provider: Provider;
+  id: string;
+  code?: string;
+  message?: string;
 }
 
 /** AI provider interface — sends screenshots, gets actions back */
@@ -83,8 +135,57 @@ export interface ComputerProvider {
   }): Promise<ModelResponse>;
 }
 
+export type VerifierEvidenceKind =
+  | "screenshot"
+  | "accessibility_tree"
+  | "browser_snapshot"
+  | "terminal_transcript"
+  | "fleet_status"
+  | "log"
+  | "note";
+
+export interface VerifierEvidence {
+  kind: VerifierEvidenceKind;
+  summary: string;
+  artifactPath?: string;
+  data?: unknown;
+}
+
+export type VerifierDecisionStatus = "done" | "needs_more_steps" | "blocked";
+
+export interface VerifierDecision {
+  status: VerifierDecisionStatus;
+  confidence: number;
+  reason: string;
+  evidence: string[];
+  nextStep?: string;
+}
+
+export interface GoalVerifierContext {
+  task: string;
+  runId?: string;
+  stepId?: string;
+  stepIndex?: number;
+  criteria?: string[];
+  evidence: VerifierEvidence[];
+}
+
+export type GoalVerifier = (context: GoalVerifierContext) => Promise<VerifierDecision> | VerifierDecision;
+
 /** Session state */
-export type SessionStatus = "running" | "paused" | "completed" | "failed" | "cancelled";
+export const SESSION_STATUSES = [
+  "pending",
+  "running",
+  "waiting_on_approval",
+  "paused",
+  "cancelling",
+  "cancelled",
+  "failed",
+  "completed",
+  "max_steps_exceeded",
+] as const;
+
+export type SessionStatus = (typeof SESSION_STATUSES)[number];
 
 /** A logged action within a session */
 export interface ActionLog {
@@ -123,10 +224,18 @@ export interface Session {
 export interface RunOptions {
   /** The natural language task to accomplish */
   task: string;
+  /** Internal/resume path: continue an existing non-terminal session instead of creating a new one. */
+  resumeSessionId?: string;
   /** AI provider to use */
   provider?: Provider;
   /** Specific model to use (defaults to provider's best) */
   model?: string;
+  /** Fallback AI provider for model analysis failures, or false to disable fallback. */
+  fallbackProvider?: Provider | false;
+  /** Specific model to use for fallback provider. */
+  fallbackModel?: string;
+  /** Failure classes that are allowed to trigger fallback for this run. */
+  fallbackOn?: ProviderFallbackReason[];
   /** Maximum number of steps before stopping */
   maxSteps?: number;
   /** Save screenshots to disk */
@@ -135,6 +244,10 @@ export interface RunOptions {
   screenshotsDir?: string;
   /** Custom system prompt */
   systemPrompt?: string;
+  /** Optional verifier pass before accepting provider-reported completion. */
+  verifier?: GoalVerifier;
+  /** Task-specific criteria passed to the verifier. */
+  verificationCriteria?: string[];
   /** Max screenshot width before sending to AI model (default: 1280 WXGA) */
   screenshotMaxWidth?: number;
   /** Dry-run mode — model plans actions but they are not executed */
@@ -149,6 +262,12 @@ export interface RunOptions {
   onDone?: (session: Session) => void;
   /** Whether to run headless */
   headless?: boolean;
+  /** Override driver, primarily for integration tests and embedded runtimes */
+  driver?: ComputerDriver;
+  /** Override AI provider, primarily for integration tests and embedded runtimes */
+  computerProvider?: ComputerProvider;
+  /** Override safety policy for this run */
+  safety?: SafetyConfig;
 }
 
 /** Safety configuration */

@@ -1,25 +1,45 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
 import { registerEventsCommands } from "@hasna/events/commander";
+import { createHash } from "node:crypto";
+import { platform } from "node:os";
 import chalk from "chalk";
-import { runTask } from "../agent/loop.js";
-import { listSessions, getSession, getActionLogs, deleteSession, getStats, searchSessions, getDataDir } from "../db/index.js";
+import { resumeTask, runTask } from "../agent/loop.js";
+import { planGoalDryRun } from "../agent/goal-planner.js";
+import { guardTerminalCommandPolicy, formatPolicyRejection } from "../agent/policy.js";
+import { listSessions, getSession, getActionLogs, deleteSession, getStats, searchSessions, getDataDir, logAuditEvent, resolveSessionId } from "../db/index.js";
 import { captureScreenshot, saveScreenshotToFile } from "../drivers/mac/screenshot.js";
+import { inspectMacHelpers, resolveMacHelper } from "../drivers/mac/helpers.js";
 import { loadConfig, getConfigValue, setConfigValue, getConfigPath } from "../lib/config.js";
 import { calculateCost, formatCost, stepCost } from "../lib/pricing.js";
 import { registerStorageCommands } from "./storage.js";
 import { renderInlineImage, supportsInlineImages } from "../lib/terminal-image.js";
 import { getAppDriver, listAppDrivers } from "../apps/registry.js";
 import { parseGrid, parseTabsSpec } from "../apps/ghostty/applescript.js";
-import type { Provider } from "../types/index.js";
+import { SESSION_STATUSES, type Provider, type SessionStatus } from "../types/index.js";
 import type { AppOpenSpec } from "../apps/types.js";
+import { VERSION } from "../version.js";
+import { cancelSession, getEmergencyStopSignal, pauseSession } from "../agent/control.js";
+import {
+  DEFAULT_DETAIL_LOG_LIMIT,
+  DEFAULT_ROW_LIMIT,
+  pageSlice,
+  parseCursor,
+  parseLimit,
+  renderSearchResults,
+  renderSessionDetail,
+  renderSessionList,
+  renderStatsSummary,
+  truncateText,
+} from "./output.js";
 
 const program = new Command();
+const SESSION_STATUS_COMPLETIONS = SESSION_STATUSES.join(" ");
 
 program
   .name("computer")
   .description("Open-source computer use for AI agents — control your Mac with AI")
-  .version("0.1.10");
+  .version(VERSION);
 
 // ── run ──────────────────────────────────────────────────────────────
 program
@@ -28,6 +48,8 @@ program
   .argument("<task>", "Natural language description of the task")
   .option("-p, --provider <provider>", "AI provider (anthropic|openai)", "anthropic")
   .option("-m, --model <model>", "Model to use")
+  .option("--fallback-provider <provider>", "Fallback AI provider (anthropic|openai|none)")
+  .option("--fallback-model <model>", "Model to use for fallback provider")
   .option("-s, --max-steps <n>", "Maximum number of steps", "50")
   .option("--save-screenshots", "Save screenshots to disk", false)
   .option("--screenshots-dir <dir>", "Directory to save screenshots")
@@ -52,6 +74,8 @@ program
       task,
       provider: provider as Provider,
       model: opts.model ?? cfg.model,
+      fallbackProvider: opts.fallbackProvider === "none" ? false : opts.fallbackProvider as Provider | undefined,
+      fallbackModel: opts.fallbackModel,
       maxSteps,
       saveScreenshots: opts.saveScreenshots ?? cfg.saveScreenshots,
       screenshotsDir: opts.screenshotsDir ?? cfg.screenshotsDir,
@@ -104,21 +128,92 @@ program
     });
   });
 
+// ── plan ─────────────────────────────────────────────────────────────
+program
+  .command("plan")
+  .description("Persist a dry-run AI SDK workflow plan without executing OS input")
+  .argument("<prompt>", "Natural language goal to plan")
+  .option("-s, --max-steps <n>", "Maximum planned steps", "8")
+  .option("--workspace-root <path>", "Workspace root to use for terminal-capable planning")
+  .option("--json", "Print structured JSON output", false)
+  .action(async (prompt: string, opts: { maxSteps?: string; workspaceRoot?: string; json?: boolean }) => {
+    const maxSteps = Number.parseInt(opts.maxSteps ?? "8", 10) || 8;
+    const plan = await planGoalDryRun({
+      prompt,
+      maxSteps,
+      workspaceRoots: [opts.workspaceRoot ?? process.cwd()],
+      actor: "cli",
+      transport: "cli",
+      metadata: { command: "plan" },
+    });
+
+    if (opts.json) {
+      console.log(JSON.stringify({
+        goal_id: plan.goal.id,
+        workflow_id: plan.workflow.id,
+        run_id: plan.run.id,
+        title: plan.draft.title,
+        summary: plan.draft.summary,
+        step_count: plan.steps.length,
+        steps: plan.steps.map((step) => ({
+          index: step.index,
+          title: step.step.title,
+          tool: step.step.toolName,
+          capability: step.route.capability,
+          status: step.route.status,
+          approval_id: step.approvalId ?? null,
+          stop_condition: step.step.stopCondition,
+        })),
+      }, null, 2));
+      return;
+    }
+
+    console.log(chalk.bold.cyan("computer plan") + chalk.yellow.bold(" [DRY RUN]"));
+    console.log(chalk.dim(`Goal: ${plan.goal.id} | Workflow: ${plan.workflow.id} | Run: ${plan.run.id}`));
+    console.log(chalk.bold(plan.draft.title));
+    console.log(chalk.dim(plan.draft.summary));
+    console.log();
+    for (const step of plan.steps) {
+      const color = step.route.status === "allowed"
+        ? chalk.green
+        : step.route.status === "requires_confirmation"
+          ? chalk.yellow
+          : chalk.red;
+      console.log(
+        `${chalk.dim(String(step.index + 1).padStart(2, "0"))} ` +
+        `${chalk.cyan(step.step.toolName.padEnd(11))} ` +
+        `${color(step.route.status.padEnd(21))} ${step.step.title}`
+      );
+      console.log(chalk.dim(`   ${step.step.stopCondition}`));
+    }
+  });
+
 // ── screenshot ───────────────────────────────────────────────────────
 program
   .command("screenshot")
   .description("Take a screenshot of the current screen")
   .option("-o, --output <path>", "Save to file path")
   .action(async (opts: any) => {
-    const ss = await captureScreenshot();
-    if (opts.output) {
-      const dir = opts.output.includes("/") ? opts.output.substring(0, opts.output.lastIndexOf("/")) : ".";
-      const file = opts.output.includes("/") ? opts.output.substring(opts.output.lastIndexOf("/") + 1) : opts.output;
-      const path = await saveScreenshotToFile(ss, dir, file);
-      console.log(chalk.green(`Screenshot saved: ${path}`));
-    } else {
-      console.log(chalk.green(`Screenshot captured: ${ss.size.width}x${ss.size.height}`));
-      console.log(chalk.dim(`Base64 length: ${ss.base64.length} chars`));
+    if (platform() !== "darwin") {
+      console.error(chalk.red("Screenshot capture is unavailable on this platform."));
+      console.error(chalk.dim("Reason: native screenshot capture currently requires macOS screencapture."));
+      process.exit(1);
+    }
+    try {
+      const ss = await captureScreenshot();
+      if (opts.output) {
+        const dir = opts.output.includes("/") ? opts.output.substring(0, opts.output.lastIndexOf("/")) : ".";
+        const file = opts.output.includes("/") ? opts.output.substring(opts.output.lastIndexOf("/") + 1) : opts.output;
+        const path = await saveScreenshotToFile(ss, dir, file);
+        console.log(chalk.green(`Screenshot saved: ${path}`));
+      } else {
+        console.log(chalk.green(`Screenshot captured: ${ss.size.width}x${ss.size.height}`));
+        console.log(chalk.dim(`Base64 length: ${ss.base64.length} chars`));
+      }
+    } catch (error) {
+      console.error(chalk.red("Screenshot capture failed."));
+      console.error(chalk.dim(`Reason: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
     }
   });
 
@@ -134,6 +229,7 @@ program
   .option("--run <command>", "Command for the next pane in order (repeatable)", collectRun, [])
   .option("--all", "Run the single --run command in every pane", false)
   .option("--dir <path>", "Working directory — every pane cds here first")
+  .option("--approve-terminal-command", "Confirm terminal command execution for --run/--dir", false)
   .option("--max", "Maximize the new window (not native fullscreen)", false)
   .action(async (app: string, opts: any) => {
     const driver = getAppDriver(app);
@@ -159,15 +255,57 @@ program
         all: opts.all,
         dir: opts.dir,
         max: opts.max,
+        terminalApproval: {
+          approved: opts.approveTerminalCommand,
+          audit: false,
+          transport: "cli",
+          metadata: { app, command_count: opts.run?.length ?? 0 },
+          signal: getEmergencyStopSignal(),
+        },
       };
+      const terminalDecision = await guardTerminalCommandPolicy(
+        { app, run: spec.run, dir: spec.dir },
+        {
+          approved: opts.approveTerminalCommand,
+          transport: "cli",
+          capability: "computer.terminal",
+          metadata: { app, command_count: spec.run?.length ?? 0 },
+        },
+      );
+      if (!terminalDecision.allowed) {
+        console.error(chalk.red(formatPolicyRejection(terminalDecision)));
+        process.exit(1);
+      }
     } catch (err) {
       console.error(chalk.red(err instanceof Error ? err.message : String(err)));
       process.exit(1);
     }
 
     const result = await driver.open(spec!);
+    if (result.transcript) {
+      await logAuditEvent({
+        event: "terminal.transcript_created",
+        transport: "cli",
+        capability: "computer.terminal",
+        action_type: "terminal_command",
+        action_data: {
+          app,
+          transcript_id: result.transcript.id,
+          command_count: result.transcript.commandCount,
+          redacted: true,
+        },
+        decision: "created",
+        metadata: {
+          manifest_path: result.transcript.manifestPath,
+          pane_count: result.transcript.panes.length,
+        },
+      });
+    }
     if (result.ok) {
       console.log(chalk.green(result.message));
+      if (result.transcript) {
+        console.log(chalk.dim(`Transcript manifest: ${result.transcript.manifestPath}`));
+      }
     } else {
       console.error(chalk.red(result.message));
       process.exit(1);
@@ -199,33 +337,40 @@ program
 program
   .command("sessions")
   .description("List computer use sessions")
-  .option("-n, --limit <n>", "Number of sessions to show", "20")
+  .option("-n, --limit <n>", "Number of sessions to show", String(DEFAULT_ROW_LIMIT))
+  .option("--cursor <n>", "Zero-based result offset for pagination", "0")
   .option("--status <status>", "Filter by status")
   .option("--tag <tag>", "Filter by tag")
+  .option("--json", "Print full session records as JSON", false)
   .action(async (opts: any) => {
-    const sessions = listSessions({
-      limit: parseInt(opts.limit),
+    const limit = parseLimit(opts.limit);
+    const cursor = parseCursor(opts.cursor);
+    const result = listSessions({
+      limit: limit + 1,
+      offset: cursor,
       status: opts.status,
       tag: opts.tag,
     });
+    const { page: sessions, hasMore, nextCursor } = pageSlice(result, limit, cursor);
 
-    if (sessions.length === 0) {
-      console.log(chalk.dim("No sessions found."));
+    if (opts.json) {
+      console.log(JSON.stringify({
+        sessions,
+        limit,
+        cursor,
+        has_more: hasMore,
+        next_cursor: hasMore ? nextCursor : null,
+      }, null, 2));
       return;
     }
 
-    for (const s of sessions) {
-      const statusColor =
-        s.status === "completed" ? chalk.green :
-        s.status === "failed" ? chalk.red :
-        s.status === "running" ? chalk.yellow : chalk.dim;
-
-      const tagStr = s.tags?.length ? chalk.magenta(` [${s.tags.join(", ")}]`) : "";
-      console.log(
-        `${chalk.dim(s.id.slice(0, 8))} ${statusColor(s.status.padEnd(10))} ${chalk.cyan(s.provider.padEnd(10))} ${s.steps} steps${tagStr}  ${chalk.dim(s.created_at)}`
-      );
-      console.log(chalk.dim(`  ${s.task.slice(0, 100)}`));
-    }
+    console.log(renderSessionList(sessions, {
+      limit,
+      cursor,
+      hasMore,
+      nextCursor,
+      detailHint: "Details: use `computer session <id> --verbose`; full data: `computer session <id> --json`.",
+    }));
   });
 
 // ── session ──────────────────────────────────────────────────────────
@@ -233,39 +378,33 @@ program
   .command("session")
   .description("Show details of a session")
   .argument("<id>", "Session ID (or prefix)")
-  .action(async (id: string) => {
-    // Support prefix matching
-    const sessions = listSessions({ limit: 100 });
-    const session = sessions.find((s) => s.id.startsWith(id));
+  .option("-n, --limit <n>", "Number of action-log rows to show by default", String(DEFAULT_DETAIL_LOG_LIMIT))
+  .option("--cursor <n>", "Zero-based action-log offset for pagination", "0")
+  .option("--verbose", "Show the complete action log in human-readable form", false)
+  .option("--json", "Print full session and action log records as JSON", false)
+  .action(async (id: string, opts: any) => {
+    const session = resolveSessionId(id);
 
     if (!session) {
       console.log(chalk.red(`Session not found: ${id}`));
       process.exit(1);
     }
 
-    console.log(chalk.bold("Session: ") + session.id);
-    console.log(chalk.bold("Task: ") + session.task);
-    console.log(chalk.bold("Provider: ") + session.provider + " / " + session.model);
-    console.log(chalk.bold("Status: ") + session.status);
-    console.log(chalk.bold("Steps: ") + session.steps);
-    console.log(chalk.bold("Tokens: ") + `${session.total_tokens_in} in / ${session.total_tokens_out} out`);
-    console.log(chalk.bold("Duration: ") + `${(session.total_duration_ms / 1000).toFixed(1)}s`);
-    if (session.error) console.log(chalk.bold("Error: ") + chalk.red(session.error));
-    console.log(chalk.bold("Created: ") + session.created_at);
-    if (session.completed_at) console.log(chalk.bold("Completed: ") + session.completed_at);
-
-    console.log();
-    console.log(chalk.bold("Action Log:"));
     const logs = getActionLogs(session.id);
-    for (const log of logs) {
-      const status = log.success ? chalk.green("OK") : chalk.red("FAIL");
-      console.log(`  [${String(log.step + 1).padStart(3)}] ${status} ${chalk.yellow(log.action.type)} ${chalk.dim(`${log.duration_ms}ms`)}`);
-      if (log.reasoning) {
-        const short = log.reasoning.slice(0, 100).replace(/\n/g, " ");
-        console.log(chalk.dim(`        ${short}`));
-      }
-      if (log.error) console.log(chalk.red(`        Error: ${log.error}`));
+    if (opts.json) {
+      console.log(JSON.stringify({ session, action_logs: logs }, null, 2));
+      return;
     }
+
+    const limit = parseLimit(opts.limit, DEFAULT_DETAIL_LOG_LIMIT);
+    const cursor = parseCursor(opts.cursor);
+    console.log(renderSessionDetail(session, logs, {
+      verbose: opts.verbose,
+      limit,
+      cursor,
+      hasMore: !opts.verbose && logs.length > cursor + limit,
+      nextCursor: cursor + Math.min(limit, Math.max(0, logs.length - cursor)),
+    }));
   });
 
 // ── delete ───────────────────────────────────────────────────────────
@@ -274,8 +413,7 @@ program
   .description("Delete a session")
   .argument("<id>", "Session ID (or prefix)")
   .action(async (id: string) => {
-    const sessions = listSessions({ limit: 1000 });
-    const session = sessions.find((s) => s.id.startsWith(id));
+    const session = resolveSessionId(id);
     if (!session) {
       console.log(chalk.red(`Session not found: ${id}`));
       process.exit(1);
@@ -284,16 +422,99 @@ program
     console.log(chalk.green(`Deleted session: ${session.id}`));
   });
 
+// ── pause ────────────────────────────────────────────────────────────
+program
+  .command("pause")
+  .description("Pause a running session before its next action")
+  .argument("<id>", "Session ID (or prefix)")
+  .option("--reason <text>", "Reason for pausing")
+  .action(async (id: string, opts: { reason?: string }) => {
+    const session = resolveSessionArg(id);
+    const state = pauseSession(session.id, opts.reason);
+    await logAuditEvent({
+      event: "run_control.pause_session",
+      transport: "cli",
+      capability: "computer.pause_session",
+      decision: "requested",
+      reason: opts.reason,
+      metadata: { session_id: session.id },
+    });
+    console.log(chalk.yellow(`Paused session ${state.session_id}`));
+  });
+
+// ── resume ───────────────────────────────────────────────────────────
+program
+  .command("resume")
+  .description("Resume a paused session from persisted state")
+  .argument("<id>", "Session ID (or prefix)")
+  .option("-p, --provider <provider>", "AI provider (anthropic|openai)")
+  .option("-m, --model <model>", "Model to use")
+  .option("-s, --max-steps <n>", "Maximum total steps before stopping", "50")
+  .option("--dry-run", "Plan actions without executing them", false)
+  .option("--save-screenshots", "Save screenshots to disk", false)
+  .option("--screenshots-dir <dir>", "Directory to save screenshots")
+  .option("--max-width <px>", "Max screenshot width for AI model (default: 1280)", "1280")
+  .option("--display <n>", "Display number to capture (1=main, 2=secondary)")
+  .action(async (id: string, opts: any) => {
+    const session = resolveSessionArg(id);
+    const cfg = loadConfig();
+    console.log(chalk.bold.cyan("computer") + chalk.yellow.bold(" [RESUME]") + ` — ${session.id}`);
+    const resumed = await resumeTask(session.id, {
+      provider: opts.provider as Provider | undefined,
+      model: opts.model,
+      maxSteps: parseInt(opts.maxSteps) || cfg.maxSteps,
+      saveScreenshots: opts.saveScreenshots ?? cfg.saveScreenshots,
+      screenshotsDir: opts.screenshotsDir ?? cfg.screenshotsDir,
+      screenshotMaxWidth: parseInt(opts.maxWidth) || cfg.screenshotMaxWidth,
+      dryRun: opts.dryRun,
+      displayNumber: opts.display ? parseInt(opts.display) : undefined,
+      onStep: (step, response, result) => {
+        const status = result.success ? chalk.green("OK") : chalk.red("FAIL");
+        console.log(chalk.dim(`[${String(step + 1).padStart(3)}]`) + ` ${status} ${chalk.yellow(response.action?.type ?? "done")}`);
+      },
+    });
+    await logAuditEvent({
+      event: "run_control.resume_session",
+      transport: "cli",
+      capability: "computer.resume_session",
+      decision: resumed.status,
+      metadata: { session_id: session.id },
+    });
+    console.log(chalk.dim(`Status: ${resumed.status} | Steps: ${resumed.steps} | Session: ${resumed.id}`));
+  });
+
+// ── cancel ───────────────────────────────────────────────────────────
+program
+  .command("cancel")
+  .description("Cancel a running or paused session")
+  .argument("<id>", "Session ID (or prefix)")
+  .option("--reason <text>", "Reason for cancellation")
+  .action(async (id: string, opts: { reason?: string }) => {
+    const session = resolveSessionArg(id);
+    cancelSession(session.id, opts.reason);
+    await logAuditEvent({
+      event: "run_control.cancel_session",
+      transport: "cli",
+      capability: "computer.cancel_session",
+      decision: "requested",
+      reason: opts.reason,
+      metadata: { session_id: session.id },
+    });
+    console.log(chalk.red(`Cancel requested for session ${session.id}`));
+  });
+
 // ── stats ────────────────────────────────────────────────────────────
 program
   .command("stats")
   .description("Show usage statistics")
-  .action(async () => {
+  .option("--json", "Print full stats as JSON", false)
+  .action(async (opts: { json?: boolean }) => {
     const stats = getStats();
-    console.log(chalk.bold("Computer Use Stats"));
-    console.log(`  Sessions:  ${stats.total_sessions} (${chalk.green(stats.completed + " completed")}, ${chalk.red(stats.failed + " failed")})`);
-    console.log(`  Steps:     ${stats.total_steps}`);
-    console.log(`  Tokens:    ${stats.total_tokens.toLocaleString()}`);
+    if (opts.json) {
+      console.log(JSON.stringify(stats, null, 2));
+      return;
+    }
+    console.log(renderStatsSummary(stats));
   });
 
 // ── watch ────────────────────────────────────────────────────────────
@@ -406,23 +627,25 @@ program
   .command("search")
   .description("Search sessions by task text")
   .argument("<query>", "Search query")
-  .option("-n, --limit <n>", "Max results", "20")
+  .option("-n, --limit <n>", "Max results", String(DEFAULT_ROW_LIMIT))
+  .option("--cursor <n>", "Zero-based result offset for pagination", "0")
+  .option("--json", "Print full search result records as JSON", false)
   .action(async (query: string, opts: any) => {
-    const sessions = searchSessions(query, parseInt(opts.limit));
-    if (sessions.length === 0) {
-      console.log(chalk.dim("No sessions found."));
+    const limit = parseLimit(opts.limit);
+    const cursor = parseCursor(opts.cursor);
+    const result = searchSessions(query, limit + 1, cursor);
+    const { page: sessions, hasMore, nextCursor } = pageSlice(result, limit, cursor);
+    if (opts.json) {
+      console.log(JSON.stringify({
+        sessions,
+        limit,
+        cursor,
+        has_more: hasMore,
+        next_cursor: hasMore ? nextCursor : null,
+      }, null, 2));
       return;
     }
-    for (const s of sessions) {
-      const statusColor =
-        s.status === "completed" ? chalk.green :
-        s.status === "failed" ? chalk.red : chalk.dim;
-      const tagStr = s.tags?.length ? chalk.magenta(` [${s.tags.join(", ")}]`) : "";
-      console.log(
-        `${chalk.dim(s.id.slice(0, 8))} ${statusColor(s.status.padEnd(10))} ${chalk.cyan(s.provider.padEnd(10))} ${s.steps} steps${tagStr}  ${chalk.dim(s.created_at)}`
-      );
-      console.log(chalk.dim(`  ${s.task.slice(0, 100)}`));
-    }
+    console.log(renderSearchResults({ sessions }, { query, limit, cursor, hasMore, nextCursor }));
   });
 
 // ── config ───────────────────────────────────────────────────────────
@@ -433,10 +656,20 @@ const configCmd = program
 configCmd
   .command("show")
   .description("Show current configuration")
-  .action(async () => {
+  .option("--json", "Print full configuration as JSON", false)
+  .action(async (opts: { json?: boolean }) => {
     const config = loadConfig();
-    console.log(chalk.bold("Config: ") + getConfigPath());
-    console.log(JSON.stringify(config, null, 2));
+    if (opts.json) {
+      console.log(JSON.stringify(config, null, 2));
+      return;
+    }
+    console.log(`Config: ${getConfigPath()}`);
+    console.log(`Provider: ${config.provider}${config.model ? ` / ${config.model}` : ""}`);
+    console.log(`Max steps: ${config.maxSteps} | Screenshot max width: ${config.screenshotMaxWidth}px`);
+    console.log(`Save screenshots: ${config.saveScreenshots ? "yes" : "no"}${config.screenshotsDir ? ` | Dir: ${truncateText(config.screenshotsDir, 80)}` : ""}`);
+    console.log(`Provider fallback: ${config.providerFallback.enabled ? "enabled" : "disabled"}`);
+    console.log(`Safety: ${config.safety.blockedApps?.length ?? 0} blocked app(s), ${config.safety.blockedDomains?.length ?? 0} blocked domain(s), confirm clicks ${config.safety.confirmClicks ? "on" : "off"}`);
+    console.log("Full configuration: use `computer config show --json`.");
   });
 
 configCmd
@@ -501,16 +734,21 @@ program
   .description("Replay a session — show actions and screenshots in sequence")
   .argument("<id>", "Session ID (or prefix)")
   .option("--speed <x>", "Replay speed multiplier (default: 2)", "2")
-  .option("--no-preview", "Disable inline screenshot preview")
+  .option("-n, --limit <n>", "Maximum replay steps to print")
+  .option("--cursor <n>", "Zero-based replay step offset", "0")
+  .option("--preview", "Render saved screenshot previews when supported", false)
+  .option("--no-preview", "Keep inline screenshot preview disabled (default)")
   .action(async (id: string, opts: any) => {
-    const sessions = listSessions({ limit: 1000 });
-    const session = sessions.find((s) => s.id.startsWith(id));
+    const session = resolveSessionId(id);
     if (!session) {
       console.log(chalk.red(`Session not found: ${id}`));
       process.exit(1);
     }
 
-    const logs = getActionLogs(session.id);
+    const allLogs = getActionLogs(session.id);
+    const cursor = parseCursor(opts.cursor);
+    const limit = opts.limit ? parseLimit(opts.limit, DEFAULT_DETAIL_LOG_LIMIT) : DEFAULT_DETAIL_LOG_LIMIT;
+    const logs = allLogs.slice(cursor, cursor + limit);
     if (logs.length === 0) {
       console.log(chalk.dim("No action logs for this session."));
       process.exit(0);
@@ -521,7 +759,7 @@ program
 
     console.log(chalk.bold.cyan("computer replay") + ` — ${chalk.dim(session.id.slice(0, 8))}`);
     console.log(chalk.dim(`Task: ${session.task}`));
-    console.log(chalk.dim(`Provider: ${session.provider} | ${logs.length} steps | Speed: ${speed}x\n`));
+    console.log(chalk.dim(`Provider: ${session.provider} | ${logs.length}/${allLogs.length} steps | Speed: ${speed}x\n`));
 
     for (let i = 0; i < logs.length; i++) {
       const log = logs[i];
@@ -540,7 +778,7 @@ program
       }
 
       // Show saved screenshot if available
-      if (opts.preview !== false && log.screenshot_path && supportsInlineImages()) {
+      if (opts.preview === true && log.screenshot_path && supportsInlineImages()) {
         try {
           const { readFileSync } = await import("fs");
           const imgData = readFileSync(log.screenshot_path);
@@ -564,6 +802,9 @@ program
     console.log(
       chalk.dim(`Replay complete. ${logs.length} steps | Cost: ${totalCost} | Duration: ${(session.total_duration_ms / 1000).toFixed(1)}s`)
     );
+    if (allLogs.length > cursor + logs.length) {
+      console.log(chalk.dim(`More steps available: use --cursor ${cursor + logs.length}${opts.limit ? ` --limit ${limit}` : ""}.`));
+    }
   });
 
 // ── headless ─────────────────────────────────────────────────────────
@@ -582,6 +823,202 @@ program
     console.log(status.recommendation);
   });
 
+// ── validate-machine ─────────────────────────────────────────────────
+program
+  .command("validate-machine")
+  .description("Run a packaged local machine readiness smoke")
+  .option("--json", "Print structured JSON output", false)
+  .option("--allow-failures", "Exit 0 even when the local machine is not ready", false)
+  .option("--skip-screenshot", "Skip the local screenshot capture attempt", false)
+  .action(async (opts: { json?: boolean; allowFailures?: boolean; skipScreenshot?: boolean }) => {
+    const { getHeadlessStatus } = await import("../drivers/mac/headless.js");
+    const checks: Array<{
+      id: string;
+      status: "passed" | "failed" | "skipped";
+      summary: string;
+      data?: Record<string, unknown>;
+    }> = [];
+
+    const headless = await getHeadlessStatus();
+    checks.push({
+      id: "local-headless-status",
+      status: "passed",
+      summary: headless.recommendation,
+      data: {
+        display: headless.display,
+        screen_sharing: headless.screenSharing,
+        lume: headless.lume,
+        platform: platform(),
+      },
+    });
+
+    const apps = listAppDrivers().map((driver) => {
+      const availability = driver.available();
+      return {
+        name: driver.name,
+        available: availability.available,
+        reason: availability.reason ?? null,
+      };
+    });
+    checks.push({
+      id: "app-drivers",
+      status: "passed",
+      summary: `${apps.length} app driver(s) inspected.`,
+      data: { apps },
+    });
+
+    const nativeTools = await inspectNativeTools();
+    const missingRequiredTools = nativeTools.filter((tool) => tool.required && !tool.available);
+    checks.push({
+      id: "native-tools",
+      status: missingRequiredTools.length === 0 ? "passed" : "failed",
+      summary: platform() === "darwin"
+        ? missingRequiredTools.length === 0
+          ? "Required macOS desktop tools are available."
+          : `Missing required macOS desktop tool(s): ${missingRequiredTools.map((tool) => tool.name).join(", ")}.`
+        : "macOS desktop tool checks are not required on this platform.",
+      data: { tools: nativeTools },
+    });
+
+    const helpers = inspectMacHelpers();
+    const helperFailures = helpers.filter((helper) => !helper.found || !helper.executable);
+    checks.push({
+      id: "packaged-helpers",
+      status: helperFailures.length === 0 ? "passed" : "failed",
+      summary: helperFailures.length === 0
+        ? "Packaged helper binaries are present and executable."
+        : `Missing or non-executable helper binary/binaries: ${helperFailures.map((helper) => helper.name).join(", ")}.`,
+      data: {
+        helpers: helpers.map((helper) => ({
+          name: helper.name,
+          found: helper.found,
+          executable: helper.executable,
+          location: classifyHelperLocation(helper.path),
+          candidate_count: helper.candidates.length,
+          reason: helper.reason,
+        })),
+      },
+    });
+
+    if (opts.skipScreenshot) {
+      checks.push({
+        id: "local-screenshot",
+        status: "skipped",
+        summary: "Screenshot skipped by --skip-screenshot.",
+      });
+    } else if (platform() !== "darwin") {
+      checks.push({
+        id: "local-screenshot",
+        status: "skipped",
+        summary: "Local native screenshot is macOS-only in this package.",
+      });
+    } else {
+      try {
+        const screenshot = await captureScreenshot();
+        const bytes = Buffer.from(screenshot.base64, "base64");
+        checks.push({
+          id: "local-screenshot",
+          status: "passed",
+          summary: "Local screenshot captured and hashed.",
+          data: {
+            width: screenshot.size.width,
+            height: screenshot.size.height,
+            bytes: bytes.length,
+            sha256: createHash("sha256").update(bytes).digest("hex"),
+          },
+        });
+      } catch (error) {
+        checks.push({
+          id: "local-screenshot",
+          status: "failed",
+          summary: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const blockers = checks
+      .filter((check) => {
+        if (check.id === "local-screenshot") return check.status !== "passed";
+        if (check.id === "native-tools" || check.id === "packaged-helpers") return check.status === "failed";
+        return false;
+      })
+      .map((check) => check.summary);
+    const ready = blockers.length === 0;
+    const report = {
+      schema_version: "open-computer.installed-machine-smoke.v1",
+      generated_at: new Date().toISOString(),
+      package: {
+        name: "@hasna/computer",
+        version: VERSION,
+      },
+      environment: {
+        platform: process.platform,
+        arch: process.arch,
+        bun: Bun.version,
+        node: process.version,
+      },
+      checks,
+      readiness: {
+        ready,
+        blockers,
+      },
+    };
+
+    if (opts.json) {
+      console.log(JSON.stringify(report, null, 2));
+    } else {
+      console.log(chalk.bold("Machine Validation Smoke\n"));
+      for (const check of checks) {
+        const color = check.status === "passed" ? chalk.green : check.status === "failed" ? chalk.red : chalk.yellow;
+        console.log(`  ${color(check.status.padEnd(7))} ${chalk.cyan(check.id)}  ${check.summary}`);
+      }
+      console.log();
+      console.log(ready ? chalk.green("Ready") : chalk.yellow("Not ready"));
+      for (const blocker of blockers) console.log(chalk.dim(`  - ${blocker}`));
+    }
+
+    if (!ready && !opts.allowFailures) process.exit(1);
+  });
+
+async function inspectNativeTools(): Promise<Array<{ name: string; required: boolean; available: boolean; reason: string | null }>> {
+  const requiredOnMac = ["screencapture", "osascript", "open", "cliclick"];
+  if (platform() !== "darwin") {
+    return requiredOnMac.map((name) => ({
+      name,
+      required: false,
+      available: false,
+      reason: "macOS-only desktop control tool",
+    }));
+  }
+
+  const tools = await Promise.all(requiredOnMac.map(async (name) => ({
+    name,
+    required: true,
+    available: await commandExists(name),
+    reason: null,
+  })));
+  return tools.map((tool) => ({
+    ...tool,
+    reason: tool.available ? null : "required command is not on PATH",
+  }));
+}
+
+async function commandExists(name: string): Promise<boolean> {
+  const proc = Bun.spawn(["sh", "-lc", `command -v ${name}`], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return await proc.exited === 0;
+}
+
+function classifyHelperLocation(path: string | null): string | null {
+  if (!path) return null;
+  if (path.includes("/node_modules/")) return "package";
+  if (path.includes("/.hasna/computer/helpers/")) return "user";
+  if (path.includes("/helpers/")) return "workspace";
+  return "unknown";
+}
+
 // ── record ───────────────────────────────────────────────────────────
 program
   .command("record")
@@ -589,20 +1026,15 @@ program
   .option("-d, --duration <seconds>", "Max recording duration in seconds", "60")
   .option("-o, --output <file>", "Save recording to JSON file")
   .action(async (opts: any) => {
-    const { join, dirname } = await import("path");
-    const { fileURLToPath } = await import("url");
-    const { existsSync, writeFileSync } = await import("fs");
+    const { join } = await import("path");
+    const { writeFileSync } = await import("fs");
 
-    // Find record helper binary
-    const __dirname = dirname(fileURLToPath(import.meta.url));
-    const candidates = [
-      join(__dirname, "..", "..", "helpers", "record"),
-      join(__dirname, "..", "helpers", "record"),
-      join(process.env.HOME ?? "~", ".hasna", "computer", "helpers", "record"),
-    ];
-    const helperPath = candidates.find((c) => existsSync(c));
-    if (!helperPath) {
-      console.log(chalk.red("Record helper not found. Run: swiftc helpers/record.swift -o helpers/record -framework CoreGraphics"));
+    let helperPath: string;
+    try {
+      helperPath = resolveMacHelper("record");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.log(chalk.red(message));
       process.exit(1);
     }
 
@@ -656,6 +1088,15 @@ registerEventsCommands(program, { source: "computer" });
 
 program.parse();
 
+function resolveSessionArg(id: string) {
+  const session = resolveSessionId(id);
+  if (!session) {
+    console.log(chalk.red(`Session not found: ${id}`));
+    process.exit(1);
+  }
+  return session;
+}
+
 function generateZshCompletions(): string {
   return `#compdef computer
 # Zsh completions for @hasna/computer
@@ -671,6 +1112,9 @@ _computer() {
     'sessions:List sessions'
     'session:Show session details'
     'delete:Delete a session'
+    'pause:Pause a running session'
+    'resume:Resume a paused session'
+    'cancel:Cancel a session'
     'stats:Show usage statistics'
     'watch:Live-stream agent activity'
     'search:Search sessions'
@@ -693,6 +1137,8 @@ _computer() {
           _arguments \\
             '-p[AI provider]:provider:(anthropic openai)' \\
             '-m[Model to use]:model:' \\
+            '--fallback-provider[Fallback AI provider]:provider:(anthropic openai none)' \\
+            '--fallback-model[Fallback model to use]:model:' \\
             '-s[Max steps]:steps:' \\
             '--save-screenshots[Save screenshots]' \\
             '--dry-run[Plan without executing]' \\
@@ -708,14 +1154,31 @@ _computer() {
             '*--run[Command per pane]:command:' \\
             '--all[Same command in every pane]' \\
             '--dir[Working directory]:dir:_files -/' \\
+            '--approve-terminal-command[Approve terminal command execution]' \\
             '--max[Maximize window]' \\
             '1:app:(ghostty)'
           ;;
         sessions)
           _arguments \\
             '-n[Limit]:limit:' \\
-            '--status[Filter by status]:status:(running completed failed cancelled)' \\
+            '--status[Filter by status]:status:(${SESSION_STATUS_COMPLETIONS})' \\
             '--tag[Filter by tag]:tag:'
+          ;;
+        pause|cancel)
+          _arguments \\
+            '--reason[Reason]:reason:' \\
+            '1:session id:'
+          ;;
+        resume)
+          _arguments \\
+            '-p[AI provider]:provider:(anthropic openai)' \\
+            '-m[Model to use]:model:' \\
+            '-s[Max total steps]:steps:' \\
+            '--save-screenshots[Save screenshots]' \\
+            '--dry-run[Plan without executing]' \\
+            '--max-width[Max screenshot width]:width:' \\
+            '--display[Display number]:display:' \\
+            '1:session id:'
           ;;
         config)
           local -a config_cmds
@@ -742,7 +1205,7 @@ _computer_completions() {
   COMPREPLY=()
   cur="\${COMP_WORDS[COMP_CWORD]}"
   prev="\${COMP_WORDS[COMP_CWORD-1]}"
-  commands="run open apps screenshot sessions session delete stats watch search config completions storage"
+  commands="run open apps screenshot sessions session delete pause resume cancel stats watch search config completions storage"
 
   if [ "$COMP_CWORD" -eq 1 ]; then
     COMPREPLY=( $(compgen -W "$commands" -- "$cur") )
@@ -751,13 +1214,19 @@ _computer_completions() {
 
   case "\${COMP_WORDS[1]}" in
     run)
-      COMPREPLY=( $(compgen -W "-p --provider -m --model -s --max-steps --save-screenshots --dry-run --tag --max-width --no-preview" -- "$cur") )
+      COMPREPLY=( $(compgen -W "-p --provider -m --model --fallback-provider --fallback-model -s --max-steps --save-screenshots --dry-run --tag --max-width --no-preview" -- "$cur") )
       ;;
     open)
-      COMPREPLY=( $(compgen -W "ghostty --grid --tabs --run --all --dir --max" -- "$cur") )
+      COMPREPLY=( $(compgen -W "ghostty --grid --tabs --run --all --dir --approve-terminal-command --max" -- "$cur") )
       ;;
     sessions)
       COMPREPLY=( $(compgen -W "-n --limit --status --tag" -- "$cur") )
+      ;;
+    pause|cancel)
+      COMPREPLY=( $(compgen -W "--reason" -- "$cur") )
+      ;;
+    resume)
+      COMPREPLY=( $(compgen -W "-p --provider -m --model -s --max-steps --save-screenshots --dry-run --max-width --display" -- "$cur") )
       ;;
     config)
       COMPREPLY=( $(compgen -W "show get set path edit reset" -- "$cur") )
@@ -768,11 +1237,31 @@ _computer_completions() {
     --provider|-p)
       COMPREPLY=( $(compgen -W "anthropic openai" -- "$cur") )
       ;;
+    --fallback-provider)
+      COMPREPLY=( $(compgen -W "anthropic openai none" -- "$cur") )
+      ;;
     --status)
-      COMPREPLY=( $(compgen -W "running completed failed cancelled" -- "$cur") )
+      COMPREPLY=( $(compgen -W "${SESSION_STATUS_COMPLETIONS}" -- "$cur") )
       ;;
   esac
 }
 
 complete -F _computer_completions computer`;
+}
+
+function colorSessionStatus(status: SessionStatus): typeof chalk.green {
+  switch (status) {
+    case "completed":
+      return chalk.green;
+    case "failed":
+    case "cancelled":
+    case "max_steps_exceeded":
+      return chalk.red;
+    case "running":
+    case "waiting_on_approval":
+    case "cancelling":
+      return chalk.yellow;
+    default:
+      return chalk.dim;
+  }
 }

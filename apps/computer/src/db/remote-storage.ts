@@ -11,17 +11,30 @@ function normalizeParams(params: unknown[]): unknown[] {
   return flat.map((value) => value === undefined ? null : value);
 }
 
-function sslConfigFor(connectionString: string): { rejectUnauthorized: boolean } | undefined {
-  return connectionString.includes("sslmode=require") || connectionString.includes("ssl=true")
-    ? { rejectUnauthorized: false }
-    : undefined;
+export interface PgAdapterOptions {
+  allowInsecureTls?: boolean;
+}
+
+export function sslConfigFor(
+  connectionString: string,
+  options: PgAdapterOptions = {}
+): { rejectUnauthorized: boolean } | undefined {
+  const url = new URL(connectionString);
+  const sslMode = url.searchParams.get("sslmode")?.toLowerCase();
+  const ssl = url.searchParams.get("ssl")?.toLowerCase();
+
+  if (sslMode === "disable" || ssl === "false") return undefined;
+  if (sslMode === "require" || sslMode === "verify-full" || sslMode === "verify-ca" || ssl === "true") {
+    return { rejectUnauthorized: options.allowInsecureTls === true ? false : true };
+  }
+  return undefined;
 }
 
 export class PgAdapterAsync {
   private readonly pool: Pool;
 
-  constructor(connectionString: string) {
-    this.pool = new pg.Pool({ connectionString, ssl: sslConfigFor(connectionString) });
+  constructor(connectionString: string, options: PgAdapterOptions = {}) {
+    this.pool = new pg.Pool({ connectionString, ssl: sslConfigFor(connectionString, options) });
   }
 
   async run(sql: string, ...params: unknown[]): Promise<{ changes: number }> {

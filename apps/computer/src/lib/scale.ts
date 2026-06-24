@@ -2,6 +2,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { readFile, unlink, writeFile } from "fs/promises";
 import type { Screenshot, ScreenSize } from "../types/index.js";
+import { formatMacProcessFailure, runMacProcess } from "../drivers/mac/process.js";
 
 /**
  * Recommended max resolutions for AI models.
@@ -47,20 +48,16 @@ export async function scaleScreenshot(
     await writeFile(tmpInput, buffer);
 
     // Use sips to resize (built into macOS)
-    const proc = Bun.spawn(
-      [
-        "sips",
-        "--resampleWidth", String(newWidth),
-        tmpInput,
-        "--out", tmpOutput,
-      ],
-      { stdout: "pipe", stderr: "pipe" }
-    );
-    await proc.exited;
+    const command = [
+      "sips",
+      "--resampleWidth", String(newWidth),
+      tmpInput,
+      "--out", tmpOutput,
+    ];
+    const result = await runMacProcess(command);
 
-    if (proc.exitCode !== 0) {
-      const stderr = await new Response(proc.stderr).text();
-      console.warn(`sips resize failed (${stderr}), using original screenshot`);
+    if (result.exitCode !== 0) {
+      console.warn(`sips resize failed (${formatMacProcessFailure(command, result)}), using original screenshot`);
       return screenshot;
     }
 
@@ -72,6 +69,11 @@ export async function scaleScreenshot(
       base64,
       size: { width: newWidth, height: newHeight },
       timestamp: screenshot.timestamp,
+      coordinateSpace: {
+        ...(screenshot.coordinateSpace ?? {}),
+        kind: "scaled_screenshot",
+        size: { width: newWidth, height: newHeight },
+      },
     };
   } finally {
     // Clean up temp files

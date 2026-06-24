@@ -1,13 +1,17 @@
 import { tmpdir } from "os";
 import { join } from "path";
 import { readFile, unlink } from "fs/promises";
-import type { Screenshot, ScreenSize } from "../../types/index.js";
+import type { DriverExecutionContext, Screenshot, ScreenSize } from "../../types/index.js";
+import { formatMacProcessFailure, runMacProcess } from "./process.js";
 
 /**
  * Capture a screenshot using macOS screencapture.
  * Returns base64 PNG data and screen dimensions.
  */
-export async function captureScreenshot(displayNumber?: number): Promise<Screenshot> {
+export async function captureScreenshot(
+  displayNumber?: number,
+  context: DriverExecutionContext = {},
+): Promise<Screenshot> {
   const timestamp = Date.now();
   const tmpPath = join(tmpdir(), `computer-screenshot-${timestamp}.png`);
 
@@ -17,56 +21,58 @@ export async function captureScreenshot(displayNumber?: number): Promise<Screens
   }
   args.push(tmpPath);
 
-  const proc = Bun.spawn(args, {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  await proc.exited;
-
-  if (proc.exitCode !== 0) {
-    const stderr = await new Response(proc.stderr).text();
-    throw new Error(`screencapture failed: ${stderr}`);
+  const result = await runMacProcess(args, { signal: context.signal });
+  if (result.exitCode !== 0) {
+    await unlink(tmpPath).catch(() => {});
+    throw new Error(formatMacProcessFailure(args, result));
   }
 
-  const data = await readFile(tmpPath);
-  const base64 = data.toString("base64");
+  try {
+    const data = await readFile(tmpPath);
+    const base64 = data.toString("base64");
+    const size = await getScreenSize(context);
 
-  // Clean up temp file
-  await unlink(tmpPath).catch(() => {});
-
-  // Get screen size from the image dimensions
-  const size = await getScreenSize();
-
-  return { base64, size, timestamp };
+    return {
+      base64,
+      size,
+      timestamp,
+      coordinateSpace: {
+        kind: "screenshot",
+        size,
+        origin: { x: 0, y: 0 },
+        displayNumber,
+      },
+    };
+  } finally {
+    await unlink(tmpPath).catch(() => {});
+  }
 }
 
 /**
  * Get the main display screen size using system_profiler.
  */
-export async function getScreenSize(): Promise<ScreenSize> {
-  const proc = Bun.spawn(
-    ["osascript", "-e", 'tell application "Finder" to get bounds of window of desktop'],
-    { stdout: "pipe", stderr: "pipe" }
-  );
-  await proc.exited;
+export async function getScreenSize(context: DriverExecutionContext = {}): Promise<ScreenSize> {
+  const primary = await runMacProcess([
+    "osascript",
+    "-e",
+    'tell application "Finder" to get bounds of window of desktop',
+  ], { signal: context.signal });
 
-  const stdout = await new Response(proc.stdout).text();
   // Returns: "0, 0, 1920, 1080" (or similar)
-  const parts = stdout.trim().split(",").map((s) => parseInt(s.trim(), 10));
+  const parts = primary.stdout.trim().split(",").map((s) => parseInt(s.trim(), 10));
 
-  if (parts.length >= 4 && !isNaN(parts[2]) && !isNaN(parts[3])) {
+  if (primary.exitCode === 0 && parts.length >= 4 && !isNaN(parts[2]) && !isNaN(parts[3])) {
     return { width: parts[2], height: parts[3] };
   }
 
   // Fallback: use screenresolution or defaults
-  const fallback = Bun.spawn(
-    ["osascript", "-e", "tell application \"Finder\" to get {do shell script \"system_profiler SPDisplaysDataType | grep Resolution\"}"],
-    { stdout: "pipe", stderr: "pipe" }
-  );
-  await fallback.exited;
-  const fallbackOut = await new Response(fallback.stdout).text();
+  const fallback = await runMacProcess([
+    "osascript",
+    "-e",
+    "tell application \"Finder\" to get {do shell script \"system_profiler SPDisplaysDataType | grep Resolution\"}",
+  ], { signal: context.signal });
 
-  const match = fallbackOut.match(/(\d+)\s*x\s*(\d+)/);
+  const match = fallback.stdout.match(/(\d+)\s*x\s*(\d+)/);
   if (match) {
     return { width: parseInt(match[1]), height: parseInt(match[2]) };
   }

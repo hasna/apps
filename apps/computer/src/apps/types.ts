@@ -25,6 +25,36 @@ export interface AppOpenSpec {
   dir?: string;
   /** Maximize the new window (not native fullscreen). */
   max?: boolean;
+  /** Internal capability approval context for terminal command execution. */
+  terminalApproval?: TerminalCapabilityApproval;
+}
+
+export interface TerminalCapabilityApproval {
+  approved?: boolean;
+  workspaceRoots?: string[];
+  audit?: boolean;
+  actor?: string;
+  transport?: string;
+  metadata?: Record<string, unknown>;
+  signal?: AbortSignal;
+}
+
+export interface TerminalTranscriptPaneSummary {
+  paneIndex: number;
+  tabIndex: number;
+  row: number;
+  col: number;
+  commandHash: string;
+  logPath: string;
+  statusPath: string;
+}
+
+export interface TerminalTranscriptSummary {
+  id: string;
+  directory: string;
+  manifestPath: string;
+  commandCount: number;
+  panes: TerminalTranscriptPaneSummary[];
 }
 
 /** Whether a driver can run on this machine, and why not if it can't. */
@@ -42,6 +72,8 @@ export interface AppOpenResult {
   panes?: number;
   /** Tabs created (when applicable). */
   tabs?: number;
+  /** Operator-local transcript metadata when approved terminal commands run. */
+  transcript?: TerminalTranscriptSummary;
 }
 
 /** A deterministic driver for one desktop application. */

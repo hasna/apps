@@ -17,6 +17,8 @@ describe("config", () => {
     expect(DEFAULT_CONFIG.screenshotMaxWidth).toBe(1280);
     expect(DEFAULT_CONFIG.port).toBe(19450);
     expect(DEFAULT_CONFIG.saveScreenshots).toBe(false);
+    expect(DEFAULT_CONFIG.providerFallback.enabled).toBe(false);
+    expect(DEFAULT_CONFIG.providerFallback.fallbackOn).toContain("rate_limit");
   });
 
   test("DEFAULT_CONFIG has safety defaults", () => {

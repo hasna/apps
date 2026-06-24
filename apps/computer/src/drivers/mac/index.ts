@@ -1,6 +1,7 @@
-import type { ComputerDriver, DriverAction, ActionResult, ScreenSize, Screenshot } from "../../types/index.js";
+import type { ComputerDriver, DriverAction, ActionResult, DriverExecutionContext, ScreenSize, Screenshot } from "../../types/index.js";
 import { captureScreenshot, getScreenSize } from "./screenshot.js";
-import { executeAction } from "./input.js";
+import { executeAction as executeRawAction } from "./input.js";
+import { executeComputerAction } from "../../agent/policy.js";
 
 /**
  * macOS computer driver — uses screencapture + cliclick for native screen control.
@@ -21,8 +22,14 @@ export class MacDriver implements ComputerDriver {
     return captureScreenshot(this.displayNumber);
   }
 
-  async execute(action: DriverAction): Promise<ActionResult> {
-    return executeAction(action);
+  async execute(action: DriverAction, context: DriverExecutionContext = {}): Promise<ActionResult> {
+    return executeComputerAction(action, {
+      executor: executeRawAction,
+      runtimeLease: false,
+      transport: "driver",
+      capability: `computer.${action.type}`,
+      signal: context.signal,
+    });
   }
 
   async dispose(): Promise<void> {

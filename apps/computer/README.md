@@ -10,7 +10,7 @@ An AI model sees your screen (via screenshots) and controls your mouse and keybo
 
 ```bash
 # Tell the AI to do something on your Mac
-computer run "open Safari and search for 'weather in NYC'"
+computer run "open Calculator and add 40 + 2"
 
 # Take a screenshot
 computer screenshot -o screen.png
@@ -27,6 +27,34 @@ computer sessions
 - **REST API** — Integrate from any language
 - **Session logging** — Every action logged in SQLite, fully replayable
 - **SDK** — Import and use programmatically in TypeScript/Bun
+
+## Browser Control Lanes
+
+Use the narrowest lane that can finish the job:
+
+| Lane | Use it for | Boundary |
+|------|------------|----------|
+| Pixel computer control | OS and app workflows, browser chrome, visual-only UI, or cross-app tasks where browser APIs cannot see the target. | Controls the current display with screenshots, mouse, and keyboard. Treat every screenshot and typed value as sensitive. |
+| Browser-native control | Owned sites, local fixtures, staging apps, CI, extraction, screenshots, audits, forms, and repeatable automation in controlled browser sessions. | Runs through `@hasna/browser` engines such as Playwright, CDP, Bun, or Lightpanda. Prefer this over pixel control for page DOM work. |
+| Extension engine | Authorized workflows inside an operator-paired visible Chrome profile that is already logged in. | Runs through `@hasna/browser --engine extension`; it is explicit-only, policy-gated, and never auto-selected. |
+
+`open-computer` keeps `@hasna/browser` optional. Use `computer plan` to dry-run
+browser steps through the policy router, then execute them through the browser
+lane once the adapter or MCP bridge is available:
+
+```bash
+computer plan "Inspect https://example.com and capture a browser snapshot" --json
+browser-serve
+browser extension pair
+browser navigate https://example.com --engine extension
+```
+
+Do not use pixel control, browser-native automation, or the extension engine to
+bypass CAPTCHA, MFA, bot detection, rate limits, paywalls, access controls,
+website terms, or anti-abuse systems. Prefer official APIs. Use browser
+automation only on domains, accounts, and data you are authorized to operate,
+and stop for manual approval when a site presents authentication, CAPTCHA, MFA,
+payment, or account-safety challenges.
 
 ## Install
 
@@ -50,10 +78,24 @@ computer run <task> -s 30        # Limit to 30 steps
 computer open <app> [options]    # Open an app deterministically via its driver
 computer apps                    # List app drivers + availability
 computer screenshot              # Capture current screen
-computer sessions                # List past sessions
-computer session <id>            # Show session details + action log
-computer stats                   # Usage statistics
+computer sessions                # Compact past-session table
+computer sessions --json         # Full machine-readable session records
+computer session <id>            # Compact session detail + capped action log
+computer session <id> --verbose  # Full human-readable action log
+computer session <id> --json     # Full session + action-log records
+computer replay <id>             # Compact text replay, capped by default
+computer replay <id> --preview   # Opt in to saved screenshot previews
+computer search <query>          # Compact session search
+computer stats                   # Compact usage statistics
+computer stats --json            # Full stats object
 ```
+
+CLI list/search/status outputs are compact by default for agent terminals:
+session tasks and reasoning are truncated, row counts default to 10, and output
+includes follow-up hints. Use `--limit` and `--cursor` for pagination, `--verbose`
+for expanded human output, and `--json` for full machine-readable records. `replay`
+prints a capped text replay by default; pass `--preview` only when inline saved
+screenshots are useful.
 
 ## Apps
 
@@ -123,12 +165,12 @@ Add to your Claude Code config:
 Shared Streamable HTTP transport for multi-agent sessions (stdio remains the default):
 
 ```bash
-computer-mcp --http              # http://127.0.0.1:8806/mcp
+computer-mcp --http              # http://127.0.0.1:8883/mcp
 MCP_HTTP=1 computer-mcp          # same via env
 computer-mcp --http --port 9000    # override port
 ```
 
-- Health: `GET http://127.0.0.1:8806/health` → `{"status":"ok","name":"computer"}`
+- Health: `GET http://127.0.0.1:8883/health` → `{"status":"ok","name":"computer"}`
 - MCP endpoint is also mounted on `computer-serve` at `/mcp`.
 
 **Available tools:**
@@ -146,25 +188,41 @@ computer-mcp --http --port 9000    # override port
 - `computer_get_session` — Get session details
 - `computer_stats` — Usage stats
 
+MCP list/status/search/detail tools also use compact summaries by default to
+avoid filling agent context. Pass `format: "json"` for machine-readable records,
+use `limit`/`cursor` for paginated list and search tools, and use
+`verbose: true` on detail/status tools when expanded text is needed without raw
+JSON. List and search JSON responses include page metadata such as `has_more`
+and `next_cursor`; session-detail JSON returns the full session and action log.
+
 ## REST API
 
 ```bash
-computer-serve  # Starts on port 19450
+export COMPUTER_API_KEY="$(openssl rand -hex 24)"
+computer-serve  # Starts on 127.0.0.1:19450
 ```
 
 ```bash
 # Run a task
-curl -X POST localhost:19450/run -d '{"task":"open calculator"}'
+curl -H "Authorization: Bearer $COMPUTER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -X POST localhost:19450/run \
+  -d '{"task":"open calculator"}'
 
 # Take a screenshot
-curl localhost:19450/screenshot
+curl -H "Authorization: Bearer $COMPUTER_API_KEY" localhost:19450/screenshot
 
 # Execute a single action
-curl -X POST localhost:19450/action -d '{"type":"click","point":{"x":500,"y":300}}'
+curl -H "Authorization: Bearer $COMPUTER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -X POST localhost:19450/action \
+  -d '{"type":"click","point":{"x":500,"y":300}}'
 
 # List sessions
-curl localhost:19450/sessions
+curl -H "Authorization: Bearer $COMPUTER_API_KEY" localhost:19450/sessions
 ```
+
+For a throwaway loopback-only development server, set `COMPUTER_ALLOW_UNAUTHENTICATED=1`. Do not combine unauthenticated mode with a non-loopback bind host.
 
 ## SDK
 
@@ -222,7 +280,11 @@ computer storage pull
 computer storage sync
 ```
 
-The MCP server also exposes `storage_status`, `storage_push`, `storage_pull`, and `storage_sync`.
+`computer storage status` is compact by default. Use `computer storage status
+--verbose` to show all local sync history, `--limit`/`--cursor` to page it, and
+`--json` for the full storage object. The MCP server also exposes
+`storage_status`, `storage_push`, `storage_pull`, and `storage_sync`; call
+`storage_status` with `format: "json"` for the full object.
 
 `COMPUTER_DATABASE_URL` is accepted as the non-Hasna fallback database URL.
 

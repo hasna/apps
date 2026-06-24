@@ -4,6 +4,10 @@
 import { existsSync } from "node:fs";
 import type { AppAvailability, AppDriver, AppOpenSpec, AppOpenResult, PaneGrid } from "../types.js";
 import { assignPaneCommands, buildGhosttyScript } from "./applescript.js";
+import { createGhosttyTranscript } from "./transcript.js";
+import { formatMacProcessFailure, runMacProcess } from "../../drivers/mac/process.js";
+import { formatPolicyRejection, guardTerminalCommandPolicy } from "../../agent/policy.js";
+import { getEmergencyStopSignal } from "../../agent/control.js";
 
 const APP_BUNDLE = "/Applications/Ghostty.app";
 
@@ -11,6 +15,14 @@ export interface GhosttyEnvironment {
   platform?: NodeJS.Platform | string;
   hasAppBundle?: boolean;
   hasBinary?: boolean;
+}
+
+export interface OpenGhosttyOptions {
+  environment?: GhosttyEnvironment;
+  runScript?: (script: string, context?: { signal?: AbortSignal }) => Promise<{ ok: boolean; stderr: string }>;
+  transcriptDataDir?: string;
+  transcriptId?: string;
+  now?: Date;
 }
 
 /** Availability check, injectable for tests. */
@@ -28,14 +40,13 @@ export function ghosttyAvailability(env: GhosttyEnvironment = {}): AppAvailabili
 }
 
 /** Run an AppleScript via osascript, capturing stderr for error reporting. */
-async function runOsascript(script: string): Promise<{ ok: boolean; stderr: string }> {
-  const proc = Bun.spawn(["osascript", "-e", script], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const code = await proc.exited;
-  const stderr = await new Response(proc.stderr).text();
-  return { ok: code === 0, stderr: stderr.trim() };
+async function runOsascript(script: string, context: { signal?: AbortSignal } = {}): Promise<{ ok: boolean; stderr: string }> {
+  const command = ["osascript", "-e", script];
+  const result = await runMacProcess(command, { signal: context.signal });
+  return {
+    ok: result.exitCode === 0,
+    stderr: result.exitCode === 0 ? "" : formatMacProcessFailure(command, result),
+  };
 }
 
 /** Normalize an AppOpenSpec into one grid per tab. */
@@ -53,44 +64,84 @@ export const ghosttyDriver: AppDriver = {
   },
 
   async open(spec: AppOpenSpec): Promise<AppOpenResult> {
-    const availability = ghosttyAvailability();
-    if (!availability.available) {
-      return { ok: false, message: availability.reason ?? "Ghostty is not available" };
-    }
-
-    const tabs = resolveTabs(spec);
-    const totalPanes = tabs.reduce((sum, g) => sum + g.rows * g.cols, 0);
-
-    let commands: (string | undefined)[];
-    try {
-      commands = assignPaneCommands(totalPanes, spec.run ?? [], spec.all ?? false);
-    } catch (err) {
-      return { ok: false, message: err instanceof Error ? err.message : String(err) };
-    }
-
-    const script = buildGhosttyScript({
-      tabs,
-      commands,
-      dir: spec.dir,
-      max: spec.max,
-    });
-
-    const result = await runOsascript(script);
-    if (!result.ok) {
-      return {
-        ok: false,
-        message: `osascript failed: ${result.stderr || "unknown error"}`,
-        panes: totalPanes,
-        tabs: tabs.length,
-      };
-    }
-
-    const tabDesc = tabs.map((g) => `${g.rows}x${g.cols}`).join(",");
-    return {
-      ok: true,
-      message: `Opened Ghostty: ${tabs.length} tab${tabs.length === 1 ? "" : "s"} (${tabDesc}), ${totalPanes} pane${totalPanes === 1 ? "" : "s"}`,
-      panes: totalPanes,
-      tabs: tabs.length,
-    };
+    return openGhostty(spec);
   },
 };
+
+export async function openGhostty(
+  spec: AppOpenSpec,
+  options: OpenGhosttyOptions = {},
+): Promise<AppOpenResult> {
+  const terminalDecision = await guardTerminalCommandPolicy(
+    { app: "ghostty", run: spec.run, dir: spec.dir },
+    {
+      approved: spec.terminalApproval?.approved,
+      workspaceRoots: spec.terminalApproval?.workspaceRoots,
+      audit: spec.terminalApproval?.audit,
+      actor: spec.terminalApproval?.actor,
+      transport: spec.terminalApproval?.transport ?? "driver",
+      capability: "computer.terminal",
+      metadata: {
+        app: "ghostty",
+        source: "ghosttyDriver.open",
+        ...spec.terminalApproval?.metadata,
+      },
+    },
+  );
+  if (!terminalDecision.allowed) {
+    return { ok: false, message: formatPolicyRejection(terminalDecision) };
+  }
+
+  const availability = ghosttyAvailability(options.environment);
+  if (!availability.available) {
+    return { ok: false, message: availability.reason ?? "Ghostty is not available" };
+  }
+
+  const tabs = resolveTabs(spec);
+  const totalPanes = tabs.reduce((sum, g) => sum + g.rows * g.cols, 0);
+
+  let commands: (string | undefined)[];
+  try {
+    commands = assignPaneCommands(totalPanes, spec.run ?? [], spec.all ?? false);
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
+
+  const transcript = await createGhosttyTranscript({
+    tabs,
+    commands,
+    dir: spec.dir,
+    dataDir: options.transcriptDataDir,
+    id: options.transcriptId,
+    now: options.now,
+  });
+
+  const script = buildGhosttyScript({
+    tabs,
+    commands,
+    dir: spec.dir,
+    max: spec.max,
+    transcript: transcript?.plan,
+  });
+
+  const signal = spec.terminalApproval?.signal ?? getEmergencyStopSignal();
+  const result = await (options.runScript ?? runOsascript)(script, { signal });
+  if (!result.ok) {
+    return {
+      ok: false,
+      message: `osascript failed: ${result.stderr || "unknown error"}`,
+      panes: totalPanes,
+      tabs: tabs.length,
+      transcript: transcript?.summary,
+    };
+  }
+
+  const tabDesc = tabs.map((g) => `${g.rows}x${g.cols}`).join(",");
+  return {
+    ok: true,
+    message: `Opened Ghostty: ${tabs.length} tab${tabs.length === 1 ? "" : "s"} (${tabDesc}), ${totalPanes} pane${totalPanes === 1 ? "" : "s"}`,
+    panes: totalPanes,
+    tabs: tabs.length,
+    transcript: transcript?.summary,
+  };
+}
