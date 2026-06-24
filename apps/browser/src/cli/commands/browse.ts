@@ -8,6 +8,7 @@ import { getText, getLinks, extract } from "../../lib/extractor.js";
 import { takeScreenshot } from "../../lib/screenshot.js";
 import { crawl } from "../../lib/crawler.js";
 import type { BrowserEngine } from "../../types/index.js";
+import { limited, parseLimit, printHint, printListFooter, truncate } from "../output.js";
 
 export function register(program: Command) {
 
@@ -312,18 +313,37 @@ program
   .option("--format <format>", "Format: text|html|links|table|structured", "text")
   .option("--headed", "Run in headed (visible) mode")
   .option("--json", "Output as JSON")
-  .action(async (url: string, opts: { engine: string; selector?: string; format: string; headed?: boolean; json?: boolean }) => {
+  .option("--limit <n>", "Max links/table rows to print in compact output", "50")
+  .option("--verbose", "Print longer text/html excerpts")
+  .action(async (url: string, opts: { engine: string; selector?: string; format: string; headed?: boolean; json?: boolean; limit?: string; verbose?: boolean }) => {
     const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed });
     await navigate(page, url);
     const result = await extract(page, { format: opts.format as "text" | "links" | "html" | "table" | "structured", selector: opts.selector });
     if (opts.json) {
       console.log(JSON.stringify(result, null, 2));
     } else if (opts.format === "links" && result.links) {
-      result.links.forEach((l) => console.log(l));
+      const { visible } = limited(result.links, parseLimit(opts.limit, 50));
+      visible.forEach((l) => console.log(truncate(l, opts.verbose ? 200 : 120)));
+      printListFooter(result.links.length, visible.length, "Use --limit N, --verbose, or --json for full links.");
     } else if (opts.format === "table" && result.table) {
-      result.table.forEach((row) => console.log(row.join("\t")));
+      const { visible } = limited(result.table, parseLimit(opts.limit, 50));
+      visible.forEach((row) => console.log(row.map((cell) => truncate(cell, opts.verbose ? 80 : 40)).join("\t")));
+      printListFooter(result.table.length, visible.length, "Use --limit N, --verbose, or --json for full table rows.");
+    } else if (typeof result.text === "string") {
+      console.log(truncate(result.text, opts.verbose ? 4000 : 1000));
+      printHint("Use --verbose for a longer excerpt or --json for the full extraction.");
+    } else if (typeof result.html === "string") {
+      console.log(truncate(result.html, opts.verbose ? 4000 : 1000));
+      printHint("Use --verbose for a longer excerpt or --json for full HTML.");
     } else {
-      console.log(JSON.stringify(result, null, 2));
+      const summary = {
+        format: opts.format,
+        table_rows: result.table?.length ?? 0,
+        links: result.links?.length ?? 0,
+        fields: result.structured ? Object.keys(result.structured).length : 0,
+      };
+      console.log(JSON.stringify(summary, null, 2));
+      printHint("Use --json for the full structured extraction.");
     }
     await closeSession(session.id);
   });
@@ -335,11 +355,17 @@ program
   .description("Run JavaScript in a page context")
   .option("--engine <engine>", "Browser engine", "auto")
   .option("--headed", "Run in headed (visible) mode")
-  .action(async (url: string, script: string, opts: { engine: string; headed?: boolean }) => {
+  .option("--json", "Output full result as JSON")
+  .option("--verbose", "Print a longer compact result")
+  .action(async (url: string, script: string, opts: { engine: string; headed?: boolean; json?: boolean; verbose?: boolean }) => {
     const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed });
     await navigate(page, url);
     const result = await page.evaluate(script);
-    console.log(JSON.stringify(result, null, 2));
+    if (opts.json) console.log(JSON.stringify(result, null, 2));
+    else {
+      console.log(truncate(JSON.stringify(result), opts.verbose ? 4000 : 1000));
+      printHint("Use --json for the full eval result.");
+    }
     await closeSession(session.id);
   });
 
@@ -351,22 +377,32 @@ program
   .option("--depth <n>", "Max crawl depth", "2")
   .option("--max-pages <n>", "Max pages to crawl", "50")
   .option("--engine <engine>", "Browser engine", "auto")
-  .action(async (url: string, opts: { depth: string; maxPages: string; engine: string }) => {
-    console.log(chalk.gray(`Crawling: ${url} (depth=${opts.depth}, max=${opts.maxPages})...`));
+  .option("--limit <n>", "Max crawled pages/errors to print in compact output", "20")
+  .option("--json", "Output full crawl result as JSON")
+  .action(async (url: string, opts: { depth: string; maxPages: string; engine: string; limit?: string; json?: boolean }) => {
+    if (!opts.json) console.log(chalk.gray(`Crawling: ${url} (depth=${opts.depth}, max=${opts.maxPages})...`));
     const result = await crawl(url, {
       maxDepth: parseInt(opts.depth),
       maxPages: parseInt(opts.maxPages),
       engine: opts.engine as BrowserEngine,
     });
+    if (opts.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
     console.log(chalk.green(`✓ Crawled ${result.pages.length} pages`));
-    result.pages.forEach((p) => {
+    const pageRows = limited(result.pages, parseLimit(opts.limit));
+    pageRows.visible.forEach((p) => {
       const status = p.status_code ? chalk.cyan(`[${p.status_code}]`) : "";
       const error = p.error ? chalk.red(` ✗ ${p.error}`) : "";
-      console.log(`  ${status} ${p.url}${error}`);
+      console.log(`  ${status} ${truncate(p.url, 120)}${error}`);
     });
+    printListFooter(result.pages.length, pageRows.visible.length, "Use --limit N or --json for the full crawl result.");
     if (result.errors.length > 0) {
       console.log(chalk.red(`\n${result.errors.length} errors:`));
-      result.errors.forEach((e) => console.log(chalk.red(`  - ${e}`)));
+      const errors = limited(result.errors, parseLimit(opts.limit));
+      errors.visible.forEach((e) => console.log(chalk.red(`  - ${truncate(e, 120)}`)));
+      if (errors.hidden > 0) printHint(`Use --limit N or --json to inspect ${errors.hidden} more errors.`);
     }
   });
 

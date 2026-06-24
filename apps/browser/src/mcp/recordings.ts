@@ -1,6 +1,7 @@
 // ─── Recording, workflow, crawl, and auth flow tools ─────────────────────────
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { compactList, truncateText } from "./compact.js";
 import {
   registerTool,
   z,
@@ -83,11 +84,27 @@ registerTool(server,
 
 registerTool(server,
   "browser_recordings_list",
-  "List all recordings",
-  { project_id: z.string().optional() },
-  async ({ project_id }) => {
+  "List recordings. Compact by default; set verbose=true for full recording records.",
+  { project_id: z.string().optional(), limit: z.number().optional().default(25), offset: z.number().optional().default(0), verbose: z.boolean().optional().default(false) },
+  async ({ project_id, limit, offset, verbose }) => {
     try {
-      return json({ recordings: listRecordings(project_id) });
+      const recordings = listRecordings(project_id);
+      if (verbose) {
+        const page = compactList(recordings, limit, (recording) => recording, { offset });
+        return json({ recordings: page.items, count: page.count, total: page.total, limit: page.limit, truncated: page.truncated, next_offset: page.next_offset });
+      }
+      const compact = compactList(recordings, limit, (recording) => ({
+        id: recording.id,
+        name: recording.name,
+        project_id: recording.project_id,
+        start_url: truncateText(recording.start_url, 140) || undefined,
+        steps: recording.steps.length,
+        created_at: recording.created_at,
+      }), {
+        offset,
+        hint: "Set verbose=true for full steps, or use browser_record_export for a specific recording.",
+      });
+      return json({ recordings: compact.items, count: compact.count, total: compact.total, limit: compact.limit, truncated: compact.truncated, next_offset: compact.next_offset, hint: compact.hint });
     } catch (e) { return err(e); }
   }
 );
@@ -108,13 +125,27 @@ registerTool(server,
 
 registerTool(server,
   "browser_workflow_list",
-  "List all saved workflows",
-  {},
-  async () => {
+  "List saved workflows. Compact by default; set verbose=true for full workflow records.",
+  { limit: z.number().optional().default(25), offset: z.number().optional().default(0), verbose: z.boolean().optional().default(false) },
+  async ({ limit, offset, verbose }) => {
     try {
       const { listWorkflows } = await import("../lib/workflows.js");
       const workflows = listWorkflows();
-      return json({ workflows: workflows.map(w => ({ ...w, steps: `${w.steps.length} steps` })), count: workflows.length });
+      if (verbose) {
+        const page = compactList(workflows, limit, (workflow: any) => workflow, { offset });
+        return json({ workflows: page.items, count: page.count, total: page.total, limit: page.limit, truncated: page.truncated, next_offset: page.next_offset });
+      }
+      const compact = compactList(workflows, limit, (workflow: any) => ({
+        name: workflow.name,
+        description: truncateText(workflow.description, 140) || undefined,
+        steps: workflow.steps?.length ?? 0,
+        created_at: workflow.created_at,
+        updated_at: workflow.updated_at,
+      }), {
+        offset,
+        hint: "Set verbose=true for full workflow step records.",
+      });
+      return json({ workflows: compact.items, count: compact.count, total: compact.total, limit: compact.limit, truncated: compact.truncated, next_offset: compact.next_offset, hint: compact.hint });
     } catch (e) { return err(e); }
   }
 );
@@ -235,12 +266,27 @@ registerTool(server,
 
 registerTool(server,
   "browser_auth_list",
-  "List all saved auth flows",
-  {},
-  async () => {
+  "List saved auth flows. Compact by default; set verbose=true for full records.",
+  { limit: z.number().optional().default(25), offset: z.number().optional().default(0), verbose: z.boolean().optional().default(false) },
+  async ({ limit, offset, verbose }) => {
     try {
       const { listAuthFlows } = await import("../lib/auth-flow.js");
-      return json({ flows: listAuthFlows() });
+      const flows = listAuthFlows();
+      if (verbose) {
+        const page = compactList(flows, limit, (flow: any) => flow, { offset });
+        return json({ flows: page.items, count: page.count, total: page.total, limit: page.limit, truncated: page.truncated, next_offset: page.next_offset });
+      }
+      const compact = compactList(flows, limit, (flow: any) => ({
+        name: flow.name,
+        domain: flow.domain,
+        recording_id: flow.recording_id,
+        created_at: flow.created_at,
+        updated_at: flow.updated_at,
+      }), {
+        offset,
+        hint: "Set verbose=true for full auth-flow metadata.",
+      });
+      return json({ flows: compact.items, count: compact.count, total: compact.total, limit: compact.limit, truncated: compact.truncated, next_offset: compact.next_offset, hint: compact.hint });
     } catch (e) { return err(e); }
   }
 );

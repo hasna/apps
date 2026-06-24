@@ -1,6 +1,7 @@
 // ─── Script and dataset tools ────────────────────────────────────────────────
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { clampLimit, compactList, truncateText } from "./compact.js";
 import {
   registerTool,
   z,
@@ -57,20 +58,32 @@ registerTool(server,
 registerTool(server,
   "browser_script_status",
   "Check progress of a running script. Shows current step, step-by-step log with durations, and final result when complete.",
-  { run_id: z.string() },
-  async ({ run_id }) => {
+  { run_id: z.string(), verbose: z.boolean().optional().default(false), limit: z.number().optional().default(25) },
+  async ({ run_id, verbose, limit }) => {
     try {
+      const rowLimit = clampLimit(limit, 25);
       const { getRun } = await import("../db/scripts.js");
       const run = getRun(run_id);
       if (!run) return err(new Error(`Run '${run_id}' not found`));
+      const stepsLog = verbose ? run.steps_log : run.steps_log.slice(0, rowLimit).map((step) => ({
+        step: step.step,
+        type: step.type,
+        status: step.status,
+        duration_ms: step.duration_ms,
+        description: truncateText(step.description, 120),
+        error: truncateText(step.error, 160) || undefined,
+      }));
       return json({
         status: run.status,
         progress: `${run.current_step}/${run.total_steps}`,
-        current_step: run.current_description,
-        steps_log: run.steps_log,
-        errors: run.errors.length > 0 ? run.errors : undefined,
+        current_step: truncateText(run.current_description, verbose ? 500 : 160),
+        steps_log: stepsLog,
+        steps_log_truncated: !verbose && run.steps_log.length > rowLimit,
+        limit: rowLimit,
+        errors: run.errors.length > 0 ? run.errors.map((error) => truncateText(error, verbose ? 1000 : 200)) : undefined,
         duration_ms: run.duration_ms,
         completed: run.completed_at,
+        hint: !verbose && run.steps_log.length > rowLimit ? "Set verbose=true or a larger limit for the full step log." : undefined,
       });
     } catch (e) { return err(e); }
   }
@@ -78,14 +91,28 @@ registerTool(server,
 
 registerTool(server,
   "browser_script_list",
-  "List all saved scripts",
-  {},
-  async () => {
+  "List saved scripts. Compact by default; set verbose=true for longer descriptions.",
+  { limit: z.number().optional().default(25), offset: z.number().optional().default(0), verbose: z.boolean().optional().default(false) },
+  async ({ limit, offset, verbose }) => {
     try {
       const { listScripts, migrateJsonScripts } = await import("../db/scripts.js");
       migrateJsonScripts();
       const scripts = listScripts();
-      return json({ scripts: scripts.map(s => ({ name: s.name, domain: s.domain, description: s.description, run_count: s.run_count, last_run: s.last_run })), count: scripts.length });
+      if (verbose) {
+        const page = compactList(scripts, limit, (script) => script, { offset });
+        return json({ scripts: page.items, count: page.count, total: page.total, limit: page.limit, truncated: page.truncated, next_offset: page.next_offset });
+      }
+      const compact = compactList(scripts, limit, (script) => ({
+        name: script.name,
+        domain: script.domain,
+        description: truncateText(script.description, 120),
+        run_count: script.run_count,
+        last_run: script.last_run,
+      }), {
+        offset,
+        hint: "Call browser_script_run by name, or use CLI `browser script show <name>` for step details.",
+      });
+      return json({ scripts: compact.items, count: compact.count, total: compact.total, limit: compact.limit, truncated: compact.truncated, next_offset: compact.next_offset, hint: compact.hint });
     } catch (e) { return err(e); }
   }
 );
@@ -159,12 +186,27 @@ registerTool(server,
 
 registerTool(server,
   "browser_dataset_list",
-  "List all saved datasets",
-  {},
-  async () => {
+  "List saved datasets. Compact by default; export one dataset for full rows.",
+  { limit: z.number().optional().default(25), offset: z.number().optional().default(0), verbose: z.boolean().optional().default(false) },
+  async ({ limit, offset, verbose }) => {
     try {
       const { listDatasets } = await import("../lib/datasets.js");
-      return json({ datasets: listDatasets() });
+      const datasets = listDatasets();
+      if (verbose) {
+        const page = compactList(datasets, limit, (dataset: any) => dataset, { offset });
+        return json({ datasets: page.items, count: page.count, total: page.total, limit: page.limit, truncated: page.truncated, next_offset: page.next_offset });
+      }
+      const compact = compactList(datasets, limit, (dataset: any) => ({
+        id: dataset.id,
+        name: dataset.name,
+        row_count: dataset.row_count,
+        source_url: truncateText(dataset.source_url, 140) || undefined,
+        created_at: dataset.created_at,
+      }), {
+        offset,
+        hint: "Use verbose=true for metadata or browser_dataset_export for full dataset rows.",
+      });
+      return json({ datasets: compact.items, count: compact.count, total: compact.total, limit: compact.limit, truncated: compact.truncated, next_offset: compact.next_offset, hint: compact.hint });
     } catch (e) { return err(e); }
   }
 );

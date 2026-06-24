@@ -80,6 +80,17 @@ describe("video recordings CRUD", () => {
     expect(listVideoRecordings({ sessionId: s1.id })).toHaveLength(1);
   });
 
+  it("limits and offsets recording lists", () => {
+    createVideoRecording({ name: "oldest", status: "completed", width: 1280, height: 720, started_at: "2026-01-01T00:00:00.000Z" });
+    createVideoRecording({ name: "middle", status: "completed", width: 1280, height: 720, started_at: "2026-01-02T00:00:00.000Z" });
+    createVideoRecording({ name: "newest", status: "completed", width: 1280, height: 720, started_at: "2026-01-03T00:00:00.000Z" });
+
+    const page = listVideoRecordings({ limit: 1, offset: 1 });
+
+    expect(page).toHaveLength(1);
+    expect(page[0]?.name).toBe("middle");
+  });
+
   it("deletes a recording", () => {
     const recording = createVideoRecording({ name: "delete-me", status: "recording", width: 1280, height: 720 });
     deleteVideoRecording(recording.id);

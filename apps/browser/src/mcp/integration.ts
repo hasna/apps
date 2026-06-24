@@ -1,6 +1,7 @@
 // ─── Integration, watch, and advanced meta tools ─────────────────────────────
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { clampLimit, compactList, truncateText } from "./compact.js";
 import {
   registerTool,
   z,
@@ -47,11 +48,24 @@ registerTool(server,
 registerTool(server,
   "browser_watch_get_changes",
   "Get DOM changes captured by a watch",
-  { watch_id: z.string() },
-  async ({ watch_id }) => {
+  { watch_id: z.string(), limit: z.number().optional().default(50), offset: z.number().optional().default(0), verbose: z.boolean().optional().default(false) },
+  async ({ watch_id, limit, offset, verbose }) => {
     try {
       const changes = getWatchChanges(watch_id);
-      return json({ changes, count: changes.length });
+      if (verbose) {
+        const page = compactList(changes, limit, (change: any) => change, { offset });
+        return json({ changes: page.items, count: page.count, total: page.total, limit: page.limit, truncated: page.truncated, next_offset: page.next_offset });
+      }
+      const compact = compactList(changes, limit, (change: any) => ({
+        type: change.type,
+        selector: truncateText(change.selector, 120) || undefined,
+        text: truncateText(change.text, 160) || undefined,
+        timestamp: change.timestamp,
+      }), {
+        offset,
+        hint: "Set verbose=true for full DOM change records.",
+      });
+      return json({ changes: compact.items, count: compact.count, total: compact.total, limit: compact.limit, truncated: compact.truncated, next_offset: compact.next_offset, hint: compact.hint });
     } catch (e) { return err(e); }
   }
 );
@@ -163,13 +177,28 @@ registerTool(server,
 
 registerTool(server,
   "browser_task_list",
-  "List pending browser tasks from open-todos.",
-  { status: z.enum(["pending", "in_progress"]).optional() },
-  async ({ status }) => {
+  "List pending browser tasks from open-todos. Compact by default; set verbose=true for full task records.",
+  { status: z.enum(["pending", "in_progress"]).optional(), limit: z.number().optional().default(25), offset: z.number().optional().default(0), verbose: z.boolean().optional().default(false) },
+  async ({ status, limit, offset, verbose }) => {
     try {
       const { getBrowserTasks } = await import("../lib/task-queue.js");
       const tasks = await getBrowserTasks(status);
-      return json({ tasks, count: tasks.length });
+      if (verbose) {
+        const page = compactList(tasks, limit, (task: any) => task, { offset });
+        return json({ tasks: page.items, count: page.count, total: page.total, limit: page.limit, truncated: page.truncated, next_offset: page.next_offset });
+      }
+      const compact = compactList(tasks, limit, (task: any) => ({
+        id: task.id,
+        title: truncateText(task.title, 120),
+        status: task.status,
+        priority: task.priority,
+        url: truncateText(task.url, 140) || undefined,
+        created_at: task.created_at,
+      }), {
+        offset,
+        hint: "Set verbose=true for full task records.",
+      });
+      return json({ tasks: compact.items, count: compact.count, total: compact.total, limit: compact.limit, truncated: compact.truncated, next_offset: compact.next_offset, hint: compact.hint });
     } catch (e) { return err(e); }
   }
 );
@@ -418,8 +447,29 @@ registerTool(server,
   }
 );
 
-registerTool(server, "browser_cron_list", "List scheduled browser cron jobs.", {},
-  async () => { try { const { listCronJobs } = await import("../lib/cron-manager.js"); return json({ jobs: listCronJobs() }); } catch (e) { return err(e); } }
+registerTool(server, "browser_cron_list", "List scheduled browser cron jobs. Compact by default; set verbose=true for full records.",
+  { limit: z.number().optional().default(25), offset: z.number().optional().default(0), verbose: z.boolean().optional().default(false) },
+  async ({ limit, offset, verbose }) => {
+    try {
+      const { listCronJobs } = await import("../lib/cron-manager.js");
+      const jobs = listCronJobs();
+      if (verbose) {
+        const page = compactList(jobs, limit, (job: any) => job, { offset });
+        return json({ jobs: page.items, count: page.count, total: page.total, limit: page.limit, truncated: page.truncated, next_offset: page.next_offset });
+      }
+      const compact = compactList(jobs, limit, (job: any) => ({
+        id: job.id,
+        name: truncateText(job.name, 120) || undefined,
+        schedule: job.schedule,
+        enabled: job.enabled,
+        next_run_at: job.next_run_at,
+      }), {
+        offset,
+        hint: "Set verbose=true for full cron job records.",
+      });
+      return json({ jobs: compact.items, count: compact.count, total: compact.total, limit: compact.limit, truncated: compact.truncated, next_offset: compact.next_offset, hint: compact.hint });
+    } catch (e) { return err(e); }
+  }
 );
 
 registerTool(server, "browser_cron_delete", "Delete a cron job.", { id: z.string() },
@@ -446,12 +496,54 @@ registerTool(server,
   }
 );
 
-registerTool(server, "browser_watch_list", "List URL watchers.", {},
-  async () => { try { const { listWatchJobs } = await import("../lib/url-watcher.js"); return json({ watches: listWatchJobs() }); } catch (e) { return err(e); } }
+registerTool(server, "browser_watch_list", "List URL watchers. Compact by default; set verbose=true for full records.",
+  { limit: z.number().optional().default(25), offset: z.number().optional().default(0), verbose: z.boolean().optional().default(false) },
+  async ({ limit, offset, verbose }) => {
+    try {
+      const { listWatchJobs } = await import("../lib/url-watcher.js");
+      const watches = listWatchJobs();
+      if (verbose) {
+        const page = compactList(watches, limit, (watch: any) => watch, { offset });
+        return json({ watches: page.items, count: page.count, total: page.total, limit: page.limit, truncated: page.truncated, next_offset: page.next_offset });
+      }
+      const compact = compactList(watches, limit, (watch: any) => ({
+        id: watch.id,
+        name: truncateText(watch.name, 120) || undefined,
+        url: truncateText(watch.url, 140),
+        schedule: watch.schedule,
+        selector: truncateText(watch.selector, 120) || undefined,
+        enabled: watch.enabled,
+      }), {
+        offset,
+        hint: "Set verbose=true for full watch records.",
+      });
+      return json({ watches: compact.items, count: compact.count, total: compact.total, limit: compact.limit, truncated: compact.truncated, next_offset: compact.next_offset, hint: compact.hint });
+    } catch (e) { return err(e); }
+  }
 );
 
-registerTool(server, "browser_watch_events", "Get change events from a watcher.", { watch_id: z.string(), limit: z.number().optional().default(20) },
-  async ({ watch_id, limit }) => { try { const { getWatchEvents } = await import("../lib/url-watcher.js"); return json({ events: getWatchEvents(watch_id, limit) }); } catch (e) { return err(e); } }
+registerTool(server, "browser_watch_events", "Get change events from a watcher. Compact by default; set verbose=true for full event records.", { watch_id: z.string(), limit: z.number().optional().default(20), verbose: z.boolean().optional().default(false) },
+  async ({ watch_id, limit, verbose }) => {
+    try {
+      const rowLimit = clampLimit(limit, 20);
+      const { getWatchEvents } = await import("../lib/url-watcher.js");
+      const events = getWatchEvents(watch_id, rowLimit);
+      if (verbose) return json({ events, count: events.length, limit: rowLimit });
+      return json({
+        events: events.map((event: any) => ({
+          id: event.id,
+          changed: event.changed,
+          changed_percent: event.changed_percent,
+          screenshot_path: event.screenshot_path,
+          created_at: event.created_at,
+          summary: truncateText(event.summary, 180) || undefined,
+        })),
+        count: events.length,
+        limit: rowLimit,
+        hint: "Set verbose=true for full watch event records.",
+      });
+    } catch (e) { return err(e); }
+  }
 );
 
 registerTool(server, "browser_watch_delete", "Delete a URL watcher.", { watch_id: z.string() },

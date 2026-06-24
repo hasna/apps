@@ -199,17 +199,72 @@ describe("CLI — session commands (DB-only)", () => {
     expect(code).toBe(0);
     expect(stdout).toContain("No sessions");
   });
+
+  it("session list is compact by default and preserves full JSON output", async () => {
+    const { createSession } = await import("../db/sessions.js");
+    const longUrl = `https://example.com/${"a".repeat(140)}`;
+    createSession({ engine: "playwright", startUrl: `${longUrl}/1` });
+    createSession({ engine: "playwright", startUrl: `${longUrl}/2` });
+    createSession({ engine: "playwright", startUrl: `${longUrl}/3` });
+
+    const compact = await runCli("session", "list", "--limit", "2");
+    expect(compact.code).toBe(0);
+    expect(compact.stdout).toContain("2/3 shown");
+    expect(compact.stdout).toContain("browser session show");
+    expect(compact.stdout).not.toContain(`${longUrl}/1`);
+
+    const full = await runCli("session", "list", "--json");
+    expect(full.code).toBe(0);
+    const parsed = JSON.parse(full.stdout);
+    expect(parsed).toHaveLength(3);
+    expect(parsed.some((session: { start_url?: string }) => session.start_url === `${longUrl}/1`)).toBe(true);
+  });
+});
+
+describe("CLI — script commands", () => {
+  beforeEach(setupDb);
+  afterEach(teardownDb);
+
+  it("script list hides long descriptions unless verbose while JSON stays full fidelity", async () => {
+    const { createScript } = await import("../db/scripts.js");
+    const description = `Detailed workflow description ${"very ".repeat(80)}long tail`;
+    createScript({
+      name: "noisy-script",
+      domain: "example.com",
+      description,
+      steps: [{ type: "browser", config: { url: "https://example.com" }, description: "Navigate" }],
+    });
+
+    const compact = await runCli("script", "list");
+    expect(compact.code).toBe(0);
+    expect(compact.stdout).toContain("noisy-script");
+    expect(compact.stdout).not.toContain("long tail");
+
+    const verbose = await runCli("script", "list", "--verbose");
+    expect(verbose.code).toBe(0);
+    expect(verbose.stdout).toContain("Detailed workflow description");
+    expect(verbose.stdout).not.toContain(description);
+
+    const full = await runCli("script", "list", "--json");
+    expect(full.code).toBe(0);
+    const parsed = JSON.parse(full.stdout);
+    expect(parsed[0].description).toBe(description);
+  });
 });
 
 describe("CLI — agent commands", () => {
   beforeEach(setupDb);
   afterEach(teardownDb);
 
-  it("agent register creates agent and shows JSON", async () => {
+  it("agent register is compact by default and supports JSON", async () => {
     const { stdout, code } = await runCli("agent", "register", "testbot", "--description", "my bot");
     expect(code).toBe(0);
     expect(stdout).toContain("testbot");
-    expect(stdout).toContain("my bot");
+    expect(stdout).not.toContain("{");
+
+    const json = await runCli("agent", "register", "jsonbot", "--description", "json bot", "--json");
+    expect(json.code).toBe(0);
+    expect(JSON.parse(json.stdout).description).toBe("json bot");
   });
 
   it("agent list shows registered agent", async () => {
@@ -229,11 +284,16 @@ describe("CLI — project commands", () => {
   beforeEach(setupDb);
   afterEach(teardownDb);
 
-  it("project create creates project and shows JSON", async () => {
+  it("project create is compact by default and supports JSON", async () => {
     const { stdout, code } = await runCli("project", "create", "myapp", "/tmp/myapp");
     expect(code).toBe(0);
     expect(stdout).toContain("myapp");
     expect(stdout).toContain("/tmp/myapp");
+    expect(stdout).not.toContain("{");
+
+    const json = await runCli("project", "create", "jsonapp", "/tmp/jsonapp", "--json");
+    expect(json.code).toBe(0);
+    expect(JSON.parse(json.stdout).path).toBe("/tmp/jsonapp");
   });
 
   it("project list shows created project", async () => {

@@ -17,6 +17,27 @@ npm install -g @hasna/browser
 browser --help
 ```
 
+CLI output is compact by default so agent terminals do not fill context with
+large records. List and status commands show essential fields, cap row counts,
+truncate long text/URLs, and print a hint for the detail path.
+
+Use gradual disclosure when you need more:
+
+```bash
+browser session list --limit 50 --verbose
+browser session show <id>
+browser script list --verbose
+browser script show <name> --limit 100
+browser gallery get <id> --json
+browser downloads list --json
+```
+
+`--json` is the machine-readable path and returns full records where the command
+previously exposed them. MCP list tools follow the same rule: compact summaries
+by default, `limit`/`offset` for pagination, `verbose=true` for full records in
+the selected page, and explicit payload flags such as `include_base64=true`,
+`include_thumbnail=true`, or `include_har=true` for large binary or HAR data.
+
 ## MCP Server
 
 ```bash

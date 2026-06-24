@@ -4,6 +4,7 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { createSession, closeSession } from "../../lib/session.js";
 import type { BrowserEngine } from "../../types/index.js";
+import { limited, parseLimit, printListFooter, truncate } from "../output.js";
 
 export function register(program: Command) {
 
@@ -37,7 +38,7 @@ scriptCmd
 
     if (!opts.json) {
       console.log(chalk.gray(`Running: ${script.name} (${steps.length} steps)`));
-      if (script.description) console.log(chalk.gray(`  ${script.description}\n`));
+      if (script.description) console.log(chalk.gray(`  ${truncate(script.description, 140)}\n`));
     }
 
     const result = await executeScriptSync(script.id, page, overrides);
@@ -60,7 +61,9 @@ scriptCmd
   .command("list")
   .description("List saved scripts")
   .option("--json", "Output as JSON")
-  .action(async (opts: { json?: boolean }) => {
+  .option("--limit <n>", "Max rows to print in compact output", String(20))
+  .option("--verbose", "Show script descriptions")
+  .action(async (opts: { json?: boolean; limit?: string; verbose?: boolean }) => {
     const { listScripts, migrateJsonScripts } = await import("../../db/scripts.js");
     migrateJsonScripts();
     const scripts = listScripts();
@@ -69,10 +72,14 @@ scriptCmd
     } else if (scripts.length === 0) {
       console.log(chalk.gray("No scripts. Import with: browser script import <file.json>"));
     } else {
-      scripts.forEach(s => {
-        console.log(`${chalk.bold(s.name)} ${chalk.gray(`(${s.domain})`)} — runs: ${s.run_count}`);
-        if (s.description) console.log(chalk.gray(`  ${s.description}`));
+      const { visible } = limited(scripts, parseLimit(opts.limit));
+      visible.forEach(s => {
+        const domain = s.domain ? chalk.gray(` (${truncate(s.domain, 32)})`) : "";
+        const last = s.last_run ? chalk.gray(` last=${s.last_run}`) : "";
+        console.log(`${chalk.bold(truncate(s.name, 40))}${domain} runs=${s.run_count}${last}`);
+        if (opts.verbose && s.description) console.log(chalk.gray(`  ${truncate(s.description, 180)}`));
       });
+      printListFooter(scripts.length, visible.length, "Use --verbose for descriptions, --json for full records, or browser script show <name> for steps.");
     }
   });
 
@@ -104,21 +111,30 @@ scriptCmd
 scriptCmd
   .command("show <name>")
   .description("Show script details")
-  .action(async (name: string) => {
+  .option("--json", "Output full script and steps as JSON")
+  .option("--limit <n>", "Max steps to print in compact output", String(50))
+  .option("--verbose", "Show longer step details")
+  .action(async (name: string, opts: { json?: boolean; limit?: string; verbose?: boolean }) => {
     const { getScriptByName, getSteps, migrateJsonScripts } = await import("../../db/scripts.js");
     migrateJsonScripts();
     const script = getScriptByName(name);
     if (!script) { console.log(chalk.red(`Script '${name}' not found`)); return; }
     const steps = getSteps(script.id);
-    console.log(chalk.bold(`${script.name} (${script.domain})\n`));
-    if (script.description) console.log(chalk.gray(`  ${script.description}\n`));
+    if (opts.json) {
+      console.log(JSON.stringify({ script, steps }, null, 2));
+      return;
+    }
+    console.log(chalk.bold(`${script.name}${script.domain ? ` (${script.domain})` : ""}\n`));
+    if (script.description) console.log(chalk.gray(`  ${truncate(script.description, opts.verbose ? 500 : 180)}\n`));
     console.log(chalk.gray(`  Variables: ${Object.keys(script.variables).join(", ")}`));
     console.log(chalk.gray(`  Runs: ${script.run_count}  Last: ${script.last_run ?? "never"}\n`));
-    steps.forEach((s, i) => {
+    const { visible } = limited(steps, parseLimit(opts.limit, 50));
+    visible.forEach((s, i) => {
       const ai = s.ai_enabled ? chalk.yellow(" [AI]") : "";
-      const detail = (s.config as any).url ?? (s.config as any).selector ?? (s.config as any).connector ?? (s.config as any).prompt?.slice(0, 40) ?? "";
-      console.log(`  ${chalk.cyan(`${i + 1}.`)} [${s.type}]${ai} ${s.description} ${chalk.gray(String(detail).slice(0, 50))}`);
+      const detail = (s.config as any).url ?? (s.config as any).selector ?? (s.config as any).connector ?? (s.config as any).prompt ?? "";
+      console.log(`  ${chalk.cyan(`${i + 1}.`)} [${s.type}]${ai} ${truncate(s.description, opts.verbose ? 140 : 70)} ${chalk.gray(truncate(detail, opts.verbose ? 120 : 56))}`);
     });
+    printListFooter(steps.length, visible.length, "Use --limit N, --verbose, or --json for more step detail.");
   });
 
 scriptCmd
