@@ -8,6 +8,7 @@
 import type { Command } from "commander";
 import { createDomain, getDomainByName, recordDomainPurchase, updateDomain } from "../../db/domains.js";
 import { createHistoryEntry } from "../../db/domain-history.js";
+import { compactHint, pageItemsOrExit } from "../../lib/compact-output.js";
 
 export interface WalletCard {
   id: string;
@@ -77,8 +78,10 @@ export function registerWalletCommand(program: Command): void {
   wallet
     .command("cards")
     .description("List available wallet cards")
+    .option("--limit <n>", "Limit number of displayed cards")
+    .option("--all", "Show all active wallet cards")
     .option("--json", "Output as JSON", false)
-    .action(async (opts) => {
+    .action(async (opts: { limit?: string; all?: boolean; json?: boolean }) => {
       try {
         const cards = await getAvailableCards();
         if (opts.json) {
@@ -88,10 +91,12 @@ export function registerWalletCommand(program: Command): void {
             console.log("No active wallet cards found.");
             return;
           }
+          const page = pageItemsOrExit(cards, { limit: opts.limit, all: opts.all });
           console.log("Available wallet cards:");
-          for (const c of cards) {
+          for (const c of page.items) {
             console.log(`  ${c.brand} •••• ${c.last_four} — ${c.name} (${c.balance} ${c.currency})`);
           }
+          console.log(`\n${compactHint(page, "card(s)", "Use --all for every card or --json for full card fields.", { paging: "limit" })}`);
         }
       } catch (error: unknown) {
         console.error(`Failed to list cards: ${error instanceof Error ? error.message : String(error)}`);

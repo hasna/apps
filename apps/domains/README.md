@@ -172,6 +172,32 @@ DOMAINS_COMMAND_GROUPS=interactive domains interactive
 DOMAINS_COMMAND_GROUPS=interactive domains interactive --status active
 ```
 
+## Compact Output For Agents
+
+List, search, status, history, discovery, and portfolio commands are compact by default. Human output shows essential fields, caps the first page to 20 rows unless a command already has a smaller explicit limit, truncates long notes/record values, and prints a hint for the next detail path.
+
+Use these flags to disclose more when needed:
+
+```bash
+domains domain list --limit 50 --offset 50
+domains domain list --all
+domains domain list --verbose
+domains domain get example.com
+domains domain list --json
+```
+
+`--verbose` adds human-readable detail columns such as registrar, notes, owner contact fields, or provider metadata. `get`, `info`, and other detail commands show one record at a time. `--json` remains the machine-readable detail path and preserves full records for existing automation unless a command already documents an explicit API/provider limit.
+
+MCP list-style tools follow the same gradual disclosure model. Defaults return compact JSON with `count`, `total`, `limit`, `offset`, `has_more`, `next_offset`, `compact`, and `hint`. Pass `limit`/`offset` for paging, `all: true` for all returned matches, or `verbose: true` for full records:
+
+```json
+{ "name": "list_domains", "arguments": { "limit": 50, "offset": 50 } }
+{ "name": "list_domains", "arguments": { "verbose": true, "limit": 5 } }
+{ "name": "get_domain", "arguments": { "id": "example.com" } }
+```
+
+MCP provider sync tools return count/error summaries by default; pass `verbose: true` only when an agent needs provider-specific arrays or full sync diagnostics.
+
 Prefer the `domains` CLI over raw registrar CLIs for Route 53 availability, registration status, local portfolio updates, and DNS delegation. The CLI applies configured defaults, records outcomes in the local portfolio DB, and keeps behavior consistent across providers.
 
 Desired DNS state files are JSON:
@@ -220,6 +246,8 @@ DOMAINS_COMMAND_GROUPS=storage domains storage pull
 ```bash
 domains-mcp
 ```
+
+MCP list/search tools are compact by default for agent context safety; use `limit`, `offset`, `all`, and `verbose` arguments, or one-record detail tools such as `get_domain`, when more detail is needed.
 
 Add to your Claude/agent config:
 

@@ -14,6 +14,7 @@ import {
 } from "../../db/domain-owners.js";
 import { getDomainDetails, getDomainByName, whoisLookup } from "../../db/domains.js";
 import { getDatabase } from "../../db/database.js";
+import { compactHint, pageItemsOrExit, truncateText } from "../../lib/compact-output.js";
 
 function requireDomain(identifier: string) {
   const details = getDomainDetails(identifier);
@@ -36,24 +37,32 @@ export function registerOwnerCommand(program: Command): void {
     .option("--source <source>", "Filter by source (whois/manual/brandsight/import)")
     .option("--verified-only", "Only show verified owners")
     .option("--with-domains", "Include domain details")
+    .option("--limit <n>", "Limit number of displayed owners/domains")
+    .option("--all", "Show all matching owners/domains")
+    .option("--verbose", "Show email and phone details")
     .option("-j, --json", "Output JSON")
     .action((opts: {
       search?: string;
       source?: DomainOwnerSource;
       verifiedOnly?: boolean;
       withDomains?: boolean;
+      limit?: string;
+      all?: boolean;
+      verbose?: boolean;
       json?: boolean;
     }) => {
       if (opts.withDomains) {
         const results = listDomainsWithOwners();
         if (opts.json) { console.log(JSON.stringify({ owners: results, count: results.length }, null, 2)); return; }
-        if (results.length === 0) { console.log("No premium domain owners found."); return; }
-        for (const r of results) {
+        const page = pageItemsOrExit(results, { limit: opts.limit, all: opts.all });
+        if (page.items.length === 0) { console.log("No premium domain owners found."); return; }
+        for (const r of page.items) {
           const verified = r.verified ? " [verified]" : "";
           const org = r.owner_organization ? ` @ ${r.owner_organization}` : "";
-          console.log(`  ${r.domain_name} (${r.domain_status}) — ${r.owner_name ?? r.owner_email ?? "unknown"}${org}${verified}`);
+          const email = opts.verbose && r.owner_email ? ` email:${r.owner_email}` : "";
+          console.log(`  ${r.domain_name} (${r.domain_status}) — ${r.owner_name ?? r.owner_email ?? "unknown"}${org}${verified}${email}`);
         }
-        console.log(`\n${results.length} domain(s) with owner info`);
+        console.log(`\n${compactHint(page, "domain(s) with owner info", "Use --verbose for email details or owner info <domain> for full details.", { paging: "limit" })}`);
         return;
       }
 
@@ -64,15 +73,16 @@ export function registerOwnerCommand(program: Command): void {
       });
 
       if (opts.json) { console.log(JSON.stringify({ owners, count: owners.length }, null, 2)); return; }
-      if (owners.length === 0) { console.log("No owners found."); return; }
-      for (const o of owners) {
+      const page = pageItemsOrExit(owners, { limit: opts.limit, all: opts.all });
+      if (page.items.length === 0) { console.log("No owners found."); return; }
+      for (const o of page.items) {
         const verified = o.verified ? " [verified]" : "";
         const org = o.owner_organization ? ` @ ${o.owner_organization}` : "";
-        console.log(`  ${o.owner_name ?? o.owner_email ?? "unknown"}${org} [${o.source}]${verified}`);
-        if (o.owner_email) console.log(`    email: ${o.owner_email}`);
-        if (o.owner_phone) console.log(`    phone: ${o.owner_phone}`);
+        console.log(`  ${truncateText(o.owner_name ?? o.owner_email ?? "unknown", 48)}${org} [${o.source}]${verified}`);
+        if (opts.verbose && o.owner_email) console.log(`    email: ${o.owner_email}`);
+        if (opts.verbose && o.owner_phone) console.log(`    phone: ${o.owner_phone}`);
       }
-      console.log(`\n${owners.length} owner(s)`);
+      console.log(`\n${compactHint(page, "owner(s)", "Use --verbose for contact fields or owner get <id> for details.", { paging: "limit" })}`);
     });
 
   // ── get ─────────────────────────────────────────────────────────────────
@@ -92,7 +102,7 @@ export function registerOwnerCommand(program: Command): void {
       console.log(`  Source: ${o.source}`);
       console.log(`  Verified: ${o.verified ? "yes" : "no"}`);
       if (o.contact_id) console.log(`  Contacts ID: ${o.contact_id}`);
-      if (o.notes) console.log(`  Notes: ${o.notes}`);
+      if (o.notes) console.log(`  Notes: ${truncateText(o.notes, 160)}`);
       console.log();
     });
 

@@ -26,6 +26,7 @@ import { registerDomain, checkAvailability, getRegistrationStatus, createHostedZ
 import { createZone as cfCreateZone, ensureZone as cfEnsureZone } from "../../lib/cloudflare.js";
 import { delegateDomainToCloudflare } from "../../lib/delegate.js";
 import { getCapability } from "../../lib/capability.js";
+import { compactHint, formatDate, pageItemsOrExit, parseLimit, parseOffset, truncateText } from "../../lib/compact-output.js";
 
 const DOMAIN_STATUS_HELP = DOMAIN_STATUSES.join("/");
 const DOMAIN_OFFER_STATUS_HELP = DOMAIN_OFFER_STATUSES.join("/");
@@ -72,43 +73,50 @@ export function registerDomainCommand(program: Command): void {
     .option("--status <status>", `Filter by status (${DOMAIN_STATUS_HELP})`)
     .option("--registrar <name>", "Filter by registrar")
     .option("--premium", "Only show premium domains")
-    .option("--limit <n>", "Limit number of returned domains")
+    .option("--limit <n>", "Limit number of displayed domains")
     .option("--offset <n>", "Skip first N domains", "0")
+    .option("--all", "Show all matching domains")
+    .option("--verbose", "Show registrar, expiry, and notes columns")
     .option("-j, --json", "Output JSON")
-    .action((opts: { status?: string; registrar?: string; premium?: boolean; limit?: string; offset?: string; json?: boolean }) => {
-      const limit = opts.limit ? parseInt(opts.limit, 10) : undefined;
-      const offset = opts.offset ? parseInt(opts.offset, 10) : 0;
-
-      if (limit !== undefined && (!Number.isInteger(limit) || limit < 0)) {
-        console.error("--limit must be a non-negative integer");
-        process.exit(1);
-      }
-      if (!Number.isInteger(offset) || offset < 0) {
-        console.error("--offset must be a non-negative integer");
+    .action((opts: { status?: string; registrar?: string; premium?: boolean; limit?: string; offset?: string; all?: boolean; verbose?: boolean; json?: boolean }) => {
+      let limit: number | undefined;
+      let offset: number;
+      try {
+        limit = opts.limit === undefined ? undefined : parseLimit(opts.limit);
+        offset = parseOffset(opts.offset);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
         process.exit(1);
       }
 
-      const domains = listDomains({
+      const filters = {
         status: opts.status as (typeof DOMAIN_STATUSES)[number] | undefined,
         registrar: opts.registrar,
         is_premium: opts.premium ? true : undefined,
-        limit,
-        offset,
-      });
+      };
+      const jsonPaging = !opts.all && (opts.limit !== undefined || offset > 0) ? { limit, offset } : {};
+      const domains = opts.json
+        ? listDomains({ ...filters, ...jsonPaging })
+        : listDomains(filters);
 
       if (opts.json) {
         console.log(JSON.stringify({ domains, count: domains.length, limit: limit ?? null, offset }, null, 2));
         return;
       }
-      if (domains.length === 0) { console.log("No domains found."); return; }
-      for (const d of domains) {
-        const exp = d.expires_at ? ` (expires ${d.expires_at.split("T")[0]})` : "";
-        console.log(`  ${d.name} [${d.status}]${exp}`);
+      const page = pageItemsOrExit(domains, { limit, offset, all: opts.all });
+      if (page.items.length === 0) { console.log("No domains found."); return; }
+      for (const d of page.items) {
+        const exp = d.expires_at ? ` exp:${formatDate(d.expires_at)}` : "";
+        const premium = d.is_premium ? " premium" : "";
+        if (opts.verbose) {
+          const registrar = d.registrar ? ` reg:${truncateText(d.registrar, 24)}` : "";
+          const notes = d.notes ? ` notes:${truncateText(d.notes, 60)}` : "";
+          console.log(`  ${d.name} [${d.status}]${registrar}${exp}${premium}${notes}`);
+        } else {
+          console.log(`  ${d.name} [${d.status}]${exp}${premium}`);
+        }
       }
-      console.log(`\n${domains.length} domain(s)`);
-      if (limit !== undefined || offset > 0) {
-        console.log(`Page: limit=${limit ?? "all"}, offset=${offset}`);
-      }
+      console.log(`\n${compactHint(page, "domain(s)", "Use --verbose for registrar/notes or domain get <id|name> for details.")}`);
     });
   // ── get ─────────────────────────────────────────────────────────────────
 
@@ -123,8 +131,8 @@ export function registerDomainCommand(program: Command): void {
       const d = details.domain;
       console.log(`\n${d.name} [${d.status}]`);
       if (d.registrar) console.log(`  Registrar:      ${d.registrar}`);
-      if (d.expires_at) console.log(`  Expires:        ${d.expires_at.split("T")[0]}`);
-      if (d.purchase_date) console.log(`  Purchased:      ${d.purchase_date.split("T")[0]}`);
+      if (d.expires_at) console.log(`  Expires:        ${formatDate(d.expires_at)}`);
+      if (d.purchase_date) console.log(`  Purchased:      ${formatDate(d.purchase_date)}`);
       if (d.purchase_price !== null) console.log(`  Purchase price: ${d.purchase_price}`);
       console.log(`  Auto-renew:     ${d.auto_renew ? "yes" : "no"}`);
       if (d.is_premium) {
@@ -132,10 +140,11 @@ export function registerDomainCommand(program: Command): void {
         if (d.premium_price !== null) console.log(`  Premium ask:    ${d.premium_price}`);
       }
       if (d.standard_price !== null) console.log(`  Standard price: ${d.standard_price}`);
-      if (d.notes) console.log(`  Notes:          ${d.notes}`);
+      if (d.notes) console.log(`  Notes:          ${truncateText(d.notes, 160)}`);
       if (details.offers.length > 0) {
         console.log("\nOffers:");
-        for (const offer of details.offers) {
+        const offerPage = pageItemsOrExit(details.offers, { fallbackLimit: 5 });
+        for (const offer of offerPage.items) {
           const parts = [
             offer.created_at.split(" ")[0],
             offer.status,
@@ -145,13 +154,16 @@ export function registerDomainCommand(program: Command): void {
           ].filter(Boolean);
           console.log(`  - ${parts.join(" | ")}`);
         }
+        if (offerPage.hasMore) console.log(`  ${compactHint(offerPage, "offer(s)", "Use --json for the full offer history.", { paging: "none" })}`);
       }
       if (details.emails.length > 0) {
         console.log("\nEmails:");
-        for (const email of details.emails) {
+        const emailPage = pageItemsOrExit(details.emails, { fallbackLimit: 5 });
+        for (const email of emailPage.items) {
           const threadPart = email.thread_id ? ` thread=${email.thread_id}` : "";
           console.log(`  - ${email.type}: ${email.email_id}${threadPart}`);
         }
+        if (emailPage.hasMore) console.log(`  ${compactHint(emailPage, "email link(s)", "Use --json for the full email list.", { paging: "none" })}`);
       }
       console.log();
     });
@@ -292,12 +304,27 @@ export function registerDomainCommand(program: Command): void {
   domain
     .command("search <query>")
     .description("Search domains by name, registrar, or notes")
+    .option("--limit <n>", "Limit number of displayed domains")
+    .option("--offset <n>", "Skip first N domains", "0")
+    .option("--all", "Show all matching domains")
+    .option("--verbose", "Show registrar and truncated notes")
     .option("-j, --json", "Output JSON")
-    .action((query: string, opts: { json?: boolean }) => {
+    .action((query: string, opts: { limit?: string; offset?: string; all?: boolean; verbose?: boolean; json?: boolean }) => {
       const results = searchDomains(query);
       if (opts.json) { console.log(JSON.stringify({ results, count: results.length }, null, 2)); return; }
-      for (const d of results) console.log(`  ${d.name} [${d.status}]`);
+      let page;
+      try {
+        page = pageItemsOrExit(results, { limit: opts.limit, offset: opts.offset, all: opts.all });
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exit(1);
+      }
+      for (const d of page.items) {
+        const notes = opts.verbose && d.notes ? ` — ${truncateText(d.notes, 80)}` : "";
+        console.log(`  ${d.name} [${d.status}]${notes}`);
+      }
       if (results.length === 0) console.log("No results.");
+      else console.log(`\n${compactHint(page, "result(s)", "Use --verbose for notes or domain get <id|name> for details.")}`);
     });
 
   // ── expiring ────────────────────────────────────────────────────────────
@@ -306,14 +333,17 @@ export function registerDomainCommand(program: Command): void {
     .command("expiring")
     .description("List domains expiring soon")
     .option("--days <n>", "Days threshold", "30")
+    .option("--limit <n>", "Limit number of displayed domains")
+    .option("--all", "Show all matching domains")
     .option("-j, --json", "Output JSON")
-    .action((opts: { days: string; json?: boolean }) => {
+    .action((opts: { days: string; limit?: string; all?: boolean; json?: boolean }) => {
       const domains = listExpiring(parseInt(opts.days));
       if (opts.json) { console.log(JSON.stringify(domains, null, 2)); return; }
-      if (domains.length === 0) { console.log(`No domains expiring within ${opts.days} days.`); return; }
+      const page = pageItemsOrExit(domains, { limit: opts.limit, all: opts.all });
+      if (page.items.length === 0) { console.log(`No domains expiring within ${opts.days} days.`); return; }
       console.log(`\nExpiring within ${opts.days} days:`);
-      for (const d of domains) console.log(`  ${d.name.padEnd(40)} expires ${(d.expires_at ?? "").split("T")[0]}`);
-      console.log();
+      for (const d of page.items) console.log(`  ${d.name.padEnd(40)} expires ${formatDate(d.expires_at)}`);
+      console.log(`\n${compactHint(page, "domain(s)", "Use --all to display every expiring domain.", { paging: "limit" })}`);
     });
 
   // ── stats ───────────────────────────────────────────────────────────────

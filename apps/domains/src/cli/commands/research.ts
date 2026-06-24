@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { researchDomain, answerAboutDomain } from "../../db/domain-research.js";
 import { getDomainDetails } from "../../db/domains.js";
 import { checkDomainReputation, getDomainReputationByName, listBlacklistedDomains, listHighThreatDomains } from "../../db/domain-reputation.js";
+import { compactHint, pageItemsOrExit, truncateText } from "../../lib/compact-output.js";
 
 export function registerResearchCommand(program: Command): void {
   const research = program
@@ -13,8 +14,10 @@ export function registerResearchCommand(program: Command): void {
   research
     .command("exa <identifier>")
     .description("Research a domain using Exa AI (ownership, company info, history)")
+    .option("--limit <n>", "Limit number of displayed web/company results")
+    .option("--all", "Show all returned research results")
     .option("-j, --json", "Output JSON")
-    .action(async (identifier: string, opts: { json?: boolean }) => {
+    .action(async (identifier: string, opts: { limit?: string; all?: boolean; json?: boolean }) => {
       const domain = getDomainDetails(identifier);
       if (!domain) {
         console.error(`Domain '${identifier}' not found.`);
@@ -36,21 +39,25 @@ export function registerResearchCommand(program: Command): void {
         }
 
         console.log(`Exa Research for ${result.domain}:`);
-        if (result.summary) console.log(`\n  Summary: ${result.summary}`);
+        if (result.summary) console.log(`\n  Summary: ${truncateText(result.summary, 240)}`);
 
         if (result.results.length > 0) {
+          const page = pageItemsOrExit(result.results, { limit: opts.limit, all: opts.all });
           console.log("\n  Web Results:");
-          for (const r of result.results) {
-            console.log(`    - ${r.title} (${r.score.toFixed(2)})`);
+          for (const r of page.items) {
+            console.log(`    - ${truncateText(r.title, 100)} (${r.score.toFixed(2)})`);
             console.log(`      ${r.url}`);
           }
+          console.log(`    ${compactHint(page, "web result(s)", "Use --all for every result or --json for structured output.", { paging: "limit" })}`);
         }
 
         if (result.companies.length > 0) {
+          const page = pageItemsOrExit(result.companies, { limit: opts.limit, all: opts.all });
           console.log("\n  Companies:");
-          for (const c of result.companies) {
+          for (const c of page.items) {
             console.log(`    - ${c.name}: ${c.domain}`);
           }
+          console.log(`    ${compactHint(page, "company result(s)", "Use --all for every company or --json for structured output.", { paging: "limit" })}`);
         }
 
         if (result.savedHistory) {
@@ -133,8 +140,10 @@ export function registerResearchCommand(program: Command): void {
   research
     .command("blacklisted")
     .description("List all blacklisted domains in the database")
+    .option("--limit <n>", "Limit number of displayed domains")
+    .option("--all", "Show all blacklisted domains")
     .option("-j, --json", "Output JSON")
-    .action((opts: { json?: boolean }) => {
+    .action((opts: { limit?: string; all?: boolean; json?: boolean }) => {
       const domains = listBlacklistedDomains();
       if (opts.json) {
         console.log(JSON.stringify({ domains, count: domains.length }, null, 2));
@@ -144,11 +153,12 @@ export function registerResearchCommand(program: Command): void {
         console.log("No blacklisted domains.");
         return;
       }
+      const page = pageItemsOrExit(domains, { limit: opts.limit, all: opts.all });
       console.log("Blacklisted domains:");
-      for (const d of domains) {
-        console.log(`  domain_id: ${d.domain_id} (sources: ${d.blacklist_sources.join(", ")})`);
+      for (const d of page.items) {
+        console.log(`  domain_id: ${d.domain_id} (sources: ${truncateText(d.blacklist_sources.join(", "), 100)})`);
       }
-      console.log(`\n${domains.length} blacklisted domain(s)`);
+      console.log(`\n${compactHint(page, "blacklisted domain(s)", "Use --all for every domain or --json for full source arrays.", { paging: "limit" })}`);
     });
 
   // ── threats ─────────────────────────────────────────────────────────────
@@ -157,8 +167,10 @@ export function registerResearchCommand(program: Command): void {
     .command("threats")
     .description("List domains with high threat scores")
     .option("--threshold <n>", "Minimum threat score", "70")
+    .option("--limit <n>", "Limit number of displayed domains")
+    .option("--all", "Show all matching domains")
     .option("-j, --json", "Output JSON")
-    .action((opts: { threshold?: string; json?: boolean }) => {
+    .action((opts: { threshold?: string; limit?: string; all?: boolean; json?: boolean }) => {
       const threshold = parseInt(opts.threshold ?? "70");
       const domains = listHighThreatDomains(threshold);
       if (opts.json) {
@@ -169,10 +181,11 @@ export function registerResearchCommand(program: Command): void {
         console.log(`No domains with threat score >= ${threshold}.`);
         return;
       }
+      const page = pageItemsOrExit(domains, { limit: opts.limit, all: opts.all });
       console.log(`Domains with threat score >= ${threshold}:`);
-      for (const d of domains) {
+      for (const d of page.items) {
         console.log(`  domain_id: ${d.domain_id} — score: ${d.threat_score ?? "?"}`);
       }
-      console.log(`\n${domains.length} domain(s)`);
+      console.log(`\n${compactHint(page, "domain(s)", "Use --all for every domain or --json for full reputation records.", { paging: "limit" })}`);
     });
 }

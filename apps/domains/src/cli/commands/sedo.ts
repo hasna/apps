@@ -1,4 +1,15 @@
 import type { Command } from "commander";
+import { compactHint, pageItemsOrExit } from "../../lib/compact-output.js";
+
+function parseSedoLimit(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    console.error("--limit must be a non-negative integer");
+    process.exit(1);
+  }
+  return parsed;
+}
 
 export function registerSedoCommand(program: Command): void {
   const sedo = program
@@ -10,16 +21,17 @@ export function registerSedoCommand(program: Command): void {
     .description("Search for domains for sale on Sedo")
     .argument("<keyword>", "Search term (e.g. 'health', 'ai', 'cloud')")
     .option("--tld <tld>", "Filter by TLD (e.g. 'com')")
-    .option("--limit <n>", "Max results", "50")
+    .option("--limit <n>", "Max results")
     .option("--min-price <n>", "Minimum price")
     .option("--max-price <n>", "Maximum price")
     .option("--json", "Output as JSON", false)
     .action(async (keyword, opts) => {
       const { searchSedoDomains } = await import("../../lib/sedo.js");
+      const limit = parseSedoLimit(opts.limit, opts.json ? 50 : 20);
 
       const result = await searchSedoDomains(keyword, {
         tld: opts.tld,
-        limit: parseInt(opts.limit),
+        limit,
         minPrice: opts.minPrice ? parseInt(opts.minPrice) : undefined,
         maxPrice: opts.maxPrice ? parseInt(opts.maxPrice) : undefined,
       });
@@ -39,6 +51,7 @@ export function registerSedoCommand(program: Command): void {
           const premium = d.isPremium ? " [PREMIUM]" : "";
           console.log(`  ${d.domain}${price}${premium}`);
         }
+        console.log(`\nShowing ${result.domains.length}/${result.total} marketplace result(s). Use --limit <n> for more or --json for full fields.`);
       }
     });
 
@@ -66,12 +79,14 @@ export function registerSedoCommand(program: Command): void {
   sedo
     .command("portfolio")
     .description("List your Sedo portfolio domains")
-    .option("--limit <n>", "Max results", "100")
+    .option("--limit <n>", "Max results")
+    .option("--all", "Show all loaded portfolio domains")
     .option("--json", "Output as JSON", false)
-    .action(async (opts) => {
+    .action(async (opts: { limit?: string; all?: boolean; json?: boolean }) => {
       const { listSedoPortfolio } = await import("../../lib/sedo.js");
+      const limit = parseSedoLimit(opts.limit, opts.json || opts.all ? 100 : 20);
 
-      const domains = await listSedoPortfolio({ limit: parseInt(opts.limit) });
+      const domains = await listSedoPortfolio({ limit });
 
       if (opts.json) {
         console.log(JSON.stringify(domains, null, 2));
@@ -80,11 +95,13 @@ export function registerSedoCommand(program: Command): void {
           console.log("No domains in your Sedo portfolio.");
           return;
         }
-        console.log(`Sedo Portfolio (${domains.length} domains):`);
-        for (const d of domains) {
+        const page = pageItemsOrExit(domains, { limit: opts.limit, all: opts.all });
+        console.log(`Sedo Portfolio:`);
+        for (const d of page.items) {
           const sale = d.forSale ? `[for sale ${d.price || "?"} ${d.currency || ""}]` : "";
           console.log(`  ${d.domain} ${sale}`);
         }
+        console.log(`\n${compactHint(page, "domain(s)", "Use --limit <n> for more or --json for full marketplace fields.", { paging: "limit" })}`);
       }
     });
 

@@ -7,6 +7,7 @@ import {
   createZone as cfCreateZone, listZones as cfListZones,
   getZone as cfGetZone, deleteZone as cfDeleteZone,
 } from "../../lib/cloudflare.js";
+import { compactHint, pageItemsOrExit } from "../../lib/compact-output.js";
 
 function resolveProvider(flag?: string): string {
   return flag ?? loadConfig().default_dns ?? "route53";
@@ -19,8 +20,10 @@ export function registerZoneCommand(program: Command): void {
     .command("list")
     .description("List all hosted zones")
     .option("--provider <name>", "DNS provider (route53, cloudflare) — defaults to config default-dns")
+    .option("--limit <n>", "Limit number of displayed zones")
+    .option("--all", "Show all hosted zones")
     .option("--json", "Output JSON")
-    .action(async (opts: { provider?: string; json?: boolean }) => {
+    .action(async (opts: { provider?: string; limit?: string; all?: boolean; json?: boolean }) => {
       const provider = resolveProvider(opts.provider);
       try {
         let zones: { id: string; name: string; status?: string; nameservers?: string[]; record_count?: number }[];
@@ -30,13 +33,14 @@ export function registerZoneCommand(program: Command): void {
           zones = await listHostedZones();
         }
         if (opts.json) { console.log(JSON.stringify(zones, null, 2)); return; }
-        if (zones.length === 0) { console.log("No hosted zones."); return; }
+        const page = pageItemsOrExit(zones, { limit: opts.limit, all: opts.all });
+        if (page.items.length === 0) { console.log("No hosted zones."); return; }
         console.log(`\nHosted Zones (${provider}):`);
-        for (const z of zones) {
+        for (const z of page.items) {
           const extra = z.record_count !== undefined ? `  ${z.record_count} records` : "";
           console.log(`  ${z.id.padEnd(32)} ${z.name}${extra}`);
         }
-        console.log();
+        console.log(`\n${compactHint(page, "zone(s)", "Use --all for every zone or zone info <zoneId> for details.", { paging: "limit" })}`);
       } catch (e) {
         console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
