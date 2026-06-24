@@ -824,11 +824,12 @@ export class Store {
     })();
   }
 
-  listLoops(opts: { status?: LoopStatus; label?: string; labels?: string[]; limit?: number } = {}): Loop[] {
+  listLoops(opts: { status?: LoopStatus; label?: string; labels?: string[]; limit?: number; offset?: number } = {}): Loop[] {
     const limit = opts.limit ?? 200;
+    const offset = opts.offset ?? 0;
     const labels = normalizeLoopLabels(opts.labels ?? (opts.label ? [opts.label] : undefined));
     const where: string[] = [];
-    const params: Record<string, string | number> = { $limit: limit };
+    const params: Record<string, string | number> = { $limit: limit, $offset: offset };
     if (opts.status) {
       where.push("status = $status");
       params.$status = opts.status;
@@ -838,7 +839,7 @@ export class Store {
       where.push(`EXISTS (SELECT 1 FROM json_each(loops.labels_json) WHERE value = ${key})`);
       params[key] = label;
     });
-    const sql = `SELECT * FROM loops${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY status ASC, next_run_at ASC LIMIT $limit`;
+    const sql = `SELECT * FROM loops${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY status ASC, next_run_at ASC LIMIT $limit OFFSET $offset`;
     const rows = this.db.query<LoopRow, Record<string, string | number>>(sql).all(params);
     return rows.map(rowToLoop);
   }
@@ -2143,6 +2144,55 @@ export class Store {
     const sql = `SELECT loop_runs.* FROM loop_runs${join}${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY loop_runs.created_at DESC LIMIT $limit`;
     const rows = this.db.query<RunRow, Record<string, string | number>>(sql).all(params);
     return rows.map(rowToRun);
+  }
+
+  listRunsForLoopIds(opts: { loopIds: string[]; status?: RunStatus; limit?: number }): LoopRun[] {
+    if (opts.loopIds.length === 0) return [];
+    const limit = opts.limit ?? 100;
+    const params: Record<string, string | number> = { $limit: limit };
+    const ids = opts.loopIds.map((id, index) => {
+      const key = `$loopId${index}`;
+      params[key] = id;
+      return key;
+    });
+    const where = [`loop_id IN (${ids.join(", ")})`];
+    if (opts.status) {
+      where.push("status = $status");
+      params.$status = opts.status;
+    }
+    const rows = this.db
+      .query<RunRow, Record<string, string | number>>(
+        `SELECT * FROM loop_runs WHERE ${where.join(" AND ")} ORDER BY created_at DESC, updated_at DESC LIMIT $limit`,
+      )
+      .all(params);
+    return rows.map(rowToRun);
+  }
+
+  latestRunsForLoopIds(loopIds: string[]): Map<string, LoopRun> {
+    if (loopIds.length === 0) return new Map();
+    const params: Record<string, string> = {};
+    const ids = loopIds.map((id, index) => {
+      const key = `$loopId${index}`;
+      params[key] = id;
+      return key;
+    });
+    const rows = this.db
+      .query<RunRow, Record<string, string>>(
+        `SELECT * FROM (
+           SELECT loop_runs.*, ROW_NUMBER() OVER (
+             PARTITION BY loop_id
+             ORDER BY created_at DESC, updated_at DESC, id DESC
+           ) AS row_number
+           FROM loop_runs
+           WHERE loop_id IN (${ids.join(", ")})
+         )
+         WHERE row_number = 1`,
+      )
+      .all(params);
+    return new Map(rows.map((row) => {
+      const run = rowToRun(row);
+      return [run.loopId, run];
+    }));
   }
 
   recoverExpiredRunLeases(now: Date = new Date(), opts: DaemonLeaseFence = {}): LoopRun[] {

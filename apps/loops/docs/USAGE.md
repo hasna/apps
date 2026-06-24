@@ -122,6 +122,30 @@ loops labels clear repo-status
 
 Repeated `--label` filters require all requested labels to be present. Run filtering uses the loop's current labels, not a historical label snapshot stored on each run.
 
+## Find Repo Or Project Loops
+
+Use `--repo <path-or-name>` when you need every loop tied to a checkout or project without composing JSON filters by hand. The matcher checks loop cwd, command strings, agent prompts, names, descriptions, goals, workflow input and step metadata, and OpenRepos metadata when present:
+
+```bash
+loops list --repo /path/to/open-codewith
+loops list --repo open-codewith --with-latest-run
+loops runs --repo open-codewith --limit 10
+loops project show open-codewith
+```
+
+Filtered human `loops list` output includes loop id, status, schedule, next run, target/cwd/provider/account context, and latest run health. JSON list output remains an array of loops unless `--with-latest-run` is provided, in which case each entry contains `{ loop, latestRun, latestRunIssue, match }`.
+
+Additional filters can narrow the result set:
+
+```bash
+loops list --cwd /path/to/repo
+loops list --name review
+loops list --text "schema error"
+loops runs --repo open-codewith --status failed
+```
+
+Use `loops project show <path-or-name>` for a compact project health summary grouped by loop status, latest run status, and current failure family.
+
 ## Workflows
 
 Create a workflow JSON file:

@@ -27,6 +27,7 @@ import {
   publicWorkflowRun,
   publicWorkflowStepRun,
   scheduleSummary,
+  compactRun,
   targetSummary,
   textOutputBlocks,
   truncateDisplay,
@@ -44,6 +45,19 @@ import { runDoctor } from "../lib/doctor.js";
 import { listOpenMachines, resolveLoopMachine } from "../lib/machines.js";
 import { packageVersion } from "../lib/version.js";
 import { mergeLoopLabels, normalizeLoopLabels, removeLoopLabels } from "../lib/labels.js";
+import {
+  conciseRunIssue,
+  discoveryLoopLine,
+  hasProjectFilters,
+  loopAccount,
+  loopProvider,
+  loopTargetCwd,
+  matchLoopToProject,
+  summaryLine,
+  summarizeProjectHealth,
+  type ProjectFilter,
+  type ProjectLoopEntry,
+} from "../lib/project-discovery.js";
 
 const program = new Command();
 
@@ -58,6 +72,7 @@ const DEFAULT_HUMAN_STEP_LIMIT = 50;
 const DEFAULT_HUMAN_LOG_LINES = 40;
 const DEFAULT_HUMAN_OUTPUT_CHARS = 4_000;
 const MAX_HUMAN_OUTPUT_CHARS = 64_000;
+const DEFAULT_FILTER_SCAN_CHUNK = 500;
 
 function isJson(): boolean {
   return Boolean(program.opts().json);
@@ -119,8 +134,13 @@ function pageItems<T>(items: T[], opts: CliOpts, limit: number): { page: T[]; cu
   return { page, cursor, nextCursor };
 }
 
-function printPageHint(noun: string, shown: number, nextCursor: number | undefined, nextCommand: string, detailHint: string): void {
-  const more = nextCursor === undefined ? "" : `; more available: ${nextCommand} --cursor ${nextCursor}`;
+function printPageHint(noun: string, shown: number, nextCursor: number | undefined, nextCommand: string | undefined, detailHint: string): void {
+  const more =
+    nextCursor === undefined
+      ? ""
+      : nextCommand
+        ? `; more available: ${nextCommand} --cursor ${nextCursor}`
+        : `; more available: repeat this command with --cursor ${nextCursor}`;
   console.log(`showing ${shown} ${noun}${more}. ${detailHint}`);
 }
 
@@ -191,6 +211,140 @@ function collectRepeated(value: string, previous: string[]): string[] {
 function labelsFromOpts(opts: CliOpts): string[] {
   const value = opts.label;
   return normalizeLoopLabels(Array.isArray(value) ? value : typeof value === "string" ? [value] : undefined);
+}
+
+function addProjectFilterOptions(command: Command, opts: { includeRepo?: boolean } = {}): Command {
+  const withRepo =
+    opts.includeRepo === false
+      ? command
+      : command.option("--repo <pathOrName>", "filter by repository/project path or name").option("--project <pathOrName>", "alias for --repo");
+  return withRepo
+    .option("--cwd <path>", "filter by loop or workflow working directory")
+    .option("--name <text>", "filter by loop name substring")
+    .option("--text <text>", "filter by name, description, goal, target, workflow, or metadata text");
+}
+
+function trimmedFilterValue(value: string | undefined, flag: string): string | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error(`${flag} must not be empty`);
+  return trimmed;
+}
+
+function projectFilterFromOpts(opts: CliOpts, repoOverride?: string): ProjectFilter {
+  if (repoOverride && (typeof opts.repo === "string" || typeof opts.project === "string")) {
+    throw new Error("project show takes the repo/project query as a positional argument; do not also pass --repo or --project");
+  }
+  const repoOption = trimmedFilterValue(typeof opts.repo === "string" ? opts.repo : undefined, "--repo");
+  const projectOption = trimmedFilterValue(typeof opts.project === "string" ? opts.project : undefined, "--project");
+  const repo = trimmedFilterValue(repoOverride, "<pathOrName>") ?? repoOption ?? projectOption;
+  if (repoOption && projectOption && repoOption !== projectOption) {
+    throw new Error("--repo and --project must refer to the same project when both are provided");
+  }
+  return {
+    repo,
+    cwd: trimmedFilterValue(typeof opts.cwd === "string" ? opts.cwd : undefined, "--cwd"),
+    name: trimmedFilterValue(typeof opts.name === "string" ? opts.name : undefined, "--name"),
+    text: trimmedFilterValue(typeof opts.text === "string" ? opts.text : undefined, "--text"),
+  };
+}
+
+function workflowMapForLoops(store: Store, loops: Loop): Map<string, WorkflowSpec>;
+function workflowMapForLoops(store: Store, loops: Loop[]): Map<string, WorkflowSpec>;
+function workflowMapForLoops(store: Store, loops: Loop | Loop[]): Map<string, WorkflowSpec> {
+  const values = Array.isArray(loops) ? loops : [loops];
+  const workflows = new Map<string, WorkflowSpec>();
+  for (const loop of values) {
+    if (loop.target.type !== "workflow" || workflows.has(loop.target.workflowId)) continue;
+    const workflow = store.getWorkflow(loop.target.workflowId);
+    if (workflow) workflows.set(workflow.id, workflow);
+  }
+  return workflows;
+}
+
+function projectEntries(store: Store, loops: Loop[], filter: ProjectFilter, includeLatestRun: boolean): ProjectLoopEntry[] {
+  const workflows = workflowMapForLoops(store, loops);
+  const entries: ProjectLoopEntry[] = [];
+  const hasFilters = hasProjectFilters(filter);
+  for (const loop of loops) {
+    const workflow = loop.target.type === "workflow" ? workflows.get(loop.target.workflowId) : undefined;
+    const match = hasFilters ? matchLoopToProject(loop, filter, workflow) : undefined;
+    if (hasFilters && !match) continue;
+    entries.push({
+      loop,
+      match: match ?? {
+        matched: false,
+        reasons: [],
+        cwd: loopTargetCwd(loop, workflow),
+        provider: loopProvider(loop, workflow),
+        account: loopAccount(loop, workflow),
+      },
+    });
+  }
+  if (!includeLatestRun || entries.length === 0) return entries;
+  const latestRuns = store.latestRunsForLoopIds(entries.map((entry) => entry.loop.id));
+  return entries.map((entry) => ({ ...entry, latestRun: latestRuns.get(entry.loop.id) }));
+}
+
+function attachLatestRuns(store: Store, entries: ProjectLoopEntry[]): ProjectLoopEntry[] {
+  if (entries.length === 0) return entries;
+  const latestRuns = store.latestRunsForLoopIds(entries.map((entry) => entry.loop.id));
+  return entries.map((entry) => ({ ...entry, latestRun: latestRuns.get(entry.loop.id) }));
+}
+
+function collectProjectEntries(
+  store: Store,
+  opts: { filter: ProjectFilter; status?: Loop["status"]; labels: string[]; includeLatestRun: boolean; cursor: number; limit: number },
+): ProjectLoopEntry[] {
+  if (!hasProjectFilters(opts.filter)) {
+    return projectEntries(
+      store,
+      store.listLoops({ status: opts.status, labels: opts.labels, limit: opts.cursor + opts.limit + 1 }),
+      opts.filter,
+      opts.includeLatestRun,
+    );
+  }
+  const needed = opts.cursor + opts.limit + 1;
+  const entries: ProjectLoopEntry[] = [];
+  let offset = 0;
+  while (entries.length < needed) {
+    const loops = store.listLoops({ status: opts.status, labels: opts.labels, limit: DEFAULT_FILTER_SCAN_CHUNK, offset });
+    if (loops.length === 0) break;
+    entries.push(...projectEntries(store, loops, opts.filter, false));
+    offset += loops.length;
+    if (loops.length < DEFAULT_FILTER_SCAN_CHUNK) break;
+  }
+  return opts.includeLatestRun ? attachLatestRuns(store, entries) : entries;
+}
+
+function collectAllProjectEntries(
+  store: Store,
+  opts: { filter: ProjectFilter; status?: Loop["status"]; labels: string[]; includeLatestRun: boolean },
+): ProjectLoopEntry[] {
+  const entries: ProjectLoopEntry[] = [];
+  let offset = 0;
+  while (true) {
+    const loops = store.listLoops({ status: opts.status, labels: opts.labels, limit: DEFAULT_FILTER_SCAN_CHUNK, offset });
+    if (loops.length === 0) break;
+    entries.push(...projectEntries(store, loops, opts.filter, false));
+    offset += loops.length;
+    if (loops.length < DEFAULT_FILTER_SCAN_CHUNK) break;
+  }
+  return opts.includeLatestRun ? attachLatestRuns(store, entries) : entries;
+}
+
+function projectJsonEntry(entry: ProjectLoopEntry, includeMatch: boolean): Record<string, unknown> {
+  return {
+    loop: publicLoop(entry.loop),
+    latestRun: entry.latestRun
+      ? {
+          ...compactRun(entry.latestRun),
+          error: truncateDisplay(entry.latestRun.error, 240),
+        }
+      : undefined,
+    latestRunIssue: conciseRunIssue(entry.latestRun),
+    match: includeMatch ? entry.match : undefined,
+  };
 }
 
 function parsePolicy(opts: {
@@ -753,30 +907,54 @@ workflows.command("archive <idOrName>").action((idOrName) => {
   }
 });
 
-program
-  .command("list")
-  .alias("ls")
-  .option("--status <status>", "filter by status")
-  .option("--label <label>", "filter by label; repeatable", collectRepeated, [])
-  .option("--limit <n>", "maximum loops to show")
-  .option("--cursor <offset>", "zero-based offset for the next page")
-  .option("-v, --verbose", "show schedule and target summaries")
-  .action((opts) => {
-    const store = new Store();
-    try {
-      const limit = defaultLimit(opts, DEFAULT_HUMAN_LIST_LIMIT, 200);
-      const cursor = parseNonNegativeInteger(typeof opts.cursor === "string" ? opts.cursor : undefined, "--cursor") ?? 0;
-      const loops = store.listLoops({ status: opts.status, labels: labelsFromOpts(opts), limit: cursor + limit + 1 });
-      const { page, nextCursor } = pageItems(loops, opts, limit);
-      if (isJson()) print(page.map(publicLoop));
-      else {
-        for (const loop of page) console.log(loopLine(loop, isVerbose(opts)));
-        printPageHint("loops", page.length, nextCursor, "loops list", "Use `loops show <id>` for details.");
+addProjectFilterOptions(
+  program
+    .command("list")
+    .alias("ls")
+    .option("--status <status>", "filter by status")
+    .option("--label <label>", "filter by label; repeatable", collectRepeated, [])
+    .option("--limit <n>", "maximum loops to show")
+    .option("--cursor <offset>", "zero-based offset for the next page")
+    .option("--with-latest-run", "include each loop's latest run status in list output")
+    .option("-v, --verbose", "show schedule and target summaries")
+    .addHelpText(
+      "after",
+      "\nExamples:\n  loops list --repo /path/to/repo\n  loops list --repo open-codewith --with-latest-run --json\n  loops list --cwd /path/to/repo --name review\n",
+    ),
+).action((opts) => {
+  const store = new Store();
+  try {
+    const limit = defaultLimit(opts, DEFAULT_HUMAN_LIST_LIMIT, 200);
+    const cursor = parseNonNegativeInteger(typeof opts.cursor === "string" ? opts.cursor : undefined, "--cursor") ?? 0;
+    const filter = projectFilterFromOpts(opts);
+    const hasFilters = hasProjectFilters(filter);
+    const includeLatestRun = Boolean(opts.withLatestRun) || (!isJson() && hasFilters);
+    const entries = collectProjectEntries(store, {
+      filter,
+      status: opts.status,
+      labels: labelsFromOpts(opts),
+      includeLatestRun,
+      cursor,
+      limit,
+    });
+    const { page, nextCursor } = pageItems(entries, opts, limit);
+    if (isJson()) {
+      if (opts.withLatestRun) print(page.map((entry) => projectJsonEntry(entry, hasFilters)));
+      else print(page.map((entry) => publicLoop(entry.loop)));
+    } else {
+      for (const entry of page) {
+        if (includeLatestRun || hasFilters) console.log(discoveryLoopLine(entry));
+        else console.log(loopLine(entry.loop, isVerbose(opts)));
       }
-    } finally {
-      store.close();
+      const detailHint = hasFilters
+        ? "Use `loops project show <repo>` for a health summary, or --json for scriptable output."
+        : "Use `loops show <id>` for details.";
+      printPageHint("loops", page.length, nextCursor, hasFilters ? undefined : "loops list", detailHint);
     }
-  });
+  } finally {
+    store.close();
+  }
+});
 
 addVerboseOption(program.command("show <idOrName>")).action((idOrName, opts) => {
   const store = new Store();
@@ -788,34 +966,99 @@ addVerboseOption(program.command("show <idOrName>")).action((idOrName, opts) => 
   }
 });
 
-program
-  .command("runs [idOrName]")
-  .option("--limit <n>", "maximum runs to show")
-  .option("--cursor <offset>", "zero-based offset for the next page")
-  .option("--label <label>", "filter by loop label; repeatable", collectRepeated, [])
-  .option("--show-output", "show stdout/stderr")
-  .option("--max-output-chars <n>", `maximum stdout/stderr characters to print; human default ${DEFAULT_HUMAN_OUTPUT_CHARS}`)
-  .action((idOrName, opts) => {
-    const store = new Store();
-    try {
-      const loop = idOrName ? store.requireLoop(idOrName) : undefined;
-      const limit = defaultLimit(opts, DEFAULT_HUMAN_RUN_LIMIT, 50);
-      const cursor = parseNonNegativeInteger(typeof opts.cursor === "string" ? opts.cursor : undefined, "--cursor") ?? 0;
-      const runs = store.listRuns({ loopId: loop?.id, labels: labelsFromOpts(opts), limit: cursor + limit + 1 });
-      const { page, nextCursor } = pageItems(runs, opts, limit);
-      if (isJson()) print(page.map((run) => publicRun(run, opts.showOutput, jsonOutputLimit(opts))));
-      else {
-        for (const run of page) {
-          const hasOutput = run.stdout || run.stderr ? " output=yes" : "";
-          console.log(`${run.id}  ${run.status.padEnd(10)}  attempt=${run.attempt}  slot=${run.scheduledFor}  ${run.loopName}${hasOutput}`);
-          if (opts.showOutput) printTextOutput(run, { limit: humanOutputLimit(opts) });
-        }
-        printPageHint("runs", page.length, nextCursor, "loops runs", "Use --show-output for bounded stdout/stderr.");
-      }
-    } finally {
-      store.close();
+addProjectFilterOptions(
+  program
+    .command("project")
+    .alias("projects")
+    .description("show loops and latest-run health for a repo/project")
+    .command("show <pathOrName>")
+    .option("--status <status>", "filter by loop status")
+    .option("--label <label>", "filter by label; repeatable", collectRepeated, [])
+    .option("--limit <n>", "maximum loops to show")
+    .option("--cursor <offset>", "zero-based offset for the next page")
+    .addHelpText(
+      "after",
+      "\nExamples:\n  loops project show /home/hasna/workspace/hasna/opensource/open-codewith\n  loops project show open-codewith --json\n",
+    ),
+  { includeRepo: false },
+).action((pathOrName, opts) => {
+  const store = new Store();
+  try {
+    const limit = defaultLimit(opts, DEFAULT_HUMAN_LIST_LIMIT, 200);
+    const cursor = parseNonNegativeInteger(typeof opts.cursor === "string" ? opts.cursor : undefined, "--cursor") ?? 0;
+    const filter = projectFilterFromOpts(opts, pathOrName);
+    const entries = collectAllProjectEntries(store, {
+      filter,
+      status: opts.status,
+      labels: labelsFromOpts(opts),
+      includeLatestRun: true,
+    });
+    const summary = summarizeProjectHealth(entries);
+    const { page, nextCursor } = pageItems(entries, opts, limit);
+    if (isJson()) {
+      print({
+        query: pathOrName,
+        cursor,
+        nextCursor,
+        summary,
+        loops: page.map((entry) => projectJsonEntry(entry, true)),
+      });
+      return;
     }
-  });
+    console.log(`project=${pathOrName} ${summaryLine(summary)}`);
+    for (const entry of page) console.log(discoveryLoopLine(entry));
+    printPageHint("loops", page.length, nextCursor, undefined, "Use --json for scriptable match reasons and latest-run fields.");
+  } finally {
+    store.close();
+  }
+});
+
+addProjectFilterOptions(
+  program
+    .command("runs [idOrName]")
+    .option("--limit <n>", "maximum runs to show")
+    .option("--cursor <offset>", "zero-based offset for the next page")
+    .option("--label <label>", "filter by loop label; repeatable", collectRepeated, [])
+    .option("--status <status>", "filter by run status")
+    .option("--show-output", "show stdout/stderr")
+    .option("--max-output-chars <n>", `maximum stdout/stderr characters to print; human default ${DEFAULT_HUMAN_OUTPUT_CHARS}`)
+    .addHelpText(
+      "after",
+      "\nExamples:\n  loops runs --repo /path/to/repo --limit 10\n  loops runs --repo open-codewith --show-output --max-output-chars 2000\n",
+    ),
+).action((idOrName, opts) => {
+  const store = new Store();
+  try {
+    const filter = projectFilterFromOpts(opts);
+    if (idOrName && hasProjectFilters(filter)) throw new Error("pass either a loop id/name or repo/cwd/name/text filters, not both");
+    const loop = idOrName ? store.requireLoop(idOrName) : undefined;
+    const limit = defaultLimit(opts, DEFAULT_HUMAN_RUN_LIMIT, 50);
+    const cursor = parseNonNegativeInteger(typeof opts.cursor === "string" ? opts.cursor : undefined, "--cursor") ?? 0;
+    let runs: ReturnType<Store["listRuns"]>;
+    if (hasProjectFilters(filter)) {
+      const entries = collectAllProjectEntries(store, {
+        filter,
+        labels: labelsFromOpts(opts),
+        includeLatestRun: false,
+      });
+      runs = store.listRunsForLoopIds({ loopIds: entries.map((entry) => entry.loop.id), status: opts.status, limit: cursor + limit + 1 });
+    } else {
+      runs = store.listRuns({ loopId: loop?.id, labels: labelsFromOpts(opts), status: opts.status, limit: cursor + limit + 1 });
+    }
+    const { page, nextCursor } = pageItems(runs, opts, limit);
+    if (isJson()) print(page.map((run) => publicRun(run, opts.showOutput, jsonOutputLimit(opts))));
+    else {
+      for (const run of page) {
+        const hasOutput = run.stdout || run.stderr ? " output=yes" : "";
+        console.log(`${run.id}  ${run.status.padEnd(10)}  attempt=${run.attempt}  slot=${run.scheduledFor}  ${run.loopName}${hasOutput}`);
+        if (opts.showOutput) printTextOutput(run, { limit: humanOutputLimit(opts) });
+      }
+      printPageHint("runs", page.length, nextCursor, hasProjectFilters(filter) || idOrName ? undefined : "loops runs", "Use --show-output for bounded stdout/stderr.");
+    }
+  } finally {
+    store.close();
+  }
+});
 
 program.command("pause <idOrName>").action((idOrName) => updateStatus(idOrName, "paused"));
 program.command("resume <idOrName>").action((idOrName) => updateStatus(idOrName, "active"));

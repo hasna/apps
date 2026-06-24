@@ -1,9 +1,10 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
+import type { Loop } from "../types.js";
 import { Store } from "../lib/store.js";
 
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
@@ -23,6 +24,25 @@ function workflowFile(dataDir: string, body: unknown): string {
 
 function futureAt(): string {
   return new Date(Date.now() + 60_000).toISOString();
+}
+
+function seedRun(store: Store, loop: Loop, status: "succeeded" | "failed" | "timed_out", slot: string, patch: { error?: string; exitCode?: number } = {}) {
+  const startedAt = new Date(slot);
+  const claim = store.claimRun(loop, slot, "test", startedAt);
+  expect(claim).toBeDefined();
+  store.finalizeRun(
+    claim!.run.id,
+    {
+      status,
+      finishedAt: new Date(startedAt.getTime() + 1_000).toISOString(),
+      durationMs: 1_000,
+      stdout: "",
+      stderr: "",
+      error: patch.error,
+      exitCode: patch.exitCode,
+    },
+    { claimedBy: "test", now: new Date(startedAt.getTime() + 1_000) },
+  );
 }
 
 describe("loops CLI", () => {
@@ -187,6 +207,176 @@ describe("loops CLI", () => {
     const clear = runCli(dataDir, ["--json", "labels", "clear", "browser"]);
     expect(clear.status).toBe(0);
     expect(JSON.parse(clear.stdout).labels).toEqual([]);
+  });
+
+  test("list filters repo loops and includes latest-run health in human output", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-repo-list-"));
+    const repoPath = join(dataDir, "open-codewith");
+    const otherPath = join(dataDir, "other");
+    const siblingPath = join(dataDir, "open-codewith-compact-cli-output");
+    mkdirSync(repoPath, { recursive: true });
+    mkdirSync(otherPath, { recursive: true });
+    mkdirSync(siblingPath, { recursive: true });
+
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      const longContextError = `Maximum context length exceeded while reviewing files ${"x".repeat(500)}`;
+      const cwdLoop = store.createLoop({
+        name: "repo-cwd-review",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "agent", provider: "codewith", prompt: "Review this checkout", cwd: repoPath, authProfile: "account015" },
+      });
+      seedRun(store, cwdLoop, "failed", "2026-01-01T00:00:00.000Z", { error: longContextError });
+
+      const commandLoop = store.createLoop({
+        name: "repo-command-status",
+        schedule: { type: "interval", everyMs: 120_000 },
+        target: { type: "command", command: `git -C ${repoPath} status --short`, cwd: otherPath },
+      });
+      seedRun(store, commandLoop, "succeeded", "2026-01-01T00:01:00.000Z");
+
+      const workflow = store.createWorkflow({
+        name: "workflow-open-codewith",
+        steps: [{ id: "inspect", target: { type: "command", command: "true", cwd: otherPath } }],
+      });
+      const workflowLoop = store.createLoop({
+        name: "repo-workflow-health",
+        description: "OpenRepos multi-repo loop for hasna/open-codewith",
+        schedule: { type: "cron", expression: "0 * * * *" },
+        target: { type: "workflow", workflowId: workflow.id, input: { OPENLOOPS_REPO_PATH: repoPath, OPENLOOPS_REPO_NAME: "open-codewith" } },
+      });
+      seedRun(store, workflowLoop, "timed_out", "2026-01-01T00:02:00.000Z", { error: "operation timed out after lease" });
+
+      const unrelated = store.createLoop({
+        name: "unrelated",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "true", cwd: otherPath },
+      });
+      seedRun(store, unrelated, "failed", "2026-01-01T00:03:00.000Z", { exitCode: 1 });
+
+      const sibling = store.createLoop({
+        name: "sibling-worktree",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "true", cwd: siblingPath },
+      });
+      seedRun(store, sibling, "succeeded", "2026-01-01T00:04:00.000Z");
+    } finally {
+      store.close();
+    }
+
+    const byPath = runCli(dataDir, ["list", "--repo", repoPath]);
+    expect(byPath.status).toBe(0);
+    expect(byPath.stdout).toContain("repo-cwd-review");
+    expect(byPath.stdout).toContain("repo-command-status");
+    expect(byPath.stdout).toContain("repo-workflow-health");
+    expect(byPath.stdout).not.toContain("unrelated");
+    expect(byPath.stdout).not.toContain("sibling-worktree");
+    expect(byPath.stdout).toContain("latest=failed");
+    expect(byPath.stdout).toContain("run=");
+    expect(byPath.stdout).toContain("context length");
+    expect(byPath.stdout).toContain("cwd=");
+    expect(byPath.stdout).toContain("provider=codewith");
+    expect(byPath.stdout).toContain("account=account015");
+    expect(byPath.stdout).toContain("Use `loops project show <repo>`");
+
+    const byNameJson = runCli(dataDir, ["--json", "list", "--repo", "open-codewith", "--with-latest-run"]);
+    expect(byNameJson.status).toBe(0);
+    const values = JSON.parse(byNameJson.stdout);
+    expect(values.map((entry: { loop: { name: string } }) => entry.loop.name).sort()).toEqual([
+      "repo-command-status",
+      "repo-cwd-review",
+      "repo-workflow-health",
+    ]);
+    expect(values.find((entry: { loop: { name: string } }) => entry.loop.name === "repo-cwd-review").latestRun.status).toBe("failed");
+    expect(values.find((entry: { loop: { name: string } }) => entry.loop.name === "repo-cwd-review").latestRun.error.length).toBeLessThan(300);
+    expect(byNameJson.stdout).not.toContain("x".repeat(500));
+    expect(
+      values
+        .find((entry: { loop: { name: string } }) => entry.loop.name === "repo-workflow-health")
+        .match.reasons.some((reason: { field: string }) => reason.field.includes("OPENLOOPS_REPO")),
+    ).toBe(true);
+
+    const byCwd = runCli(dataDir, ["--json", "list", "--cwd", repoPath]);
+    expect(byCwd.status).toBe(0);
+    expect(JSON.parse(byCwd.stdout).map((loop: { name: string }) => loop.name)).toEqual(["repo-cwd-review", "repo-workflow-health"]);
+
+    const byName = runCli(dataDir, ["--json", "list", "--name", "command"]);
+    expect(byName.status).toBe(0);
+    expect(JSON.parse(byName.stdout).map((loop: { name: string }) => loop.name)).toEqual(["repo-command-status"]);
+
+    const paged = runCli(dataDir, ["list", "--repo", "open-codewith", "--limit", "1"]);
+    expect(paged.status).toBe(0);
+    expect(paged.stdout).toContain("repeat this command with --cursor 1");
+    expect(paged.stdout).not.toContain("loops list --cursor 1");
+
+    const empty = runCli(dataDir, ["list", "--repo", "   "]);
+    expect(empty.status).not.toBe(0);
+    expect(empty.stderr).toContain("--repo must not be empty");
+  });
+
+  test("runs and project show support repo discovery filters", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-repo-runs-"));
+    const repoPath = join(dataDir, "open-codewith");
+    const otherPath = join(dataDir, "other");
+    mkdirSync(repoPath, { recursive: true });
+    mkdirSync(otherPath, { recursive: true });
+
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      const matched = store.createLoop({
+        name: "repo-health",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "agent", provider: "codewith", prompt: "Check open-codewith health", cwd: repoPath },
+      });
+      seedRun(store, matched, "failed", "2026-01-02T00:00:00.000Z", { error: "Schema validation failed for tool input" });
+
+      const textMatched = store.createLoop({
+        name: "manual-project-watch",
+        description: "Watch the open-codewith project even when cwd is elsewhere",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "true", cwd: otherPath },
+      });
+      seedRun(store, textMatched, "succeeded", "2026-01-02T00:01:00.000Z");
+
+      const unrelated = store.createLoop({
+        name: "other-health",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "true", cwd: otherPath },
+      });
+      seedRun(store, unrelated, "failed", "2026-01-02T00:02:00.000Z", { error: "other failure" });
+    } finally {
+      store.close();
+    }
+
+    const runs = runCli(dataDir, ["--json", "runs", "--repo", "open-codewith"]);
+    expect(runs.status).toBe(0);
+    expect(JSON.parse(runs.stdout).map((run: { loopName: string }) => run.loopName).sort()).toEqual(["manual-project-watch", "repo-health"]);
+
+    const failedRuns = runCli(dataDir, ["--json", "runs", "--repo", "open-codewith", "--status", "failed"]);
+    expect(failedRuns.status).toBe(0);
+    expect(JSON.parse(failedRuns.stdout).map((run: { loopName: string }) => run.loopName)).toEqual(["repo-health"]);
+
+    const project = runCli(dataDir, ["project", "show", "open-codewith"]);
+    expect(project.status).toBe(0);
+    expect(project.stdout).toContain("project=open-codewith");
+    expect(project.stdout).toContain("loops=2");
+    expect(project.stdout).toContain("failed=1");
+    expect(project.stdout).toContain("schema_error=1");
+    expect(project.stdout).toContain("repo-health");
+    expect(project.stdout).toContain("manual-project-watch");
+    expect(project.stdout).not.toContain("other-health");
+
+    const projectPaged = runCli(dataDir, ["project", "show", "open-codewith", "--limit", "1"]);
+    expect(projectPaged.status).toBe(0);
+    expect(projectPaged.stdout).toContain("repeat this command with --cursor 1");
+    expect(projectPaged.stdout).not.toContain("loops project show --cursor 1");
+
+    const projectJson = runCli(dataDir, ["--json", "project", "show", "open-codewith"]);
+    expect(projectJson.status).toBe(0);
+    const value = JSON.parse(projectJson.stdout);
+    expect(value.summary.total).toBe(2);
+    expect(value.summary.failureFamilies.schema_error).toBe(1);
+    expect(value.loops.map((entry: { loop: { name: string } }) => entry.loop.name).sort()).toEqual(["manual-project-watch", "repo-health"]);
   });
 
   test("default list is capped and points to pagination while JSON remains full", () => {
