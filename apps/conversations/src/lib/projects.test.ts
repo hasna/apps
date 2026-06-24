@@ -73,12 +73,12 @@ describe("listProjects", () => {
     expect(listProjects()).toEqual([]);
   });
 
-  test("returns projects with space_count", () => {
+  test("returns projects with channel_count", () => {
     createProject({ name: "myproject", created_by: "alice" });
     const projects = listProjects();
     expect(projects).toHaveLength(1);
     expect(projects[0].name).toBe("myproject");
-    expect(projects[0].space_count).toBe(0);
+    expect(projects[0].channel_count).toBe(0);
   });
 
   test("filters by status", () => {
@@ -137,7 +137,7 @@ describe("getProject", () => {
     expect(found).toBeTruthy();
     expect(found!.name).toBe("myproject");
     expect(found!.description).toBe("Test");
-    expect(found!.space_count).toBe(0);
+    expect(found!.channel_count).toBe(0);
   });
 });
 
@@ -185,7 +185,7 @@ describe("updateProject", () => {
 });
 
 describe("deleteProject", () => {
-  test("deletes project with no spaces", () => {
+  test("deletes project with no channels", () => {
     const p = createProject({ name: "myproject", created_by: "alice" });
     const deleted = deleteProject(p.id);
     expect(deleted).toBe(true);

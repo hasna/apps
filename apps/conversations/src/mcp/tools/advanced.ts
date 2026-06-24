@@ -10,7 +10,7 @@ import { resolveIdentity } from "../../lib/identity.js";
 import { addReaction, removeReaction, getReactions, getReactionSummary } from "../../lib/reactions.js";
 import { acquireLock, tryBulkAcquireLock, releaseLock, checkLock, listLocksEnriched, cleanExpiredLocks, releaseStaleAgentLocks } from "../../lib/locks.js";
 import { listHotSessions } from "../../lib/hot.js";
-import { getSpaceTopics, getSessionTopics, getTrendingTopics } from "../../lib/topics.js";
+import { getChannelTopics, getSessionTopics, getTrendingTopics } from "../../lib/topics.js";
 import { getConversationSummary } from "../../lib/summary.js";
 import { buildGraph, getRelated, getAgentNetwork, getGraphStats } from "../../lib/graph.js";
 
@@ -19,15 +19,15 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
   // ---- Read Receipts ----
 
   server.registerTool("read_receipts", {
-    description: "Get per-agent read receipts for a message. Shows who has read it and (for space messages) who hasn't.",
+    description: "Get per-agent read receipts for a message. Shows who has read it and (for channel messages) who hasn't.",
     inputSchema: {
       message_id: z.coerce.number(),
-      space: z.string().optional().describe("Space name — if provided, also returns list of members who haven't read yet"),
+      channel: z.string().optional().describe("Channel name — if provided, also returns list of members who haven't read yet"),
     },
   }, async (args: Record<string, any>) => {
     const receipts = getReadReceipts(args.message_id);
-    if (args.space) {
-      const status = getMessageReadStatus(args.message_id, args.space);
+    if (args.channel) {
+      const status = getMessageReadStatus(args.message_id, args.channel);
       return { content: [{ type: "text", text: JSON.stringify(status) }] };
     }
     return { content: [{ type: "text", text: JSON.stringify({ receipts, count: receipts.length }) }] };
@@ -115,10 +115,10 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
   // ---- Unread Counts & Mentions ----
 
   server.registerTool("list_unread_counts", {
-    description: "Get unread message counts per space without fetching message content. Use this at session start to triage which spaces need attention before calling read_messages.",
+    description: "Get unread message counts per channel without fetching message content. Use this at session start to triage which channels need attention before calling read_messages.",
     inputSchema: {
-      agent: z.string().optional().describe("Filter to spaces the agent is a member of or has received messages in. Omit for global unread counts."),
-      include_mentions: z.coerce.boolean().optional().describe("Include mention_count per space (requires agent)"),
+      agent: z.string().optional().describe("Filter to channels the agent is a member of or has received messages in. Omit for global unread counts."),
+      include_mentions: z.coerce.boolean().optional().describe("Include mention_count per channel (requires agent)"),
     },
   }, async (args: Record<string, any>) => {
     if (args.agent && args.include_mentions) {
@@ -133,13 +133,13 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     description: "Get messages that @mention a specific agent. Useful for catching up on missed pings.",
     inputSchema: {
       agent: z.string().describe("Agent name to find mentions for"),
-      space: z.string().optional().describe("Filter to a specific space"),
+      channel: z.string().optional().describe("Filter to a specific channel"),
       unread_only: z.coerce.boolean().optional().describe("Only unread (not yet notified) mentions (default: true)"),
       limit: z.coerce.number().optional().describe("Max results (default: 50)"),
     },
   }, async (args: Record<string, any>) => {
     const results = getMessagesForAgent(args.agent as string, {
-      space: args.space,
+      channel: args.channel,
       unread_only: args.unread_only ?? true,
       limit: args.limit,
     });
@@ -150,17 +150,17 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     description: "Mark @mentions as seen for an agent. Clears unread mention counts.",
     inputSchema: {
       agent: z.string().describe("Agent name"),
-      space: z.string().optional().describe("Clear only mentions in this space"),
+      channel: z.string().optional().describe("Clear only mentions in this channel"),
     },
   }, async (args: Record<string, any>) => {
-    const cleared = markMentionsRead(args.agent as string, args.space);
+    const cleared = markMentionsRead(args.agent as string, args.channel);
     return { content: [{ type: "text", text: JSON.stringify({ cleared }) }] };
   });
 
   // ---- Graph Tools ----
 
   server.registerTool("build_graph", {
-    description: "Build/rebuild the knowledge graph from messages, spaces, and projects. Creates relationship edges between agents, spaces, and projects.",
+    description: "Build/rebuild the knowledge graph from messages, channels, and projects. Creates relationship edges between agents, channels, and projects.",
     inputSchema: {},
   }, async () => {
     const result = buildGraph();
@@ -179,7 +179,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
   });
 
   server.registerTool("get_agent_network", {
-    description: "Get an agent's communication network: who they talk to, spaces, projects.",
+    description: "Get an agent's communication network: who they talk to, channels, projects.",
     inputSchema: {
       agent: z.string(),
     },
@@ -199,15 +199,15 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
   // ---- Summary Tools ----
 
   server.registerTool("get_summary", {
-    description: "Get a structured summary of a conversation (session or space): participants, topics, key messages, blockers, activity.",
+    description: "Get a structured summary of a conversation (session or channel): participants, topics, key messages, blockers, activity.",
     inputSchema: {
       session_id: z.string().optional(),
-      space: z.string().optional(),
+      channel: z.string().optional(),
       limit: z.coerce.number().optional(),
     },
   }, async (args: Record<string, any>) => {
-    const target = args.space || args.session_id;
-    if (!target) return { content: [{ type: "text", text: "session_id or space required" }], isError: true };
+    const target = args.channel || args.session_id;
+    if (!target) return { content: [{ type: "text", text: "session_id or channel required" }], isError: true };
     const summary = getConversationSummary(target, { limit: args.limit });
     if (!summary) return { content: [{ type: "text", text: `No messages found for "${target}"` }], isError: true };
     return { content: [{ type: "text", text: JSON.stringify(summary) }] };
@@ -216,15 +216,15 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
   // ---- Topic Tools ----
 
   server.registerTool("get_topics", {
-    description: "Extract topics from a space or session. Returns weighted keyword list.",
+    description: "Extract topics from a channel or session. Returns weighted keyword list.",
     inputSchema: {
-      space: z.string().optional(),
+      channel: z.string().optional(),
       session_id: z.string().optional(),
       limit: z.coerce.number().optional(),
     },
   }, async (args: Record<string, any>) => {
-    const topics = args.space
-      ? getSpaceTopics(args.space, { limit: args.limit })
+    const topics = args.channel
+      ? getChannelTopics(args.channel, { limit: args.limit })
       : args.session_id
       ? getSessionTopics(args.session_id, { limit: args.limit })
       : getTrendingTopics({ top_n: args.limit });
@@ -250,14 +250,14 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     inputSchema: {
       limit: z.coerce.number().optional(),
       min_score: z.coerce.number().optional(),
-      space: z.string().optional(),
+      channel: z.string().optional(),
       project_id: z.string().optional(),
     },
   }, async (args: Record<string, any>) => {
     const sessions = listHotSessions({
       limit: args.limit,
       min_score: args.min_score,
-      space: args.space,
+      channel: args.channel,
       project_id: args.project_id,
     });
     return { content: [{ type: "text", text: JSON.stringify(sessions) }] };
@@ -413,9 +413,9 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     const all = [
       "send_message", "read_messages", "get_message", "read_digest", "list_sessions", "reply",
       "mark_read", "search_messages", "export_messages",
-      "create_space", "list_spaces", "send_to_space", "read_space",
-      "join_space", "leave_space", "update_space", "archive_space", "unarchive_space",
-      "subscribe_space_notifications", "unsubscribe_space_notifications", "list_space_subscriptions", "read_space_notifications", "mark_space_notifications_read",
+      "create_channel", "list_channels", "send_to_channel", "read_channel",
+      "join_channel", "leave_channel", "update_channel", "archive_channel", "unarchive_channel",
+      "subscribe_channel_notifications", "unsubscribe_channel_notifications", "list_channel_subscriptions", "read_channel_notifications", "mark_channel_notifications_read",
       "create_project", "list_projects", "get_project", "update_project", "delete_project",
       "delete_message", "edit_message", "pin_message", "unpin_message", "get_pinned_messages",
       "build_graph", "get_related", "get_agent_network", "graph_stats",
@@ -449,59 +449,59 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     const descriptions: Record<string, string> = {
       // DM tools
       send_message: "Send DM to agent. Required: to, content. Optional: from?, priority?(low|normal|high|urgent), blocking?",
-      read_messages: "Read messages with filters. Optional: session_id?, from?, to?, space?, since?(ISO), limit?, unread_only?, mark_read?(default true \u2014 auto-marks returned messages as read, pass false to peek without consuming)",
+      read_messages: "Read messages with filters. Optional: session_id?, from?, to?, channel?, since?(ISO), limit?, unread_only?, mark_read?(default true \u2014 auto-marks returned messages as read, pass false to peek without consuming)",
       get_message: "Get the full content of a specific message by id. Required: id",
-      read_digest: "Lightweight unread digest \u2014 preview only (no full bodies), auto-marks read, never overflows tokens. Returns { messages, total_unread, shown }. Optional: space?, session_id?, to?, since?(ISO), limit?, project_id?",
+      read_digest: "Lightweight unread digest \u2014 preview only (no full bodies), auto-marks read, never overflows tokens. Returns { messages, total_unread, shown }. Optional: channel?, session_id?, to?, since?(ISO), limit?, project_id?",
       list_sessions: "List all DM sessions. Optional: agent?(filter by participant)",
       reply: "Reply to a specific message, creating a thread (sets reply_to). Use read_thread to retrieve. Required: message_id, content. Optional: from?",
       mark_read: "Mark messages as read. Optional: from?, ids?(array), all?(bool \u2014 mark all unread)",
-      mark_space_read: "Mark ALL messages in a space as read without fetching. Required: space. Optional: from?",
-      search_messages: "Full-text search messages. Required: query. Optional: space?, from?, to?, limit?",
-      export_messages: "Export messages as JSON or CSV. Optional: space?, session_id?, from?, since?, until?, format?(json|csv)",
-      // Space tools
-      create_space: "Create space and auto-join. Required: name. Optional: from?, description?, parent_id?(max 3 levels), project_id?",
-      list_unread_counts: "Get unread message counts per space (no content). Ideal for session start triage. Optional: agent?(filter to agent's spaces)",
-      list_spaces: "List spaces with member/message counts. Optional: project_id?, parent_id?(use 'null' for top-level), include_archived?",
-      send_to_space: "Post message to space. Required: space, content. Optional: from?, priority?(low|normal|high|urgent), blocking?",
-      read_space: "Read messages in a space. Required: space. Optional: since?(ISO), limit?, mark_read?(default true \u2014 auto-marks returned messages as read)",
-      join_space: "Join a space. Required: space. Optional: from?",
-      leave_space: "Leave a space. Required: space. Optional: from?",
-      update_space: "Update space fields. Required: name. Optional: description?, parent_id?(use 'null' to remove), project_id?(use 'null' to remove)",
-      archive_space: "Archive a space (hidden from default list). Required: name",
-      unarchive_space: "Restore archived space. Required: name",
-      subscribe_space_notifications: "Subscribe to preview-only notifications for a space. Required: space. Optional: from?, preview_chars?",
-      unsubscribe_space_notifications: "Stop preview-only notifications for a space. Required: space. Optional: from?",
-      list_space_subscriptions: "List preview-only space notification subscriptions for the current agent. Optional: from?, space?",
-      read_space_notifications: "Read preview-only notifications from subscribed spaces. Returns blurbs instead of full message bodies. Optional: from?, space?, unread_only?, since?, limit?, mark_read?",
-      mark_space_notifications_read: "Mark preview-only space notifications as read. Optional: from?, ids?(array), space?, all?(bool)",
+      mark_channel_read: "Mark ALL messages in a channel as read without fetching. Required: channel. Optional: from?",
+      search_messages: "Full-text search messages. Required: query. Optional: channel?, from?, to?, limit?",
+      export_messages: "Export messages as JSON or CSV. Optional: channel?, session_id?, from?, since?, until?, format?(json|csv)",
+      // Channel tools
+      create_channel: "Create channel and auto-join. Required: name. Optional: from?, description?, topic?, project_id?",
+      list_unread_counts: "Get unread message counts per channel (no content). Ideal for session start triage. Optional: agent?(filter to agent's channels)",
+      list_channels: "List channels with member/message counts. Optional: project_id?, include_archived?",
+      send_to_channel: "Post message to channel. Required: channel, content. Optional: from?, priority?(low|normal|high|urgent), blocking?",
+      read_channel: "Read messages in a channel. Required: channel. Optional: since?(ISO), limit?, mark_read?(default true \u2014 auto-marks returned messages as read)",
+      join_channel: "Join a channel. Required: channel. Optional: from?",
+      leave_channel: "Leave a channel. Required: channel. Optional: from?",
+      update_channel: "Update channel fields. Required: name. Optional: description?, topic?(use 'null' to remove), project_id?(use 'null' to remove)",
+      archive_channel: "Archive a channel (hidden from default list). Required: name",
+      unarchive_channel: "Restore archived channel. Required: name",
+      subscribe_channel_notifications: "Subscribe to preview-only notifications for a channel. Required: channel. Optional: from?, preview_chars?",
+      unsubscribe_channel_notifications: "Stop preview-only notifications for a channel. Required: channel. Optional: from?",
+      list_channel_subscriptions: "List preview-only channel notification subscriptions for the current agent. Optional: from?, channel?",
+      read_channel_notifications: "Read preview-only notifications from subscribed channels. Returns blurbs instead of full message bodies. Optional: from?, channel?, unread_only?, since?, limit?, mark_read?",
+      mark_channel_notifications_read: "Mark preview-only channel notifications as read. Optional: from?, ids?(array), channel?, all?(bool)",
       // Project tools
       create_project: "Create a project. Required: name. Optional: from?, description?, path?, repository?, tags?(JSON array), metadata?(JSON), settings?(JSON)",
       list_projects: "List projects. Optional: status?(active|archived)",
       get_project: "Get project by UUID or name. Required: id",
       update_project: "Update project fields. Required: id. Optional: name?, description?, path?, status?(active|archived), repository?, tags?(JSON), metadata?(JSON), settings?(JSON)",
-      delete_project: "Delete project (fails if spaces reference it). Required: id",
+      delete_project: "Delete project (fails if channels reference it). Required: id",
       // Message management
       delete_message: "Delete a message (sender only). Required: id. Optional: from?",
       edit_message: "Edit message content (sender only). Required: id, content. Optional: from?",
       pin_message: "Pin a message. Required: id",
       unpin_message: "Unpin a message. Required: id",
-      get_pinned_messages: "Get pinned messages. Optional: space?, session_id?, limit?",
+      get_pinned_messages: "Get pinned messages. Optional: channel?, session_id?, limit?",
       // Graph
-      build_graph: "Build/rebuild knowledge graph from messages, spaces, projects. Returns edge counts.",
+      build_graph: "Build/rebuild knowledge graph from messages, channels, projects. Returns edge counts.",
       get_related: "Find entities related to a given entity. Required: entity_type, entity_id",
-      get_agent_network: "Agent's communication network: contacts, spaces, projects. Required: agent",
+      get_agent_network: "Agent's communication network: contacts, channels, projects. Required: agent",
       graph_stats: "Knowledge graph stats: total edges, by relation type",
       // Summary
-      get_summary: "Structured conversation summary: participants, topics, key messages, blockers. Required: session_id? or space?. Optional: limit?",
+      get_summary: "Structured conversation summary: participants, topics, key messages, blockers. Required: session_id? or channel?. Optional: limit?",
       // Topics
-      get_topics: "Extract topics from space or session. Optional: space?, session_id?, limit?",
+      get_topics: "Extract topics from channel or session. Optional: channel?, session_id?, limit?",
       trending_topics: "Trending topics across all messages. Optional: hours?, project_id?, top_n?",
-      set_space_topic: "Set current topic/status of a space. Required: space, topic (pass null to clear).",
-      get_space_topic: "Get current topic/status of a space. Required: space.",
+      set_channel_topic: "Set current topic/status of a channel. Required: channel, topic (pass null to clear).",
+      get_channel_topic: "Get current topic/status of a channel. Required: channel.",
       // Session activity
       get_session_activity: "Get activity metrics for a session: velocity, agents, reply ratio, reactions, trending. Required: session_id",
       // Hot conversations
-      hot_sessions: "List conversations by hotness score (velocity, reactions, replies, priority, blockers). Optional: limit?, min_score?, space?, project_id?",
+      hot_sessions: "List conversations by hotness score (velocity, reactions, replies, priority, blockers). Optional: limit?, min_score?, channel?, project_id?",
       // Reaction tools
       add_reaction: "Add emoji reaction to a message. Required: message_id, emoji. Optional: from?",
       remove_reaction: "Remove emoji reaction from a message. Required: message_id, emoji. Optional: from?",
@@ -532,9 +532,9 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       search_tools: "Search tool names by keyword. Optional: query?",
       describe_tools: "Get full descriptions for tools. Required: names(array of tool names)",
       // Task tools
-      create_task: "Create a new task. Required: subject, reporter. Optional: description?, assignee?, priority?(low|medium|high|critical), project_id?, space?, parent_id?(subtask), depends_on?(array of task ids), tags?(array), metadata?(JSON), due_at?(ISO date)",
+      create_task: "Create a new task. Required: subject, reporter. Optional: description?, assignee?, priority?(low|medium|high|critical), project_id?, channel?, parent_id?(subtask), depends_on?(array of task ids), tags?(array), metadata?(JSON), due_at?(ISO date)",
       get_task: "Get a task by id or uuid. Returns enriched TaskInfo with subtask_count, comment_count, dependency_count, blocker_info. Required: id? or uuid?",
-      list_tasks: "List tasks with filters. Optional: status?(pending|in_progress|completed|cancelled|blocked), assignee?, reporter?, project_id?, space?, parent_id?(null for top-level), priority?, tag?, limit?(default 50), offset?, include_archived?",
+      list_tasks: "List tasks with filters. Optional: status?(pending|in_progress|completed|cancelled|blocked), assignee?, reporter?, project_id?, channel?, parent_id?(null for top-level), priority?, tag?, limit?(default 50), offset?, include_archived?",
       start_task: "Mark task in_progress. Fails if any dependency not completed. Required: id. Optional: agent?",
       complete_task: "Mark task completed. Auto-unblocks dependent tasks with all deps met. Required: id. Optional: agent?, evidence?",
       cancel_task: "Cancel a task with optional reason. Required: id. Optional: agent?, reason?",

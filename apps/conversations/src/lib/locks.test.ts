@@ -21,17 +21,17 @@ afterEach(() => {
 
 describe("acquireLock", () => {
   test("acquires a new lock", () => {
-    const result = acquireLock("space", "general", "agent-1");
+    const result = acquireLock("channel", "general", "agent-1");
     expect(result.acquired).toBe(true);
     expect(result.lock).toBeTruthy();
-    expect(result.lock!.resource_type).toBe("space");
+    expect(result.lock!.resource_type).toBe("channel");
     expect(result.lock!.resource_id).toBe("general");
     expect(result.lock!.agent_id).toBe("agent-1");
     expect(result.lock!.lock_type).toBe("advisory");
   });
 
   test("defaults to advisory lock type", () => {
-    const result = acquireLock("space", "room", "agent-1");
+    const result = acquireLock("channel", "room", "agent-1");
     expect(result.lock!.lock_type).toBe("advisory");
   });
 
@@ -41,29 +41,29 @@ describe("acquireLock", () => {
   });
 
   test("same agent re-acquiring same lock refreshes it", () => {
-    acquireLock("space", "general", "agent-1");
-    const result = acquireLock("space", "general", "agent-1");
+    acquireLock("channel", "general", "agent-1");
+    const result = acquireLock("channel", "general", "agent-1");
     expect(result.acquired).toBe(true);
     expect(result.held_by).toBeUndefined();
   });
 
   test("different agent blocked by existing lock", () => {
-    acquireLock("space", "general", "agent-1");
-    const result = acquireLock("space", "general", "agent-2");
+    acquireLock("channel", "general", "agent-1");
+    const result = acquireLock("channel", "general", "agent-2");
     expect(result.acquired).toBe(false);
     expect(result.lock).toBeNull();
     expect(result.held_by).toBe("agent-1");
   });
 
   test("different resource types don't conflict", () => {
-    acquireLock("space", "general", "agent-1");
+    acquireLock("channel", "general", "agent-1");
     const result = acquireLock("pinned_message", "general", "agent-2");
     expect(result.acquired).toBe(true);
   });
 
   test("different resource IDs don't conflict", () => {
-    acquireLock("space", "room-a", "agent-1");
-    const result = acquireLock("space", "room-b", "agent-2");
+    acquireLock("channel", "room-a", "agent-1");
+    const result = acquireLock("channel", "room-b", "agent-2");
     expect(result.acquired).toBe(true);
   });
 
@@ -72,43 +72,43 @@ describe("acquireLock", () => {
     // Insert an already-expired lock
     db.prepare(`
       INSERT INTO resource_locks (resource_type, resource_id, agent_id, lock_type, locked_at, expires_at)
-      VALUES ('space', 'expired-room', 'old-agent', 'advisory', strftime('%Y-%m-%dT%H:%M:%f', 'now', '-600 seconds'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '-300 seconds'))
+      VALUES ('channel', 'expired-room', 'old-agent', 'advisory', strftime('%Y-%m-%dT%H:%M:%f', 'now', '-600 seconds'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '-300 seconds'))
     `).run();
 
-    const result = acquireLock("space", "expired-room", "new-agent");
+    const result = acquireLock("channel", "expired-room", "new-agent");
     expect(result.acquired).toBe(true);
   });
 });
 
 describe("releaseLock", () => {
   test("releases lock held by agent", () => {
-    acquireLock("space", "general", "agent-1");
-    const released = releaseLock("space", "general", "agent-1");
+    acquireLock("channel", "general", "agent-1");
+    const released = releaseLock("channel", "general", "agent-1");
     expect(released).toBe(true);
-    expect(checkLock("space", "general")).toBeNull();
+    expect(checkLock("channel", "general")).toBeNull();
   });
 
   test("returns false if agent doesn't hold the lock", () => {
-    acquireLock("space", "general", "agent-1");
-    const released = releaseLock("space", "general", "agent-2");
+    acquireLock("channel", "general", "agent-1");
+    const released = releaseLock("channel", "general", "agent-2");
     expect(released).toBe(false);
-    expect(checkLock("space", "general")).toBeTruthy();
+    expect(checkLock("channel", "general")).toBeTruthy();
   });
 
   test("returns false for nonexistent lock", () => {
-    const released = releaseLock("space", "nonexistent", "agent-1");
+    const released = releaseLock("channel", "nonexistent", "agent-1");
     expect(released).toBe(false);
   });
 });
 
 describe("checkLock", () => {
   test("returns null when no lock exists", () => {
-    expect(checkLock("space", "general")).toBeNull();
+    expect(checkLock("channel", "general")).toBeNull();
   });
 
   test("returns lock when it exists", () => {
-    acquireLock("space", "general", "agent-1");
-    const lock = checkLock("space", "general");
+    acquireLock("channel", "general", "agent-1");
+    const lock = checkLock("channel", "general");
     expect(lock).toBeTruthy();
     expect(lock!.agent_id).toBe("agent-1");
   });
@@ -117,9 +117,9 @@ describe("checkLock", () => {
     const db = getDb();
     db.prepare(`
       INSERT INTO resource_locks (resource_type, resource_id, agent_id, lock_type, locked_at, expires_at)
-      VALUES ('space', 'stale', 'old-agent', 'advisory', strftime('%Y-%m-%dT%H:%M:%f', 'now', '-600 seconds'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '-300 seconds'))
+      VALUES ('channel', 'stale', 'old-agent', 'advisory', strftime('%Y-%m-%dT%H:%M:%f', 'now', '-600 seconds'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '-300 seconds'))
     `).run();
-    expect(checkLock("space", "stale")).toBeNull();
+    expect(checkLock("channel", "stale")).toBeNull();
   });
 });
 
@@ -129,16 +129,16 @@ describe("cleanExpiredLocks", () => {
     // Insert expired locks directly (bypass acquireLock which auto-cleans)
     db.prepare(`
       INSERT INTO resource_locks (resource_type, resource_id, agent_id, lock_type, locked_at, expires_at)
-      VALUES ('space', 'r1', 'a1', 'advisory', strftime('%Y-%m-%dT%H:%M:%f', 'now', '-600 seconds'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '-300 seconds'))
+      VALUES ('channel', 'r1', 'a1', 'advisory', strftime('%Y-%m-%dT%H:%M:%f', 'now', '-600 seconds'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '-300 seconds'))
     `).run();
     db.prepare(`
       INSERT INTO resource_locks (resource_type, resource_id, agent_id, lock_type, locked_at, expires_at)
-      VALUES ('space', 'r2', 'a2', 'advisory', strftime('%Y-%m-%dT%H:%M:%f', 'now', '-600 seconds'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '-300 seconds'))
+      VALUES ('channel', 'r2', 'a2', 'advisory', strftime('%Y-%m-%dT%H:%M:%f', 'now', '-600 seconds'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '-300 seconds'))
     `).run();
     // Insert an active lock directly too
     db.prepare(`
       INSERT INTO resource_locks (resource_type, resource_id, agent_id, lock_type, locked_at, expires_at)
-      VALUES ('space', 'active', 'a3', 'advisory', strftime('%Y-%m-%dT%H:%M:%f', 'now'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '+60 seconds'))
+      VALUES ('channel', 'active', 'a3', 'advisory', strftime('%Y-%m-%dT%H:%M:%f', 'now'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '+60 seconds'))
     `).run();
 
     const cleaned = cleanExpiredLocks();
@@ -158,12 +158,12 @@ describe("releaseStaleAgentLocks", () => {
     // Insert a lock held by that stale agent
     db.prepare(`
       INSERT INTO resource_locks (resource_type, resource_id, agent_id, lock_type, locked_at, expires_at)
-      VALUES ('space', 'stale-room', 'stale-agent', 'advisory', strftime('%Y-%m-%dT%H:%M:%f', 'now', '-1900 seconds'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '+3600 seconds'))
+      VALUES ('channel', 'stale-room', 'stale-agent', 'advisory', strftime('%Y-%m-%dT%H:%M:%f', 'now', '-1900 seconds'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '+3600 seconds'))
     `).run();
 
     const released = releaseStaleAgentLocks();
     expect(released).toBe(1);
-    expect(checkLock("space", "stale-room")).toBeNull();
+    expect(checkLock("channel", "stale-room")).toBeNull();
   });
 
   test("does not release locks for agents with fresh heartbeat", () => {
@@ -174,24 +174,24 @@ describe("releaseStaleAgentLocks", () => {
     `).run();
     db.prepare(`
       INSERT INTO resource_locks (resource_type, resource_id, agent_id, lock_type, locked_at, expires_at)
-      VALUES ('space', 'fresh-room', 'fresh-agent', 'advisory', strftime('%Y-%m-%dT%H:%M:%f', 'now'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '+3600 seconds'))
+      VALUES ('channel', 'fresh-room', 'fresh-agent', 'advisory', strftime('%Y-%m-%dT%H:%M:%f', 'now'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '+3600 seconds'))
     `).run();
 
     const released = releaseStaleAgentLocks();
     expect(released).toBe(0);
-    expect(checkLock("space", "fresh-room")).toBeTruthy();
+    expect(checkLock("channel", "fresh-room")).toBeTruthy();
   });
 
   test("does not release locks for agents with no presence record", () => {
     const db = getDb();
     db.prepare(`
       INSERT INTO resource_locks (resource_type, resource_id, agent_id, lock_type, locked_at, expires_at)
-      VALUES ('space', 'unknown-room', 'unknown-agent', 'advisory', strftime('%Y-%m-%dT%H:%M:%f', 'now'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '+3600 seconds'))
+      VALUES ('channel', 'unknown-room', 'unknown-agent', 'advisory', strftime('%Y-%m-%dT%H:%M:%f', 'now'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '+3600 seconds'))
     `).run();
 
     const released = releaseStaleAgentLocks();
     expect(released).toBe(0);
-    expect(checkLock("space", "unknown-room")).toBeTruthy();
+    expect(checkLock("channel", "unknown-room")).toBeTruthy();
   });
 
   test("auto-releases stale agent locks via acquireLock cleanup", () => {
@@ -203,11 +203,11 @@ describe("releaseStaleAgentLocks", () => {
     `).run();
     db.prepare(`
       INSERT INTO resource_locks (resource_type, resource_id, agent_id, lock_type, locked_at, expires_at)
-      VALUES ('space', 'zombie-room', 'zombie-agent', 'advisory', strftime('%Y-%m-%dT%H:%M:%f', 'now', '-2000 seconds'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '+3600 seconds'))
+      VALUES ('channel', 'zombie-room', 'zombie-agent', 'advisory', strftime('%Y-%m-%dT%H:%M:%f', 'now', '-2000 seconds'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '+3600 seconds'))
     `).run();
 
     // A new agent tries to acquire the same lock — cleanup runs internally and succeeds
-    const result = acquireLock("space", "zombie-room", "new-agent");
+    const result = acquireLock("channel", "zombie-room", "new-agent");
     expect(result.acquired).toBe(true);
   });
 });
@@ -218,22 +218,22 @@ describe("listLocks", () => {
   });
 
   test("returns all active locks", () => {
-    acquireLock("space", "r1", "agent-1");
+    acquireLock("channel", "r1", "agent-1");
     acquireLock("pinned_message", "42", "agent-2", "exclusive");
     expect(listLocks()).toHaveLength(2);
   });
 
   test("filters by resource_type", () => {
-    acquireLock("space", "r1", "agent-1");
+    acquireLock("channel", "r1", "agent-1");
     acquireLock("pinned_message", "42", "agent-2");
-    const spaceLocks = listLocks({ resource_type: "space" });
-    expect(spaceLocks).toHaveLength(1);
-    expect(spaceLocks[0].resource_type).toBe("space");
+    const channelLocks = listLocks({ resource_type: "channel" });
+    expect(channelLocks).toHaveLength(1);
+    expect(channelLocks[0].resource_type).toBe("channel");
   });
 
   test("filters by agent_id", () => {
-    acquireLock("space", "r1", "agent-1");
-    acquireLock("space", "r2", "agent-2");
+    acquireLock("channel", "r1", "agent-1");
+    acquireLock("channel", "r2", "agent-2");
     const agentLocks = listLocks({ agent_id: "agent-1" });
     expect(agentLocks).toHaveLength(1);
     expect(agentLocks[0].agent_id).toBe("agent-1");
@@ -242,7 +242,7 @@ describe("listLocks", () => {
 
 describe("listLocksEnriched", () => {
   test("includes locked_seconds_ago and expires_in_seconds", () => {
-    acquireLock("space", "enrich-room", "enrich-agent");
+    acquireLock("channel", "enrich-room", "enrich-agent");
     const locks = listLocksEnriched();
     expect(locks).toHaveLength(1);
     expect(typeof locks[0].locked_seconds_ago).toBe("number");
@@ -252,7 +252,7 @@ describe("listLocksEnriched", () => {
   });
 
   test("agent is null when no presence record exists", () => {
-    acquireLock("space", "no-presence-room", "ghost-agent");
+    acquireLock("channel", "no-presence-room", "ghost-agent");
     const locks = listLocksEnriched({ agent_id: "ghost-agent" });
     expect(locks).toHaveLength(1);
     expect(locks[0].agent).toBeNull();
@@ -264,7 +264,7 @@ describe("listLocksEnriched", () => {
       INSERT OR REPLACE INTO agent_presence (id, agent, session_id, role, status, last_seen_at, created_at)
       VALUES ('dd', 'known-agent', 'sess', 'engineer', 'busy', strftime('%Y-%m-%dT%H:%M:%f', 'now'), strftime('%Y-%m-%dT%H:%M:%f', 'now'))
     `).run();
-    acquireLock("space", "known-room", "known-agent");
+    acquireLock("channel", "known-room", "known-agent");
     const locks = listLocksEnriched({ agent_id: "known-agent" });
     expect(locks).toHaveLength(1);
     expect(locks[0].agent).not.toBeNull();
@@ -279,7 +279,7 @@ describe("listLocksEnriched", () => {
       INSERT OR REPLACE INTO agent_presence (id, agent, session_id, role, status, last_seen_at, created_at)
       VALUES ('ee', 'offline-agent', 'sess', 'agent', 'online', strftime('%Y-%m-%dT%H:%M:%f', 'now', '-120 seconds'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '-120 seconds'))
     `).run();
-    acquireLock("space", "offline-room", "offline-agent");
+    acquireLock("channel", "offline-room", "offline-agent");
     const locks = listLocksEnriched({ agent_id: "offline-agent" });
     expect(locks[0].agent!.online).toBe(false);
   });
@@ -288,8 +288,8 @@ describe("listLocksEnriched", () => {
 describe("tryBulkAcquireLock", () => {
   test("acquires multiple locks atomically", () => {
     const result = tryBulkAcquireLock([
-      { resource_type: "space", resource_id: "bulk-a" },
-      { resource_type: "space", resource_id: "bulk-b" },
+      { resource_type: "channel", resource_id: "bulk-a" },
+      { resource_type: "channel", resource_id: "bulk-b" },
       { resource_type: "pinned_message", resource_id: "42", lock_type: "exclusive" },
     ], "bulk-agent");
 
@@ -298,39 +298,39 @@ describe("tryBulkAcquireLock", () => {
     expect(result.blocked_by).toBeUndefined();
 
     // Verify all locks exist in DB
-    expect(checkLock("space", "bulk-a")).toBeTruthy();
-    expect(checkLock("space", "bulk-b")).toBeTruthy();
+    expect(checkLock("channel", "bulk-a")).toBeTruthy();
+    expect(checkLock("channel", "bulk-b")).toBeTruthy();
     expect(checkLock("pinned_message", "42")).toBeTruthy();
   });
 
   test("returns failure and no locks when any resource is blocked", () => {
     // agent-other holds bulk-blocked
-    acquireLock("space", "bulk-blocked", "agent-other");
+    acquireLock("channel", "bulk-blocked", "agent-other");
 
     const result = tryBulkAcquireLock([
-      { resource_type: "space", resource_id: "bulk-free" },
-      { resource_type: "space", resource_id: "bulk-blocked" },
+      { resource_type: "channel", resource_id: "bulk-free" },
+      { resource_type: "channel", resource_id: "bulk-blocked" },
     ], "bulk-requester");
 
     expect(result.acquired).toBe(false);
     expect(result.locks).toHaveLength(0);
     expect(result.blocked_by).toEqual({
-      resource_type: "space",
+      resource_type: "channel",
       resource_id: "bulk-blocked",
       held_by: "agent-other",
     });
 
     // bulk-free must NOT have been acquired (atomicity)
-    expect(checkLock("space", "bulk-free")).toBeNull();
+    expect(checkLock("channel", "bulk-free")).toBeNull();
   });
 
   test("same agent re-acquiring all owned locks succeeds", () => {
-    acquireLock("space", "bulk-owned-a", "self-agent");
-    acquireLock("space", "bulk-owned-b", "self-agent");
+    acquireLock("channel", "bulk-owned-a", "self-agent");
+    acquireLock("channel", "bulk-owned-b", "self-agent");
 
     const result = tryBulkAcquireLock([
-      { resource_type: "space", resource_id: "bulk-owned-a" },
-      { resource_type: "space", resource_id: "bulk-owned-b" },
+      { resource_type: "channel", resource_id: "bulk-owned-a" },
+      { resource_type: "channel", resource_id: "bulk-owned-b" },
     ], "self-agent");
 
     expect(result.acquired).toBe(true);

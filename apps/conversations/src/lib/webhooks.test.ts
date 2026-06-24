@@ -7,6 +7,7 @@ import type { Message } from "../types";
 
 const TEST_CONFIG_DIR = join(tmpdir(), `conversations-test-webhooks-${Date.now()}`);
 const TEST_CONFIG_PATH = join(TEST_CONFIG_DIR, "config.json");
+const ORIGINAL_FETCH = globalThis.fetch;
 
 function makeMessage(overrides: Partial<Message> = {}): Message {
   return {
@@ -14,7 +15,7 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
     session_id: "test-session",
     from_agent: "alice",
     to_agent: "bob",
-    space: null,
+    channel: null,
     project_id: null,
     content: "hello",
     priority: "normal",
@@ -33,6 +34,15 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
   };
 }
 
+async function waitFor(condition: () => boolean, timeoutMs = 2000): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (condition()) return;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  expect(condition()).toBe(true);
+}
+
 beforeEach(() => {
   mkdirSync(TEST_CONFIG_DIR, { recursive: true });
   process.env.CONVERSATIONS_CONFIG_PATH = TEST_CONFIG_PATH;
@@ -40,6 +50,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  globalThis.fetch = ORIGINAL_FETCH;
   delete process.env.CONVERSATIONS_CONFIG_PATH;
   _resetConfigCache();
   try { rmSync(TEST_CONFIG_DIR, { recursive: true }); } catch {}
@@ -69,18 +80,15 @@ describe("fireWebhooks", () => {
     fireWebhooks(makeMessage({ blocking: false }));
   });
 
-  test("matches dm event for non-space messages", () => {
+  test("matches dm event for non-channel messages", () => {
     let called = false;
-    const originalFetch = globalThis.fetch;
     (globalThis as any).fetch = async (...args: any[]) => { called = true; return new Response("ok"); };
 
     writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
       webhooks: [{ url: "http://localhost:9999/hook", events: ["dm"] }],
     }));
-    fireWebhooks(makeMessage({ space: null }));
+    fireWebhooks(makeMessage({ channel: null }));
 
-    // Restore
-    setTimeout(() => { globalThis.fetch = originalFetch; }, 100);
     // fetch is async so called may not be true yet, but the function shouldn't throw
   });
 
@@ -92,11 +100,11 @@ describe("fireWebhooks", () => {
     fireWebhooks(makeMessage({ blocking: true }));
   });
 
-  test("matches space event for space messages", () => {
+  test("matches channel event for channel messages", () => {
     writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
-      webhooks: [{ url: "http://localhost:9999/hook", events: ["space"] }],
+      webhooks: [{ url: "http://localhost:9999/hook", events: ["channel"] }],
     }));
-    fireWebhooks(makeMessage({ space: "general" }));
+    fireWebhooks(makeMessage({ channel: "general" }));
   });
 
   test("matches mention event when agent is @mentioned", () => {
@@ -114,12 +122,12 @@ describe("fireWebhooks", () => {
     fireWebhooks(makeMessage({ to_agent: "bob" }));
   });
 
-  test("fires webhook for agent-scoped space message", () => {
+  test("fires webhook for agent-scoped channel message", () => {
     writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
-      webhooks: [{ url: "http://localhost:9999/hook", events: ["space"], agent: "charlie" }],
+      webhooks: [{ url: "http://localhost:9999/hook", events: ["channel"], agent: "charlie" }],
     }));
-    // Space messages are not filtered by agent scope (only DMs are)
-    fireWebhooks(makeMessage({ space: "general", to_agent: "general" }));
+    // Channel messages are not filtered by agent scope (only DMs are)
+    fireWebhooks(makeMessage({ channel: "general", to_agent: "general" }));
   });
 
   test("mention event does not match when agent not mentioned", () => {
@@ -171,7 +179,7 @@ describe("fireTaskWebhooks", () => {
 
   test("does nothing when no webhooks have task events", () => {
     writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
-      webhooks: [{ url: "https://example.com/hook", events: ["dm", "space"] }],
+      webhooks: [{ url: "https://example.com/hook", events: ["dm", "channel"] }],
     }));
     fireTaskWebhooks(makeTaskEvent());
   });
@@ -190,8 +198,7 @@ describe("fireTaskWebhooks", () => {
 
     fireTaskWebhooks(makeTaskEvent({ action: "created", new_status: "pending" }));
 
-    // Wait for async fetch
-    await new Promise((r) => setTimeout(r, 50));
+    await waitFor(() => capturedBody !== null);
 
     expect(capturedBody).toEqual({
       task_id: 1,
@@ -225,7 +232,7 @@ describe("fireTaskWebhooks", () => {
 
     fireTaskWebhooks(makeTaskEvent({ action: "started", old_status: "pending", new_status: "in_progress" }));
 
-    await new Promise((r) => setTimeout(r, 50));
+    await waitFor(() => capturedBody !== null);
 
     expect(capturedBody.action).toBe("started");
     expect(capturedBody.old_status).toBe("pending");
@@ -253,7 +260,7 @@ describe("fireTaskWebhooks", () => {
       detail: "Fixed the null pointer in auth handler",
     }));
 
-    await new Promise((r) => setTimeout(r, 50));
+    await waitFor(() => capturedBody !== null);
 
     expect(capturedBody.action).toBe("completed");
     expect(capturedBody.detail).toBe("Fixed the null pointer in auth handler");
@@ -282,7 +289,7 @@ describe("fireTaskWebhooks", () => {
       detail: "No longer needed after refactor",
     }));
 
-    await new Promise((r) => setTimeout(r, 50));
+    await waitFor(() => capturedBody !== null);
 
     expect(capturedBody.action).toBe("cancelled");
     expect(capturedBody.detail).toBe("No longer needed after refactor");
@@ -309,7 +316,7 @@ describe("fireTaskWebhooks", () => {
       detail: "Waiting for API access token",
     }));
 
-    await new Promise((r) => setTimeout(r, 50));
+    await waitFor(() => capturedBody !== null);
 
     expect(capturedBody.action).toBe("blocked");
     expect(capturedBody.new_status).toBe("blocked");
@@ -337,7 +344,7 @@ describe("fireTaskWebhooks", () => {
       detail: "dependency #1 completed",
     }));
 
-    await new Promise((r) => setTimeout(r, 50));
+    await waitFor(() => capturedBody !== null);
 
     expect(capturedBody.action).toBe("auto_unblocked");
     expect(capturedBody.agent).toBe("system");
@@ -362,7 +369,7 @@ describe("fireTaskWebhooks", () => {
 
     // Event from bob — SHOULD fire
     fireTaskWebhooks(makeTaskEvent({ agent: "bob" }));
-    await new Promise((r) => setTimeout(r, 50));
+    await waitFor(() => callCount === 1);
     expect(callCount).toBe(1);
 
     globalThis.fetch = originalFetch;
@@ -370,7 +377,11 @@ describe("fireTaskWebhooks", () => {
 
   test("handles fetch failure silently", async () => {
     const originalFetch = globalThis.fetch;
-    (globalThis as any).fetch = async () => { throw new Error("network error"); };
+    let attempted = false;
+    (globalThis as any).fetch = async () => {
+      attempted = true;
+      throw new Error("network error");
+    };
 
     try {
       writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
@@ -379,7 +390,7 @@ describe("fireTaskWebhooks", () => {
 
       // Should not throw, and the rejected async fetch must settle before restore.
       expect(() => fireTaskWebhooks(makeTaskEvent())).not.toThrow();
-      await new Promise((r) => setTimeout(r, 50));
+      await waitFor(() => attempted);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -401,7 +412,7 @@ describe("fireTaskWebhooks", () => {
     }));
 
     fireTaskWebhooks(makeTaskEvent());
-    await new Promise((r) => setTimeout(r, 50));
+    await waitFor(() => urls.length === 2);
 
     expect(urls).toContain("https://example.com/tasks1");
     expect(urls).toContain("https://example.com/tasks2");
@@ -420,7 +431,7 @@ describe("fireTaskWebhooks", () => {
     }));
 
     fireTaskWebhooks(makeTaskEvent());
-    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 100));
 
     // Should not fire — private IP blocked by SSRF protection
     expect(callCount).toBe(0);
@@ -445,7 +456,7 @@ describe("fireTaskWebhooks", () => {
       detail: "medium -> critical",
     }));
 
-    await new Promise((r) => setTimeout(r, 50));
+    await waitFor(() => capturedBody !== null);
 
     expect(capturedBody.action).toBe("priority_changed");
     expect(capturedBody.detail).toBe("medium -> critical");

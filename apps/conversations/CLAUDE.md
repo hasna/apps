@@ -24,20 +24,20 @@ Three entry points share one core library and one SQLite database:
 
 ```
 src/
-  types.ts            -- TypeScript types: Message, Session, Space, Project, Priority, etc.
+  types.ts            -- TypeScript types: Message, Session, Channel, Project, Priority, etc.
   index.ts            -- Library re-exports for @hasna/conversations consumers
 
   lib/
     db.ts             -- Singleton SQLite connection, WAL mode, schema creation, auto-migration
-    messages.ts       -- sendMessage, readMessages, markRead, markSessionRead, markSpaceRead, getMessageById
+    messages.ts       -- sendMessage, readMessages, markRead, markSessionRead, markChannelRead, getMessageById
     sessions.ts       -- Sessions derived from messages via GROUP BY (no sessions table)
-    spaces.ts         -- Space CRUD + membership + hierarchy (max 3 levels deep)
+    channels.ts       -- Flat channel CRUD + membership
     projects.ts       -- Project CRUD with metadata, tags, status, settings, repository
-    poll.ts           -- startPolling() (plain JS) and useMessages()/useSpaceMessages() (React hooks)
+    poll.ts           -- startPolling() (plain JS) and useMessages()/useChannelMessages() (React hooks)
     identity.ts       -- Agent identity: explicit flag -> CONVERSATIONS_AGENT_ID env -> "user" fallback
 
   cli/
-    index.tsx         -- Commander.js CLI with subcommands (send, read, reply, space, project, etc.)
+    index.tsx         -- Commander.js CLI with subcommands (send, read, reply, channel, project, etc.)
                          Default action (no subcommand) renders Ink TUI.
                          The `mcp` subcommand does a dynamic import to avoid loading MCP deps for other commands.
     components/
@@ -47,12 +47,12 @@ src/
       MessageBubble.tsx -- Single message display component
 
   mcp/
-    index.ts          -- MCP server with 16 tools (5 DM + 6 space + 5 project) on stdio transport.
+    index.ts          -- MCP server with DM, channel, project, task, storage, and coordination tools on stdio transport.
                          Exports startMcpServer() for the CLI's dynamic import.
                          Also runs directly when invoked as conversations-mcp.
 
   server/
-    serve.ts          -- Dashboard HTTP server: serves static files + JSON API routes for messages, sessions, spaces, projects
+    serve.ts          -- Dashboard HTTP server: serves static files + JSON API routes for messages, sessions, channels, projects
     serve.test.ts     -- Tests for dashboard API routes
 ```
 
@@ -60,21 +60,21 @@ All surfaces (CLI, MCP server, library, dashboard) call directly into `src/lib/`
 
 ## Key Design Decisions
 
-### DMs vs Spaces
+### DMs vs Channels
 
-DMs use `to_agent` for direct addressing; the `space` field is null. Spaces set the `space` field and use `session_id: "space:{name}"`. The TUI's SessionList filters out `space:*` sessions to avoid duplicates since spaces appear as their own items.
+DMs use `to_agent` for direct addressing; the `channel` field is null. Channels set the `channel` field and use `session_id: "channel:{name}"`. The TUI's SessionList filters out channel sessions to avoid duplicates since channels appear as their own items.
 
 ### Session IDs
 
-Auto-generated as `${[from, to].sort().join("-")}-${randomUUID().slice(0,8)}` for DMs. For spaces, always `space:{name}`. Sessions are derived from messages -- there is no sessions table; `listSessions()` uses `GROUP BY session_id` on the messages table.
+Auto-generated as `${[from, to].sort().join("-")}-${randomUUID().slice(0,8)}` for DMs. For channels, always `channel:{name}`. Sessions are derived from messages -- there is no sessions table; `listSessions()` uses `GROUP BY session_id` on the messages table.
 
-### Space Hierarchy
+### Channel Model
 
-Spaces can have a `parent_id` referencing another space. Max depth is 3 levels (0, 1, 2), enforced in `createSpace()` via `getSpaceDepth()` which walks the parent chain. Messages are isolated per space -- sub-spaces do not inherit parent messages.
+Channels are flat and Slack-like. There is no runtime hierarchy and no public spaces/sub-spaces API surface. Older spaces/sub-spaces are imported once as flat channels; parent context is preserved in channel `metadata.import_source`, tags, and descriptions.
 
 ### Projects
 
-Spaces can optionally belong to a project via `project_id`. Projects have rich attributes: metadata (JSON), tags (JSON array), status (active/archived), repository URL, and settings (JSON). Projects cannot be deleted while spaces reference them (enforced in `deleteProject()`).
+Channels can optionally belong to a project via `project_id`. Projects have rich attributes: metadata (JSON), tags (JSON array), status (active/archived), repository URL, and settings (JSON). Projects cannot be deleted while channels reference them (enforced in `deleteProject()`).
 
 ### Polling
 
@@ -92,17 +92,19 @@ Priority chain: explicit `--from` flag or function argument > `CONVERSATIONS_AGE
 
 bun:sqlite with WAL mode, foreign keys enabled via schema references, 5-second busy timeout.
 
-**Location priority**: `CONVERSATIONS_DB_PATH` env var > `~/.conversations/messages.db` global default. The `getDb()` function auto-creates the directory and database file.
+**Location priority**: `CONVERSATIONS_DB_PATH` env var > `~/.hasna/conversations/messages.db` global default. The `getDb()` function auto-creates the directory and database file.
 
-**Schema auto-migration**: The `getDb()` function detects old `channels`/`channel_members` tables and migrates them to `spaces`/`space_members`. It also migrates the `messages.channel` column to `messages.space` and rewrites `session_id` values from `channel:*` to `space:*`.
+**Schema auto-migration**: The `getDb()` function detects old spaces/sub-spaces tables and columns, deterministically imports them to flat channels, rewrites channel session ids to `channel:*`, preserves legacy parent context in channel metadata/tags, and removes legacy space storage.
 
 ### Tables
 
-**messages** -- id (autoincrement PK), session_id, from_agent, to_agent, space (nullable), content, priority (default 'normal'), working_dir, repository, branch, metadata (JSON), created_at, read_at
+**messages** -- id (autoincrement PK), uuid, session_id, from_agent, to_agent, channel (nullable), project_id, content, priority (default 'normal'), working_dir, repository, branch, metadata (JSON), attachments, reply_to, created_at, read_at
 
-**spaces** -- name (text PK), description, parent_id (FK to spaces.name), project_id (FK to projects.id), created_by, created_at
+**channels** -- name (text PK), description, topic, project_id (FK to projects.id), created_by, created_at, archived_at, metadata (JSON), tags (JSON)
 
-**space_members** -- space + agent (composite PK), joined_at
+**channel_members** -- channel + agent (composite PK), joined_at
+
+**channel_subscriptions** -- channel + agent (composite PK), created_at, preview_chars, since_message_id
 
 **projects** -- id (UUID text PK), name (unique), description, path, created_by, created_at, metadata (JSON), tags (JSON), status (default 'active'), repository, settings (JSON)
 
@@ -111,32 +113,33 @@ bun:sqlite with WAL mode, foreign keys enabled via schema references, 5-second b
 - `idx_messages_session` on messages(session_id)
 - `idx_messages_to` on messages(to_agent)
 - `idx_messages_created` on messages(created_at)
-- `idx_messages_space` on messages(space)
+- `idx_messages_channel` on messages(channel)
 - `idx_projects_name` on projects(name)
 - `idx_projects_status` on projects(status)
-- `idx_spaces_parent` on spaces(parent_id)
-- `idx_spaces_project` on spaces(project_id)
+- `idx_channels_project` on channels(project_id)
 
-## MCP Tools (22 total)
+## MCP Tools
 
 ### DM Tools (5)
 | Tool | Description |
 |------|-------------|
 | `send_message` | Send a direct message (sender from CONVERSATIONS_AGENT_ID) |
-| `read_messages` | Read messages with filters: session_id, from, to, space, since, limit, unread_only |
+| `read_messages` | Read messages with filters: session_id, from, to, channel, since, limit, unread_only |
 | `list_sessions` | List sessions, optionally filtered by agent |
 | `reply` | Reply to message ID (auto-resolves session and recipient) |
 | `mark_read` | Mark message IDs as read |
 
-### Space Tools (6)
+### Channel Tools
 | Tool | Description |
 |------|-------------|
-| `create_space` | Create space (auto-joins creator, supports parent_id and project_id) |
-| `list_spaces` | List spaces with member/message counts, filter by project or parent |
-| `send_to_space` | Send message to space |
-| `read_space` | Read space messages |
-| `join_space` | Join a space |
-| `leave_space` | Leave a space |
+| `create_channel` | Create channel and auto-join creator |
+| `list_channels` | List channels with member/message counts |
+| `send_to_channel` | Send message to channel |
+| `read_channel` | Read channel messages |
+| `join_channel` | Join a channel |
+| `leave_channel` | Leave a channel |
+| `subscribe_channel_notifications` | Subscribe to preview-only channel notifications |
+| `summarize_channel` | Structured channel catch-up summary |
 
 ### Project Tools (5)
 | Tool | Description |
@@ -145,19 +148,19 @@ bun:sqlite with WAL mode, foreign keys enabled via schema references, 5-second b
 | `list_projects` | List projects, optionally filter by status (active/archived) |
 | `get_project` | Get project by ID or name |
 | `update_project` | Update any project field |
-| `delete_project` | Delete project (fails if spaces reference it) |
+| `delete_project` | Delete project (fails if channels reference it) |
 
-### Cloud Sync Tools (6)
+### Storage Sync Tools (6)
 | Tool | Description |
 |------|-------------|
-| `conversations_cloud_status` | Show cloud config, PG connection health, and unresolved conflict count |
-| `conversations_cloud_push` | Push local → cloud PostgreSQL. Skips int-PK tables (messages, reactions, etc.) to avoid ID collision |
-| `conversations_cloud_pull` | Pull cloud → local with UPSERT merge. Skips int-PK tables |
-| `conversations_cloud_sync` | Bidirectional sync — pull then push in one call |
-| `conversations_cloud_migrate` | Run `src/lib/pg-migrations.ts` DDL against the configured RDS instance. Supports `--dry_run` |
-| `conversations_cloud_feedback` | Send feedback for the conversations service |
+| `conversations_storage_status` | Show remote storage config, PG connection health, and unresolved conflict count |
+| `conversations_storage_push` | Push local → remote PostgreSQL storage. Skips int-PK tables (messages, reactions, etc.) to avoid ID collision |
+| `conversations_storage_pull` | Pull remote storage → local with UPSERT merge. Skips int-PK tables |
+| `conversations_storage_sync` | Bidirectional sync — pull then push in one call |
+| `conversations_storage_migrate` | Run `src/lib/pg-migrations.ts` DDL against the configured RDS instance. Supports `--dry_run` |
+| `conversations_storage_feedback` | Send feedback for the conversations service |
 
-**Tables excluded from default sync** (integer AUTOINCREMENT PKs collide across machines): `messages`, `reactions`, `message_read_receipts`, `message_mentions`. Pass explicit `tables` param to sync these.
+**Tables excluded from default sync** (integer AUTOINCREMENT PKs collide across machines): `messages`, `reactions`, `message_read_receipts`, `message_mentions`, channel notification reads, and task detail tables. Pass explicit `tables` param only when you have a deliberate merge plan.
 
 ## Testing
 
@@ -167,7 +170,7 @@ Test files:
 - `src/lib/db.test.ts` -- Database initialization, WAL mode, table creation
 - `src/lib/messages.test.ts` -- Send, read, filter, mark read, metadata handling
 - `src/lib/sessions.test.ts` -- Session derivation, agent filtering, unread counts
-- `src/lib/spaces.test.ts` -- Space CRUD, membership, hierarchy depth enforcement
+- `src/lib/channels.test.ts` -- Channel CRUD and membership
 - `src/lib/projects.test.ts` -- Project CRUD, cascade protection, JSON field handling
 - `src/lib/poll.test.ts` -- Polling start/stop, new message detection
 - `src/lib/identity.test.ts` -- Identity resolution priority chain

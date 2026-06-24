@@ -7,7 +7,7 @@ describe("public API exports", () => {
     expect(typeof index.readMessages).toBe("function");
     expect(typeof index.markRead).toBe("function");
     expect(typeof index.markSessionRead).toBe("function");
-    expect(typeof index.markSpaceRead).toBe("function");
+    expect(typeof index.markChannelRead).toBe("function");
     expect(typeof index.markAllRead).toBe("function");
     expect(typeof index.getMessageById).toBe("function");
     expect(typeof index.searchMessages).toBe("function");
@@ -27,29 +27,28 @@ describe("public API exports", () => {
     expect(typeof index.getSessionActivity).toBe("function");
   });
 
-  test("exports space functions", () => {
-    expect(typeof index.createSpace).toBe("function");
-    expect(typeof index.updateSpace).toBe("function");
-    expect(typeof index.archiveSpace).toBe("function");
-    expect(typeof index.unarchiveSpace).toBe("function");
-    expect(typeof index.listSpaces).toBe("function");
-    expect(typeof index.getSpace).toBe("function");
-    expect(typeof index.joinSpace).toBe("function");
-    expect(typeof index.leaveSpace).toBe("function");
-    expect(typeof index.getSpaceMembers).toBe("function");
-    expect(typeof index.isSpaceMember).toBe("function");
-    expect(typeof index.getSpaceDepth).toBe("function");
+  test("exports channel functions", () => {
+    expect(typeof index.createChannel).toBe("function");
+    expect(typeof index.updateChannel).toBe("function");
+    expect(typeof index.archiveChannel).toBe("function");
+    expect(typeof index.unarchiveChannel).toBe("function");
+    expect(typeof index.listChannels).toBe("function");
+    expect(typeof index.getChannel).toBe("function");
+    expect(typeof index.joinChannel).toBe("function");
+    expect(typeof index.leaveChannel).toBe("function");
+    expect(typeof index.getChannelMembers).toBe("function");
+    expect(typeof index.isChannelMember).toBe("function");
   });
 
-  test("exports space notification functions", () => {
+  test("exports channel notification functions", () => {
     expect(typeof index.buildMessagePreview).toBe("function");
-    expect(typeof index.subscribeToSpaceNotifications).toBe("function");
-    expect(typeof index.unsubscribeFromSpaceNotifications).toBe("function");
-    expect(typeof index.listSpaceNotificationSubscriptions).toBe("function");
-    expect(typeof index.getSubscribedSpaces).toBe("function");
-    expect(typeof index.readSpaceNotifications).toBe("function");
-    expect(typeof index.markSpaceNotificationsRead).toBe("function");
-    expect(typeof index.markAllSpaceNotificationsRead).toBe("function");
+    expect(typeof index.subscribeToChannelNotifications).toBe("function");
+    expect(typeof index.unsubscribeFromChannelNotifications).toBe("function");
+    expect(typeof index.listChannelNotificationSubscriptions).toBe("function");
+    expect(typeof index.getSubscribedChannels).toBe("function");
+    expect(typeof index.readChannelNotifications).toBe("function");
+    expect(typeof index.markChannelNotificationsRead).toBe("function");
+    expect(typeof index.markAllChannelNotificationsRead).toBe("function");
   });
 
   test("exports webhook functions", () => {
@@ -78,7 +77,7 @@ describe("public API exports", () => {
   test("exports polling functions", () => {
     expect(typeof index.startPolling).toBe("function");
     expect(typeof index.useMessages).toBe("function");
-    expect(typeof index.useSpaceMessages).toBe("function");
+    expect(typeof index.useChannelMessages).toBe("function");
   });
 
   test("exports identity functions", () => {
@@ -121,7 +120,7 @@ describe("public API exports", () => {
 
   test("exports topic functions", () => {
     expect(typeof index.extractTopics).toBe("function");
-    expect(typeof index.getSpaceTopics).toBe("function");
+    expect(typeof index.getChannelTopics).toBe("function");
     expect(typeof index.getSessionTopics).toBe("function");
     expect(typeof index.getTrendingTopics).toBe("function");
   });

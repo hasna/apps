@@ -37,11 +37,11 @@ export function StatsCards({ status }: StatsCardsProps) {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
             <HashIcon className="size-4" />
-            Spaces
+            Channels
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="text-3xl font-bold">{status?.total_spaces ?? "—"}</div>
+          <div className="text-3xl font-bold">{status?.total_channels ?? "—"}</div>
         </CardContent>
       </Card>
 

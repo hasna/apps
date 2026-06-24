@@ -17,7 +17,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { readMessages, markReadByIds } from "../lib/messages.js";
-import { markSpaceNotificationsRead, readSpaceNotifications } from "../lib/space-notifications.js";
+import { markChannelNotificationsRead, readChannelNotifications } from "../lib/channel-notifications.js";
 
 const DEFAULT_POLL_INTERVAL_MS = 1000;
 const DEFAULT_START_DELAY_MS = 2000;
@@ -74,11 +74,11 @@ export function registerChannelBridge(
     content: string;
     from_agent: string;
     session_id: string;
-    space?: string | null;
+    channel?: string | null;
     priority?: string;
-  }, mode: "direct" | "dm" | "space_blurb"): Promise<boolean> {
-    const enrichedContent = mode === "space_blurb"
-      ? `${msg.from_agent} posted in #${msg.space}: ${msg.content}\n\n---\n[Preview only for space message #${msg.id}. To inspect the full message later, call get_message with id=${msg.id} or run conversations show ${msg.id}.]`
+  }, mode: "direct" | "dm" | "channel_blurb"): Promise<boolean> {
+    const enrichedContent = mode === "channel_blurb"
+      ? `${msg.from_agent} posted in #${msg.channel}: ${msg.content}\n\n---\n[Preview only for channel message #${msg.id}. To inspect the full message later, call get_message with id=${msg.id} or run conversations show ${msg.id}.]`
       : `${msg.content}\n\n---\n[Via Conversations from ${msg.from_agent} (msg #${msg.id}). To reply, use conversations send_message with to="${msg.from_agent}". For direct session injection, use send_to_session with target_session_id from the sender's session.]`;
 
     try {
@@ -91,7 +91,7 @@ export function registerChannelBridge(
             message_id: String(msg.id),
             session_id: msg.session_id,
             mode,
-            ...(msg.space ? { space: msg.space } : {}),
+            ...(msg.channel ? { channel: msg.channel } : {}),
             ...(msg.priority && msg.priority !== "normal" ? { priority: msg.priority } : {}),
           },
         },
@@ -100,10 +100,10 @@ export function registerChannelBridge(
       // Only acknowledge delivery after the channel transport accepts it.
       if (mode === "direct") {
         try { markReadByIds([msg.id]); } catch { /* ok */ }
-      } else if (mode === "space_blurb") {
+      } else if (mode === "channel_blurb") {
         const agent = getSessionAgent();
         if (agent) {
-          try { markSpaceNotificationsRead(agent, [msg.id]); } catch { /* ok */ }
+          try { markChannelNotificationsRead(agent, [msg.id]); } catch { /* ok */ }
         }
       }
 
@@ -143,7 +143,7 @@ export function registerChannelBridge(
       }
 
       if (agent) {
-        const notifications = readSpaceNotifications({
+        const notifications = readChannelNotifications({
           agent,
           unread_only: true,
           limit: 20,
@@ -155,10 +155,10 @@ export function registerChannelBridge(
             id: notification.message_id,
             content: notification.preview,
             from_agent: notification.from_agent,
-            session_id: `space:${notification.space}`,
-            space: notification.space,
+            session_id: `channel:${notification.channel}`,
+            channel: notification.channel,
             priority: notification.priority,
-          }, "space_blurb");
+          }, "channel_blurb");
           if (!delivered) break;
         }
       }

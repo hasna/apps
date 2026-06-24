@@ -69,22 +69,22 @@ describe("startPolling", () => {
     expect(received.every((m) => m.session_id === "target-session")).toBe(true);
   });
 
-  test("filters by space", async () => {
+  test("filters by channel", async () => {
     const received: Message[] = [];
 
     const { stop } = startPolling({
-      space: "general",
+      channel: "general",
       interval_ms: 50,
       on_messages: (msgs) => received.push(...msgs),
     });
 
-    sendMessage({ from: "a", to: "general", content: "sp-msg", space: "general" });
+    sendMessage({ from: "a", to: "general", content: "sp-msg", channel: "general" });
     sendMessage({ from: "a", to: "b", content: "dm-msg" });
 
     await new Promise((r) => setTimeout(r, 200));
     stop();
 
-    expect(received.every((m) => m.space === "general")).toBe(true);
+    expect(received.every((m) => m.channel === "general")).toBe(true);
   });
 
   test("handles callback errors gracefully", async () => {

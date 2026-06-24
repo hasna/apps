@@ -1,5 +1,6 @@
 import { getDb } from "./db.js";
-import type { SpaceNotification, SpaceNotificationSubscription } from "../types.js";
+import type { ChannelNotification, ChannelNotificationSubscription } from "../types.js";
+import { normalizeChannelName } from "./channel-names.js";
 
 const DEFAULT_PREVIEW_CHARS = 140;
 
@@ -12,82 +13,84 @@ export function buildMessagePreview(content: string, maxChars = DEFAULT_PREVIEW_
   return normalized.slice(0, Math.max(1, maxChars)).trimEnd() + "…";
 }
 
-export function subscribeToSpaceNotifications(
-  space: string,
+export function subscribeToChannelNotifications(
+  channel: string,
   agent: string,
   opts?: { preview_chars?: number },
-): SpaceNotificationSubscription {
+): ChannelNotificationSubscription {
   const db = getDb();
-  const existingSpace = db.prepare("SELECT name FROM spaces WHERE name = ?").get(space);
-  if (!existingSpace) {
-    throw new Error(`Space not found: ${space}`);
+  const channelName = normalizeChannelName(channel);
+  const existingChannel = db.prepare("SELECT name FROM channels WHERE name = ?").get(channelName);
+  if (!existingChannel) {
+    throw new Error(`Channel not found: ${channel}`);
   }
 
   const previewChars = Number.isFinite(opts?.preview_chars) && (opts?.preview_chars as number) > 0
     ? Math.floor(opts!.preview_chars as number)
     : DEFAULT_PREVIEW_CHARS;
   const currentMaxMessageId = (db.prepare(
-    "SELECT COALESCE(MAX(id), 0) AS max_id FROM messages WHERE space = ?"
-  ).get(space) as { max_id: number }).max_id;
+    "SELECT COALESCE(MAX(id), 0) AS max_id FROM messages WHERE channel = ?"
+  ).get(channelName) as { max_id: number }).max_id;
 
   db.prepare(`
-    INSERT INTO space_subscriptions (space, agent, preview_chars, since_message_id)
+    INSERT INTO channel_subscriptions (channel, agent, preview_chars, since_message_id)
     VALUES (?, ?, ?, ?)
-    ON CONFLICT(space, agent) DO UPDATE SET preview_chars = excluded.preview_chars
-  `).run(space, agent, previewChars, currentMaxMessageId);
+    ON CONFLICT(channel, agent) DO UPDATE SET preview_chars = excluded.preview_chars
+  `).run(channelName, agent, previewChars, currentMaxMessageId);
 
   return db.prepare(
-    "SELECT space, agent, created_at, preview_chars, since_message_id FROM space_subscriptions WHERE space = ? AND agent = ?"
-  ).get(space, agent) as SpaceNotificationSubscription;
+    "SELECT channel, agent, created_at, preview_chars, since_message_id FROM channel_subscriptions WHERE channel = ? AND agent = ?"
+  ).get(channelName, agent) as ChannelNotificationSubscription;
 }
 
-export function unsubscribeFromSpaceNotifications(space: string, agent: string): boolean {
+export function unsubscribeFromChannelNotifications(channel: string, agent: string): boolean {
   const db = getDb();
+  const channelName = normalizeChannelName(channel);
   const result = db.prepare(
-    "DELETE FROM space_subscriptions WHERE space = ? AND agent = ?"
-  ).run(space, agent);
+    "DELETE FROM channel_subscriptions WHERE channel = ? AND agent = ?"
+  ).run(channelName, agent);
   return result.changes > 0;
 }
 
-export function listSpaceNotificationSubscriptions(agent?: string): SpaceNotificationSubscription[] {
+export function listChannelNotificationSubscriptions(agent?: string): ChannelNotificationSubscription[] {
   const db = getDb();
   if (agent) {
     return db.prepare(
-      "SELECT space, agent, created_at, preview_chars, since_message_id FROM space_subscriptions WHERE agent = ? ORDER BY created_at ASC, space ASC"
-    ).all(agent) as SpaceNotificationSubscription[];
+      "SELECT channel, agent, created_at, preview_chars, since_message_id FROM channel_subscriptions WHERE agent = ? ORDER BY created_at ASC, channel ASC"
+    ).all(agent) as ChannelNotificationSubscription[];
   }
 
   return db.prepare(
-    "SELECT space, agent, created_at, preview_chars, since_message_id FROM space_subscriptions ORDER BY agent ASC, space ASC"
-  ).all() as SpaceNotificationSubscription[];
+    "SELECT channel, agent, created_at, preview_chars, since_message_id FROM channel_subscriptions ORDER BY agent ASC, channel ASC"
+  ).all() as ChannelNotificationSubscription[];
 }
 
-export function getSubscribedSpaces(agent: string): string[] {
-  return listSpaceNotificationSubscriptions(agent).map((row) => row.space);
+export function getSubscribedChannels(agent: string): string[] {
+  return listChannelNotificationSubscriptions(agent).map((row) => row.channel);
 }
 
-export interface ReadSpaceNotificationsOptions {
+export interface ReadChannelNotificationsOptions {
   agent: string;
-  space?: string;
+  channel?: string;
   unread_only?: boolean;
   limit?: number;
   since?: string;
   mark_read?: boolean;
 }
 
-export function readSpaceNotifications(opts: ReadSpaceNotificationsOptions): SpaceNotification[] {
+export function readChannelNotifications(opts: ReadChannelNotificationsOptions): ChannelNotification[] {
   const db = getDb();
   const conditions: string[] = [
     "s.agent = ?",
-    "m.space IS NOT NULL",
+    "m.channel IS NOT NULL",
     "m.from_agent != ?",
     "m.id > s.since_message_id",
   ];
   const params: (string | number)[] = [opts.agent, opts.agent];
 
-  if (opts.space) {
-    conditions.push("m.space = ?");
-    params.push(opts.space);
+  if (opts.channel) {
+    conditions.push("m.channel = ?");
+    params.push(normalizeChannelName(opts.channel));
   }
   if (opts.since) {
     conditions.push("m.created_at > ?");
@@ -104,7 +107,7 @@ export function readSpaceNotifications(opts: ReadSpaceNotificationsOptions): Spa
   const rows = db.prepare(`
     SELECT
       m.id AS message_id,
-      m.space,
+      m.channel,
       m.from_agent,
       m.created_at,
       m.priority,
@@ -113,16 +116,16 @@ export function readSpaceNotifications(opts: ReadSpaceNotificationsOptions): Spa
       s.preview_chars,
       snr.message_id AS read_message_id
     FROM messages m
-    INNER JOIN space_subscriptions s
-      ON s.space = m.space
-    LEFT JOIN space_notification_reads snr
+    INNER JOIN channel_subscriptions s
+      ON s.channel = m.channel
+    LEFT JOIN channel_notification_reads snr
       ON snr.message_id = m.id AND snr.agent = s.agent
     WHERE ${conditions.join(" AND ")}
     ORDER BY m.created_at DESC, m.id DESC
     LIMIT ${Math.max(1, Math.min(limit, 500))}
   `).all(...params) as Array<{
     message_id: number;
-    space: string;
+    channel: string;
     from_agent: string;
     created_at: string;
     priority: "low" | "normal" | "high" | "urgent";
@@ -134,28 +137,28 @@ export function readSpaceNotifications(opts: ReadSpaceNotificationsOptions): Spa
 
   const notifications = rows.map((row) => ({
     message_id: row.message_id,
-    space: row.space,
+    channel: row.channel,
     from_agent: row.from_agent,
     created_at: row.created_at,
     priority: row.priority,
     preview: buildMessagePreview(row.content, row.preview_chars),
     unread: row.read_message_id == null,
     has_attachments: !!row.attachments && row.attachments !== "[]",
-  })) satisfies SpaceNotification[];
+  })) satisfies ChannelNotification[];
 
   if (opts.mark_read && notifications.length > 0) {
-    markSpaceNotificationsRead(opts.agent, notifications.map((row) => row.message_id));
+    markChannelNotificationsRead(opts.agent, notifications.map((row) => row.message_id));
     for (const row of notifications) row.unread = false;
   }
 
   return notifications;
 }
 
-export function markSpaceNotificationsRead(agent: string, messageIds: number[]): number {
+export function markChannelNotificationsRead(agent: string, messageIds: number[]): number {
   if (messageIds.length === 0) return 0;
   const db = getDb();
   const insert = db.prepare(`
-    INSERT OR IGNORE INTO space_notification_reads (agent, message_id)
+    INSERT OR IGNORE INTO channel_notification_reads (agent, message_id)
     VALUES (?, ?)
   `);
 
@@ -167,7 +170,7 @@ export function markSpaceNotificationsRead(agent: string, messageIds: number[]):
   return count;
 }
 
-export function markAllSpaceNotificationsRead(agent: string, space?: string): number {
-  const unread = readSpaceNotifications({ agent, space, unread_only: true, limit: 10000 });
-  return markSpaceNotificationsRead(agent, unread.map((row) => row.message_id));
+export function markAllChannelNotificationsRead(agent: string, channel?: string): number {
+  const unread = readChannelNotifications({ agent, channel, unread_only: true, limit: 10000 });
+  return markChannelNotificationsRead(agent, unread.map((row) => row.message_id));
 }

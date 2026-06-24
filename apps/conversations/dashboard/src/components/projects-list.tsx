@@ -34,7 +34,7 @@ export function ProjectsList({ projects }: ProjectsListProps) {
             <TableHead>Description</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Created by</TableHead>
-            <TableHead className="text-right">Spaces</TableHead>
+            <TableHead className="text-right">Channels</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -56,7 +56,7 @@ export function ProjectsList({ projects }: ProjectsListProps) {
                 )}
               </TableCell>
               <TableCell>{p.created_by}</TableCell>
-              <TableCell className="text-right">{p.space_count}</TableCell>
+              <TableCell className="text-right">{p.channel_count}</TableCell>
             </TableRow>
           ))}
         </TableBody>

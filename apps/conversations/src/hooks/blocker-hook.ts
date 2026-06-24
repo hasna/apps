@@ -24,15 +24,15 @@ const agent = resolveIdentity();
 const db = getDb();
 
 const blockers = db.prepare(`
-  SELECT id, from_agent, content, space, created_at FROM messages
+  SELECT id, from_agent, content, channel, created_at FROM messages
   WHERE blocking = 1 AND read_at IS NULL
   AND (
     to_agent = ?
-    OR space IN (SELECT space FROM space_members WHERE agent = ?)
+    OR channel IN (SELECT channel FROM channel_members WHERE agent = ?)
   )
   ORDER BY created_at ASC
   LIMIT 10
-`).all(agent, agent) as { id: number; from_agent: string; content: string; space: string | null; created_at: string }[];
+`).all(agent, agent) as { id: number; from_agent: string; content: string; channel: string | null; created_at: string }[];
 
 closeDb();
 
@@ -44,7 +44,7 @@ if (blockers.length === 0) {
 // Exit 0 to avoid deadlock — agent needs tools to acknowledge.
 const ids = blockers.map((b) => b.id);
 const details = blockers.map((b) => {
-  const where = b.space ? `#${b.space}` : "DM";
+  const where = b.channel ? `#${b.channel}` : "DM";
   return `[#${b.id}] ${b.from_agent} (${where}): ${b.content}`;
 }).join("\n");
 

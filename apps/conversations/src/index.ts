@@ -4,7 +4,7 @@
  * Send and receive messages between AI agents on the same machine:
  *   conversations send --to claude-code "hello from codex"
  *   conversations read --to codex --json
- *   conversations space send deployments "v1.2 deployed"
+ *   conversations channel send deployments "v1.2 deployed"
  *
  * Or use the interactive TUI:
  *   conversations
@@ -15,7 +15,7 @@ export {
   readMessages,
   markRead,
   markSessionRead,
-  markSpaceRead,
+  markChannelRead,
   markAllRead,
   getMessageById,
   searchMessages,
@@ -38,29 +38,28 @@ export {
 export type { SessionActivity } from "./lib/sessions.js";
 
 export {
-  createSpace,
-  updateSpace,
-  archiveSpace,
-  unarchiveSpace,
-  listSpaces,
-  getSpace,
-  joinSpace,
-  leaveSpace,
-  getSpaceMembers,
-  isSpaceMember,
-  getSpaceDepth,
-} from "./lib/spaces.js";
+  createChannel,
+  updateChannel,
+  archiveChannel,
+  unarchiveChannel,
+  listChannels,
+  getChannel,
+  joinChannel,
+  leaveChannel,
+  getChannelMembers,
+  isChannelMember,
+} from "./lib/channels.js";
 
 export {
   buildMessagePreview,
-  subscribeToSpaceNotifications,
-  unsubscribeFromSpaceNotifications,
-  listSpaceNotificationSubscriptions,
-  getSubscribedSpaces,
-  readSpaceNotifications,
-  markSpaceNotificationsRead,
-  markAllSpaceNotificationsRead,
-} from "./lib/space-notifications.js";
+  subscribeToChannelNotifications,
+  unsubscribeFromChannelNotifications,
+  listChannelNotificationSubscriptions,
+  getSubscribedChannels,
+  readChannelNotifications,
+  markChannelNotificationsRead,
+  markAllChannelNotificationsRead,
+} from "./lib/channel-notifications.js";
 
 export {
   listWebhooks,
@@ -84,9 +83,42 @@ export {
 } from "./lib/db.js";
 
 export {
+  CANONICAL_CONVERSATIONS_DATABASE_ENV,
+  CANONICAL_CONVERSATIONS_RDS_CLUSTER,
+  CANONICAL_CONVERSATIONS_RDS_DATABASE,
+  CANONICAL_CONVERSATIONS_RDS_SECRET_PATH,
+  CONVERSATIONS_DATABASE_FALLBACK_ENV,
+  DEFAULT_STORAGE_TABLES,
+  SYNC_EXCLUDED,
+  STORAGE_CONFIG_PATH,
+  STORAGE_DATABASE_ENV,
+  STORAGE_MODE_ENV,
+  getCanonicalConversationsRdsConfig,
+  getStorageConfig,
+  getStorageDatabaseUrl,
+  getStoragePg,
+  listConflicts,
+  listPgTables,
+  listSqliteTables,
+  resolveTables,
+  runStorageMigrations,
+  storagePull,
+  storagePush,
+  storageSync,
+} from "./lib/storage-sync.js";
+export type {
+  CanonicalConversationsRdsConfig,
+  StorageConfig,
+  StorageMode,
+  StorageSyncResult,
+  SyncConflict,
+  SyncResult,
+} from "./lib/storage-sync.js";
+
+export {
   startPolling,
   useMessages,
-  useSpaceMessages,
+  useChannelMessages,
 } from "./lib/poll.js";
 
 export {
@@ -142,7 +174,7 @@ export type { HotSession, HotSessionsOptions } from "./lib/hot.js";
 
 export {
   extractTopics,
-  getSpaceTopics,
+  getChannelTopics,
   getSessionTopics,
   getTrendingTopics,
 } from "./lib/topics.js";
@@ -202,9 +234,9 @@ export type { DueTaskReminder, TaskSummary } from "./lib/tasks.js";
 export type {
   Message,
   Session,
-  Space,
-  SpaceInfo,
-  SpaceMember,
+  Channel,
+  ChannelInfo,
+  ChannelMember,
   Project,
   ProjectInfo,
   Priority,

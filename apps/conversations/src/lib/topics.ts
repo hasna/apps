@@ -59,17 +59,17 @@ export function extractTopics(text: string, topN: number = 10): TopicWeight[] {
 }
 
 /**
- * Get topics for a space by aggregating recent messages.
+ * Get topics for a channel by aggregating recent messages.
  */
-export function getSpaceTopics(spaceName: string, opts?: { limit?: number; since?: string }): TopicWeight[] {
+export function getChannelTopics(channelName: string, opts?: { limit?: number; since?: string }): TopicWeight[] {
   const db = getDb();
   const limit = opts?.limit ?? 100;
   const sinceClause = opts?.since ? "AND created_at > ?" : "";
-  const params: (string | number)[] = [spaceName];
+  const params: (string | number)[] = [channelName];
   if (opts?.since) params.push(opts.since);
 
   const rows = db.prepare(
-    `SELECT content FROM messages WHERE space = ? ${sinceClause} ORDER BY created_at DESC LIMIT ${limit}`
+    `SELECT content FROM messages WHERE channel = ? ${sinceClause} ORDER BY created_at DESC LIMIT ${limit}`
   ).all(...params) as { content: string }[];
 
   const combined = rows.map((r) => r.content).join("\n");
@@ -92,7 +92,7 @@ export function getSessionTopics(sessionId: string, opts?: { limit?: number }): 
 }
 
 /**
- * Get trending topics across all spaces or a specific project.
+ * Get trending topics across all channels or a specific project.
  */
 export function getTrendingTopics(opts?: { project_id?: string; hours?: number; top_n?: number }): TopicWeight[] {
   const db = getDb();

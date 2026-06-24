@@ -22,17 +22,17 @@ export interface SummaryOptions {
 }
 
 /**
- * Generate a structured summary of a conversation (session or space).
+ * Generate a structured summary of a conversation (session or channel).
  * Uses message metadata — no LLM needed.
  */
-export function getConversationSummary(sessionOrSpace: string, opts?: SummaryOptions): ConversationSummary | null {
+export function getConversationSummary(sessionOrChannel: string, opts?: SummaryOptions): ConversationSummary | null {
   const db = getDb();
   const limit = opts?.limit ?? 50;
 
-  // Detect if this is a space or session
-  const isSpace = sessionOrSpace.startsWith("space:") || db.prepare("SELECT 1 FROM spaces WHERE name = ?").get(sessionOrSpace);
-  const filterCol = isSpace ? "space" : "session_id";
-  const filterVal = isSpace && !sessionOrSpace.startsWith("space:") ? sessionOrSpace : sessionOrSpace;
+  // Detect if this is a channel or session
+  const isChannel = sessionOrChannel.startsWith("channel:") || db.prepare("SELECT 1 FROM channels WHERE name = ?").get(sessionOrChannel);
+  const filterCol = isChannel ? "channel" : "session_id";
+  const filterVal = isChannel && !sessionOrChannel.startsWith("channel:") ? sessionOrChannel : sessionOrChannel;
 
   const messages = db.prepare(
     `SELECT * FROM messages WHERE ${filterCol} = ? ORDER BY created_at DESC LIMIT ${limit}`
@@ -146,8 +146,8 @@ export function getConversationSummary(sessionOrSpace: string, opts?: SummaryOpt
   const avgPriority = Object.entries(priorityCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "normal";
 
   return {
-    session_id: sessionOrSpace,
-    participants: [...agents].filter((a) => a !== sessionOrSpace),
+    session_id: sessionOrChannel,
+    participants: [...agents].filter((a) => a !== sessionOrChannel),
     message_count: messages.length,
     date_range: dateRange,
     topics,

@@ -4,7 +4,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { server } from "./index.js";
 import { closeDb } from "../lib/db.js";
 import { sendMessage, readMessages } from "../lib/messages.js";
-import { createSpace } from "../lib/spaces.js";
+import { createChannel } from "../lib/channels.js";
 import { resolveIdentity } from "../lib/identity.js";
 import { heartbeat } from "../lib/presence.js";
 import { unlinkSync } from "fs";
@@ -142,115 +142,115 @@ describe("mark_read from parameter", () => {
   });
 });
 
-// ---- create_space ----
+// ---- create_channel ----
 
-describe("create_space from parameter", () => {
-  test("creates space with explicit creator", async () => {
+describe("create_channel from parameter", () => {
+  test("creates channel with explicit creator", async () => {
     const result = await client.callTool({
-      name: "create_space",
-      arguments: { from: "space-creator", name: "test-space-from" },
+      name: "create_channel",
+      arguments: { from: "channel-creator", name: "test-channel-from" },
     });
     const sp = parseResult(result as any) as any;
-    expect(sp.name).toBe("test-space-from");
-    expect(sp.created_by).toBe("space-creator");
+    expect(sp.name).toBe("test-channel-from");
+    expect(sp.created_by).toBe("channel-creator");
   });
 
   test("falls back to auto-generated name when from is omitted", async () => {
     const autoName = resolveIdentity();
     const result = await client.callTool({
-      name: "create_space",
-      arguments: { name: "test-space-no-from" },
+      name: "create_channel",
+      arguments: { name: "test-channel-no-from" },
     });
     const sp = parseResult(result as any) as any;
     expect(sp.created_by).toBe(autoName);
   });
 });
 
-// ---- send_to_space ----
+// ---- send_to_channel ----
 
-describe("send_to_space from parameter", () => {
-  test("sends to space with explicit from", async () => {
-    createSpace("msg-space", "creator");
+describe("send_to_channel from parameter", () => {
+  test("sends to channel with explicit from", async () => {
+    createChannel("msg-channel", "creator");
     const result = await client.callTool({
-      name: "send_to_space",
-      arguments: { from: "space-sender", space: "msg-space", content: "hello space" },
+      name: "send_to_channel",
+      arguments: { from: "channel-sender", channel: "msg-channel", content: "hello channel" },
     });
     const msg = parseResult(result as any) as any;
-    expect(msg.from_agent).toBe("space-sender");
-    expect(msg.space).toBe("msg-space");
+    expect(msg.from_agent).toBe("channel-sender");
+    expect(msg.channel).toBe("msg-channel");
   });
 
   test("falls back to auto-generated name when from is omitted", async () => {
     const autoName = resolveIdentity();
-    createSpace("msg-space-2", "creator");
+    createChannel("msg-channel-2", "creator");
     const result = await client.callTool({
-      name: "send_to_space",
-      arguments: { space: "msg-space-2", content: "no from" },
+      name: "send_to_channel",
+      arguments: { channel: "msg-channel-2", content: "no from" },
     });
     const msg = parseResult(result as any) as any;
     expect(msg.from_agent).toBe(autoName);
   });
 });
 
-describe("space notification tools", () => {
-  test("subscribe and read space notifications return preview blurbs for new messages only", async () => {
-    createSpace("notify-space-a", "creator");
+describe("channel notification tools", () => {
+  test("subscribe and read channel notifications return preview blurbs for new messages only", async () => {
+    createChannel("notify-channel-a", "creator");
     const historical = sendMessage({
       from: "alice",
-      to: "notify-space-a",
-      space: "notify-space-a",
-      session_id: "space:notify-space-a",
+      to: "notify-channel-a",
+      channel: "notify-channel-a",
+      session_id: "channel:notify-channel-a",
       content: "historical message before subscription",
     });
 
     const subscription = parseResult(await client.callTool({
-      name: "subscribe_space_notifications",
-      arguments: { from: "notify-agent-a", space: "notify-space-a", preview_chars: 18 },
+      name: "subscribe_channel_notifications",
+      arguments: { from: "notify-agent-a", channel: "notify-channel-a", preview_chars: 18 },
     }) as any) as any;
 
-    expect(subscription.space).toBe("notify-space-a");
+    expect(subscription.channel).toBe("notify-channel-a");
     expect(subscription.preview_chars).toBe(18);
     expect(subscription.since_message_id).toBe(historical.id);
 
     const fullContent = "## deployment _finished_ after a very long validation run";
     const live = sendMessage({
       from: "alice",
-      to: "notify-space-a",
-      space: "notify-space-a",
-      session_id: "space:notify-space-a",
+      to: "notify-channel-a",
+      channel: "notify-channel-a",
+      session_id: "channel:notify-channel-a",
       content: fullContent,
     });
 
     const result = parseResult(await client.callTool({
-      name: "read_space_notifications",
+      name: "read_channel_notifications",
       arguments: { from: "notify-agent-a", unread_only: true },
     }) as any) as any;
 
     expect(result.count).toBe(1);
-    expect(result.notifications[0].space).toBe("notify-space-a");
+    expect(result.notifications[0].channel).toBe("notify-channel-a");
     expect(result.notifications[0].message_id).toBe(live.id);
     expect(result.notifications[0].preview).not.toContain("##");
     expect(result.notifications[0].preview).not.toBe(fullContent);
   });
 
   test("get_message returns the full message for later inspection", async () => {
-    createSpace("notify-space-b", "creator");
+    createChannel("notify-channel-b", "creator");
     await client.callTool({
-      name: "subscribe_space_notifications",
-      arguments: { from: "notify-agent-b", space: "notify-space-b" },
+      name: "subscribe_channel_notifications",
+      arguments: { from: "notify-agent-b", channel: "notify-channel-b" },
     });
 
     const fullContent = "full body for on-demand inspection";
     const sent = sendMessage({
       from: "bob",
-      to: "notify-space-b",
-      space: "notify-space-b",
-      session_id: "space:notify-space-b",
+      to: "notify-channel-b",
+      channel: "notify-channel-b",
+      session_id: "channel:notify-channel-b",
       content: fullContent,
     });
 
     const notificationResult = parseResult(await client.callTool({
-      name: "read_space_notifications",
+      name: "read_channel_notifications",
       arguments: { from: "notify-agent-b", unread_only: true },
     }) as any) as any;
 
@@ -266,14 +266,14 @@ describe("space notification tools", () => {
   });
 });
 
-// ---- join_space ----
+// ---- join_channel ----
 
-describe("join_space from parameter", () => {
-  test("joins space with explicit from", async () => {
-    createSpace("join-space", "creator");
+describe("join_channel from parameter", () => {
+  test("joins channel with explicit from", async () => {
+    createChannel("join-channel", "creator");
     const result = await client.callTool({
-      name: "join_space",
-      arguments: { from: "joiner-agent", space: "join-space" },
+      name: "join_channel",
+      arguments: { from: "joiner-agent", channel: "join-channel" },
     });
     const data = parseResult(result as any) as any;
     expect(data.agent).toBe("joiner-agent");
@@ -282,69 +282,69 @@ describe("join_space from parameter", () => {
 
   test("falls back to auto-generated name when from is omitted", async () => {
     const autoName = resolveIdentity();
-    createSpace("join-space-2", "creator");
+    createChannel("join-channel-2", "creator");
     const result = await client.callTool({
-      name: "join_space",
-      arguments: { space: "join-space-2" },
+      name: "join_channel",
+      arguments: { channel: "join-channel-2" },
     });
     const data = parseResult(result as any) as any;
     expect(data.agent).toBe(autoName);
   });
 });
 
-describe("space notification subscription tools", () => {
-  test("subscribes and lists preview-only space notifications", async () => {
-    createSpace("notify-space", "creator");
+describe("channel notification subscription tools", () => {
+  test("subscribes and lists preview-only channel notifications", async () => {
+    createChannel("notify-channel", "creator");
 
     const subscribeResult = await client.callTool({
-      name: "subscribe_space_notifications",
-      arguments: { from: "watcher-agent", space: "notify-space", preview_chars: 80 },
+      name: "subscribe_channel_notifications",
+      arguments: { from: "watcher-agent", channel: "notify-channel", preview_chars: 80 },
     });
     const subscription = parseResult(subscribeResult as any) as any;
-    expect(subscription.space).toBe("notify-space");
+    expect(subscription.channel).toBe("notify-channel");
     expect(subscription.agent).toBe("watcher-agent");
     expect(subscription.preview_chars).toBe(80);
 
     const listResult = await client.callTool({
-      name: "list_space_subscriptions",
+      name: "list_channel_subscriptions",
       arguments: { from: "watcher-agent" },
     });
     const list = parseResult(listResult as any) as any[];
     expect(list).toHaveLength(1);
-    expect(list[0].space).toBe("notify-space");
+    expect(list[0].channel).toBe("notify-channel");
   });
 
-  test("reads preview-only notifications and clears them after read_space", async () => {
-    createSpace("notify-space-read", "creator");
+  test("reads preview-only notifications and clears them after read_channel", async () => {
+    createChannel("notify-channel-read", "creator");
     await client.callTool({
-      name: "subscribe_space_notifications",
-      arguments: { from: "watcher-agent", space: "notify-space-read", preview_chars: 24 },
+      name: "subscribe_channel_notifications",
+      arguments: { from: "watcher-agent", channel: "notify-channel-read", preview_chars: 24 },
     });
 
     const sent = sendMessage({
       from: "alice",
-      to: "notify-space-read",
-      space: "notify-space-read",
-      session_id: "space:notify-space-read",
-      content: "Deployment status update for the shared space",
+      to: "notify-channel-read",
+      channel: "notify-channel-read",
+      session_id: "channel:notify-channel-read",
+      content: "Deployment status update for the shared channel",
     });
 
     const notificationsResult = await client.callTool({
-      name: "read_space_notifications",
+      name: "read_channel_notifications",
       arguments: { from: "watcher-agent" },
     });
     const notificationsPayload = parseResult(notificationsResult as any) as any;
     expect(notificationsPayload.count).toBe(1);
     expect(notificationsPayload.notifications[0].message_id).toBe(sent.id);
-    expect(notificationsPayload.notifications[0].preview).not.toContain("shared space");
+    expect(notificationsPayload.notifications[0].preview).not.toContain("shared channel");
 
     await client.callTool({
-      name: "read_space",
-      arguments: { from: "watcher-agent", space: "notify-space-read", limit: 10 },
+      name: "read_channel",
+      arguments: { from: "watcher-agent", channel: "notify-channel-read", limit: 10 },
     });
 
     const afterReadResult = await client.callTool({
-      name: "read_space_notifications",
+      name: "read_channel_notifications",
       arguments: { from: "watcher-agent" },
     });
     const afterReadPayload = parseResult(afterReadResult as any) as any;
@@ -352,14 +352,14 @@ describe("space notification subscription tools", () => {
   });
 });
 
-// ---- leave_space ----
+// ---- leave_channel ----
 
-describe("leave_space from parameter", () => {
-  test("leaves space with explicit from", async () => {
-    createSpace("leave-space", "leaver-agent");
+describe("leave_channel from parameter", () => {
+  test("leaves channel with explicit from", async () => {
+    createChannel("leave-channel", "leaver-agent");
     const result = await client.callTool({
-      name: "leave_space",
-      arguments: { from: "leaver-agent", space: "leave-space" },
+      name: "leave_channel",
+      arguments: { from: "leaver-agent", channel: "leave-channel" },
     });
     const data = parseResult(result as any) as any;
     expect(data.agent).toBe("leaver-agent");
@@ -495,13 +495,13 @@ describe("read-only tools work without from", () => {
     expect(Array.isArray(sessions)).toBe(true);
   });
 
-  test("list_spaces returns spaces", async () => {
+  test("list_channels returns channels", async () => {
     const result = await client.callTool({
-      name: "list_spaces",
+      name: "list_channels",
       arguments: {},
     });
-    const spaces = parseResult(result as any) as any[];
-    expect(Array.isArray(spaces)).toBe(true);
+    const channels = parseResult(result as any) as any[];
+    expect(Array.isArray(channels)).toBe(true);
   });
 
   test("list_projects returns projects", async () => {
@@ -970,12 +970,12 @@ describe("acquire_lock auto-DM", () => {
   test("auto-DMs holding agent on lock conflict", async () => {
     await client.callTool({
       name: "acquire_lock",
-      arguments: { resource_type: "space", resource_id: "dm-test-room", from: "agent-lock-holder" },
+      arguments: { resource_type: "channel", resource_id: "dm-test-room", from: "agent-lock-holder" },
     });
 
     const result = parseResult(await client.callTool({
       name: "acquire_lock",
-      arguments: { resource_type: "space", resource_id: "dm-test-room", from: "agent-lock-requester" },
+      arguments: { resource_type: "channel", resource_id: "dm-test-room", from: "agent-lock-requester" },
     }) as { content: unknown[] });
 
     expect((result as any).acquired).toBe(false);
@@ -990,12 +990,12 @@ describe("acquire_lock auto-DM", () => {
   test("no DM sent when auto_dm is false", async () => {
     await client.callTool({
       name: "acquire_lock",
-      arguments: { resource_type: "space", resource_id: "dm-test-room-2", from: "agent-nodm-holder" },
+      arguments: { resource_type: "channel", resource_id: "dm-test-room-2", from: "agent-nodm-holder" },
     });
 
     await client.callTool({
       name: "acquire_lock",
-      arguments: { resource_type: "space", resource_id: "dm-test-room-2", from: "agent-nodm-requester", auto_dm: false },
+      arguments: { resource_type: "channel", resource_id: "dm-test-room-2", from: "agent-nodm-requester", auto_dm: false },
     });
 
     const dms = readMessages({ to: "agent-nodm-holder", unread_only: false });

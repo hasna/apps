@@ -5,8 +5,8 @@ import { join } from "path";
 
 import { closeDb } from "../lib/db.js";
 import { readMessages, sendMessage } from "../lib/messages.js";
-import { createSpace } from "../lib/spaces.js";
-import { readSpaceNotifications, subscribeToSpaceNotifications } from "../lib/space-notifications.js";
+import { createChannel } from "../lib/channels.js";
+import { readChannelNotifications, subscribeToChannelNotifications } from "../lib/channel-notifications.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerChannelBridge, setSessionAgent, setClaudeSessionId, getSessionAgent, getClaudeSessionId } from "./channel.js";
 
@@ -35,13 +35,13 @@ afterEach(() => {
 });
 
 describe("channel bridge delivery", () => {
-  test("retries space blurbs after a transient transport failure and only clears after delivery", async () => {
+  test("retries channel blurbs after a transient transport failure and only clears after delivery", async () => {
     process.env.CONVERSATIONS_DB_PATH = createTestDbPath();
     closeDb();
 
-    createSpace("notify-bridge", "creator");
-    subscribeToSpaceNotifications("notify-bridge", "watcher", { preview_chars: 24 });
-    setSessionAgent("watcher", "claude-session-space");
+    createChannel("notify-bridge", "creator");
+    subscribeToChannelNotifications("notify-bridge", "watcher", { preview_chars: 24 });
+    setSessionAgent("watcher", "claude-session-channel");
 
     let allowDelivery = false;
     let attempts = 0;
@@ -64,24 +64,24 @@ describe("channel bridge delivery", () => {
       sendMessage({
         from: "alice",
         to: "notify-bridge",
-        space: "notify-bridge",
-        session_id: "space:notify-bridge",
+        channel: "notify-bridge",
+        session_id: "channel:notify-bridge",
         content: "Deployment status update after rollout completed",
       });
 
       await waitFor(() => attempts >= 1);
-      expect(readSpaceNotifications({ agent: "watcher", unread_only: true })).toHaveLength(1);
+      expect(readChannelNotifications({ agent: "watcher", unread_only: true })).toHaveLength(1);
       expect(delivered).toHaveLength(0);
 
       allowDelivery = true;
       await waitFor(() => delivered.length === 1);
 
       expect(delivered[0].method).toBe("notifications/claude/channel");
-      expect(delivered[0].params.meta.mode).toBe("space_blurb");
-      expect(delivered[0].params.meta.space).toBe("notify-bridge");
+      expect(delivered[0].params.meta.mode).toBe("channel_blurb");
+      expect(delivered[0].params.meta.channel).toBe("notify-bridge");
       expect(delivered[0].params.content).toContain("alice posted in #notify-bridge");
-      expect(delivered[0].params.content).toContain("Preview only for space message");
-      expect(readSpaceNotifications({ agent: "watcher", unread_only: true })).toHaveLength(0);
+      expect(delivered[0].params.content).toContain("Preview only for channel message");
+      expect(readChannelNotifications({ agent: "watcher", unread_only: true })).toHaveLength(0);
     } finally {
       stop();
     }

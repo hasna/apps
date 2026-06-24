@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { extractTopics, getSpaceTopics, getSessionTopics, getTrendingTopics } from "./topics";
+import { extractTopics, getChannelTopics, getSessionTopics, getTrendingTopics } from "./topics";
 import { sendMessage } from "./messages";
-import { createSpace, joinSpace } from "./spaces";
+import { createChannel, joinChannel } from "./channels";
 import { closeDb } from "./db";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
@@ -70,21 +70,21 @@ describe("extractTopics", () => {
   });
 });
 
-describe("getSpaceTopics", () => {
-  test("extracts topics from space messages", () => {
-    createSpace("deploy-space", "tester");
-    sendMessage({ from: "a", to: "deploy-space", content: "deployment failed on staging server", space: "deploy-space" });
-    sendMessage({ from: "b", to: "deploy-space", content: "deployment succeeded on production server", space: "deploy-space" });
-    const topics = getSpaceTopics("deploy-space");
+describe("getChannelTopics", () => {
+  test("extracts topics from channel messages", () => {
+    createChannel("deploy-channel", "tester");
+    sendMessage({ from: "a", to: "deploy-channel", content: "deployment failed on staging server", channel: "deploy-channel" });
+    sendMessage({ from: "b", to: "deploy-channel", content: "deployment succeeded on production server", channel: "deploy-channel" });
+    const topics = getChannelTopics("deploy-channel");
     expect(topics.length).toBeGreaterThan(0);
     const words = topics.map((t) => t.topic);
     expect(words).toContain("deployment");
     expect(words).toContain("server");
   });
 
-  test("returns empty for space with no messages", () => {
-    createSpace("empty-space", "tester");
-    expect(getSpaceTopics("empty-space")).toEqual([]);
+  test("returns empty for channel with no messages", () => {
+    createChannel("empty-channel", "tester");
+    expect(getChannelTopics("empty-channel")).toEqual([]);
   });
 });
 
@@ -99,7 +99,7 @@ describe("getSessionTopics", () => {
 });
 
 describe("getTrendingTopics", () => {
-  test("returns topics from recent messages across all spaces", () => {
+  test("returns topics from recent messages across all channels", () => {
     sendMessage({ from: "a", to: "b", content: "kubernetes cluster scaling issue" });
     sendMessage({ from: "c", to: "d", content: "kubernetes pods restarting frequently" });
     const topics = getTrendingTopics({ hours: 1 });

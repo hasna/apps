@@ -38,7 +38,7 @@ describe("listWebhooks", () => {
     writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
       webhooks: [
         { url: "https://example.com/hook1", events: ["dm", "task"] },
-        { url: "https://example.com/hook2", events: ["space"], agent: "bob" },
+        { url: "https://example.com/hook2", events: ["channel"], agent: "bob" },
       ],
     }));
     const hooks = listWebhooks();
@@ -66,7 +66,7 @@ describe("addWebhook", () => {
       webhooks: [{ url: "https://example.com/first", events: ["dm"] }],
     }));
 
-    const result = await addWebhook("https://example.com/second", ["task", "space"]);
+    const result = await addWebhook("https://example.com/second", ["task", "channel"]);
     expect(result.success).toBe(true);
     expect(result.index).toBe(1);
 

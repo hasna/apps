@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * MCP server for conversations.
- * Exposes tools for sending, reading, and managing messages, spaces, and projects between agents.
+ * Exposes tools for sending, reading, and managing messages, channels, and projects between agents.
  *
  * Usage:
  *   conversations mcp          # Start MCP server on stdio (40+ tools)
@@ -14,11 +14,11 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { getPresence } from "../lib/presence.js";
 
 import { registerMessagingTools } from "./tools/messaging.js";
-import { registerSpaceTools } from "./tools/spaces.js";
+import { registerChannelTools } from "./tools/channels.js";
 import { registerProjectTools } from "./tools/projects.js";
 import { registerAgentTools } from "./tools/agents.js";
 import { registerAdvancedTools } from "./tools/advanced.js";
-import { registerCloudSyncTools } from "./tools/cloud.js";
+import { registerStorageSyncTools } from "./tools/storage.js";
 import { registerChannelBridge } from "./channel.js";
 import { registerTelegramChannel } from "./telegram-channel.js";
 import { registerTmuxTools } from "./tools/tmux.js";
@@ -50,13 +50,13 @@ export function buildServer(forHttp = false): McpServer {
   });
 
   registerMessagingTools(srv, resolveProjectId);
-  registerSpaceTools(srv);
+  registerChannelTools(srv);
   registerProjectTools(srv);
   registerAgentTools(srv, agentFocus, getAgentFocus);
   registerAdvancedTools(srv, pkg.version);
   registerTaskTools(srv);
   registerTmuxTools(srv);
-  registerCloudSyncTools(srv);
+  registerStorageSyncTools(srv);
 
   if (!forHttp) {
     registerChannelBridge(srv);

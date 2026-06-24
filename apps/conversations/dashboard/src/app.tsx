@@ -3,22 +3,22 @@ import { RefreshCwIcon } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { StatsCards } from "@/components/stats-cards";
 import { MessagesTable } from "@/components/messages-table";
-import { SpacesTree } from "@/components/spaces-tree";
+import { ChannelsList } from "@/components/channels-list";
 import { ProjectsList } from "@/components/projects-list";
 import { ChatPanel } from "@/components/chat-panel";
-import { SpaceFeed } from "@/components/space-feed";
+import { ChannelFeed } from "@/components/channel-feed";
 import { SendDialog } from "@/components/send-dialog";
 import { HelpPage } from "@/components/help-page";
 import { AgentsPage } from "@/components/agents-page";
 import { Button } from "@/components/ui/button";
-import type { Message, Space, Project, DashboardStatus } from "@/types";
+import type { Message, Channel, Project, DashboardStatus } from "@/types";
 
-type Page = "dashboard" | "messages" | "spaces" | "projects" | "agents" | "help";
+type Page = "dashboard" | "messages" | "channels" | "projects" | "agents" | "help";
 
 export function App() {
   const [status, setStatus] = React.useState<DashboardStatus | null>(null);
   const [messages, setMessages] = React.useState<Message[]>([]);
-  const [spaces, setSpaces] = React.useState<Space[]>([]);
+  const [channels, setChannels] = React.useState<Channel[]>([]);
   const [projects, setProjects] = React.useState<Project[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [page, setPage] = React.useState<Page>("dashboard");
@@ -28,11 +28,11 @@ export function App() {
   const [chatTitle, setChatTitle] = React.useState("");
   const [searchQuery, setSearchQuery] = React.useState("");
   const [searchResults, setSearchResults] = React.useState<Message[] | null>(null);
-  const [selectedSpace, setSelectedSpace] = React.useState<string | null>(null);
+  const [selectedChannel, setSelectedChannel] = React.useState<string | null>(null);
   const [messageLimit, setMessageLimit] = React.useState(50);
   const [toast, setToast] = React.useState<{ message: string; type: "success" | "error" } | null>(null);
 
-  const [spaceUnreadCounts, setSpaceUnreadCounts] = React.useState<Record<string, number>>({});
+  const [channelUnreadCounts, setChannelUnreadCounts] = React.useState<Record<string, number>>({});
   const loadInFlight = React.useRef(false);
 
   const showToast = React.useCallback((message: string, type: "success" | "error") => {
@@ -56,26 +56,26 @@ export function App() {
     if (loadInFlight.current) return;
     loadInFlight.current = true;
     try {
-      const [statusRes, messagesRes, spacesRes, projectsRes, allMsgsRes] = await Promise.all([
+      const [statusRes, messagesRes, channelsRes, projectsRes, allMsgsRes] = await Promise.all([
         fetchJson<DashboardStatus>("/api/status"),
         fetchJson<Message[]>(`/api/messages?limit=${messageLimit}`),
-        fetchJson<Space[]>("/api/spaces"),
+        fetchJson<Channel[]>("/api/channels"),
         fetchJson<Project[]>("/api/projects"),
         fetchJson<Message[]>("/api/messages?limit=500"),
       ]);
       setStatus(statusRes);
       // Filter to DMs only for the messages page
-      setMessages(messagesRes.filter((m) => !m.space));
-      setSpaces(spacesRes);
+      setMessages(messagesRes.filter((m) => !m.channel));
+      setChannels(channelsRes);
       setProjects(projectsRes);
-      // Compute unread counts per space
+      // Compute unread counts per channel
       const counts: Record<string, number> = {};
       for (const m of allMsgsRes) {
-        if (m.space && !m.read_at) {
-          counts[m.space] = (counts[m.space] || 0) + 1;
+        if (m.channel && !m.read_at) {
+          counts[m.channel] = (counts[m.channel] || 0) + 1;
         }
       }
-      setSpaceUnreadCounts(counts);
+      setChannelUnreadCounts(counts);
     } catch (error) {
       showToast(error instanceof Error ? error.message : "Failed to load data", "error");
     } finally {
@@ -92,7 +92,7 @@ export function App() {
       if (res.ok) {
         const data = await res.json() as Message[];
         // Filter to DMs only
-        setSearchResults(data.filter((m) => !m.space));
+        setSearchResults(data.filter((m) => !m.channel));
       }
     } catch { setSearchResults(null); }
   }, []);
@@ -112,7 +112,7 @@ export function App() {
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       if (e.key === "0") setPage("dashboard");
       if (e.key === "1") setPage("messages");
-      if (e.key === "2") { setPage("spaces"); setSelectedSpace(null); }
+      if (e.key === "2") { setPage("channels"); setSelectedChannel(null); }
       if (e.key === "3") setPage("projects");
       if (e.key === "4") setPage("agents");
       if (e.key === "5") setPage("help");
@@ -126,7 +126,7 @@ export function App() {
   const navItems: { key: Page; label: string }[] = [
     { key: "dashboard", label: "Dashboard" },
     { key: "messages", label: "Messages" },
-    { key: "spaces", label: "Spaces" },
+    { key: "channels", label: "Channels" },
     { key: "projects", label: "Projects" },
     { key: "agents", label: "Agents" },
     { key: "help", label: "Help" },
@@ -147,7 +147,7 @@ export function App() {
                   key={item.key}
                   variant={page === item.key ? "secondary" : "ghost"}
                   size="sm"
-                  onClick={() => { setPage(item.key); if (item.key === "spaces") setSelectedSpace(null); }}
+                  onClick={() => { setPage(item.key); if (item.key === "channels") setSelectedChannel(null); }}
                 >
                   {item.label}
                 </Button>
@@ -201,11 +201,11 @@ export function App() {
           </>
         )}
 
-        {page === "spaces" && (
-          selectedSpace ? (
-            <SpaceFeed spaceName={selectedSpace} onBack={() => setSelectedSpace(null)} />
+        {page === "channels" && (
+          selectedChannel ? (
+            <ChannelFeed channelName={selectedChannel} onBack={() => setSelectedChannel(null)} />
           ) : (
-            <SpacesTree spaces={spaces} onSelectSpace={(name) => setSelectedSpace(name)} unreadCounts={spaceUnreadCounts} />
+            <ChannelsList channels={channels} onSelectChannel={(name) => setSelectedChannel(name)} unreadCounts={channelUnreadCounts} />
           )
         )}
 

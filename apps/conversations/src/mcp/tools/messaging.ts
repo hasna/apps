@@ -1,13 +1,13 @@
 /**
  * Messaging tools: send_message, read_messages, get_message, read_digest, list_sessions, reply,
- * mark_read, mark_unread, mark_space_read, search_messages, export_messages,
+ * mark_read, mark_unread, mark_channel_read, search_messages, export_messages,
  * delete_message, edit_message, pin_message, unpin_message, get_pinned_messages,
  * mark_all_read, broadcast
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSpaceRead, getMessageById, searchMessages, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, markUnreadByIds } from "../../lib/messages.js";
+import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markChannelRead, getMessageById, searchMessages, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, markUnreadByIds } from "../../lib/messages.js";
 import { listSessions } from "../../lib/sessions.js";
 import { resolveIdentity } from "../../lib/identity.js";
 
@@ -101,7 +101,7 @@ export function registerMessagingTools(
       session_id: z.string().optional(),
       from: z.string().optional(),
       to: z.string().optional(),
-      space: z.string().optional(),
+      channel: z.string().optional(),
       project_id: z.string().optional(),
       since: z.string().optional(),
       limit: z.coerce.number().optional(),
@@ -131,7 +131,7 @@ export function registerMessagingTools(
   });
 
   server.registerTool("get_message", {
-    description: "Get the full content of a message by numeric ID. Use this to inspect a full space message after receiving a preview-only notification blurb.",
+    description: "Get the full content of a message by numeric ID. Use this to inspect a full channel message after receiving a preview-only notification blurb.",
     inputSchema: {
       id: z.coerce.number().describe("Numeric message ID to fetch"),
     },
@@ -183,15 +183,15 @@ export function registerMessagingTools(
     }
 
     const from = resolveIdentity(fromParam);
-    const space =
-      original.space ||
-      (original.session_id?.startsWith("space:") ? original.session_id.slice(6) : undefined);
+    const channel =
+      original.channel ||
+      (original.session_id?.startsWith("channel:") ? original.session_id.slice(6) : undefined);
     const msg = sendMessage({
       from,
-      to: space ?? (original.from_agent === from ? original.to_agent : original.from_agent),
+      to: channel ?? (original.from_agent === from ? original.to_agent : original.from_agent),
       content,
       session_id: original.session_id,
-      space,
+      channel,
       reply_to: message_id,  // thread linkage
     });
 
@@ -243,17 +243,17 @@ export function registerMessagingTools(
     return { content: [{ type: "text", text: JSON.stringify({ marked_unread: count }) }] };
   });
 
-  server.registerTool("mark_space_read", {
-    description: "Mark ALL messages in a space as read without fetching them. Use this on busy spaces (200+ messages) where read_messages would overflow tokens.",
+  server.registerTool("mark_channel_read", {
+    description: "Mark ALL messages in a channel as read without fetching them. Use this on busy channels (200+ messages) where read_messages would overflow tokens.",
     inputSchema: {
-      space: z.string().describe("Space name"),
+      channel: z.string().describe("Channel name"),
       from: z.string().optional().describe("Mark read on behalf of this agent (default: current agent)"),
     },
   }, async (args: Record<string, any>) => {
-    const { space, from: fromParam } = args;
-    const count = markSpaceRead(space, fromParam);
+    const { channel, from: fromParam } = args;
+    const count = markChannelRead(channel, fromParam);
     return {
-      content: [{ type: "text", text: JSON.stringify({ space, marked_read: count }) }],
+      content: [{ type: "text", text: JSON.stringify({ channel, marked_read: count }) }],
     };
   });
 
@@ -261,7 +261,7 @@ export function registerMessagingTools(
     description: "Full-text search across messages. Uses FTS5 with BM25 ranking if available, falls back to LIKE. Returns messages with snippet and relevance_score.",
     inputSchema: {
       query: z.string().describe("Search query. Wrap in quotes for exact phrase: '\"BUG-005\"'"),
-      space: z.string().optional().describe("Limit to a specific space"),
+      channel: z.string().optional().describe("Limit to a specific channel"),
       from: z.string().optional().describe("Filter by sender"),
       to: z.string().optional().describe("Filter by recipient"),
       since: z.string().optional().describe("ISO 8601 date — only messages after this"),
@@ -270,8 +270,8 @@ export function registerMessagingTools(
       limit: z.coerce.number().optional().describe("Max results (default: 20)"),
     },
   }, async (args: Record<string, any>) => {
-    const { query, space, from, to, since, until, sort, limit } = args;
-    const results = searchMessages({ query, space, from, to, since, until, sort, limit });
+    const { query, channel, from, to, since, until, sort, limit } = args;
+    const results = searchMessages({ query, channel, from, to, since, until, sort, limit });
 
     return {
       content: [{ type: "text", text: JSON.stringify({
@@ -285,7 +285,7 @@ export function registerMessagingTools(
   server.registerTool("export_messages", {
     description: "Export messages as JSON or CSV.",
     inputSchema: {
-      space: z.string().optional(),
+      channel: z.string().optional(),
       session_id: z.string().optional(),
       from: z.string().optional(),
       since: z.string().optional(),
@@ -293,8 +293,8 @@ export function registerMessagingTools(
       format: z.string().optional(),
     },
   }, async (args: Record<string, any>) => {
-    const { space, session_id, from, since, until, format } = args;
-    const result = exportMessages({ space, session_id, from, since, until, format });
+    const { channel, session_id, from, since, until, format } = args;
+    const result = exportMessages({ channel, session_id, from, since, until, format });
 
     return {
       content: [{ type: "text", text: result }],
@@ -302,9 +302,9 @@ export function registerMessagingTools(
   });
 
   server.registerTool("read_digest", {
-    description: "Lightweight unread message digest — returns preview-only summaries, auto-marks as read. Use instead of read_messages on busy spaces to avoid token overflow.",
+    description: "Lightweight unread message digest — returns preview-only summaries, auto-marks as read. Use instead of read_messages on busy channels to avoid token overflow.",
     inputSchema: {
-      space: z.string().optional(),
+      channel: z.string().optional(),
       session_id: z.string().optional(),
       to: z.string().optional(),
       since: z.string().optional(),
@@ -312,8 +312,8 @@ export function registerMessagingTools(
       project_id: z.string().optional(),
     },
   }, async (args: Record<string, any>) => {
-    const { space, session_id, to, since, limit, project_id } = args;
-    const result = readDigest({ space, session_id, to, since, limit, project_id });
+    const { channel, session_id, to, since, limit, project_id } = args;
+    const result = readDigest({ channel, session_id, to, since, limit, project_id });
     return {
       content: [{ type: "text", text: JSON.stringify(result) }],
     };
@@ -407,15 +407,15 @@ export function registerMessagingTools(
   });
 
   server.registerTool("get_pinned_messages", {
-    description: "Get pinned messages by space or session.",
+    description: "Get pinned messages by channel or session.",
     inputSchema: {
-      space: z.string().optional(),
+      channel: z.string().optional(),
       session_id: z.string().optional(),
       limit: z.coerce.number().optional(),
     },
   }, async (args: Record<string, any>) => {
-    const { space, session_id, limit } = args;
-    const messages = getPinnedMessages({ space, session_id, limit });
+    const { channel, session_id, limit } = args;
+    const messages = getPinnedMessages({ channel, session_id, limit });
 
     return {
       content: [{ type: "text", text: JSON.stringify(messages) }],
@@ -423,25 +423,25 @@ export function registerMessagingTools(
   });
 
   server.registerTool("broadcast", {
-    description: "Send the same message to multiple spaces at once. Useful for status updates, bug reports, or announcements that need to go to several spaces.",
+    description: "Send the same message to multiple channels at once. Useful for status updates, bug reports, or announcements that need to go to several channels.",
     inputSchema: {
-      spaces: z.array(z.string()).describe("List of space names to send to"),
+      channels: z.array(z.string()).describe("List of channel names to send to"),
       content: z.string().describe("Message content"),
       from: z.string().optional().describe("Sender agent name"),
       priority: z.enum(["low", "normal", "high", "urgent"]).optional(),
     },
   }, async (args: Record<string, any>) => {
-    const { spaces, content, from: fromParam, priority } = args;
+    const { channels, content, from: fromParam, priority } = args;
     const from = resolveIdentity(fromParam);
-    const results: Array<{ space: string; id: number }> = [];
+    const results: Array<{ channel: string; id: number }> = [];
     const errors: string[] = [];
 
-    for (const space of (spaces as string[])) {
+    for (const channel of (channels as string[])) {
       try {
-        const msg = sendMessage({ from, to: space, content, space, priority });
-        results.push({ space, id: msg.id });
+        const msg = sendMessage({ from, to: channel, content, channel, priority });
+        results.push({ channel, id: msg.id });
       } catch (e) {
-        errors.push(`${space}: ${e instanceof Error ? e.message : String(e)}`);
+        errors.push(`${channel}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
 

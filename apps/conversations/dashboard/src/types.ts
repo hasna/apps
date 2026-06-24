@@ -3,7 +3,7 @@ export interface Message {
   session_id: string;
   from_agent: string;
   to_agent: string;
-  space: string | null;
+  channel: string | null;
   content: string;
   priority: string;
   working_dir: string | null;
@@ -22,13 +22,16 @@ export interface Session {
   unread_count: number;
 }
 
-export interface Space {
+export interface Channel {
   name: string;
   description: string | null;
-  parent_id: string | null;
+  topic: string | null;
   project_id: string | null;
   created_by: string;
   created_at: string;
+  archived_at: string | null;
+  metadata: Record<string, unknown> | null;
+  tags: string[];
   member_count: number;
   message_count: number;
 }
@@ -42,14 +45,14 @@ export interface Project {
   created_at: string;
   status: "active" | "archived";
   repository: string | null;
-  space_count: number;
+  channel_count: number;
 }
 
 export interface DashboardStatus {
   db_path: string;
   total_messages: number;
   total_sessions: number;
-  total_spaces: number;
+  total_channels: number;
   total_projects: number;
   unread_messages: number;
 }

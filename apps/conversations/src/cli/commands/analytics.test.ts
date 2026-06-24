@@ -35,7 +35,7 @@ describe("registerAnalyticsCommands", () => {
 
     const topics = program.commands.find((c) => c.name() === "topics");
     expect(topics).toBeDefined();
-    expect(topics?.options.some((o) => o.long === "--space")).toBe(true);
+    expect(topics?.options.some((o) => o.long === "--channel")).toBe(true);
   });
 
   test("registers hot command", () => {

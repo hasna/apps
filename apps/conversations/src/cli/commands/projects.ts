@@ -121,7 +121,7 @@ export function registerProjectCommands(program: Command): void {
           for (const p of projects) {
             const desc = p.description ? chalk.dim(` — ${p.description}`) : "";
             const statusBadge = p.status === "archived" ? chalk.yellow(" [archived]") : "";
-            console.log(`${chalk.bold(p.name)}${desc}${statusBadge}  ${p.space_count} spaces`);
+            console.log(`${chalk.bold(p.name)}${desc}${statusBadge}  ${p.channel_count} channels`);
           }
         }
       }
@@ -150,7 +150,7 @@ export function registerProjectCommands(program: Command): void {
         if (p.path) console.log(`  Path: ${p.path}`);
         if (p.repository) console.log(`  Repository: ${p.repository}`);
         console.log(`  Status: ${p.status}`);
-        console.log(`  Spaces: ${p.space_count}`);
+        console.log(`  Channels: ${p.channel_count}`);
         if (p.tags.length > 0) console.log(`  Tags: ${p.tags.join(", ")}`);
         console.log(`  Created by: ${p.created_by} on ${p.created_at.slice(0, 10)}`);
       }

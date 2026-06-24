@@ -7,7 +7,7 @@ import net from "net";
 
 export interface WebhookConfig {
   url: string;
-  events: ("dm" | "blocker" | "space" | "mention" | "task")[];
+  events: ("dm" | "blocker" | "channel" | "mention" | "task")[];
   agent?: string;
 }
 
@@ -47,9 +47,9 @@ function loadConfig(): ConversationsConfig {
 
 function matchesEvent(webhook: WebhookConfig, msg: Message): boolean {
   for (const event of webhook.events) {
-    if (event === "dm" && !msg.space) return true;
+    if (event === "dm" && !msg.channel) return true;
     if (event === "blocker" && msg.blocking) return true;
-    if (event === "space" && msg.space) return true;
+    if (event === "channel" && msg.channel) return true;
     if (event === "mention" && webhook.agent && msg.content.includes(`@${webhook.agent}`)) return true;
   }
   return false;
@@ -108,7 +108,7 @@ export function fireWebhooks(msg: Message): void {
 
   for (const webhook of config.webhooks) {
     // If webhook is scoped to an agent, only fire for messages to that agent
-    if (webhook.agent && msg.to_agent !== webhook.agent && !msg.space) continue;
+    if (webhook.agent && msg.to_agent !== webhook.agent && !msg.channel) continue;
 
     if (!matchesEvent(webhook, msg)) continue;
 
@@ -122,7 +122,7 @@ export function fireWebhooks(msg: Message): void {
           id: msg.id,
           from: msg.from_agent,
           to: msg.to_agent,
-          space: msg.space,
+          channel: msg.channel,
           content: msg.content,
           priority: msg.priority,
           blocking: msg.blocking,
@@ -210,7 +210,7 @@ export async function addWebhook(url: string, events: string[], agent?: string):
     return { success: false, error: "url and events are required" };
   }
 
-  const validEvents = ["dm", "blocker", "space", "mention", "task"];
+  const validEvents = ["dm", "blocker", "channel", "mention", "task"];
   for (const event of events) {
     if (!validEvents.includes(event)) {
       return { success: false, error: `Invalid event "${event}". Valid events: ${validEvents.join(", ")}` };

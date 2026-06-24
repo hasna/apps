@@ -5,7 +5,7 @@ export interface Message {
   session_id: string;
   from_agent: string;
   to_agent: string;
-  space: string | null;
+  channel: string | null;
   project_id: string | null;
   content: string;
   priority: Priority;
@@ -47,33 +47,35 @@ export interface Session {
   unread_count: number;
 }
 
-export interface Space {
+export interface Channel {
   name: string;
   description: string | null;
-  parent_id: string | null;
+  topic: string | null;
   project_id: string | null;
   created_by: string;
   created_at: string;
   archived_at: string | null;
+  metadata: Record<string, unknown> | null;
+  tags: string[];
 }
 
-export interface SpaceMember {
-  space: string;
+export interface ChannelMember {
+  channel: string;
   agent: string;
   joined_at: string;
 }
 
-export interface SpaceNotificationSubscription {
-  space: string;
+export interface ChannelNotificationSubscription {
+  channel: string;
   agent: string;
   created_at: string;
   preview_chars: number;
   since_message_id: number;
 }
 
-export interface SpaceNotification {
+export interface ChannelNotification {
   message_id: number;
-  space: string;
+  channel: string;
   from_agent: string;
   created_at: string;
   priority: Priority;
@@ -82,10 +84,9 @@ export interface SpaceNotification {
   has_attachments: boolean;
 }
 
-export interface SpaceInfo extends Space {
+export interface ChannelInfo extends Channel {
   member_count: number;
   message_count: number;
-  children?: SpaceInfo[];
 }
 
 export interface Project {
@@ -103,7 +104,7 @@ export interface Project {
 }
 
 export interface ProjectInfo extends Project {
-  space_count: number;
+  channel_count: number;
 }
 
 export interface SendMessageOptions {
@@ -111,7 +112,7 @@ export interface SendMessageOptions {
   to: string;
   content: string;
   session_id?: string;
-  space?: string;
+  channel?: string;
   project_id?: string;
   priority?: Priority;
   working_dir?: string;
@@ -127,7 +128,7 @@ export interface ReadMessagesOptions {
   session_id?: string;
   from?: string;
   to?: string;
-  space?: string;
+  channel?: string;
   project_id?: string;
   since?: string;
   since_id?: number;
@@ -145,7 +146,7 @@ export interface ReadMessagesOptions {
 
 export interface SearchMessagesOptions {
   query: string;
-  space?: string;
+  channel?: string;
   from?: string;
   to?: string;
   since?: string;
@@ -206,7 +207,7 @@ export interface Task {
   assignee: string | null;
   reporter: string;
   project_id: string | null;
-  space: string | null;
+  channel: string | null;
   parent_id: number | null;
   depends_on: string[] | null;
   tags: string[] | null;
@@ -232,7 +233,7 @@ export interface CreateTaskOptions {
   assignee?: string;
   priority?: TaskPriority;
   project_id?: string;
-  space?: string;
+  channel?: string;
   parent_id?: number;
   depends_on?: number[];
   tags?: string[];
@@ -245,7 +246,7 @@ export interface ListTasksOptions {
   assignee?: string;
   reporter?: string;
   project_id?: string;
-  space?: string;
+  channel?: string;
   parent_id?: number | null;
   priority?: TaskPriority;
   tag?: string;
@@ -261,7 +262,7 @@ export interface SearchTasksOptions {
   status?: TaskStatus;
   assignee?: string;
   project_id?: string;
-  space?: string;
+  channel?: string;
   priority?: TaskPriority;
   limit?: number;
   sort?: "relevance" | "recent";
