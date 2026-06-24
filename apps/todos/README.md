@@ -17,6 +17,22 @@ bun install -g @hasna/todos
 todos --help
 ```
 
+CLI output is compact by default so agent terminals do not fill context with
+entire task records. List and search views show dense rows, truncate long text,
+cap default human output to 50 rows, and print a continuation hint when more
+rows are available:
+
+```bash
+todos list                         # compact first page
+todos list --cursor <cursor>       # continue from the hint
+todos list --limit 100             # request a larger page
+todos show <task-id> --verbose     # expand long text, comments, and relations
+todos inspect <task-id> --json     # explicit full machine-readable record
+```
+
+Use `--json` for stable machine-readable output and `--verbose` only when you
+want full human detail in the terminal.
+
 Generate shell completions directly from the registered CLI command tree:
 
 ```bash

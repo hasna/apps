@@ -450,6 +450,40 @@ export function truncateText(value: string | null | undefined, maxChars = 240): 
   return `${value.slice(0, Math.max(0, maxChars - 3))}...`;
 }
 
+function priorityRank(priority: string): number {
+  return priority === "critical" ? 0
+    : priority === "high" ? 1
+      : priority === "medium" ? 2
+        : priority === "low" ? 3
+          : 4;
+}
+
+export function encodeTaskCursor(task: Task): string {
+  return Buffer.from(JSON.stringify({
+    p: priorityRank(task.priority),
+    c: task.created_at,
+    i: task.id,
+  })).toString("base64");
+}
+
+export function decodeTaskCursor(cursor: string): { p: number; c: string; i: string } {
+  try {
+    const decoded = JSON.parse(Buffer.from(cursor, "base64").toString("utf8")) as Record<string, unknown>;
+    if (
+      !Number.isInteger(decoded["p"])
+      || typeof decoded["c"] !== "string"
+      || typeof decoded["i"] !== "string"
+      || decoded["c"].length === 0
+      || decoded["i"].length === 0
+    ) {
+      throw new Error("invalid shape");
+    }
+    return { p: decoded["p"] as number, c: decoded["c"], i: decoded["i"] };
+  } catch {
+    throw new Error("Invalid task cursor. Use the opaque cursor from a previous list_tasks response.");
+  }
+}
+
 export function compactTask(task: Task, maxDescriptionChars = 180): Record<string, unknown> {
   const summary: Record<string, unknown> = {
     id: task.id,

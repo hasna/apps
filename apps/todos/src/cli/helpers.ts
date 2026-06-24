@@ -9,6 +9,11 @@ import type { Project, Task } from "../types/index.js";
 
 export { getPackageVersion };
 
+export const DEFAULT_CLI_ROW_LIMIT = 50;
+export const DEFAULT_CLI_DETAIL_LIMIT = 5;
+export const DEFAULT_CLI_TEXT_LIMIT = 600;
+export const DEFAULT_CLI_TITLE_LIMIT = 120;
+
 export function handleError(e: unknown): never {
   // Try to read program options — may not be available during early init
   let jsonMode = false;
@@ -136,6 +141,64 @@ export function output(data: unknown, jsonMode: boolean): void {
   }
 }
 
+export function truncateText(value: string | null | undefined, maxChars = DEFAULT_CLI_TEXT_LIMIT): string {
+  if (!value) return "";
+  if (!Number.isFinite(maxChars) || maxChars <= 0 || value.length <= maxChars) return value;
+  return `${value.slice(0, Math.max(0, maxChars - 3))}...`;
+}
+
+export function parsePositiveInt(value: unknown, label: string): number {
+  const parsed = Number.parseInt(String(value), 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    console.error(chalk.red(`Invalid ${label} value: ${String(value)}. Must be a positive integer.`));
+    process.exit(1);
+  }
+  return parsed;
+}
+
+export function parseNonNegativeInt(value: unknown, label: string): number {
+  const parsed = Number.parseInt(String(value), 10);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    console.error(chalk.red(`Invalid ${label} value: ${String(value)}. Must be zero or a positive integer.`));
+    process.exit(1);
+  }
+  return parsed;
+}
+
+function priorityRank(priority: string): number {
+  return priority === "critical" ? 0
+    : priority === "high" ? 1
+      : priority === "medium" ? 2
+        : priority === "low" ? 3
+          : 4;
+}
+
+export function encodeTaskCursor(task: Task): string {
+  return Buffer.from(JSON.stringify({
+    p: priorityRank(task.priority),
+    c: task.created_at,
+    i: task.id,
+  })).toString("base64");
+}
+
+export function validateTaskCursor(cursor: string, label = "--cursor"): void {
+  try {
+    const decoded = JSON.parse(Buffer.from(cursor, "base64").toString("utf8")) as Record<string, unknown>;
+    if (
+      !Number.isInteger(decoded["p"])
+      || typeof decoded["c"] !== "string"
+      || typeof decoded["i"] !== "string"
+      || decoded["c"].length === 0
+      || decoded["i"].length === 0
+    ) {
+      throw new Error("invalid shape");
+    }
+  } catch {
+    console.error(chalk.red(`Invalid ${label} value. Use the opaque cursor printed by a previous default-order list page.`));
+    process.exit(1);
+  }
+}
+
 export const statusColors: Record<string, (s: string) => string> = {
   pending: chalk.yellow,
   in_progress: chalk.blue,
@@ -151,12 +214,21 @@ export const priorityColors: Record<string, (s: string) => string> = {
   low: chalk.gray,
 };
 
-export function formatTaskLine(t: Task): string {
+export function formatTaskLine(
+  t: Task,
+  opts: { maxTitleChars?: number; maxTags?: number } = {},
+): string {
   const statusFn = statusColors[t.status] || chalk.white;
   const priorityFn = priorityColors[t.priority] || chalk.white;
   const lock = t.locked_by ? chalk.magenta(` [locked:${t.locked_by}]`) : "";
   const assigned = t.assigned_to ? chalk.cyan(` -> ${t.assigned_to}`) : "";
-  const tags = t.tags.length > 0 ? chalk.dim(` [${t.tags.join(",")}]`) : "";
+  const maxTags = opts.maxTags ?? 6;
+  const visibleTags = t.tags.slice(0, maxTags);
+  const hiddenTags = Math.max(0, t.tags.length - visibleTags.length);
+  const tags = visibleTags.length > 0
+    ? chalk.dim(` [${visibleTags.join(",")}${hiddenTags > 0 ? `,+${hiddenTags}` : ""}]`)
+    : "";
   const plan = t.plan_id ? chalk.magenta(` [plan:${t.plan_id.slice(0, 8)}]`) : "";
-  return `${chalk.dim(t.id.slice(0, 8))} ${statusFn(t.status.padEnd(11))} ${priorityFn(t.priority.padEnd(8))} ${t.title}${assigned}${lock}${tags}${plan}`;
+  const title = truncateText(t.title, opts.maxTitleChars ?? DEFAULT_CLI_TITLE_LIMIT);
+  return `${chalk.dim(t.id.slice(0, 8))} ${statusFn(t.status.padEnd(11))} ${priorityFn(t.priority.padEnd(8))} ${title}${assigned}${lock}${tags}${plan}`;
 }

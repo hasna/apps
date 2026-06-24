@@ -1,11 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { getDatabase, closeDatabase, resetDatabase } from "../db/database.js";
 import { createTask } from "../db/tasks.js";
+import { addComment } from "../db/comments.js";
+
+const HEAVY_CLI_TEST_TIMEOUT_MS = 20_000;
 
 async function runCli(args: string[], dbPath: string, extraEnv: Record<string, string> = {}) {
   const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
     cwd: import.meta.dir + "/../..",
-    env: { ...process.env, ...extraEnv, TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false" },
+    env: cliEnv(dbPath, extraEnv),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -15,15 +18,35 @@ async function runCli(args: string[], dbPath: string, extraEnv: Record<string, s
   return { stdout, stderr, exitCode };
 }
 
+function cliEnv(dbPath: string, extraEnv: Record<string, string> = {}) {
+  return {
+    ...process.env,
+    ...extraEnv,
+    HASNA_TODOS_DB_PATH: dbPath,
+    TODOS_DB_PATH: dbPath,
+    TODOS_AUTO_PROJECT: "false",
+  };
+}
+
+function setTestDbPath(dbPath: string): void {
+  process.env["HASNA_TODOS_DB_PATH"] = dbPath;
+  process.env["TODOS_DB_PATH"] = dbPath;
+}
+
+function clearTestDbPath(): void {
+  delete process.env["HASNA_TODOS_DB_PATH"];
+  delete process.env["TODOS_DB_PATH"];
+}
+
 beforeEach(() => {
-  process.env["TODOS_DB_PATH"] = ":memory:";
+  setTestDbPath(":memory:");
   resetDatabase();
   getDatabase();
 });
 
 afterEach(() => {
   closeDatabase();
-  delete process.env["TODOS_DB_PATH"];
+  clearTestDbPath();
 });
 
 describe("CLI integration", () => {
@@ -36,7 +59,7 @@ describe("CLI integration", () => {
       for (const flag of ["--version", "-V"]) {
         const proc = Bun.spawn(["bun", "run", entrypoint, flag], {
           cwd: import.meta.dir + "/../..",
-          env: { ...process.env, TODOS_DB_PATH: ":memory:", TODOS_AUTO_PROJECT: "false", TODOS_NO_OPEN: "true" },
+          env: cliEnv(":memory:", { TODOS_NO_OPEN: "true" }),
           stdout: "pipe",
           stderr: "pipe",
         });
@@ -57,7 +80,7 @@ describe("CLI integration", () => {
       for (const flag of ["--help", "-h"]) {
         const proc = Bun.spawn(["bun", "run", entrypoint, flag], {
           cwd: import.meta.dir + "/../..",
-          env: { ...process.env, TODOS_DB_PATH: ":memory:", TODOS_AUTO_PROJECT: "false", TODOS_NO_OPEN: "true" },
+          env: cliEnv(":memory:", { TODOS_NO_OPEN: "true" }),
           stdout: "pipe",
           stderr: "pipe",
         });
@@ -99,7 +122,7 @@ describe("CLI integration", () => {
       ["bun", "run", "src/cli/index.tsx", "add", "CLI test task", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-todos.db", TODOS_AUTO_PROJECT: "false" },
+        env: cliEnv("/tmp/test-cli-todos.db"),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -121,7 +144,7 @@ describe("CLI integration", () => {
       ["bun", "run", "src/cli/index.tsx", "list", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-list.db", TODOS_AUTO_PROJECT: "false" },
+        env: cliEnv("/tmp/test-cli-list.db"),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -135,6 +158,104 @@ describe("CLI integration", () => {
 
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync("/tmp/test-cli-list.db"); } catch {}
+  });
+
+  it("should keep human task list compact by default and expose a cursor for more rows", async () => {
+    const dbPath = "/tmp/test-cli-compact-list.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    setTestDbPath(dbPath);
+    resetDatabase();
+    const db = getDatabase();
+    for (let index = 0; index < 55; index++) {
+      createTask({ title: `Compact list task ${String(index).padStart(2, "0")} ${"x".repeat(180)}` }, db);
+    }
+    closeDatabase();
+
+    const firstPage = await runCli(["list"], dbPath);
+    expect(firstPage.exitCode).toBe(0);
+    expect(firstPage.stdout).toContain("50 of 55 task(s)");
+    expect(firstPage.stdout).toContain("todos show <id>");
+    expect(firstPage.stdout).not.toContain("x".repeat(150));
+
+    const cursor = firstPage.stdout.match(/--cursor ([A-Za-z0-9+/=]+)/)?.[1];
+    expect(cursor).toBeDefined();
+    const secondPage = await runCli(["list", "--cursor", cursor!], dbPath);
+    expect(secondPage.exitCode).toBe(0);
+    expect(secondPage.stdout).toContain("5 task(s)");
+
+    const csv = await runCli(["list", "--all", "--format", "csv"], dbPath);
+    expect(csv.exitCode).toBe(0);
+    expect(csv.stdout.trim().split("\n")).toHaveLength(56);
+    expect(csv.stderr).not.toContain("Showing 50");
+
+    const sorted = await runCli(["list", "--all", "--sort", "status", "--limit", "10"], dbPath);
+    expect(sorted.exitCode).toBe(0);
+    expect(sorted.stdout).toContain("--offset 10");
+    expect(sorted.stdout).not.toContain("--cursor");
+
+    const invalidCursor = await runCli(["list", "--cursor", "not-a-cursor"], dbPath);
+    expect(invalidCursor.exitCode).not.toBe(0);
+    expect(invalidCursor.stderr).toContain("Invalid --cursor value");
+
+    try { unlinkSync(dbPath); } catch {}
+  });
+
+  it("should compact inspect output by default and expand with --verbose", async () => {
+    const dbPath = "/tmp/test-cli-compact-inspect.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    setTestDbPath(dbPath);
+    resetDatabase();
+    const db = getDatabase();
+    const task = createTask({
+      title: "Inspect compact task",
+      description: `full-description-${"d".repeat(900)}`,
+    }, db);
+    for (let index = 0; index < 8; index++) {
+      addComment({ task_id: task.id, content: `comment-${index}-${"c".repeat(500)}` }, db);
+    }
+    closeDatabase();
+
+    const compact = await runCli(["inspect", task.id, "--max-text", "120"], dbPath);
+    expect(compact.exitCode).toBe(0);
+    expect(compact.stdout).toContain("Compact orientation");
+    expect(compact.stdout).not.toContain("d".repeat(500));
+    expect(compact.stdout).not.toContain("c".repeat(300));
+    expect((compact.stdout.match(/comment-/g) || []).length).toBe(5);
+
+    const verbose = await runCli(["inspect", task.id, "--verbose"], dbPath);
+    expect(verbose.exitCode).toBe(0);
+    expect(verbose.stdout).toContain("d".repeat(500));
+    expect((verbose.stdout.match(/comment-/g) || []).length).toBe(8);
+
+    try { unlinkSync(dbPath); } catch {}
+  });
+
+  it("should preserve uncapped explicit JSON search output unless --limit is requested", async () => {
+    const dbPath = "/tmp/test-cli-search-json-limit.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    setTestDbPath(dbPath);
+    resetDatabase();
+    const db = getDatabase();
+    for (let index = 0; index < 70; index++) {
+      createTask({ title: `searchjson result ${String(index).padStart(2, "0")}` }, db);
+    }
+    closeDatabase();
+
+    const json = await runCli(["search", "searchjson", "--json"], dbPath);
+    expect(json.exitCode).toBe(0);
+    expect(JSON.parse(json.stdout)).toHaveLength(70);
+
+    const limited = await runCli(["search", "searchjson", "--json", "--limit", "12"], dbPath);
+    expect(limited.exitCode).toBe(0);
+    expect(JSON.parse(limited.stdout)).toHaveLength(12);
+
+    try { unlinkSync(dbPath); } catch {}
   });
 
   it("should run usage report command", async () => {
@@ -301,7 +422,7 @@ describe("CLI integration", () => {
       ["bun", "run", "src/cli/index.tsx", "add", "searchable item", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-search.db", TODOS_AUTO_PROJECT: "false" },
+        env: cliEnv("/tmp/test-cli-search.db"),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -312,7 +433,7 @@ describe("CLI integration", () => {
       ["bun", "run", "src/cli/index.tsx", "search", "searchable", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-search.db", TODOS_AUTO_PROJECT: "false" },
+        env: cliEnv("/tmp/test-cli-search.db"),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -713,7 +834,7 @@ describe("CLI integration", () => {
       ["bun", "run", "src/cli/index.tsx", "add", "weekly test task", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-week.db", TODOS_AUTO_PROJECT: "false" },
+        env: cliEnv("/tmp/test-cli-week.db"),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -724,7 +845,7 @@ describe("CLI integration", () => {
       ["bun", "run", "src/cli/index.tsx", "week", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-week.db", TODOS_AUTO_PROJECT: "false" },
+        env: cliEnv("/tmp/test-cli-week.db"),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -746,7 +867,7 @@ describe("CLI integration", () => {
       ["bun", "run", "src/cli/index.tsx", "mine", "test-agent", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-mine.db", TODOS_AUTO_PROJECT: "false" },
+        env: cliEnv("/tmp/test-cli-mine.db"),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -766,7 +887,7 @@ describe("CLI integration", () => {
       ["bun", "run", "src/cli/index.tsx", "blocked", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-blocked.db", TODOS_AUTO_PROJECT: "false" },
+        env: cliEnv("/tmp/test-cli-blocked.db"),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -786,7 +907,7 @@ describe("CLI integration", () => {
       ["bun", "run", "src/cli/index.tsx", "burndown", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-burndown.db", TODOS_AUTO_PROJECT: "false" },
+        env: cliEnv("/tmp/test-cli-burndown.db"),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -809,7 +930,7 @@ describe("CLI integration", () => {
       ["bun", "run", "src/cli/index.tsx", "log", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-log.db", TODOS_AUTO_PROJECT: "false" },
+        env: cliEnv("/tmp/test-cli-log.db"),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -829,7 +950,7 @@ describe("CLI integration", () => {
       ["bun", "run", "src/cli/index.tsx", "ready", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-ready.db", TODOS_AUTO_PROJECT: "false" },
+        env: cliEnv("/tmp/test-cli-ready.db"),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -1256,7 +1377,7 @@ describe("CLI integration", () => {
     for (const path of [sourceDb, targetDb, bundlePath, `${sourceDb}-shm`, `${sourceDb}-wal`, `${targetDb}-shm`, `${targetDb}-wal`]) {
       try { unlinkSync(path); } catch {}
     }
-  });
+  }, HEAVY_CLI_TEST_TIMEOUT_MS);
 
   it("should create verify integrity-check and restore a local backup through the CLI", async () => {
     const sourceDb = "/tmp/test-cli-backup-source.db";
@@ -1304,7 +1425,7 @@ describe("CLI integration", () => {
     for (const path of [sourceDb, targetDb, backupPath, `${sourceDb}-shm`, `${sourceDb}-wal`, `${targetDb}-shm`, `${targetDb}-wal`]) {
       try { unlinkSync(path); } catch {}
     }
-  });
+  }, HEAVY_CLI_TEST_TIMEOUT_MS);
 
   it("should inspect native storage status without network access", async () => {
     const dbPath = "/tmp/test-cli-storage-status.db";
@@ -1509,7 +1630,7 @@ describe("CLI integration", () => {
     for (const path of [sourceDb, targetDb, markdownPath, `${sourceDb}-shm`, `${sourceDb}-wal`, `${targetDb}-shm`, `${targetDb}-wal`]) {
       try { unlinkSync(path); } catch {}
     }
-  });
+  }, HEAVY_CLI_TEST_TIMEOUT_MS);
 
   it("should list and import bundled onboarding fixtures through the CLI", async () => {
     const dbPath = "/tmp/test-cli-onboarding-fixtures.db";
@@ -1669,7 +1790,7 @@ describe("CLI integration", () => {
       try { unlinkSync(path); } catch {}
     }
     rmSync(home, { recursive: true, force: true });
-  });
+  }, HEAVY_CLI_TEST_TIMEOUT_MS);
 
   it("should create all tasks and dependencies from a reusable plan template", async () => {
     const dbPath = "/tmp/test-cli-plan-template-use.db";
@@ -1788,7 +1909,7 @@ describe("CLI integration", () => {
       ["bun", "run", "src/cli/index.tsx", "sprint", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-sprint.db", TODOS_AUTO_PROJECT: "false" },
+        env: cliEnv("/tmp/test-cli-sprint.db"),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -1907,14 +2028,14 @@ describe("CLI integration", () => {
       try { unlinkSync(`${path}-shm`); } catch {}
       try { unlinkSync(`${path}-wal`); } catch {}
     }
-  });
+  }, HEAVY_CLI_TEST_TIMEOUT_MS);
 
   it("should run overdue command", async () => {
     const proc = Bun.spawn(
       ["bun", "run", "src/cli/index.tsx", "overdue", "--json"],
       {
         cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-overdue.db", TODOS_AUTO_PROJECT: "false" },
+        env: cliEnv("/tmp/test-cli-overdue.db"),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -2034,7 +2155,7 @@ describe("CLI integration", () => {
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
-    process.env["TODOS_DB_PATH"] = dbPath;
+    setTestDbPath(dbPath);
     resetDatabase();
     const db = getDatabase();
     const task = createTask({ title: "old cli retention evidence" }, db);
@@ -2048,7 +2169,7 @@ describe("CLI integration", () => {
     ]);
     closeDatabase();
     resetDatabase();
-    delete process.env["TODOS_DB_PATH"];
+    clearTestDbPath();
 
     try {
       const preview = await runCli(["retention", "cleanup", "--older-than-days", "30", "--json"], dbPath);
@@ -2080,7 +2201,7 @@ describe("CLI integration", () => {
 
   it("should report local scale hardening and preview compaction from the CLI", async () => {
     const dbPath = `/tmp/test-cli-scale-hardening-${crypto.randomUUID()}.db`;
-    process.env["TODOS_DB_PATH"] = dbPath;
+    setTestDbPath(dbPath);
     resetDatabase();
     const db = getDatabase();
     const task = createTask({ title: "CLI scale task", status: "completed" }, db);
@@ -2108,7 +2229,10 @@ describe("CLI integration", () => {
       expect(result.dry_run).toBe(true);
       expect(result.actions).toEqual(["PRAGMA optimize", "VACUUM"]);
     } finally {
+      closeDatabase();
       resetDatabase();
+      clearTestDbPath();
+      try { (await import("node:fs")).unlinkSync(dbPath); } catch {}
     }
   });
 

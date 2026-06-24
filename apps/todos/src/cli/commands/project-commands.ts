@@ -22,7 +22,7 @@ import {
 } from "../../lib/saved-search-views.js";
 import { defaultSyncAgents, syncWithAgent, syncWithAgents } from "../../lib/sync.js";
 import { getAgentTaskListId } from "../../lib/config.js";
-import { autoProject, autoDetectProject, handleError, output, formatTaskLine, normalizeStatus, resolveTaskId } from "../helpers.js";
+import { autoProject, autoDetectProject, handleError, output, formatTaskLine, normalizeStatus, resolveTaskId, DEFAULT_CLI_ROW_LIMIT, truncateText } from "../helpers.js";
 
 function collectOption(value: string, previous: string[] = []): string[] {
   return [...previous, value];
@@ -169,7 +169,7 @@ export function registerProjectCommands(program: Command) {
     .option("--depends-on <id>", "Only tasks that depend on a task")
     .option("--blocks <id>", "Only tasks that block a task")
     .option("--scope <scope>", "Search scope: tasks, projects, plans, runs, comments, all", "tasks")
-    .option("--limit <n>", "Maximum results", "100")
+    .option("--limit <n>", "Maximum results")
     .option("--filter <json>", "Merge an advanced saved-search filter JSON object")
     .option("--save-as <name>", "Save this search as a named view")
     .option("--description <text>", "Saved view description")
@@ -179,7 +179,11 @@ export function registerProjectCommands(program: Command) {
       try {
         const projectId = opts.allProjects ? undefined : autoProject(globalOpts);
         const scope = normalizeScope(opts.scope) as SavedSearchScope;
-        const searchOpts = buildSearchFilters(query, opts, projectId);
+        const effectiveOpts = {
+          ...opts,
+          limit: opts.limit ?? (!globalOpts.json && !opts.saveAs ? String(DEFAULT_CLI_ROW_LIMIT) : undefined),
+        };
+        const searchOpts = buildSearchFilters(query, effectiveOpts, projectId);
         if (opts.saveAs) {
           const view = saveSearchView({
             name: opts.saveAs,
@@ -204,8 +208,9 @@ export function registerProjectCommands(program: Command) {
           console.log(chalk.bold(`${result.count} ${scope} result(s) for "${query}":\n`));
           for (const item of result.results) {
             const entity = item.entity as any;
-            console.log(`${chalk.cyan(item.entity_type)} ${entity.id?.slice?.(0, 8) || ""} ${entity.name || entity.title || entity.content || entity.summary || ""}`);
+            console.log(`${chalk.cyan(item.entity_type)} ${entity.id?.slice?.(0, 8) || ""} ${truncateText(entity.name || entity.title || entity.content || entity.summary || "", 140)}`);
           }
+          console.log(chalk.dim(`\nUse --limit for more rows or --json for the full structured result.`));
           return;
         }
         const tasks = runSavedSearch(searchOpts, "tasks").results.map((item) => item.entity as ReturnType<typeof searchTasks>[number]);
@@ -224,6 +229,7 @@ export function registerProjectCommands(program: Command) {
         for (const t of tasks) {
           console.log(formatTaskLine(t));
         }
+        console.log(chalk.dim(`\nUse --limit for more rows, \`todos show <id>\` for details, or --json for the full structured result.`));
       } catch (e) {
         handleError(e);
       }

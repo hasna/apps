@@ -63,14 +63,14 @@ export const CLI_COMMAND_GROUPS: CliCommandGroup[] = [
     description: "Task CRUD and workflow",
     commands: [
       { name: "add", summary: "Create a task", usage: "todos add <title>", flags: ["--priority", "--project", "--json"], example: "todos add \"Fix auth bug\" --priority high", json: true },
-      { name: "list", summary: "List tasks", flags: ["-s, --status", "--project", "--json"], json: true },
-      { name: "show", summary: "Show task details", usage: "todos show <id>", json: true },
+      { name: "list", summary: "List compact task rows", flags: ["-s, --status", "--limit", "--cursor", "--verbose", "--project", "--json"], json: true },
+      { name: "show", summary: "Show task details", usage: "todos show <id>", flags: ["--verbose", "--comments", "--max-text", "--json"], json: true },
       { name: "start", summary: "Start a task", usage: "todos start <id>", json: true },
       { name: "done", summary: "Complete a task", usage: "todos done <id>", flags: ["--notes", "--commit-hash"], json: true },
       { name: "claim", summary: "Atomically claim next task", usage: "todos claim <agent>", json: true },
       { name: "next", summary: "Show next claimable task", json: true },
       { name: "fail", summary: "Mark task failed", flags: ["--reason", "--retry"], json: true },
-      { name: "search", summary: "Full-text search", usage: "todos search <query>", json: true },
+      { name: "search", summary: "Compact full-text search", usage: "todos search <query>", flags: ["--scope", "--limit", "--json"], json: true },
     ],
   },
   {

@@ -1077,6 +1077,36 @@ describe("MCP tool wrappers", () => {
     expect(listed.content[0]!.text).toContain("Assigned without pre-registering agent");
   });
 
+  it("list_tasks is compact by default and returns a continuation cursor", async () => {
+    const tools = captureTools(registerTaskCrudTools);
+    for (let index = 0; index < 55; index++) {
+      createTask({ title: `MCP compact row ${String(index).padStart(2, "0")}` }, db);
+    }
+
+    const firstPage = await callCapturedTool(tools, "list_tasks", {});
+    const firstText = firstPage.content[0]!.text;
+    expect(firstText).toContain("Showing 50");
+    expect(firstText).toContain("cursor=");
+    expect((firstText.match(/MCP compact row/g) || []).length).toBe(50);
+
+    const cursor = firstText.match(/cursor="([^"]+)"/)?.[1];
+    expect(cursor).toBeDefined();
+    const secondPage = await callCapturedTool(tools, "list_tasks", { cursor });
+    expect((secondPage.content[0]!.text.match(/MCP compact row/g) || []).length).toBe(5);
+  });
+
+  it("list_tasks rejects invalid cursors", async () => {
+    const tools = captureTools(registerTaskCrudTools);
+    const tool = tools.get("list_tasks");
+    expect(tool).toBeDefined();
+
+    const result = await tool!.handler({ cursor: "not-a-cursor" }) as { isError?: boolean; content: { text: string }[] };
+    const payload = JSON.parse(result.content[0]!.text);
+
+    expect(result.isError).toBe(true);
+    expect(payload.code).toBe("INVALID_CURSOR");
+  });
+
   it("update_task accepts unregistered assignee names like the CLI", async () => {
     const tools = captureTools(registerTaskCrudTools);
     const task = createTask({ title: "Reassign via MCP" }, db);

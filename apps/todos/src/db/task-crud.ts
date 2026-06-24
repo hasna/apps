@@ -284,15 +284,26 @@ export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
 
   // Cursor-based pagination: decode cursor and add compound WHERE condition
   if (filter.cursor) {
+    let decoded: { p: number; c: string; i: string };
     try {
-      const decoded = JSON.parse(Buffer.from(filter.cursor, "base64").toString("utf8")) as { p: number; c: string; i: string };
-      conditions.push(
-        `(${PRIORITY_RANK} > ? OR (${PRIORITY_RANK} = ? AND created_at < ?) OR (${PRIORITY_RANK} = ? AND created_at = ? AND id > ?))`
-      );
-      params.push(decoded.p, decoded.p, decoded.c, decoded.p, decoded.c, decoded.i);
+      const parsed = JSON.parse(Buffer.from(filter.cursor, "base64").toString("utf8")) as Record<string, unknown>;
+      if (
+        !Number.isInteger(parsed["p"])
+        || typeof parsed["c"] !== "string"
+        || typeof parsed["i"] !== "string"
+        || parsed["c"].length === 0
+        || parsed["i"].length === 0
+      ) {
+        throw new Error("invalid shape");
+      }
+      decoded = { p: parsed["p"] as number, c: parsed["c"], i: parsed["i"] };
     } catch {
-      // Invalid cursor — ignore and return from beginning
+      throw new Error("Invalid task cursor. Use the opaque cursor from a previous default-order task list page.");
     }
+    conditions.push(
+      `(${PRIORITY_RANK} > ? OR (${PRIORITY_RANK} = ? AND created_at < ?) OR (${PRIORITY_RANK} = ? AND created_at = ? AND id > ?))`
+    );
+    params.push(decoded.p, decoded.p, decoded.c, decoded.p, decoded.c, decoded.i);
   }
 
   // Exclude archived tasks by default
@@ -314,7 +325,7 @@ export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
 
   const rows = d
     .query(
-      `SELECT * FROM tasks ${where} ORDER BY ${PRIORITY_RANK}, created_at DESC${limitClause}`,
+      `SELECT * FROM tasks ${where} ORDER BY ${PRIORITY_RANK}, created_at DESC, id ASC${limitClause}`,
     )
     .all(...params) as TaskRow[];
 
@@ -396,6 +407,22 @@ export function countTasks(filter: Omit<TaskFilter, 'limit' | 'offset'> = {}, db
   if (filter.task_list_id) {
     conditions.push("task_list_id = ?");
     params.push(filter.task_list_id);
+  }
+
+  if (filter.has_recurrence === true) {
+    conditions.push("recurrence_rule IS NOT NULL");
+  } else if (filter.has_recurrence === false) {
+    conditions.push("recurrence_rule IS NULL");
+  }
+
+  if (filter.task_type) {
+    if (Array.isArray(filter.task_type)) {
+      conditions.push(`task_type IN (${filter.task_type.map(() => "?").join(",")})`);
+      params.push(...filter.task_type);
+    } else {
+      conditions.push("task_type = ?");
+      params.push(filter.task_type);
+    }
   }
 
   // Exclude archived tasks by default (consistent with listTasks)

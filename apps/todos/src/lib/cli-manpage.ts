@@ -96,6 +96,8 @@ export function generateCliReferenceMarkdown(): string {
     "- `--json` / `-j` — machine-readable output",
     "- `--help` / `-h` — command help",
     "",
+    "Human list/search/detail commands are compact by default. Use `--limit` and `--cursor` to page rows, `--verbose` for expanded human detail, or `--json` for explicit machine-readable records.",
+    "",
     "## Command groups",
     "",
   ];

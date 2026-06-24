@@ -8,6 +8,7 @@ import {
   getTask,
   getTaskWithRelations,
   listTasks,
+  countTasks,
   updateTask,
   deleteTask,
   startTask,
@@ -25,6 +26,14 @@ import {
   output,
   statusColors,
   priorityColors,
+  DEFAULT_CLI_ROW_LIMIT,
+  DEFAULT_CLI_DETAIL_LIMIT,
+  DEFAULT_CLI_TEXT_LIMIT,
+  encodeTaskCursor,
+  parsePositiveInt,
+  parseNonNegativeInt,
+  truncateText,
+  validateTaskCursor,
 } from "../helpers.js";
 
 /** Resolve a project by ID or name substring. */
@@ -47,6 +56,14 @@ function resolveProjectIdOrSlug(input: string): string {
 
 function isPathLike(input: string): boolean {
   return input.startsWith(".") || input.includes("/") || input.includes("\\");
+}
+
+function sliceForCompact<T>(items: T[], limit: number, verbose: boolean): T[] {
+  return verbose ? items : items.slice(0, limit);
+}
+
+function printOmittedHint(count: number, command: string): void {
+  if (count > 0) console.log(chalk.dim(`    ... ${count} more. Use ${command} for full details.`));
 }
 
 function resolvePlanId(input: string): string {
@@ -153,6 +170,9 @@ export function registerTaskCommands(program: Command) {
     .option("--overdue", "Only overdue tasks (past due_at)")
     .option("--recurring", "Only recurring tasks")
     .option("--limit <n>", "Max tasks to return")
+    .option("--cursor <cursor>", "Opaque cursor from a previous compact list page")
+    .option("--offset <n>", "Entries to skip; prefer --cursor for stable pagination")
+    .option("--verbose", "Show every matching human row unless --limit is provided")
     .action((opts) => {
       const globalOpts = program.opts();
       opts.tags = opts.tags || opts.tag;
@@ -209,16 +229,45 @@ export function registerTaskCommands(program: Command) {
         filter["assigned_to"] = opts.agentName;
       }
       if (opts.recurring) filter["has_recurrence"] = true;
-      if (opts.limit !== undefined) {
-        const parsedLimit = Number.parseInt(String(opts.limit), 10);
-        if (!Number.isInteger(parsedLimit) || parsedLimit <= 0) {
-          console.error(chalk.red(`Invalid --limit value: ${opts.limit}. Must be a positive integer.`));
-          process.exit(1);
-        }
-        filter["limit"] = parsedLimit;
+      const requestedLimit = opts.limit !== undefined ? parsePositiveInt(opts.limit, "--limit") : undefined;
+      const fmt = opts.format || (globalOpts.json ? "json" : "table");
+      const needsPostFilter = Boolean(opts.dueToday || opts.overdue || opts.sort);
+      const compactHumanMode = fmt === "table" || fmt === "compact";
+      const requestedOffset = opts.offset !== undefined ? parseNonNegativeInt(opts.offset, "--offset") : undefined;
+      if (opts.cursor && requestedOffset !== undefined) {
+        console.error(chalk.red("Use either --cursor or --offset, not both."));
+        process.exit(1);
+      }
+      if (opts.cursor && needsPostFilter) {
+        console.error(chalk.red("--cursor is only valid for default-order task lists. Use --offset with --sort, --due-today, or --overdue."));
+        process.exit(1);
+      }
+      if (opts.cursor) {
+        validateTaskCursor(opts.cursor);
+        filter["cursor"] = opts.cursor;
       }
 
-      let tasks = listTasks(filter as any);
+      const pageLimit = requestedLimit !== undefined
+        ? requestedLimit
+        : compactHumanMode && !opts.verbose
+          ? DEFAULT_CLI_ROW_LIMIT
+          : undefined;
+
+      if (!needsPostFilter && requestedOffset !== undefined) {
+        filter["offset"] = requestedOffset;
+      }
+      if (!needsPostFilter && pageLimit !== undefined && fmt !== "json") {
+        filter["limit"] = pageLimit + 1;
+      } else if (!needsPostFilter && requestedLimit !== undefined) {
+        filter["limit"] = requestedLimit;
+      }
+
+      let tasks;
+      try {
+        tasks = listTasks(filter as any);
+      } catch (e) {
+        handleError(e);
+      }
       if (opts.dueToday) {
         const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
         tasks = tasks.filter(t => t.due_at && t.due_at <= todayEnd.toISOString());
@@ -238,14 +287,33 @@ export function registerTaskCommands(program: Command) {
         });
       }
 
-      const fmt = opts.format || (globalOpts.json ? "json" : "table");
-
       if (fmt === "json") {
-        output(tasks, true);
+        const start = needsPostFilter ? requestedOffset ?? 0 : 0;
+        const jsonTasks = needsPostFilter && (requestedOffset !== undefined || requestedLimit !== undefined)
+          ? tasks.slice(start, requestedLimit !== undefined ? start + requestedLimit : undefined)
+          : tasks;
+        output(jsonTasks, true);
         return;
       }
 
-      if (tasks.length === 0) {
+      const total = needsPostFilter
+        ? tasks.length
+        : countTasks(({ ...filter, limit: undefined, offset: undefined, cursor: undefined }) as any);
+      const start = needsPostFilter ? requestedOffset ?? 0 : 0;
+      const pageSource = needsPostFilter ? tasks.slice(start) : tasks;
+      const hasMore = Boolean(pageLimit && pageSource.length > pageLimit);
+      const displayTasks = pageLimit ? pageSource.slice(0, pageLimit) : pageSource;
+      const nextCursor = hasMore && !needsPostFilter && displayTasks.length > 0
+        ? encodeTaskCursor(displayTasks[displayTasks.length - 1]!)
+        : null;
+      const nextOffset = hasMore && needsPostFilter ? start + displayTasks.length : null;
+      const moreHint = nextCursor
+        ? `--cursor ${nextCursor}`
+        : nextOffset !== null
+          ? `--offset ${nextOffset}`
+          : null;
+
+      if (displayTasks.length === 0) {
         if (fmt === "compact" || fmt === "csv") process.stdout.write("");
         else console.log(chalk.dim("No tasks found."));
         return;
@@ -253,25 +321,34 @@ export function registerTaskCommands(program: Command) {
 
       if (fmt === "csv") {
         const headers = "id,short_id,title,status,priority,assigned_to,updated_at";
-        const rows = tasks.map((t: any) => [
+        const rows = displayTasks.map((t: any) => [
           t.id, t.short_id || "", t.title.replace(/,/g, ";"), t.status, t.priority, t.assigned_to || "", t.updated_at,
         ].join(","));
         console.log([headers, ...rows].join("\n"));
+        if (hasMore && moreHint) console.error(`Showing ${displayTasks.length} of ${total}. Use ${moreHint} for more.`);
         return;
       }
 
       if (fmt === "compact") {
-        for (const t of tasks) {
+        for (const t of displayTasks) {
           const id = t.short_id || t.id.slice(0, 8);
           const assigned = t.assigned_to ? ` ${t.assigned_to}` : "";
-          process.stdout.write(`${id} ${t.status} ${t.priority} ${t.title}${assigned}\n`);
+          process.stdout.write(`${id} ${t.status} ${t.priority} ${truncateText(t.title, 100)}${assigned}\n`);
         }
+        if (hasMore && moreHint) console.error(`Showing ${displayTasks.length} of ${total}. Use ${moreHint}, --limit, or --verbose for more.`);
         return;
       }
 
-      console.log(chalk.bold(`${tasks.length} task(s):\n`));
-      for (const t of tasks) {
+      const countLabel = hasMore ? `${displayTasks.length} of ${total}` : String(displayTasks.length);
+      console.log(chalk.bold(`${countLabel} task(s):\n`));
+      for (const t of displayTasks) {
         console.log(formatTaskLine(t));
+      }
+      const detailHint = "Use `todos show <id>` or `todos inspect <id> --verbose` for details.";
+      if (hasMore) {
+        console.log(chalk.dim(`\nShowing ${displayTasks.length} of ${total}. Use ${moreHint ? `${moreHint}, ` : ""}--limit, or --verbose for more. ${detailHint}`));
+      } else {
+        console.log(chalk.dim(`\n${detailHint}`));
       }
     });
 
@@ -304,8 +381,12 @@ export function registerTaskCommands(program: Command) {
   // show
   program
     .command("show <id>")
-    .description("Show full task details")
-    .action((id: string) => {
+    .description("Show task details (compact by default)")
+    .option("--verbose", "Show full descriptions, comments, and related rows")
+    .option("--comments <n>", "Comments to show before truncating", String(DEFAULT_CLI_DETAIL_LIMIT))
+    .option("--related <n>", "Related rows to show per section before truncating", "10")
+    .option("--max-text <n>", "Max characters for long text fields", String(DEFAULT_CLI_TEXT_LIMIT))
+    .action((id: string, opts) => {
       const globalOpts = program.opts();
       const resolvedId = resolveTaskId(id);
       const task = getTaskWithRelations(resolvedId);
@@ -320,12 +401,22 @@ export function registerTaskCommands(program: Command) {
         return;
       }
 
+      const verbose = Boolean(opts.verbose);
+      const commentLimit = parsePositiveInt(opts.comments, "--comments");
+      const relatedLimit = parsePositiveInt(opts.related, "--related");
+      const textLimit = parsePositiveInt(opts.maxText, "--max-text");
+      let omitted = false;
+
       console.log(chalk.bold("Task Details:\n"));
       console.log(`  ${chalk.dim("ID:")}       ${task.id}`);
       console.log(`  ${chalk.dim("Title:")}    ${task.title}`);
       console.log(`  ${chalk.dim("Status:")}   ${(statusColors[task.status] || chalk.white)(task.status)}`);
       console.log(`  ${chalk.dim("Priority:")} ${(priorityColors[task.priority] || chalk.white)(task.priority)}`);
-      if (task.description) console.log(`  ${chalk.dim("Desc:")}     ${task.description}`);
+      if (task.description) {
+        const description = verbose ? task.description : truncateText(task.description, textLimit);
+        if (description !== task.description) omitted = true;
+        console.log(`  ${chalk.dim("Desc:")}     ${description}`);
+      }
       if (task.assigned_to) console.log(`  ${chalk.dim("Assigned:")} ${task.assigned_to}`);
       if (task.agent_id) console.log(`  ${chalk.dim("Agent:")}    ${task.agent_id}`);
       if (task.session_id) console.log(`  ${chalk.dim("Session:")}  ${task.session_id}`);
@@ -356,39 +447,64 @@ export function registerTaskCommands(program: Command) {
 
       if (task.subtasks.length > 0) {
         console.log(chalk.bold(`\n  Subtasks (${task.subtasks.length}):`));
-        for (const st of task.subtasks) {
+        for (const st of sliceForCompact(task.subtasks, relatedLimit, verbose)) {
           console.log(`    ${formatTaskLine(st)}`);
+        }
+        if (!verbose && task.subtasks.length > relatedLimit) {
+          omitted = true;
+          printOmittedHint(task.subtasks.length - relatedLimit, "`todos show <id> --verbose`");
         }
       }
 
       if (task.dependencies.length > 0) {
         console.log(chalk.bold(`\n  Depends on (${task.dependencies.length}):`));
-        for (const dep of task.dependencies) {
+        for (const dep of sliceForCompact(task.dependencies, relatedLimit, verbose)) {
           console.log(`    ${formatTaskLine(dep)}`);
+        }
+        if (!verbose && task.dependencies.length > relatedLimit) {
+          omitted = true;
+          printOmittedHint(task.dependencies.length - relatedLimit, "`todos show <id> --verbose`");
         }
       }
 
       if (task.blocked_by.length > 0) {
         console.log(chalk.bold(`\n  Blocks (${task.blocked_by.length}):`));
-        for (const b of task.blocked_by) {
+        for (const b of sliceForCompact(task.blocked_by, relatedLimit, verbose)) {
           console.log(`    ${formatTaskLine(b)}`);
+        }
+        if (!verbose && task.blocked_by.length > relatedLimit) {
+          omitted = true;
+          printOmittedHint(task.blocked_by.length - relatedLimit, "`todos show <id> --verbose`");
         }
       }
 
       if (task.comments.length > 0) {
         console.log(chalk.bold(`\n  Comments (${task.comments.length}):`));
-        for (const c of task.comments) {
+        for (const c of sliceForCompact(task.comments, commentLimit, verbose)) {
           const agent = c.agent_id ? chalk.cyan(`[${c.agent_id}] `) : "";
-          console.log(`    ${agent}${chalk.dim(c.created_at)}: ${c.content}`);
+          const content = verbose ? c.content : truncateText(c.content, textLimit);
+          if (content !== c.content) omitted = true;
+          console.log(`    ${agent}${chalk.dim(c.created_at)}: ${content}`);
+        }
+        if (!verbose && task.comments.length > commentLimit) {
+          omitted = true;
+          printOmittedHint(task.comments.length - commentLimit, "`todos show <id> --verbose`");
         }
       }
+      if (omitted) console.log(chalk.dim("\nCompact detail view. Use `todos show <id> --verbose` or `--json` for the full record."));
     });
 
   // inspect
   program
     .command("inspect [id]")
-    .description("Full orientation for a task — details, description, dependencies, blocker, files, commits, comments. If no ID given, shows current in-progress task for --agent.")
-    .action(async (id?: string) => {
+    .description("Compact orientation for a task; pass --verbose for full details. If no ID given, shows current in-progress task for --agent.")
+    .option("--verbose", "Show full descriptions, comments, files, commits, and related rows")
+    .option("--comments <n>", "Comments to show before truncating", String(DEFAULT_CLI_DETAIL_LIMIT))
+    .option("--files <n>", "Files to show before truncating", "20")
+    .option("--commits <n>", "Commits to show before truncating", "10")
+    .option("--related <n>", "Related rows to show per section before truncating", "10")
+    .option("--max-text <n>", "Max characters for long text fields", String(DEFAULT_CLI_TEXT_LIMIT))
+    .action(async (id?: string, opts?: any) => {
       const globalOpts = program.opts();
       let resolvedId = id ? resolveTaskId(id) : null;
 
@@ -411,6 +527,14 @@ export function registerTaskCommands(program: Command) {
         return;
       }
 
+      const verbose = Boolean(opts?.verbose);
+      const commentLimit = parsePositiveInt(opts?.comments ?? DEFAULT_CLI_DETAIL_LIMIT, "--comments");
+      const fileLimit = parsePositiveInt(opts?.files ?? 20, "--files");
+      const commitLimit = parsePositiveInt(opts?.commits ?? 10, "--commits");
+      const relatedLimit = parsePositiveInt(opts?.related ?? 10, "--related");
+      const textLimit = parsePositiveInt(opts?.maxText ?? DEFAULT_CLI_TEXT_LIMIT, "--max-text");
+      let omitted = false;
+
       const sid = task.short_id || task.id.slice(0, 8);
       const statusColor = statusColors[task.status] || chalk.white;
       const prioColor = priorityColors[task.priority] || chalk.white;
@@ -418,7 +542,9 @@ export function registerTaskCommands(program: Command) {
 
       if (task.description) {
         console.log(chalk.dim("Description:"));
-        console.log(`  ${task.description}\n`);
+        const description = verbose ? task.description : truncateText(task.description, textLimit);
+        if (description !== task.description) omitted = true;
+        console.log(`  ${description}\n`);
       }
 
       if (task.assigned_to) console.log(`  ${chalk.dim("Assigned:")}  ${task.assigned_to}`);
@@ -439,10 +565,14 @@ export function registerTaskCommands(program: Command) {
       const unfinishedDeps = task.dependencies.filter(d => d.status !== "completed" && d.status !== "cancelled");
       if (task.dependencies.length > 0) {
         console.log(chalk.bold(`\n  Depends on (${task.dependencies.length}):`));
-        for (const dep of task.dependencies) {
+        for (const dep of sliceForCompact(task.dependencies, relatedLimit, verbose)) {
           const blocked = dep.status !== "completed" && dep.status !== "cancelled";
-          const icon = blocked ? chalk.red("✗") : chalk.green("✓");
+          const icon = blocked ? chalk.red("x") : chalk.green("+");
           console.log(`    ${icon} ${formatTaskLine(dep)}`);
+        }
+        if (!verbose && task.dependencies.length > relatedLimit) {
+          omitted = true;
+          printOmittedHint(task.dependencies.length - relatedLimit, "`todos inspect <id> --verbose`");
         }
       }
       if (unfinishedDeps.length > 0) {
@@ -451,12 +581,20 @@ export function registerTaskCommands(program: Command) {
 
       if (task.blocked_by.length > 0) {
         console.log(chalk.bold(`\n  Blocks (${task.blocked_by.length}):`));
-        for (const b of task.blocked_by) console.log(`    ${formatTaskLine(b)}`);
+        for (const b of sliceForCompact(task.blocked_by, relatedLimit, verbose)) console.log(`    ${formatTaskLine(b)}`);
+        if (!verbose && task.blocked_by.length > relatedLimit) {
+          omitted = true;
+          printOmittedHint(task.blocked_by.length - relatedLimit, "`todos inspect <id> --verbose`");
+        }
       }
 
       if (task.subtasks.length > 0) {
         console.log(chalk.bold(`\n  Subtasks (${task.subtasks.length}):`));
-        for (const st of task.subtasks) console.log(`    ${formatTaskLine(st)}`);
+        for (const st of sliceForCompact(task.subtasks, relatedLimit, verbose)) console.log(`    ${formatTaskLine(st)}`);
+        if (!verbose && task.subtasks.length > relatedLimit) {
+          omitted = true;
+          printOmittedHint(task.subtasks.length - relatedLimit, "`todos inspect <id> --verbose`");
+        }
       }
 
       // Files
@@ -465,7 +603,11 @@ export function registerTaskCommands(program: Command) {
         const files = listTaskFiles(task.id);
         if (files.length > 0) {
           console.log(chalk.bold(`\n  Files (${files.length}):`));
-          for (const f of files) console.log(`    ${chalk.dim(f.status || "file")} ${f.path}`);
+          for (const f of sliceForCompact(files, fileLimit, verbose)) console.log(`    ${chalk.dim(f.status || "file")} ${f.path}`);
+          if (!verbose && files.length > fileLimit) {
+            omitted = true;
+            printOmittedHint(files.length - fileLimit, "`todos inspect <id> --verbose`");
+          }
         }
       } catch (e) {
         console.error(chalk.dim(`Warning: could not load task files: ${e instanceof Error ? e.message : String(e)}`));
@@ -477,7 +619,11 @@ export function registerTaskCommands(program: Command) {
         const commits = getTaskCommits(task.id);
         if (commits.length > 0) {
           console.log(chalk.bold(`\n  Commits (${commits.length}):`));
-          for (const c of commits) console.log(`    ${chalk.yellow(c.sha.slice(0, 7))} ${c.message || ""}`);
+          for (const c of sliceForCompact(commits, commitLimit, verbose)) console.log(`    ${chalk.yellow(c.sha.slice(0, 7))} ${truncateText(c.message || "", verbose ? Number.MAX_SAFE_INTEGER : 120)}`);
+          if (!verbose && commits.length > commitLimit) {
+            omitted = true;
+            printOmittedHint(commits.length - commitLimit, "`todos inspect <id> --verbose`");
+          }
         }
       } catch (e) {
         console.error(chalk.dim(`Warning: could not load task commits: ${e instanceof Error ? e.message : String(e)}`));
@@ -485,21 +631,32 @@ export function registerTaskCommands(program: Command) {
 
       if (task.comments.length > 0) {
         console.log(chalk.bold(`\n  Comments (${task.comments.length}):`));
-        for (const c of task.comments) {
+        for (const c of sliceForCompact(task.comments, commentLimit, verbose)) {
           const agent = c.agent_id ? chalk.cyan(`[${c.agent_id}] `) : "";
-          console.log(`    ${agent}${chalk.dim(c.created_at)}: ${c.content}`);
+          const content = verbose ? c.content : truncateText(c.content, textLimit);
+          if (content !== c.content) omitted = true;
+          console.log(`    ${agent}${chalk.dim(c.created_at)}: ${content}`);
+        }
+        if (!verbose && task.comments.length > commentLimit) {
+          omitted = true;
+          printOmittedHint(task.comments.length - commentLimit, "`todos inspect <id> --verbose`");
         }
       }
 
       if (task.checklist && task.checklist.length > 0) {
         const done = task.checklist.filter((c: any) => c.checked).length;
         console.log(chalk.bold(`\n  Checklist (${done}/${task.checklist.length}):`));
-        for (const item of task.checklist) {
-          const icon = (item as any).checked ? chalk.green("☑") : chalk.dim("☐");
+        for (const item of sliceForCompact(task.checklist, relatedLimit, verbose)) {
+          const icon = (item as any).checked ? chalk.green("[x]") : chalk.dim("[ ]");
           console.log(`    ${icon} ${(item as any).text || (item as any).title}`);
+        }
+        if (!verbose && task.checklist.length > relatedLimit) {
+          omitted = true;
+          printOmittedHint(task.checklist.length - relatedLimit, "`todos inspect <id> --verbose`");
         }
       }
 
+      if (omitted) console.log(chalk.dim("\nCompact orientation. Use `todos inspect <id> --verbose` or `--json` for the full record."));
       console.log();
     });
 
@@ -507,7 +664,10 @@ export function registerTaskCommands(program: Command) {
   program
     .command("history <id>")
     .description("Show change history for a task (audit log)")
-    .action(async (id: string) => {
+    .option("--limit <n>", "Max changes to show in human output", "20")
+    .option("--max-text <n>", "Max characters for changed values", "160")
+    .option("--verbose", "Show all history rows and full changed values")
+    .action(async (id: string, opts) => {
       const globalOpts = program.opts();
       const resolvedId = resolveTaskId(id);
       const { getTaskHistory } = await import("../../db/audit.js");
@@ -518,17 +678,28 @@ export function registerTaskCommands(program: Command) {
         return;
       }
 
+      const verbose = Boolean(opts.verbose);
+      const limit = parsePositiveInt(opts.limit, "--limit");
+      const textLimit = parsePositiveInt(opts.maxText, "--max-text");
+      const visibleHistory = verbose ? history : history.slice(0, limit);
+
       if (history.length === 0) {
         console.log(chalk.dim("No history for this task."));
         return;
       }
 
-      console.log(chalk.bold(`${history.length} change(s):\n`));
-      for (const h of history) {
+      const countLabel = visibleHistory.length < history.length ? `${visibleHistory.length} of ${history.length}` : String(history.length);
+      console.log(chalk.bold(`${countLabel} change(s):\n`));
+      for (const h of visibleHistory) {
         const agent = h.agent_id ? chalk.cyan(` by ${h.agent_id}`) : "";
         const field = h.field ? chalk.yellow(` ${h.field}`) : "";
-        const change = h.old_value && h.new_value ? ` ${chalk.red(h.old_value)} → ${chalk.green(h.new_value)}` : h.new_value ? ` → ${chalk.green(h.new_value)}` : "";
+        const oldValue = verbose ? h.old_value : truncateText(h.old_value, textLimit);
+        const newValue = verbose ? h.new_value : truncateText(h.new_value, textLimit);
+        const change = oldValue && newValue ? ` ${chalk.red(oldValue)} -> ${chalk.green(newValue)}` : newValue ? ` -> ${chalk.green(newValue)}` : "";
         console.log(`  ${chalk.dim(h.created_at)} ${chalk.bold(h.action)}${field}${change}${agent}`);
+      }
+      if (!verbose && visibleHistory.length < history.length) {
+        console.log(chalk.dim(`\nShowing ${visibleHistory.length} of ${history.length}. Use --limit or --verbose for more. Use --json for the full audit record.`));
       }
     });
 

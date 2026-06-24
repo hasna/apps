@@ -54,6 +54,15 @@ todos done <id> \
 todos fail <id> --reason "Auth bug in middleware" --retry  # Auto-creates retry copy
 ```
 
+## Compact CLI Output
+
+Human CLI output is compact by default to avoid flooding agent context. `todos
+list` and `todos search` show dense truncated rows and cap default human output
+to 50 rows; use `--limit` plus the printed `--cursor` hint to page deliberately.
+Use `todos show <id>` or `todos inspect <id>` for details, add `--verbose` for
+full human output, and use `--json` only when you explicitly need the structured
+record.
+
 ## Key MCP Tools for Agents
 
 | Tool | What it does |

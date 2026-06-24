@@ -9,7 +9,7 @@ import { z } from "zod";
 import type { Task } from "../../types/index.js";
 import { createTask, listTasks, getTask, updateTask, deleteTask } from "../../db/tasks.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
-import { compactJson, compactTask, truncateText } from "../token-utils.js";
+import { compactJson, compactTask, decodeTaskCursor, encodeTaskCursor, truncateText } from "../token-utils.js";
 
 interface TaskCrudContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -111,6 +111,7 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
         created_before: z.string().optional().describe("ISO date — tasks created before this date"),
         limit: z.number().optional().describe("Max results (default: 50, max 500)"),
         offset: z.number().optional().describe("Pagination offset"),
+        cursor: z.string().optional().describe("Opaque cursor from a previous list_tasks response"),
       },
       async (params) => {
         try {
@@ -118,11 +119,26 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
           if (params.project_id) resolved.project_id = resolveId(params.project_id, "projects");
           if (params.task_list_id) resolved.task_list_id = resolveId(params.task_list_id, "task_lists");
           if (params.assigned_to) resolved.assigned_to = resolveAssignee(params.assigned_to);
+          if (params.cursor) decodeTaskCursor(params.cursor);
+          const limit = Math.max(1, Math.min(Number(params.limit || 50), 500));
+          resolved.limit = limit + 1;
           const tasks = listTasks(resolved as Parameters<typeof listTasks>[0], undefined) as Task[];
           if (tasks.length === 0) return { content: [{ type: "text" as const, text: "No tasks found." }] };
-          const lines = tasks.map(formatTask);
+          const visible = tasks.slice(0, limit);
+          const lines = visible.map(formatTask);
+          if (tasks.length > limit) {
+            const cursor = encodeTaskCursor(visible[visible.length - 1]!);
+            lines.push("");
+            lines.push(`Showing ${visible.length}. Pass cursor="${cursor}" or a larger limit for more. Use get_task(detail=full) for details.`);
+          } else {
+            lines.push("");
+            lines.push("Use get_task(task_id) for compact details or get_task(detail=full) for the full record.");
+          }
           return { content: [{ type: "text" as const, text: lines.join("\n") }] };
         } catch (e) {
+          if (e instanceof Error && e.message.startsWith("Invalid task cursor")) {
+            return { content: [{ type: "text" as const, text: JSON.stringify({ code: "INVALID_CURSOR", message: e.message }) }], isError: true };
+          }
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }
       },
