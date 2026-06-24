@@ -42,12 +42,22 @@ List and search without printing secret values:
 secrets list
 secrets list hasnaxyz/anthropic
 secrets search anthropic
+secrets show hasnaxyz/anthropic/live/api_key
 ```
+
+`list`, `search`, `audit`/`history`, and `users list` are compact by default:
+they show the first 20 rows, truncate long fields, and print a next-cursor hint
+when more rows are available. Use `--limit <n>` and `--cursor <n>` to page,
+`--verbose` for wider metadata columns, and `--json` for machine-readable
+metadata. Use `secrets show <key>` or `secrets inspect <key>` for one secret's
+metadata. Secret values are still only printed by explicit value commands such
+as `secrets get <key>` or `secrets export` without `--redact`.
 
 Inspect audit history:
 
 ```bash
 secrets audit hasnaxyz/anthropic/live/api_key
+secrets history --limit 20 --cursor 20
 ```
 
 Inspect metadata-only secret reference health:
@@ -129,19 +139,22 @@ secrets mcp
 The MCP exposes these tools:
 
 ```text
-list_secrets(namespace?)
-search_secrets(query)
+list_secrets(namespace?, limit?, cursor?, verbose?)
+search_secrets(query, limit?, cursor?, verbose?)
+inspect_secret(key)
 get_secret(key)
 set_secret(key, value, type?, label?, ttl?)
 delete_secret(key)
-audit_log(key?, limit?)
+audit_log(key?, limit?, cursor?, verbose?)
 register_user(id, name, type?)
-list_users(type?)
+list_users(type?, limit?, cursor?, verbose?)
 ```
 
-`list_secrets` and `search_secrets` return metadata only. `get_secret` returns
-the raw value, so use it only when the agent needs to pass the secret into a
-tool or command.
+`list_secrets`, `search_secrets`, `audit_log`, and `list_users` are compact by
+default and accept `limit`, `cursor`, and `verbose` arguments. `list_secrets`,
+`search_secrets`, and `inspect_secret` return metadata only. `get_secret`
+returns the raw value, so use it only when the agent needs to pass the secret
+into a tool or command.
 
 ## Env-File Bridge
 
@@ -192,7 +205,8 @@ The vault database lives at `~/.hasna/secrets/vault.db`. Key material lives in
 
 ## Safety Notes
 
-- `list`, `search`, and `export --redact` do not print secret values.
+- `list`, `search`, `show`, `inspect`, and `export --redact` do not print secret values.
+- `list`, `search`, `audit`/`history`, and `users list` are compact by default; use `--limit`, `--cursor`, `--verbose`, and `--json` for gradual disclosure.
 - `get` and MCP `get_secret` return raw secret values.
 - Never paste secret values into commits, logs, issues, PRs, or chat messages.
 - Keep `.env`, `.env.local`, `.secrets/`, and `.connect/` out of git.

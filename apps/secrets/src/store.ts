@@ -1,7 +1,7 @@
 import { hostname } from "os";
 import { getDb } from "./db.js";
 import { encrypt, decrypt, isEncrypted } from "./crypto.js";
-import type { SecretEntry, SecretType, AuditEntry } from "./types.js";
+import type { SecretEntry, SecretMetadata, SecretType, AuditEntry } from "./types.js";
 
 function currentAgent(): string {
   return process.env.AGENT_ID ?? process.env.USER ?? hostname();
@@ -64,6 +64,10 @@ function decryptRows(rows: SecretEntry[]): SecretEntry[] {
   return rows.map((r) => ({ ...r, value: decrypt(r.value) }));
 }
 
+function metadataRows(rows: SecretMetadata[]): SecretMetadata[] {
+  return rows.map((r) => ({ ...r, label: r.label ?? undefined, expires_at: r.expires_at ?? undefined }));
+}
+
 export function listSecrets(namespace?: string): SecretEntry[] {
   const db = getDb();
   let rows: SecretEntry[];
@@ -78,6 +82,29 @@ export function listSecrets(namespace?: string): SecretEntry[] {
   return decryptRows(rows);
 }
 
+export function listSecretMetadata(namespace?: string): SecretMetadata[] {
+  const db = getDb();
+  let rows: SecretMetadata[];
+  const columns = "key, type, label, expires_at, created_at, updated_at";
+  if (!namespace) {
+    rows = db.prepare(`SELECT ${columns} FROM secrets ORDER BY key`).all() as SecretMetadata[];
+  } else {
+    const prefix = namespace.endsWith("/") ? namespace : `${namespace}/`;
+    rows = db
+      .prepare(`SELECT ${columns} FROM secrets WHERE key LIKE ? OR key = ? ORDER BY key`)
+      .all(`${prefix}%`, namespace) as SecretMetadata[];
+  }
+  return metadataRows(rows);
+}
+
+export function getSecretMetadata(key: string): SecretMetadata | undefined {
+  const db = getDb();
+  const row = db
+    .prepare("SELECT key, type, label, expires_at, created_at, updated_at FROM secrets WHERE key = ?")
+    .get(key) as SecretMetadata | undefined;
+  return row ? metadataRows([row])[0] : undefined;
+}
+
 export function searchSecrets(query: string): SecretEntry[] {
   const db = getDb();
   const q = `%${query}%`;
@@ -87,6 +114,17 @@ export function searchSecrets(query: string): SecretEntry[] {
     )
     .all(q, q, q) as SecretEntry[];
   return decryptRows(rows);
+}
+
+export function searchSecretMetadata(query: string): SecretMetadata[] {
+  const db = getDb();
+  const q = `%${query}%`;
+  const rows = db
+    .prepare(
+      "SELECT key, type, label, expires_at, created_at, updated_at FROM secrets WHERE key LIKE ? OR label LIKE ? OR type LIKE ? ORDER BY key"
+    )
+    .all(q, q, q) as SecretMetadata[];
+  return metadataRows(rows);
 }
 
 export function importSecrets(
@@ -111,16 +149,24 @@ export function exportSecrets(redact = false): { version: number; secrets: Recor
   return { version: 2, secrets };
 }
 
-export function getAuditLog(key?: string, limit = 100): AuditEntry[] {
+export function getAuditLog(key?: string, limit = 100, offset = 0): AuditEntry[] {
   const db = getDb();
   if (key) {
     return db
-      .prepare("SELECT * FROM audit_log WHERE key = ? ORDER BY timestamp DESC LIMIT ?")
-      .all(key, limit) as AuditEntry[];
+      .prepare("SELECT * FROM audit_log WHERE key = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?")
+      .all(key, limit, offset) as AuditEntry[];
   }
   return db
-    .prepare("SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT ?")
-    .all(limit) as AuditEntry[];
+    .prepare("SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT ? OFFSET ?")
+    .all(limit, offset) as AuditEntry[];
+}
+
+export function countAuditLog(key?: string): number {
+  const db = getDb();
+  if (key) {
+    return Number((db.prepare("SELECT COUNT(*) as count FROM audit_log WHERE key = ?").get(key) as { count: number }).count);
+  }
+  return Number((db.prepare("SELECT COUNT(*) as count FROM audit_log").get() as { count: number }).count);
 }
 
 export function pruneExpired(): number {

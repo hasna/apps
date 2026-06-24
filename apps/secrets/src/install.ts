@@ -75,7 +75,7 @@ mcp:
   args: [mcp]
 ---
 
-MCP server for open-secrets vault. Use tools: get_secret, set_secret, list_secrets, delete_secret, search_secrets, audit_log, register_user, list_users.
+MCP server for open-secrets vault. Use tools: get_secret, set_secret, list_secrets, inspect_secret, delete_secret, search_secrets, audit_log, register_user, list_users. List/search/audit/user tools are compact by default; pass limit, cursor, and verbose for gradual disclosure.
 `
   );
 

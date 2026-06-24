@@ -8,13 +8,25 @@ import { z } from "zod";
 import {
   setSecret,
   getSecret,
+  getSecretMetadata,
   deleteSecret,
-  listSecrets,
-  searchSecrets,
+  listSecretMetadata,
+  searchSecretMetadata,
   getAuditLog,
+  countAuditLog,
   registerUser,
   listUsers,
 } from "./store.js";
+import {
+  DEFAULT_PAGE_LIMIT,
+  MAX_PAGE_LIMIT,
+  createPage,
+  formatAuditRows,
+  formatSecretDetail,
+  formatSecretRows,
+  formatUserRows,
+  pageItems,
+} from "./output.js";
 
 const SECRET_TYPES = ["api_key", "password", "token", "credential", "other"] as const;
 
@@ -72,39 +84,65 @@ export function buildServer(): McpServer {
 
   server.tool(
     "list_secrets",
-    "List secrets, optionally filtered by namespace",
-    { namespace: z.string().optional().describe("Namespace prefix e.g. openai") },
-    async ({ namespace }) => {
-      const entries = listSecrets(namespace);
-      const lines = entries.map((e) => `${e.key} [${e.type}]${e.label ? ` — ${e.label}` : ""}`);
-      return { content: [{ type: "text", text: lines.join("\n") || "No secrets found." }] };
+    "List secret metadata, compact by default. Use limit/cursor for pagination and inspect_secret or get_secret for details.",
+    {
+      namespace: z.string().optional().describe("Namespace prefix e.g. openai"),
+      limit: z.number().int().min(1).max(MAX_PAGE_LIMIT).optional().describe(`Max rows to return (default ${DEFAULT_PAGE_LIMIT}, max ${MAX_PAGE_LIMIT})`),
+      cursor: z.number().int().min(0).optional().describe("Numeric cursor offset from a previous result"),
+      verbose: z.boolean().optional().describe("Show wider metadata columns"),
+    },
+    async ({ namespace, limit, cursor, verbose }) => {
+      const entries = listSecretMetadata(namespace);
+      const page = pageItems(entries, { limit, cursor });
+      if (entries.length === 0) return { content: [{ type: "text", text: "No secrets found." }] };
+      return { content: [{ type: "text", text: formatSecretRows(page, { command: "list_secrets", detailCommand: "inspect_secret", verbose, mode: "mcp" }) }] };
     }
   );
 
   server.tool(
     "search_secrets",
-    "Search secrets by key, label, or type",
-    { query: z.string() },
-    async ({ query }) => {
-      const entries = searchSecrets(query);
-      const lines = entries.map((e) => `${e.key} [${e.type}]${e.label ? ` — ${e.label}` : ""}`);
-      return { content: [{ type: "text", text: lines.join("\n") || "No results." }] };
+    "Search secret metadata by key, label, or type. Compact by default; use limit/cursor for pagination.",
+    {
+      query: z.string(),
+      limit: z.number().int().min(1).max(MAX_PAGE_LIMIT).optional().describe(`Max rows to return (default ${DEFAULT_PAGE_LIMIT}, max ${MAX_PAGE_LIMIT})`),
+      cursor: z.number().int().min(0).optional().describe("Numeric cursor offset from a previous result"),
+      verbose: z.boolean().optional().describe("Show wider metadata columns"),
+    },
+    async ({ query, limit, cursor, verbose }) => {
+      const entries = searchSecretMetadata(query);
+      const page = pageItems(entries, { limit, cursor });
+      if (entries.length === 0) return { content: [{ type: "text", text: "No results." }] };
+      return { content: [{ type: "text", text: formatSecretRows(page, { command: "search_secrets", detailCommand: "inspect_secret", verbose, noun: "result", mode: "mcp" }) }] };
+    }
+  );
+
+  server.tool(
+    "inspect_secret",
+    "Show metadata for one secret without returning the secret value. Use get_secret only when the raw value is needed.",
+    { key: z.string().describe("The secret key to inspect") },
+    async ({ key }) => {
+      const entry = getSecretMetadata(key);
+      if (!entry) return { content: [{ type: "text", text: `Not found: ${key}` }], isError: true };
+      return { content: [{ type: "text", text: formatSecretDetail(entry, { mode: "mcp" }) }] };
     }
   );
 
   server.tool(
     "audit_log",
-    "View audit log for a key or recent activity",
+    "View compact audit history for a key or recent activity",
     {
       key: z.string().optional().describe("Filter by key"),
-      limit: z.number().optional().describe("Max entries (default 50)"),
+      limit: z.number().int().min(1).max(MAX_PAGE_LIMIT).optional().describe(`Max entries (default ${DEFAULT_PAGE_LIMIT}, max ${MAX_PAGE_LIMIT})`),
+      cursor: z.number().int().min(0).optional().describe("Numeric cursor offset from a previous result"),
+      verbose: z.boolean().optional().describe("Show wider metadata columns"),
     },
-    async ({ key, limit }) => {
-      const entries = getAuditLog(key, limit ?? 50);
-      const lines = entries.map(
-        (e) => `[${e.timestamp}] ${e.action.toUpperCase()} ${e.key} by ${e.agent}`
-      );
-      return { content: [{ type: "text", text: lines.join("\n") || "No audit entries." }] };
+    async ({ key, limit, cursor, verbose }) => {
+      const requestedLimit = limit ?? DEFAULT_PAGE_LIMIT;
+      const requestedCursor = cursor ?? 0;
+      const entries = getAuditLog(key, requestedLimit, requestedCursor);
+      const page = createPage(entries, countAuditLog(key), requestedLimit, requestedCursor);
+      if (page.total === 0) return { content: [{ type: "text", text: "No audit entries." }] };
+      return { content: [{ type: "text", text: formatAuditRows(page, { command: "audit_log", verbose, mode: "mcp" }) }] };
     }
   );
 
@@ -124,12 +162,18 @@ export function buildServer(): McpServer {
 
   server.tool(
     "list_users",
-    "List registered users and agents",
-    { type: z.enum(["human", "agent"]).optional() },
-    async ({ type }) => {
+    "List registered users and agents, compact by default",
+    {
+      type: z.enum(["human", "agent"]).optional(),
+      limit: z.number().int().min(1).max(MAX_PAGE_LIMIT).optional().describe(`Max rows to return (default ${DEFAULT_PAGE_LIMIT}, max ${MAX_PAGE_LIMIT})`),
+      cursor: z.number().int().min(0).optional().describe("Numeric cursor offset from a previous result"),
+      verbose: z.boolean().optional().describe("Show wider metadata columns"),
+    },
+    async ({ type, limit, cursor, verbose }) => {
       const users = listUsers(type);
-      const lines = users.map((u) => `${u.id} [${u.type}] — ${u.name}`);
-      return { content: [{ type: "text", text: lines.join("\n") || "No users registered." }] };
+      const page = pageItems(users, { limit, cursor });
+      if (users.length === 0) return { content: [{ type: "text", text: "No users registered." }] };
+      return { content: [{ type: "text", text: formatUserRows(page, { command: "list_users", verbose, mode: "mcp" }) }] };
     }
   );
 

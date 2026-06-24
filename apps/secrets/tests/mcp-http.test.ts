@@ -60,11 +60,55 @@ describe("secrets MCP HTTP transport", () => {
     await client.connect(transport);
     const tools = await client.listTools();
     expect(tools.tools.some((t) => t.name === "get_secret")).toBe(true);
+    expect(tools.tools.some((t) => t.name === "inspect_secret")).toBe(true);
 
     await client.callTool({ name: "set_secret", arguments: { key: "test/key", value: "s3cret" } });
     const got = await client.callTool({ name: "get_secret", arguments: { key: "test/key" } });
     const content = got.content as Array<{ type: string; text: string }>;
     expect(content[0]?.text).toContain("s3cret");
+    await client.close();
+  });
+
+  test("MCP list_secrets is compact and paginated by default", async () => {
+    const client = new Client({ name: "secrets-http-compact-test", version: "0.0.0" });
+    const transport = new StreamableHTTPClientTransport(
+      new URL(`http://127.0.0.1:${port}/mcp`),
+    );
+    await client.connect(transport);
+
+    for (let i = 1; i <= 25; i++) {
+      const suffix = String(i).padStart(2, "0");
+      await client.callTool({
+        name: "set_secret",
+        arguments: {
+          key: `mcp-compact/service/prod/token-${suffix}`,
+          value: `secret-value-${suffix}`,
+          type: "token",
+          label: `MCP compact token ${suffix}`,
+        },
+      });
+    }
+
+    const listed = await client.callTool({
+      name: "list_secrets",
+      arguments: { namespace: "mcp-compact" },
+    });
+    const content = listed.content as Array<{ type: string; text: string }>;
+    const text = content[0]?.text ?? "";
+
+    expect(text).toContain("Showing 1-20 of 25 secrets.");
+    expect(text).toContain('Next: call list_secrets with {"cursor":20,"limit":20}');
+    expect(text).toContain('Details: call inspect_secret with {"key":"<key>"}');
+    expect(text).not.toContain("secret-value-01");
+    expect(text.split("\n").filter((line) => line.includes("mcp-compact/service/prod/token-")).length).toBe(20);
+
+    const inspected = await client.callTool({
+      name: "inspect_secret",
+      arguments: { key: "mcp-compact/service/prod/token-01" },
+    });
+    const inspectContent = inspected.content as Array<{ type: string; text: string }>;
+    expect(inspectContent[0]?.text).toContain('call get_secret with {"key":"mcp-compact/service/prod/token-01"}');
+    expect(inspectContent[0]?.text).not.toContain("secret-value-01");
     await client.close();
   });
 });

@@ -10,6 +10,8 @@ export interface SecretEntry {
   updated_at: string;
 }
 
+export type SecretMetadata = Omit<SecretEntry, "value">;
+
 export interface AuditEntry {
   id: number;
   action: "get" | "set" | "delete";

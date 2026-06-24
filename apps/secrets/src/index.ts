@@ -3,12 +3,15 @@ import {
   getUser,
   setSecret,
   getSecret,
+  getSecretMetadata,
   deleteSecret,
   listSecrets,
-  searchSecrets,
+  listSecretMetadata,
+  searchSecretMetadata,
   importSecrets,
   exportSecrets,
   getAuditLog,
+  countAuditLog,
   pruneExpired,
   getVaultPath,
   registerUser,
@@ -16,10 +19,22 @@ import {
   deleteUser,
 } from "./store.js";
 import { getDb } from "./db.js";
-import { encrypt, decrypt, isEncrypted, getMasterKey, initKms, getKeyStatus } from "./crypto.js";
+import { encrypt, isEncrypted, getMasterKey, initKms, getKeyStatus } from "./crypto.js";
 import type { SecretEntry } from "./types.js";
 import { getSecretReferenceStatus } from "./status.js";
 import { runEventsCli } from "@hasna/events/cli";
+import {
+  formatAuditRows,
+  formatKeyListSummary,
+  formatSecretDetail,
+  formatSecretRows,
+  formatUserRows,
+  pageItems,
+  pageToJson,
+  parsePageOptions,
+  createPage,
+  shellArg,
+} from "./output.js";
 
 const SECRET_TYPES: SecretEntry["type"][] = ["api_key", "password", "token", "credential", "other"];
 
@@ -36,11 +51,14 @@ Commands:
   export-env                 export vault secrets to ~/.secrets/ .env files [--dir <path>] [--force] [--dry-run]
   list [namespace]
   search <query>
+  show <key>                  show metadata for one secret without printing value
+  inspect <key>               alias: show
   export [--redact]
   import <json-file>
   status                      show metadata-only secret reference health
   gc                          prune expired secrets
-  audit [key]                 show audit log
+  audit [key]                 show compact audit log
+  history [key]               alias: audit
   path                        show vault db path
   events                      emit, list, and replay Hasna events
   webhooks                    manage Hasna event webhook subscriptions
@@ -75,6 +93,7 @@ Examples:
   secrets get openai/api_key
   secrets list openai
   secrets search gmail
+  secrets show openai/api_key
   secrets users register my-agent "My Agent" --type agent
   secrets aws configure
   secrets aws sync
@@ -114,6 +133,12 @@ Common CLI workflows
   List or search without revealing values:
     secrets list hasnaxyz/anthropic
     secrets search anthropic
+    secrets show hasnaxyz/anthropic/live/api_key
+
+  Gradually disclose larger outputs:
+    secrets list --limit 20 --cursor 20
+    secrets search anthropic --verbose
+    secrets audit --json --limit 20
 
   Review access history:
     secrets audit hasnaxyz/anthropic/live/api_key
@@ -140,21 +165,26 @@ MCP usage
     secrets mcp
 
   MCP tools:
-    list_secrets(namespace?)
-    search_secrets(query)
+    list_secrets(namespace?, limit?, cursor?, verbose?)
+    search_secrets(query, limit?, cursor?, verbose?)
+    inspect_secret(key)
     get_secret(key)
     set_secret(key, value, type?, label?, ttl?)
     delete_secret(key)
-    audit_log(key?, limit?)
+    audit_log(key?, limit?, cursor?, verbose?)
+    register_user(id, name, type?)
+    list_users(type?, limit?, cursor?, verbose?)
 
 Safety
-  list, search, and export --redact do not print secret values.
+  list, search, show, inspect, and export --redact do not print secret values.
+  list, search, audit/history, users list, and MCP list tools are compact by
+  default. Use --limit, --cursor, --verbose, --json, or inspect/show for more.
   get and get_secret return raw secret values. Use them only when needed.
   Never paste secrets into commits, logs, issues, PRs, or chat messages.
 `);
 }
 
-const BOOLEAN_FLAGS = new Set(["redact", "push", "dry-run", "force", "overwrite", "json"]);
+const BOOLEAN_FLAGS = new Set(["redact", "push", "dry-run", "force", "overwrite", "json", "verbose"]);
 
 function parseArgs(args: string[]): { flags: Record<string, string>; positional: string[] } {
   const flags: Record<string, string> = {};
@@ -192,6 +222,27 @@ function formatEntry(entry: SecretEntry, showValue = false): string {
   const expired =
     entry.expires_at && new Date(entry.expires_at) < new Date() ? " [EXPIRED]" : "";
   return `${entry.key}${label} [${entry.type}]${expiry}${expired} = ${val}`;
+}
+
+function verbose(flags: Record<string, string>): boolean {
+  return "verbose" in flags;
+}
+
+function json(flags: Record<string, string>): boolean {
+  return "json" in flags;
+}
+
+function pagination(flags: Record<string, string>): { limit: number; cursor: number } {
+  try {
+    return parsePageOptions({ limit: flags.limit, cursor: flags.cursor });
+  } catch (e: any) {
+    console.error(e.message);
+    process.exit(1);
+  }
+}
+
+function commandHint(parts: string[]): string {
+  return parts.map(shellArg).join(" ");
 }
 
 const args = process.argv.slice(2);
@@ -275,12 +326,15 @@ switch (command) {
 
   case "list": {
     const [namespace] = positional;
-    const entries = listSecrets(namespace);
-    if (entries.length === 0) {
+    const entries = listSecretMetadata(namespace);
+    const page = pageItems(entries, pagination(flags));
+    if (json(flags)) {
+      console.log(JSON.stringify(pageToJson(page), null, 2));
+    } else if (entries.length === 0) {
       console.log(namespace ? `No secrets in namespace: ${namespace}` : "Vault is empty.");
     } else {
-      for (const e of entries) console.log(formatEntry(e));
-      console.log(`\n${entries.length} secret(s)`);
+      const command = commandHint(["secrets", "list", ...(namespace ? [namespace] : [])]);
+      console.log(formatSecretRows(page, { command, verbose: verbose(flags) }));
     }
     break;
   }
@@ -288,11 +342,32 @@ switch (command) {
   case "search": {
     const [query] = positional;
     if (!query) { console.error("Usage: secrets search <query>"); process.exit(1); }
-    const results = searchSecrets(query);
-    if (results.length === 0) { console.log(`No results for: ${query}`); }
-    else {
-      for (const e of results) console.log(formatEntry(e));
-      console.log(`\n${results.length} result(s)`);
+    const results = searchSecretMetadata(query);
+    const page = pageItems(results, pagination(flags));
+    if (json(flags)) {
+      console.log(JSON.stringify(pageToJson(page), null, 2));
+    } else if (results.length === 0) {
+      console.log(`No results for: ${query}`);
+    } else {
+      console.log(formatSecretRows(page, {
+        command: commandHint(["secrets", "search", query]),
+        verbose: verbose(flags),
+        noun: "result",
+      }));
+    }
+    break;
+  }
+
+  case "show":
+  case "inspect": {
+    const [key] = positional;
+    if (!key) { console.error(`Usage: secrets ${command} <key>`); process.exit(1); }
+    const entry = getSecretMetadata(key);
+    if (!entry) { console.error(`Not found: ${key}`); process.exit(1); }
+    if (json(flags)) {
+      console.log(JSON.stringify(entry, null, 2));
+    } else {
+      console.log(formatSecretDetail(entry));
     }
     break;
   }
@@ -339,15 +414,19 @@ switch (command) {
     break;
   }
 
-  case "audit": {
+  case "audit":
+  case "history": {
     const [key] = positional;
-    const limit = flags.limit ? parseInt(flags.limit) : 50;
-    const entries = getAuditLog(key, limit);
-    if (entries.length === 0) { console.log("No audit entries."); }
-    else {
-      for (const e of entries) {
-        console.log(`[${e.timestamp}] ${e.action.toUpperCase().padEnd(6)} ${e.key} — ${e.agent}`);
-      }
+    const { limit, cursor } = pagination(flags);
+    const entries = getAuditLog(key, limit, cursor);
+    const page = createPage(entries, countAuditLog(key), limit, cursor);
+    if (json(flags)) {
+      console.log(JSON.stringify(pageToJson(page), null, 2));
+    } else if (page.total === 0) {
+      console.log("No audit entries.");
+    } else {
+      const commandParts = ["secrets", command, ...(key ? [key] : [])];
+      console.log(formatAuditRows(page, { command: commandHint(commandParts), verbose: verbose(flags) }));
     }
     break;
   }
@@ -359,17 +438,19 @@ switch (command) {
 
   case "users": {
     const [sub, ...userRest] = positional;
-    const { flags: uFlags, positional: uPos } = parseArgs(userRest);
+    const { flags: parsedUserFlags, positional: uPos } = parseArgs(userRest);
+    const uFlags = { ...flags, ...parsedUserFlags };
     switch (sub) {
       case "list": {
         const users = listUsers(uFlags.type as any);
-        if (users.length === 0) { console.log("No users registered."); }
-        else {
-          for (const u of users) {
-            const seen = u.last_seen ? ` (last seen: ${new Date(u.last_seen).toLocaleDateString()})` : "";
-            console.log(`${u.id} [${u.type}] — ${u.name}${seen}`);
-          }
-          console.log(`\n${users.length} user(s)`);
+        const page = pageItems(users, pagination(uFlags));
+        if (json(uFlags)) {
+          console.log(JSON.stringify(pageToJson(page), null, 2));
+        } else if (users.length === 0) {
+          console.log("No users registered.");
+        } else {
+          const command = commandHint(["secrets", "users", "list", ...(uFlags.type ? ["--type", uFlags.type] : [])]);
+          console.log(formatUserRows(page, { command, verbose: verbose(uFlags) }));
         }
         break;
       }
@@ -424,10 +505,12 @@ switch (command) {
           console.log(`✓ Pushed: ${key}`);
         } else {
           const entries = listSecrets();
+          const pushed: string[] = [];
           for (const e of entries) {
             await pushSecret(e.key);
-            console.log(`✓ Pushed: ${e.key}`);
+            pushed.push(e.key);
           }
+          console.log(formatKeyListSummary("Pushed", pushed));
         }
         break;
       }
@@ -443,8 +526,8 @@ switch (command) {
       case "sync": {
         console.log("Syncing with AWS Secrets Manager...");
         const { pushed, pulled, errors } = await syncAll();
-        if (pushed.length) console.log(`Pushed (${pushed.length}): ${pushed.join(", ")}`);
-        if (pulled.length) console.log(`Pulled (${pulled.length}): ${pulled.join(", ")}`);
+        if (pushed.length) console.log(formatKeyListSummary("Pushed", pushed));
+        if (pulled.length) console.log(formatKeyListSummary("Pulled", pulled));
         if (errors.length) { console.error(`Errors:\n${errors.map(e => `  ${e}`).join("\n")}`); }
         console.log("✓ Sync complete");
         break;
