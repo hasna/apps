@@ -17,6 +17,10 @@ import type {
   ProjectBreakdown,
   AgentBreakdown,
   AccountBreakdown,
+  LoopAttribution,
+  LoopAttributionFilter,
+  LoopEfficiencyGroup,
+  LoopEfficiencySummary,
   Period,
   SessionFilter,
 } from '../types/index.js'
@@ -169,6 +173,43 @@ function initSchema(db: Database): void {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS loop_attributions (
+      id TEXT PRIMARY KEY,
+      request_id TEXT DEFAULT '',
+      session_id TEXT DEFAULT '',
+      loop_id TEXT DEFAULT '',
+      loop_name TEXT DEFAULT '',
+      loop_run_id TEXT DEFAULT '',
+      goal_id TEXT DEFAULT '',
+      goal_run_id TEXT DEFAULT '',
+      workflow_run_id TEXT DEFAULT '',
+      workflow_step_id TEXT DEFAULT '',
+      thread_id TEXT DEFAULT '',
+      account_key TEXT DEFAULT '',
+      account_tool TEXT DEFAULT '',
+      account_name TEXT DEFAULT '',
+      provider TEXT DEFAULT '',
+      model TEXT DEFAULT '',
+      phase TEXT DEFAULT '',
+      status TEXT DEFAULT '',
+      loop_status TEXT DEFAULT '',
+      schedule_json TEXT DEFAULT '{}',
+      scheduled_for TEXT DEFAULT '',
+      started_at TEXT DEFAULT '',
+      finished_at TEXT DEFAULT '',
+      duration_ms INTEGER DEFAULT 0,
+      attempt INTEGER DEFAULT 0,
+      tokens INTEGER DEFAULT 0,
+      api_equivalent_usd REAL NOT NULL DEFAULT 0,
+      subscription_included_usd REAL NOT NULL DEFAULT 0,
+      billable_usd REAL NOT NULL DEFAULT 0,
+      failure_retry_usd REAL NOT NULL DEFAULT 0,
+      cost_basis TEXT DEFAULT 'estimated',
+      machine_id TEXT DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS goals (
       id TEXT PRIMARY KEY,
       period TEXT NOT NULL,
@@ -193,6 +234,12 @@ function initSchema(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_path);
     CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at);
     CREATE INDEX IF NOT EXISTS idx_cost_centers_kind ON cost_centers(kind);
+    CREATE INDEX IF NOT EXISTS idx_loop_attr_loop ON loop_attributions(loop_id, loop_run_id);
+    CREATE INDEX IF NOT EXISTS idx_loop_attr_provider ON loop_attributions(provider);
+    CREATE INDEX IF NOT EXISTS idx_loop_attr_account ON loop_attributions(account_key);
+    CREATE INDEX IF NOT EXISTS idx_loop_attr_model ON loop_attributions(model);
+    CREATE INDEX IF NOT EXISTS idx_loop_attr_machine ON loop_attributions(machine_id);
+    CREATE INDEX IF NOT EXISTS idx_loop_attr_updated ON loop_attributions(updated_at);
 
     CREATE TABLE IF NOT EXISTS model_pricing (
       model TEXT PRIMARY KEY,
@@ -288,6 +335,43 @@ function initSchema(db: Database): void {
   addColumnIfMissing(db, 'requests', 'cost_center_id', `TEXT`)
   addColumnIfMissing(db, 'sessions', 'cost_center_id', `TEXT`)
   addColumnIfMissing(db, 'budgets', 'cost_center_id', `TEXT`)
+  for (const [column, definition] of [
+    ['request_id', `TEXT DEFAULT ''`],
+    ['session_id', `TEXT DEFAULT ''`],
+    ['loop_id', `TEXT DEFAULT ''`],
+    ['loop_name', `TEXT DEFAULT ''`],
+    ['loop_run_id', `TEXT DEFAULT ''`],
+    ['goal_id', `TEXT DEFAULT ''`],
+    ['goal_run_id', `TEXT DEFAULT ''`],
+    ['workflow_run_id', `TEXT DEFAULT ''`],
+    ['workflow_step_id', `TEXT DEFAULT ''`],
+    ['thread_id', `TEXT DEFAULT ''`],
+    ['account_key', `TEXT DEFAULT ''`],
+    ['account_tool', `TEXT DEFAULT ''`],
+    ['account_name', `TEXT DEFAULT ''`],
+    ['provider', `TEXT DEFAULT ''`],
+    ['model', `TEXT DEFAULT ''`],
+    ['phase', `TEXT DEFAULT ''`],
+    ['status', `TEXT DEFAULT ''`],
+    ['loop_status', `TEXT DEFAULT ''`],
+    ['schedule_json', `TEXT DEFAULT '{}'`],
+    ['scheduled_for', `TEXT DEFAULT ''`],
+    ['started_at', `TEXT DEFAULT ''`],
+    ['finished_at', `TEXT DEFAULT ''`],
+    ['duration_ms', `INTEGER DEFAULT 0`],
+    ['attempt', `INTEGER DEFAULT 0`],
+    ['tokens', `INTEGER DEFAULT 0`],
+    ['api_equivalent_usd', `REAL NOT NULL DEFAULT 0`],
+    ['subscription_included_usd', `REAL NOT NULL DEFAULT 0`],
+    ['billable_usd', `REAL NOT NULL DEFAULT 0`],
+    ['failure_retry_usd', `REAL NOT NULL DEFAULT 0`],
+    ['cost_basis', `TEXT DEFAULT 'estimated'`],
+    ['machine_id', `TEXT DEFAULT ''`],
+    ['created_at', `TEXT DEFAULT ''`],
+    ['updated_at', `TEXT DEFAULT ''`],
+  ] as const) {
+    addColumnIfMissing(db, 'loop_attributions', column, definition)
+  }
   if (addColumnIfMissing(db, 'requests', 'cache_create_5m_tokens', 'INTEGER DEFAULT 0')) {
     db.exec(`UPDATE requests SET cache_create_5m_tokens = cache_create_tokens WHERE cache_create_5m_tokens = 0`)
   }
@@ -324,6 +408,12 @@ function initSchema(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_sessions_cost_center ON sessions(cost_center_id);
     CREATE INDEX IF NOT EXISTS idx_budgets_cost_center ON budgets(cost_center_id);
     CREATE INDEX IF NOT EXISTS idx_cost_centers_kind ON cost_centers(kind);
+    CREATE INDEX IF NOT EXISTS idx_loop_attr_loop ON loop_attributions(loop_id, loop_run_id);
+    CREATE INDEX IF NOT EXISTS idx_loop_attr_provider ON loop_attributions(provider);
+    CREATE INDEX IF NOT EXISTS idx_loop_attr_account ON loop_attributions(account_key);
+    CREATE INDEX IF NOT EXISTS idx_loop_attr_model ON loop_attributions(model);
+    CREATE INDEX IF NOT EXISTS idx_loop_attr_machine ON loop_attributions(machine_id);
+    CREATE INDEX IF NOT EXISTS idx_loop_attr_updated ON loop_attributions(updated_at);
   `)
 }
 
@@ -376,6 +466,210 @@ export function upsertCostCenter(db: Database, center: CostCenter): void {
 
 export function getCostCenter(db: Database, id: string): CostCenter | null {
   return db.prepare(`SELECT * FROM cost_centers WHERE id = ?`).get(id) as CostCenter | null
+}
+
+export function upsertLoopAttribution(db: Database, row: LoopAttribution): void {
+  db.prepare(`
+    INSERT OR REPLACE INTO loop_attributions
+      (id, request_id, session_id, loop_id, loop_name, loop_run_id, goal_id, goal_run_id,
+       workflow_run_id, workflow_step_id, thread_id, account_key, account_tool, account_name,
+       provider, model, phase, status, loop_status, schedule_json, scheduled_for, started_at,
+       finished_at, duration_ms, attempt, tokens, api_equivalent_usd, subscription_included_usd,
+       billable_usd, failure_retry_usd, cost_basis, machine_id, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    row.id,
+    row.request_id,
+    row.session_id,
+    row.loop_id,
+    row.loop_name,
+    row.loop_run_id,
+    row.goal_id,
+    row.goal_run_id,
+    row.workflow_run_id,
+    row.workflow_step_id,
+    row.thread_id,
+    row.account_key,
+    row.account_tool,
+    row.account_name,
+    row.provider,
+    row.model,
+    row.phase,
+    row.status,
+    row.loop_status,
+    row.schedule_json,
+    row.scheduled_for,
+    row.started_at,
+    row.finished_at,
+    row.duration_ms,
+    row.attempt,
+    row.tokens,
+    row.api_equivalent_usd,
+    row.subscription_included_usd,
+    row.billable_usd,
+    row.failure_retry_usd,
+    row.cost_basis,
+    row.machine_id,
+    row.created_at,
+    row.updated_at,
+  )
+}
+
+function loopAttributionWhere(filter: LoopAttributionFilter): { where: string; params: string[] } {
+  const clauses = ['1=1']
+  const params: string[] = []
+  if (filter.since) {
+    clauses.push('updated_at >= ?')
+    params.push(filter.since)
+  }
+  if (filter.machine) {
+    clauses.push('machine_id = ?')
+    params.push(filter.machine)
+  }
+  if (filter.loop) {
+    clauses.push('(loop_id = ? OR loop_name LIKE ? OR loop_run_id = ?)')
+    params.push(filter.loop, `%${filter.loop}%`, filter.loop)
+  }
+  if (filter.provider) {
+    clauses.push('provider = ?')
+    params.push(filter.provider)
+  }
+  if (filter.account) {
+    clauses.push('(account_key LIKE ? OR account_name LIKE ? OR account_tool LIKE ?)')
+    params.push(`%${filter.account}%`, `%${filter.account}%`, `%${filter.account}%`)
+  }
+  if (filter.model) {
+    clauses.push('model LIKE ?')
+    params.push(`%${filter.model}%`)
+  }
+  return { where: clauses.join(' AND '), params }
+}
+
+export function queryLoopAttributions(db: Database, filter: LoopAttributionFilter = {}): LoopAttribution[] {
+  const { where, params } = loopAttributionWhere(filter)
+  return db.prepare(`
+    SELECT * FROM loop_attributions
+    WHERE ${where}
+    ORDER BY updated_at DESC, loop_name ASC, goal_run_id ASC
+  `).all(...params) as LoopAttribution[]
+}
+
+function emptyLoopEfficiencyGroup(key: string): LoopEfficiencyGroup {
+  return {
+    key,
+    row_count: 0,
+    runs: 0,
+    failed_runs: 0,
+    retry_runs: 0,
+    tokens: 0,
+    api_equivalent_usd: 0,
+    subscription_included_usd: 0,
+    billable_usd: 0,
+    failure_retry_usd: 0,
+    avg_duration_ms: 0,
+    max_duration_ms: 0,
+    last_active: '',
+  }
+}
+
+interface LoopEfficiencyAccumulator {
+  group: LoopEfficiencyGroup
+  runKeys: Set<string>
+  failedRunKeys: Set<string>
+  retryRunKeys: Set<string>
+  durationByRun: Map<string, number>
+}
+
+function runKeyForLoopEfficiency(row: LoopAttribution): string {
+  return row.loop_run_id || row.goal_run_id || row.id
+}
+
+function isFailedLoopAttribution(row: LoopAttribution): boolean {
+  return row.loop_status === 'failed' || row.status === 'failed' || row.status === 'blocked'
+}
+
+function addLoopEfficiencyRow(
+  groups: Map<string, LoopEfficiencyAccumulator>,
+  key: string,
+  row: LoopAttribution,
+  decorate: (group: LoopEfficiencyGroup) => void,
+): void {
+  const accumulator = groups.get(key) ?? {
+    group: emptyLoopEfficiencyGroup(key),
+    runKeys: new Set<string>(),
+    failedRunKeys: new Set<string>(),
+    retryRunKeys: new Set<string>(),
+    durationByRun: new Map<string, number>(),
+  }
+  const group = accumulator.group
+  const runKey = runKeyForLoopEfficiency(row)
+  decorate(group)
+  group.row_count += 1
+  accumulator.runKeys.add(runKey)
+  if (isFailedLoopAttribution(row)) accumulator.failedRunKeys.add(runKey)
+  if (row.attempt > 1) accumulator.retryRunKeys.add(runKey)
+  accumulator.durationByRun.set(runKey, Math.max(accumulator.durationByRun.get(runKey) ?? 0, row.duration_ms))
+  group.tokens += row.tokens
+  group.api_equivalent_usd += row.api_equivalent_usd
+  group.subscription_included_usd += row.subscription_included_usd
+  group.billable_usd += row.billable_usd
+  group.failure_retry_usd += row.failure_retry_usd
+  group.max_duration_ms = Math.max(group.max_duration_ms, row.duration_ms)
+  if (!group.last_active || row.updated_at > group.last_active) group.last_active = row.updated_at
+  groups.set(key, accumulator)
+}
+
+function finalizeLoopEfficiencyGroups(groups: Map<string, LoopEfficiencyAccumulator>): LoopEfficiencyGroup[] {
+  return [...groups.values()]
+    .map(accumulator => {
+      const durations = [...accumulator.durationByRun.values()]
+      return {
+        ...accumulator.group,
+        runs: accumulator.runKeys.size,
+        failed_runs: accumulator.failedRunKeys.size,
+        retry_runs: accumulator.retryRunKeys.size,
+        avg_duration_ms: durations.length > 0 ? durations.reduce((sum, value) => sum + value, 0) / durations.length : 0,
+        max_duration_ms: durations.length > 0 ? Math.max(...durations) : accumulator.group.max_duration_ms,
+      }
+    })
+    .sort((a, b) => b.api_equivalent_usd - a.api_equivalent_usd)
+}
+
+export function queryLoopEfficiency(db: Database, filter: LoopAttributionFilter = {}): LoopEfficiencySummary {
+  const rows = queryLoopAttributions(db, filter)
+  const byLoop = new Map<string, LoopEfficiencyAccumulator>()
+  const byProvider = new Map<string, LoopEfficiencyAccumulator>()
+  const byAccount = new Map<string, LoopEfficiencyAccumulator>()
+  const byModel = new Map<string, LoopEfficiencyAccumulator>()
+  const totalsMap = new Map<string, LoopEfficiencyAccumulator>()
+
+  for (const row of rows) {
+    addLoopEfficiencyRow(byLoop, row.loop_id || row.loop_name || 'unknown', row, (group) => {
+      group.loop_id = row.loop_id
+      group.loop_name = row.loop_name
+    })
+    addLoopEfficiencyRow(byProvider, row.provider || 'unknown', row, (group) => {
+      group.provider = row.provider || 'unknown'
+    })
+    addLoopEfficiencyRow(byAccount, row.account_key || 'unknown', row, (group) => {
+      group.account_key = row.account_key || 'unknown'
+    })
+    addLoopEfficiencyRow(byModel, row.model || 'unknown', row, (group) => {
+      group.model = row.model || 'unknown'
+    })
+    addLoopEfficiencyRow(totalsMap, 'total', row, () => {})
+  }
+  const totals = finalizeLoopEfficiencyGroups(totalsMap)[0] ?? emptyLoopEfficiencyGroup('total')
+
+  return {
+    filters: filter,
+    totals,
+    rows,
+    by_loop: finalizeLoopEfficiencyGroups(byLoop),
+    by_provider: finalizeLoopEfficiencyGroups(byProvider),
+    by_account: finalizeLoopEfficiencyGroups(byAccount),
+    by_model: finalizeLoopEfficiencyGroups(byModel),
+  }
 }
 
 export function upsertRequest(db: Database, req: EconomyRequest): void {

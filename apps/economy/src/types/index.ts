@@ -181,6 +181,118 @@ export interface CostCenterBreakdown {
   last_active: string
 }
 
+export interface LoopAttribution {
+  id: string
+  request_id: string
+  session_id: string
+  loop_id: string
+  loop_name: string
+  loop_run_id: string
+  goal_id: string
+  goal_run_id: string
+  workflow_run_id: string
+  workflow_step_id: string
+  thread_id: string
+  account_key: string
+  account_tool: string
+  account_name: string
+  provider: string
+  model: string
+  phase: string
+  status: string
+  loop_status: string
+  schedule_json: string
+  scheduled_for: string
+  started_at: string
+  finished_at: string
+  duration_ms: number
+  attempt: number
+  tokens: number
+  api_equivalent_usd: number
+  subscription_included_usd: number
+  billable_usd: number
+  failure_retry_usd: number
+  cost_basis: import('../lib/agents.js').CostBasis
+  machine_id: string
+  created_at: string
+  updated_at: string
+}
+
+export interface LoopAttributionFilter {
+  since?: string
+  machine?: string
+  loop?: string
+  provider?: string
+  account?: string
+  model?: string
+}
+
+export interface LoopEfficiencyGroup {
+  key: string
+  loop_id?: string
+  loop_name?: string
+  provider?: string
+  account_key?: string
+  model?: string
+  row_count: number
+  runs: number
+  failed_runs: number
+  retry_runs: number
+  tokens: number
+  api_equivalent_usd: number
+  subscription_included_usd: number
+  billable_usd: number
+  failure_retry_usd: number
+  avg_duration_ms: number
+  max_duration_ms: number
+  last_active: string
+}
+
+export interface LoopEfficiencySummary {
+  filters: LoopAttributionFilter
+  totals: Omit<LoopEfficiencyGroup, 'key'>
+  rows: LoopAttribution[]
+  by_loop: LoopEfficiencyGroup[]
+  by_provider: LoopEfficiencyGroup[]
+  by_account: LoopEfficiencyGroup[]
+  by_model: LoopEfficiencyGroup[]
+}
+
+export type EconomyProvider = 'codewith' | 'codex' | 'claude' | 'cursor' | 'aicopilot' | 'opencode' | 'gemini'
+export type ProviderHealth = 'ok' | 'missing' | 'unknown' | 'not_required'
+
+export interface ProviderReadinessRow {
+  provider: EconomyProvider
+  installed: boolean
+  available: boolean
+  authenticated: boolean
+  routable: boolean
+  key_health: ProviderHealth
+  pricing_health: ProviderHealth
+  subscription_backed: boolean
+  representative_model: string
+  api_cost_per_1m: number | null
+  material_savings_vs_baseline: boolean
+  flags: string[]
+}
+
+export interface SubscriptionAwareRouting {
+  preferred: EconomyProvider[]
+  avoid: EconomyProvider[]
+  third_party_candidates: EconomyProvider[]
+  recommendation: string
+}
+
+export interface ProviderReadinessSummary {
+  generated_at: string
+  baseline_model: string
+  baseline_api_cost_per_1m: number | null
+  zero_cost_token_rows: number
+  providers: ProviderReadinessRow[]
+  flags: string[]
+  routing: SubscriptionAwareRouting
+}
+
 export interface ModelPricing {
   inputPer1M: number
   outputPer1M: number

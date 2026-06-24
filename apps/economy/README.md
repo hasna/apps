@@ -11,6 +11,8 @@ AI coding cost tracker for Claude Code, Takumi, Codex, Gemini, OpenCode, Cursor,
 - Tracks sessions, requests, projects, machines, models, cache tokens, cost centers, budgets, goals, and provider billing.
 - Attributes usage to `@hasna/accounts` profiles when agents run under managed account/profile config dirs.
 - Breaks down API-equivalent, metered API, subscription-included, estimated, and unknown cost by account, coding agent, and cost center.
+- Links OpenLoops runs to session/thread/account/provider/model token attribution, including subscription-included, billable, and failure/retry costs.
+- Reports provider readiness and subscription-aware routing for Codewith, Codex, Claude, Cursor, AICopilot, OpenCode, and Gemini.
 - Seeds editable model pricing with input, output, cache-read, 5-minute cache-write, 1-hour cache-write, and context-cache storage rates.
 - Handles tiered pricing such as Gemini long-prompt rates and OpenAI long-context rates.
 - Reconciles estimates against Anthropic, OpenAI, and Gemini billing sources.
@@ -128,6 +130,24 @@ economy breakdown --by app
 economy breakdown --by repo
 ```
 
+Exact loop attribution is available separately from the compact cost-center summary:
+
+```bash
+economy loops --since 7d --loop fleet-evaluator
+economy loops --machine spark02 --provider codex --account work --json
+```
+
+`economy loops` links `loop_id`, `loop_name`, `loop_run_id`, `session_id`, `thread_id`, account, provider, model, tokens, API-equivalent USD, subscription-included USD, billable/on-demand USD, failure/retry USD, schedule, and duration. Human output is capped and compact by default; use `--limit` or `--json` for more rows.
+
+Loop efficiency and provider routing checks are available from the existing efficiency command:
+
+```bash
+economy efficiency --since 7d --machine spark02
+economy efficiency --json
+```
+
+The JSON output includes loop efficiency aggregates plus provider readiness for `codewith`, `codex`, `claude`, `cursor`, `aicopilot`, `opencode`, and `gemini`. It flags missing `CURSOR_SESSION_TOKEN`, unavailable providers, zero-cost token rows, missing pricing, and missing keys. Routing recommendations prefer subscription-backed Codewith, Codex, and Claude first, and only list third-party API candidates when key health and pricing show material savings.
+
 Apps and services can report usage through the local `economy-otel` sidecar:
 
 ```bash
@@ -219,6 +239,8 @@ Common endpoints:
 - `GET /api/breakdown?by=agent&period=month`
 - `GET /api/breakdown?by=cost-center&period=month`
 - `GET /api/breakdown?by=loop&period=month`
+- `GET /api/loops?since=2026-06-01&machine=spark02&loop=fleet&provider=codex&account=work&model=gpt-5&limit=100`
+- `GET /api/efficiency?since=2026-06-01&machine=spark02&loop=fleet&provider=codex&account=work&model=gpt-5`
 - `GET /api/accounts?period=month`
 - `GET /api/usage?period=month`
 - `GET /api/savings?period=month`

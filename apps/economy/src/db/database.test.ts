@@ -13,11 +13,12 @@ import {
   upsertUsageSnapshot, queryUsageSnapshots,
   dedupeRequests,
   upsertCostCenter, getCostCenter, queryCostCenterBreakdown,
+  upsertLoopAttribution, queryLoopAttributions, queryLoopEfficiency,
 } from './database.js'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
-import type { CostCenter, EconomyRequest, EconomySession } from '../types/index.js'
+import type { CostCenter, EconomyRequest, EconomySession, LoopAttribution } from '../types/index.js'
 
 function makeDb() {
   return openDatabase(':memory:', true)
@@ -87,6 +88,46 @@ function sampleCostCenter(overrides: Partial<CostCenter> = {}): CostCenter {
     repo_path: null,
     labels_json: '{"tier":"ops"}',
     created_at: NOW,
+    ...overrides,
+  }
+}
+
+function sampleLoopAttribution(overrides: Partial<LoopAttribution> = {}): LoopAttribution {
+  return {
+    id: 'loop-attr-1',
+    request_id: 'loops-goal-run-1',
+    session_id: 'loops-loop-run-1',
+    loop_id: 'loop-1',
+    loop_name: 'fleet-evaluator',
+    loop_run_id: 'loop-run-1',
+    goal_id: 'goal-1',
+    goal_run_id: 'goal-run-1',
+    workflow_run_id: 'workflow-run-1',
+    workflow_step_id: 'judge',
+    thread_id: 'thread-1',
+    account_key: 'codex:work',
+    account_tool: 'codex',
+    account_name: 'work',
+    provider: 'codewith',
+    model: 'gpt-5-codex',
+    phase: 'judge',
+    status: 'succeeded',
+    loop_status: 'succeeded',
+    schedule_json: '{"type":"interval","everyMs":600000}',
+    scheduled_for: '2026-06-24T10:00:00.000Z',
+    started_at: '2026-06-24T10:00:01.000Z',
+    finished_at: '2026-06-24T10:00:09.000Z',
+    duration_ms: 8000,
+    attempt: 1,
+    tokens: 372,
+    api_equivalent_usd: 0.01,
+    subscription_included_usd: 0.01,
+    billable_usd: 0,
+    failure_retry_usd: 0,
+    cost_basis: 'subscription_included',
+    machine_id: 'spark02',
+    created_at: '2026-06-24T10:00:01.000Z',
+    updated_at: '2026-06-24T10:00:09.000Z',
     ...overrides,
   }
 }
@@ -1367,5 +1408,104 @@ describe('machine_id support', () => {
 
     expect(dedupeRequests(db)).toBe(1)
     expect((db.prepare(`SELECT COUNT(*) as cnt FROM requests`).get() as { cnt: number }).cnt).toBe(1)
+  })
+
+  it('upserts and filters exact loop attribution rows', () => {
+    const db = makeDb()
+    upsertLoopAttribution(db, sampleLoopAttribution())
+    upsertLoopAttribution(db, sampleLoopAttribution({
+      id: 'loop-attr-2',
+      request_id: 'loops-goal-run-2',
+      loop_id: 'loop-2',
+      loop_name: 'fleet-watchdog',
+      loop_run_id: 'loop-run-2',
+      goal_run_id: 'goal-run-2',
+      thread_id: 'thread-2',
+      account_key: 'claude:ops',
+      account_tool: 'claude',
+      account_name: 'ops',
+      provider: 'claude',
+      model: 'claude-sonnet-4-6',
+      machine_id: 'apple03',
+      status: 'blocked',
+      loop_status: 'failed',
+      attempt: 2,
+      api_equivalent_usd: 0.40,
+      subscription_included_usd: 0.40,
+      failure_retry_usd: 0.40,
+      updated_at: '2026-06-24T11:00:00.000Z',
+    }))
+
+    const filtered = queryLoopAttributions(db, {
+      since: '2026-06-24T10:30:00.000Z',
+      machine: 'apple03',
+      loop: 'fleet-watchdog',
+      provider: 'claude',
+      account: 'ops',
+      model: 'sonnet',
+    })
+
+    expect(filtered).toHaveLength(1)
+    expect(filtered[0]).toMatchObject({
+      loop_id: 'loop-2',
+      loop_name: 'fleet-watchdog',
+      loop_run_id: 'loop-run-2',
+      thread_id: 'thread-2',
+      account_key: 'claude:ops',
+      provider: 'claude',
+      model: 'claude-sonnet-4-6',
+      failure_retry_usd: 0.40,
+    })
+  })
+
+  it('aggregates loop efficiency by loop, provider, account, and model', () => {
+    const db = makeDb()
+    upsertLoopAttribution(db, sampleLoopAttribution())
+    upsertLoopAttribution(db, sampleLoopAttribution({
+      id: 'loop-attr-retry',
+      request_id: 'loops-goal-run-retry',
+      loop_run_id: 'loop-run-retry',
+      goal_run_id: 'goal-run-retry',
+      status: 'failed',
+      loop_status: 'failed',
+      attempt: 2,
+      tokens: 100,
+      api_equivalent_usd: 0.05,
+      subscription_included_usd: 0.05,
+      failure_retry_usd: 0.05,
+      duration_ms: 12000,
+    }))
+    upsertLoopAttribution(db, sampleLoopAttribution({
+      id: 'other-provider',
+      request_id: 'other-provider-request',
+      loop_id: 'loop-2',
+      loop_name: 'fleet-watchdog',
+      loop_run_id: 'loop-run-2',
+      goal_run_id: 'goal-run-2',
+      provider: 'gemini',
+      model: 'gemini-3.1-pro-preview',
+      account_key: 'gemini:api',
+      account_tool: 'gemini',
+      account_name: 'api',
+      tokens: 50,
+      api_equivalent_usd: 0.20,
+      subscription_included_usd: 0,
+      billable_usd: 0.20,
+      cost_basis: 'metered_api',
+    }))
+
+    const summary = queryLoopEfficiency(db, {})
+
+    expect(summary.totals.row_count).toBe(3)
+    expect(summary.totals.runs).toBe(3)
+    expect(summary.totals.tokens).toBe(522)
+    expect(summary.totals.api_equivalent_usd).toBeCloseTo(0.26)
+    expect(summary.totals.subscription_included_usd).toBeCloseTo(0.06)
+    expect(summary.totals.billable_usd).toBeCloseTo(0.20)
+    expect(summary.totals.failure_retry_usd).toBeCloseTo(0.05)
+    expect(summary.by_loop.find(row => row.loop_name === 'fleet-evaluator')?.failure_retry_usd).toBeCloseTo(0.05)
+    expect(summary.by_provider.map(row => row.provider)).toContain('gemini')
+    expect(summary.by_account.map(row => row.account_key)).toContain('codex:work')
+    expect(summary.by_model.map(row => row.model)).toContain('gpt-5-codex')
   })
 })

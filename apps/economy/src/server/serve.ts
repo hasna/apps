@@ -11,12 +11,15 @@ import {
   listMachines, getMachineId,
   listMachineRegistry,
   queryBillingSummary,
+  queryLoopAttributions,
+  queryLoopEfficiency,
   openDatabase,
 } from '../db/database.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
 import { AGENTS, isAgent } from '../lib/agents.js'
 import { syncAll } from '../lib/sync-all.js'
 import { querySavingsSummary } from '../lib/savings.js'
+import { buildProviderReadiness } from '../lib/provider-routing.js'
 import { usageSnapshotFilterForPeriod } from '../lib/periods.js'
 import { queryBillingDiff } from '../lib/billing-diff.js'
 import { queryUsageSnapshots } from '../db/database.js'
@@ -25,7 +28,7 @@ import { randomUUID } from 'crypto'
 import { existsSync } from 'fs'
 import { resolve, sep } from 'path'
 import { getServeBindHost } from '../lib/serve-auth.js'
-import type { CostCenterKind, Period } from '../types/index.js'
+import type { CostCenterKind, LoopAttributionFilter, Period } from '../types/index.js'
 import type { Agent } from '../lib/agents.js'
 
 const CORS = {
@@ -95,6 +98,35 @@ function optionalAgent(value: unknown): Agent | null | undefined {
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
+function parseSinceFilter(since: string | null): string | undefined {
+  if (!since) return undefined
+  const relMatch = since.match(/^(\d+)d$/)
+  if (!relMatch) return since
+  const days = Number(relMatch[1])
+  const date = new Date()
+  date.setDate(date.getDate() - days)
+  return date.toISOString().substring(0, 10)
+}
+
+function loopFilterFromUrl(url: URL): LoopAttributionFilter {
+  return {
+    since: parseSinceFilter(url.searchParams.get('since')),
+    machine: url.searchParams.get('machine') ?? undefined,
+    loop: url.searchParams.get('loop') ?? undefined,
+    provider: url.searchParams.get('provider') ?? undefined,
+    account: url.searchParams.get('account') ?? undefined,
+    model: url.searchParams.get('model') ?? undefined,
+  }
+}
+
+function boundedLimit(url: URL, fallback: number, max: number): number | null {
+  const raw = url.searchParams.get('limit')
+  if (raw == null) return fallback
+  const parsed = Number(raw)
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > max) return null
+  return parsed
 }
 
 function dashboardPath(root: string, pathname: string): string | null {
@@ -282,6 +314,44 @@ export function createHandler(db: Database) {
       const period = (url.searchParams.get('period') ?? 'all') as Period
       const machine = url.searchParams.get('machine') ?? undefined
       return ok(queryAccountBreakdown(db, period, machine))
+    }
+
+    if (path === '/api/loops' && method === 'GET') {
+      const limit = boundedLimit(url, 100, 1000)
+      if (limit == null) return err('limit must be an integer between 1 and 1000')
+      const filter = loopFilterFromUrl(url)
+      const rows = queryLoopAttributions(db, filter)
+      return ok({
+        filters: filter,
+        total_rows: rows.length,
+        limit,
+        rows: rows.slice(0, limit),
+      })
+    }
+
+    if (path === '/api/efficiency' && method === 'GET') {
+      const limit = boundedLimit(url, 25, 250)
+      if (limit == null) return err('limit must be an integer between 1 and 250')
+      const filter = loopFilterFromUrl(url)
+      const summary = queryLoopEfficiency(db, filter)
+      return ok({
+        loops: {
+          filters: summary.filters,
+          total_rows: summary.rows.length,
+          totals: summary.totals,
+          group_counts: {
+            by_loop: summary.by_loop.length,
+            by_provider: summary.by_provider.length,
+            by_account: summary.by_account.length,
+            by_model: summary.by_model.length,
+          },
+          by_loop: summary.by_loop.slice(0, limit),
+          by_provider: summary.by_provider.slice(0, limit),
+          by_account: summary.by_account.slice(0, limit),
+          by_model: summary.by_model.slice(0, limit),
+        },
+        provider_readiness: buildProviderReadiness(db),
+      }, { limit })
     }
 
     // Breakdown (alias)

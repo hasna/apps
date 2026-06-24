@@ -9,15 +9,16 @@ import { AGENTS, parseAgent } from '../lib/agents.js'
 import { syncAll } from '../lib/sync-all.js'
 import { maybePullFromCloud, cloudPush, cloudPull, cloudSyncFull, getCloudDatabaseUrl, getCloudPg } from '../lib/cloud-sync.js'
 import { mergePeerDatabase } from '../lib/peer-sync.js'
+import { buildProviderReadiness } from '../lib/provider-routing.js'
 import type { Agent } from '../lib/agents.js'
-import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryAgentBreakdown, queryAccountBreakdown, queryCostCenterBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertProject, deleteProject, getProject, listModelPricing, upsertModelPricing, deleteModelPricing, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId, listMachineRegistry } from '../db/database.js'
+import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryAgentBreakdown, queryAccountBreakdown, queryCostCenterBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertProject, deleteProject, getProject, listModelPricing, upsertModelPricing, deleteModelPricing, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId, listMachineRegistry, queryLoopEfficiency } from '../db/database.js'
 import { queryBillingSummary } from '../db/database.js'
 import { syncAnthropicBilling, syncOpenAIBilling, syncGeminiBilling } from '../ingest/billing.js'
 import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
 import { randomUUID } from 'crypto'
 import { execSync } from 'child_process'
-import type { AccountBreakdown, CostCenterKind, Period } from '../types/index.js'
+import type { AccountBreakdown, CostCenterKind, LoopAttributionFilter, LoopEfficiencySummary, Period, ProviderReadinessSummary } from '../types/index.js'
 
 const program = new Command()
 
@@ -74,6 +75,19 @@ function fmtCount(n: number): string {
   return n.toLocaleString('en-US')
 }
 
+function fmtDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '0s'
+  if (ms >= 3_600_000) return `${(ms / 3_600_000).toFixed(1)}h`
+  if (ms >= 60_000) return `${(ms / 60_000).toFixed(1)}m`
+  return `${(ms / 1000).toFixed(1)}s`
+}
+
+function truncate(value: string, length: number): string {
+  if (value.length <= length) return value
+  if (length <= 1) return value.slice(0, length)
+  return `${value.slice(0, length - 1)}…`
+}
+
 function fmtAgent(agent: string): string {
   if (agent === 'claude') return chalk.blue('claude')
   if (agent === 'codex') return chalk.yellow('codex')
@@ -107,6 +121,12 @@ function parsePositiveCliNumber(value: string | undefined, option: string): numb
 function parsePositiveCliInteger(value: string | undefined, option: string): number {
   const parsed = parsePositiveCliNumber(value, option)
   if (!Number.isInteger(parsed)) fail(`${option} must be an integer`)
+  return parsed
+}
+
+function parseBoundedCliInteger(value: string | undefined, option: string, max: number): number {
+  const parsed = parsePositiveCliInteger(value, option)
+  if (parsed > max) fail(`${option} must be at most ${max}`)
   return parsed
 }
 
@@ -188,6 +208,83 @@ function parseSinceDate(since: string): string {
   }
   // ISO date: 2026-03-01
   return since
+}
+
+interface LoopReportOptions {
+  since?: string
+  machine?: string
+  loop?: string
+  provider?: string
+  account?: string
+  model?: string
+  limit?: string
+  json?: boolean
+}
+
+function loopFilterFromOptions(opts: LoopReportOptions): LoopAttributionFilter {
+  return {
+    since: opts.since ? parseSinceDate(opts.since) : undefined,
+    machine: opts.machine,
+    loop: opts.loop,
+    provider: opts.provider,
+    account: opts.account,
+    model: opts.model,
+  }
+}
+
+function compactLoopSummary(summary: LoopEfficiencySummary): string {
+  return [
+    `runs ${fmtCount(summary.totals.runs)}`,
+    `rows ${fmtCount(summary.totals.row_count)}`,
+    `failed ${fmtCount(summary.totals.failed_runs)}`,
+    `retries ${fmtCount(summary.totals.retry_runs)}`,
+    `tokens ${fmtTokens(summary.totals.tokens)}`,
+    `api ${fmt(summary.totals.api_equivalent_usd)}`,
+    `included ${fmt(summary.totals.subscription_included_usd)}`,
+    `billable ${fmt(summary.totals.billable_usd)}`,
+    `failure/retry ${fmt(summary.totals.failure_retry_usd)}`,
+  ].join(chalk.dim(' · '))
+}
+
+function loopJsonPayload(summary: LoopEfficiencySummary, limit: number): Record<string, unknown> {
+  return {
+    filters: summary.filters,
+    total_rows: summary.rows.length,
+    limit,
+    rows: summary.rows.slice(0, limit),
+    totals: summary.totals,
+    group_counts: {
+      by_loop: summary.by_loop.length,
+      by_provider: summary.by_provider.length,
+      by_account: summary.by_account.length,
+      by_model: summary.by_model.length,
+    },
+    by_loop: summary.by_loop.slice(0, limit),
+    by_provider: summary.by_provider.slice(0, limit),
+    by_account: summary.by_account.slice(0, limit),
+    by_model: summary.by_model.slice(0, limit),
+  }
+}
+
+function efficiencyJsonPayload(summary: LoopEfficiencySummary, readiness: ProviderReadinessSummary, limit: number): Record<string, unknown> {
+  return {
+    loops: {
+      filters: summary.filters,
+      total_rows: summary.rows.length,
+      totals: summary.totals,
+      group_counts: {
+        by_loop: summary.by_loop.length,
+        by_provider: summary.by_provider.length,
+        by_account: summary.by_account.length,
+        by_model: summary.by_model.length,
+      },
+      by_loop: summary.by_loop.slice(0, limit),
+      by_provider: summary.by_provider.slice(0, limit),
+      by_account: summary.by_account.slice(0, limit),
+      by_model: summary.by_model.slice(0, limit),
+    },
+    provider_readiness: readiness,
+  }
 }
 
 function printSummary(label: string, period: Period): void {
@@ -640,6 +737,64 @@ program
         ]),
       )
     }
+    console.log()
+  })
+
+// ── loops / efficiency ───────────────────────────────────────────────────────
+
+program
+  .command('loops')
+  .description('List exact OpenLoops attribution rows with session, account, model, token, and cost linkage')
+  .option('--since <date>', 'Filter since date or relative (e.g. 2026-03-01, 7d, 30d)')
+  .option('--machine <id>', 'Filter by machine hostname')
+  .option('--loop <id-or-name>', 'Filter by loop id, loop run id, or loop name')
+  .option('--provider <provider>', 'Filter by provider')
+  .option('--account <query>', 'Filter by account key, name, or tool')
+  .option('--model <query>', 'Filter by model')
+  .option('--limit <n>', 'Rows to display', '20')
+  .option('--json', 'Output JSON')
+  .action((opts: LoopReportOptions) => {
+    const limit = parseBoundedCliInteger(opts.limit ?? '20', '--limit', 1000)
+    const db = openDatabase()
+    ensurePricingSeeded(db)
+    const summary = queryLoopEfficiency(db, loopFilterFromOptions(opts))
+
+    if (opts.json) {
+      console.log(JSON.stringify(loopJsonPayload(summary, limit), null, 2))
+      return
+    }
+
+    if (summary.rows.length === 0) {
+      console.log(chalk.yellow('No loop attribution rows yet. Run `economy sync --loops` first, then try `economy loops --json` for full detail.'))
+      return
+    }
+
+    const rows = summary.rows.slice(0, limit)
+    console.log()
+    console.log(chalk.bold.cyan('  Loop Attribution'))
+    console.log(`  ${compactLoopSummary(summary)}`)
+    console.log()
+    printTable(
+      ['Loop', 'Run', 'Thread', 'Account', 'Provider', 'Model', 'Tokens', 'API Eq', 'Included', 'Billable', 'Failure', 'Duration'],
+      rows.map(r => [
+        chalk.white(truncate(r.loop_name || r.loop_id || 'unknown', 22)),
+        chalk.dim(truncate(r.loop_run_id || r.goal_run_id || '—', 12)),
+        chalk.dim(truncate(r.thread_id || r.session_id || '—', 12)),
+        chalk.white(truncate(r.account_name || r.account_key || r.account_tool || 'unknown', 18)),
+        fmtAgent(r.provider || 'unknown'),
+        chalk.white(truncate(r.model || 'unknown', 20)),
+        chalk.cyan(fmtTokens(r.tokens)),
+        fmt(r.api_equivalent_usd),
+        fmt(r.subscription_included_usd),
+        fmt(r.billable_usd),
+        fmt(r.failure_retry_usd),
+        chalk.dim(fmtDuration(r.duration_ms)),
+      ]),
+    )
+    if (summary.rows.length > rows.length) {
+      console.log(chalk.dim(`  Showing ${rows.length}/${summary.rows.length} rows. Use --limit ${summary.rows.length} or --json for more.`))
+    }
+    console.log(chalk.dim('  Tip: filter with --since, --machine, --loop, --provider, --account, or --model.'))
     console.log()
   })
 
@@ -1379,30 +1534,100 @@ program
 
 program
   .command('efficiency')
-  .description('Show output/input token ratio per model')
-  .action(async () => {
-    await autoSync()
+  .description('Show model token efficiency, loop efficiency, and subscription-aware provider routing')
+  .option('--since <date>', 'Filter loop rows since date or relative (e.g. 2026-03-01, 7d, 30d)')
+  .option('--machine <id>', 'Filter loop rows by machine hostname')
+  .option('--loop <id-or-name>', 'Filter by loop id, loop run id, or loop name')
+  .option('--provider <provider>', 'Filter loop rows by provider')
+  .option('--account <query>', 'Filter loop rows by account key, name, or tool')
+  .option('--model <query>', 'Filter loop rows by model')
+  .option('--limit <n>', 'Rows to display', '10')
+  .option('--json', 'Output JSON')
+  .action(async (opts: LoopReportOptions) => {
+    const limit = parseBoundedCliInteger(opts.limit ?? '10', '--limit', 250)
+    if (!opts.json) await autoSync()
     const db = openDatabase()
+    ensurePricingSeeded(db)
     const models = db.prepare(`
       SELECT model, SUM(input_tokens) as input, SUM(output_tokens) as output,
              SUM(cache_read_tokens) as cache_read, SUM(cache_create_tokens) as cache_write,
              COUNT(*) as requests, SUM(cost_usd) as cost
       FROM requests GROUP BY model ORDER BY cost DESC
     `).all() as Array<{ model: string; input: number; output: number; cache_read: number; cache_write: number; requests: number; cost: number }>
+    const loopSummary = queryLoopEfficiency(db, loopFilterFromOptions(opts))
+    const readiness = buildProviderReadiness(db)
+
+    if (opts.json) {
+      console.log(JSON.stringify({
+        model_efficiency: models,
+        ...efficiencyJsonPayload(loopSummary, readiness, limit),
+      }, null, 2))
+      return
+    }
 
     console.log()
-    console.log(chalk.bold.cyan('  Token Efficiency'))
+    console.log(chalk.bold.cyan('  Model Token Efficiency'))
+    console.log()
+    if (models.length > 0) {
+      printTable(
+        ['Model', 'Output/Input', 'Cache Hit%', 'Cost/1k Output', 'Requests'],
+        models.slice(0, limit).map(m => {
+          const ratio = m.input > 0 ? (m.output / m.input).toFixed(2) : '—'
+          const totalInput = m.input + m.cache_read + m.cache_write
+          const cacheHit = totalInput > 0 ? ((m.cache_read / totalInput) * 100).toFixed(1) + '%' : '—'
+          const costPer1kOutput = m.output > 0 ? fmt((m.cost / m.output) * 1000) : '—'
+          return [chalk.white(truncate(m.model, 28)), ratio, cacheHit, costPer1kOutput, fmtCount(m.requests)]
+        }),
+      )
+      if (models.length > limit) console.log(chalk.dim(`  Showing ${limit}/${models.length} model rows. Use --limit ${models.length} or --json for more.`))
+    } else {
+      console.log(chalk.yellow('  No model usage rows yet. Run `economy sync` first.'))
+    }
+
+    console.log()
+    console.log(chalk.bold.cyan('  Loop Efficiency'))
+    console.log(`  ${compactLoopSummary(loopSummary)}`)
+    console.log()
+    if (loopSummary.by_loop.length > 0) {
+      printTable(
+        ['Loop', 'Runs', 'Failed', 'Retries', 'Tokens', 'API Eq', 'Included', 'Billable', 'Failure', 'Avg Duration'],
+        loopSummary.by_loop.slice(0, limit).map(r => [
+          chalk.white(truncate(r.loop_name || r.loop_id || r.key, 24)),
+          fmtCount(r.runs),
+          r.failed_runs > 0 ? chalk.red(fmtCount(r.failed_runs)) : fmtCount(r.failed_runs),
+          r.retry_runs > 0 ? chalk.yellow(fmtCount(r.retry_runs)) : fmtCount(r.retry_runs),
+          chalk.cyan(fmtTokens(r.tokens)),
+          fmt(r.api_equivalent_usd),
+          fmt(r.subscription_included_usd),
+          fmt(r.billable_usd),
+          fmt(r.failure_retry_usd),
+          chalk.dim(fmtDuration(r.avg_duration_ms)),
+        ]),
+      )
+    } else {
+      console.log(chalk.yellow('  No loop attribution rows yet. Run `economy sync --loops` first.'))
+    }
+
+    console.log()
+    console.log(chalk.bold.cyan('  Provider Readiness'))
     console.log()
     printTable(
-      ['Model', 'Output/Input', 'Cache Hit%', 'Cost/1k Output', 'Requests'],
-      models.map(m => {
-        const ratio = m.input > 0 ? (m.output / m.input).toFixed(2) : '—'
-        const totalInput = m.input + m.cache_read + m.cache_write
-        const cacheHit = totalInput > 0 ? ((m.cache_read / totalInput) * 100).toFixed(1) + '%' : '—'
-        const costPer1kOutput = m.output > 0 ? fmt((m.cost / m.output) * 1000) : '—'
-        return [chalk.white(m.model), ratio, cacheHit, costPer1kOutput, fmtCount(m.requests)]
-      }),
+      ['Provider', 'Available', 'Key', 'Pricing', 'Sub', 'Cost/1M', 'Flags'],
+      readiness.providers.map(p => [
+        chalk.white(p.provider),
+        p.available ? chalk.green('yes') : chalk.red('no'),
+        p.key_health === 'missing' ? chalk.red(p.key_health) : chalk.green(p.key_health),
+        p.pricing_health === 'missing' ? chalk.red(p.pricing_health) : chalk.green(p.pricing_health),
+        p.subscription_backed ? chalk.green('yes') : chalk.dim('no'),
+        p.api_cost_per_1m == null ? chalk.dim('unknown') : fmt(p.api_cost_per_1m),
+        p.flags.length > 0 ? chalk.yellow(truncate(p.flags.join('; '), 52)) : chalk.dim('—'),
+      ]),
     )
+    console.log()
+    console.log(`  ${chalk.dim('Preferred:')} ${readiness.routing.preferred.join(', ') || 'none'}`)
+    console.log(`  ${chalk.dim('Third-party candidates:')} ${readiness.routing.third_party_candidates.join(', ') || 'none'}`)
+    if (readiness.flags.length > 0) console.log(`  ${chalk.dim('Flags:')} ${readiness.flags.join('; ')}`)
+    console.log(`  ${chalk.dim(readiness.routing.recommendation)}`)
     console.log()
   })
 

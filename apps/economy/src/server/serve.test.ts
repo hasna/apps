@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
-import { openDatabase, upsertRequest, upsertSession, upsertBudget, upsertGoal, upsertModelPricing, upsertBillingDaily, upsertUsageSnapshot, upsertCostCenter } from '../db/database.js'
+import { openDatabase, upsertRequest, upsertSession, upsertBudget, upsertGoal, upsertModelPricing, upsertBillingDaily, upsertUsageSnapshot, upsertCostCenter, upsertLoopAttribution } from '../db/database.js'
 import { createHandler, createServerFetch, startServer } from './serve.js'
 import type { SqliteAdapter as Database } from '@hasna/cloud'
 import { Database as BunDatabase } from 'bun:sqlite'
@@ -53,6 +53,42 @@ function seedData(db: Database) {
     input_tokens: 50, output_tokens: 0, cache_read_tokens: 0, cache_create_tokens: 0,
     cost_usd: 0.01, cost_basis: 'estimated', duration_ms: 0, timestamp: NOW, source_request_id: 'loop-req',
     cost_center_id: 'loop:fleet-evaluator',
+  })
+  upsertLoopAttribution(db, {
+    id: 'loop-attr-1',
+    request_id: 'loop-req',
+    session_id: 'loop-session',
+    loop_id: 'loop-123',
+    loop_name: 'fleet-evaluator',
+    loop_run_id: 'run-123',
+    goal_id: 'goal-123',
+    goal_run_id: 'goal-run-123',
+    workflow_run_id: 'workflow-run-123',
+    workflow_step_id: 'workflow-step-123',
+    thread_id: 'thread-123',
+    account_key: 'codex:pro',
+    account_tool: 'codex',
+    account_name: 'Codex Pro',
+    provider: 'codex',
+    model: 'gpt-5-codex',
+    phase: 'judge',
+    status: 'failed',
+    loop_status: 'failed',
+    schedule_json: '{"type":"interval","minutes":15}',
+    scheduled_for: NOW,
+    started_at: NOW,
+    finished_at: NOW,
+    duration_ms: 123000,
+    attempt: 2,
+    tokens: 372,
+    api_equivalent_usd: 0.004185,
+    subscription_included_usd: 0.004185,
+    billable_usd: 0,
+    failure_retry_usd: 0.004185,
+    cost_basis: 'subscription_included',
+    machine_id: 'spark02',
+    created_at: NOW,
+    updated_at: NOW,
   })
   upsertBudget(db, {
     id: 'bud-1', project_path: null, agent: null, period: 'monthly',
@@ -270,6 +306,55 @@ describe('REST API server', () => {
       metered_api_usd: 1.5,
       subscription_included_usd: 0,
     })
+  })
+
+  it('GET /api/loops returns exact loop attribution rows with filters', async () => {
+    const { status, data } = await req(handler, '/api/loops?since=99999d&loop=fleet&provider=codex&account=pro&model=gpt-5&machine=spark02&limit=1')
+
+    expect(status).toBe(200)
+    const payload = (data as Record<string, unknown>)['data'] as Record<string, unknown>
+    expect(payload['total_rows']).toBe(1)
+    expect((payload['filters'] as Record<string, unknown>)['since']).not.toBe('99999d')
+    const rows = payload['rows'] as Array<Record<string, unknown>>
+    expect(rows[0]).toMatchObject({
+      loop_id: 'loop-123',
+      loop_name: 'fleet-evaluator',
+      loop_run_id: 'run-123',
+      session_id: 'loop-session',
+      thread_id: 'thread-123',
+      account_key: 'codex:pro',
+      provider: 'codex',
+      model: 'gpt-5-codex',
+      tokens: 372,
+      subscription_included_usd: 0.004185,
+      billable_usd: 0,
+      failure_retry_usd: 0.004185,
+    })
+  })
+
+  it('GET /api/efficiency returns loop summary and provider readiness', async () => {
+    const { status, data } = await req(handler, '/api/efficiency?loop=fleet')
+
+    expect(status).toBe(200)
+    const payload = (data as Record<string, unknown>)['data'] as Record<string, unknown>
+    const loops = payload['loops'] as Record<string, unknown>
+    expect((loops['totals'] as Record<string, unknown>)['tokens']).toBe(372)
+    expect((loops['by_loop'] as Array<Record<string, unknown>>)[0]).toMatchObject({
+      loop_id: 'loop-123',
+      loop_name: 'fleet-evaluator',
+      failed_runs: 1,
+      retry_runs: 1,
+    })
+    const readiness = payload['provider_readiness'] as Record<string, unknown>
+    expect((readiness['providers'] as Array<Record<string, unknown>>).map(row => row['provider'])).toEqual([
+      'codewith',
+      'codex',
+      'claude',
+      'cursor',
+      'aicopilot',
+      'opencode',
+      'gemini',
+    ])
   })
 
   it('manages subscriptions through the REST API', async () => {

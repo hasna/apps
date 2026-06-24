@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { openDatabase, upsertCostCenter, upsertRequest, upsertSession } from '../db/database.js'
+import { openDatabase, upsertCostCenter, upsertLoopAttribution, upsertRequest, upsertSession } from '../db/database.js'
 
 const root = new URL('../../', import.meta.url).pathname.replace(/\/$/, '')
 const tempRoots: string[] = []
@@ -108,6 +108,24 @@ describe('economy CLI help', () => {
     expect(result.stdout).toContain('loop')
     expect(result.stdout).toContain('app')
     expect(result.stdout).toContain('repo')
+  })
+
+  test('documents loops and efficiency filters', async () => {
+    let result = await runCli(['loops', '--help'])
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('--since <date>')
+    expect(result.stdout).toContain('--machine <id>')
+    expect(result.stdout).toContain('--loop <id-or-name>')
+    expect(result.stdout).toContain('--provider <provider>')
+    expect(result.stdout).toContain('--account <query>')
+    expect(result.stdout).toContain('--model <query>')
+    expect(result.stdout).toContain('--json')
+
+    result = await runCli(['efficiency', '--help'])
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('subscription-aware provider')
+    expect(result.stdout).toContain('routing')
+    expect(result.stdout).toContain('--json')
   })
 })
 
@@ -234,6 +252,72 @@ describe('economy CLI mutation validation', () => {
     result = await runCli(['breakdown', '--by', 'loop'], { HASNA_ECONOMY_DB_PATH: dbPath })
     expect(result.exitCode).toBe(0)
     expect(result.stdout).toContain('fleet-evaluator')
+  })
+
+  test('loops and efficiency expose loop attribution and provider readiness JSON', async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'economy-cli-loop-efficiency-'))
+    tempRoots.push(tempRoot)
+    const dbPath = join(tempRoot, 'economy.db')
+    const db = openDatabase(dbPath, true)
+    const now = new Date().toISOString()
+    upsertLoopAttribution(db, {
+      id: 'loop-attr-1',
+      request_id: 'loop-req',
+      session_id: 'loop-session',
+      loop_id: 'loop-123',
+      loop_name: 'fleet-evaluator',
+      loop_run_id: 'run-123',
+      goal_id: 'goal-123',
+      goal_run_id: 'goal-run-123',
+      workflow_run_id: 'workflow-run-123',
+      workflow_step_id: 'workflow-step-123',
+      thread_id: 'thread-123',
+      account_key: 'codex:pro',
+      account_tool: 'codex',
+      account_name: 'Codex Pro',
+      provider: 'codex',
+      model: 'gpt-5-codex',
+      phase: 'judge',
+      status: 'failed',
+      loop_status: 'failed',
+      schedule_json: '{"type":"interval","minutes":15}',
+      scheduled_for: now,
+      started_at: now,
+      finished_at: now,
+      duration_ms: 123000,
+      attempt: 2,
+      tokens: 372,
+      api_equivalent_usd: 0.004185,
+      subscription_included_usd: 0.004185,
+      billable_usd: 0,
+      failure_retry_usd: 0.004185,
+      cost_basis: 'subscription_included',
+      machine_id: 'spark02',
+      created_at: now,
+      updated_at: now,
+    })
+
+    let result = await runCli(['loops', '--json', '--loop', 'fleet', '--provider', 'codex'], { HASNA_ECONOMY_DB_PATH: dbPath })
+    expect(result.exitCode).toBe(0)
+    const loopsPayload = JSON.parse(result.stdout) as Record<string, unknown>
+    expect(loopsPayload['total_rows']).toBe(1)
+    expect((loopsPayload['rows'] as Array<Record<string, unknown>>)[0]).toMatchObject({
+      loop_id: 'loop-123',
+      loop_run_id: 'run-123',
+      thread_id: 'thread-123',
+      account_key: 'codex:pro',
+      provider: 'codex',
+      model: 'gpt-5-codex',
+      tokens: 372,
+      failure_retry_usd: 0.004185,
+    })
+
+    result = await runCli(['efficiency', '--json', '--machine', 'spark02'], { HASNA_ECONOMY_DB_PATH: dbPath })
+    expect(result.exitCode).toBe(0)
+    const efficiencyPayload = JSON.parse(result.stdout) as Record<string, Record<string, unknown>>
+    expect((efficiencyPayload['loops']?.['totals'] as Record<string, unknown>)['tokens']).toBe(372)
+    const providers = ((efficiencyPayload['provider_readiness']?.['providers'] as Array<Record<string, unknown>>) ?? []).map(row => row['provider'])
+    expect(providers).toEqual(['codewith', 'codex', 'claude', 'cursor', 'aicopilot', 'opencode', 'gemini'])
   })
 
   test('pricing set rejects invalid numeric values', async () => {
