@@ -372,14 +372,17 @@ describe("fireTaskWebhooks", () => {
     const originalFetch = globalThis.fetch;
     (globalThis as any).fetch = async () => { throw new Error("network error"); };
 
-    writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
-      webhooks: [{ url: "https://example.com/task-hook", events: ["task"] }],
-    }));
+    try {
+      writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+        webhooks: [{ url: "https://example.com/task-hook", events: ["task"] }],
+      }));
 
-    // Should not throw
-    expect(() => fireTaskWebhooks(makeTaskEvent())).not.toThrow();
-
-    globalThis.fetch = originalFetch;
+      // Should not throw, and the rejected async fetch must settle before restore.
+      expect(() => fireTaskWebhooks(makeTaskEvent())).not.toThrow();
+      await new Promise((r) => setTimeout(r, 50));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   test("fires multiple task webhooks", async () => {

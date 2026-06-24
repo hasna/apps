@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { getDb, getDbPath, closeDb } from "./db";
 import { unlinkSync } from "fs";
+import { Database } from "bun:sqlite";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -91,6 +92,42 @@ describe("db", () => {
     const cols = db.prepare("PRAGMA table_info(messages)").all() as { name: string }[];
     const colNames = cols.map((c) => c.name);
     expect(colNames).toContain("space");
+  });
+
+  test("migrates legacy channel messages before creating space indexes", () => {
+    closeDb();
+    const legacyDb = new Database(TEST_DB);
+    legacyDb.exec(`
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        from_agent TEXT NOT NULL,
+        to_agent TEXT NOT NULL,
+        channel TEXT,
+        content TEXT NOT NULL,
+        priority TEXT NOT NULL DEFAULT 'normal',
+        working_dir TEXT,
+        repository TEXT,
+        branch TEXT,
+        metadata TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+        read_at TEXT
+      );
+      INSERT INTO messages (session_id, from_agent, to_agent, channel, content)
+      VALUES ('channel:ops', 'alice', 'ops', 'ops', 'legacy message');
+    `);
+    legacyDb.close();
+
+    const db = getDb();
+    const cols = db.prepare("PRAGMA table_info(messages)").all() as { name: string }[];
+    expect(cols.map((c) => c.name)).toContain("space");
+    const row = db.prepare("SELECT session_id, space FROM messages WHERE content = ?").get("legacy message") as {
+      session_id: string;
+      space: string;
+    };
+    expect(row).toEqual({ session_id: "space:ops", space: "ops" });
+    const indexes = db.prepare("SELECT name FROM sqlite_master WHERE type='index'").all() as { name: string }[];
+    expect(indexes.map((i) => i.name)).toContain("idx_messages_space");
   });
 
   test("space subscriptions track the subscription starting point", () => {

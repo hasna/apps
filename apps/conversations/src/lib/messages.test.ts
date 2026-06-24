@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSessionRead, markSpaceRead, getMessageById, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, searchMessages, getUnreadBlockers, getThreadReplies, compactMessage, listUnreadCounts, parseMentions, listUnreadCountsWithMentions, getMessagesForAgent, markMentionsRead, markUnread, markUnreadByIds, recordReadReceipt, recordReadReceiptsBatch, getReadReceipts, getMessageReadStatus } from "./messages";
+import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSessionRead, markSpaceRead, getMessageById, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, searchMessages, getUnreadBlockers, getThreadReplies, compactMessage, listUnreadCounts, parseMentions, listUnreadCountsWithMentions, getMessagesForAgent, markMentionsRead, markUnread, markUnreadByIds, recordReadReceipt, recordReadReceiptsBatch, getReadReceipts, getMessageReadStatus, MAX_MESSAGE_BYTES } from "./messages";
 import { createSpace, joinSpace } from "./spaces";
 import { closeDb } from "./db";
 import { unlinkSync } from "fs";
@@ -408,6 +408,17 @@ describe("editMessage", () => {
     expect(edited!.from_agent).toBe("alice");
     expect(edited!.to_agent).toBe("bob");
   });
+
+  test("rejects oversized edited content without changing the message", () => {
+    const msg = sendMessage({ from: "alice", to: "bob", content: "original" });
+    const oversizedContent = "x".repeat(MAX_MESSAGE_BYTES + 1);
+
+    expect(() => editMessage(msg.id, "alice", oversizedContent)).toThrow("Message content exceeds maximum size");
+
+    const unchanged = getMessageById(msg.id);
+    expect(unchanged!.content).toBe("original");
+    expect(unchanged!.edited_at).toBeNull();
+  });
 });
 
 describe("pinMessage / unpinMessage", () => {
@@ -755,6 +766,31 @@ describe("attachments", () => {
   test("message without attachments has null attachments field", () => {
     const msg = sendMessage({ from: "alice", to: "bob", content: "no files" });
     expect(msg.attachments).toBeNull();
+  });
+
+  test("does not persist message when attachment source is missing", () => {
+    expect(() => sendMessage({
+      from: "alice",
+      to: "bob",
+      content: "bad attachment",
+      attachments: [{ name: "missing.txt", source_path: join(TEMP_DIR, "missing.txt") }],
+    })).toThrow("Attachment source not found");
+
+    expect(readMessages()).toHaveLength(0);
+  });
+
+  test("does not persist message when attachment name is invalid", () => {
+    const srcFile = join(TEMP_DIR, "secret.txt");
+    writeFileSync(srcFile, "secret");
+
+    expect(() => sendMessage({
+      from: "alice",
+      to: "bob",
+      content: "bad attachment name",
+      attachments: [{ name: ".env", source_path: srcFile }],
+    })).toThrow("Invalid attachment name");
+
+    expect(readMessages()).toHaveLength(0);
   });
 });
 

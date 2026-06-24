@@ -17,6 +17,8 @@ import { getReactions, getReactionSummary } from "../lib/reactions.js";
 import { listHotSessions } from "../lib/hot.js";
 import { getRelated, getAgentNetwork, getGraphStats } from "../lib/graph.js";
 import { listLocks } from "../lib/locks.js";
+import { handleMcpRequest, healthPayload } from "../mcp/http.js";
+import { buildServer } from "../mcp/index.js";
 import { join, resolve, sep } from "path";
 import { existsSync } from "fs";
 
@@ -108,6 +110,57 @@ function normalizePort(value: unknown, fallback: number): number {
   return port;
 }
 
+const NPM_LATEST_URL = "https://registry.npmjs.org/@hasna/conversations/latest";
+const DEFAULT_REGISTRY_TIMEOUT_MS = 3000;
+const MAX_REGISTRY_TIMEOUT_MS = 30000;
+
+class RegistryTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`npm registry request timed out after ${timeoutMs}ms`);
+    this.name = "RegistryTimeoutError";
+  }
+}
+
+function registryTimeoutMs(): number {
+  const raw = process.env.CONVERSATIONS_REGISTRY_TIMEOUT_MS;
+  if (!raw) return DEFAULT_REGISTRY_TIMEOUT_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_REGISTRY_TIMEOUT_MS;
+  return Math.min(Math.ceil(parsed), MAX_REGISTRY_TIMEOUT_MS);
+}
+
+async function fetchLatestPackageVersion(): Promise<string> {
+  const timeoutMs = registryTimeoutMs();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(NPM_LATEST_URL, {
+      headers: { "Accept": "application/json" },
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      throw new Error(`npm registry responded with ${res.status}`);
+    }
+    const data = await res.json() as { version?: unknown };
+    if (typeof data.version !== "string" || !data.version) {
+      throw new Error("npm registry response did not include a version");
+    }
+    return data.version;
+  } catch (e: any) {
+    if (controller.signal.aborted) {
+      throw new RegistryTimeoutError(timeoutMs);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function registryErrorStatus(e: unknown): number {
+  return e instanceof RegistryTimeoutError ? 504 : 500;
+}
+
 function isSameOrigin(req: Request): boolean {
   const origin = req.headers.get("origin");
   if (!origin) return true;
@@ -145,6 +198,13 @@ export function startDashboardServer(port = 0, host?: string) {
     async fetch(req) {
       const url = new URL(req.url);
       const path = url.pathname;
+
+      if (path === "/health" && req.method === "GET") {
+        return jsonResponse(healthPayload("conversations"));
+      }
+      if (path === "/mcp") {
+        return handleMcpRequest(req, () => buildServer(true));
+      }
 
       // ---- API Routes ----
       if (path === "/api/status") {
@@ -527,12 +587,10 @@ export function startDashboardServer(port = 0, host?: string) {
         try {
           const pkg = await import("../../package.json");
           const current = pkg.version;
-          const res = await fetch("https://registry.npmjs.org/@hasna/conversations/latest");
-          const data = await res.json() as { version: string };
-          const latest = data.version;
+          const latest = await fetchLatestPackageVersion();
           return jsonResponse({ current, latest, updateAvailable: current !== latest });
         } catch (e: any) {
-          return jsonResponse({ error: e.message }, 500);
+          return jsonResponse({ error: e.message }, registryErrorStatus(e));
         }
       }
 
@@ -543,9 +601,7 @@ export function startDashboardServer(port = 0, host?: string) {
         try {
           const pkg = await import("../../package.json");
           const current = pkg.version;
-          const res = await fetch("https://registry.npmjs.org/@hasna/conversations/latest");
-          const data = await res.json() as { version: string };
-          const latest = data.version;
+          const latest = await fetchLatestPackageVersion();
 
           if (current === latest) {
             return jsonResponse({ current, latest, status: "up-to-date" });
@@ -565,7 +621,7 @@ export function startDashboardServer(port = 0, host?: string) {
             return jsonResponse({ current, latest, status: "failed", exitCode, stderr }, 500);
           }
         } catch (e: any) {
-          return jsonResponse({ error: e.message }, 500);
+          return jsonResponse({ error: e.message }, registryErrorStatus(e));
         }
       }
 

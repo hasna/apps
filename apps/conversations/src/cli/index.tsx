@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
-import { Command } from "commander";
 import { registerEventsCommands } from "@hasna/events/commander";
+import { Command } from "commander";
 import chalk from "chalk";
 import { render } from "ink";
 import React from "react";
@@ -77,6 +77,5 @@ program
     render(React.createElement(App, { agent }));
   });
 registerEventsCommands(program, { source: "conversations" });
-
 
 program.parse();

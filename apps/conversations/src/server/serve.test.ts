@@ -640,6 +640,80 @@ describe("API /api/locks", () => {
   });
 });
 
+describe("API /api/version", () => {
+  const registryUrl = "https://registry.npmjs.org/@hasna/conversations/latest";
+
+  test("reports latest version using an abortable registry request", async () => {
+    const originalFetch = globalThis.fetch;
+    let registrySignal: AbortSignal | undefined;
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === registryUrl) {
+        registrySignal = init?.signal as AbortSignal | undefined;
+        if (!registrySignal) throw new Error("missing abort signal");
+        return new Response(JSON.stringify({ version: "9.9.9" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    try {
+      const res = await originalFetch(`${base()}/api/version`);
+      expect(res.status).toBe(200);
+      const data = await res.json() as any;
+      expect(data.latest).toBe("9.9.9");
+      expect(data.updateAvailable).toBe(true);
+      expect(registrySignal).toBeInstanceOf(AbortSignal);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("returns 504 when registry fetch exceeds the timeout", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalTimeout = process.env.CONVERSATIONS_REGISTRY_TIMEOUT_MS;
+    process.env.CONVERSATIONS_REGISTRY_TIMEOUT_MS = "5";
+
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === registryUrl) {
+        return new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (!(signal instanceof AbortSignal)) {
+            setTimeout(() => reject(new Error("missing abort signal")), 50);
+            return;
+          }
+          if (signal.aborted) {
+            reject(new DOMException("Aborted", "AbortError"));
+            return;
+          }
+          signal.addEventListener(
+            "abort",
+            () => reject(new DOMException("Aborted", "AbortError")),
+            { once: true }
+          );
+        });
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    try {
+      const res = await originalFetch(`${base()}/api/version`);
+      expect(res.status).toBe(504);
+      const data = await res.json() as any;
+      expect(data.error).toContain("npm registry request timed out");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalTimeout === undefined) {
+        delete process.env.CONVERSATIONS_REGISTRY_TIMEOUT_MS;
+      } else {
+        process.env.CONVERSATIONS_REGISTRY_TIMEOUT_MS = originalTimeout;
+      }
+    }
+  });
+});
+
 describe("Static files", () => {
   test("serves dashboard root from configured dist", async () => {
     const res = await fetch(`${base()}/`);
