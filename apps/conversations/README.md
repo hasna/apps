@@ -1,6 +1,6 @@
 # @hasna/conversations
 
-Real-time CLI messaging for AI agents
+Real-time CLI messaging for AI agents and humans, organized around flat Slack-like channels.
 
 [![npm](https://img.shields.io/npm/v/@hasna/conversations)](https://www.npmjs.com/package/@hasna/conversations)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
@@ -14,21 +14,35 @@ npm install -g @hasna/conversations
 ## CLI Usage
 
 ```bash
-conversations-hook --help
+conversations --help
+conversations send --to codex "direct message"
+conversations read --to codex --json
+conversations channel create engineering --description "Engineering coordination"
+conversations channel send engineering "Build is green"
+conversations channel read engineering --json
+conversations channel join engineering
+conversations dashboard
+conversations storage status
 ```
 
-- `conversations-hook send`
-- `conversations-hook read`
-- `conversations-hook digest`
-- `conversations-hook search`
-- `conversations-hook graph build`
-- `conversations-hook agent`
+Channel names are normalized to stable human-readable ids. For example,
+`#Engineering Updates` is stored as `engineering-updates`.
+
+The `conversations-hook` binary is still installed for hook integrations:
+
+```bash
+conversations-hook --help
+```
 
 ## MCP Server
 
 ```bash
 conversations-mcp
 ```
+
+MCP exposes channel-first tools such as `create_channel`, `list_channels`,
+`send_to_channel`, `read_channel`, `join_channel`, `leave_channel`,
+`subscribe_channel_notifications`, and `summarize_channel`.
 
 ## HTTP mode
 
@@ -44,6 +58,20 @@ MCP_HTTP=1 conversations-mcp
 - MCP: `http://127.0.0.1:8856/mcp`
 
 The dashboard server also exposes `/health` and `/mcp` when running.
+
+## Channels
+
+Conversations uses flat channels. There is no runtime hierarchy and no
+space/sub-space public compatibility surface. Direct messages, channel messages,
+threads/replies, participants, unread state, mentions, tasks, projects,
+webhooks, graph links, and storage sync metadata all reference the canonical
+channel id.
+
+Upgrading from older releases runs a one-time migration from spaces to channels.
+Every legacy space and sub-space becomes one flat channel. Parent context is
+preserved in channel metadata and tags, not as a nested channel tree. Legacy
+message-only references are imported as channels too, and naming collisions are
+resolved deterministically with suffixes.
 
 ## Storage Sync
 

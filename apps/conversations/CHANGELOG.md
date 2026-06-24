@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-06-24
+
+### Breaking
+- Replaced the runtime spaces/sub-spaces model with flat Slack-like channels.
+- Removed public space/sub-space API, CLI, MCP, SDK, dashboard, and storage names. Channel commands and tools are the supported surface.
+- Legacy spaces are only read by the one-time database migration path. The application no longer keeps backwards-compatible space commands or tools alive.
+
+### Migration
+- Existing nested spaces are deterministically imported as flat channels. Parent context is preserved in channel `metadata.import_source`, `tags`, and descriptions instead of a nested runtime hierarchy.
+- Migration preserves messages, channel participants, notification subscriptions/read positions, mentions, tasks, graph edges, resource locks, project links, webhooks, and storage metadata.
+- Channel names are normalized to stable human-readable ids. Collisions are resolved deterministically with suffixes so no legacy content is dropped.
+
+### Changed
+- CLI, MCP tools/resources, SDK exports, dashboard routes, dashboard UI, tests, and examples now use channel-first naming.
+- The dashboard Channels page now shows a flat channel list with unread counts and a channel feed.
+- Message sessions for channel traffic are canonicalized as `channel:<name>`.
+
 ## [0.1.21] - 2026-03-12
 
 ### Performance
