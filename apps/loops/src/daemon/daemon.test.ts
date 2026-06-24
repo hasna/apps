@@ -5,6 +5,20 @@ import { describe, expect, test } from "bun:test";
 import { Store } from "../lib/store.js";
 import { runDaemon } from "./daemon.js";
 import { tick } from "../lib/scheduler.js";
+import type { ExecutorResult } from "../types.js";
+
+function executorResult(status: ExecutorResult["status"], at: string): ExecutorResult {
+  return {
+    status,
+    exitCode: status === "succeeded" ? 0 : 1,
+    stdout: status,
+    stderr: "",
+    error: status === "succeeded" ? undefined : status,
+    startedAt: at,
+    finishedAt: at,
+    durationMs: 0,
+  };
+}
 
 describe("daemon", () => {
   test("executes workflow loop targets from the daemon tick path", async () => {
@@ -26,8 +40,10 @@ describe("daemon", () => {
         store,
         pidPath: join(root, "loops-daemon.pid"),
         intervalMs: 5,
-        sleep: async () => {
-          if (store.listWorkflowRuns({ workflowId: workflow.id }).length > 0) stopped = true;
+        sleep: async (ms) => {
+          const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0];
+          if (run && run.status !== "running") stopped = true;
+          await Bun.sleep(ms);
         },
         shouldStop: () => stopped,
         log: () => undefined,
@@ -37,6 +53,66 @@ describe("daemon", () => {
       expect(run?.status).toBe("succeeded");
       expect(store.listWorkflowStepRuns(run!.id)[0]?.stdout).toContain("daemon-workflow");
     } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("starts multiple due loop runs without waiting for the first to finish", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-daemon-concurrent-"));
+    const store = new Store(":memory:");
+    let stop = false;
+    let started = 0;
+    let active = 0;
+    let maxActive = 0;
+    let releaseGate: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    try {
+      store.createLoop({
+        name: "concurrent-a",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "command", command: "true" },
+      });
+      store.createLoop({
+        name: "concurrent-b",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "command", command: "true" },
+      });
+
+      const daemon = runDaemon({
+        store,
+        pidPath: join(root, "loops-daemon.pid"),
+        intervalMs: 5,
+        concurrency: 2,
+        sleep: async (ms) => Bun.sleep(ms),
+        shouldStop: () => stop,
+        log: () => undefined,
+        execute: async () => {
+          started += 1;
+          active += 1;
+          maxActive = Math.max(maxActive, active);
+          if (started === 2) releaseGate();
+          await gate;
+          active -= 1;
+          return executorResult("succeeded", "2026-01-01T00:00:00.000Z");
+        },
+      });
+
+      for (let i = 0; i < 100 && started < 2; i++) await Bun.sleep(10);
+      expect(started).toBe(2);
+      expect(maxActive).toBe(2);
+      for (let i = 0; i < 100 && store.listRuns({ status: "succeeded" }).length < 2; i++) await Bun.sleep(10);
+      stop = true;
+      await daemon;
+
+      expect(store.listRuns({ status: "succeeded" })).toHaveLength(2);
+      expect(store.findLoopByName("concurrent-a")?.status).toBe("stopped");
+      expect(store.findLoopByName("concurrent-b")?.status).toBe("stopped");
+    } finally {
+      stop = true;
+      releaseGate();
       store.close();
       rmSync(root, { recursive: true, force: true });
     }
