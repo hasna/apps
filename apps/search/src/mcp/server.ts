@@ -5,7 +5,7 @@ import { unifiedSearch, searchSingleProvider } from "../lib/search.js";
 import { exportResults } from "../lib/export.js";
 import { getConfig, setConfig } from "../lib/config.js";
 import { listSearches, getSearch, deleteSearch, getSearchStats } from "../db/searches.js";
-import { listResults, getResult, searchResultsFts } from "../db/results.js";
+import { countResults, listResults, getResult, searchResultsFts } from "../db/results.js";
 import {
   createSavedSearch,
   listSavedSearches,
@@ -34,13 +34,71 @@ import {
   indexAllRoots,
   listRoots,
   removeRoot,
+  type IndexRoot,
 } from "../lib/local/indexer.js";
+import {
+  DEFAULT_COMPACT_LIMIT,
+  clampLimit,
+  compactEnvelope,
+  compactProfile,
+  compactProvider,
+  compactResult,
+  compactSavedSearch,
+  compactSearch,
+  truncateMiddle,
+  truncateText,
+} from "../lib/compact-output.js";
 import { registerSearchStorageTools } from "./storage-tools.js";
 
 const pkg = require("../../package.json") as { version: string };
 
 export const MCP_NAME = "search";
 export const VERSION = pkg.version;
+
+function jsonText(value: unknown) {
+  return { content: [{ type: "text" as const, text: JSON.stringify(value) }] };
+}
+
+function plainText(text: string, isError = false) {
+  return { content: [{ type: "text" as const, text }], ...(isError ? { isError: true as const } : {}) };
+}
+
+function mcpLimit(limit: number | undefined, fallback = DEFAULT_COMPACT_LIMIT): number {
+  return clampLimit(limit, fallback);
+}
+
+function mcpOffset(offset: number | undefined): number {
+  return Number.isInteger(offset) && offset! >= 0 ? offset! : 0;
+}
+
+function compactIndexRoot(root: IndexRoot & { staleMinutes?: number | null }): Record<string, unknown> {
+  return {
+    id: root.id,
+    name: root.name,
+    path: truncateMiddle(root.path, 120),
+    status: root.status,
+    fileCount: root.fileCount,
+    lastIndexedAt: root.lastIndexedAt,
+    staleMinutes: root.staleMinutes ?? null,
+    error: root.error ? truncateText(root.error, 160) : null,
+  };
+}
+
+function compactSearchResults(
+  results: import("../types/index.js").SearchResult[],
+  verbose: boolean | undefined,
+): unknown[] {
+  return verbose ? results : results.slice(0, DEFAULT_COMPACT_LIMIT).map(compactResult);
+}
+
+function searchHint(
+  total: number,
+  returned: number,
+  moreHint = "Use a narrower query to reduce rows.",
+): string {
+  const detail = "Use verbose:true for full result records.";
+  return returned < total ? `${detail} ${moreHint}` : detail;
+}
 
 export function buildServer(): McpServer {
   const server = new McpServer({
@@ -63,28 +121,41 @@ server.tool(
     limit: z.number().int().min(1).max(100).optional().describe("Max results (default 20)"),
     regex: z.boolean().optional().describe("Treat query as a regular expression (grep-style, line-based; needs one 3+ char literal)"),
     case_sensitive: z.boolean().optional().describe("Case-sensitive matching (regex mode only)"),
+    verbose: z.boolean().optional().describe("Return full paths/snippets/match lines instead of compact rows"),
   },
-  async ({ query, kind, root, ext, dir, limit, regex, case_sensitive }) => {
+  async ({ query, kind, root, ext, dir, limit, regex, case_sensitive, verbose }) => {
     const response = findLocal(query, {
       kind: kind as FindKind,
       root,
       ext,
       dir,
-      limit,
+      limit: mcpLimit(limit),
       regex,
       caseSensitive: case_sensitive,
     });
     if (!response.indexed) {
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: "No index roots ready. Add one with the index_add tool (e.g. {\"path\": \"~/workspace\"}) or `search index add <path>`.",
-          },
-        ],
-      };
+      return plainText("No index roots ready. Add one with the index_add tool (e.g. {\"path\": \"~/workspace\"}) or `search index add <path>`.");
     }
-    return { content: [{ type: "text" as const, text: JSON.stringify(response) }] };
+    const results = verbose
+      ? response.results
+      : response.results.map((r) => ({
+          path: truncateMiddle(r.path, 140),
+          root: r.root,
+          kind: r.kind,
+          line: r.line,
+          score: r.score,
+          snippet: truncateText(r.snippet, 180),
+        }));
+    return jsonText({
+      query: response.query,
+      kind: response.kind,
+      indexed: response.indexed,
+      roots: response.roots,
+      total: response.total,
+      returned: results.length,
+      results,
+      hint: verbose ? undefined : "Use verbose:true for full paths and additional match lines.",
+    });
   },
 );
 
@@ -97,13 +168,13 @@ server.tool(
     name: z.string().optional().describe("Friendly root name (default: basename)"),
     content: z.boolean().optional().describe("Index file content too (default: true)"),
     exclude: z.array(z.string()).optional().describe("Extra exclude patterns (gitignore syntax)"),
+    verbose: z.boolean().optional().describe("Return the full root record"),
   },
-  async ({ path, name, content, exclude }) => {
+  async ({ path, name, content, exclude, verbose }) => {
     const root = addRoot(path, { name, contentIndexing: content, exclude });
     const stats = indexRoot(root.id);
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify({ root: getRoot(root.id), stats }) }],
-    };
+    const indexedRoot = getRoot(root.id);
+    return jsonText({ root: verbose ? indexedRoot : indexedRoot ? compactIndexRoot(indexedRoot) : null, stats });
   },
 );
 
@@ -117,27 +188,45 @@ server.tool(
   async ({ root, force }) => {
     if (root) {
       const r = getRoot(root);
-      if (!r) return { content: [{ type: "text" as const, text: `Index root not found: ${root}` }], isError: true };
+      if (!r) return plainText(`Index root not found: ${root}`, true);
       const stats = indexRoot(r.id, { force });
-      return { content: [{ type: "text" as const, text: JSON.stringify(stats) }] };
+      return jsonText(stats);
     }
     const all = indexAllRoots({ force });
-    return { content: [{ type: "text" as const, text: JSON.stringify(all) }] };
+    return jsonText(compactEnvelope("index_stats", all, {
+      total: all.length,
+      hint: "Use index_status for root details.",
+    }));
   },
 );
 
 server.tool(
   "index_status",
   "List local index roots with file counts, status, and staleness",
-  {},
-  async () => {
+  {
+    limit: z.number().int().min(1).max(100).optional().describe("Max roots (default 20)"),
+    offset: z.number().int().min(0).optional(),
+    verbose: z.boolean().optional().describe("Return full root records"),
+  },
+  async ({ limit, offset, verbose }) => {
+    const pageLimit = mcpLimit(limit);
+    const pageOffset = mcpOffset(offset);
     const roots = listRoots().map((r) => ({
       ...r,
       staleMinutes: r.lastIndexedAt
         ? Math.round((Date.now() - Date.parse(r.lastIndexedAt)) / 60_000)
         : null,
     }));
-    return { content: [{ type: "text" as const, text: JSON.stringify(roots, null, 2) }] };
+    const page = roots.slice(pageOffset, pageOffset + pageLimit);
+    return jsonText(compactEnvelope(
+      "index_roots",
+      verbose ? page : page.map(compactIndexRoot),
+      {
+        total: roots.length,
+        offset: pageOffset,
+        hint: "Use verbose:true for full root records.",
+      },
+    ));
   },
 );
 
@@ -148,9 +237,9 @@ server.tool(
   async ({ root }) => {
     const ok = removeRoot(root);
     if (!ok) {
-      return { content: [{ type: "text" as const, text: `Not found: ${root}` }], isError: true };
+      return plainText(`Not found: ${root}`, true);
     }
-    return { content: [{ type: "text" as const, text: "Removed" }] };
+    return plainText("Removed");
   },
 );
 
@@ -164,40 +253,28 @@ server.tool(
     profile: z.string().optional().describe("Search profile name (e.g. research, social, code)"),
     limit: z.number().int().min(1).max(100).optional().describe("Max results per provider"),
     dedup: z.boolean().optional().describe("Deduplicate results by URL (default: true)"),
+    verbose: z.boolean().optional().describe("Return full result records instead of compact rows"),
   },
-  async ({ query, providers, profile, limit, dedup }) => {
+  async ({ query, providers, profile, limit, dedup, verbose }) => {
     const response = await unifiedSearch(query, {
       providers,
       profile,
       options: limit ? { limit } : undefined,
       dedup,
     });
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify(
-            {
-              searchId: response.search.id,
-              query: response.search.query,
-              resultCount: response.results.length,
-              duration: response.search.duration,
-              results: response.results.map((r) => ({
-                rank: r.rank,
-                title: r.title,
-                url: r.url,
-                snippet: r.snippet,
-                source: r.source,
-                score: r.score,
-              })),
-              errors: response.errors,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+    const results = compactSearchResults(response.results, verbose);
+    return jsonText({
+      searchId: response.search.id,
+      query: response.search.query,
+      resultCount: response.results.length,
+      returned: results.length,
+      duration: response.search.duration,
+      results,
+      errors: response.errors,
+      hint: verbose
+        ? undefined
+        : searchHint(response.results.length, results.length, "Use provider filters or a narrower query to reduce rows."),
+    });
   },
 );
 
@@ -209,33 +286,22 @@ for (const providerName of PROVIDER_NAMES) {
     {
       query: z.string().describe("Search query"),
       limit: z.number().int().min(1).max(100).optional().describe("Max results"),
+      verbose: z.boolean().optional().describe("Return full result records instead of compact rows"),
     },
-    async ({ query, limit }) => {
+    async ({ query, limit, verbose }) => {
       const response = await searchSingleProvider(providerName, query, limit ? { limit } : undefined);
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(
-              {
-                searchId: response.search.id,
-                resultCount: response.results.length,
-                duration: response.search.duration,
-                results: response.results.map((r) => ({
-                  rank: r.rank,
-                  title: r.title,
-                  url: r.url,
-                  snippet: r.snippet,
-                  score: r.score,
-                })),
-                errors: response.errors,
-              },
-              null,
-              2,
-            ),
-          },
-        ],
-      };
+      const results = compactSearchResults(response.results, verbose);
+      return jsonText({
+        searchId: response.search.id,
+        resultCount: response.results.length,
+        returned: results.length,
+        duration: response.search.duration,
+        results,
+        errors: response.errors,
+        hint: verbose
+          ? undefined
+          : searchHint(response.results.length, results.length, "Use a narrower query to reduce rows."),
+      });
     },
   );
 }
@@ -248,26 +314,53 @@ server.tool(
     query: z.string().optional().describe("Filter by query text"),
     limit: z.number().int().min(1).max(100).optional().describe("Max results (default 20)"),
     offset: z.number().int().min(0).optional(),
+    verbose: z.boolean().optional().describe("Return full search records instead of compact rows"),
   },
-  async ({ query, limit, offset }) => {
-    const { searches, total } = listSearches({ query, limit: limit ?? 20, offset });
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify({ total, searches }, null, 2) }],
-    };
+  async ({ query, limit, offset, verbose }) => {
+    const pageLimit = mcpLimit(limit);
+    const pageOffset = mcpOffset(offset);
+    const { searches, total } = listSearches({ query, limit: pageLimit, offset: pageOffset });
+    const items: unknown[] = verbose ? searches : searches.map(compactSearch);
+    return jsonText(compactEnvelope(
+      "searches",
+      items,
+      {
+        total,
+        offset: pageOffset,
+        hint: "Use get_search with an id, or verbose:true for full search records.",
+      },
+    ));
   },
 );
 
 server.tool(
   "get_search",
   "Get search details with results",
-  { id: z.string().describe("Search ID") },
-  async ({ id }) => {
+  {
+    id: z.string().describe("Search ID"),
+    limit: z.number().int().min(1).max(100).optional().describe("Max result rows (default 20)"),
+    offset: z.number().int().min(0).optional(),
+    verbose: z.boolean().optional().describe("Return full result records instead of compact rows"),
+  },
+  async ({ id, limit, offset, verbose }) => {
     const search = getSearch(id);
-    if (!search) return { content: [{ type: "text" as const, text: "Search not found" }] };
-    const results = listResults(id);
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify({ search, results }, null, 2) }],
-    };
+    if (!search) return plainText("Search not found", true);
+    const pageLimit = mcpLimit(limit);
+    const pageOffset = mcpOffset(offset);
+    const results = listResults(id, { limit: pageLimit, offset: pageOffset });
+    const items: unknown[] = verbose ? results : results.map(compactResult);
+    return jsonText({
+      search,
+      results: compactEnvelope(
+        "results",
+        items,
+        {
+          total: search.resultCount,
+          offset: pageOffset,
+          hint: verbose ? undefined : "Use verbose:true for full result records.",
+        },
+      ),
+    });
   },
 );
 
@@ -277,7 +370,7 @@ server.tool(
   { id: z.string().describe("Search ID") },
   async ({ id }) => {
     const ok = deleteSearch(id);
-    return { content: [{ type: "text" as const, text: ok ? "Deleted" : "Not found" }] };
+    return plainText(ok ? "Deleted" : "Not found", !ok);
   },
 );
 
@@ -287,14 +380,27 @@ server.tool(
   "List results for a search",
   {
     search_id: z.string().describe("Search ID"),
-    limit: z.number().int().optional(),
+    limit: z.number().int().min(1).max(100).optional().describe("Max result rows (default 20)"),
+    offset: z.number().int().min(0).optional(),
     source: SearchProviderNameSchema.optional().describe("Filter by provider"),
+    verbose: z.boolean().optional().describe("Return full result records instead of compact rows"),
   },
-  async ({ search_id, limit, source }) => {
-    const results = listResults(search_id, { limit, source });
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }],
-    };
+  async ({ search_id, limit, offset, source, verbose }) => {
+    const pageLimit = mcpLimit(limit);
+    const pageOffset = mcpOffset(offset);
+    const results = listResults(search_id, { limit: pageLimit, offset: pageOffset, source });
+    const search = source ? null : getSearch(search_id);
+    const total = source ? countResults(search_id, { source }) : (search?.resultCount ?? results.length);
+    const items: unknown[] = verbose ? results : results.map(compactResult);
+    return jsonText(compactEnvelope(
+      "results",
+      items,
+      {
+        total,
+        offset: pageOffset,
+        hint: verbose ? undefined : "Use get_result for one full record, or verbose:true for full listed records.",
+      },
+    ));
   },
 );
 
@@ -306,7 +412,7 @@ server.tool(
     const result = getResult(id);
     return {
       content: [
-        { type: "text" as const, text: result ? JSON.stringify(result, null, 2) : "Not found" },
+        { type: "text" as const, text: result ? JSON.stringify(result) : "Not found" },
       ],
     };
   },
@@ -317,13 +423,19 @@ server.tool(
   "Full-text search across all stored search results",
   {
     query: z.string().describe("FTS query"),
-    limit: z.number().int().optional(),
+    limit: z.number().int().min(1).max(100).optional().describe("Max results (default 20)"),
+    verbose: z.boolean().optional().describe("Return full result records instead of compact rows"),
   },
-  async ({ query, limit }) => {
-    const results = searchResultsFts(query, { limit });
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }],
-    };
+  async ({ query, limit, verbose }) => {
+    const results = searchResultsFts(query, { limit: mcpLimit(limit) });
+    const items: unknown[] = verbose ? results : results.map(compactResult);
+    return jsonText(compactEnvelope(
+      "results",
+      items,
+      {
+        hint: verbose ? undefined : "Use get_result for one full record, or verbose:true for full listed records.",
+      },
+    ));
   },
 );
 
@@ -344,48 +456,63 @@ server.tool(
       providers: providers ?? [],
       profileId: profile,
     });
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify(saved, null, 2) }],
-    };
+    return jsonText(saved);
   },
 );
 
 server.tool(
   "list_saved_searches",
   "List all saved searches",
-  {},
-  async () => {
+  {
+    limit: z.number().int().min(1).max(100).optional().describe("Max saved searches (default 20)"),
+    offset: z.number().int().min(0).optional(),
+    verbose: z.boolean().optional().describe("Return full saved-search records instead of compact rows"),
+  },
+  async ({ limit, offset, verbose }) => {
     const saved = listSavedSearches();
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify(saved, null, 2) }],
-    };
+    const pageLimit = mcpLimit(limit);
+    const pageOffset = mcpOffset(offset);
+    const page = saved.slice(pageOffset, pageOffset + pageLimit);
+    const items: unknown[] = verbose ? page : page.map(compactSavedSearch);
+    return jsonText(compactEnvelope(
+      "saved_searches",
+      items,
+      {
+        total: saved.length,
+        offset: pageOffset,
+        hint: "Use run_saved_search with an id, or verbose:true for full saved-search records.",
+      },
+    ));
   },
 );
 
 server.tool(
   "run_saved_search",
   "Re-execute a saved search",
-  { id: z.string().describe("Saved search ID") },
-  async ({ id }) => {
+  {
+    id: z.string().describe("Saved search ID"),
+    limit: z.number().int().min(1).max(100).optional().describe("Override max results per provider"),
+    verbose: z.boolean().optional().describe("Return full result records instead of compact rows"),
+  },
+  async ({ id, limit, verbose }) => {
     const saved = getSavedSearch(id);
-    if (!saved) return { content: [{ type: "text" as const, text: "Saved search not found" }] };
+    if (!saved) return plainText("Saved search not found", true);
     updateSavedSearchLastRun(id);
     const response = await unifiedSearch(saved.query, {
       providers: saved.providers.length > 0 ? saved.providers : undefined,
-      options: saved.options,
+      options: { ...saved.options, ...(limit ? { limit } : {}) },
     });
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify(
-            { searchId: response.search.id, resultCount: response.results.length, results: response.results },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+    const results = compactSearchResults(response.results, verbose);
+    return jsonText({
+      searchId: response.search.id,
+      savedSearchId: saved.id,
+      resultCount: response.results.length,
+      returned: results.length,
+      results,
+      hint: verbose
+        ? undefined
+        : searchHint(response.results.length, results.length, "Use provider filters or a narrower query to reduce rows."),
+    });
   },
 );
 
@@ -395,7 +522,7 @@ server.tool(
   { id: z.string().describe("Saved search ID") },
   async ({ id }) => {
     const ok = deleteSavedSearch(id);
-    return { content: [{ type: "text" as const, text: ok ? "Deleted" : "Not found" }] };
+    return plainText(ok ? "Deleted" : "Not found", !ok);
   },
 );
 
@@ -403,16 +530,20 @@ server.tool(
 server.tool(
   "list_providers",
   "List all search providers with their configuration and status",
-  {},
-  async () => {
+  {
+    verbose: z.boolean().optional().describe("Return full provider configuration records"),
+  },
+  async ({ verbose }) => {
     const providers = listProviders();
     const withStatus = providers.map((p) => ({
       ...p,
       configured: isProviderConfigured(p),
     }));
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify(withStatus, null, 2) }],
-    };
+    return jsonText(compactEnvelope(
+      "providers",
+      verbose ? withStatus : withStatus.map((p) => compactProvider(p, p.configured)),
+      { total: withStatus.length, hint: verbose ? undefined : "Use verbose:true for full provider metadata." },
+    ));
   },
 );
 
@@ -422,7 +553,7 @@ server.tool(
   { name: SearchProviderNameSchema.describe("Provider name") },
   async ({ name }) => {
     const ok = enableProvider(name);
-    return { content: [{ type: "text" as const, text: ok ? `${name} enabled` : "Not found" }] };
+    return plainText(ok ? `${name} enabled` : "Not found", !ok);
   },
 );
 
@@ -432,7 +563,7 @@ server.tool(
   { name: SearchProviderNameSchema.describe("Provider name") },
   async ({ name }) => {
     const ok = disableProvider(name);
-    return { content: [{ type: "text" as const, text: ok ? `${name} disabled` : "Not found" }] };
+    return plainText(ok ? `${name} disabled` : "Not found", !ok);
   },
 );
 
@@ -449,7 +580,7 @@ server.tool(
     if (api_key_env) updates.apiKeyEnv = api_key_env;
     if (rate_limit) updates.rateLimit = rate_limit;
     const ok = updateProvider(name, updates);
-    return { content: [{ type: "text" as const, text: ok ? `${name} updated` : "Not found" }] };
+    return plainText(ok ? `${name} updated` : "Not found", !ok);
   },
 );
 
@@ -457,12 +588,26 @@ server.tool(
 server.tool(
   "list_profiles",
   "List all search profiles",
-  {},
-  async () => {
+  {
+    limit: z.number().int().min(1).max(100).optional().describe("Max profiles (default 20)"),
+    offset: z.number().int().min(0).optional(),
+    verbose: z.boolean().optional().describe("Return full profile records"),
+  },
+  async ({ limit, offset, verbose }) => {
     const profiles = listProfiles();
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify(profiles, null, 2) }],
-    };
+    const pageLimit = mcpLimit(limit);
+    const pageOffset = mcpOffset(offset);
+    const page = profiles.slice(pageOffset, pageOffset + pageLimit);
+    const items: unknown[] = verbose ? page : page.map(compactProfile);
+    return jsonText(compactEnvelope(
+      "profiles",
+      items,
+      {
+        total: profiles.length,
+        offset: pageOffset,
+        hint: verbose ? undefined : "Use verbose:true for full profile records.",
+      },
+    ));
   },
 );
 
@@ -476,9 +621,7 @@ server.tool(
   },
   async ({ name, providers, description }) => {
     const profile = createProfile({ name, providers, description });
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify(profile, null, 2) }],
-    };
+    return jsonText(profile);
   },
 );
 
@@ -488,7 +631,7 @@ server.tool(
   { id: z.string().describe("Profile ID") },
   async ({ id }) => {
     const ok = deleteProfile(id);
-    return { content: [{ type: "text" as const, text: ok ? "Deleted" : "Not found" }] };
+    return plainText(ok ? "Deleted" : "Not found", !ok);
   },
 );
 
@@ -498,25 +641,26 @@ server.tool(
   {
     profile: z.string().describe("Profile name"),
     query: z.string().describe("Search query"),
-    limit: z.number().int().optional(),
+    limit: z.number().int().min(1).max(100).optional(),
+    verbose: z.boolean().optional().describe("Return full result records instead of compact rows"),
   },
-  async ({ profile, query, limit }) => {
+  async ({ profile, query, limit, verbose }) => {
     const response = await unifiedSearch(query, {
       profile,
       options: limit ? { limit } : undefined,
     });
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify(
-            { searchId: response.search.id, resultCount: response.results.length, results: response.results },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+    const results = compactSearchResults(response.results, verbose);
+    return jsonText({
+      searchId: response.search.id,
+      profile,
+      resultCount: response.results.length,
+      returned: results.length,
+      results,
+      errors: response.errors,
+      hint: verbose
+        ? undefined
+        : searchHint(response.results.length, results.length, "Use provider filters or a narrower query to reduce rows."),
+    });
   },
 );
 
@@ -528,35 +672,44 @@ server.tool(
     url: z.string().describe("YouTube video URL"),
     provider: z.string().optional().describe("Transcription provider (elevenlabs, openai, deepgram)"),
     language: z.string().optional().describe("Language code (e.g. en, fr)"),
+    verbose: z.boolean().optional().describe("Include the full transcript text"),
   },
-  async ({ url, provider, language }) => {
+  async ({ url, provider, language, verbose }) => {
     const available = await isTranscriberAvailable();
     if (!available) {
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: "Transcriber not available. Ensure microservice-transcriber is running on port 19600 or installed as CLI.",
-          },
-        ],
-      };
+      return plainText("Transcriber not available. Ensure microservice-transcriber is running on port 19600 or installed as CLI.", true);
     }
     const result = await transcribeVideo(url, { provider, language });
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-    };
+    if (verbose) return jsonText(result);
+    const { transcriptText, ...rest } = result;
+    return jsonText({
+      ...rest,
+      transcriptPreview: truncateText(transcriptText, 600),
+      hint: "Use verbose:true for full transcript text.",
+    });
   },
 );
 
 server.tool(
   "search_transcripts",
   "Search within transcribed YouTube content",
-  { query: z.string().describe("Search query for transcripts") },
-  async ({ query }) => {
+  {
+    query: z.string().describe("Search query for transcripts"),
+    limit: z.number().int().min(1).max(100).optional().describe("Max transcript matches (default 20)"),
+    verbose: z.boolean().optional().describe("Return full snippets"),
+  },
+  async ({ query, limit, verbose }) => {
     const results = await searchTranscripts(query);
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }],
-    };
+    const pageLimit = mcpLimit(limit);
+    const page = results.slice(0, pageLimit);
+    return jsonText(compactEnvelope(
+      "transcript_matches",
+      verbose ? page : page.map((r) => ({ ...r, snippet: truncateText(r.snippet, 220) })),
+      {
+        total: results.length,
+        hint: verbose ? undefined : "Use verbose:true for full transcript snippets.",
+      },
+    ));
   },
 );
 
@@ -589,9 +742,7 @@ server.tool(
   {},
   async () => {
     const stats = getSearchStats();
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify(stats, null, 2) }],
-    };
+    return jsonText(stats);
   },
 );
 
@@ -602,9 +753,7 @@ server.tool(
   {},
   async () => {
     const config = getConfig();
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify(config, null, 2) }],
-    };
+    return jsonText(config);
   },
 );
 
@@ -624,9 +773,7 @@ server.tool(
       ...(updates.max_concurrent !== undefined && { maxConcurrent: updates.max_concurrent }),
       ...(updates.default_profile !== undefined && { defaultProfile: updates.default_profile }),
     });
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify(config, null, 2) }],
-    };
+    return jsonText(config);
   },
 );
 
@@ -640,11 +787,11 @@ server.tool(
   { name: z.string(), session_id: z.string().optional() },
   async (a: { name: string; session_id?: string }) => {
     const existing = [..._agentReg.values()].find(x => x.name === a.name);
-    if (existing) { existing.last_seen_at = new Date().toISOString(); return { content: [{ type: "text" as const, text: JSON.stringify(existing) }] }; }
+    if (existing) { existing.last_seen_at = new Date().toISOString(); return jsonText(existing); }
     const id = Math.random().toString(36).slice(2, 10);
     const ag = { id, name: a.name, last_seen_at: new Date().toISOString() };
     _agentReg.set(id, ag);
-    return { content: [{ type: "text" as const, text: JSON.stringify(ag) }] };
+    return jsonText(ag);
   },
 );
 
@@ -654,9 +801,9 @@ server.tool(
   { agent_id: z.string() },
   async (a: { agent_id: string }) => {
     const ag = _agentReg.get(a.agent_id);
-    if (!ag) return { content: [{ type: "text" as const, text: `Agent not found: ${a.agent_id}` }], isError: true };
+    if (!ag) return plainText(`Agent not found: ${a.agent_id}`, true);
     ag.last_seen_at = new Date().toISOString();
-    return { content: [{ type: "text" as const, text: JSON.stringify({ id: ag.id, name: ag.name, last_seen_at: ag.last_seen_at }) }] };
+    return jsonText({ id: ag.id, name: ag.name, last_seen_at: ag.last_seen_at });
   },
 );
 
@@ -666,20 +813,25 @@ server.tool(
   { agent_id: z.string(), project_id: z.string().nullable().optional() },
   async (a: { agent_id: string; project_id?: string | null }) => {
     const ag = _agentReg.get(a.agent_id);
-    if (!ag) return { content: [{ type: "text" as const, text: `Agent not found: ${a.agent_id}` }], isError: true };
+    if (!ag) return plainText(`Agent not found: ${a.agent_id}`, true);
     (ag as any).project_id = a.project_id ?? undefined;
-    return { content: [{ type: "text" as const, text: a.project_id ? `Focus: ${a.project_id}` : "Focus cleared" }] };
+    return plainText(a.project_id ? `Focus: ${a.project_id}` : "Focus cleared");
   },
 );
 
 server.tool(
   "list_agents",
   "List all registered agents.",
-  {},
-  async () => {
+  {
+    limit: z.number().int().min(1).max(100).optional().describe("Max agents (default 20)"),
+    offset: z.number().int().min(0).optional(),
+  },
+  async ({ limit, offset }) => {
     const agents = [..._agentReg.values()];
-    if (agents.length === 0) return { content: [{ type: "text" as const, text: "No agents registered." }] };
-    return { content: [{ type: "text" as const, text: JSON.stringify(agents, null, 2) }] };
+    if (agents.length === 0) return plainText("No agents registered.");
+    const pageOffset = mcpOffset(offset);
+    const page = agents.slice(pageOffset, pageOffset + mcpLimit(limit));
+    return jsonText(compactEnvelope("agents", page, { total: agents.length, offset: pageOffset }));
   },
 );
 
@@ -701,7 +853,7 @@ server.tool(
       "INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)",
       [params.message, params.email || null, params.category || "general", pkg.version]
     );
-    return { content: [{ type: "text" as const, text: "Feedback saved. Thank you!" }] };
+    return plainText("Feedback saved. Thank you!");
   }
 );
 

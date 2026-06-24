@@ -194,6 +194,24 @@ export function listResults(
   return rows.map(rowToResult);
 }
 
+export function countResults(
+  searchId: string,
+  opts: { source?: SearchProviderName } = {},
+  db?: Database,
+): number {
+  const d = db ?? getDb();
+  if (opts.source) {
+    const row = d
+      .prepare("SELECT COUNT(*) as count FROM search_results WHERE search_id = ? AND source = ?")
+      .get(searchId, opts.source) as { count: number };
+    return row.count;
+  }
+  const row = d
+    .prepare("SELECT COUNT(*) as count FROM search_results WHERE search_id = ?")
+    .get(searchId) as { count: number };
+  return row.count;
+}
+
 export function searchResultsFts(
   query: string,
   opts: { limit?: number } = {},

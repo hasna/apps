@@ -8,8 +8,15 @@ import {
   indexAllRoots,
   listRoots,
   removeRoot,
+  type IndexRoot,
   type IndexStats,
 } from "../lib/local/indexer.js";
+import {
+  DEFAULT_COMPACT_LIMIT,
+  clampLimit,
+  truncateMiddle,
+  truncateText,
+} from "../lib/compact-output.js";
 
 function printJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
@@ -24,6 +31,29 @@ function parsePositiveInt(value: string, label: string): number {
   return n;
 }
 
+function parseOptionalLimit(value: string | undefined, label: string): number {
+  if (value === undefined) return DEFAULT_COMPACT_LIMIT;
+  return clampLimit(parsePositiveInt(value, label));
+}
+
+function parseOffset(value: string | undefined): number {
+  if (value === undefined) return 0;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0) {
+    console.error(chalk.red(`Invalid --offset: ${value} (expected an integer >= 0)`));
+    process.exit(1);
+  }
+  return n;
+}
+
+function printPageHint(shown: number, total: number, offset: number, command: string, detailHint?: string): void {
+  const hints: string[] = [];
+  const nextOffset = offset + shown;
+  if (nextOffset < total) hints.push(`more: ${command} --offset ${nextOffset}`);
+  if (detailHint) hints.push(detailHint);
+  if (hints.length > 0) console.log(chalk.dim(hints.join(" | ")));
+}
+
 function printStats(stats: IndexStats, rootLabel: string): void {
   console.log(
     chalk.green(`✓ ${rootLabel}`) +
@@ -31,6 +61,14 @@ function printStats(stats: IndexStats, rootLabel: string): void {
         ` ${stats.fileCount} files (+${stats.added} ~${stats.updated} -${stats.deleted}, ${stats.contentIndexed} content) in ${stats.durationMs}ms`,
       ),
   );
+}
+
+function rootStatus(status: IndexRoot["status"]): string {
+  return status === "ready"
+    ? chalk.green(status)
+    : status === "error"
+      ? chalk.red(status)
+      : chalk.yellow(status);
 }
 
 export function registerLocalCommands(program: Command): void {
@@ -47,6 +85,7 @@ export function registerLocalCommands(program: Command): void {
     .option("--case-sensitive", "Case-sensitive matching (regex mode)")
     .option("--no-refresh", "Skip stale-index refresh before searching")
     .option("--json", "Output as JSON")
+    .option("--verbose", "Show full paths, snippets, and match lines")
     .action((queryParts: string[], opts) => {
       const query = queryParts.join(" ");
       let response;
@@ -83,15 +122,22 @@ export function registerLocalCommands(program: Command): void {
         return;
       }
 
+      console.log(chalk.bold(`Local matches (showing ${response.results.length} of ${response.total})`));
+      console.log();
       for (const r of response.results) {
         const loc = r.line ? `:${r.line}` : "";
         const badge = chalk.bgCyan.black(` ${r.kind} `);
-        console.log(`${badge} ${chalk.bold(r.path)}${chalk.dim(loc)}`);
-        if (r.kind !== "file" && r.snippet) console.log(`   ${r.snippet}`);
-        for (const m of r.matches?.slice(1) ?? []) {
+        const path = opts.verbose ? r.path : truncateMiddle(r.path, 120);
+        console.log(`${badge} ${chalk.bold(path)}${chalk.dim(loc)}`);
+        if (r.kind !== "file" && r.snippet) {
+          console.log(`   ${opts.verbose ? r.snippet : truncateText(r.snippet, 160)}`);
+        }
+        const matches = opts.verbose ? (r.matches?.slice(1) ?? []) : [];
+        for (const m of matches) {
           console.log(chalk.dim(`   :${m.line} ${m.text}`));
         }
       }
+      if (!opts.verbose) console.log(chalk.dim("details: search find <query> --verbose or --json"));
     });
 
   const index = program.command("index").description("Manage the local file index");
@@ -167,7 +213,10 @@ export function registerLocalCommands(program: Command): void {
     .command("list")
     .alias("ls")
     .description("List index roots")
+    .option("-l, --limit <n>", "Max roots to show", "20")
+    .option("--offset <n>", "Start offset for pagination", "0")
     .option("--json", "Output as JSON")
+    .option("--verbose", "Show full root paths and errors")
     .action((opts) => {
       const roots = listRoots();
       if (opts.json) {
@@ -178,24 +227,29 @@ export function registerLocalCommands(program: Command): void {
         console.log(chalk.yellow("No index roots. Add one with: search index add <path>"));
         return;
       }
-      for (const r of roots) {
-        const status =
-          r.status === "ready"
-            ? chalk.green(r.status)
-            : r.status === "error"
-              ? chalk.red(r.status)
-              : chalk.yellow(r.status);
+      const limit = parseOptionalLimit(opts.limit, "--limit");
+      const offset = parseOffset(opts.offset);
+      const page = roots.slice(offset, offset + limit);
+      console.log(chalk.bold(`Index Roots (showing ${page.length} of ${roots.length})`));
+      console.log();
+      for (const r of page) {
+        const status = rootStatus(r.status);
+        const path = opts.verbose ? r.path : truncateMiddle(r.path, 88);
         console.log(
-          `${chalk.dim(r.id.substring(0, 8))}  ${chalk.yellow(r.name.padEnd(20))} ${status.padEnd(8)} ${String(r.fileCount).padStart(7)} files  ${chalk.dim(r.path)}`,
+          `${chalk.dim(r.id)}  ${chalk.yellow(truncateText(r.name, 20).padEnd(20))} ${status.padEnd(8)} ${String(r.fileCount).padStart(7)} files  ${chalk.dim(path)}`,
         );
-        if (r.error) console.log(chalk.red(`    ${r.error}`));
+        if (r.error) console.log(chalk.red(`    ${opts.verbose ? r.error : truncateText(r.error, 140)}`));
       }
+      printPageHint(page.length, roots.length, offset, "search index list", "details: search index status --verbose");
     });
 
   index
     .command("status")
     .description("Show index status and staleness")
+    .option("-l, --limit <n>", "Max roots to show", "20")
+    .option("--offset <n>", "Start offset for pagination", "0")
     .option("--json", "Output as JSON")
+    .option("--verbose", "Show full root paths and errors")
     .action((opts) => {
       const roots = listRoots();
       const status = roots.map((r) => ({
@@ -212,12 +266,20 @@ export function registerLocalCommands(program: Command): void {
         console.log(chalk.yellow("No index roots. Add one with: search index add <path>"));
         return;
       }
-      for (const r of status) {
+      const limit = parseOptionalLimit(opts.limit, "--limit");
+      const offset = parseOffset(opts.offset);
+      const page = status.slice(offset, offset + limit);
+      console.log(chalk.bold(`Index Status (showing ${page.length} of ${status.length})`));
+      console.log();
+      for (const r of page) {
         const age = r.staleMinutes === null ? "never indexed" : `indexed ${r.staleMinutes}m ago`;
+        const path = opts.verbose ? r.path : truncateMiddle(r.path, 88);
         console.log(
-          `${chalk.yellow(r.name.padEnd(20))} ${r.status.padEnd(8)} ${String(r.fileCount).padStart(7)} files  ${age}  ${chalk.dim(`(${r.lastDurationMs ?? "?"}ms)`)}`,
+          `${chalk.yellow(truncateText(r.name, 20).padEnd(20))} ${r.status.padEnd(8)} ${String(r.fileCount).padStart(7)} files  ${age}  ${chalk.dim(`(${r.lastDurationMs ?? "?"}ms)`)}  ${chalk.dim(path)}`,
         );
+        if (r.error) console.log(chalk.red(`    ${opts.verbose ? r.error : truncateText(r.error, 140)}`));
       }
+      printPageHint(page.length, status.length, offset, "search index status", "details: search index status --verbose");
     });
 
   index

@@ -31,6 +31,12 @@ import {
   deleteProfile,
   getProfileByName,
 } from "../db/profiles.js";
+import {
+  DEFAULT_COMPACT_LIMIT,
+  clampLimit,
+  truncateMiddle,
+  truncateText,
+} from "../lib/compact-output.js";
 
 const pkg = require("../../package.json") as { version: string };
 
@@ -46,6 +52,44 @@ registerEventsCommands(program, { source: "search" });
 
 registerLocalCommands(program);
 
+function printJson(value: unknown): void {
+  console.log(JSON.stringify(value, null, 2));
+}
+
+function parseCliLimit(value: string | undefined, label: string, fallback = DEFAULT_COMPACT_LIMIT): number {
+  if (value === undefined) return fallback;
+  const limit = Number(value);
+  if (!Number.isInteger(limit) || limit < 1) {
+    console.error(chalk.red(`Invalid ${label}: ${value} (expected a positive integer)`));
+    process.exit(1);
+  }
+  return clampLimit(limit, fallback);
+}
+
+function parseCliOffset(value: string | undefined): number {
+  if (value === undefined) return 0;
+  const offset = Number(value);
+  if (!Number.isInteger(offset) || offset < 0) {
+    console.error(chalk.red(`Invalid --offset: ${value} (expected an integer >= 0)`));
+    process.exit(1);
+  }
+  return offset;
+}
+
+function printPaginationHint(
+  shown: number,
+  total: number,
+  offset: number,
+  nextCommand: string,
+  detailHint?: string,
+): void {
+  const nextOffset = offset + shown;
+  const hints: string[] = [];
+  if (nextOffset < total) hints.push(`more: ${nextCommand} --offset ${nextOffset}`);
+  if (detailHint) hints.push(detailHint);
+  if (hints.length > 0) console.log(chalk.dim(hints.join(" | ")));
+}
+
 // --- Main search command ---
 program
   .command("query")
@@ -56,6 +100,7 @@ program
   .option("-l, --limit <n>", "Max results per provider", "10")
   .option("-f, --format <format>", "Output format: table, json", "table")
   .option("--no-dedup", "Disable deduplication")
+  .option("--verbose", "Show every returned row with untruncated URLs/snippets")
   .action(async (queryParts: string[], opts) => {
     const query = queryParts.join(" ");
     const providers = opts.providers
@@ -75,7 +120,7 @@ program
         return;
       }
 
-      printResults(response.results, response.search.duration, response.errors);
+      printResults(response.results, response.search.duration, response.errors, { verbose: opts.verbose });
     } catch (err) {
       console.error(chalk.red(`Error: ${err instanceof Error ? err.message : err}`));
       process.exit(1);
@@ -90,6 +135,7 @@ for (const providerName of PROVIDER_NAMES) {
     .option("-l, --limit <n>", "Max results", "10")
     .option("-f, --format <format>", "Output: table, json", "table")
     .option("--transcribe", "Transcribe top YouTube results (youtube only)")
+    .option("--verbose", "Show every returned row with untruncated URLs/snippets")
     .action(async (queryParts: string[], opts) => {
       const query = queryParts.join(" ");
 
@@ -99,7 +145,7 @@ for (const providerName of PROVIDER_NAMES) {
             limit: parseInt(opts.limit),
             transcribeTop: 3,
           });
-          printResults(deep.videoResults, 0, []);
+          printResults(deep.videoResults, 0, [], { verbose: opts.verbose });
           if (deep.transcriptMatches.length > 0) {
             console.log(chalk.cyan("\n--- Transcript Matches ---"));
             for (const m of deep.transcriptMatches) {
@@ -122,7 +168,7 @@ for (const providerName of PROVIDER_NAMES) {
           return;
         }
 
-        printResults(response.results, response.search.duration, response.errors);
+        printResults(response.results, response.search.duration, response.errors, { verbose: opts.verbose });
       } catch (err) {
         console.error(chalk.red(`Error: ${err instanceof Error ? err.message : err}`));
         process.exit(1);
@@ -137,35 +183,62 @@ history
   .command("list")
   .alias("ls")
   .option("-l, --limit <n>", "Max items", "20")
+  .option("--offset <n>", "Start offset for pagination", "0")
   .option("-q, --query <query>", "Filter by query")
+  .option("--json", "Output full records as JSON")
+  .option("--verbose", "Show full query text")
   .action((opts) => {
+    const limit = parseCliLimit(opts.limit, "--limit");
+    const offset = parseCliOffset(opts.offset);
     const { searches, total } = listSearches({
-      limit: parseInt(opts.limit),
+      limit,
+      offset,
       query: opts.query,
     });
-    console.log(chalk.bold(`Search History (${total} total)`));
+    if (opts.json) {
+      printJson({ total, limit, offset, searches });
+      return;
+    }
+    console.log(chalk.bold(`Search History (showing ${searches.length} of ${total})`));
     console.log();
     for (const s of searches) {
       console.log(
-        `${chalk.dim(s.id.substring(0, 8))}  ${chalk.white(s.query)}  ${chalk.cyan(s.providers.join(","))}  ${chalk.green(String(s.resultCount) + " results")}  ${chalk.dim(s.createdAt)}`,
+        `${chalk.dim(s.id)}  ${chalk.white(opts.verbose ? s.query : truncateText(s.query, 88))}  ${chalk.cyan(s.providers.join(","))}  ${chalk.green(String(s.resultCount) + " results")}  ${chalk.dim(s.createdAt)}`,
       );
     }
+    printPaginationHint(
+      searches.length,
+      total,
+      offset,
+      "search history list",
+      "details: search history show <id> --verbose",
+    );
   });
 
 history
   .command("show <id>")
-  .action((id: string) => {
+  .option("-l, --limit <n>", "Max result rows to show", "20")
+  .option("--offset <n>", "Start offset for result pagination", "0")
+  .option("--json", "Output details as JSON")
+  .option("--verbose", "Show full result URLs/snippets")
+  .action((id: string, opts) => {
     const search = getSearch(id);
     if (!search) {
       console.error(chalk.red(`Search not found: ${id}`));
       return;
     }
+    const limit = parseCliLimit(opts.limit, "--limit");
+    const offset = parseCliOffset(opts.offset);
+    const results = listResults(search.id, { limit, offset });
+    if (opts.json) {
+      printJson({ search, results, limit, offset });
+      return;
+    }
     console.log(chalk.bold(`Query: ${search.query}`));
     console.log(`Providers: ${search.providers.join(", ")}`);
-    console.log(`Results: ${search.resultCount} | Duration: ${search.duration}ms`);
+    console.log(`Results: ${search.resultCount} | Showing: ${results.length} | Duration: ${search.duration}ms`);
     console.log();
-    const results = listResults(search.id);
-    printResults(results, search.duration, []);
+    printResults(results, search.duration, [], { verbose: opts.verbose, total: search.resultCount, offset });
   });
 
 history
@@ -181,18 +254,41 @@ history
 // --- Saved searches ---
 const saved = program.command("saved").description("Saved searches");
 
-saved.command("list").alias("ls").action(() => {
-  const items = listSavedSearches();
-  if (items.length === 0) {
-    console.log(chalk.dim("No saved searches"));
-    return;
-  }
-  for (const s of items) {
-    console.log(
-      `${chalk.dim(s.id.substring(0, 8))}  ${chalk.yellow(s.name)}  ${chalk.white(s.query)}  ${chalk.cyan(s.providers.join(","))}  ${chalk.dim(s.lastRunAt ?? "never run")}`,
+saved
+  .command("list")
+  .alias("ls")
+  .option("-l, --limit <n>", "Max items", "20")
+  .option("--offset <n>", "Start offset for pagination", "0")
+  .option("--json", "Output full records as JSON")
+  .option("--verbose", "Show full query text")
+  .action((opts) => {
+    const items = listSavedSearches();
+    const limit = parseCliLimit(opts.limit, "--limit");
+    const offset = parseCliOffset(opts.offset);
+    const page = items.slice(offset, offset + limit);
+    if (opts.json) {
+      printJson({ total: items.length, limit, offset, savedSearches: page });
+      return;
+    }
+    if (items.length === 0) {
+      console.log(chalk.dim("No saved searches"));
+      return;
+    }
+    console.log(chalk.bold(`Saved Searches (showing ${page.length} of ${items.length})`));
+    console.log();
+    for (const s of page) {
+      console.log(
+        `${chalk.dim(s.id)}  ${chalk.yellow(truncateText(s.name, 40))}  ${chalk.white(opts.verbose ? s.query : truncateText(s.query, 88))}  ${chalk.cyan(s.providers.join(",") || "all")}  ${chalk.dim(s.lastRunAt ?? "never run")}`,
+      );
+    }
+    printPaginationHint(
+      page.length,
+      items.length,
+      offset,
+      "search saved list",
+      "details: search saved run <id> --verbose",
     );
-  }
-});
+  });
 
 saved
   .command("add <name> <query...>")
@@ -209,7 +305,8 @@ saved
 
 saved
   .command("run <id>")
-  .action(async (id: string) => {
+  .option("--verbose", "Show every returned row with untruncated URLs/snippets")
+  .action(async (id: string, opts) => {
     const s = getSavedSearch(id);
     if (!s) {
       console.error(chalk.red(`Saved search not found: ${id}`));
@@ -220,7 +317,7 @@ saved
       providers: s.providers.length > 0 ? s.providers : undefined,
       options: s.options,
     });
-    printResults(response.results, response.search.duration, response.errors);
+    printResults(response.results, response.search.duration, response.errors, { verbose: opts.verbose });
   });
 
 saved
@@ -236,21 +333,29 @@ saved
 // --- Providers ---
 const providers = program.command("providers").description("Manage search providers");
 
-providers.command("list").alias("ls").action(() => {
-  const all = listProviders();
-  console.log(chalk.bold("Search Providers"));
-  console.log();
-  for (const p of all) {
-    const configured = isProviderConfigured(p);
-    const status = p.enabled
-      ? configured
-        ? chalk.green("enabled")
-        : chalk.yellow("enabled (no key)")
-      : chalk.dim("disabled");
-    const keyInfo = p.apiKeyEnv ? chalk.dim(` [${p.apiKeyEnv}]`) : chalk.dim(" [no key needed]");
-    console.log(`  ${chalk.white(p.name.padEnd(14))} ${status}${keyInfo}  rate: ${p.rateLimit}/min`);
-  }
-});
+providers
+  .command("list")
+  .alias("ls")
+  .option("--json", "Output full records as JSON")
+  .action((opts) => {
+    const all = listProviders();
+    if (opts.json) {
+      printJson(all.map((p) => ({ ...p, configured: isProviderConfigured(p) })));
+      return;
+    }
+    console.log(chalk.bold("Search Providers"));
+    console.log();
+    for (const p of all) {
+      const configured = isProviderConfigured(p);
+      const status = p.enabled
+        ? configured
+          ? chalk.green("enabled")
+          : chalk.yellow("enabled (no key)")
+        : chalk.dim("disabled");
+      const keyInfo = p.apiKeyEnv ? chalk.dim(` [${p.apiKeyEnv}]`) : chalk.dim(" [no key needed]");
+      console.log(`  ${chalk.white(p.name.padEnd(14))} ${status}${keyInfo}  rate: ${p.rateLimit}/min`);
+    }
+  });
 
 providers
   .command("enable <name>")
@@ -290,14 +395,25 @@ providers
 // --- Profiles ---
 const profiles = program.command("profiles").description("Search profiles");
 
-profiles.command("list").alias("ls").action(() => {
-  const all = listProfiles();
-  for (const p of all) {
-    console.log(
-      `${chalk.dim(p.id.substring(0, 12))}  ${chalk.yellow(p.name.padEnd(12))} ${chalk.white(p.providers.join(", "))}  ${chalk.dim(p.description ?? "")}`,
-    );
-  }
-});
+profiles
+  .command("list")
+  .alias("ls")
+  .option("--json", "Output full records as JSON")
+  .option("--verbose", "Show full descriptions")
+  .action((opts) => {
+    const all = listProfiles();
+    if (opts.json) {
+      printJson(all);
+      return;
+    }
+    console.log(chalk.bold(`Search Profiles (${all.length})`));
+    console.log();
+    for (const p of all) {
+      console.log(
+        `${chalk.dim(p.id)}  ${chalk.yellow(p.name.padEnd(12))} ${chalk.white(truncateText(p.providers.join(", "), 72))}  ${chalk.dim(opts.verbose ? (p.description ?? "") : truncateText(p.description ?? "", 88))}`,
+      );
+    }
+  });
 
 profiles
   .command("create <name>")
@@ -323,7 +439,8 @@ profiles
 
 profiles
   .command("use <name> <query...>")
-  .action(async (name: string, queryParts: string[]) => {
+  .option("--verbose", "Show every returned row with untruncated URLs/snippets")
+  .action(async (name: string, queryParts: string[], opts) => {
     const query = queryParts.join(" ");
     const profile = getProfileByName(name);
     if (!profile) {
@@ -331,7 +448,7 @@ profiles
       return;
     }
     const response = await unifiedSearch(query, { profile: name });
-    printResults(response.results, response.search.duration, response.errors);
+    printResults(response.results, response.search.duration, response.errors, { verbose: opts.verbose });
   });
 
 // --- Export ---
@@ -404,6 +521,7 @@ function printResults(
   results: import("../types/index.js").SearchResult[],
   duration: number,
   errors: Array<{ provider: SearchProviderName; error: string }>,
+  opts: { verbose?: boolean; total?: number; offset?: number } = {},
 ): void {
   if (results.length === 0) {
     console.log(chalk.yellow("No results found"));
@@ -413,15 +531,24 @@ function printResults(
     return;
   }
 
-  console.log(chalk.bold(`${results.length} results`) + chalk.dim(` (${duration}ms)`));
+  const total = opts.total ?? results.length;
+  const offset = opts.offset ?? 0;
+  const visible = opts.verbose ? results : results.slice(0, DEFAULT_COMPACT_LIMIT);
+  console.log(
+    chalk.bold(`${total} results`) +
+      chalk.dim(` (${duration}ms, showing ${visible.length}${offset ? ` from offset ${offset}` : ""})`),
+  );
   console.log();
 
-  for (const r of results) {
+  for (const r of visible) {
     const badge = chalk.bgCyan.black(` ${r.source} `);
-    console.log(`${chalk.dim(String(r.rank).padStart(3))} ${badge} ${chalk.bold.blue(r.title)}`);
-    console.log(`     ${chalk.dim(r.url)}`);
+    const title = opts.verbose ? r.title : truncateText(r.title, 110);
+    const url = opts.verbose ? r.url : truncateMiddle(r.url, 120);
+    const snippet = opts.verbose ? r.snippet : truncateText(r.snippet, 160);
+    console.log(`${chalk.dim(String(r.rank).padStart(3))} ${badge} ${chalk.bold.blue(title)}`);
+    console.log(`     ${chalk.dim(url)}`);
     if (r.snippet) {
-      console.log(`     ${r.snippet.substring(0, 200)}`);
+      console.log(`     ${snippet}`);
     }
     if (r.score !== null) {
       console.log(`     ${chalk.dim(`score: ${r.score.toFixed(3)}`)}`);
@@ -434,6 +561,10 @@ function printResults(
     for (const e of errors) {
       console.log(`  ${chalk.red(e.provider)}: ${e.error}`);
     }
+  }
+
+  if (!opts.verbose && visible.length < total) {
+    console.log(chalk.dim("More results available. Use --verbose or a narrower --limit/filter for more detail."));
   }
 }
 
