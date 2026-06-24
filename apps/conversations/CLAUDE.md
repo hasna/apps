@@ -147,15 +147,15 @@ bun:sqlite with WAL mode, foreign keys enabled via schema references, 5-second b
 | `update_project` | Update any project field |
 | `delete_project` | Delete project (fails if spaces reference it) |
 
-### Cloud Sync Tools (6)
+### Storage Sync Tools (6)
 | Tool | Description |
 |------|-------------|
-| `conversations_cloud_status` | Show cloud config, PG connection health, and unresolved conflict count |
-| `conversations_cloud_push` | Push local → cloud PostgreSQL. Skips int-PK tables (messages, reactions, etc.) to avoid ID collision |
-| `conversations_cloud_pull` | Pull cloud → local with UPSERT merge. Skips int-PK tables |
-| `conversations_cloud_sync` | Bidirectional sync — pull then push in one call |
-| `conversations_cloud_migrate` | Run `src/lib/pg-migrations.ts` DDL against the configured RDS instance. Supports `--dry_run` |
-| `conversations_cloud_feedback` | Send feedback for the conversations service |
+| `conversations_storage_status` | Show remote storage config, PG connection health, and unresolved conflict count |
+| `conversations_storage_push` | Push local → remote PostgreSQL storage. Skips int-PK tables (messages, reactions, etc.) to avoid ID collision |
+| `conversations_storage_pull` | Pull remote storage → local with UPSERT merge. Skips int-PK tables |
+| `conversations_storage_sync` | Bidirectional sync — pull then push in one call |
+| `conversations_storage_migrate` | Run `src/lib/pg-migrations.ts` DDL against the configured RDS instance. Supports `--dry_run` |
+| `conversations_storage_feedback` | Send feedback for the conversations service |
 
 **Tables excluded from default sync** (integer AUTOINCREMENT PKs collide across machines): `messages`, `reactions`, `message_read_receipts`, `message_mentions`. Pass explicit `tables` param to sync these.
 

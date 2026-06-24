@@ -17,7 +17,7 @@ import { registerSpaceTools } from "./tools/spaces.js";
 import { registerProjectTools } from "./tools/projects.js";
 import { registerAgentTools } from "./tools/agents.js";
 import { registerAdvancedTools } from "./tools/advanced.js";
-import { registerCloudSyncTools } from "./tools/cloud.js";
+import { registerStorageSyncTools } from "./tools/storage.js";
 import { registerChannelBridge } from "./channel.js";
 import { registerTelegramChannel } from "./telegram-channel.js";
 import { registerTmuxTools } from "./tools/tmux.js";
@@ -66,7 +66,7 @@ registerTelegramChannel(server);   // Telegram (if TELEGRAM_BOT_TOKEN is set)
 
 export async function startMcpServer() {
   const transport = new StdioServerTransport();
-  registerCloudSyncTools(server);
+  registerStorageSyncTools(server);
   await server.connect(transport);
 }
 

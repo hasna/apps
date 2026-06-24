@@ -1,5 +1,5 @@
 /**
- * PostgreSQL migrations for open-conversations cloud sync.
+ * PostgreSQL migrations for open-conversations remote storage sync.
  *
  * Equivalent of the SQLite schema in db.ts, translated for PostgreSQL.
  * Each element is a standalone SQL string that must be executed in order.
@@ -198,6 +198,22 @@ export const PG_MIGRATIONS: string[] = [
     machine_id TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
+
+  CREATE TABLE IF NOT EXISTS graph_edges (
+    from_type TEXT NOT NULL,
+    from_id TEXT NOT NULL,
+    to_type TEXT NOT NULL,
+    to_id TEXT NOT NULL,
+    relation TEXT NOT NULL,
+    weight DOUBLE PRECISION NOT NULL DEFAULT 1,
+    metadata TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(from_type, from_id, to_type, to_id, relation)
+  );
+  CREATE INDEX IF NOT EXISTS idx_graph_from ON graph_edges(from_type, from_id);
+  CREATE INDEX IF NOT EXISTS idx_graph_to ON graph_edges(to_type, to_id);
+  CREATE INDEX IF NOT EXISTS idx_graph_relation ON graph_edges(relation);
 
   CREATE TABLE IF NOT EXISTS _migrations (
     id INTEGER PRIMARY KEY,

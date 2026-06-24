@@ -1,7 +1,83 @@
-import { SqliteAdapter as Database } from "@hasna/cloud";
+import { Database as BunDatabase } from "bun:sqlite";
+import type { Changes, SQLQueryBindings, Statement } from "bun:sqlite";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
+
+export interface ConversationsStatement<ReturnType = any, ParamsType extends unknown[] = unknown[]> {
+  all(...params: ParamsType): ReturnType[];
+  get(...params: ParamsType): ReturnType | null;
+  run(...params: ParamsType): Changes;
+}
+
+class LocalConversationsStatement<ReturnType = any, ParamsType extends unknown[] = unknown[]> implements ConversationsStatement<ReturnType, ParamsType> {
+  constructor(private readonly statement: Statement<ReturnType, any[]>) {}
+
+  all(...params: ParamsType): ReturnType[] {
+    return this.statement.all(...normalizeBindings(params));
+  }
+
+  get(...params: ParamsType): ReturnType | null {
+    return this.statement.get(...normalizeBindings(params));
+  }
+
+  run(...params: ParamsType): Changes {
+    return this.statement.run(...normalizeBindings(params));
+  }
+}
+
+export class ConversationsDatabase {
+  private readonly database: BunDatabase;
+
+  constructor(path: string) {
+    this.database = new BunDatabase(path);
+  }
+
+  exec(sql: string): Changes {
+    return this.database.exec(sql);
+  }
+
+  all<ReturnType = any>(sql: string, ...params: unknown[]): ReturnType[] {
+    return this.database.query(sql).all(...normalizeBindings(params)) as ReturnType[];
+  }
+
+  get<ReturnType = any>(sql: string, ...params: unknown[]): ReturnType | null {
+    return this.database.query(sql).get(...normalizeBindings(params)) as ReturnType | null;
+  }
+
+  query<ReturnType = any, ParamsType extends unknown[] = unknown[]>(sql: string): ConversationsStatement<ReturnType, ParamsType> {
+    return new LocalConversationsStatement(this.database.query(sql));
+  }
+
+  prepare<ReturnType = any, ParamsType extends unknown[] = unknown[]>(sql: string): ConversationsStatement<ReturnType, ParamsType> {
+    return new LocalConversationsStatement(this.database.prepare(sql));
+  }
+
+  run(sql: string, ...params: unknown[]): Changes {
+    const bindings = normalizeBindings(params);
+    return bindings.length === 0 ? this.database.run(sql) : this.database.run(sql, bindings);
+  }
+
+  transaction<T>(fn: () => T): T {
+    return this.database.transaction(fn)();
+  }
+
+  close(): void {
+    this.database.close();
+  }
+}
+
+export type Database = ConversationsDatabase;
+
+function normalizeBindings(params: unknown[]): SQLQueryBindings[] {
+  const flat = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
+  return flat.map(coerceBinding);
+}
+
+function coerceBinding(value: unknown): SQLQueryBindings {
+  if (value === undefined) return null;
+  return value as SQLQueryBindings;
+}
 
 let db: Database | null = null;
 
@@ -199,7 +275,7 @@ export function getDb(): Database {
   const dbPath = getDbPath();
   mkdirSync(dirname(dbPath), { recursive: true });
 
-  db = new Database(dbPath);
+  db = new ConversationsDatabase(dbPath);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA busy_timeout = 5000");
 

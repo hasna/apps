@@ -32,15 +32,30 @@ conversations-mcp
 
 1 tools available.
 
-## Cloud Sync
+## Storage Sync
 
-This package supports cloud sync via `@hasna/cloud`:
+This package supports optional remote storage sync to a PostgreSQL database:
 
 ```bash
-cloud setup
-cloud sync push --service conversations
-cloud sync pull --service conversations
+export HASNA_CONVERSATIONS_DATABASE_URL="<value from hasna/xyz/opensource/conversations/prod/rds>"
+conversations storage status
+conversations storage push
+conversations storage pull
 ```
+
+Production storage for Hasna XYZ uses the `conversations` database on
+`hasna-xyz-infra-apps-prod-postgres`. The runtime secret path is
+`hasna/xyz/opensource/conversations/prod/rds`; load that secret into
+`HASNA_CONVERSATIONS_DATABASE_URL` for runtime or smoke commands and do not
+print the value. `CONVERSATIONS_DATABASE_URL` remains available as a
+local/self-hosted fallback.
+
+Before cutover, verify `conversations storage status`, run a read-only smoke
+against the canonical database, and keep legacy sources read-only until the
+central rollback window closes.
+
+By default, sync only includes
+text-key/global tables to avoid local integer ID collisions across machines.
 
 ## Data Directory
 
