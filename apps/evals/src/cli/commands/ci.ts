@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { loadDataset } from "../../datasets/loader.js";
 import { runEvals } from "../../core/runner.js";
-import { compareRuns, printDiffReport, printTerminalReport, toMarkdown } from "../../core/reporter.js";
+import { compareRuns, parseDisplayLimit, printDiffReport, printTerminalReport, toMarkdown } from "../../core/reporter.js";
 import { saveRun, getBaseline, setBaseline } from "../../db/store.js";
 import { parseAdapterConfig } from "../adapter-parser.js";
 
@@ -35,6 +35,8 @@ export function ciCommand(): Command {
     .option("--baseline <name>", "Baseline name to compare against", "main")
     .option("--fail-if-regression <pct>", "Fail if score drops by more than N%", "0")
     .option("--output <format>", "Output format: terminal|markdown", "terminal")
+    .option("--limit <n>", "Max result/diff rows in compact terminal output", String(20))
+    .option("--verbose", "Show all result/diff rows in terminal output")
     .option("-j, --json", "Output JSON")
     .action(async (dataset: string, opts: Record<string, string>) => {
       const { cases } = await loadDataset(dataset);
@@ -47,12 +49,22 @@ export function ciCommand(): Command {
 
       if (opts["json"]) { console.log(JSON.stringify(run)); }
       else if (opts["output"] === "markdown") { console.log(toMarkdown(run)); }
-      else { printTerminalReport(run); }
+      else {
+        printTerminalReport(run, {
+          limit: parseDisplayLimit(opts["limit"]),
+          verbose: Boolean(opts["verbose"]),
+          detailHint: `use evals runs show ${run.id} --verbose for saved details`,
+          jsonHint: "use --json for full machine-readable run data",
+        });
+      }
 
       if (baseline) {
         const diff = compareRuns(baseline, run);
         console.log(`\nCompared to baseline "${baselineName}":`);
-        printDiffReport(diff);
+        printDiffReport(diff, {
+          limit: parseDisplayLimit(opts["limit"]),
+          verbose: Boolean(opts["verbose"]),
+        });
 
         const threshold = parseFloat(opts["failIfRegression"] ?? "0");
         const dropPct = -diff.passRateDelta * 100;

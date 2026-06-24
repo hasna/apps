@@ -30,6 +30,7 @@ async function runCli(args: string[], env: Record<string, string> = {}): Promise
 }
 
 let smokeDataset: string;
+let largeDataset: string;
 let tmpDir: string;
 
 beforeAll(() => {
@@ -40,6 +41,11 @@ beforeAll(() => {
     JSON.stringify({ id: "t1", input: "hello", assertions: [{ type: "min_length", value: 1 }] }),
     JSON.stringify({ id: "t2", input: "world", assertions: [{ type: "contains", value: "MISSING_XYZ" }] }),
   ].join("\n") + "\n");
+
+  largeDataset = join(tmpDir, "large.jsonl");
+  writeFileSync(largeDataset, Array.from({ length: 8 }, (_, i) =>
+    JSON.stringify({ id: `case-${i}`, input: `input ${i}`, assertions: [{ type: "contains", value: "ok" }] })
+  ).join("\n") + "\n");
 });
 
 describe("evals --version", () => {
@@ -144,6 +150,94 @@ describe("evals compare", () => {
   });
 });
 
+describe("evals run compact output", () => {
+  test("caps default terminal result rows", async () => {
+    const { stdout, exitCode } = await runCli([
+      "run",
+      largeDataset,
+      "--adapter", "cli",
+      "--command", "echo ok",
+      "--no-judge",
+      "--limit", "3",
+    ]);
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("case-2");
+    expect(stdout).not.toContain("case-3");
+    expect(stdout).toContain("5 more results hidden");
+    expect(stdout).toContain("use --verbose");
+  });
+
+  test("--verbose shows all terminal result rows", async () => {
+    const { stdout, exitCode } = await runCli([
+      "run",
+      largeDataset,
+      "--adapter", "cli",
+      "--command", "echo ok",
+      "--no-judge",
+      "--limit", "3",
+      "--verbose",
+    ]);
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("case-7");
+    expect(stdout).not.toContain("more results hidden");
+  });
+
+  test("--json remains full machine-readable run data", async () => {
+    const { stdout, exitCode } = await runCli([
+      "run",
+      largeDataset,
+      "--adapter", "cli",
+      "--command", "echo ok",
+      "--no-judge",
+      "--limit", "3",
+      "--json",
+    ]);
+
+    expect(exitCode).toBe(0);
+    const json = JSON.parse(stdout) as { results: unknown[] };
+    expect(json.results.length).toBe(8);
+  });
+});
+
+describe("evals runs", () => {
+  test("lists compact summaries and shows full JSON on request", async () => {
+    const dbPath = join(tmpDir, "runs-list.db");
+    const env = { EVALS_DB_PATH: dbPath };
+    const saved = await runCli([
+      "run",
+      largeDataset,
+      "--adapter", "cli",
+      "--command", "echo ok",
+      "--no-judge",
+      "--save",
+      "--limit", "2",
+    ], env);
+    expect(saved.exitCode).toBe(0);
+
+    const listed = await runCli(["runs", "list", "--json"], env);
+    expect(listed.exitCode).toBe(0);
+    const listJson = JSON.parse(listed.stdout) as {
+      runs: Array<{ id: string; total: number; results?: unknown[] }>;
+      total: number;
+    };
+    expect(listJson.total).toBe(1);
+    expect(listJson.runs[0]!.total).toBe(8);
+    expect(listJson.runs[0]!.results).toBeUndefined();
+
+    const id = listJson.runs[0]!.id;
+    const shown = await runCli(["runs", "show", id, "--limit", "2"], env);
+    expect(shown.exitCode).toBe(0);
+    expect(shown.stdout).toContain("6 more results hidden");
+
+    const full = await runCli(["runs", "show", id, "--json"], env);
+    expect(full.exitCode).toBe(0);
+    const runJson = JSON.parse(full.stdout) as { results: unknown[] };
+    expect(runJson.results.length).toBe(8);
+  });
+});
+
 describe("evals ci set-baseline", () => {
   test("reports no runs when DB is empty", async () => {
     const { exitCode } = await runCli(["ci", "set-baseline", "main"]);
@@ -152,13 +246,15 @@ describe("evals ci set-baseline", () => {
 });
 
 describe("evals completion", () => {
-  test("includes sync command in bash and zsh completion output", async () => {
+  test("includes sync and runs commands in bash and zsh completion output", async () => {
     const bash = await runCli(["completion", "bash"]);
     expect(bash.exitCode).toBe(0);
     expect(bash.stdout).toContain("sync");
+    expect(bash.stdout).toContain("runs");
 
     const zsh = await runCli(["completion", "zsh"]);
     expect(zsh.exitCode).toBe(0);
     expect(zsh.stdout).toContain("sync:");
+    expect(zsh.stdout).toContain("runs:");
   });
 });

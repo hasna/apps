@@ -13,6 +13,7 @@ import { mcpCommand } from "./commands/mcp.js";
 import { captureCommand } from "./commands/capture.js";
 import { completionCommand } from "./commands/completion.js";
 import { syncCommand } from "./commands/sync.js";
+import { runsCommand } from "./commands/runs.js";
 
 const pkg = await Bun.file(new URL("../../package.json", import.meta.url)).json() as { version: string };
 
@@ -35,6 +36,7 @@ program.addCommand(mcpCommand());
 program.addCommand(captureCommand());
 program.addCommand(completionCommand());
 program.addCommand(syncCommand());
+program.addCommand(runsCommand());
 registerEventsCommands(program, { source: "evals" });
 
 program.parse(process.argv);

@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { loadDataset } from "../../datasets/loader.js";
 import { runJudge } from "../../core/judge.js";
+import { parseDisplayLimit, truncateDisplayText } from "../../core/reporter.js";
 import type { Verdict } from "../../types/index.js";
 
 export function calibrateCommand(): Command {
@@ -9,6 +10,8 @@ export function calibrateCommand(): Command {
     .argument("<gold>", "Path to gold-labeled JSONL (each case needs metadata.gold_verdict)")
     .option("--model <model>", "Judge model to calibrate", "claude-sonnet-4-6")
     .option("--provider <p>", "Provider: anthropic|openai", "anthropic")
+    .option("--limit <n>", "Max mismatch rows in compact output", String(20))
+    .option("--verbose", "Show all mismatch rows")
     .option("--json", "Output JSON")
     .action(async (gold: string, opts: Record<string, string>) => {
       const { cases } = await loadDataset(gold);
@@ -19,7 +22,7 @@ export function calibrateCommand(): Command {
         process.exit(1);
       }
 
-      console.log(`Calibrating ${opts["model"]} on ${goldCases.length} gold cases...`);
+      if (!opts["json"]) console.log(`Calibrating ${opts["model"]} on ${goldCases.length} gold cases...`);
       let agreements = 0;
       const results: Array<{ id: string; gold: Verdict; predicted: Verdict; match: boolean }> = [];
 
@@ -44,9 +47,15 @@ export function calibrateCommand(): Command {
         console.log(`\n\x1b[1mCalibration results for ${opts["model"]}\x1b[0m`);
         console.log(`  Agreement:     ${(agreement * 100).toFixed(1)}% (${agreements}/${goldCases.length})`);
         console.log(`  Cohen's Kappa: ${kappa.toFixed(3)} ${kappaLabel(kappa)}`);
-        for (const r of results.filter(r => !r.match)) {
-          console.log(`  \x1b[31m✗ ${r.id}: expected ${r.gold}, got ${r.predicted}\x1b[0m`);
+        const mismatches = results.filter(r => !r.match);
+        const limit = parseDisplayLimit(opts["limit"]);
+        const visible = opts["verbose"] ? mismatches : mismatches.slice(0, limit);
+        for (const r of visible) {
+          const id = opts["verbose"] ? r.id : truncateDisplayText(r.id, 48);
+          console.log(`  \x1b[31m✗ ${id}: expected ${r.gold}, got ${r.predicted}\x1b[0m`);
         }
+        const hidden = mismatches.length - visible.length;
+        if (hidden > 0) console.log(`  ... ${hidden} more mismatch${hidden === 1 ? "" : "es"} hidden (use --verbose or --limit <n>).`);
         console.log();
       }
     });

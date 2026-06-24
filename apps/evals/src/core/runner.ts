@@ -4,7 +4,6 @@ import { runJudge } from "./judge.js";
 import { callHttpAdapter } from "../adapters/http.js";
 import { callAnthropicAdapter } from "../adapters/anthropic.js";
 import { callOpenAIAdapter } from "../adapters/openai.js";
-import { callMcpAdapter } from "../adapters/mcp.js";
 import { callFunctionAdapter } from "../adapters/function.js";
 import { callCliAdapter } from "../adapters/cli.js";
 import { redactAdapterConfig } from "./redaction.js";
@@ -31,7 +30,10 @@ async function callAdapter(
     case "http":       return callHttpAdapter(config, input, turns);
     case "anthropic":  return callAnthropicAdapter(config, input, turns);
     case "openai":     return callOpenAIAdapter(config, input, turns);
-    case "mcp":        return callMcpAdapter(config, input);
+    case "mcp": {
+      const { callMcpAdapter } = await import("../adapters/mcp.js");
+      return callMcpAdapter(config, input);
+    }
     case "function":   return callFunctionAdapter(config, input);
     case "cli":        return callCliAdapter(config, input);
   }

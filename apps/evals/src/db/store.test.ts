@@ -58,6 +58,13 @@ describe("saveRun / getRun", () => {
     expect(fetched).not.toBeNull();
   });
 
+  test("ambiguous partial IDs throw instead of returning an arbitrary run", async () => {
+    const { saveRun, getRun } = await import("./store.js");
+    saveRun(makeRun("deadbeef11111111"));
+    saveRun(makeRun("deadbeef22222222"));
+    expect(() => getRun("deadbeef")).toThrow("Ambiguous run id prefix");
+  });
+
   test("returns null for unknown run", async () => {
     const { getRun } = await import("./store.js");
     expect(getRun("nonexistent")).toBeNull();

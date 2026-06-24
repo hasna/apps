@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { printTerminalReport, toJson, toMarkdown, compareRuns, printDiffReport } from "./reporter.js";
+import { formatRunList, formatRunSummary, printTerminalReport, toJson, toMarkdown, compareRuns, printDiffReport } from "./reporter.js";
 import type { EvalRun } from "../types/index.js";
 
 function makeRun(id: string, overrides: Partial<EvalRun["stats"]> = {}): EvalRun {
@@ -53,6 +53,28 @@ function makeRun(id: string, overrides: Partial<EvalRun["stats"]> = {}): EvalRun
       ...overrides,
     },
   };
+}
+
+function makeLargeRun(total = 25): EvalRun {
+  const run = makeRun("large-run", {
+    total,
+    passed: total,
+    failed: 0,
+    unknown: 0,
+    errors: 0,
+    passRate: 1,
+    totalDurationMs: total * 10,
+    totalCostUsd: 0,
+    totalTokens: total,
+  });
+  run.results = Array.from({ length: total }, (_, i) => ({
+    caseId: `case-${i.toString().padStart(3, "0")}`,
+    verdict: "PASS",
+    output: "ok",
+    assertionResults: [],
+    durationMs: 10,
+  }));
+  return run;
 }
 
 describe("toJson", () => {
@@ -140,6 +162,65 @@ describe("printTerminalReport", () => {
     console.log = orig;
     expect(lines.join("\n")).toContain("Connection refused");
   });
+
+  test("caps default terminal output and prints disclosure hint", () => {
+    const lines: string[] = [];
+    const orig = console.log;
+    console.log = (...args: unknown[]) => lines.push(args.join(" "));
+    printTerminalReport(makeLargeRun(25), { limit: 5 });
+    console.log = orig;
+    const out = lines.join("\n");
+    expect(out).toContain("case-004");
+    expect(out).not.toContain("case-005");
+    expect(out).toContain("20 more results hidden");
+    expect(out).toContain("use --verbose");
+  });
+
+  test("verbose terminal output shows all rows", () => {
+    const lines: string[] = [];
+    const orig = console.log;
+    console.log = (...args: unknown[]) => lines.push(args.join(" "));
+    printTerminalReport(makeLargeRun(25), { limit: 5, verbose: true });
+    console.log = orig;
+    const out = lines.join("\n");
+    expect(out).toContain("case-024");
+    expect(out).not.toContain("more results hidden");
+  });
+});
+
+describe("compact formatters", () => {
+  test("formatRunSummary caps results with a hint", () => {
+    const summary = formatRunSummary(makeLargeRun(12), { limit: 3, jsonHint: "set format=json" });
+    expect(summary).toContain("case-002");
+    expect(summary).not.toContain("case-003");
+    expect(summary).toContain("9 more results hidden");
+    expect(summary).toContain("set format=json");
+  });
+
+  test("formatRunList is paginated and points to show", () => {
+    const list = formatRunList([makeRun("run-list-a"), makeRun("run-list-b")], {
+      total: 5,
+      cursor: 0,
+      limit: 2,
+      nextCursor: 2,
+    });
+    expect(list).toContain("run-list");
+    expect(list).toContain("Showing 2 of 5 runs");
+    expect(list).toContain("Next page");
+    expect(list).toContain("evals runs show");
+  });
+
+  test("formatRunList reports empty pages when cursor is past available rows", () => {
+    const list = formatRunList([], {
+      total: 5,
+      cursor: 10,
+      limit: 2,
+      nextCursor: null,
+    });
+    expect(list).toContain("No runs on this page");
+    expect(list).toContain("Showing 5 of 5 runs");
+    expect(list).toContain("evals runs show");
+  });
 });
 
 describe("compareRuns", () => {
@@ -212,5 +293,40 @@ describe("printDiffReport", () => {
     expect(out).toContain("IMPROVEMENT");
     expect(out).toContain("t1");
     expect(out).toContain("t2");
+  });
+
+  test("caps diff rows unless verbose", () => {
+    const lines: string[] = [];
+    const orig = console.log;
+    console.log = (...args: unknown[]) => lines.push(args.join(" "));
+    printDiffReport({
+      regressions: Array.from({ length: 5 }, (_, i) => ({ caseId: `r${i}`, before: "PASS", after: "FAIL" })),
+      improvements: Array.from({ length: 5 }, (_, i) => ({ caseId: `i${i}`, before: "FAIL", after: "PASS" })),
+      scoreDelta: 0,
+      passRateDelta: 0,
+    }, { limit: 3 });
+    console.log = orig;
+    const out = lines.join("\n");
+    expect(out).toContain("r2");
+    expect(out).not.toContain("r3");
+    expect(out).toContain("7 more changes hidden");
+  });
+
+  test("truncates long case IDs in compact diff rows", () => {
+    const longId = `case-${"x".repeat(5000)}`;
+    const lines: string[] = [];
+    const orig = console.log;
+    console.log = (...args: unknown[]) => lines.push(args.join(" "));
+    printDiffReport({
+      regressions: [{ caseId: longId, before: "PASS", after: "FAIL" }],
+      improvements: [],
+      scoreDelta: 0,
+      passRateDelta: 0,
+    }, { limit: 1 });
+    console.log = orig;
+    const out = lines.join("\n");
+    expect(out).toContain("case-");
+    expect(out).toContain("...");
+    expect(out.length).toBeLessThan(400);
   });
 });

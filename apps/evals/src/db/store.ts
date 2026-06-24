@@ -73,16 +73,34 @@ export function saveRun(run: EvalRun): void {
 
 export function getRun(id: string): EvalRun | null {
   const db = getDatabase();
-  const row = db.prepare("SELECT data FROM runs WHERE id LIKE ? || '%'").get(id) as { data: string } | null;
-  return row ? JSON.parse(row.data) as EvalRun : null;
+  const exact = db.prepare("SELECT data FROM runs WHERE id = ?").get(id) as { data: string } | null;
+  if (exact) return JSON.parse(exact.data) as EvalRun;
+
+  const rows = db
+    .prepare("SELECT id, data FROM runs WHERE id LIKE ? || '%' ORDER BY created_at DESC LIMIT 3")
+    .all(id) as Array<{ id: string; data: string }>;
+  if (rows.length === 0) return null;
+  if (rows.length > 1) {
+    const suffix = rows.length === 3 ? ", ..." : "";
+    throw new Error(`Ambiguous run id prefix "${id}". Matches: ${rows.map((r) => r.id).join(", ")}${suffix}`);
+  }
+  return JSON.parse(rows[0]!.data) as EvalRun;
 }
 
-export function listRuns(limit = 20, dataset?: string): EvalRun[] {
+export function listRuns(limit = 20, dataset?: string, offset = 0): EvalRun[] {
   const db = getDatabase();
   const rows = dataset
-    ? db.prepare("SELECT data FROM runs WHERE dataset = ? ORDER BY created_at DESC LIMIT ?").all(dataset, limit) as Array<{ data: string }>
-    : db.prepare("SELECT data FROM runs ORDER BY created_at DESC LIMIT ?").all(limit) as Array<{ data: string }>;
+    ? db.prepare("SELECT data FROM runs WHERE dataset = ? ORDER BY created_at DESC LIMIT ? OFFSET ?").all(dataset, limit, offset) as Array<{ data: string }>
+    : db.prepare("SELECT data FROM runs ORDER BY created_at DESC LIMIT ? OFFSET ?").all(limit, offset) as Array<{ data: string }>;
   return rows.map((r) => JSON.parse(r.data) as EvalRun);
+}
+
+export function countRuns(dataset?: string): number {
+  const db = getDatabase();
+  const row = dataset
+    ? db.prepare("SELECT COUNT(*) AS count FROM runs WHERE dataset = ?").get(dataset) as { count: number }
+    : db.prepare("SELECT COUNT(*) AS count FROM runs").get() as { count: number };
+  return row.count;
 }
 
 export function deleteRun(id: string): void {

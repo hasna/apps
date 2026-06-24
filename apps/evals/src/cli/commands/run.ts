@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { loadDataset } from "../../datasets/loader.js";
 import { runEvals } from "../../core/runner.js";
-import { printTerminalReport, toJson, toMarkdown } from "../../core/reporter.js";
+import { parseDisplayLimit, printTerminalReport, toJson, toMarkdown } from "../../core/reporter.js";
 import { saveRun } from "../../db/store.js";
 import { parseAdapterConfig } from "../adapter-parser.js";
 
@@ -34,6 +34,8 @@ export function runCommand(): Command {
     .option("--no-judge", "Skip LLM judge, run assertions only")
     .option("--output <format>", "Output format: terminal|json|markdown", "terminal")
     .option("--save", "Save run to database")
+    .option("--limit <n>", "Max result rows in compact terminal output", String(20))
+    .option("--verbose", "Show all result rows in terminal output")
     .option("-j, --json", "Alias for --output json")
     .action(async (dataset: string, opts: Record<string, string>) => {
       const { cases, warnings } = await loadDataset(dataset, {
@@ -67,7 +69,12 @@ export function runCommand(): Command {
       } else if (format === "markdown") {
         console.log(toMarkdown(run));
       } else {
-        printTerminalReport(run);
+        printTerminalReport(run, {
+          limit: parseDisplayLimit(opts["limit"]),
+          verbose: Boolean(opts["verbose"]),
+          detailHint: opts["save"] ? `use evals runs show ${run.id} --verbose for saved details` : "use --verbose for all rows",
+          jsonHint: "use --json for full machine-readable run data",
+        });
       }
 
       process.exit(run.stats.failed > 0 || run.stats.errors > 0 ? 1 : 0);
