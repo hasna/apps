@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
-import { openDatabase, upsertRequest, upsertSession, upsertBudget, upsertGoal, upsertModelPricing, upsertBillingDaily, upsertUsageSnapshot } from '../db/database.js'
+import { openDatabase, upsertRequest, upsertSession, upsertBudget, upsertGoal, upsertModelPricing, upsertBillingDaily, upsertUsageSnapshot, upsertCostCenter } from '../db/database.js'
 import { createHandler, createServerFetch, startServer } from './serve.js'
 import type { SqliteAdapter as Database } from '@hasna/cloud'
 import { Database as BunDatabase } from 'bun:sqlite'
@@ -34,6 +34,25 @@ function seedData(db: Database) {
     cost_usd: 1.5, cost_basis: 'metered_api', duration_ms: 2000, timestamp: NOW, source_request_id: 'src-1',
     account_key: 'claude:work', account_tool: 'claude', account_name: 'work',
     account_email: 'work@example.com', account_source: 'current',
+  })
+  upsertCostCenter(db, {
+    id: 'loop:fleet-evaluator',
+    kind: 'loop',
+    name: 'fleet-evaluator',
+    repo_path: null,
+    labels_json: '{}',
+    created_at: NOW,
+  })
+  upsertSession(db, {
+    id: 'loop-session', agent: 'loop', project_path: '', project_name: 'fleet-evaluator',
+    started_at: '2000-01-01T00:00:00.000Z', ended_at: null, total_cost_usd: 0, total_tokens: 0, request_count: 0,
+    cost_center_id: 'loop:fleet-evaluator',
+  })
+  upsertRequest(db, {
+    id: 'loop-req', agent: 'loop', session_id: 'loop-session', model: 'gpt-5-codex',
+    input_tokens: 50, output_tokens: 0, cache_read_tokens: 0, cache_create_tokens: 0,
+    cost_usd: 0.01, cost_basis: 'estimated', duration_ms: 0, timestamp: NOW, source_request_id: 'loop-req',
+    cost_center_id: 'loop:fleet-evaluator',
   })
   upsertBudget(db, {
     id: 'bud-1', project_path: null, agent: null, period: 'monthly',
@@ -340,6 +359,16 @@ describe('REST API server', () => {
     const accounts = (response.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
     expect(accounts[0]?.['account_key']).toBe('claude:work@example.com')
     expect(accounts[0]?.['billable_usd']).toBe(1.5)
+
+    response = await req(handler, '/api/breakdown?by=cost-center&period=all')
+    expect(response.status).toBe(200)
+    const costCenters = (response.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
+    expect(costCenters.some(row => row['name'] === 'fleet-evaluator' && row['kind'] === 'loop')).toBe(true)
+
+    response = await req(handler, '/api/breakdown?by=loop&period=all')
+    expect(response.status).toBe(200)
+    const loops = (response.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
+    expect(loops.every(row => row['kind'] === 'loop')).toBe(true)
   })
 
   it('manages project registry records', async () => {
@@ -380,12 +409,13 @@ describe('REST API server', () => {
 
   it('POST /api/budgets creates a budget', async () => {
     const { status, data } = await req(handler, '/api/budgets', 'POST', {
-      period: 'daily', limit_usd: 10, alert_at_percent: 70,
+      period: 'daily', limit_usd: 10, alert_at_percent: 70, cost_center_id: 'loop:fleet-evaluator',
     })
     expect(status).toBe(200)
     const budget = (data as Record<string, unknown>)['data'] as Record<string, unknown>
     expect(budget['id']).toBeString()
     expect(budget['period']).toBe('daily')
+    expect(budget['cost_center_id']).toBe('loop:fleet-evaluator')
     expect(budget['limit_usd']).toBe(10)
     expect(budget['current_spend_usd']).toBeNumber()
     expect(budget['percent_used']).toBeNumber()

@@ -7,6 +7,9 @@ import type {
   EconomyRequest,
   EconomySession,
   EconomyProject,
+  CostCenter,
+  CostCenterBreakdown,
+  CostCenterKind,
   Budget,
   BudgetStatus,
   CostSummary,
@@ -92,6 +95,16 @@ function addColumnIfMissing(db: Database, table: string, column: string, definit
 
 function initSchema(db: Database): void {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS cost_centers (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      name TEXT NOT NULL,
+      repo_path TEXT,
+      labels_json TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS requests (
       id TEXT PRIMARY KEY,
       agent TEXT NOT NULL,
@@ -108,6 +121,7 @@ function initSchema(db: Database): void {
       timestamp TEXT NOT NULL,
       source_request_id TEXT,
       machine_id TEXT DEFAULT '',
+      cost_center_id TEXT,
       account_key TEXT DEFAULT '',
       account_tool TEXT DEFAULT '',
       account_name TEXT DEFAULT '',
@@ -126,6 +140,7 @@ function initSchema(db: Database): void {
       total_tokens INTEGER DEFAULT 0,
       request_count INTEGER DEFAULT 0,
       machine_id TEXT DEFAULT '',
+      cost_center_id TEXT,
       account_key TEXT DEFAULT '',
       account_tool TEXT DEFAULT '',
       account_name TEXT DEFAULT '',
@@ -146,6 +161,7 @@ function initSchema(db: Database): void {
       id TEXT PRIMARY KEY,
       project_path TEXT,
       agent TEXT,
+      cost_center_id TEXT,
       period TEXT NOT NULL,
       limit_usd REAL NOT NULL,
       alert_at_percent INTEGER DEFAULT 80,
@@ -176,6 +192,7 @@ function initSchema(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent);
     CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_path);
     CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at);
+    CREATE INDEX IF NOT EXISTS idx_cost_centers_kind ON cost_centers(kind);
 
     CREATE TABLE IF NOT EXISTS model_pricing (
       model TEXT PRIMARY KEY,
@@ -265,6 +282,12 @@ function initSchema(db: Database): void {
   // same migration between the PRAGMA check and ALTER TABLE.
   addColumnIfMissing(db, 'requests', 'machine_id', `TEXT DEFAULT ''`)
   addColumnIfMissing(db, 'sessions', 'machine_id', `TEXT DEFAULT ''`)
+  if (addColumnIfMissing(db, 'cost_centers', 'updated_at', `TEXT DEFAULT ''`)) {
+    db.exec(`UPDATE cost_centers SET updated_at = created_at WHERE updated_at = '' OR updated_at IS NULL`)
+  }
+  addColumnIfMissing(db, 'requests', 'cost_center_id', `TEXT`)
+  addColumnIfMissing(db, 'sessions', 'cost_center_id', `TEXT`)
+  addColumnIfMissing(db, 'budgets', 'cost_center_id', `TEXT`)
   if (addColumnIfMissing(db, 'requests', 'cache_create_5m_tokens', 'INTEGER DEFAULT 0')) {
     db.exec(`UPDATE requests SET cache_create_5m_tokens = cache_create_tokens WHERE cache_create_5m_tokens = 0`)
   }
@@ -297,6 +320,10 @@ function initSchema(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_sessions_machine ON sessions(machine_id);
     CREATE INDEX IF NOT EXISTS idx_requests_account ON requests(account_key);
     CREATE INDEX IF NOT EXISTS idx_sessions_account ON sessions(account_key);
+    CREATE INDEX IF NOT EXISTS idx_requests_cost_center ON requests(cost_center_id);
+    CREATE INDEX IF NOT EXISTS idx_sessions_cost_center ON sessions(cost_center_id);
+    CREATE INDEX IF NOT EXISTS idx_budgets_cost_center ON budgets(cost_center_id);
+    CREATE INDEX IF NOT EXISTS idx_cost_centers_kind ON cost_centers(kind);
   `)
 }
 
@@ -335,6 +362,22 @@ function requestPeriodWhere(period: Period): string {
 
 // ── Requests ──────────────────────────────────────────────────────────────────
 
+export function upsertCostCenter(db: Database, center: CostCenter): void {
+  const updatedAt = center.updated_at ?? center.created_at
+  db.prepare(`
+    INSERT OR REPLACE INTO cost_centers
+      (id, kind, name, repo_path, labels_json, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    center.id, center.kind, center.name,
+    center.repo_path ?? null, center.labels_json ?? '{}', center.created_at, updatedAt,
+  )
+}
+
+export function getCostCenter(db: Database, id: string): CostCenter | null {
+  return db.prepare(`SELECT * FROM cost_centers WHERE id = ?`).get(id) as CostCenter | null
+}
+
 export function upsertRequest(db: Database, req: EconomyRequest): void {
   const now = req.updated_at ?? new Date().toISOString()
   db.prepare(`
@@ -342,9 +385,9 @@ export function upsertRequest(db: Database, req: EconomyRequest): void {
       (id, agent, session_id, model, input_tokens, output_tokens,
        cache_read_tokens, cache_create_tokens, cache_create_5m_tokens,
        cache_create_1h_tokens, cost_usd, cost_basis, duration_ms, timestamp,
-       source_request_id, machine_id, attribution_tag, account_key, account_tool,
+       source_request_id, machine_id, cost_center_id, attribution_tag, account_key, account_tool,
        account_name, account_email, account_source, updated_at, synced_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     req.id, req.agent, req.session_id, req.model,
     req.input_tokens, req.output_tokens, req.cache_read_tokens,
@@ -353,6 +396,7 @@ export function upsertRequest(db: Database, req: EconomyRequest): void {
     req.cache_create_1h_tokens ?? 0,
     req.cost_usd, req.cost_basis ?? 'estimated', req.duration_ms,
     req.timestamp, req.source_request_id, req.machine_id ?? '',
+    req.cost_center_id ?? null,
     req.attribution_tag ?? process.env['ECONOMY_TAG'] ?? '',
     req.account_key ?? '', req.account_tool ?? '',
     req.account_name ?? '', req.account_email ?? '', req.account_source ?? '',
@@ -368,14 +412,15 @@ export function upsertSession(db: Database, session: EconomySession): void {
     INSERT OR REPLACE INTO sessions
       (id, agent, project_path, project_name, started_at, ended_at,
        total_cost_usd, total_tokens, request_count, machine_id, attribution_tag,
-       account_key, account_tool, account_name, account_email, account_source, updated_at, synced_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       cost_center_id, account_key, account_tool, account_name, account_email, account_source, updated_at, synced_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     session.id, session.agent, session.project_path, session.project_name,
     session.started_at, session.ended_at ?? null,
     session.total_cost_usd, session.total_tokens, session.request_count,
     session.machine_id ?? '',
     session.attribution_tag ?? process.env['ECONOMY_TAG'] ?? '',
+    session.cost_center_id ?? null,
     session.account_key ?? '', session.account_tool ?? '',
     session.account_name ?? '', session.account_email ?? '', session.account_source ?? '',
     now, session.synced_at ?? '',
@@ -406,9 +451,12 @@ export function rollupSession(db: Database, sessionId: string): void {
                             ELSE account_email END,
       account_source = CASE WHEN account_source = '' OR account_source IS NULL
                             THEN COALESCE((SELECT account_source FROM requests WHERE session_id = ? AND account_source != '' ORDER BY timestamp DESC LIMIT 1), '')
-                            ELSE account_source END
+                            ELSE account_source END,
+      cost_center_id = CASE WHEN cost_center_id = '' OR cost_center_id IS NULL
+                            THEN COALESCE((SELECT cost_center_id FROM requests WHERE session_id = ? AND cost_center_id IS NOT NULL AND cost_center_id != '' ORDER BY timestamp DESC LIMIT 1), NULL)
+                            ELSE cost_center_id END
     WHERE id = ?
-  `).run(sessionId, sessionId, sessionId, sessionId, sessionId, sessionId, sessionId, sessionId, sessionId, sessionId, sessionId)
+  `).run(sessionId, sessionId, sessionId, sessionId, sessionId, sessionId, sessionId, sessionId, sessionId, sessionId, sessionId, sessionId)
 }
 
 export function querySessions(db: Database, filter: SessionFilter = {}): EconomySession[] {
@@ -867,6 +915,176 @@ export function queryAccountBreakdown(db: Database, period: Period = 'all', mach
   return result
 }
 
+type CostCenterGroup = {
+  cost_center_id: string
+  kind: CostCenterKind
+  name: string
+  repo_path: string | null
+  labels_json: string
+  sessionIds: Set<string>
+  requests: number
+  total_tokens: number
+  api_equivalent_usd: number
+  metered_api_usd: number
+  subscription_included_usd: number
+  estimated_usd: number
+  unknown_usd: number
+  last_active: string
+}
+
+type CostCenterSourceRow = {
+  cost_center_id: string
+  kind: CostCenterKind | ''
+  name: string
+  repo_path: string | null
+  labels_json: string
+  session_id: string
+  requests: number
+  total_tokens: number
+  cost_usd: number
+  cost_basis: string
+  last_active: string
+}
+
+function kindFromCostCenterId(id: string): CostCenterKind | '' {
+  const prefix = id.split(':', 1)[0] ?? ''
+  return ['loop', 'app', 'repo', 'service', 'team'].includes(prefix) ? prefix as CostCenterKind : ''
+}
+
+function addCostCenterBreakdownRow(groups: Map<string, CostCenterGroup>, row: CostCenterSourceRow, sessionOnly: boolean): void {
+  if (!row.cost_center_id) return
+  const derivedKind = row.kind || kindFromCostCenterId(row.cost_center_id) || 'service'
+  const group = groups.get(row.cost_center_id) ?? {
+    cost_center_id: row.cost_center_id,
+    kind: derivedKind as CostCenterKind,
+    name: row.name || row.cost_center_id,
+    repo_path: row.repo_path ?? null,
+    labels_json: row.labels_json || '{}',
+    sessionIds: new Set<string>(),
+    requests: 0,
+    total_tokens: 0,
+    api_equivalent_usd: 0,
+    metered_api_usd: 0,
+    subscription_included_usd: 0,
+    estimated_usd: 0,
+    unknown_usd: 0,
+    last_active: '',
+  }
+
+  group.kind = derivedKind as CostCenterKind
+  if (row.name) group.name = row.name
+  if (row.repo_path && !group.repo_path) group.repo_path = row.repo_path
+  if (row.labels_json && row.labels_json !== '{}') group.labels_json = row.labels_json
+  if (row.session_id) group.sessionIds.add(row.session_id)
+  group.requests += row.requests
+  group.total_tokens += row.total_tokens
+  group.api_equivalent_usd += row.cost_usd
+  if (sessionOnly) {
+    group.estimated_usd += row.cost_usd
+  } else if (row.cost_basis === 'metered_api') {
+    group.metered_api_usd += row.cost_usd
+  } else if (row.cost_basis === 'subscription_included') {
+    group.subscription_included_usd += row.cost_usd
+  } else if (row.cost_basis === 'unknown') {
+    group.unknown_usd += row.cost_usd
+  } else {
+    group.estimated_usd += row.cost_usd
+  }
+  if (!group.last_active || row.last_active > group.last_active) group.last_active = row.last_active
+  groups.set(row.cost_center_id, group)
+}
+
+export function queryCostCenterBreakdown(
+  db: Database,
+  period: Period = 'all',
+  filter: { kind?: CostCenterKind; machine?: string; since?: string } = {},
+): CostCenterBreakdown[] {
+  const requestWhere = filter.since ? 'r.timestamp >= ?' : requestPeriodWhere(period)
+  const sessionWhere = filter.since ? 's.started_at >= ?' : sessionPeriodWhere(period)
+  const requestMachineClause = filter.machine ? ' AND r.machine_id = ?' : ''
+  const sessionMachineClause = filter.machine ? ' AND s.machine_id = ?' : ''
+  const requestParams: string[] = []
+  const sessionParams: string[] = []
+  if (filter.since) {
+    requestParams.push(filter.since)
+    sessionParams.push(filter.since)
+  }
+  if (filter.machine) {
+    requestParams.push(filter.machine)
+    sessionParams.push(filter.machine)
+  }
+  const groups = new Map<string, CostCenterGroup>()
+
+  const requestRows = db.prepare(`
+    SELECT
+      COALESCE(NULLIF(r.cost_center_id, ''), NULLIF(s.cost_center_id, '')) as cost_center_id,
+      COALESCE(cc.kind, '') as kind,
+      COALESCE(cc.name, COALESCE(NULLIF(r.cost_center_id, ''), NULLIF(s.cost_center_id, ''))) as name,
+      cc.repo_path as repo_path,
+      COALESCE(cc.labels_json, '{}') as labels_json,
+      r.session_id as session_id,
+      1 as requests,
+      COALESCE(r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_create_tokens, 0) as total_tokens,
+      COALESCE(r.cost_usd, 0) as cost_usd,
+      COALESCE(NULLIF(r.cost_basis, ''), 'estimated') as cost_basis,
+      r.timestamp as last_active
+    FROM requests r
+    LEFT JOIN sessions s ON s.id = r.session_id
+    LEFT JOIN cost_centers cc ON cc.id = COALESCE(NULLIF(r.cost_center_id, ''), NULLIF(s.cost_center_id, ''))
+    WHERE ${requestWhere}${requestMachineClause}
+      AND COALESCE(NULLIF(r.cost_center_id, ''), NULLIF(s.cost_center_id, '')) IS NOT NULL
+      AND COALESCE(NULLIF(r.cost_center_id, ''), NULLIF(s.cost_center_id, '')) != ''
+  `).all(...requestParams) as CostCenterSourceRow[]
+
+  for (const row of requestRows) addCostCenterBreakdownRow(groups, row, false)
+
+  const sessionOnlyRows = db.prepare(`
+    SELECT
+      s.cost_center_id as cost_center_id,
+      COALESCE(cc.kind, '') as kind,
+      COALESCE(cc.name, s.cost_center_id) as name,
+      cc.repo_path as repo_path,
+      COALESCE(cc.labels_json, '{}') as labels_json,
+      s.id as session_id,
+      COALESCE(s.request_count, 0) as requests,
+      COALESCE(s.total_tokens, 0) as total_tokens,
+      COALESCE(s.total_cost_usd, 0) as cost_usd,
+      'estimated' as cost_basis,
+      s.started_at as last_active
+    FROM sessions s
+    LEFT JOIN cost_centers cc ON cc.id = s.cost_center_id
+    WHERE ${sessionWhere}${sessionMachineClause}
+      AND s.id NOT IN (SELECT DISTINCT session_id FROM requests)
+      AND s.cost_center_id IS NOT NULL
+      AND s.cost_center_id != ''
+  `).all(...sessionParams) as CostCenterSourceRow[]
+
+  for (const row of sessionOnlyRows) addCostCenterBreakdownRow(groups, row, true)
+
+  const result = [...groups.values()].map((group) => ({
+    cost_center_id: group.cost_center_id,
+    kind: group.kind,
+    name: group.name,
+    repo_path: group.repo_path,
+    labels_json: group.labels_json,
+    sessions: group.sessionIds.size,
+    requests: group.requests,
+    total_tokens: group.total_tokens,
+    api_equivalent_usd: group.api_equivalent_usd,
+    billable_usd: group.metered_api_usd,
+    metered_api_usd: group.metered_api_usd,
+    subscription_included_usd: group.subscription_included_usd,
+    estimated_usd: group.estimated_usd,
+    unknown_usd: group.unknown_usd,
+    cost_usd: group.api_equivalent_usd,
+    last_active: group.last_active,
+  }))
+
+  const filtered = filter.kind ? result.filter(row => row.kind === filter.kind) : result
+  filtered.sort((a, b) => b.cost_usd - a.cost_usd)
+  return filtered
+}
+
 export function queryDailyBreakdown(db: Database, days = 30, machine?: string): Array<{ date: string; cost_usd: number; agent: string }> {
   const machineClause = machine ? ' AND machine_id = ?' : ''
   const params = machine ? [`-${days}`, machine] : [`-${days}`]
@@ -927,10 +1145,11 @@ export function deleteProject(db: Database, path: string): void {
 export function upsertBudget(db: Database, budget: Budget): void {
   db.prepare(`
     INSERT OR REPLACE INTO budgets
-      (id, project_path, agent, period, limit_usd, alert_at_percent, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      (id, project_path, agent, cost_center_id, period, limit_usd, alert_at_percent, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     budget.id, budget.project_path ?? null, budget.agent ?? null,
+    budget.cost_center_id ?? null,
     budget.period, budget.limit_usd, budget.alert_at_percent,
     budget.created_at, budget.updated_at,
   )
@@ -959,6 +1178,10 @@ export function getBudgetStatuses(db: Database): BudgetStatus[] {
     if (b.agent) {
       spendQuery += ` AND agent = ?`
       params.push(b.agent)
+    }
+    if (b.cost_center_id) {
+      spendQuery += ` AND COALESCE(NULLIF(cost_center_id, ''), (SELECT NULLIF(s.cost_center_id, '') FROM sessions s WHERE s.id = requests.session_id)) = ?`
+      params.push(b.cost_center_id)
     }
     const row = db.prepare(spendQuery).get(...params) as { spend: number }
     const spend = row.spend

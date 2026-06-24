@@ -21,6 +21,8 @@ export async function checkAndFireWebhooks(db: Database): Promise<void> {
       event: 'budget_alert',
       budget_id: b.id,
       project: b.project_path ?? 'global',
+      cost_center_id: b.cost_center_id ?? null,
+      scope: b.cost_center_id ?? b.project_path ?? 'global',
       period: b.period,
       spend: b.current_spend_usd,
       limit: b.limit_usd,

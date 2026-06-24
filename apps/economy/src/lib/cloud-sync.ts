@@ -3,6 +3,7 @@ import { getDbPath, getMachineId, openDatabase } from '../db/database.js'
 import { packageMetadata } from './package-metadata.js'
 
 export const CLOUD_TABLES = [
+  'cost_centers',
   'requests',
   'sessions',
   'projects',

@@ -12,11 +12,12 @@ import {
   seedModelPricing, listMachines, getMachineId,
   upsertUsageSnapshot, queryUsageSnapshots,
   dedupeRequests,
+  upsertCostCenter, getCostCenter, queryCostCenterBreakdown,
 } from './database.js'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
-import type { EconomyRequest, EconomySession } from '../types/index.js'
+import type { CostCenter, EconomyRequest, EconomySession } from '../types/index.js'
 
 function makeDb() {
   return openDatabase(':memory:', true)
@@ -78,6 +79,18 @@ function sampleSession(overrides: Partial<EconomySession> = {}): EconomySession 
   }
 }
 
+function sampleCostCenter(overrides: Partial<CostCenter> = {}): CostCenter {
+  return {
+    id: 'loop:fleet-evaluator',
+    kind: 'loop',
+    name: 'fleet-evaluator',
+    repo_path: null,
+    labels_json: '{"tier":"ops"}',
+    created_at: NOW,
+    ...overrides,
+  }
+}
+
 describe('openDatabase', () => {
   it('creates all tables on first open', () => {
     const db = makeDb()
@@ -85,6 +98,7 @@ describe('openDatabase', () => {
     const names = tables.map(t => t.name)
     expect(names).toContain('requests')
     expect(names).toContain('sessions')
+    expect(names).toContain('cost_centers')
     expect(names).toContain('budgets')
     expect(names).toContain('projects')
     expect(names).toContain('ingest_state')
@@ -212,14 +226,18 @@ describe('openDatabase', () => {
     const db = openDatabase(dbPath, true)
     const requestCols = (db.prepare(`PRAGMA table_info(requests)`).all() as Array<{ name: string }>).map(c => c.name)
     const sessionCols = (db.prepare(`PRAGMA table_info(sessions)`).all() as Array<{ name: string }>).map(c => c.name)
+    const budgetCols = (db.prepare(`PRAGMA table_info(budgets)`).all() as Array<{ name: string }>).map(c => c.name)
     const pricingCols = (db.prepare(`PRAGMA table_info(model_pricing)`).all() as Array<{ name: string }>).map(c => c.name)
 
     expect(requestCols).toContain('machine_id')
     expect(requestCols).toContain('cache_create_5m_tokens')
     expect(requestCols).toContain('cache_create_1h_tokens')
     expect(requestCols).toContain('account_key')
+    expect(requestCols).toContain('cost_center_id')
     expect(sessionCols).toContain('machine_id')
     expect(sessionCols).toContain('account_key')
+    expect(sessionCols).toContain('cost_center_id')
+    expect(budgetCols).toContain('cost_center_id')
     expect(pricingCols).toContain('cache_write_1h_per_1m')
     expect(pricingCols).toContain('cache_storage_per_1m_hour')
 
@@ -234,6 +252,98 @@ describe('openDatabase', () => {
     const migratedPricing = getModelPricing(db, 'legacy-model')
     expect(migratedPricing?.cache_write_1h_per_1m).toBe(0)
     expect(migratedPricing?.cache_storage_per_1m_hour).toBe(0)
+  })
+})
+
+describe('cost centers', () => {
+  it('upserts and retrieves cost centers', () => {
+    const db = makeDb()
+    upsertCostCenter(db, sampleCostCenter())
+
+    const row = getCostCenter(db, 'loop:fleet-evaluator')
+
+    expect(row?.kind).toBe('loop')
+    expect(row?.name).toBe('fleet-evaluator')
+    expect(row?.labels_json).toBe('{"tier":"ops"}')
+  })
+
+  it('stores request and session cost center ids and rolls sessions forward from requests', () => {
+    const db = makeDb()
+    upsertCostCenter(db, sampleCostCenter())
+    upsertSession(db, sampleSession({ cost_center_id: null, total_cost_usd: 0, total_tokens: 0, request_count: 0 }))
+    upsertRequest(db, sampleRequest({ cost_center_id: 'loop:fleet-evaluator', cost_usd: 0.40 }))
+
+    rollupSession(db, 'sess-1')
+    const request = db.prepare('SELECT cost_center_id FROM requests WHERE id = ?').get('req-1') as { cost_center_id: string }
+    const session = db.prepare('SELECT cost_center_id, total_cost_usd FROM sessions WHERE id = ?').get('sess-1') as { cost_center_id: string; total_cost_usd: number }
+
+    expect(request.cost_center_id).toBe('loop:fleet-evaluator')
+    expect(session.cost_center_id).toBe('loop:fleet-evaluator')
+    expect(session.total_cost_usd).toBeCloseTo(0.40)
+  })
+
+  it('breaks spend down by cost center with kind filters', () => {
+    const db = makeDb()
+    upsertCostCenter(db, sampleCostCenter())
+    upsertCostCenter(db, sampleCostCenter({ id: 'app:alumia', kind: 'app', name: 'alumia', repo_path: '/apps/alumia' }))
+    upsertSession(db, sampleSession({ id: 'loop-session', cost_center_id: 'loop:fleet-evaluator' }))
+    upsertSession(db, sampleSession({ id: 'app-session', cost_center_id: 'app:alumia', agent: 'codex', project_path: '/apps/alumia', project_name: 'alumia' }))
+    upsertRequest(db, sampleRequest({ id: 'loop-r1', session_id: 'loop-session', cost_center_id: 'loop:fleet-evaluator', cost_usd: 2, input_tokens: 10, output_tokens: 5, cache_read_tokens: 0, cache_create_tokens: 0 }))
+    upsertRequest(db, sampleRequest({ id: 'loop-r2', session_id: 'loop-session', cost_center_id: 'loop:fleet-evaluator', cost_usd: 1, input_tokens: 6, output_tokens: 4, cache_read_tokens: 0, cache_create_tokens: 0 }))
+    upsertRequest(db, sampleRequest({ id: 'app-r1', session_id: 'app-session', agent: 'codex', cost_center_id: 'app:alumia', cost_usd: 5 }))
+
+    const all = queryCostCenterBreakdown(db, 'all')
+    const loop = queryCostCenterBreakdown(db, 'all', { kind: 'loop' })
+
+    expect(all.map(row => row.name)).toEqual(['alumia', 'fleet-evaluator'])
+    expect(loop).toHaveLength(1)
+    expect(loop[0]?.kind).toBe('loop')
+    expect(loop[0]?.requests).toBe(2)
+    expect(loop[0]?.cost_usd).toBeCloseTo(3)
+    expect(loop[0]?.total_tokens).toBe(25)
+  })
+
+  it('falls back to the session cost center when request rows are untagged', () => {
+    const db = makeDb()
+    upsertCostCenter(db, sampleCostCenter())
+    upsertSession(db, sampleSession({
+      id: 'loop-session',
+      cost_center_id: 'loop:fleet-evaluator',
+      total_cost_usd: 0,
+      total_tokens: 0,
+      request_count: 0,
+    }))
+    upsertRequest(db, sampleRequest({
+      id: 'untagged-request',
+      session_id: 'loop-session',
+      cost_center_id: null,
+      cost_usd: 4,
+      input_tokens: 100,
+      output_tokens: 20,
+      cache_read_tokens: 0,
+      cache_create_tokens: 0,
+    }))
+
+    const breakdown = queryCostCenterBreakdown(db, 'all', { kind: 'loop' })
+
+    expect(breakdown).toHaveLength(1)
+    expect(breakdown[0]?.cost_center_id).toBe('loop:fleet-evaluator')
+    expect(breakdown[0]?.requests).toBe(1)
+    expect(breakdown[0]?.total_tokens).toBe(120)
+    expect(breakdown[0]?.cost_usd).toBe(4)
+  })
+
+  it('derives kind filters from orphan cost center id prefixes', () => {
+    const db = makeDb()
+    upsertRequest(db, sampleRequest({ id: 'orphan-loop', cost_center_id: 'loop:missing-center', cost_usd: 2 }))
+
+    const loops = queryCostCenterBreakdown(db, 'all', { kind: 'loop' })
+    const apps = queryCostCenterBreakdown(db, 'all', { kind: 'app' })
+
+    expect(loops).toHaveLength(1)
+    expect(loops[0]?.cost_center_id).toBe('loop:missing-center')
+    expect(loops[0]?.kind).toBe('loop')
+    expect(apps).toHaveLength(0)
   })
 })
 
@@ -933,6 +1043,35 @@ describe('budgets', () => {
     expect(status?.current_spend_usd).toBe(4)
     expect(status?.percent_used).toBe(50)
     expect(status?.is_over_alert).toBe(false)
+  })
+
+  it('getBudgetStatuses filters spend by cost center id', () => {
+    const db = makeDb()
+    upsertCostCenter(db, sampleCostCenter())
+    upsertCostCenter(db, sampleCostCenter({ id: 'app:alumia', kind: 'app', name: 'alumia' }))
+    upsertRequest(db, sampleRequest({ id: 'loop-r1', cost_center_id: 'loop:fleet-evaluator', cost_usd: 4 }))
+    upsertRequest(db, sampleRequest({ id: 'loop-r2', cost_center_id: 'loop:fleet-evaluator', cost_usd: 2 }))
+    upsertRequest(db, sampleRequest({ id: 'app-r1', cost_center_id: 'app:alumia', cost_usd: 20 }))
+    upsertBudget(db, { ...budget, id: 'loop-budget', cost_center_id: 'loop:fleet-evaluator', limit_usd: 12 })
+
+    const status = getBudgetStatuses(db).find(row => row.id === 'loop-budget')
+
+    expect(status?.current_spend_usd).toBe(6)
+    expect(status?.percent_used).toBe(50)
+    expect(status?.cost_center_id).toBe('loop:fleet-evaluator')
+  })
+
+  it('getBudgetStatuses falls back to session cost center for untagged request rows', () => {
+    const db = makeDb()
+    upsertCostCenter(db, sampleCostCenter())
+    upsertSession(db, sampleSession({ id: 'loop-session', cost_center_id: 'loop:fleet-evaluator' }))
+    upsertRequest(db, sampleRequest({ id: 'untagged-loop', session_id: 'loop-session', cost_center_id: null, cost_usd: 9 }))
+    upsertBudget(db, { ...budget, id: 'loop-budget', cost_center_id: 'loop:fleet-evaluator', limit_usd: 18 })
+
+    const status = getBudgetStatuses(db).find(row => row.id === 'loop-budget')
+
+    expect(status?.current_spend_usd).toBe(9)
+    expect(status?.percent_used).toBe(50)
   })
 })
 

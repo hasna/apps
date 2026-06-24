@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { registerCloudTools } from '@hasna/cloud'
 import { z } from 'zod'
-import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryAgentBreakdown, queryAccountBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertGoal, deleteGoal, getGoalStatuses, listSubscriptions, upsertSubscription, deleteSubscription, listMachines, getMachineId, queryBillingSummary, listModelPricing, upsertModelPricing, deleteModelPricing } from '../db/database.js'
+import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryAgentBreakdown, queryAccountBreakdown, queryCostCenterBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertGoal, deleteGoal, getGoalStatuses, listSubscriptions, upsertSubscription, deleteSubscription, listMachines, getMachineId, queryBillingSummary, listModelPricing, upsertModelPricing, deleteModelPricing } from '../db/database.js'
 import { syncAll } from '../lib/sync-all.js'
 import { AGENTS } from '../lib/agents.js'
 import { querySavingsSummary } from '../lib/savings.js'
@@ -11,7 +11,7 @@ import { usageSnapshotFilterForPeriod } from '../lib/periods.js'
 import { computeCostFromDb } from '../lib/pricing.js'
 import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
-import type { Period } from '../types/index.js'
+import type { CostCenterKind, Period } from '../types/index.js'
 import type { Agent } from '../lib/agents.js'
 
 export const MCP_NAME = 'economy'
@@ -30,6 +30,7 @@ const server: any = new McpServer({
 })
 
 const _econAgents = new Map<string, { id: string; name: string; last_seen_at: string; project_id?: string }>()
+const SYNC_SOURCES = ['all', ...AGENTS, 'loops'] as const
 
 const TOOL_NAMES = [
   'get_cost_summary',
@@ -39,6 +40,7 @@ const TOOL_NAMES = [
   'get_project_breakdown',
   'get_agent_breakdown',
   'get_account_breakdown',
+  'get_cost_center_breakdown',
   'get_budget_status',
   'set_budget',
   'remove_budget',
@@ -76,8 +78,9 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   get_project_breakdown: 'period?(today|week|month|year|all) -> project_name, sessions, tokens, cost',
   get_agent_breakdown: 'period?(today|week|month|year|all) -> agent, sessions, requests, tokens, api-equivalent, billable, included',
   get_account_breakdown: 'period?(today|week|month|year|all) -> account profile, sessions, requests, tokens, api-equivalent, billable, included',
+  get_cost_center_breakdown: 'period?(today|week|month|year|all), kind?(loop|app|repo|service|team) -> cost center, sessions, requests, tokens, cost',
   get_budget_status: 'no params -> budget limits, current spend, percent_used, is_over_alert',
-  set_budget: 'period(daily|weekly|monthly), limit_usd, project_path?, agent?, alert_at_percent? -> create budget',
+  set_budget: 'period(daily|weekly|monthly), limit_usd, project_path?, agent?, cost_center_id?, alert_at_percent? -> create budget',
   remove_budget: 'id -> delete budget',
   get_pricing: 'no params -> model pricing rows with input, output, cache read/write, and cache storage rates',
   set_pricing: 'model, input_per_1m, output_per_1m, cache_read_per_1m?, cache_write_per_1m?, cache_write_1h_per_1m?, cache_storage_per_1m_hour? -> create/update pricing',
@@ -90,7 +93,7 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   list_subscriptions: 'no params -> configured subscription plans and included usage',
   set_subscription: `provider, plan, monthly_fee_usd?, included_usage_usd?, agent?(${AGENTS.join('|')}) -> create/update subscription plan`,
   remove_subscription: 'id -> delete subscription plan',
-  sync: `sources(all|${AGENTS.join('|')}) -> ingest latest cost data`,
+  sync: `sources(${SYNC_SOURCES.join('|')}) -> ingest latest cost data`,
   search_tools: 'query substring -> tool name list',
   describe_tools: 'names[] -> one-line parameter hints',
   get_goals: 'no params -> goal progress summary',
@@ -280,6 +283,31 @@ server.tool(
 )
 
 server.tool(
+  'get_cost_center_breakdown',
+  'Cost per cost center. Params: period(today|week|month|year|all), kind(loop|app|repo|service|team).',
+  {
+    period: z.enum(['today', 'week', 'month', 'year', 'all']).optional(),
+    kind: z.enum(['loop', 'app', 'repo', 'service', 'team']).optional(),
+  },
+  async ({ period, kind }: { period?: Exclude<Period, 'yesterday'>; kind?: CostCenterKind }) => {
+    const rows = queryCostCenterBreakdown(db, period ?? 'all', { kind }) as unknown as Array<Record<string, unknown>>
+    if (rows.length === 0) return text('No cost-center usage yet.')
+    const lines = ['kind     cost_center          sessions requests tokens   cost']
+    for (const row of rows) {
+      lines.push(
+        `${String(row['kind']).slice(0, 8).padEnd(9)}` +
+        `${String(row['name'] || row['cost_center_id'] || '—').slice(0, 20).padEnd(21)}` +
+        `${String(row['sessions']).padEnd(9)}` +
+        `${String(row['requests']).padEnd(9)}` +
+        `${fmtTok(Number(row['total_tokens'])).padEnd(9)}` +
+        `${fmtUsd(Number(row['cost_usd']))}`,
+      )
+    }
+    return text(lines.join('\n'))
+  },
+)
+
+server.tool(
   'get_budget_status',
   'Budget limits vs spend, percent used, alert flags. No params.',
   {},
@@ -289,7 +317,7 @@ server.tool(
 
     const lines = ['scope                period   spent      limit      used%  status']
     for (const budget of budgets) {
-      const scope = String(budget['project_path'] ?? 'global').slice(0, 20)
+      const scope = String(budget['cost_center_id'] ?? budget['project_path'] ?? 'global').slice(0, 20)
       const pct = Number(budget['percent_used']).toFixed(1)
       const status = budget['is_over_limit'] ? 'OVER' : budget['is_over_alert'] ? 'ALERT' : 'OK'
       lines.push(`${scope.padEnd(21)}${String(budget['period']).padEnd(9)}${fmtUsd(Number(budget['current_spend_usd'])).padEnd(11)}${fmtUsd(Number(budget['limit_usd'])).padEnd(11)}${pct}%`.padEnd(49) + `  ${status}`)
@@ -306,15 +334,17 @@ server.tool(
     limit_usd: z.number().positive(),
     project_path: z.string().optional(),
     agent: z.enum(AGENTS).optional(),
+    cost_center_id: z.string().optional(),
     alert_at_percent: z.number().positive().max(100).optional(),
   },
-  async ({ period, limit_usd, project_path, agent, alert_at_percent }: { period: 'daily' | 'weekly' | 'monthly'; limit_usd: number; project_path?: string; agent?: Agent; alert_at_percent?: number }) => {
+  async ({ period, limit_usd, project_path, agent, cost_center_id, alert_at_percent }: { period: 'daily' | 'weekly' | 'monthly'; limit_usd: number; project_path?: string; agent?: Agent; cost_center_id?: string; alert_at_percent?: number }) => {
     const now = new Date().toISOString()
     const id = randomUUID()
     upsertBudget(db, {
       id,
       project_path: project_path ?? null,
       agent: agent ?? null,
+      cost_center_id: cost_center_id ?? null,
       period,
       limit_usd,
       alert_at_percent: alert_at_percent ?? 80,
@@ -473,9 +503,9 @@ server.tool(
 
 server.tool(
   'sync',
-  `Ingest new cost data. sources: all|${AGENTS.join('|')}`,
-  { sources: z.enum(['all', ...AGENTS] as [string, ...string[]]).optional() },
-  async ({ sources }: { sources?: typeof AGENTS[number] | 'all' }) => {
+  `Ingest new cost data. sources: ${SYNC_SOURCES.join('|')}`,
+  { sources: z.enum([...SYNC_SOURCES] as [string, ...string[]]).optional() },
+  async ({ sources }: { sources?: typeof SYNC_SOURCES[number] }) => {
     const selected = sources ?? 'all'
     const opts = selected === 'all' ? {} : { [selected]: true } as Record<string, boolean>
     const result = await syncAll(db, opts)

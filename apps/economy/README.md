@@ -8,9 +8,9 @@ AI coding cost tracker for Claude Code, Takumi, Codex, Gemini, OpenCode, Cursor,
 ## Features
 
 - Ingests local Claude Code, Takumi, Codex, Gemini, OpenCode, Cursor, Pi, and Hermes usage.
-- Tracks sessions, requests, projects, machines, models, cache tokens, budgets, goals, and provider billing.
+- Tracks sessions, requests, projects, machines, models, cache tokens, cost centers, budgets, goals, and provider billing.
 - Attributes usage to `@hasna/accounts` profiles when agents run under managed account/profile config dirs.
-- Breaks down API-equivalent, metered API, subscription-included, estimated, and unknown cost by account and coding agent.
+- Breaks down API-equivalent, metered API, subscription-included, estimated, and unknown cost by account, coding agent, and cost center.
 - Seeds editable model pricing with input, output, cache-read, 5-minute cache-write, 1-hour cache-write, and context-cache storage rates.
 - Handles tiered pricing such as Gemini long-prompt rates and OpenAI long-context rates.
 - Reconciles estimates against Anthropic, OpenAI, and Gemini billing sources.
@@ -71,7 +71,7 @@ Gemini settings:
 }
 ```
 
-The MCP server exposes read tools for summaries, sessions, machines, pricing, daily spend, budgets, goals, provider billing, usage snapshots, savings, project/account/agent breakdowns, and subscriptions. It also exposes mutation tools for budgets, pricing rows, goals, and subscriptions so coding agents can manage Economy data through the same validated surface as the CLI and REST API.
+The MCP server exposes read tools for summaries, sessions, machines, pricing, daily spend, budgets, goals, provider billing, usage snapshots, savings, project/account/agent/cost-center breakdowns, and subscriptions. It also exposes mutation tools for budgets, pricing rows, goals, and subscriptions so coding agents can manage Economy data through the same validated surface as the CLI and REST API.
 
 ## Ingest
 
@@ -92,7 +92,10 @@ economy sync --opencode
 economy sync --cursor
 economy sync --pi
 economy sync --hermes
+economy sync --loops
 ```
+
+`economy sync --loops` reads `~/.hasna/loops/loops.db` in read-only mode and imports OpenLoops orchestration/judge `goal_runs.tokens_used` into `loop:*` cost centers. It intentionally does not ingest dispatched coding-agent work from loops; heavy agent spend remains captured by the existing per-agent ingesters and can be analyzed alongside loop cost centers through account/profile attribution.
 
 Useful repair options:
 
@@ -115,6 +118,26 @@ economy breakdown --by account
 ```
 
 Account breakdowns report `api_equivalent_usd` for the API list-price value of the usage, plus `billable_usd`/`metered_api_usd` for known direct API spend and `subscription_included_usd` for usage covered by a subscription.
+
+Cost-center breakdowns group spend across loops, apps, repos, services, and teams:
+
+```bash
+economy breakdown --by cost-center
+economy breakdown --by loop
+economy breakdown --by app
+economy breakdown --by repo
+```
+
+Apps and services can report usage through the local `economy-otel` sidecar:
+
+```bash
+economy-otel --port 4318
+curl -X POST http://127.0.0.1:4318/ingest \
+  -H 'content-type: application/json' \
+  -d '{"source":"app","cost_center":"alumia","cost_center_kind":"app","project_path":"/workspace/alumia","model":"gpt-5-mini","cost_usd":0.12,"input_tokens":1200,"output_tokens":300}'
+```
+
+Accepted `/ingest` attribution fields include `cost_center`, `cost_center_kind`, `cost_center_id`, `attribution_tag`, `project_path`, `repo`, `account_key`, `account_tool`, `account_name`, `account_email`, and explicit `cost_usd`.
 
 Subscription plans can be configured locally and are used by savings calculations:
 
@@ -164,6 +187,7 @@ Gemini billing export files may be JSON arrays, JSON objects with `rows`, JSONL,
 ```bash
 economy budget set --period monthly --limit 50 --alert 80
 economy budget set --agent codex --period weekly --limit 25 --alert 70
+economy budget set --cost-center loop:fleet-evaluator --period weekly --limit 10
 economy budget list
 economy goal set --period month --limit 40
 economy goal set --agent gemini --period week --limit 15
@@ -172,7 +196,7 @@ economy config set webhook-url https://example.com/economy-webhook
 economy config webhook-test
 ```
 
-Budgets and goals can be global, project-scoped with `--project`, agent-scoped with `--agent`, or both. Valid agent scopes are `claude`, `takumi`, `codex`, `gemini`, `opencode`, `cursor`, `pi`, and `hermes`.
+Budgets can be global, project-scoped with `--project`, agent-scoped with `--agent`, cost-center scoped with `--cost-center`, or combined. Goals can be global, project-scoped, agent-scoped, or both. Valid agent scopes are `claude`, `takumi`, `codex`, `gemini`, `opencode`, `cursor`, `pi`, and `hermes`.
 
 Budget webhooks fire after sync when the alert threshold is crossed. Failed webhook deliveries are not marked as fired, so the next sync can retry them.
 
@@ -193,6 +217,8 @@ Common endpoints:
 - `GET /api/models`
 - `GET /api/projects?period=month`
 - `GET /api/breakdown?by=agent&period=month`
+- `GET /api/breakdown?by=cost-center&period=month`
+- `GET /api/breakdown?by=loop&period=month`
 - `GET /api/accounts?period=month`
 - `GET /api/usage?period=month`
 - `GET /api/savings?period=month`

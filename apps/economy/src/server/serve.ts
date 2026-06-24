@@ -2,7 +2,7 @@ import type { SqliteAdapter as Database } from '@hasna/cloud'
 import {
   querySummary, querySessions, queryTopSessions,
   queryModelBreakdown, queryProjectBreakdown, queryAgentBreakdown, queryDailyBreakdown, queryHourlyBreakdown,
-  queryAccountBreakdown,
+  queryAccountBreakdown, queryCostCenterBreakdown,
   getBudgetStatuses, upsertBudget, deleteBudget,
   listProjects, upsertProject, deleteProject,
   listModelPricing, upsertModelPricing, deleteModelPricing,
@@ -25,7 +25,7 @@ import { randomUUID } from 'crypto'
 import { existsSync } from 'fs'
 import { resolve, sep } from 'path'
 import { getServeBindHost } from '../lib/serve-auth.js'
-import type { Period } from '../types/index.js'
+import type { CostCenterKind, Period } from '../types/index.js'
 import type { Agent } from '../lib/agents.js'
 
 const CORS = {
@@ -34,7 +34,7 @@ const CORS = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Economy-Token',
 }
 const AGENT_ERROR = `agent must be one of: ${AGENTS.join(', ')}`
-const SYNC_SOURCES = ['all', ...AGENTS] as const
+const SYNC_SOURCES = ['all', ...AGENTS, 'loops'] as const
 const DEFAULT_DASHBOARD_DIR = new URL('../../dashboard/dist', import.meta.url).pathname
 
 interface StartServerOptions {
@@ -292,6 +292,8 @@ export function createHandler(db: Database) {
       if (by === 'project') return ok(queryProjectBreakdown(db, period, machine))
       if (by === 'agent') return ok(queryAgentBreakdown(db, period, machine))
       if (by === 'account') return ok(queryAccountBreakdown(db, period, machine))
+      if (by === 'cost-center') return ok(queryCostCenterBreakdown(db, period, { machine }))
+      if (['loop', 'app', 'repo', 'service', 'team'].includes(by)) return ok(queryCostCenterBreakdown(db, period, { kind: by as CostCenterKind, machine }))
       return ok(queryModelBreakdown(db))
     }
 
@@ -313,6 +315,7 @@ export function createHandler(db: Database) {
         id: randomUUID(),
         project_path: (body['project_path'] as string | null) ?? null,
         agent,
+        cost_center_id: optionalString(body['cost_center_id']) ?? null,
         period: normalizeBudgetPeriod(body['period']),
         limit_usd: limitUsd,
         alert_at_percent: alertAtPercent,

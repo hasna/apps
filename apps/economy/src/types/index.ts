@@ -2,10 +2,23 @@ export type { Agent, CostBasis } from '../lib/agents.js'
 export { AGENTS, COST_BASIS, isAgent } from '../lib/agents.js'
 
 export type Period = 'today' | 'yesterday' | 'week' | 'month' | 'year' | 'all'
+export type EconomyAgent = import('../lib/agents.js').Agent | 'app' | 'service' | 'repo' | 'loop'
+
+export type CostCenterKind = 'loop' | 'app' | 'repo' | 'service' | 'team'
+
+export interface CostCenter {
+  id: string
+  kind: CostCenterKind
+  name: string
+  repo_path?: string | null
+  labels_json: string
+  created_at: string
+  updated_at?: string
+}
 
 export interface EconomyRequest {
   id: string
-  agent: import('../lib/agents.js').Agent
+  agent: EconomyAgent
   session_id: string
   model: string
   input_tokens: number
@@ -20,6 +33,7 @@ export interface EconomyRequest {
   timestamp: string
   source_request_id: string
   machine_id?: string
+  cost_center_id?: string | null
   attribution_tag?: string
   account_key?: string
   account_tool?: string
@@ -32,7 +46,7 @@ export interface EconomyRequest {
 
 export interface EconomySession {
   id: string
-  agent: import('../lib/agents.js').Agent
+  agent: EconomyAgent
   project_path: string
   project_name: string
   started_at: string
@@ -41,6 +55,7 @@ export interface EconomySession {
   total_tokens: number
   request_count: number
   machine_id?: string
+  cost_center_id?: string | null
   attribution_tag?: string
   account_key?: string
   account_tool?: string
@@ -64,6 +79,7 @@ export interface Budget {
   id: string
   project_path: string | null
   agent: import('../lib/agents.js').Agent | null
+  cost_center_id?: string | null
   period: 'daily' | 'weekly' | 'monthly'
   limit_usd: number
   alert_at_percent: number
@@ -94,7 +110,7 @@ export interface CostSummary {
 
 export interface ModelBreakdown {
   model: string
-  agent: import('../lib/agents.js').Agent
+  agent: EconomyAgent
   requests: number
   input_tokens: number
   output_tokens: number
@@ -113,7 +129,7 @@ export interface ProjectBreakdown {
 }
 
 export interface AgentBreakdown {
-  agent: import('../lib/agents.js').Agent
+  agent: EconomyAgent
   sessions: number
   requests: number
   total_tokens: number
@@ -146,6 +162,25 @@ export interface AccountBreakdown {
   last_active: string
 }
 
+export interface CostCenterBreakdown {
+  cost_center_id: string
+  kind: CostCenterKind
+  name: string
+  repo_path: string | null
+  labels_json: string
+  sessions: number
+  requests: number
+  total_tokens: number
+  api_equivalent_usd: number
+  billable_usd: number
+  metered_api_usd: number
+  subscription_included_usd: number
+  estimated_usd: number
+  unknown_usd: number
+  cost_usd: number
+  last_active: string
+}
+
 export interface ModelPricing {
   inputPer1M: number
   outputPer1M: number
@@ -164,6 +199,7 @@ export interface SyncOptions {
   cursor?: boolean
   pi?: boolean
   hermes?: boolean
+  loops?: boolean
   verbose?: boolean
 }
 

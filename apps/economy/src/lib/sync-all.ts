@@ -6,6 +6,7 @@ import { ingestOpenCode } from '../ingest/opencode.js'
 import { ingestCursor } from '../ingest/cursor.js'
 import { ingestPi } from '../ingest/pi.js'
 import { ingestHermes } from '../ingest/hermes.js'
+import { ingestLoops } from '../ingest/loops.js'
 import { ingestClaudeQuota } from '../ingest/claude-quota.js'
 import { ingestCodexQuota } from '../ingest/codex-quota.js'
 import { dedupeRequests } from '../db/database.js'
@@ -21,6 +22,7 @@ export interface SyncAllResult {
   cursor?: Awaited<ReturnType<typeof ingestCursor>>
   pi?: Awaited<ReturnType<typeof ingestPi>>
   hermes?: Awaited<ReturnType<typeof ingestHermes>>
+  loops?: Awaited<ReturnType<typeof ingestLoops>>
   claudeQuota?: Awaited<ReturnType<typeof ingestClaudeQuota>>
   codexQuota?: Awaited<ReturnType<typeof ingestCodexQuota>>
   deduped: number
@@ -31,7 +33,7 @@ export interface SyncAllResult {
 export async function syncAll(db: Database, opts: SyncOptions = {}): Promise<SyncAllResult> {
   const anySpecific = Boolean(
     opts.claude || opts.takumi || opts.codex || opts.gemini
-    || opts.opencode || opts.cursor || opts.pi || opts.hermes,
+    || opts.opencode || opts.cursor || opts.pi || opts.hermes || opts.loops,
   )
   const all = !anySpecific
 
@@ -53,6 +55,7 @@ export async function syncAll(db: Database, opts: SyncOptions = {}): Promise<Syn
   if (all || opts.cursor) result.cursor = await ingestCursor(db, opts.verbose)
   if (all || opts.pi) result.pi = await ingestPi(db, opts.verbose)
   if (all || opts.hermes) result.hermes = await ingestHermes(db, opts.verbose)
+  if (all || opts.loops) result.loops = await ingestLoops(db, opts.verbose)
 
   result.deduped = dedupeRequests(db)
   result.cloudPushed = await maybePushAfterIngest()
