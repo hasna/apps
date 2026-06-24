@@ -16,6 +16,7 @@ import type {
 } from "../types.js";
 import { daemonLogPath } from "../lib/paths.js";
 import {
+  daemonStatusSummary,
   publicLoop,
   publicExecutorResult,
   publicGoal,
@@ -34,7 +35,7 @@ import { parseDuration } from "../lib/schedule.js";
 import { Store } from "../lib/store.js";
 import { executeWorkflow, preflightWorkflow } from "../lib/workflow-runner.js";
 import { advanceLoop, executeClaimedRun, manualRunScheduledFor, manualRunSource, shouldAdvanceManualRun, tick } from "../lib/scheduler.js";
-import { daemonStatus, stopDaemon, type DaemonStatus } from "../daemon/control.js";
+import { daemonStatus, stopDaemon } from "../daemon/control.js";
 import { runDaemon, startDaemon } from "../daemon/daemon.js";
 import { enableStartup, installStartup } from "../daemon/install.js";
 import { workflowBodyFromJson } from "../lib/workflow-spec.js";
@@ -144,18 +145,6 @@ function workflowStepLine(step: WorkflowStepRun, verbose = false): string {
   const duration = step.durationMs === undefined ? "" : ` duration=${step.durationMs}ms`;
   const error = step.error ? ` error=${truncateDisplay(step.error, verbose ? 180 : 80)}` : "";
   return `  ${String(step.sequence).padStart(2, "0")}  ${step.status.padEnd(10)}  ${step.stepId}${duration}${output}${error}`;
-}
-
-function daemonStatusLine(status: DaemonStatus): string {
-  const daemon = status.running ? `running pid=${status.pid}` : status.stale ? `stale pid=${status.pid}` : "stopped";
-  const lease = status.lease ? ` lease=pid:${status.lease.pid}@${status.lease.hostname} until=${status.lease.expiresAt}` : "";
-  return [
-    `daemon ${daemon} host=${status.host}${lease}`,
-    `loops total=${status.loops.total} active=${status.loops.active} paused=${status.loops.paused} stopped=${status.loops.stopped} expired=${status.loops.expired}`,
-    `runs total=${status.runs.total} running=${status.runs.running} failed=${status.runs.failed} succeeded=${status.runs.succeeded} abandoned=${status.runs.abandoned}`,
-    `logs=${status.logPath}`,
-    "Use --verbose or --json for full daemon status.",
-  ].join("\n");
 }
 
 function parseSchedule(opts: { at?: string; every?: string; cron?: string; dynamic?: boolean }): ScheduleSpec {
@@ -634,10 +623,11 @@ workflows
       const result = await executeWorkflow(store, workflow);
       const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0];
       const steps = run ? store.listWorkflowStepRuns(run.id) : [];
+      const maxOutputChars = outputLimit(opts);
       const value = {
-        result: publicExecutorResult(result),
+        result: publicExecutorResult(result, opts.showOutput, maxOutputChars),
         workflowRun: run ? publicWorkflowRun(run) : undefined,
-        steps: steps.map((step) => publicWorkflowStepRun(step, opts.showOutput)),
+        steps: steps.map((step) => publicWorkflowStepRun(step, opts.showOutput, maxOutputChars)),
       };
       if (isJson()) print(value);
       else {
@@ -791,7 +781,7 @@ program
       const cursor = parseNonNegativeInteger(typeof opts.cursor === "string" ? opts.cursor : undefined, "--cursor") ?? 0;
       const runs = store.listRuns({ loopId: loop?.id, labels: labelsFromOpts(opts), limit: cursor + limit + 1 });
       const { page, nextCursor } = pageItems(runs, opts, limit);
-      if (isJson()) print(page.map((run) => publicRun(run, opts.showOutput)));
+      if (isJson()) print(page.map((run) => publicRun(run, opts.showOutput, outputLimit(opts))));
       else {
         for (const run of page) {
           const hasOutput = run.stdout || run.stderr ? " output=yes" : "";
@@ -920,7 +910,7 @@ program
       if (shouldAdvance) {
         advanceLoop(store, claim.loop, run, new Date(run.finishedAt ?? new Date()), run.status === "succeeded");
       }
-      const value = { ...publicRun(run, opts.showOutput), runNow: { source, advancesLoop: shouldAdvance } };
+      const value = { ...publicRun(run, opts.showOutput, outputLimit(opts)), runNow: { source, advancesLoop: shouldAdvance } };
       print(value, `${run.id} ${run.status} source=${source} slot=${run.scheduledFor}`);
       if (!isJson() && opts.showOutput) printTextOutput(run, { limit: outputLimit(opts) });
       if (run.status !== "succeeded") process.exitCode = 1;
@@ -979,7 +969,7 @@ addVerboseOption(daemon.command("status")).action((opts) => {
   const store = new Store();
   try {
     const status = daemonStatus(store);
-    printDetail(status, daemonStatusLine(status), opts);
+    printDetail(status, daemonStatusSummary(status), opts);
   } finally {
     store.close();
   }

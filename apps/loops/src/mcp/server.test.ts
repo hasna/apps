@@ -231,11 +231,48 @@ describe("OpenLoops MCP server", () => {
         await client.callTool({ name: "openloops_list_workflow_runs", arguments: { idOrName: "mcp-workflow" } }),
       );
       expect(workflowRuns.workflowRuns[0]?.id).toBe(workflowRun.workflowRun.id);
+
+      const statusWorkflow = store.createWorkflow({
+        name: "status-filter-workflow",
+        steps: [{ id: "status", target: { type: "command", command: "true" } }],
+      });
+      const failedRun = store.createWorkflowRun({ workflow: statusWorkflow });
+      store.finalizeWorkflowRun(failedRun.id, "failed", { error: "expected failure" });
+      store.createWorkflowRun({ workflow: statusWorkflow });
+      const failedRuns = structured<{ workflowRuns: { id: string; status: string }[] }>(
+        await client.callTool({
+          name: "openloops_list_workflow_runs",
+          arguments: { idOrName: "status-filter-workflow", status: "failed", limit: 1 },
+        }),
+      );
+      expect(failedRuns.workflowRuns).toHaveLength(1);
+      expect(failedRuns.workflowRuns[0]?.id).toBe(failedRun.id);
+      expect(failedRuns.workflowRuns[0]?.status).toBe("failed");
+
       const inspected = structured<{ workflowRun: { id: string }; steps: unknown[]; events: unknown[] }>(
         await client.callTool({ name: "openloops_inspect_workflow_run", arguments: { runId: workflowRun.workflowRun.id } }),
       );
       expect(inspected.workflowRun.id).toBe(workflowRun.workflowRun.id);
       expect(inspected.steps.length).toBe(1);
+      const largeWorkflow = store.createWorkflow({
+        name: "large-inspect-workflow",
+        steps: Array.from({ length: 60 }, (_, index) => ({
+          id: `step-${index}`,
+          target: { type: "command" as const, command: "true" },
+        })),
+      });
+      const largeRun = store.createWorkflowRun({ workflow: largeWorkflow });
+      const cappedInspect = structured<{ steps: unknown[]; stepsTotal: number; stepsTruncated: boolean }>(
+        await client.callTool({ name: "openloops_inspect_workflow_run", arguments: { runId: largeRun.id } }),
+      );
+      expect(cappedInspect.steps).toHaveLength(50);
+      expect(cappedInspect.stepsTotal).toBe(60);
+      expect(cappedInspect.stepsTruncated).toBe(true);
+      const expandedInspect = structured<{ steps: unknown[]; stepsTruncated: boolean }>(
+        await client.callTool({ name: "openloops_inspect_workflow_run", arguments: { runId: largeRun.id, stepsLimit: 60 } }),
+      );
+      expect(expandedInspect.steps).toHaveLength(60);
+      expect(expandedInspect.stepsTruncated).toBe(false);
       const events = structured<{ events: unknown[] }>(
         await client.callTool({ name: "openloops_list_workflow_events", arguments: { runId: workflowRun.workflowRun.id } }),
       );
@@ -276,10 +313,26 @@ describe("OpenLoops MCP server", () => {
       expect(goal.config.objective).toBe("verify from MCP");
 
       const runtimeGoal = store.createGoal({ objective: "runtime goal" });
-      const goalStatus = structured<{ goal: { goalId: string } }>(
+      store.createGoalPlanNodes(
+        runtimeGoal.goalId,
+        Array.from({ length: 60 }, (_, index) => ({
+          key: `node-${index}`,
+          objective: index === 0 ? `${"Review compact MCP output. ".repeat(20)}TAIL_MARKER_SHOULD_REQUIRE_VERBOSE` : `node ${index}`,
+        })),
+      );
+      const goalStatus = structured<{ goal: { goalId: string }; nodes: unknown[]; nodesTotal: number; nodesTruncated: boolean }>(
         await client.callTool({ name: "openloops_get_goal_status", arguments: { runId: runtimeGoal.goalId } }),
       );
       expect(goalStatus.goal.goalId).toBe(runtimeGoal.goalId);
+      expect(goalStatus.nodes).toHaveLength(50);
+      expect(goalStatus.nodesTotal).toBe(60);
+      expect(goalStatus.nodesTruncated).toBe(true);
+      expect(JSON.stringify(goalStatus)).not.toContain("TAIL_MARKER_SHOULD_REQUIRE_VERBOSE");
+      const verboseGoalStatus = structured<{ nodes: { objective: string }[] }>(
+        await client.callTool({ name: "openloops_get_goal_status", arguments: { runId: runtimeGoal.goalId, verbose: true, nodesLimit: 60 } }),
+      );
+      expect(verboseGoalStatus.nodes).toHaveLength(60);
+      expect(JSON.stringify(verboseGoalStatus)).toContain("TAIL_MARKER_SHOULD_REQUIRE_VERBOSE");
 
       await client.callTool({
         name: "openloops_create_loop",

@@ -236,6 +236,21 @@ describe("loops CLI", () => {
     const verboseStatus = runCli(dataDir, ["daemon", "status", "--verbose"]);
     expect(verboseStatus.status).toBe(0);
     expect(JSON.parse(verboseStatus.stdout).loops.total).toBe(1);
+
+    const standaloneStatus = spawnSync(process.execPath, [join(dirname(cliPath), "../daemon/index.ts"), "status"], {
+      env: { ...process.env, LOOPS_DATA_DIR: dataDir },
+      encoding: "utf8",
+    });
+    expect(standaloneStatus.status).toBe(0);
+    expect(standaloneStatus.stdout.trim().startsWith("{")).toBe(false);
+    expect(standaloneStatus.stdout).toContain("loops total=");
+
+    const standaloneJson = spawnSync(process.execPath, [join(dirname(cliPath), "../daemon/index.ts"), "--json", "status"], {
+      env: { ...process.env, LOOPS_DATA_DIR: dataDir },
+      encoding: "utf8",
+    });
+    expect(standaloneJson.status).toBe(0);
+    expect(JSON.parse(standaloneJson.stdout).loops.total).toBe(1);
   });
 
   test("shown command output is bounded by max-output-chars", () => {
@@ -249,6 +264,19 @@ describe("loops CLI", () => {
     expect(run.stdout).toContain("abcd");
     expect(run.stdout).toContain("[truncated 6 chars]");
     expect(run.stdout).not.toContain("abcdefghij");
+
+    const jsonRun = runCli(dataDir, ["--json", "run-now", "bounded", "--show-output", "--max-output-chars", "4"]);
+    expect(jsonRun.status).toBe(0);
+    const jsonRunValue = JSON.parse(jsonRun.stdout);
+    expect(jsonRunValue.stdout).toContain("abcd");
+    expect(jsonRunValue.stdout).toContain("[truncated 6 chars]");
+    expect(jsonRun.stdout).not.toContain("abcdefghij");
+
+    const jsonRuns = runCli(dataDir, ["--json", "runs", "bounded", "--show-output", "--max-output-chars", "4"]);
+    expect(jsonRuns.status).toBe(0);
+    const jsonRunsValue = JSON.parse(jsonRuns.stdout);
+    expect(jsonRunsValue[0].stdout).toContain("[truncated 6 chars]");
+    expect(jsonRuns.stdout).not.toContain("abcdefghij");
   });
 
   test("--label validates label format", () => {
@@ -319,6 +347,13 @@ describe("loops CLI", () => {
     const value = JSON.parse(run.stdout);
     expect(value.result.stdout).toContain("[redacted");
     expect(value.steps[0].stdout).toContain("[redacted");
+
+    const boundedRun = runCli(dataDir, ["--json", "workflows", "run", "workflow-redact", "--show-output", "--max-output-chars", "6"]);
+    expect(boundedRun.status).toBe(0);
+    expect(boundedRun.stdout).not.toContain(secret);
+    const boundedValue = JSON.parse(boundedRun.stdout);
+    expect(boundedValue.result.stdout).toContain("[truncated");
+    expect(boundedValue.steps[0].stdout).toContain("[truncated");
 
     const inspect = runCli(dataDir, ["--json", "workflows", "inspect", value.workflowRun.id]);
     expect(inspect.status).toBe(0);

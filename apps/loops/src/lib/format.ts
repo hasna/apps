@@ -1,6 +1,7 @@
 import type {
   ExecutorResult,
   Goal,
+  GoalPlanNode,
   GoalRun,
   Loop,
   LoopRun,
@@ -11,6 +12,7 @@ import type {
   WorkflowSpec,
   WorkflowStepRun,
 } from "../types.js";
+import type { DaemonStatus } from "../daemon/control.js";
 
 const TEXT_OUTPUT_LIMIT = 32 * 1024;
 const SENSITIVE_PAYLOAD_KEYS = new Set(["env", "error", "prompt", "reason", "stderr", "stdout"]);
@@ -187,6 +189,24 @@ export function compactGoal(goal: Goal): Record<string, unknown> {
   };
 }
 
+export function compactGoalPlanNode(node: GoalPlanNode): Record<string, unknown> {
+  return {
+    nodeId: node.nodeId,
+    planId: node.planId,
+    key: node.key,
+    sequence: node.sequence,
+    priority: node.priority,
+    objective: truncateDisplay(node.objective, 160),
+    status: node.status,
+    ready: node.ready,
+    tokenBudget: node.tokenBudget,
+    tokensUsed: node.tokensUsed,
+    timeUsedSeconds: node.timeUsedSeconds,
+    dependsOn: node.dependsOn,
+    updatedAt: node.updatedAt,
+  };
+}
+
 export function compactGoalRun(run: GoalRun): Record<string, unknown> {
   return {
     runId: run.runId,
@@ -198,6 +218,18 @@ export function compactGoalRun(run: GoalRun): Record<string, unknown> {
     tokensUsed: run.tokensUsed,
     createdAt: run.createdAt,
   };
+}
+
+export function daemonStatusSummary(status: DaemonStatus): string {
+  const daemon = status.running ? `running pid=${status.pid}` : status.stale ? `stale pid=${status.pid}` : "stopped";
+  const lease = status.lease ? ` lease=pid:${status.lease.pid}@${status.lease.hostname} until=${status.lease.expiresAt}` : "";
+  return [
+    `daemon ${daemon} host=${status.host}${lease}`,
+    `loops total=${status.loops.total} active=${status.loops.active} paused=${status.loops.paused} stopped=${status.loops.stopped} expired=${status.loops.expired}`,
+    `runs total=${status.runs.total} running=${status.runs.running} failed=${status.runs.failed} succeeded=${status.runs.succeeded} abandoned=${status.runs.abandoned}`,
+    `logs=${status.logPath}`,
+    "Use --verbose or --json for full daemon status.",
+  ].join("\n");
 }
 
 export function publicLoop(loop: Loop): Record<string, unknown> {
@@ -214,19 +246,19 @@ export function publicLoop(loop: Loop): Record<string, unknown> {
   };
 }
 
-export function publicRun(run: LoopRun, showOutput = false): Record<string, unknown> {
+export function publicRun(run: LoopRun, showOutput = false, maxOutputChars = TEXT_OUTPUT_LIMIT): Record<string, unknown> {
   return {
     ...run,
-    stdout: showOutput ? run.stdout : run.stdout ? `[redacted ${run.stdout.length} chars]` : undefined,
-    stderr: showOutput ? run.stderr : run.stderr ? `[redacted ${run.stderr.length} chars]` : undefined,
+    stdout: showOutput ? (run.stdout ? truncateTextOutput(run.stdout, maxOutputChars) : run.stdout) : run.stdout ? `[redacted ${run.stdout.length} chars]` : undefined,
+    stderr: showOutput ? (run.stderr ? truncateTextOutput(run.stderr, maxOutputChars) : run.stderr) : run.stderr ? `[redacted ${run.stderr.length} chars]` : undefined,
   };
 }
 
-export function publicExecutorResult(result: ExecutorResult, showOutput = false): Record<string, unknown> {
+export function publicExecutorResult(result: ExecutorResult, showOutput = false, maxOutputChars = TEXT_OUTPUT_LIMIT): Record<string, unknown> {
   return {
     ...result,
-    stdout: showOutput ? result.stdout : result.stdout ? `[redacted ${result.stdout.length} chars]` : undefined,
-    stderr: showOutput ? result.stderr : result.stderr ? `[redacted ${result.stderr.length} chars]` : undefined,
+    stdout: showOutput ? (result.stdout ? truncateTextOutput(result.stdout, maxOutputChars) : result.stdout) : result.stdout ? `[redacted ${result.stdout.length} chars]` : undefined,
+    stderr: showOutput ? (result.stderr ? truncateTextOutput(result.stderr, maxOutputChars) : result.stderr) : result.stderr ? `[redacted ${result.stderr.length} chars]` : undefined,
     error: redact(result.error),
   };
 }
@@ -250,11 +282,11 @@ export function publicWorkflowRun(run: WorkflowRun): Record<string, unknown> {
   return { ...run, error: redact(run.error) };
 }
 
-export function publicWorkflowStepRun(run: WorkflowStepRun, showOutput = false): Record<string, unknown> {
+export function publicWorkflowStepRun(run: WorkflowStepRun, showOutput = false, maxOutputChars = TEXT_OUTPUT_LIMIT): Record<string, unknown> {
   return {
     ...run,
-    stdout: showOutput ? run.stdout : run.stdout ? `[redacted ${run.stdout.length} chars]` : undefined,
-    stderr: showOutput ? run.stderr : run.stderr ? `[redacted ${run.stderr.length} chars]` : undefined,
+    stdout: showOutput ? (run.stdout ? truncateTextOutput(run.stdout, maxOutputChars) : run.stdout) : run.stdout ? `[redacted ${run.stdout.length} chars]` : undefined,
+    stderr: showOutput ? (run.stderr ? truncateTextOutput(run.stderr, maxOutputChars) : run.stderr) : run.stderr ? `[redacted ${run.stderr.length} chars]` : undefined,
     error: redact(run.error),
   };
 }

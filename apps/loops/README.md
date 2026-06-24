@@ -263,9 +263,11 @@ loops show <id-or-name>    # compact detail
 loops show <id-or-name> --verbose
 loops runs --show-output --max-output-chars 8000
 loops daemon status --verbose
+loops-daemon status --json
 ```
 
 Use `show`/`inspect` commands for one record at a time. Use `--verbose` for full redacted detail output and `--json` for stable machine-readable records. Output streams are redacted unless explicitly requested and are bounded in human output.
+The standalone `loops-daemon` helper follows the same compact default output; add `--verbose` or `--json` for full lifecycle and install records.
 
 `loops run-now` reports the manual run source:
 
@@ -319,7 +321,7 @@ The server exposes these tools:
 - `openloops_daemon_status`: read daemon process, lease, loop, and run counts.
 - `openloops_doctor`: run local health checks.
 
-Tool responses include structured JSON plus a compact text JSON summary. List/read tools return compact records by default and accept `verbose` where full redacted records are useful. Run stdout/stderr and agent prompts are redacted by default; tools that expose output accept `showOutput` and cap text through `maxOutputChars` up to 32,000 characters. MCP command loop creation uses the same typed command target boundary as the CLI and SDK. Connect the server only to trusted local clients because `openloops_run_now`, `openloops_run_workflow`, and `openloops_tick` can execute loops or workflows stored in OpenLoops.
+Tool responses include structured JSON plus a compact text JSON summary. List/read tools return compact records by default and accept `verbose` where full redacted records are useful. Run stdout/stderr and agent prompts are redacted by default; tools that expose output accept `showOutput` and cap text through `maxOutputChars` up to 32,000 characters. Inspect/get tools cap child collections by default and expose explicit limits such as `stepsLimit`, `eventsLimit`, and `nodesLimit`. MCP command loop creation uses the same typed command target boundary as the CLI and SDK. Connect the server only to trusted local clients because `openloops_run_now`, `openloops_run_workflow`, and `openloops_tick` can execute loops or workflows stored in OpenLoops.
 
 ## Daemon
 

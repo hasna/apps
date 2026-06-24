@@ -1442,24 +1442,24 @@ export class Store {
     return run;
   }
 
-  listWorkflowRuns(opts: { workflowId?: string; loopRunId?: string; limit?: number } = {}): WorkflowRun[] {
+  listWorkflowRuns(opts: { workflowId?: string; loopRunId?: string; status?: WorkflowRunStatus; limit?: number } = {}): WorkflowRun[] {
     const limit = opts.limit ?? 100;
-    let rows: WorkflowRunRow[];
+    const where: string[] = [];
+    const params: Record<string, string | number> = { $limit: limit };
     if (opts.workflowId) {
-      rows = this.db
-        .query<WorkflowRunRow, [string, number]>(
-          "SELECT * FROM workflow_runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT ?",
-        )
-        .all(opts.workflowId, limit);
-    } else if (opts.loopRunId) {
-      rows = this.db
-        .query<WorkflowRunRow, [string, number]>(
-          "SELECT * FROM workflow_runs WHERE loop_run_id = ? ORDER BY created_at DESC LIMIT ?",
-        )
-        .all(opts.loopRunId, limit);
-    } else {
-      rows = this.db.query<WorkflowRunRow, [number]>("SELECT * FROM workflow_runs ORDER BY created_at DESC LIMIT ?").all(limit);
+      where.push("workflow_id = $workflowId");
+      params.$workflowId = opts.workflowId;
     }
+    if (opts.loopRunId) {
+      where.push("loop_run_id = $loopRunId");
+      params.$loopRunId = opts.loopRunId;
+    }
+    if (opts.status) {
+      where.push("status = $status");
+      params.$status = opts.status;
+    }
+    const sql = `SELECT * FROM workflow_runs${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC LIMIT $limit`;
+    const rows = this.db.query<WorkflowRunRow, Record<string, string | number>>(sql).all(params);
     return rows.map(rowToWorkflowRun);
   }
 

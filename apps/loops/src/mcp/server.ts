@@ -6,6 +6,7 @@ import { daemonStatus } from "../daemon/control.js";
 import { runDoctor } from "../lib/doctor.js";
 import {
   compactGoal,
+  compactGoalPlanNode,
   compactGoalRun,
   compactLoop,
   compactRun,
@@ -36,6 +37,7 @@ const DEFAULT_OUTPUT_CHARS = 8_000;
 const MAX_OUTPUT_CHARS = 32_000;
 const MAX_RESPONSE_CHARS = 128_000;
 const DEFAULT_RECENT_LIMIT = 10;
+const DEFAULT_CHILD_LIMIT = 50;
 const MAX_LIMIT = 200;
 const MAX_OUTPUT_RUN_LIMIT = 25;
 
@@ -367,6 +369,8 @@ interface InspectWorkflowRunArgs {
   runId: string;
   showOutput?: boolean;
   maxOutputChars?: number;
+  stepsLimit?: number;
+  eventsLimit?: number;
   verbose?: boolean;
 }
 
@@ -386,12 +390,14 @@ interface WorkflowReasonArgs extends WorkflowRunIdArgs {
 interface GoalArgs {
   idOrName: string;
   limit?: number;
+  nodesLimit?: number;
   verbose?: boolean;
 }
 
 interface GoalStatusArgs {
   runId: string;
   limit?: number;
+  nodesLimit?: number;
   verbose?: boolean;
 }
 
@@ -736,10 +742,8 @@ export function createOpenLoopsMcpServer(opts: OpenLoopsMcpServerOptions = {}): 
     },
     async ({ idOrName, loopRunId, status, limit, verbose }) => {
       const workflow = idOrName ? store.requireWorkflow(idOrName) : undefined;
-      const wanted = workflowRunStatus(status);
       const runs = store
-        .listWorkflowRuns({ workflowId: workflow?.id, loopRunId, limit: boundedLimit(limit, 50) })
-        .filter((run) => !wanted || run.status === wanted)
+        .listWorkflowRuns({ workflowId: workflow?.id, loopRunId, status: workflowRunStatus(status), limit: boundedLimit(limit, 50) })
         .map((run) => (verbose ? publicWorkflowRun(run) : compactWorkflowRun(run)));
       return jsonResult({ workflowRuns: runs });
     },
@@ -755,18 +759,22 @@ export function createOpenLoopsMcpServer(opts: OpenLoopsMcpServerOptions = {}): 
         runId: z.string().min(1),
         showOutput: z.boolean().optional(),
         maxOutputChars: positiveIntSchema.optional(),
+        stepsLimit: positiveIntSchema.optional(),
+        eventsLimit: positiveIntSchema.optional(),
         verbose: z.boolean().optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ runId, showOutput, maxOutputChars, verbose }) => {
+    async ({ runId, showOutput, maxOutputChars, stepsLimit, eventsLimit, verbose }) => {
       const run = store.requireWorkflowRun(runId);
+      const allSteps = store.listWorkflowStepRuns(run.id);
+      const limitedSteps = allSteps.slice(0, boundedLimit(stepsLimit, DEFAULT_CHILD_LIMIT));
       return jsonResult({
         workflowRun: verbose ? publicWorkflowRun(run) : compactWorkflowRun(run),
-        steps: store
-          .listWorkflowStepRuns(run.id)
-          .map((step) => (showOutput || verbose ? boundWorkflowStepRun(step, showOutput, maxOutputChars) : compactWorkflowStepRun(step))),
-        events: store.listWorkflowEvents(run.id, DEFAULT_RECENT_LIMIT).map((event) => (verbose ? publicWorkflowEvent(event) : compactWorkflowEvent(event))),
+        steps: limitedSteps.map((step) => (showOutput || verbose ? boundWorkflowStepRun(step, showOutput, maxOutputChars) : compactWorkflowStepRun(step))),
+        stepsTotal: allSteps.length,
+        stepsTruncated: allSteps.length > limitedSteps.length,
+        events: store.listWorkflowEvents(run.id, boundedLimit(eventsLimit, DEFAULT_RECENT_LIMIT)).map((event) => (verbose ? publicWorkflowEvent(event) : compactWorkflowEvent(event))),
       });
     },
   );
@@ -845,17 +853,22 @@ export function createOpenLoopsMcpServer(opts: OpenLoopsMcpServerOptions = {}): 
       inputSchema: {
         idOrName: z.string().min(1),
         limit: positiveIntSchema.optional(),
+        nodesLimit: positiveIntSchema.optional(),
         verbose: z.boolean().optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ idOrName, limit, verbose }) => {
+    async ({ idOrName, limit, nodesLimit, verbose }) => {
       const runtimeGoal = store.getGoal(idOrName) ?? store.findGoalByLoop(idOrName);
       if (runtimeGoal) {
         const runs = store.listGoalRuns({ goalId: runtimeGoal.goalId, limit: boundedLimit(limit, 50) });
+        const nodes = store.listGoalPlanNodes(runtimeGoal.goalId);
+        const limitedNodes = nodes.slice(0, boundedLimit(nodesLimit, DEFAULT_CHILD_LIMIT));
         return jsonResult({
           goal: verbose ? publicGoal(runtimeGoal) : compactGoal(runtimeGoal),
-          nodes: store.listGoalPlanNodes(runtimeGoal.goalId),
+          nodes: limitedNodes.map((node) => (verbose ? node : compactGoalPlanNode(node))),
+          nodesTotal: nodes.length,
+          nodesTruncated: nodes.length > limitedNodes.length,
           runs: runs.map((run) => (verbose ? publicGoalRun(run) : compactGoalRun(run))),
         });
       }
@@ -876,17 +889,22 @@ export function createOpenLoopsMcpServer(opts: OpenLoopsMcpServerOptions = {}): 
       inputSchema: {
         runId: z.string().min(1),
         limit: positiveIntSchema.optional(),
+        nodesLimit: positiveIntSchema.optional(),
         verbose: z.boolean().optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ runId, limit, verbose }) => {
+    async ({ runId, limit, nodesLimit, verbose }) => {
       const runtimeGoal = store.findGoalByRunId(runId);
       if (!runtimeGoal) throw new Error(`goal run not found: ${runId}`);
       const runs = store.listGoalRuns({ goalId: runtimeGoal.goalId, limit: boundedLimit(limit, 50) });
+      const nodes = store.listGoalPlanNodes(runtimeGoal.goalId);
+      const limitedNodes = nodes.slice(0, boundedLimit(nodesLimit, DEFAULT_CHILD_LIMIT));
       return jsonResult({
         goal: verbose ? publicGoal(runtimeGoal) : compactGoal(runtimeGoal),
-        nodes: store.listGoalPlanNodes(runtimeGoal.goalId),
+        nodes: limitedNodes.map((node) => (verbose ? node : compactGoalPlanNode(node))),
+        nodesTotal: nodes.length,
+        nodesTruncated: nodes.length > limitedNodes.length,
         runs: runs.map((run) => (verbose ? publicGoalRun(run) : compactGoalRun(run))),
       });
     },
