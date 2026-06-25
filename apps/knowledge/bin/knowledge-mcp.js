@@ -2889,7 +2889,7 @@ var init_schemas = __esm(() => {
             })));
           }
         }
-        
+
         if (${id}.value === undefined) {
           if (${k} in input) {
             newResult[${k}] = undefined;
@@ -2897,7 +2897,7 @@ var init_schemas = __esm(() => {
         } else {
           newResult[${k}] = ${id}.value;
         }
-        
+
       `);
         } else if (!isOptionalIn) {
           doc.write(`
@@ -2934,7 +2934,7 @@ var init_schemas = __esm(() => {
             path: iss.path ? [${k}, ...iss.path] : [${k}]
           })));
         }
-        
+
         if (${id}.value === undefined) {
           if (${k} in input) {
             newResult[${k}] = undefined;
@@ -2942,7 +2942,7 @@ var init_schemas = __esm(() => {
         } else {
           newResult[${k}] = ${id}.value;
         }
-        
+
       `);
         }
       }
@@ -11250,7 +11250,7 @@ function finalize(ctx, schema) {
     result.$schema = "http://json-schema.org/draft-07/schema#";
   } else if (ctx.target === "draft-04") {
     result.$schema = "http://json-schema.org/draft-04/schema#";
-  } else if (ctx.target === "openapi-3.0") {}
+  } else if (ctx.target === "openapi-3.0") {} else {}
   if (ctx.external?.uri) {
     const id = ctx.external.registry.get(schema)?.id;
     if (!id)
@@ -11511,7 +11511,7 @@ var formatMap, stringProcessor = (schema, ctx, _json, _params) => {
     if (val === undefined) {
       if (ctx.unrepresentable === "throw") {
         throw new Error("Literal `undefined` cannot be represented in JSON Schema");
-      }
+      } else {}
     } else if (typeof val === "bigint") {
       if (ctx.unrepresentable === "throw") {
         throw new Error("BigInt literals cannot be represented in JSON Schema");
@@ -14993,7 +14993,7 @@ var init_mcp_http = () => {};
 init_zod();
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { existsSync as existsSync10, readFileSync as readFileSync10, writeFileSync as writeFileSync5 } from "fs";
+import { existsSync as existsSync11, readFileSync as readFileSync11, writeFileSync as writeFileSync5 } from "fs";
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
@@ -16034,7 +16034,7 @@ function createArtifactStore(config2, workspace) {
 // src/service.ts
 import { createHash as createHash13 } from "crypto";
 import { spawnSync as spawnSync2 } from "child_process";
-import { existsSync as existsSync9, readFileSync as readFileSync9 } from "fs";
+import { existsSync as existsSync10, readFileSync as readFileSync10 } from "fs";
 import { hostname as hostname5 } from "os";
 import { join as join4, resolve as resolve4 } from "path";
 
@@ -16373,6 +16373,9 @@ function withProvenance(metadata, provenance) {
     provenance
   };
 }
+
+// src/search.ts
+import { existsSync as existsSync5, readFileSync as readFileSync5 } from "fs";
 
 // src/embeddings.ts
 import { createHash } from "crypto";
@@ -16862,6 +16865,35 @@ function selectKnowledgeIndexes(db, terms, limit) {
      ORDER BY updated_at DESC
      LIMIT ?`).all(...likeParams(terms, fields.length), limit);
 }
+function readLegacyItems(path) {
+  if (!path || !existsSync5(path))
+    return [];
+  try {
+    const parsed = JSON.parse(readFileSync5(path, "utf8"));
+    if (!parsed || !Array.isArray(parsed.items))
+      return [];
+    return parsed.items.filter((item) => {
+      return Boolean(item && typeof item === "object" && typeof item.id === "string" && typeof item.title === "string" && typeof item.content === "string");
+    });
+  } catch {
+    return [];
+  }
+}
+function legacyItemHaystack(item) {
+  return [
+    item.id,
+    item.short_id,
+    item.title,
+    item.content,
+    item.url,
+    ...item.tags ?? []
+  ].filter((value) => typeof value === "string" && value.length > 0).join(" ").toLowerCase();
+}
+function selectLegacyItems(path, terms, limit) {
+  if (terms.length === 0)
+    return [];
+  return readLegacyItems(path).filter((item) => item.archived !== true).map((item) => ({ item, haystack: legacyItemHaystack(item) })).filter(({ haystack }) => terms.some((term) => haystack.includes(term))).map(({ item, haystack }) => ({ item, score: catalogScore(haystack, terms) })).sort((a, b) => b.score - a.score || a.item.id.localeCompare(b.item.id)).slice(0, limit);
+}
 function chunkResult(row, keywordScore) {
   const metadata = parseJsonObject2(row.chunk_metadata_json);
   const provenance = provenanceForChunk2(row);
@@ -16895,6 +16927,30 @@ function chunkResult(row, keywordScore) {
     } : null,
     provenance,
     reasons: ["keyword_match"]
+  };
+  result.score = combinedScore(result.scores, result.citation);
+  return result;
+}
+function legacyItemResult(item, keywordScore) {
+  const uri = `knowledge://item/${encodeURIComponent(item.id)}`;
+  const result = {
+    kind: "legacy_item",
+    id: item.id,
+    title: item.title,
+    text: item.content,
+    score: 0,
+    scores: { keyword: keywordScore },
+    source: {
+      uri,
+      ref: uri,
+      kind: "legacy_item",
+      revision: null,
+      hash: null
+    },
+    citation: null,
+    artifact: null,
+    provenance: null,
+    reasons: ["legacy_note_match", "keyword_match"]
   };
   result.score = combinedScore(result.scores, result.citation);
   return result;
@@ -16972,8 +17028,9 @@ function sortResults(results) {
   const kindOrder = {
     source_chunk: 0,
     wiki_chunk: 1,
-    wiki_page: 2,
-    knowledge_index: 3
+    legacy_item: 2,
+    wiki_page: 3,
+    knowledge_index: 4
   };
   return results.sort((a, b) => {
     if (b.score !== a.score)
@@ -17005,7 +17062,10 @@ async function hybridSearch(options) {
     ftsRows.forEach((row, index) => mergeResult(merged, chunkResult(row, scoreFromRank(row.rank, index))));
     const wikiRows = selectWikiPages(db, terms, Math.max(limit, 10));
     const indexRows = selectKnowledgeIndexes(db, terms, Math.max(limit, 10));
+    const legacyRows = selectLegacyItems(options.legacyStorePath, terms, Math.max(limit, 10));
     catalogCount = wikiRows.length + indexRows.length;
+    keywordCount += legacyRows.length;
+    legacyRows.forEach(({ item, score }) => mergeResult(merged, legacyItemResult(item, score)));
     wikiRows.forEach((row) => mergeResult(merged, wikiPageResult(row, terms)));
     indexRows.forEach((row) => mergeResult(merged, indexResult(row, terms)));
   } finally {
@@ -17146,6 +17206,8 @@ function authorityScore(result) {
     return 0.85;
   if (result.kind === "source_chunk")
     return 0.8;
+  if (result.kind === "legacy_item")
+    return 0.6;
   if (result.kind === "wiki_page")
     return 0.65;
   return 0.55;
@@ -17593,7 +17655,7 @@ import { randomUUID as randomUUID6 } from "crypto";
 
 // src/sync.ts
 import { createHash as createHash4, randomUUID as randomUUID5 } from "crypto";
-import { existsSync as existsSync5, readFileSync as readFileSync5 } from "fs";
+import { existsSync as existsSync6, readFileSync as readFileSync6 } from "fs";
 import { hostname as hostname3 } from "os";
 import { fileURLToPath } from "url";
 import { relative as relative2, resolve as resolve2, sep as sep2 } from "path";
@@ -18788,8 +18850,8 @@ function createKnowledgeSyncBundle(options) {
       if (options.includeArtifactContent !== false && key && row.artifact_uri.startsWith("file://")) {
         try {
           const path = fileURLToPath(row.artifact_uri);
-          if (existsSync5(path))
-            artifact.content_base64 = readFileSync5(path).toString("base64");
+          if (existsSync6(path))
+            artifact.content_base64 = readFileSync6(path).toString("base64");
           else
             warnings.push(`artifact_missing:${row.artifact_uri}`);
         } catch (error51) {
@@ -20073,7 +20135,7 @@ async function proposeKnowledgeSyncConflictResolutionWithAi(options) {
 
 // src/outbox-consume.ts
 import { createHash as createHash6, randomUUID as randomUUID8 } from "crypto";
-import { existsSync as existsSync6, readFileSync as readFileSync6 } from "fs";
+import { existsSync as existsSync7, readFileSync as readFileSync7 } from "fs";
 import { basename } from "path";
 
 // src/safety.ts
@@ -20350,9 +20412,9 @@ async function readS3Text(uri, config2, safetyPolicy) {
 async function readOutboxInput(input, config2, safetyPolicy) {
   if (input.startsWith("s3://"))
     return readS3Text(input, config2, safetyPolicy);
-  if (!existsSync6(input))
+  if (!existsSync7(input))
     throw new Error(`Outbox not found: ${input}`);
-  return readFileSync6(input, "utf8");
+  return readFileSync7(input, "utf8");
 }
 function mergeJson(existing, patch) {
   let base = {};
@@ -20591,7 +20653,7 @@ async function consumeOpenFilesOutbox(options) {
 
 // src/manifest-ingest.ts
 import { createHash as createHash7 } from "crypto";
-import { existsSync as existsSync7, readFileSync as readFileSync7 } from "fs";
+import { existsSync as existsSync8, readFileSync as readFileSync8 } from "fs";
 import { basename as basename2 } from "path";
 function stableId4(prefix, value) {
   return `${prefix}_${createHash7("sha256").update(value).digest("hex").slice(0, 20)}`;
@@ -20813,9 +20875,9 @@ async function readS3Text2(uri, config2, safetyPolicy) {
 async function readManifestInput(input, config2, safetyPolicy) {
   if (input.startsWith("s3://"))
     return readS3Text2(input, config2, safetyPolicy);
-  if (!existsSync7(input))
+  if (!existsSync8(input))
     throw new Error(`Manifest not found: ${input}`);
-  return readFileSync7(input, "utf8");
+  return readFileSync8(input, "utf8");
 }
 function chunkText(text, maxChars, overlapChars) {
   const normalized = text.replace(/\r\n/g, `
@@ -22193,7 +22255,7 @@ async function preflightKnowledgeMachine(options = {}) {
 
 // src/source-ingest.ts
 import { createHash as createHash8 } from "crypto";
-import { existsSync as existsSync8, readFileSync as readFileSync8 } from "fs";
+import { existsSync as existsSync9, readFileSync as readFileSync9 } from "fs";
 import { basename as basename3 } from "path";
 
 // src/source-resolver.ts
@@ -22543,9 +22605,9 @@ function titleForRef(parsed) {
 }
 async function readDirectSourceText(parsed, config2, safetyPolicy) {
   if (parsed.kind === "file") {
-    if (!existsSync8(parsed.path))
+    if (!existsSync9(parsed.path))
       throw new Error(`Source file not found: ${parsed.path}`);
-    const text = readFileSync8(parsed.path, "utf8");
+    const text = readFileSync9(parsed.path, "utf8");
     return {
       text,
       contentSource: "file",
@@ -23902,7 +23964,7 @@ function recordWikiLayoutCatalog(db, artifacts, now = new Date) {
 // src/service.ts
 function resolvePeerWorkspace(input) {
   const target = resolve4(input);
-  if (existsSync9(join4(target, "knowledge.db")) || existsSync9(join4(target, "config.json"))) {
+  if (existsSync10(join4(target, "knowledge.db")) || existsSync10(join4(target, "config.json"))) {
     return ensureKnowledgeWorkspace(target);
   }
   return ensureKnowledgeWorkspace(workspaceForHome(projectKnowledgeHome(target)).home);
@@ -24202,10 +24264,10 @@ function selectInventoryRows(db, sql, params = []) {
   return db.query(sql).all(...params);
 }
 function readLegacyInventoryStore(path) {
-  if (!existsSync9(path))
+  if (!existsSync10(path))
     return { exists: false, read_error: null, items: [] };
   try {
-    const parsed = JSON.parse(readFileSync9(path, "utf8"));
+    const parsed = JSON.parse(readFileSync10(path, "utf8"));
     if (!parsed || !Array.isArray(parsed.items)) {
       return { exists: true, read_error: "invalid_store_shape", items: [] };
     }
@@ -25019,25 +25081,37 @@ class KnowledgeService {
   }
   async search(options) {
     const workspace = this.ensureWorkspace();
+    const legacyStorePath = options.legacyStorePath ?? workspace.jsonStorePath;
+    if (!options.legacyStorePath)
+      ensureStore(legacyStorePath);
     return hybridSearch({
       ...options,
       dbPath: workspace.knowledgeDbPath,
+      legacyStorePath,
       config: this.config()
     });
   }
   async retrieveContext(options) {
     const workspace = this.ensureWorkspace();
+    const legacyStorePath = options.legacyStorePath ?? workspace.jsonStorePath;
+    if (!options.legacyStorePath)
+      ensureStore(legacyStorePath);
     return retrieveKnowledgeContext({
       ...options,
       dbPath: workspace.knowledgeDbPath,
+      legacyStorePath,
       config: this.config()
     });
   }
   async runPrompt(options) {
     const workspace = this.ensureWorkspace();
+    const legacyStorePath = options.legacyStorePath ?? workspace.jsonStorePath;
+    if (!options.legacyStorePath)
+      ensureStore(legacyStorePath);
     return runKnowledgePrompt({
       ...options,
       dbPath: workspace.knowledgeDbPath,
+      legacyStorePath,
       config: this.config()
     });
   }
@@ -27731,9 +27805,9 @@ function buildServer() {
     store_path: storePathField,
     scope: scopeField
   }, async ({ file: file2, store_path, scope }) => {
-    if (!existsSync10(file2))
+    if (!existsSync11(file2))
       return errorText(`File not found: ${file2}`);
-    const imported = JSON.parse(readFileSync10(file2, "utf8"));
+    const imported = JSON.parse(readFileSync11(file2, "utf8"));
     if (!imported || !Array.isArray(imported.items))
       return errorText('Invalid import file: expected {"items": [...]}');
     const storePath = resolveStorePath(store_path, scope);
