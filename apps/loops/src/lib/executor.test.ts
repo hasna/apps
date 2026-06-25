@@ -267,9 +267,14 @@ describe("executeLoop", () => {
       ["cursor", "cursor-agent"],
       ["aicopilot", "aicopilot"],
     ] as const;
-    for (const [, binary] of providers) {
+    for (const [provider, binary] of providers) {
       const fake = join(binDir, binary);
-      await Bun.write(fake, "#!/usr/bin/env bash\nsleep 0.3\nprintf 'stdin:'\ncat\n");
+      await Bun.write(
+        fake,
+        provider === "cursor"
+          ? "#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"${1:-}\" != \"agent\" ]]; then echo 'missing cursor agent subcommand' >&2; exit 64; fi\nsleep 0.3\nprintf 'stdin:'\ncat\n"
+          : "#!/usr/bin/env bash\nsleep 0.3\nprintf 'stdin:'\ncat\n",
+      );
       chmodSync(fake, 0o755);
     }
 

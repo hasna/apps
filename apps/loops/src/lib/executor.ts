@@ -186,7 +186,7 @@ function agentArgs(target: AgentTarget): string[] {
       args.push(...(target.extraArgs ?? []));
       return args;
     case "cursor":
-      args.push("-p");
+      args.push("agent", "-p");
       if (target.model) args.push("--model", target.model);
       if (target.agent) args.push("--agent", target.agent);
       args.push(...(target.extraArgs ?? []));
