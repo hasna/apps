@@ -38,6 +38,16 @@ describe("index exports", () => {
     expect(typeof api.closeDb).toBe("function");
   });
 
+  it("exports storage sync functions", () => {
+    expect(Array.isArray(api.STORAGE_TABLES)).toBe(true);
+    expect(typeof api.getStorageDatabaseUrl).toBe("function");
+    expect(typeof api.getStorageMode).toBe("function");
+    expect(typeof api.getStorageStatus).toBe("function");
+    expect(typeof api.storagePush).toBe("function");
+    expect(typeof api.storagePull).toBe("function");
+    expect(typeof api.storageSync).toBe("function");
+  });
+
   it("exports machine registry functions", () => {
     expect(typeof api.addMachine).toBe("function");
     expect(typeof api.upsertMachine).toBe("function");

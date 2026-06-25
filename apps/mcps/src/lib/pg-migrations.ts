@@ -1,10 +1,13 @@
 /**
- * PostgreSQL migrations for open-mcps cloud sync.
+ * PostgreSQL migrations for open-mcps remote storage sync.
  *
  * Equivalent to the SQLite schema in db.ts, translated for PostgreSQL.
  */
 
 export const PG_MIGRATIONS: string[] = [
+  // Migration 0: UUID helper for feedback rows
+  `CREATE EXTENSION IF NOT EXISTS pgcrypto`,
+
   // Migration 1: servers table
   `CREATE TABLE IF NOT EXISTS servers (
     id TEXT PRIMARY KEY,
@@ -13,6 +16,7 @@ export const PG_MIGRATIONS: string[] = [
     command TEXT NOT NULL,
     args TEXT NOT NULL DEFAULT '[]',
     env TEXT NOT NULL DEFAULT '{}',
+    credential_refs TEXT NOT NULL DEFAULT '{}',
     transport TEXT NOT NULL DEFAULT 'stdio',
     url TEXT,
     source TEXT NOT NULL DEFAULT 'local',
@@ -22,6 +26,8 @@ export const PG_MIGRATIONS: string[] = [
     created_at TEXT NOT NULL DEFAULT NOW()::text,
     updated_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
+
+  `ALTER TABLE servers ADD COLUMN IF NOT EXISTS credential_refs TEXT NOT NULL DEFAULT '{}'`,
 
   // Migration 2: tool_cache table
   `CREATE TABLE IF NOT EXISTS tool_cache (
@@ -47,7 +53,29 @@ export const PG_MIGRATIONS: string[] = [
     created_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
 
-  // Migration 4: feedback table
+  // Migration 4: machines table
+  `CREATE TABLE IF NOT EXISTS machines (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    host TEXT NOT NULL,
+    username TEXT NOT NULL DEFAULT '',
+    port INTEGER NOT NULL DEFAULT 22,
+    platform TEXT NOT NULL DEFAULT 'unknown',
+    arch TEXT NOT NULL DEFAULT 'unknown',
+    bun_path TEXT,
+    npm_path TEXT,
+    installer TEXT NOT NULL DEFAULT 'auto',
+    ssh_key_path TEXT,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    updated_at TEXT NOT NULL DEFAULT NOW()::text,
+    last_seen_at TEXT,
+    last_error TEXT
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_machines_enabled ON machines(enabled)`,
+
+  // Migration 5: feedback table
   `CREATE TABLE IF NOT EXISTS feedback (
     id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     message TEXT NOT NULL,
@@ -58,7 +86,7 @@ export const PG_MIGRATIONS: string[] = [
     created_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
 
-  // Migration 5: provider profile catalog
+  // Migration 6: provider profile catalog
   `CREATE TABLE IF NOT EXISTS provider_profiles (
     id TEXT PRIMARY KEY,
     display_name TEXT NOT NULL,

@@ -129,3 +129,16 @@ export {
 } from "./lib/proxy.js";
 
 export { getDb, closeDb } from "./lib/db.js";
+export {
+  STORAGE_TABLES,
+  storagePull,
+  storagePush,
+  storageSync,
+  getStorageDatabaseEnv,
+  getStorageDatabaseUrl,
+  getStorageMode,
+  getStorageStatus,
+  runStorageMigrations,
+  getSyncMetaAll,
+} from "./lib/storage-sync.js";
+export type { StorageEnv, StorageMode, SyncMeta, SyncResult } from "./lib/storage-sync.js";

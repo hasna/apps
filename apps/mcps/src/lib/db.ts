@@ -1,8 +1,25 @@
 import { Database } from "bun:sqlite";
-import { SqliteAdapter } from "@hasna/cloud";
 import { mkdirSync } from "fs";
 import { MCPS_DIR, DB_PATH } from "./config.js";
 import { DEFAULT_PROVIDER_PROFILE_SEEDS } from "./provider-profile-seeds.js";
+
+export class SqliteAdapter {
+  readonly raw: Database;
+
+  constructor(path: string) {
+    this.raw = new Database(path);
+    this.raw.exec("PRAGMA journal_mode = WAL");
+    this.raw.exec("PRAGMA foreign_keys = ON");
+  }
+
+  run(sql: string, ...params: any[]) {
+    return this.raw.run(sql, ...params);
+  }
+
+  close(): void {
+    this.raw.close();
+  }
+}
 
 let db: Database | null = null;
 let _adapter: SqliteAdapter | null = null;
@@ -14,7 +31,6 @@ export function getDb(): Database {
 
   _adapter = new SqliteAdapter(DB_PATH);
   db = _adapter.raw;
-  // SqliteAdapter already sets WAL and foreign_keys; add busy_timeout
   db.exec("PRAGMA busy_timeout = 5000");
 
   db.exec(`
