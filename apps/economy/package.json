@@ -1,6 +1,6 @@
 {
   "name": "@hasna/economy",
-  "version": "0.2.30",
+  "version": "0.2.31",
   "description": "AI coding cost tracker — CLI + MCP server + REST API + web dashboard for Claude Code, Codex, Gemini, OpenCode, Cursor, Pi, and Hermes",
   "type": "module",
   "main": "dist/index.js",
@@ -15,6 +15,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./storage": {
+      "types": "./dist/storage.d.ts",
+      "import": "./dist/storage.js"
     }
   },
   "files": [
@@ -23,11 +27,11 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "cd dashboard && bun run build && cd .. && bun build src/cli/index.ts --outdir dist/cli --target bun --packages external && bun build src/mcp/index.ts --outdir dist/mcp --target bun --packages external && bun build src/server/index.ts --outdir dist/server --target bun --packages external && bun build src/otel/index.ts --outdir dist/otel --target bun --packages external && bun build src/index.ts --outdir dist --target bun --packages external && tsc --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist dashboard/dist && cd dashboard && bun run build && cd .. && bun build src/cli/index.ts --outdir dist/cli --target bun --packages external && bun build src/mcp/index.ts --outdir dist/mcp --target bun --packages external && bun build src/server/index.ts --outdir dist/server --target bun --packages external && bun build src/otel/index.ts --outdir dist/otel --target bun --packages external && bun build src/index.ts src/storage.ts --outdir dist --target bun --packages external && tsc --emitDeclarationOnly --outDir dist",
     "build:cli": "bun build src/cli/index.ts --outdir dist/cli --target bun --packages external",
     "build:mcp": "bun build src/mcp/index.ts --outdir dist/mcp --target bun --packages external",
     "build:server": "bun build src/server/index.ts --outdir dist/server --target bun --packages external",
-    "build:lib": "bun build src/index.ts --outdir dist --target bun --packages external",
+    "build:lib": "bun build src/index.ts src/storage.ts --outdir dist --target bun --packages external",
     "build:dashboard": "cd dashboard && bun run build",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
@@ -57,20 +61,21 @@
   },
   "dependencies": {
     "@hasna/accounts": "0.1.6",
-    "@hasna/cloud": "^0.1.24",
-    "@hasna/projects": "0.1.51",
+    "@hasna/events": "^0.1.3",
+    "@hasna/projects": "0.1.55",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
+    "pg": "^8.20.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "@types/pg": "^8.20.0",
     "bun-types": "latest",
     "typescript": "^5.7.2"
   },
   "trustedDependencies": [
-    "@hasna/cloud",
     "@hasna/projects"
   ]
 }

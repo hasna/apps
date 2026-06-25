@@ -1,4 +1,4 @@
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { Database } from '../db/database.js'
 
 export interface SpikeInfo {
   date: string

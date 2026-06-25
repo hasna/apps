@@ -63,7 +63,7 @@ describe('economy CLI help', () => {
     expect(stdout).toContain('phase-9')
     expect(stdout).toContain('Multi-machine auto sync')
     expect(stdout).toContain('9.7')
-    expect(stdout).toContain('registerSyncSchedule')
+    expect(stdout).toContain('repo-native launchd/systemd scheduler')
     expect(stderr).toBe('')
   })
 
@@ -94,6 +94,41 @@ describe('economy CLI help', () => {
     expect(stdout).toContain('List account usage by email address and coding agent')
     expect(stdout).toContain('--json')
     expect(stderr).toBe('')
+  })
+
+  test('documents shared events and webhooks commands', async () => {
+    const eventsDir = mkdtempSync(join(tmpdir(), 'economy-events-'))
+    tempRoots.push(eventsDir)
+    const { stdout, stderr, exitCode } = await runCli(['--help'], {
+      HASNA_EVENTS_DIR: eventsDir,
+    })
+
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain('events')
+    expect(stdout).toContain('webhooks')
+    expect(stderr).toBe('')
+  })
+
+  test('documents storage sync command without legacy hosted naming', async () => {
+    const help = await runCli(['storage', '--help'])
+
+    expect(help.exitCode).toBe(0)
+    expect(help.stdout).toContain('Cross-machine sync via repo-owned PostgreSQL storage')
+    expect(help.stdout).toContain('Usage: economy storage')
+    expect(help.stdout).not.toContain(['storage', 'cloud'].join('|'))
+    expect(help.stdout).toContain('push')
+    expect(help.stdout).toContain('pull')
+    expect(help.stdout).toContain('sync')
+    expect(help.stderr).toBe('')
+
+    const status = await runCli(['storage', 'status'])
+    expect(status.exitCode).toBe(0)
+    expect(status.stdout).toContain('Canonical RDS')
+    expect(status.stdout).toContain('hasna-xyz-infra-apps-prod-postgres/economy')
+    expect(status.stdout).toContain('hasna/xyz/opensource/economy/prod/rds')
+    expect(status.stdout).toContain('Storage URL')
+    expect(status.stdout).toContain('HASNA_ECONOMY_DATABASE_URL')
+    expect(status.stdout).not.toContain(['ECONOMY', 'CLOUD', 'DATABASE', 'URL'].join('_'))
   })
 })
 
@@ -209,5 +244,15 @@ describe('economy CLI mutation validation', () => {
     result = await runCli(['top', '--agent', 'unknown'])
     expect(result.exitCode).toBe(1)
     expect(result.stderr).toContain('--agent must be one of: claude, takumi, codex, gemini, opencode, cursor, pi, hermes')
+  })
+
+  test('dashboard command requires an API token before starting or opening', async () => {
+    const result = await runCli(['dashboard', '--port', '3456'], {
+      ECONOMY_API_TOKEN: '',
+      HASNA_ECONOMY_API_TOKEN: '',
+    })
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('ECONOMY_API_TOKEN or HASNA_ECONOMY_API_TOKEN is required')
   })
 })

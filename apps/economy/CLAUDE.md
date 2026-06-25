@@ -5,7 +5,7 @@ AI coding cost tracker — `@hasna/economy`
 ## Stack
 - Runtime: Bun
 - Language: TypeScript
-- DB: SQLite via `@hasna/cloud` `SqliteAdapter` at `~/.hasna/economy/economy.db`
+- DB: repo-native SQLite adapter at `~/.hasna/economy/economy.db`; optional PostgreSQL/AWS RDS remote sync is implemented inside this repo
 - CLI: Commander.js
 - MCP: @modelcontextprotocol/sdk
 - Server: Bun.serve

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { RefreshCwIcon } from "lucide-react";
+import { KeyRoundIcon, RefreshCwIcon } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { ThemeProvider } from "@/components/theme-provider";
 import { OverviewTab } from "@/tabs/OverviewTab";
@@ -16,6 +16,8 @@ import { SavingsTab } from "@/tabs/SavingsTab";
 import { FleetTab } from "@/tabs/FleetTab";
 import { ReconciliationTab } from "@/tabs/ReconciliationTab";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { getDashboardApiToken, initDashboardApiTokenFromLocation, setDashboardApiToken } from "@/api";
 import {
   NavigationMenu,
   NavigationMenuList,
@@ -82,6 +84,9 @@ function AppInner() {
   const [tab, setTab] = React.useState<Tab>("overview");
   const [loading, setLoading] = React.useState(false);
   const [reloadKey, setReloadKey] = React.useState(0);
+  const [apiToken, setApiToken] = React.useState(() => initDashboardApiTokenFromLocation());
+  const [draftApiToken, setDraftApiToken] = React.useState(() => getDashboardApiToken());
+  const [tokenEditorOpen, setTokenEditorOpen] = React.useState(false);
   const { text: lastUpdatedText, markReloaded } = useElapsedTime();
 
   const reload = React.useCallback(() => {
@@ -105,6 +110,23 @@ function AppInner() {
     }
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [reload]);
+
+  const saveApiToken = React.useCallback((event: React.FormEvent) => {
+    event.preventDefault();
+    const saved = setDashboardApiToken(draftApiToken);
+    setApiToken(saved);
+    setDraftApiToken(saved);
+    setTokenEditorOpen(false);
+    reload();
+  }, [draftApiToken, reload]);
+
+  const clearApiToken = React.useCallback(() => {
+    setDashboardApiToken("");
+    setApiToken("");
+    setDraftApiToken("");
+    setTokenEditorOpen(false);
+    reload();
   }, [reload]);
 
   return (
@@ -138,10 +160,41 @@ function AppInner() {
               </NavigationMenuList>
             </NavigationMenu>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <span className="text-xs text-muted-foreground hidden sm:inline">
               Updated {lastUpdatedText}
             </span>
+            {tokenEditorOpen && (
+              <form className="flex items-center gap-2" onSubmit={saveApiToken}>
+                <Input
+                  type="password"
+                  value={draftApiToken}
+                  onChange={(event) => setDraftApiToken(event.target.value)}
+                  placeholder="API token"
+                  className="h-8 w-44"
+                />
+                <Button type="submit" variant="outline" size="sm" className="h-8">
+                  Save
+                </Button>
+                {apiToken && (
+                  <Button type="button" variant="ghost" size="sm" className="h-8" onClick={clearApiToken}>
+                    Clear
+                  </Button>
+                )}
+              </form>
+            )}
+            <Button
+              variant={apiToken ? "secondary" : "outline"}
+              size="icon"
+              className="size-8"
+              onClick={() => {
+                setDraftApiToken(getDashboardApiToken());
+                setTokenEditorOpen((open) => !open);
+              }}
+              title={apiToken ? "API token set" : "API token"}
+            >
+              <KeyRoundIcon className="size-4" />
+            </Button>
             <Button
               variant="outline"
               size="icon"

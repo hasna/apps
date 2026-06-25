@@ -1,5 +1,5 @@
 import { Database as BunDatabase } from 'bun:sqlite'
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { Database } from '../db/database.js'
 import { existsSync } from 'fs'
 import { dedupeRequests } from '../db/database.js'
 import { packageMetadata } from './package-metadata.js'

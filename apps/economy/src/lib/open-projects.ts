@@ -1,38 +1,48 @@
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { Database } from '../db/database.js'
 import { upsertProject } from '../db/database.js'
 
 interface OpenProject {
   id: string
   name: string
   description: string | null
-  path: string
+  path?: string | null
+  primary_path?: string | null
   tags: string[]
   created_at: string
 }
 
 type ListOpenProjects = (options: { status: 'active'; limit: number }) => OpenProject[]
 
+interface OpenProjectsApi {
+  listProjects?: ListOpenProjects
+  listWorkspaces?: ListOpenProjects
+}
+
 export async function syncOpenProjectsRegistry(
   db: Database,
   listActiveProjects?: ListOpenProjects,
 ): Promise<{ imported: number; skipped: number }> {
-  let listProjects = listActiveProjects
-  if (!listProjects) {
-    const projectsApi = await import('@hasna/projects')
-    listProjects = projectsApi.listProjects as ListOpenProjects
+  let listOpenProjects = listActiveProjects
+  if (!listOpenProjects) {
+    const projectsApi = await import('@hasna/projects') as OpenProjectsApi
+    listOpenProjects = projectsApi.listProjects ?? projectsApi.listWorkspaces
   }
-  const projects = listProjects({ status: 'active', limit: 5000 })
+  if (!listOpenProjects) {
+    throw new Error('@hasna/projects does not expose listWorkspaces or listProjects')
+  }
+  const projects = listOpenProjects({ status: 'active', limit: 5000 })
   let imported = 0
   let skipped = 0
 
   for (const project of projects) {
-    if (!project.path) {
+    const path = project.path ?? project.primary_path ?? ''
+    if (!path) {
       skipped++
       continue
     }
     upsertProject(db, {
       id: project.id,
-      path: project.path,
+      path,
       name: project.name,
       description: project.description,
       tags: project.tags ?? [],

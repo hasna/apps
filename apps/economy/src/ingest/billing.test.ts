@@ -4,7 +4,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { openDatabase, queryBillingSummary } from '../db/database.js'
 import { syncAnthropicBilling, syncGeminiBilling, syncOpenAIBilling } from './billing.js'
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { Database } from '../db/database.js'
 
 let root: string
 let db: Database
@@ -18,18 +18,15 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = realFetch
-  delete process.env['HASNAXYZ_ANTHROPIC_LIVE_ADMIN_API_KEY']
   delete process.env['ANTHROPIC_ADMIN_API_KEY']
-  delete process.env['HASNAXYZ_OPENAI_LIVE_ADMIN_API_KEY']
   delete process.env['OPENAI_ADMIN_API_KEY']
   delete process.env['HASNA_ECONOMY_GEMINI_BILLING_EXPORT_PATH']
-  delete process.env['HASNAXYZ_ECONOMY_GEMINI_BILLING_EXPORT_PATH']
   if (existsSync(root)) rmSync(root, { recursive: true, force: true })
 })
 
 describe('syncAnthropicBilling', () => {
   it('imports paginated Anthropic cost report rows from cents to USD', async () => {
-    process.env['HASNAXYZ_ANTHROPIC_LIVE_ADMIN_API_KEY'] = 'anthropic-admin-test'
+    process.env['ANTHROPIC_ADMIN_API_KEY'] = 'anthropic-admin-test'
     const seenUrls: URL[] = []
     globalThis.fetch = (async (input, init) => {
       const url = new URL(String(input))
@@ -85,7 +82,7 @@ describe('syncAnthropicBilling', () => {
 
 describe('syncOpenAIBilling', () => {
   it('imports OpenAI organization cost rows grouped by line item', async () => {
-    process.env['HASNAXYZ_OPENAI_LIVE_ADMIN_API_KEY'] = 'openai-admin-test'
+    process.env['OPENAI_ADMIN_API_KEY'] = 'openai-admin-test'
     const seenUrls: URL[] = []
     globalThis.fetch = (async (input, init) => {
       const url = new URL(String(input))
@@ -151,23 +148,7 @@ describe('syncGeminiBilling', () => {
     expect(result.days).toBe(0)
     expect(result.totalUsd).toBe(0)
     expect(result.skipped).toContain('HASNA_ECONOMY_GEMINI_BILLING_EXPORT_PATH')
-    expect(result.skipped).toContain('HASNAXYZ_ECONOMY_GEMINI_BILLING_EXPORT_PATH')
     expect(result.skipped).toContain('GEMINI_BILLING_EXPORT_PATH')
-  })
-
-  it('supports the legacy HASNAXYZ Gemini billing export env alias', async () => {
-    const exportPath = join(root, 'gemini-billing-legacy.jsonl')
-    writeFileSync(exportPath, JSON.stringify({
-      date: '2026-05-08',
-      service: 'Google AI',
-      sku: 'Gemini API',
-      amount: 2.5,
-    }))
-    process.env['HASNAXYZ_ECONOMY_GEMINI_BILLING_EXPORT_PATH'] = exportPath
-
-    const result = await syncGeminiBilling(db, { fromDate: '2026-05-01', toDate: '2026-05-09' })
-    expect(result.days).toBe(1)
-    expect(result.totalUsd).toBeCloseTo(2.5)
   })
 
   it('parses quoted CSV billing exports with commas in text fields', async () => {

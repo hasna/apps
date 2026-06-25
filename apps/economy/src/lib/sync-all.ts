@@ -1,4 +1,4 @@
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { Database } from '../db/database.js'
 import { ingestClaude, ingestTakumi } from '../ingest/claude.js'
 import { ingestCodex } from '../ingest/codex.js'
 import { ingestGemini } from '../ingest/gemini.js'
@@ -9,7 +9,7 @@ import { ingestHermes } from '../ingest/hermes.js'
 import { ingestClaudeQuota } from '../ingest/claude-quota.js'
 import { ingestCodexQuota } from '../ingest/codex-quota.js'
 import { dedupeRequests } from '../db/database.js'
-import { maybePullFromCloud, maybePushAfterIngest } from './cloud-sync.js'
+import { maybePullFromStorage, maybePushAfterIngest } from './native-storage.js'
 import type { SyncOptions } from '../types/index.js'
 
 export interface SyncAllResult {
@@ -24,8 +24,8 @@ export interface SyncAllResult {
   claudeQuota?: Awaited<ReturnType<typeof ingestClaudeQuota>>
   codexQuota?: Awaited<ReturnType<typeof ingestCodexQuota>>
   deduped: number
-  cloudPulled: boolean
-  cloudPushed: boolean
+  storagePulled: boolean
+  storagePushed: boolean
 }
 
 export async function syncAll(db: Database, opts: SyncOptions = {}): Promise<SyncAllResult> {
@@ -35,9 +35,13 @@ export async function syncAll(db: Database, opts: SyncOptions = {}): Promise<Syn
   )
   const all = !anySpecific
 
-  await maybePullFromCloud()
+  const storagePulled = await maybePullFromStorage()
 
-  const result: SyncAllResult = { deduped: 0, cloudPulled: false, cloudPushed: false }
+  const result: SyncAllResult = {
+    deduped: 0,
+    storagePulled,
+    storagePushed: false,
+  }
 
   if (all || opts.claude) {
     result.claude = await ingestClaude(db, opts.verbose)
@@ -55,7 +59,7 @@ export async function syncAll(db: Database, opts: SyncOptions = {}): Promise<Syn
   if (all || opts.hermes) result.hermes = await ingestHermes(db, opts.verbose)
 
   result.deduped = dedupeRequests(db)
-  result.cloudPushed = await maybePushAfterIngest()
+  result.storagePushed = await maybePushAfterIngest()
 
   return result
 }

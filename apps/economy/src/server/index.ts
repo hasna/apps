@@ -10,7 +10,12 @@ REST API server for ${packageMetadata.name}
 Options:
   -p, --port <port>  Port to bind (default: ECONOMY_PORT or 3456)
   -V, --version      output the version number
-  -h, --help         display help for command`)
+  -h, --help         display help for command
+
+Environment:
+  ECONOMY_API_TOKEN or HASNA_ECONOMY_API_TOKEN is required
+  ECONOMY_BIND or ECONOMY_HOST overrides the default 127.0.0.1 bind host
+  ECONOMY_CORS_ORIGIN(S) allow explicit browser origins beyond localhost`)
 }
 
 function resolvePort(argv: string[]): number {

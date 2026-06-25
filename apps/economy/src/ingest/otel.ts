@@ -1,4 +1,4 @@
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { Database } from '../db/database.js'
 import { upsertRequest, upsertSession, rollupSession, getMachineId } from '../db/database.js'
 import { isAgent } from '../lib/agents.js'
 import type { Agent } from '../lib/agents.js'

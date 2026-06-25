@@ -1,9 +1,7 @@
 import { randomUUID } from 'crypto'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { registerCloudTools } from '@hasna/cloud'
 import { z } from 'zod'
-import { openDatabase, getDbPath, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryAgentBreakdown, queryAccountBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertGoal, deleteGoal, getGoalStatuses, listSubscriptions, upsertSubscription, deleteSubscription, listMachines, getMachineId, queryBillingSummary, listModelPricing, upsertModelPricing, deleteModelPricing } from '../db/database.js'
-import { PG_MIGRATIONS } from '../db/pg-migrations.js'
+import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryAgentBreakdown, queryAccountBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertGoal, deleteGoal, getGoalStatuses, listSubscriptions, upsertSubscription, deleteSubscription, listMachines, getMachineId, queryBillingSummary, listModelPricing, upsertModelPricing, deleteModelPricing } from '../db/database.js'
 import { syncAll } from '../lib/sync-all.js'
 import { AGENTS } from '../lib/agents.js'
 import { querySavingsSummary } from '../lib/savings.js'
@@ -12,6 +10,7 @@ import { usageSnapshotFilterForPeriod } from '../lib/periods.js'
 import { computeCostFromDb } from '../lib/pricing.js'
 import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
+import { storagePull, storagePush, storageSyncFull, getStorageDatabaseUrl, getStoragePg } from '../lib/native-storage.js'
 import type { Period } from '../types/index.js'
 import type { Agent } from '../lib/agents.js'
 
@@ -55,6 +54,10 @@ const TOOL_NAMES = [
   'set_subscription',
   'remove_subscription',
   'sync',
+  'storage_status',
+  'storage_push',
+  'storage_pull',
+  'storage_sync',
   'search_tools',
   'describe_tools',
   'get_goals',
@@ -92,6 +95,10 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   set_subscription: `provider, plan, monthly_fee_usd?, included_usage_usd?, agent?(${AGENTS.join('|')}) -> create/update subscription plan`,
   remove_subscription: 'id -> delete subscription plan',
   sync: `sources(all|${AGENTS.join('|')}) -> ingest latest cost data`,
+  storage_status: 'no params -> check configured economy PostgreSQL storage and synced tables',
+  storage_push: 'tables?[] -> push local economy SQLite rows to remote PostgreSQL storage',
+  storage_pull: 'tables?[] -> pull remote PostgreSQL storage rows into local economy SQLite',
+  storage_sync: 'no params -> push local rows, then pull remote rows',
   search_tools: 'query substring -> tool name list',
   describe_tools: 'names[] -> one-line parameter hints',
   get_goals: 'no params -> goal progress summary',
@@ -485,6 +492,53 @@ server.tool(
 )
 
 server.tool(
+  'storage_status',
+  'Check configured economy PostgreSQL remote and synced tables.',
+  {},
+  async () => {
+    const url = getStorageDatabaseUrl()
+    if (!url) return text('storage: not configured')
+
+    let storage: Awaited<ReturnType<typeof getStoragePg>> | null = null
+    try {
+      storage = await getStoragePg()
+      await storage.get('SELECT 1 as ok')
+      const tables = await storage.all("SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename") as Array<{ tablename: string }>
+      return text([
+        'storage: connected',
+        `database: ${url.replace(/:[^:@/]+@/, ':***@')}`,
+        `tables: ${tables.map(row => row.tablename).join(', ') || 'none'}`,
+      ].join('\n'))
+    } catch (error) {
+      return textError(`storage: ${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      if (storage) await storage.close().catch(() => {})
+    }
+  },
+)
+
+server.tool(
+  'storage_push',
+  'Push local economy SQLite rows to remote PostgreSQL.',
+  { tables: z.array(z.string()).optional() },
+  async ({ tables }: { tables?: string[] }) => text(JSON.stringify(await storagePush({ tables }), null, 2)),
+)
+
+server.tool(
+  'storage_pull',
+  'Pull remote PostgreSQL rows into local economy SQLite.',
+  { tables: z.array(z.string()).optional() },
+  async ({ tables }: { tables?: string[] }) => text(JSON.stringify(await storagePull({ tables }), null, 2)),
+)
+
+server.tool(
+  'storage_sync',
+  'Push local rows, then pull remote rows.',
+  {},
+  async () => text(JSON.stringify(await storageSyncFull(), null, 2)),
+)
+
+server.tool(
   'get_usage',
   'Usage snapshots and fleet summary. period: today|week|month|year|all',
   { period: z.enum(['today', 'week', 'month', 'year', 'all']).optional(), agent: z.enum(AGENTS).optional() },
@@ -723,9 +777,5 @@ server.tool(
   },
 )
 
-registerCloudTools(server, MCP_NAME, {
-  dbPath: getDbPath(),
-  migrations: PG_MIGRATIONS,
-})
 return server
 }

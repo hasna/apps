@@ -1,10 +1,10 @@
 import chalk from 'chalk'
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { Database } from '../../db/database.js'
 import {
   openDatabase, querySummary, queryUsageSnapshots, listMachines,
 } from '../../db/database.js'
 import { querySavingsSummary } from '../../lib/savings.js'
-import { getCloudDatabaseUrl, getLastCloudPull } from '../../lib/cloud-sync.js'
+import { getStorageDatabaseUrl, getLastStoragePull } from '../../lib/native-storage.js'
 import { getServeApiToken } from '../../lib/serve-auth.js'
 
 function fmt(usd: number): string {
@@ -38,8 +38,8 @@ export function buildStatusLine(db: Database): string {
   const week = querySummary(db, 'week', undefined, true)
   const agent = topAgent(db)
   const quota = quotaHint(db)
-  const cloud = getCloudDatabaseUrl() ? 'cloud' : 'local'
-  const lastPull = getLastCloudPull()
+  const storage = getStorageDatabaseUrl() ? 'storage' : 'local'
+  const lastPull = getLastStoragePull()
   const pullAge = lastPull
     ? `${Math.round((Date.now() - new Date(lastPull).getTime()) / 60000)}m`
     : 'never'
@@ -49,7 +49,7 @@ export function buildStatusLine(db: Database): string {
     `week ${fmt(week.total_usd)}`,
     `top ${agent}`,
     `${machines} machines`,
-    `${cloud} pull ${pullAge}`,
+    `${storage} pull ${pullAge}`,
   ]
   if (quota) parts.push(quota)
   return parts.join(' · ')
@@ -100,7 +100,7 @@ export async function runTui(opts: { watch?: boolean; interval?: number }): Prom
     console.log(`  Top agent: ${topAgent(db)}`)
     if (quota) console.log(`  Quota:     ${quota}`)
     console.log(`  Fleet:     ${machines.length} machines`)
-    console.log(`  Cloud:     ${getCloudDatabaseUrl() ? 'connected' : 'local-only'}`)
+    console.log(`  Storage:   ${getStorageDatabaseUrl() ? 'connected' : 'local-only'}`)
     if (getServeApiToken()) console.log(chalk.dim('  API auth:  ECONOMY_API_TOKEN set'))
     console.log(chalk.dim(`\n  ${opts.watch ? `Refreshing every ${interval}s — Ctrl+C to exit` : 'Run with --watch for live refresh'}`))
   }

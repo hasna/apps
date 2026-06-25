@@ -1,4 +1,4 @@
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { Database } from '../db/database.js'
 import type { ModelPricing } from '../types/index.js'
 import { deleteModelPricing, getModelPricing, seedModelPricing, upsertModelPricing } from '../db/database.js'
 

@@ -1,6 +1,6 @@
 const TOP_LEVEL = [
   'sync', 'today', 'week', 'month', 'all', 'sessions', 'top', 'watch',
-  'budget', 'project', 'pricing', 'goal', 'billing', 'cloud', 'machines',
+  'budget', 'project', 'pricing', 'goal', 'billing', 'storage', 'machines',
   'usage', 'savings', 'subscriptions', 'status', 'doctor', 'init', 'estimate',
   'accounts', 'breakdown', 'fleet', 'merge-db', 'todos', 'serve', 'mcp', 'completion', 'tui', 'waybar', 'bar',
 ] as const
@@ -33,7 +33,7 @@ _economy_completions() {
     completion)
       COMPREPLY=( $(compgen -W "bash zsh fish" -- "\${cur}") )
       ;;
-    cloud)
+    storage)
       COMPREPLY=( $(compgen -W "push pull sync schedule" -- "\${cur}") )
       ;;
     *)
@@ -68,7 +68,7 @@ case $state in
       completion)
         _arguments '1: :(bash zsh fish)'
         ;;
-      cloud)
+      storage)
         _arguments '1: :(push pull sync schedule)'
         ;;
     esac
@@ -83,7 +83,7 @@ function fishCompletion(): string {
     ...TOP_LEVEL.map((c) => `complete -c economy -n '__fish_use_subcommand' -a '${c}'`),
     ...AGENTS.map((a) => `complete -c economy -n '__fish_seen_subcommand_from sync watch usage savings sessions top' -l agent -a '${a}'`),
     "complete -c economy -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'",
-    "complete -c economy -n '__fish_seen_subcommand_from cloud' -a 'push pull sync schedule'",
+    "complete -c economy -n '__fish_seen_subcommand_from storage' -a 'push pull sync schedule'",
   ]
   return lines.join('\n') + '\n'
 }

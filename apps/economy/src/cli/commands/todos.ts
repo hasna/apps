@@ -351,7 +351,7 @@ export const ROADMAP_PHASES: TodoPhase[] = [
       },
       {
         id: '7.8',
-        title: 'Cloud sync: push/pull usage_snapshots, subscriptions, savings_daily tables',
+        title: 'Storage sync: push/pull usage_snapshots, subscriptions, savings_daily tables',
         status: 'done',
         deps: ['0.3', '0.4', '0.5'],
       },
@@ -386,7 +386,7 @@ export const ROADMAP_PHASES: TodoPhase[] = [
       },
       {
         id: '8.5',
-        title: 'economy doctor: detect installed agents, missing auth, stale usage snapshots, cloud drift',
+        title: 'economy doctor: detect installed agents, missing auth, stale usage snapshots, storage drift',
         status: 'done',
         deps: ['7.1', '9.1'],
       },
@@ -396,11 +396,11 @@ export const ROADMAP_PHASES: TodoPhase[] = [
     id: 'phase-9',
     title: 'Multi-machine auto sync (4-machine fleet)',
     summary:
-      'Investigation: machine_id + listMachines + manual cloud push/pull exist; @hasna/cloud has incremental sync, conflict resolution, and launchd/systemd schedulers — but economy does not use them, requests/sessions lack updated_at, ingest is local-only, RDS is hardcoded, and default commands never pull before query.',
+      'Investigation: machine_id + listMachines + manual storage push/pull exist; repo-native storage needed incremental sync, conflict resolution, and launchd/systemd schedulers. Economy did not own them yet, requests/sessions lacked updated_at, ingest was local-only, RDS was hardcoded, and default commands never pulled before query.',
     tasks: [
       {
         id: '9.1',
-        title: 'INVESTIGATION DONE: document gaps — no auto-sync, no updated_at on requests/sessions, ingest_state not cloud-synced, billing_daily multi-writer OK via UPSERT, request IDs agent-prefixed (cross-machine safe), cloud sync manual only',
+        title: 'INVESTIGATION DONE: document gaps — no auto-sync, no updated_at on requests/sessions, ingest_state not storage-synced, billing_daily multi-writer OK via UPSERT, request IDs agent-prefixed (cross-machine safe), storage sync manual only',
         status: 'done',
       },
       {
@@ -411,37 +411,37 @@ export const ROADMAP_PHASES: TodoPhase[] = [
       },
       {
         id: '9.3',
-        title: 'Switch cloud sync to @hasna/cloud incrementalSyncPush/Pull with _sync_meta (replace full table scans)',
+        title: 'Switch storage sync to repo-native incremental push/pull with _sync_meta (replace full table scans)',
         status: 'done',
         deps: ['9.2'],
       },
       {
         id: '9.4',
-        title: 'Extract cloud config: ECONOMY_CLOUD_DATABASE_URL + ECONOMY_PG_PASSWORD; remove hardcoded RDS host from CLI',
+        title: 'Extract storage config: HASNA_ECONOMY_DATABASE_URL + explicit PostgreSQL credentials; remove hardcoded RDS host from CLI',
         status: 'done',
         deps: ['9.1'],
       },
       {
         id: '9.5',
-        title: 'Auto-sync hook: after economy sync (ingest), auto cloud push if ECONOMY_CLOUD_AUTO=1',
+        title: 'Auto-sync hook: after economy sync (ingest), auto storage push if HASNA_ECONOMY_SYNC_AUTO=1',
         status: 'done',
         deps: ['9.3', '9.4'],
       },
       {
         id: '9.6',
-        title: 'Auto-pull hook: before summary queries (today/week/default), pull from cloud if last pull > N minutes (ECONOMY_CLOUD_PULL_INTERVAL)',
+        title: 'Auto-pull hook: before summary queries (today/week/default), pull from storage if last pull > N minutes (HASNA_ECONOMY_SYNC_PULL_INTERVAL)',
         status: 'done',
         deps: ['9.3'],
       },
       {
         id: '9.7',
-        title: 'CLI economy cloud schedule install|status|remove — wrap @hasna/cloud registerSyncSchedule (launchd/systemd every 5–15m)',
+        title: 'CLI economy storage schedule install|status|remove — repo-native launchd/systemd scheduler every 5–15m',
         status: 'done',
         deps: ['9.5'],
       },
       {
         id: '9.8',
-        title: 'CLI economy cloud sync --all-machines: ingest local → push → pull → show per-machine row counts',
+        title: 'CLI economy storage sync --all-machines: ingest local → push → pull → show per-machine row counts',
         status: 'done',
         deps: ['9.5', '9.6'],
       },
@@ -453,7 +453,7 @@ export const ROADMAP_PHASES: TodoPhase[] = [
       },
       {
         id: '9.10',
-        title: 'cloud status: show all 4 machines last sync time, row counts, stale warnings (>1h)',
+        title: 'storage status: show all 4 machines last sync time, row counts, stale warnings (>1h)',
         status: 'done',
         deps: ['9.9'],
       },
@@ -465,7 +465,7 @@ export const ROADMAP_PHASES: TodoPhase[] = [
       },
       {
         id: '9.12',
-        title: 'Include ingest_state in cloud sync OR derive from max(timestamp) per machine to avoid re-ingest skew',
+        title: 'Include ingest_state in storage sync OR derive from max(timestamp) per machine to avoid re-ingest skew',
         status: 'done',
         deps: ['9.3'],
       },
@@ -477,19 +477,19 @@ export const ROADMAP_PHASES: TodoPhase[] = [
       },
       {
         id: '9.14',
-        title: 'Dashboard: machine filter dropdown + fleet-wide overview (all machines default when cloud connected)',
+        title: 'Dashboard: machine filter dropdown + fleet-wide overview (all machines default when storage is connected)',
         status: 'done',
         deps: ['9.13'],
       },
       {
         id: '9.15',
-        title: 'MCP + REST: get_fleet_summary, POST /api/cloud/sync, cloud schedule status endpoint',
+        title: 'MCP + REST: get_fleet_summary, POST /api/storage/sync, storage schedule status endpoint',
         status: 'done',
         deps: ['9.8'],
       },
       {
         id: '9.16',
-        title: 'Billing sync leader election: only one machine runs billing sync per day (cloud lock via ingest_state or PG advisory lock)',
+        title: 'Billing sync leader election: only one machine runs billing sync per day (storage lock via ingest_state or PG advisory lock)',
         status: 'done',
         deps: ['9.4'],
       },
@@ -502,13 +502,13 @@ export const ROADMAP_PHASES: TodoPhase[] = [
     tasks: [
       {
         id: '10.1',
-        title: 'CLI economy status — one-line: today $X · week $Y · top agent · cloud sync age · stale machines',
+        title: 'CLI economy status — one-line: today $X · week $Y · top agent · storage sync age · stale machines',
         status: 'done',
         deps: ['9.10'],
       },
       {
         id: '10.2',
-        title: 'CLI economy doctor — installed agents, missing keys, pricing gaps, billing drift, cloud connectivity, per-machine last ingest',
+        title: 'CLI economy doctor — installed agents, missing keys, pricing gaps, billing drift, storage connectivity, per-machine last ingest',
         status: 'done',
         deps: ['9.10', '8.5'],
       },
@@ -519,7 +519,7 @@ export const ROADMAP_PHASES: TodoPhase[] = [
       },
       {
         id: '10.4',
-        title: 'Watcher triggers ingest + optional cloud push on new events (debounced 5s)',
+        title: 'Watcher triggers ingest + optional storage push on new events (debounced 5s)',
         status: 'done',
         deps: ['10.3', '9.5'],
       },
@@ -540,7 +540,7 @@ export const ROADMAP_PHASES: TodoPhase[] = [
       },
       {
         id: '10.8',
-        title: 'systemd/launchd unit for economy watch --daemon + cloud schedule on each machine',
+        title: 'systemd/launchd unit for economy watch --daemon + storage schedule on each machine',
         status: 'done',
         deps: ['10.4', '9.7'],
       },
@@ -616,18 +616,18 @@ export const ROADMAP_PHASES: TodoPhase[] = [
       },
       {
         id: '12.4',
-        title: 'economy init — detect agents, set ECONOMY_MACHINE_ID, cloud URL, MCP install, cloud schedule, cron hint',
+        title: 'economy init — detect agents, set ECONOMY_MACHINE_ID, storage URL, MCP install, storage schedule, cron hint',
         status: 'done',
         deps: ['9.7', '12.1'],
       },
       {
         id: '12.5',
-        title: 'Grouped help: economy help ingest|alerts|cloud|usage',
+        title: 'Grouped help: economy help ingest|alerts|storage|usage',
         status: 'done',
       },
       {
         id: '12.6',
-        title: 'Mark existing machine_id + listMachines + cloud push/pull/sync as done baseline',
+        title: 'Mark existing machine_id + listMachines + storage push/pull/sync as done baseline',
         status: 'done',
       },
     ],
@@ -732,9 +732,9 @@ export function printTodosHelp(): void {
   console.log('    economy todos show <task-id>      Task detail (e.g. 9.7)')
   console.log()
   console.log(chalk.bold('  Multi-machine (current vs target)'))
-  console.log('    today       machine_id on rows, economy machines, manual cloud push/pull/sync')
+  console.log('    today       machine_id on rows, economy machines, manual storage push/pull/sync')
   console.log('    gap         no auto-sync, no updated_at, hardcoded RDS, queries are local-only')
-  console.log('    target      4 machines → cloud PG hub → auto push/pull every 5–15m → fleet today')
+  console.log('    target      4 machines → PostgreSQL storage hub → auto push/pull every 5–15m → fleet today')
   console.log()
   console.log(chalk.bold('  Agents covered'))
   console.log('    claude       Claude Code telemetry + Pro/Max quota (partial)')

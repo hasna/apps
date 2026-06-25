@@ -6,7 +6,7 @@ import { Database as BunDatabase } from 'bun:sqlite'
 import { openDatabase } from '../db/database.js'
 import { ingestCodex, readCodexModel } from './codex.js'
 import { computeCost } from '../lib/pricing.js'
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { Database } from '../db/database.js'
 
 let root: string
 let codexDbPath: string

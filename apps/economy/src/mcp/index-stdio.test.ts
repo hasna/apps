@@ -39,9 +39,11 @@ describe('economy-mcp stdio server', () => {
 
       const tools = await client.listTools(undefined, { timeout: 5_000 })
       const names = new Set(tools.tools.map((tool) => tool.name))
-      for (const expected of ['get_cost_summary', 'get_sessions', 'get_pricing', 'set_budget', 'set_pricing', 'get_billing_summary', 'get_usage', 'get_savings', 'list_subscriptions', 'set_subscription', 'remove_subscription', 'sync', 'describe_tools']) {
+      for (const expected of ['get_cost_summary', 'get_sessions', 'get_pricing', 'set_budget', 'set_pricing', 'get_billing_summary', 'get_usage', 'get_savings', 'list_subscriptions', 'set_subscription', 'remove_subscription', 'sync', 'storage_status', 'storage_push', 'storage_pull', 'storage_sync', 'describe_tools']) {
         expect(names.has(expected)).toBe(true)
       }
+      const retiredStatusTool = ['cloud', 'status'].join('_')
+      expect(names.has(retiredStatusTool)).toBe(false)
 
       const summary = await client.callTool(
         { name: 'get_cost_summary', arguments: { period: 'today' } },

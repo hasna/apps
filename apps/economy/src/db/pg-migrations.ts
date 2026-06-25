@@ -1,11 +1,10 @@
 /**
- * PostgreSQL migrations for open-economy cloud sync.
+ * PostgreSQL migrations for open-economy remote storage.
  *
  * Equivalent to the SQLite schema in database.ts, translated for PostgreSQL.
  */
 
 export const PG_MIGRATIONS: string[] = [
-  // Requests table — individual API calls
   `CREATE TABLE IF NOT EXISTS requests (
     id TEXT PRIMARY KEY,
     agent TEXT NOT NULL,
@@ -29,7 +28,6 @@ export const PG_MIGRATIONS: string[] = [
     account_source TEXT DEFAULT ''
   )`,
 
-  // Sessions table — aggregated session-level data
   `CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     agent TEXT NOT NULL,
@@ -48,7 +46,6 @@ export const PG_MIGRATIONS: string[] = [
     account_source TEXT DEFAULT ''
   )`,
 
-  // Projects table
   `CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
     path TEXT UNIQUE NOT NULL,
@@ -58,7 +55,6 @@ export const PG_MIGRATIONS: string[] = [
     created_at TEXT NOT NULL
   )`,
 
-  // Budgets table
   `CREATE TABLE IF NOT EXISTS budgets (
     id TEXT PRIMARY KEY,
     project_path TEXT,
@@ -70,7 +66,6 @@ export const PG_MIGRATIONS: string[] = [
     updated_at TEXT NOT NULL
   )`,
 
-  // Goals table
   `CREATE TABLE IF NOT EXISTS goals (
     id TEXT PRIMARY KEY,
     period TEXT NOT NULL,
@@ -81,7 +76,6 @@ export const PG_MIGRATIONS: string[] = [
     updated_at TEXT NOT NULL
   )`,
 
-  // Ingest state tracker
   `CREATE TABLE IF NOT EXISTS ingest_state (
     source TEXT NOT NULL,
     key TEXT NOT NULL,
@@ -89,7 +83,6 @@ export const PG_MIGRATIONS: string[] = [
     PRIMARY KEY (source, key)
   )`,
 
-  // Indexes
   `CREATE INDEX IF NOT EXISTS idx_requests_session ON requests(session_id)`,
   `CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp)`,
   `CREATE INDEX IF NOT EXISTS idx_requests_agent ON requests(agent)`,
@@ -99,7 +92,6 @@ export const PG_MIGRATIONS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at)`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_machine ON sessions(machine_id)`,
 
-  // Model pricing table
   `CREATE TABLE IF NOT EXISTS model_pricing (
     model TEXT PRIMARY KEY,
     input_per_1m REAL NOT NULL DEFAULT 0,
@@ -116,7 +108,6 @@ export const PG_MIGRATIONS: string[] = [
   `ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS cache_write_1h_per_1m REAL NOT NULL DEFAULT 0`,
   `ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS cache_storage_per_1m_hour REAL NOT NULL DEFAULT 0`,
 
-  // Feedback table
   `CREATE TABLE IF NOT EXISTS feedback (
     id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     message TEXT NOT NULL,
@@ -207,4 +198,4 @@ export const PG_MIGRATIONS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_savings_date ON savings_daily(date)`,
   `CREATE INDEX IF NOT EXISTS idx_requests_account ON requests(account_key)`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_account ON sessions(account_key)`,
-];
+]

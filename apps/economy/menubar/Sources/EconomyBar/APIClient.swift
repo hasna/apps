@@ -8,13 +8,16 @@ enum APIError: Error {
 
 actor APIClient {
   static let defaultsKey = "economy.apiBaseURL"
+  static let tokenDefaultsKey = "economy.apiToken"
   static let defaultBaseURL = "http://127.0.0.1:3456"
 
   private var base: String
+  private var apiToken: String
   private let session: URLSession
 
   init(baseURL: String? = nil, session injectedSession: URLSession? = nil) {
     base = Self.normalizeBaseURL(baseURL ?? UserDefaults.standard.string(forKey: Self.defaultsKey) ?? Self.defaultBaseURL)
+    apiToken = Self.normalizeAPIToken(UserDefaults.standard.string(forKey: Self.tokenDefaultsKey) ?? "")
     if let injectedSession {
       session = injectedSession
     } else {
@@ -28,12 +31,24 @@ actor APIClient {
     normalizeBaseURL(UserDefaults.standard.string(forKey: defaultsKey) ?? defaultBaseURL)
   }
 
+  static func storedAPIToken() -> String {
+    normalizeAPIToken(UserDefaults.standard.string(forKey: tokenDefaultsKey) ?? "")
+  }
+
+  static func hasStoredAPIToken() -> Bool {
+    !storedAPIToken().isEmpty
+  }
+
   static func normalizeBaseURL(_ value: String) -> String {
     var normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
     if normalized.isEmpty { normalized = defaultBaseURL }
     if !normalized.contains("://") { normalized = "http://\(normalized)" }
     if normalized.hasSuffix("/") { normalized.removeLast() }
     return normalized
+  }
+
+  static func normalizeAPIToken(_ value: String) -> String {
+    value.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
   func setBaseURL(_ value: String) -> String {
@@ -43,10 +58,22 @@ actor APIClient {
     return normalized
   }
 
+  func setAPIToken(_ value: String) -> String {
+    let normalized = Self.normalizeAPIToken(value)
+    apiToken = normalized
+    if normalized.isEmpty {
+      UserDefaults.standard.removeObject(forKey: Self.tokenDefaultsKey)
+    } else {
+      UserDefaults.standard.set(normalized, forKey: Self.tokenDefaultsKey)
+    }
+    return normalized
+  }
+
   func isOnline() async -> Bool {
     guard let url = URL(string: "\(base)/health") else { return false }
     var req = URLRequest(url: url)
     req.timeoutInterval = 1.5
+    authorize(&req)
     do {
       let (_, response) = try await session.data(for: req)
       guard let http = response as? HTTPURLResponse else { return false }
@@ -144,6 +171,7 @@ actor APIClient {
     var req = URLRequest(url: url)
     req.httpMethod = "POST"
     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    authorize(&req)
     req.httpBody = try? JSONEncoder().encode(["sources": "all"])
     let (_, response) = try await session.data(for: req)
     guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
@@ -170,7 +198,9 @@ actor APIClient {
 
   private func get<T: Decodable>(_ url: URL) async throws -> T {
     do {
-      let (data, response) = try await session.data(from: url)
+      var req = URLRequest(url: url)
+      authorize(&req)
+      let (data, response) = try await session.data(for: req)
       guard let http = response as? HTTPURLResponse else { throw APIError.offline }
       guard http.statusCode == 200 else { throw APIError.serverError(http.statusCode) }
       do {
@@ -184,5 +214,10 @@ actor APIClient {
     } catch {
       throw APIError.offline
     }
+  }
+
+  private func authorize(_ request: inout URLRequest) {
+    guard !apiToken.isEmpty else { return }
+    request.setValue("Bearer \(apiToken)", forHTTPHeaderField: "Authorization")
   }
 }

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'fs'
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { Database } from '../db/database.js'
 import { getIngestState, setIngestState, getMachineId, upsertUsageSnapshot, upsertSubscription } from '../db/database.js'
 import { agentPaths } from '../lib/paths.js'
 

@@ -3,8 +3,21 @@ import XCTest
 @testable import EconomyBar
 
 final class APIClientTests: XCTestCase {
+  private var previousAPIToken: String?
+
+  override func setUp() {
+    super.setUp()
+    previousAPIToken = UserDefaults.standard.string(forKey: APIClient.tokenDefaultsKey)
+    UserDefaults.standard.removeObject(forKey: APIClient.tokenDefaultsKey)
+  }
+
   override func tearDown() {
     MockURLProtocol.handler = nil
+    if let previousAPIToken {
+      UserDefaults.standard.set(previousAPIToken, forKey: APIClient.tokenDefaultsKey)
+    } else {
+      UserDefaults.standard.removeObject(forKey: APIClient.tokenDefaultsKey)
+    }
     super.tearDown()
   }
 
@@ -29,6 +42,30 @@ final class APIClientTests: XCTestCase {
 
     XCTAssertEqual(normalized, "http://economy.test:4567")
     XCTAssertEqual(APIClient.storedBaseURL(), "http://economy.test:4567")
+  }
+
+  func testSetAPITokenPersistsAndAuthorizesRequests() async throws {
+    var capturedRequests: [URLRequest] = []
+    MockURLProtocol.handler = { request in
+      capturedRequests.append(request)
+      if request.url?.path == "/api/sync" {
+        return ok(#"{"data":{"ok":true}}"#, request: request)
+      }
+      return ok(#"{"data":{"total_usd":1,"sessions":1,"requests":1,"tokens":150}}"#, request: request)
+    }
+
+    let client = APIClient(baseURL: "https://economy.test/", session: makeSession())
+    let token = await client.setAPIToken(" test-token ")
+
+    XCTAssertEqual(token, "test-token")
+    XCTAssertTrue(APIClient.hasStoredAPIToken())
+
+    _ = try await client.fetchSummary(period: "today")
+    try await client.sync()
+
+    XCTAssertEqual(capturedRequests.count, 2)
+    XCTAssertEqual(capturedRequests[0].value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
+    XCTAssertEqual(capturedRequests[1].value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
   }
 
   func testFetchSessionsEncodesSearchAndDecodesWrappedResponse() async throws {

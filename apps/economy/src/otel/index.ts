@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { openDatabase } from '../db/database.js'
 import { ingestOtelRows, parseOtlpMetrics, parseSimpleIngest } from '../ingest/otel.js'
-import { maybePushAfterIngest } from '../lib/cloud-sync.js'
+import { maybePushAfterIngest } from '../lib/native-storage.js'
 import { packageMetadata } from '../lib/package-metadata.js'
 
 function resolvePort(argv: string[]): number {

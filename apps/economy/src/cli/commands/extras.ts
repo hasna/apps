@@ -21,11 +21,11 @@ import { computeCostFromDb, ensurePricingSeeded } from '../../lib/pricing.js'
 import { AGENTS, parseAgent } from '../../lib/agents.js'
 import type { Period } from '../../types/index.js'
 import {
-  getCloudDatabaseUrl,
-  getCloudScheduleStatus,
-  registerCloudSchedule,
-  removeCloudSchedule,
-} from '../../lib/cloud-sync.js'
+  getStorageDatabaseUrl,
+  getStorageScheduleStatus,
+  registerStorageSchedule,
+  removeStorageSchedule,
+} from '../../lib/native-storage.js'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { printCompletion } from './completion.js'
@@ -165,7 +165,7 @@ export function registerExtendedCommands(program: Command): void {
 
   program
     .command('doctor')
-    .description('Diagnose agents, cloud, pricing, and billing health')
+    .description('Diagnose agents, storage, pricing, and billing health')
     .action(async () => {
       const db = openDatabase()
       ensurePricingSeeded(db)
@@ -183,7 +183,7 @@ export function registerExtendedCommands(program: Command): void {
         checks.push({ ok: existsSync(path), msg: `${agent}: ${existsSync(path) ? path : 'not found'}` })
       }
       checks.push({ ok: Boolean(process.env['CURSOR_SESSION_TOKEN']), msg: `cursor token: ${process.env['CURSOR_SESSION_TOKEN'] ? 'set' : 'missing CURSOR_SESSION_TOKEN'}` })
-      checks.push({ ok: Boolean(getCloudDatabaseUrl()), msg: `cloud: ${getCloudDatabaseUrl() ? 'ECONOMY_CLOUD_DATABASE_URL set' : 'not configured'}` })
+      checks.push({ ok: Boolean(getStorageDatabaseUrl()), msg: `storage: ${getStorageDatabaseUrl() ? 'HASNA_ECONOMY_DATABASE_URL set' : 'not configured'}` })
 
       const zeroCost = db.prepare(`SELECT COUNT(*) as c FROM requests WHERE cost_usd = 0 AND (input_tokens > 0 OR output_tokens > 0)`).get() as { c: number }
       checks.push({ ok: zeroCost.c === 0, msg: `zero-cost requests with tokens: ${zeroCost.c}` })
@@ -211,11 +211,11 @@ export function registerExtendedCommands(program: Command): void {
     .action(async () => {
       console.log(chalk.bold.cyan('\n  Economy Init\n'))
       console.log('  1. Set machine id:  export ECONOMY_MACHINE_ID=spark01')
-      console.log('  2. Cloud sync:      export ECONOMY_CLOUD_DATABASE_URL=postgresql://...')
-      console.log('  3. Auto cloud:      export ECONOMY_CLOUD_AUTO=1')
+      console.log('  2. Storage sync:    export HASNA_ECONOMY_DATABASE_URL=postgresql://...')
+      console.log('  3. Auto storage:    export HASNA_ECONOMY_SYNC_AUTO=1')
       console.log('  4. Cursor token:    export CURSOR_SESSION_TOKEN=...')
       console.log('  5. Run ingest:      economy sync --verbose')
-      console.log('  6. Schedule sync:   economy cloud schedule install --minutes 10')
+      console.log('  6. Schedule sync:   economy storage schedule install --minutes 10')
       console.log('  7. MCP install:     economy mcp --all')
       console.log('  8. Subscriptions:   economy subscriptions set --provider cursor --plan pro --fee 20 --included 20 --agent cursor')
       console.log('  9. OTel sidecar:   economy-otel --port 4318')
@@ -296,30 +296,30 @@ export function registerExtendedCommands(program: Command): void {
       })
   }
 
-  const cloudCmd = program.commands.find(c => c.name() === 'cloud')
-  if (cloudCmd) {
-    const scheduleCmd = cloudCmd.command('schedule').description('Manage automatic cloud sync schedule')
+  const storageCmd = program.commands.find(c => c.name() === 'storage')
+  if (storageCmd) {
+    const scheduleCmd = storageCmd.command('schedule').description('Manage automatic storage sync schedule')
     scheduleCmd
       .command('install')
       .description('Install launchd/systemd schedule')
       .option('--minutes <n>', 'Interval minutes', '10')
       .action(async (opts: { minutes?: string }) => {
-        await registerCloudSchedule(Number(opts.minutes ?? 10))
-        console.log(chalk.green(`✓ Cloud sync scheduled every ${opts.minutes ?? 10} minutes`))
+        await registerStorageSchedule(Number(opts.minutes ?? 10))
+        console.log(chalk.green(`✓ Storage sync scheduled every ${opts.minutes ?? 10} minutes`))
       })
     scheduleCmd
       .command('status')
       .description('Show schedule status')
       .action(async () => {
-        const status = await getCloudScheduleStatus()
+        const status = await getStorageScheduleStatus()
         console.log(JSON.stringify(status, null, 2))
       })
     scheduleCmd
       .command('remove')
       .description('Remove schedule')
       .action(async () => {
-        await removeCloudSchedule()
-        console.log(chalk.green('✓ Cloud sync schedule removed'))
+        await removeStorageSchedule()
+        console.log(chalk.green('✓ Storage sync schedule removed'))
       })
   }
 }

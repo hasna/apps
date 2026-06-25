@@ -1,12 +1,13 @@
 #!/usr/bin/env bun
 import { Command } from 'commander'
+import { registerEventsCommands } from '@hasna/events/commander'
 import chalk from 'chalk'
 import { registerBrainsCommand } from './brains.js'
 import { registerTodosCommand } from './commands/todos.js'
 import { registerExtendedCommands, registerFleetCommands } from './commands/extras.js'
 import { AGENTS, parseAgent } from '../lib/agents.js'
 import { syncAll } from '../lib/sync-all.js'
-import { maybePullFromCloud, cloudPush, cloudPull, cloudSyncFull, getCloudDatabaseUrl, getCloudPg } from '../lib/cloud-sync.js'
+import { maybePullFromStorage, storagePush, storagePull, storageSyncFull, getStorageStatus, getStoragePg } from '../lib/native-storage.js'
 import { mergePeerDatabase } from '../lib/peer-sync.js'
 import type { Agent } from '../lib/agents.js'
 import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryAgentBreakdown, queryAccountBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertProject, deleteProject, getProject, listModelPricing, upsertModelPricing, deleteModelPricing, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId, listMachineRegistry } from '../db/database.js'
@@ -30,7 +31,7 @@ program
 async function autoSync(opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; verbose?: boolean } = {}): Promise<void> {
   const db = openDatabase()
   ensurePricingSeeded(db)
-  await maybePullFromCloud()
+  await maybePullFromStorage()
   await syncAll(db, opts)
 }
 
@@ -292,7 +293,7 @@ program
       hermes: opts.hermes,
       verbose: opts.verbose,
     })
-    console.log(chalk.green(`✓ deduped ${result.deduped}${result.cloudPushed ? ', pushed to cloud' : ''}`))
+    console.log(chalk.green(`✓ deduped ${result.deduped}${result.storagePushed ? ', pushed to storage' : ''}`))
     // Backfill empty machine_id records
     if (opts.backfillMachine) {
       const machine = getMachineId()
@@ -1002,7 +1003,12 @@ program
   .action(async (opts: { port?: string }) => {
     const port = parseCliPort(opts.port ?? '3456', '--port')
     const { startServer } = await import('../server/serve.js')
-    startServer(port)
+    try {
+      startServer(port)
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error))
+      process.exitCode = 1
+    }
   })
 
 // ── dashboard ─────────────────────────────────────────────────────────────────
@@ -1013,7 +1019,15 @@ program
   .option('-p, --port <port>', 'Server port', '3456')
   .action(async (opts: { port?: string }) => {
     const port = parseCliPort(opts.port ?? '3456', '--port')
+    const { getServeApiToken } = await import('../lib/serve-auth.js')
+    const token = getServeApiToken()
+    if (!token) {
+      console.error('ECONOMY_API_TOKEN or HASNA_ECONOMY_API_TOKEN is required to start the dashboard server')
+      process.exitCode = 1
+      return
+    }
     const url = `http://localhost:${port}`
+    const dashboardUrl = `${url}/#token=${encodeURIComponent(token)}`
 
     // Check if server is already running
     let serverRunning = false
@@ -1054,9 +1068,9 @@ program
 
     console.log(chalk.cyan(`Opening ${url}`))
     try {
-      execSync(`open ${url}`)
+      execSync(`open ${JSON.stringify(dashboardUrl)}`)
     } catch {
-      console.log(chalk.yellow(`Open your browser at ${url}`))
+      console.log(chalk.yellow(`Open your browser at ${dashboardUrl}`))
     }
   })
 
@@ -1545,53 +1559,59 @@ program
     }
   })
 
-// ── cloud ────────────────────────────────────────────────────────────────────
+// ── storage ──────────────────────────────────────────────────────────────────
 
-const cloudCmd = program.command('cloud').description('Cross-machine sync via cloud PostgreSQL')
+const storageCmd = program
+  .command('storage')
+  .description('Cross-machine sync via repo-owned PostgreSQL storage')
 
-cloudCmd
+storageCmd
   .command('push')
-  .description('Push local economy data to cloud PostgreSQL')
+  .description('Push local economy data to remote PostgreSQL storage')
   .option('--tables <tables>', 'Comma-separated table names (default: all)')
   .action(async (opts: { tables?: string }) => {
     const tableList = opts.tables ? opts.tables.split(',').map(t => t.trim()) : undefined
-    process.stdout.write(chalk.cyan('→ Pushing to cloud... '))
-    const r = await cloudPush({ tables: tableList })
+    process.stdout.write(chalk.cyan('→ Pushing to storage... '))
+    const r = await storagePush({ tables: tableList })
     console.log(chalk.green(`✓ ${r.rows} rows from ${r.machine}`))
   })
 
-cloudCmd
+storageCmd
   .command('pull')
-  .description('Pull cloud PostgreSQL data to local')
+  .description('Pull remote PostgreSQL storage data to local')
   .option('--tables <tables>', 'Comma-separated table names (default: all)')
   .action(async (opts: { tables?: string }) => {
     const tableList = opts.tables ? opts.tables.split(',').map(t => t.trim()) : undefined
-    process.stdout.write(chalk.cyan('→ Pulling from cloud... '))
-    const r = await cloudPull({ tables: tableList })
+    process.stdout.write(chalk.cyan('→ Pulling from storage... '))
+    const r = await storagePull({ tables: tableList })
     console.log(chalk.green(`✓ ${r.rows} rows to ${r.machine}`))
   })
 
-cloudCmd
+storageCmd
   .command('sync')
-  .description('Full sync: ingest local → push to cloud → pull from cloud')
+  .description('Full sync: ingest local → push to storage → pull from storage')
   .action(async () => {
-    console.log(chalk.bold.cyan(`  Cloud Sync — ${getMachineId()}\n`))
+    console.log(chalk.bold.cyan(`  Storage Sync — ${getMachineId()}\n`))
     process.stdout.write(chalk.cyan('→ Ingesting local data... '))
     await autoSync()
     console.log(chalk.green('✓'))
-    process.stdout.write(chalk.cyan('→ Cloud round-trip... '))
-    const r = await cloudSyncFull()
+    process.stdout.write(chalk.cyan('→ Storage round-trip... '))
+    const r = await storageSyncFull()
     console.log(chalk.green(`✓ push ${r.push} / pull ${r.pull}`))
-    console.log(chalk.bold.green('\n✓ Cloud sync complete'))
+    console.log(chalk.bold.green('\n✓ Storage sync complete'))
   })
 
-cloudCmd
+storageCmd
   .command('status')
-  .description('Check cloud connection and fleet machine registry')
+  .description('Check storage connection and fleet machine registry')
   .action(async () => {
+    const status = getStorageStatus()
     console.log()
     console.log(`  Machine: ${chalk.white(getMachineId())}`)
-    console.log(`  Cloud URL: ${chalk.white(getCloudDatabaseUrl() ?? '(not set — export ECONOMY_CLOUD_DATABASE_URL)')}`)
+    console.log(`  Canonical RDS: ${chalk.white(`${status.canonical.cluster}/${status.canonical.database}`)}`)
+    console.log(`  Runtime secret: ${chalk.white(status.canonical.runtimeSecretPath)}`)
+    console.log(`  Database env: ${chalk.white(`${status.canonical.primaryEnv} (fallback: ${status.canonical.fallbackEnv})`)}`)
+    console.log(`  Storage URL: ${chalk.white(status.database.redacted_url ?? '(not set - export HASNA_ECONOMY_DATABASE_URL)')}`)
     const registry = listMachineRegistry(openDatabase())
     if (registry.length > 0) {
       console.log(chalk.dim('\n  Fleet registry:'))
@@ -1600,15 +1620,17 @@ cloudCmd
       }
     }
     try {
-      const cloud = await getCloudPg()
-      await cloud.get('SELECT 1 as ok')
-      const tables = await cloud.all("SELECT tablename FROM pg_tables WHERE schemaname = 'public'") as Array<{ tablename: string }>
+      const storage = await getStoragePg()
+      await storage.get('SELECT 1 as ok')
+      const tables = await storage.all("SELECT tablename FROM pg_tables WHERE schemaname = 'public'") as Array<{ tablename: string }>
       console.log(`\n  PostgreSQL: ${chalk.green('connected')}`)
       console.log(`  Tables: ${chalk.white(tables.map(t => t.tablename).join(', ') || '(none)')}`)
-      await cloud.close()
+      await storage.close()
     } catch (err: unknown) {
       console.log(`\n  PostgreSQL: ${chalk.red(`failed — ${err instanceof Error ? err.message : String(err)}`)}`)
     }
+    for (const issue of status.issues) console.log(chalk.red(`  ${issue}`))
+    for (const warning of status.warnings) console.log(chalk.yellow(`  ${warning}`))
     console.log()
   })
 
@@ -1692,5 +1714,6 @@ registerBrainsCommand(program)
 registerTodosCommand(program)
 registerExtendedCommands(program)
 registerFleetCommands(program)
+registerEventsCommands(program, { source: 'economy' })
 
 program.parse()

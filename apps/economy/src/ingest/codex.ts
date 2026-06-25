@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { join, basename } from 'path'
 import { Database as BunDatabase } from 'bun:sqlite'
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { Database } from '../db/database.js'
 import {
   upsertRequest, upsertSession, rollupSession, getIngestState, setIngestState, getMachineId,
 } from '../db/database.js'

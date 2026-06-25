@@ -1,22 +1,19 @@
 import { readFileSync } from 'fs'
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { Database } from '../db/database.js'
 import { upsertBillingDaily, clearBillingRange } from '../db/database.js'
 
 function getAnthropicAdminKey(): string | null {
-  return process.env['HASNAXYZ_ANTHROPIC_LIVE_ADMIN_API_KEY']
-    ?? process.env['ANTHROPIC_ADMIN_API_KEY']
+  return process.env['ANTHROPIC_ADMIN_API_KEY']
     ?? null
 }
 
 function getOpenAIAdminKey(): string | null {
-  return process.env['HASNAXYZ_OPENAI_LIVE_ADMIN_API_KEY']
-    ?? process.env['OPENAI_ADMIN_API_KEY']
+  return process.env['OPENAI_ADMIN_API_KEY']
     ?? null
 }
 
 function getGeminiBillingExportPath(): string | null {
   return process.env['HASNA_ECONOMY_GEMINI_BILLING_EXPORT_PATH']
-    ?? process.env['HASNAXYZ_ECONOMY_GEMINI_BILLING_EXPORT_PATH']
     ?? process.env['GEMINI_BILLING_EXPORT_PATH']
     ?? null
 }
@@ -110,7 +107,7 @@ export async function syncAnthropicBilling(
   opts: { days?: number; fromDate?: string; toDate?: string } = {},
 ): Promise<{ days: number; totalUsd: number }> {
   const key = getAnthropicAdminKey()
-  if (!key) throw new Error('Missing Anthropic admin key (HASNAXYZ_ANTHROPIC_LIVE_ADMIN_API_KEY)')
+  if (!key) throw new Error('Missing Anthropic admin key (ANTHROPIC_ADMIN_API_KEY)')
 
   const now = new Date()
   const end = opts.toDate ? new Date(opts.toDate) : new Date(now.getTime() + 24 * 3600_000)
@@ -183,7 +180,7 @@ export async function syncOpenAIBilling(
   opts: { days?: number; fromDate?: string; toDate?: string } = {},
 ): Promise<{ days: number; totalUsd: number }> {
   const key = getOpenAIAdminKey()
-  if (!key) throw new Error('Missing OpenAI admin key (HASNAXYZ_OPENAI_LIVE_ADMIN_API_KEY)')
+  if (!key) throw new Error('Missing OpenAI admin key (OPENAI_ADMIN_API_KEY)')
 
   const now = new Date()
   const end = opts.toDate ? new Date(opts.toDate) : now
@@ -245,7 +242,7 @@ export async function syncGeminiBilling(
     return {
       days: 0,
       totalUsd: 0,
-      skipped: 'Missing Gemini billing export path (HASNA_ECONOMY_GEMINI_BILLING_EXPORT_PATH, HASNAXYZ_ECONOMY_GEMINI_BILLING_EXPORT_PATH, or GEMINI_BILLING_EXPORT_PATH)',
+      skipped: 'Missing Gemini billing export path (HASNA_ECONOMY_GEMINI_BILLING_EXPORT_PATH or GEMINI_BILLING_EXPORT_PATH)',
     }
   }
 

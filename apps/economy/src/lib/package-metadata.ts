@@ -7,11 +7,28 @@ type PackageMetadata = {
 
 let cachedMetadata: PackageMetadata | null = null
 
+function readPackageMetadata(): Partial<PackageMetadata> {
+  const candidates = [
+    new URL('../package.json', import.meta.url),
+    new URL('../../package.json', import.meta.url),
+    new URL('../../../package.json', import.meta.url),
+  ]
+
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(readFileSync(candidate, 'utf8')) as Partial<PackageMetadata>
+    } catch {
+      // Bundled entrypoints live at different depths under dist.
+    }
+  }
+
+  return {}
+}
+
 export function getPackageMetadata(): PackageMetadata {
   if (cachedMetadata) return cachedMetadata
 
-  const raw = readFileSync(new URL('../../package.json', import.meta.url), 'utf8')
-  const parsed = JSON.parse(raw) as Partial<PackageMetadata>
+  const parsed = readPackageMetadata()
 
   cachedMetadata = {
     name: parsed.name ?? '@hasna/economy',

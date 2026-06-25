@@ -60,4 +60,24 @@ describe('economy-serve entrypoint', () => {
       expect(stderr).toContain(c.message)
     }
   })
+
+  test('rejects startup without an API token before binding', async () => {
+    const env = { ...process.env, ECONOMY_DB: ':memory:' }
+    delete env['ECONOMY_API_TOKEN']
+    delete env['HASNA_ECONOMY_API_TOKEN']
+    const proc = Bun.spawn(['bun', 'run', 'src/server/index.ts', '--port', '3456'], {
+      cwd: new URL('../../', import.meta.url).pathname.replace(/\/$/, ''),
+      env,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+
+    const stdout = await new Response(proc.stdout).text()
+    const stderr = await new Response(proc.stderr).text()
+    const exitCode = await proc.exited
+
+    expect(exitCode).toBe(1)
+    expect(stdout).toBe('')
+    expect(stderr).toContain('ECONOMY_API_TOKEN or HASNA_ECONOMY_API_TOKEN is required')
+  })
 })

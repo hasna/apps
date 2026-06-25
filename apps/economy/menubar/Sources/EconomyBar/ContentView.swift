@@ -213,6 +213,7 @@ struct ContentView: View {
   @EnvironmentObject var appState: AppState
   @Environment(\.openURL) private var openURL
   @State private var draftAPIBaseURL: String = ""
+  @State private var draftAPIToken: String = ""
   @State private var selectedPeriod: WorkPeriod = WorkPeriod.initial
   @State private var selectedScreen: MenuScreen = MenuScreen.initial
   @State private var selectedTab: WorkTab = .all
@@ -274,6 +275,10 @@ struct ContentView: View {
 
   private var topMachine: FleetMachine? {
     selectedMachines.first
+  }
+
+  private var selectedMachineMaxCost: Double {
+    max(selectedMachines.map(\.total_cost_usd).max() ?? 0, 1)
   }
 
   private var topAgent: AgentStat? {
@@ -340,14 +345,6 @@ struct ContentView: View {
 
   private var topNavigation: some View {
     HStack(spacing: 8) {
-      MachineFilterMenu(
-        selectedMachineID: appState.selectedMachineID,
-        currentMachine: appState.currentMachine,
-        machines: machineOptions,
-        onSelect: appState.setMachineFilter
-      )
-      .layoutPriority(1)
-
       ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: 4) {
           ForEach(WorkTab.allCases) { tab in
@@ -369,6 +366,15 @@ struct ContentView: View {
       .frame(maxWidth: .infinity, alignment: .leading)
       .frame(height: 32)
       .nativeGlassSurface(cornerRadius: 12, material: .ultraThinMaterial, shadow: false)
+
+      MachineFilterMenu(
+        selectedMachineID: appState.selectedMachineID,
+        currentMachine: appState.currentMachine,
+        machines: machineOptions,
+        onSelect: appState.setMachineFilter
+      )
+      .frame(maxWidth: 142)
+      .layoutPriority(1)
 
       HStack(spacing: 4) {
         Button(action: openDashboard) {
@@ -670,7 +676,11 @@ struct ContentView: View {
           } else {
             ForEach(Array(selectedMachines.prefix(5).enumerated()), id: \.element.machine_id) { index, machine in
               if index > 0 { Divider().opacity(0.55) }
-              EconomyMachineRow(machine: machine, currentMachine: appState.currentMachine)
+              EconomyMachineRow(
+                machine: machine,
+                currentMachine: appState.currentMachine,
+                progress: machine.total_cost_usd / selectedMachineMaxCost
+              )
                 .padding(.vertical, 8)
             }
           }
@@ -885,7 +895,12 @@ struct ContentView: View {
         }
 
         ManageSectionsGroup(title: "SETTINGS", badge: nil, actionTitle: nil, action: nil) {
-          ServerSettingsRow(baseURL: appState.apiBaseURL, isEditing: appState.isEditingServer, action: toggleServerEditor)
+          ServerSettingsRow(
+            baseURL: appState.apiBaseURL,
+            tokenConfigured: appState.apiTokenConfigured,
+            isEditing: appState.isEditingServer,
+            action: toggleServerEditor
+          )
 
           if appState.isEditingServer {
             Divider().opacity(0.55)
@@ -937,13 +952,19 @@ struct ContentView: View {
       TextField("Server URL", text: $draftAPIBaseURL)
         .textFieldStyle(.roundedBorder)
         .font(.system(size: 12, weight: .regular))
-        .onSubmit(saveServerURL)
+        .onSubmit(saveServerSettings)
+
+      SecureField("API Token", text: $draftAPIToken)
+        .textFieldStyle(.roundedBorder)
+        .font(.system(size: 12, weight: .regular))
+        .onSubmit(saveServerSettings)
 
       HStack(spacing: 8) {
-        Button("Save", action: saveServerURL)
+        Button("Save", action: saveServerSettings)
           .buttonStyle(.borderedProminent)
         Button("Cancel") {
           draftAPIBaseURL = appState.apiBaseURL
+          draftAPIToken = APIClient.storedAPIToken()
           appState.cancelServerEditing()
         }
         .buttonStyle(.bordered)
@@ -1001,6 +1022,7 @@ struct ContentView: View {
 
   private func toggleServerEditor() {
     draftAPIBaseURL = appState.apiBaseURL
+    draftAPIToken = APIClient.storedAPIToken()
     appState.toggleServerEditor()
   }
 
@@ -1013,6 +1035,7 @@ struct ContentView: View {
   private func closeSections() {
     if appState.isEditingServer {
       draftAPIBaseURL = appState.apiBaseURL
+      draftAPIToken = APIClient.storedAPIToken()
       appState.cancelServerEditing()
     }
     withAnimation(.easeInOut(duration: 0.16)) {
@@ -1128,12 +1151,19 @@ struct ContentView: View {
     mutate(&manageSections[index])
   }
 
-  private func saveServerURL() {
-    appState.saveAPIBaseURL(draftAPIBaseURL)
+  private func saveServerSettings() {
+    appState.saveAPISettings(baseURL: draftAPIBaseURL, token: draftAPIToken)
   }
 
   private func openDashboard() {
-    if let url = URL(string: appState.apiBaseURL) {
+    var value = appState.apiBaseURL
+    let token = APIClient.storedAPIToken()
+    var fragmentAllowed = CharacterSet.urlQueryAllowed
+    fragmentAllowed.remove(charactersIn: "&=+#")
+    if !token.isEmpty, let encoded = token.addingPercentEncoding(withAllowedCharacters: fragmentAllowed) {
+      value += "/#token=\(encoded)"
+    }
+    if let url = URL(string: value) {
       openURL(url)
     }
   }
@@ -1324,6 +1354,7 @@ private struct ManageChip: View {
 
 private struct ServerSettingsRow: View {
   let baseURL: String
+  let tokenConfigured: Bool
   let isEditing: Bool
   let action: () -> Void
 
@@ -1339,6 +1370,10 @@ private struct ServerSettingsRow: View {
           .foregroundStyle(.secondary)
           .lineLimit(1)
           .truncationMode(.middle)
+        Text(tokenConfigured ? "API token set" : "API token missing")
+          .font(.system(size: 10, weight: .regular))
+          .foregroundStyle(tokenConfigured ? .green : .orange)
+          .lineLimit(1)
       }
 
       Spacer(minLength: 10)
@@ -1475,16 +1510,27 @@ private struct MachineFilterMenu: View {
   let onSelect: (String?) -> Void
 
   private var labelText: String {
-    selectedMachineID ?? "All machines"
+    selectedMachineID ?? "All Machines"
   }
 
   private var isAllMachines: Bool {
     selectedMachineID == nil
   }
 
-  private var machineCountLabel: String? {
-    guard isAllMachines, !machines.isEmpty else { return nil }
-    return "\(machines.count)"
+  private var subtitle: String {
+    if isAllMachines {
+      return machines.isEmpty ? "Synced machines" : "\(machines.count) synced machines"
+    }
+
+    if selectedMachineID == currentMachine {
+      return "This Mac"
+    }
+
+    return "Machine"
+  }
+
+  private var iconName: String {
+    isAllMachines ? "rectangle.stack" : "desktopcomputer"
   }
 
   var body: some View {
@@ -1492,7 +1538,7 @@ private struct MachineFilterMenu: View {
       Button {
         onSelect(nil)
       } label: {
-        Label("All machines", systemImage: selectedMachineID == nil ? "checkmark" : "rectangle.stack")
+        Label("All Machines", systemImage: selectedMachineID == nil ? "checkmark" : "rectangle.stack")
       }
 
       if !machines.isEmpty {
@@ -1507,37 +1553,35 @@ private struct MachineFilterMenu: View {
         }
       }
     } label: {
-      HStack(spacing: 7) {
+      HStack(spacing: 8) {
         ZStack {
-          Circle()
-            .fill(isAllMachines ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.08))
-          Image(systemName: isAllMachines ? "rectangle.stack" : "desktopcomputer")
-            .font(.system(size: 10, weight: .semibold))
+          RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(isAllMachines ? Color.accentColor.opacity(0.14) : adaptiveControlFill)
+          Image(systemName: iconName)
+            .font(.system(size: 10, weight: .medium))
             .foregroundStyle(isAllMachines ? Color.accentColor : Color.secondary)
         }
-        .frame(width: 22, height: 22)
+        .frame(width: 24, height: 24)
 
-        Text(labelText)
-          .font(.system(size: 12, weight: .medium))
-          .foregroundStyle(.primary)
-          .lineLimit(1)
-          .truncationMode(.middle)
-          .frame(maxWidth: 118, alignment: .leading)
+        VStack(alignment: .leading, spacing: 1) {
+          Text(labelText)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+            .truncationMode(.middle)
 
-        if let machineCountLabel {
-          Text(machineCountLabel)
-            .font(.system(size: 9, weight: .semibold).monospacedDigit())
+          Text(subtitle)
+            .font(.system(size: 9, weight: .regular))
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
-            .background(adaptiveBadgeFill, in: Capsule())
+            .lineLimit(1)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
 
         Image(systemName: "chevron.down")
           .font(.system(size: 8, weight: .bold))
           .foregroundStyle(.tertiary)
       }
-      .padding(.horizontal, 9)
+      .padding(.horizontal, 8)
       .padding(.vertical, 5)
       .nativeGlassSurface(cornerRadius: 12, material: .ultraThinMaterial, shadow: false)
     }
@@ -1742,6 +1786,7 @@ private struct CollapsedSectionCard: View {
 private struct EconomyMachineRow: View {
   let machine: FleetMachine
   let currentMachine: String
+  let progress: Double
 
   private var isCurrent: Bool {
     machine.machine_id == currentMachine
@@ -1749,23 +1794,43 @@ private struct EconomyMachineRow: View {
 
   var body: some View {
     HStack(spacing: 12) {
-      RowIcon(systemName: isCurrent ? "desktopcomputer" : "server.rack", tint: isCurrent ? .blue : .secondary)
+      ZStack {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+          .fill(isCurrent ? Color.blue.opacity(0.12) : adaptiveControlFill)
+        Image(systemName: isCurrent ? "desktopcomputer" : "macwindow")
+          .font(.system(size: 11, weight: .medium))
+          .foregroundStyle(isCurrent ? Color.blue : Color.secondary)
+      }
+      .frame(width: 26, height: 26)
 
-      VStack(alignment: .leading, spacing: 3) {
+      VStack(alignment: .leading, spacing: 5) {
         HStack(spacing: 7) {
           Text(machine.displayName)
-            .font(.system(size: 12, weight: .semibold))
+            .font(.system(size: 12, weight: .medium))
             .lineLimit(1)
+            .truncationMode(.middle)
 
           if isCurrent {
-            Text("THIS MAC")
-              .font(.system(size: 9, weight: .bold))
+            Text("This Mac")
+              .font(.system(size: 9, weight: .medium))
               .foregroundStyle(.blue)
               .padding(.horizontal, 6)
-              .padding(.vertical, 3)
+              .padding(.vertical, 2)
               .background(.blue.opacity(0.12), in: Capsule())
           }
         }
+
+        GeometryReader { proxy in
+          ZStack(alignment: .leading) {
+            Capsule()
+              .fill(adaptiveControlFill)
+            Capsule()
+              .fill(isCurrent ? Color.blue.opacity(0.65) : Color.secondary.opacity(0.34))
+              .frame(width: proxy.size.width * CGFloat(min(max(progress, 0), 1)))
+          }
+        }
+        .frame(height: 4)
+
         Text("\(machine.sessions) sessions  \(machine.requests) requests")
           .font(.system(size: 11).monospacedDigit())
           .foregroundStyle(.secondary)
@@ -1774,13 +1839,9 @@ private struct EconomyMachineRow: View {
       Spacer(minLength: 10)
 
       Text(formatCost(machine.total_cost_usd))
-        .font(.system(size: 12, weight: .semibold).monospacedDigit())
+        .font(.system(size: 12, weight: .medium).monospacedDigit())
         .lineLimit(1)
         .minimumScaleFactor(0.75)
-
-      Image(systemName: "chevron.right")
-        .font(.system(size: 10, weight: .semibold))
-        .foregroundStyle(.tertiary)
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 9)

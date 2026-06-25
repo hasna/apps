@@ -30,6 +30,7 @@ bun install -g @hasna/economy
 economy sync --verbose
 economy today
 economy pricing list
+export ECONOMY_API_TOKEN="$(openssl rand -hex 32)"
 economy serve --port 3456
 ```
 
@@ -153,9 +154,9 @@ economy billing show --period month
 
 Supported billing sources:
 
-- Anthropic: `HASNAXYZ_ANTHROPIC_LIVE_ADMIN_API_KEY` or `ANTHROPIC_ADMIN_API_KEY`
-- OpenAI: `HASNAXYZ_OPENAI_LIVE_ADMIN_API_KEY` or `OPENAI_ADMIN_API_KEY`
-- Gemini: `HASNA_ECONOMY_GEMINI_BILLING_EXPORT_PATH`, legacy `HASNAXYZ_ECONOMY_GEMINI_BILLING_EXPORT_PATH`, or `GEMINI_BILLING_EXPORT_PATH`
+- Anthropic: `ANTHROPIC_ADMIN_API_KEY`
+- OpenAI: `OPENAI_ADMIN_API_KEY`
+- Gemini: `HASNA_ECONOMY_GEMINI_BILLING_EXPORT_PATH` or `GEMINI_BILLING_EXPORT_PATH`
 
 Gemini billing export files may be JSON arrays, JSON objects with `rows`, JSONL, or simple CSV.
 
@@ -181,8 +182,18 @@ Budget webhooks fire after sync when the alert threshold is crossed. Failed webh
 Start the server:
 
 ```bash
+export ECONOMY_API_TOKEN="$(openssl rand -hex 32)"
 economy-serve --port 3456
 ```
+
+The REST API requires `ECONOMY_API_TOKEN` or `HASNA_ECONOMY_API_TOKEN` by default.
+Pass it as `Authorization: Bearer <token>` or `X-Economy-Token: <token>`.
+`/health` stays unauthenticated for local liveness checks.
+
+The server binds to `127.0.0.1` unless `ECONOMY_BIND` or `ECONOMY_HOST` is set.
+Only localhost browser origins are allowed by default; set
+`ECONOMY_CORS_ORIGIN` or comma-separated `ECONOMY_CORS_ORIGINS` for a specific
+dashboard origin. CORS never defaults to `*`.
 
 Common endpoints:
 
@@ -236,22 +247,24 @@ economy menubar stop
 economy menubar uninstall
 ```
 
-## Cloud Sync
+## Remote Sync
 
-Economy can push and pull local SQLite data through `@hasna/cloud` PostgreSQL sync:
+Economy stores data locally in SQLite and can optionally push/pull the same service-owned tables to PostgreSQL, including AWS RDS:
 
 ```bash
-economy cloud status
-economy cloud push
-economy cloud pull
-economy cloud sync
+economy storage status
+economy storage push
+economy storage pull
+economy storage sync
 ```
 
 ## Data Directory
 
 Data is stored in `~/.hasna/economy/`.
 
-The main SQLite database lives at `~/.hasna/economy/economy.db`. Older `~/.economy/` data is auto-migrated on first open. Override the database path with `HASNA_ECONOMY_DB_PATH` or `ECONOMY_DB`.
+The main SQLite database lives at `~/.hasna/economy/economy.db`. Older `~/.economy/` data is auto-migrated on first open. Override the database path with `HASNA_ECONOMY_DB_PATH` or `ECONOMY_DB`. Configure remote sync with `HASNA_ECONOMY_DATABASE_URL`; `ECONOMY_DATABASE_URL` remains a plain fallback for local operator scripts.
+
+For Hasna XYZ production, the canonical RDS target is cluster `hasna-xyz-infra-apps-prod-postgres`, database `economy`, and runtime secret `hasna/xyz/opensource/economy/prod/rds`. Runtime wiring should set `HASNA_ECONOMY_DATABASE_URL` from that secret. `ECONOMY_DATABASE_URL` is kept only as a local/operator fallback during migration.
 
 ## Development
 

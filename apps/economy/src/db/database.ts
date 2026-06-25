@@ -1,4 +1,4 @@
-import { SqliteAdapter as Database } from '@hasna/cloud'
+import { SqliteAdapter } from './storage-adapter.js'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'fs'
 import { hostname } from 'os'
 import { homedir } from 'os'
@@ -17,6 +17,9 @@ import type {
   Period,
   SessionFilter,
 } from '../types/index.js'
+
+export { SqliteAdapter } from './storage-adapter.js'
+export type Database = SqliteAdapter
 
 export function getMachineId(): string {
   if (process.env['ECONOMY_MACHINE_ID']) return process.env['ECONOMY_MACHINE_ID']
@@ -57,7 +60,7 @@ export function openDatabase(dbPath?: string, skipSeed = false): Database {
     const dir = path.substring(0, path.lastIndexOf('/'))
     if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true })
   }
-  const db = new Database(path)
+  const db = new SqliteAdapter(path)
   db.exec('PRAGMA journal_mode = WAL')
   db.exec('PRAGMA busy_timeout = 5000')
   db.exec('PRAGMA foreign_keys = ON')

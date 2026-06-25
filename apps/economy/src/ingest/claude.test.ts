@@ -4,7 +4,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { openDatabase } from '../db/database.js'
 import { ingestClaude, ingestJsonlProjects, ingestTakumi } from './claude.js'
-import type { SqliteAdapter as Database } from '@hasna/cloud'
+import type { Database } from '../db/database.js'
 
 let db: Database
 let root: string
