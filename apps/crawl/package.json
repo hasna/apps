@@ -1,6 +1,6 @@
 {
   "name": "@hasna/crawl",
-  "version": "0.4.5",
+  "version": "0.4.8",
   "description": "AI-powered web crawler — self-hosted Firecrawl alternative. Crawl, extract, render JS, search. CLI + MCP + REST API + Dashboard.",
   "type": "module",
   "main": "dist/index.js",
@@ -14,6 +14,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./storage": {
+      "types": "./dist/storage.d.ts",
+      "import": "./dist/storage.js"
     }
   },
   "files": [
@@ -22,7 +26,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "bun build src/cli/index.ts --outdir dist/cli --target bun --external playwright --external playwright-core --external e2b && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external playwright --external playwright-core --external e2b && bun build src/server/index.ts --outdir dist/server --target bun --external playwright --external playwright-core --external e2b && bun build src/index.ts --outdir dist --target bun --external playwright --external playwright-core --external e2b && tsc --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external playwright --external playwright-core --external e2b && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external playwright --external playwright-core --external e2b && bun build src/server/index.ts --outdir dist/server --target bun --external playwright --external playwright-core --external e2b && bun build src/index.ts src/storage.ts --outdir dist --target bun --external playwright --external playwright-core --external e2b && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.ts",
@@ -65,14 +69,16 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/cloud": "^0.1.24",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
-    "zod": "^3.24.2"
+    "pg": "^8.20.0",
+    "zod": "^3.24.2",
+    "@hasna/events": "^0.1.6"
   },
   "devDependencies": {
     "@types/bun": "^1.2.4",
+    "@types/pg": "^8.15.6",
     "typescript": "^5.7.3"
   },
   "optionalDependencies": {

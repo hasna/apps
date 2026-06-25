@@ -52,6 +52,36 @@ export { getDb, closeDb } from "./db/database.js";
 // Database — PostgreSQL migrations
 export { PG_MIGRATIONS } from "./db/pg-migrations.js";
 
+// Database — Storage sync
+export {
+  STORAGE_TABLES,
+  getStorageS3Config,
+  getStorageS3Status,
+  storageArtifactsDownload,
+  storageArtifactsUpload,
+  storagePull,
+  storagePush,
+  storageSync,
+  getStorageDatabaseEnv,
+  getStorageDatabaseUrl,
+  getStorageMode,
+  getStorageStatus,
+  runStorageMigrations,
+  getSyncMetaAll,
+} from "./db/storage-sync.js";
+export type {
+  ArtifactSyncResult,
+  StorageEnv,
+  StorageMode,
+  StorageS3Config,
+  StorageS3Status,
+  SyncMeta,
+  SyncResult,
+} from "./db/storage-sync.js";
+
+// Package metadata
+export { PACKAGE_VERSION } from "./version.js";
+
 // Lib — Config
 export { getConfig, setConfig, resetConfig, getConfigPath } from "./lib/config.js";
 

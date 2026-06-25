@@ -1,10 +1,13 @@
 /**
- * PostgreSQL migrations for open-crawl cloud sync.
+ * PostgreSQL migrations for open-crawl remote storage sync.
  *
  * Equivalent to the SQLite schema in migrations.ts, translated for PostgreSQL.
  */
 
 export const PG_MIGRATIONS: string[] = [
+  // Migration 0: UUID helper for feedback rows
+  `CREATE EXTENSION IF NOT EXISTS pgcrypto`,
+
   // Migration 1: crawls table
   `CREATE TABLE IF NOT EXISTS crawls (
     id TEXT PRIMARY KEY,

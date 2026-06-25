@@ -8,6 +8,7 @@ import { validateApiKey, extractBearerToken } from "../lib/api-auth.js";
 import { createApiKey, listApiKeys, revokeApiKey } from "../db/api-keys.js";
 import { getUsageSummary, getRecentEvents } from "../db/usage.js";
 import type { ApiKey } from "../types/index.js";
+import { PACKAGE_VERSION } from "../version.js";
 
 const PORT = parseInt(process.env.PORT ?? "19700", 10);
 
@@ -185,7 +186,7 @@ Bun.serve({
       if (acceptHeader.includes("application/json")) {
         return json({
           name: "open-crawl",
-          version: "0.2.0",
+          version: PACKAGE_VERSION,
           apiVersion: "v1",
           port: PORT,
         });

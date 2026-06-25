@@ -4,10 +4,20 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { getCrawl, listCrawls, getCrawlStats, deleteCrawl, getGlobalStats } from "../db/crawls.js";
 import { getPage, listPages, searchPages } from "../db/pages.js";
+import {
+  STORAGE_TABLES,
+  getStorageStatus,
+  storageArtifactsDownload,
+  storageArtifactsUpload,
+  storagePull,
+  storagePush,
+  storageSync,
+} from "../db/storage-sync.js";
 import { getConfig, setConfig } from "../lib/config.js";
 import { fetchSitemap, type SitemapEntry } from "../lib/sitemap.js";
 import type { ExportFormat } from "../types/index.js";
 import { createWebhook, getWebhook, listWebhooks, deleteWebhook, listDeliveries } from "../db/webhooks.js";
+import { PACKAGE_VERSION } from "../version.js";
 
 // These modules exist at runtime but are not yet implemented.
 // Using dynamic imports with .catch fallbacks so TypeScript infers `any` at call sites.
@@ -32,8 +42,10 @@ const _crawlAgents = new Map<string, _CrawlAgent>();
 
 const server = new McpServer({
   name: "open-crawl",
-  version: "0.1.0",
+  version: PACKAGE_VERSION,
 });
+
+const STORAGE_TABLE_SCHEMA = z.enum(STORAGE_TABLES);
 
 // ─── Tool: crawl_url ─────────────────────────────────────────────────────────
 
@@ -1003,13 +1015,83 @@ server.tool(
   async (params) => {
     const { getDb } = await import("../db/database.js");
     const db = getDb();
-    const pkg = require("../../package.json");
     db.run(
       "INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)",
-      [params.message, params.email || null, params.category || "general", pkg.version]
+      [params.message, params.email || null, params.category || "general", PACKAGE_VERSION]
     );
     return { content: [{ type: "text" as const, text: "Feedback saved. Thank you!" }] };
   }
+);
+
+// ─── Tool: storage_status ───────────────────────────────────────────────────
+
+server.tool(
+  "storage_status",
+  "Show open-crawl remote storage configuration and local sync metadata",
+  {},
+  async () => ({
+    content: [{
+      type: "text" as const,
+      text: JSON.stringify(getStorageStatus(), null, 2),
+    }],
+  })
+);
+
+server.tool(
+  "storage_push",
+  "Push local open-crawl tables to the configured remote Postgres storage",
+  { tables: z.array(STORAGE_TABLE_SCHEMA).optional().describe("Tables to push") },
+  async ({ tables }) => ({
+    content: [{ type: "text" as const, text: JSON.stringify(await storagePush({ tables }), null, 2) }],
+  })
+);
+
+server.tool(
+  "storage_pull",
+  "Pull open-crawl tables from the configured remote Postgres storage",
+  { tables: z.array(STORAGE_TABLE_SCHEMA).optional().describe("Tables to pull") },
+  async ({ tables }) => ({
+    content: [{ type: "text" as const, text: JSON.stringify(await storagePull({ tables }), null, 2) }],
+  })
+);
+
+server.tool(
+  "storage_sync",
+  "Push then pull open-crawl tables with the configured remote Postgres storage",
+  { tables: z.array(STORAGE_TABLE_SCHEMA).optional().describe("Tables to sync") },
+  async ({ tables }) => ({
+    content: [{ type: "text" as const, text: JSON.stringify(await storageSync({ tables }), null, 2) }],
+  })
+);
+
+server.tool(
+  "storage_artifacts_upload",
+  "Upload local open-crawl screenshot artifacts to configured S3 storage",
+  {
+    crawl_id: z.string().optional().describe("Limit uploads to one crawl"),
+    page_id: z.string().optional().describe("Limit uploads to one page screenshot"),
+  },
+  async ({ crawl_id, page_id }) => ({
+    content: [{
+      type: "text" as const,
+      text: JSON.stringify(await storageArtifactsUpload({ crawlId: crawl_id, pageId: page_id }), null, 2),
+    }],
+  })
+);
+
+server.tool(
+  "storage_artifacts_download",
+  "Download open-crawl screenshot artifacts from configured S3 storage",
+  {
+    crawl_id: z.string().optional().describe("Limit downloads to one crawl"),
+    page_id: z.string().optional().describe("Limit downloads to one page screenshot"),
+  },
+  async ({ crawl_id, page_id }) => ({
+    content: [{
+      type: "text" as const,
+      text: JSON.stringify(await storageArtifactsDownload({ crawlId: crawl_id, pageId: page_id }), null, 2),
+    }],
+  })
 );
 
 // ─── Agent Tools ─────────────────────────────────────────────────────────────

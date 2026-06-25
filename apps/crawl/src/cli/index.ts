@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
+import { registerEventsCommands } from "@hasna/events/commander";
 import chalk from "chalk";
 import { execSync } from "child_process";
 import { createWriteStream } from "fs";
@@ -13,6 +14,7 @@ import { createWebhook, getWebhook, listWebhooks, deleteWebhook, listDeliveries,
 import { deliverWebhook } from "../lib/webhooks.js";
 import { createApiKey, listApiKeys, revokeApiKey } from "../db/api-keys.js";
 import { getUsageSummary } from "../db/usage.js";
+import { PACKAGE_VERSION } from "../version.js";
 
 // These modules exist at runtime but are not yet written; typed as any to avoid type errors.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -42,7 +44,7 @@ const program = new Command();
 program
   .name("crawl")
   .description("AI-powered web crawler — crawl, extract, search")
-  .version("0.1.0");
+  .version(PACKAGE_VERSION);
 
 // ─── crawl <url> ─────────────────────────────────────────────────────────────
 
@@ -1484,11 +1486,80 @@ function parseConfigValue(value: string): unknown {
   }
 }
 
+function parseTables(value?: string): string[] | undefined {
+  if (!value) return undefined;
+  return value.split(",").map((table) => table.trim()).filter(Boolean);
+}
+
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+// ─── storage ─────────────────────────────────────────────────────────────────
+
+program
+  .command("storage [action] [artifactAction]")
+  .description("Sync local crawl tables with configured remote Postgres storage")
+  .option("--tables <tables>", "comma-separated table list")
+  .option("--crawl-id <crawlId>", "limit screenshot artifact sync to a crawl")
+  .option("--page-id <pageId>", "limit screenshot artifact sync to a page")
+  .option("--json", "output as JSON")
+  .action(async (
+    action = "status",
+    artifactAction: string | undefined,
+    opts: { tables?: string; crawlId?: string; pageId?: string; json?: boolean },
+  ) => {
+    const {
+      getStorageStatus,
+      storageArtifactsDownload,
+      storageArtifactsUpload,
+      storagePull,
+      storagePush,
+      storageSync,
+    } = await import("../db/storage-sync.js");
+    const tables = parseTables(opts.tables);
+    try {
+      switch (action) {
+        case "status":
+          process.stdout.write(JSON.stringify(getStorageStatus(), null, 2) + "\n");
+          break;
+        case "artifacts":
+          switch (artifactAction) {
+            case "upload":
+              process.stdout.write(JSON.stringify(await storageArtifactsUpload({ crawlId: opts.crawlId, pageId: opts.pageId }), null, 2) + "\n");
+              break;
+            case "download":
+              process.stdout.write(JSON.stringify(await storageArtifactsDownload({ crawlId: opts.crawlId, pageId: opts.pageId }), null, 2) + "\n");
+              break;
+            case "status":
+            case undefined:
+              process.stdout.write(JSON.stringify(getStorageStatus().s3, null, 2) + "\n");
+              break;
+            default:
+              process.stderr.write(chalk.red(`Unknown storage artifacts action: ${artifactAction}. Valid actions: status, upload, download\n`));
+              process.exit(1);
+          }
+          break;
+        case "push":
+          process.stdout.write(JSON.stringify(await storagePush({ tables }), null, 2) + "\n");
+          break;
+        case "pull":
+          process.stdout.write(JSON.stringify(await storagePull({ tables }), null, 2) + "\n");
+          break;
+        case "sync":
+          process.stdout.write(JSON.stringify(await storageSync({ tables }), null, 2) + "\n");
+          break;
+        default:
+          process.stderr.write(chalk.red(`Unknown storage action: ${action}. Valid actions: status, push, pull, sync\n`));
+          process.exit(1);
+      }
+    } catch (err) {
+      process.stderr.write(chalk.red(`Storage ${action} failed: ${(err as Error).message}\n`));
+      process.exit(1);
+    }
+  });
 
 // ─── feedback ─────────────────────────────────────────────────────────────────
 
@@ -1515,6 +1586,8 @@ const firstArg = args[0];
 if (firstArg && (firstArg.startsWith("http://") || firstArg.startsWith("https://"))) {
   process.argv.splice(2, 0, "crawl");
 }
+registerEventsCommands(program, { source: "crawl" });
+
 
 program.parseAsync(process.argv).catch((err) => {
   process.stderr.write(chalk.red(`Fatal: ${(err as Error).message}\n`));
