@@ -1,10 +1,11 @@
 import { type EmbeddingRuntimeOptions } from './embeddings';
 import { type GeneratedArtifactProvenance, type KnowledgeProvenance } from './provenance';
 import type { KnowledgeConfig } from './workspace';
-export type SearchResultKind = 'source_chunk' | 'wiki_chunk' | 'wiki_page' | 'knowledge_index';
+export type SearchResultKind = 'source_chunk' | 'wiki_chunk' | 'legacy_item' | 'wiki_page' | 'knowledge_index';
 export type SearchProvenance = KnowledgeProvenance | GeneratedArtifactProvenance;
 export interface HybridSearchOptions extends EmbeddingRuntimeOptions {
     dbPath: string;
+    legacyStorePath?: string;
     query: string;
     limit?: number;
     semantic?: boolean;

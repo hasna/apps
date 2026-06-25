@@ -60,6 +60,9 @@ function canonicalExampleKnowledgeStorage() {
     }
   };
 }
+function legacyGlobalStorePath() {
+  return join(homedir(), ".open-knowledge", "db.json");
+}
 function globalKnowledgeHome() {
   return join(homedir(), ".hasna", "apps", "knowledge");
 }
