@@ -688,41 +688,18 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_goal_runs_loop_run ON goal_runs(loop_run_id);
       CREATE INDEX IF NOT EXISTS idx_goal_runs_workflow_run ON goal_runs(workflow_run_id);
     `);
-    try {
-      this.db.query("ALTER TABLE loops ADD COLUMN machine_json TEXT").run();
-    } catch {
-      /* column already exists */
-    }
-    try {
-      this.db.query("ALTER TABLE loops ADD COLUMN goal_json TEXT").run();
-    } catch {
-      /* column already exists */
-    }
-    try {
-      this.db.query("ALTER TABLE loop_runs ADD COLUMN goal_run_id TEXT").run();
-    } catch {
-      /* column already exists */
-    }
-    try {
-      this.db.query("ALTER TABLE workflow_specs ADD COLUMN goal_json TEXT").run();
-    } catch {
-      /* column already exists */
-    }
-    try {
-      this.db.query("ALTER TABLE workflow_runs ADD COLUMN goal_run_id TEXT").run();
-    } catch {
-      /* column already exists */
-    }
-    try {
-      this.db.query("ALTER TABLE workflow_step_runs ADD COLUMN pid INTEGER").run();
-    } catch {
-      /* column already exists */
-    }
-    try {
-      this.db.query("ALTER TABLE workflow_step_runs ADD COLUMN goal_run_id TEXT").run();
-    } catch {
-      /* column already exists */
-    }
+    // Additive columns for older databases. These must be idempotent: issuing
+    // `ALTER TABLE ... ADD COLUMN` for a column that already exists makes
+    // SQLite log a "duplicate column name" error via libsqlite3 *before* a JS
+    // try/catch can swallow it, polluting the system log on every process
+    // start. Check for the column first so the failing statement never runs.
+    this.addColumnIfMissing("loops", "machine_json", "TEXT");
+    this.addColumnIfMissing("loops", "goal_json", "TEXT");
+    this.addColumnIfMissing("loop_runs", "goal_run_id", "TEXT");
+    this.addColumnIfMissing("workflow_specs", "goal_json", "TEXT");
+    this.addColumnIfMissing("workflow_runs", "goal_run_id", "TEXT");
+    this.addColumnIfMissing("workflow_step_runs", "pid", "INTEGER");
+    this.addColumnIfMissing("workflow_step_runs", "goal_run_id", "TEXT");
     this.db
       .query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)")
       .run("0001_initial_and_workflows", nowIso());
@@ -732,6 +709,19 @@ export class Store {
     this.db
       .query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)")
       .run("0003_goals", nowIso());
+  }
+
+  /**
+   * Add a column only if it does not already exist. Idempotent — avoids the
+   * "duplicate column name" error that SQLite logs (via libsqlite3, before any
+   * JS try/catch) when re-running an additive migration on a database that has
+   * already been upgraded. Table/column/definition come from hardcoded literals
+   * in {@link migrate}, never user input, so interpolation here is safe.
+   */
+  private addColumnIfMissing(table: string, column: string, definition: string): void {
+    const columns = this.db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (columns.some((c) => c.name === column)) return;
+    this.db.query(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
   }
 
   private assertDaemonLeaseFence(opts: DaemonLeaseFence = {}, now: string = nowIso()): void {

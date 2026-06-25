@@ -418,4 +418,34 @@ describe("Store", () => {
       store.close();
     }
   });
+
+  test("migrate is idempotent — re-running issues no ALTER TABLE ADD COLUMN once columns exist", () => {
+    const store = new Store(":memory:");
+    try {
+      // The constructor already ran migrate() once, so every additive column
+      // now exists. Re-running migrate() must NOT issue an `ALTER TABLE ... ADD
+      // COLUMN` for an existing column — doing so makes SQLite log a
+      // "duplicate column name" error (libsqlite3 logs it before JS can catch
+      // it), which is the noise this regression guards against.
+      const internal = store as unknown as {
+        db: { query: (sql: string) => { run: (...a: unknown[]) => unknown; all: () => unknown } };
+        migrate: () => void;
+      };
+      const issued: string[] = [];
+      const originalQuery = internal.db.query.bind(internal.db);
+      internal.db.query = ((sql: string) => {
+        issued.push(sql);
+        return originalQuery(sql);
+      }) as typeof internal.db.query;
+      try {
+        internal.migrate();
+      } finally {
+        internal.db.query = originalQuery as typeof internal.db.query;
+      }
+      const offending = issued.filter((sql) => /ALTER\s+TABLE\s+\w+\s+ADD\s+COLUMN/i.test(sql));
+      expect(offending).toEqual([]);
+    } finally {
+      store.close();
+    }
+  });
 });
